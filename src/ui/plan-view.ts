@@ -25,6 +25,7 @@ import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekT
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
+import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet } from './home-view';
@@ -683,135 +684,49 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     h += `</div>`;
   }
 
-  const excessGarminIds = new Set((wk.unspentLoadItems || []).map((u: any) => u.garminId));
-
   h += `<div style="padding:8px 0 4px">`;
 
-  // Build set of adhoc garmin IDs so we can deduplicate garminActuals entries
-  // that are also present as adhocWorkouts (created together by addAdhocWorkoutFromPending).
-  const adhocGarminIds = new Set(adhocGarmin.map((w: any) => w.id || ''));
-
-  // Collect all items into a single array with sortable timestamps, then render sorted by date.
-  type LogEntry = { sortTime: number; html: string };
-  const logEntries: LogEntry[] = [];
-
-  // garminActuals entries: plan-slot matches show "Matched", orphaned garmin-* entries
-  // (adhoc was removed via ×) show "Logged". Skip garmin-* entries that still have
-  // a corresponding adhocWorkout. The adhoc loop renders those with correct Logged/Excess badge.
-  for (const [workoutId, a] of Object.entries(actuals)) {
-    if (workoutId.startsWith('garmin-') && adhocGarminIds.has(workoutId)) continue;
-    const actual = a as any;
-    const isAdhocOrphan = workoutId.startsWith('garmin-');
-    const activityName = actual.displayName || actual.workoutName || workoutId;
-    const slotName = !isAdhocOrphan && actual.workoutName && actual.workoutName !== actual.displayName ? actual.workoutName : null;
-    const dur = Math.round(actual.durationSec / 60);
+  // Item rows come from the shared week-activity gatherer (collectWeekActivities)
+  // so the running log, the home feed, and the tri/HYROX logs all show the
+  // identical deduped set. Markup + handlers stay here; only the data is shared.
+  const unit = s.unitPref ?? 'km';
+  const BADGE_LABEL: Record<string, string> = { matched: 'Matched', logged: 'Logged', excess: 'Excess', pending: 'Pending' };
+  for (const e of collectWeekActivities(wk)) {
+    const dateStr = e.sortTime ? new Date(e.sortTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
     const statsArr: string[] = [];
-    if (actual.distanceKm > 0.1) statsArr.push(formatKm(actual.distanceKm, s.unitPref ?? 'km'));
-    if (actual.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm, s.unitPref ?? 'km'));
-    if (actual.avgHR) statsArr.push(`HR ${actual.avgHR}`);
-    statsArr.push(`${dur} min`);
-    const dateStr = actual.startTime ? new Date(actual.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    if (e.distanceKm > 0.1) statsArr.push(formatKm(e.distanceKm, unit));
+    if (e.paceSecPerKm) statsArr.push(fmtPacePlan(e.paceSecPerKm, unit));
+    if (e.avgHR) statsArr.push(`HR ${e.avgHR}`);
+    // Matched/orphaned actuals always showed a minutes line; adhoc/pending only when > 0.
+    if (e.durationMin > 0 || e.source === 'actual') statsArr.push(`${e.durationMin} min`);
+    if (dateStr) statsArr.push(dateStr);
+    if (e.slotName) statsArr.push(`→ ${e.slotName}`);
 
-    const isExcess = isAdhocOrphan && excessGarminIds.has(workoutId.slice('garmin-'.length));
-    const badgeLabel = isAdhocOrphan ? (isExcess ? 'Excess' : 'Logged') : 'Matched';
-    const badgeHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${badgeLabel}</span>`;
+    const badgeHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${BADGE_LABEL[e.badge]}</span>`;
 
-    let row = `<div class="m-list-item plan-act-open" data-workout-key="${escapeHtml(workoutId)}" data-week-num="${viewWeek}" style="cursor:pointer">`;
+    const cls = e.source === 'actual' ? 'm-list-item plan-act-open'
+      : e.source === 'adhoc' ? 'm-list-item plan-adhoc-open'
+      : 'm-list-item';
+    const dataAttr = e.source === 'actual' ? ` data-workout-key="${escapeHtml(e.key)}" data-week-num="${viewWeek}"`
+      : e.source === 'adhoc' ? ` data-adhoc-id="${escapeHtml(e.key)}" data-week-num="${viewWeek}"`
+      : '';
+
+    let row = `<div class="${cls}"${dataAttr} style="cursor:pointer">`;
     row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
     row += `<div style="flex:1;min-width:0">`;
-    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(activityName)}</div>`;
-    const subParts = [...statsArr];
-    if (dateStr) subParts.push(dateStr);
-    if (slotName) subParts.push(`→ ${slotName}`);
-    row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${subParts.join(' · ')}</div>`;
+    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(e.name)}</div>`;
+    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
     row += `</div>`;
     row += `<div style="display:flex;align-items:center;gap:6px">`;
     row += badgeHtml;
     row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
-    if (actual.garminId) {
-      row += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(actual.garminId)}" style="font-size:20px;line-height:1;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">×</button>`;
+    if (e.source === 'actual' && e.garminId) {
+      row += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(e.garminId)}" style="font-size:20px;line-height:1;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">×</button>`;
     }
     row += `</div>`;
     row += `</div>`;
-
-    const sortTime = actual.startTime ? new Date(actual.startTime).getTime() : 0;
-    logEntries.push({ sortTime, html: row });
+    h += row;
   }
-
-  // Adhoc garmin/strava activities. Logged only or excess load
-  for (const w of adhocGarmin) {
-    const wAny = w as any;
-    const rawId = (w.id || '').slice('garmin-'.length);
-    // Stats come from fields stored directly on the adhoc workout by addAdhocWorkoutFromPending.
-    const name = wAny.n || 'Activity';
-    const dur = wAny.garminDurationMin || wAny.dur || 0;
-    const km = wAny.garminDistKm || wAny.km || wAny.distanceKm || 0;
-    const avgHR = wAny.garminAvgHR;
-    const paceSecPerKm = wAny.garminDistKm > 0.1 && wAny.garminDurationMin > 0
-      ? Math.round((wAny.garminDurationMin * 60) / wAny.garminDistKm)
-      : null;
-    const isExcess = excessGarminIds.has(rawId);
-    const statsArr: string[] = [];
-    if (km > 0.1) statsArr.push(typeof km === 'number' ? formatKm(km, s.unitPref ?? 'km') : formatKm(parseFloat(km), s.unitPref ?? 'km'));
-    if (paceSecPerKm) statsArr.push(fmtPacePlan(paceSecPerKm, s.unitPref ?? 'km'));
-    if (avgHR) statsArr.push(`HR ${avgHR}`);
-    if (dur > 0) statsArr.push(`${dur} min`);
-    const adhocTime = wAny.garminTimestamp || wAny.startTime;
-    const adhocDateStr = adhocTime ? new Date(adhocTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
-    if (adhocDateStr) statsArr.push(adhocDateStr);
-
-    const tagLabel = isExcess ? 'Excess' : 'Logged';
-    const tagHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${tagLabel}</span>`;
-
-    let row = `<div class="m-list-item plan-adhoc-open" data-adhoc-id="${escapeHtml(w.id || '')}" data-week-num="${viewWeek}" style="cursor:pointer">`;
-    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
-    row += `<div style="flex:1;min-width:0">`;
-    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
-    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
-    row += `</div>`;
-    row += `<div style="display:flex;align-items:center;gap:6px">`;
-    row += tagHtml;
-    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
-    row += `</div>`;
-    row += `</div>`;
-
-    const sortTime = adhocTime ? new Date(adhocTime).getTime() : 0;
-    logEntries.push({ sortTime, html: row });
-  }
-
-  // Pending items as individual rows. Ensures unassigned / not-yet-reviewed activities
-  // are always visible in the log (not just as an aggregate banner count).
-  for (const p of pendingItems) {
-    const dur = Math.round(p.durationSec / 60);
-    const distKm = (p.distanceM ?? 0) / 1000;
-    const statsArr: string[] = [];
-    if (distKm > 0.1) statsArr.push(formatKm(distKm, s.unitPref ?? 'km'));
-    if (p.avgPaceSecKm) statsArr.push(fmtPacePlan(p.avgPaceSecKm, s.unitPref ?? 'km'));
-    if (p.avgHR) statsArr.push(`HR ${p.avgHR}`);
-    if (dur > 0) statsArr.push(`${dur} min`);
-    const dateStr = p.startTime ? new Date(p.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
-    if (dateStr) statsArr.push(dateStr);
-    const name = formatActivityType(p.activityType);
-
-    let row = `<div class="m-list-item" style="cursor:pointer">`;
-    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
-    row += `<div style="flex:1;min-width:0">`;
-    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
-    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
-    row += `</div>`;
-    row += `<div style="display:flex;align-items:center;gap:6px">`;
-    row += `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">Pending</span>`;
-    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
-    row += `</div>`;
-    row += `</div>`;
-
-    const sortTime = p.startTime ? new Date(p.startTime).getTime() : 0;
-    logEntries.push({ sortTime, html: row });
-  }
-
-  // Sort all entries by date (oldest first)
-  logEntries.sort((a, b) => b.sortTime - a.sortTime);
-  for (const entry of logEntries) h += entry.html;
 
   h += `</div></div>`;
   return h;

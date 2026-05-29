@@ -999,9 +999,17 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         const activityDayOfWeek = dayOfWeekFromDate(new Date(row.start_time));
         const activityDurMin = row.duration_sec / 60;
 
-        // Find an unrated station/brick triWorkout on the same day (or ±1 day) with similar duration
+        // Find a station/brick triWorkout on the same day (or ±1 day) with similar
+        // duration. Normally we skip already-rated workouts, but a workout whose
+        // current actual was logged in-app (a guided session, `garminId` prefixed
+        // 'guided-') is an UPGRADE candidate: this synced recording replaces the
+        // in-app one with richer data (HR, GPS), mirroring the Strava-beats-Garmin
+        // rule, instead of landing as a duplicate adhoc activity.
         const stationWorkouts = (wk.triWorkouts ?? []).filter((w: Workout) => {
-          if (wk.rated![w.id || w.n] !== undefined) return false;
+          const wid = w.id || w.n;
+          const existing = wk.garminActuals?.[wid];
+          const isGuidedActual = !!existing && String(existing.garminId).startsWith('guided-');
+          if (wk.rated![wid] !== undefined && !isGuidedActual) return false;
           const disc = (w as any).discipline as string | undefined;
           return disc === 'station' || disc === 'brick';
         });
@@ -1026,6 +1034,10 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           wk.garminMatched![row.garmin_id] = workoutId;
 
           if (!wk.garminActuals) wk.garminActuals = {};
+          // Carry the in-app per-station recap across the upgrade so the
+          // activity-detail summary survives when the watch recording replaces
+          // the guided actual (the synced row has no per-station breakdown).
+          const priorRecap = wk.garminActuals[workoutId]?.hyroxSession;
           wk.garminActuals[workoutId] = {
             garminId: row.garmin_id,
             startTime: row.start_time,
@@ -1046,6 +1058,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             plannedDistanceKm: null,
             elevationGainM: null,
             workoutName: stationMatch.n,
+            ...(priorRecap ? { hyroxSession: priorRecap } : {}),
           };
 
           // Accumulate ACTUAL MTL from the matched workout. WeeklyMTL holds the planned target;

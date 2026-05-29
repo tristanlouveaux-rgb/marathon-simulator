@@ -41,7 +41,7 @@ import { collectRunsFromState } from '@/calculations/blended-fitness';
 import { computePredictionInputs } from '@/calculations/prediction-inputs';
 import { buildInfoIcon, mountInfoPopovers } from './info-popover';
 
-export type ChipKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration';
+export type ChipKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration' | 'shoes';
 
 // ── Design tokens (mirror race-readiness-detail / race-forecast-view) ────────
 
@@ -1117,7 +1117,41 @@ function pageFor(key: ChipKey, s: SimulatorState): { title: string; subhead: str
     case 'durability':  return pageDurability(s);
     case 'heat':        return pageHeat(s);
     case 'calibration': return pageCalibration(s);
+    case 'shoes':       return pageShoes(s);
   }
+}
+
+// ── Shoes drilldown ──────────────────────────────────────────────────────────
+
+function pageShoes(s: SimulatorState): { title: string; subhead: string; body: string } {
+  const kind = s.shoeKind ?? 'standard';
+  const isCarbon = kind === 'supershoes';
+  const tone = isCarbon ? '#16A34A' : TEXT_S;
+  const headline = isCarbon ? '+3% pace' : 'No boost applied';
+  const detail = isCarbon
+    ? 'Race-day prediction credits carbon-plated racing flats. Adjust the assumed time if you switch back.'
+    : 'Switch to supershoes if you plan to race in carbon-plated flats (Vaporfly, Alphafly, Adios Pro, Endorphin Elite, etc.).';
+
+  const toggleCard = `
+    <div style="${CARD};margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span style="font-size:14px;color:${TEXT_M};font-weight:600">Race-day shoes</span>
+        <span style="font-size:18px;font-weight:600;color:${tone};font-variant-numeric:tabular-nums">${headline}</span>
+      </div>
+      <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:14px">${detail}</div>
+      <div style="display:flex;gap:8px">
+        <button id="fcd-shoes-standard" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${!isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${!isCarbon ? TEXT_M : 'transparent'};color:${!isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Standard</button>
+        <button id="fcd-shoes-supershoes" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${isCarbon ? TEXT_M : 'transparent'};color:${isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Supershoes</button>
+      </div>
+    </div>
+  `;
+
+  const body = `
+    ${toggleCard}
+    ${captionCard('Carbon-plated racing shoes (Vaporfly, Alphafly, Adios Pro, Endorphin Elite, Metaspeed) deliver a 2.7–4.2% running-economy improvement at marathon pace, mean ~3% (Hoogkamer et al. 2018; Barnes &amp; Kilding 2019). The boost comes from the stiff carbon plate reducing energy lost at the metatarsophalangeal joint, combined with a high-rebound foam (PEBA-based) that returns more energy on toe-off. Effect tapers slightly at slower paces but stays meaningful above 5:30/km. Mosaic applies the boost as a flat 3% pace adjustment on your forecast and race-day projection when supershoes are selected. If you train in regular shoes and race in supershoes, the cone widens at race day to reflect that you have not specifically practiced the race-shoe feel.')}
+  `;
+
+  return { title: 'Shoes', subhead: 'Race-day footwear', body };
 }
 
 // ── New drill-down pages (durability / heat / calibration) ──────────────────
@@ -1357,6 +1391,20 @@ export function renderForecastChipDetail(key: ChipKey): void {
       openImportActivityModal({ onComplete: () => renderForecastChipDetail(key) });
     });
   });
+
+  // Shoes toggle. Writes shoeKind to state, refreshes blended fitness so the
+  // forecast time picks up the new 3% adjustment, then re-renders this page.
+  const setShoeKind = async (kind: 'standard' | 'supershoes') => {
+    const { getMutableState, saveState } = await import('@/state');
+    getMutableState().shoeKind = kind;
+    saveState();
+    const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
+    refreshBlendedFitness(getMutableState());
+    saveState();
+    renderForecastChipDetail('shoes');
+  };
+  document.getElementById('fcd-shoes-standard')?.addEventListener('click', () => setShoeKind('standard'));
+  document.getElementById('fcd-shoes-supershoes')?.addEventListener('click', () => setShoeKind('supershoes'));
 
   wireTabBarHandlers(navigateTab);
 }

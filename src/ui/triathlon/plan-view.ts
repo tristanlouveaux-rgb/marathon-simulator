@@ -141,8 +141,12 @@ export function renderTriathlonPlanView(): void {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
+  // Injury only looks forward. A current injury must not paint "Injury management"
+  // onto already-trained past weeks (it reads as history being rewritten). Gate the
+  // per-discipline status on the week being current or future, mirroring the
+  // isPastWeek guard in plan_engine.triathlon.ts and generator.ts.
   const injuryActive = isInjuryActive();
-  const injState = injuryActive ? getInjuryStateForDisplay() : null;
+  const injState = (injuryActive && !isPastWeek) ? getInjuryStateForDisplay() : null;
   const injStatus = injState ? getDisciplineStatusForInjury(injState.location) : null;
 
   container.innerHTML = `

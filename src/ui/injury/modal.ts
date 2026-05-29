@@ -476,13 +476,30 @@ async function handleSaveInjury(): Promise<void> {
   setInjuryState(injuryState);
   saveState();
 
+  // HYROX plans are gated only at generation time, so an injury change must
+  // trigger an explicit regen of the current + future weeks for the discipline
+  // gates (drop runs when blocked, drop/scale stations by upper/lower capacity)
+  // to take effect. Running and triathlon regenerate weeks on demand; HYROX
+  // does not, so without this the plan keeps prescribing runs/stations the
+  // athlete reported they cannot do. Past weeks are preserved (the gate skips
+  // them, and regen carries over each week's actuals/rated/skip).
+  if ((getState() as { eventType?: string }).eventType === 'hyrox' && s.wks?.length) {
+    const { regenerateHyroxWeek } = await import('@/workouts/plan_engine.hyrox');
+    for (let wi = s.w; wi <= s.wks.length; wi++) {
+      const regen = regenerateHyroxWeek(s, wi);
+      if (regen) s.wks[wi - 1] = regen;
+    }
+    saveState();
+  }
+
   closeInjuryModal();
 
   if (wasAlreadyActive) {
-    // next() advances the week and re-renders; nudge the week the user is
-    // entering (not the one being closed), and after next() so no modal stacks.
-    const { next } = await import('@/ui/events');
-    await next();
+    // Updating an existing injury must NOT advance the plan week. Re-render the
+    // current view in place to reflect the new capacity, then offer the nudge.
+    // Historic bug: this called next(), which ran the full week-completion flow
+    // (s.w++ at events.ts), pushing the user forward one week on every injury edit.
+    render();
     await maybeShowStrengthNudge();
   } else {
     await maybeShowStrengthNudge();

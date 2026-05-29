@@ -15,6 +15,7 @@ import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } f
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { SPORT_LABELS, IMPACT_PER_KM } from '@/constants';
+import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { showSportPicker, reclassifyActivity, getEffectiveSport } from './sport-picker-modal';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
@@ -376,6 +377,36 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     }
   }
 
+  // ─── HYROX session breakdown ─────────────────────────────────────────────────
+  // Replays the guided session recap (per-station best round + run legs) saved on
+  // the actual at completion. Preserved across a watch/Strava upgrade.
+  let hyroxHtml = '';
+  if (actual.hyroxSession && (actual.hyroxSession.stations.length || actual.hyroxSession.runs.length)) {
+    const hs = actual.hyroxSession;
+    const runRows = hs.runs.map(r => {
+      const dist = formatKm(r.distanceM / 1000, unitPref, r.distanceM % 1000 === 0 ? 0 : 1);
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px">
+          <span style="color:${TEXT_M}">Run <span style="color:${TEXT_L};font-size:11px">round ${r.round} · ${dist}</span></span>
+          <span style="font-variant-numeric:tabular-nums;font-weight:600;color:${TEXT_M}">${fmtDuration(r.durationSec)} <span style="color:${TEXT_L};font-weight:400;font-size:11px">${fmtPace(r.paceSecKm, unitPref)}</span></span>
+        </div>`;
+    }).join('');
+    const stationRows = hs.stations.map(st => {
+      const name = STATION_DISPLAY[st.station]?.name ?? String(st.station);
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px">
+          <span style="color:${TEXT_M}">${esc(name)}${hs.rounds > 1 ? ` <span style="color:${TEXT_L};font-size:11px">best round</span>` : ''}</span>
+          <span style="font-variant-numeric:tabular-nums;font-weight:600;color:${TEXT_M}">${fmtDuration(st.bestSec)}</span>
+        </div>`;
+    }).join('');
+    hyroxHtml = `
+      <div class="ad-fade" style="animation-delay:0.2s;margin-bottom:16px">
+        ${secLabel(hs.rounds > 1 ? `Session · ${hs.rounds} rounds` : 'Session')}
+        <div style="${CARD};padding:8px 16px">${runRows}${stationRows}</div>
+      </div>
+    `;
+  }
+
   // ─── Rep table + fade ────────────────────────────────────────────────────────
   // Only renders when reps were detected. Shows source ("Strava laps" / "Auto"),
   // per-rep table, fade chart, and a one-line commentary when the prescribed
@@ -608,6 +639,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           ${heroHtml}
           ${sportRowHtml}
           ${statsHtml}
+          ${hyroxHtml}
           ${loadCompareHtml}
           ${teHtml}
           ${mapHtml}

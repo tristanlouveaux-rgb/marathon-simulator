@@ -322,8 +322,14 @@ export function generateWeekWorkouts(
   }
   let scheduledWorkouts = assignDefaultDays(workouts, weekdayBudgetMin, weekendBudgetMin);
 
-  // Apply injury adaptations if injury is active
-  if (injuryState && injuryState.active) {
+  // Apply injury adaptations if injury is active — but only to the current and
+  // future weeks. A current injury must NEVER rewrite past weeks: doing so turns
+  // already-trained sessions into rehab/rest, which orphans their matched actuals
+  // and reads as "lost workout logs". Injury looks forward only. This mirrors the
+  // isPastWeek guard in plan_engine.triathlon.ts / plan_engine.hyrox.ts.
+  const currentWeek = getState().w ?? 1;
+  const isPastWeek = weekIndex != null && weekIndex < currentWeek;
+  if (injuryState && injuryState.active && !isPastWeek) {
     scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState, easyPaceSecPerKm);
     // Recalculate loads for adapted workouts (descriptions/RPE changed by injury engine)
     for (const w of scheduledWorkouts) {

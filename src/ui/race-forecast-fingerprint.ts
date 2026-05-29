@@ -19,7 +19,7 @@ import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 
 // ── Cluster data shape ───────────────────────────────────────────────────────
 
-type ClusterKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration';
+type ClusterKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration' | 'shoes';
 
 interface Cluster {
   key: ClusterKey;
@@ -241,6 +241,29 @@ function buildHeat(s: SimulatorState): Cluster | null {
   };
 }
 
+function buildShoes(s: SimulatorState): Cluster {
+  // Always-on chip — surfaces the assumed footwear so the user can confirm or
+  // toggle to supershoes. ~3% pace gain credit from carbon-plated racing
+  // flats (Hoogkamer 2018; Barnes & Kilding 2019).
+  const kind = s.shoeKind ?? 'standard';
+  if (kind === 'supershoes') {
+    return {
+      key: 'shoes', label: 'Shoes',
+      headline: '+3%',
+      detail: 'Carbon-plated racing flats',
+      present: true,
+      tone: 'good',
+    };
+  }
+  return {
+    key: 'shoes', label: 'Shoes',
+    headline: 'Standard',
+    detail: 'Tap to switch to supershoes',
+    present: false,
+    addCta: 'Configure',
+  };
+}
+
 function buildCalibration(s: SimulatorState): Cluster | null {
   // Conditional. Only renders when tier ≥ 1 (≥ 2 races at same distance).
   const cal = s.runCalibration;
@@ -356,6 +379,7 @@ export function renderForecastFingerprint(s: SimulatorState): string {
     buildTraining(s),
     buildDurability(s),
     buildVenue(s),
+    buildShoes(s),
   ];
   const conditional: Cluster[] = [
     buildHeat(s),

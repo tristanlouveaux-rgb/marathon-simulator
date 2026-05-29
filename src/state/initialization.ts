@@ -332,6 +332,16 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       if (state.heightCm) s.heightCm = state.heightCm;
       if (state.recurringActivities?.length) s.recurringActivities = [...state.recurringActivities];
 
+      // Commute config. Just-track has no plan to fold commute volume into, but
+      // the per-activity tag + load-carriage adjustment are mode-agnostic and
+      // still apply, so the captured config must survive. Transfer it the same
+      // way the plan path does (initialization.ts:529).
+      if (state.runsToWork && state.commuteConfig) {
+        s.commuteConfig = state.commuteConfig;
+      } else {
+        s.commuteConfig = undefined;
+      }
+
       // Seed volume from detected Strava history if available (same rule as
       // the full plan path). Used by stats / weekly summary, not by
       // plan-generation (there is none).

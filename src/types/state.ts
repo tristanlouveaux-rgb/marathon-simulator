@@ -424,6 +424,16 @@ export interface GarminActual {
    *  `moderate` → 0.15 load/min, half-life ×1.05; `heavy` → 0.35 load/min,
    *  half-life ×1.20. `none` writes no entry. */
   legFeel?: 'none' | 'moderate' | 'heavy';
+  /** HYROX guided-session recap, set when a guided station/brick session is
+   *  logged from the in-app player. Lets the activity-detail page show the same
+   *  per-station best rounds + run legs the finish screen showed. Preserved when
+   *  a watch/Strava recording upgrades the guided actual. Guided actuals are
+   *  identified by `garminId` starting with `'guided-'`. See SCIENCE_LOG §AP. */
+  hyroxSession?: {
+    rounds: number;
+    stations: Array<{ station: import('./triathlon').HyroxStation; bestSec: number }>;
+    runs: Array<{ round: number; durationSec: number; distanceM: number; paceSecKm: number }>;
+  };
 }
 
 /** Per-lap split from Garmin activity details */
@@ -687,6 +697,13 @@ export interface SimulatorState {
   /** Forecast race time after applying course factors (climate/altitude/elevation).
    * Populated only when `selectedMarathon.profile` exists. Falls back to `forecastTime`. */
   forecastTimeAdjusted?: number;
+  /** Race-day footwear. 'supershoes' = carbon-plated racing flats (Vaporfly,
+   *  Alphafly, Adios Pro, etc.) which deliver ~3% running-economy gains
+   *  (Hoogkamer 2018; Barnes & Kilding 2019). 'standard' = traditional racing
+   *  shoes with no plate / lower-bounce midsole. Undefined treated as
+   *  'standard' so existing users default to no boost.
+   *  Applied as a 3% pace boost on `forecastTime` and `forecastTimeAdjusted`. */
+  shoeKind?: 'standard' | 'supershoes';
   /** Itemised course factors backing `forecastTimeAdjusted` for UI display. */
   forecastCourseFactors?: Array<{
     kind: 'climate' | 'altitude' | 'run-elevation' | 'wind' | 'heat-acclim';

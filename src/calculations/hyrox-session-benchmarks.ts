@@ -107,6 +107,22 @@ function bestRoundPerStation(components: HyroxComponent[], records: SetRecord[])
   return out;
 }
 
+/** Compact recap of a completed guided session, stored on the logged activity
+ *  (`GarminActual.hyroxSession`) so the activity-detail page can replay the same
+ *  per-station best rounds + run legs. Pure. Null when there is nothing to show. */
+export function buildHyroxSessionRecap(
+  workout: Workout,
+  records: SetRecord[],
+): { rounds: number; stations: Array<{ station: HyroxStation; bestSec: number }>; runs: RunLegResult[] } | null {
+  const components = ((workout as any).hyroxComponents ?? []) as HyroxComponent[];
+  if (!components.length || !records.length) return null;
+  const rounds = Math.max(1, Math.round((workout as any).hyroxRounds ?? 1));
+  const stations = Array.from(bestRoundPerStation(components, records), ([station, bestSec]) => ({ station, bestSec }));
+  const runs = summariseHyroxRuns(workout, records);
+  if (!stations.length && !runs.length) return null;
+  return { rounds, stations, runs };
+}
+
 /** One run leg of a brick session, for the end-of-session summary. Runs carry no
  *  benchmark (run fitness lives in VDOT/pace, tracked elsewhere) — we surface
  *  time + pace per round so the athlete can see fade across the brick. */

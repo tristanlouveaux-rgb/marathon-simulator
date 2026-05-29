@@ -11,6 +11,7 @@ import { StrengthGuideController } from '@/guided/strength-controller';
 import type { SetRecord } from '@/guided/strength-controller';
 import type { StrengthSession } from '@/guided/strength-model';
 import { applyHyroxSessionBenchmarks, summariseHyroxSession } from '@/calculations/hyrox-session-benchmarks';
+import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
 
 const ACCESS = { sled: 'always' as const, skiErg: true, rowErg: true };
@@ -88,6 +89,40 @@ describe('HYROX guided flow — density end to end', () => {
     expect(state.hyroxConfig.stationBenchmarksSingles[station0]).toBe(300);
     const hist = state.hyroxConfig.stationBenchmarkHistory[station0];
     expect(hist[hist.length - 1]).toMatchObject({ sec: 300, source: 'session' });
+  });
+});
+
+describe('HYROX guided flow — a faster session produces a faster forecast', () => {
+  it('a session that beats a station benchmark lowers the predicted finish time', () => {
+    const density = generateHyroxStation({
+      kind: 'station_density', targetMinutes: 55, band: 'intermediate',
+      stationAccess: ACCESS, phase: 'build', slotIndex: 0,
+    });
+    const station0 = density.hyroxComponents![0].type as HyroxStation; // wall_balls
+
+    // State with a deliberately SLOW wall_balls benchmark (600s); other stations on seeds.
+    const state = {
+      hyroxConfig: {
+        athleteBand: 'intermediate', format: 'open_singles',
+        stationAccess: ACCESS, stationBenchmarksSingles: { [station0]: 600 },
+      },
+    } as any;
+
+    const before = predictHyroxRace(state);
+    expect(before).not.toBeNull();
+
+    // Run a real session whose best wall_balls round is 300s (beats the 600s benchmark).
+    const session = parseHyroxSession(density)!;
+    const records = walkSession(session, (round, exIdx) =>
+      exIdx === 0 ? [400, 380, 300, 300, 300][round] ?? 300 : 350);
+    const applied = applyHyroxSessionBenchmarks(density, records, state);
+    expect(applied.find(a => a.station === station0)?.toSec).toBe(300);
+
+    // The prediction must now be faster — the learning fed through to the forecast.
+    const after = predictHyroxRace(state);
+    expect(after!.totalSec).toBeLessThan(before!.totalSec);
+    // wall_balls dropped 600 → 300, so the whole-race delta is on that order.
+    expect(before!.totalSec - after!.totalSec).toBeGreaterThan(120);
   });
 });
 

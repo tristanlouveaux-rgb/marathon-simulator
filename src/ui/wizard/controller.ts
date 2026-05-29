@@ -267,10 +267,11 @@ export function nextStep(): void {
   }
 
   // Branch: race-target → schedule for everyone except track-only. Track-only
-  // users skip schedule (no plan to size) but still see the review/profile
+  // users skip schedule (no plan to size) but still capture commute (tag + load
+  // are mode-agnostic and apply even without a plan) then see the review/profile
   // reveal so they get the same "this is who you are" moment.
   if (s.onboarding.currentStep === 'race-target' && s.onboarding.trackOnly) {
-    goToStep('review');
+    goToStep('commute');
     return;
   }
 
@@ -394,13 +395,16 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: commute back → the preceding workout-preview step. Mode-specific
-  // because each mode routes through a different preview screen.
+  // Branch: commute back → the preceding step. Mode-specific because each mode
+  // routes through a different screen before commute. Track-only has no
+  // workout-preview, so it comes straight from race-target.
   if (s.onboarding.currentStep === 'commute') {
     if (s.onboarding.trainingMode === 'triathlon') {
       goToStep('tri-workout-preview');
     } else if (s.onboarding.trainingMode === 'hyrox') {
       goToStep('hyrox-workout-preview');
+    } else if (s.onboarding.trackOnly) {
+      goToStep('race-target');
     } else {
       goToStep('workout-preview');
     }
@@ -431,7 +435,8 @@ export function previousStep(): void {
     } else if (s.onboarding.trainingMode === 'cycling') {
       goToStep('workout-preview');
     } else if (s.onboarding.trackOnly) {
-      goToStep('race-target');
+      // Track-only: race-target → commute → review.
+      goToStep('commute');
     } else {
       // Running mode (default): workout-preview → commute → review.
       goToStep('commute');

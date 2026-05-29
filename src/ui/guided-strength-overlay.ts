@@ -584,8 +584,34 @@ function renderCountdown(): void {
   // confirm-finish flow if the user really wants out.
   document.getElementById('gs-close')?.addEventListener('click', () => {
     if (!active) return;
-    if (confirm('Finish the session?')) active.controller.finish();
+    showFinishConfirm(() => active?.controller.finish());
   });
+}
+
+/**
+ * In-app finish confirmation. Replaces the native `confirm()` dialog, which
+ * renders as a "localhost says…" system box in the browser and behaves poorly
+ * in the iOS WKWebView. A small centered card layered over the overlay shell.
+ */
+function showFinishConfirm(onConfirm: () => void): void {
+  const host = document.getElementById(OVERLAY_ID);
+  if (!host || host.querySelector('#gs-confirm')) return;
+  const el = document.createElement('div');
+  el.id = 'gs-confirm';
+  el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
+  el.innerHTML = `
+    <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+      <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Finish the session?</div>
+      <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">Your time so far will be logged.</div>
+      <div style="display:flex;gap:10px">
+        <button id="gs-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Keep going</button>
+        <button id="gs-confirm-yes" style="flex:1;padding:12px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Finish</button>
+      </div>
+    </div>`;
+  host.appendChild(el);
+  el.addEventListener('click', e => { if (e.target === el) el.remove(); });
+  el.querySelector('#gs-confirm-cancel')?.addEventListener('click', () => el.remove());
+  el.querySelector('#gs-confirm-yes')?.addEventListener('click', () => { el.remove(); onConfirm(); });
 }
 
 /** Format a time delta: "8s" under a minute, "1:20" above. */
@@ -807,10 +833,8 @@ function wireCommonControls(): void {
   document.getElementById('gs-close')?.addEventListener('click', () => {
     if (!active) return;
     if (active.finished) { closeOverlay(); return; }
-    // Confirm before discarding an in-progress session.
-    const ok = confirm('Finish the session? Your time will be logged.');
-    if (!ok) return;
-    active.controller.finish();
+    // Confirm before discarding an in-progress session (in-app dialog, not native confirm()).
+    showFinishConfirm(() => active?.controller.finish());
   });
 }
 

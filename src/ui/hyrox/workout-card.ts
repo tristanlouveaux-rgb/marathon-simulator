@@ -107,8 +107,10 @@ export function renderHyroxWorkoutCard(
       </div>
       <!-- Name -->
       <div style="font-size:18px;font-weight:700;color:#0F172A;margin-bottom:5px;letter-spacing:-0.01em">${escAttr(w.n)}</div>
-      <!-- Description -->
-      <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escAttr(w.d || '')}</div>
+      <!-- Description: station/brick cards carry their prescription in the
+           component list below, so the prose paragraph is suppressed to keep
+           the card scannable. Runs and other simple sessions keep their line. -->
+      ${showComponents ? '' : `<div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escAttr(w.d || '')}</div>`}
       <!-- Component list for station/brick -->
       ${showComponents ? renderComponents(components!) : ''}
       <!-- Taper eccentric warning -->

@@ -4,6 +4,21 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-29 — Hid cycling from the onboarding mode picker (parked)
+
+- **Cycling tile removed from the goals-screen mode picker** via a new `HIDDEN_MODES` list in `goals.ts` (`VISIBLE_MODE_TILES = MODE_TILES.filter(...)`). The picker now shows Running / HYROX / Triathlon / Just-track. Cycling is parked: single-discipline V1, not a shipping priority, and it has no run leg so the commute model never applied to it.
+- **Nothing else removed.** The cycling tile definition, the `ICON_CYCLE`/image imports, the `cycling-setup` step, the plan-engine discipline gate, the prediction (`race-prediction.cycling.ts`), and the `controller.ts` cycling routing branch all stay intact. Re-enabling is a one-line change (drop `'cycling'` from `HIDDEN_MODES`). Existing cycling-mode state keeps working. Confirmed `goals.ts` is the only place a user *selects* cycling — every other reference branches on an already-set mode.
+- **Key file**: `src/ui/wizard/steps/goals.ts`. FEATURES.md T2b flagged HIDDEN. Typecheck clean; no new lint violations on touched files.
+
+## 2026-05-29 — Fixed injury painting onto historic weeks (looked like history rewritten / logs lost)
+
+Old bug, re-introduced, in two independent places. An active injury was being applied to **past** weeks, not just the current/future ones. Injury must only look forward.
+
+- **Triathlon display (the one Tristan actually saw)**: `src/ui/triathlon/plan-view.ts:146` computed the per-discipline injury status (`injStatus`) from `isInjuryActive()` alone, ignoring `isPastWeek` (already derived two lines above at :88). It was then handed to `renderDay` for every week, so scrolling to a previous week painted "Easy intensity only. Injury management" over already-trained swim/bike/run cards. Fix: gate `injState` on `!isPastWeek` so past weeks render their original cards untouched.
+- **Running generator**: `src/workouts/generator.ts:326` applied `applyInjuryAdaptations` whenever `injuryState.active`, with no check on which week was being generated. Running plans regenerate on the fly at render time (`computeRenderedWorkouts`), so rendering any past week while injured collapsed it to acute rest, orphaning that week's matched actuals. Fix: only adapt when `weekIndex >= getState().w`. The triathlon and HYROX *engines* already guard this (`plan_engine.triathlon.ts:354` / `plan_engine.hyrox.ts:353`); the running generator and the tri *display* layer were the two gaps. The illness path (`plan-view.ts:2305`) was already correctly gated on `isCurrentWeek`.
+- **Tests**: 3 regression tests in `generator.test.ts` (past week not collapsed while injured; past-week plan matches the no-injury baseline; current/future weeks still adapt). Full injury + workouts suites green (268 tests). Typecheck clean.
+- **Key files**: `src/ui/triathlon/plan-view.ts`, `src/workouts/generator.ts`, `src/workouts/generator.test.ts`. Not yet device-verified.
+
 ## 2026-05-29 — Run-to-work: restored the wizard step + per-activity tag chips lost in the crash, reconnected drift learning, fixed the trips-vs-days count
 
 Same crash-restore (`4b57684`) that rolled back the HYROX forecast also disconnected the run-to-work feature. The engines survived (plan generation, load-carriage, matcher auto-tag, drift math, prediction hook); three connection points did not. Restored all three and fixed a latent counting bug. Tristan's phone showed the step because it runs the older deployed build.
@@ -13,7 +28,8 @@ Same crash-restore (`4b57684`) that rolled back the HYROX forecast also disconne
 - **Reconnected Phase 5 drift learning.** `detectCommuteDrift()` was fully built and tested but only ever called from its test file — nothing ran it at rollover. Added a boot-time pass in `main.ts` (before the forecast refresh, so the trimmed count flows into the same-launch prediction). Only reduces, converges, surfaces a small toast via `showMarkerBumpToast`.
 - **Fixed a latent counting bug** in `commute-drift.ts`: it counted commute *trips* but compared against declared *days*. A bidirectional commuter logs two runs per day, so the observation doubled and the drift could never fire. Now counts distinct calendar dates. New regression test (`commute-drift.test.ts`) proves morning+evening on one date = one day; test helper updated to date each actual. 10 drift tests + 55 commute-suite tests pass; typecheck clean.
 - **Confirmed commute volume feeds the race prediction** (Tristan's "it might already" — it does). `blended-fitness.ts` folds `commuteDaysPerWeek` into `sessionsForHorizon` → `getPlanPrescribedMeanWeeklyKm` + `calculateLiveForecast` → `s.expectedFinal`. Gated on `commuteConfig.enabled`, which the re-wired wizard and the Account row both set. The historical "two 5k runs counted as one trip" tracking bug was already fixed (two-slot morning/evening model + slot consumption); that fix survived the crash.
-- **Key files**: `src/ui/wizard/controller.ts`, `src/ui/wizard/renderer.ts`, `src/ui/activity-detail.ts`, `src/calculations/commute-drift.ts` (+test), `src/main.ts`. Not yet device-verified.
+- **Extended the wizard step to just-track** (Tristan's call; cycling stays excluded and is being hidden as a mode anyway). Track-only now flows race-target → commute → review. Since just-track has no plan, the captured config only drives the per-activity tag + load-carriage (both mode-agnostic), and the step subtitle is reworded for that case. Added the `commuteConfig` transfer to the trackOnly branch of `initializeSimulator` (`initialization.ts:333`) — it previously returned before the plan-path transfer, so the captured config would have been dropped on a fresh just-track setup.
+- **Key files**: `src/ui/wizard/controller.ts`, `src/ui/wizard/renderer.ts`, `src/ui/wizard/steps/commute.ts` (just-track copy), `src/ui/activity-detail.ts`, `src/calculations/commute-drift.ts` (+test), `src/state/initialization.ts` (just-track config transfer), `src/main.ts`. Not yet device-verified.
 
 ## 2026-05-29 — HYROX forecast: restored the lost chip-hero + Race/Station-order build, added injury-aware projection
 

@@ -241,7 +241,15 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // the forecast represents end-of-plan fitness, which assumes the
       // plan delivers the required long runs before race day. Mirrors the
       // tri engine's "execution factor" treatment (race-prediction.triathlon).
-      s.forecastTime = applyRunCalibrationBias(forecastTime, s.rd, calibration);
+      const calibrated = applyRunCalibrationBias(forecastTime, s.rd, calibration);
+      // Race-day footwear boost. Carbon-plated racing flats (Vaporfly,
+      // Alphafly, Adios Pro, Endorphin Elite) deliver ~3% running-economy
+      // improvement at marathon pace (Hoogkamer 2018, mean 2.7–4.2%, taken
+      // here as a flat 3%). Applied last so any downstream course-factors
+      // pass picks up the boosted forecastTime and propagates it to
+      // forecastTimeAdjusted automatically.
+      const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
+      s.forecastTime = calibrated * shoeMul;
     } catch {
       // Leave expectedFinal untouched on any forecast failure.
     }

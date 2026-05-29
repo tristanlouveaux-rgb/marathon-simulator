@@ -89,7 +89,9 @@ export function renderCommute(container: HTMLElement, state: OnboardingState): v
             Do you run to work?
           </h2>
           <p style="font-size:13.5px;color:var(--c-faint);margin:0;line-height:1.5">
-            Commute runs are added on top of your runs-per-week target. The plan tracks the extra volume and surfaces each trip as its own session.
+            ${state.trackOnly
+              ? 'Tag your commute runs so they count toward your tracked volume. Backpack load is applied to each trip.'
+              : 'Commute runs are added on top of your runs-per-week target. The plan tracks the extra volume and surfaces each trip as its own session.'}
           </p>
         </div>
 

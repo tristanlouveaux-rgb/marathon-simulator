@@ -80,6 +80,13 @@ const MODE_TILES: ModeTile[] = [
   },
 ];
 
+// Modes hidden from the picker (2026-05-29). The tile definitions and all
+// downstream cycling code paths stay intact, so re-enabling is just removing
+// the id from this list. Cycling is parked: single-discipline V1 that isn't a
+// shipping priority, and it has no run leg so the commute model doesn't apply.
+const HIDDEN_MODES: TrainingMode[] = ['cycling'];
+const VISIBLE_MODE_TILES = MODE_TILES.filter(t => !HIDDEN_MODES.includes(t.id));
+
 /**
  * Page 2. Training Mode picker.
  *
@@ -133,7 +140,7 @@ export function renderGoals(container: HTMLElement, state: OnboardingState): voi
         </div>
 
         <div style="width:100%;max-width:460px;display:flex;flex-direction:column;gap:10px;margin-top:24px">
-          ${MODE_TILES.map((t, i) => renderModeTile(t, i)).join('')}
+          ${VISIBLE_MODE_TILES.map((t, i) => renderModeTile(t, i)).join('')}
         </div>
       </div>
 

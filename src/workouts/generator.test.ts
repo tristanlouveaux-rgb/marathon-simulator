@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { generateWeekWorkouts, initializeWeeks, getPhaseDisplayName } from './generator';
 import type { TrainingPhase, RaceDistance, RunnerType, Workout } from '@/types';
+import type { InjuryState } from '@/types/injury';
+import { updateState } from '@/state';
 
 describe('Workout Generator', () => {
   describe('generateWeekWorkouts', () => {
@@ -403,6 +405,85 @@ describe('Workout Generator', () => {
       expect(getPhaseDisplayName('build')).toBe('BUILD');
       expect(getPhaseDisplayName('peak')).toBe('PEAK');
       expect(getPhaseDisplayName('taper')).toBe('TAPER');
+    });
+  });
+
+  // Regression: a current injury must only look forward. It must NEVER rewrite a
+  // past week's plan into rehab/rest, because doing so orphans the matched actuals
+  // for those weeks and reads to the user as "lost workout logs". This mirrors the
+  // isPastWeek guard in plan_engine.triathlon.ts / plan_engine.hyrox.ts. Old bug,
+  // re-introduced when injury moved entirely into applyInjuryAdaptations with no
+  // week guard.
+  describe('injury past-week protection', () => {
+    const makeAcuteInjury = (): InjuryState => ({
+      active: true,
+      type: 'general',
+      location: 'knee',
+      locationDetail: 'R',
+      currentPain: 6,
+      history: [],
+      startDate: new Date().toISOString(),
+      context: 'training',
+      recoveryPhase: 'no_load',
+      lastTestRunDate: null,
+      testRunPainResult: null,
+      emergencyShutdownUntil: null,
+      rehabBlockStartDate: null,
+      physioNotes: '',
+      expectedDurationWeeks: 4,
+      injuryPhase: 'acute',
+      painLatency: false,
+      acutePhaseStartDate: new Date().toISOString(),
+      capacityTestsPassed: [],
+      capacityTestHistory: [],
+      phaseTransitions: [],
+      lastActivityDate: null,
+      morningPainYesterday: null,
+      canRun: 'no',
+      returnToRunLevel: 1,
+      severityClass: 'moderate',
+      morningPainResponses: [],
+      holdCount: 0,
+      preferredCrossTraining: null,
+      zeroPainWeeks: 0,
+      graduatedReturnWeeksLeft: 2,
+    } as InjuryState);
+
+    const gen = (weekIndex: number, injury?: InjuryState | null) =>
+      generateWeekWorkouts(
+        'build', 5, 'marathon', 'Balanced', [], undefined,
+        injury ?? null, undefined, 'intermediate', undefined, undefined,
+        weekIndex, 16,
+      );
+
+    it('does not collapse a past week into acute rest while injured', () => {
+      updateState({ w: 8 });
+      const injury = makeAcuteInjury();
+
+      // Week 8 is the current week — injury applies, plan becomes acute rest.
+      const current = gen(8, injury);
+      expect(current.some(w => w.t === 'rest')).toBe(true);
+      expect(current.some(w => w.t === 'long')).toBe(false);
+
+      // Week 3 is in the past — injury must NOT touch it. A long run survives.
+      const past = gen(3, injury);
+      expect(past.some(w => w.t === 'long')).toBe(true);
+      expect(past.every(w => w.modReason !== 'Acute injury phase - 72h minimum rest required')).toBe(true);
+    });
+
+    it('past-week plan while injured matches the no-injury baseline', () => {
+      updateState({ w: 8 });
+      const baseline = gen(3, null);
+      const injured = gen(3, makeAcuteInjury());
+      expect(injured.map(w => w.t).sort()).toEqual(baseline.map(w => w.t).sort());
+    });
+
+    it('still applies injury to the current and future weeks', () => {
+      updateState({ w: 8 });
+      const injury = makeAcuteInjury();
+      const future = gen(12, injury);
+      expect(future.some(w => w.t === 'rest')).toBe(true);
+      expect(future.some(w => w.t === 'long')).toBe(false);
     });
   });
 

@@ -14,10 +14,11 @@
  */
 
 import type { Workout } from '@/types';
+import type { SimulatorState } from '@/types/state';
 import { rate } from '@/ui/events';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
-import { applyHyroxSessionBenchmarks } from '@/calculations/hyrox-session-benchmarks';
+import { applyHyroxSessionBenchmarks, buildHyroxSessionRecap } from '@/calculations/hyrox-session-benchmarks';
 import type { SetRecord } from './strength-controller';
 
 export interface CompleteStrengthOpts {
@@ -50,18 +51,73 @@ export function completeStrengthSession(workout: Workout, opts: CompleteStrength
     console.log(`[strength] completed ${workout.n}: ${mins} min, RPE ${chosen}`);
   }
 
-  // HYROX: learn from the session. Only race-pace sessions (density, brick)
-  // improve a station benchmark, PB-only, using the best round per station and a
-  // sanity floor. Technique (65% pace) is excluded. See SCIENCE_LOG §AP.
+  // HYROX: learn from the session + log it as an activity.
   if (opts.records && opts.records.length) {
     const state = getMutableState();
+    let dirty = false;
+
+    // (1) Learn: only race-pace sessions (density, brick) improve a station
+    // benchmark, PB-only, best round per station, with a sanity floor. Technique
+    // (65% pace) is excluded. See SCIENCE_LOG §AP.
     const applied = applyHyroxSessionBenchmarks(workout, opts.records, state);
     if (applied.length) {
-      saveState();
+      dirty = true;
       for (const u of applied) {
         // eslint-disable-next-line no-console
         console.log(`[hyrox session-bench] ${u.displayName}: ${u.fromSec ?? '—'}s → ${u.toSec}s (best round beat the benchmark)`);
       }
     }
+
+    // (2) Log: record the session as a completed activity so it appears in
+    // history and a later watch/Strava sync of the same session upgrades it
+    // (mirrors the Strava-beats-Garmin rule) instead of double-counting.
+    if (logGuidedHyroxActivity(workout, opts.records, opts.durationSec ?? 0, opts.targetWeek, state)) dirty = true;
+
+    if (dirty) saveState();
   }
+}
+
+/**
+ * Write a guided HYROX session to `wk.garminActuals` as a completed activity.
+ * `garminId` is `'guided-…'` so the matcher can tell it apart from a synced
+ * activity and upgrade it later. Does not clobber an existing richer (synced)
+ * actual. Returns true if it wrote.
+ */
+function logGuidedHyroxActivity(
+  workout: Workout,
+  records: SetRecord[],
+  durationSec: number,
+  targetWeek: number | undefined,
+  state: SimulatorState,
+): boolean {
+  const recap = buildHyroxSessionRecap(workout, records);
+  if (!recap) return false; // non-HYROX or nothing measured
+
+  const weekIdx = (targetWeek ?? state.w) - 1;
+  const wk = state.wks?.[weekIdx];
+  if (!wk) return false;
+
+  const workoutId = (workout as any).id ?? workout.n;
+  if (!wk.garminActuals) wk.garminActuals = {};
+  const existing = wk.garminActuals[workoutId];
+  // A synced activity (non-guided garminId) already present wins — don't overwrite.
+  if (existing && !String(existing.garminId).startsWith('guided-')) return false;
+
+  const distanceKm = recap.runs.reduce((sum, r) => sum + r.distanceM / 1000, 0);
+  wk.garminActuals[workoutId] = {
+    garminId: `guided-${Date.now()}`,
+    startTime: new Date().toISOString(),
+    distanceKm,
+    durationSec: Math.max(0, Math.round(durationSec)),
+    avgPaceSecKm: null,
+    avgHR: null,
+    maxHR: null,
+    calories: null,
+    activityType: 'hyrox',
+    plannedType: workout.t ?? null,
+    workoutName: workout.n,
+    displayName: workout.n,
+    hyroxSession: recap,
+  };
+  return true;
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   summariseHyroxSession,
   summariseHyroxRuns,
+  buildHyroxSessionRecap,
   applyHyroxSessionBenchmarks,
   isRacePaceHyroxSession,
 } from './hyrox-session-benchmarks';
@@ -108,6 +109,26 @@ describe('summariseHyroxRuns', () => {
   it('is empty for station-only sessions', () => {
     const w = workout('hyrox_station_density', [WB, ROW]);
     expect(summariseHyroxRuns(w, densityRecords([300, 280], [250, 240]))).toEqual([]);
+  });
+});
+
+describe('buildHyroxSessionRecap', () => {
+  const RUN: HyroxComponent = { type: 'run', distanceM: 1000, mtl: 0 };
+
+  it('captures rounds, per-station best, and run legs for a brick', () => {
+    const w = workout('hyrox_brick', [RUN, WB]);
+    const recap = buildHyroxSessionRecap(w, [
+      rec(0, 250, 0), rec(1, 410, 0),
+      rec(0, 270, 1), rec(1, 400, 1),
+    ])!;
+    expect(recap.rounds).toBe(2);
+    expect(recap.stations).toEqual([{ station: 'wall_balls', bestSec: 400 }]);
+    expect(recap.runs.map(r => r.round)).toEqual([1, 2]);
+    expect(recap.runs[0].paceSecKm).toBe(250);
+  });
+
+  it('returns null for a non-HYROX workout', () => {
+    expect(buildHyroxSessionRecap({ t: 'gym', n: 'X', d: '' } as any, [rec(0, 100, 0)])).toBeNull();
   });
 });
 

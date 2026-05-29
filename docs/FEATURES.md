@@ -186,7 +186,9 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 **Key files**: `src/workouts/plan_engine.triathlon.ts`, `src/workouts/scheduler.triathlon.ts`, `src/workouts/swim.ts`, `src/workouts/bike.ts`, `src/workouts/brick.ts`
 **Tests**: `src/workouts/plan_engine.triathlon.test.ts` — ✅ Passing (8 tests); `src/workouts/bike.test.ts` — ✅ Passing (10 tests)
 
-### T2b. Cycling-only mode (V1)
+### T2b. Cycling-only mode (V1) — ⚠️ HIDDEN from picker (2026-05-29)
+**Status**: The cycling tile is hidden from the onboarding mode picker via `HIDDEN_MODES` in `goals.ts` (parked: single-discipline V1, not a shipping priority, and no run leg so the commute model doesn't apply). All cycling code paths, the tile definition, and the routing branches are intact — re-enable by removing `'cycling'` from `HIDDEN_MODES`. Existing cycling-mode state continues to work. The rest of this section describes the (still-functional) path.
+
 **What it does**: Standalone cycling plan path alongside running and triathlon. Goals screen has a four-tile mode picker; cycling users go through `connect-data → cycling-setup → workout-preview → review → initializing`. Cycling setup collects event distance (50/100/160/200/300 km Gran Fondo class), target date, weekly hours, and strength sessions. Workout-preview renders the 9 bike kinds with literature anchors as a research showcase before plan generation. Plan engine reuses `generateTriathlonPlan` with `triConfig.disciplines = ['bike']`; swim/run/brick generation is gated. Bike session cap lifts from 3 to 5 in single-discipline mode.
 
 **Cycling finish-time prediction**: `predictCyclingEvent` (`src/calculations/race-prediction.cycling.ts`) computes finish time using FTP × distance-keyed intensity factor (IF from Allen & Coggan 2010: 50 km→0.88, 100 km→0.80, 160 km→0.74, 200 km→0.68, 300 km→0.62) and the Martin et al. 1998 bike physics engine. Uses full physics when aero profile + masses are set; falls back to a linear watts→kph approximation otherwise. Confidence range ±10% >4 weeks out, ±6% within 4 weeks. Card shown in Forecast tab via `renderCyclingFinishCard`.
@@ -585,7 +587,7 @@ Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014
 ---
 
 ### 13. Run to Work (Commute)
-**What it does**: A complete end-to-end commute model. Captured at onboarding (running, triathlon, HYROX) and editable from Account → Run to work. Drives the plan engine, the load model, and a self-tuning baseline.
+**What it does**: A complete end-to-end commute model. Captured at onboarding (running, triathlon, HYROX, and just-track — cycling is excluded, no run leg) and editable from Account → Run to work. Drives the plan engine, the load model, and a self-tuning baseline. In just-track mode there is no plan, so the captured config only drives the per-activity tag + load-carriage adjustment (both mode-agnostic).
 
 - **Capture**: one-way distance, bidirectional?, days/week, optional backpack kg.
 - **Additive planning**: commute runs are appended on top of `runsPerWeek`, not substituted (revised 2026-05-20, see SCIENCE_LOG §AM). A user with 2 runs/week + 3 commutes gets the full prescribed plan (long + easy) plus 3 commute days. Mirrored across running, triathlon run leg, and HYROX easy-run filler.
