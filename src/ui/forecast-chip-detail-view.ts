@@ -14,6 +14,7 @@
 import { getState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
 import { ft, fp, formatKm } from '@/utils/format';
+import { cv, rdKm } from '@/calculations/vdot';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from './page-flair';
 import { buildBenchmarkTrendChart, smoothAreaPath } from './triathlon/benchmark-charts';
@@ -344,65 +345,95 @@ function renderBlendCard(s: SimulatorState): string {
 }
 
 function pageCapacity(s: SimulatorState): { title: string; subhead: string; body: string } {
-  const vdot = s.blendedEffectiveVdot ?? s.v ?? 0;
-  const baseVdot = s.v ?? 0;
-  const physioAdj = s.physioAdj ?? 0;
-  const rpeAdj = s.rpeAdj ?? 0;
-  const totalAdj = physioAdj + rpeAdj;
+  const currentVdot = s.blendedEffectiveVdot ?? s.v ?? 0;
+  // Projected race-day VDOT, inferred from the forecast race time at the
+  // selected race distance. Same conversion the predictor uses; falls back
+  // to current when no forecast exists.
+  const forecastTime = s.forecastTime ?? s.forecastTimeAdjusted ?? 0;
+  const raceKm = s.rd ? rdKm(s.rd) : 0;
+  const projectedVdot = forecastTime > 0 && raceKm > 0
+    ? cv(raceKm * 1000, forecastTime)
+    : null;
   const lt = s.lt;
-  const pac = s.pac;
   const unitPref = s.unitPref ?? 'km';
 
+  // Weeks remaining to race day. `tw` = total weeks, `w` = current week.
+  const totalWeeks = s.tw ?? (s.wks?.length ?? 0);
+  const currentWeek = s.w ?? 1;
+  const weeksRemaining = Math.max(0, totalWeeks - currentWeek);
+
+  // ── Fitness markers card (current → projected race-day) ─────────────────
+  const markerRow = (
+    label: string,
+    accent: string,
+    current: number | null,
+    projected: number | null,
+    fmt: (v: number) => string,
+    inverted: boolean,
+  ): string => {
+    if (current == null || current <= 0) {
+      return `
+        <div style="padding:12px 0;border-top:1px solid rgba(0,0,0,0.04)">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:${TEXT_M};font-weight:500">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${accent}"></span>
+              ${escapeText(label)}
+            </span>
+            <span style="font-size:11px;color:${TEXT_L}">No marker yet</span>
+          </div>
+        </div>
+      `;
+    }
+    const minDelta = label === 'VDOT' ? 0.5 : 1;
+    const moved = projected != null && Math.abs(current - projected) >= minDelta;
+    const improving = projected != null
+      ? (inverted ? projected < current : projected > current)
+      : false;
+    const deltaTone = !moved ? TEXT_S : (improving ? '#1F7A3D' : '#9A6A20');
+    return `
+      <div style="padding:12px 0;border-top:1px solid rgba(0,0,0,0.04)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+          <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:${TEXT_M};font-weight:500">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${accent}"></span>
+            ${escapeText(label)}
+          </span>
+          <span style="font-size:13px;color:${TEXT_M};font-variant-numeric:tabular-nums">${fmt(current)}${moved ? ` → <span style="color:${deltaTone}">${fmt(projected!)}</span>` : ''}</span>
+        </div>
+        <div style="font-size:11px;color:${TEXT_L}">${moved ? (improving ? 'Projected race-day gain' : 'Detraining if plan slips') : 'Projection ≈ current'}</div>
+      </div>
+    `;
+  };
+
+  const markersCard = `
+    <div style="${CARD};margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-size:14px;color:${TEXT_S};font-weight:500">Fitness markers</span>
+        <span style="font-size:11px;color:${TEXT_L}">${weeksRemaining > 0 ? `${weeksRemaining}w to race day` : 'Race date pending'}</span>
+      </div>
+      ${markerRow('VDOT', '#16A34A', currentVdot, projectedVdot, (v) => v.toFixed(1), /*inverted*/ false)}
+      ${lt && lt > 0 ? markerRow('LT pace', '#14B8A6', lt, null, (v) => fp(v, unitPref), /*inverted*/ true) : ''}
+    </div>
+  `;
+
+  // ── VDOT history sparkline ───────────────────────────────────────────────
   const vdotSamples = (s.vdotHistory ?? [])
     .filter(h => h.vdot && h.vdot > 0 && h.date)
     .map(h => ({ date: h.date!, value: h.vdot }));
 
-  const chart = vdotSamples.length >= 2
-    ? buildBenchmarkTrendChart(vdotSamples, '#3B82F6', 'rgba(59,130,246,0.08)', '', false)
-    : `<div style="text-align:center;padding:16px 8px;font-size:12px;color:${TEXT_S}">Sparkline fills as VDOT is re-measured. Needs at least 2 samples (currently ${vdotSamples.length}).</div>`;
-
-  const paceRows = pac
-    ? `
-      ${statRow('Easy pace', fp(pac.e, unitPref))}
-      ${statRow('Marathon pace', fp(pac.m, unitPref))}
-      ${statRow('Threshold pace', fp(pac.t, unitPref))}
-      ${statRow('Interval pace', fp(pac.i, unitPref))}
-      ${statRow('Repetition pace', fp(pac.r, unitPref))}
-    `
-    : '';
-
-  const ltRow = lt && lt > 0 ? statRow('LT pace', fp(lt, unitPref)) : '';
-  const adjRow = totalAdj !== 0
-    ? statRow('Recent adjustment', `${totalAdj >= 0 ? '+' : ''}${totalAdj.toFixed(1)}`)
-    : '';
+  const sparkVdot = vdotSamples.length >= 2 ? `
+    <div style="${CARD};margin-bottom:14px">
+      <div style="font-size:13px;color:${TEXT_S};font-weight:500;margin-bottom:10px">VDOT history</div>
+      ${buildBenchmarkTrendChart(vdotSamples, '#16A34A', 'rgba(22,163,74,0.10)', '', /*inverted*/ false)}
+    </div>
+  ` : '';
 
   const body = `
-    <div style="${CARD};margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
-        <div>
-          <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Current VDOT</div>
-          <div style="font-size:32px;font-weight:600;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${vdot.toFixed(1)}</div>
-        </div>
-        <div style="font-size:11px;color:${TEXT_L}">Base ${baseVdot.toFixed(1)}</div>
-      </div>
-      ${chart}
-    </div>
-
-    ${renderBlendCard(s)}
-
-    ${(pac || lt || totalAdj !== 0) ? `
-      <div style="${CARD};margin-bottom:14px">
-        <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Pace zones</div>
-        ${ltRow}
-        ${paceRows}
-        ${adjRow}
-      </div>
-    ` : ''}
-
-    ${captionCard('VDOT is the model\'s single-number proxy for aerobic capacity. The headline value is a <strong>weighted blend</strong> of up to six predictors. Each row above shows the predictor, its base weight at the current race distance, and the time it would predict on its own. The blend redistributes weight when a predictor is missing (HR rolls into LT; Tanda rolls into LT for shorter distances). RPE and physiology adjustments fine-tune the final VDOT in real time on top of the blend.')}
+    ${markersCard}
+    ${sparkVdot}
+    ${captionCard('VDOT is the model\'s single-number proxy for aerobic capacity. The current value is a weighted blend of up to six predictors (race PBs, recent runs, LT pace, HR-calibrated efforts, Tanda formula). The projected race-day VDOT is derived from your forecast finish time at the race distance — it factors in weeks remaining, planned sessions, and recent adherence. Markers without recent training get demoted so the projection does not overpromise gains.')}
   `;
 
-  return { title: 'Capacity', subhead: 'Aerobic ceiling that sets the pace floor', body };
+  return { title: 'Capacity', subhead: 'Fitness markers that set the pace floor', body };
 }
 
 // ── Prediction-penalty surface (pageResponse) ────────────────────────────────
