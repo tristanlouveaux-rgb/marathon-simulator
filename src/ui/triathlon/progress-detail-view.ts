@@ -30,10 +30,15 @@ import { DISCIPLINE_LABEL } from './colours';
 
 // Blue/indigo spectrum. From the UX_PATTERNS zone colour scale.
 // Swim = sky, Bike = blue, Run = indigo. All from the same tonal family.
+// Discipline accents for line/area charts. Unified with the marquee per-leg
+// accents (swim blue / bike red / run green) so the colour story stays the
+// same across Forecast, Stats, and per-benchmark drill-downs. Bike was
+// previously violet (#8B5CF6) which rendered as purple on the CTL and TSS
+// charts; corrected per the "no purple on stats" rule.
 const DISC_CHART = {
-  swim: { stroke: '#38BDF8', fill: 'rgba(56,189,248,0.08)' },
-  bike: { stroke: '#8B5CF6', fill: 'rgba(139,92,246,0.08)' },
-  run:  { stroke: '#14B8A6', fill: 'rgba(20,184,166,0.08)' },
+  swim: { stroke: '#3B82F6', fill: 'rgba(59,130,246,0.08)' },
+  bike: { stroke: '#DC2626', fill: 'rgba(220,38,38,0.08)' },
+  run:  { stroke: '#16A34A', fill: 'rgba(22,163,74,0.08)' },
 } as const;
 import { sportToTransferSource } from '@/constants/transfer-matrix';
 import { formatKm, type UnitPref } from '@/utils/format';
@@ -844,30 +849,6 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
       ${buildPerDisciplineCTLChart(s, range)}
     </div>
 
-    ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Swim</span>
-      </div>
-      ${buildDisciplineKmChart(series, 'swim', unitPref)}
-    </div>`}
-
-    <div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Bike</span>
-      </div>
-      ${buildDisciplineKmChart(series, 'bike', unitPref)}
-    </div>
-
-    ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Run</span>
-      </div>
-      ${buildDisciplineKmChart(series, 'run', unitPref)}
-    </div>`}
-
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Weekly load (TSS) by discipline</div>
       <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
@@ -942,33 +923,6 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           ${legendRow(cycling)}
           ${buildPerDisciplineCTLChart(s, range)}
         </div>
-
-        <!-- Weekly km. Swim -->
-        ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Swim</span>
-          </div>
-          ${buildDisciplineKmChart(series, 'swim', unitPref)}
-        </div>`}
-
-        <!-- Weekly km. Bike -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Bike</span>
-          </div>
-          ${buildDisciplineKmChart(series, 'bike', unitPref)}
-        </div>
-
-        <!-- Weekly km. Run -->
-        ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Run</span>
-          </div>
-          ${buildDisciplineKmChart(series, 'run', unitPref)}
-        </div>`}
 
         <!-- Weekly TSS by discipline -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
