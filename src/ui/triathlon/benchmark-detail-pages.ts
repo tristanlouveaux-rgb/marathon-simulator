@@ -461,7 +461,6 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
   if (ceiling != null) allValues.push(ceiling);
   const domainMax = Math.max(...allValues, 1) * 1.10;
 
-  const ceilingPct = ceiling != null ? Math.min(100, (ceiling / domainMax) * 100) : null;
 
   const barRow = (b: BarSpec): string => {
     const pct = Math.min(100, Math.max(0, (b.value / domainMax) * 100));
@@ -469,15 +468,14 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
     // Soft tint of the accent as the empty-bar background so the empty portion
     // reads as "less of this discipline" rather than neutral grey.
     const track = `${accent}1F`; // ~12% opacity hex suffix
-    // Number sits at the end of the coloured fill. If the bar is near full, anchor
-    // to the right edge so the number doesn't overflow off the chart.
-    const labelOnFill = pct >= 88;
     return `
       <div style="margin-bottom:14px">
-        <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:5px">${b.label}</div>
-        <div style="position:relative;height:18px;border-radius:5px;background:${track}">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px">
+          <span style="font-size:13px;color:var(--c-black);font-weight:500">${b.label}</span>
+          <span style="font-size:14px;color:var(--c-black);font-weight:700;font-variant-numeric:tabular-nums">${Math.round(b.value)}</span>
+        </div>
+        <div style="position:relative;height:10px;border-radius:5px;background:${track};overflow:hidden">
           <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${accent};border-radius:5px"></div>
-          <span style="position:absolute;${labelOnFill ? `right:8px;color:#fff` : `left:calc(${pct.toFixed(1)}% + 8px);color:var(--c-black)`};top:50%;transform:translateY(-50%);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1">${Math.round(b.value)}</span>
         </div>
       </div>`;
   };
@@ -488,23 +486,19 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
     ? `Best measured ${Math.round(bestMeasured)} · ceiling ${Math.round(ceiling)}. ${Math.round(ceiling - bestMeasured)} points of theoretical headroom. Not a target to chase; the ceiling rises naturally as your underlying fitness builds.`
     : (ceiling != null ? `Cardiac ceiling ${Math.round(ceiling)}. Your aerobic upper bound from peak HR ÷ resting HR. Not a measure of current fitness.` : '');
 
-  // Ceiling line: dashed vertical line spanning the chart area at the
-  // ceiling's x-position, with a small label above. Rendered in cardiac-
-  // ceiling warm orange so the cap reads at a glance against the green/red
-  // discipline bars.
-  const ceilingMarker = ceilingPct != null && ceiling != null ? `
-    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:0;bottom:6px;border-left:1.5px dashed ${CEILING_COLOR};transform:translateX(-1px);z-index:2;pointer-events:none"></div>
-    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:-22px;transform:translateX(-50%);font-size:11px;color:${CEILING_COLOR};white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600">Ceiling ${Math.round(ceiling)}</div>
+  // Cardiac-ceiling label, top-right of the card. Cleaner than a dashed
+  // overlay line and reads as a separate fact rather than a chart cap.
+  const ceilingPill = ceiling != null ? `
+    <span style="font-size:11px;font-weight:600;color:${CEILING_COLOR};font-variant-numeric:tabular-nums">Ceiling ${Math.round(ceiling)}</span>
   ` : '';
 
   return `
     <div class="m-card" style="padding:14px 16px;margin-bottom:8px">
-      <div style="font-size:13px;color:var(--c-black);margin-bottom:14px">Per source</div>
-      <div style="position:relative;padding-top:24px">
-        ${ceilingMarker}
-        ${bars.map(barRow).join('')}
-        ${bars.length > 0 ? '<div style="height:6px"></div>' : ''}
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px">
+        <span style="font-size:13px;color:var(--c-black);font-weight:600">Per source</span>
+        ${ceilingPill}
       </div>
+      ${bars.map(barRow).join('')}
       ${headroomCopy ? `<div style="font-size:11px;color:var(--c-black);line-height:1.5;margin-top:6px;padding-top:10px;border-top:1px solid var(--c-border)">${headroomCopy}</div>` : ''}
     </div>`;
 }
