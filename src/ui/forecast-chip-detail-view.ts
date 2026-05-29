@@ -1123,7 +1123,7 @@ function pageFor(key: ChipKey, s: SimulatorState): { title: string; subhead: str
 
 // ── Shoes drilldown ──────────────────────────────────────────────────────────
 
-function pageShoes(s: SimulatorState): { title: string; subhead: string; body: string } {
+function buildShoesToggleCardHTML(s: SimulatorState): string {
   const kind = s.shoeKind ?? 'standard';
   const isCarbon = kind === 'supershoes';
   const tone = isCarbon ? '#16A34A' : TEXT_S;
@@ -1143,20 +1143,43 @@ function pageShoes(s: SimulatorState): { title: string; subhead: string; body: s
     </div>
   ` : '';
 
-  const toggleCard = `
-    <div style="${CARD};margin-bottom:14px">
+  // Segmented-control toggle with depth. Active = raised filled chip (subtle
+  // outer shadow), inactive = inset / recessed look against the track. The
+  // outer track has a soft inset shadow so the inactive side reads as a
+  // pressed-into-track surface rather than a flat button.
+  const segTrack = 'background:rgba(15,23,42,0.05);border-radius:100px;padding:4px;box-shadow:inset 0 1px 2px rgba(15,23,42,0.10),inset 0 0 0 1px rgba(15,23,42,0.04)';
+  const segActive = `background:#fff;color:${TEXT_M};box-shadow:0 1px 2px rgba(15,23,42,0.08),0 4px 10px rgba(15,23,42,0.10),inset 0 0 0 1px rgba(15,23,42,0.04)`;
+  const segInactive = `background:transparent;color:${TEXT_S};box-shadow:none`;
+  const segBtn = (id: string, label: string, active: boolean) => `
+    <button id="${id}" type="button" data-active="${active}" style="
+      flex:1;padding:10px 14px;border-radius:100px;border:none;
+      font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f);
+      transition:background 0.18s cubic-bezier(0.2,0.8,0.2,1),
+                 color 0.18s cubic-bezier(0.2,0.8,0.2,1),
+                 box-shadow 0.18s cubic-bezier(0.2,0.8,0.2,1);
+      -webkit-tap-highlight-color:transparent;
+      ${active ? segActive : segInactive}
+    ">${label}</button>
+  `;
+
+  return `
+    <div id="fcd-shoes-card" style="${CARD};margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
         <span style="font-size:14px;color:${TEXT_M};font-weight:600">Race-day shoes</span>
         <span style="font-size:18px;font-weight:600;color:${tone};font-variant-numeric:tabular-nums">${headline}</span>
       </div>
       <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:14px">${detail}</div>
-      <div style="display:flex;gap:8px">
-        <button id="fcd-shoes-standard" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${!isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${!isCarbon ? TEXT_M : 'transparent'};color:${!isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Standard</button>
-        <button id="fcd-shoes-supershoes" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${isCarbon ? TEXT_M : 'transparent'};color:${isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Supershoes</button>
+      <div style="display:flex;gap:0;${segTrack}">
+        ${segBtn('fcd-shoes-standard',   'Standard',   !isCarbon)}
+        ${segBtn('fcd-shoes-supershoes', 'Supershoes',  isCarbon)}
       </div>
       ${forecastRow}
     </div>
   `;
+}
+
+function pageShoes(s: SimulatorState): { title: string; subhead: string; body: string } {
+  const toggleCard = buildShoesToggleCardHTML(s);
 
   const body = `
     ${toggleCard}
@@ -1404,13 +1427,17 @@ export function renderForecastChipDetail(key: ChipKey): void {
     });
   });
 
-  // Shoes toggle. Writes shoeKind to state, refreshes blended fitness so the
-  // raw forecast time picks up the 3% adjustment, then re-runs the course-
-  // factors pass so forecastTimeAdjusted (the field the hero card actually
-  // reads) reflects the new value. Re-renders this page on completion.
+  // Shoes toggle. In-place update of the toggle card only — avoids the full
+  // page reload (and the visible scroll jump) of renderForecastChipDetail.
+  // 1) Write shoeKind, save.
+  // 2) refreshBlendedFitness updates s.forecastTime with the 3% pace boost.
+  // 3) refreshForecastCourseFactors propagates to s.forecastTimeAdjusted.
+  // 4) Rebuild #fcd-shoes-card HTML in-place. Re-wire the buttons since the
+  //    nodes are replaced.
   const setShoeKind = async (kind: 'standard' | 'supershoes') => {
     const { getMutableState, saveState } = await import('@/state');
     const ms = getMutableState();
+    if (ms.shoeKind === kind) return;
     ms.shoeKind = kind;
     saveState();
     const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
@@ -1418,10 +1445,17 @@ export function renderForecastChipDetail(key: ChipKey): void {
     const { refreshForecastCourseFactors } = await import('@/calculations/course-factors-running');
     refreshForecastCourseFactors(ms);
     saveState();
-    renderForecastChipDetail('shoes');
+    const card = document.getElementById('fcd-shoes-card');
+    if (card?.parentElement) {
+      card.outerHTML = buildShoesToggleCardHTML(getState());
+      wireShoeButtons();
+    }
   };
-  document.getElementById('fcd-shoes-standard')?.addEventListener('click', () => setShoeKind('standard'));
-  document.getElementById('fcd-shoes-supershoes')?.addEventListener('click', () => setShoeKind('supershoes'));
+  const wireShoeButtons = () => {
+    document.getElementById('fcd-shoes-standard')?.addEventListener('click', () => setShoeKind('standard'));
+    document.getElementById('fcd-shoes-supershoes')?.addEventListener('click', () => setShoeKind('supershoes'));
+  };
+  wireShoeButtons();
 
   wireTabBarHandlers(navigateTab);
 }
