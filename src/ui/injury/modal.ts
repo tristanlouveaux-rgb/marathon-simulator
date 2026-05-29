@@ -29,6 +29,16 @@ import { saveState } from '@/state';
 /** Modal container ID */
 const MODAL_ID = 'injury-modal';
 
+/**
+ * When the injury modal is opened as the weekly check-in gate (from
+ * `events.ts:next()`), saving the check-in IS the trigger to resume the paused
+ * week advance. Every other entry point (banner / button edits, the daily
+ * check-in overlay) opens a plain status edit that must NOT advance the week.
+ * ISSUE-248: this flag was missing, so every injury edit ran the full
+ * complete-week flow and pushed the user forward a week.
+ */
+let advanceWeekAfterSave = false;
+
 /** Get or create injury state on simulator state */
 function getInjuryState(): InjuryState {
   const state = getState() as any;
@@ -47,8 +57,10 @@ function setInjuryState(injuryState: InjuryState): void {
 /**
  * Open the injury report modal
  */
-export function openInjuryModal(): void {
+export function openInjuryModal(opts?: { advanceWeekAfterSave?: boolean }): void {
   closeInjuryModal();
+
+  advanceWeekAfterSave = opts?.advanceWeekAfterSave ?? false;
 
   const injuryState = getInjuryState();
 
@@ -365,10 +377,20 @@ async function handleSaveInjury(): Promise<void> {
   setInjuryState(injuryState);
   saveState();
 
-  if (wasAlreadyActive) {
+  if (wasAlreadyActive && advanceWeekAfterSave) {
+    // Opened as the weekly check-in gate (events.ts:next()): the check-in just
+    // set wk.injuryCheckedIn, so calling next() again resumes the week advance
+    // the gate paused. This is the ONE path where saving an injury advances.
     closeInjuryModal();
     const { next } = await import('@/ui/events');
     next();
+  } else if (wasAlreadyActive) {
+    // Banner / button edit of an existing injury: re-render in place to reflect
+    // the new capacity, never advance the plan week (ISSUE-248). Historic bug:
+    // this called next() unconditionally, running the full week-completion flow
+    // (s.w++ at events.ts) and pushing the user forward a week on every edit.
+    closeInjuryModal();
+    render();
   } else {
     window.location.reload();
   }

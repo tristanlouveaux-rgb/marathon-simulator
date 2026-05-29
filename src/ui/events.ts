@@ -847,7 +847,9 @@ export async function next(): Promise<void> {
         openGraduatedReturnCheckIn();
       } else {
         const { openInjuryModal } = await import('./injury/modal');
-        openInjuryModal();
+        // Opened as the weekly check-in gate: saving the check-in must resume
+        // the week advance this gate just paused (return early below).
+        openInjuryModal({ advanceWeekAfterSave: true });
       }
       return;
     }
