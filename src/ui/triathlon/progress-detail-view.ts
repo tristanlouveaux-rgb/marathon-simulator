@@ -758,6 +758,57 @@ function legendRow(cycling = false): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Recent weeks summary card — top of the Progress section.
+// Big numbers for the last 5 weeks plus a tap target that opens the dedicated
+// Recent weeks drill-down (stacked Hours / Sessions / TSS bars by discipline).
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildRecentWeeksCard(s: SimulatorState): string {
+  const wks = s.wks ?? [];
+  const curWeek = Math.max(1, Math.min(wks.length, s.w ?? 1));
+  const startIdx = Math.max(0, curWeek - 5);
+  let totalSec = 0, sessionCount = 0, totalTSS = 0;
+  for (let i = startIdx; i < curWeek; i++) {
+    const wk = wks[i];
+    if (!wk?.garminActuals) continue;
+    const seen = new Set<string>();
+    for (const a of Object.values(wk.garminActuals)) {
+      if (!a) continue;
+      if (a.garminId && seen.has(a.garminId)) continue;
+      if (a.garminId) seen.add(a.garminId);
+      if (typeof a.durationSec === 'number') totalSec += a.durationSec;
+      totalTSS += iTrimpToTSS(a.iTrimp);
+      sessionCount += 1;
+    }
+  }
+  const hh = Math.floor(totalSec / 3600);
+  const mm = Math.floor((totalSec % 3600) / 60);
+  const timeLabel = totalSec > 0 ? `${hh}h ${String(mm).padStart(2, '0')}m` : '—';
+
+  return `
+    <button id="tri-recent-weeks-card" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.05);border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.05);padding:16px 18px;margin-bottom:14px;cursor:pointer;font-family:var(--f);position:relative;-webkit-tap-highlight-color:transparent">
+      <svg style="position:absolute;top:16px;right:14px;pointer-events:none" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:10px">Recent weeks</div>
+      <div style="display:flex;align-items:baseline;gap:18px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${timeLabel}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">time active</div>
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${sessionCount}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">sessions</div>
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${Math.round(totalTSS)}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">total TSS</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--c-muted);margin-top:10px">Last 5 weeks · tap to see weekly breakdowns</div>
+    </button>
+  `;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Exported content block. Used by the unified stats page
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -776,6 +827,8 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
     : 'All available history.';
 
   return `
+    ${buildRecentWeeksCard(s)}
+
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       ${buildRangeToggle(range)}
       <div style="font-size:10px;color:var(--c-faint);max-width:60%;text-align:right;line-height:1.4">${rangeNote}</div>

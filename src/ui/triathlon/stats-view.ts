@@ -146,6 +146,12 @@ export function renderTriathlonStatsView(): void {
 
   wireStatsProgressRangeButtons(s);
 
+  // Drill into the dedicated Recent weeks page (stacked Hours / Sessions /
+  // TSS bars by discipline).
+  document.getElementById('tri-recent-weeks-card')?.addEventListener('click', () => {
+    import('./progress-detail-view').then(({ renderTriProgressDetailView }) => renderTriProgressDetailView());
+  });
+
   // Drill-through from the "Your Numbers" bars. Each bar id (css/ftp/lt/vo2)
   // routes to its own detail page with a matching override card. LT reuses
   // the running-stats page (mode-agnostic); CSS/FTP/VO2max use the
