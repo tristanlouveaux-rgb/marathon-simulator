@@ -7,6 +7,7 @@ import {
   calculateLiveForecast
 } from '@/calculations';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { injuryAdjustedBuildWeeks } from '@/calculations/injury-recovery';
 import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
 import {
   generateWeekWorkouts, parseWorkoutDescription,
@@ -197,12 +198,16 @@ export function render(): void {
     forecast = s.forecastTime;
   } else {
     const wr = s.tw - realW + 1;
+    // Injury-aware: a current run restriction debits its recovery weeks so the
+    // forecast builds from the return date instead of crediting build during
+    // weeks the athlete cannot run. Same helper as the s.forecastTime recompute.
+    const effectiveWr = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', wr);
     const sessionsForHorizon = (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
     const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
     const { forecastTime: rawForecast } = calculateLiveForecast({
       currentVdot: currentVDOT,
       targetDistance: s.rd,
-      weeksRemaining: wr,
+      weeksRemaining: effectiveWr,
       sessionsPerWeek: sessionsForHorizon,
       runnerType: getRunnerType(s.b),
       experienceLevel: s.onboarding?.experienceLevel || 'intermediate',

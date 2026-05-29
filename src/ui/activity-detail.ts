@@ -11,7 +11,7 @@ import { saveState } from '@/state/persistence';
 import { formatKm } from '@/utils/format';
 import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
 import { looksLikeCssTest, looksLikeFtpTest } from '@/calculations/tri-benchmarks-from-history';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { SPORT_LABELS } from '@/constants';
@@ -612,7 +612,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
-  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  else if (tab === 'forecast') navigateToForecastTab();
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

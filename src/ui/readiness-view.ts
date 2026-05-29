@@ -33,7 +33,7 @@ import { computeDailyCoach } from '@/calculations/daily-coach';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildInjuryCaption, isInjuryActive } from './injury/modal';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
@@ -787,7 +787,7 @@ function getReadinessHTML(s: SimulatorState): string {
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
-  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  else if (tab === 'forecast') navigateToForecastTab();
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

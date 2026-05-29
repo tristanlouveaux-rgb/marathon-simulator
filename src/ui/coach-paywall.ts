@@ -18,7 +18,7 @@
  *     3.1.3(a) anti-steering
  */
 
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildScrollAtmosphereBackground, buildSunGlint } from './page-flair';
 import { showSimpleToast } from './toast';
 import {
@@ -294,7 +294,7 @@ async function onRestore(): Promise<void> {
 function navigateTab(tab: TabId): void {
   if (tab === 'home') void import('./home-view').then(m => m.renderHomeView());
   else if (tab === 'plan') void import('./main-view').then(m => m.renderMainView());
-  else if (tab === 'forecast') void import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  else if (tab === 'forecast') navigateToForecastTab();
   else if (tab === 'record') void import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') void import('./stats-view').then(m => m.renderStatsView());
 }

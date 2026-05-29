@@ -160,32 +160,62 @@ function describeHyroxComponent(c: HyroxComponent): { name: string; amount: stri
 
 /** Parse a HYROX station/brick workout into the same flat guided shape used
  *  by strength sessions, so the overlay / controller / progress rings are
- *  reused unchanged. Returns null if there are no components. */
+ *  reused unchanged. Returns null if there are no components.
+ *
+ *  The component list stores ONE entry per station/run (per-round work + total
+ *  MTL); the prescribed round count lives on `workout.hyroxRounds`. Here we
+ *  expand that into the full round x component walk so the guided player steps
+ *  through every round. Each expanded set reuses the ORIGINAL component index as
+ *  `exerciseIndex` so the overlay's GPS run bridge and the progress rings (which
+ *  group by exercise) still resolve correctly — a station accumulates `rounds`
+ *  sets under one ring.
+ *
+ *  Rest is prescribed, not athlete-paced: each component carries `restAfterSec`
+ *  (inter-station rest); the last component of each round uses the workout's
+ *  `hyroxRoundRestSec` (inter-round rest); the final set has no rest. Only the
+ *  calibration assessment (`hyrox_assessment`) stays manual / unbounded so the
+ *  athlete can take as long as they like recording split times. */
 export function parseHyroxSession(workout: Workout): StrengthSession | null {
   const components = (workout as any).hyroxComponents as HyroxComponent[] | undefined;
   if (!components || components.length === 0) return null;
 
-  const sets: GuidedSet[] = components.map((c, i) => {
-    const { name, amount } = describeHyroxComponent(c);
-    return {
-      exerciseName: name,
-      exerciseIndex: i,
-      setIndex: 0,
-      setCount: 1,
-      reps: amount,
-      cue: '',
-      restSec: 0,
-    };
-  });
+  const rounds = Math.max(1, Math.round((workout as any).hyroxRounds ?? 1));
+  const roundRestSec = Math.max(0, Math.round((workout as any).hyroxRoundRestSec ?? 0));
+
+  const sets: GuidedSet[] = [];
+  for (let r = 0; r < rounds; r++) {
+    components.forEach((c, ci) => {
+      const { name, amount } = describeHyroxComponent(c);
+      const isLastComponent = ci === components.length - 1;
+      const isFinalRound = r === rounds - 1;
+      // Rest after this set: inter-round rest after the last component of a
+      // round (except the final round), the component's own inter-station rest
+      // otherwise, and none on the very last set.
+      let restSec: number;
+      if (isLastComponent && isFinalRound) restSec = 0;
+      else if (isLastComponent) restSec = roundRestSec;
+      else restSec = Math.max(0, Math.round(c.restAfterSec ?? 0));
+
+      sets.push({
+        exerciseName: name,
+        exerciseIndex: ci,
+        setIndex: r,
+        setCount: rounds,
+        reps: amount,
+        cue: '',
+        restSec,
+      });
+    });
+  }
 
   return {
     title: workout.n || 'HYROX session',
     sets,
     exerciseCount: components.length,
     stretch: null,
-    // HYROX training/testing is athlete-paced between components: hit a station
-    // hard, take as much rest as you need, start the next when ready.
-    manualAdvance: true,
+    // Only the calibration assessment is athlete-paced (unbounded rest while
+    // recording splits). Prescribed sessions use the timed rest countdown.
+    manualAdvance: workout.t === 'hyrox_assessment',
   };
 }
 

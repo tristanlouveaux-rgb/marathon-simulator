@@ -21,6 +21,8 @@ import { cv } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
+import { getDisciplineCapacity } from '@/injury/engine';
+import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
 const DIST_M: Record<RaceDistance, number> = {
   '5k': 5000,
@@ -184,12 +186,13 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Hold s.v at its pre-taper value until we exit the low-volume phase.
   const currentWeek = (s.wks ?? [])[(s.w ?? 1) - 1];
   const inTaperOrDeload = currentWeek?.ph === 'taper';
-  // During active injury where running is stopped (canRun='no'), the PB/HR
-  // blend reflects pre-injury fitness. Writing it back would undo the weekly
-  // VDOT decay applied by advanceWeekToToday. Allow it to write again once
-  // the user returns to running (canRun='limited'|'yes').
+  // During active injury where running is fully blocked (run capacity 0), the
+  // PB/HR blend reflects pre-injury fitness. Writing it back would undo the
+  // weekly VDOT decay applied by advanceWeekToToday. Allow it to write again
+  // once the user returns to any running (capacity > 0). Reads capacity (not the
+  // legacy canRun enum) so it stays correct with the per-discipline sliders.
   const injuryState = (s as any).injuryState;
-  const injuryBlockingRun = injuryState?.active && injuryState?.canRun === 'no';
+  const injuryBlockingRun = injuryState?.active && getDisciplineCapacity(injuryState, 'run') === 0;
   if (!inTaperOrDeload && !injuryBlockingRun) {
     s.v = s.blendedEffectiveVdot;
   }
@@ -214,10 +217,14 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         totalWeeks: s.tw,
         taperWeeks: s.rd === 'marathon' ? 3 : 2,
       });
+      // Injury-aware: build from the return date, not flat. A current run
+      // restriction debits its recovery weeks so the forecast doesn't credit
+      // build during weeks the athlete cannot run. Mirrors the tri predictor.
+      const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
       const { forecastVdot, forecastTime } = calculateLiveForecast({
         currentVdot: s.v,
         targetDistance: s.rd,
-        weeksRemaining,
+        weeksRemaining: effectiveWeeksRemaining,
         sessionsPerWeek: sessionsForHorizon,
         runnerType: s.typ as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
         experienceLevel: s.onboarding?.experienceLevel || 'intermediate',

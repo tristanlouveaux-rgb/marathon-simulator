@@ -115,51 +115,29 @@ import {
   type ClimateCategory,
 } from '@/constants/triathlon-course-factors';
 import type { InjuryState } from '@/types/injury';
-import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
+import { disciplineRecovery, recoveryDebitWeeks, type DisciplineRecovery } from './injury-recovery';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
 // ───────────────────────────────────────────────────────────────────────────
-
-/** Per-discipline recovery state read off a current injury. */
-interface DisciplineRecovery {
-  /** Weeks until the discipline returns to full, clamped to the race horizon.
-   *  0 = unrestricted or no captured window (legacy state). */
-  resumeWeeks: number;
-  /** Current capacity 0–100. 0 = blocked, 1–99 = reduced, 100 = full. */
-  capacity: number;
-}
 
 /**
  * Per-discipline recovery info owed to a current injury. The resume week drives
  * the dose-sampling offset and the forecast caption; capacity scales the
  * build-time debit so a discipline you can still partly train (e.g. bike at
  * 50%) loses only a fraction of its build weeks, not all of them.
+ * Per-discipline math lives in ./injury-recovery (shared with running).
  */
 function computeInjuryRecoveryWeeks(
   state: SimulatorState,
   weeksRemaining: number,
 ): { swim: DisciplineRecovery; bike: DisciplineRecovery; run: DisciplineRecovery } {
   const inj = (state as any).injuryState as InjuryState | undefined;
-  const none: DisciplineRecovery = { resumeWeeks: 0, capacity: 100 };
-  const allNone = { swim: none, bike: none, run: none };
-  if (!inj?.active || !inj.resumeWeeksByDiscipline) return allNone;
-  const resume = inj.resumeWeeksByDiscipline;
-  const build = (w: number | undefined, disc: DisciplineKey): DisciplineRecovery => ({
-    resumeWeeks: typeof w === 'number' && w > 0 ? Math.min(w, weeksRemaining) : 0,
-    capacity: getDisciplineCapacity(inj, disc),
-  });
   return {
-    swim: build(resume.swim, 'swim'),
-    bike: build(resume.bike, 'bike'),
-    run:  build(resume.run,  'run'),
+    swim: disciplineRecovery(inj, 'swim', weeksRemaining),
+    bike: disciplineRecovery(inj, 'bike', weeksRemaining),
+    run:  disciplineRecovery(inj, 'run',  weeksRemaining),
   };
-}
-
-/** Build-time debit (weeks) for a discipline: full window when blocked,
- *  fractional when still trainable at reduced capacity. */
-function recoveryDebitWeeks(r: DisciplineRecovery): number {
-  return r.resumeWeeks * (1 - Math.max(0, Math.min(100, r.capacity)) / 100);
 }
 
 export function predictTriathlonRace(state: SimulatorState): TriRacePrediction | null {

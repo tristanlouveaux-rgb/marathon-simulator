@@ -105,6 +105,64 @@ describe('parseHyroxSession', () => {
     expect(session.sets[1].reps).toBe('100 reps');
     expect(session.sets[2].exerciseName).toBe('Sled Push');
   });
+
+  it('expands the component list by hyroxRounds, reusing the original component index', () => {
+    const w = {
+      t: 'hyrox_station_density', n: 'Density', d: '',
+      hyroxRounds: 3, hyroxRoundRestSec: 120,
+      hyroxComponents: [
+        { type: 'wall_balls', reps: 100, mtl: 0, restAfterSec: 30 },
+        { type: 'row_erg', distanceM: 1000, mtl: 0, restAfterSec: 30 },
+      ],
+    } as any as Workout;
+    const s = parseHyroxSession(w)!;
+    expect(s.exerciseCount).toBe(2);                 // rings still group by station
+    expect(s.sets).toHaveLength(6);                  // 3 rounds x 2 stations
+    expect(s.sets.every(set => set.setCount === 3)).toBe(true);
+    // exerciseIndex cycles 0,1,0,1,0,1 so the GPS bridge / rings resolve
+    expect(s.sets.map(set => set.exerciseIndex)).toEqual([0, 1, 0, 1, 0, 1]);
+    // setIndex carries the round number
+    expect(s.sets.map(set => set.setIndex)).toEqual([0, 0, 1, 1, 2, 2]);
+  });
+
+  it('applies inter-station rest within a round, inter-round rest between rounds, none on the last set', () => {
+    const w = {
+      t: 'hyrox_station_density', n: 'Density', d: '',
+      hyroxRounds: 2, hyroxRoundRestSec: 120,
+      hyroxComponents: [
+        { type: 'wall_balls', reps: 100, mtl: 0, restAfterSec: 30 },
+        { type: 'row_erg', distanceM: 1000, mtl: 0, restAfterSec: 30 },
+      ],
+    } as any as Workout;
+    const s = parseHyroxSession(w)!;
+    //         r0 WB  r0 Row   r1 WB  r1 Row
+    expect(s.sets.map(set => set.restSec)).toEqual([30, 120, 30, 0]);
+  });
+
+  it('prescribed sessions use timed rest (not manual advance)', () => {
+    const w = {
+      t: 'hyrox_station_density', n: 'D', d: '', hyroxRounds: 2, hyroxRoundRestSec: 120,
+      hyroxComponents: [{ type: 'wall_balls', reps: 100, mtl: 0, restAfterSec: 30 }],
+    } as any as Workout;
+    expect(parseHyroxSession(w)!.manualAdvance).toBe(false);
+  });
+
+  it('only the calibration assessment stays athlete-paced (manual advance)', () => {
+    const w = {
+      t: 'hyrox_assessment', n: 'Assessment', d: '', hyroxRounds: 1,
+      hyroxComponents: [{ type: 'wall_balls', reps: 100, mtl: 0 }],
+    } as any as Workout;
+    expect(parseHyroxSession(w)!.manualAdvance).toBe(true);
+  });
+
+  it('defaults to one round when hyroxRounds is absent (backward compatible)', () => {
+    const s = parseHyroxSession(hx([
+      { type: 'wall_balls', reps: 100, mtl: 0 },
+      { type: 'row_erg', distanceM: 1000, mtl: 0 },
+    ]))!;
+    expect(s.sets).toHaveLength(2);
+    expect(s.sets.every(set => set.setCount === 1)).toBe(true);
+  });
 });
 
 describe('parseGuidedSession (adapter)', () => {

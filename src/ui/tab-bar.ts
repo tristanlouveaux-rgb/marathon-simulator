@@ -85,3 +85,26 @@ if (typeof document !== 'undefined') {
 export function wireTabBarHandlers(onChange: (tab: TabId) => void): void {
   _tabHandler = onChange;
 }
+
+/**
+ * Mode-aware navigation to the Forecast tab. EventType decides which forecast
+ * view loads:
+ *   - 'hyrox'     → renderHyroxForecastView
+ *   - 'triathlon' → renderTriathlonForecastView
+ *   - 'running'   → renderRaceForecastView (default; covers undefined/legacy)
+ *
+ * Use this instead of inlining the dispatch in every navigateTab() handler —
+ * the inlined "else import('./triathlon/forecast-view')" pattern broke running
+ * mode (tri forecast bails when triConfig is missing, so the user saw a blank
+ * page).
+ */
+export function navigateToForecastTab(): void {
+  const eventType = getState().eventType;
+  if (eventType === 'hyrox') {
+    void import('./hyrox/forecast-view').then(m => m.renderHyroxForecastView());
+  } else if (eventType === 'triathlon') {
+    void import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  } else {
+    void import('./race-forecast-view').then(m => m.renderRaceForecastView());
+  }
+}

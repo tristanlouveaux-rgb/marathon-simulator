@@ -17,7 +17,7 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { computeDailyCoach, type CoachState, type CoachSignals, type CoachBlocker } from '@/calculations/daily-coach';
 import { fmtSleepDebt } from '@/calculations/sleep-insights';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { renderFeelingPromptHTML, wireFeelingPromptHandlers } from './feeling-prompt';
 import { buildScrollAtmosphereBackground, buildSunGlint } from './page-flair';
 
@@ -1055,7 +1055,7 @@ function getClassicCoachHTML(coach: CoachState): string {
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
-  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  else if (tab === 'forecast') navigateToForecastTab();
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

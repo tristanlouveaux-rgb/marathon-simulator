@@ -121,6 +121,44 @@ function fmtPace(secPerKm: number): string {
   return `${m}:${s}`;
 }
 
+/**
+ * Coach dose ceiling (max rounds) per ability band. Sourced from the HYROX
+ * research doc §3.5 brick dosing (docs/research/hyrox.md lines 169-171):
+ *   beginner tier ≤4, novice/intermediate ≤6, advanced/competitive ≤8.
+ * Used as the upper clamp so race-pace station volume never exceeds the band's
+ * prescribed dose, regardless of how large a slot the scheduler hands us.
+ * See SCIENCE_LOG §AO.
+ */
+function bandMaxRounds(band: AbilityBand): number {
+  switch (band) {
+    case 'competitive':
+    case 'advanced':
+      return 8;
+    case 'intermediate':
+    case 'novice':
+      return 6;
+    default: // beginner, total_beginner
+      return 4;
+  }
+}
+
+/** A circuit session is at least this many rounds (below this it is a single
+ *  pass, i.e. the calibration assessment, not a training circuit). */
+const MIN_CIRCUIT_ROUNDS = 2;
+
+/**
+ * Rounds that best fill a time budget given one round's duration: nearest whole
+ * number of rounds to the slot (so the session fills the time the scheduler
+ * allocated rather than always under- or over-shooting), floored at 2 rounds
+ * and capped at the band's coach dose ceiling. The budget does the filling; the
+ * band cap prevents over-dosing race-pace volume on a large slot.
+ */
+function fillRounds(budgetSec: number, roundDurSec: number, bandMax: number): number {
+  if (roundDurSec <= 0) return MIN_CIRCUIT_ROUNDS;
+  const raw = Math.round(budgetSec / roundDurSec);
+  return Math.max(MIN_CIRCUIT_ROUNDS, Math.min(bandMax, raw));
+}
+
 // ─── Run session generator ────────────────────────────────────────────────────
 
 /**
@@ -218,24 +256,39 @@ function generateStationTechnique(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
 }): Workout {
-  // 3 stations × 3 rounds at 65% of seed time (technique pace), 1:1 work:rest.
-  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 3);
+  // Up to 4 stations at 65% of seed time (technique pace), 60s between stations
+  // and 3 min between rounds. Round count fills the station-work budget (slot
+  // minus the run finish), clamped to the band's coach range — controlled pace
+  // sustains more volume than race-pace density. Duration follows the work.
+  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 4);
   // Beginners: remove eccentric-heavy stations entirely. Quad DOMS from burpees/lunges
   // on Week 1 kills adherence. Introduce progressively from build phase.
   if ((p.band === 'total_beginner' || p.band === 'beginner') && p.phase === 'base') {
     const safe = stations.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
     if (safe.length >= 2) stations = safe;
   }
-  const rounds = 3;
+
+  const INTER_STATION_REST = 60;
+  const INTER_ROUND_REST = 180;
+
+  // Per-station technique work (one round) and the run finish that closes the session.
+  const perStationSec = stations.map(s => Math.round(stationSeedSec(s, p.band, p.stationBenchmarks) * 0.65));
+  const runFinishMin = Math.min(20, Math.round(p.dur * 0.4));
+  const easyPace = SEED_RUN_PACE_SEC_KM[p.band] * 1.2;
+  const runKm = Math.round((runFinishMin * 60) / easyPace * 10) / 10;
+
+  // Round duration = station work + within-round rests + one inter-round rest.
+  const workPerRoundSec = perStationSec.reduce((sum, s) => sum + s, 0);
+  const roundDurSec = workPerRoundSec + Math.max(0, stations.length - 1) * INTER_STATION_REST + INTER_ROUND_REST;
+  const stationBudgetSec = Math.max(0, (p.dur - runFinishMin) * 60);
+  const rounds = fillRounds(stationBudgetSec, roundDurSec, bandMaxRounds(p.band));
+
   const components: HyroxComponent[] = [];
   let totalMTL = 0;
-
-  const stationLines = stations.map(s => {
+  const stationLines = stations.map((s, i) => {
     const display = STATION_DISPLAY[s];
-    const seedSec = stationSeedSec(s, p.band, p.stationBenchmarks);
-    const techSec = Math.round(seedSec * 0.65);  // 65% of race pace → technique stimulus
-    const workMinPerRound = techSec / 60;
-    const workMinTotal = workMinPerRound * rounds;
+    const techSec = perStationSec[i];
+    const workMinTotal = (techSec / 60) * rounds;
     const externalKg = STATION_EXTERNAL_LOAD_KG[s];
     const stationMTL = computeComponentMTL(workMinTotal, 5, s, externalKg, p.bodyWeightKg);
     totalMTL += stationMTL;
@@ -246,19 +299,22 @@ function generateStationTechnique(p: {
       reps: s === 'wall_balls' ? 50 : undefined,  // half reps for technique
       durationSec: techSec,
       mtl: stationMTL,
+      restAfterSec: INTER_STATION_REST,
     });
 
     return `${display.name} (${s === 'wall_balls' ? '50 reps' : display.distance}, ~${fmtSec(techSec)})`;
   });
 
-  // Session name: generic. The station list lives inside the modal body where
-  // it has space; cramming three station names into the headline reads as noise.
-  const sessionName = 'Station Circuit';
+  // Total prescribed time = station work + all rests across rounds + run finish.
+  const stationTotalSec =
+    workPerRoundSec * rounds +
+    rounds * Math.max(0, stations.length - 1) * INTER_STATION_REST +
+    Math.max(0, rounds - 1) * INTER_ROUND_REST;
+  const estimatedDurationMin = Math.round(stationTotalSec / 60) + runFinishMin;
 
-  // Add a 20-min easy run at the end. Race-specific transition practice
-  const runFinishMin = Math.min(20, Math.round(p.dur * 0.4));
-  const easyPace = SEED_RUN_PACE_SEC_KM[p.band] * 1.2;
-  const runKm = Math.round((runFinishMin * 60) / easyPace * 10) / 10;
+  // Session name: generic. The station list lives inside the modal body where
+  // it has space; cramming station names into the headline reads as noise.
+  const sessionName = 'Station Circuit';
 
   return {
     n: sessionName,
@@ -267,9 +323,11 @@ function generateStationTechnique(p: {
     discipline: 'station',
     r: 5,
     rpe: 5,
-    estimatedDurationMin: p.dur + runFinishMin,
+    estimatedDurationMin,
     musculoTendonLoad: totalMTL,
     hyroxComponents: components,
+    hyroxRounds: rounds,
+    hyroxRoundRestSec: INTER_ROUND_REST,
   };
 }
 
@@ -282,26 +340,45 @@ function generateStationDensity(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
 }): Workout {
-  // 2 stations in AMRAP-style density blocks. Pick 1 high-MTL + 1 erg (lower MTL).
-  // Prioritise the race's primary discriminators (wall balls, sled pull) in build/peak.
+  // Time-capped station circuit (research §7.2: "station work for time / AMRAP").
+  // Pick the race's primary discriminators (2 high-MTL) + 1 erg, then run the
+  // circuit at race pace for as many rounds as fill the slot, clamped to the
+  // band's coach range. 30s between stations, 2 min between rounds. Duration
+  // follows the actual work, not the raw slot budget.
   const avail = availableStations(p.stationAccess);
   const highMTL: HyroxStation[] = ['wall_balls', 'sled_pull', 'sandbag_lunges', 'burpee_broad_jumps']
     .filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
   const ergBased: HyroxStation[] = ['row_erg', 'ski_erg'].filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
 
-  const rotation = p.slotIndex % Math.max(1, highMTL.length);
-  const station1 = highMTL[rotation] ?? avail[p.slotIndex % avail.length];
-  const station2 = ergBased[(p.slotIndex) % Math.max(1, ergBased.length)] ?? avail[(p.slotIndex + 1) % avail.length];
+  // Rotate the two high-MTL picks + an erg by slotIndex for week-to-week variety.
+  const h1 = highMTL[p.slotIndex % Math.max(1, highMTL.length)];
+  const h2 = highMTL[(p.slotIndex + 1) % Math.max(1, highMTL.length)];
+  const erg = ergBased[p.slotIndex % Math.max(1, ergBased.length)];
+  const selectedStations: HyroxStation[] = [];
+  for (const s of [h1, h2, erg]) {
+    if (s && !selectedStations.includes(s)) selectedStations.push(s);
+  }
+  // Fallback: ensure at least two stations even on sparse equipment.
+  if (selectedStations.length < 2) {
+    for (const s of avail) {
+      if (!selectedStations.includes(s)) { selectedStations.push(s); if (selectedStations.length >= 2) break; }
+    }
+  }
+  if (selectedStations.length === 0) selectedStations.push('row_erg');
 
-  const selectedStations = station1 === station2 ? [station1] : [station1, station2];
+  const INTER_STATION_REST = 30;
+  const INTER_ROUND_REST = 120;
+
+  const perStationSec = selectedStations.map(s => stationSeedSec(s, p.band, p.stationBenchmarks));
+  const workPerRoundSec = perStationSec.reduce((sum, s) => sum + s, 0);
+  const roundDurSec = workPerRoundSec + Math.max(0, selectedStations.length - 1) * INTER_STATION_REST + INTER_ROUND_REST;
+  const rounds = fillRounds(p.dur * 60, roundDurSec, bandMaxRounds(p.band));
+
   const components: HyroxComponent[] = [];
   let totalMTL = 0;
-
-  // Each density block: 2 rounds full race distance, race-pace effort
-  const rounds = 2;
-  const stationLines = selectedStations.map(s => {
+  const stationLines = selectedStations.map((s, i) => {
     const display = STATION_DISPLAY[s];
-    const seedSec = stationSeedSec(s, p.band, p.stationBenchmarks);
+    const seedSec = perStationSec[i];
     const workMinTotal = (seedSec / 60) * rounds;
     const externalKg = STATION_EXTERNAL_LOAD_KG[s];
     const stationMTL = computeComponentMTL(workMinTotal, 7, s, externalKg, p.bodyWeightKg);
@@ -313,9 +390,16 @@ function generateStationDensity(p: {
       reps: s === 'wall_balls' ? 100 : undefined,
       durationSec: seedSec,
       mtl: stationMTL,
+      restAfterSec: INTER_STATION_REST,
     });
     return `${display.name} (${display.distance}, target ${fmtSec(seedSec)})`;
   });
+
+  const totalSec =
+    workPerRoundSec * rounds +
+    rounds * Math.max(0, selectedStations.length - 1) * INTER_STATION_REST +
+    Math.max(0, rounds - 1) * INTER_ROUND_REST;
+  const estimatedDurationMin = Math.round(totalSec / 60);
 
   return {
     n: 'Station Density',
@@ -324,9 +408,11 @@ function generateStationDensity(p: {
     discipline: 'station',
     r: 7,
     rpe: 7,
-    estimatedDurationMin: p.dur,
+    estimatedDurationMin,
     musculoTendonLoad: totalMTL,
     hyroxComponents: components,
+    hyroxRounds: rounds,
+    hyroxRoundRestSec: INTER_ROUND_REST,
   };
 }
 
@@ -393,6 +479,7 @@ function generateFullBrick(p: {
       distanceM: 1000,
       durationSec: runSeedSec,
       mtl: runMTL,
+      restAfterSec: 0,  // straight into the station, race-like
     },
     {
       type: station,
@@ -400,6 +487,7 @@ function generateFullBrick(p: {
       reps: station === 'wall_balls' ? 100 : undefined,
       durationSec: stationSeedSec_,
       mtl: stationMTL,
+      restAfterSec: 0,  // last of round → inter-round rest applies (hyroxRoundRestSec)
     },
   ];
 
@@ -413,6 +501,8 @@ function generateFullBrick(p: {
     estimatedDurationMin: p.dur,
     musculoTendonLoad: runMTL + stationMTL,
     hyroxComponents: components,
+    hyroxRounds: rounds,
+    hyroxRoundRestSec: 120,  // "2 min rest between rounds" (description)
   };
 }
 
@@ -448,13 +538,13 @@ function generateMiniBrick(p: {
   const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, undefined, p.bodyWeightKg);
 
   const components: HyroxComponent[] = [
-    { type: 'run', distanceM: 500, durationSec: runSeedSec, mtl: runMTL },
-    { type: station, durationSec: stationSeedSec_, mtl: stationMTL },
+    { type: 'run', distanceM: 500, durationSec: runSeedSec, mtl: runMTL, restAfterSec: 0 },
+    { type: station, durationSec: stationSeedSec_, mtl: stationMTL, restAfterSec: 0 },
   ];
 
   return {
     n: 'Mini Brick',
-    d: `${rounds} rounds: 500m run + ${stationDisplay.name} (${stationDisplay.distance}). Build the run-to-station transition.`,
+    d: `${rounds} rounds: 500m run + ${stationDisplay.name} (${stationDisplay.distance}). Build the run-to-station transition. 2 min rest between rounds.`,
     t: 'hyrox_mini_brick',
     discipline: 'brick',
     r: 6,
@@ -462,6 +552,8 @@ function generateMiniBrick(p: {
     estimatedDurationMin: p.dur,
     musculoTendonLoad: runMTL + stationMTL,
     hyroxComponents: components,
+    hyroxRounds: rounds,
+    hyroxRoundRestSec: 120,
   };
 }
 
@@ -513,5 +605,6 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
     estimatedDurationMin: totalDurMin,
     musculoTendonLoad: totalMTL,
     hyroxComponents: components,
+    hyroxRounds: 1,  // one calibration pass; guided overlay stays athlete-paced
   };
 }

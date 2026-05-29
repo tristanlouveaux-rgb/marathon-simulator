@@ -142,6 +142,13 @@ export interface Workout extends WorkoutDefinition {
   /** HYROX mode: component breakdown for brick and station sessions.
    *  Used by plan-view workout cards and the detail modal. */
   hyroxComponents?: import('./triathlon').HyroxComponent[];
+  /** HYROX mode: prescribed number of rounds through the component circuit.
+   *  The detail modal renders "N rounds" and the guided parser expands the
+   *  component list by this factor. Absent defaults to 1 round. */
+  hyroxRounds?: number;
+  /** HYROX mode: prescribed rest in seconds BETWEEN rounds (inter-round rest),
+   *  distinct from per-component inter-station rest. Absent = 0. */
+  hyroxRoundRestSec?: number;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
@@ -514,6 +521,7 @@ export interface Week {
   garminPending?: GarminPendingItem[];                           // All Garmin activities queued for review (kept after processing for re-review)
   garminReviewChoices?: Record<string, 'integrate' | 'log'>;    // Last user choice per garmin_id (for re-review pre-population)
   injuryCheckedIn?: boolean;                    // Whether injury was updated this week
+  strengthNudgeSeen?: boolean;                  // Whether the injury-driven "add a strength session" nudge was offered this week (once-only guard)
   passedCapacityTests?: string[];               // Capacity tests passed this week
   completedKm?: number;                         // Total km completed this week (stored on week advance)
   effortScore?: number;                          // Average (actual RPE - expected RPE) for rated run workouts (legacy blended)

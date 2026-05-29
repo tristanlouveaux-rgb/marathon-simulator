@@ -6,7 +6,7 @@
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
 import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
@@ -42,11 +42,7 @@ function navigateTab(tab: TabId): void {
   if (tab === 'plan') {
     import('./main-view').then(({ renderMainView }) => renderMainView());
   } else if (tab === 'forecast') {
-    if (getState().eventType === 'hyrox') {
-      import('./hyrox/forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
-    } else {
-      import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
-    }
+    navigateToForecastTab();
   } else if (tab === 'stats') {
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   } else if (tab === 'account') {

@@ -91,6 +91,11 @@ export class StrengthGuideController {
   get pauseElapsedSec(): number {
     return this._phase === 'paused' ? Math.max(0, this._elapsedSec - this.pauseStartElapsed) : 0;
   }
+  /** Seconds elapsed on the current set/station since it became active (zero
+   *  unless `active`). Drives the live per-exercise clock in the overlay. */
+  get currentSetElapsedSec(): number {
+    return this._phase === 'active' ? Math.max(0, this._elapsedSec - this.setStartElapsed) : 0;
+  }
   get totalSets(): number { return this.session.sets.length; }
   /** Sets completed so far. While `active` (or `idle`) the current set is not
    *  counted; in `resting` / `paused` / `done` the just-completed set IS. */

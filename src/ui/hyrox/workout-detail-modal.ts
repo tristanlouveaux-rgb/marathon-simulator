@@ -276,6 +276,12 @@ function fmtSec(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** Rest period as "30s" or "2 min" (whole minutes collapse to "N min"). */
+function fmtRest(sec: number): string {
+  if (sec >= 60 && sec % 60 === 0) return `${sec / 60} min`;
+  return `${sec}s`;
+}
+
 function renderSessionBody(workout: Workout, components: HyroxComponent[] | undefined, accent: string, disc: HyroxDisc): string {
   const t = workout.t ?? '';
   const mtl = workout.musculoTendonLoad;
@@ -289,12 +295,15 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const runFinishKm = runMatch ? parseFloat(runMatch[2]) : null;
 
     const stationRows = stationComponents.map(c => renderStationRow(c, workout, { context: 'technique', accent })).join('');
+    const rounds = workout.hyroxRounds ?? 3;
+    const interStation = stationComponents[0]?.restAfterSec ?? 60;
+    const interRound = workout.hyroxRoundRestSec ?? 180;
 
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#3d4f80">3 rounds</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">60s between stations · 3 min between rounds · Technique pace</div>
+          <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} rounds</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace</div>
         </div>
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
@@ -312,12 +321,15 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
   if (t === 'hyrox_station_density') {
     const stationComponents = (components ?? []).filter(c => c.type !== 'run');
     const stationRows = stationComponents.map(c => renderStationRow(c, workout, { context: 'density', accent })).join('');
+    const rounds = workout.hyroxRounds ?? 2;
+    const interStation = stationComponents[0]?.restAfterSec ?? 30;
+    const interRound = workout.hyroxRoundRestSec ?? 120;
 
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(184,116,44,0.06);border:1px solid rgba(184,116,44,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#8a5820">2 rounds · Race pace</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">30s between stations · 2 min between rounds · Stations only</div>
+          <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} rounds · Race pace</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only</div>
         </div>
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}

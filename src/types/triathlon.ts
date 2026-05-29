@@ -122,12 +122,15 @@ export interface HyroxConfig {
    *   - `'full_test'`: athlete completed the full race-distance station fresh.
    *   - `'race'`: extracted from a race result split.
    *   - `'manual'`: direct entry of a known time.
+   *   - `'session'`: best round of a race-pace guided session (density / brick),
+   *     auto-logged when it beats the stored benchmark (conservative — measured
+   *     under in-circuit fatigue). See SCIENCE_LOG §AP.
    *
    *  Ordered chronologically; consumers should sort by `dateISO` if mutating. */
   stationBenchmarkHistory?: Partial<Record<HyroxStation, Array<{
     dateISO: string;
     sec: number;
-    source: 'half_test' | 'full_test' | 'race' | 'manual';
+    source: 'half_test' | 'full_test' | 'race' | 'manual' | 'session';
     format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
     /** True if recorded at Pro weights. Mirrors `benchmarksAtProWeights`. */
     proWeights?: boolean;
@@ -210,6 +213,10 @@ export interface HyroxComponent {
   durationSec?: number;
   /** MTL contribution for all rounds of this component. */
   mtl: number;
+  /** Prescribed rest in seconds AFTER this component, within a round
+   *  (inter-station rest). The guided parser overrides this with the
+   *  inter-round rest on the last component of each round. Absent = 0. */
+  restAfterSec?: number;
 }
 
 /** 1 (weakest) to 5 (strongest). Used for the three self-rating sliders that replace runner-type for tri users (§18.7). */

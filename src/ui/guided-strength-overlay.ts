@@ -24,6 +24,8 @@ import { GpsTracker } from '@/gps/tracker';
 import { createGpsProvider } from '@/gps/providers';
 import { formatKm, formatPace } from '@/utils/format';
 import { getState } from '@/state/store';
+import { summariseHyroxSession } from '@/calculations/hyrox-session-benchmarks';
+import type { SetRecord } from '@/guided/strength-controller';
 
 const OVERLAY_ID = 'guided-strength-overlay';
 
@@ -431,12 +433,15 @@ function renderActive(): void {
   node.innerHTML = `
     ${shellOpen(muteButton(active.cuesOn))}
       <div style="padding:6px 22px 22px">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
           <div>
             <div id="gs-elapsed" style="font-size:34px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${fmtElapsed(active.controller.elapsedSec)}</div>
-            <div style="font-size:11px;color:var(--c-muted);margin-top:4px">${positionLabel}</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:4px">Session · ${positionLabel}</div>
           </div>
-          ${cur.setCount > 1 ? `<div style="font-size:11px;color:var(--c-muted);text-align:right">Set ${cur.setIndex + 1} of ${cur.setCount}</div>` : ''}
+          <div style="text-align:right">
+            <div id="gs-set-elapsed" style="font-size:22px;font-weight:600;color:#0F172A;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;line-height:1">${fmtElapsed(active.controller.currentSetElapsedSec)}</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:4px">${oneShot ? 'This station' : 'This set'}${cur.setCount > 1 ? ` · ${cur.setIndex + 1}/${cur.setCount}` : ''}</div>
+          </div>
         </div>
 
         ${renderProgressRings()}
@@ -583,6 +588,45 @@ function renderCountdown(): void {
   });
 }
 
+/** Format a time delta: "8s" under a minute, "1:20" above. */
+function fmtDelta(sec: number): string {
+  const a = Math.abs(Math.round(sec));
+  return a >= 60 ? fmtElapsed(a) : `${a}s`;
+}
+
+/**
+ * HYROX end-of-session summary: one row per station showing the best round,
+ * how it ranks against the field, and whether it beat (and updated) the stored
+ * benchmark. Race-pace sessions compare; technique rows show "Technique pace"
+ * since the times are submaximal by design. Mirrors `summariseHyroxSession`.
+ */
+function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string {
+  const results = summariseHyroxSession(workout, records, getState());
+  if (!results.length) return '';
+  const multiRound = ((workout as any).hyroxRounds ?? 1) > 1;
+  const rows = results.map(r => {
+    const nameLabel = `${escapeHtml(r.displayName)}${multiRound ? '<span style="color:var(--c-muted);font-size:11px;margin-left:6px">best round</span>' : ''}`;
+    let sub = '';
+    if (r.isImprovement) {
+      const detail = r.benchmarkSec != null && r.deltaSec != null
+        ? `Benchmark updated. ${fmtDelta(r.deltaSec)} faster than your best.`
+        : 'New session best recorded.';
+      sub = `<div style="font-size:11px;color:#15803d;margin-top:2px">${detail}</div>`;
+    } else if (r.percentile == null) {
+      sub = `<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Technique pace</div>`;
+    } else {
+      const parts = [`Faster than ${r.percentile}% of the field`];
+      if (r.deltaSec != null && r.deltaSec < 0) parts.push(`${fmtDelta(r.deltaSec)} off your best`);
+      sub = `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${parts.join(' · ')}</div>`;
+    }
+    return `<li style="padding:8px 0;border-bottom:1px solid var(--c-border)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px"><span>${nameLabel}</span><span style="font-variant-numeric:tabular-nums;color:#0F172A;font-weight:600">${fmtElapsed(r.bestSec)}</span></div>
+      ${sub}
+    </li>`;
+  }).join('');
+  return `<ul style="margin:0 0 22px;padding:0;list-style:none">${rows}</ul>`;
+}
+
 function renderFinish(): void {
   if (!active) return;
   const node = document.getElementById(OVERLAY_ID);
@@ -597,8 +641,12 @@ function renderFinish(): void {
   active.finishRpe = initial;
 
   // Per-set or per-station breakdown of measured times.
+  const isHyrox = Array.isArray((active.workout as any).hyroxComponents) && (active.workout as any).hyroxComponents.length > 0;
   let breakdownHtml = '';
-  if (records.length) {
+  if (records.length && isHyrox) {
+    // HYROX: per-station best round vs benchmark + percentile + "new best".
+    breakdownHtml = buildHyroxFinishSummary(active.workout, records);
+  } else if (records.length) {
     if (oneShot) {
       // HYROX / one-shot: numbered list with the station name + time.
       const rows = records.map((r, i) =>
@@ -627,7 +675,20 @@ function renderFinish(): void {
       <div style="padding:6px 22px 22px">
         <div style="font-size:11px;letter-spacing:0.04em;color:var(--c-muted);margin-bottom:4px">Session complete</div>
         <div style="font-size:36px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1;margin-bottom:6px;font-variant-numeric:tabular-nums">${elapsedMin} min</div>
-        <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px">${oneShot ? `${ex} ${ex === 1 ? 'station' : 'stations'}` : `${sets} sets across ${ex} exercise${ex === 1 ? '' : 's'}`}.</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px">${
+          isHyrox
+            ? (() => {
+                // Count stations (non-run) separately so a brick's run leg isn't mislabelled a station.
+                const comps = ((active.workout as any).hyroxComponents ?? []) as Array<{ type: string }>;
+                const stationCount = comps.filter(c => c.type !== 'run').length || ex;
+                const hasRun = comps.some(c => c.type === 'run');
+                const rd = (active.workout as any).hyroxRounds ?? 1;
+                const stations = `${stationCount} ${stationCount === 1 ? 'station' : 'stations'}`;
+                const head = rd > 1 ? `${rd} rounds` : '1 round';
+                return hasRun ? `${head} of run + ${stations}` : `${head} across ${stations}`;
+              })()
+            : (oneShot ? `${ex} ${ex === 1 ? 'station' : 'stations'}` : `${sets} sets across ${ex} exercise${ex === 1 ? '' : 's'}`)
+        }.</div>
 
         ${breakdownHtml}
 
@@ -681,6 +742,11 @@ function patchClocks(): void {
   const phase = active.controller.phase;
   const el = document.getElementById('gs-elapsed');
   if (el) el.textContent = fmtElapsed(active.controller.elapsedSec);
+  // Live per-station clock alongside the session clock (active phase only).
+  if (phase === 'active') {
+    const setEl = document.getElementById('gs-set-elapsed');
+    if (setEl) setEl.textContent = fmtElapsed(active.controller.currentSetElapsedSec);
+  }
   // GPS readout patches on every tick too. Keeps the distance/pace fresh
   // even when GPS updates lag (e.g. indoors with weak signal).
   if (phase === 'active' && active.activeRun && active.gps) {

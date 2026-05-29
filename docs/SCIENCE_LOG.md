@@ -6170,6 +6170,8 @@ heatStrainRatio = clamp((mass/BSA) / (refMass/refBSA), 0.85, 1.25)
 
 **Code.** `src/ui/injury/modal.ts` (per-discipline capture, protocol-seeded), `src/workouts/plan_engine.triathlon.ts:applyTriInjuryGates` (per-week restore), `src/calculations/race-prediction.triathlon.ts:computeInjuryRecoveryWeeks` + `buildProjection` per-discipline weeks, `src/calculations/tri-volume-by-discipline.ts` (`startOffset` dose sampling). Caption: `src/ui/triathlon/race-forecast-card.ts:renderInjuryRecoveryNote`. Tests: `gates.test.ts` (restore-after-window, per-discipline, legacy-freeze), `race-prediction.triathlon.test.ts` (monotonic: shorter recovery → faster race day), `tri-volume-by-discipline.test.ts` (offset).
 
+**Running-mode mirror (2026-05-29).** Running mode previously *froze* its forecast during a run injury — it held `s.v` (correct: no improvement while not running) but fed the live forecast the full `weeksRemaining`, crediting build over weeks the athlete could not run. It now applies the **same** capacity-scaled debit as triathlon: `debit_run = r_run × (1 − c_run/100)`, effective build weeks `= max(0, weeksRemaining − debit_run)`, so the projection builds from the return date. The formula, the `DisciplineRecovery` shape, and `recoveryDebitWeeks` are lifted into `src/calculations/injury-recovery.ts` and consumed by both predictors (CLAUDE.md "Mirror rule"; no duplicated math, no new constant). Applied at both running forecast sites (`blended-fitness.ts` `s.forecastTime`/`s.expectedFinal` recompute and `renderer.ts` live forecast) so the two numbers agree. The VDOT-freeze gate (`blended-fitness.ts`) now reads `getDisciplineCapacity(inj,'run') === 0` instead of the raw `canRun === 'no'` enum, so it stays correct with the per-discipline sliders. Running has no per-week dose sampling to offset (its horizon dose is a flat prescribed mean), so the effective-weeks reduction is the whole lever; same Banister impulse-integral first-order approximation and same limitations (ignores in-window detraining decay). Tests: `injury-recovery.test.ts` (debit math, blocked vs reduced, horizon clamp, legacy-freeze fallback).
+
 ## §AN — Region-aware strength during injury (2026-05-27, ISSUE-249)
 
 **Problem.** An injured triathlete still saw the full 45-minute full-body strength session in both the plan and the AI coach. Root cause (`applyTriInjuryGates`): the strength session was dropped only when `upperLoadCapacity <= 0`, but the triathlon injury modal never shows the upper/lower-load sliders (HYROX-only), so `upperLoadCapacity` stayed undefined → read as 100 → strength never dropped. It was gated on a control the athlete could not reach. Running had the mirror problem from the other direction: its gym generator dropped strength entirely in the acute/rehab phases (all-or-nothing), discarding the maintainable, unaffected regions.
@@ -6195,3 +6197,59 @@ heatStrainRatio = clamp((mass/BSA) / (refMass/refBSA), 0.85, 1.25)
 3. **No per-week recovery ramp for strength.** Region strength stays adapted until the injury is marked resolved, rather than auto-restoring on a guessed timeline (the §AM resume-week logic governs the disciplines, not the strength regions). Conservative by design.
 
 **Code.** `src/injury/engine.ts` (`LOCATION_CAPACITY_DEFAULTS`, `bodyRegionLoadability`), `src/workouts/injury-strength.ts` (`injuryStrengthDecision`), `src/workouts/plan_engine.triathlon.ts:applyTriInjuryGates`, `src/workouts/gym.ts`, 27 `generateWeekWorkouts` call sites now pass `s.injuryState` so the plan/coach views match the canonical regen. Tests: `injury-strength.test.ts` (per-location regions, phase gating, slider override, submaximal RPE), `gym.test.ts` (region-aware running gym).
+
+**Compensation nudge (2026-05-29).** When an injury limits a discipline, the app *suggests* (accept/decline, once per week) adding one extra region-safe strength session — the user's "can't run, so do more leg/upper gym work" intent. It reuses the *same* `injuryStrengthDecision` output (region-filtered exercises, capacity-scaled duration), so it introduces no new load model or constant; it only changes *how many* safe sessions the week can hold, and only with user consent. Deliberately a suggestion, not an auto-ramp: the freed training load is not load-matched to a target (that would need an absorption constant we do not have), and silently inflating volume during injury is the wrong default. Code: `src/ui/injury/modal.ts:maybeShowStrengthNudge` (pushes to `wk.adhocWorkouts` on accept; `Week.strengthNudgeSeen` guard).
+
+## §AO — HYROX station session round count fills the time budget (2026-05-29)
+
+**Problem.** Station-density and station-technique sessions prescribed a fixed round count (density 2, technique 3) but set the headline `estimatedDurationMin` to the scheduler's slot budget (e.g. 55 min). The prescribed work (2 rounds x 2 stations, intermediate band) totals ~26 min, so a ~26-min session was labelled 55m. The number was wrong and the work was too little for the allocated time.
+
+**Model.** Treat the station circuit as the research doc's intended shape: density is "station work for time / AMRAP" (docs/research/hyrox.md §7.2, line 462), so the slot is a legitimate time cap. Rather than a fixed token count, the round count fills the budget:
+
+```
+roundDurSec = Σ(per-station work) + (nStations-1)·interStationRest + interRoundRest
+rounds      = clamp( round(budgetSec / roundDurSec), 2, bandMax )   // nearest-fit
+durationMin = round( (Σwork·rounds + all rests) / 60 )              // headline FOLLOWS the work
+```
+
+This mirrors the brick generator's fill-the-budget intent (`generateFullBrick`), applied to density and technique too, but uses **nearest-round** fill rather than `floor` so the session lands near the allocated slot instead of always under-shooting it.
+
+**Constants — all sourced, none invented:**
+- **Band dose ceiling** (`bandMaxRounds`): beginner tier ≤4, novice/intermediate ≤6, advanced/competitive ≤8 — the *upper* bounds of the HYROX research doc §3.5 brick dosing (lines 169–171). Used as the clamp ceiling so race-pace station volume never exceeds the band's prescribed dose on a large slot. The time budget sets the round count below the cap; it is deliberately *not* forced up to the brick *minimum* (those minima assume a 1 km run per round, so forcing them onto a run-less station circuit overshoots the slot — e.g. intermediate min-4 would turn a 55-min slot into a 77-min session).
+- **Circuit floor** (`MIN_CIRCUIT_ROUNDS = 2`): structural, not physiological — below 2 rounds it is a single pass (the calibration assessment), not a training circuit. Matches the prior fixed behaviour's effective minimum.
+- **Rest periods**: density 30s between stations / 2 min between rounds; technique 60s / 3 min. These were already the values in the detail-modal copy; now stored on the workout (`HyroxComponent.restAfterSec`, `Workout.hyroxRoundRestSec`) so the guided player and the modal read the same source.
+- **Station count**: technique up to 4 (was 3); density 3 — two race-discriminator high-MTL stations + one erg (was 2). Tristan's coach steer (2026-05-29): "prescribe enough work… what would a coach do" — more variety + budget-filled rounds.
+
+**Why defensible.** MTL now scales with the actual prescribed rounds (more work → more load), which is physiologically correct. Round dosing tied to training status follows the same brick guidance the rest of the HYROX engine uses. The headline duration is no longer a phantom: it is computed from the work the athlete is told to do.
+
+**Known limitations.**
+1. **Dose ceiling borrowed from brick dosing.** Bricks include a 1 km run per round; station-only rounds are shorter, so a given band/budget yields a different round count than a brick would. We use only the brick *max* as a sanity cap (a beginner should not do >4 rounds of anything); the budget sets the actual count. Moderate confidence, consistent with the doc's own "Moderate" rating for brick dosing.
+2. **Race-pace density volume ceiling** is enforced only by the band max (≤8). No explicit fatigue model caps race-pace station repeats beyond that.
+3. **Nearest-fit can overshoot the slot** by up to half a round (≈7 min competitive, ≈13 min total-beginner). Accepted: a coach fills to the nearest whole round, the headline duration is honest about it, and the pre-existing technique session already overshot its slot by the full run-finish (≤20 min), so downstream load accounting already tolerates `estimatedDurationMin ≠ targetMinutes`.
+4. **Technique run finish** is still encoded in the description text, not as a guided component (out of scope for this change).
+
+**Code.** `src/workouts/hyrox-generators.ts` (`bandMaxRounds`, `MIN_CIRCUIT_ROUNDS`, `fillRounds`, `generateStationDensity`, `generateStationTechnique`; brick/mini/assessment also store `hyroxRounds`). Types: `HyroxComponent.restAfterSec`, `Workout.hyroxRounds`/`hyroxRoundRestSec`. Guided expansion: `src/guided/strength-model.ts` (`parseHyroxSession`). Tests: `hyrox-generators.test.ts`, `strength-model.test.ts`.
+
+## §AP — Learning station benchmarks from guided sessions (2026-05-29)
+
+**Problem.** Guided HYROX station sessions captured a per-round time for every station, but the times went nowhere usable: the write guarded on `components.length === records.length` (broken once rounds expanded the record list), targeted the wrong config object (`triConfig` instead of `hyroxConfig`), and only touched history, never the scalar benchmark the predictor reads. So measured performance never improved the athlete's benchmarks.
+
+**Model.** Feed measured station times into the benchmark via the "Manually-set Benchmarks Yield to Improvements" rule, with HYROX-specific guardrails grounded in what the times actually represent:
+
+- **Only race-pace sessions teach** (`hyrox_station_density`, `hyrox_brick`). Technique runs at 65% of seed pace by design (and half reps) — submaximal, so it can never improve a benchmark. It is still shown in the session summary, labelled "technique pace".
+- **Candidate = best (fastest) round** per station. It is measured under in-circuit fatigue (after the prior station, or after a 1 km run in a brick), so it is a *conservative* proxy for a fresh single-station test. Beating the stored benchmark while fatigued is strong, hard-to-fake evidence the benchmark is stale.
+- **PB-only**: a session only ever lowers a benchmark; a slow day never raises it. A station with no user benchmark yet is *calibrated* from the best round (better than the population estimate it was using).
+- **Sanity floor**: a measured time below the elite (`competitive`) seed for that station is rejected as a timing slip. Sourced bound, no invented number.
+
+**Conservative on fatigue (deliberate).** We log the *raw* best round, not a fatigue-corrected "fresh equivalent". This under-credits the athlete slightly (their fresh time would be faster), but inventing an un-fatigue multiplier would violate the no-made-up-numbers rule. The next fresh test or faster session catches up. A future refinement could apply the predictor's existing race-day fade factor in reverse, if one is sourced.
+
+**Transparency.** Updates surface in the end-of-session summary the user is already looking at ("Benchmark updated. 8s faster than your best."), so there is no separate launch toast and therefore no meaningful-delta threshold to invent. History entries carry a new `'session'` source so the per-station detail view labels them "Session best".
+
+**Why defensible.** This is *tracking* (describing fitness from what the athlete did), the correct side of the tracking/planning line. The PB-only + confidence-gate + provenance pattern mirrors the run-pace marker-bump (`applyHyroxRunPaceDerivation`) and the synced-activity parser (`applyParsedBenchmarks`). The fatigue-conservatism means false-positive benchmark improvements are structurally unlikely (you cannot accidentally go faster under fatigue).
+
+**Known limitations.**
+1. **Phone-stopwatch noise.** Times come from the user tapping "Complete set". The sanity floor catches gross slips; small mis-taps that still clear the floor could set a slightly-optimistic benchmark. PB-only means a later honest test cannot *raise* it back, so a bad tap can stick until beaten — accepted risk for a single-user dev build, revisit if it bites.
+2. **Doubles sanity floor uses the singles elite seed.** Doubles station times are faster (half the work), so the singles floor is conservative for doubles — it may occasionally decline to auto-update a legitimate fast doubles time. Errs toward not-updating (safe).
+3. **Raw fatigued time** (see "Conservative on fatigue").
+
+**Code.** `src/calculations/hyrox-session-benchmarks.ts` (`isRacePaceHyroxSession`, `summariseHyroxSession`, `applyHyroxSessionBenchmarks`). Wired from `src/guided/strength-complete.ts`; summary in `src/ui/guided-strength-overlay.ts` (`buildHyroxFinishSummary`). Source enum `'session'` added in `hyrox-station-history.ts` + `triathlon.ts`; label in `station-detail-view.ts`. Tests: `hyrox-session-benchmarks.test.ts` (9).

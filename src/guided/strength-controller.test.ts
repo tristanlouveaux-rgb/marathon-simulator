@@ -50,6 +50,23 @@ describe('StrengthGuideController — start + completion', () => {
     expect(typesOf().filter(t => t === 'setStart')).toHaveLength(4);
   });
 
+  it('tracks current-set elapsed time independently of session elapsed', () => {
+    const { c } = harness(['2x10 Squat (5s rest)']);
+    c.start();
+    expect(c.currentSetElapsedSec).toBe(0);
+    c.tick(3);
+    expect(c.elapsedSec).toBe(3);
+    expect(c.currentSetElapsedSec).toBe(3);   // first set: session == set elapsed
+    c.completeSet();                           // -> resting (set elapsed resets to 0)
+    expect(c.currentSetElapsedSec).toBe(0);
+    for (let i = 0; i < 5; i++) c.tick(1);     // rest finishes -> next set active
+    expect(c.elapsedSec).toBe(8);
+    expect(c.currentSetElapsedSec).toBe(0);    // new set just started
+    c.tick(2);
+    expect(c.currentSetElapsedSec).toBe(2);    // 2s into the second set
+    expect(c.elapsedSec).toBe(10);             // session clock keeps running
+  });
+
   it('skips the rest screen when the set has restSec=0', () => {
     const { c, typesOf } = harness(['2x10 Squat (0s rest)']);
     c.start();

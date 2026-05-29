@@ -4,6 +4,51 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-29 — Injury mode: capacity capture restored, running prediction ramp, gym nudge
+
+A post-crash restore (`4b57684`) had reverted the injury modal to a single tri-state "Can you run?" pill, even though the state model (`runCapacity`/`bikeCapacity`/`swimCapacity`/`upperLoadCapacity`/`lowerLoadCapacity`, `resumeWeeksByDiscipline`), the plan engines, and the triathlon predictor still read those fields. The capture UX described in FEATURES (2026-05-27) had no writer. Three fixes:
+
+- **Capacity capture rebuilt** (`src/ui/injury/modal.ts`): the weekly injury update now renders mode-aware per-discipline capacity sliders (running = run; triathlon = run/bike/swim; HYROX = run/upper-load/lower-load) with a live caption, plus a **"Back to [discipline] in N weeks"** field per restricted discipline (seeded from the protocol's `typicalRecoveryWeeks` midpoint, user-editable). Save writes the `*Capacity` fields and `resumeWeeksByDiscipline`; the legacy `canRun` enum is derived from the run slider so the return-to-run protocol and the VDOT-freeze gate still work. Resume windows are only persisted while a discipline is below full capacity.
+- **Running prediction ramp** (`src/calculations/injury-recovery.ts`, `blended-fitness.ts`, `renderer.ts`): the running forecast no longer credits build during weeks the athlete cannot run. It debits the run recovery window (`debit = resumeWeeks × (1 − capacity/100)`) and builds from the return date, mirroring the triathlon predictor. The shared math now lives in one helper used by both modes (parity). The VDOT-freeze gate reads run capacity instead of the raw `canRun` enum.
+- **Gym compensation nudge** (`src/ui/injury/modal.ts`): after an injury update where a discipline is limited, the app suggests adding one region-safe strength session (from the existing `injuryStrengthDecision` generator). Suggestion only — accepted sessions are pushed to `wk.adhocWorkouts`; dismissed ones do nothing. Once per week (`Week.strengthNudgeSeen` guard). No invented load numbers.
+- Tests: `src/calculations/injury-recovery.test.ts` (13). Tri parity tests (22) still pass.
+
+## 2026-05-29 — HYROX setup: "Which race?" moved above "Competition format"
+
+- **Onboarding ordering**: in the Hyrox setup wizard step (`src/ui/wizard/steps/hyrox-setup.ts`) the race-event picker now sits above the competition-format card. Race comes first because it anchors the training horizon and course factors; format is a refinement on top. Rise-in animation delays swapped to keep the order top-to-bottom.
+
+## 2026-05-29 — HYROX station sessions: round count fills the budget, timed rest, live dual timer
+
+Three issues Tristan reported on the Higher Ops plan's station session.
+
+**Issue 1 — "55m doesn't add up; just two sets of two."** Root cause: `generateStationDensity`/`generateStationTechnique` prescribed a fixed round count (2 / 3) but set `estimatedDurationMin` to the scheduler's raw slot budget. A ~26-min session (2 rounds × 2 stations, intermediate) was labelled 55m. Fix (SCIENCE_LOG §AO): round count now **fills the time budget** — `rounds = clamp(floor(budget ÷ roundDuration), bandMin, bandMax)`, mirroring the brick generator. Band ranges sourced from research §3.5 (beginner 2–4, novice/intermediate 4–6, advanced/competitive 6–8). Headline duration is recomputed from the actual work+rest sum. Density bumped to 2 discriminator stations + 1 erg (was 2 total); technique up to 4 (was 3). MTL now scales with actual rounds. Per Tristan's "what would a coach do — prescribe enough work" steer.
+
+**Issue 3 — inter-station timer should be 30s, not "as long as you like".** `parseHyroxSession` previously set `manualAdvance: true` + `restSec: 0` for every HYROX session, triggering the unbounded pause. Now rests are prescribed: components carry `restAfterSec` (30s density / 60s technique), the last component of each round uses `hyroxRoundRestSec` (2–3 min), and `manualAdvance` is true **only** for the calibration assessment (`hyrox_assessment`). The adapter expands the component list by `hyroxRounds`, reusing the original component index so the GPS bridge + progress rings still resolve.
+
+**Issue 2 — see current-exercise time alongside session time.** Added `StrengthGuideController.currentSetElapsedSec`; the active screen now shows a live session clock and a live current-station clock side by side.
+
+- **Types**: `HyroxComponent.restAfterSec?`, `Workout.hyroxRounds?` / `hyroxRoundRestSec?` (all optional, fresh-install safe).
+- **Modal**: detail-modal round/rest copy now reads from the workout instead of hardcoded "2 rounds"/"3 rounds".
+- **Tests**: new `hyrox-generators.test.ts` (6 — duration follows work, band-clamped rounds, rest encoding); `strength-model.test.ts` +5 (rounds expansion, rest pattern, assessment-only manual advance, backward-compat); `strength-controller.test.ts` +1 (dual timer). Full suite 2378 pass, typecheck clean, `lint:ui` clean for touched files.
+- **Not device-verified yet.** Brick/mini-brick also now expand rounds + use timed rest (consistency with the Mirror rule); Tristan only tested the density session, so the brick guided flow (GPS run legs × multiple rounds) needs an on-device pass. Pre-existing `race-forecast-marquee.ts:56` lint violation is unrelated (not in this changeset) and left untouched.
+
+### Guided HYROX sessions now learn from your times (SCIENCE_LOG §AP)
+
+Tristan: "we're not logging the times… we should be learning from how well someone's doing." Three broken links found and fixed:
+1. **The capture was dead.** `writeHyroxStationHistory` guarded on `components.length === records.length`, which the rounds-expansion above always breaks (records now = rounds × stations), so nothing was written. It also targeted `triConfig.stationBenchmarkHistory` while the predictor/UI read `hyroxConfig`, and it never updated the scalar benchmark the prediction actually uses.
+2. **New learning module** `src/calculations/hyrox-session-benchmarks.ts`: takes the **best (fastest) round** per station, and **only from race-pace sessions** (density, brick) — technique (65% pace) is shown but never feeds the benchmark. **PB-only** (a slow day never degrades it; an un-benchmarked station is calibrated), with a **sanity floor** (elite seed time) to reject timing slips. When the best round beats the stored benchmark it auto-updates the scalar slot + appends a `'session'`-sourced history entry, written to the correct `hyroxConfig` object.
+3. **Real end-of-session summary**: `buildHyroxFinishSummary` in the overlay shows each station's best round, how it ranks vs the field (percentile), and a "Benchmark updated. Ns faster than your best." line when it improved. Technique rows are labelled "technique pace".
+- Conservative by design: logs the **raw** fatigued best round (no invented un-fatigue multiplier); surfaces the update in the summary the user is already viewing (no launch-toast threshold to invent). Tracking, not planning. New source `'session'` ("Session best") added to the benchmark history enum + station-detail label.
+- **Tests**: `hyrox-session-benchmarks.test.ts` (9) + `hyrox-guided-flow.test.ts` (5, full real pipeline: generate → parse → controller walk → benchmark). Typecheck + `lint:ui` clean.
+
+### End-to-end verification (density + brick) + one fix
+
+Drove both session types through the real app (live store + overlay + Save button, walked via a controllable clock):
+- **Density**: 3 rounds / 3 stations, duration 58 min (fills the 55-min slot), dual timer, timed rests, finish summary; Save wrote `wall_balls 9999 → 300` with a `'session'` history entry. Calibration path ("New session best recorded") confirmed for stations with no prior benchmark.
+- **Brick**: 4 rounds × (run + station) = 8 sets all walked; GPS bridge degraded to manual tap in headless without breaking the interleaved run/station walk; station benchmark updated (runs correctly skipped).
+- **Fix found in verification**: the finish subtitle counted components, so a brick read "4 rounds across 2 stations" (one is a run). Now counts stations and phrases run-bearing sessions as "N rounds of run + M station(s)" (`guided-strength-overlay.ts`).
+- **Known follow-up**: the brick finish summary lists only the station, not the run legs the athlete did. Runs are GPS-tracked but not surfaced in the summary. Candidate enhancement, pending Tristan's call.
+
 ## 2026-05-28 — Post-crash recovery checkpoint + stripMarkdown em-dash regex restore
 
 After a memory-wall crash interrupted the post-em-dash-sweep restore session, took a safety checkpoint of the 403 uncommitted modified files (mostly em-dash → period sweep across JSDoc/comments, plus uncommitted slivers of today's recovery work) so nothing is lost to a future crash. Working-tree patch dumped to `/tmp/mosaic-recovery-20260528-1813.patch` before staging. Typecheck clean; 2365/2366 tests pass.

@@ -29,7 +29,8 @@ const LOCATION_LABELS: Record<InjuryLocation, string> = {
 };
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity, evaluatePhaseTransition, getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
-import type { SimulatorState } from '@/types/state';
+import type { SimulatorState, Workout } from '@/types/state';
+import { injuryStrengthDecision } from '@/workouts/injury-strength';
 import { getState, getMutableState } from '@/state/store';
 import { render } from '@/ui/renderer';
 import { saveState } from '@/state';
@@ -89,17 +90,83 @@ const CROSS_TRAINING_LABELS: Record<string, string> = {
 const INPUT_STYLE = `background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black);border-radius:10px;width:100%;padding:10px 12px;font-size:14px;outline:none;font-family:var(--f)`;
 const LABEL_STYLE = `display:block;font-size:12px;font-weight:600;color:var(--c-muted);margin-bottom:6px;letter-spacing:0.01em`;
 
+/** A discipline shown in the capacity-capture block, with its copy. */
+interface DiscConfig {
+  disc: DisciplineKey;
+  question: string;    // "Can you run?"
+  resumeLabel: string; // "running" -> "Back to running in N weeks"
+  verb0: string;       // caption shown when capacity is 0
+}
+
+/**
+ * The disciplines to show capacity sliders for, by mode.
+ * Running = run only; triathlon = run/bike/swim; HYROX = run/upper-load/lower-load.
+ * Mirrors the per-mode list in buildInjuryCaption().
+ */
+function disciplinesForMode(eventType: string | undefined): DiscConfig[] {
+  if (eventType === 'hyrox') {
+    return [
+      { disc: 'run',       question: 'Can you run?',      resumeLabel: 'running',         verb0: 'Cannot run' },
+      { disc: 'upperLoad', question: 'Upper-body load?',  resumeLabel: 'upper-body work', verb0: 'No upper-body loading' },
+      { disc: 'lowerLoad', question: 'Lower-body load?',  resumeLabel: 'lower-body work', verb0: 'No lower-body loading' },
+    ];
+  }
+  if (eventType === 'triathlon') {
+    return [
+      { disc: 'run',  question: 'Can you run?',  resumeLabel: 'running',   verb0: 'Cannot run' },
+      { disc: 'bike', question: 'Can you bike?', resumeLabel: 'cycling',   verb0: 'Cannot bike' },
+      { disc: 'swim', question: 'Can you swim?', resumeLabel: 'swimming',  verb0: 'Cannot swim' },
+    ];
+  }
+  // running (and any unset mode) = run only
+  return [
+    { disc: 'run', question: 'Can you run?', resumeLabel: 'running', verb0: 'Cannot run' },
+  ];
+}
+
+/** Right-aligned value label for a capacity slider. */
+const capValueLabel = (cap: number): string => (cap <= 0 ? 'None' : cap >= 100 ? 'Full' : `${cap}%`);
+/** Caption beneath a capacity slider. verb0 used at 0%. */
+const capCaptionText = (cap: number, verb0: string): string =>
+  cap <= 0 ? verb0 : cap >= 100 ? 'Full capacity' : 'Reduced volume, sessions scaled down';
+
 function getModalHTML(injuryState: InjuryState): string {
   const injuryTypes = Object.keys(INJURY_PROTOCOLS) as InjuryType[];
   const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
   const crossTrainingOptions = (protocol.allowedActivities || [])
     .filter((a: string) => a in CROSS_TRAINING_LABELS);
   const pain = Math.max(1, injuryState.currentPain);
-  const canRun = injuryState.canRun || 'no';
+  const eventType = (getState() as any).eventType as string | undefined;
+  const disciplines = disciplinesForMode(eventType);
 
-  const segOption = (value: 'yes' | 'limited' | 'no', label: string) => `
-    <button type="button" data-value="${value}" data-active="${canRun === value}">${label}</button>
-  `;
+  // Seed a return-to-sport estimate from the protocol's typical recovery window
+  // (injury-protocols.ts, clinical-judgement bands) so restricted disciplines
+  // default to a sensible week count instead of blank. User-editable.
+  const rw = protocol.typicalRecoveryWeeks;
+  const recoveryMid = rw ? Math.round((rw.min + rw.max) / 2) : '';
+
+  const capacityBlock = disciplines.map(({ disc, question, resumeLabel, verb0 }) => {
+    const cap = Math.round(getDisciplineCapacity(injuryState, disc));
+    const resume = injuryState.resumeWeeksByDiscipline?.[disc] ?? recoveryMid;
+    return `
+        <div class="injury-cap-block" data-disc="${disc}" data-verb0="${verb0}">
+          <div class="flex items-center justify-between mb-2">
+            <label style="${LABEL_STYLE};margin-bottom:0">${question}</label>
+            <span id="injury-cap-${disc}-val" style="font-size:12px;font-weight:600;color:var(--c-black)">${capValueLabel(cap)}</span>
+          </div>
+          <input type="range" id="injury-cap-${disc}" class="m-slider-glass" min="0" max="100" step="5" value="${cap}" />
+          <div class="flex justify-between mt-1.5" style="font-size:11px;color:var(--c-faint)">
+            <span>None</span>
+            <span>Full</span>
+          </div>
+          <p id="injury-cap-${disc}-caption" style="font-size:12px;color:var(--c-muted);margin-top:6px;margin-bottom:0">${capCaptionText(cap, verb0)}</p>
+          <div id="injury-resume-${disc}-row" class="flex items-center gap-2 mt-2" style="${cap >= 100 ? 'display:none' : ''}">
+            <span style="font-size:13px;color:var(--c-muted)">Back to ${resumeLabel} in</span>
+            <input type="number" id="injury-resume-${disc}" min="0" max="52" value="${resume === '' ? '' : resume}" placeholder="?" style="${INPUT_STYLE};width:64px;text-align:center;padding:8px" />
+            <span style="font-size:13px;color:var(--c-muted)">weeks</span>
+          </div>
+        </div>`;
+  }).join('');
 
   return `
     <style>
@@ -107,9 +174,6 @@ function getModalHTML(injuryState: InjuryState): string {
       #${MODAL_ID} #injury-form details > summary::-webkit-details-marker { display:none; }
       #${MODAL_ID} #injury-form details > summary::after { content:''; width:8px; height:8px; border-right:1.5px solid var(--c-faint); border-bottom:1.5px solid var(--c-faint); transform:rotate(-45deg); transition:transform 0.2s; }
       #${MODAL_ID} #injury-form details[open] > summary::after { transform:rotate(45deg); }
-      #${MODAL_ID} #can-run-segment { display:grid; grid-template-columns:repeat(3, 1fr); gap:3px; padding:3px; background:rgba(0,0,0,0.04); border:1px solid var(--c-border); border-radius:11px; }
-      #${MODAL_ID} #can-run-segment button { background:transparent; border:none; border-radius:8px; padding:8px 6px; font-size:13px; font-weight:500; color:var(--c-muted); cursor:pointer; transition:background 0.15s, color 0.15s, box-shadow 0.15s; font-family:var(--f); }
-      #${MODAL_ID} #can-run-segment button[data-active="true"] { background:var(--c-surface); color:var(--c-black); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04); }
       #${MODAL_ID} #injury-form select:focus, #${MODAL_ID} #injury-form input:focus, #${MODAL_ID} #injury-form textarea:focus { border-color:var(--c-border-strong); }
     </style>
     <div class="rounded-2xl p-5 w-full max-w-md mx-4 shadow-xl overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border);max-height:90vh">
@@ -177,14 +241,9 @@ function getModalHTML(injuryState: InjuryState): string {
           </select>
         </div>
 
-        <!-- 4. Can you run?. Segmented pill -->
-        <div>
-          <label style="${LABEL_STYLE}">Can you run?</label>
-          <div id="can-run-segment" role="radiogroup">
-            ${segOption('yes', 'Yes')}
-            ${segOption('limited', 'With pain')}
-            ${segOption('no', 'No')}
-          </div>
+        <!-- 4. Per-discipline capacity + return-to-sport timeline (mode-aware) -->
+        <div class="space-y-4">
+          ${capacityBlock}
         </div>
 
         <!-- 5. Preferred Cross-Training -->
@@ -284,13 +343,19 @@ function wireModalHandlers(): void {
 
   document.getElementById('injury-cancel')?.addEventListener('click', () => closeInjuryModal());
 
-  // Segmented "Can you run?" control
-  document.querySelectorAll<HTMLButtonElement>('#can-run-segment button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll<HTMLButtonElement>('#can-run-segment button').forEach(b => {
-        b.dataset.active = 'false';
-      });
-      btn.dataset.active = 'true';
+  // Per-discipline capacity sliders: live value label, caption, and resume-row visibility
+  document.querySelectorAll<HTMLInputElement>('input[id^="injury-cap-"]').forEach(slider => {
+    const disc = slider.id.slice('injury-cap-'.length);
+    const block = slider.closest('.injury-cap-block') as HTMLElement | null;
+    const verb0 = block?.dataset.verb0 || 'Cannot do this';
+    const valEl = document.getElementById(`injury-cap-${disc}-val`);
+    const capEl = document.getElementById(`injury-cap-${disc}-caption`);
+    const resumeRow = document.getElementById(`injury-resume-${disc}-row`);
+    slider.addEventListener('input', () => {
+      const cap = parseInt(slider.value, 10);
+      if (valEl) valEl.textContent = capValueLabel(cap);
+      if (capEl) capEl.textContent = capCaptionText(cap, verb0);
+      if (resumeRow) resumeRow.style.display = cap >= 100 ? 'none' : '';
     });
   });
 
@@ -331,12 +396,35 @@ async function handleSaveInjury(): Promise<void> {
   const location = locationSelect.value as InjuryLocation;
   const locationDetail = locationDetailInput?.value || '';
   const physioNotes = physioNotesTextarea?.value || '';
-  const canRunEl = document.querySelector('#can-run-segment button[data-active="true"]') as HTMLButtonElement | null;
-  const canRun = ((canRunEl?.dataset.value as 'yes' | 'limited' | 'no' | undefined) || 'no');
   const crossTrainingSelect = document.getElementById('injury-cross-training') as HTMLSelectElement;
   const preferredCrossTraining = crossTrainingSelect?.value || null;
 
   let injuryState = getInjuryState();
+
+  // Per-discipline capacity + return-to-sport timeline (mode-aware)
+  const eventType = (getState() as any).eventType as string | undefined;
+  const disciplines = disciplinesForMode(eventType);
+  const capacityUpdates: Record<string, number> = {};
+  const resumeWeeks: Partial<Record<DisciplineKey, number>> = { ...(injuryState.resumeWeeksByDiscipline || {}) };
+  let runCap = getDisciplineCapacity(injuryState, 'run');
+  for (const { disc } of disciplines) {
+    const slider = document.getElementById(`injury-cap-${disc}`) as HTMLInputElement | null;
+    let cap = getDisciplineCapacity(injuryState, disc);
+    if (slider) {
+      cap = Math.max(0, Math.min(100, parseInt(slider.value, 10) || 0));
+      capacityUpdates[`${disc}Capacity`] = cap;
+      if (disc === 'run') runCap = cap;
+    }
+    // A return-to-sport window only applies while the discipline is restricted.
+    const resumeEl = document.getElementById(`injury-resume-${disc}`) as HTMLInputElement | null;
+    if (cap < 100 && resumeEl && resumeEl.value.trim() !== '') {
+      resumeWeeks[disc] = Math.max(0, parseInt(resumeEl.value, 10) || 0);
+    } else {
+      delete resumeWeeks[disc];
+    }
+  }
+  // Keep the legacy canRun enum in sync so the return-to-run protocol and freeze gate still work.
+  const canRun: 'yes' | 'limited' | 'no' = runCap <= 0 ? 'no' : runCap >= 100 ? 'yes' : 'limited';
   const wasAlreadyActive = injuryState.active;
 
   const isNewInjury = !injuryState.active || injuryState.injuryPhase === 'resolved';
@@ -359,6 +447,8 @@ async function handleSaveInjury(): Promise<void> {
     locationDetail,
     physioNotes,
     canRun,
+    ...capacityUpdates,
+    resumeWeeksByDiscipline: resumeWeeks,
     preferredCrossTraining: preferredCrossTraining || null,
     startDate: isNewInjury ? new Date().toISOString() : injuryState.startDate,
     injuryPhase: initialPhase,
@@ -390,13 +480,65 @@ async function handleSaveInjury(): Promise<void> {
   setInjuryState(injuryState);
   saveState();
 
+  closeInjuryModal();
+
   if (wasAlreadyActive) {
-    closeInjuryModal();
+    // next() advances the week and re-renders; nudge the week the user is
+    // entering (not the one being closed), and after next() so no modal stacks.
     const { next } = await import('@/ui/events');
-    next();
+    await next();
+    await maybeShowStrengthNudge();
   } else {
+    await maybeShowStrengthNudge();
     window.location.reload();
   }
+}
+
+/**
+ * After an injury update, offer ONE region-safe strength session to compensate
+ * for the disciplines the injury limits (e.g. cannot run, so add leg/upper work).
+ * Suggestion only: nothing is added unless the user accepts. Fires at most once
+ * per week (strengthNudgeSeen guard). Reuses the existing injuryStrengthDecision
+ * generator, which already picks injury-safe exercises and scales by region
+ * capacity, so there are no invented load numbers here.
+ */
+async function maybeShowStrengthNudge(): Promise<void> {
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  if (!wk || wk.strengthNudgeSeen) return;
+
+  const inj = getInjuryState();
+  if (!inj.active) return;
+
+  // Only when a discipline is actually limited this week.
+  const caption = buildInjuryCaption(s);
+  if (!caption) return;
+
+  // Only when loaded strength is currently safe (region-adapted session exists).
+  // Acute phase or all regions blocked returns 'none' and we stay quiet.
+  const decision = injuryStrengthDecision(inj);
+  if (decision.kind !== 'adapted') return;
+
+  // Mark seen up front so a dismissed nudge never re-fires this week.
+  wk.strengthNudgeSeen = true;
+  saveState();
+
+  const accepted = await showInjuryConfirm(
+    'Add a strength session?',
+    `${caption} A session that avoids the injured area holds your strength and durability while you recover.`,
+    'Add session',
+    'Not now',
+  );
+  if (!accepted) return;
+
+  const workout: Workout = {
+    ...decision.workout,
+    id: `adhoc-strength-${Date.now()}`,
+  };
+  if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+  wk.adhocWorkouts.push(workout);
+  saveState();
+  render();
 }
 
 /**

@@ -9,7 +9,7 @@ import type { SimulatorState, PhysiologyDayEntry } from '@/types/state';
 import { computeRecoveryScore } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import { CONF_MEDIUM_FLOOR, K_USER_DEFAULT } from '@/calculations/adaptive-recovery';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
 void buildSkyBackground; void skyAnimationCSS;
@@ -677,7 +677,7 @@ function renderPersonalRecoveryCard(s: SimulatorState): string {
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
-  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
+  else if (tab === 'forecast') navigateToForecastTab();
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

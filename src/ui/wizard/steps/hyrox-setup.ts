@@ -143,29 +143,8 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
         <div style="width:100%;max-width:480px">
 
           <!-- Format: 4-way selector -->
-          <div class="hx-card hx-rise" style="animation-delay:0.10s">
-            <div class="hx-label">Competition format</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <button class="hx-toggle ${format === 'open_singles' ? 'active' : ''}" data-format="open_singles">
-                Open Singles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Standard solo</span>
-              </button>
-              <button class="hx-toggle ${format === 'open_doubles' ? 'active' : ''}" data-format="open_doubles">
-                Open Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">2-person team</span>
-              </button>
-              <button class="hx-toggle ${format === 'pro_singles' ? 'active' : ''}" data-format="pro_singles">
-                Pro Singles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro division</span>
-              </button>
-              <button class="hx-toggle ${format === 'pro_doubles' ? 'active' : ''}" data-format="pro_doubles">
-                Pro Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro 2-person</span>
-              </button>
-            </div>
-            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You each run all 8 legs. Stations are split: training covers all 8 for flexibility, but at half the weekly station volume.</p>
-            <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">Pro division uses heavier weights: sled push 202 kg, sandbag 30 kg, wall balls 9 kg.</p>
-            <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional: base first, race-specific second.</p>
-          </div>
-
           <!-- Race event picker -->
-          <div class="hx-card hx-rise" style="animation-delay:0.12s">
+          <div class="hx-card hx-rise" style="animation-delay:0.10s">
             <div class="hx-label">Which race?</div>
             <select id="hx-race-event" style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid rgba(0,0,0,0.08);background:rgba(255,255,255,0.95);color:var(--c-black);font-size:14px;font-family:var(--f);outline:none;margin-bottom:10px">
               <option value="">Select a HYROX event</option>
@@ -190,6 +169,27 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 ).join('')}
               </select>
             </div>
+          </div>
+
+          <div class="hx-card hx-rise" style="animation-delay:0.12s">
+            <div class="hx-label">Competition format</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <button class="hx-toggle ${format === 'open_singles' ? 'active' : ''}" data-format="open_singles">
+                Open Singles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Standard solo</span>
+              </button>
+              <button class="hx-toggle ${format === 'open_doubles' ? 'active' : ''}" data-format="open_doubles">
+                Open Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">2-person team</span>
+              </button>
+              <button class="hx-toggle ${format === 'pro_singles' ? 'active' : ''}" data-format="pro_singles">
+                Pro Singles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro division</span>
+              </button>
+              <button class="hx-toggle ${format === 'pro_doubles' ? 'active' : ''}" data-format="pro_doubles">
+                Pro Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro 2-person</span>
+              </button>
+            </div>
+            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You each run all 8 legs. Stations are split: training covers all 8 for flexibility, but at half the weekly station volume.</p>
+            <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">Pro division uses heavier weights: sled push 202 kg, sandbag 30 kg, wall balls 9 kg.</p>
+            <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional: base first, race-specific second.</p>
           </div>
 
           <!-- Previous time + which format it was set in -->

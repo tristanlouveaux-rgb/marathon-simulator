@@ -33,6 +33,7 @@ const SOURCE_LABEL: Record<StationTestEntry['source'], string> = {
   full_test: 'Full test',
   race: 'Race split',
   manual: 'Manual entry',
+  session: 'Session best',
 };
 
 function fmtMmSs(sec: number): string {
