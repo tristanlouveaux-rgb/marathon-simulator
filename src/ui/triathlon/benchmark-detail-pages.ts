@@ -438,9 +438,16 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
   if (c.value != null) bars.push({ key: 'cycling', label: 'Cycling', value: c.value });
   if (ct.value != null) bars.push({ key: 'crossTraining', label: 'Cross-training', value: ct.value });
 
-  // Best-of bar gets the accent fill; others read in neutral grey. Length still
-  // encodes value. Colour only differentiates which source is currently the
-  // headline. Keeps the chart within the 2-non-neutral colour budget.
+  // Discipline-coloured bars (run = green, bike = red, cross-training = slate).
+  // Length encodes value; colour identifies which source is which at a glance.
+  // Matches the marquee per-leg accents on the forecast page and the
+  // "Cardiac ceiling" orange dot on the per-sport list.
+  const DISC_BAR_COLOR: Record<BarSpec['key'], string> = {
+    running:        '#16A34A',
+    cycling:        '#DC2626',
+    crossTraining:  '#64748B',
+  };
+  const CEILING_COLOR = '#C48A3A';
   const bestValue = bars.length > 0 ? Math.max(...bars.map(b => b.value)) : null;
 
   // No measured bars and no ceiling. Render the original row layout as a
@@ -458,16 +465,18 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
 
   const barRow = (b: BarSpec): string => {
     const pct = Math.min(100, Math.max(0, (b.value / domainMax) * 100));
-    const isBest = bestValue != null && b.value === bestValue;
-    const fill = isBest ? 'var(--c-black)' : 'rgba(0,0,0,0.25)';
+    const accent = DISC_BAR_COLOR[b.key];
+    // Soft tint of the accent as the empty-bar background so the empty portion
+    // reads as "less of this discipline" rather than neutral grey.
+    const track = `${accent}1F`; // ~12% opacity hex suffix
     return `
-      <div style="margin-bottom:10px">
+      <div style="margin-bottom:12px">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:12px;color:var(--c-muted)">${b.label}</span>
-          <span style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${Math.round(b.value)}</span>
+          <span style="font-size:13px;color:var(--c-black);font-weight:500">${b.label}</span>
+          <span style="font-size:14px;font-weight:700;color:var(--c-black);font-variant-numeric:tabular-nums">${Math.round(b.value)}</span>
         </div>
-        <div style="position:relative;height:10px;border-radius:5px;background:var(--c-border);overflow:hidden">
-          <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${fill};border-radius:5px"></div>
+        <div style="position:relative;height:10px;border-radius:5px;background:${track};overflow:hidden">
+          <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${accent};border-radius:5px"></div>
         </div>
       </div>`;
   };
@@ -479,11 +488,12 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
     : (ceiling != null ? `Cardiac ceiling ${Math.round(ceiling)}. Your aerobic upper bound from peak HR ÷ resting HR. Not a measure of current fitness.` : '');
 
   // Ceiling line: dashed vertical line spanning the chart area at the
-  // ceiling's x-position, with a small label above. Pure HTML/CSS so we
-  // dodge the SVG sizing class of bug entirely.
+  // ceiling's x-position, with a small label above. Rendered in cardiac-
+  // ceiling warm orange so the cap reads at a glance against the green/red
+  // discipline bars.
   const ceilingMarker = ceilingPct != null && ceiling != null ? `
-    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:-4px;bottom:24px;border-left:1.5px dashed var(--c-muted);transform:translateX(-1px)"></div>
-    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:-20px;transform:translateX(-50%);font-size:10px;color:var(--c-muted);white-space:nowrap;font-variant-numeric:tabular-nums">Ceiling ${Math.round(ceiling)}</div>
+    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:0;bottom:6px;border-left:1.5px dashed ${CEILING_COLOR};transform:translateX(-1px);z-index:2;pointer-events:none"></div>
+    <div style="position:absolute;left:${ceilingPct.toFixed(1)}%;top:-22px;transform:translateX(-50%);font-size:11px;color:${CEILING_COLOR};white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:600">Ceiling ${Math.round(ceiling)}</div>
   ` : '';
 
   return `

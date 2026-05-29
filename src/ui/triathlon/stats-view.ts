@@ -54,9 +54,9 @@ export function renderTriathlonStatsView(): void {
       }
       .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
-    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('ts', { variant: 'centered', palette: 'sky', pulse: true })}
+        ${buildRingBackground('ts', { variant: 'centered', palette: 'mint', pulse: true })}
       </div>
       ${buildSunGlint('low')}
 

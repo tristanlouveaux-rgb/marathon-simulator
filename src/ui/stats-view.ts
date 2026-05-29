@@ -3221,44 +3221,65 @@ export function buildLTMetricPage(s: SimulatorState): string {
   const overrideCard = buildLTOverrideCard(s, currentLT, currentHR, unitPref);
 
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildMetricSubHeader('Lactate Threshold')}
-      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-          <span style="font-size:28px;font-weight:300;color:var(--c-black)">${ltLabel}</span>
-          ${currentHR ? `<span style="font-size:14px;color:var(--c-muted)">· ${currentHR} bpm</span>` : ''}
-          ${buildConfidenceChip(confidence)}
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('bd-lt', { variant: 'centered', palette: 'mint', pulse: false })}
+      </div>
+      ${buildSunGlint('low')}
+
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+
+        <!-- Back button row -->
+        <div style="padding:max(20px, env(safe-area-inset-top)) 18px 0">
+          <button id="stats-metric-back" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:15px;color:var(--c-black);font-family:var(--f);padding:6px 0;margin-left:-2px">
+            <span style="font-size:18px;line-height:1">←</span>
+            <span style="font-weight:500">Back</span>
+          </button>
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${escapeHtml(provenance)}${sourceLabel ? ` · ${sourceLabel}` : ''}</div>
-        ${conflictCard}
-        ${sparkline}
-        ${methodsCard}
-        ${overrideCard}
-        ${s.pac ? `
-        <div style="margin-top:16px">
-          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">Training Paces</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div class="m-card" style="padding:12px 14px">
-              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Easy</div>
-              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.e, unitPref)} – ${fp(Math.round(s.pac.e * 13 / 12), unitPref)}</div>
-              <div style="font-size:10px;color:var(--c-faint);margin-top:2px">slower is fine</div>
-            </div>
-            <div class="m-card" style="padding:12px 14px">
-              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Marathon</div>
-              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.m, unitPref)}</div>
-            </div>
-            <div class="m-card" style="padding:12px 14px">
-              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Threshold</div>
-              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.t, unitPref)}</div>
-            </div>
-            <div class="m-card" style="padding:12px 14px">
-              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">VO2max</div>
-              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.i, unitPref)}</div>
-            </div>
+
+        <!-- Centered hero block -->
+        <div style="text-align:center;padding:40px 20px 22px">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Lactate Threshold</div>
+          <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap">
+            <span style="font-size:30px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${ltLabel}</span>
+            ${currentHR ? `<span style="font-size:14px;color:var(--c-muted)">· ${currentHR} bpm</span>` : ''}
+            ${buildConfidenceChip(confidence)}
           </div>
-        </div>` : ''}
-        <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:14px">
-          LT pace anchors threshold workouts and feeds race-time predictions. We blend Daniels VDOT, critical-speed fits, and recent steady-state runs. Override below if you trust a lab test or race time more.
+          <div style="font-size:13px;color:var(--c-muted);margin-top:8px">${escapeHtml(provenance)}${sourceLabel ? ` · ${sourceLabel}` : ''}</div>
+        </div>
+
+        <!-- Cards -->
+        <div style="padding:0 16px">
+          ${conflictCard}
+          ${sparkline}
+          ${methodsCard}
+          ${overrideCard}
+          ${s.pac ? `
+          <div style="margin-top:16px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">Training Paces</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="m-card" style="padding:12px 14px">
+                <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Easy</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.e, unitPref)} – ${fp(Math.round(s.pac.e * 13 / 12), unitPref)}</div>
+                <div style="font-size:10px;color:var(--c-faint);margin-top:2px">slower is fine</div>
+              </div>
+              <div class="m-card" style="padding:12px 14px">
+                <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Marathon</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.m, unitPref)}</div>
+              </div>
+              <div class="m-card" style="padding:12px 14px">
+                <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Threshold</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.t, unitPref)}</div>
+              </div>
+              <div class="m-card" style="padding:12px 14px">
+                <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">VO2max</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.i, unitPref)}</div>
+              </div>
+            </div>
+          </div>` : ''}
+          <div style="font-size:13px;color:var(--c-muted);line-height:1.55;margin-top:18px;padding:0 4px">
+            LT pace anchors threshold workouts and feeds race-time predictions. We blend Daniels VDOT, critical-speed fits, and recent steady-state runs. Override below if you trust a lab test or race time more.
+          </div>
         </div>
       </div>
     </div>
