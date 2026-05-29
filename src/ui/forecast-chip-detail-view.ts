@@ -151,12 +151,13 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
   ` : '';
 
   const pbRows = pbsWithValues.length === 0
-    ? `<div style="font-size:13px;color:${TEXT_S};line-height:1.5;text-align:center;padding:6px 0">No personal bests on file yet. Add one on the Account page to anchor the prediction.</div>`
+    ? `<div style="font-size:13px;color:${TEXT_S};line-height:1.5;text-align:center;padding:6px 0">No personal bests on file yet. Import your run history to anchor the prediction.</div>`
     : pbsWithValues.map(([dist, sec]) => statRow(dist, ft(sec))).join('');
   const pbsCard = `
     <div style="${CARD};margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:10px">Personal bests</div>
       ${pbRows}
+      <button id="fcd-import-runs" style="display:block;width:100%;margin-top:12px;padding:11px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:${TEXT_M};font:inherit;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">${pbsWithValues.length === 0 ? 'Import run history' : 'Import more runs'} →</button>
     </div>
   `;
 
@@ -1346,6 +1347,15 @@ export function renderForecastChipDetail(key: ChipKey): void {
   });
   document.getElementById('fcd-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
+  });
+
+  // You-page "Import run history" button: opens the same activity-import modal
+  // the onboarding wizard uses. Re-renders the You page on completion so any
+  // newly-derived PBs surface immediately.
+  document.getElementById('fcd-import-runs')?.addEventListener('click', () => {
+    import('./import-activity-modal').then(({ openImportActivityModal }) => {
+      openImportActivityModal({ onComplete: () => renderForecastChipDetail(key) });
+    });
   });
 
   wireTabBarHandlers(navigateTab);
