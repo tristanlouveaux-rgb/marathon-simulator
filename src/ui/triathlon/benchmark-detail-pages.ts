@@ -469,14 +469,15 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
     // Soft tint of the accent as the empty-bar background so the empty portion
     // reads as "less of this discipline" rather than neutral grey.
     const track = `${accent}1F`; // ~12% opacity hex suffix
+    // Number sits at the end of the coloured fill. If the bar is near full, anchor
+    // to the right edge so the number doesn't overflow off the chart.
+    const labelOnFill = pct >= 88;
     return `
-      <div style="margin-bottom:12px">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
-          <span style="font-size:13px;color:var(--c-black);font-weight:500">${b.label}</span>
-          <span style="font-size:14px;font-weight:700;color:var(--c-black);font-variant-numeric:tabular-nums">${Math.round(b.value)}</span>
-        </div>
-        <div style="position:relative;height:10px;border-radius:5px;background:${track};overflow:hidden">
+      <div style="margin-bottom:14px">
+        <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:5px">${b.label}</div>
+        <div style="position:relative;height:18px;border-radius:5px;background:${track}">
           <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${accent};border-radius:5px"></div>
+          <span style="position:absolute;${labelOnFill ? `right:8px;color:#fff` : `left:calc(${pct.toFixed(1)}% + 8px);color:var(--c-black)`};top:50%;transform:translateY(-50%);font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1">${Math.round(b.value)}</span>
         </div>
       </div>`;
   };
