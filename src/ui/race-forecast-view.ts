@@ -20,6 +20,7 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-f
 import { renderMarathonPopulationCard } from './marathon-population-card';
 import { renderForecastFingerprint } from './race-forecast-fingerprint';
 import { renderRunConeCard, wireRunConeCard } from './race-forecast-cone-card';
+import { wireForecastChips } from './forecast-chip-detail-view';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
@@ -418,6 +419,7 @@ function wireRaceForecastHandlers(): void {
 
   animateChartDrawOn();
   wireRunConeCard();
+  wireForecastChips();
 
   document.getElementById('rfc-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
