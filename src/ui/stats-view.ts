@@ -7,7 +7,7 @@
 
 import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary } from '@/types';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
@@ -36,9 +36,14 @@ function navigateTab(tab: TabId): void {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'plan') {
     import('./main-view').then(({ renderMainView }) => renderMainView());
+  } else if (tab === 'forecast') {
+    navigateToForecastTab();
+  } else if (tab === 'record') {
+    import('./record-view').then(({ renderRecordView }) => renderRecordView());
   } else if (tab === 'account') {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   }
+  // 'stats' is already active
 }
 
 // ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAd
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
 import { gp } from '@/calculations/paces';
 import type { WorkoutMod } from '@/types';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getSyncLabel, hasPhysiologySource } from '@/data/sources';
 
@@ -2533,6 +2533,8 @@ function wireEventHandlers(): void {
   wireTabBarHandlers((tab: TabId) => {
     if (tab === 'home') {
       import('./home-view').then(({ renderHomeView }) => renderHomeView());
+    } else if (tab === 'forecast') {
+      navigateToForecastTab();
     } else if (tab === 'account') {
       import('./account-view').then(({ renderAccountView }) => renderAccountView());
     } else if (tab === 'record') {
