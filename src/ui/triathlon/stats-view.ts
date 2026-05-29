@@ -15,7 +15,7 @@ import type { SimulatorState } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
-import { buildYourNumbersCard } from './fitness-detail-view';
+import { buildYourNumbersCard, buildTrendCards } from './fitness-detail-view';
 import { buildProgressContent, type ProgressRange } from './progress-detail-view';
 import { animateChartDrawOn } from './benchmark-charts';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
@@ -75,11 +75,14 @@ export function renderTriathlonStatsView(): void {
 
         <div style="padding:0 20px">
 
-          <!-- VO2max only on main. CSS/FTP/LT live in the per-benchmark
-               drill-down pages so the main page isn't cluttered with bars
-               that already have dedicated detail views. -->
+          <!-- Your Numbers: CSS / FTP / LT / VO2max zone bars -->
           <div class="hf" data-delay="0.10">
-            ${buildYourNumbersCard(s, { vo2Only: true })}
+            ${buildYourNumbersCard(s)}
+          </div>
+
+          <!-- Trends: sparklines per benchmark -->
+          <div class="hf" data-delay="0.14">
+            ${buildTrendCards(s)}
           </div>
 
           <!-- Progress section -->
