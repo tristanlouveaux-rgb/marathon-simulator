@@ -1,19 +1,24 @@
 /**
- * Triathlon Stats. Two compact tap-cards that drill into the full Fitness
- * and Progress detail pages. The Fitness detail (`renderTriFitnessDetailView`)
- * owns Your Numbers + Trend sparklines + Race estimates. The Progress detail
- * (`renderTriProgressDetailView`) owns Recent weeks, the stat list, Phase
- * timeline, CTL chart, and Weekly load TSS charts. Putting all of that on
- * the main page made it too busy.
+ * Triathlon Stats. Single scrollable page.
+ *
+ * Sections (top to bottom):
+ *   1. Your Numbers. CSS / FTP / LT / VO2max zone bars
+ *   2. Trends. Benchmark sparklines (CSS, FTP, LT, VO2max)
+ *   3. Progress. Range toggle, stat list, phase timeline, CTL + volume charts
+ *
+ * Race estimates live on the Forecast tab.
  */
 
 import { getState } from '@/state/store';
-import type { SimulatorState, GarminActual } from '@/types';
+import { getMutableState, saveState } from '@/state';
+import type { SimulatorState } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
+import { buildYourNumbersCard, buildTrendCards } from './fitness-detail-view';
+import { buildProgressContent, type ProgressRange } from './progress-detail-view';
+import { animateChartDrawOn } from './benchmark-charts';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
-import { iTrimpToTSS } from './progress-detail-view';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('../home-view').then(({ renderHomeView }) => renderHomeView());
@@ -22,95 +27,7 @@ function navigateTab(tab: TabId): void {
   else if (tab === 'account') import('../account-view').then(({ renderAccountView }) => renderAccountView());
 }
 
-// ── Compact summary cards ────────────────────────────────────────────────────
-
-function fmtCssCompact(secPer100m: number): string {
-  const m = Math.floor(secPer100m / 60);
-  const s = Math.round(secPer100m % 60);
-  return `${m}:${String(s).padStart(2, '0')}/100m`;
-}
-
-function fmtLtCompact(secPerKm: number, pref: 'km' | 'mi'): string {
-  const sec = pref === 'mi' ? secPerKm * 1.609344 : secPerKm;
-  const unit = pref === 'mi' ? '/mi' : '/km';
-  return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}${unit}`;
-}
-
-const COMPACT_CARD = 'display:block;width:100%;text-align:left;background:rgba(255,255,255,0.78);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.65);border-radius:18px;box-shadow:0 2px 8px rgba(15,23,42,0.05),0 10px 28px rgba(15,23,42,0.05);padding:18px 18px 16px;margin-bottom:12px;cursor:pointer;font-family:var(--f);position:relative;-webkit-tap-highlight-color:transparent';
-const CHEVRON_TR = `<svg style="position:absolute;top:18px;right:16px;pointer-events:none" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>`;
-
-function buildCompactFitnessCard(s: SimulatorState): string {
-  const tri = s.triConfig;
-  const unitPref = (s.unitPref ?? 'km') as 'km' | 'mi';
-  const css = tri?.swim?.cssSecPer100m;
-  const ftp = tri?.bike?.ftp;
-  const lt  = s.lt;
-  const vo2 = (s.vo2Estimates?.headline?.value ?? s.vo2) ?? null;
-
-  const row = (label: string, value: string | null) => `
-    <div style="display:flex;align-items:baseline;justify-content:space-between;padding:6px 0;border-top:1px solid rgba(15,23,42,0.05)">
-      <span style="font-size:13px;color:var(--c-muted);font-weight:500">${label}</span>
-      <span style="font-size:14px;color:var(--c-black);font-weight:600;font-variant-numeric:tabular-nums">${value ?? '—'}</span>
-    </div>`;
-
-  return `
-    <button id="tri-stats-fitness-card" style="${COMPACT_CARD}">
-      ${CHEVRON_TR}
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:10px">Fitness</div>
-      ${row('Swim CSS',  css != null && css > 0 ? fmtCssCompact(css) : null)}
-      ${row('Bike FTP',  ftp != null && ftp > 0 ? `${Math.round(ftp)} W` : null)}
-      ${row('Run LT',    lt  != null && lt  > 0 ? fmtLtCompact(lt, unitPref) : null)}
-      ${row('VO2max',    vo2 != null && vo2 > 0 ? `${Math.round(vo2)}` : null)}
-    </button>
-  `;
-}
-
-function buildCompactProgressCard(s: SimulatorState): string {
-  // Aggregates over the last 5 weeks of completed actuals. Cheap walk; same
-  // semantics as the Recent weeks card on the Progress detail page.
-  const wks = s.wks ?? [];
-  const curWeek = Math.max(1, Math.min(wks.length, s.w ?? 1));
-  const startIdx = Math.max(0, curWeek - 5);
-  let totalSec = 0, sessionCount = 0, totalTSS = 0;
-  for (let i = startIdx; i < curWeek; i++) {
-    const wk = wks[i];
-    if (!wk?.garminActuals) continue;
-    const seen = new Set<string>();
-    for (const a of Object.values(wk.garminActuals) as GarminActual[]) {
-      if (!a) continue;
-      if (a.garminId && seen.has(a.garminId)) continue;
-      if (a.garminId) seen.add(a.garminId);
-      if (typeof a.durationSec === 'number') totalSec += a.durationSec;
-      totalTSS += iTrimpToTSS(a.iTrimp);
-      sessionCount += 1;
-    }
-  }
-  const hh = Math.floor(totalSec / 3600);
-  const mm = Math.floor((totalSec % 3600) / 60);
-  const timeLabel = totalSec > 0 ? `${hh}h ${String(mm).padStart(2, '0')}m` : '—';
-
-  return `
-    <button id="tri-stats-progress-card" style="${COMPACT_CARD}">
-      ${CHEVRON_TR}
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:10px">Progress</div>
-      <div style="display:flex;align-items:baseline;gap:18px;flex-wrap:wrap">
-        <div>
-          <div style="font-size:24px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${timeLabel}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">time active</div>
-        </div>
-        <div>
-          <div style="font-size:24px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${sessionCount}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">sessions</div>
-        </div>
-        <div>
-          <div style="font-size:24px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${Math.round(totalTSS)}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">total TSS</div>
-        </div>
-      </div>
-      <div style="font-size:12px;color:var(--c-muted);margin-top:12px">Last 5 weeks · tap to see weekly breakdown</div>
-    </button>
-  `;
-}
+let _activeRange: ProgressRange = '12w';
 
 export function renderTriathlonStatsView(): void {
   const container = document.getElementById('app-root');
@@ -158,16 +75,20 @@ export function renderTriathlonStatsView(): void {
 
         <div style="padding:0 20px">
 
-          <!-- Compact Fitness summary. Tap to drill into the full Your Numbers,
-               Trend sparklines, and Race estimates page. -->
+          <!-- Your Numbers: CSS / FTP / LT / VO2max zone bars -->
           <div class="hf" data-delay="0.10">
-            ${buildCompactFitnessCard(s)}
+            ${buildYourNumbersCard(s)}
           </div>
 
-          <!-- Compact Progress summary. Tap to drill into Recent weeks, Stat
-               list, Phase Timeline, CTL chart, and Weekly load TSS chart. -->
+          <!-- Trends: sparklines per benchmark -->
           <div class="hf" data-delay="0.14">
-            ${buildCompactProgressCard(s)}
+            ${buildTrendCards(s)}
+          </div>
+
+          <!-- Progress section -->
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px" class="hf" data-delay="0.17">Progress</div>
+          <div id="tri-progress-section" class="hf" data-delay="0.18">
+            ${buildProgressContent(s, _activeRange)}
           </div>
 
         </div>
@@ -178,16 +99,141 @@ export function renderTriathlonStatsView(): void {
   `;
 
   wireTabBarHandlers(navigateTab);
+  animateChartDrawOn();
   document.getElementById('tri-account-btn')?.addEventListener('click', () => navigateTab('account'));
 
-  // Drill into Fitness detail (Your Numbers + Trend sparklines + Race estimates).
-  document.getElementById('tri-stats-fitness-card')?.addEventListener('click', () => {
-    import('./fitness-detail-view').then(({ renderTriFitnessDetailView }) => renderTriFitnessDetailView());
+  document.getElementById('vo2-info-btn')?.addEventListener('click', () => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 24px 48px rgba(0,0,0,0.18)">
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:14px">VO2max sources</div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Mosaic</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Computed from your training data. Running uses pace-vs-HR regression (Daniels VDOT). Cycling uses the ACSM power formula: <span style="font-variant-numeric:tabular-nums">10.8 × W/kg + 7</span>, derived from your FTP. Cardiac ceiling is your aerobic upper bound (peak HR ÷ resting HR, Uth-Sørensen): a theoretical ceiling, not current fitness. Cross-training, when shown, is sustained-HR aerobic capacity from non-run, non-bike sport. The headline shows your highest measured value, falling back to cardiac ceiling only when no measured signal exists.
+        </div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Read directly from your device. Garmin and Apple Watch use their own proprietary algorithms. Typically HR variability during GPS activities. Updates automatically when your device syncs. May differ from Mosaic; neither is ground truth.
+        </div>
+
+        <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding-top:12px;border-top:1px solid var(--c-border)">
+          Running, cycling, and cardiac are shown separately because each measures a different aspect of aerobic fitness. A strong cyclist may score higher in cycling than running. Both are real.
+        </div>
+
+        <button id="vo2-info-close" style="margin-top:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Close</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('vo2-info-close')?.addEventListener('click', close);
   });
 
-  // Drill into Progress detail (Recent weeks, stat list, Phase Timeline,
-  // per-discipline CTL, Weekly load TSS).
-  document.getElementById('tri-stats-progress-card')?.addEventListener('click', () => {
-    import('./progress-detail-view').then(({ renderTriProgressDetailView }) => renderTriProgressDetailView());
+  document.getElementById('vo2-src-mosaic')?.addEventListener('click', () => {
+    getMutableState().vo2Source = 'mosaic';
+    saveState();
+    renderTriathlonStatsView();
+  });
+  document.getElementById('vo2-src-device')?.addEventListener('click', () => {
+    const sv = getState();
+    if (!(sv.vo2 != null && sv.vo2 > 0)) return;
+    getMutableState().vo2Source = 'device';
+    saveState();
+    renderTriathlonStatsView();
+  });
+
+  wireStatsProgressRangeButtons(s);
+
+  // Drill-through from the "Your Numbers" bars. Each bar id (css/ftp/lt/vo2)
+  // routes to its own detail page with a matching override card. LT reuses
+  // the running-stats page (mode-agnostic); CSS/FTP/VO2max use the
+  // tri-specific pages in `benchmark-detail-pages.ts`. The back button is
+  // always rebound to return to *this* view, not the running fitness detail
+  // page that running's flow uses.
+  document.querySelectorAll<HTMLElement>('[data-tri-metric-detail]').forEach(el => {
+    const handler = async () => {
+      const id = el.dataset.triMetricDetail;
+      const root = document.getElementById('app-root');
+      if (!root) return;
+      const sv = getState();
+
+      if (id === 'lt') {
+        const { buildLTMetricPage, wireLTOverrideHandlers, wireInfoButtons } =
+          await import('../stats-view');
+        root.innerHTML = buildLTMetricPage(sv);
+        animateChartDrawOn();
+        wireTabBarHandlers(navigateTab);
+        wireLTOverrideHandlers(sv);
+        wireInfoButtons();
+      } else if (id === 'css') {
+        const { buildCSSDetailPage, wireCSSDetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildCSSDetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireCSSDetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else if (id === 'ftp') {
+        const { buildFTPDetailPage, wireFTPDetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildFTPDetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireFTPDetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else if (id === 'vo2') {
+        const { buildVO2DetailPage, wireVO2DetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildVO2DetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireVO2DetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else {
+        return;
+      }
+
+      rebindBack();
+    };
+
+    const rebindBack = () => {
+      const back = document.getElementById('stats-metric-back');
+      back?.addEventListener('click', () => renderTriathlonStatsView());
+    };
+
+    el.addEventListener('click', handler);
+    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
+  });
+}
+
+function wireStatsProgressRangeButtons(s: SimulatorState): void {
+  document.querySelectorAll<HTMLButtonElement>('.tri-progress-range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const r = btn.dataset.range as ProgressRange;
+      if (!r || r === _activeRange) return;
+      _activeRange = r;
+      const section = document.getElementById('tri-progress-section');
+      if (section) {
+        section.innerHTML = buildProgressContent(s, _activeRange);
+        animateChartDrawOn();
+        wireStatsProgressRangeButtons(s);
+      } else {
+        renderTriathlonStatsView();
+      }
+    });
   });
 }
