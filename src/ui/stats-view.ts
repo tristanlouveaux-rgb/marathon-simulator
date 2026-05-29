@@ -1,8 +1,11 @@
 /**
- * Stats tab. Redesigned 2026-03-19.
- * Three-pillar architecture: Progress · Fitness · Readiness
- * Opening screen: one card per pillar + flat Summary section.
- * Each card taps into a single-scroll detail page (no tabs inside).
+ * Stats tab. Opening screen mirrors the triathlon stats page (2026-05-29):
+ *   1. "Your Numbers" card — LT + VO2 Max zone bars, each tapping straight
+ *      into its metric detail page (LT page, VO2 page) with history.
+ *   2. Progress section — Recent-weeks summary (drills into the full Progress
+ *      detail page) + a running-load (CTL) trend.
+ * Mint page-flair background. The earlier Progress / Fitness / Readiness /
+ * Summary opening cards were removed; their content lives in the drilldowns.
  */
 
 import { getState } from '@/state';
@@ -412,16 +415,18 @@ function buildOnePositionBar(opts: {
     ? `<div id="stats-info-${infoId}" style="display:none;margin-top:6px;font-size:11px;color:var(--c-muted);line-height:1.5;background:rgba(0,0,0,0.04);border-radius:8px;padding:10px 12px">${INFO_TEXTS[infoId]}</div>`
     : '';
 
-  // Zone fill colour. Sky→blue→indigo→violet→purple→deep-violet (fitness scale, non-judgmental)
+  // Single teal-green fill across all zones (matches the triathlon stats bars).
+  // The old blue-to-purple gradient drove the high tiers purple, which reads
+  // wrong for a fitness benchmark and breaks the no-blue/no-purple palette rule.
   const ZONE_FILL: Record<string, string> = {
-    'Building':     '#38BDF8',
-    'Foundation':   '#3B82F6',
-    'Trained':      '#4F46E5',
-    'Well-Trained': '#7C3AED',
-    'Performance':  '#9333EA',
-    'Elite':        '#6D28D9',
+    'Building':     '#14B8A6',
+    'Foundation':   '#14B8A6',
+    'Trained':      '#14B8A6',
+    'Well-Trained': '#14B8A6',
+    'Performance':  '#14B8A6',
+    'Elite':        '#14B8A6',
   };
-  const fillColor = ZONE_FILL[zoneName] ?? '#3B82F6';
+  const fillColor = ZONE_FILL[zoneName] ?? '#14B8A6';
 
   // Full zone names. No abbreviations
   const ZONE_SHORT: Record<string, string> = {
@@ -557,481 +562,6 @@ function physioBarEntries(
   }));
 }
 
-// ---------------------------------------------------------------------------
-// ══════════════════════════════════════════════════════════════════════════════
-// OPENING SCREEN
-// ══════════════════════════════════════════════════════════════════════════════
-
-// ---------------------------------------------------------------------------
-// 1. Progress Card
-
-function buildProgressCard_Opening(s: SimulatorState): string {
-  const isRaceMode = !s.continuousMode && !!s.initialBaseline;
-
-  if (isRaceMode) {
-    // Race mode: arc/timeline from plan start → race day
-    const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.currentFitness ?? 0;
-
-    // Timeline progress bar
-    const totalWks = s.tw ?? (s.wks?.length ?? 16);
-    const currentWk = s.w ?? 1;
-    const pct = Math.min(100, Math.max(0, ((currentWk - 1) / Math.max(totalWks - 1, 1)) * 100));
-
-    const fmtT = (secs: number) => {
-      if (!secs) return '—';
-      const h = Math.floor(secs / 3600);
-      const m = Math.floor((secs % 3600) / 60);
-      const sc = Math.round(secs % 60);
-      return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}` : `${m}:${String(sc).padStart(2,'0')}`;
-    };
-
-    return `
-      <div id="stats-card-progress" style="padding:0 18px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-        <div class="m-card" style="padding:18px">
-          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Progress</div>
-
-          <div style="position:relative;margin-bottom:14px;padding-top:22px">
-            <div style="position:absolute;top:0;left:${Math.max(6, Math.min(94, pct))}%;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--c-black);white-space:nowrap">
-              Week ${currentWk} of ${totalWks}
-            </div>
-            <div style="height:4px;background:rgba(15,23,42,0.08);border-radius:2px;overflow:hidden">
-              <div style="height:100%;width:${pct}%;background:var(--c-black);border-radius:2px;transition:width 0.3s"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:6px">
-              <span style="font-size:10px;color:var(--c-faint)">Start</span>
-              <span style="font-size:10px;color:var(--c-faint)">Race day</span>
-            </div>
-          </div>
-
-          <div>
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Forecast finish</div>
-            <div style="font-size:28px;font-weight:300;letter-spacing:-0.03em;color:var(--c-black)">${fmtT(forecastSec)}</div>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  // General fitness mode: compact card matching Fitness style
-  const unitPref = s.unitPref ?? 'km';
-  const completedWksForCard = (s.wks ?? []).slice(0, Math.max(0, (s.w ?? 1) - 1));
-  let totalRunKmCard = 0;
-  for (const wk of completedWksForCard) {
-    const seenIds = new Set<string>();
-    for (const actual of Object.values(wk.garminActuals ?? {})) {
-      if (actual.garminId && seenIds.has(actual.garminId)) continue;
-      if (actual.garminId) seenIds.add(actual.garminId);
-      if ((!actual.displayName || !!actual.workoutName) && actual.distanceKm > 0) {
-        totalRunKmCard += actual.distanceKm;
-      }
-    }
-  }
-  const displayKm = unitPref === 'mi' ? totalRunKmCard * 0.621371 : totalRunKmCard;
-  const unitLabel = unitPref === 'mi' ? 'mi' : 'km';
-  return `
-    <div id="stats-card-progress" style="padding:0 18px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-      <div class="m-card" style="padding:18px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Progress</div>
-        <div style="display:flex;align-items:flex-start;justify-content:space-between">
-          <div>
-            <div style="display:flex;align-items:baseline;gap:6px">
-              <div style="font-size:40px;font-weight:200;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${displayKm > 0 ? displayKm.toFixed(1) : '—'}</div>
-              <span style="font-size:22px;font-weight:300;color:var(--c-faint);line-height:1">→</span>
-            </div>
-            <div style="font-size:12px;color:var(--c-muted);margin-top:3px">${unitLabel} run · this plan</div>
-          </div>
-          <div style="font-size:11px;color:var(--c-faint);padding-top:4px">Tap for detail ›</div>
-        </div>
-      </div>
-    </div>`;
-}
-
-// ---------------------------------------------------------------------------
-// 2. Fitness Card
-
-function buildFitnessCard_Opening(s: SimulatorState): string {
-  // Honest zero-state: if the user has no real fitness signal (no device VO2,
-  // no PBs, no VDOT history), don't surface the `s.v=50` store default. Show
-  // "—" instead. Otherwise fall through to normal VO2 / VDOT display.
-  const hasRealFitness =
-    (s.vo2 ?? 0) > 0 ||
-    (s.vdotHistory?.length ?? 0) > 0 ||
-    Object.keys(s.pbs ?? {}).length > 0;
-  const display = resolveVO2Display(s);
-  const vo2display = !hasRealFitness ? 0 : display.value;
-  const isEstimated = display.mode === 'estimated';
-
-  // VO2 Max tier label
-  const isFemale = s.biologicalSex === 'female';
-  const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
-  const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
-  const aerZoneIdx = aerBreaks.findIndex(b => vo2display < b);
-  const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
-
-  // Trend arrow only when its source matches the headline value's source.
-  // device-no-trend: headline is from the watch but we have no second reading,
-  // so a VDOT-derived arrow would describe a different number.
-  let trendArrow = '→';
-  let trendColor = 'var(--c-faint)';
-  if (display.mode === 'device-with-trend') {
-    const d = display.vo2hist[display.vo2hist.length - 1].value - display.vo2hist[display.vo2hist.length - 2].value;
-    trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
-    trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
-  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
-    const d = display.vdotHist[display.vdotHist.length - 1].vdot - display.vdotHist[display.vdotHist.length - 2].vdot;
-    trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
-    trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
-  }
-
-  let chart = '';
-  let changeNote = '';
-  if (display.mode === 'device-with-trend') {
-    chart = buildVO2LineChart(display.vo2hist);
-    changeNote = buildVO2ChangeNote(display.vo2hist);
-  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
-    chart = buildVdotLineChart(display.vdotHist, '8w');
-    changeNote = buildVdotChangeNote(display.vdotHist);
-  } else if (display.mode === 'device-no-trend') {
-    changeNote = buildVO2NoTrendNote();
-  }
-
-  const vo2Label = isEstimated ? 'VO2 Max (est.)' : 'VO2 Max';
-
-  return `
-    <div id="stats-card-fitness" style="padding:0 18px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-      <div class="m-card" style="padding:18px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Fitness</div>
-        <div style="display:flex;align-items:flex-start;justify-content:space-between">
-          <div>
-            <div style="display:flex;align-items:baseline;gap:6px">
-              <div style="font-size:40px;font-weight:200;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${vo2display > 0 ? Math.round(vo2display) : '—'}</div>
-              <span style="font-size:22px;font-weight:300;color:${trendColor};line-height:1">${trendArrow}</span>
-            </div>
-            <div style="font-size:12px;color:var(--c-muted);margin-top:3px">${vo2Label} · ${aerZone}</div>
-          </div>
-          <div style="font-size:11px;color:var(--c-faint);padding-top:4px">Tap for detail ›</div>
-        </div>
-        ${chart ? `<div style="margin-top:12px">${chart}</div>` : ''}
-        ${changeNote}
-      </div>
-    </div>`;
-}
-
-// ---------------------------------------------------------------------------
-// 3. Readiness Card
-
-function buildReadinessCard_Opening(s: SimulatorState): string {
-  // Mirror exactly what the home page computes so both show the same score
-  const archivedPlans = (s as any).previousPlanWks ?? undefined;
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate, undefined, archivedPlans);
-  const tsb = sameSignal?.tsb ?? 0;
-  const ctlNow = sameSignal?.ctl ?? 0;
-
-  const tier = s.athleteTier ?? 'recreational';
-  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, archivedPlans, s.adaptiveRecovery);
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
-  const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
-
-  const latestPhysio = s.physiologyHistory?.slice(-1)[0];
-  const today = new Date().toISOString().split('T')[0];
-  const manualToday = (s.recoveryHistory ?? []).slice().reverse().find(
-    (e: any) => e.date === today && e.source === 'manual',
-  );
-  const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
-  const latestWithSleep = (s.physiologyHistory ?? []).slice().reverse().find(p => p.sleepScore != null);
-  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestWithSleep?.sleepScore ?? null;
-  const latestWithHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null);
-  const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
-  const hrvAll = (s.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
-  const hrvPersonalAvg: number | null = hrvAll.length >= 3
-    ? Math.round(hrvAll.reduce((a: number, b: number) => a + b, 0) / hrvAll.length)
-    : null;
-
-  const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
-  const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
-  const sleepDebtForRecovery2 = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
-  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? [], { sleepDebtSec: sleepDebtForRecovery2 });
-  const readiness = computeReadiness({
-    tsb, acwr: acwr.ratio, ctlNow,
-    sleepScore, hrvRmssd,
-    sleepHistory: s.physiologyHistory ?? [],
-    hrvPersonalAvg,
-    sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
-    weeksOfHistory: metrics.length,
-    precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
-    acwrSafeUpper: acwr.safeUpper,
-  });
-
-  const hasData = ctlNow > 0;
-  const color = readinessColor(readiness.label);
-  const markerPct = Math.min(98, Math.max(2, readiness.score));
-
-  return `
-    <div id="stats-card-readiness" style="padding:0 18px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-      <div class="m-card" style="padding:18px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Readiness</div>
-        <div style="display:flex;align-items:flex-start;justify-content:space-between">
-          <div>
-            <div style="display:flex;align-items:baseline;gap:6px">
-              <div style="font-size:40px;font-weight:200;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${hasData ? readiness.score : '—'}</div>
-              <span style="font-size:22px;font-weight:300;color:var(--c-faint);line-height:1">→</span>
-            </div>
-            <div style="font-size:12px;color:var(--c-muted);margin-top:3px">${hasData ? readiness.label : '—'}</div>
-          </div>
-          <div style="font-size:11px;color:var(--c-faint);padding-top:4px">Tap for detail ›</div>
-        </div>
-      </div>
-    </div>`;
-}
-
-// ---------------------------------------------------------------------------
-// 4. Summary section (flat, no tap-through)
-
-function buildSummarySection(s: SimulatorState): string {
-  const vdot = computeCurrentVDOT(s);
-  const isRaceMode = !s.continuousMode && !!s.initialBaseline;
-  const unitPref = s.unitPref ?? 'km';
-
-  const fmtTime = (secs: number): string => {
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const sc = Math.round(secs % 60);
-    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}`;
-    return `${m}:${String(sc).padStart(2,'0')}`;
-  };
-
-  // Forecast times (race mode only)
-  let forecastRows = '';
-  if (isRaceMode && vdot >= 20) {
-    const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-    const inputs2 = computePredictionInputs(collectRunActivities(s));
-    const liveRec2 = inputs2.recentRun ?? s.rec ?? null;
-    const liveKmPerWeek2 = inputs2.weeklyKm;
-    const liveAvgPace2 = inputs2.avgPaceSecPerKm ?? null;
-    const distances: Array<{ label: string; dist: number; km: number; code: 'marathon'|'half'|'10k'|'5k' }> = [
-      { label: 'Marathon', dist: 42195, km: 42.195,  code: 'marathon' },
-      { label: 'Half',     dist: 21097, km: 21.0975, code: 'half' },
-      { label: '10K',      dist: 10000, km: 10,      code: '10k' },
-      { label: '5K',       dist: 5000,  km: 5,       code: '5k' },
-    ];
-    forecastRows = distances.map(d => {
-      let timeSec: number;
-      if (hasBlendInputs) {
-        const blended = blendPredictions(
-          d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
-          s.b ?? 1.06, s.typ ?? 'Balanced', liveRec2,
-          s.athleteTier ?? undefined, liveKmPerWeek2, liveAvgPace2 ?? undefined,
-          { weeksCovered: inputs2.weeksCovered, paceConfidence: inputs2.paceConfidence, isStale: inputs2.isStale },
-        );
-        timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
-      } else {
-        timeSec = vt(d.km, vdot);
-      }
-      // Signed delta vs target. Only on the row matching s.rd, and only when a goal is set.
-      let deltaHtml = '';
-      if (d.code === s.rd && !s.continuousMode && s.initialBaseline && s.initialBaseline > 0) {
-        const dSec = Math.round(timeSec - s.initialBaseline);
-        const dMin = Math.round(Math.abs(dSec) / 60);
-        const text = Math.abs(dSec) < 60
-          ? 'On pace'
-          : dSec > 0 ? `+${dMin} min` : `\u2212${dMin} min`;
-        deltaHtml = `<span style="font-size:11px;color:var(--c-muted);margin-right:4px">${text}</span>`;
-      }
-      return `
-        <div class="race-est-row" data-dist="${d.code}" data-time="${Math.round(timeSec)}" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);cursor:pointer;-webkit-tap-highlight-color:transparent">
-          <span style="font-size:13px;color:var(--c-muted)">${d.label}</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            ${deltaHtml}
-            <span style="font-size:14px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span>
-            <span style="font-size:13px;color:var(--c-faint);line-height:1">›</span>
-          </div>
-        </div>`;
-    }).join('');
-  }
-
-  if (!forecastRows) return '';
-
-  return `
-    <div style="padding:0 18px 18px">
-      <div class="m-card" style="padding:16px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Current Race Estimates</div>
-        <div style="font-size:10px;color:var(--c-faint);margin-bottom:6px">Estimated finish times if racing today</div>
-        ${forecastRows}
-      </div>
-    </div>`;
-}
-
-// ---------------------------------------------------------------------------
-// Opening screen assembly
-
-/**
- * Shared area-line renderer used by track-only volume + load cards.
- * Mirrors the VO2 / rolling-TSS chart style: polyline top + gradient fill.
- */
-function buildTrackOnlyAreaChart(
-  series: number[],
-  options: { risingColor: string; flatColor: string; gradId: string; heightPx: number },
-): string {
-  const { risingColor, flatColor, gradId, heightPx } = options;
-  if (series.length < 2) return '';
-  const W = 320, H = 60;
-  const maxVal = Math.max(...series, 1) * 1.1;
-  const xOf = (i: number) => (i / (series.length - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
-  const pts: [number, number][] = series.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = 'M ' + pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ');
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const last = series[series.length - 1];
-  const prev = series[series.length - 2];
-  const rising = last > prev + (last * 0.05);
-  const stroke = rising ? risingColor : flatColor;
-
-  return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${heightPx}" preserveAspectRatio="none" style="display:block">
-      <defs>
-        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="${stroke}" stop-opacity="0.22"/>
-          <stop offset="100%" stop-color="${stroke}" stop-opacity="0.04"/>
-        </linearGradient>
-      </defs>
-      <path d="${areaPath}" fill="url(#${gradId})"/>
-      <path d="${topPath}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-    </svg>`;
-}
-
-/**
- * Just-Track weekly volume retrospective. Line/area chart (same style as VO2).
- * Series sourced from `s.wks` only. Each week's km summed from garminActuals
- * + adhocWorkouts. Excludes `historicWeeklyKm` (Strava backfill from prior
- * plan usage) so a fresh tracking programme starts with a clean chart and
- * fills in as activities sync into the new weeks.
- */
-function buildTrackOnlyVolumeCard(s: SimulatorState): string {
-  const unit: 'km' | 'mi' = s.unitPref ?? 'km';
-  const wks = s.wks ?? [];
-
-  function weekKm(w: typeof wks[number]): number {
-    let km = 0;
-    const seen = new Set<string>();
-    for (const actual of Object.values(w.garminActuals ?? {})) {
-      if (actual.garminId && seen.has(actual.garminId)) continue;
-      if (actual.garminId) seen.add(actual.garminId);
-      if (typeof actual.distanceKm === 'number' && actual.distanceKm > 0) km += actual.distanceKm;
-    }
-    for (const adhoc of (w.adhocWorkouts ?? [])) {
-      const d = (adhoc as any).garminDistKm ?? (adhoc as any).distanceKm;
-      if (typeof d === 'number' && d > 0) km += d;
-    }
-    return km;
-  }
-
-  const series = wks.map(weekKm);
-  const currentKm = series[series.length - 1] ?? 0;
-  const prevKm = series.length >= 2 ? series[series.length - 2] : 0;
-  const avg4wSource = series.slice(-4);
-  const avg4wKm = avg4wSource.length ? avg4wSource.reduce((a, b) => a + b, 0) / avg4wSource.length : 0;
-
-  if (series.every(k => !k || k === 0)) {
-    return `
-      <div style="padding:0 18px 12px">
-        <div class="m-card" style="padding:18px;text-align:center">
-          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Weekly volume</div>
-          <div style="font-size:13px;color:var(--c-muted);line-height:1.45">Connect Strava or record a run. Weekly volume builds up from this week forward.</div>
-        </div>
-      </div>`;
-  }
-
-  const chart = buildTrackOnlyAreaChart(series, {
-    risingColor: 'rgba(58,96,144,0.85)',
-    flatColor: 'rgba(71,85,105,0.70)',
-    gradId: 'volFill',
-    heightPx: 90,
-  });
-
-  return `
-    <div style="padding:0 18px 12px">
-      <div class="m-card" style="padding:18px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Weekly volume</div>
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
-          <div>
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">This week</div>
-            <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black);line-height:1">${formatKm(currentKm, unit)}</div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Last week</div>
-            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${formatKm(prevKm, unit)}</div>
-            <div style="font-size:11px;color:var(--c-muted);margin-top:6px">4w avg</div>
-            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${formatKm(avg4wKm, unit)}</div>
-          </div>
-        </div>
-        ${chart}
-        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--c-faint)">
-          <span>${series.length} wk ago</span>
-          <span style="color:var(--c-black);font-weight:600">This week</span>
-        </div>
-      </div>
-    </div>`;
-}
-
-/**
- * Just-Track weekly Signal-B TSS retrospective (load over time).
- *
- * Current week TSS comes from `computeWeekRawTSS` on the live bucket.
- * Prior weeks from `historicWeeklyTSS` (Strava backfill). Rendered the
- * same way as the volume card but with TSS instead of km. Empty state
- * when no data yet.
- */
-function buildTrackOnlyLoadCard(s: SimulatorState): string {
-  // Series sourced from s.wks only. Each week's Signal-B TSS. Excludes
-  // historicWeeklyTSS (Strava backfill from prior plan usage).
-  const wks = s.wks ?? [];
-  const series = wks.map(w => Math.round(computeWeekRawTSS(w, w.rated ?? {}, s.planStartDate)));
-  const currentTSS = series[series.length - 1] ?? 0;
-  const prevTSS = series.length >= 2 ? series[series.length - 2] : 0;
-  const avg4wSource = series.slice(-4);
-  const avg4wTSS = avg4wSource.length ? Math.round(avg4wSource.reduce((a, b) => a + b, 0) / avg4wSource.length) : 0;
-
-  if (series.every(t => !t || t === 0)) {
-    return `
-      <div style="padding:0 18px 12px">
-        <div class="m-card" style="padding:18px;text-align:center">
-          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Load over time</div>
-          <div style="font-size:13px;color:var(--c-muted);line-height:1.45">Connect Strava or record a run. Weekly TSS builds up from this week forward.</div>
-        </div>
-      </div>`;
-  }
-
-  const chart = buildTrackOnlyAreaChart(series, {
-    risingColor: 'rgba(58,96,144,0.85)',
-    flatColor: 'rgba(71,85,105,0.70)',
-    gradId: 'loadFill',
-    heightPx: 90,
-  });
-
-  return `
-    <div style="padding:0 18px 12px">
-      <div class="m-card" style="padding:18px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Load over time</div>
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
-          <div>
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">This week</div>
-            <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black);line-height:1;font-variant-numeric:tabular-nums">${currentTSS}<span style="font-size:14px;font-weight:500;color:var(--c-muted);margin-left:4px">TSS</span></div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Last week</div>
-            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${prevTSS} TSS</div>
-            <div style="font-size:11px;color:var(--c-muted);margin-top:6px">4w avg</div>
-            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${avg4wTSS} TSS</div>
-          </div>
-        </div>
-        ${chart}
-        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--c-faint)">
-          <span>${series.length} wk ago</span>
-          <span style="color:var(--c-black);font-weight:600">This week</span>
-        </div>
-      </div>
-    </div>`;
-}
 
 // ─── Plan History ─────────────────────────────────────────────────────────────
 
@@ -1102,6 +632,182 @@ function buildCompletedPlansCard(s: SimulatorState): string {
   </div>`;
 }
 
+/** Staggered float-in used by the stats hero + cards. Mirrors the triathlon
+ *  stats page (`triathlon/stats-view.ts`). */
+const STATS_HERO_STYLE = `
+  <style>
+    @keyframes statsFloatUp {
+      from { opacity:0; transform:translateY(16px) scale(0.97); }
+      to   { opacity:1; transform:translateY(0) scale(1); }
+    }
+    .stats-sf { opacity:0; animation:statsFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+  </style>`;
+
+/** Centered "Stats" hero: account button on its own row, large title, optional
+ *  contextual subtitle. Copied from the triathlon stats hero so all modes share
+ *  one page frame. The account button keeps id `stats-account-btn` (wired in
+ *  `renderStatsView`). */
+function buildStatsHero(initials: string, subtitle: string): string {
+  return `
+    <div class="stats-sf" style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;animation-delay:0.02s">
+      <button id="stats-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
+    </div>
+    <div class="stats-sf" style="text-align:center;padding:20px 20px 20px;animation-delay:0.06s">
+      <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Stats</div>
+      ${subtitle ? `<div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${subtitle}</div>` : ''}
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// ══════════════════════════════════════════════════════════════════════════════
+// "YOUR NUMBERS" CARD + PROGRESS SECTION (opening screen)
+// Mirrors the triathlon stats opening: a Your Numbers card whose bars drill
+// straight into the metric detail pages (with history), plus a lean Progress
+// section. Replaces the old Progress / Fitness / Readiness / Summary cards,
+// whose content already lived inside those detail pages.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Equal-tone teal track tints (Building → Elite), matching the triathlon bars. */
+const ZONE_TINTS = [
+  'rgba(20,184,166,0.12)', 'rgba(20,184,166,0.16)', 'rgba(20,184,166,0.20)',
+  'rgba(20,184,166,0.24)', 'rgba(148,163,184,0.20)', 'rgba(148,163,184,0.28)',
+];
+
+/** Build a 6-segment zone list from raw fractions + the shared teal tints. */
+function zonesFromFractions(labels: readonly string[], fractions: number[]): PositionZone[] {
+  return labels.map((label, i) => ({ label, fraction: fractions[i], color: ZONE_TINTS[i] }));
+}
+
+/**
+ * "Your Numbers" card for the opening Stats screen. Two physiological markers,
+ * each tapping straight into its detail page (with history). VO2max precedes
+ * LT to match the triathlon card's run-marker order.
+ */
+function buildRunningNumbersCard(s: SimulatorState): string {
+  const isFemale = s.biologicalSex === 'female';
+  const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
+
+  // VO2 Max. Same priority chain the rest of the app uses.
+  const vo2physio = getPhysiologicalVdot(s);
+  const vo2bar = vo2physio.vdot ?? computeCurrentVDOT(s);
+  const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
+  const aerZoneIdx = aerBreaks.findIndex(b => vo2bar < b);
+  const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
+  const aerZones = zonesFromFractions(
+    zoneLabels,
+    isFemale ? [8/60, 7/60, 10/60, 10/60, 10/60, 15/60] : [15/60, 7/60, 10/60, 8/60, 10/60, 10/60],
+  );
+  const aerSubtitle = vo2physio.source === 'device' ? undefined : vo2physio.detail;
+  const vo2Bar = vo2bar > 0 ? buildOnePositionBar({
+    title: 'VO2 Max',
+    infoId: 'aerobic',
+    detailId: 'vo2',
+    value: vo2bar,
+    valueLabel: Math.round(vo2bar).toString(),
+    zoneName: aerZone,
+    scaleMin: 20,
+    scaleMax: 80,
+    zones: aerZones,
+    subtitle: aerSubtitle,
+  }) : '';
+
+  // Lactate Threshold.
+  const ltPace = s.lt ?? 0;
+  const ltSlower = isFemale ? 380 : 360;
+  const ltFaster = isFemale ? 180 : 160;
+  const ltScore = ltPace > 0
+    ? Math.min(100, Math.max(0, ((ltSlower - ltPace) / (ltSlower - ltFaster)) * 100))
+    : null;
+  const ltBreaks = [20, 40, 55, 70, 85];
+  const ltZoneIdx = ltScore != null ? ltBreaks.findIndex(b => ltScore < b) : -1;
+  const ltZoneName = ltScore != null ? zoneLabels[ltZoneIdx === -1 ? 5 : ltZoneIdx] : '—';
+  const ltUnitPref = s.unitPref ?? 'km';
+  const ltLabel = ltPace > 0 ? fp(ltPace, ltUnitPref) : '—';
+  let ltSubtitle: string | undefined;
+  if (s.ltHR && s.ltHR > 0) {
+    const pct = s.maxHR ? Math.round((s.ltHR / s.maxHR) * 100) : null;
+    ltSubtitle = pct ? `${s.ltHR} bpm · ${pct}% max HR` : `${s.ltHR} bpm`;
+  }
+  const ltBar = buildOnePositionBar({
+    title: 'Lactate Threshold',
+    infoId: 'lt',
+    detailId: 'lt',
+    value: ltScore,
+    valueLabel: ltLabel,
+    zoneName: ltZoneName,
+    scaleMin: 0,
+    scaleMax: 100,
+    zones: zonesFromFractions(zoneLabels, [20/100, 20/100, 15/100, 15/100, 15/100, 15/100]),
+    subtitle: ltSubtitle,
+  });
+
+  return `
+    <div class="m-card stats-sf" style="padding:16px;margin-bottom:10px;animation-delay:0.10s">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:14px">Your Numbers</div>
+      ${ltBar}
+      ${vo2Bar}
+    </div>`;
+}
+
+/**
+ * Lean Progress section for the opening screen. A Recent-weeks summary that
+ * taps into the full Progress detail page, plus a compact running-load (CTL)
+ * trend. The deeper stats table, phase timeline, and forecasts stay behind the
+ * drilldown, so nothing is duplicated on the opening.
+ */
+function buildProgressSection(s: SimulatorState): string {
+  const wks = s.wks ?? [];
+  const curWeek = Math.max(1, Math.min(wks.length, s.w ?? 1));
+  const startIdx = Math.max(0, curWeek - 5);
+  let totalSec = 0, sessionCount = 0, totalTSS = 0;
+  for (let i = startIdx; i < curWeek; i++) {
+    const wk = wks[i];
+    if (!wk?.garminActuals) continue;
+    const seen = new Set<string>();
+    for (const a of Object.values(wk.garminActuals)) {
+      if (!a) continue;
+      if (a.garminId && seen.has(a.garminId)) continue;
+      if (a.garminId) seen.add(a.garminId);
+      if (typeof a.durationSec === 'number') totalSec += a.durationSec;
+      sessionCount += 1;
+    }
+    totalTSS += computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
+  }
+  const hh = Math.floor(totalSec / 3600);
+  const mm = Math.floor((totalSec % 3600) / 60);
+  const timeLabel = totalSec > 0 ? `${hh}h ${String(mm).padStart(2, '0')}m` : '—';
+
+  const recentWeeksCard = `
+    <button id="stats-recent-weeks-card" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.05);border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.05);padding:16px 18px;margin-bottom:10px;cursor:pointer;font-family:var(--f);position:relative;-webkit-tap-highlight-color:transparent">
+      <svg style="position:absolute;top:16px;right:14px;pointer-events:none" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:10px">Recent weeks</div>
+      <div style="display:flex;align-items:baseline;gap:18px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${timeLabel}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">time active</div>
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${sessionCount}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">sessions</div>
+        </div>
+        <div>
+          <div style="font-size:22px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${Math.round(totalTSS)}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:3px">total load</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--c-muted);margin-top:10px">Last 5 weeks · tap for the full breakdown</div>
+    </button>`;
+
+  const ctlCard = `
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Running fitness (CTL)</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">42-day rolling load · daily-equivalent units</div>
+      ${buildCTLLineChart(s, 'all')}
+    </div>`;
+
+  return `${recentWeeksCard}${ctlCard}`;
+}
+
 function buildStatsSummary(s: SimulatorState): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -1111,43 +817,46 @@ function buildStatsSummary(s: SimulatorState): string {
   // Progress card taps through to the Progress detail page which hides Plan
   // Adherence + Phase Timeline for trackOnly. The Current/Total toggle lives
   // on the Progress detail page now (not on this main view).
+  // Week-progress subtitle, mirroring the triathlon hero. Just-Track has no
+  // fixed plan, so it shows no subtitle.
+  const weekLabel = (!s.trackOnly && s.w != null && s.tw != null)
+    ? (s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`)
+    : '';
+
   if (s.trackOnly) {
     return `
-      <div class="mosaic-page" style="background:var(--c-bg)">
-        <div style="max-width:600px;margin:0 auto">
-          <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
-            <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
-            <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
+      ${STATS_HERO_STYLE}
+      <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
+        <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+          ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: true })}
+        </div>
+        ${buildSunGlint('low')}
+        <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+          ${buildStatsHero(initials, '')}
+          <div style="padding:0 18px">
+            ${buildRunningNumbersCard(s)}
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px">Progress</div>
+            ${buildProgressSection(s)}
           </div>
-          ${buildProgressCard_Opening(s)}
-          <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
-            <div style="height:1px;background:var(--c-border)"></div>
-          </div>
-          ${buildFitnessCard_Opening(s)}
-          ${buildTrackOnlyVolumeCard(s)}
-          ${buildTrackOnlyLoadCard(s)}
         </div>
       </div>
       ${renderTabBar('stats', isSimulatorMode())}`;
   }
 
   return `
-    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+    ${STATS_HERO_STYLE}
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('sts', { variant: 'centered', palette: 'sky', pulse: true })}
+        ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: true })}
       </div>
       ${buildSunGlint('low')}
-      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
-        <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
-          <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
-          <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+        ${buildStatsHero(initials, weekLabel)}
+        <div style="padding:0 18px">
+          ${buildRunningNumbersCard(s)}
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px">Progress</div>
+          ${buildProgressSection(s)}
         </div>
-        ${buildProgressCard_Opening(s)}
-        <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
-          <div style="height:1px;background:var(--c-border)"></div>
-        </div>
-        ${buildFitnessCard_Opening(s)}
-        ${buildSummarySection(s)}
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
@@ -1177,7 +886,7 @@ function buildPhaseTimeline(s: SimulatorState): string {
   if (weeks.length === 0) return '';
 
   const phaseColors: Record<string, string> = {
-    base: 'rgba(37,99,235,0.75)', build: 'rgba(249,115,22,0.75)', peak: 'rgba(168,85,247,0.75)', taper: 'rgba(234,179,8,0.75)',
+    base: 'rgba(22,163,74,0.75)', build: 'rgba(249,115,22,0.75)', peak: 'rgba(15,118,110,0.85)', taper: 'rgba(234,179,8,0.75)',
     checkpoint: 'rgba(20,184,166,0.85)',
   };
   const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper', checkpoint: 'Checkpoint' };
@@ -2373,10 +2082,10 @@ function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummar
     : null;
 
   // Compact sleep-score sparkline. One thin bar per night in the plan window;
-  // colour-coded green/violet/orange so the worst nights stand out without
+  // colour-coded green/teal/orange so the worst nights stand out without
   // needing labels. Newest on the right.
   const _scoreColor = (v: number): string =>
-    v >= 75 ? '#34C759' : v >= 55 ? '#8B5CF6' : '#FF9500';
+    v >= 75 ? '#34C759' : v >= 55 ? '#14B8A6' : '#FF9500';
   const sleepSpark = sleepNights.length >= 2 ? (() => {
     const BAR_H = 48;
     const sorted = [...sleepNights].sort((a, b) => a.date.localeCompare(b.date));
@@ -2506,12 +2215,12 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
   const ctlD = Math.round(ctl / 7);
 
   const zones: Array<{ label: string; range: string; desc: string; color: string }> = [
-    { label: 'Building',     range: '< 20',    desc: 'Returning or new runner, building aerobic base.',                              color: '#38BDF8' },
-    { label: 'Foundation',   range: '20 to 40', desc: 'Consistent recreational runner, 3 to 4 sessions per week.',                   color: '#3B82F6' },
-    { label: 'Trained',      range: '40 to 58', desc: 'Structured training, 4 to 5 runs per week.',                                  color: '#4F46E5' },
-    { label: 'Well-Trained', range: '58 to 75', desc: 'High-volume amateur or committed club runner.',                               color: '#7C3AED' },
-    { label: 'Performance',  range: '75 to 95', desc: 'Competitive amateur, structured year-round, high weekly volume.',             color: '#9333EA' },
-    { label: 'Elite',        range: '95+',      desc: 'Near-professional or elite-level weekly training volume.',                    color: '#6D28D9' },
+    { label: 'Building',     range: '< 20',    desc: 'Returning or new runner, building aerobic base.',                              color: '#14B8A6' },
+    { label: 'Foundation',   range: '20 to 40', desc: 'Consistent recreational runner, 3 to 4 sessions per week.',                   color: '#14B8A6' },
+    { label: 'Trained',      range: '40 to 58', desc: 'Structured training, 4 to 5 runs per week.',                                  color: '#14B8A6' },
+    { label: 'Well-Trained', range: '58 to 75', desc: 'High-volume amateur or committed club runner.',                               color: '#14B8A6' },
+    { label: 'Performance',  range: '75 to 95', desc: 'Competitive amateur, structured year-round, high weekly volume.',             color: '#14B8A6' },
+    { label: 'Elite',        range: '95+',      desc: 'Near-professional or elite-level weekly training volume.',                    color: '#14B8A6' },
   ];
 
   const rows = zones.map((z, i) => {
@@ -2662,12 +2371,12 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     scaleMin: 0,
     scaleMax: 150,
     zones: [
-      { label: 'Building',     fraction:  20/150, color: 'rgba(56,189,248,0.18)'  },
-      { label: 'Foundation',   fraction:  20/150, color: 'rgba(59,130,246,0.20)'  },
-      { label: 'Trained',      fraction:  18/150, color: 'rgba(79,70,229,0.22)'   },
-      { label: 'Well-Trained', fraction:  17/150, color: 'rgba(124,58,237,0.25)'  },
-      { label: 'Performance',  fraction:  20/150, color: 'rgba(147,51,234,0.28)'  },
-      { label: 'Elite',        fraction:  55/150, color: 'rgba(109,40,217,0.35)'  },
+      { label: 'Building',     fraction:  20/150, color: 'rgba(20,184,166,0.12)'  },
+      { label: 'Foundation',   fraction:  20/150, color: 'rgba(20,184,166,0.16)'  },
+      { label: 'Trained',      fraction:  18/150, color: 'rgba(20,184,166,0.20)'   },
+      { label: 'Well-Trained', fraction:  17/150, color: 'rgba(20,184,166,0.24)'  },
+      { label: 'Performance',  fraction:  20/150, color: 'rgba(148,163,184,0.20)'  },
+      { label: 'Elite',        fraction:  55/150, color: 'rgba(148,163,184,0.28)'  },
     ],
   });
 
@@ -2681,20 +2390,20 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
   const aerZones = isFemale
     ? [
-        { label: 'Building',     fraction:  8/60, color: 'rgba(56,189,248,0.18)'  },
-        { label: 'Foundation',   fraction:  7/60, color: 'rgba(59,130,246,0.20)'  },
-        { label: 'Trained',      fraction: 10/60, color: 'rgba(79,70,229,0.22)'   },
-        { label: 'Well-Trained', fraction: 10/60, color: 'rgba(124,58,237,0.25)'  },
-        { label: 'Performance',  fraction: 10/60, color: 'rgba(147,51,234,0.28)'  },
-        { label: 'Elite',        fraction: 15/60, color: 'rgba(109,40,217,0.35)'  },
+        { label: 'Building',     fraction:  8/60, color: 'rgba(20,184,166,0.12)'  },
+        { label: 'Foundation',   fraction:  7/60, color: 'rgba(20,184,166,0.16)'  },
+        { label: 'Trained',      fraction: 10/60, color: 'rgba(20,184,166,0.20)'   },
+        { label: 'Well-Trained', fraction: 10/60, color: 'rgba(20,184,166,0.24)'  },
+        { label: 'Performance',  fraction: 10/60, color: 'rgba(148,163,184,0.20)'  },
+        { label: 'Elite',        fraction: 15/60, color: 'rgba(148,163,184,0.28)'  },
       ]
     : [
-        { label: 'Building',     fraction: 15/60, color: 'rgba(56,189,248,0.18)'  },
-        { label: 'Foundation',   fraction:  7/60, color: 'rgba(59,130,246,0.20)'  },
-        { label: 'Trained',      fraction: 10/60, color: 'rgba(79,70,229,0.22)'   },
-        { label: 'Well-Trained', fraction:  8/60, color: 'rgba(124,58,237,0.25)'  },
-        { label: 'Performance',  fraction: 10/60, color: 'rgba(147,51,234,0.28)'  },
-        { label: 'Elite',        fraction: 10/60, color: 'rgba(109,40,217,0.35)'  },
+        { label: 'Building',     fraction: 15/60, color: 'rgba(20,184,166,0.12)'  },
+        { label: 'Foundation',   fraction:  7/60, color: 'rgba(20,184,166,0.16)'  },
+        { label: 'Trained',      fraction: 10/60, color: 'rgba(20,184,166,0.20)'   },
+        { label: 'Well-Trained', fraction:  8/60, color: 'rgba(20,184,166,0.24)'  },
+        { label: 'Performance',  fraction: 10/60, color: 'rgba(148,163,184,0.20)'  },
+        { label: 'Elite',        fraction: 10/60, color: 'rgba(148,163,184,0.28)'  },
       ];
   // Subtitle reflects the actual source the unified function picked. When
   // device VO2 is fresh, no subtitle (the value speaks for itself). When we
@@ -2745,12 +2454,12 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     scaleMin: 0,
     scaleMax: 100,
     zones: [
-      { label: 'Building',     fraction: 20/100, color: 'rgba(56,189,248,0.18)'  },
-      { label: 'Foundation',   fraction: 20/100, color: 'rgba(59,130,246,0.20)'  },
-      { label: 'Trained',      fraction: 15/100, color: 'rgba(79,70,229,0.22)'   },
-      { label: 'Well-Trained', fraction: 15/100, color: 'rgba(124,58,237,0.25)'  },
-      { label: 'Performance',  fraction: 15/100, color: 'rgba(147,51,234,0.28)'  },
-      { label: 'Elite',        fraction: 15/100, color: 'rgba(109,40,217,0.35)'  },
+      { label: 'Building',     fraction: 20/100, color: 'rgba(20,184,166,0.12)'  },
+      { label: 'Foundation',   fraction: 20/100, color: 'rgba(20,184,166,0.16)'  },
+      { label: 'Trained',      fraction: 15/100, color: 'rgba(20,184,166,0.20)'   },
+      { label: 'Well-Trained', fraction: 15/100, color: 'rgba(20,184,166,0.24)'  },
+      { label: 'Performance',  fraction: 15/100, color: 'rgba(148,163,184,0.20)'  },
+      { label: 'Elite',        fraction: 15/100, color: 'rgba(148,163,184,0.28)'  },
     ],
     subtitle: ltSubtitle,
   });
@@ -3153,17 +2862,37 @@ function buildVDOTMetricPage(s: SimulatorState): string {
     : 'From device';
 
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildMetricSubHeader('VO2 Max')}
-      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-          <span style="font-size:28px;font-weight:300;color:var(--c-black)">${vo2metric > 0 ? Math.round(vo2metric) : '—'}</span>
-          <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('bd-vo2', { variant: 'centered', palette: 'mint', pulse: false })}
+      </div>
+      ${buildSunGlint('low')}
+
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+
+        <!-- Back button row -->
+        <div style="padding:max(20px, env(safe-area-inset-top)) 18px 0">
+          <button id="stats-metric-back" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:15px;color:var(--c-black);font-family:var(--f);padding:6px 0;margin-left:-2px">
+            <span style="font-size:18px;line-height:1">←</span>
+            <span style="font-weight:500">Back</span>
+          </button>
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${sourceLabel}</div>
-        ${chartHtml ? `<div class="m-card" style="padding:16px">${chartHtml}</div>` : ''}
-        ${changeNote}
-        ${isEstimated ? buildHrPaceCalibrationCard(s) : ''}
+
+        <!-- Centered hero block -->
+        <div style="text-align:center;padding:40px 20px 22px">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">VO2 Max</div>
+          <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:14px">
+            <span style="font-size:30px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${vo2metric > 0 ? Math.round(vo2metric) : '—'}</span>
+            <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
+          </div>
+          <div style="font-size:13px;color:var(--c-muted);margin-top:8px">${sourceLabel}</div>
+        </div>
+
+        <div style="padding:0 16px">
+          ${chartHtml ? `<div class="m-card" style="padding:16px;margin-bottom:10px">${chartHtml}</div>` : ''}
+          ${changeNote}
+          ${isEstimated ? buildHrPaceCalibrationCard(s) : ''}
+        </div>
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
@@ -3983,10 +3712,10 @@ function buildRecoveryAccordionBody(
     <div style="margin-bottom:20px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
         <span style="font-size:13px;font-weight:600;color:var(--c-black)">HRV (RMSSD)</span>
-        <span style="font-size:15px;font-weight:600;color:#A855F7">${lastHrv != null ? Math.round(lastHrv) + ' ms' : '—'}</span>
+        <span style="font-size:15px;font-weight:600;color:#14B8A6">${lastHrv != null ? Math.round(lastHrv) + ' ms' : '—'}</span>
       </div>
       ${hrvBaseline != null ? `<div style="font-size:10px;color:var(--c-faint);margin-bottom:2px">Your 28-day average: ${hrvBaseline} ms</div>` : ''}
-      ${buildPhysioChartWithBaseline(hrvEntries, '#A855F7', hrvBaseline, ' ms')}
+      ${buildPhysioChartWithBaseline(hrvEntries, '#14B8A6', hrvBaseline, ' ms')}
     </div>` : '';
 
   // Resting HR
@@ -4410,23 +4139,23 @@ function buildCTLCard(s: SimulatorState): string {
   const ctlZone = zoneLabels[ctlZoneIdx === -1 ? 5 : ctlZoneIdx];
 
   const TIER_COLOR: Record<string, string> = {
-    'Building':     '#38BDF8',
-    'Foundation':   '#3B82F6',
-    'Trained':      '#4F46E5',
-    'Well-Trained': '#7C3AED',
-    'Performance':  '#9333EA',
-    'Elite':        '#6D28D9',
+    'Building':     '#14B8A6',
+    'Foundation':   '#14B8A6',
+    'Trained':      '#14B8A6',
+    'Well-Trained': '#14B8A6',
+    'Performance':  '#14B8A6',
+    'Elite':        '#14B8A6',
   };
-  const tierColor = TIER_COLOR[ctlZone] ?? '#3B82F6';
+  const tierColor = TIER_COLOR[ctlZone] ?? '#14B8A6';
   const ctlMarker = latestCTL > 0 ? Math.min(98, Math.max(2, (ctlD / 150) * 100)) : null;
 
   const specBar = buildInlineSpectrumBar([
-    { label: 'Building',     fraction:  20/150, color: 'rgba(56,189,248,0.18)'  },
-    { label: 'Foundation',   fraction:  20/150, color: 'rgba(59,130,246,0.20)'  },
-    { label: 'Trained',      fraction:  18/150, color: 'rgba(79,70,229,0.22)'   },
-    { label: 'Well-Trained', fraction:  17/150, color: 'rgba(124,58,237,0.25)'  },
-    { label: 'Performance',  fraction:  20/150, color: 'rgba(147,51,234,0.28)'  },
-    { label: 'Elite',        fraction:  55/150, color: 'rgba(109,40,217,0.35)'  },
+    { label: 'Building',     fraction:  20/150, color: 'rgba(20,184,166,0.12)'  },
+    { label: 'Foundation',   fraction:  20/150, color: 'rgba(20,184,166,0.16)'  },
+    { label: 'Trained',      fraction:  18/150, color: 'rgba(20,184,166,0.20)'   },
+    { label: 'Well-Trained', fraction:  17/150, color: 'rgba(20,184,166,0.24)'  },
+    { label: 'Performance',  fraction:  20/150, color: 'rgba(148,163,184,0.20)'  },
+    { label: 'Elite',        fraction:  55/150, color: 'rgba(148,163,184,0.28)'  },
   ], ctlMarker, ctlZone);
 
   const chart = buildCTLLineChart(s, '8w');
@@ -4757,10 +4486,12 @@ function wireMetricDetailButtons(s: SimulatorState): void {
   });
 }
 
-function wireMetricBack(s: SimulatorState): void {
+function wireMetricBack(_s: SimulatorState): void {
   const btn = document.getElementById('stats-metric-back');
   if (!btn) return;
-  const go = () => renderFitnessDetail(s);
+  // Metric pages (LT, VO2 Max) are reached from the Stats opening "Your Numbers"
+  // card, so Back returns there.
+  const go = () => renderStatsView();
   btn.addEventListener('click', go);
   btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
 }
@@ -4906,6 +4637,39 @@ export function renderStatsView(): void {
     el.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
   };
 
-  tapHandler('stats-card-progress',  () => renderProgressDetail(s));
-  tapHandler('stats-card-fitness',   () => renderFitnessDetail(s));
+  // Progress section → full Progress detail page.
+  tapHandler('stats-recent-weeks-card', () => renderProgressDetail(s));
+
+  // Inline info buttons (ⓘ) on the Your Numbers bars.
+  wireInfoButtons();
+
+  // "Your Numbers" bar drilldowns. Each opens its metric detail page with the
+  // back button rebound to this opening screen (not the old Fitness detail).
+  document.querySelectorAll<HTMLElement>('[data-metric-detail]').forEach(el => {
+    const handler = () => {
+      const id = el.dataset.metricDetail;
+      if (!id) return;
+      const root = document.getElementById('app-root');
+      if (!root) return;
+      if (id === 'lt') {
+        root.innerHTML = buildLTMetricPage(s);
+        animateChartDrawOn();
+        wireTabBarHandlers(navigateTab);
+        wireLTOverrideHandlers(s);
+        wireInfoButtons();
+      } else if (id === 'vo2' || id === 'vdot') {
+        root.innerHTML = buildVDOTMetricPage(s);
+        animateChartDrawOn();
+        wireTabBarHandlers(navigateTab);
+      } else {
+        return;
+      }
+      const back = document.getElementById('stats-metric-back');
+      const go = () => renderStatsView();
+      back?.addEventListener('click', go);
+      back?.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
+    };
+    el.addEventListener('click', handler);
+    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
+  });
 }

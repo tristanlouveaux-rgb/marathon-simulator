@@ -13,6 +13,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind } from './colours';
+import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { formatKm } from '@/utils/format';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
@@ -22,7 +23,7 @@ import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 import type { Workout } from '@/types/state';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from '../injury/modal';
-import { recordMorningPain } from '@/injury/engine';
+import { recordMorningPain, injuryAppliesToWeek } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import type { InjuryState, InjuryLocation } from '@/types/injury';
 
@@ -142,11 +143,11 @@ export function renderTriathlonPlanView(): void {
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   // Injury only looks forward. A current injury must not paint "Injury management"
-  // onto already-trained past weeks (it reads as history being rewritten). Gate the
-  // per-discipline status on the week being current or future, mirroring the
-  // isPastWeek guard in plan_engine.triathlon.ts and generator.ts.
+  // onto already-trained past weeks (it reads as history being rewritten). Uses the
+  // shared injuryAppliesToWeek() rule, the same one the running generator and the
+  // tri/HYROX plan engines enforce, so the gate can't drift out of sync.
   const injuryActive = isInjuryActive();
-  const injState = (injuryActive && !isPastWeek) ? getInjuryStateForDisplay() : null;
+  const injState = (injuryActive && injuryAppliesToWeek(viewWeek, s.w)) ? getInjuryStateForDisplay() : null;
   const injStatus = injState ? getDisciplineStatusForInjury(injState.location) : null;
 
   container.innerHTML = `
@@ -924,7 +925,6 @@ function effortSignal(actual: any, discipline: string): EffortSignal | null {
 
 function buildCompletedEfforts(wk: any, s: any): string {
   const completed = (wk?.triWorkouts ?? []).filter((w: any) => w.status === 'completed');
-  if (completed.length === 0) return '';
   const actuals = wk?.garminActuals ?? {};
   const rated   = wk?.rated ?? {};
 
@@ -960,10 +960,52 @@ function buildCompletedEfforts(wk: any, s: any): string {
       </div>`;
   }).join('');
 
+  // Extra activities the user logged that did NOT map to a completed planned
+  // session: unmatched/extra sessions, orphaned matches, or pending review.
+  // These already showed on Home and on the running Activity Log; they were
+  // invisible here because this list only walked completed planned workouts.
+  // Same shared source (collectWeekActivities) so the three surfaces agree.
+  const renderedKeys = new Set<string>();
+  const renderedGarminIds = new Set<string>();
+  for (const w of completed) {
+    if (w.matchedActivityId) renderedKeys.add(w.matchedActivityId);
+    const a = w.matchedActivityId ? actuals[w.matchedActivityId] : null;
+    if (a?.garminId) renderedGarminIds.add(a.garminId);
+  }
+  const STATUS_LABEL: Record<string, string> = { matched: 'Logged', logged: 'Logged', excess: 'Excess', pending: 'Pending' };
+  const extra = collectWeekActivities(wk).filter(e =>
+    !renderedKeys.has(e.key) && !(e.garminId && renderedGarminIds.has(e.garminId)));
+
+  const extraRows = extra.map((e) => {
+    const known = e.discipline != null;
+    const disc  = (e.discipline ?? 'strength') as BadgeKind;
+    const c     = DISCIPLINE_COLOURS[disc] ?? DISCIPLINE_COLOURS.run;
+    const icon  = known ? (DISCIPLINE_ICON[disc] ?? '') : '';
+    const label = known ? (DISCIPLINE_LABEL[disc] ?? disc) : 'Other';
+    const dur   = e.durationMin > 0 ? `${e.durationMin} min` : null;
+    const dateStr = e.sortTime ? new Date(e.sortTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    const meta  = [dateStr, dur].filter(Boolean).join(' · ');
+
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.05)">
+        <span style="display:inline-flex;align-items:center;gap:4px;background:${c.badge};color:${c.badgeText};font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:3px 7px;border-radius:100px;flex-shrink:0">
+          ${icon} ${label}
+        </span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(e.name)}</div>
+          ${meta ? `<div style="font-size:11px;color:var(--c-muted)">${meta}</div>` : ''}
+        </div>
+        <div style="flex-shrink:0"><span style="font-size:11px;color:var(--c-muted)">${STATUS_LABEL[e.badge]}</span></div>
+      </div>`;
+  }).join('');
+
+  if (!rows && !extraRows) return '';
+
   return `
     <div style="margin:0 20px 12px;background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Completed</div>
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Activity log</div>
       ${rows}
+      ${extraRows}
     </div>`;
 }
 

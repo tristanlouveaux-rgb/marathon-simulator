@@ -104,13 +104,15 @@ export function renderHyroxStatsView(): void {
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
 
-        <!-- Header -->
-        <div class="hxsf" style="padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between">
-          <div>
-            <div style="font-size:28px;font-weight:700;color:#0F172A;letter-spacing:-0.02em">HYROX</div>
-            <div style="font-size:13px;color:var(--c-muted);margin-top:2px">${bandLabel} · ${(format === 'pro_singles' || format === 'pro_doubles') ? 'Pro' : 'Open'} ${(format === 'open_doubles' || format === 'pro_doubles') ? 'Doubles' : 'Singles'}</div>
-          </div>
+        <!-- Account button -->
+        <div class="hxsf" style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end">
           <button id="hx-stats-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
+        </div>
+
+        <!-- Hero -->
+        <div class="hxsf" style="text-align:center;padding:20px 20px 20px;animation-delay:0.04s">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Stats</div>
+          <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${bandLabel} · ${(format === 'pro_singles' || format === 'pro_doubles') ? 'Pro' : 'Open'} ${(format === 'open_doubles' || format === 'pro_doubles') ? 'Doubles' : 'Singles'}</div>
         </div>
 
         <!-- Plan timeline -->

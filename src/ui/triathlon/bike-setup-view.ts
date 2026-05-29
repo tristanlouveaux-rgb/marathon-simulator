@@ -875,7 +875,16 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
   onNumberChange('rider-kg', 'riderKg');
   onNumberChange('bike-kg', 'bikeKg');
 
-  // Selects
+  // Selects.
+  // WebKit (Safari / iOS WKWebView) swallows a native <select>'s value commit
+  // if we tear down and rebuild the element synchronously inside its own
+  // `change` handler, snapping it back to the prior option. Chromium tolerates
+  // it. So defer the full rerender to the next macrotask: the native change
+  // cycle finishes first, then we rebuild with the committed value selected.
+  // (Engine-divergence rule, CLAUDE.md — verified working in Chromium, broken
+  // on WebKit, 2026-05-29.)
+  const deferRerender = () => setTimeout(rerender, 0);
+
   const posSelect = overlay.querySelector('#position') as HTMLSelectElement | null;
   if (posSelect) posSelect.addEventListener('change', () => {
     form.position = posSelect.value as BikePosition;
@@ -894,17 +903,17 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
       form.cdaSource = 'preset';
       form.autoCalib = null;
     }
-    rerender();
+    deferRerender();
   });
   const tireSelect = overlay.querySelector('#tire') as HTMLSelectElement | null;
   if (tireSelect) tireSelect.addEventListener('change', () => {
     form.tire = tireSelect.value as BikeTire;
-    rerender();
+    deferRerender();
   });
   const courseSelect = overlay.querySelector('#course') as HTMLSelectElement | null;
   if (courseSelect) courseSelect.addEventListener('change', () => {
     form.course = courseSelect.value as BikeCourseProfile;
-    rerender();
+    deferRerender();
   });
   // Reveal the dropdown when the user wants to override the auto-detected
   // course. Stays open for the rest of the session.

@@ -1443,6 +1443,27 @@ export function applyAdvancedInjuryLogic(
 }
 
 /**
+ * Single rule for "does a current injury apply to this week?". Injury looks
+ * FORWARD only — it adapts the current week and future weeks, never a past
+ * (already-trained) week. Rewriting a past week into rehab/rest orphans that
+ * week's logged actuals and reads to the user as history being rewritten or
+ * logs being lost.
+ *
+ * Every site that gates injury behaviour on a week index must call this, so the
+ * running generator (`generateWeekWorkouts`) and the triathlon/cycling display
+ * (`renderTriathlonPlanView`) can never drift apart again. The tri/HYROX plan
+ * engines already enforce the same `isPastWeek` rule at generation time.
+ *
+ * @param weekIndex   1-based week being generated/rendered. `null`/`undefined`
+ *                    means "no week context" (legacy fallback path) → applies.
+ * @param currentWeek 1-based current week (`state.w`).
+ */
+export function injuryAppliesToWeek(weekIndex: number | null | undefined, currentWeek: number): boolean {
+  if (weekIndex == null) return true;
+  return weekIndex >= currentWeek;
+}
+
+/**
  * Simple wrapper that applies injury adaptations and returns just the workouts array.
  * Used by the workout generator for seamless integration.
  *

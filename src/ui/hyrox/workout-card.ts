@@ -13,7 +13,7 @@ import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
-type HyroxDisc = 'run' | 'station' | 'brick';
+type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
 function discColours(disc: HyroxDisc): { accent: string; badgeBg: string; badgeText: string; label: string } {
   switch (disc) {
@@ -23,12 +23,19 @@ function discColours(disc: HyroxDisc): { accent: string; badgeBg: string; badgeT
       return { accent: '#b8742c', badgeBg: 'rgba(184,116,44,0.14)', badgeText: '#8a5820', label: 'Station' };
     case 'brick':
       return { accent: '#5b6ea0', badgeBg: 'rgba(91,110,160,0.14)', badgeText: '#3d4f80', label: 'Brick' };
+    case 'strength':
+      return { accent: '#6b7280', badgeBg: 'rgba(107,114,128,0.14)', badgeText: '#4b5563', label: 'Strength' };
+    case 'cross':
+      return { accent: '#0d9488', badgeBg: 'rgba(13,148,136,0.14)', badgeText: '#0f766e', label: 'Cross-train' };
   }
 }
 
 function workoutDisc(w: Workout): HyroxDisc {
   if (w.discipline === 'station') return 'station';
   if (w.discipline === 'brick') return 'brick';
+  const t = (w.t || '') as string;
+  if (t === 'gym' || t === 'strength') return 'strength';
+  if (t === 'cross_training') return 'cross';
   return 'run';
 }
 

@@ -44,15 +44,19 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 **Why still open**: device confirmation pending — set an active injury (e.g. a leg injury) in triathlon mode and confirm the plan + coach now show an upper-body/core session (or paused), not the 45-min full-body session.
 
-### ISSUE-248: Updating an injury auto-advances/completes the current week *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
+### ISSUE-248: Updating an injury auto-advances/completes the current week *(P1, 2026-05-27, re-fixed 2026-05-29)* — fixed in code, ⚠️ awaiting device verification
 
 **Symptom (Tristan, production)**: "I just updated my injury for the new build and it's kicked me forward a week again." Recurring. Any edit to an active injury silently completed the current week.
 
-**Root cause**: `handleSaveInjury` (`src/ui/injury/modal.ts`) called `events.ts:next()` unconditionally whenever the injury was already active. `next()` is the full complete-week-and-advance flow; the modal had just set `wk.injuryCheckedIn = true`, so `next()` passed the injury check-in gate and advanced `s.w`. The `next()` call existed only to trigger running-mode plan regen — but running mode regenerates on every `render()` via `generateWeekWorkouts` (`applyInjuryAdaptations` runs inside it), so it was never needed.
+**⚠️ Regression — the fix was lost.** Re-reported 2026-05-29 on `feat/revenue-cat-iap`. The fix below was documented on 2026-05-27 but was **not present in the codebase** — neither on this branch nor on `main` (both still had the unconditional `await next()` at `modal.ts` / `main:368`, and `advanceWeekAfterSave` existed nowhere). The doc entry survived a multi-agent rollback that reverted the actual code change. Re-applied 2026-05-29.
 
-**Fix**: `openInjuryModal` now takes an opt-in `{ advanceWeekAfterSave }`. Only the weekly check-in caller (`events.ts:next()`, acute/rehab/test_capacity phases, where the check-in IS the week-advance trigger) passes `true`. All banner / button entry points open a plain status edit that re-renders in place. The dedicated "Confirm & Advance Week" gate modals (return-to-run, graduated-return) are unchanged. `tsc` + `lint:ui` clean, 2248 tests pass.
+**Root cause**: `handleSaveInjury` (`src/ui/injury/modal.ts`) called `events.ts:next()` unconditionally whenever the injury was already active. `next()` is the full complete-week-and-advance flow (`s.w++`). The same `handleSaveInjury` runs for *every* entry point, so banner/button "update injury" edits — which are not trying to advance — advanced anyway. Compounding bug: `planStartDate` also drifted forward a week in at least one real case, so `s.w` and the calendar anchor disagreed (caught by `assertPlanAnchorConsistent()`).
 
-**Why still open**: device confirmation pending — open the injury modal on an active injury, change a capacity / resume week, save, and confirm the week does NOT advance.
+**Why `next()` can't just be deleted**: there IS one legitimate path. When `next()` hits an active, un-checked-in injury (`events.ts:861-873`, acute/rehab/test_capacity phases) it opens the modal as a gate and `return`s without advancing; saving the check-in must re-call `next()` to resume that paused advance. The `return-to-run` and `graduated-return` phases use their own dedicated gate modals.
+
+**Fix**: `openInjuryModal` takes an opt-in `{ advanceWeekAfterSave }` (module-level flag in `modal.ts`). Only the weekly check-in gate caller (`events.ts:873`) passes `true`. All banner / button / daily-check-in-overlay entry points stay bare → re-render in place via `render()`, never advance. `tsc` + `lint:ui` clean on touched files (`modal.ts`, `events.ts`).
+
+**Why still open**: device confirmation pending — open the injury modal on an active injury from the banner/plan-view, change a capacity / resume week, save, and confirm the week does NOT advance. Then separately complete a week while injured (the gate path) and confirm it DOES advance once.
 
 ### ISSUE-247: Injured triathlon forecast projects almost no improvement *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
 

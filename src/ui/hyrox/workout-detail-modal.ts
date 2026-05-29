@@ -12,7 +12,7 @@ import { getSubstitutionsFor, findSubstitution } from '@/constants/hyrox-substit
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 
-type HyroxDisc = 'run' | 'station' | 'brick';
+type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
 /** Render a single station row, with optional swap button + active substitution overlay. */
 function renderStationRow(
@@ -75,6 +75,8 @@ function discColour(disc: HyroxDisc) {
     case 'run':     return { accent: '#7a845c', bg: 'rgba(122,132,92,0.08)', badge: 'rgba(122,132,92,0.14)', badgeText: '#4f5a3b', label: 'Run' };
     case 'station': return { accent: '#b8742c', bg: 'rgba(184,116,44,0.08)', badge: 'rgba(184,116,44,0.14)', badgeText: '#8a5820', label: 'Station' };
     case 'brick':   return { accent: '#5b6ea0', bg: 'rgba(91,110,160,0.08)', badge: 'rgba(91,110,160,0.14)', badgeText: '#3d4f80', label: 'Brick' };
+    case 'strength':return { accent: '#6b7280', bg: 'rgba(107,114,128,0.08)', badge: 'rgba(107,114,128,0.14)', badgeText: '#4b5563', label: 'Strength' };
+    case 'cross':   return { accent: '#0d9488', bg: 'rgba(13,148,136,0.08)', badge: 'rgba(13,148,136,0.14)', badgeText: '#0f766e', label: 'Cross-train' };
   }
 }
 
@@ -83,7 +85,13 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
   if (existing) existing.remove();
 
   const rawDisc = workout.discipline as string;
-  const disc: HyroxDisc = rawDisc === 'station' ? 'station' : rawDisc === 'brick' ? 'brick' : 'run';
+  const wt = (workout.t || '') as string;
+  const disc: HyroxDisc =
+    rawDisc === 'station' ? 'station' :
+    rawDisc === 'brick'   ? 'brick' :
+    (wt === 'gym' || wt === 'strength') ? 'strength' :
+    wt === 'cross_training' ? 'cross' :
+    'run';
   const c = discColour(disc);
 
   const rpe = workout.rpe ?? (workout as any).r ?? 5;
@@ -131,10 +139,12 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
       <!-- Session body -->
       ${renderSessionBody(workout, components, c.accent, disc)}
 
-      <!-- Guided session entry -->
+      <!-- Guided session entry. Cross-training (bike/erg/swim) has no guided
+           set-by-set flow yet, so it shows only "Mark as done" rather than a
+           dead "Start session" button. Strength and HYROX sessions guide. -->
       <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
-        <button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
-        <button id="hx-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+        ${disc === 'cross' ? '' : `<button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>`}
+        <button id="hx-detail-strength-done" style="width:100%;padding:${disc === 'cross' ? '14px' : '11px'};background:${disc === 'cross' ? '#0F172A' : 'transparent'};color:${disc === 'cross' ? '#FAF9F6' : '#0F172A'};border:${disc === 'cross' ? 'none' : '1px solid var(--c-border)'};border-radius:${disc === 'cross' ? '12px' : '10px'};font-size:${disc === 'cross' ? '15px' : '13px'};font-weight:${disc === 'cross' ? '600' : '500'};cursor:pointer;font-family:var(--f)">Mark as done</button>
       </div>
 
       <div style="height:6px"></div>

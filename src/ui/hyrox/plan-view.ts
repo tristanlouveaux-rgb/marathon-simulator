@@ -16,9 +16,53 @@ import {
   shouldShowBenchmarkCard,
 } from './benchmark-card';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
-import type { Workout } from '@/types/state';
+import type { Workout, Week } from '@/types/state';
+import { collectWeekActivities } from '@/calculations/week-activity-log';
+import { formatKm } from '@/utils/format';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function hxEscape(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
+}
+
+/**
+ * "What you actually did" log for a past HYROX week. Reads the shared
+ * collectWeekActivities source so it shows the identical deduped set as the
+ * home feed and the running/triathlon logs (matched + logged + excess +
+ * pending), rather than nothing — which is what HYROX showed before.
+ */
+function buildHyroxActivityLog(wk: Week | undefined): string {
+  const entries = collectWeekActivities(wk);
+  if (entries.length === 0) return '';
+  const STATUS_LABEL: Record<string, string> = { matched: 'Completed', logged: 'Logged', excess: 'Excess', pending: 'Pending' };
+  const s = getState();
+  const unit = s.unitPref ?? 'km';
+
+  const rows = entries.map((e) => {
+    const stats: string[] = [];
+    if (e.distanceKm > 0.1) stats.push(formatKm(e.distanceKm, unit));
+    if (e.avgHR) stats.push(`HR ${e.avgHR}`);
+    if (e.durationMin > 0) stats.push(`${e.durationMin} min`);
+    const dateStr = e.sortTime ? new Date(e.sortTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    if (dateStr) stats.push(dateStr);
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.05)">
+        <div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${hxEscape(e.name)}</div>
+          ${stats.length ? `<div style="font-size:11px;color:var(--c-muted)">${stats.join(' · ')}</div>` : ''}
+        </div>
+        <div style="flex-shrink:0"><span style="font-size:11px;color:var(--c-muted)">${STATUS_LABEL[e.badge]}</span></div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="hxf" style="margin:0 20px 12px;background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Activity log</div>
+      ${rows}
+    </div>`;
+}
 
 // ─── Module-level navigation state ───────────────────────────────────────────
 let _viewWeek: number | null = null;
@@ -50,8 +94,11 @@ export function renderHyroxPlanView(): void {
 
   const viewWeek = _viewWeek ?? s.w;
   const isFutureWeek = viewWeek > s.w;
+  const isPastWeek = viewWeek < s.w;
   const wk = s.wks?.[viewWeek - 1];
-  const workouts: Workout[] = wk?.triWorkouts ?? [];
+  // Include adhoc sessions (e.g. injury-substitute bike / safe strength accepted
+  // from the capability nudge) so suggested sessions actually show on the plan.
+  const workouts: Workout[] = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
 
   const band = hx.athleteBand;
   const format = hx.format ?? 'open_singles';
@@ -176,6 +223,9 @@ export function renderHyroxPlanView(): void {
           ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], isFutureWeek, raceDays > 0 ? raceDays : null)).join('')}
         </div>
 
+        <!-- What you actually did (past weeks) -->
+        ${isPastWeek ? buildHyroxActivityLog(wk) : ''}
+
       </div>
 
       ${renderTabBar('plan')}
@@ -220,7 +270,8 @@ export function renderHyroxPlanView(): void {
       if (!id) return;
       const st = getState();
       const wkRow = st.wks?.[viewWeek - 1];
-      const found = (wkRow?.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      const found = [...(wkRow?.triWorkouts ?? []), ...(wkRow?.adhocWorkouts ?? [])]
+        .find((x: any) => (x.id || x.n) === id);
       if (found) {
         import('./workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(found));
       }

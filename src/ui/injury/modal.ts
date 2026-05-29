@@ -38,6 +38,16 @@ import { saveState } from '@/state';
 /** Modal container ID */
 const MODAL_ID = 'injury-modal';
 
+/**
+ * When the injury modal is opened as the weekly check-in gate (from
+ * `events.ts:next()`), saving the check-in IS the trigger to resume the paused
+ * week advance. Every other entry point (banner / button edits, the daily
+ * check-in overlay) opens a plain status edit that must NOT advance the week.
+ * ISSUE-248: this flag was missing, so every injury edit ran the full
+ * complete-week flow and pushed the user forward a week.
+ */
+let advanceWeekAfterSave = false;
+
 /** Get or create injury state on simulator state */
 function getInjuryState(): InjuryState {
   const state = getState() as any;
@@ -56,8 +66,10 @@ function setInjuryState(injuryState: InjuryState): void {
 /**
  * Open the injury report modal
  */
-export function openInjuryModal(): void {
+export function openInjuryModal(opts?: { advanceWeekAfterSave?: boolean }): void {
   closeInjuryModal();
+
+  advanceWeekAfterSave = opts?.advanceWeekAfterSave ?? false;
 
   const injuryState = getInjuryState();
 
@@ -476,17 +488,27 @@ async function handleSaveInjury(): Promise<void> {
   setInjuryState(injuryState);
   saveState();
 
-  // HYROX plans are gated only at generation time, so an injury change must
-  // trigger an explicit regen of the current + future weeks for the discipline
-  // gates (drop runs when blocked, drop/scale stations by upper/lower capacity)
-  // to take effect. Running and triathlon regenerate weeks on demand; HYROX
-  // does not, so without this the plan keeps prescribing runs/stations the
-  // athlete reported they cannot do. Past weeks are preserved (the gate skips
-  // them, and regen carries over each week's actuals/rated/skip).
-  if ((getState() as { eventType?: string }).eventType === 'hyrox' && s.wks?.length) {
+  // Triathlon, cycling, and HYROX plans are all gated only at generation time:
+  // the discipline gates (drop runs when blocked, drop/scale a discipline by
+  // its capacity, drop the brick) live inside the week generator and only bake
+  // into stored `triWorkouts` / HYROX workouts when the plan is regenerated.
+  // For these modes a fresh injury otherwise sits unreflected until the next
+  // generator-version bump or activity-sync regen, so every surface that reads
+  // the stored plan (the plan view, load, and the "X sess/wk" forecast chip)
+  // keeps counting sessions the athlete reported they cannot do. Trigger an
+  // explicit regen of the current + future weeks here. Past weeks are preserved
+  // (the gate skips them, and regen carries over each week's actuals/rated/skip).
+  if (eventType === 'hyrox' && s.wks?.length) {
     const { regenerateHyroxWeek } = await import('@/workouts/plan_engine.hyrox');
     for (let wi = s.w; wi <= s.wks.length; wi++) {
       const regen = regenerateHyroxWeek(s, wi);
+      if (regen) s.wks[wi - 1] = regen;
+    }
+    saveState();
+  } else if ((eventType === 'triathlon' || eventType === 'cycling') && s.wks?.length) {
+    const { regenerateTriathlonWeek } = await import('@/workouts/plan_engine.triathlon');
+    for (let wi = s.w; wi <= s.wks.length; wi++) {
+      const regen = regenerateTriathlonWeek(s, wi);
       if (regen) s.wks[wi - 1] = regen;
     }
     saveState();
@@ -494,11 +516,18 @@ async function handleSaveInjury(): Promise<void> {
 
   closeInjuryModal();
 
-  if (wasAlreadyActive) {
-    // Updating an existing injury must NOT advance the plan week. Re-render the
-    // current view in place to reflect the new capacity, then offer the nudge.
-    // Historic bug: this called next(), which ran the full week-completion flow
-    // (s.w++ at events.ts), pushing the user forward one week on every injury edit.
+  if (wasAlreadyActive && advanceWeekAfterSave) {
+    // Opened as the weekly check-in gate (events.ts:next()): the check-in just
+    // set wk.injuryCheckedIn, so calling next() again resumes the week advance
+    // the gate paused. This is the ONE path where saving an injury advances.
+    const { next } = await import('@/ui/events');
+    await next();
+    await maybeShowStrengthNudge();
+  } else if (wasAlreadyActive) {
+    // Banner / button edit of an existing injury: re-render in place to reflect
+    // the new capacity, never advance the plan week (ISSUE-248). Historic bug:
+    // this called next() unconditionally, running the full week-completion flow
+    // (s.w++ at events.ts) and pushing the user forward a week on every edit.
     render();
     await maybeShowStrengthNudge();
   } else {
@@ -527,8 +556,44 @@ async function maybeShowStrengthNudge(): Promise<void> {
   const caption = buildInjuryCaption(s);
   if (!caption) return;
 
-  // Only when loaded strength is currently safe (region-adapted session exists).
+  // HYROX: offer the full safe-session set the capacity vector allows
+  // (aerobic substitute + region-safe strength) — "what you can still do" —
+  // rather than only a strength session. Suggestion only: nothing is added
+  // until the user accepts.
+  const isHyrox = (getState() as { eventType?: string }).eventType === 'hyrox';
+  if (isHyrox) {
+    const { buildHyroxCapabilityOffers } = await import('@/calculations/capability-substitution');
+    const offers = await buildHyroxCapabilityOffers(s);
+    if (offers.length === 0) return;
+
+    // Mark seen up front so a dismissed nudge never re-fires this week.
+    wk.strengthNudgeSeen = true;
+    saveState();
+
+    const join = (parts: string[]): string =>
+      parts.length <= 1 ? (parts[0] ?? '')
+      : parts.length === 2 ? `${parts[0]} and ${parts[1]}`
+      : `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+    const accepted = await showInjuryConfirm(
+      'Add what you can still do?',
+      `${caption} You can still train around it: ${join(offers.map(o => o.reason))}.`,
+      offers.length === 1 ? 'Add session' : `Add ${offers.length} sessions`,
+      'Not now',
+    );
+    if (!accepted) return;
+
+    if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+    offers.forEach((o, i) => {
+      wk.adhocWorkouts!.push({ ...o.workout, id: `adhoc-cap-${Date.now()}-${i}` });
+    });
+    saveState();
+    render();
+    return;
+  }
+
+  // Other modes (running / triathlon): single region-safe strength session.
   // Acute phase or all regions blocked returns 'none' and we stay quiet.
+  // (Aerobic substitution mirrors here in a follow-up pass.)
   const decision = injuryStrengthDecision(inj);
   if (decision.kind !== 'adapted') return;
 

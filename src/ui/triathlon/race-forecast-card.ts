@@ -42,6 +42,21 @@ function isEmpiricalFactors(factors: CourseFactorEntry[]): boolean {
   return factors.length > 0 && /n=\d+/.test(factors[0].value);
 }
 
+/**
+ * Calibration-dataset provenance note. Honest dual-branch: empirical when the
+ * venue is covered by the 1.3M-finish dataset, physical otherwise. Either way
+ * the 1.3M figure is named so the science is visible regardless of coverage.
+ * Single source for both the legacy race-forecast card and the live
+ * forecast-view footer note (see CLAUDE.md "two numbers, one source").
+ * Returns the inner caption HTML; the call site supplies the wrapper.
+ */
+export function calibrationDatasetCaption(factors: CourseFactorEntry[]): string {
+  const bigN = `<span style="color:var(--c-black);font-weight:500">1.3 million</span>`;
+  return isEmpiricalFactors(factors)
+    ? `Calibrated against ${bigN} historical Ironman and 70.3 race finishes (CoachCox, Kaggle, 2002 to 2024). Course factors for this race are derived from real splits, controlled for athlete quality.`
+    : `Course factors for this race use the physical model (climate, altitude, elevation, wind, swim type). The dataset of ${bigN} historical Ironman and 70.3 finishes (CoachCox, Kaggle) doesn't yet cover this venue, so the prediction falls back to the physical model.`;
+}
+
 export function renderRaceForecastCard(state: SimulatorState): string {
   const tri = state.triConfig;
   if (!tri) return '';
@@ -113,13 +128,7 @@ export function renderRaceForecastCard(state: SimulatorState): string {
         )}
 
         <!-- Calibration caption. Honest about which source generated this prediction's course factors -->
-        ${(() => {
-          const isEmpirical = isEmpiricalFactors(p.courseFactors ?? []);
-          const caption = isEmpirical
-            ? `Calibrated against <span style="color:var(--c-black);font-weight:500">1.3 million</span> historical Ironman and 70.3 race finishes (CoachCox, Kaggle, 2002 to 2024). Course factors for this race are derived from real splits, controlled for athlete quality.`
-            : `Course factors for this race use the physical model (climate, altitude, elevation, wind, swim type). The dataset of 1.3 million historical Ironman and 70.3 finishes (CoachCox, Kaggle) doesn't yet cover this venue or has too few finishers for a reliable empirical fit.`;
-          return `<div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,0.06);font-size:10px;color:var(--c-faint);line-height:1.5">${caption}</div>`;
-        })()}
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,0.06);font-size:10px;color:var(--c-faint);line-height:1.5">${calibrationDatasetCaption(p.courseFactors ?? [])}</div>
 
         ${p.sprintTotalSec || p.olympicTotalSec ? `
           <div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(0,0,0,0.06);font-size:12px;color:var(--c-muted);line-height:1.6">

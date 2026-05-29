@@ -7,7 +7,7 @@
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { renderCyclingFinishCard } from './race-forecast-card';
+import { renderCyclingFinishCard, calibrationDatasetCaption } from './race-forecast-card';
 import { renderTriForecastFingerprint, wireTriForecastChips } from './race-forecast-fingerprint';
 import { renderTriConeCard, wireTriConeCard } from './race-forecast-cone-card';
 import { renderTriForecastMarquee } from './race-forecast-marquee';
@@ -114,6 +114,7 @@ export function renderTriathlonForecastView(): void {
             <div class="hf" data-delay="0.08">${renderTriForecastMarquee(s)}</div>
             <div class="hf" data-delay="0.12">${renderTriForecastFingerprint(s, tri?.prediction ?? null)}</div>
             ${renderTriConeCard(s)}
+            <div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:6px 16px 0">${calibrationDatasetCaption(tri?.prediction?.courseFactors ?? [])}</div>
           `}
           <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
             <button id="tri-fc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>

@@ -727,7 +727,6 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   const bikeAvgKph = estimateBikeSpeed(
     args.state,
     args.ftp,
-    args.state.triConfig?.bike?.hasPowerMeter,
     args.rating.bike as TriSkillSlider,
     args.distance,
     args.raceProfile?.bikeProfile,
@@ -961,7 +960,6 @@ function estimateCSSFromSkill(slider: TriSkillSlider): number {
 function estimateBikeSpeed(
   state: SimulatorState,
   ftp: number | undefined,
-  hasPower: boolean | undefined,
   skill: TriSkillSlider,
   distance: '70.3' | 'ironman',
   raceBikeProfile: BikeCourseProfileExtended | undefined,
@@ -975,7 +973,14 @@ function estimateBikeSpeed(
   const course: BikeCourseProfileExtended =
     tri?.bike?.courseProfile ?? raceBikeProfile ?? 'flat';
 
-  if (hasPower && ftp && aero && state.bodyWeightKg && tri?.bike?.bikeWeightKg) {
+  // Full power-balance physics whenever FTP + aero profile + masses exist.
+  // Gated on data presence, NOT on `hasPowerMeter` — this mirrors the cycling
+  // predictor (race-prediction.cycling.ts), so the same bike & aero setup
+  // (weight, position, tyres, course) flows into the split in both modes.
+  // FTP can be derived/estimated without a dedicated power meter; the bike-setup
+  // modal always writes an aero profile + masses, so this path fires after any
+  // save. Requiring hasPowerMeter previously made all of those inputs inert.
+  if (ftp && aero && state.bodyWeightKg && tri?.bike?.bikeWeightKg) {
     const params = paramsFromProfile(aero, state.bodyWeightKg, tri.bike.bikeWeightKg, course);
     const racePct = RACE_INTENSITY_BY_DISTANCE[distance];
     const raceWatts = ftp * racePct;
@@ -983,7 +988,7 @@ function estimateBikeSpeed(
     if (v > 0) return msToKph(v);
   }
 
-  if (hasPower && ftp) {
+  if (ftp) {
     const racePct = distance === 'ironman' ? 0.70 : 0.78;
     const raceWatts = ftp * racePct;
     const kph = Math.min(48, Math.max(18, 20 + (raceWatts - 100) * 0.067));

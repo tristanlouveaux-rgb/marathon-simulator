@@ -24,6 +24,7 @@ import { renderPercentileDistributions } from './percentile-distributions';
 import { applyHyroxPrevFormatChange } from '@/state/hyrox-prev-format-fix';
 import { isInjuryActive } from '@/ui/injury/modal';
 import { getDisciplineCapacity } from '@/injury/engine';
+import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -539,7 +540,9 @@ function naturalJoin(parts: string[]): string {
 
 function renderHyroxInjuryNote(s: SimulatorState): string {
   if (!isInjuryActive()) return '';
-  const inj = s.injuryState;
+  // Use the same protocol-window fallback the projection uses, so the "resumes
+  // in N weeks" copy matches the build-week debit driving the forecast.
+  const inj = injuryWithResumeFallback(s.injuryState);
   if (!inj) return '';
 
   const DISCS: Array<{ key: 'run' | 'upperLoad' | 'lowerLoad'; label: string }> = [

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultInjuryState } from '@/types/injury';
 import type { InjuryState } from '@/types/injury';
 import type { SimulatorState } from '@/types/state';
-import { HYROX_STATION_REGION, stationInjuryBuildWeeks } from './hyrox-injury';
+import { HYROX_STATION_REGION, stationInjuryBuildWeeks, runInjuryBuildWeeks, injuryWithResumeFallback } from './hyrox-injury';
 import { buildHyroxProjection } from './race-projection.hyrox';
 import { predictHyroxRace } from './race-prediction.hyrox';
 
@@ -109,6 +109,48 @@ describe('stationInjuryBuildWeeks', () => {
   });
 });
 
+describe('injuryWithResumeFallback', () => {
+  it('returns the input untouched when no active injury', () => {
+    expect(injuryWithResumeFallback(undefined)).toBeUndefined();
+    const inactive = { ...createDefaultInjuryState(), active: false };
+    expect(injuryWithResumeFallback(inactive)).toBe(inactive);
+  });
+
+  it('fills a restricted discipline that lacks an explicit window (protocol midpoint)', () => {
+    // general protocol typicalRecoveryWeeks {1,4} → midpoint 3.
+    const inj = injury({ type: 'general', upperLoadCapacity: 0 }); // no resumeWeeksByDiscipline
+    const eff = injuryWithResumeFallback(inj)!;
+    expect(eff.resumeWeeksByDiscipline?.upperLoad).toBe(3);
+  });
+
+  it('does not overwrite an explicit window', () => {
+    const inj = injury({ type: 'general', upperLoadCapacity: 0, resumeWeeksByDiscipline: { upperLoad: 6 } });
+    expect(injuryWithResumeFallback(inj)!.resumeWeeksByDiscipline?.upperLoad).toBe(6);
+  });
+
+  it('leaves full-capacity disciplines alone', () => {
+    const inj = injury({ type: 'general', upperLoadCapacity: 0, lowerLoadCapacity: 100, runCapacity: 100 });
+    const eff = injuryWithResumeFallback(inj)!;
+    expect(eff.resumeWeeksByDiscipline?.lowerLoad).toBeUndefined();
+    expect(eff.resumeWeeksByDiscipline?.run).toBeUndefined();
+  });
+});
+
+describe('debit fires WITHOUT an explicit resume window (protocol fallback)', () => {
+  it('stationInjuryBuildWeeks debits an upper station for a blocked arm and no window', () => {
+    const inj = injury({ type: 'general', upperLoadCapacity: 0, lowerLoadCapacity: 100, runCapacity: 100 });
+    // fallback 3 weeks, fully blocked → 10 - 3 = 7
+    expect(stationInjuryBuildWeeks(inj, 'ski_erg', 10)).toBe(7);
+    // lower station untouched
+    expect(stationInjuryBuildWeeks(inj, 'sled_push', 10)).toBe(10);
+  });
+
+  it('runInjuryBuildWeeks debits a blocked run with no window', () => {
+    const inj = injury({ type: 'general', runCapacity: 0, upperLoadCapacity: 100, lowerLoadCapacity: 100 });
+    expect(runInjuryBuildWeeks(inj, 10)).toBe(7);
+  });
+});
+
 describe('buildHyroxProjection injury integration', () => {
   it('a blocked run removes the projected run gain', () => {
     const healthy = buildHyroxProjection(eightWeekState(), predictHyroxRace(eightWeekState())!);
@@ -134,6 +176,20 @@ describe('buildHyroxProjection injury integration', () => {
 
     // Upper + full stations lose their build → smaller (less negative) gain.
     expect(injured.byDiscipline.stations.deltaSec).toBeGreaterThan(healthyStationsGain);
+  });
+
+  it('an arm injury with NO explicit resume window still reduces the projected stations gain', () => {
+    // Reproduces the "forecast doesn't change at all" report: capacity set but
+    // no resume weeks captured. The protocol fallback must still debit.
+    const sHealthy = eightWeekState();
+    const healthy = buildHyroxProjection(sHealthy, predictHyroxRace(sHealthy)!);
+
+    const inj = injury({ type: 'general', upperLoadCapacity: 0, lowerLoadCapacity: 100, runCapacity: 100 });
+    delete inj.resumeWeeksByDiscipline; // explicitly no captured window
+    const sInjured = eightWeekState({}, inj);
+    const injured = buildHyroxProjection(sInjured, predictHyroxRace(sInjured)!);
+
+    expect(injured.byDiscipline.stations.deltaSec).toBeGreaterThan(healthy.byDiscipline.stations.deltaSec);
   });
 
   it('no injury leaves the projection identical to the healthy path', () => {

@@ -115,7 +115,7 @@ const BLOCK_MIN: Record<Region, number> = { lower: 18, upper: 15, core: 10 };
 /** Submaximal RPE by phase. Acute kept lightest (fresh inflammation managed
  *  systemically even though only the unaffected region is loaded). Anchored to
  *  the existing gym.ts return/maintenance templates (RPE 3-5). */
-const RPE_BY_PHASE: Record<string, number> = {
+export const RPE_BY_PHASE: Record<string, number> = {
   acute: 3,
   rehab: 4,
   test_capacity: 4,

@@ -6,8 +6,31 @@ import {
   applyPhaseRegression,
   applyPhaseProgression,
   evaluatePhaseTransition,
+  injuryAppliesToWeek,
 } from './engine';
 import type { InjuryState } from '@/types/injury';
+
+// ---------------------------------------------------------------------------
+// injuryAppliesToWeek — the single forward-only rule shared by the running
+// generator and the triathlon display. Regression cover for the bug where a
+// current injury rewrote / repainted past (already-trained) weeks.
+// ---------------------------------------------------------------------------
+describe('injuryAppliesToWeek', () => {
+  it('applies to the current week', () => {
+    expect(injuryAppliesToWeek(5, 5)).toBe(true);
+  });
+  it('applies to future weeks', () => {
+    expect(injuryAppliesToWeek(8, 5)).toBe(true);
+  });
+  it('does NOT apply to past weeks', () => {
+    expect(injuryAppliesToWeek(4, 5)).toBe(false);
+    expect(injuryAppliesToWeek(1, 5)).toBe(false);
+  });
+  it('applies when there is no week context (legacy fallback path)', () => {
+    expect(injuryAppliesToWeek(null, 5)).toBe(true);
+    expect(injuryAppliesToWeek(undefined, 5)).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Minimal state factory
