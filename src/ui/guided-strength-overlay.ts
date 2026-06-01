@@ -413,16 +413,70 @@ function fmtCountdown(sec: number): string {
   return `${s}s`;
 }
 
+/**
+ * Full ordered workout list shown beneath the active-exercise hero. One row per
+ * exercise (HYROX: one per station). Completed exercises are ticked and dimmed,
+ * the current one carries a filled dot + "now", upcoming ones a hollow dot. Lets
+ * the athlete see the whole session, not just what's next. Re-renders on every
+ * setStart / restEnd via the normal render paths (mid-tick never changes which
+ * exercise is done, so no per-tick patch needed).
+ */
+function renderWorkoutList(): string {
+  if (!active) return '';
+  const sets = active.session.sets;
+  const totalDone = active.controller.completedSets;
+  const curEx = active.controller.currentSet()?.exerciseIndex;
+  const oneShot = sets.every(s => s.setCount === 1);
+
+  // Group sets by exercise, in order; first set carries the prescription.
+  const order: number[] = [];
+  const firstSet = new Map<number, GuidedSet>();
+  const counts = new Map<number, number>();
+  for (const s of sets) {
+    if (!firstSet.has(s.exerciseIndex)) { firstSet.set(s.exerciseIndex, s); order.push(s.exerciseIndex); }
+    counts.set(s.exerciseIndex, (counts.get(s.exerciseIndex) ?? 0) + 1);
+  }
+  if (order.length <= 1) return '';
+
+  let consumed = 0;
+  const rows = order.map(exIdx => {
+    const ex = firstSet.get(exIdx)!;
+    const cnt = counts.get(exIdx) ?? 1;
+    const doneHere = Math.max(0, Math.min(cnt, totalDone - consumed));
+    consumed += cnt;
+    const isDone = doneHere >= cnt;
+    const isCurrent = exIdx === curEx && !isDone;
+    const prescription = oneShot
+      ? escapeHtml(ex.reps)
+      : (ex.reps ? `${cnt} × ${escapeHtml(ex.reps)}` : `${cnt} set${cnt > 1 ? 's' : ''}`);
+
+    const marker = isDone
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0F172A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`
+      : isCurrent
+        ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#0F172A"></span>`
+        : `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--c-border)"></span>`;
+    const nameWeight = isCurrent ? '700' : '500';
+    const nameColor = isDone ? 'var(--c-muted)' : '#0F172A';
+    return `
+      <li style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--c-border);${isDone ? 'opacity:0.55' : ''}">
+        <span style="width:16px;display:flex;justify-content:center;flex-shrink:0">${marker}</span>
+        <span style="flex:1;min-width:0;font-size:13px;font-weight:${nameWeight};color:${nameColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(ex.exerciseName)}${isCurrent ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500;margin-left:7px">now</span>` : ''}</span>
+        <span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums;flex-shrink:0">${prescription}</span>
+      </li>`;
+  }).join('');
+
+  const heading = oneShot ? 'Stations' : 'Workout';
+  return `
+    <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">${heading}</div>
+    <ul style="margin:0;padding:0;list-style:none">${rows}</ul>`;
+}
+
 function renderActive(): void {
   if (!active) return;
   const cur = active.controller.currentSet();
   if (!cur) return;
   const idx = active.session.sets.indexOf(cur);
   const total = active.session.sets.length;
-  const upcoming = active.session.sets
-    .slice(idx + 1, Math.min(idx + 4, total))
-    .filter((s, i, arr) => i === 0 || arr[i - 1].exerciseIndex !== s.exerciseIndex)
-    .slice(0, 3);
   // When every step is a one-shot (HYROX), suppress the redundant "Set 1 of 1"
   // and use "Station" terminology for the overall position counter.
   const oneShot = active.session.sets.every(s => s.setCount === 1);
@@ -444,25 +498,19 @@ function renderActive(): void {
           </div>
         </div>
 
-        ${renderProgressRings()}
-
         <div style="font-size:24px;font-weight:700;color:#0F172A;line-height:1.2;letter-spacing:-0.01em;margin-bottom:6px">${escapeHtml(cur.exerciseName)}</div>
         ${cur.reps ? `<div style="font-size:14px;color:#0F172A;margin-bottom:8px">${escapeHtml(cur.reps)}</div>` : ''}
         ${cur.cue ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">${escapeHtml(cur.cue)}</div>` : ''}
         ${renderRunReadoutBlock()}
 
-        ${upcoming.length ? `
-          <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">Up next</div>
-          <ul style="margin:0 0 22px;padding-left:18px;font-size:12px;color:var(--c-muted);line-height:1.6">
-            ${upcoming.map(u => `<li>${escapeHtml(u.exerciseName)}</li>`).join('')}
-          </ul>` : ''}
-
         <button id="gs-complete" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">
           Complete set
         </button>
-        <button id="gs-finish" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">
+        <button id="gs-finish" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f);margin-bottom:18px">
           Finish session
         </button>
+
+        ${renderWorkoutList()}
       </div>
     ${shellClose()}
   `;
@@ -770,8 +818,14 @@ function renderFinish(): void {
   document.getElementById('gs-save')?.addEventListener('click', () => {
     if (!active) return;
     const rpe = active.finishRpe ?? initial;
-    completeStrengthSession(active.workout, { rpe, durationSec: elapsed, records });
+    const wo = active.workout;
+    const result = completeStrengthSession(wo, { rpe, durationSec: elapsed, records });
     closeOverlay();
+    // Standard gym sessions get the muscle-group + HR recap (no-op for HYROX,
+    // which has its own benchmark recap).
+    if (!result.isHyrox) {
+      import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(wo, result));
+    }
   });
 }
 

@@ -9,7 +9,7 @@ import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { parseStrengthSession } from '@/guided/strength-model';
 
-export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean } = {}): string {
+export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean; statusChip?: string } = {}): string {
   const discipline: BadgeKind = badgeKindFor(w);
   const c = DISCIPLINE_COLOURS[discipline];
   const label = DISCIPLINE_LABEL[discipline];
@@ -56,6 +56,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
         ${discipline === 'swim' && opts.cssSecPer100m == null && opts.dismissedTests?.has('css-pair') ? `<span style="font-size:10px;font-weight:500;color:var(--c-faint);background:rgba(0,0,0,0.04);border-radius:100px;padding:2px 8px;letter-spacing:0.02em">No CSS</span>` : ''}
         ${discipline === 'bike' && opts.ftp == null && opts.dismissedTests?.has('ftp-20min') ? `<span style="font-size:10px;font-weight:500;color:var(--c-faint);background:rgba(0,0,0,0.04);border-radius:100px;padding:2px 8px;letter-spacing:0.02em">No FTP</span>` : ''}
         <span style="flex:1"></span>
+        ${opts.statusChip ?? ''}
         <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
         ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
       </div>

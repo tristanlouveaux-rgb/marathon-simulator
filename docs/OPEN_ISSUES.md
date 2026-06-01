@@ -8,6 +8,32 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-252: AI Coach must not use Strava data (Strava API Policy §5.3) *(P1 strategic, 2026-06-01)* — decided, build deferred to Coach GA
+
+**Context**: Strava's June 2026 API Policy (§5.3) bans using Strava Data — *including data derived/aggregated from it, and including ingestion into an LLM context window* — for the operation of any AI Application. §5.10 bans disclosing Strava Data to third parties (names AI providers). The AI Coach feeds Strava-derived training data (`coach-chat-client.ts:63-69`) to Anthropic.
+
+**DECISION (Tristan, 2026-06-01)**: **Strava is non-negotiable** (only viable pipe for Garmin users), so **the AI Coach must not use Strava data**. In practice the Coach is **unavailable to Strava-connected users**; it may only serve Apple-Health-only / manual-entry users.
+
+**Not a live violation now**: Coach is allowlist/entitlement-gated server-side (`entitlement.ts`), serving no general/Strava users. So this is a *before-GA* requirement, not a fire.
+
+**Required at Coach GA** (deferred until then): gate the Coach off whenever Strava is a connected source for that user (or strictly exclude Strava-derived data — which for those users is effectively everything). Re-evaluate Tier-2 monetisation, since the paying cohort (serious Garmin/Strava athletes) is the one the Coach can no longer serve. Full reasoning in `docs/AI_STRATEGY.md → Update 2026-06-01`.
+
+**Open question to ask Strava** (developers@strava.com): does BYOK (user's own Anthropic key, personal use) change anything? Don't assume it does — Mosaic still operates the pipeline.
+
+### ISSUE-253: Strava disconnect must delete Strava data (API Agreement requirement) *(P1 compliance, 2026-06-01)* — small build, not started
+
+**Problem**: On in-app Strava disconnect (`account-view.ts:2153`), we delete the `strava_tokens` row but **do not delete the synced Strava activity data** (`garmin_activities` rows where `garmin_id LIKE 'strava-%'`) and **do not call Strava `deauthorize`**. Strava's API Agreement requires deleting an athlete's Strava data on deauthorization.
+
+**Interim (done 2026-06-01)**: the public privacy/support pages no longer claim "deleted within 48 hours" — softened to "disconnect stops syncing; to erase synced data, delete your account or email us" (a valid manual-deletion posture). So no false published claim, but the auto-delete is still owed.
+
+**DECISION (Tristan)**: do the small build after the website work. Scope: extend the disconnect handler (or a small `strava-disconnect` edge function mirroring `delete-account`'s deauthorize) to call `deauthorize`, delete `garmin_activities` Strava rows, and strip `strava-` entries from state (`garminActuals`/`garminPending`/`rated`/`garminMatched`). **Keep** the derived benchmark scalars (VDOT/FTP/CSS) — Option A, chosen 2026-06-01. Once shipped, restore the stronger auto-delete wording on the website.
+
+### ISSUE-254: Sync in-app legal pages to match the landing site *(P2, 2026-06-01)* — not started
+
+**Problem**: privacy/support/terms exist in two places — the landing repo (`~/Documents/mosaic-landing`, what mosaicrunning.run + the Strava reviewer see) and the app repo `public/` (what the app displays in-app + serves at the vercel.app build). The 2026-06-01 edits (fleshed-out support page, softened deletion wording, fixed footer links) were made on the **landing** copy only. The app repo `public/privacy.html` / `public/support.html` are now stale.
+
+**Fix**: copy the updated wording into `public/privacy.html` + `public/support.html` so the two stay consistent. Per memory, the app repo `public/` is meant to be source-of-truth — consider reversing the flow (edit `public/`, copy to landing) to avoid future drift.
+
 ### ISSUE-251: Reuse the guided-session shape for running interval workouts *(P3, 2026-05-28)* — idea, not started
 
 **Idea (Tristan, end of guided-strength session)**: "Using this format for people doing tempo runs on their phone, they can click log run at the end if they're doing 4×400m sprints and stuff like that." The guided-strength flow (tap to complete, log time per segment, auto-advance, finish summary) maps cleanly onto interval running done on the phone without a watch.
@@ -44,7 +70,7 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 **Why still open**: device confirmation pending — set an active injury (e.g. a leg injury) in triathlon mode and confirm the plan + coach now show an upper-body/core session (or paused), not the 45-min full-body session.
 
-### ISSUE-248: Updating an injury auto-advances/completes the current week *(P1, 2026-05-27, re-fixed 2026-05-29)* — fixed in code, ⚠️ awaiting device verification
+### ISSUE-248: Updating an injury auto-advances/completes the current week *(P1, 2026-05-27, re-fixed 2026-05-29)* — ✅ FIXED (Tristan confirmed in-app 2026-05-30; on `main` @ `c3bb015`, pushed)
 
 **Symptom (Tristan, production)**: "I just updated my injury for the new build and it's kicked me forward a week again." Recurring. Any edit to an active injury silently completed the current week.
 
@@ -56,7 +82,7 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 **Fix**: `openInjuryModal` takes an opt-in `{ advanceWeekAfterSave }` (module-level flag in `modal.ts`). Only the weekly check-in gate caller (`events.ts:873`) passes `true`. All banner / button / daily-check-in-overlay entry points stay bare → re-render in place via `render()`, never advance. `tsc` + `lint:ui` clean on touched files (`modal.ts`, `events.ts`).
 
-**Why still open**: device confirmation pending — open the injury modal on an active injury from the banner/plan-view, change a capacity / resume week, save, and confirm the week does NOT advance. Then separately complete a week while injured (the gate path) and confirm it DOES advance once.
+**Verified**: Tristan confirmed in-app on 2026-05-30 that editing an injury no longer advances the week. Shipped on `main` (`c3bb015`, pushed to origin). The fix also lives in the `feat/revenue-cat-iap` working tree.
 
 ### ISSUE-247: Injured triathlon forecast projects almost no improvement *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
 

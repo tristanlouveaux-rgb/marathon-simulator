@@ -427,6 +427,62 @@ function scaleAndCap(w: any, entry: ScheduleEntry, kind: 'run' | 'bike' | 'swim'
 }
 
 /**
+ * Discipline-aware illness mods for the legacy `{severity}` illnessState used
+ * by the live illness modal. The legacy `applyIllnessMods` (illness-modal.ts and
+ * the `applyLegacyMods` fallback above) skip everything in NON_RUN_TYPES, so on
+ * triathlon and HYROX they only ever touch the run legs and silently leave bike,
+ * swim, stations, and bricks at full load. This generalises the same severity
+ * tiers across all sport disciplines via `classifyWorkoutKind`, so resting rests
+ * the whole week and light reduces every discipline.
+ *
+ * Reuses the existing volume ratio (0.6) and the canonical `scaleAndCap`/`markRest`
+ * helpers — no new constants. Run-leg behaviour is unchanged versus the legacy
+ * path (quality downgraded to easy, volume reduced); the only new behaviour is
+ * that non-run disciplines are no longer skipped.
+ *
+ *   resting → every run/bike/swim/strength session becomes rest.
+ *   light   → volume scaled to 0.6, intensity capped to easy (quality/bike/swim
+ *             downgraded; stations/bricks reduced in duration, intensity kept).
+ *
+ * rest_like (walk/yoga/mobility) and 'other' (padel/climb) are left alone, matching
+ * the v2 engine. Render-time only — not persisted.
+ */
+const ILLNESS_LIGHT_ENTRY: ScheduleEntry = {
+  dateOffsetDays: 0,
+  capacity: 'reduced',
+  volumeFactor: 0.6,
+  intensityCeiling: 'easy',
+};
+
+export function applyIllnessModsAllDisciplines(workouts: any[], severity: 'light' | 'resting'): void {
+  for (const w of workouts) {
+    const kind = classifyWorkoutKind(w);
+    if (kind === 'rest_like' || kind === 'other') continue;
+    if (severity === 'resting') {
+      markRest(w);
+      // markRest only rewrites the description; HYROX/tri cards render from
+      // estimatedDurationMin and musculoTendonLoad, so zero those too.
+      if (w.estimatedDurationMin != null) {
+        w.originalDurationMin = w.estimatedDurationMin;
+        w.estimatedDurationMin = 0;
+      }
+      if (w.musculoTendonLoad != null) w.musculoTendonLoad = 0;
+      continue;
+    }
+    // light: scaleAndCap handles the description string + run km + quality
+    // downgrade. The duration-driven disciplines (bike/swim/station/brick) also
+    // need their numeric fields scaled, since the cards read those, not `d`.
+    scaleAndCap(w, ILLNESS_LIGHT_ENTRY, kind);
+    if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
+      w.estimatedDurationMin = Math.max(15, Math.round(w.estimatedDurationMin * ILLNESS_LIGHT_ENTRY.volumeFactor / 5) * 5);
+    }
+    if (typeof w.musculoTendonLoad === 'number') {
+      w.musculoTendonLoad = Math.round(w.musculoTendonLoad * ILLNESS_LIGHT_ENTRY.volumeFactor);
+    }
+  }
+}
+
+/**
  * Classify a workout by its primary discipline. Order matters:
  *   rest_like  → walk/yoga/pilates/rest/mobility (never mutated outside rest)
  *   bike       → type starts with bike_/cycl_  OR name leads with Bike/Cycl/Ride/Spin

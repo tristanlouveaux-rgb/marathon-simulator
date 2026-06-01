@@ -28,8 +28,11 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectiveVo2max } from '@/calculations/physiological-vdot';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
+import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
+import { gp } from '@/calculations/paces';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -2946,9 +2949,9 @@ export function buildLTMetricPage(s: SimulatorState): string {
       ? 'Watch reading'
       : derived.provenance);
 
-  // Sparkline (Garmin history). Only shown when there's enough history.
-  const hist = (s.physiologyHistory ?? []).filter(e => (e.ltPace ?? 0) > 0);
-  const sparkline = hist.length >= 2 ? buildLTSparkline(hist) : '';
+  // Trend card. Mirrors the VO2 / CSS trend cards: current pace + delta-since-
+  // first-sample + a draw-on sparkline that fills as history accrues.
+  const sparkline = buildLTTrendCard(s, currentLT, unitPref);
 
   const conflictCard = s.ltSuggestion ? buildLTConflictCard(s.ltSuggestion, unitPref) : '';
   const methodsCard = derived.methods.length > 0 ? buildLTMethodsCard(derived, unitPref) : '';
@@ -3037,35 +3040,60 @@ export function buildConfidenceChip(c: 'high' | 'medium' | 'low'): string {
   return `<span style="font-size:11px;color:var(--c-muted);margin-left:6px">· ${label}</span>`;
 }
 
-function buildLTSparkline(hist: PhysiologyDayEntry[]): string {
-  const vals = hist.map(e => e.ltPace!);
-  const n = vals.length;
-  const lo = Math.min(...vals) - 5;
-  const hi = Math.max(...vals) + 5;
-  const range2 = hi - lo || 1;
-  const W = 320, H = 60;
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, ((hi - v) / range2) * (H - 8));
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const trend = n >= 2 ? vals[n-1] - vals[n-2] : 0;
-  const improving = trend < 0;
-  const strokeColor = improving ? 'rgba(52,199,89,0.85)' : 'rgba(255,69,58,0.80)';
-  const fillColor   = improving ? 'rgba(52,199,89,0.12)' : 'rgba(255,69,58,0.10)';
-  const firstDate = hist[0].date.slice(5);
-  const lastDate  = hist[n-1].date.slice(5);
+/**
+ * LT "Trend" card. Mirrors the VO2 / CSS / FTP trend cards. Real data only:
+ * watch LT-pace history (`physiologyHistory[].ltPace`, ≥2 points) when present,
+ * else the threshold pace derived from VDOT history via `gp(vdot).t`. The
+ * trailing point is pinned to the page's current LT so the trend headline
+ * equals the page headline. Values render in the user's pace unit. Below two
+ * samples it shows the shared honest empty state (no synthetic curve).
+ */
+function buildLTTrendCard(s: SimulatorState, currentLT: number, unitPref: UnitPref): string {
+  const watchHist = (s.physiologyHistory ?? [])
+    .filter(e => (e.ltPace ?? 0) > 0)
+    .map(e => ({ date: e.date, value: e.ltPace as number }));
+  const vdotDerived = (s.vdotHistory ?? [])
+    .filter(h => h.date != null && h.vdot > 0)
+    .map(h => ({ date: h.date as string, value: gp(h.vdot).t }));
+
+  let samples = watchHist.length >= 2 ? watchHist : vdotDerived;
+  if (currentLT > 0 && samples.length > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const lastIdx = samples.length - 1;
+    samples = samples[lastIdx].date === today
+      ? samples.slice(0, lastIdx).concat({ date: today, value: currentLT })
+      : samples.concat({ date: today, value: currentLT });
+  }
+
+  // Convert sec/km → display unit so headline, delta, and axis all read in the
+  // user's pace unit. Faster pace = lower number, so the chart is inverted.
+  const factor = unitPref === 'mi' ? 1.60934 : 1;
+  const disp = samples.map(p => ({ date: p.date, value: p.value * factor }));
+  const suffix = unitPref === 'mi' ? '/mi' : '/km';
+
+  let chart = buildBenchmarkTrendChart(disp, '#14B8A6', 'rgba(20,184,166,0.08)', suffix, /*inverted*/ true);
+  if (disp.length >= 2) {
+    const sorted = [...disp].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+    const latest = sorted[sorted.length - 1].value;
+    const first = sorted[0].value;
+    const delta = latest - first;
+    const better = delta < 0;
+    const col = Math.abs(delta) < 0.5 ? 'var(--c-muted)' : (better ? '#5a8050' : '#c06a50');
+    const sign = delta >= 0 ? '+' : '';
+    const mss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    // Pace-format the headline and delta (buildBenchmarkTrendChart renders raw
+    // numbers; LT is a pace, not a scalar).
+    chart = chart
+      .replace(/<span style="font-size:14px;font-weight:600[^>]*>[^<]*(?:<span[^>]*>[^<]*<\/span>)?<\/span>/,
+        `<span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${mss(latest)}<span style="font-size:11px;color:var(--c-muted);font-weight:400;margin-left:2px">${suffix}</span></span>`)
+      .replace(/<span style="font-size:11px;color:[^"]+;font-variant-numeric:tabular-nums">[^<]*<\/span>/,
+        `<span style="font-size:11px;color:${col};font-variant-numeric:tabular-nums">${sign}${delta.toFixed(1)}s since first sample</span>`);
+  }
+
   return `
-    <div class="m-card" style="padding:16px;margin-bottom:12px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Watch history</div>
-      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
-        <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-        <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round"/>
-      </svg>
-      <div style="display:flex;justify-content:space-between;padding:3px 0 0">
-        <span style="font-size:9px;color:var(--c-faint)">${firstDate}</span>
-        <span style="font-size:9px;color:var(--c-faint)">${lastDate}</span>
-      </div>
+    <div class="m-card" style="padding:14px;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:10px">Trend</div>
+      ${chart}
     </div>`;
 }
 
@@ -3317,7 +3345,7 @@ function buildForecastTimesCard(s: SimulatorState): string {
     let timeSec: number;
     if (hasBlendInputs) {
       const blended = blendPredictions(
-        d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
+        d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
         s.b ?? 1.06, s.typ ?? 'Balanced', liveRec,
         s.athleteTier ?? undefined, liveKmPerWeek, liveAvgPace ?? undefined,
         { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
@@ -4529,6 +4557,9 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     // Refresh cached pace zones so threshold/easy/marathon paces and any view
     // reading s.pac immediately use the new LT.
     m.pac = gp(getEffectiveVdot(m), m.lt);
+    // Flow the LT change through to the cached race prediction (the forecast
+    // surfaces read s.forecastTime / s.blendedRaceTimeSec, not s.lt directly).
+    refreshBlendedFitness(m);
     saveState();
     // Re-render in place.
     const container = document.getElementById('app-root');
@@ -4548,6 +4579,7 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     delete m.ltOverride;
     recomputeLT(m);
     m.pac = gp(getEffectiveVdot(m), m.lt);
+    refreshBlendedFitness(m);
     saveState();
     const container = document.getElementById('app-root');
     if (container) {
@@ -4588,6 +4620,7 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
       clearLTSuggestion(m);
       recomputeLT(m);
       m.pac = gp(getEffectiveVdot(m), m.lt);
+      refreshBlendedFitness(m);
       saveState();
       const container = document.getElementById('app-root');
       if (container) {
@@ -4645,8 +4678,14 @@ export function renderStatsView(): void {
 
   // "Your Numbers" bar drilldowns. Each opens its metric detail page with the
   // back button rebound to this opening screen (not the old Fitness detail).
+  const rebindMetricBack = () => {
+    const back = document.getElementById('stats-metric-back');
+    const go = () => renderStatsView();
+    back?.addEventListener('click', go);
+    back?.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
+  };
   document.querySelectorAll<HTMLElement>('[data-metric-detail]').forEach(el => {
-    const handler = () => {
+    const handler = async () => {
       const id = el.dataset.metricDetail;
       if (!id) return;
       const root = document.getElementById('app-root');
@@ -4657,17 +4696,22 @@ export function renderStatsView(): void {
         wireTabBarHandlers(navigateTab);
         wireLTOverrideHandlers(s);
         wireInfoButtons();
+        rebindMetricBack();
       } else if (id === 'vo2' || id === 'vdot') {
-        root.innerHTML = buildVDOTMetricPage(s);
-        animateChartDrawOn();
-        wireTabBarHandlers(navigateTab);
-      } else {
-        return;
+        // Reuse the rich shared VO2max detail page (per-source breakdown,
+        // Mosaic/Watch/Manual source toggle, override slider, explainer). It is
+        // mode-agnostic — reads s.vo2Estimates / s.vo2 / s.vo2Override, no
+        // triConfig — so running and triathlon share one canonical page.
+        const { buildVO2DetailPage, wireVO2DetailHandlers } = await import('./triathlon/benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildVO2DetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireVO2DetailHandlers(rerender);
+          rebindMetricBack();
+        };
+        rerender();
       }
-      const back = document.getElementById('stats-metric-back');
-      const go = () => renderStatsView();
-      back?.addEventListener('click', go);
-      back?.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
     };
     el.addEventListener('click', handler);
     el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });

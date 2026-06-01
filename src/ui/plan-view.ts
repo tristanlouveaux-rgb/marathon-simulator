@@ -9,6 +9,7 @@ import type { SimulatorState, Week, Workout } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
 import { openActivityReReview, showActivityReview } from './activity-review';
@@ -599,6 +600,8 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         html += `<div style="display:flex;gap:12px;justify-content:center;margin-top:4px">`;
         html += `<button class="plan-action-mark-done" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Mark as Done</button>`;
         html += `<span style="color:var(--c-border)">·</span>`;
+        html += `<button class="plan-action-adjust" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" data-d="${safeDesc}" data-orig="${escapeHtml((w as any).originalDistance || '')}" data-type="${w.t}" data-rpe="${rpe}" data-dur="${(w as any).estimatedDurationMin ?? ''}" data-orig-dur="${(w as any).originalDurationMin ?? ''}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Adjust</button>`;
+        html += `<span style="color:var(--c-border)">·</span>`;
         html += `<button class="plan-action-skip" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Skip</button>`;
         html += `</div>`;
       } else if (w.t === 'gym') {
@@ -882,13 +885,29 @@ function buildWorkoutCards(
       const isReduced = !isDone && !isSkipped && (w as any).status === 'reduced' && !isTimingMod((w as any).modReason);
       const distKm = w.km || w.distanceKm;
       const durationMin = w.dur;
-      let valueStr = distKm ? (typeof distKm === 'number' ? formatKm(distKm, s.unitPref ?? 'km') : formatKm(parseFloat(distKm), s.unitPref ?? 'km'))
-        : durationMin ? `${Math.round(durationMin)} min`
-          : '';
-      // For reduced workouts, parse new distance from w.d ("5.2km (was 8km)"). W.km is not updated by mods
-      if (isReduced && (w as any).d) {
-        const reducedKm = parseFloat((w as any).d);
-        if (!isNaN(reducedKm)) valueStr = formatKm(reducedKm, s.unitPref ?? 'km');
+      const estMin = (w as any).estimatedDurationMin as number | undefined;
+      const isRunTypeCard = !!w.t && w.t !== 'gym' && w.t !== 'cross' && w.t !== 'rest';
+
+      let valueStr: string;
+      if (isRunTypeCard) {
+        // Time is the universal unit and updates live with any Adjust. Distance is
+        // shown alongside only for distance-defined runs (easy / long / MP). Structured
+        // sessions (tempo / intervals) headline time only — there is no single honest
+        // distance, which is why a tempo no longer mis-shows its warm-up "2.0 km".
+        const timeMin = (estMin && estMin > 0) ? Math.round(estMin) : (durationMin ? Math.round(durationMin) : 0);
+        const dKm = isSimpleDistanceDesc((w as any).d) ? parseDistanceKm((w as any).d) : null;
+        const parts: string[] = [];
+        if (dKm && dKm > 0) parts.push(formatKm(dKm, s.unitPref ?? 'km'));
+        if (timeMin > 0) parts.push(`${timeMin} min`);
+        valueStr = parts.join(' · ');
+      } else {
+        valueStr = distKm ? (typeof distKm === 'number' ? formatKm(distKm, s.unitPref ?? 'km') : formatKm(parseFloat(distKm), s.unitPref ?? 'km'))
+          : durationMin ? `${Math.round(durationMin)} min`
+            : '';
+        if (isReduced && (w as any).d) {
+          const kmMatch = /(\d+\.?\d*)\s*km/i.exec((w as any).d);
+          if (kmMatch) valueStr = formatKm(parseFloat(kmMatch[1]), s.unitPref ?? 'km');
+        }
       }
 
       // Replacement detection
@@ -999,7 +1018,12 @@ function buildWorkoutCards(
         const origLabel = origDist || (wasMatch ? wasMatch[1] : null);
         const cardUnitPref = s.unitPref ?? 'km';
         const lines: string[] = [];
-        if (origLabel) {
+        // Only show the "Original:" caption when both the label is a clean distance
+        // ("8km") AND the session itself is a simple distance run. Structured
+        // sessions (tempo / intervals) have no single honest distance, so a
+        // "Original: 2km" caption there is meaningless (it was the warm-up). This
+        // also heals stale mods from the earlier distance-only scaling build.
+        if (origLabel && /^\s*\d+(?:\.\d+)?\s*km\s*$/i.test(origLabel) && isSimpleDistanceDesc((w as any).d)) {
           lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Original: ${fmtDesc(origLabel, cardUnitPref)}</div>`);
         }
         reducedBadge = lines.join('');
@@ -1256,7 +1280,7 @@ function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number)
     ? `${(overflowMin / 60).toFixed(1)} h`
     : `${overflowMin} min`;
   return `
-    <div style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+    <div id="budget-banner-card" style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Time budget</div>
       <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.5;margin-bottom:4px">This week's plan totals about ${(totalMin / 60).toFixed(1)} h, ${overflowLabel} over your ${target} h target.</div>
       <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Sessions are already at minimum effective duration. Quality work cannot be shortened without losing the training stimulus.</div>
@@ -1774,13 +1798,16 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
 
   if (wk.workoutMods && wk.workoutMods.length > 0) {
     for (const mod of wk.workoutMods) {
-      const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+      // Match by stable slot id first (see findWorkoutForMod), name+day fallback.
+      const w = findWorkoutForMod(workouts as any[], mod);
       if (w) {
         if (!isTimingMod(mod.modReason)) {
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
           (w as any).status = mod.status;
           (w as any).d = mod.newDistance;
           if (mod.newType) (w as any).t = mod.newType;
+          if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
+          if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
         }
       }
     }
@@ -2192,9 +2219,11 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
 
   if (wk?.workoutMods) {
     for (const mod of wk.workoutMods) {
+      // Timing mods match by name only; all others prefer the stable slot id
+      // (see findWorkoutForMod — keeps user-scale Adjust from reverting on reshuffle).
       const w = isTimingMod(mod.modReason)
         ? workouts.find((wo: any) => wo.n === mod.name)
-        : workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+        : findWorkoutForMod(workouts as any[], mod);
       if (w) {
         (w as any).modReason = mod.modReason;
         if (mod.autoReduceNote != null) (w as any).autoReduceNote = mod.autoReduceNote;
@@ -2204,6 +2233,9 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
           (w as any).status = mod.status;
           if (mod.newType) (w as any).t = mod.newType;
           if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
+          if (mod.userScaledAt) (w as any).userScaledAt = mod.userScaledAt;
+          if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
+          if (mod.originalDurationMin != null) (w as any).originalDurationMin = mod.originalDurationMin;
         }
       }
     }
@@ -2539,6 +2571,11 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           ${buildHolidayBannerPlan(s)}
           ${buildMorningPainCheck()}
           ${buildBenchmarkPanel(s)}
+          ${viewWeek === s.w ? `
+            <div class="plan-fade" style="animation-delay:0.16s;margin:6px 28px 0 20px;text-align:right">
+              <span style="font-size:10px;color:var(--c-faint);font-weight:500">Hold and drag to reorder</span>
+            </div>
+          ` : ''}
           <div id="plan-week-list" class="plan-fade" style="animation-delay:0.18s;margin:6px 20px 0">
             ${buildWorkoutCards(s, workouts, viewWeek)}
           </div>
@@ -2616,7 +2653,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     if (ms.onboarding && ms.onboarding.weeklyTrainingHours != null) {
       ms.onboarding.budgetAcceptedAtHours = ms.onboarding.weeklyTrainingHours;
       saveState();
-      renderPlanView();
+      // In-place: accepting only dismisses this banner (nothing else on the page
+      // reads budgetAcceptedAtHours), so drop the node instead of re-rendering.
+      document.getElementById('budget-banner-card')?.remove();
     }
   });
 
@@ -2903,6 +2942,13 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
+  document.querySelectorAll('.plan-action-adjust').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAdjustFromButton(btn as HTMLElement);
+    });
+  });
+
   document.querySelectorAll('.plan-action-unrate').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2964,7 +3010,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       );
       // Apply existing mods so distances reflect current state
       for (const mod of (wk2.workoutMods ?? [])) {
-        const w = nudgeWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+        const w = findWorkoutForMod(nudgeWorkouts as any[], mod);
         if (w && !mod.modReason?.startsWith('Timing:')) {
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
           (w as any).d = mod.newDistance;
@@ -3022,7 +3068,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     if (!wk2) return;
     wk2.kmNudgeDismissed = true;
     saveState();
-    renderPlanView();
+    // In-place: the nudge is a purely additive card, so just drop the node
+    // rather than re-rendering the whole Plan page (which flashes + scroll-jumps).
+    document.getElementById('plan-km-nudge-card')?.remove();
   });
 
   // ─── Vibes Run nudge handlers ──────────────────────────────────────────────
@@ -3031,7 +3079,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const s2 = getMutableState();
     s2.vibesRunNudgeDismissed = true;
     saveState();
-    renderPlanView();
+    // In-place: drop the additive nudge card, no full Plan re-render.
+    document.getElementById('plan-vibes-nudge-card')?.remove();
   });
   document.getElementById('vibes-nudge-science')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3274,6 +3323,11 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // ─── Touch DnD for iOS WKWebView (HTML5 drag events don't fire there) ────────
   {
+    // Long-press to reorder: the finger must rest TOUCH_DRAG_HOLD_MS before a
+    // drag arms, so scrolling the plan no longer reorders days by accident.
+    // Until the hold elapses, any real movement is treated as a scroll and the
+    // card is never picked up. (Tristan, 2026-06-01: 350ms. Mirrored in tri + HYROX.)
+    const TOUCH_DRAG_HOLD_MS = 350;
     let _touchDragId = '';
     let _touchDragDay = -1;
     let _touchStartX = 0;
@@ -3282,6 +3336,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     let _touchClone: HTMLElement | null = null;
     let _touchSourceCard: HTMLElement | null = null;
     let _touchLastHighlight: HTMLElement | null = null;
+    let _touchHoldTimer: number | null = null;
+    let _touchHoldMet = false;
 
     document.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
       card.addEventListener('touchstart', (e) => {
@@ -3292,6 +3348,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
         _touchStartY = touch.clientY;
         _touchDragging = false;
         _touchSourceCard = card;
+        _touchHoldMet = false;
+        if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
+        _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
       }, { passive: true });
 
       card.addEventListener('touchmove', (e) => {
@@ -3299,9 +3358,20 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
         const touch = e.touches[0];
         const dx = touch.clientX - _touchStartX;
         const dy = touch.clientY - _touchStartY;
-        if (!_touchDragging && Math.sqrt(dx * dx + dy * dy) < 8) return;
-
         if (!_touchDragging) {
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          // Long-press gate. Before the hold elapses, real movement means the
+          // user is scrolling: abandon the drag candidate and let the page
+          // scroll (no preventDefault). After the hold, a small intentional
+          // move arms the drag.
+          if (!_touchHoldMet) {
+            if (dist >= 8) {
+              if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+              _touchDragId = '';
+            }
+            return;
+          }
+          if (dist < 8) return;
           _touchDragging = true;
           _touchDraggingCard = true;
           if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
@@ -3350,6 +3420,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
       card.addEventListener('touchend', (e) => {
         _touchDraggingCard = false;
+        if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+        _touchHoldMet = false;
         if (!_touchDragging || !_touchDragId) {
           _touchDragId = '';
           _touchDragDay = -1;
@@ -3418,22 +3490,10 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   }
 
-  // Touch swipe for iOS/mobile (left = next week, right = prev week)
-  let touchStartX = 0;
-  const page = document.querySelector('.mosaic-page') as HTMLElement;
-  if (page) {
-    page.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
-    page.addEventListener('touchend', (e) => {
-      if (_touchDraggingCard) return; // card drag was in progress. Don't swipe
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      if (Math.abs(dx) > 60) {
-        // Delegate to the same prev/next click handlers so swipes can also
-        // cross plan boundaries into the archive.
-        const trigger = dx < 0 ? 'plan-week-next' : 'plan-week-prev';
-        document.getElementById(trigger)?.click();
-      }
-    }, { passive: true });
-  }
+  // Horizontal swipe on Plan now changes tabs (global page-swipe nav), not weeks.
+  // Week navigation lives on the chevron buttons (#plan-week-prev / #plan-week-next)
+  // and the numbered week pills. The old per-week touch swipe was removed here so
+  // it no longer double-fires against the global tab swipe.
 }
 
 export function renderPlanView(): void {
@@ -3666,6 +3726,13 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
     });
   });
 
+  root.querySelectorAll('.plan-action-adjust').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openAdjustFromButton(btn as HTMLElement);
+    });
+  });
+
   root.querySelectorAll('.plan-action-unrate').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3895,16 +3962,22 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding:56px 16px 120px">
 
         <div class="tp-rise" style="padding:0 4px 18px">
-          <div style="font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#0F172A">Log</div>
-          <div style="font-size:13px;color:#64748B;margin-top:2px">Activities only. No plan.</div>
+          <div style="font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#0F172A">Sessions</div>
+          <div style="font-size:13px;color:#64748B;margin-top:2px">Generate one any time. No fixed plan.</div>
         </div>
 
+        <!-- Primary action: generate a session. On-demand has no plan, so this is the
+             hero, not a plan-creation prompt. Whole-card tap target, no accent fill. -->
         <div class="tp-rise" style="margin-bottom:18px;animation-delay:0.06s">
-          <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
-            <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:4px">Start a training plan</div>
-            <div style="font-size:13px;line-height:1.45;color:#475569;margin-bottom:14px">Scheduled workouts, load targets, and weekly progressions built from your activity history.</div>
-            <button id="plan-create-btn" class="m-btn-glass">Create a plan</button>
-          </div>
+          <button id="track-generate-session" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px;cursor:pointer;font-family:inherit">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <div>
+                <div style="font-size:16px;font-weight:700;color:#0F172A;letter-spacing:-0.01em;margin-bottom:4px">Generate a session</div>
+                <div style="font-size:13px;color:#64748B;line-height:1.45">Run, bike, swim or gym. We read your recovery and size it to today.</div>
+              </div>
+              <span style="font-size:20px;color:#94A3B8;flex:0 0 auto">&rarr;</span>
+            </div>
+          </button>
         </div>
 
         ${currentWeekBlock}
@@ -4009,7 +4082,31 @@ function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): s
 
 function wireTrackOnlyPlanHandlers(): void {
   wireTabBarHandlers(navigateTab);
-  document.getElementById('plan-create-btn')?.addEventListener('click', () => {
-    import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
+  // Primary action: generate a session. Plan-creation lives in Settings now (it
+  // resets the app), so it is no longer surfaced on the On-demand Plan tab.
+  document.getElementById('track-generate-session')?.addEventListener('click', () => {
+    import('./session-generator').then(({ openSessionGenerator }) => openSessionGenerator());
   });
+}
+
+/** Build a minimal Workout from an Adjust button's data attributes and open the
+ *  per-session scaling overlay. The card already carries the resolved (post-mod)
+ *  values, so we avoid re-deriving the week's workouts here. */
+function openAdjustFromButton(el: HTMLElement): void {
+  const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : getMutableState().w;
+  const durRaw = el.dataset.dur;
+  const origDurRaw = el.dataset.origDur;
+  const workoutId = el.dataset.workoutId || undefined;
+  const w = {
+    id: workoutId,
+    n: el.dataset.name || '',
+    dayOfWeek: el.dataset.day != null ? parseInt(el.dataset.day, 10) : undefined,
+    d: el.dataset.d || '',
+    t: el.dataset.type || 'easy',
+    rpe: el.dataset.rpe ? parseInt(el.dataset.rpe, 10) : undefined,
+    estimatedDurationMin: durRaw ? parseInt(durRaw, 10) : undefined,
+    originalDurationMin: origDurRaw ? parseInt(origDurRaw, 10) : undefined,
+    originalDistance: el.dataset.orig || undefined,
+  } as import('@/types/state').Workout;
+  import('@/ui/workout-adjust-overlay').then(m => m.openWorkoutAdjust(w, weekNum - 1, { workoutId }));
 }

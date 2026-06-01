@@ -127,7 +127,7 @@ const SHORT_LOCATION_LABEL: Record<InjuryLocation, string> = {
   foot: 'Foot', knee: 'Knee', calf: 'Calf', hamstring: 'Hamstring', hip: 'Hip',
   back: 'Back', shoulder: 'Shoulder', upper_arm: 'Upper-arm', elbow: 'Elbow',
   forearm: 'Forearm', wrist: 'Wrist', neck: 'Neck', chest_ribs: 'Chest/rib',
-  other: 'Current',
+  other: 'General',
 };
 
 /** Trunk/spine locations where anti-rotation and plank core loading is itself
@@ -156,7 +156,10 @@ export function injuryStrengthDecision(
   if (phase === 'resolved') return { kind: 'normal' };
 
   const loc = injuryState.location || 'other';
-  const label = SHORT_LOCATION_LABEL[loc] ?? 'Current';
+  const label = SHORT_LOCATION_LABEL[loc] ?? 'General';
+  // Phrase for "the <X>" sentence positions. A specific location reads "the
+  // knee"; an unspecified one reads "the injured area" (not "the general").
+  const bodyPhrase = loc === 'other' ? 'injured area' : label.toLowerCase();
   const avoid = new Set<BodyArea>(LOCATION_AVOID[loc] ?? []);
   const safe = (ex: Exercise) => ex.loads.every(a => !avoid.has(a));
 
@@ -189,11 +192,11 @@ export function injuryStrengthDecision(
   if (coreEx.length)  { durationMin += BLOCK_MIN.core; regionLabels.push('core'); }
 
   const lines = selected.map(e => `${e.sets} ${e.name} (${e.cue}) (${e.rest})`);
-  lines.push(`Stretch to finish: gentle range, nothing that aggravates the ${label.toLowerCase()}.`);
+  lines.push(`Stretch to finish: gentle range, nothing that aggravates the ${bodyPhrase}.`);
 
   const rpe = RPE_BY_PHASE[phase] ?? 4;
   const name = capitaliseFirst(`${joinRegions(regionLabels)} strength`);
-  const reason = buildReason(label, upperEx.length > 0, lowerEx.length > 0);
+  const reason = buildReason(label, bodyPhrase, upperEx.length > 0, lowerEx.length > 0);
 
   const workout: Workout = {
     t: 'gym',
@@ -215,14 +218,14 @@ function joinRegions(parts: string[]): string {
   return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`;
 }
 
-function buildReason(label: string, upperOK: boolean, lowerOK: boolean): string {
+function buildReason(label: string, bodyPhrase: string, upperOK: boolean, lowerOK: boolean): string {
   if (upperOK && !lowerOK) {
     return `${label} injury. Upper-body and core only, with shoulder-safe exercises; lower-body loading paused while it settles.`;
   }
   if (lowerOK && !upperOK) {
-    return `${label} injury. Lower-body and core only, picked to avoid loading the ${label.toLowerCase()}; upper-body loading paused while it settles.`;
+    return `${label} injury. Lower-body and core only, picked to avoid loading the ${bodyPhrase}; upper-body loading paused while it settles.`;
   }
-  return `${label} injury. Exercises picked to avoid loading the ${label.toLowerCase()}.`;
+  return `${label} injury. Exercises picked to avoid loading the ${bodyPhrase}.`;
 }
 
 function capitaliseFirst(s: string): string {

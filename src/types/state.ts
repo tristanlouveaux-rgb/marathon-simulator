@@ -127,6 +127,14 @@ export interface Workout extends WorkoutDefinition {
    * generation time so downstream code (scheduler capacity, card chips,
    * detail modal) doesn't have to parse the description string. */
   estimatedDurationMin?: number;
+  /** Original (plan) session minutes before a user scale. Carried so the Adjust
+   *  overlay can anchor its slider to the plan, and reopen at the right position. */
+  originalDurationMin?: number;
+  /** Chosen intensity rung for a user-scaled bike/swim session (a key from
+   *  BIKE_INTENSITY_LADDER / SWIM_INTENSITY_LADDER, e.g. 'bike_tempo'). Set by the
+   *  per-session Adjust "Harder/Easier" control on object-mode (tri/cycling/HYROX)
+   *  sessions; the target watts/pace are derived live from FTP/CSS at this rung. */
+  intensityLevel?: string;
   /** Garmin/Strava activity ID matched to this workout. Populated by the tri matcher so
    *  the effort multiplier can read powerAdherence from the matched actual. */
   matchedActivityId?: string;
@@ -184,6 +192,13 @@ export interface SkippedWorkout {
 export interface WorkoutMod {
   name: string;
   dayOfWeek?: number;  // Added for unique identification when names collide
+  /** Stable slot id (`W{week}-{type}-{idx}` from the generator) the mod targets.
+   *  Preferred match key for user-scale mods: running workouts are regenerated
+   *  every render and `assignDefaultDays` reshuffles `dayOfWeek` whenever the week
+   *  set changes, so matching by (name, dayOfWeek) loses the mod and the change
+   *  reverts. The id survives day reshuffling. Optional for back-compat with mods
+   *  written before this field existed (they fall back to name+day matching). */
+  workoutId?: string;
   status: string;
   modReason: string;
   confidence?: string;
@@ -195,6 +210,19 @@ export interface WorkoutMod {
   /** ISO timestamp when the AI coach created this mod. Used to render a
    *  "Coach" badge in the plan view. */
   aiModifiedAt?: string;
+  /** ISO timestamp when the user manually scaled this workout via the per-card
+   *  "Adjust" control (workout-scaling.ts). Distinct from `aiModifiedAt` so the
+   *  card shows an "Adjusted" chip (not "Coach") and the reset path targets only
+   *  user mods. The mod still uses the standard newDistance/newType/newRpe fields. */
+  userScaledAt?: string;
+  /** Scaled session duration in minutes, carried so the duration chip and weekly
+   *  total stay honest after a user duration scale (the generator otherwise
+   *  re-derives full-length estimatedDurationMin each render). */
+  newDurationMin?: number;
+  /** Original (plan) session minutes, the reference the user-scale slider anchors
+   *  to. Applied back onto the workout so a reopened Adjust overlay scales from
+   *  the plan, not from the already-scaled state. */
+  originalDurationMin?: number;
   /** When the AI capped intensity (adjust_intensity), this is the zone cap. */
   zoneCap?: 2 | 3;
 }
@@ -354,6 +382,10 @@ export interface GarminActual {
   /** Plan workout type at the time of matching (e.g. 'easy', 'long', 'threshold', 'vo2').
    *  Used by iTRIMP intensity calibration. Null for non-run matches or pre-migration actuals. */
   plannedType?: string | null;
+  /** Muscle groups worked, ordered most-worked first (strength/gym sessions only).
+   *  Derived at completion from the parsed exercise list. Drives the body-map and
+   *  chip summary on the post-session recap and the activity-log detail. */
+  workedMuscleGroups?: string[];
   /** HR effort score: how hard this was relative to target zone.
    *  0.8 = undercooked, 1.0 = nailed it, 1.2 = overcooked. Null if no HR data or no target zone. */
   hrEffortScore?: number | null;
@@ -1009,6 +1041,7 @@ export interface SimulatorState {
     startDate: string;              // ISO YYYY-MM-DD
     endDate: string;                // ISO YYYY-MM-DD
     canRun: 'yes' | 'maybe' | 'no';
+    canSwim?: boolean;              // triathlon only: pool/open-water access while away (bike is always assumed unavailable on holiday)
     holidayType: 'relaxation' | 'active' | 'working';
     active: boolean;
     preHolidayShifts?: Record<string, number>;  // workoutId → new dayOfWeek

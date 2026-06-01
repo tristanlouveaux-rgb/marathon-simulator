@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultInjuryState } from '@/types/injury';
 import type { InjuryState } from '@/types/injury';
-import { pickAerobicSubstitute } from './capability-substitution';
+import { pickAerobicSubstitute, buildCapabilityOffers } from './capability-substitution';
+import { generateRehabPhaseWorkouts } from '@/injury/engine';
+import type { SimulatorState } from '@/types/state';
 
 function injury(overrides: Partial<InjuryState>): InjuryState {
   return {
@@ -42,5 +44,51 @@ describe('pickAerobicSubstitute', () => {
   it('ignores a preference whose discipline is blocked, using the next available', () => {
     const inj = injury({ bikeCapacity: 50, swimCapacity: 0, preferredCrossTraining: 'swimming' });
     expect(pickAerobicSubstitute(inj)?.sport).toBe('bike');
+  });
+
+  it('returns null for no injury', () => {
+    expect(pickAerobicSubstitute(undefined)).toBeNull();
+  });
+});
+
+describe('generateRehabPhaseWorkouts uses the capacity-aware pick (running mirror)', () => {
+  const crossLabel = (inj: InjuryState | undefined): string => {
+    const cross = generateRehabPhaseWorkouts(inj).find(w => w.t === 'cross');
+    return (cross?.n ?? '').replace('Rehab Cross-Training: ', '');
+  };
+
+  it('a knee (bike still usable) gets a Bike rehab session, not the generic label', () => {
+    expect(crossLabel(injury({ runCapacity: 0, bikeCapacity: 50, swimCapacity: 100 }))).toBe('Bike');
+  });
+
+  it('an arm injury that blocks bike gets a Swim rehab session', () => {
+    expect(crossLabel(injury({ bikeCapacity: 0, upperLoadCapacity: 0, swimCapacity: 100 }))).toBe('Swim');
+  });
+
+  it('falls back to the generic low-impact label when nothing aerobic is safe', () => {
+    expect(crossLabel(injury({ bikeCapacity: 0, upperLoadCapacity: 0, swimCapacity: 0 }))).toBe('pool, cycling');
+  });
+
+  it('honours the saved cross-training preference', () => {
+    expect(crossLabel(injury({ bikeCapacity: 50, swimCapacity: 100, preferredCrossTraining: 'swimming' }))).toBe('Swim');
+  });
+});
+
+describe('buildCapabilityOffers routing guards', () => {
+  const state = (over: Partial<SimulatorState>): SimulatorState =>
+    ({ w: 1, wks: [], ...over } as unknown as SimulatorState);
+
+  it('returns [] when there is no active injury', async () => {
+    expect(await buildCapabilityOffers(state({ eventType: 'hyrox' } as any))).toEqual([]);
+  });
+
+  it('returns [] for a resolved injury', async () => {
+    const inj = injury({ injuryPhase: 'resolved', runCapacity: 0 });
+    expect(await buildCapabilityOffers(state({ eventType: 'triathlon', injuryState: inj } as any))).toEqual([]);
+  });
+
+  it('returns [] for an unsupported mode (running routes via its phase path, not here)', async () => {
+    const inj = injury({ runCapacity: 0 });
+    expect(await buildCapabilityOffers(state({ eventType: 'running', injuryState: inj } as any))).toEqual([]);
   });
 });

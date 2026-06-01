@@ -140,12 +140,13 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
       <!-- Skip. Top right -->
       <div style="position:absolute;top:max(20px,env(safe-area-inset-top,20px));right:20px;z-index:10">
         <button id="isl-skip"
-          style="font-size:12px;font-weight:500;color:rgba(0,0,0,0.32);
-                 background:rgba(255,255,255,0.55);border:1px solid rgba(0,0,0,0.08);
-                 border-radius:100px;padding:7px 16px;cursor:pointer;
+          style="font-size:13px;font-weight:600;color:rgba(0,0,0,0.62);
+                 background:rgba(255,255,255,0.72);border:1px solid rgba(0,0,0,0.12);
+                 border-radius:100px;padding:9px 20px;cursor:pointer;
                  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+                 box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.06);
                  transition:opacity 0.15s">
-          Skip
+          Skip intro
         </button>
       </div>
 

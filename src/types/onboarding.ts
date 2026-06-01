@@ -232,6 +232,10 @@ export interface OnboardingState {
    *  'apple' → auto-prompt HealthKit; 'other' → reveal export-upload panel.
    *  Legacy 'garmin' from an earlier 3-tile picker is migrated to 'other' at render. */
   chosenWatch?: 'apple' | 'other';
+  /** True once the user enters a valid beta access code on the Garmin path, which
+   *  reveals the live "Connect Strava" button. Gates the capped Strava pipe so public
+   *  users don't consume the 10 Standard-Tier athlete slots. See constants/access-codes.ts. */
+  stravaUnlocked?: boolean;
 
   // Step 5 (fitness path): "Just track". Activity tracking only, no plan generated
   trackOnly?: boolean;

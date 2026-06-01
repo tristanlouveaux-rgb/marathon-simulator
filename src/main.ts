@@ -9,7 +9,7 @@ import { restorePlanFromSupabase, getLocalStateOwner, setLocalStateOwner } from 
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
-import { advanceWeekToToday, assertPlanAnchorConsistent, recordAppOpen, isWeekPendingDebrief } from '@/ui/welcome-back';
+import { advanceWeekToToday, assertPlanAnchorConsistent, reconcilePlanAnchorToEarliestActivity, recordAppOpen, isWeekPendingDebrief } from '@/ui/welcome-back';
 import { checkHolidayEnd, showHolidayWelcomeBack } from '@/ui/holiday-modal';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
@@ -28,6 +28,8 @@ import { getActivitySource, hasPhysiologySource } from '@/data/sources';
 import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnostic';
 import { initRevenueCat, identifyRevenueCatUser } from '@/coach/revenuecat-client';
 import { isNative } from '@/utils/platform';
+import { installWebOverscrollBounce } from '@/ui/web-overscroll-bounce';
+import { installPageSwipeNav } from '@/ui/page-swipe-nav';
 import '@/ui/strava-detail';
 
 // Console-callable VO2max diagnostic: run `diagnoseVO2()` in the browser console
@@ -161,6 +163,8 @@ function applyWebViewportPolicy(): void {
 
 async function bootstrap(): Promise<void> {
   applyWebViewportPolicy();
+  installWebOverscrollBounce();
+  installPageSwipeNav();
 
   // Dev: install window.__debugForecast() for prediction-stack diagnostics.
   const { installDebugForecast } = await import('@/dev/debug-forecast');
@@ -362,6 +366,29 @@ async function launchApp(): Promise<void> {
     });
   }
 
+  // One-time cleanup: the weekly-hours onboarding slider was removed (2026-06-01).
+  // Existing state may still carry weeklyTrainingHours / weekdayTrainingHours,
+  // which keep the plan-engine hours cap (applyHoursBudget) active and squeeze
+  // sessions below their natural race-plan length. Clear them so the plan runs
+  // uncapped — the live Adjust feature now handles per-session time trims. Also
+  // drops the now-orphaned budgetAcceptedAtHours (banner dismissal marker).
+  // Idempotent: deletes only if present, so it self-disables after one launch.
+  if (
+    hasState && state.onboarding &&
+    (state.onboarding.weeklyTrainingHours != null ||
+     state.onboarding.weekdayTrainingHours != null ||
+     state.onboarding.budgetAcceptedAtHours != null)
+  ) {
+    const ms = getMutableState();
+    if (ms.onboarding) {
+      delete ms.onboarding.weeklyTrainingHours;
+      delete ms.onboarding.weekdayTrainingHours;
+      delete ms.onboarding.budgetAcceptedAtHours;
+      console.log('[launch] Cleared deprecated weekly-hours budget (slider removed; plan now runs at natural length, Adjust handles time trims).');
+      saveState();
+    }
+  }
+
   // Self-heal stravaConnected flag. Users who connected Strava from the tri
   // setup page (or via any path that didn't land on ?strava=connected) have
   // tokens in strava_tokens but the state flag is false. Which gates the
@@ -548,7 +575,16 @@ async function launchApp(): Promise<void> {
           derivedCss != null &&
           derivedCss < currentCss &&
           (derived.css.swimActivityCount ?? 0) >= 2;
-        if ((cssBlank || cssDerivedRefresh || cssUserBeaten) && derivedCss) {
+        // Holiday-detrain anchor gate: while a return dock is active, a swim dated on or
+        // before the dock (the holiday end) cannot IMPROVE (lower) the docked CSS — a
+        // pre-return swim is not evidence of recovery. A swim after the dock supersedes it
+        // and clears the anchor. See showHolidayWelcomeBack / cssDetrainAnchorISO.
+        const cssAnchor = swim?.cssDetrainAnchorISO;
+        const cssEvidencePostAnchor =
+          !cssAnchor || (derived.css.sourceActivityISO != null && derived.css.sourceActivityISO > cssAnchor);
+        const cssBlockedByAnchor =
+          !cssEvidencePostAnchor && derivedCss != null && currentCss != null && derivedCss < currentCss;
+        if ((cssBlank || cssDerivedRefresh || cssUserBeaten) && derivedCss && !cssBlockedByAnchor) {
           if (cssUserBeaten) {
             console.log(`[tri] CSS auto-improved: user ${currentCss}s/100m → derived ${derivedCss}s/100m`);
           }
@@ -557,8 +593,12 @@ async function launchApp(): Promise<void> {
             cssSecPer100m: derivedCss,
             cssSource: 'derived',
             cssConfidence: derived.css.confidence,
+            // A post-return swim cleared the detrain dock; drop the anchor.
+            cssDetrainAnchorISO: cssEvidencePostAnchor ? undefined : swim?.cssDetrainAnchorISO,
           };
           appendCssSample(mutable.triConfig.swim, derivedCss, 'derived', derived.css.confidence);
+        } else if (cssBlockedByAnchor) {
+          console.log(`[tri] CSS held by holiday-detrain anchor (${cssAnchor}): derived ${derivedCss}s/100m is from a pre-return swim, keeping docked ${currentCss}s/100m.`);
         } else if (swimSrc === 'user' && swim?.cssSecPer100m) {
           // User-set CSS. Confidence is 'high' if they did the paired-TT test
           // (both m400 and m200 PBs present), 'medium' if they typed a single
@@ -609,7 +649,16 @@ async function launchApp(): Promise<void> {
             derivedFtp >= currentFtp ||
             confRank(ftpConf) > confRank(currentConf)
           );
-        if ((ftpBlank || ftpDerivedRefresh || ftpUserBeaten) && derivedFtp) {
+        // Holiday-detrain anchor gate: while a return dock is active, a ride dated on or
+        // before the dock (the holiday end) cannot RAISE the docked FTP — a pre-return ride
+        // is not evidence of recovery. A ride after the dock supersedes it and clears the
+        // anchor. See showHolidayWelcomeBack / ftpDetrainAnchorISO.
+        const ftpAnchor = bike?.ftpDetrainAnchorISO;
+        const ftpEvidencePostAnchor =
+          !ftpAnchor || (derived.ftp.sourceRideISO != null && derived.ftp.sourceRideISO > ftpAnchor);
+        const ftpBlockedByAnchor =
+          !ftpEvidencePostAnchor && derivedFtp != null && currentFtp != null && derivedFtp > currentFtp;
+        if ((ftpBlank || ftpDerivedRefresh || ftpUserBeaten) && derivedFtp && !ftpBlockedByAnchor) {
           if (ftpUserBeaten) {
             console.log(`[tri] FTP auto-improved: user ${currentFtp}W → derived ${derivedFtp}W (${ftpConf} conf)`);
           } else if (ftpDerivedRefresh && currentFtp != null && derivedFtp > currentFtp) {
@@ -623,8 +672,12 @@ async function launchApp(): Promise<void> {
             ftpSource: 'derived',
             ftpConfidence: ftpConf,
             hasPowerMeter: true,
+            // A post-return ride cleared the detrain dock; drop the anchor.
+            ftpDetrainAnchorISO: ftpEvidencePostAnchor ? undefined : bike?.ftpDetrainAnchorISO,
           };
           appendFtpSample(mutable.triConfig.bike, derivedFtp, 'derived', ftpConf);
+        } else if (ftpBlockedByAnchor) {
+          console.log(`[tri] FTP held by holiday-detrain anchor (${ftpAnchor}): derived ${derivedFtp}W is from a pre-return ride, keeping docked ${currentFtp}W.`);
         } else if (bikeSrc === 'derived' && currentFtp != null && derivedFtp != null && derivedFtp < currentFtp) {
           // Saved derived value was held; the new derivation produced a
           // *lower* number with same-or-worse confidence. Log the rejection
@@ -873,6 +926,10 @@ async function launchApp(): Promise<void> {
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
+    // Correct a planStartDate that drifted later than the earliest logged
+    // activity (backfill arrived after the anchor was derived) BEFORE advancing,
+    // so s.w recomputes from the right anchor.
+    if (reconcilePlanAnchorToEarliestActivity()) saveState();
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
     assertPlanAnchorConsistent(); // tripwire: warn loudly if s.w and planStartDate disagree
 
@@ -1194,9 +1251,30 @@ async function launchApp(): Promise<void> {
   }
 
   if (STRAVA_ENABLED && params.get('strava') === 'connected') {
+    // Read the athlete profile the callback passed back BEFORE we strip the query
+    // string. Strava sends sex ('M'/'F') and weight (kg) so onboarding can pre-fill
+    // them (about-you). Strava exposes no birthdate, so age is still asked.
+    const stravaSex = params.get('sex');
+    const stravaWeight = params.get('weight');
     window.history.replaceState({}, '', window.location.pathname);
     import('@/state').then(({ updateState, saveState }) => {
       updateState({ stravaConnected: true });
+      // Pre-fill onboarding profile from the Strava athlete, without clobbering
+      // anything the user already entered.
+      const ob = state.onboarding;
+      if (ob) {
+        const patch: Partial<typeof ob> = {};
+        if (!ob.biologicalSex && (stravaSex === 'M' || stravaSex === 'F')) {
+          patch.biologicalSex = stravaSex === 'M' ? 'male' : 'female';
+        }
+        const w = stravaWeight ? Number(stravaWeight) : NaN;
+        if (!ob.bodyWeightKg && Number.isFinite(w) && w > 0) {
+          patch.bodyWeightKg = Math.round(w * 10) / 10;
+        }
+        if (Object.keys(patch).length > 0) {
+          updateState({ onboarding: { ...ob, ...patch } });
+        }
+      }
       saveState();
     });
     resetStravaCache();
@@ -1207,8 +1285,10 @@ async function launchApp(): Promise<void> {
     if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
     }
-    // Mid-wizard: sync fires in the background; connect-data auto-advances;
-    // review page waits on the DB fetch and then decides.
+    // Mid-wizard: the connect-data step detects the return directly from the live
+    // ?strava=connected URL (it renders in initWizard, before this handler strips the
+    // query string), so no extra flag is needed. An earlier sessionStorage flag set
+    // here was never cleared and made connect-data auto-skip on every later visit.
   }
 
   // Sync wearable data on launch (skip in simulator mode. No auth)

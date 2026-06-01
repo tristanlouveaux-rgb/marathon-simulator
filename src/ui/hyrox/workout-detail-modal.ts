@@ -11,6 +11,8 @@ import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getSubstitutionsFor, findSubstitution } from '@/constants/hyrox-substitutions';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
+import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -80,9 +82,11 @@ function discColour(disc: HyroxDisc) {
   }
 }
 
-export function openHyroxWorkoutDetail(workout: Workout): void {
+export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void {
   const existing = document.getElementById('hx-workout-detail-overlay');
   if (existing) existing.remove();
+
+  const wkIdx = weekIdx ?? (getMutableState().w - 1);
 
   const rawDisc = workout.discipline as string;
   const wt = (workout.t || '') as string;
@@ -115,6 +119,17 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
     `${i > 0 ? '<span style="color:var(--c-faint);margin:0 8px">·</span>' : ''}<span>${t}</span>`
   ).join('');
 
+  // Duration Adjust applies to time-defined sessions only: runs and cross-training
+  // (bike / erg / swim). Stations and bricks are round/component structured and
+  // strength is rep-based, so they're excluded here (no defined duration-scale).
+  const canAdjust = (disc === 'run' || disc === 'cross')
+    && ((typeof dur === 'number' && dur > 0) || /\d\s*(km|m|min)\b/i.test(workout.d || ''));
+  const isScaled = !!(workout as any).userScaledAt;
+  const origMin = (typeof (workout as any).originalDurationMin === 'number' && (workout as any).originalDurationMin > 0)
+    ? Math.round((workout as any).originalDurationMin) : 0;
+  const hxCfg = getMutableState().triConfig;
+  const intensityTarget = intensityTargetLabel(workout, hxCfg?.bike?.ftp, hxCfg?.swim?.cssSecPer100m);
+
   overlay.innerHTML = `
     <div style="
       background:#FAF9F6;
@@ -134,6 +149,8 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
         </div>
         <div style="font-size:22px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1.15;margin-bottom:6px">${esc(workout.n)}</div>
         <div style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${chipsHtml}</div>
+        ${intensityTarget ? `<div style="font-size:12px;color:var(--c-muted);margin-top:6px;font-variant-numeric:tabular-nums">Target: ${intensityTarget}</div>` : ''}
+        ${isScaled && origMin > 0 ? `<div style="font-size:11px;color:var(--c-faint);margin-top:5px">Adjusted for this session. Planned ${origMin} min.</div>` : ''}
       </div>
 
       <!-- Session body -->
@@ -145,6 +162,7 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
       <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
         ${disc === 'cross' ? '' : `<button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>`}
         <button id="hx-detail-strength-done" style="width:100%;padding:${disc === 'cross' ? '14px' : '11px'};background:${disc === 'cross' ? '#0F172A' : 'transparent'};color:${disc === 'cross' ? '#FAF9F6' : '#0F172A'};border:${disc === 'cross' ? 'none' : '1px solid var(--c-border)'};border-radius:${disc === 'cross' ? '12px' : '10px'};font-size:${disc === 'cross' ? '15px' : '13px'};font-weight:${disc === 'cross' ? '600' : '500'};cursor:pointer;font-family:var(--f)">Mark as done</button>
+        ${canAdjust ? `<button id="hx-detail-adjust" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Adjust duration</button>` : ''}
       </div>
 
       <div style="height:6px"></div>
@@ -156,6 +174,18 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#hx-detail-close')?.addEventListener('click', close);
+  overlay.querySelector('#hx-detail-adjust')?.addEventListener('click', () => {
+    close();
+    import('@/ui/workout-adjust-overlay').then(({ openWorkoutAdjust }) => {
+      openWorkoutAdjust(workout, wkIdx, {
+        persist: 'object',
+        store: 'triWorkouts',
+        workoutId: (workout as any).id,
+        allowIntensity: false,
+        rerender: () => import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {}),
+      });
+    });
+  });
 
   // Guided strength / station session. Same overlay the tri side uses; the
   // adapter (parseHyroxSession) walks hyroxComponents one at a time.
@@ -296,6 +326,19 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
   const t = workout.t ?? '';
   const mtl = workout.musculoTendonLoad;
 
+  // Strength / gym: parse the newline prescription into clean per-exercise rows
+  // (mirrors the station-circuit overview) instead of dumping the run-on prose
+  // paragraph. The set-by-set detail lives in the guided player; this is just
+  // the overview.
+  if (disc === 'strength') {
+    const session = parseStrengthSession(workout);
+    if (session) {
+      return `
+        ${renderStrengthBreakdown(session, accent, workout)}
+        ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
+    }
+  }
+
   // Station technique: structured rounds table + run finish
   if (t === 'hyrox_station_technique') {
     const stationComponents = (components ?? []).filter(c => c.type !== 'run');
@@ -354,6 +397,55 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     </div>
     ${components?.length ? renderComponentBreakdown(components, accent, workout) : ''}
     ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
+}
+
+/** Rest after a set as "45s rest" / "2 min rest"; "" when none parsed. */
+function fmtRestSuffix(sec: number): string {
+  if (sec <= 0) return '';
+  return sec >= 60 && sec % 60 === 0 ? `${sec / 60} min rest` : `${sec}s rest`;
+}
+
+/**
+ * Clean per-exercise overview for a strength/gym session. One row per exercise
+ * (first set carries the prescription), prescription right-aligned, cue + rest
+ * underneath. A neutral summary chip leads, matching the station-circuit modal's
+ * shape. The guided player walks the sets one at a time.
+ */
+function renderStrengthBreakdown(session: StrengthSession, accent: string, workout: Workout): string {
+  const dur = workout.estimatedDurationMin;
+  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
+
+  const byExercise = new Map<number, GuidedSet>();
+  for (const s of session.sets) {
+    if (!byExercise.has(s.exerciseIndex)) byExercise.set(s.exerciseIndex, s);
+  }
+  const rows = [...byExercise.values()].map(ex => {
+    const prescription = ex.reps
+      ? `${ex.setCount} × ${esc(ex.reps)}`
+      : `${ex.setCount} set${ex.setCount > 1 ? 's' : ''}`;
+    const meta = [ex.cue ? esc(ex.cue) : '', fmtRestSuffix(ex.restSec)].filter(Boolean).join(' · ');
+    return `
+      <div style="display:flex;gap:14px;padding:11px 0;border-top:1px solid rgba(0,0,0,0.05)">
+        <div style="width:3px;flex-shrink:0;background:${accent};border-radius:2px;margin-top:3px"></div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+            <span style="font-size:14px;font-weight:600;color:#0F172A">${esc(ex.exerciseName)}</span>
+            <span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums;flex-shrink:0">${prescription}</span>
+          </div>
+          ${meta ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-top:2px">${meta}</div>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div style="padding:18px 24px 0">
+      <div style="padding:12px 14px;border-radius:10px;background:rgba(107,114,128,0.07);border:1px solid rgba(107,114,128,0.14);margin-bottom:2px">
+        <div style="font-size:12px;font-weight:600;color:#4b5563">${session.exerciseCount} exercise${session.exerciseCount === 1 ? '' : 's'}${durStr ? ` · ${durStr}` : ''}</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Tap Start to be guided through each set.</div>
+      </div>
+      ${rows}
+      ${session.stretch ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding:11px 0 0">${esc(session.stretch)}</div>` : ''}
+    </div>`;
 }
 
 function renderComponentBreakdown(components: HyroxComponent[], accent: string, workout: Workout): string {

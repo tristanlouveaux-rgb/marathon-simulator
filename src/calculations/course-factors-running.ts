@@ -152,33 +152,31 @@ export function applyRunningCourseFactors(
   }
 
   // ── Heat acclimatisation discount ───────────────────────────────────────
-  // Only fires when the climate penalty is positive AND we have a recent
-  // training temperature. Discounts up to RUN_HEAT_ACCLIM_MAX_DISCOUNT (50%)
-  // of the climate penalty when training temp is within RAMP_GAP_C (15°C)
-  // of the race climate anchor.
+  // Symmetric individual heat adjustment, pivoting at race temp (revised
+  // 2026-06-01, Tristan — mirrors the triathlon heat model). The climate penalty
+  // is the average field; training hotter than the race makes you better adapted
+  // (credit), training cooler makes you under-adapted (penalty), training at race
+  // temp leaves the field-average penalty unchanged. Scales to ±MAX_DISCOUNT of
+  // the climate penalty at a ±RAMP_GAP°C gap. The old ramp only ever credited.
   if (climatePenaltyFraction > 0 && opts?.trainingTempC != null && profile.climate) {
     const raceAnchorTemp = CLIMATE_ANCHOR_TEMP_C[profile.climate];
     const tempGap = raceAnchorTemp - opts.trainingTempC; // positive = training cooler
-    if (tempGap < RUN_HEAT_ACCLIM_RAMP_GAP_C) {
-      const discountFraction = Math.max(
-        0,
-        RUN_HEAT_ACCLIM_MAX_DISCOUNT * (1 - Math.max(0, tempGap) / RUN_HEAT_ACCLIM_RAMP_GAP_C),
-      );
-      if (discountFraction > 0) {
-        // The discount is applied as a sub-1.0 factor against the already-
-        // applied climate penalty. Effective net climate penalty becomes:
-        //   (1 + climatePenaltyFraction) * acclimFactor
-        // where acclimFactor < 1 reduces but does not erase the climate hit.
-        const acclimFactor = 1 - climatePenaltyFraction * discountFraction;
-        mult *= acclimFactor;
-        factors.push({
-          kind: 'heat-acclim',
-          label: 'Heat acclimatisation',
-          value: `Training ${Math.round(opts.trainingTempC)}°C vs race ${Math.round(raceAnchorTemp)}°C (−${(discountFraction * 100).toFixed(0)}% of climate)`,
-          deltaSec: rawSec * (acclimFactor - 1),
-          multiplier: acclimFactor,
-        });
-      }
+    const acclimFraction = Math.max(
+      -RUN_HEAT_ACCLIM_MAX_DISCOUNT,
+      Math.min(RUN_HEAT_ACCLIM_MAX_DISCOUNT,
+        RUN_HEAT_ACCLIM_MAX_DISCOUNT * tempGap / RUN_HEAT_ACCLIM_RAMP_GAP_C),
+    );
+    if (Math.abs(acclimFraction) > 0.001) {
+      // acclimFactor > 1 = penalty (trained cooler, slower); < 1 = credit (faster).
+      const acclimFactor = 1 + climatePenaltyFraction * acclimFraction;
+      mult *= acclimFactor;
+      factors.push({
+        kind: 'heat-acclim',
+        label: acclimFraction > 0 ? 'Heat: trained cooler than race' : 'Heat acclimatisation',
+        value: `Training ${Math.round(opts.trainingTempC)}°C vs race ${Math.round(raceAnchorTemp)}°C`,
+        deltaSec: rawSec * (acclimFactor - 1),
+        multiplier: acclimFactor,
+      });
     }
   }
 

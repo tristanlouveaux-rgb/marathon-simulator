@@ -43,6 +43,8 @@
 import type { SimulatorState } from '@/types/state';
 import type {
   CourseFactorEntry,
+  LegWaterfall,
+  LegWaterfallStep,
   LimitingFactor,
   TriProjectionMarkers,
   TriRacePrediction,
@@ -97,7 +99,7 @@ import { applyCourseFactors } from './course-factors';
 import { heatStrainRatioForState } from './body-mass-adaptations';
 import { lookupEmpiricalCourseFactors, pickCourseFactors } from './empirical-course-factors';
 import {
-  lookupEmpiricalTransitions,
+  lookupTransitionFieldContext,
   splitCombinedTransition,
   applySockSavings,
 } from './empirical-transitions';
@@ -423,6 +425,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   let adjustedProjectedBike = projected.bikeSec * projPenalty(raceReadiness.bike.penaltyMultiplier, bikePenaltyShare);
   let adjustedProjectedRun  = projected.runSec  * projPenalty(raceReadiness.run.penaltyMultiplier,  runPenaltyShare);
 
+  // Post-readiness, pre-calibration leg times — the waterfall needs this stage
+  // separate from the final calibrated number.
+  const postReadiness = { swim: adjustedProjectedSwim, bike: adjustedProjectedBike, run: adjustedProjectedRun };
+
   // ── Tier-1 calibration bias ──────────────────────────────────────────────
   // Per-user systematic bias (median actual − predicted across past races),
   // capped at ±8% of median predicted leg time at compute time. Applied
@@ -447,6 +453,14 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     adjustedProjectedSwim + projected.t1Sec + adjustedProjectedBike + projected.t2Sec + adjustedProjectedRun,
   );
 
+  // Per-leg "how this time was built" waterfall for the projected (headline) number.
+  const legWaterfall = buildLegWaterfall(
+    projected.stages,
+    postReadiness,
+    { swim: adjustedProjectedSwim, bike: adjustedProjectedBike, run: adjustedProjectedRun },
+    projected.courseMeta,
+  );
+
   // ── Confidence range ─────────────────────────────────────────────────────
   // Anchor to the adjusted projected total. The headline race-day number.
   const totalRangeSec = computeRangeSec(adjustedProjectedTotal, distance, weeksRemaining, yearsTraining);
@@ -465,6 +479,8 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     bikeSec: Math.round(adjustedProjectedBike),
     t2Sec: projected.t2Sec,
     runSec: Math.round(adjustedProjectedRun),
+    bikeAvgWatts: projected.bikeAvgWatts,
+    legWaterfall,
     totalRangeSec,
     currentTotalSec: adjustedCurrentTotal,
     currentSwimSec: Math.round(adjustedCurrentSwim),
@@ -704,9 +720,20 @@ interface ComputeRaceTimeResult {
   t2Sec: number;
   runSec: number;
   bikeAvgKph: number;
+  /** Target bike power the prediction assumes (ftp × race intensity factor). Undefined when no FTP. */
+  bikeAvgWatts?: number;
   baseRunPaceSecPerKm: number;
   courseFactors: CourseFactorEntry[];
   limitingFactor: LimitingFactor;
+  transitionMeta: TriRacePrediction['transitionMeta'];
+  /** Provenance of the course factors (empirical venue calibration vs physical model), for the waterfall caption. */
+  courseMeta: { source: 'empirical' | 'physical'; n?: number; confidence?: string; venueShort?: string };
+  /** Intermediate per-leg cumulative times + flags, for the leg-breakdown waterfall. */
+  stages: {
+    swim: { baseSec: number; owSec: number; courseSec: number; css?: number; owApplied: boolean; wetsuit: boolean; courseApplied: boolean };
+    bike: { baseSec: number; courseSec: number; heatSec: number; watts?: number; courseApplied: boolean; heatApplied: boolean; heatDetail?: string };
+    run:  { baseSec: number; courseSec: number; heatSec: number; durabilitySec: number; vdot?: number; fatiguePct: number; courseApplied: boolean; heatApplied: boolean; heatDetail?: string; durabilityApplied: boolean };
+  };
 }
 
 function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
@@ -732,6 +759,14 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     args.raceProfile?.bikeProfile,
   );
   const baseBikeSec = (args.legs.bikeKm / bikeAvgKph) * 3600;
+
+  // Target race power the speed above assumes. Both estimateBikeSpeed branches
+  // (physics + simple-ftp fallback) intensity-scale FTP by RACE_INTENSITY_BY_DISTANCE,
+  // so reusing that constant here keeps the surfaced watts in lockstep with the
+  // speed. Undefined when no FTP (skill-slider path has no power target).
+  const bikeAvgWatts = args.ftp != null
+    ? Math.round(args.ftp * RACE_INTENSITY_BY_DISTANCE[args.distance])
+    : undefined;
 
   // Run base: blend ALL signals (PB + recent run + LT + VO2 + HR-calibrated
   // VDOT + Tanda volume) at the run-leg's actual distance. Half-marathon
@@ -818,12 +853,22 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   let bikeSec = baseBikeSec * cf.bikeMultiplier;
   let runSec = baseRunSec * cf.runMultiplier;
 
-  // ISSUE-190: Heat acclimatisation discount on run and bike.
-  // Athletes training in heat comparable to the race environment perform
-  // better than the average field used to calibrate the climate penalty.
-  // Lorenzo & Cheuvront 2010: 10–14 days of heat acclimatisation preserves
-  // ~3–5% performance. We discount the physical climate penalty by up to 50%.
-  // Swim is less heat-sensitive (water cooling). No discount applied.
+  // Capture post-course cumulative leg times before heat/durability mutate them,
+  // so the leg-breakdown waterfall can show each stage. (Swim has no further steps.)
+  const bikeCourseSec = bikeSec;
+  const runCourseSec = runSec;
+  let bikeHeatDiscount = 0;
+  let runHeatDiscount = 0;
+  let durabilityMult = 1;
+  let heatDetail: string | undefined;
+
+  // ISSUE-190: Individual heat adjustment on run and bike (symmetric, signed).
+  // Credit when the athlete trained hotter than the race (better adapted than the
+  // field), penalty when cooler (under-adapted), zero at race temp. Because it
+  // pivots at race temp it adds only the athlete's personal deviation from the
+  // field, so it applies in BOTH the empirical and physical course-factor paths
+  // without double-counting the field weather (Tristan, 2026-06-01). Swim is less
+  // heat-sensitive (water cooling). No adjustment applied.
   if (args.trainingTempC != null && args.raceProfile?.climate) {
     const { runDiscount, bikeDiscount } = computeHeatAcclimatisationDiscounts(
       args.trainingTempC,
@@ -831,9 +876,18 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
       baseBikeSec,
       baseRunSec,
     );
-    bikeSec -= bikeDiscount;
+    bikeSec -= bikeDiscount;   // signed: positive subtracts (credit), negative adds (penalty)
     runSec  -= runDiscount;
+    bikeHeatDiscount = bikeDiscount;
+    runHeatDiscount = runDiscount;
+    if (Math.abs(bikeDiscount) > 0.5 || Math.abs(runDiscount) > 0.5) {
+      const raceAnchor = CLIMATE_ANCHOR_TEMP_C[args.raceProfile.climate];
+      heatDetail = `Trained ~${Math.round(args.trainingTempC)}°C vs ${raceAnchor}°C race`;
+    }
   }
+
+  // Post-heat run time, captured before the durability cap for the waterfall.
+  const runHeatSec = runSec;
 
   // ── Apply run-leg durability cap ────────────────────────────────────────
   let limitingFactor: LimitingFactor = null;
@@ -843,6 +897,7 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
       args.distance,
     );
     runSec = runSec * dc.multiplier;
+    durabilityMult = dc.multiplier;
     limitingFactor = dc.limitingFactor;
   }
 
@@ -862,7 +917,7 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   const override = args.state.triConfig?.transitionOverride;
   const movingSec = swimSec + bikeSec + runSec;
   const empTrans = args.raceName != null
-    ? lookupEmpiricalTransitions(args.raceName, args.distance, movingSec)
+    ? lookupTransitionFieldContext(args.raceName, args.distance, movingSec)
     : null;
 
   let t1Sec: number;
@@ -895,6 +950,27 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     t2Sec = adj.t2;
   }
 
+  // Provenance + field context for the Transitions detail page. The field mean
+  // is the population average BEFORE the sock modifier (the dataset reflects the
+  // 't1' baseline); the user's displayed T1+T2 above is their personalised
+  // number on top of it.
+  const usingTransitionOverride = override?.t1Sec != null && override?.t2Sec != null;
+  const transitionMeta: TriRacePrediction['transitionMeta'] = {
+    source: usingTransitionOverride
+      ? 'user-override'
+      : empTrans && empTrans.source !== 'none'
+        ? empTrans.source
+        : 'slider',
+    fieldMeanSec: empTrans?.fieldMeanSec,
+    sampleN: empTrans?.n,
+    binCenterSec: empTrans?.binCenterSec,
+    venueFinishers: empTrans?.venueFinishers,
+    datasetFinishers: empTrans?.datasetFinishers,
+    fastRef: empTrans?.fastRef
+      ? { fieldMeanSec: empTrans.fastRef.fieldMeanSec, binCenterSec: empTrans.fastRef.binCenterSec }
+      : undefined,
+  };
+
   const totalSec = Math.round(swimSec + t1Sec + bikeSec + t2Sec + runSec);
 
   return {
@@ -905,10 +981,166 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     t2Sec,
     runSec: Math.round(runSec),
     bikeAvgKph,
+    bikeAvgWatts,
     baseRunPaceSecPerKm,
     courseFactors: cf.factors,
     limitingFactor,
+    transitionMeta,
+    courseMeta: {
+      source: picked.source,
+      n: picked.n,
+      confidence: picked.confidence,
+      venueShort: shortVenueLabel(args.raceName),
+    },
+    stages: {
+      swim: {
+        baseSec: baseSwimSec,
+        owSec: owAdjustedSwimSec,
+        courseSec: swimSec,
+        css: args.css,
+        owApplied: owPenaltyFraction > 0,
+        wetsuit: args.isWetsuitSwim,
+        courseApplied: cf.swimMultiplier !== 1,
+      },
+      bike: {
+        baseSec: baseBikeSec,
+        courseSec: bikeCourseSec,
+        heatSec: bikeSec,
+        watts: bikeAvgWatts,
+        courseApplied: cf.bikeMultiplier !== 1,
+        heatApplied: Math.abs(bikeHeatDiscount) > 0.5,
+        heatDetail,
+      },
+      run: {
+        baseSec: baseRunSec,
+        courseSec: runCourseSec,
+        heatSec: runHeatSec,
+        durabilitySec: runSec,
+        vdot: args.vdot,
+        fatiguePct: fatigueDiscount,
+        courseApplied: cf.runMultiplier !== 1,
+        heatApplied: Math.abs(runHeatDiscount) > 0.5,
+        heatDetail,
+        durabilityApplied: durabilityMult !== 1,
+      },
+    },
   };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Leg-breakdown waterfall. Decomposes each projected leg time into ordered
+// stages (base marker → course → heat → durability → readiness → calibration).
+// Each step's `toSec` is the cumulative time after the step, so the last row
+// equals the displayed leg time. Steps that move the time less than MIN_STEP_SEC
+// are omitted so the list stays honest and uncluttered.
+// ───────────────────────────────────────────────────────────────────────────
+
+const MIN_STEP_SEC = 3;
+
+function fmtMmSs(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** "IRONMAN 70.3 Ohio" → "Ohio". Used to label the course step. */
+function shortVenueLabel(raceName: string | undefined): string | undefined {
+  if (!raceName) return undefined;
+  const stripped = raceName
+    .replace(/^IRONMAN\s+70\.3\s+/i, '')
+    .replace(/^IRONMAN\s+/i, '')
+    .replace(/\s+70\.3$/i, '')
+    .trim();
+  return stripped || raceName;
+}
+
+type CourseMeta = ComputeRaceTimeResult['courseMeta'];
+
+/** Shared label + provenance caption for the course-factors step across all three legs. */
+function courseStepText(meta: CourseMeta): { label: string; detail?: string } {
+  const label = meta.venueShort ? `${meta.venueShort} course factors` : 'Course factors';
+  const detail = meta.source === 'empirical' && meta.n != null
+    ? `Calibrated, ${meta.n.toLocaleString()} finishers`
+    : 'Physical course model';
+  return { label, detail };
+}
+
+function appendReadinessCalibration(
+  steps: LegWaterfallStep[],
+  postCourseSec: number,
+  postReadinessSec: number,
+  finalSec: number,
+): void {
+  if (Math.abs(postReadinessSec - postCourseSec) >= MIN_STEP_SEC) {
+    steps.push({ kind: 'readiness', label: 'Race-day readiness', toSec: postReadinessSec });
+  }
+  if (Math.abs(finalSec - postReadinessSec) >= MIN_STEP_SEC) {
+    steps.push({ kind: 'calibration', label: 'Your past-race calibration', toSec: finalSec });
+  }
+}
+
+function buildLegWaterfall(
+  st: ComputeRaceTimeResult['stages'],
+  postReadiness: { swim: number; bike: number; run: number },
+  final: { swim: number; bike: number; run: number },
+  courseMeta: CourseMeta,
+): LegWaterfall {
+  const course = courseStepText(courseMeta);
+
+  // ── Swim: base (CSS + race-pace offset) → open water → course ────────────
+  const swim: LegWaterfallStep[] = [];
+  swim.push({
+    kind: 'base',
+    label: st.swim.css != null ? `CSS ${fmtMmSs(st.swim.css)}/100m + 5s race pace` : 'Swim base pace',
+    toSec: st.swim.baseSec,
+  });
+  if (st.swim.owApplied && Math.abs(st.swim.owSec - st.swim.baseSec) >= MIN_STEP_SEC) {
+    swim.push({ kind: 'ow', label: st.swim.wetsuit ? 'Open water (wetsuit)' : 'Open water', toSec: st.swim.owSec });
+  }
+  if (st.swim.courseApplied && Math.abs(st.swim.courseSec - st.swim.owSec) >= MIN_STEP_SEC) {
+    swim.push({ kind: 'course', label: course.label, detail: course.detail, toSec: st.swim.courseSec });
+  }
+  appendReadinessCalibration(swim, st.swim.courseSec, postReadiness.swim, final.swim);
+
+  // ── Bike: base (watts on aero setup) → course → heat credit ──────────────
+  const bike: LegWaterfallStep[] = [];
+  bike.push({
+    kind: 'base',
+    label: st.bike.watts != null ? `${st.bike.watts}W on your aero setup` : 'Bike base speed',
+    toSec: st.bike.baseSec,
+  });
+  if (st.bike.courseApplied && Math.abs(st.bike.courseSec - st.bike.baseSec) >= MIN_STEP_SEC) {
+    bike.push({ kind: 'course', label: course.label, detail: course.detail, toSec: st.bike.courseSec });
+  }
+  if (st.bike.heatApplied && Math.abs(st.bike.heatSec - st.bike.courseSec) >= MIN_STEP_SEC) {
+    const penalty = st.bike.heatSec > st.bike.courseSec;
+    bike.push({ kind: 'heat', label: penalty ? 'Heat: trained cooler than race' : 'Heat acclimatisation credit', detail: st.bike.heatDetail, toSec: st.bike.heatSec });
+  }
+  appendReadinessCalibration(bike, st.bike.heatSec, postReadiness.bike, final.bike);
+
+  // ── Run: base (VDOT + brick fatigue) → course → heat → durability cap ────
+  const run: LegWaterfallStep[] = [];
+  const fatiguePct = Math.round(st.run.fatiguePct * 100);
+  run.push({
+    kind: 'base',
+    label: st.run.vdot != null
+      ? `VDOT ${st.run.vdot.toFixed(0)} race pace + ${fatiguePct}% brick fatigue`
+      : `Run base pace + ${fatiguePct}% brick fatigue`,
+    toSec: st.run.baseSec,
+  });
+  if (st.run.courseApplied && Math.abs(st.run.courseSec - st.run.baseSec) >= MIN_STEP_SEC) {
+    run.push({ kind: 'course', label: course.label, detail: course.detail, toSec: st.run.courseSec });
+  }
+  if (st.run.heatApplied && Math.abs(st.run.heatSec - st.run.courseSec) >= MIN_STEP_SEC) {
+    const penalty = st.run.heatSec > st.run.courseSec;
+    run.push({ kind: 'heat', label: penalty ? 'Heat: trained cooler than race' : 'Heat acclimatisation credit', detail: st.run.heatDetail, toSec: st.run.heatSec });
+  }
+  if (st.run.durabilityApplied && Math.abs(st.run.durabilitySec - st.run.heatSec) >= MIN_STEP_SEC) {
+    run.push({ kind: 'durability', label: 'Durability cap (long-session volume)', toSec: st.run.durabilitySec });
+  }
+  appendReadinessCalibration(run, st.run.durabilitySec, postReadiness.run, final.run);
+
+  return { swim, bike, run };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1276,7 +1508,7 @@ function computeTrainingTempC(state: SimulatorState): number | null {
  * Lorenzo & Cheuvront 2010: 10–14 days of heat acclimatisation → 3–5%
  * performance preservation.
  */
-function computeHeatAcclimatisationDiscounts(
+export function computeHeatAcclimatisationDiscounts(
   trainingTempC: number,
   raceClimate: ClimateCategory,
   baseBikeSec: number,
@@ -1291,15 +1523,28 @@ function computeHeatAcclimatisationDiscounts(
     return { runDiscount: 0, bikeDiscount: 0 };
   }
 
-  const tempGap = raceAnchorTemp - trainingTempC;  // positive = training is cooler
-  if (tempGap >= 15) return { runDiscount: 0, bikeDiscount: 0 };
+  const tempGap = raceAnchorTemp - trainingTempC;  // positive = training is cooler than race
 
-  // Discount fraction: 0.5 at tempGap ≤ 0, 0 at tempGap = 15, linear between.
-  const discountFraction = Math.max(0, 0.5 * (1 - tempGap / 15));
+  // Symmetric individual heat adjustment, pivoting at race temp (Tristan,
+  // 2026-06-01). The climate penalty (+4% warm etc.) is calibrated to the
+  // AVERAGE field. An athlete's own heat preparation shifts their exposure to it:
+  //   - training AT race temp  → field-average penalty stands, no adjustment.
+  //   - training HOTTER         → better adapted than the field → credit (faster).
+  //   - training COOLER         → under-adapted → penalty (slower).
+  // Magnitude scales linearly to ±50% of the climate penalty at a ±15°C gap.
+  // Science: Périard/Racinais/Sawka 2015 and Racinais et al. 2015 consensus — the
+  // acclimatised-vs-unacclimatised performance gap is ~symmetric and of the same
+  // order as the heat decrement itself; Ely et al. 2007 (marathon vs WBGT) shows
+  // under-prepared runners slow more than the field. Because the adjustment is
+  // ZERO at race temp, it adds only the athlete's personal deviation and does NOT
+  // double-count the field weather baked into an empirical venue factor.
+  const acclimFraction = Math.max(-0.5, Math.min(0.5, tempGap / 30)); // +cooler, −hotter
 
+  // Returned value is SUBTRACTED from leg time downstream: positive = credit
+  // (faster, trained hotter), negative = penalty (slower, trained cooler).
   return {
-    runDiscount:  baseRunSec  * runClimatePenaltyFraction  * discountFraction,
-    bikeDiscount: baseBikeSec * bikeClimatePenaltyFraction * discountFraction,
+    runDiscount:  -baseRunSec  * runClimatePenaltyFraction  * acclimFraction,
+    bikeDiscount: -baseBikeSec * bikeClimatePenaltyFraction * acclimFraction,
   };
 }
 

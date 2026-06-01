@@ -329,6 +329,12 @@ export interface BikeBenchmarks {
     source: 'user' | 'derived';
     confidence?: 'high' | 'medium' | 'low' | 'none';
   }>;
+
+  /** Set when a holiday return docks FTP for detraining (welcome-back). The launch
+   *  benchmark refresh will not RAISE FTP from a contributing ride dated on or before
+   *  this ISO date — a pre-holiday effort can't prove you've recovered. Cleared once a
+   *  ride after this date supersedes the docked value. Holiday-only; undefined normally. */
+  ftpDetrainAnchorISO?: string;
 }
 
 /** Swim benchmarks. CSS (Critical Swim Speed) is the canonical swim threshold — seconds per 100m. */
@@ -372,6 +378,12 @@ export interface SwimBenchmarks {
     source: 'user' | 'derived';
     confidence?: 'high' | 'medium' | 'low' | 'none';
   }>;
+
+  /** Set when a holiday return docks CSS for detraining (welcome-back). The launch
+   *  benchmark refresh will not IMPROVE CSS (lower the seconds) from a contributing swim
+   *  dated on or before this ISO date — a pre-holiday swim can't prove you've recovered.
+   *  Cleared once a swim after this date supersedes the docked value. Holiday-only. */
+  cssDetrainAnchorISO?: string;
 }
 
 /** Per-discipline fitness EMAs. Mirrors the running-side CTL/ATL but lives under triConfig so running mode is untouched. */
@@ -485,6 +497,29 @@ export interface TriProjectionMarkers {
   weeksRemaining: number;
 }
 
+/**
+ * One row in a leg's "how this time was built" waterfall. Each step's `toSec`
+ * is the cumulative leg time AFTER the step is applied, so the rows read top to
+ * bottom from the base marker to the final displayed leg time. `kind` lets the
+ * UI map a step to its colour and the matching forecast factor chip.
+ */
+export interface LegWaterfallStep {
+  kind: 'base' | 'ow' | 'course' | 'heat' | 'durability' | 'readiness' | 'calibration';
+  /** Factual one-line label (e.g. "CSS 1:51 + 5s race pace", "Sandusky swim course"). */
+  label: string;
+  /** Optional provenance caption (e.g. "Ohio field · n=6,480" for an empirical course factor). */
+  detail?: string;
+  /** Cumulative leg seconds after this step. The last step equals the displayed leg time. */
+  toSec: number;
+}
+
+/** Per-leg decomposition of the projected (headline) prediction. Reconciles to swimSec/bikeSec/runSec by construction. */
+export interface LegWaterfall {
+  swim: LegWaterfallStep[];
+  bike: LegWaterfallStep[];
+  run: LegWaterfallStep[];
+}
+
 /** Predicted race time with confidence band. */
 export interface TriRacePrediction {
   /**
@@ -499,6 +534,10 @@ export interface TriRacePrediction {
   bikeSec: number;
   t2Sec: number;
   runSec: number;                  // Includes the §18.4 pace discount (tracking side only)
+  /** Target bike power the headline prediction assumes (ftp × race IF). Undefined when no FTP. Drives the bike leg's "·NNNW" split caption. */
+  bikeAvgWatts?: number;
+  /** Per-leg "how this time was built" waterfall for the projected number. Drives the leg drill-down. */
+  legWaterfall?: LegWaterfall;
   totalRangeSec: [number, number]; // ±band on total (§18.8). Narrows as race day approaches.
 
   /**
@@ -521,6 +560,30 @@ export interface TriRacePrediction {
    * or long-run shortfall). UI surfaces this as a banner above the forecast.
    */
   limitingFactor?: LimitingFactor;
+
+  /**
+   * Provenance + field context for the resolved T1/T2. Lets the Transitions
+   * detail page tell the user *why* the number is what it is: which band of
+   * historical finishers they were matched to, the sample size, and how the
+   * field's transition times gradient against finish speed. Sourced from the
+   * empirical lookup that also produced `t1Sec`/`t2Sec`, so the displayed
+   * transition and the field average it is compared against never diverge.
+   */
+  transitionMeta?: {
+    source: 'race-empirical' | 'global-empirical' | 'user-override' | 'slider';
+    /** Population mean T1+T2 for the matched band (seconds). */
+    fieldMeanSec?: number;
+    /** Finishers in the matched swim+bike+run band. */
+    sampleN?: number;
+    /** Centre of the matched swim+bike+run band (seconds). */
+    binCenterSec?: number;
+    /** Total finishers at this venue in the dataset (race-empirical only). */
+    venueFinishers?: number;
+    /** Total finishers in the distance dataset. */
+    datasetFinishers?: number;
+    /** Faster reference band for the "field gradient" line. */
+    fastRef?: { fieldMeanSec: number; binCenterSec: number };
+  };
 
   /**
    * Live projection inputs. Projected vs current fitness markers per

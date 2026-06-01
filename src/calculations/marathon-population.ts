@@ -21,6 +21,10 @@ import {
   type PercentileTable,
 } from '@/data/marathon-population-distributions';
 
+// Re-export the pooled-finisher summary so UI surfaces import it through the
+// calculations layer (mirrors how the rest of this module is consumed).
+export { pooledMarathonFinisherSummary } from '@/data/marathon-population-distributions';
+
 /** Resolution source used by a percentile lookup, surfaced for the calibration
  *  caption so the UI can be honest about which dataset answered the query. */
 export type PercentileSource = 'venue' | 'aggregate' | 'none';

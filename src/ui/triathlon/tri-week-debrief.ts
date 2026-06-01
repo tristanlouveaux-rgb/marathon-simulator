@@ -60,8 +60,13 @@ export function showTriWeekDebrief(weekNum: number): void {
   const summary = buildWeekSummary(state, weekNum);
   document.body.insertAdjacentHTML('beforeend', renderStep1HTML(weekNum, summary, state));
 
+  // Backdrop tap dismisses WITHOUT recording the week as debriefed. Mirrors
+  // running's week-debrief.ts, where only the explicit "Accept plan" / "Continue"
+  // buttons call _closeAndRecord. A stray tap on the dimmed backdrop must not
+  // silently consume the week's wrap-up (it previously marked the week done,
+  // suppressing the prompt forever).
   document.getElementById(OVERLAY_ID)?.addEventListener('click', (e) => {
-    if ((e.target as HTMLElement).id === OVERLAY_ID) _closeAndRecord(weekNum);
+    if ((e.target as HTMLElement).id === OVERLAY_ID) document.getElementById(OVERLAY_ID)?.remove();
   });
   _wireStep1Handlers(weekNum);
 }

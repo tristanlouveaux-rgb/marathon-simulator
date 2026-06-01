@@ -22,6 +22,8 @@ import { runMarathonForecastSim as runForecastSim } from '@/calculations/race-fo
 import { buildForecastCone, type ConeHistoryPoint } from '@/ui/forecast-cone';
 import { tv, rdKm } from '@/calculations/vdot';
 import { ft, fmtProbPct } from '@/utils/format';
+import { getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 
 // ── Design tokens (match tri cone card) ──────────────────────────────────────
 
@@ -104,9 +106,14 @@ function buildHistory(s: SimulatorState): ConeHistoryPoint[] {
     .sort((a, b) => a.week - b.week);
 }
 
-// ── Public render ────────────────────────────────────────────────────────────
+// ── Card body (swappable in place) ───────────────────────────────────────────
 
-export function renderRunConeCard(s: SimulatorState): string {
+// Everything inside the .rfc-fade wrapper, in a single element with a stable
+// id so the outcome tiles / goal edits can swap it via outerHTML without
+// re-rendering the whole forecast page (which flashes the background, drops
+// scroll position, and replays the fade-up animations). Mirrors the
+// buildShoesToggleCardHTML in-place pattern.
+function buildConeCardHTML(s: SimulatorState): string {
   // Goal: user-set wins, otherwise fall back to the initial-plan baseline so
   // the line still shows something meaningful. `raceGoalTimeSec` was previously
   // unreferenced anywhere in the codebase; this restores it as the goal source.
@@ -166,8 +173,7 @@ export function renderRunConeCard(s: SimulatorState): string {
     </div>`;
 
   return `
-    <div class="rfc-fade" style="animation-delay:0.16s;padding:0 16px;margin-bottom:14px">
-      <div style="${CARD};padding:20px">
+      <div id="run-cone-card" style="${CARD};padding:20px">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
           <div style="font-size:14px;color:${TEXT_M};font-weight:600">Race-time progression</div>
           <div style="font-size:11px;color:${TEXT_L}">Lower is faster</div>
@@ -179,13 +185,33 @@ export function renderRunConeCard(s: SimulatorState): string {
         ${legend}
         ${goalBlock}
         ${tilesBlock}
-      </div>
+      </div>`;
+}
+
+// ── Public render ────────────────────────────────────────────────────────────
+
+export function renderRunConeCard(s: SimulatorState): string {
+  return `
+    <div class="rfc-fade" style="animation-delay:0.16s;padding:0 16px;margin-bottom:14px">
+      ${buildConeCardHTML(s)}
     </div>`;
 }
 
 // ── Public wiring ────────────────────────────────────────────────────────────
 
 export function wireRunConeCard(): void {
+  // Swap just this card in place: re-runs the sim for the new goal and rebuilds
+  // the goal line / chance % / selected-tile highlight, without re-rendering the
+  // whole forecast page (no background flash, no scroll jump, no replayed fade).
+  // The DOM nodes are replaced, so we re-wire afterwards.
+  const refreshCard = () => {
+    const card = document.getElementById('run-cone-card');
+    if (!card) return;
+    card.outerHTML = buildConeCardHTML(getMutableState());
+    wireRunConeCard();
+  };
+
+  // "Edit goal time" / "Set a goal time" open the editor overlay.
   const open = (preSec?: number) => {
     void import('./goal-time-overlay').then(m => {
       if (typeof m.openRunGoalOverlay === 'function') m.openRunGoalOverlay(preSec);
@@ -193,10 +219,20 @@ export function wireRunConeCard(): void {
   };
   document.getElementById('run-cone-edit-goal')?.addEventListener('click', () => open());
   document.getElementById('run-cone-set-goal')?.addEventListener('click', () => open());
+
+  // Outcome tiles set the goal directly in one tap (no overlay): tapping
+  // Optimistic / Median / Conservative jumps the goal to that time, then
+  // updates the card in place so the goal line, chance %, and selected-tile
+  // highlight refresh.
   document.querySelectorAll<HTMLButtonElement>('.run-cone-outcome').forEach(btn => {
     btn.addEventListener('click', () => {
       const sec = Number(btn.dataset.outcomeSec);
-      if (Number.isFinite(sec) && sec > 0) open(Math.round(sec));
+      if (!Number.isFinite(sec) || sec <= 0) return;
+      const ms = getMutableState();
+      if (ms.raceGoalTimeSec === Math.round(sec)) return; // already this goal — no-op
+      ms.raceGoalTimeSec = Math.round(sec);
+      saveState();
+      refreshCard();
     });
   });
 }

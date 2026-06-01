@@ -10,6 +10,7 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderHyroxWorkoutCard } from './workout-card';
+import { deriveWorkoutStatus, renderWorkoutStatusChip, computeWeekStatusContext, type WeekStatusContext } from '../workout-status';
 import {
   renderHyroxBenchmarkCard,
   wireHyroxBenchmarkCard,
@@ -18,7 +19,10 @@ import {
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import type { Workout, Week } from '@/types/state';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
+import { applyIllnessModsAllDisciplines } from '@/calculations/illness-rules';
+import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
 import { formatKm } from '@/utils/format';
+import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -100,6 +104,24 @@ export function renderHyroxPlanView(): void {
   // from the capability nudge) so suggested sessions actually show on the plan.
   const workouts: Workout[] = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
 
+  // Render-time illness + holiday suppression. Mirrors the running plan-view
+  // (plan-view.ts) but via the discipline-aware helpers so stations, bricks, and
+  // runs are all scaled, not just the run legs. Not persisted.
+  const isCurrentWeek = viewWeek === s.w;
+  const _illness = (s as any).illnessState;
+  if (_illness?.active && isCurrentWeek) {
+    applyIllnessModsAllDisciplines(workouts, _illness.severity);
+  }
+  const _holiday = s.holidayState;
+  const _todayIso = new Date().toISOString().split('T')[0];
+  if (_holiday?.active && _todayIso >= _holiday.startDate && _todayIso <= _holiday.endDate
+      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, _holiday)) {
+    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, _holiday);
+    applyHolidayModsAllDisciplines(workouts, _holiday.canRun, holidayDays, _holiday.canSwim);
+  }
+  // Post-holiday comeback ramp. No-ops unless buildBridgeWeekMods set a scale on this week.
+  if (wk) applyBridgeModsAllDisciplines(workouts, wk);
+
   const band = hx.athleteBand;
   const format = hx.format ?? 'open_singles';
   const phase = wk?.ph ? capitalize(wk.ph) : '';
@@ -111,6 +133,16 @@ export function renderHyroxPlanView(): void {
   // Weekly totals
   const totalMin = workouts.reduce((acc, w) => acc + estimateMinutes(w), 0);
   const totalMtl = workouts.reduce((acc, w) => acc + (w.musculoTendonLoad ?? 0), 0);
+
+  // Execution-adaptation note (current week only). The effort multiplier scales this week's
+  // budget from trailing RPE; surface it when the shift is meaningful (±5%, the CLAUDE.md
+  // adaptation-note threshold). SCIENCE_LOG §AU.
+  const effortMult = hyroxEffortMultiplier(s);
+  const effortPct = Math.round(Math.abs(effortMult - 1) * 100);
+  const showEffortNote = viewWeek === s.w && effortPct >= 5;
+  const effortNote = effortMult > 1
+    ? `Load raised ${effortPct}% this week after recent sessions were rated easier than planned.`
+    : `Load eased ${effortPct}% this week after recent sessions were rated harder than planned.`;
 
   // Per-discipline minute totals
   const minByDisc = { run: 0, station: 0, brick: 0 };
@@ -199,6 +231,7 @@ export function renderHyroxPlanView(): void {
             ${renderDisciplineMini('brick', minByDisc.brick, totalMin)}
           </div>
           <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours per discipline this week</div>
+          ${showEffortNote ? `<div style="text-align:center;font-size:11px;color:var(--c-muted);margin-top:8px;line-height:1.5">${effortNote}</div>` : ''}
         </div>
 
         <!-- Week navigation pills -->
@@ -218,9 +251,19 @@ export function renderHyroxPlanView(): void {
         <!-- Benchmark calibration card (current week only) -->
         ${shouldShowBenchmarkCard(s, viewWeek) ? renderHyroxBenchmarkCard(s) : ''}
 
+        <!-- Reorder hint: tiny, muted, above Monday. Current week only. -->
+        ${viewWeek === s.w ? `
+          <div class="hxf" style="padding:6px 28px 0 20px;text-align:right;animation-delay:0.16s">
+            <span style="font-size:10px;color:var(--c-faint);font-weight:500">Hold and drag to reorder</span>
+          </div>
+        ` : ''}
+
         <!-- Day-by-day -->
         <div class="hxf" style="padding:12px 20px;animation-delay:0.18s">
-          ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], isFutureWeek, raceDays > 0 ? raceDays : null)).join('')}
+          ${(() => {
+            const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w) };
+            return Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], isFutureWeek, raceDays > 0 ? raceDays : null, statusCtx)).join('');
+          })()}
         </div>
 
         <!-- What you actually did (past weeks) -->
@@ -273,7 +316,7 @@ export function renderHyroxPlanView(): void {
       const found = [...(wkRow?.triWorkouts ?? []), ...(wkRow?.adhocWorkouts ?? [])]
         .find((x: any) => (x.id || x.n) === id);
       if (found) {
-        import('./workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(found));
+        import('./workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(found, viewWeek - 1));
       }
     });
   });
@@ -285,6 +328,11 @@ export function renderHyroxPlanView(): void {
 // Touch DnD. Reorder within week (same pattern as triathlon plan-view)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Long-press to reorder: the finger must rest TOUCH_DRAG_HOLD_MS before a drag
+// arms, so scrolling the plan no longer reorders days by accident. Until the
+// hold elapses, any real movement is treated as a scroll and the card is never
+// picked up. (Tristan, 2026-06-01: 350ms. Mirrored in running + triathlon.)
+const TOUCH_DRAG_HOLD_MS = 350;
 let _touchDragId = '';
 let _touchDragDay = -1;
 let _touchStartX = 0;
@@ -293,6 +341,8 @@ let _touchDragging = false;
 let _touchClone: HTMLElement | null = null;
 let _touchSourceCard: HTMLElement | null = null;
 let _touchLastHighlight: HTMLElement | null = null;
+let _touchHoldTimer: number | null = null;
+let _touchHoldMet = false;
 
 function wireHyroxWorkoutTouchDnd(): void {
   document.querySelectorAll<HTMLElement>('.hyrox-workout-card').forEach((card) => {
@@ -304,6 +354,9 @@ function wireHyroxWorkoutTouchDnd(): void {
       _touchStartY = touch.clientY;
       _touchDragging = false;
       _touchSourceCard = card;
+      _touchHoldMet = false;
+      if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
+      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
     }, { passive: true });
 
     card.addEventListener('touchmove', (e) => {
@@ -311,9 +364,20 @@ function wireHyroxWorkoutTouchDnd(): void {
       const touch = e.touches[0];
       const dx = touch.clientX - _touchStartX;
       const dy = touch.clientY - _touchStartY;
-      if (!_touchDragging && Math.sqrt(dx * dx + dy * dy) < 8) return;
-
       if (!_touchDragging) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Long-press gate. Before the hold elapses, real movement means the
+        // user is scrolling: abandon the drag candidate and let the page
+        // scroll (no preventDefault). After the hold, a small intentional
+        // move arms the drag.
+        if (!_touchHoldMet) {
+          if (dist >= 8) {
+            if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+            _touchDragId = '';
+          }
+          return;
+        }
+        if (dist < 8) return;
         _touchDragging = true;
         if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
         _touchClone = card.cloneNode(true) as HTMLElement;
@@ -355,6 +419,8 @@ function wireHyroxWorkoutTouchDnd(): void {
     }, { passive: false });
 
     card.addEventListener('touchend', (e) => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
       if (!_touchDragging || !_touchDragId) {
         _touchDragId = '';
         _touchDragDay = -1;
@@ -429,8 +495,11 @@ function moveWorkoutToDay(id: string, targetDay: number): void {
 // Day renderer
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderDay(d: number, list: Workout[], isFutureWeek: boolean, daysToRace: number | null): string {
+function renderDay(d: number, list: Workout[], isFutureWeek: boolean, daysToRace: number | null, statusCtx: { wk: any; ctx: WeekStatusContext } | null = null): string {
   const dayLabel = DAY_NAMES[d];
+  // Done / Logged / Missed / Today flag, mirroring the running plan-view card.
+  const chipFor = (w: Workout): string =>
+    statusCtx ? renderWorkoutStatusChip(deriveWorkoutStatus(w, statusCtx.wk, statusCtx.ctx)) : '';
   if (list.length === 0) {
     return `
       <div class="hx-day-row" data-hx-day-drop="${d}" style="margin-bottom:14px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
@@ -449,7 +518,7 @@ function renderDay(d: number, list: Workout[], isFutureWeek: boolean, daysToRace
         <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
         <span style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length > 1 ? `${list.length} sessions` : ''}</span>
       </div>
-      ${list.map((w) => renderHyroxWorkoutCard(w, { interactive: !isFutureWeek, daysToRace })).join('')}
+      ${list.map((w) => renderHyroxWorkoutCard(w, { interactive: !isFutureWeek, daysToRace, statusChip: chipFor(w) })).join('')}
     </div>
   `;
 }

@@ -21,6 +21,7 @@ import type { InjuryState } from '@/types/injury';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { isInjuryActive } from '@/ui/injury/modal';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
+import { legSplitLine } from './race-forecast-card';
 import { ft } from '@/utils/format';
 
 // Vibrant per-leg accents matching the Xcode marquee build. The muted
@@ -45,18 +46,21 @@ function legCard(
   currentSec: number | undefined,
   accent: string,
   derivedFlag: boolean,
+  subline?: string,
 ): string {
   const gap = currentSec != null ? currentSec - sec : null;
   const showGap = gap != null && Math.abs(gap) >= 30;
   const gapColor = gap != null && gap > 0 ? '#16A34A' : '#94A3B8';
   const gapSign = gap != null && gap > 0 ? '−' : '+';
   return `
-    <div style="flex:1;min-width:0;border-left:3px solid ${accent};padding:8px 0 8px 12px">
+    <div data-leg-tap="${label.toLowerCase()}" role="button" tabindex="0" style="position:relative;flex:1;min-width:0;border-left:3px solid ${accent};padding:8px 14px 8px 12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+      <div style="position:absolute;top:6px;right:4px;pointer-events:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.06em;text-transform:uppercase">${label}</div>
+        <div style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.01em">${label}</div>
         ${derivedFlag ? `<span style="font-size:9px;color:#a89060;background:#FAF3E2;padding:1px 6px;border-radius:6px;font-weight:600;letter-spacing:0.02em">derived</span>` : ''}
       </div>
       <div style="font-size:21px;font-weight:600;color:#0F172A;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;line-height:1.1">${ft(sec)}</div>
+      ${subline ? `<div style="font-size:11px;color:#94A3B8;margin-top:3px;font-variant-numeric:tabular-nums;line-height:1.3">${subline}</div>` : ''}
       ${showGap ? `<div style="font-size:11px;color:${gapColor};margin-top:5px;font-variant-numeric:tabular-nums;line-height:1.3">${gapSign}${fmtShortSec(Math.abs(gap!))} vs today</div>` : ''}
     </div>
   `;
@@ -191,9 +195,9 @@ export function renderTriForecastMarquee(s: SimulatorState): string {
       ${renderInjuryRecoveryNote(s)}
 
       <div style="display:flex;gap:0;margin:18px 18px 0;padding-top:4px">
-        ${legCard('Swim', p.swimSec, p.currentSwimSec, LEG_ACCENT.swim, swimDerived)}
-        ${legCard('Bike', p.bikeSec, p.currentBikeSec, LEG_ACCENT.bike, bikeDerived)}
-        ${legCard('Run',  p.runSec,  p.currentRunSec,  LEG_ACCENT.run,  false)}
+        ${legCard('Swim', p.swimSec, p.currentSwimSec, LEG_ACCENT.swim, swimDerived, legSplitLine('swim', p.swimSec, tri.distance, s.unitPref))}
+        ${legCard('Bike', p.bikeSec, p.currentBikeSec, LEG_ACCENT.bike, bikeDerived, legSplitLine('bike', p.bikeSec, tri.distance, s.unitPref, p.bikeAvgWatts))}
+        ${legCard('Run',  p.runSec,  p.currentRunSec,  LEG_ACCENT.run,  false, legSplitLine('run', p.runSec, tri.distance, s.unitPref))}
       </div>
     </div>
   `;

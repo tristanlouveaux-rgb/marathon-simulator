@@ -133,6 +133,19 @@ export function isStrengthWorkout(workout: Workout): boolean {
   return /strength|gym/i.test(workout.n || '');
 }
 
+/** Canonical inline summary for a strength/gym card body: "7 exercises · tap
+ * to view". Returns null when the workout isn't a strength session (so the
+ * caller renders its own description) — bike/swim/run substitutes are
+ * unaffected. One source for every card surface: running plan, tri plan,
+ * HYROX plan, and the home today-hero cards all read this, so the count and
+ * wording never diverge between them. */
+export function strengthCardSummary(workout: Workout): string | null {
+  if (!isStrengthWorkout(workout)) return null;
+  const count = parseStrengthSession(workout)?.exerciseCount ?? 0;
+  if (count <= 0) return null;
+  return `${count} exercise${count === 1 ? '' : 's'} · tap to view`;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // HYROX: each component (station or run) becomes one GuidedSet with setCount=1
 // so the existing controller, overlay and progress rings work unchanged. HYROX

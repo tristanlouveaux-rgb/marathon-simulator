@@ -17,10 +17,11 @@ import { blendPredictions, calculateLiveForecast } from './predictions';
 import { getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
-import { cv } from './vdot';
+import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
+import { effectiveVo2max } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -70,6 +71,139 @@ export function collectRunsFromState(s: SimulatorState): RunActivityInput[] {
   return runs;
 }
 
+const STANDARD_DISTANCES: RaceDistance[] = ['5k', '10k', 'half', 'marathon'];
+
+/**
+ * Predict finish time at every standard race distance (5K / 10K / half /
+ * marathon) from current fitness, independent of any target race. Used by the
+ * "just training" forecast view, where the user has no goal event but still
+ * wants to see what they could run today.
+ *
+ * Each distance runs the SAME pipeline as the targeted `refreshBlendedFitness`
+ * blend — calibration bias, then long-run durability cap, then the carbon-shoe
+ * boost — so a distance shown here matches what the targeted forecast would
+ * show if that distance were the goal (CLAUDE.md: two numbers that mean the
+ * same thing come from the same source). Returns null for a distance the blend
+ * cannot estimate (no usable signal), so the caller can render an empty tile.
+ *
+ * Read-only: computes from state but writes nothing back. Safe to call on every
+ * render.
+ */
+export function predictStandardDistances(s: SimulatorState): Record<RaceDistance, number | null> {
+  const empty: Record<RaceDistance, number | null> = { '5k': null, '10k': null, 'half': null, 'marathon': null };
+  if (!s.pbs || !s.b) return empty;
+  // Just-Track users without PBs have {} for s.pbs and the default s.b — no
+  // real signal to blend. Mirror the guard in refreshBlendedFitness.
+  if (s.trackOnly && Object.keys(s.pbs).length === 0) return empty;
+
+  const runs = collectRunsFromState(s);
+  const inputs = computePredictionInputs(runs);
+  const hrVdot = computeHRCalibratedVdot(runs, s.restingHR ?? null, s.maxHR ?? null);
+  const calibration = computeRunCalibration(s.runRaceLog);
+  const longestRunSec = getLongestRunSec(s, 12);
+
+  const marathonPbDateISO = s.onboarding?.pbDates?.m;
+  const marathonPbAgeDays = marathonPbDateISO
+    ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
+    : undefined;
+  // Carbon-plated racing flats: flat 3% pace boost (Hoogkamer 2018). Mirrors
+  // the targeted-forecast treatment so the toggle moves both views the same way.
+  const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
+
+  const out: Record<RaceDistance, number | null> = { ...empty };
+  for (const dist of STANDARD_DISTANCES) {
+    const blended = blendPredictions(
+      DIST_M[dist],
+      s.pbs,
+      s.lt ?? null,
+      effectiveVo2max(s),
+      s.b,
+      (s.typ ?? 'Balanced').toLowerCase(),
+      inputs.recentRun ?? s.rec ?? null,
+      s.athleteTier ?? undefined,
+      inputs.weeklyKm,
+      inputs.avgPaceSecPerKm ?? undefined,
+      { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
+      hrVdot,
+      marathonPbAgeDays,
+    );
+    if (!blended || blended <= 0 || !isFinite(blended)) { out[dist] = null; continue; }
+    const calibrated = applyRunCalibrationBias(blended, dist, calibration);
+    const durability = applyLongRunCap(longestRunSec, dist);
+    out[dist] = calibrated * durability.multiplier * shoeMul;
+  }
+  return out;
+}
+
+/**
+ * Append (or overwrite, dedup by week+date) a VDOT history point from the
+ * current effective VDOT. Drives the VDOT sparkline and the standard-distance
+ * forecast trend. Idempotent within a (week, date); keeps the last 20 points.
+ * No-ops when there is no usable VDOT.
+ */
+export function recordVdotHistoryPoint(s: SimulatorState): void {
+  if (!s.v || s.v <= 0) return;
+  const effectiveVdot = s.v + (s.rpeAdj ?? 0) + (s.physioAdj ?? 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const weekNum = s.w ?? 1;
+  const hist = s.vdotHistory ?? [];
+  const existingIdx = hist.findIndex(h => h.week === weekNum && h.date === today);
+  const entry = { week: weekNum, vdot: Math.round(effectiveVdot * 10) / 10, date: today };
+  if (existingIdx >= 0) hist[existingIdx] = entry; else hist.push(entry);
+  s.vdotHistory = hist.slice(-20);
+}
+
+export interface StandardForecastDetail {
+  predictedSec: number | null;
+  vdot: number | null;
+  /** LT pace (sec/km) — the heaviest-weighted single predictor in the blend. */
+  ltSecPerKm: number | null;
+  weeklyKm: number | null;
+  durabilityMultiplier: number;
+  durabilityCapped: boolean;
+  calibrationBiasSec: number | null;
+  calibrationRaceCount: number;
+  /** Predicted finish time at this distance per recorded week (raw VDOT-derived trajectory). */
+  trend: { date: string; value: number }[];
+}
+
+/**
+ * Per-distance detail for the no-target-race forecast drill-down. The headline
+ * `predictedSec` comes from the same canonical `predictStandardDistances` blend
+ * (so it equals the grid tile); the `trend` is the raw VDOT-derived trajectory
+ * reconstructed from `vdotHistory` (faster = lower time), mirroring how the
+ * targeted forecast chart shows fitness trajectory separately from the adjusted
+ * headline. Read-only.
+ */
+export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance): StandardForecastDetail {
+  const predictedSec = predictStandardDistances(s)[dist];
+
+  const inputs = computePredictionInputs(collectRunsFromState(s));
+  const weeklyKm = inputs.weeklyKm > 0 ? inputs.weeklyKm : (s.detectedWeeklyKm ?? null);
+
+  const durability = applyLongRunCap(getLongestRunSec(s, 12), dist);
+
+  const calibration = computeRunCalibration(s.runRaceLog);
+  const bias = calibration.perDistanceBiasSec?.[dist];
+
+  const distKm = rdKm(dist);
+  const trend = (s.vdotHistory ?? [])
+    .filter(h => h.vdot && h.vdot > 0 && h.date)
+    .map(h => ({ date: h.date!, value: tv(h.vdot, distKm) }));
+
+  return {
+    predictedSec,
+    vdot: s.v && s.v > 0 ? s.v : null,
+    ltSecPerKm: s.lt && s.lt > 0 ? s.lt : null,
+    weeklyKm,
+    durabilityMultiplier: durability.multiplier,
+    durabilityCapped: durability.multiplier > 1.0001,
+    calibrationBiasSec: bias != null ? bias : null,
+    calibrationRaceCount: calibration.basedOnRaceCount ?? 0,
+    trend,
+  };
+}
+
 /**
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
  * Idempotent. Safe to call any time. Does nothing and returns false if
@@ -116,7 +250,14 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     console.warn('[refreshBlendedFitness] recomputeLT failed:', e);
   }
 
-  if (!s.rd || !s.pbs || !s.b) return false;
+  if (!s.rd || !s.pbs || !s.b) {
+    // No target race (just-training): still record a VDOT history point so the
+    // standard-distance forecast trend fills in over time. The full-blend path
+    // below records its own point at the end, so only do it here when bailing
+    // specifically for a missing race distance.
+    if (!s.rd) recordVdotHistoryPoint(s);
+    return false;
+  }
   // Just-Track users without PBs have {} for s.pbs (truthy, slips past the
   // guard above) and the default s.b=1.06. blendPredictions would then clobber
   // s.v with a stale default. Bail instead.
@@ -143,7 +284,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     targetDistM,
     s.pbs,
     s.lt ?? null,
-    s.vo2 ?? null,
+    effectiveVo2max(s),
     s.b,
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
@@ -258,18 +399,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Record a history entry so the VDOT sparkline shows the weekly refresh.
   // Dedup by (week, date). RefreshBlendedFitness can fire multiple times
   // per boot (app launch + onboarding + weekly rollover).
-  const effectiveVdot = s.v + (s.rpeAdj ?? 0) + (s.physioAdj ?? 0);
-  const today = new Date().toISOString().slice(0, 10);
-  const weekNum = s.w ?? 1;
-  const hist = s.vdotHistory ?? [];
-  const existingIdx = hist.findIndex(h => h.week === weekNum && h.date === today);
-  const entry = { week: weekNum, vdot: Math.round(effectiveVdot * 10) / 10, date: today };
-  if (existingIdx >= 0) {
-    hist[existingIdx] = entry;
-  } else {
-    hist.push(entry);
-  }
-  s.vdotHistory = hist.slice(-20);
+  recordVdotHistoryPoint(s);
 
   return true;
 }

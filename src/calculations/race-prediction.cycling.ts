@@ -78,7 +78,12 @@ export function predictCyclingEvent(state: SimulatorState): CyclingPrediction | 
   const ftp = tri.bike?.ftp;
   if (!ftp) return null; // no FTP = can't produce a watts-based prediction
 
-  const IF = CYCLING_EVENT_INTENSITY_FACTOR[distanceKey] ?? 0.74;
+  // Intensity factor must track the ACTUAL race distance, not the onboarding
+  // bucket. When a selected event overrides distanceKm (e.g. a 174 km gran
+  // fondo while the user's onboarding bucket is '100km'), looking IF up by the
+  // stale bucket key gives the wrong race watts. Interpolate IF from the same
+  // CYCLING_EVENT_INTENSITY_FACTOR anchors against the effective distance.
+  const IF = intensityForDistanceKm(distanceKm);
 
   const aero = tri.bike?.aeroProfiles?.[0];
   const course: BikeCourseProfileExtended =
@@ -188,6 +193,33 @@ function climateLabel(c: 'cool' | 'temperate' | 'warm' | 'hot' | 'hot-humid'): s
 function parseDistanceKm(key: string): number {
   const n = parseInt(key, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Intensity factor for an arbitrary distance, interpolated from the discrete
+ * CYCLING_EVENT_INTENSITY_FACTOR anchors (50/100/160/200/300 km). Linear
+ * between anchors, clamped at the ends. Keeps the constant table as the single
+ * source of truth — no new numbers — while letting event-overridden distances
+ * (which are rarely exactly a bucket) get the correct effort fraction.
+ */
+function intensityForDistanceKm(km: number): number {
+  const anchors = Object.entries(CYCLING_EVENT_INTENSITY_FACTOR)
+    .map(([k, v]) => [parseInt(k, 10), v] as [number, number])
+    .filter(([d]) => Number.isFinite(d) && d > 0)
+    .sort((a, b) => a[0] - b[0]);
+  if (anchors.length === 0) return 0.74;
+  if (km <= anchors[0][0]) return anchors[0][1];
+  const last = anchors[anchors.length - 1];
+  if (km >= last[0]) return last[1];
+  for (let i = 1; i < anchors.length; i++) {
+    const [d1, f1] = anchors[i - 1];
+    const [d2, f2] = anchors[i];
+    if (km <= d2) {
+      const t = (km - d1) / (d2 - d1);
+      return f1 + (f2 - f1) * t;
+    }
+  }
+  return last[1];
 }
 
 function fallbackKph(watts: number, course: BikeCourseProfileExtended): number {

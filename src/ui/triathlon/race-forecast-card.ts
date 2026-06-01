@@ -15,12 +15,13 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import type { CourseFactorEntry, LimitingFactor, TriRacePrediction } from '@/types/triathlon';
+import type { CourseFactorEntry, LimitingFactor, TriRacePrediction, TriathlonDistance } from '@/types/triathlon';
 import type { CourseProfile } from '@/types/onboarding';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { validateAgainstDistribution, type DistributionTable } from '@/validation/distribution';
 import splitDistJson from '@/constants/empirical-split-distributions.json';
+import { RACE_LEG_DISTANCES } from '@/constants/triathlon-constants';
 import { DISCIPLINE_COLOURS } from './colours';
 import { isCyclingOnlyMode, getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { gp } from '@/calculations/paces';
@@ -106,16 +107,16 @@ export function renderRaceForecastCard(state: SimulatorState): string {
 
         <!-- Per-leg breakdown -->
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:24px">
-          ${legCell('Swim', p.swimSec, DISCIPLINE_COLOURS.swim.accent, p.currentSwimSec, swimLowConfidenceFlag(state))}
-          ${legCell('Bike', p.bikeSec, DISCIPLINE_COLOURS.bike.accent, p.currentBikeSec, bikeLowConfidenceFlag(state))}
-          ${legCell('Run',  p.runSec,  DISCIPLINE_COLOURS.run.accent,  p.currentRunSec)}
+          ${legCell('Swim', p.swimSec, DISCIPLINE_COLOURS.swim.accent, p.currentSwimSec, swimLowConfidenceFlag(state), legSplitLine('swim', p.swimSec, tri.distance, state.unitPref))}
+          ${legCell('Bike', p.bikeSec, DISCIPLINE_COLOURS.bike.accent, p.currentBikeSec, bikeLowConfidenceFlag(state), legSplitLine('bike', p.bikeSec, tri.distance, state.unitPref, p.bikeAvgWatts))}
+          ${legCell('Run',  p.runSec,  DISCIPLINE_COLOURS.run.accent,  p.currentRunSec, undefined, legSplitLine('run', p.runSec, tri.distance, state.unitPref))}
         </div>
 
         <!-- Transitions: tap to open the override overlay (also surfaces the
              empirical lookup provenance. Average at this race × your level). -->
-        <button id="tri-fc-transitions-btn" type="button" style="display:flex;align-items:center;gap:14px;width:100%;background:transparent;border:none;padding:8px 0;margin-top:8px;cursor:pointer;text-align:left;font-family:var(--f);-webkit-tap-highlight-color:transparent">
-          <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">T1: ${fmtShort(p.t1Sec)}</span>
-          <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">T2: ${fmtShort(p.t2Sec)}</span>
+        <button id="tri-fc-transitions-btn" type="button" style="display:flex;align-items:baseline;gap:10px;width:100%;background:transparent;border:none;padding:8px 0;margin-top:8px;cursor:pointer;text-align:left;font-family:var(--f);-webkit-tap-highlight-color:transparent">
+          <span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">Transitions <span style="color:var(--c-black);font-weight:600">${fmtShort(p.t1Sec + p.t2Sec)}</span></span>
+          <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">T1 ${fmtShort(p.t1Sec)} · T2 ${fmtShort(p.t2Sec)}</span>
           <span style="font-size:11px;color:var(--c-muted);margin-left:auto">Adjust →</span>
         </button>
 
@@ -487,7 +488,7 @@ function renderCourseFactorsPanel(
  * signal we have no independent data on. We return empty rather than
  * speculate.
  */
-function legCommentary(
+export function legCommentary(
   leg: 'swim' | 'bike' | 'run',
   deltaSec: number,
   profile: CourseProfile | null,
@@ -560,19 +561,48 @@ function legCommentary(
   return '';
 }
 
-function legCell(label: string, sec: number, accent: string, currentSec?: number, lowConfidenceFlag?: string): string {
+function legCell(label: string, sec: number, accent: string, currentSec?: number, lowConfidenceFlag?: string, subline?: string): string {
   const gap = currentSec != null ? currentSec - sec : null;
   const showGap = gap != null && Math.abs(gap) >= 30;
   return `
-    <div style="border-left:2px solid ${accent};border-radius:10px;padding:14px 12px">
+    <div data-leg-tap="${label.toLowerCase()}" role="button" tabindex="0" style="position:relative;border-left:2px solid ${accent};border-radius:10px;padding:14px 12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+      <div style="position:absolute;top:10px;right:8px;pointer-events:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
         <span style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em">${label}</span>
         ${lowConfidenceFlag ? `<span title="${lowConfidenceFlag}" style="font-size:9px;color:#a89060;background:#FAF3E2;padding:1px 5px;border-radius:6px">${lowConfidenceFlag}</span>` : ''}
       </div>
       <div style="font-size:17px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtDuration(sec)}</div>
+      ${subline ? `<div style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-top:2px">${subline}</div>` : ''}
       ${showGap ? `<div style="font-size:10px;color:${gap! > 0 ? 'var(--c-ok)' : 'var(--c-faint)'};font-variant-numeric:tabular-nums;margin-top:3px">${gap! > 0 ? '−' : '+'}${fmtShort(Math.abs(gap!))} vs today</div>` : ''}
     </div>
   `;
+}
+
+/**
+ * Per-leg pace/speed caption shown under the leg time. Swim → pace per 100m,
+ * bike → race speed (km/h or mph) plus the prediction's target watts when an
+ * FTP exists, run → pace per km/mi. Speed is derived from the *displayed* leg
+ * `sec` so the caption always agrees with the time above it; watts come from
+ * the model (`p.bikeAvgWatts`) so the figure isn't recomputed off a duplicated
+ * intensity constant.
+ */
+export function legSplitLine(
+  leg: 'swim' | 'bike' | 'run',
+  sec: number,
+  distance: TriathlonDistance,
+  unitPref?: string | null,
+  bikeWatts?: number,
+): string {
+  const legs = RACE_LEG_DISTANCES[distance];
+  if (leg === 'swim') {
+    return fmtCss(sec / (legs.swimM / 100));
+  }
+  if (leg === 'bike') {
+    const kph = legs.bikeKm / (sec / 3600);
+    const speed = unitPref === 'mi' ? `${(kph / 1.60934).toFixed(1)} mph` : `${kph.toFixed(1)} km/h`;
+    return bikeWatts != null ? `${speed} · ${bikeWatts}W` : speed;
+  }
+  return fmtLtPace(sec / legs.runKm, unitPref);
 }
 
 function renderProjectedMarkers(p: TriRacePrediction, state: SimulatorState): string {

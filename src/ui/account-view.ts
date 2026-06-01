@@ -22,7 +22,7 @@ import { isWakeLockSupported } from '@/utils/wake-lock';
 import type { SimulatorState } from '@/types/state';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
-import { poweredByStrava } from './strava-brand';
+import { poweredByStrava, connectWithStravaButton } from './strava-brand';
 
 let garminConnected = false;
 let stravaConnectedStatus = false;
@@ -260,7 +260,7 @@ function getAccountHTML(): string {
             <button id="btn-create-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
               <div>
                 <div style="font-size:15px;color:var(--c-black);text-align:left">Create a training plan</div>
-                <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Build a plan from your activity history. All stats and connections are preserved.</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Re-runs setup to build a plan from your activity history. Your stats, history, and connections are kept.</div>
               </div>
               ${chevron()}
             </button>
@@ -401,7 +401,7 @@ function renderStravaStandaloneRow(): string {
         </div>
       </div>
       ${!stravaConnectedStatus && !checkingStrava
-        ? pillBtn('btn-connect-strava', 'Connect', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')
+        ? connectWithStravaButton('btn-connect-strava', 32)
         : stravaConnectedStatus ? `<div style="display:flex;gap:8px;align-items:center">
             ${pillBtn('btn-sync-strava', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
             <button id="btn-disconnect-strava" style="background:none;border:none;font-size:12px;font-weight:500;color:#dc2626;cursor:pointer;padding:4px 2px">Remove</button>
@@ -425,7 +425,7 @@ function renderStravaEnrichRow(): string {
         </div>
       </div>
       ${!stravaConnectedStatus && !checkingStrava
-        ? pillBtn('btn-connect-strava', 'Connect', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')
+        ? connectWithStravaButton('btn-connect-strava', 32)
         : stravaConnectedStatus ? `<div style="display:flex;gap:8px;align-items:center">
             ${pillBtn('btn-sync-strava-hr', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
             <button id="btn-disconnect-strava" style="background:none;border:none;font-size:12px;font-weight:500;color:#dc2626;cursor:pointer;padding:4px 2px">Remove</button>
@@ -1604,6 +1604,17 @@ function wireAccountHandlers(): void {
     if (dispResting) dispResting.textContent = s.restingHR != null ? String(s.restingHR) : '—';
     (document.getElementById('hr-edit') as HTMLElement).style.display = 'none';
     (document.getElementById('hr-display') as HTMLElement).style.display = '';
+    // HR feeds HR-calibrated VDOT, which feeds the prediction. Recompute so the
+    // forecast isn't stale on next visit. Running stores the result on state
+    // (s.forecastTime) and only refreshBlendedFitness recomputes it; triathlon
+    // caches in triConfig.prediction; cycling has no HR dependency.
+    if (s.eventType === 'triathlon' || isCyclingOnlyMode(s)) {
+      if (s.triConfig) { s.triConfig.prediction = undefined; saveState(); }
+    } else if (s.eventType !== 'hyrox') {
+      import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
+        refreshBlendedFitness(s); saveState();
+      });
+    }
   });
 
   document.getElementById('btn-vo2-source-mosaic')?.addEventListener('click', () => {
@@ -1715,7 +1726,10 @@ function wireAccountHandlers(): void {
   });
 
   document.getElementById('account-bike-setup-btn')?.addEventListener('click', () => {
-    import('./triathlon/bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
+    // persistForm invalidates triConfig.prediction, so the forecast recomputes
+    // on next visit; refresh the account page itself so any bike-derived row
+    // updates immediately rather than after a navigation.
+    import('./triathlon/bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay(() => renderAccountView()));
   });
 
   document.getElementById('account-swim-env-btn')?.addEventListener('click', () => {

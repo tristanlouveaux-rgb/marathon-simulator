@@ -134,6 +134,81 @@ export function lookupEmpiricalTransitions(
   return { source: 'none', n: 0 };
 }
 
+/** Fastest well-populated band in a table — the gradient anchor. The fastest
+ * bin (smallest swim+bike+run centre) whose sample size clears `minN`, so the
+ * "faster finishers transition quicker" reference is never drawn from a noisy
+ * sparse cell. */
+function fastestPopulatedBin(bins: RawBinStats[], minN: number): RawBinStats | null {
+  let best: RawBinStats | null = null;
+  for (const b of bins) {
+    if (b.n < minN) continue;
+    if (!best || b.centerSec < best.centerSec) best = b;
+  }
+  return best;
+}
+
+export interface TransitionFieldContext extends EmpiricalTransitionsResult {
+  /** Population mean T1+T2 for the matched band (seconds). Alias of
+   *  `transitionSec`, named for the UI's "field average" framing. */
+  fieldMeanSec?: number;
+  /** Total finishers at this venue in the dataset. Race-empirical match only. */
+  venueFinishers?: number;
+  /** Total finishers in the distance dataset (1.3M-finish corpus split). */
+  datasetFinishers: number;
+  /** Fastest well-populated band in the consulted table — gradient anchor.
+   *  Omitted when the only populated band is the user's own (already fastest). */
+  fastRef?: { fieldMeanSec: number; binCenterSec: number; n: number };
+}
+
+/**
+ * Field context for the Transitions detail page. Wraps `lookupEmpiricalTransitions`
+ * with the population framing the UI needs to tell the user *why* the number is
+ * what it is: which band of finishers they were matched to, how large that
+ * sample is, and how the field's transition times gradient against finish speed.
+ *
+ * Deterministic and pure: keyed on the same (raceName, distance, movingSec) the
+ * predictor bins on, so the matched band is identical to the one that produced
+ * the user's own T1/T2. No divergence between the displayed transition and the
+ * field average it is compared against.
+ */
+export function lookupTransitionFieldContext(
+  raceName: string,
+  distance: Distance,
+  predictedMovingSec: number,
+): TransitionFieldContext {
+  const table = TABLES[distance];
+  const datasetFinishers = table.totalRecords;
+  const base = lookupEmpiricalTransitions(raceName, distance, predictedMovingSec);
+
+  if (base.source === 'race-empirical') {
+    const key = normaliseLocationKey(raceName);
+    const bins = NORMALISED_BY_LOCATION[distance].get(key) ?? [];
+    const venueFinishers = bins.reduce((sum, b) => sum + b.n, 0);
+    const fast = fastestPopulatedBin(bins, table.minRaceBinN);
+    return {
+      ...base,
+      fieldMeanSec: base.transitionSec,
+      venueFinishers,
+      datasetFinishers,
+      fastRef: fast && fast.centerSec < (base.binCenterSec ?? 0)
+        ? { fieldMeanSec: fast.transitionMean, binCenterSec: fast.centerSec, n: fast.n }
+        : undefined,
+    };
+  }
+  if (base.source === 'global-empirical') {
+    const fast = fastestPopulatedBin(table.global, table.minGlobalBinN);
+    return {
+      ...base,
+      fieldMeanSec: base.transitionSec,
+      datasetFinishers,
+      fastRef: fast && fast.centerSec < (base.binCenterSec ?? 0)
+        ? { fieldMeanSec: fast.transitionMean, binCenterSec: fast.centerSec, n: fast.n }
+        : undefined,
+    };
+  }
+  return { ...base, datasetFinishers };
+}
+
 /**
  * Split a combined T1+T2 mean into asymmetric per-side values using the
  * empirical T1 share (`IM_T1_SHARE_OF_TOTAL`). Used when the dataset only

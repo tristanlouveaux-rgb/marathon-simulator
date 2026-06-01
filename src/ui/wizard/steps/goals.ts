@@ -72,8 +72,8 @@ const MODE_TILES: ModeTile[] = [
   },
   {
     id: 'track',
-    label: 'Just track',
-    sub: 'Log activities only. No plan.',
+    label: 'On demand',
+    sub: 'No race on the calendar. Generate sessions when you want them.',
     icon: ICON_TRACK,
     placeholderBg: 'linear-gradient(135deg, #1e1e1e 0%, #2c2c2c 55%, #1a1a1a 100%)',
     imageUrl: trackImgUrl,

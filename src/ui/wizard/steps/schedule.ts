@@ -1,5 +1,6 @@
 import type { OnboardingState, RecurringActivity, RunnerExperience } from '@/types/onboarding';
 import type { RaceDistance, AbilityBand } from '@/types/training';
+import type { CommuteConfig } from '@/types/state';
 import { nextStep, updateOnboarding, getOnboardingState } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { SPORT_LABELS } from '@/constants/sports';
@@ -56,24 +57,6 @@ const DUR_STEP = 15;
 /** Sports catalogue — flattened from SPORT_LABELS, ordered as the constants file lists them. */
 const SPORT_ENTRIES = Object.entries(SPORT_LABELS) as [string, string][];
 
-/** Hours slider range and default by race distance.
- * Defaults calibrated to "first event, time-constrained" not "competitive
- * intermediate". Most onboarding users are building toward their first race,
- * not their fifth. Each default lands at roughly running portion + ~2h cross
- * buffer for a 4-runs/week starting point. Range stays wide so users can slide
- * up to Pfitzinger / Daniels competitive volumes (5K: 4–8h, marathon: 8–14h). */
-const HOURS_BY_RACE: Record<string, { min: number; max: number; default: number }> = {
-  '5k':      { min: 2, max: 8,  default: 3 },
-  '10k':     { min: 3, max: 10, default: 4 },
-  half:      { min: 4, max: 12, default: 5 },
-  marathon:  { min: 5, max: 15, default: 6 },
-};
-const HOURS_DEFAULT_NO_RACE = { min: 2, max: 12, default: 4 };
-
-function hoursRange(state: OnboardingState): { min: number; max: number; default: number } {
-  return HOURS_BY_RACE[state.raceDistance ?? ''] ?? HOURS_DEFAULT_NO_RACE;
-}
-
 /** Formats minutes for the week preview: 45→"45 min", 60→"1h", 105→"1h 45". */
 function formatMin(min: number): string {
   if (!Number.isFinite(min) || min <= 0) return '0';
@@ -113,14 +96,14 @@ function runMinuteAnchors(race: RaceDistance | null, exp: RunnerExperience | und
 }
 
 /** "Your week" preview — concrete session-by-session shape that updates as
- * the user moves any input above. Replaces three forms of prose hint
- * (hours commentary, runs underflow, cross-training nudge) with one
- * informative summary. */
+ * the user moves any input above. Shows the per-session lengths the race plan
+ * will deliver plus a weekly total. Run lengths come from race + ability +
+ * phase, not a time budget, so the card carries an Adjust reveal: any session
+ * can be lengthened or shortened later from the plan itself. */
 function weekShapePreview(state: OnboardingState): string {
   const runs = state.runsPerWeek ?? 0;
   const gym = state.gymSessionsPerWeek ?? 0;
   const acts = state.recurringActivities;
-  const target = state.weeklyTrainingHours ?? 0;
 
   const cardStyle = 'background:#fff;border-radius:16px;padding:18px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.06)';
 
@@ -158,37 +141,27 @@ function weekShapePreview(state: OnboardingState): string {
   const gymMins = gym * ASSUMED_GYM_SESSION_MIN;
   const crossMins = acts.reduce((s, a) => s + a.frequency * a.durationMin, 0);
   const totalMin = runMins + gymMins + crossMins;
-  const targetMin = target * 60;
-  const gapMin = targetMin - totalMin;
 
-  // Two-row totals make the model explicit: running structure is fixed by the
-  // race plan; the hours slider is a total-time budget that cross-training is
-  // meant to fill. Showing "Total X of Yh" reads as a deficit; "Scheduled / Target"
-  // as separate rows reads as an intentional gap to fill below.
-  const totalRow = (label: string, value: string, muted: boolean) => `
-    <div style="display:flex;justify-content:space-between;font-size:14px;color:${muted ? 'var(--c-muted)' : 'var(--c-black)'};font-weight:${muted ? '400' : '500'};padding:6px 0;line-height:1.3">
-      <span>${label}</span>
-      <span style="font-variant-numeric:tabular-nums">${value}</span>
+  // Single total row. No target, no gap-to-fill: the plan sets run lengths,
+  // and the Adjust reveal below tells the user they can reshape any session
+  // live once the plan exists.
+  const totalRow = `
+    <div style="display:flex;justify-content:space-between;font-size:14px;color:var(--c-black);font-weight:500;padding:6px 0;line-height:1.3">
+      <span>Weekly total</span>
+      <span style="font-variant-numeric:tabular-nums">${formatMin(totalMin)}</span>
     </div>
   `;
-  const totalsHTML = totalRow('Scheduled', formatMin(totalMin), false)
-    + (target > 0 ? totalRow('Target', `${target}h`, true) : '');
 
-  let footer = '';
-  if (target > 0) {
-    if (gapMin >= 30) {
-      footer = `<p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">Add up to ${formatMin(gapMin)} of cross-training below to fill your target. Run lengths follow your race plan, not the hours slider.</p>`;
-    } else if (gapMin <= -30) {
-      footer = `<p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">${formatMin(-gapMin)} over target. Raise the target or trim a cross-training session.</p>`;
-    }
-  }
+  const footer = runs >= 1
+    ? `<p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">Run lengths follow your race plan. You can lengthen or shorten any session later from your plan.</p>`
+    : '';
 
   return `
     <div style="${cardStyle}">
       <label class="sc-micro" style="margin-bottom:8px">YOUR WEEK</label>
       <div>${rows.join('')}</div>
       <div style="border-top:1px solid rgba(0,0,0,0.06);padding-top:4px;margin-top:6px">
-        ${totalsHTML}
+        ${totalRow}
       </div>
       ${footer}
     </div>
@@ -244,27 +217,31 @@ function inferIntensity(sportKey: string): 'easy' | 'moderate' | 'hard' {
 export function renderSchedule(container: HTMLElement, state: OnboardingState): void {
   const isNonEvent = state.trainingForEvent === false || state.continuousMode === true || state.trainingMode === 'fitness';
   const runsOptions = isNonEvent ? RUNS_PER_WEEK_NON_EVENT_OPTIONS : RUNS_PER_WEEK_EVENT_OPTIONS;
-  const hr = hoursRange(state);
-  const hoursPerWeek = state.weeklyTrainingHours ?? hr.default;
-  const defaultWeekdayHours = Math.round(hoursPerWeek * 0.4 * 2) / 2;
-  const weekdayHours = state.weekdayTrainingHours ?? defaultWeekdayHours;
-  const weekendHours = Math.max(0, hoursPerWeek - weekdayHours);
 
   container.innerHTML = `
     <style>
       @keyframes scRise { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
       .sc-rise { opacity:0; animation: scRise 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
 
-      .sc-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:rgba(0,0,0,0.12); border-radius:4px; outline:none; margin:10px 0 2px; }
-      .sc-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
-      .sc-slider::-moz-range-thumb { width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; border:none; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
-      .sc-slider-row { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--c-black); }
-      .sc-slider-val { font-size:16px; font-weight:500; font-variant-numeric:tabular-nums; }
       .sc-hint { font-size:12px; color:var(--c-faint); margin:5px 0 0; line-height:1.5; }
 
       .shadow-ap { box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08); }
 
       .sc-micro { display:block; font-size:11px; color:var(--c-faint); letter-spacing:0.08em; margin:0 0 10px; }
+
+      /* Question-style label (sports toggle) — sentence case, not a section caps label. */
+      .sc-q { display:block; font-size:15px; font-weight:500; color:var(--c-black); margin:0 0 4px; line-height:1.3; }
+      .sc-q-sub { font-size:12px; color:var(--c-faint); margin:0 0 12px; line-height:1.45; }
+      .sc-yesno { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+      /* Age input + gate hint. */
+      .sc-age-input { width:72px; height:42px; border-radius:8px; border:1px solid var(--c-border); text-align:center; font-size:16px; background:#fff; color:var(--c-black); }
+      .sc-age-input:focus { outline:none; border-color:var(--c-black); }
+      .sc-gate-hint { font-size:12px; color:var(--c-faint); text-align:center; margin:10px 0 0; min-height:16px; }
+
+      /* Commute (run-to-work) inline fields. */
+      .sc-cm-field { display:flex; align-items:center; gap:12px; }
+      .sc-cm-label { font-size:14px; color:var(--c-black); font-weight:500; margin:0; line-height:1.2; }
 
       /* Numeric pill grid (runs / gym). */
       .sc-num-grid { display:grid; gap:8px; }
@@ -359,25 +336,25 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
 
         <div class="sc-rise" style="width:100%;max-width:480px;margin-top:24px;animation-delay:0.12s;display:flex;flex-direction:column;gap:22px">
 
-          <!-- Time available -->
+          <!-- About you (age — and sex if Strava didn't give it). Sets max HR + zones. -->
           <div style="background:#fff;border-radius:16px;padding:18px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.06)">
-            <label class="sc-micro" style="margin-bottom:14px">TOTAL TRAINING TIME PER WEEK</label>
-            <div class="sc-slider-row">
-              <span>Peak weekly hours</span>
-              <span class="sc-slider-val" id="sc-hours-value">${hoursPerWeek}h</span>
+            <label class="sc-micro" style="margin-bottom:14px">ABOUT YOU</label>
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="flex:1;font-size:14px;color:var(--c-black)">Your age</span>
+              <input id="sc-age" class="sc-age-input" type="number" inputmode="numeric" min="14" max="90"
+                value="${state.age ?? ''}" placeholder="—">
             </div>
-            <input type="range" class="sc-slider" id="sc-hours"
-              min="${hr.min}" max="${hr.max}" step="1" value="${hoursPerWeek}">
-
+            ${state.biologicalSex ? '' : `
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
-              <div class="sc-slider-row" style="margin-bottom:4px">
-                <span style="font-size:13px">Mon–Fri split</span>
-                <span class="sc-slider-val" id="sc-weekday-value" style="font-size:14px">${weekdayHours}h weekday / ${weekendHours.toFixed(1)}h weekend</span>
+              <span style="font-size:14px;color:var(--c-black)">Sex</span>
+              <div class="sc-num-grid" style="grid-template-columns:repeat(3,1fr);margin-top:8px">
+                <button data-sex="male" class="sc-num ${state.biologicalSex === 'male' ? 'selected' : ''}">Male</button>
+                <button data-sex="female" class="sc-num ${state.biologicalSex === 'female' ? 'selected' : ''}">Female</button>
+                <button data-sex="prefer_not_to_say" class="sc-num ${state.biologicalSex === 'prefer_not_to_say' ? 'selected' : ''}" style="font-size:12.5px">Prefer not</button>
               </div>
-              <input type="range" class="sc-slider" id="sc-weekday"
-                min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}">
-              <p class="sc-hint">Long runs land Sat/Sun by default.</p>
+              <p class="sc-hint">Refines your recovery and effort estimates.</p>
             </div>
+            `}
           </div>
 
           <div>
@@ -406,12 +383,15 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
 
           <div id="sc-other-activities">${renderOtherActivities(state)}</div>
 
+          <div id="sc-commute">${renderCommuteSection(state)}</div>
+
         </div>
       </div>
 
       <div class="sc-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.28s">
         <div style="max-width:480px;margin:0 auto">
           <button id="sc-continue" class="sc-cta">Continue</button>
+          <p id="sc-gate-hint" class="sc-gate-hint"></p>
         </div>
       </div>
 
@@ -426,23 +406,30 @@ function renderOtherActivities(state: OnboardingState): string {
   const active = state.recurringActivities;
   const activeKeys = new Set(active.map(a => a.sport));
   const allSelected = activeKeys.size >= SPORT_ENTRIES.length;
+  // Default the toggle to "No" (collapsed). Open it only if the user already has
+  // sports added (e.g. returning to the step, or Strava/express-path seeded them).
+  const playsSports = active.length > 0;
 
   return `
     <div class="sc-section">
       <div>
-        <label class="sc-micro">OTHER SPORTS YOU DO REGULARLY</label>
-        <p style="font-size:11.5px;color:var(--c-faint);margin:0 0 12px;line-height:1.4">
-          Each session reduces your run load.
-        </p>
+        <label class="sc-q">Do you play other sports regularly?</label>
+        <p class="sc-q-sub">Don't worry if it's not regular — we'll auto-adjust your plan. Each session reduces your run load.</p>
+        <div class="sc-yesno">
+          <button data-sports-toggle="no" class="sc-num ${playsSports ? '' : 'selected'}">No</button>
+          <button data-sports-toggle="yes" class="sc-num ${playsSports ? 'selected' : ''}">Yes</button>
+        </div>
       </div>
 
-      ${allSelected ? '' : renderSportPicker(activeKeys)}
+      <div id="sc-sports-body" style="display:${playsSports ? 'flex' : 'none'};flex-direction:column;gap:14px">
+        ${allSelected ? '' : renderSportPicker(activeKeys)}
 
-      ${active.length > 0 ? `
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${active.map((a, i) => renderActiveRow(a, i)).join('')}
-        </div>
-      ` : ''}
+        ${active.length > 0 ? `
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${active.map((a, i) => renderActiveRow(a, i)).join('')}
+          </div>
+        ` : ''}
+      </div>
     </div>
   `;
 }
@@ -482,6 +469,78 @@ function renderActiveRow(a: RecurringActivity, idx: number): string {
   `;
 }
 
+/**
+ * Run-to-work (commute) capture, folded onto the schedule step under a Yes/No
+ * toggle next to the sports question (Tristan: "could this not just sit under
+ * 'do you play sports?'"). Same fields and `commuteConfig` shape as the old
+ * standalone commute step; the plan engine reads the config wherever it's set.
+ */
+function renderCommuteSection(state: OnboardingState): string {
+  const cfg = state.commuteConfig;
+  const yes = state.runsToWork === true || cfg?.enabled === true;
+  const distance = cfg?.distanceKm ? String(cfg.distanceKm) : '';
+  const bidir = cfg?.isBidirectional ?? true;
+  const days = cfg?.commuteDaysPerWeek && cfg.commuteDaysPerWeek > 0 ? cfg.commuteDaysPerWeek : 3;
+  const backpack = cfg?.backpackKg ? String(cfg.backpackKg) : '';
+
+  return `
+    <div class="sc-section">
+      <div>
+        <label class="sc-q">Do you run to or from work?</label>
+        <p class="sc-q-sub">Commute runs are added on top of your plan. We track the extra easy mileage as its own sessions.</p>
+        <div class="sc-yesno">
+          <button data-commute-toggle="no" class="sc-num ${yes ? '' : 'selected'}">No</button>
+          <button data-commute-toggle="yes" class="sc-num ${yes ? 'selected' : ''}">Yes</button>
+        </div>
+      </div>
+
+      <div id="sc-commute-body" style="display:${yes ? 'flex' : 'none'};flex-direction:column;gap:16px">
+        <div class="sc-cm-field">
+          <div style="flex:1">
+            <p class="sc-cm-label">One-way distance</p>
+            <p class="sc-hint" style="margin-top:2px">Home to work, in km.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <input id="sc-cm-distance" class="sc-age-input" type="number" inputmode="decimal" min="1" max="30" step="0.5" placeholder="—" value="${distance}">
+            <span style="font-size:13px;color:var(--c-faint)">km</span>
+          </div>
+        </div>
+
+        <div class="sc-cm-field">
+          <div style="flex:1">
+            <p class="sc-cm-label">Run both ways?</p>
+            <p class="sc-hint" style="margin-top:2px">To and from work, or one direction.</p>
+          </div>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <button data-bidir="one" class="sc-num ${bidir ? '' : 'selected'}" style="padding:8px 14px">One way</button>
+            <button data-bidir="both" class="sc-num ${bidir ? 'selected' : ''}" style="padding:8px 14px">Both</button>
+          </div>
+        </div>
+
+        <div>
+          <p class="sc-cm-label" style="margin-bottom:8px">Days per week</p>
+          <div class="sc-num-grid" style="grid-template-columns:repeat(5,1fr)">
+            ${[1, 2, 3, 4, 5].map(d => `<button data-cm-days="${d}" class="sc-num ${days === d ? 'selected' : ''}">${d}</button>`).join('')}
+          </div>
+        </div>
+
+        <div class="sc-cm-field">
+          <div style="flex:1">
+            <p class="sc-cm-label">Backpack weight <span style="color:var(--c-faint);font-weight:400">(optional)</span></p>
+            <p class="sc-hint" style="margin-top:2px">Leave blank if you don't carry one.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <input id="sc-cm-backpack" class="sc-age-input" type="number" inputmode="decimal" min="0" max="25" step="0.5" placeholder="0" value="${backpack}">
+            <span style="font-size:13px;color:var(--c-faint)">kg</span>
+          </div>
+        </div>
+
+        <p id="sc-cm-summary" class="sc-hint" style="margin:0"></p>
+      </div>
+    </div>
+  `;
+}
+
 function renderSportPicker(activeKeys: Set<string>): string {
   return `
     <div class="sc-chip-grid">
@@ -498,35 +557,6 @@ function renderSportPicker(activeKeys: Set<string>): string {
 /* ---------- Handlers ---------- */
 
 function wireHandlers(state: OnboardingState): void {
-  // Hours slider
-  const hoursInput = document.getElementById('sc-hours') as HTMLInputElement | null;
-  const hoursValue = document.getElementById('sc-hours-value');
-  const weekdayInput = document.getElementById('sc-weekday') as HTMLInputElement | null;
-
-  hoursInput?.addEventListener('input', () => {
-    const h = Number(hoursInput.value);
-    if (hoursValue) hoursValue.textContent = `${h}h`;
-    updateOnboarding({ weeklyTrainingHours: h });
-    // Rescale weekday slider max and proportionally adjust value
-    if (weekdayInput) {
-      const prev = Number(weekdayInput.max) || h;
-      weekdayInput.max = String(h);
-      const scaled = prev > 0 ? Math.min(h, Math.round((Number(weekdayInput.value) / prev) * h * 2) / 2) : h * 0.4;
-      weekdayInput.value = String(scaled);
-      updateWeekdayLabel(scaled, h);
-      updateOnboarding({ weekdayTrainingHours: scaled });
-    }
-    refreshRunsCaption();
-    refreshWeekPreview();
-  });
-
-  weekdayInput?.addEventListener('input', () => {
-    const wd = Number(weekdayInput.value);
-    const total = Number(hoursInput?.value ?? state.weeklyTrainingHours ?? 5);
-    updateWeekdayLabel(wd, total);
-    updateOnboarding({ weekdayTrainingHours: wd });
-  });
-
   // Runs per week. Update selection + caption in-place to avoid full rerender.
   document.querySelectorAll<HTMLElement>('[data-runs]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -558,12 +588,166 @@ function wireHandlers(state: OnboardingState): void {
     });
   });
 
-  wireActivitiesHandlers(state);
+  // Age (required — Strava/Apple can't give us a birthdate, so this is the one
+  // physiology field we always ask. Captured here now that the About-you step is gone).
+  document.getElementById('sc-age')?.addEventListener('input', () => {
+    const el = document.getElementById('sc-age') as HTMLInputElement | null;
+    const n = el ? parseInt(el.value, 10) : NaN;
+    updateOnboarding({ age: Number.isFinite(n) ? n : undefined });
+    clearGateHint();
+  });
 
-  // Continue.
+  // Sex pills (only rendered when Strava didn't pre-fill biologicalSex).
+  document.querySelectorAll<HTMLElement>('[data-sex]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sex = btn.getAttribute('data-sex') as 'male' | 'female' | 'prefer_not_to_say' | null;
+      if (!sex) return;
+      updateOnboarding({ biologicalSex: sex });
+      document.querySelectorAll<HTMLElement>('[data-sex]').forEach(b =>
+        b.classList.toggle('selected', b.getAttribute('data-sex') === sex));
+      clearGateHint();
+    });
+  });
+
+  wireActivitiesHandlers(state);
+  wireCommuteHandlers();
+  refreshCommuteSummary();
+
+  // Continue — gated on age + sex (max-HR estimation needs both), and on a commute
+  // distance when run-to-work is set to Yes.
   document.getElementById('sc-continue')?.addEventListener('click', () => {
+    const cur = getOnboardingState();
+    const age = cur?.age;
+    const ageOk = typeof age === 'number' && age >= 14 && age <= 90;
+    if (!ageOk) {
+      showGateHint('Add your age to continue.');
+      document.getElementById('sc-age')?.focus();
+      return;
+    }
+    if (!cur?.biologicalSex) {
+      showGateHint('Pick your sex to continue.');
+      return;
+    }
+    if (cur?.runsToWork === true && !(cur.commuteConfig?.distanceKm && cur.commuteConfig.distanceKm > 0)) {
+      showGateHint('Add your commute distance, or switch run-to-work to No.');
+      document.getElementById('sc-cm-distance')?.focus();
+      return;
+    }
     nextStep();
   });
+}
+
+function showGateHint(msg: string): void {
+  const el = document.getElementById('sc-gate-hint');
+  if (el) el.textContent = msg;
+}
+function clearGateHint(): void {
+  const el = document.getElementById('sc-gate-hint');
+  if (el) el.textContent = '';
+}
+
+/* ---------- Commute (run-to-work) handlers ---------- */
+
+function wireCommuteHandlers(): void {
+  document.querySelectorAll<HTMLElement>('[data-commute-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const yes = btn.getAttribute('data-commute-toggle') === 'yes';
+      updateOnboarding({ runsToWork: yes });
+      document.querySelectorAll<HTMLElement>('[data-commute-toggle]').forEach(b =>
+        b.classList.toggle('selected', (b.getAttribute('data-commute-toggle') === 'yes') === yes));
+      const body = document.getElementById('sc-commute-body');
+      if (body) body.style.display = yes ? 'flex' : 'none';
+      if (yes) {
+        const cur = getOnboardingState();
+        if (!cur?.commuteConfig || !cur.commuteConfig.commuteDaysPerWeek) {
+          updateOnboarding({ commuteConfig: { enabled: false, distanceKm: 0, isBidirectional: true, commuteDaysPerWeek: 3 } });
+        }
+        persistCommute();
+      } else {
+        updateOnboarding({ commuteConfig: { enabled: false, distanceKm: 0, isBidirectional: false, commuteDaysPerWeek: 0 } });
+      }
+      refreshCommuteSummary();
+      clearGateHint();
+    });
+  });
+
+  document.getElementById('sc-cm-distance')?.addEventListener('input', () => {
+    persistCommute();
+    refreshCommuteSummary();
+    clearGateHint();
+  });
+
+  // Both ways / one way.
+  document.querySelectorAll<HTMLElement>('[data-bidir]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const both = btn.getAttribute('data-bidir') === 'both';
+      const cur = getOnboardingState();
+      const existing = cur?.commuteConfig ?? { enabled: false, distanceKm: 0, isBidirectional: true, commuteDaysPerWeek: 3 };
+      updateOnboarding({ commuteConfig: { ...existing, isBidirectional: both } });
+      document.querySelectorAll<HTMLElement>('[data-bidir]').forEach(b =>
+        b.classList.toggle('selected', (b.getAttribute('data-bidir') === 'both') === both));
+      refreshCommuteSummary();
+    });
+  });
+
+  // Days per week.
+  document.querySelectorAll<HTMLElement>('[data-cm-days]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = parseInt(btn.getAttribute('data-cm-days') || '0', 10);
+      if (!d) return;
+      const cur = getOnboardingState();
+      const existing = cur?.commuteConfig ?? { enabled: false, distanceKm: 0, isBidirectional: true, commuteDaysPerWeek: d };
+      updateOnboarding({ commuteConfig: { ...existing, commuteDaysPerWeek: d } });
+      document.querySelectorAll<HTMLElement>('[data-cm-days]').forEach(b =>
+        b.classList.toggle('selected', parseInt(b.getAttribute('data-cm-days') || '0', 10) === d));
+      refreshCommuteSummary();
+    });
+  });
+
+  document.getElementById('sc-cm-backpack')?.addEventListener('input', () => {
+    persistCommute();
+    refreshCommuteSummary();
+  });
+}
+
+/** Rebuild commuteConfig from the live inputs (distance/backpack) + persisted
+ * days/bidirectional. Mirrors the old commute step's persistConfig. */
+function persistCommute(): void {
+  const s = getOnboardingState();
+  if (!s) return;
+  if (s.runsToWork !== true) {
+    updateOnboarding({ commuteConfig: { enabled: false, distanceKm: 0, isBidirectional: false, commuteDaysPerWeek: 0 } });
+    return;
+  }
+  const distEl = document.getElementById('sc-cm-distance') as HTMLInputElement | null;
+  const backpackEl = document.getElementById('sc-cm-backpack') as HTMLInputElement | null;
+  const dist = distEl ? Number(distEl.value) : NaN;
+  const distance = Number.isFinite(dist) && dist > 0 ? dist : 0;
+  const isBidirectional = s.commuteConfig?.isBidirectional ?? true;
+  const daysRaw = s.commuteConfig?.commuteDaysPerWeek;
+  const days = daysRaw && daysRaw > 0 ? daysRaw : 3;
+  const backpackRaw = backpackEl ? Number(backpackEl.value) : NaN;
+  const backpackKg = Number.isFinite(backpackRaw) && backpackRaw > 0 ? backpackRaw : undefined;
+
+  const cfg: CommuteConfig = {
+    enabled: distance > 0,
+    distanceKm: distance,
+    isBidirectional,
+    commuteDaysPerWeek: Math.min(Math.max(days, 1), 5),
+    ...(backpackKg ? { backpackKg } : {}),
+  };
+  updateOnboarding({ commuteConfig: cfg });
+}
+
+function refreshCommuteSummary(): void {
+  const el = document.getElementById('sc-cm-summary');
+  if (!el) return;
+  const cfg = getOnboardingState()?.commuteConfig;
+  if (!cfg || !cfg.enabled || !cfg.distanceKm || cfg.distanceKm <= 0) { el.textContent = ''; return; }
+  const perDay = cfg.isBidirectional ? cfg.distanceKm * 2 : cfg.distanceKm;
+  const weekly = perDay * cfg.commuteDaysPerWeek;
+  const pack = cfg.backpackKg && cfg.backpackKg > 0 ? ` with a ${cfg.backpackKg}kg pack` : '';
+  el.textContent = `That's about ${weekly.toFixed(0)} km/week of easy mileage${pack}.`;
 }
 
 /**
@@ -572,6 +756,25 @@ function wireHandlers(state: OnboardingState): void {
  * tear down the whole step and replay entrance animations.
  */
 function wireActivitiesHandlers(state: OnboardingState): void {
+  // "Do you play other sports regularly?" Yes/No toggle. Yes reveals the picker;
+  // No collapses it and clears any added sports (so the answer and the data agree).
+  document.querySelectorAll<HTMLElement>('[data-sports-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = btn.getAttribute('data-sports-toggle');
+      if (val === 'no') {
+        updateOnboarding({ recurringActivities: [], sportsPerWeek: 0, activeLifestyle: false });
+        rerenderActivities();
+        refreshRunsCaption();
+        refreshWeekPreview();
+      } else {
+        const body = document.getElementById('sc-sports-body');
+        if (body) body.style.display = 'flex';
+        document.querySelectorAll<HTMLElement>('[data-sports-toggle]').forEach(b =>
+          b.classList.toggle('selected', b.getAttribute('data-sports-toggle') === 'yes'));
+      }
+    });
+  });
+
   // Add / toggle a sport.
   document.querySelectorAll<HTMLElement>('[data-sport-add]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -651,12 +854,6 @@ function wireActivitiesHandlers(state: OnboardingState): void {
       rerenderActivities();
     });
   });
-}
-
-function updateWeekdayLabel(wd: number, total: number): void {
-  const label = document.getElementById('sc-weekday-value');
-  if (!label) return;
-  label.textContent = `${wd}h weekday / ${Math.max(0, total - wd).toFixed(1)}h weekend`;
 }
 
 function adjustFrequency(state: OnboardingState, idx: number, delta: 1 | -1): void {

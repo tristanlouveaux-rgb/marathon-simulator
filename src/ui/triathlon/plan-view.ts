@@ -11,9 +11,12 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
+import { deriveWorkoutStatus, renderWorkoutStatusChip, computeWeekStatusContext, type WeekStatusContext } from '../workout-status';
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind } from './colours';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
+import { applyIllnessModsAllDisciplines } from '@/calculations/illness-rules';
+import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
 import { formatKm } from '@/utils/format';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
@@ -23,9 +26,9 @@ import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 import type { Workout } from '@/types/state';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from '../injury/modal';
-import { recordMorningPain, injuryAppliesToWeek } from '@/injury/engine';
+import { recordMorningPain, injuryAppliesToWeek, getDisciplineCapacity } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
-import type { InjuryState, InjuryLocation } from '@/types/injury';
+import type { InjuryState } from '@/types/injury';
 
 // ─── Module-level navigation state ───────────────────────────────────────────
 // null = show the live current week (s.w). Non-null = preview another week
@@ -77,6 +80,32 @@ function navigateTab(tab: TabId): void {
 // Main render
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Render-time illness + holiday suppression for a tri/cycling week's workouts.
+ * Mirrors the running plan-view (plan-view.ts) but via the discipline-aware
+ * helpers so swim, bike, and run legs are all scaled, not just the run. Mutates
+ * the passed array in place (the array is a fresh copy of stored workouts, so
+ * this is not persisted). Both render entry points call this.
+ */
+function applyTriRenderMods(workouts: any[], s: any, viewWeek: number): void {
+  const isCurrentWeek = viewWeek === s.w;
+  const illness = s.illnessState;
+  if (illness?.active && isCurrentWeek) {
+    applyIllnessModsAllDisciplines(workouts, illness.severity);
+  }
+  const holiday = s.holidayState;
+  const todayIso = new Date().toISOString().split('T')[0];
+  if (holiday?.active && todayIso >= holiday.startDate && todayIso <= holiday.endDate
+      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, holiday)) {
+    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, holiday);
+    applyHolidayModsAllDisciplines(workouts, holiday.canRun, holidayDays, holiday.canSwim);
+  }
+  // Post-holiday comeback ramp. No-ops unless buildBridgeWeekMods set a scale on this week.
+  // Runs after the holiday gate (the two never overlap: bridge weeks come after the holiday).
+  const wk = s.wks?.[viewWeek - 1];
+  if (wk) applyBridgeModsAllDisciplines(workouts, wk);
+}
+
 export function renderTriathlonPlanView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
@@ -88,7 +117,11 @@ export function renderTriathlonPlanView(): void {
   const isFutureWeek = viewWeek > s.w;
   const isPastWeek = viewWeek < s.w;
   const wk = s.wks?.[viewWeek - 1];
-  const workouts = wk?.triWorkouts ?? [];
+  // Include adhoc sessions (e.g. injury-safe strength accepted from the
+  // capability nudge) so suggested sessions render on the plan, not just
+  // `triWorkouts`. Mirrors the HYROX plan-view fix.
+  const workouts = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
+  applyTriRenderMods(workouts, s, viewWeek);
   const phase = wk?.ph ? capitalize(wk.ph) : '';
   const cyclingLabel = getCyclingEventLabel(s);
   const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
@@ -99,9 +132,6 @@ export function renderTriathlonPlanView(): void {
   const raceDays = raceDate ? daysUntil(raceDate) : 0;
   const raceCountdownDisplay = raceDays > 14 ? `${Math.floor(raceDays / 7)}` : `${raceDays}`;
   const raceCountdownUnit = raceDays > 14 ? 'weeks' : 'days';
-
-  // Dismissed benchmark tests. Chips only show after the test card is dismissed
-  const dismissedTests = new Set<string>((tri as any).dismissedTests as string[] ?? []);
 
   // Weekly totals
   const totalMin = workouts.reduce((acc, w) => acc + estimateMinutes(w), 0);
@@ -131,13 +161,9 @@ export function renderTriathlonPlanView(): void {
   }
   const showProgress = !isFutureWeek;
 
-  // Group by day
-  const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
-  for (const w of workouts) {
-    const d = w.dayOfWeek ?? 4;
-    byDay[d] = byDay[d] ?? [];
-    byDay[d].push(w);
-  }
+  // (Day grouping / injury discipline status / dismissed-test set are computed
+  // inside buildTriDayList so the localized drag re-render can rebuild the list
+  // without a full render.)
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -146,9 +172,10 @@ export function renderTriathlonPlanView(): void {
   // onto already-trained past weeks (it reads as history being rewritten). Uses the
   // shared injuryAppliesToWeek() rule, the same one the running generator and the
   // tri/HYROX plan engines enforce, so the gate can't drift out of sync.
+  // (injStatus is computed inside buildTriDayList; injState is still needed
+  // here for the injury banner / morning-pain check below.)
   const injuryActive = isInjuryActive();
   const injState = (injuryActive && injuryAppliesToWeek(viewWeek, s.w)) ? getInjuryStateForDisplay() : null;
-  const injStatus = injState ? getDisciplineStatusForInjury(injState.location) : null;
 
   container.innerHTML = `
     <style>
@@ -274,9 +301,18 @@ export function renderTriathlonPlanView(): void {
         <!-- Completed efforts (past weeks only) -->
         ${isPastWeek ? buildCompletedEfforts(wk, s) : ''}
 
-        <!-- Day-by-day -->
-        <div class="hf" data-delay="0.18" style="padding:12px 20px">
-          ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri.swim?.cssSecPer100m ?? null, ftp: tri.bike?.ftp ?? null, dismissedTests }, injStatus)).join('')}
+        <!-- Reorder hint: tiny, muted, above Monday. Current week only. -->
+        ${viewWeek === s.w ? `
+          <div class="hf" data-delay="0.16" style="padding:6px 28px 0 20px;text-align:right">
+            <span style="font-size:10px;color:var(--c-faint);font-weight:500">Hold and drag to reorder</span>
+          </div>
+        ` : ''}
+
+        <!-- Day-by-day. Stable id so a drag-and-drop reorder re-renders just
+             this subtree (buildTriDayList) instead of the whole page, which
+             would replay the .hf entrance animation and read as a refresh. -->
+        <div id="tri-plan-day-list" class="hf" data-delay="0.18" style="padding:12px 20px">
+          ${buildTriDayList(s, viewWeek)}
         </div>
 
       </div>
@@ -320,7 +356,8 @@ export function renderTriathlonPlanView(): void {
     const ms = getMutableState();
     ms.vibesRunNudgeDismissed = true;
     saveState();
-    renderTriathlonPlanView();
+    // In-place: drop the additive nudge card, no full Plan re-render.
+    document.getElementById('tri-vibes-nudge-card')?.remove();
   });
   document.getElementById('tri-vibes-nudge-science')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -368,22 +405,12 @@ export function renderTriathlonPlanView(): void {
     });
   });
 
-  // Workout card → full breakdown modal (suppressed for future-week previews and injury-stopped cards)
-  document.querySelectorAll<HTMLElement>('[data-tri-workout-id]').forEach((el) => {
-    el.addEventListener('click', () => {
-      if (isFutureWeek) return;
-      if (_dragSuppressClick) { _dragSuppressClick = false; return; }
-      if (el.getAttribute('draggable') === 'false') return; // injury-stopped card
-      const id = el.getAttribute('data-tri-workout-id');
-      if (!id) return;
-      const st = getState();
-      const wkRow = st.wks?.[st.w - 1];
-      const found = (wkRow?.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
-      if (found) openTriWorkoutDetail(found);
-    });
-  });
+  // Day-list card clicks + drag-and-drop. Factored so a localized re-render
+  // after a drop (rerenderTriDayListLocal) can rebind the fresh card nodes.
+  wireTriDayList();
 
-  // Completed effort rows → detail pop-up
+  // Completed effort rows → detail pop-up (live outside the day-list subtree,
+  // past weeks only, so a day-list re-render never touches them)
   document.querySelectorAll<HTMLElement>('.tri-completed-row').forEach((el) => {
     el.addEventListener('click', () => {
       const id = el.getAttribute('data-completed-id');
@@ -391,9 +418,6 @@ export function renderTriathlonPlanView(): void {
       openCompletedEffortDetail(id, wk, s);
     });
   });
-
-  wireTriWorkoutDnd();
-  wireTriWorkoutTouchDnd();
 
   // Prompt for chronic high-RPE bike pattern (fires after view mounts)
   maybePromptHighRpeBike();
@@ -408,6 +432,11 @@ let _dragDay = -1;
 let _dragSuppressClick = false;
 
 // Touch DnD state (iOS. HTML5 drag events don't fire in WKWebView)
+// Long-press to reorder: the finger must rest TOUCH_DRAG_HOLD_MS before a drag
+// arms. Until then any real movement is treated as a scroll and the card is
+// never picked up, so scrolling the plan no longer reorders days by accident.
+// (Tristan, 2026-06-01: 350ms. Mirrored in running + HYROX plan-views.)
+const TOUCH_DRAG_HOLD_MS = 350;
 let _touchDragId = '';
 let _touchDragDay = -1;
 let _touchStartX = 0;
@@ -416,6 +445,74 @@ let _touchDragging = false;
 let _touchClone: HTMLElement | null = null;
 let _touchSourceCard: HTMLElement | null = null;
 let _touchLastHighlight: HTMLElement | null = null;
+let _touchHoldTimer: number | null = null;
+let _touchHoldMet = false;
+
+/**
+ * Build the 7-day plan list HTML for a given week. Self-contained (recomputes
+ * workouts/byDay/injury/status from state) so both the full render and the
+ * localized drag-and-drop re-render can call it.
+ */
+function buildTriDayList(s: any, viewWeek: number): string {
+  const tri = s.triConfig;
+  const wk = s.wks?.[viewWeek - 1];
+  const workouts = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
+  applyTriRenderMods(workouts, s, viewWeek);
+  const dismissedTests = new Set<string>((tri as any)?.dismissedTests as string[] ?? []);
+
+  const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+  for (const w of workouts) {
+    const d = w.dayOfWeek ?? 4;
+    byDay[d] = byDay[d] ?? [];
+    byDay[d].push(w);
+  }
+
+  const injuryActive = isInjuryActive();
+  const injState = (injuryActive && injuryAppliesToWeek(viewWeek, s.w)) ? getInjuryStateForDisplay() : null;
+  const injStatus = injState ? injuryDisciplineStatus(injState) : null;
+
+  const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w) };
+  return Array.from({ length: 7 }, (_, d) =>
+    renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri?.swim?.cssSecPer100m ?? null, ftp: tri?.bike?.ftp ?? null, dismissedTests }, injStatus, statusCtx),
+  ).join('');
+}
+
+/** Wire day-list card clicks + drag-and-drop. Safe to call again after a localized re-render. */
+function wireTriDayList(): void {
+  const s = getState();
+  const isFutureWeek = (_viewWeek ?? s.w) > s.w;
+  // Workout card → full breakdown modal (suppressed for future-week previews and injury-stopped cards)
+  document.querySelectorAll<HTMLElement>('[data-tri-workout-id]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (isFutureWeek) return;
+      if (_dragSuppressClick) { _dragSuppressClick = false; return; }
+      if (el.getAttribute('draggable') === 'false') return; // injury-stopped card
+      const id = el.getAttribute('data-tri-workout-id');
+      if (!id) return;
+      const st = getState();
+      const wkRow = st.wks?.[st.w - 1];
+      const found = [...(wkRow?.triWorkouts ?? []), ...(wkRow?.adhocWorkouts ?? [])]
+        .find((x: any) => (x.id || x.n) === id);
+      if (found) openTriWorkoutDetail(found, st.w - 1);
+    });
+  });
+  wireTriWorkoutDnd();
+  wireTriWorkoutTouchDnd();
+}
+
+/**
+ * Re-render only the day-list subtree after a drag-and-drop move. Mirrors
+ * running's rerenderWeekListLocal: swapping a workout's day doesn't change
+ * weekly totals, so the summary strip and the rest of the page are untouched,
+ * and the .hf entrance animation does not replay (no "page refresh" flash).
+ */
+function rerenderTriDayListLocal(): void {
+  const listEl = document.getElementById('tri-plan-day-list');
+  if (!listEl) { renderTriathlonPlanView(); return; }
+  const s = getState();
+  listEl.innerHTML = buildTriDayList(s, _viewWeek ?? s.w);
+  wireTriDayList();
+}
 
 function wireTriWorkoutDnd(): void {
   document.querySelectorAll<HTMLElement>('.tri-workout-card').forEach((card) => {
@@ -453,7 +550,7 @@ function wireTriWorkoutDnd(): void {
       swapWorkoutDays(srcId, targetId, srcDay, targetDay);
       _dragId = '';
       _dragDay = -1;
-      renderTriathlonPlanView();
+      rerenderTriDayListLocal();
       maybeOpenSuggestionsAfterDrop(targetDay);
     });
   });
@@ -490,7 +587,7 @@ function wireTriWorkoutDnd(): void {
       moveWorkoutToDay(srcId, targetDay);
       _dragId = '';
       _dragDay = -1;
-      renderTriathlonPlanView();
+      rerenderTriDayListLocal();
       maybeOpenSuggestionsAfterDrop(targetDay);
     });
   });
@@ -530,7 +627,7 @@ function wireTriWorkoutDnd(): void {
       moveWorkoutToDay(srcId, targetDay);
       _dragId = '';
       _dragDay = -1;
-      renderTriathlonPlanView();
+      rerenderTriDayListLocal();
       maybeOpenSuggestionsAfterDrop(targetDay);
     });
   });
@@ -552,6 +649,9 @@ function wireTriWorkoutTouchDnd(): void {
       _touchStartY = touch.clientY;
       _touchDragging = false;
       _touchSourceCard = card;
+      _touchHoldMet = false;
+      if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
+      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
     }, { passive: true });
 
     card.addEventListener('touchmove', (e) => {
@@ -560,9 +660,20 @@ function wireTriWorkoutTouchDnd(): void {
       const dx = touch.clientX - _touchStartX;
       const dy = touch.clientY - _touchStartY;
 
-      if (!_touchDragging && Math.sqrt(dx * dx + dy * dy) < 8) return;
-
       if (!_touchDragging) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Long-press gate. Before the hold elapses, real movement means the
+        // user is scrolling: abandon the drag candidate and let the page
+        // scroll (no preventDefault). After the hold, a small intentional
+        // move arms the drag.
+        if (!_touchHoldMet) {
+          if (dist >= 8) {
+            if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+            _touchDragId = '';
+          }
+          return;
+        }
+        if (dist < 8) return;
         _touchDragging = true;
         if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
         _touchClone = card.cloneNode(true) as HTMLElement;
@@ -618,6 +729,8 @@ function wireTriWorkoutTouchDnd(): void {
     }, { passive: false });
 
     card.addEventListener('touchend', (e) => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
       if (!_touchDragging || !_touchDragId) {
         _touchDragId = '';
         _touchDragDay = -1;
@@ -654,7 +767,7 @@ function wireTriWorkoutTouchDnd(): void {
         const targetDay = parseInt(targetCard.getAttribute('data-tri-day-of-week') || '-1', 10);
         if (targetId && targetDay >= 0 && targetDay !== srcDay) {
           swapWorkoutDays(srcId, targetId, srcDay, targetDay);
-          renderTriathlonPlanView();
+          rerenderTriDayListLocal();
           maybeOpenSuggestionsAfterDrop(targetDay);
           return;
         }
@@ -664,7 +777,7 @@ function wireTriWorkoutTouchDnd(): void {
         const targetDay = parseInt(targetHeader.getAttribute('data-tri-day-stack') || '-1', 10);
         if (targetDay >= 0 && targetDay !== srcDay) {
           moveWorkoutToDay(srcId, targetDay);
-          renderTriathlonPlanView();
+          rerenderTriDayListLocal();
           maybeOpenSuggestionsAfterDrop(targetDay);
           return;
         }
@@ -674,7 +787,7 @@ function wireTriWorkoutTouchDnd(): void {
         const targetDay = parseInt(targetRow.getAttribute('data-tri-day-drop') || '-1', 10);
         if (targetDay >= 0 && targetDay !== srcDay) {
           moveWorkoutToDay(srcId, targetDay);
-          renderTriathlonPlanView();
+          rerenderTriDayListLocal();
           maybeOpenSuggestionsAfterDrop(targetDay);
         }
       }
@@ -758,28 +871,30 @@ function maybeOpenSuggestionsAfterDrop(targetDay: number): void {
 type DisciplineStatus = 'ok' | 'easy' | 'stop';
 
 /**
- * Returns per-discipline training status based on injury location.
- * Lower-body injuries stop running but allow easy bike and normal swim.
- * Back injuries reduce all disciplines to easy. Everything else eases run only.
+ * Per-discipline training status derived from the user's own capacity sliders
+ * (`runCapacity`/`bikeCapacity`/`swimCapacity`), NOT from the injury location.
+ * The location-based guess was wrong for upper-body injuries: a shoulder injury
+ * mapped to "swim normal, run easy" when the athlete had actually told us they
+ * cannot swim. Mirrors the modal's caption bands exactly (modal.ts:142):
+ * 0 → Paused, 1–99 → Low intensity only, 100 → Continue normally.
  */
-function getDisciplineStatusForInjury(location: InjuryLocation): Record<'swim' | 'bike' | 'run', DisciplineStatus> {
-  switch (location) {
-    case 'foot':
-    case 'knee':
-    case 'calf':
-    case 'hamstring':
-    case 'hip':
-      return { swim: 'ok', bike: 'easy', run: 'stop' };
-    case 'back':
-      return { swim: 'easy', bike: 'easy', run: 'easy' };
-    case 'other':
-    default:
-      return { swim: 'ok', bike: 'ok', run: 'easy' };
-  }
+function disciplineStatusFromCapacity(cap: number): DisciplineStatus {
+  if (cap <= 0) return 'stop';
+  if (cap >= 100) return 'ok';
+  return 'easy';
+}
+
+/** Per-discipline status for swim/bike/run, read from the athlete's capacity sliders. */
+function injuryDisciplineStatus(inj: InjuryState): Record<'swim' | 'bike' | 'run', DisciplineStatus> {
+  return {
+    swim: disciplineStatusFromCapacity(getDisciplineCapacity(inj, 'swim')),
+    bike: disciplineStatusFromCapacity(getDisciplineCapacity(inj, 'bike')),
+    run:  disciplineStatusFromCapacity(getDisciplineCapacity(inj, 'run')),
+  };
 }
 
 function buildTriInjuryBanner(inj: InjuryState): string {
-  const status = getDisciplineStatusForInjury(inj.location);
+  const status = injuryDisciplineStatus(inj);
   const protocol = INJURY_PROTOCOLS[inj.type];
   const displayName = protocol?.displayName || inj.type;
 
@@ -1099,16 +1214,23 @@ function openCompletedEffortDetail(workoutId: string, wk: any, s: any): void {
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: number | null; ftp: number | null; dismissedTests?: Set<string> }, injStatus: Record<'swim' | 'bike' | 'run', DisciplineStatus> | null = null): string {
+function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: number | null; ftp: number | null; dismissedTests?: Set<string> }, injStatus: Record<'swim' | 'bike' | 'run', DisciplineStatus> | null = null, statusCtx: { wk: any; ctx: WeekStatusContext } | null = null): string {
   const dayLabel = DAY_NAMES[d];
+  // Done / Logged / Missed / Today flag, mirroring the running plan-view card.
+  const chipFor = (w: any): string =>
+    statusCtx ? renderWorkoutStatusChip(deriveWorkoutStatus(w, statusCtx.wk, statusCtx.ctx)) : '';
   if (list.length === 0) {
+    // Empty rest day: the row itself is the drop zone (mirrors running's
+    // single `.plan-drop-zone`). No inner `.tri-day-header`, so the row's
+    // drop handler isn't suppressed by the header-exclusion guard at the top
+    // of the `.tri-day-row` drop listener, and a generous top/bottom pad makes
+    // the thin strip an easy target. Fixes "card picks up but won't drop on
+    // the last/empty day" (e.g. dragging Saturday's session onto rest-day Sunday).
     return `
-      <div class="tri-day-row" data-tri-day-drop="${d}" style="margin-bottom:14px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
-        <div class="tri-day-header" data-tri-day-stack="${d}" style="display:flex;align-items:center;gap:12px;border-radius:6px;transition:background 0.15s">
-          <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:40px">${dayLabel.slice(0, 3)}</span>
-          <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
-          <span class="tri-day-rest-label" style="font-size:11px;color:var(--c-faint);font-weight:500">Rest</span>
-        </div>
+      <div class="tri-day-row" data-tri-day-drop="${d}" style="display:flex;align-items:center;gap:12px;margin-bottom:14px;padding:16px 8px 10px;border-radius:10px;transition:background 0.15s">
+        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:40px">${dayLabel.slice(0, 3)}</span>
+        <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
+        <span class="tri-day-rest-label" style="font-size:11px;color:var(--c-faint);font-weight:500">Rest</span>
       </div>
     `;
   }
@@ -1117,7 +1239,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     const rawDisc = w.discipline as 'swim' | 'bike' | 'run' | undefined;
     // Non-tri-discipline workouts (strength, gym) are never injury-restricted
     if (!injStatus || !rawDisc || (rawDisc !== 'swim' && rawDisc !== 'bike' && rawDisc !== 'run')) {
-      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests });
+      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w) });
     }
     // For bricks: use the more restrictive of bike/run status
     let disc: 'swim' | 'bike' | 'run' = rawDisc;
@@ -1127,7 +1249,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     }
     const status = injStatus[disc];
     if (status === 'stop') return renderInjuryRestCard(w, rawDisc);
-    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy' });
+    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy', statusChip: chipFor(w) });
   }).join('');
 
   return `

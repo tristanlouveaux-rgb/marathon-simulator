@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { predictTriathlonRace } from './race-prediction.triathlon';
+import { predictTriathlonRace, computeHeatAcclimatisationDiscounts } from './race-prediction.triathlon';
 import { applyDurabilityCap, DURABILITY_THRESHOLDS } from './durability-cap';
 import {
   applyTriHorizonSwim,
@@ -259,6 +259,115 @@ describe('durability cap', () => {
 // End-to-end predictTriathlonRace
 // ───────────────────────────────────────────────────────────────────────────
 
+describe('heat acclimatisation adjustment (symmetric)', () => {
+  // Race anchors: warm = 24°C, cool = 12°C (CLIMATE_ANCHOR_TEMP_C).
+  // Returned value is SUBTRACTED from leg time: positive = credit (faster),
+  // negative = penalty (slower).
+  it('penalises training cooler than the race (14°C train, warm race)', () => {
+    const d = computeHeatAcclimatisationDiscounts(14, 'warm', 9000, 6000);
+    expect(d.runDiscount).toBeLessThan(0);   // negative = time added = penalty
+    expect(d.bikeDiscount).toBeLessThan(0);
+  });
+
+  it('credits training hotter than the race (28°C train, warm race)', () => {
+    const d = computeHeatAcclimatisationDiscounts(28, 'warm', 9000, 6000);
+    expect(d.runDiscount).toBeGreaterThan(0); // positive = time removed = credit
+    expect(d.bikeDiscount).toBeGreaterThan(0);
+  });
+
+  it('is neutral when training at race temp (24°C train, warm race)', () => {
+    const d = computeHeatAcclimatisationDiscounts(24, 'warm', 9000, 6000);
+    expect(d.runDiscount).toBeCloseTo(0, 6);
+    expect(d.bikeDiscount).toBeCloseTo(0, 6);
+  });
+
+  it('no adjustment for a cool race (no climate penalty to scale)', () => {
+    const d = computeHeatAcclimatisationDiscounts(30, 'cool', 9000, 6000);
+    expect(d.runDiscount).toBe(0);
+    expect(d.bikeDiscount).toBe(0);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Forecast-factor DIRECTION audit (2026-06-01). These factors apply silently on
+// top of the markers; before this block none had a directional guard, which is
+// exactly how the heat sign/double-count bug survived. Each test perturbs ONE
+// factor (volume/co-location held constant where possible) and asserts the leg
+// moves the correct way.
+// ───────────────────────────────────────────────────────────────────────────
+
+function daysAgoISO(days: number, hour = 6): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(Math.floor(hour), Math.round((hour % 1) * 60), 0, 0);
+  return d.toISOString();
+}
+function mkActual(id: string, type: string, startISO: string, durationSec: number, extra: Record<string, unknown> = {}) {
+  return { garminId: id, activityType: type, startTime: startISO, durationSec, distanceKm: 10, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, ...extra } as any;
+}
+
+describe('forecast factor direction — athlete-side adjustments', () => {
+  it('calibration bias: a positive per-leg bias slows that leg, negative speeds it', () => {
+    const neutral = predictTriathlonRace(baseState())!;
+    const slow = baseState();
+    slow.triConfig!.calibration = { tier: 1, basedOnRaceCount: 2, perLegBiasSec: { swim: 240, bike: 0, run: 0 } } as any;
+    const fast = baseState();
+    fast.triConfig!.calibration = { tier: 1, basedOnRaceCount: 2, perLegBiasSec: { swim: -120, bike: 0, run: 0 } } as any;
+    expect(predictTriathlonRace(slow)!.swimSec).toBeGreaterThan(neutral.swimSec);
+    expect(predictTriathlonRace(fast)!.swimSec).toBeLessThan(neutral.swimSec);
+  });
+
+  it('open-water adaptation: OW swims speed the swim leg vs the same count of pool swims', () => {
+    const swims = (type: string) => ({ garminActuals: {
+      s1: mkActual('s1', type, daysAgoISO(7), 2400),
+      s2: mkActual('s2', type, daysAgoISO(14), 2400),
+      s3: mkActual('s3', type, daysAgoISO(21), 2400),
+      s4: mkActual('s4', type, daysAgoISO(28), 2400),
+    } });
+    const pool = baseState(); pool.wks = [swims('LAP_SWIMMING')] as any;
+    const ow = baseState();   ow.wks   = [swims('OPEN_WATER_SWIMMING')] as any;
+    expect(predictTriathlonRace(ow)!.swimSec).toBeLessThan(predictTriathlonRace(pool)!.swimSec);
+  });
+
+  it('brick adaptation: bike→run bricks speed the run leg vs the same sessions on separate days', () => {
+    // Same volume both ways; only co-location (and therefore brick detection) differs.
+    const week = (brick: boolean, i: number) => ({ garminActuals: {
+      [`b${i}`]: mkActual(`b${i}`, 'CYCLING', daysAgoISO(i * 7 + 7, 6), 7200),         // 2h bike, ends 08:00
+      [`r${i}`]: mkActual(`r${i}`, 'RUNNING', brick ? daysAgoISO(i * 7 + 7, 8) : daysAgoISO(i * 7 + 5, 6), 2400),
+    } });
+    const bricked = baseState();  bricked.wks  = [0,1,2,3,4].map(i => week(true, i)) as any;
+    const separate = baseState(); separate.wks = [0,1,2,3,4].map(i => week(false, i)) as any;
+    expect(predictTriathlonRace(bricked)!.runSec).toBeLessThan(predictTriathlonRace(separate)!.runSec);
+  });
+
+  it('marathon depth (IM run): a recent fast PB credits the run more than the same PB years old', () => {
+    // Same 2:42 marathon PB; only recency differs, isolating the depth-credit recency factor.
+    const mk = (yearsAgo: number) => {
+      const s = baseState(); // ironman distance
+      s.pbs = { m: 2.7 * 3600 } as any;
+      s.onboarding = { ...(s.onboarding as any), pbDates: { m: yearsAgoISO(yearsAgo) } };
+      return s;
+    };
+    const recent = predictTriathlonRace(mk(0.3))!; // ~4 months → full credit
+    const old = predictTriathlonRace(mk(5))!;       // 5 years → decayed credit
+    expect(recent.runSec).toBeLessThan(old.runSec);
+  });
+
+  it('empirical course factor: a slower-swim venue predicts a slower swim than a faster-swim venue', () => {
+    // IRONMAN 70.3 Ohio (empirical swim factor 1.163) vs IRONMAN 70.3 Augusta
+    // (current-assisted river swim, well under 1.0). Same athlete, 70.3.
+    const venue = (id: string) => {
+      const s = baseState();
+      s.triConfig!.distance = '70.3';
+      s.onboarding = { selectedTriathlonId: id } as any;
+      return s;
+    };
+    const ohio = predictTriathlonRace(venue('703-ohio'))!;
+    const augusta = predictTriathlonRace(venue('703-augusta'))!;
+    expect(ohio.swimSec).toBeGreaterThan(augusta.swimSec);
+  });
+});
+
 describe('predictTriathlonRace — end to end', () => {
   it('returns a finite total with both projected and current numbers', () => {
     const p = predictTriathlonRace(baseState());
@@ -266,6 +375,25 @@ describe('predictTriathlonRace — end to end', () => {
     expect(p!.totalSec).toBeGreaterThan(0);
     expect(p!.currentTotalSec).toBeGreaterThan(0);
     expect(p!.totalRangeSec[0]).toBeLessThan(p!.totalRangeSec[1]);
+  });
+
+  it('leg waterfall reconciles to the displayed leg time (last step == leg sec)', () => {
+    const p = predictTriathlonRace(baseState());
+    expect(p!.legWaterfall).toBeDefined();
+    const wf = p!.legWaterfall!;
+    const finalByLeg = { swim: p!.swimSec, bike: p!.bikeSec, run: p!.runSec };
+    for (const leg of ['swim', 'bike', 'run'] as const) {
+      const steps = wf[leg];
+      expect(steps.length).toBeGreaterThan(0);
+      // First step is always the base marker.
+      expect(steps[0].kind).toBe('base');
+      // Steps are monotonic in the sense that each toSec is a positive time.
+      for (const s of steps) expect(s.toSec).toBeGreaterThan(0);
+      // The last row must land on the number the card shows (within rounding +
+      // the MIN_STEP_SEC threshold that hides sub-3s final adjustments).
+      const last = steps[steps.length - 1].toSec;
+      expect(Math.abs(last - finalByLeg[leg])).toBeLessThan(3);
+    }
   });
 
   it('projected is faster than current when the plan prescribes a realistic training pattern', () => {

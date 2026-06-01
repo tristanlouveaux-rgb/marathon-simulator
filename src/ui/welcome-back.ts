@@ -15,6 +15,7 @@
 
 import { getState, getMutableState, saveState } from '@/state';
 import { weekIndexForDate } from '@/calculations/activity-matcher';
+import { getMondayOf } from '@/state/persistence';
 
 const GAP_SEEN_KEY = 'mosaic_gap_seen';
 const LAST_OPENED_KEY = 'mosaic_last_opened_at';
@@ -165,17 +166,54 @@ export function advanceWeekToToday(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Estimate VDOT loss for a given number of missed weeks.
- * Based on ~1.2% VO2max loss/week (weeks 1–2), ~0.8% thereafter.
- * Diminishing returns modelled by compounding the loss.
+ * A layoff shorter than this detrains nothing. A normal week off is a taper, not
+ * detraining: Mujika & Padilla (2000) found VO2max is essentially preserved through
+ * roughly the first week off, with measurable loss only in weeks 2–4. (Tristan, 2026-06-01.)
+ */
+export const DETRAINING_DEADZONE_DAYS = 10;
+
+/**
+ * Fraction of a fitness marker lost to a training layoff. Shared by VDOT, FTP and CSS
+ * so all three detrain on one defensible curve rather than three invented ones.
+ *
+ * Shape (Mujika & Padilla 2000, short-term detraining): no loss inside the dead-zone,
+ * then ~1.2%/week for the first two detraining weeks and ~0.8%/week thereafter, compounding.
+ * Time is measured *past* the dead-zone, so the steep early-loss phase begins where the
+ * literature says detraining actually starts, not on day one.
+ *
+ * `retentionRatio` ∈ [0,1] is the fraction of normal training load maintained while away
+ * (e.g. rides logged on holiday). The loss is attenuated by (1 − retentionRatio), so an
+ * athlete who kept training through the break detrains proportionally less, or not at all.
+ *
+ * Returns a positive fraction (0..1) of the current value lost. Callers apply direction
+ * (VDOT/FTP move down; CSS seconds move up).
+ */
+export function detrainingLossFraction(daysAway: number, retentionRatio = 0): number {
+  const detrainingDays = daysAway - DETRAINING_DEADZONE_DAYS;
+  if (detrainingDays <= 0) return 0;
+  const weeks = detrainingDays / 7;
+  let frac = 0;
+  const wholeWeeks = Math.floor(weeks);
+  for (let i = 0; i < wholeWeeks; i++) {
+    const rate = i < 2 ? 0.012 : 0.008;
+    frac += (1 - frac) * rate;
+  }
+  const partial = weeks - wholeWeeks;
+  if (partial > 0) {
+    const rate = wholeWeeks < 2 ? 0.012 : 0.008;
+    frac += (1 - frac) * rate * partial;
+  }
+  const retention = Math.max(0, Math.min(1, retentionRatio));
+  return frac * (1 - retention);
+}
+
+/**
+ * Estimate VDOT loss for a given number of missed weeks. Delegates to the shared
+ * detraining curve so the 10-day dead-zone applies here too (a 1-week gap docks nothing).
  */
 export function computeVdotLoss(currentVdot: number, weeksGap: number): number {
-  let loss = 0;
-  for (let i = 0; i < weeksGap; i++) {
-    const rate = i < 2 ? 0.012 : 0.008;
-    loss += (currentVdot - loss) * rate;
-  }
-  return Math.round(loss * 10) / 10;
+  const frac = detrainingLossFraction(weeksGap * 7, 0);
+  return Math.round(currentVdot * frac * 10) / 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +245,71 @@ function computeCurrentCalendarWeek(s: ReturnType<typeof getMutableState>): numb
  */
 export function recordAppOpen(): void {
   localStorage.setItem(LAST_OPENED_KEY, new Date().toISOString());
+}
+
+/**
+ * Anchor invariant: `planStartDate` must never fall after the earliest logged
+ * activity. Week 1 cannot start after the user's first recorded session, so an
+ * anchor later than the earliest activity is provably wrong.
+ *
+ * How it drifts: `derivePlanStartDate` sets the anchor from the earliest
+ * activity known *at the time*, but only runs when the anchor is absent
+ * (`persistence.ts`). If an earlier activity arrives later (a history backfill,
+ * a late Strava/Garmin sync), the anchor is never re-derived and stays too
+ * late. `weekIndexForDate` then files every subsequent activity one or more
+ * weeks too late and the whole plan calendar shifts. Real incident
+ * (2026-06-01): `planStartDate` was 2026-05-04 while the first activity was
+ * 2026-04-27, shifting every week by one and hiding a week from the user.
+ *
+ * Fix: pull `planStartDate` back to the Monday of the earliest activity, and
+ * shift `s.w` forward by the same number of weeks. Moving the anchor earlier by
+ * N weeks means today now falls N weeks later in the plan, so `s.w` must move
+ * with it — otherwise `advanceWeekToToday` reads the gap as N missed weeks and
+ * applies spurious VDOT detraining for training the user actually did. Bumping
+ * `s.w` by N keeps it pointing at "today" and leaves the net advance at zero.
+ * This is the minimal correction that restores the invariant and matches
+ * `derivePlanStartDate`'s "anchor reflects the first recorded activity"
+ * philosophy. Call this BEFORE `advanceWeekToToday`.
+ *
+ * Only fires when the anchor is provably too late; a `planStartDate` that
+ * legitimately precedes the first activity (the user rested the opening weeks)
+ * is left alone. Returns true if it moved the anchor (caller should saveState).
+ */
+export function reconcilePlanAnchorToEarliestActivity(): boolean {
+  const s = getMutableState();
+  if (!s.hasCompletedOnboarding || !s.planStartDate || !s.wks?.length) return false;
+
+  let earliestMs: number | null = null;
+  const consider = (iso: string | null | undefined): void => {
+    if (!iso) return;
+    const t = Date.parse(iso);
+    if (!Number.isNaN(t) && (earliestMs === null || t < earliestMs)) earliestMs = t;
+  };
+  for (const wk of s.wks) {
+    for (const a of Object.values(wk.garminActuals ?? {})) consider((a as { startTime?: string | null }).startTime);
+    for (const w of wk.adhocWorkouts ?? []) {
+      consider((w as { garminTimestamp?: string; startTime?: string }).garminTimestamp ?? (w as { startTime?: string }).startTime);
+    }
+    for (const p of wk.garminPending ?? []) consider(p.startTime);
+  }
+  if (earliestMs === null) return false;
+
+  const earliestMonday = getMondayOf(new Date(earliestMs));
+  // planStartDate is stored as a Monday-snapped YYYY-MM-DD; compare at UTC midnight.
+  const planStartUtc = new Date(s.planStartDate + 'T00:00:00Z').getTime();
+  if (planStartUtc <= earliestMonday.getTime()) return false; // invariant already holds
+
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  const weeksMoved = Math.round((planStartUtc - earliestMonday.getTime()) / msPerWeek);
+  const corrected = earliestMonday.toISOString().slice(0, 10);
+  console.log(
+    `[plan-anchor] planStartDate ${s.planStartDate} is after earliest activity ` +
+      `(${new Date(earliestMs).toISOString().slice(0, 10)}) — pulling anchor back ${weeksMoved}w to ${corrected}, ` +
+      `s.w ${s.w}→${s.w + weeksMoved}.`,
+  );
+  s.planStartDate = corrected;
+  s.w = s.w + weeksMoved;
+  return true;
 }
 
 /**

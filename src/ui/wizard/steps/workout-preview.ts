@@ -1,8 +1,13 @@
 import type { OnboardingState } from '@/types/onboarding';
-import { nextStep, updateOnboarding } from '../controller';
+import { nextStep, updateOnboarding, completeOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { getState } from '@/state/store';
+import { initializeSimulator } from '@/state/initialization';
+
+/** Set when the user toggles a running workout exclusion on the post-plan demonstration,
+ * so the Continue handler knows to regenerate the plan before completing. */
+let runExclusionsChanged = false;
 
 /**
  * Workout preview. The "research showcase" step.
@@ -203,19 +208,37 @@ function renderRunWorkoutPreview(container: HTMLElement, state: OnboardingState)
     ...(raceSpecific.length > 0 ? [{ label: 'Race-specific', cards: raceSpecific }] : []),
   ];
 
+  // Running's workout-preview is now the post-plan demonstration (after plan-preview-v2)
+  // and the final onboarding step. The plan is already built, so this is a showcase of
+  // the session types it draws from; opting out regenerates the plan on Continue.
+  runExclusionsChanged = false;
+
   container.innerHTML = buildPreviewHTML({
     title: 'What your plan looks like',
     intro: 'The session types your plan draws from, each anchored to published training literature.',
-    tapHint: 'Tap any unlocked card to opt out.',
+    tapHint: 'Tap any unlocked card to opt out. Your plan updates if you do.',
     categories,
     excluded,
-    stepNum: 7,
+    stepNum: 8,
     totalSteps: 8,
+    hideProgress: true,
+    ctaText: 'Start training',
   });
 
   wireRunToggles(excluded);
 
-  document.getElementById('wp-continue')?.addEventListener('click', () => nextStep());
+  document.getElementById('wp-continue')?.addEventListener('click', () => {
+    // If the user changed an exclusion on this post-plan demonstration, regenerate the
+    // plan so it reflects the change before we finish. Otherwise keep the built plan.
+    if (runExclusionsChanged) {
+      try {
+        const ob = getState().onboarding;
+        if (ob) initializeSimulator(ob);
+      } catch { /* keep the already-built plan if regen fails */ }
+    }
+    completeOnboarding();
+    window.location.reload();
+  });
 }
 
 function wireRunToggles(excluded: Set<string>): void {
@@ -237,6 +260,7 @@ function wireRunToggles(excluded: Set<string>): void {
         card.setAttribute('aria-label', card.getAttribute('aria-label')?.replace('included', 'excluded') ?? '');
       }
       updateOnboarding({ runningExcludedWorkouts: Array.from(current) });
+      runExclusionsChanged = true;
     });
   });
 }
@@ -297,8 +321,12 @@ function buildPreviewHTML(opts: {
   stepNum: number;
   totalSteps: number;
   proGradeLabel?: boolean;
+  /** CTA label. Defaults to the pre-plan "build my plan" wording. */
+  ctaText?: string;
+  /** Hide the wizard progress indicator (used for the post-plan demonstration). */
+  hideProgress?: boolean;
 }): string {
-  const { title, intro, tapHint, categories, excluded, stepNum, totalSteps, proGradeLabel } = opts;
+  const { title, intro, tapHint, categories, excluded, stepNum, totalSteps, proGradeLabel, ctaText, hideProgress } = opts;
 
   const categoryBlocks = categories.map((cat, gi) => `
     <div class="wp-rise" style="animation-delay:${0.1 + gi * 0.06}s">
@@ -346,7 +374,7 @@ function buildPreviewHTML(opts: {
       </div>
 
       <div style="position:relative;z-index:1;padding:36px 20px 140px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(stepNum, totalSteps)}
+        ${hideProgress ? '' : renderProgressIndicator(stepNum, totalSteps)}
 
         <div class="wp-rise" style="width:100%;max-width:480px;text-align:center;margin-bottom:14px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
@@ -358,7 +386,7 @@ function buildPreviewHTML(opts: {
 
         <div style="width:100%;max-width:480px">
           ${categoryBlocks}
-          <button id="wp-continue" class="wp-cta wp-rise" style="animation-delay:0.36s">Looks good, build my plan</button>
+          <button id="wp-continue" class="wp-cta wp-rise" style="animation-delay:0.36s">${ctaText ?? 'Looks good, build my plan'}</button>
         </div>
       </div>
 

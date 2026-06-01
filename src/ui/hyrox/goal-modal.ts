@@ -152,6 +152,13 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
 
   // Close handlers. Close back to forecast (i.e. don't navigate).
   const close = () => overlay.remove();
+  // targetFinishTimeSec only feeds the forecast hero's delta chip (not the
+  // prediction itself), and this modal sits over the forecast, so re-render it
+  // after save/clear or the chip stays stale until the user navigates away.
+  // Dynamic import: forecast-view imports this modal, so a static import here
+  // would be circular.
+  const refreshForecast = () =>
+    import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.getElementById('hx-goal-close')?.addEventListener('click', close);
 
@@ -163,6 +170,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     if (ms2.hyroxConfig) ms2.hyroxConfig.targetFinishTimeSec = sec;
     saveState();
     close();
+    refreshForecast();
   });
 
   document.getElementById('hx-goal-clear')?.addEventListener('click', () => {
@@ -170,5 +178,6 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     if (ms2.hyroxConfig) ms2.hyroxConfig.targetFinishTimeSec = undefined;
     saveState();
     close();
+    refreshForecast();
   });
 }

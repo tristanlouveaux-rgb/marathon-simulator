@@ -81,6 +81,43 @@ describe('triTrailingEffortScore', () => {
   });
 });
 
+describe('triTrailingEffortScore — swim pace-vs-CSS blend (D6)', () => {
+  // Swim workout matched to an actual carrying paceAdherence (actual ÷ target pace).
+  function swimState(paceAdherence: number | null, plannedRpe: number, ratedRpe: number): SimulatorState {
+    const w: any = {
+      id: 's1', t: 'easy', n: 'Swim', d: '60min', r: plannedRpe,
+      discipline: 'swim', estimatedDurationMin: 60, matchedActivityId: 'a1',
+    };
+    const actual: any = {}; // no durationSec → under-duration guard inert
+    if (paceAdherence != null) actual.paceAdherence = paceAdherence;
+    return {
+      eventType: 'triathlon', w: 1,
+      wks: [{ triWorkouts: [w], rated: { s1: ratedRpe }, garminActuals: { a1: actual } }],
+      triConfig: { distance: 'ironman' },
+    } as unknown as SimulatorState;
+  }
+
+  it('faster than target (paceAdherence < 1.0) reads as harder → positive score', () => {
+    // rpeDev 0; objectiveDev = (1 - 0.9)*10 = 1.0; blend = 0*0.4 + 1.0*0.6 = 0.6
+    expect(triTrailingEffortScore(swimState(0.9, 5, 5), 'swim')).toBeCloseTo(0.6, 5);
+  });
+
+  it('slower than target (paceAdherence > 1.0) reads as easier → negative score', () => {
+    // objectiveDev = (1 - 1.1)*10 = -1.0; blend = -0.6
+    expect(triTrailingEffortScore(swimState(1.1, 5, 5), 'swim')).toBeCloseTo(-0.6, 5);
+  });
+
+  it('blends 60% objective / 40% RPE', () => {
+    // rpeDev = 8 - 5 = 3; objectiveDev = 1.0; blend = 3*0.4 + 1.0*0.6 = 1.8
+    expect(triTrailingEffortScore(swimState(0.9, 5, 8), 'swim')).toBeCloseTo(1.8, 5);
+  });
+
+  it('falls back to pure RPE when no pace signal', () => {
+    // no paceAdherence → dev = rpeDev = 5 - 7 = -2
+    expect(triTrailingEffortScore(swimState(null, 7, 5), 'swim')).toBeCloseTo(-2, 5);
+  });
+});
+
 describe('triEffortMultiplier', () => {
   it('formula matches running: 1 - score * 0.05, clamped [0.85, 1.15]', () => {
     // score = -2 → 1 - (-2 * 0.05) = 1.10 → 10% longer next week

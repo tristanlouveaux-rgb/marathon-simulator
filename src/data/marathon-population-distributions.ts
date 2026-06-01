@@ -169,6 +169,31 @@ export const VENUE_DATA_PROVENANCE: Record<VenueId, VenueDataProvenance> = {
   'nottingham-half':               { source: 'none', n: null, years: null, attribution: null, hasSplits: false },
 };
 
+/** Display names for the marathon majors that carry real ingested data.
+ *  Used only by the pooled-finisher caption. */
+const VENUE_DISPLAY_NAMES: Record<string, string> = {
+  berlin: 'Berlin', boston: 'Boston', chicago: 'Chicago', london: 'London', nyc: 'New York',
+};
+
+/**
+ * Pooled real-finisher total + contributing venue names behind the marathon
+ * distance-aggregate table. Derived from `VENUE_DATA_PROVENANCE` so the
+ * user-facing count can never drift from the underlying data. All venues with
+ * real data are marathons (the half venues are all `source: 'none'`), so this
+ * total is marathon-only by construction. Currently 888,989 across 5 majors.
+ */
+export function pooledMarathonFinisherSummary(): { count: number; venues: string[] } {
+  let count = 0;
+  const venues: string[] = [];
+  for (const [id, p] of Object.entries(VENUE_DATA_PROVENANCE)) {
+    if (p.source === 'none' || p.n == null) continue;
+    count += p.n;
+    venues.push(VENUE_DISPLAY_NAMES[id] ?? id);
+  }
+  venues.sort();
+  return { count, venues };
+}
+
 /**
  * Look up a percentile from a real distribution table. Returns null when the
  * table is empty (no data ingested yet). Caller falls back to the distance

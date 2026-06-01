@@ -80,6 +80,25 @@ function courseOptionLabel(
 
 const ALL_POSITIONS: BikePosition[] = ['hoods', 'drops', 'clip-ons', 'tt-bike'];
 
+// Physical bounds for the weight inputs. These match the min/max already
+// declared on the number inputs; we enforce them in JS because HTML min/max
+// only flag validity, they don't clamp a typed value. Out-of-range mass
+// poisons the CdA calibration: an absurd bike weight makes the inversion
+// attribute power away from aero, lowering CdA and (perversely) speeding up
+// the prediction. See SCIENCE_LOG — bike mass / CdA coupling.
+const BIKE_KG_MIN = 4;
+const BIKE_KG_MAX = 30;
+const RIDER_KG_MIN = 30;
+const RIDER_KG_MAX = 200;
+
+const clampKg = (v: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, v));
+
+// Single source of truth for the CdA explainer copy. Rendered in two places:
+// the riding-position caption and the auto-calibration result card. Keep one
+// constant so the two never drift.
+const CDA_EXPLAINER = `<strong>CdA</strong> = drag coefficient × frontal area (m²). One number capturing how aero you are: body position, helmet, clothing, bike, wheels. Lower is faster: wind drag scales with speed cubed, so at race speeds (35+ kph) it accounts for 70–80% of total resistive power. The presets here are mid-range published values: 0.36 hoods, 0.32 drops, 0.28 with clip-ons, 0.24 on a TT bike with aero helmet. The calibration panel inverts the equation from a known ride to estimate yours specifically.`;
+
 /** Local working state of the overlay — mutates as the user changes inputs. */
 export interface FormState {
   riderKg: number;
@@ -105,6 +124,8 @@ export interface FormState {
   /** Toggles for the inline (i) explanations on CdA and Crr. */
   showCdaInfo: boolean;
   showCrrInfo: boolean;
+  /** Toggle for the (i) explainer on the auto-calibration result card. */
+  showCalibCdaInfo: boolean;
 }
 
 interface AutoCalibUI {
@@ -208,6 +229,7 @@ function initialFormState(): FormState {
       courseDropdownOpen: !courseCollapsed(course),
       showCdaInfo: false,
       showCrrInfo: false,
+      showCalibCdaInfo: false,
     };
   }
 
@@ -246,6 +268,7 @@ function initialFormState(): FormState {
     courseDropdownOpen: !courseCollapsed(initialCourse),
     showCdaInfo: false,
     showCrrInfo: false,
+    showCalibCdaInfo: false,
   };
 }
 
@@ -464,7 +487,12 @@ function fmtDuration(sec: number): string {
 // Render
 // ───────────────────────────────────────────────────────────────────────────
 
-export function openBikeSetupOverlay(): void {
+/**
+ * @param onSaved Called after the user saves and the overlay closes. Lets the
+ *   opener (the forecast view) re-render so the new bike split shows
+ *   immediately instead of only after the user navigates away and back.
+ */
+export function openBikeSetupOverlay(onSaved?: () => void): void {
   document.getElementById(OVERLAY_ID)?.remove();
 
   const state = getState();
@@ -496,7 +524,7 @@ export function openBikeSetupOverlay(): void {
     }
 
     overlay.innerHTML = renderShell(form, distance);
-    wireHandlers(overlay, form, distance, rerender);
+    wireHandlers(overlay, form, distance, rerender, onSaved);
 
     if (focusedId) {
       const restored = overlay.querySelector(`#${focusedId}`) as HTMLInputElement | HTMLSelectElement | null;
@@ -560,8 +588,8 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
 
         ${section('Riding position',
           select('position', form.position, ALL_POSITIONS.map(p => ({ value: p, label: POSITION_LABEL[p] }))) +
-          `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.45">CdA preset: ${CDA_PRESET[form.position].toFixed(2)} m².${infoButton('bike-setup-cda-info')}${form.cdaSource === 'calibrated' ? ' Override active from your calibration.' : ''}</div>` +
-          (form.showCdaInfo ? infoBox(`<strong>CdA</strong> = drag coefficient × frontal area (m²). One number capturing how aero you are: body position, helmet, clothing, bike, wheels. Lower is faster: wind drag scales with speed cubed, so at race speeds (35+ kph) it accounts for 70–80% of total resistive power. The presets here are mid-range published values: 0.36 hoods, 0.32 drops, 0.28 with clip-ons, 0.24 on a TT bike with aero helmet. The calibration panel below inverts the equation from a known ride to estimate yours specifically.`) : '')
+          `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.45">${cdaCaption(form)}${infoButton('bike-setup-cda-info')}</div>` +
+          (form.showCdaInfo ? infoBox(CDA_EXPLAINER) : '')
         )}
 
         ${section('Tires',
@@ -734,20 +762,49 @@ function renderAutoCalibPanel(form: FormState): string {
 
   return `
     <div style="margin-bottom:8px;padding:11px 12px;border-radius:10px;background:rgba(0,0,0,0.03)">
-      <div style="font-size:12px;color:var(--c-muted)">Estimated CdA from a recent flat ride</div>
+      <div style="font-size:12px;color:var(--c-muted)">Estimated CdA from a recent flat ride${infoButton('bike-setup-calib-cda-info')}</div>
       <div style="font-size:18px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums;margin-top:2px">${cda.toFixed(3)} m²</div>
       <div style="font-size:11px;color:var(--c-muted);margin-top:4px;line-height:1.5">
         ${ac.rideName}${dateLabel ? ` · ${dateLabel}` : ''}<br>
         ${ac.rideDistanceKm?.toFixed(1)} km at ${ac.rideAvgPowerW} W, ${ac.rideAvgGradientPct?.toFixed(2)}% mean gradient. Confidence: ${ac.confidence}.
       </div>
+      ${form.showCalibCdaInfo ? infoBox(CDA_EXPLAINER) : ''}
       ${plausibilityNote}
     </div>
   `;
 }
 
+/**
+ * Caption under the position selector. Leads with the CdA actually used by the
+ * prediction (so the modal, the what-if table, and the headline forecast all
+ * agree), not the position preset. Showing "preset: 0.24" while the prediction
+ * silently used a 0.48 calibration was the source of the modal/forecast split
+ * mismatch.
+ */
+function cdaCaption(form: FormState): string {
+  if (form.cdaSource === 'calibrated') {
+    return `CdA: ${form.cda.toFixed(3)} m² · calibrated from your ride. `;
+  }
+  if (form.cdaSource === 'user') {
+    return `CdA: ${form.cda.toFixed(3)} m² · set by you. `;
+  }
+  return `CdA: ${CDA_PRESET[form.position].toFixed(2)} m² · ${POSITION_LABEL[form.position]} preset. `;
+}
+
 function renderWhatIf(form: FormState, distance: '70.3' | 'ironman'): string {
+  // When the user has a calibrated/user CdA, anchor the comparison on THAT
+  // measured value and shift it by each position's published preset delta,
+  // rather than dropping back to raw presets. This keeps the active-position
+  // row equal to the headline forecast (same CdA), and makes the other rows
+  // "your real aero, adjusted for the position change". With only presets, the
+  // active row disagreed with the forecast whenever a calibration was active.
+  const anchored = form.cdaSource === 'calibrated' || form.cdaSource === 'user';
+  const basePreset = CDA_PRESET[form.position];
   const rows = ALL_POSITIONS.map(pos => {
-    const trial: FormState = { ...form, position: pos, cda: CDA_PRESET[pos], cdaSource: 'preset' };
+    const cdaForPos = anchored
+      ? Math.max(0.15, form.cda + (CDA_PRESET[pos] - basePreset))
+      : CDA_PRESET[pos];
+    const trial: FormState = { ...form, position: pos, cda: cdaForPos, cdaSource: anchored ? form.cdaSource : 'preset' };
     const r = predictBikeSplit(trial, distance);
     const isActive = pos === form.position;
     return `
@@ -759,9 +816,12 @@ function renderWhatIf(form: FormState, distance: '70.3' | 'ironman'): string {
     `;
   }).join('');
 
+  const note = anchored
+    ? 'Predicted bike split per position, anchored on your calibrated CdA and shifted by each position’s published aero delta. FTP, tyres, course held constant.'
+    : 'Predicted bike split per position at your FTP and weight. Tyres and course held constant.';
   return `
     <div style="display:flex;flex-direction:column;gap:2px">${rows}</div>
-    ${hint('Predicted bike split per position at your FTP and weight. Tires/course held constant.')}
+    ${hint(note)}
   `;
 }
 
@@ -836,7 +896,7 @@ function infoBox(text: string): string {
 // Wiring
 // ───────────────────────────────────────────────────────────────────────────
 
-function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 'ironman', rerender: () => void): void {
+function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 'ironman', rerender: () => void, onSaved?: () => void): void {
   void distance;
 
   overlay.querySelector('#bike-setup-close')?.addEventListener('click', () => overlay.remove());
@@ -850,11 +910,16 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
     const bikeEl = overlay.querySelector('#bike-kg') as HTMLInputElement | null;
     const riderV = riderEl ? parseFloat(riderEl.value) : NaN;
     const bikeV = bikeEl ? parseFloat(bikeEl.value) : NaN;
-    if (isFinite(riderV)) form.riderKg = riderV;
-    if (isFinite(bikeV)) form.bikeKg = bikeV;
+    if (isFinite(riderV)) form.riderKg = clampKg(riderV, RIDER_KG_MIN, RIDER_KG_MAX);
+    if (isFinite(bikeV)) form.bikeKg = clampKg(bikeV, BIKE_KG_MIN, BIKE_KG_MAX);
 
     persistForm(form);
     overlay.remove();
+    // Refresh the opener so the new bike split is visible immediately.
+    // persistForm already invalidated the cached prediction; without this the
+    // forecast headline keeps showing the stale number until the user tabs away
+    // and back (which forces a recompute).
+    onSaved?.();
   });
 
   // Number inputs. Fire on blur, not on every keystroke. `<input type="number">`
@@ -862,18 +927,22 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
   // cursor at position 0 in Chrome and the next digit gets prepended (user
   // typing "57" sees "75"). 'change' avoids the rerender-during-typing loop
   // entirely; the prediction strip catches up when the user blurs the field.
-  const onNumberChange = (id: string, key: keyof FormState) => {
+  const onNumberChange = (id: string, key: keyof FormState, bounds?: { min: number; max: number }) => {
     const el = overlay.querySelector(`#${id}`) as HTMLInputElement | null;
     if (!el) return;
     el.addEventListener('change', () => {
       const v = parseFloat(el.value);
       if (!isFinite(v)) return;
-      (form as unknown as Record<string, unknown>)[key as string] = v;
+      // Clamp out-of-range mass so an absurd value (e.g. a 100 kg bike) can't
+      // poison the CdA calibration and invert the prediction's mass-sensitivity.
+      const next = bounds ? clampKg(v, bounds.min, bounds.max) : v;
+      if (bounds && next !== v) el.value = String(next);
+      (form as unknown as Record<string, unknown>)[key as string] = next;
       rerender();
     });
   };
-  onNumberChange('rider-kg', 'riderKg');
-  onNumberChange('bike-kg', 'bikeKg');
+  onNumberChange('rider-kg', 'riderKg', { min: RIDER_KG_MIN, max: RIDER_KG_MAX });
+  onNumberChange('bike-kg', 'bikeKg', { min: BIKE_KG_MIN, max: BIKE_KG_MAX });
 
   // Selects.
   // WebKit (Safari / iOS WKWebView) swallows a native <select>'s value commit
@@ -929,6 +998,10 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
   });
   overlay.querySelector('#bike-setup-crr-info')?.addEventListener('click', () => {
     form.showCrrInfo = !form.showCrrInfo;
+    rerender();
+  });
+  overlay.querySelector('#bike-setup-calib-cda-info')?.addEventListener('click', () => {
+    form.showCalibCdaInfo = !form.showCalibCdaInfo;
     rerender();
   });
 

@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { setState } from '@/state/store';
-import { assertPlanAnchorConsistent } from './welcome-back';
+import { setState, getMutableState } from '@/state/store';
+import { assertPlanAnchorConsistent, reconcilePlanAnchorToEarliestActivity, detrainingLossFraction, computeVdotLoss, DETRAINING_DEADZONE_DAYS } from './welcome-back';
 import type { SimulatorState } from '@/types/state';
 
 function buildState(overrides: Partial<SimulatorState> = {}): SimulatorState {
@@ -117,5 +117,136 @@ describe('assertPlanAnchorConsistent', () => {
     assertPlanAnchorConsistent();
     // weekIndexForDate returns null when idx > wks.length. No warn.
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcilePlanAnchorToEarliestActivity', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  /** Put an activity (by startTime) into a given week's garminActuals. */
+  function withActual(state: SimulatorState, weekIdx: number, startTime: string): SimulatorState {
+    (state.wks[weekIdx] as unknown as { garminActuals: Record<string, unknown> }).garminActuals = {
+      [`garmin-${startTime}`]: { garminId: startTime, startTime, distanceKm: 5 },
+    };
+    return state;
+  }
+
+  it('pulls planStartDate back to the Monday of the earliest activity (real 2026-06-01 incident)', () => {
+    // Anchor drifted to May 4 while the first activity was Apr 27 (a Monday).
+    const s = withActual(buildState({ planStartDate: '2026-05-04', w: 5 }), 3, '2026-04-27T08:00:00Z');
+    setState(s);
+    const moved = reconcilePlanAnchorToEarliestActivity();
+    expect(moved).toBe(true);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+    // Anchor moved back 1 week → s.w bumps 5→6 so no spurious detraining fires.
+    expect(getMutableState().w).toBe(6);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('snaps a mid-week earliest activity back to its Monday', () => {
+    // First activity Wed Apr 29 → its Monday is Apr 27.
+    const s = withActual(buildState({ planStartDate: '2026-05-04', w: 5 }), 0, '2026-04-29T18:00:00Z');
+    setState(s);
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(true);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+    expect(getMutableState().w).toBe(6);
+  });
+
+  it('considers adhocWorkouts garminTimestamp when finding the earliest', () => {
+    const s = buildState({ planStartDate: '2026-05-04', w: 5 });
+    (s.wks[2] as unknown as { adhocWorkouts: unknown[] }).adhocWorkouts = [
+      { id: 'garmin-x', garminTimestamp: '2026-04-27T06:00:00Z' },
+    ];
+    setState(s);
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(true);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+  });
+
+  it('considers garminPending startTime when finding the earliest', () => {
+    const s = buildState({ planStartDate: '2026-05-04', w: 5 });
+    (s.wks[1] as unknown as { garminPending: unknown[] }).garminPending = [
+      { garminId: 'p1', startTime: '2026-04-27T07:00:00Z' },
+    ];
+    setState(s);
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(true);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+  });
+
+  it('does NOT move the anchor when it already precedes the earliest activity (user rested week 1)', () => {
+    // Anchor Apr 27, first activity not until May 11 (week 3). Valid — leave alone.
+    const s = withActual(buildState({ planStartDate: '2026-04-27', w: 5 }), 2, '2026-05-11T08:00:00Z');
+    setState(s);
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(false);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT move the anchor when it equals the earliest activity Monday', () => {
+    const s = withActual(buildState({ planStartDate: '2026-04-27', w: 5 }), 0, '2026-04-27T08:00:00Z');
+    setState(s);
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(false);
+    expect(getMutableState().planStartDate).toBe('2026-04-27');
+  });
+
+  it('is a no-op when there are no logged activities', () => {
+    setState(buildState({ planStartDate: '2026-05-04', w: 5 }));
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(false);
+    expect(getMutableState().planStartDate).toBe('2026-05-04');
+  });
+
+  it('is a no-op before onboarding, with no anchor, or with no weeks', () => {
+    setState(buildState({ hasCompletedOnboarding: false, planStartDate: '2026-05-04' }));
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(false);
+    setState(buildState({ planStartDate: undefined as unknown as string, wks: [] }));
+    expect(reconcilePlanAnchorToEarliestActivity()).toBe(false);
+  });
+});
+
+describe('detrainingLossFraction — shared VDOT/FTP/CSS decay curve', () => {
+  it('loses nothing inside the 10-day dead-zone', () => {
+    expect(detrainingLossFraction(0)).toBe(0);
+    expect(detrainingLossFraction(7)).toBe(0);   // a normal week off is a taper
+    expect(detrainingLossFraction(9)).toBe(0);
+    expect(detrainingLossFraction(DETRAINING_DEADZONE_DAYS)).toBe(0); // boundary: 0 days past
+  });
+
+  it('starts detraining only past the dead-zone, and grows with time away', () => {
+    const d14 = detrainingLossFraction(14);
+    const d21 = detrainingLossFraction(21);
+    const d35 = detrainingLossFraction(35);
+    expect(d14).toBeGreaterThan(0);
+    expect(d21).toBeGreaterThan(d14);
+    expect(d35).toBeGreaterThan(d21);
+    // ~2 weeks past the dead-zone (24 days) should be a small single-digit % loss,
+    // matching the ~1.2%/wk early-detraining rate (Mujika & Padilla 2000).
+    expect(detrainingLossFraction(24)).toBeLessThan(0.05);
+  });
+
+  it('attenuates loss by the activity-while-away ratio', () => {
+    const full = detrainingLossFraction(31, 0);      // sedentary holiday
+    const half = detrainingLossFraction(31, 0.5);    // kept ~half the load
+    const kept = detrainingLossFraction(31, 1);      // trained as normal away
+    expect(half).toBeCloseTo(full * 0.5, 6);
+    expect(kept).toBe(0);
+    // ratios above 1 (trained MORE than normal) clamp to no loss, never negative.
+    expect(detrainingLossFraction(31, 1.4)).toBe(0);
+  });
+});
+
+describe('computeVdotLoss — inherits the dead-zone', () => {
+  it('docks nothing for a one-week gap', () => {
+    expect(computeVdotLoss(50, 1)).toBe(0); // 7 days < dead-zone
+  });
+  it('docks a small amount for a multi-week gap', () => {
+    const loss = computeVdotLoss(50, 3); // 21 days → ~1 week of detraining
+    expect(loss).toBeGreaterThan(0);
+    expect(loss).toBeLessThan(2); // small: a few tenths of a VDOT point, not a cliff
   });
 });

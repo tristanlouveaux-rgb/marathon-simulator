@@ -11,11 +11,13 @@ import { intentToWorkout } from '@/workouts/intent_to_workout';
 import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 import { generateSwimSession, describeSwimSession, estimateDistanceMetres, SWIM_VARIANT_COUNT, type SwimSessionKind } from '@/workouts/swim';
 import { generateBikeSession, describeBikeSession, BIKE_VARIANT_COUNT, type BikeSessionKind } from '@/workouts/bike';
+import { generateGymWorkouts } from '@/workouts/gym';
 import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 import { formatKm, formatPace } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
 import { blendPredictions } from '@/calculations/predictions';
+import { effectiveVo2max } from '@/calculations/physiological-vdot';
 import { buildSessionRecommendation } from '@/calculations/session-recommendation';
 import type { TrainingPhase } from '@/types/training';
 
@@ -138,6 +140,19 @@ const SESSION_TYPES: SessionTypeOption[] = [
   },
 ];
 
+// Recovery effort band (from buildSessionRecommendation.recommendedSlot) → a
+// concrete run session type for the "Suggested session" path. Walks up the
+// existing RPE ladder only: easy (rpe 3) → progressive (rpe 5) → threshold
+// (rpe 7). It deliberately stops short of VO2 (rpe 8) and Time Trial — the
+// system never proposes the highest-risk sessions unprompted; those stay opt-in
+// via "Pick your own". No new durations or constants: each mapped type carries
+// its own `defaultMinutes`.
+const SUGGESTED_SLOT_BY_EFFORT: Record<'easy' | 'steady' | 'hard', SlotType> = {
+  easy: 'easy',
+  steady: 'progressive',
+  hard: 'threshold',
+};
+
 /** Open the session generator modal. Adds the workout to the current week's adhocWorkouts. */
 // ─── Variant definitions (matching plan_engine.ts rotation) ─────────────────
 
@@ -207,6 +222,11 @@ export function openSessionGenerator(): void {
   //   hyrox              → Run by Feel only (jumps straight to the vibes view).
   const isTri = s.eventType === 'triathlon';
   const isHyrox = s.eventType === 'hyrox';
+  // On-demand mode (formerly "Just track"): no plan, but the user can generate a
+  // session in any discipline we support — run, bike, swim, gym. It reuses the same
+  // discipline picker as tri, but every result saves to adhocWorkouts (the single
+  // running/fitness store), never triWorkouts, and re-renders the main view.
+  const isOnDemand = s.trackOnly === true;
   // Run-types list is identical across modes; in tri mode it's the third step
   // after the user picks "Run" from the discipline picker.
   const availableTypes: SessionTypeOption[] = SESSION_TYPES;
@@ -215,7 +235,12 @@ export function openSessionGenerator(): void {
   // selectedDiscipline === 'run' the existing renderStep1/Step2 are reused
   // with the save path tagged for triWorkouts.
   type TriDiscipline = 'swim' | 'bike' | 'run';
-  let selectedDiscipline: TriDiscipline | null = null;
+  // On-demand can additionally pick 'gym'. Tri/run flows never set it.
+  type GenDiscipline = TriDiscipline | 'gym';
+  let selectedDiscipline: GenDiscipline | null = null;
+  // True once the user reached a discipline via the picker (tri always; on-demand
+  // when they chose "Pick your own"). Drives whether "Run" shows a Back vs Cancel.
+  const hasDisciplinePicker = isTri || isOnDemand;
 
   // Recovery signal for effort recommendation (vibes / Run by Feel step only).
   const acwr = computeReadinessACWR(s);
@@ -263,17 +288,18 @@ export function openSessionGenerator(): void {
   function render() {
     if (step === 0) renderTriDiscipline();
     else if (step === 1) {
-      if (isTri && selectedDiscipline === 'swim') renderSwimKind();
-      else if (isTri && selectedDiscipline === 'bike') renderBikeKind();
+      if (hasDisciplinePicker && selectedDiscipline === 'swim') renderSwimKind();
+      else if (hasDisciplinePicker && selectedDiscipline === 'bike') renderBikeKind();
+      else if (isOnDemand && selectedDiscipline === 'gym') renderGymSession();
       else renderStep1();
     } else if (step === 2) {
-      if (isTri && selectedDiscipline === 'swim') renderSwimDuration();
-      else if (isTri && selectedDiscipline === 'bike') renderBikeDuration();
+      if (hasDisciplinePicker && selectedDiscipline === 'swim') renderSwimDuration();
+      else if (hasDisciplinePicker && selectedDiscipline === 'bike') renderBikeDuration();
       else renderStep2();
     } else {
       // step 3. Variant drill-down
-      if (isTri && selectedDiscipline === 'swim') renderSwimVariantList();
-      else if (isTri && selectedDiscipline === 'bike') renderBikeVariantList();
+      if (hasDisciplinePicker && selectedDiscipline === 'swim') renderSwimVariantList();
+      else if (hasDisciplinePicker && selectedDiscipline === 'bike') renderBikeVariantList();
     }
   }
 
@@ -300,7 +326,9 @@ export function openSessionGenerator(): void {
   // ── Step 1: Pick session type ──────────────────────────────────────────────
 
   function renderStep1() {
-    const isTriRun = isTri && selectedDiscipline === 'run';
+    // Reached "Run" via the discipline picker (tri always; on-demand when the user
+    // chose "Pick your own"). Then the back button returns to the picker, not closes.
+    const isTriRun = hasDisciplinePicker && selectedDiscipline === 'run';
     const title = isTriRun ? 'Run session' : 'Generate session';
     const subtitle = isTriRun ? 'Pick a run type.' : 'Pick a session type.';
 
@@ -373,31 +401,44 @@ export function openSessionGenerator(): void {
           <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Pick a discipline.</div>
           ${renderRecommendationCaption()}
 
-          <button class="sg-disc-btn" data-disc="swim" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Swim</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Technique, endurance, CSS intervals or speed.</div>
+          <button class="sg-disc-btn" data-disc="run" style="${tilePickerStyle()}">
+            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Run</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Easy, long, threshold, VO2 or Run by Feel.</div>
           </button>
           <button class="sg-disc-btn" data-disc="bike" style="${tilePickerStyle()}">
             <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Bike</div>
             <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Endurance, sweet spot, threshold or VO2.</div>
           </button>
-          <button class="sg-disc-btn" data-disc="run" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Run</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Easy, long, threshold, VO2 or Run by Feel.</div>
+          <button class="sg-disc-btn" data-disc="swim" style="${tilePickerStyle()}">
+            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Swim</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Technique, endurance, CSS intervals or speed.</div>
           </button>
+          ${isOnDemand ? `
+          <button class="sg-disc-btn" data-disc="gym" style="${tilePickerStyle()}">
+            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Gym</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Strength session matched to your phase and ability.</div>
+          </button>` : ''}
 
           <button id="sg-disc-cancel" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">
-            Cancel
+            ${isOnDemand ? 'Back' : 'Cancel'}
           </button>
         </div>
       </div>
     `;
 
-    document.getElementById('sg-disc-cancel')?.addEventListener('click', () => modal.remove());
+    document.getElementById('sg-disc-cancel')?.addEventListener('click', () => {
+      if (isOnDemand) renderEntryChoice();   // back to Suggested / Pick-your-own chooser
+      else modal.remove();
+    });
     modal.querySelectorAll('.sg-disc-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        const disc = (btn as HTMLElement).dataset.disc;
-        selectedDiscipline = disc as TriDiscipline;
+        const disc = (btn as HTMLElement).dataset.disc as GenDiscipline;
+        // On-demand: offer an optional benchmark capture before bike/swim when none is
+        // set yet. FTP unlocks watt targets; CSS unlocks pace targets. Both skippable —
+        // the generators fall back to RPE/duration when the benchmark is absent.
+        if (isOnDemand && disc === 'bike' && !s.triConfig?.bike?.ftp) { renderBenchmarkPrompt('bike'); return; }
+        if (isOnDemand && disc === 'swim' && !s.triConfig?.swim?.cssSecPer100m) { renderBenchmarkPrompt('swim'); return; }
+        selectedDiscipline = disc;
         step = 1;
         render();
       });
@@ -914,19 +955,37 @@ export function openSessionGenerator(): void {
 
   // ── Tri mode. Save adhoc workout into triWorkouts ────────────────────────
 
-  async function saveTriAdhoc(wo: Workout, discipline: TriDiscipline): Promise<void> {
-    const { DAY_NAMES } = await import('@/workouts/scheduler.triathlon');
+  async function saveTriAdhoc(wo: Workout, discipline: TriDiscipline | 'gym'): Promise<void> {
     const jsDay = new Date().getDay();
     const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
     const ms = getMutableState();
     const wk = ms.wks?.[(ms.w ?? 1) - 1];
     if (!wk) return;
+
+    // On-demand is single-store: every discipline (run / bike / swim / gym) lands in
+    // adhocWorkouts, exactly like the running/fitness path, and re-renders the main
+    // view. No triWorkouts, no triathlon plan view (the user has neither).
+    if (isOnDemand) {
+      if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+      const adhoc: Workout = { ...wo, id: `adhoc-${Date.now()}`, dayOfWeek: ourDay };
+      // Tag run/bike/swim with their discipline so the session detail view (and any
+      // discipline-aware display) renders them correctly rather than falling back to
+      // "run". Gym is identified by t:'gym', so it needs no discipline tag.
+      if (discipline !== 'gym') adhoc.discipline = discipline;
+      wk.adhocWorkouts.push(adhoc);
+      saveState();
+      const { renderMainView } = await import('./main-view');
+      renderMainView();
+      return;
+    }
+
+    const { DAY_NAMES } = await import('@/workouts/scheduler.triathlon');
     if (!wk.triWorkouts) wk.triWorkouts = [];
     wk.triWorkouts.push({
       ...wo,
       id: `adhoc-${Date.now()}`,
-      discipline,
+      discipline: discipline as TriDiscipline,
       dayOfWeek: ourDay,
       dayName: DAY_NAMES[ourDay],
     });
@@ -934,6 +993,120 @@ export function openSessionGenerator(): void {
 
     const { renderTriathlonPlanView } = await import('./triathlon/plan-view');
     renderTriathlonPlanView();
+  }
+
+  // ── On-demand: optional FTP / CSS capture before bike / swim ───────────────
+  // Shown once, only when the benchmark is missing. Saving stores a 'user'-sourced
+  // value on triConfig (the canonical benchmark home — cycling mode reuses it too).
+  // eventType stays non-triathlon, so this never flips the user into triathlon UI.
+  // Skipping proceeds with RPE/duration targets — the generators degrade gracefully.
+  function renderBenchmarkPrompt(disc: 'bike' | 'swim') {
+    const isBike = disc === 'bike';
+    const title = isBike ? 'Add your FTP?' : 'Add your CSS?';
+    const blurb = isBike
+      ? 'Functional Threshold Power in watts. Adding it shows watt targets on your bike sessions. Skip and sessions use perceived effort instead.'
+      : 'Critical Swim Speed: your threshold pace per 100m. Adding it shows pace targets on your swim sessions. Skip and distance is estimated from skill level.';
+
+    modal.innerHTML = `
+      ${modalShellOpen('auto')}
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${title}</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px;line-height:1.5">${blurb}</div>
+
+        <div style="margin-bottom:16px">
+          <label style="display:block;font-size:12px;font-weight:600;color:var(--c-muted);margin-bottom:8px">${isBike ? 'FTP (watts)' : 'CSS (min:sec per 100m)'}</label>
+          <input type="${isBike ? 'number' : 'text'}" id="sg-bench-input" inputmode="${isBike ? 'numeric' : 'text'}"
+            placeholder="${isBike ? '220' : '1:45'}"
+            style="width:100%;box-sizing:border-box;background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:10px;padding:12px 14px;font-size:16px;outline:none">
+        </div>
+
+        <button id="sg-bench-save" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Save and continue</button>
+        <button id="sg-bench-skip" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Skip</button>
+        <button id="sg-bench-back" class="m-btn-glass m-btn-glass--inset" style="width:100%">Back</button>
+      ${modalShellClose()}
+    `;
+
+    const proceed = () => { selectedDiscipline = disc; step = 1; render(); };
+
+    document.getElementById('sg-bench-back')?.addEventListener('click', () => { step = 0; render(); });
+    document.getElementById('sg-bench-skip')?.addEventListener('click', proceed);
+    document.getElementById('sg-bench-save')?.addEventListener('click', () => {
+      const raw = (document.getElementById('sg-bench-input') as HTMLInputElement)?.value?.trim() ?? '';
+      const ms = getMutableState();
+      if (!ms.triConfig) ms.triConfig = {} as NonNullable<typeof ms.triConfig>;
+      if (isBike) {
+        const ftp = parseInt(raw, 10);
+        if (ftp > 0) {
+          ms.triConfig.bike = { ...(ms.triConfig.bike ?? {}), ftp, ftpSource: 'user', ftpConfidence: 'medium' };
+          saveState();
+        }
+      } else {
+        // Parse "m:ss" or plain seconds → sec/100m.
+        let css = 0;
+        if (raw.includes(':')) {
+          const [m, sec] = raw.split(':');
+          css = (parseInt(m, 10) || 0) * 60 + (parseInt(sec, 10) || 0);
+        } else {
+          css = parseInt(raw, 10) || 0;
+        }
+        if (css > 0) {
+          ms.triConfig.swim = { ...(ms.triConfig.swim ?? {}), cssSecPer100m: css, cssSource: 'user' };
+          saveState();
+        }
+      }
+      proceed();
+    });
+  }
+
+  // ── On-demand: gym session ─────────────────────────────────────────────────
+  // Single screen. generateGymWorkouts builds a phase- and ability-matched strength
+  // session (injury-aware: returns [] when an injury pauses loaded strength). No
+  // duration slider — gym sessions are template-driven.
+  function renderGymSession() {
+    const phase = (s.wks?.[(s.w ?? 1) - 1]?.ph as TrainingPhase) ?? 'base';
+    const fitnessLevel = s.onboarding?.experienceLevel ?? 'intermediate';
+    const gymList = generateGymWorkouts(phase, 1, fitnessLevel, s.w ?? 1, s.tw ?? 18, s.v, s.injuryState ?? null);
+    const wo = gymList[0];
+
+    const esc = (str: string) => String(str ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // wo.d is a newline-joined list of exercise lines. Render each as its own row so
+    // it reads as a session, not a wall of text. Trailing parenthetical (rest / cue)
+    // is split onto a muted sub-line where present.
+    const exerciseRows = wo ? String(wo.d ?? '').split('\n').filter(l => l.trim()).map(line => {
+      const m = line.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
+      const main = m ? m[1].trim() : line.trim();
+      const note = m ? m[2].trim() : '';
+      return `
+        <div style="padding:11px 0;border-top:1px solid rgba(0,0,0,0.05)">
+          <div style="font-size:13px;color:var(--c-black);line-height:1.4">${esc(main)}</div>
+          ${note ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px;line-height:1.4">${esc(note)}</div>` : ''}
+        </div>`;
+    }).join('') : '';
+
+    modal.innerHTML = `
+      ${modalShellOpen()}
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">Gym session</div>
+        ${wo ? `
+          <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Matched to your phase and ability.</div>
+          ${renderRecommendationCaption()}
+          <div style="padding:4px 16px 10px;border-radius:14px;background:#fff;border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.05);margin-bottom:14px">
+            <div style="font-size:17px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;padding:14px 0 4px">${esc(wo.n)}</div>
+            ${exerciseRows}
+          </div>
+          <button id="sg-gym-confirm" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Add session</button>
+        ` : `
+          <div style="font-size:13px;color:var(--c-black);line-height:1.55;margin-bottom:14px;padding:14px;border-radius:12px;background:#fff;border:1px solid rgba(0,0,0,0.06)">Loaded strength is paused while you recover. Focus on the rehab for the affected area until the injury clears.</div>
+        `}
+        <button id="sg-gym-back" class="m-btn-glass m-btn-glass--inset" style="width:100%">Back</button>
+      ${modalShellClose()}
+    `;
+
+    document.getElementById('sg-gym-back')?.addEventListener('click', () => { step = 0; render(); });
+    document.getElementById('sg-gym-confirm')?.addEventListener('click', async () => {
+      modal.remove();
+      await saveTriAdhoc(wo, 'gym');
+    });
   }
 
   // ── Step 2: Set effort + distance/time ────────────────────────────────────
@@ -1199,7 +1372,7 @@ export function openSessionGenerator(): void {
 
     const predictions = TIME_TRIAL_DISTANCES.map(d => {
       const sec = hasBlendInputs
-        ? blendPredictions(d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
+        ? blendPredictions(d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
             s.b ?? 1.06, s.typ ?? 'Balanced', s.rec ?? null,
             s.athleteTier ?? undefined)
         : null;
@@ -1408,7 +1581,122 @@ export function openSessionGenerator(): void {
     });
   }
 
-  render();
+  // ── Entry: Suggested vs Pick your own (running / fitness incl. Just-Track) ──
+  // The chooser only fronts the single-discipline run/fitness flow. Tri opens
+  // straight to its discipline picker (step 0) and hyrox returned to renderVibes
+  // above — recovery can't choose a discipline, so a cross-discipline auto-
+  // suggestion would be guesswork.
+  function renderEntryChoice() {
+    modal.innerHTML = `
+      ${modalShellOpen()}
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">Add a session</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">How do you want to start?</div>
+        ${renderRecommendationCaption()}
+
+        <button id="sg-entry-suggested" style="${tilePickerStyle()}">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Suggested session</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.45">We read your recovery and pick the effort and duration. Adjust anything before adding it.</div>
+        </button>
+        <button id="sg-entry-pick" style="${tilePickerStyle()}">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Pick your own</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.45">${isOnDemand ? 'Choose a discipline (run, bike, swim or gym) and set it up yourself.' : 'Browse every session type and set it up yourself.'}</div>
+        </button>
+
+        <button id="sg-entry-cancel" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">Cancel</button>
+      ${modalShellClose()}
+    `;
+    document.getElementById('sg-entry-suggested')?.addEventListener('click', () => renderSuggestion());
+    document.getElementById('sg-entry-pick')?.addEventListener('click', () => { step = isOnDemand ? 0 : 1; render(); });
+    document.getElementById('sg-entry-cancel')?.addEventListener('click', () => modal.remove());
+  }
+
+  // ── Suggested session card ─────────────────────────────────────────────────
+  // Concrete typed session built from the recovery read. Effort comes from
+  // sessionRec.recommendedSlot (readiness/ACWR/HRV/sleep composite); the type is
+  // mapped via SUGGESTED_SLOT_BY_EFFORT; the duration is the type's own default.
+  // Nothing invented here. With no recovery data yet we fall back to the lowest-
+  // risk option (Easy Run) rather than the band default, since suggesting a
+  // structured session to someone we know nothing about is the wrong default.
+  function renderSuggestion() {
+    const effort: 'easy' | 'steady' | 'hard' =
+      sessionRec.readinessScore == null ? 'easy' : sessionRec.recommendedSlot;
+    const slot = SUGGESTED_SLOT_BY_EFFORT[effort];
+    const type = SESSION_TYPES.find(t => t.slot === slot) ?? SESSION_TYPES[0];
+    const mins = type.defaultMinutes;
+    const km = Math.round(mins * 60 / easyPace);
+
+    // One-line "why this session", framed off the effort band. Qualitative, no
+    // numbers — the readiness caption above already carries the score.
+    const whyLine =
+      effort === 'easy' ? 'Recovery signals are low. Keep it aerobic and easy today.'
+      : effort === 'steady' ? 'Recovery is moderate. A controlled progressive run fits today.'
+      : 'Recovery is strong. You can absorb a threshold session today.';
+
+    modal.innerHTML = `
+      ${modalShellOpen()}
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">Suggested for today</div>
+
+        <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.4);margin-bottom:14px">
+          <div style="font-size:20px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${type.label}</div>
+          <div style="font-size:13px;color:var(--c-muted);margin-bottom:10px;font-variant-numeric:tabular-nums">${mins} min · ${formatKm(km, up)}</div>
+          ${sessionRec.caption ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:6px">${String(sessionRec.caption).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+          <div style="font-size:13px;color:var(--c-black);line-height:1.5">${whyLine}</div>
+        </div>
+
+        <button id="sg-sugg-accept" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Accept</button>
+        <button id="sg-sugg-adjust" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Adjust</button>
+        <button id="sg-sugg-back" class="m-btn-glass m-btn-glass--inset" style="width:100%">Back</button>
+      ${modalShellClose()}
+    `;
+
+    document.getElementById('sg-sugg-back')?.addEventListener('click', () => renderEntryChoice());
+
+    // Adjust: pre-select the suggested type and drop into its normal setup step
+    // (duration / effort), so the user tweaks this exact session rather than
+    // restarting from the type list.
+    document.getElementById('sg-sugg-adjust')?.addEventListener('click', () => {
+      selectedType = type;
+      step = 2;
+      render();
+    });
+
+    // Accept: commit the suggested session. Mirrors renderStep2's non-effort
+    // save path exactly (same buildSessionIntent → intentToWorkout → adhoc push).
+    document.getElementById('sg-sugg-accept')?.addEventListener('click', () => {
+      modal.remove();
+      const workMinutes = Math.round(mins * type.workRatio);
+      const weekIdx = s.w || 1;
+      const intent = buildSessionIntent(type.slot as SlotType, mins, workMinutes, weekIdx);
+      const workout = intentToWorkout(intent, s.rd, s.typ, easyPace);
+
+      const jsDay = new Date().getDay();
+      const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+
+      const session: Workout = {
+        id: `adhoc-${Date.now()}`,
+        t: workout.t,
+        n: workout.n,
+        d: workout.d,
+        r: workout.r,
+        rpe: workout.rpe ?? workout.r,
+        dayOfWeek: ourDay,
+      };
+
+      const ms = getMutableState();
+      const wk = ms.wks?.[ms.w - 1];
+      if (!wk) return;
+      if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+      wk.adhocWorkouts.push(session);
+      saveState();
+
+      import('./main-view').then(({ renderMainView }) => renderMainView());
+    });
+  }
+
+  // Running / fitness (incl. Just-Track) open with the chooser; tri goes
+  // straight to its discipline picker.
+  if (isTri) render();
+  else renderEntryChoice();
 }
 
 /**

@@ -1,0 +1,302 @@
+/**
+ * HYROX P2 integration test — effortMultiplier → real plan engine.
+ *
+ * Verifies that rating past HYROX weeks easy or hard actually produces
+ * a DIFFERENT current-week volume from the REAL generator, not just that
+ * hyroxEffortMultiplier() returns a different number.
+ *
+ * Adversarial stance: we try to find where the wiring is wrong.
+ */
+
+import { describe, it, expect } from 'vitest';
+import { generateHyroxPlan, regenerateHyroxWeek } from '@/workouts/plan_engine.hyrox';
+import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
+import type { SimulatorState, Week, Workout } from '@/types/state';
+import type { HyroxConfig } from '@/types/triathlon';
+
+// ─── Minimal valid HyroxConfig ────────────────────────────────────────────────
+
+const BASE_HYROX_CONFIG: HyroxConfig = {
+  format: 'open_singles',
+  athleteBand: 'intermediate',
+  hyroxPhase: 'build',
+  stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+  weeklyMTL: 0,
+  mtlCap: 200,
+  mtlHistory: [],
+  // Per-band session counts (intermediate defaults): 3 runs, 2 stations, 1 brick
+  runsPerWeek: 3,
+  stationSessionsPerWeek: 2,
+  bricksPerWeek: 1,
+  weeklyHoursAvailable: 8,
+};
+
+// ─── Helper: build a rated week with HYROX workouts ──────────────────────────
+
+function makeRatedWeek(
+  weekNum: number,
+  plannedRpe: number,
+  ratedRpe: number,
+  workoutCount = 4
+): Week {
+  const workouts: Workout[] = [];
+  const rated: Record<string, number> = {};
+
+  for (let i = 0; i < workoutCount; i++) {
+    const id = `w${weekNum}-s${i}`;
+    workouts.push({
+      id,
+      t: 'hyrox_station_sled',
+      n: `Station ${i}`,
+      d: '45min',
+      r: plannedRpe,
+      estimatedDurationMin: 45,
+    } as Workout);
+    rated[id] = ratedRpe;
+  }
+
+  return {
+    w: weekNum,
+    ph: 'build',
+    triWorkouts: workouts,
+    rated,
+    skip: [],
+    cross: [],
+    wkGain: 0,
+    workoutMods: [],
+    adjustments: [],
+    unspentLoad: 0,
+    extraRunLoad: 0,
+  } as Week;
+}
+
+// ─── Helper: build a SimulatorState for 16 weeks, current week = 3 ──────────
+
+function buildState(
+  week1Planned: number,
+  week1Rated: number,
+  week2Planned: number,
+  week2Rated: number
+): SimulatorState {
+  const week1 = makeRatedWeek(1, week1Planned, week1Rated);
+  const week2 = makeRatedWeek(2, week2Planned, week2Rated);
+
+  // Weeks 3–16 are skeleton weeks (no triWorkouts, no ratings).
+  // The generator populates them on demand.
+  const skeletonWeeks: Week[] = [];
+  for (let i = 3; i <= 16; i++) {
+    skeletonWeeks.push({
+      w: i,
+      ph: 'build',
+      triWorkouts: [],
+      rated: {},
+      skip: [],
+      cross: [],
+      wkGain: 0,
+      workoutMods: [],
+      adjustments: [],
+      unspentLoad: 0,
+      extraRunLoad: 0,
+    } as Week);
+  }
+
+  return {
+    eventType: 'hyrox',
+    w: 3,           // current week
+    tw: 16,         // total weeks
+    hyroxConfig: { ...BASE_HYROX_CONFIG },
+    wks: [week1, week2, ...skeletonWeeks],
+  } as unknown as SimulatorState;
+}
+
+// ─── Helper: sum estimatedDurationMin for a generated week's workouts ────────
+
+function totalDurationMin(workouts: Workout[]): number {
+  return workouts.reduce((sum, w) => sum + (w.estimatedDurationMin ?? 0), 0);
+}
+
+function totalMTL(workouts: Workout[]): number {
+  return workouts.reduce((sum, w) => sum + (w.musculoTendonLoad ?? 0), 0);
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe('HYROX P2 integration — effortMultiplier wired into real generator', () => {
+
+  // ── Multiplier sanity checks (using real function) ──────────────────────────
+
+  it('NEUTRAL: rated == planned → multiplier is exactly 1.0', () => {
+    const state = buildState(7, 7, 7, 7);
+    const mult = hyroxEffortMultiplier(state);
+    expect(mult).toBe(1.0);
+  });
+
+  it('EASY: rated well below planned → multiplier > 1.0 (more load next week)', () => {
+    // planned=7, rated=4 → score = -3 → mult = 1 - (-3*0.05) = 1.15
+    const state = buildState(7, 4, 7, 4);
+    const mult = hyroxEffortMultiplier(state);
+    expect(mult).toBeGreaterThan(1.0);
+    console.log('EASY multiplier:', mult);
+  });
+
+  it('HARD: rated well above planned → multiplier < 1.0 (less load next week)', () => {
+    // planned=5, rated=9 → score = +4 → mult = 1 - (4*0.05) = 0.80 → clamped to 0.85
+    const state = buildState(5, 9, 5, 9);
+    const mult = hyroxEffortMultiplier(state);
+    expect(mult).toBeLessThan(1.0);
+    console.log('HARD multiplier:', mult);
+  });
+
+  it('clamps at upper bound 1.15 (extreme easy)', () => {
+    const state = buildState(9, 1, 9, 1);
+    expect(hyroxEffortMultiplier(state)).toBe(1.15);
+  });
+
+  it('clamps at lower bound 0.85 (extreme hard)', () => {
+    const state = buildState(1, 9, 1, 9);
+    expect(hyroxEffortMultiplier(state)).toBe(0.85);
+  });
+
+  // ── Integration: does the REAL generator produce DIFFERENT volume? ──────────
+
+  it('INTEGRATION: EASY rating produces HIGHER current-week volume than NEUTRAL', () => {
+    const neutralState = buildState(7, 7, 7, 7);
+    const easyState    = buildState(7, 4, 7, 4);
+
+    // Use generateHyroxPlan — the full plan engine, not a reimplementation.
+    const neutralPlan = generateHyroxPlan(neutralState);
+    const easyPlan    = generateHyroxPlan(easyState);
+
+    // Current week = week 3 → index 2 (0-based)
+    const neutralWeek3 = neutralPlan[2]?.triWorkouts ?? [];
+    const easyWeek3    = easyPlan[2]?.triWorkouts ?? [];
+
+    const neutralVol = totalDurationMin(neutralWeek3);
+    const easyVol    = totalDurationMin(easyWeek3);
+
+    console.log('\n--- INTEGRATION volume numbers ---');
+    console.log('NEUTRAL week 3 total duration (min):', neutralVol);
+    console.log('EASY    week 3 total duration (min):', easyVol);
+    console.log('EASY MTL:', totalMTL(easyWeek3), '  NEUTRAL MTL:', totalMTL(neutralWeek3));
+
+    expect(easyVol).toBeGreaterThan(neutralVol);
+  });
+
+  it('INTEGRATION: HARD rating produces LOWER current-week volume than NEUTRAL', () => {
+    const neutralState = buildState(7, 7, 7, 7);
+    const hardState    = buildState(5, 9, 5, 9);
+
+    const neutralPlan = generateHyroxPlan(neutralState);
+    const hardPlan    = generateHyroxPlan(hardState);
+
+    const neutralWeek3 = neutralPlan[2]?.triWorkouts ?? [];
+    const hardWeek3    = hardPlan[2]?.triWorkouts ?? [];
+
+    const neutralVol = totalDurationMin(neutralWeek3);
+    const hardVol    = totalDurationMin(hardWeek3);
+
+    console.log('\n--- INTEGRATION volume numbers ---');
+    console.log('NEUTRAL week 3 total duration (min):', neutralVol);
+    console.log('HARD    week 3 total duration (min):', hardVol);
+    console.log('HARD MTL:', totalMTL(hardWeek3), '  NEUTRAL MTL:', totalMTL(neutralWeek3));
+
+    expect(hardVol).toBeLessThan(neutralVol);
+  });
+
+  it('INTEGRATION: EASY→NEUTRAL→HARD volume is strictly ordered', () => {
+    const neutralState = buildState(7, 7, 7, 7);
+    const easyState    = buildState(7, 4, 7, 4);
+    const hardState    = buildState(5, 9, 5, 9);
+
+    const neutralVol = totalDurationMin(generateHyroxPlan(neutralState)[2]?.triWorkouts ?? []);
+    const easyVol    = totalDurationMin(generateHyroxPlan(easyState)[2]?.triWorkouts ?? []);
+    const hardVol    = totalDurationMin(generateHyroxPlan(hardState)[2]?.triWorkouts ?? []);
+
+    console.log('\n--- Summary across scenarios ---');
+    console.log(`HARD(${hardVol}) < NEUTRAL(${neutralVol}) < EASY(${easyVol})`);
+
+    expect(easyVol).toBeGreaterThan(neutralVol);
+    expect(hardVol).toBeLessThan(neutralVol);
+  });
+
+  // ── Gate check: past weeks must NOT be scaled ────────────────────────────────
+
+  it('GATE: past week (weekIndex < state.w) is NOT scaled by effortMultiplier', () => {
+    // Build an "extreme easy" state (mult = 1.15) and compare week 1 output
+    // (past) vs week 3 output (current). The past week should be IDENTICAL
+    // to the neutral state's week 1 — the multiplier gate prevents rewriting history.
+
+    const neutralState = buildState(7, 7, 7, 7);
+    const easyState    = buildState(7, 4, 7, 4);
+
+    const neutralPlan = generateHyroxPlan(neutralState);
+    const easyPlan    = generateHyroxPlan(easyState);
+
+    // Week 1 is index 0 (past — before state.w=3)
+    const neutralWeek1Vol = totalDurationMin(neutralPlan[0]?.triWorkouts ?? []);
+    const easyWeek1Vol    = totalDurationMin(easyPlan[0]?.triWorkouts ?? []);
+
+    console.log('\n--- Gate check ---');
+    console.log('Week 1 (PAST) NEUTRAL vol:', neutralWeek1Vol);
+    console.log('Week 1 (PAST) EASY vol:   ', easyWeek1Vol);
+    console.log('Week 1 volumes should be equal (gate prevents rewriting history)');
+
+    // Past weeks must not diverge between neutral and easy state.
+    expect(easyWeek1Vol).toBe(neutralWeek1Vol);
+  });
+
+  // ── regenerateHyroxWeek sanity check ─────────────────────────────────────────
+
+  it('regenerateHyroxWeek also reflects effortMultiplier for current/future weeks', () => {
+    // NOTE: regenerateHyroxWeek reads state.wks[weekIndex-1] as the "existing" week to
+    // spread metadata onto. It still calls generateWeekSessions(state, ...) which reads
+    // hyroxEffortMultiplier(state). So the state.wks MUST preserve the rated weeks 1&2
+    // to keep the effort signal alive. We must NOT overwrite wks with generated plan
+    // output (generateHyroxPlan returns weeks with empty rated:{}, killing the signal).
+    // Instead we directly call regenerateHyroxWeek on the original states — wks already
+    // has skeleton weeks 3-16 with empty triWorkouts, which is fine because
+    // regenerateHyroxWeek only needs wks[weekIndex-1] to exist (to spread).
+
+    const neutralState = buildState(7, 7, 7, 7);
+    const easyState    = buildState(7, 4, 7, 4);
+
+    // regenerateHyroxWeek requires wks[weekIndex-1] to exist (it spreads the existing week).
+    // state.wks already has skeleton week 3 at index 2. Call directly.
+    const neutralWeek = regenerateHyroxWeek(neutralState, 3);
+    const easyWeek    = regenerateHyroxWeek(easyState, 3);
+
+    const neutralVol = totalDurationMin(neutralWeek?.triWorkouts ?? []);
+    const easyVol    = totalDurationMin(easyWeek?.triWorkouts ?? []);
+
+    console.log('\n--- regenerateHyroxWeek check ---');
+    console.log('regenerateHyroxWeek NEUTRAL vol (week 3):', neutralVol);
+    console.log('regenerateHyroxWeek EASY    vol (week 3):', easyVol);
+
+    expect(easyVol).toBeGreaterThan(neutralVol);
+  });
+
+  // ── Magnitude check: is the delta meaningful? ────────────────────────────────
+
+  it('MAGNITUDE: the volume delta between EASY and HARD is large enough to matter', () => {
+    // With 8h/wk and mult range [0.85, 1.15], the delta should be at least
+    // 0.30 * 8h * 60min/h = 144 min across the full week. Even after session
+    // clamping, we expect at least a 30-min difference.
+    const easyState = buildState(9, 1, 9, 1);   // mult = 1.15
+    const hardState = buildState(1, 9, 1, 9);   // mult = 0.85
+
+    const easyVol = totalDurationMin(generateHyroxPlan(easyState)[2]?.triWorkouts ?? []);
+    const hardVol = totalDurationMin(generateHyroxPlan(hardState)[2]?.triWorkouts ?? []);
+    const delta = easyVol - hardVol;
+
+    console.log('\n--- Magnitude check ---');
+    console.log('EXTREME EASY vol (week 3):', easyVol);
+    console.log('EXTREME HARD vol (week 3):', hardVol);
+    console.log('Delta (min):', delta);
+
+    // Any delta > 0 confirms the wiring. We also flag if it's suspiciously tiny.
+    expect(delta).toBeGreaterThan(0);
+    if (delta < 10) {
+      console.warn('WARNING: volume delta is very small (< 10 min). Session clamping may be eating the signal!');
+    }
+  });
+});

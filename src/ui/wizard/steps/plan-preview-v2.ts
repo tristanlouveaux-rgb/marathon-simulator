@@ -2,13 +2,16 @@ import type { OnboardingState, MilestoneTarget } from '@/types/onboarding';
 import { findNearestMilestone } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
-import { completeOnboarding, updateOnboarding } from '../controller';
+import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { ft } from '@/utils/format';
+import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { getAbilityBand } from '@/calculations/fatigue';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
+import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
+import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
+import { initializeSimulator } from '@/state/initialization';
 
 /**
  * Page 7. Plan Preview (v2).
@@ -17,7 +20,8 @@ import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBa
  *  - Recalculate forecast via `calculateLiveForecast` (single source of truth)
  *  - Detect nearby milestone with `findNearestMilestone` (5% default, experience-scaled)
  *  - Show predicted finish, plan summary card, adaptive-prediction note
- *  - Start-training CTA → `completeOnboarding()` + reload
+ *  - "See your sessions" CTA → hands off to the post-plan workout demonstration
+ *    (workout-preview), which is the final step and completes onboarding
  *  - Optional milestone popup with accept/decline
  *
  * Aesthetic clone of `goals.ts` / `review.ts`:
@@ -36,20 +40,28 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const noEvent = !!s.continuousMode;
   const focusLabel = focusToLabel(state.trainingFocus);
 
-  const sessionsForHorizon = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
-  const { forecastTime } = calculateLiveForecast({
-    currentVdot: s.v || 50,
-    targetDistance: s.rd,
-    weeksRemaining: s.tw || 16,
-    sessionsPerWeek: sessionsForHorizon,
-    runnerType: getRunnerType(s.b || 1.06),
-    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-    weeklyVolumeKm: planMeanKm ?? s.wkm,
-    hmPbSeconds: s.pbs?.h || undefined,
-    ltPaceSecPerKm: s.lt || undefined,
-    blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
-  });
+  const commuteDays = s.commuteConfig?.enabled ? (s.commuteConfig.commuteDaysPerWeek ?? 0) : 0;
+  const baseRunsPerWeek = s.rw || 3;
+  const sessionsForHorizon = (s.epw || s.rw || 4) + commuteDays;
+  const forecastTime = forecastForSessions(s, sessionsForHorizon);
+
+  // Seed the headline forecast onto state so the goal Monte Carlo anchors its
+  // cone to the same number the hero shows. Without this the sim has no
+  // headline anchor during onboarding and falls back to a bare-VDOT trajectory
+  // that can drift from the displayed forecast, making "X% chance · forecast Y"
+  // read incoherently. This is the real first-launch forecast either way.
+  if (forecastTime > 0 && s.forecastTimeAdjusted !== forecastTime) {
+    updateState({ forecastTime, forecastTimeAdjusted: forecastTime });
+  }
+
+  // User-entered goal (running). Persisted in `s.raceGoalTimeSec`, carries
+  // through to the post-onboarding Race Forecast page. When set, the hero
+  // reframes around the goal and shows the live Monte Carlo chance of hitting
+  // it on the *current* plan.
+  const goalSec = s.raceGoalTimeSec && s.raceGoalTimeSec > 0 ? s.raceGoalTimeSec : null;
+  const goalChancePct = goalSec ? goalChanceForState(s, goalSec) : null;
+  // Room to add sessions (same cap the bump helper enforces: 7 runs/week).
+  const canAddSessions = baseRunsPerWeek < 7;
 
   // ─── DIAGNOSTIC LOG (remove after horizon-input bug investigation) ───
   // Dumps every input the horizon model receives and every component it
@@ -138,20 +150,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const canBumpSessions = (s.rw ?? 0) < 7 && (s.epw ?? 0) < 10;
   let milestone: MilestoneTarget | null = null;
   if (candidateMilestone && canBumpSessions) {
-    const bumpedSessions = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0) + 1;
-    const bumpedPlanMeanKm = getPlanPrescribedMeanWeeklyKm(bumpedSessions, s.rd);
-    const { forecastTime: bumpedForecast } = calculateLiveForecast({
-      currentVdot: s.v || 50,
-      targetDistance: s.rd,
-      weeksRemaining: s.tw || 16,
-      sessionsPerWeek: bumpedSessions,
-      runnerType: getRunnerType(s.b || 1.06),
-      experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-      weeklyVolumeKm: bumpedPlanMeanKm ?? s.wkm,
-      hmPbSeconds: s.pbs?.h || undefined,
-      ltPaceSecPerKm: s.lt || undefined,
-      blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
-    });
+    const bumpedForecast = forecastForSessions(s, sessionsForHorizon + 1);
     if (bumpedForecast <= candidateMilestone.time) {
       milestone = candidateMilestone;
     }
@@ -181,6 +180,15 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
 
       /* Milestone pill — no accent, just a bordered tag. */
       .pp-milestone-tag { display:inline-flex; align-items:center; gap:6px; margin-top:12px; padding:6px 12px; border-radius:100px; background:#FFFFFF; border:1px solid rgba(0,0,0,0.12); font-size:12px; color:var(--c-black); }
+
+      /* Goal chance row under the target time. */
+      .pp-goal-chance { display:flex; align-items:baseline; justify-content:center; gap:8px; margin-top:12px; }
+      .pp-goal-pct { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; line-height:1; }
+      .pp-goal-chance-cap { font-size:12px; color:var(--c-faint); }
+
+      /* Secondary goal-entry button — bordered pill, no accent (nav-link colour rule). */
+      .pp-goal-btn { width:100%; height:46px; margin-top:10px; border-radius:23px; background:transparent; border:1px solid var(--c-border); color:var(--c-black); font-size:14px; font-weight:500; cursor:pointer; transition:transform 0.12s ease; }
+      .pp-goal-btn:active { transform:translateY(1px); }
 
       /* Plan summary rows. */
       .pp-rows { display:flex; flex-direction:column; gap:10px; }
@@ -240,6 +248,26 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             <p style="font-size:12px;color:var(--c-faint);margin:14px 0 0;line-height:1.5">
               No race target. ${state.continuousMode === false ? `Fixed ${totalWeeks}-week block with a benchmark test at the end.` : 'Rolling plan that rebuilds week-by-week as you train.'}
             </p>
+          </div>
+        ` : goalSec ? `
+          <div class="pp-rise shadow-ap pp-hero" style="max-width:480px;margin-top:22px;animation-delay:0.12s">
+            <p class="pp-hero-label">TARGET TIME</p>
+            <p class="pp-hero-time">${ft(goalSec)}</p>
+            <p class="pp-hero-dist">${distanceLabel(raceDistance)}</p>
+
+            ${goalChancePct != null ? `
+              <div class="pp-goal-chance">
+                <span class="pp-goal-pct" style="color:${liveTone(goalChancePct)}">${fmtProbPct(goalChancePct)}</span>
+                <span class="pp-goal-chance-cap">chance · ${liveLabel(goalChancePct)}</span>
+              </div>
+            ` : ''}
+
+            ${initialTime > 0 ? `
+              <div class="pp-hero-foot">
+                <div><span class="k">On current plan</span><span class="v">${ft(forecastTime)}</span></div>
+                <div class="delta">${formatImprovement(initialTime, forecastTime)}</div>
+              </div>
+            ` : ''}
           </div>
         ` : `
           <div class="pp-rise shadow-ap pp-hero" style="max-width:480px;margin-top:22px;animation-delay:0.12s">
@@ -303,7 +331,8 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
 
       <div class="pp-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.30s">
         <div style="max-width:480px;margin:0 auto">
-          <button id="pp-start" class="pp-cta">Start training</button>
+          <button id="pp-start" class="pp-cta">See your sessions</button>
+          ${!noEvent ? `<button id="pp-goal" class="pp-goal-btn">${goalSec ? 'Edit goal time' : 'Do you have a goal time?'}</button>` : ''}
         </div>
       </div>
 
@@ -422,25 +451,249 @@ function formatLTPace(secPerKm: number): string {
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
+/* ---------- Forecast / goal helpers ---------- */
+
+/**
+ * Single source for the onboarding forecast at a given session count. The hero,
+ * the milestone feasibility check, and the goal overlay all read from this one
+ * call so the numbers can never diverge between surfaces.
+ */
+function forecastForSessions(s: ReturnType<typeof getState>, sessions: number): number {
+  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd);
+  return calculateLiveForecast({
+    currentVdot: s.v || 50,
+    targetDistance: s.rd,
+    weeksRemaining: s.tw || 16,
+    sessionsPerWeek: sessions,
+    runnerType: getRunnerType(s.b || 1.06),
+    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    weeklyVolumeKm: planMeanKm ?? s.wkm,
+    hmPbSeconds: s.pbs?.h || undefined,
+    ltPaceSecPerKm: s.lt || undefined,
+    blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+  }).forecastTime;
+}
+
+/**
+ * Live Monte Carlo chance (%) of beating `goalSec`. `addedSessions` simulates
+ * extra runs/week WITHOUT mutating state (spread-clone), so the overlay can
+ * show the goal probability sliding up as the user adds sessions.
+ */
+function goalChanceForState(s: ReturnType<typeof getState>, goalSec: number, addedSessions = 0): number | null {
+  const commuteDays = s.commuteConfig?.enabled ? (s.commuteConfig.commuteDaysPerWeek ?? 0) : 0;
+  const sessions = (s.epw || s.rw || 4) + commuteDays + addedSessions;
+  // Anchor the sim to the SAME forecast the overlay caption shows for this
+  // session count, so the chance and the displayed forecast move together as
+  // sessions are added (the stored s.forecastTime knows only the base count).
+  const forecastOverride = forecastForSessions(s, sessions);
+  const simState = addedSessions > 0
+    ? { ...s, rw: (s.rw || 3) + addedSessions, epw: (s.epw ?? s.rw ?? 3) + addedSessions }
+    : s;
+  const sim = runMarathonForecastSim(simState, 2000, goalSec, forecastOverride);
+  if (!sim || sim.goalProbability == null) return null;
+  return sim.goalProbability * 100;
+}
+
+/**
+ * Add `added` runs/week to the plan FOR REAL: bump the onboarding record's
+ * runsPerWeek (capped at 7) and re-run initializeSimulator so the generated
+ * weeks actually gain the session. The plan is built before this screen and
+ * only regenerates through this path, so bumping `s.rw`/`s.epw` alone would be
+ * cosmetic — the prescribed weeks would never reflect the extra session.
+ */
+function bumpSessionsAndRegen(added: number): void {
+  if (added <= 0) return;
+  const ob = getState().onboarding;
+  if (!ob) return;
+  const current = ob.runsPerWeek ?? getState().rw ?? 3;
+  const next = Math.min(7, current + added);
+  if (next <= current) return;
+  updateOnboarding({ runsPerWeek: next });
+  try {
+    const ob2 = getState().onboarding;
+    if (ob2) initializeSimulator(ob2);
+  } catch (e) {
+    console.warn('[PlanPreview] session-bump regen failed:', e);
+  }
+}
+
+/* ---------- Goal-time overlay (onboarding-local) ---------- */
+
+/**
+ * Goal-time entry on the plan-ready screen. Two interacting controls — a goal
+ * slider and a sessions stepper — both re-run the Monte Carlo so the predicted
+ * finish and the chance of hitting the goal slide live. Saving persists
+ * `s.raceGoalTimeSec` (carries to the post-onboarding Race Forecast page) and,
+ * if sessions were added, regenerates the plan so the extra session is real.
+ */
+function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
+  document.getElementById('pp-goal-overlay')?.remove();
+
+  const s = getState();
+  const commuteDays = s.commuteConfig?.enabled ? (s.commuteConfig.commuteDaysPerWeek ?? 0) : 0;
+  const baseSessions = (s.epw || s.rw || 4) + commuteDays;
+  const baseRunsPerWeek = s.rw || 3;
+  const maxAdd = Math.max(0, 7 - baseRunsPerWeek);
+
+  const predictedSec = forecastForSessions(s, baseSessions);
+  if (!predictedSec || predictedSec <= 0) return;
+
+  // Extend the slider's fast end to cover the fastest plan the user could build
+  // here (base + every addable session), so adding sessions never runs the goal
+  // off the end of the range. The range is fixed at open time, not re-derived
+  // per tap, so the bounds don't shift under the user.
+  const fastestSec = maxAdd > 0 ? forecastForSessions(s, baseSessions + maxAdd) : undefined;
+  const { minSec, maxSec, stepSec: STEP } = deriveBounds(predictedSec, s.rd, fastestSec);
+  const snap = (v: number, st: number) => Math.round(v / st) * st;
+  const savedGoal = s.raceGoalTimeSec && s.raceGoalTimeSec > 0 ? s.raceGoalTimeSec : null;
+  const initialSec = Math.min(maxSec, Math.max(minSec, snap(savedGoal ?? Math.round(predictedSec * 0.97), STEP)));
+
+  let goalSec = initialSec;
+  let added = 0;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pp-goal-overlay';
+  overlay.className = 'pp-overlay-backdrop';
+  overlay.innerHTML = `
+    <div class="pp-overlay-card shadow-ap" style="max-width:400px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <p class="pp-hero-label" style="margin:0">GOAL TIME</p>
+          <h3 style="font-size:18px;font-weight:500;color:var(--c-black);margin:6px 0 0">What are you chasing?</h3>
+        </div>
+        <button id="ppg-close" aria-label="Close" style="background:none;border:none;cursor:pointer;color:var(--c-muted);font-size:22px;line-height:1;padding:0">×</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--c-muted);margin:8px 0 18px;line-height:1.5">Set a race-day target. We simulate the rest of your block to show your chance of hitting it.</p>
+
+      <div style="text-align:center;margin-bottom:4px">
+        <div id="ppg-time" style="font-size:40px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${ft(goalSec)}</div>
+      </div>
+      <input id="ppg-slider" type="range" min="${minSec}" max="${maxSec}" step="${STEP}" value="${goalSec}" style="width:100%;margin:16px 0 4px;-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer" />
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-bottom:16px">
+        <span>${ft(minSec)}</span><span>${ft(maxSec)}</span>
+      </div>
+
+      <div id="ppg-chance" style="border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px"></div>
+
+      ${maxAdd > 0 ? `
+        <div style="border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:12px 14px;margin-bottom:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div style="font-size:13px;color:var(--c-black)">Add quality sessions</div>
+              <div id="ppg-sess-cap" style="font-size:11.5px;color:var(--c-faint);margin-top:2px">${baseRunsPerWeek} runs/week</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <button id="ppg-minus" class="ppg-step" aria-label="Remove a session">−</button>
+              <span id="ppg-added" style="font-size:14px;font-weight:500;color:var(--c-black);min-width:28px;text-align:center;font-variant-numeric:tabular-nums">+0</span>
+              <button id="ppg-plus" class="ppg-step" aria-label="Add a session">+</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      <button id="ppg-save" class="pp-overlay-btn-primary" style="width:100%">Set this goal</button>
+      ${savedGoal ? `<button id="ppg-clear" style="width:100%;padding:10px 0 0;background:none;border:none;color:var(--c-muted);font-size:13px;cursor:pointer">Clear goal</button>` : ''}
+    </div>
+
+    <style>
+      #ppg-slider::-webkit-slider-runnable-track { height:4px;background:rgba(0,0,0,0.10);border-radius:2px; }
+      #ppg-slider::-webkit-slider-thumb { -webkit-appearance:none;appearance:none;width:24px;height:24px;border-radius:50%;background:#fff;border:1px solid rgba(0,0,0,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.18);margin-top:-10px;cursor:pointer; }
+      #ppg-slider::-moz-range-track { height:4px;background:rgba(0,0,0,0.10);border-radius:2px; }
+      #ppg-slider::-moz-range-thumb { width:24px;height:24px;border-radius:50%;background:#fff;border:1px solid rgba(0,0,0,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.18);cursor:pointer; }
+      .ppg-step { width:32px;height:32px;border-radius:50%;background:#FFFFFF;border:1px solid var(--c-border);color:var(--c-black);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center; }
+      .ppg-step:disabled { opacity:0.35;cursor:default; }
+    </style>
+  `;
+  document.body.appendChild(overlay);
+
+  const timeEl = overlay.querySelector('#ppg-time') as HTMLElement | null;
+  const chanceEl = overlay.querySelector('#ppg-chance') as HTMLElement | null;
+  const addedEl = overlay.querySelector('#ppg-added') as HTMLElement | null;
+  const sessCapEl = overlay.querySelector('#ppg-sess-cap') as HTMLElement | null;
+  const minusBtn = overlay.querySelector('#ppg-minus') as HTMLButtonElement | null;
+  const plusBtn = overlay.querySelector('#ppg-plus') as HTMLButtonElement | null;
+
+  const recomputeChance = (): void => {
+    if (!chanceEl) return;
+    const predicted = forecastForSessions(getState(), baseSessions + added);
+    const pct = goalChanceForState(getState(), goalSec, added);
+    if (pct == null) {
+      chanceEl.innerHTML = `<div style="font-size:12px;color:var(--c-faint)">Forecast unavailable.</div>`;
+      return;
+    }
+    chanceEl.innerHTML = `
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <span style="font-size:24px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums;line-height:1">${fmtProbPct(pct)}</span>
+        <span style="font-size:12px;color:var(--c-muted)">chance · forecast ${ft(predicted)}</span>
+      </div>
+      <span style="font-size:12px;font-weight:600;color:${liveTone(pct)}">${liveLabel(pct)}</span>
+    `;
+  };
+  recomputeChance();
+
+  // Goal slider — debounced sim per frame.
+  let pending = false;
+  const slider = overlay.querySelector('#ppg-slider') as HTMLInputElement | null;
+  slider?.addEventListener('input', () => {
+    goalSec = Number(slider.value);
+    if (timeEl) timeEl.textContent = ft(goalSec);
+    if (!pending) {
+      pending = true;
+      requestAnimationFrame(() => { pending = false; recomputeChance(); });
+    }
+  });
+
+  const syncSteppers = (): void => {
+    if (addedEl) addedEl.textContent = `+${added}`;
+    if (sessCapEl) sessCapEl.textContent = `${baseRunsPerWeek + added} runs/week`;
+    if (minusBtn) minusBtn.disabled = added <= 0;
+    if (plusBtn) plusBtn.disabled = added >= maxAdd;
+  };
+  minusBtn?.addEventListener('click', () => { if (added > 0) { added--; syncSteppers(); recomputeChance(); } });
+  plusBtn?.addEventListener('click', () => { if (added < maxAdd) { added++; syncSteppers(); recomputeChance(); } });
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#ppg-close')?.addEventListener('click', close);
+
+  overlay.querySelector('#ppg-save')?.addEventListener('click', () => {
+    // Regenerate first (initializeSimulator rewrites broad state), then pin the
+    // goal so the regen can't clobber it.
+    if (added > 0) bumpSessionsAndRegen(added);
+    updateState({ raceGoalTimeSec: goalSec });
+    saveState();
+    close();
+    rerender(onboarding);
+  });
+
+  overlay.querySelector('#ppg-clear')?.addEventListener('click', () => {
+    updateState({ raceGoalTimeSec: undefined });
+    saveState();
+    close();
+    rerender(onboarding);
+  });
+}
+
 /* ---------- Handlers ---------- */
 
 function wireHandlers(state: OnboardingState, milestone: MilestoneTarget | null, _showMilestone: boolean): void {
   document.getElementById('pp-start')?.addEventListener('click', () => {
-    completeOnboarding();
-    window.location.reload();
+    // The plan reveal now hands off to the post-plan workout demonstration, which is
+    // the final step and completes onboarding. (plan-preview-v2 is running-only.)
+    goToStep('workout-preview');
   });
 
   document.getElementById('pp-vdot-info')?.addEventListener('click', showVDOTExplanation);
 
+  document.getElementById('pp-goal')?.addEventListener('click', () => openOnboardingGoalOverlay(state));
+
   document.getElementById('pp-accept')?.addEventListener('click', () => {
     if (milestone) {
       updateOnboarding({ targetMilestone: milestone, acceptedMilestoneChallenge: true });
-      const s = getState();
-      // Mirror legacy behaviour: nudge runs + sessions up by one, capped at 7/10.
-      updateState({
-        rw: Math.min(s.rw + 1, 7),
-        epw: Math.min(s.epw + 1, 10),
-      });
+      // Add the session FOR REAL: bump runsPerWeek and regenerate the plan so
+      // the prescribed weeks gain it. (Bumping s.rw/s.epw alone was cosmetic —
+      // the plan is built before this screen.)
+      bumpSessionsAndRegen(1);
       saveState();
     }
     closeMilestoneOverlay();

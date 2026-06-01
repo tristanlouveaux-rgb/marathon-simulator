@@ -250,11 +250,19 @@ export function nextStep(): void {
     return;
   }
 
-  // Branch: manual-entry rejoins the flow at about-you (so age + sex still
-  // get captured even if the user skipped Strava OAuth). about-you then
-  // routes to the mode-appropriate next step.
+  // Branch: running connect-data with a data source connected (not skipped). The
+  // About-you step was removed from the running flow (age is now captured on the
+  // schedule step, sex pre-fills from Strava), so go straight to race-target.
+  // Tri/cycling/HYROX handled their own connect-data routing in the blocks above.
+  if (s.onboarding.currentStep === 'connect-data') {
+    goToStep('race-target');
+    return;
+  }
+
+  // Branch: manual-entry (running, no data source) rejoins at race-target. About-you
+  // was removed for running; age + sex are captured on the schedule step instead.
   if (s.onboarding.currentStep === 'manual-entry') {
-    goToStep('about-you');
+    goToStep('race-target');
     return;
   }
 
@@ -282,11 +290,17 @@ export function nextStep(): void {
   // workout-preview → review inside its block above (no run leg, no commute).
   const isRunningMode = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
   if (s.onboarding.currentStep === 'schedule' && isRunningMode && !s.onboarding.trackOnly) {
-    goToStep('workout-preview');
+    // Running: the workout demonstration ("what your plan looks like") now comes AFTER
+    // the plan (plan-preview-v2 → workout-preview), so schedule goes straight to review.
+    goToStep('review');
     return;
   }
   if (s.onboarding.currentStep === 'workout-preview') {
-    goToStep('commute');
+    // Running: workout-preview is now the post-plan demonstration and the final step.
+    // Its CTA completes onboarding directly; this is a safe fallback. (Cycling handles
+    // its own pre-plan workout-preview → review inside its block above.)
+    completeOnboarding();
+    goToStep('main-view');
     return;
   }
   if (s.onboarding.currentStep === 'commute') {
@@ -388,10 +402,11 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: workout-preview back → cycling-setup (cycling) or schedule (running).
+  // Branch: workout-preview back. Cycling's is pre-plan (→ cycling-setup). Running's
+  // is now the post-plan demonstration, so back returns to the plan reveal.
   if (s.onboarding.currentStep === 'workout-preview') {
     const isRunning = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
-    goToStep(isRunning ? 'schedule' : 'cycling-setup');
+    goToStep(isRunning ? 'plan-preview-v2' : 'cycling-setup');
     return;
   }
 
@@ -438,8 +453,9 @@ export function previousStep(): void {
       // Track-only: race-target → commute → review.
       goToStep('commute');
     } else {
-      // Running mode (default): workout-preview → commute → review.
-      goToStep('commute');
+      // Running mode (default): workout-preview moved to after the plan, so review
+      // now comes straight from the schedule step.
+      goToStep('schedule');
     }
     return;
   }

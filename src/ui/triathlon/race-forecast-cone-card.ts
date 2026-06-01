@@ -21,6 +21,8 @@ import type { SimulatorState } from '@/types/state';
 import { runTriForecastSim } from '@/calculations/race-forecast-simulation.triathlon';
 import { buildForecastCone, type ConeHistoryPoint } from '@/ui/forecast-cone';
 import { ft, fmtProbPct } from '@/utils/format';
+import { getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
@@ -177,6 +179,7 @@ export function renderTriConeCard(s: SimulatorState): string {
 // into the same opener so tapping an outcome sets it as the goal.
 
 export function wireTriConeCard(): void {
+  // "Edit goal time" / "Set a goal time" open the editor overlay.
   const open = (preSec?: number) => {
     void import('./goal-time-overlay').then(m => {
       if (typeof m.openTriGoalOverlay === 'function') m.openTriGoalOverlay(preSec);
@@ -184,10 +187,19 @@ export function wireTriConeCard(): void {
   };
   document.getElementById('tri-cone-edit-goal')?.addEventListener('click', () => open());
   document.getElementById('tri-cone-set-goal')?.addEventListener('click', () => open());
+
+  // Outcome tiles set the goal directly in one tap (no overlay): tapping
+  // Optimistic / Median / Conservative jumps the goal to that time, then
+  // re-renders so the goal line, chance %, and selected-tile highlight update.
   document.querySelectorAll<HTMLButtonElement>('.tri-cone-outcome').forEach(btn => {
     btn.addEventListener('click', () => {
       const sec = Number(btn.dataset.outcomeSec);
-      if (Number.isFinite(sec) && sec > 0) open(Math.round(sec));
+      if (!Number.isFinite(sec) || sec <= 0) return;
+      const ms = getMutableState();
+      if (!ms.triConfig) return;
+      ms.triConfig.targetFinishTimeSec = Math.round(sec);
+      saveState();
+      void import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
     });
   });
 }

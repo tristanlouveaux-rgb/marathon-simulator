@@ -1,18 +1,42 @@
 # Parking Strava & Garmin (launch runbook)
 
-**Status (2026-05-27): STRAVA IS WIRED & PARKED.** `STRAVA_ENABLED = false` in
-`src/constants/feature-flags.ts`. All Strava UI is hidden and all launch-time Strava
-network calls are skipped (sites below). `GARMIN_CONNECT_ENABLED` remains `true` — Garmin
-is being *repurposed* (export-and-upload), not buried, and is handled in the onboarding
-rework, not here.
+**Status (2026-06-01): STRAVA IS RE-ENABLED.** `STRAVA_ENABLED = true` in
+`src/constants/feature-flags.ts`. Strava's June 2026 Developer Program overhaul lets
+Standard Tier self-serve up to **10 athletes** with no review; Tristan upgraded (Premium
+satisfies the developer-subscription requirement). All Strava UI and launch-time network
+calls are live again. **CEILING: 10 athletes — this is the beta path, not public scale.**
+Public launch with Strava needs Extended Access Tier (see section below).
 
-## TO REVIVE STRAVA (e.g. if Strava approves our API access)
+`GARMIN_CONNECT_ENABLED` is still gated — Garmin's own webhook is single-dev-account only,
+so live Garmin OAuth stays off. Garmin users come in via **Garmin → Strava → Mosaic**,
+which is the whole reason Strava is back on.
 
-Set `STRAVA_ENABLED = true` in `src/constants/feature-flags.ts`. That single flip restores
-every gated site — connect buttons, source rows, the auto-log banner, and the launch-time
-sync / backfill / restore / self-heal. No other edits needed. Existing synced Strava data
-was never deleted by burying, so a revived account picks up where it left off. After
-flipping, run `npx tsc --noEmit`, `npm run lint:ui`, and `npx vitest run` to confirm green.
+## TO RE-PARK STRAVA (if ever needed)
+
+Set `STRAVA_ENABLED = false` in `src/constants/feature-flags.ts`. That single flip hides
+every gated site — connect buttons, source rows, the auto-log banner — and skips the
+launch-time sync / backfill / restore / self-heal. No other edits needed. Existing synced
+Strava data is never deleted by burying. After flipping either way, run `npx tsc --noEmit`,
+`npm run lint:ui`, and `npx vitest run` to confirm green.
+
+## Extended Access Tier (the public-scale path)
+
+Standard Tier caps at 10 athletes. To onboard more than 10 Strava users, Mosaic needs
+**Extended Access** (greater user capacity, higher rate limits, no developer-sub required).
+Approval-gated — the same review that historically capped us at 1.
+
+**How to apply:**
+1. Form: https://share.hsforms.com/1VXSwPUYqSH6IxK0y51FjHwcnkd8 (also linked from the API
+   settings dashboard). Or email developers@strava.com with the Client ID.
+2. Submit the Mosaic Client ID + app description. Strava reviews for: current API agreement,
+   branding-guideline compliance (Powered-by-Strava badge — already wired in
+   `connect-strava.ts`), athlete-privacy respect, rate-limit behaviour.
+3. Expect delays — community reports range from the stated 7–10 business days to ~4 weeks
+   (June 2026 backlog from a 448% application surge).
+
+**Positioning:** direct integration (no intermediary), athlete-benefit use case (training
+planning, not data resale or AI training), real Standard-tier beta usage to cite. Keep Apple
+Health as the Apple-Watch spine so a slow/denied review only blocks the Garmin segment.
 
 ## Why park
 

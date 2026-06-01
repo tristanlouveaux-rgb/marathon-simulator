@@ -97,6 +97,7 @@ describe('ISSUE-189: bike-setup modal preview matches headline forecast', () => 
       courseDropdownOpen: false,
       showCdaInfo: false,
       showCrrInfo: false,
+      showCalibCdaInfo: false,
     };
     const modal = predictBikeSplit(form, '70.3');
 
@@ -126,6 +127,7 @@ describe('ISSUE-189: bike-setup modal preview matches headline forecast', () => 
       courseDropdownOpen: false,
       showCdaInfo: false,
       showCrrInfo: false,
+      showCalibCdaInfo: false,
     };
     const baseline = predictBikeSplit(form, '70.3');
 

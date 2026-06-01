@@ -542,7 +542,9 @@ export function wireTriForecastChips(): void {
       const key = el.dataset.cluster as TriChipKey | undefined;
       if (!key) return;
       if (key === 'bike-setup') {
-        import('./bike-setup-view').then(m => m.openBikeSetupOverlay());
+        import('./bike-setup-view').then(m => m.openBikeSetupOverlay(
+          () => import('./forecast-view').then(f => f.renderTriathlonForecastView()),
+        ));
         return;
       }
       import('./forecast-chip-detail-view').then(m => m.renderTriForecastChipDetail(key));

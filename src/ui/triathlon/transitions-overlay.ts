@@ -40,17 +40,6 @@ function fmtMmSs(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function parseMmSs(text: string): number | null {
-  const m = text.trim().match(/^(\d+):(\d{1,2})$/);
-  if (!m) return null;
-  const min = parseInt(m[1], 10);
-  const sec = parseInt(m[2], 10);
-  if (sec >= 60) return null;
-  const total = min * 60 + sec;
-  if (total < 0 || total > 30 * 60) return null;
-  return total;
-}
-
 interface ResolvedTransitions {
   t1: number;
   t2: number;
@@ -147,9 +136,15 @@ const SOCK_OPTIONS: { value: TransitionSocks; label: string; sublabel: string }[
   { value: 'none', label: 'Sockless', sublabel: `−${SOCK_ON_COST_SEC}s overall` },
 ];
 
-function renderShell(resolved: ResolvedTransitions, choice: TransitionSocks): string {
+function renderShell(
+  resolved: ResolvedTransitions,
+  choice: TransitionSocks,
+  t1Val: number,
+  t2Val: number,
+  maxSec: number,
+): string {
   const isOverride = resolved.source === 'override';
-  const adjusted = applySockless(resolved, choice);
+  const adjusted = applySockless({ ...resolved, t1: t1Val, t2: t2Val }, choice);
   const total = adjusted.t1 + adjusted.t2;
 
   return `
@@ -169,15 +164,15 @@ function renderShell(resolved: ResolvedTransitions, choice: TransitionSocks): st
       <div style="padding:14px 20px;border-bottom:1px solid var(--c-border);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div>
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">T1</div>
-          <div style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(adjusted.t1)}</div>
+          <div id="tr-ovl-top-t1" style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(adjusted.t1)}</div>
         </div>
         <div>
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">T2</div>
-          <div style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(adjusted.t2)}</div>
+          <div id="tr-ovl-top-t2" style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(adjusted.t2)}</div>
         </div>
         <div>
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Total</div>
-          <div style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(total)}</div>
+          <div id="tr-ovl-top-total" style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(total)}</div>
         </div>
       </div>
 
@@ -197,20 +192,23 @@ function renderShell(resolved: ResolvedTransitions, choice: TransitionSocks): st
         </div>
       </div>
 
-      <!-- Inputs -->
+      <!-- Override sliders -->
       <div style="padding:18px 20px 6px">
-        <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">Override the predicted transition time if you have a tested number you trust more. Format: <span style="font-variant-numeric:tabular-nums">m:ss</span>.</div>
-        <div style="display:flex;gap:12px;margin-bottom:6px">
-          <div style="flex:1">
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:6px">T1 (swim → bike)</div>
-            <input type="text" id="tr-ovl-t1" value="${fmtMmSs(resolved.t1)}" inputmode="numeric" autocomplete="off" style="width:100%;height:44px;padding:0 12px;border:1px solid var(--c-border);border-radius:10px;background:transparent;font-family:var(--f);font-size:15px;color:var(--c-black);font-variant-numeric:tabular-nums">
+        <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:16px">Override the predicted transition time if you have a tested number you trust more. Drag to set each leg.</div>
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--c-muted)">T1 (swim → bike)</span>
+            <span id="tr-ovl-t1-readout" style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(t1Val)}</span>
           </div>
-          <div style="flex:1">
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:6px">T2 (bike → run)</div>
-            <input type="text" id="tr-ovl-t2" value="${fmtMmSs(resolved.t2)}" inputmode="numeric" autocomplete="off" style="width:100%;height:44px;padding:0 12px;border:1px solid var(--c-border);border-radius:10px;background:transparent;font-family:var(--f);font-size:15px;color:var(--c-black);font-variant-numeric:tabular-nums">
-          </div>
+          <input type="range" id="tr-ovl-t1" min="30" max="${maxSec}" step="1" value="${t1Val}" style="width:100%;accent-color:var(--c-black);cursor:pointer">
         </div>
-        <div id="tr-ovl-error" style="display:none;font-size:11px;color:#B91C1C;margin-top:6px">Use m:ss format (e.g. 4:30). Each side must be under 30 minutes.</div>
+        <div style="margin-bottom:6px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+            <span style="font-size:11px;color:var(--c-muted)">T2 (bike → run)</span>
+            <span id="tr-ovl-t2-readout" style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(t2Val)}</span>
+          </div>
+          <input type="range" id="tr-ovl-t2" min="30" max="${maxSec}" step="1" value="${t2Val}" style="width:100%;accent-color:var(--c-black);cursor:pointer">
+        </div>
       </div>
 
       <!-- Footer -->
@@ -233,6 +231,15 @@ export function openTransitionsOverlay(prediction: TriRacePrediction | null, onS
   // when the user toggles, persisted on Save (alongside any T1/T2 override).
   let sockChoice: TransitionSocks = state.triConfig.transitionSocks ?? 't1';
 
+  // Live slider values (raw, pre-sock). Seeded from the resolved baseline,
+  // mutated as the user drags, preserved across sock-toggle rerenders.
+  let t1Val = resolved.t1;
+  let t2Val = resolved.t2;
+  // Slider ceiling: distance-aware practical max, auto-extended if an existing
+  // override already exceeds it so we never silently clamp the saved value.
+  const distanceMax = (state.triConfig.distance ?? '70.3') === 'ironman' ? 1200 : 600;
+  const maxSec = Math.max(distanceMax, Math.ceil(t1Val), Math.ceil(t2Val));
+
   const overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
@@ -241,7 +248,7 @@ export function openTransitionsOverlay(prediction: TriRacePrediction | null, onS
   document.body.appendChild(overlay);
 
   const rerender = () => {
-    overlay.innerHTML = renderShell(resolved, sockChoice);
+    overlay.innerHTML = renderShell(resolved, sockChoice, t1Val, t2Val, maxSec);
     wire();
   };
 
@@ -259,17 +266,29 @@ export function openTransitionsOverlay(prediction: TriRacePrediction | null, onS
       });
     }
 
+    // Live slider sync. Update the per-leg readout and the sock-adjusted top
+    // strip in place on drag, without a full rerender (which would interrupt
+    // the drag gesture). t1Val / t2Val persist across sock-toggle rerenders.
+    const syncReadouts = (): void => {
+      const adj = applySockless({ ...resolved, t1: t1Val, t2: t2Val }, sockChoice);
+      const set = (id: string, sec: number): void => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = fmtMmSs(sec);
+      };
+      set('tr-ovl-t1-readout', t1Val);
+      set('tr-ovl-t2-readout', t2Val);
+      set('tr-ovl-top-t1', adj.t1);
+      set('tr-ovl-top-t2', adj.t2);
+      set('tr-ovl-top-total', adj.t1 + adj.t2);
+    };
+    const t1Slider = document.getElementById('tr-ovl-t1') as HTMLInputElement | null;
+    const t2Slider = document.getElementById('tr-ovl-t2') as HTMLInputElement | null;
+    t1Slider?.addEventListener('input', () => { t1Val = parseInt(t1Slider.value, 10); syncReadouts(); });
+    t2Slider?.addEventListener('input', () => { t2Val = parseInt(t2Slider.value, 10); syncReadouts(); });
+
     document.getElementById('tr-ovl-save')?.addEventListener('click', () => {
-      const t1Input = document.getElementById('tr-ovl-t1') as HTMLInputElement | null;
-      const t2Input = document.getElementById('tr-ovl-t2') as HTMLInputElement | null;
-      const err = document.getElementById('tr-ovl-error');
-      if (!t1Input || !t2Input) return;
-      const t1 = parseMmSs(t1Input.value);
-      const t2 = parseMmSs(t2Input.value);
-      if (t1 == null || t2 == null) {
-        if (err) err.style.display = 'block';
-        return;
-      }
+      const t1 = t1Val;
+      const t2 = t2Val;
       const m = getMutableState();
       if (!m.triConfig) return;
       // Only write a hardcoded override when the inputs actually differ from

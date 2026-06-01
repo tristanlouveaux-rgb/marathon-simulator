@@ -889,7 +889,7 @@ function pageVenue(s: SimulatorState, p: TriRacePrediction | null): PageContent 
         <div>
           <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">${escapeText(raceName)}</div>
           <div style="font-size:24px;font-weight:600;color:${TEXT_M};letter-spacing:-0.01em">${totalSign}${Math.abs(totalPct).toFixed(1)}% ${slowerOrFaster}</div>
-          <div style="font-size:12px;color:${TEXT_S};margin-top:4px">vs flat, cool, sea level</div>
+          <div style="font-size:12px;color:${TEXT_S};margin-top:4px">vs an ideal flat, cool, sea-level course (not this venue)</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:11px;color:${TEXT_L};margin-bottom:2px">Net cost</div>
@@ -977,6 +977,21 @@ function pageTransitions(s: SimulatorState, p: TriRacePrediction | null): PageCo
     : sockChoice === 't2' ? 'Sockless bike, socks on at T2'
     : 'Sockless (no socks at all)';
 
+  const meta = p.transitionMeta;
+  const raceId = s.onboarding?.selectedTriathlonId;
+  const race = raceId ? getTriathlonById(raceId) : null;
+  const raceName = race?.name ?? 'this race';
+  const movingSec = p.swimSec + p.bikeSec + p.runSec;
+  const fmtHM = (sec: number): string => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.round((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m} min`;
+  };
+  const sourceLabel = meta?.source === 'race-empirical' ? 'Historical field average'
+    : meta?.source === 'global-empirical' ? 'Field average'
+    : meta?.source === 'user-override' ? 'Your benchmark'
+    : 'Skill estimate';
+
   const headlineCard = `
     <div style="${CARD};margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
@@ -984,7 +999,7 @@ function pageTransitions(s: SimulatorState, p: TriRacePrediction | null): PageCo
           <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Total transitions</div>
           <div style="font-size:28px;font-weight:600;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${fmtDuration(p.t1Sec + p.t2Sec)}</div>
         </div>
-        <div style="text-align:right;font-size:11px;color:${TEXT_L};line-height:1.5">${usingOverride ? 'User override' : 'Empirical or skill-slider'}</div>
+        <div style="text-align:right;font-size:11px;color:${TEXT_L};line-height:1.5">${sourceLabel}</div>
       </div>
       ${statRow('T1 (swim → bike)', fmtMSS(p.t1Sec))}
       ${statRow('T2 (bike → run)',  fmtMSS(p.t2Sec))}
@@ -993,12 +1008,50 @@ function pageTransitions(s: SimulatorState, p: TriRacePrediction | null): PageCo
     <button id="tri-fcd-transitions-open" style="display:block;width:100%;margin-bottom:14px;padding:13px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:${TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer">Adjust T1 / T2 →</button>
   `;
 
+  // Field-context card: tell the user why the number is what it is. The same
+  // empirical band that produced their T1/T2 also gives the population mean and
+  // the speed gradient, so the comparison never contradicts the headline.
+  let contextCard = '';
+  const isEmpirical = meta?.source === 'race-empirical' || meta?.source === 'global-empirical';
+  if (isEmpirical && meta?.fieldMeanSec != null) {
+    const provenance = meta.source === 'race-empirical' && meta.venueFinishers
+      ? `Based on ${meta.venueFinishers.toLocaleString()} finishers at ${escapeText(raceName)}${meta.sampleN ? `, ${meta.sampleN.toLocaleString()} near your swim-bike-run time` : ''}.`
+      : `We do not have enough finishers at ${escapeText(raceName)} to calibrate it directly, so this is the global field average across ${(meta.datasetFinishers ?? 0).toLocaleString()} finishes at your distance. Transition times vary widely by venue, from the size of the transition zone to the run in from the swim exit, so treat this as a baseline.`;
+    const benchmarkLine = usingOverride
+      ? 'You have set your own benchmark, so the prediction uses it instead of the field.'
+      : 'You have not set your own benchmark, so the prediction uses this field average.';
+    contextCard = `
+      <div style="${CARD};margin-bottom:14px">
+        <div style="font-size:14px;color:${TEXT_M};line-height:1.5;font-weight:500;margin-bottom:4px">Finishers around your swim-bike-run time (≈${fmtHM(movingSec)}) average ${fmtMSS(meta.fieldMeanSec)} in transitions.</div>
+        <div style="font-size:13px;color:${TEXT_S};line-height:1.55;margin-bottom:6px">${provenance} ${benchmarkLine}</div>
+        ${statRow('Field average (T1 + T2)', fmtMSS(meta.fieldMeanSec))}
+        ${statRow('Your estimate', fmtMSS(p.t1Sec + p.t2Sec))}
+      </div>
+    `;
+  } else if (meta?.source === 'user-override') {
+    const ref = meta.fieldMeanSec != null
+      ? ` For reference, finishers around your swim-bike-run time average ${fmtMSS(meta.fieldMeanSec)}.`
+      : '';
+    contextCard = `
+      <div style="${CARD};margin-bottom:14px">
+        <div style="font-size:13px;color:${TEXT_S};line-height:1.55">You have set your own transition benchmark, so the prediction uses it directly.${ref}</div>
+      </div>
+    `;
+  } else {
+    contextCard = `
+      <div style="${CARD};margin-bottom:14px">
+        <div style="font-size:13px;color:${TEXT_S};line-height:1.55">No historical transition data covers ${escapeText(raceName)} yet, so this estimate comes from your skill rating. Transition times also vary widely by venue, from the size of the transition zone to the run in from the swim exit. Set your own benchmark for a sharper number.</div>
+      </div>
+    `;
+  }
+
   return {
     title: 'Transitions',
     subhead: 'T1 and T2 clock time',
     body: `
       ${headlineCard}
-      ${captionCard('Transitions are added directly to the finish time. No multiplier. Default values come from the empirical lookup for your race and skill level; you can override with your own benchmark. Sock choice shifts the ~20 s sock-on cost between T1 and T2 (or removes it entirely if you go sockless).')}
+      ${contextCard}
+      ${captionCard('Transitions are added directly to the finish time. No multiplier. Default values come from 1.3 million historical Ironman and 70.3 finishes at your predicted swim-bike-run time. Transition times vary widely by venue, so where we have no data for your race this falls back to the global average at your distance. T1 runs longer than T2 because of the wetsuit strip and the longer run in from the swim exit. You can override with your own benchmark. Sock choice shifts the ~20 s sock-on cost between T1 and T2, or removes it entirely if you go sockless.')}
     `,
   };
 }

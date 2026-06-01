@@ -1,5 +1,25 @@
 # Mosaic AI Strategy
 
+## Update — 2026-06-01 (CRITICAL: Strava's new API Policy bans AI use of Strava data)
+
+Strava's June 2026 Developer Program overhaul shipped a new API Policy with a broad anti-AI clause. As read on 2026-06-01 (verify exact section numbers before quoting):
+
+- **§5.3** — "You may not use the Strava API Materials or Strava Data, directly or indirectly, in connection with the development, training, evaluation, or **operation of any AI Application.**" This explicitly extends to data **derived, aggregated, or anonymised from Strava Data**, and explicitly covers **"ingestion into a context window or working memory"** (i.e. inference, not just training).
+- **§5.10** — may not disclose Strava Data to any third party; names **AI providers** specifically.
+- Only AI carve-out: Strava's own MCP, **personal use only**.
+
+**What this means for Mosaic.** The AI Coach feeds Strava-derived data to the LLM (`coach-chat-client.ts:63-69`: `recent_activities` last 4 weeks pace/HR/splits, `benchmarks` FTP/CSS/VDOT). For a Strava-connected user, that data — and everything derived from it — is Strava Data. So the Coach as built cannot serve Strava-connected users under this policy.
+
+**DECISION (Tristan, 2026-06-01): Strava wins.** Strava is the *only* viable activity pipe for Garmin users (Garmin's own API is closed to us; the aggregator fallback was killed by the same overhaul; the Garmin→Apple Health bridge drops splits). It is non-negotiable for the user base. Therefore **the AI Coach must not use Strava data**, which in practice means **the Coach is unavailable to Strava-connected users**. It may only serve users whose data is Apple-Health-only or manual-entry.
+
+**Status:** NOT a live violation today — the Coach is allowlist/entitlement-gated server-side (`coach-chat-client.ts:5`, `entitlement.ts`); it does not serve general or Strava users. Even Tristan's own allowlisted use technically touches Strava data (fine for dev, do not roll out).
+
+**Monetisation implication:** the serious Garmin/Strava athletes are exactly the cohort most likely to pay for the Coach, and they're the cohort it can no longer serve. The Tier-2 (£4.99/mo IAP) Coach economics below were written before this constraint and need re-evaluation.
+
+**Open avenue (not assumed safe):** BYOK (user supplies their own Anthropic key) *might* be a narrower "personal use" path, but Mosaic still builds/operates the pipeline that ingests Strava data into an AI, so it does not clearly exempt us. Worth a written question to developers@strava.com before relying on it. Tracked as ISSUE-252.
+
+**Required before any Coach GA:** gate the Coach off for Strava-connected users (or strictly exclude Strava-derived data, which for those users is effectively all of it). See ISSUE-252.
+
 ## Update — 2026-05-28
 
 Two material changes have landed since the original strategy below was written. The sections further down still capture the reasoning, but the live state is:

@@ -21,6 +21,7 @@ import {
   percentileHeadline,
   percentileLabel,
   venueCalibrationCaption,
+  pooledMarathonFinisherSummary,
 } from '@/calculations/marathon-population';
 import { ft } from '@/utils/format';
 
@@ -177,9 +178,18 @@ export function renderMarathonPopulationCard(s: SimulatorState): string {
     : `${userX.toFixed(1)}px`;
 
   // Caption: venue-attributed when we have a real venue table, distance pool when aggregate.
-  const caption = source === 'venue'
-    ? (venueCalibrationCaption(result) ?? '')
-    : `Pooled from real finishes across all calibrated venues at this distance.`;
+  let caption: string;
+  if (source === 'venue') {
+    caption = venueCalibrationCaption(result) ?? '';
+  } else if (distance === 'marathon') {
+    const { count, venues } = pooledMarathonFinisherSummary();
+    const venueList = venues.length > 1
+      ? `${venues.slice(0, -1).join(', ')} and ${venues[venues.length - 1]}`
+      : (venues[0] ?? '');
+    caption = `Compared against ${count.toLocaleString()} real marathon finishers from ${venueList}.`;
+  } else {
+    caption = `Pooled from real finishes across all calibrated venues at this distance.`;
+  }
 
   // Per-venue notes (e.g. Boston historical-only caveat) appended in a faint line.
   const notes = source === 'venue' && result.provenance?.notes

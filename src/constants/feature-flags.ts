@@ -16,20 +16,25 @@ export const BIKE_SETUP_AUTO_FILL = true;
 /**
  * Live Strava integration (OAuth connect UI + launch-time sync/backfill/restore).
  *
- * Strava's API is capped at 1 authorised user on the current app registration,
- * so for shipped users the live integration cannot function. The launch plan is
- * to PARK it: hide the connect UI and skip the launch-time network triggers,
- * keeping manual FIT/GPX/TCX file import (which works for everyone) as the path.
+ * RE-ENABLED 2026-06-01 (Tristan). Strava's June 2026 Developer Program overhaul
+ * lets Standard Tier self-serve up to 10 athletes with no review. Tristan upgraded
+ * (now at 10 athletes; his Strava Premium satisfies the developer-subscription
+ * requirement). Strava is the REQUIRED activity pipe for Garmin users (Garmin's own
+ * API is closed to us, the aggregator fallback was killed by the same overhaul, and
+ * the Garmin->Apple Health bridge drops per-km splits). See docs/STRAVALESS_PLAN.md.
  *
- * WIRED & PARKED (Tristan, 2026-05-27). `false` buries Strava: hides all connect
- * UI (the plan-header button, the Account source rows, the auto-log banner) and
- * skips the launch-time sync / backfill / restore / self-heal network calls.
- * Flip to `true` to fully restore Strava in one change. E.g. if Strava ever
- * approves our API access. Every gated site keys off this constant; see
- * docs/STRAVA_PARKED.md for the full list. Existing synced Strava data is NOT
- * deleted by burying. Only new syncs and the UI are suppressed.
+ * CEILING: 10 athletes on Standard Tier. This is the BETA path, NOT public scale.
+ * Public launch with Strava needs Extended Access Tier approval (see docs/STRAVA_PARKED.md
+ * -> Extended Access). Do not advertise Strava connect to >10 users until that lands.
+ *
+ * Apple Health remains the separate, uncapped pipe for Apple Watch users (routed in
+ * main.ts: activitySrc === 'apple'). The two pipelines coexist by design.
+ *
+ * `false` buries Strava: hides all connect UI (plan-header button, Account source
+ * rows, auto-log banner) and skips launch-time sync/backfill/restore/self-heal.
+ * Every gated site keys off this constant; see docs/STRAVA_PARKED.md for the full list.
  */
-export const STRAVA_ENABLED: boolean = false;
+export const STRAVA_ENABLED: boolean = true;
 
 /**
  * Live Garmin Connect integration (OAuth connect UI + launch-time physiology /

@@ -59,6 +59,27 @@ export function deriveAthleteTier(ctlBaseline: number, perf: AthleteTierInputs =
 }
 
 /**
+ * Begin the Strava OAuth handshake. POSTs to the `strava-auth-start` edge function
+ * (which mints a PKCE challenge + state row) and redirects the browser to Strava's
+ * authorize page. On approval Strava bounces to `strava-auth-callback`, which stores
+ * the tokens and redirects back to the app origin with `?strava=connected` (plus the
+ * athlete's sex/weight — see main.ts return handler).
+ *
+ * Shared by the Account connect button and the onboarding connect-data step. Throws
+ * if the edge function returns no URL so callers can surface a retry message.
+ */
+export async function startStravaConnect(): Promise<void> {
+  const data = await callEdgeFunction<{ url?: string }>('strava-auth-start', {
+    appOrigin: window.location.origin,
+  });
+  if (data?.url) {
+    window.location.href = data.url;
+    return;
+  }
+  throw new Error('strava-auth-start returned no url');
+}
+
+/**
  * Fetch recent Strava activities and match them to the current week's plan.
  * Returns the number of activities processed.
  */

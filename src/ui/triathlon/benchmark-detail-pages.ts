@@ -36,6 +36,7 @@ import { buildConfidenceChip } from '../stats-view';
 import { appendCssSample, appendFtpSample } from '@/calculations/tri-benchmark-history';
 import { buildBenchmarkTrendChart, buildCssTrendChart, animateChartDrawOn } from './benchmark-charts';
 import { computeVO2Estimates } from '@/calculations/vo2-orchestrator';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, type RingPalette } from '../page-flair';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -370,6 +371,8 @@ export function buildVO2DetailPage(s: SimulatorState): string {
 
   const methods = buildVO2MethodsCard(est);
 
+  const trend = buildVO2TrendCard(s, displayVal);
+
   const footer = 'VO2max is your peak rate of oxygen use during exercise (ml/kg/min). Cross-sport, lab-grade. We estimate it from your training data; your watch estimates it from HR variability during activities; neither is ground truth. Set a manual value if you have a lab test.';
 
   return buildShell({
@@ -377,11 +380,46 @@ export function buildVO2DetailPage(s: SimulatorState): string {
     headline,
     confidence: conf,
     provenance,
-    sparkline: methods + toggle,
+    sparkline: trend + methods + toggle,
     overrideCard,
     footer,
     palette: 'mint',
   });
+}
+
+/**
+ * VO2max "Trend" card. Mirrors the CSS / FTP trend cards: current value +
+ * delta-since-first-sample + a draw-on sparkline that fills as history accrues.
+ * Real data only — device VO2max history when present (≥2 points), else the
+ * VDOT history both modes record. The latest point is pinned to the page's
+ * displayed value so the trend headline equals the page headline. Below two
+ * samples it renders the shared honest empty state (no synthetic curve).
+ */
+function buildVO2TrendCard(s: SimulatorState, displayVal: number | null): string {
+  const deviceHist = (s.physiologyHistory ?? [])
+    .filter(d => d.vo2max != null && (d.vo2max as number) > 0)
+    .map(d => ({ date: d.date, value: d.vo2max as number }));
+  const vdotHist = (s.vdotHistory ?? [])
+    .filter(h => h.date != null && h.vdot > 0)
+    .map(h => ({ date: h.date as string, value: h.vdot }));
+
+  let samples = deviceHist.length >= 2 ? deviceHist : vdotHist;
+  // Pin the trailing point to the page's displayed value so the two agree.
+  if (displayVal != null && displayVal > 0 && samples.length > 0) {
+    const today = new Date().toISOString().slice(0, 10);
+    const lastIdx = samples.length - 1;
+    if (samples[lastIdx].date === today) {
+      samples = samples.slice(0, lastIdx).concat({ date: today, value: displayVal });
+    } else {
+      samples = samples.concat({ date: today, value: displayVal });
+    }
+  }
+
+  return `
+    <div class="m-card" style="padding:14px;margin-bottom:8px">
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:10px">Trend</div>
+      ${buildBenchmarkTrendChart(samples, '#34C759', 'rgba(52,199,89,0.08)', 'ml/kg/min', /*inverted*/ false)}
+    </div>`;
 }
 
 function buildVO2SourceToggle(args: {
@@ -542,12 +580,16 @@ export function wireVO2DetailHandlers(rerender: () => void): void {
     const value = parseInt(slider.value, 10);
     const m = getMutableState();
     m.vo2Override = { value, setAt: new Date().toISOString() };
+    // Recompute the cached race prediction so the manual VO2max flows through to
+    // the forecast immediately (effectiveVo2max now reads the override).
+    refreshBlendedFitness(m);
     saveState();
     rerender();
   });
   document.getElementById('vo2-override-reset')?.addEventListener('click', () => {
     const m = getMutableState();
     delete m.vo2Override;
+    refreshBlendedFitness(m);
     saveState();
     rerender();
   });

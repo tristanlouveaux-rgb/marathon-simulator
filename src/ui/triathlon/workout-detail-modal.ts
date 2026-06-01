@@ -8,17 +8,24 @@
  */
 
 import type { Workout } from '@/types/state';
+import { getState } from '@/state/store';
+import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { openGuidedStrength } from '@/ui/guided-strength-overlay';
 import { completeStrengthSession } from '@/guided/strength-complete';
 
-export function openTriWorkoutDetail(workout: Workout): void {
+export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
   // Strength/gym sessions use the shared clean per-exercise breakdown modal,
   // not the swim/bike/run block layout below.
   if (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n || '')) {
     import('@/ui/strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(workout));
     return;
   }
+
+  // Week the session lives in (its triWorkouts object is mutated in place by the
+  // Adjust control). The tap handlers resolve `workout` from the current week's
+  // store, so default there.
+  const wkIdx = weekIdx ?? (getState().w - 1);
 
   const existing = document.getElementById('tri-workout-detail-overlay');
   if (existing) existing.remove();
@@ -36,6 +43,16 @@ export function openTriWorkoutDetail(workout: Workout): void {
   const rpe = workout.rpe ?? workout.r ?? 5;
   const tss = (workout.aerobic ?? 0) + (workout.anaerobic ?? 0);
   const blocks = parseWorkoutBlocks(workout);
+  const durMin = (typeof workout.estimatedDurationMin === 'number' && workout.estimatedDurationMin > 0)
+    ? Math.round(workout.estimatedDurationMin) : 0;
+  const isScaled = !!(workout as any).userScaledAt;
+  const origMin = (typeof (workout as any).originalDurationMin === 'number' && (workout as any).originalDurationMin > 0)
+    ? Math.round((workout as any).originalDurationMin) : 0;
+  const triCfg = getState().triConfig;
+  const intensityTarget = intensityTargetLabel(workout, triCfg?.bike?.ftp, triCfg?.swim?.cssSecPer100m);
+  // Adjust applies to time-defined swim/bike/run sessions (cycling lives here as
+  // the bike discipline). Strength sessions take the separate breakdown modal above.
+  const canAdjust = durMin > 0 || /\d\s*(km|m|min)\b/i.test(workout.d || '');
 
   const overlay = document.createElement('div');
   overlay.id = 'tri-workout-detail-overlay';
@@ -75,10 +92,13 @@ export function openTriWorkoutDetail(workout: Workout): void {
 
         <div style="font-size:26px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;margin-bottom:6px">${escapeHtml(workout.n)}</div>
         <div style="display:flex;gap:14px;font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">
+          ${durMin > 0 ? `<span>${durMin} min</span>` : ''}
           <span>RPE ${rpe}</span>
           ${tss > 0 ? `<span>TSS ${Math.round(tss)}</span>` : ''}
           ${workout.dayName ? `<span>${workout.dayName}</span>` : ''}
         </div>
+        ${intensityTarget ? `<div style="font-size:12px;color:var(--c-muted);margin-top:6px;font-variant-numeric:tabular-nums">Target: ${intensityTarget}</div>` : ''}
+        ${isScaled && origMin > 0 ? `<div style="font-size:11px;color:var(--c-faint);margin-top:5px">Adjusted for this session. Planned ${origMin} min.</div>` : ''}
       </div>
 
       <!-- Structured breakdown -->
@@ -94,7 +114,14 @@ export function openTriWorkoutDetail(workout: Workout): void {
           <button id="tri-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
         </div>
       ` : `
-        <div style="padding:8px 24px 24px;display:flex;justify-content:flex-end">
+        <div style="padding:8px 24px 24px;display:flex;justify-content:space-between;align-items:center">
+          ${canAdjust ? `<button id="tri-detail-adjust" style="
+            padding:13px 18px;
+            background:transparent;color:#0F172A;
+            border:1px solid var(--c-border);border-radius:10px;
+            font-size:14px;font-weight:600;
+            cursor:pointer;font-family:var(--f);
+          ">Adjust duration</button>` : '<span></span>'}
           <button id="tri-detail-done" style="
             padding:13px 22px;
             background:#0F172A;color:#FAF9F6;
@@ -113,13 +140,26 @@ export function openTriWorkoutDetail(workout: Workout): void {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#tri-detail-close')?.addEventListener('click', close);
   overlay.querySelector('#tri-detail-done')?.addEventListener('click', close);
+  overlay.querySelector('#tri-detail-adjust')?.addEventListener('click', () => {
+    close();
+    import('@/ui/workout-adjust-overlay').then(({ openWorkoutAdjust }) => {
+      openWorkoutAdjust(workout, wkIdx, {
+        persist: 'object',
+        store: 'triWorkouts',
+        workoutId: (workout as any).id,
+        allowIntensity: false,
+        rerender: () => import('./plan-view').then(m => m.renderTriathlonPlanView()).catch(() => {}),
+      });
+    });
+  });
   overlay.querySelector('#tri-detail-strength-start')?.addEventListener('click', () => {
     close();
     openGuidedStrength(workout);
   });
   overlay.querySelector('#tri-detail-strength-done')?.addEventListener('click', () => {
-    completeStrengthSession(workout);
+    const result = completeStrengthSession(workout);
     close();
+    import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(workout, result));
   });
 }
 

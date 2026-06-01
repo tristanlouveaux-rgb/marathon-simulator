@@ -119,8 +119,9 @@ export function openStrengthWorkoutDetail(workout: Workout): void {
   });
   overlay.querySelector('#strength-detail-done')?.addEventListener('click', () => {
     import('@/guided/strength-complete').then(({ completeStrengthSession }) => {
-      completeStrengthSession(workout);
+      const result = completeStrengthSession(workout);
       close();
+      import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(workout, result));
     });
   });
 }

@@ -31,6 +31,7 @@ import {
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment } from './hyrox-generators';
 import { scheduleHyroxWeek } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
+import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
@@ -207,8 +208,20 @@ function generateWeekSessions(
 
   // Hours available this week
   const mult = phaseMultiplier(phase, weekIndex, totalWeeks);
-  const deload = isDeloadWeek(weekIndex, phase);
-  const effectiveHours = hx.weeklyHoursAvailable * mult * (deload ? HYROX_DELOAD_FACTOR : 1);
+  // Honour a holiday-forced deload the same way running's plan_engine.ts does
+  // (deload = ctx.forceDeload || isDeloadWeek(...)). The holiday modal sets
+  // wk.forceDeload on weeks that overlap the holiday; without this the HYROX
+  // engine ignored it and regenerated those weeks at full load.
+  const forceDeload = !!(state.wks?.[weekIndex - 1] as any)?.forceDeload;
+  const deload = forceDeload || isDeloadWeek(weekIndex, phase);
+  // Execution → next-week load. Trailing RPE across all HYROX sessions scales the weekly
+  // budget, mirroring running's `effortMultiplier` (applied multiplicatively on top of
+  // phase + deload, per plan_engine.ts dMult). Only weeks ≥ current are scaled — past
+  // weeks keep their real prescribed load (don't rewrite history). Non-compounding:
+  // regeneration rebuilds the baseline budget before re-applying the current multiplier.
+  // See effort-multiplier.hyrox.ts / SCIENCE_LOG §AU.
+  const effortMult = weekIndex >= (state.w ?? 1) ? hyroxEffortMultiplier(state) : 1.0;
+  const effectiveHours = hx.weeklyHoursAvailable * mult * (deload ? HYROX_DELOAD_FACTOR : 1) * effortMult;
 
   // Distribute hours
   let runHours       = effectiveHours * HYROX_TIME_SPLIT.runs;

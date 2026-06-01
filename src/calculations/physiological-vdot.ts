@@ -160,6 +160,26 @@ function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
  *
  * Returns `{ vdot: null, source: 'none' }` when nothing is usable.
  */
+/**
+ * The VO2max value to feed the prediction blend's VO2 predictor, honouring the
+ * manual override. Returns the override if set, else the device VO2max, else
+ * null.
+ *
+ * This exists because every `blendPredictions` call historically read `s.vo2`
+ * directly — which holds only the device value and silently misses
+ * `s.vo2Override`. As a result a manual VO2max change on the stats view never
+ * reached race predictions. Call sites must read THIS instead of `s.vo2`.
+ *
+ * Deliberately does NOT fall through to HR-calibrated or mosaic estimates:
+ * those are separate signals in the blend (the HR slot, and the overall VDOT),
+ * so feeding them into the VO2 slot would double-count. Freshness is not gated
+ * here either, to preserve the prior `s.vo2`-direct behaviour for device values.
+ */
+export function effectiveVo2max(s: SimulatorState): number | null {
+  if (s.vo2Override && s.vo2Override.value > 0) return s.vo2Override.value;
+  return s.vo2 != null && s.vo2 > 0 ? s.vo2 : null;
+}
+
 export function getPhysiologicalVdot(
   s: SimulatorState,
   opts: { now?: string | Date; skipMosaic?: boolean; skipDevice?: boolean } = {},

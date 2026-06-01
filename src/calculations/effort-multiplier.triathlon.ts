@@ -36,8 +36,9 @@ import { scoreRepAdherence, repAdherenceToEffortDev } from './rep-adherence';
  * `events.ts` but uses power as the primary objective signal for cycling
  * (Coggan & Allen 2019: power is more reliable than HR for intensity control).
  *
- * For swim/run: pure RPE (swim has no reliable pace-adherence signal yet;
- * run re-uses the running-side HR+RPE blend in events.ts).
+ * For swim: blends objective pace-vs-CSS adherence (60%) with RPE (40%),
+ * mirroring bike (D6, 2026-06-01); falls back to pure RPE when no pace signal.
+ * For run: pure RPE here (the run leg re-uses the running-side HR+RPE blend in events.ts).
  *
  * effortScore scale: positive = harder than planned → shorter next week.
  *                    negative = easier than planned → longer next week.
@@ -99,6 +100,20 @@ export function triTrailingEffortScore(state: SimulatorState, discipline: Discip
         }
         dev = bikeObjectiveDev != null
           ? rpeDev * 0.4 + bikeObjectiveDev * 0.6
+          : rpeDev;
+      } else if (discipline === 'swim') {
+        // Swim mirrors bike's objective + RPE blend (D6, 2026-06-01), but the
+        // objective signal is pace-vs-CSS adherence (scoreSwimEffort, persisted as
+        // actual.paceAdherence). Sign is INVERTED vs power: lower sec/100m = faster =
+        // harder, so faster-than-target (paceAdherence < 1.0) is a positive (harder)
+        // deviation. Falls back to pure RPE when no pace signal (e.g. a drill set with
+        // no usable distance/duration). Blend 60% objective / 40% RPE, matching bike.
+        let swimObjectiveDev: number | null = null;
+        if (actual?.paceAdherence != null) {
+          swimObjectiveDev = (1.0 - actual.paceAdherence) * 10;
+        }
+        dev = swimObjectiveDev != null
+          ? rpeDev * 0.4 + swimObjectiveDev * 0.6
           : rpeDev;
       } else {
         dev = rpeDev;

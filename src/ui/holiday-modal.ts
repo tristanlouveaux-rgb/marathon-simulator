@@ -9,8 +9,10 @@
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState, Workout, Week } from '@/types';
 import { computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
-import { computeVdotLoss } from './welcome-back';
+import { detrainingLossFraction } from './welcome-back';
+import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import { generateWeekWorkouts } from '@/workouts';
+import { classifyWorkoutKind } from '@/calculations/illness-rules';
 
 
 const MODAL_ID = 'holiday-modal';
@@ -90,12 +92,19 @@ export function openHolidayModal(): void {
   const s = getState();
   const today = todayISO();
 
-  let step = 1;
+  let step: 1 | 2 | 'swim' | 3 | 4 = 1;
   let startDate = today;
   let endDate = '';
   let startingToday = true;
   let canRun: 'yes' | 'maybe' | 'no' = 'maybe';
+  let canSwim: boolean | undefined = undefined;
   let holidayType: 'relaxation' | 'active' | 'working' = 'relaxation';
+
+  // Triathletes get an extra "can you swim?" question on holiday: a pool or open
+  // water is sometimes available away, a bike almost never is. Cycling-only mode
+  // (disciplines without swim) and HYROX skip it. Bike + HYROX stations are always
+  // treated as unavailable on holiday — you can't travel with a bike or a sled.
+  const isTriWithSwim = !!s.triConfig && (s.triConfig.disciplines ?? ['swim', 'bike', 'run']).includes('swim');
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
@@ -107,6 +116,7 @@ export function openHolidayModal(): void {
   function render() {
     if (step === 1) renderStep1();
     else if (step === 2) renderStep2();
+    else if (step === 'swim') renderStepSwim();
     else if (step === 3) renderStep3();
     else if (step === 4) renderStep4();
   }
@@ -272,10 +282,45 @@ export function openHolidayModal(): void {
         </button>
       </div>
     `;
-    document.getElementById('hol-run-yes')?.addEventListener('click', () => { canRun = 'yes'; step = 3; render(); });
-    document.getElementById('hol-run-maybe')?.addEventListener('click', () => { canRun = 'maybe'; step = 3; render(); });
-    document.getElementById('hol-run-no')?.addEventListener('click', () => { canRun = 'no'; step = 3; render(); });
+    const afterRun: 'swim' | 3 = isTriWithSwim ? 'swim' : 3;
+    document.getElementById('hol-run-yes')?.addEventListener('click', () => { canRun = 'yes'; step = afterRun; render(); });
+    document.getElementById('hol-run-maybe')?.addEventListener('click', () => { canRun = 'maybe'; step = afterRun; render(); });
+    document.getElementById('hol-run-no')?.addEventListener('click', () => { canRun = 'no'; step = afterRun; render(); });
     document.getElementById('hol-back-2')?.addEventListener('click', () => { step = 1; render(); });
+  }
+
+  // Triathlon-only step: pool / open-water access while away. Bike is assumed
+  // unavailable on holiday, so we don't ask about it.
+  function renderStepSwim() {
+    modal.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Swimming on holiday</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px">Will you have a pool or open water? Bike sessions pause while you're away.</div>
+
+        <button id="hol-swim-yes"
+          style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
+                 border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:8px;text-align:left">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:2px">Yes</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.4">Hotel pool or open water available. Keep easy swims in.</div>
+        </button>
+
+        <button id="hol-swim-no"
+          style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
+                 border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:14px;text-align:left">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:2px">No</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.4">No water access. Swim sessions pause too.</div>
+        </button>
+
+        <button id="hol-back-swim"
+          style="width:100%;padding:11px;border-radius:12px;border:1px solid var(--c-border);
+                 background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f)">
+          Back
+        </button>
+      </div>
+    `;
+    document.getElementById('hol-swim-yes')?.addEventListener('click', () => { canSwim = true; step = 3; render(); });
+    document.getElementById('hol-swim-no')?.addEventListener('click', () => { canSwim = false; step = 3; render(); });
+    document.getElementById('hol-back-swim')?.addEventListener('click', () => { step = 2; render(); });
   }
 
   function renderStep3() {
@@ -315,7 +360,7 @@ export function openHolidayModal(): void {
     document.getElementById('hol-type-relax')?.addEventListener('click', () => { holidayType = 'relaxation'; step = 4; render(); });
     document.getElementById('hol-type-active')?.addEventListener('click', () => { holidayType = 'active'; step = 4; render(); });
     document.getElementById('hol-type-work')?.addEventListener('click', () => { holidayType = 'working'; step = 4; render(); });
-    document.getElementById('hol-back-3')?.addEventListener('click', () => { step = 2; render(); });
+    document.getElementById('hol-back-3')?.addEventListener('click', () => { step = isTriWithSwim ? 'swim' : 2; render(); });
   }
 
   function renderStep4() {
@@ -362,7 +407,7 @@ export function openHolidayModal(): void {
     document.getElementById('hol-back-4')?.addEventListener('click', () => { step = 3; render(); });
     document.getElementById('hol-confirm')?.addEventListener('click', () => {
       modal.remove();
-      confirmHoliday(startDate, endDate, canRun, holidayType);
+      confirmHoliday(startDate, endDate, canRun, holidayType, canSwim);
     });
   }
 
@@ -376,6 +421,7 @@ function confirmHoliday(
   endDate: string,
   canRun: 'yes' | 'maybe' | 'no',
   holidayType: 'relaxation' | 'active' | 'working',
+  canSwim?: boolean,
 ): void {
   const s = getMutableState();
 
@@ -398,6 +444,7 @@ function confirmHoliday(
     startDate,
     endDate,
     canRun,
+    canSwim,
     holidayType,
     active: true,
     preHolidayShifts: Object.keys(preHolidayShifts).length > 0 ? preHolidayShifts : undefined,
@@ -581,6 +628,118 @@ export function applyHolidayMods(workouts: any[], canRun: 'yes' | 'maybe' | 'no'
         }
       }
       // Non-quality runs (easy, long) keep their name but are slightly flagged
+    }
+  }
+}
+
+/**
+ * Discipline-aware holiday mods for triathlon and HYROX, built on what an athlete
+ * can realistically train while away rather than a single "can you run?" flag.
+ * Facility-access model (Tristan, 2026-06-01):
+ *
+ *   - Running is the holiday-safe discipline: it honours `canRun` exactly as the
+ *     running path does (no → rest, maybe → optional easy, yes → reduced).
+ *   - Bike always rests. You don't travel with a bike or a trainer.
+ *   - Strength / HYROX stations + bricks always rest. A hotel gym isn't a HYROX
+ *     box (no sled, ski-erg, wall balls), and a brick's station half is unavailable.
+ *   - Swimming is conditional on `canSwim` (asked only of triathletes): with access
+ *     it stays as an easy, reduced swim; without it, it rests.
+ *
+ * Reuses the running path's 0.7 reduction ratio — no new constants. rest_like and
+ * 'other' workouts are left alone. Render-time only — not persisted.
+ */
+export function applyHolidayModsAllDisciplines(
+  workouts: any[],
+  canRun: 'yes' | 'maybe' | 'no',
+  holidayDays?: Set<number> | null,
+  canSwim?: boolean,
+): void {
+  for (const w of workouts) {
+    const kind = classifyWorkoutKind(w);
+    if (kind === 'rest_like' || kind === 'other') continue;
+    if ((w.id || '').startsWith('holiday-')) continue;
+    if (holidayDays && w.dayOfWeek != null && !holidayDays.has(w.dayOfWeek)) continue;
+
+    w.holidayMod = true;
+    w.originalDistance = w.d || w.n;
+    w.originalName = w.n;
+    w.status = 'holiday';
+    w.modReason = 'Holiday';
+
+    const restAway = (name: string, detail: string) => {
+      w.n = name;
+      w.d = detail;
+      w.t = 'easy';
+      w.r = 0;
+      w.km = 0;
+      w.dur = 0;
+      if (w.estimatedDurationMin != null) {
+        w.originalDurationMin = w.estimatedDurationMin;
+        w.estimatedDurationMin = 0;
+      }
+      if (w.musculoTendonLoad != null) w.musculoTendonLoad = 0;
+    };
+
+    // Reduce a duration-driven session (swim) to an easy 70%.
+    const reduceDuration = () => {
+      if (w.estimatedDurationMin != null) {
+        w.originalDurationMin = w.estimatedDurationMin;
+        w.estimatedDurationMin = Math.max(15, Math.round(w.estimatedDurationMin * 0.7 / 5) * 5);
+      }
+      if (typeof w.musculoTendonLoad === 'number') w.musculoTendonLoad = Math.round(w.musculoTendonLoad * 0.7);
+      w.r = Math.min(typeof w.r === 'number' ? w.r : 4, 4);
+    };
+
+    // Bike + strength/stations are never available on holiday.
+    if (kind === 'bike') {
+      restAway('Holiday, bike paused', 'No bike access while away.');
+      continue;
+    }
+    if (kind === 'strength') {
+      restAway('Holiday, strength paused', 'No gym or HYROX stations while away.');
+      continue;
+    }
+
+    // Swim: only if the athlete has water access.
+    if (kind === 'swim') {
+      if (!canSwim) {
+        restAway('Holiday, swim paused', 'No pool or open water while away.');
+      } else {
+        w.n = 'Easy Swim';
+        reduceDuration();
+      }
+      continue;
+    }
+
+    // Run: the holiday-safe discipline, keyed by canRun (mirrors the running path).
+    if (canRun === 'no') {
+      restAway('Holiday, rest day', 'On holiday. No running planned.');
+    } else if (canRun === 'maybe') {
+      w.n = 'Holiday, optional run';
+      w.d = 'Easy run if opportunity arises';
+      w.t = 'easy';
+      w.r = 2;
+    } else {
+      // yes: keep running, quality downgraded to easy at 70%.
+      const isQuality = QUALITY_TYPES.some(t => (w.t || '').toLowerCase().includes(t));
+      if (isQuality) {
+        const origKm = parseKmFromDesc(w.d);
+        if (origKm > 0) {
+          const newKm = Math.max(3, Math.round(origKm * 0.7 * 2) / 2);
+          w.n = 'Easy Run';
+          w.d = `${newKm}km easy pace`;
+          w.t = 'easy';
+          w.r = 3;
+          w.km = newKm;
+        } else {
+          w.n = 'Easy Run';
+          w.d = 'Easy run';
+          w.t = 'easy';
+          w.r = 3;
+        }
+      }
+      // Easy/long runs keep their full prescription — running is the discipline
+      // you can actually maintain away, so it stays the holiday training spine.
     }
   }
 }
@@ -1091,6 +1250,71 @@ export function applyBridgeMods_renderTime(workouts: any[], wk: Week): void {
   }
 }
 
+/**
+ * Discipline-aware sibling of applyBridgeMods_renderTime. The run-only version scales
+ * `\d+km` strings and skips every non-run session, useless for tri/cycling/HYROX whose
+ * sessions are duration- and load-driven. This one scales swim / bike / run-leg / station
+ * sessions on the comeback weeks using the SAME `_holidayBridgeScale` the run path uses
+ * (set by buildBridgeWeekMods), so the resume week is eased, not full. Mutates the array
+ * in place — it is a fresh copy of stored workouts, so this is render-time only and not
+ * persisted. Reuses running's existing scale constants; introduces none.
+ */
+export function applyBridgeModsAllDisciplines(workouts: any[], wk: Week): void {
+  const scale = (wk as any)?._holidayBridgeScale as number | undefined;
+  if (!scale) return;
+  const downgrade = (wk as any)?._holidayBridgeDowngrade as boolean | undefined;
+
+  for (const w of workouts) {
+    if ((w as any).holidayMod) continue;       // already rested by holiday mods
+    if ((w as any).userScaledAt) continue;     // respect an explicit user Adjust
+    const id = (w.id || '') as string;
+    if (id.startsWith('adhoc-') || id.startsWith('holiday-')) continue;
+
+    const kind = classifyWorkoutKind(w);
+    if (kind === 'rest_like' || kind === 'other') continue;
+
+    // Duration-and-load scaler for the non-run, duration-driven disciplines.
+    const scaleDuration = () => {
+      if (w.estimatedDurationMin != null) {
+        if (w.originalDurationMin == null) w.originalDurationMin = w.estimatedDurationMin;
+        w.estimatedDurationMin = Math.max(15, Math.round((w.estimatedDurationMin * scale) / 5) * 5);
+      }
+      if (typeof w.musculoTendonLoad === 'number') w.musculoTendonLoad = Math.round(w.musculoTendonLoad * scale);
+    };
+
+    if (kind === 'run') {
+      // Mirror applyBridgeMods_renderTime for the run leg (km-string sessions); fall back
+      // to duration scaling for run legs that carry minutes rather than a km string.
+      const isQuality = QUALITY_TYPES.some(t => (w.t || '').toLowerCase().includes(t));
+      const origKm = parseKmFromDesc(w.d);
+      if (downgrade && isQuality) {
+        w.originalDistance = w.d;
+        w.d = origKm > 0 ? `${Math.max(2, Math.round(origKm * scale * 2) / 2)}km easy pace` : 'Easy run';
+        w.t = 'easy';
+        w.r = 3;
+      } else if (origKm > 0) {
+        const newKm = Math.max(2, Math.round(origKm * scale * 2) / 2);
+        if (newKm === origKm) continue;
+        w.originalDistance = w.d;
+        w.d = w.d.replace(/(\d+\.?\d*)km/, `${newKm}km`);
+      } else {
+        scaleDuration();
+      }
+      w.modReason = 'Post-holiday bridge';
+      w.status = 'reduced';
+      continue;
+    }
+
+    // swim / bike / strength(stations): scale volume + musculo-tendon load. On a downgrade
+    // week, also ease intensity (cap RPE). FTP/CSS-derived watt/pace targets are left to the
+    // (separately docked) benchmarks; the bridge governs volume.
+    scaleDuration();
+    if (downgrade && typeof w.r === 'number') w.r = Math.min(w.r, 4);
+    w.modReason = 'Post-holiday bridge';
+    w.status = 'reduced';
+  }
+}
+
 export function showHolidayWelcomeBack(onComplete: () => void): void {
   const s = getMutableState();
   const holiday = s.holidayState;
@@ -1100,16 +1324,62 @@ export function showHolidayWelcomeBack(onComplete: () => void): void {
   const daysAway = daysBetween(holiday.startDate, holiday.endDate) + 1;
   const weeksAway = Math.ceil(daysAway / 7);
 
-  // Apply VDOT detraining
-  const vdotLoss = s.v ? computeVdotLoss(s.v, weeksAway) : 0;
-  if (vdotLoss > 0 && s.v) {
-    s.v = Math.max(Math.round((s.v - vdotLoss) * 10) / 10, 20);
+  // Detraining on return. One shared decay curve (Mujika & Padilla 2000) for VDOT, FTP
+  // and CSS: nothing inside the 10-day dead-zone, then ~1.2%/wk (wks 1-2) / 0.8%/wk after,
+  // attenuated by the holiday activity ratio (kept training through the break → detrain less).
+  // Detraining only ever fires on a declared holiday return, never while following the plan.
+  const detrainFrac = detrainingLossFraction(daysAway, ratio);
+
+  // VDOT (run leg). Higher = better → detraining lowers it. Uses the precise day count +
+  // activity ratio here rather than the ceil-weeks the missed-week path uses.
+  let vdotLoss = 0;
+  if (detrainFrac > 0 && s.v) {
+    const before = s.v;
+    s.v = Math.max(Math.round(before * (1 - detrainFrac) * 10) / 10, 20);
+    vdotLoss = Math.round((before - s.v) * 10) / 10;
+    if (vdotLoss > 0) console.log(`[holiday-detrain] VDOT ${before} → ${s.v} (-${vdotLoss}, ${daysAway}d away, ${Math.round(ratio * 100)}% retention)`);
+  }
+
+  // FTP (bike). Higher = better → detraining lowers watts. The anchor stops the launch
+  // refresh from restoring FTP off a pre-holiday ride; a ride after the return lifts the gate.
+  const bike = s.triConfig?.bike;
+  let ftpLoss = 0;
+  if (detrainFrac > 0 && bike?.ftp) {
+    const before = bike.ftp;
+    const next = Math.round(before * (1 - detrainFrac));
+    if (next > 0 && next < before) {
+      bike.ftp = next;
+      bike.ftpSource = 'derived';
+      bike.ftpDetrainAnchorISO = holiday.endDate;
+      appendFtpSample(bike, next, 'derived', bike.ftpConfidence);
+      ftpLoss = before - next;
+      console.log(`[holiday-detrain] FTP ${before}W → ${next}W (-${ftpLoss}W, anchor ${holiday.endDate})`);
+    }
+  }
+
+  // CSS (swim). Lower sec/100m = better → detraining raises the seconds (slower).
+  const swim = s.triConfig?.swim;
+  let cssLoss = 0;
+  if (detrainFrac > 0 && swim?.cssSecPer100m) {
+    const before = swim.cssSecPer100m;
+    const next = Math.round(before * (1 + detrainFrac));
+    if (next > before) {
+      swim.cssSecPer100m = next;
+      swim.cssSource = 'derived';
+      swim.cssDetrainAnchorISO = holiday.endDate;
+      appendCssSample(swim, next, 'derived', swim.cssConfidence);
+      cssLoss = next - before;
+      console.log(`[holiday-detrain] CSS ${before}s → ${next}s (+${cssLoss}s, anchor ${holiday.endDate})`);
+    }
   }
 
   // Build bridge weeks
   buildBridgeWeekMods(s, level);
 
-  // Build copy
+  // Build copy. Mode-aware: the comeback bridge now scales every discipline, so the
+  // "bridge you back" promise is true in all modes. Only the run-specific feel-cue is gated.
+  const eventType = (s as any).eventType;
+  const isMultisport = eventType === 'triathlon' || eventType === 'cycling' || eventType === 'hyrox';
   let title: string;
   let body: string;
   const pctText = Math.round(ratio * 100);
@@ -1121,12 +1391,22 @@ export function showHolidayWelcomeBack(onComplete: () => void): void {
     title = 'Back from holiday';
     body = `Holiday load was ${pctText}% of your pre-holiday average. One easy week followed by gradual quality reintroduction. The next 2 weeks bridge you back to the normal plan.`;
   } else {
+    const feelCue = isMultisport ? 'Ease back by feel, not target pace or power.' : 'Run by feel, not pace targets.';
     title = `Back after ${weeksAway === 1 ? '1 week' : weeksAway + ' weeks'} away`;
-    body = `Minimal activity during holiday. ${weeksAway >= 2 ? 'Two to three' : 'One to two'} weeks of progressive volume before quality sessions resume. Run by feel, not pace targets.`;
+    body = `Minimal activity during holiday. ${weeksAway >= 2 ? 'Two to three' : 'One to two'} weeks of progressive volume before quality sessions resume. ${feelCue}`;
   }
 
-  if (vdotLoss > 0) {
-    body += ` Fitness adjusted down by ${vdotLoss.toFixed(1)} points to reflect time away.`;
+  // Detraining summary. Only name markers that actually moved, so HYROX never claims an
+  // FTP change and a runner never sees swim copy. A fresh effort refreshes any of them.
+  const detrainParts: string[] = [];
+  if (vdotLoss > 0) detrainParts.push(`${isMultisport ? 'run fitness' : 'fitness'} by ${vdotLoss.toFixed(1)} points`);
+  if (ftpLoss > 0) detrainParts.push(`FTP by ${ftpLoss}W`);
+  if (cssLoss > 0) detrainParts.push(`swim pace by ${cssLoss}s/100m`);
+  if (detrainParts.length > 0) {
+    const list = detrainParts.length === 1
+      ? detrainParts[0]
+      : `${detrainParts.slice(0, -1).join(', ')} and ${detrainParts[detrainParts.length - 1]}`;
+    body += ` Markers eased down to reflect time away: ${list}. A new effort refreshes them.`;
   }
 
   const overlay = document.createElement('div');

@@ -163,7 +163,12 @@ function generateWeekForTriathlon(
 
   // Phase multiplier (fraction of peak hours this week represents)
   const phaseMult = phaseMultiplier(phase, weekIndex, totalWeeks);
-  const isDeload = isDeloadWeek(weekIndex, phase);
+  // Honour a holiday-forced deload the same way running's plan_engine.ts does
+  // (deload = ctx.forceDeload || isDeloadWeek(...)). The holiday modal sets
+  // wk.forceDeload on weeks overlapping the holiday; without this the tri engine
+  // ignored it and regenerated those weeks at full load.
+  const forceDeload = !!(state.wks?.[weekIndex - 1] as any)?.forceDeload;
+  const isDeload = forceDeload || isDeloadWeek(weekIndex, phase);
   const effectiveMult = isDeload ? phaseMult * 0.7 : phaseMult;
   const weekHours = timeAvailable * effectiveMult;
 

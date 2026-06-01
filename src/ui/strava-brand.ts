@@ -1,5 +1,17 @@
 /** Inline SVG helpers for Strava brand assets. Inline rendering stays crisp at any size. */
 
+/**
+ * Official "Connect with Strava" button artwork (`public/connect-with-strava.svg`).
+ * Strava's brand guidelines require the unmodified official button — we are not
+ * permitted to build our own Strava-branded connect control. Renders the asset
+ * inside a transparent <button> so the existing `#${id}` click handlers keep working.
+ */
+export function connectWithStravaButton(id: string, heightPx = 32): string {
+  return `<button id="${id}" aria-label="Connect with Strava" style="background:none;border:none;padding:0;margin:0;cursor:pointer;line-height:0">
+    <img src="/connect-with-strava.svg" alt="Connect with Strava" height="${heightPx}" style="height:${heightPx}px;width:auto;display:block" />
+  </button>`;
+}
+
 export function poweredByStrava(heightPx: number, opacity = 1): string {
   return `<svg role="img" aria-label="Powered by Strava"
     height="${heightPx}" viewBox="0 0 365 37" fill="none"

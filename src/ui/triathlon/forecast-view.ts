@@ -12,6 +12,7 @@ import { renderTriForecastFingerprint, wireTriForecastChips } from './race-forec
 import { renderTriConeCard, wireTriConeCard } from './race-forecast-cone-card';
 import { renderTriForecastMarquee } from './race-forecast-marquee';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import { getCyclingEventById } from '@/data/cycling-events';
 import { getTriathlonById } from '@/data/triathlons';
@@ -73,6 +74,15 @@ export function renderTriathlonForecastView(): void {
   const tri = s.triConfig;
   if (!tri) return;
 
+  // The fingerprint card and its chip drill-downs must read the same prediction.
+  // The drill-down falls back to predictTriathlonRace() when triConfig.prediction
+  // is not yet stored, so the card must too — otherwise prediction-derived chips
+  // (Transitions, Endurance, Durability) wrongly show "Needs markers" while the
+  // drill-down shows a live estimate.
+  const fingerprintPrediction = isCyclingOnlyMode(s)
+    ? null
+    : (tri.prediction ?? predictTriathlonRace(s));
+
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
   const eventLabel = getCyclingEventLabel(s) ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
@@ -112,9 +122,9 @@ export function renderTriathlonForecastView(): void {
             <div class="hf" data-delay="0.10">${renderCyclingFinishCard(s)}</div>
           ` : `
             <div class="hf" data-delay="0.08">${renderTriForecastMarquee(s)}</div>
-            <div class="hf" data-delay="0.12">${renderTriForecastFingerprint(s, tri?.prediction ?? null)}</div>
+            <div class="hf" data-delay="0.12">${renderTriForecastFingerprint(s, fingerprintPrediction)}</div>
             ${renderTriConeCard(s)}
-            <div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:6px 16px 0">${calibrationDatasetCaption(tri?.prediction?.courseFactors ?? [])}</div>
+            <div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:6px 16px 0">${calibrationDatasetCaption(fingerprintPrediction?.courseFactors ?? [])}</div>
           `}
           <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
             <button id="tri-fc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
@@ -130,6 +140,7 @@ export function renderTriathlonForecastView(): void {
   if (!isCyclingOnlyMode(s)) {
     wireTriForecastChips();
     wireTriConeCard();
+    import('./race-forecast-leg-detail').then(m => m.wireTriLegBreakdownTaps());
   }
   document.getElementById('tri-fc-account-btn')?.addEventListener('click', () => navigateTab('account'));
   document.getElementById('tri-fc-methodology-btn')?.addEventListener('click', () => {
@@ -142,7 +153,7 @@ export function renderTriathlonForecastView(): void {
     });
   });
   document.getElementById('tri-bike-setup-btn')?.addEventListener('click', () => {
-    import('./bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
+    import('./bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay(() => renderTriathlonForecastView()));
   });
   document.getElementById('tri-fc-transitions-btn')?.addEventListener('click', async () => {
     const [{ openTransitionsOverlay }, { predictTriathlonRace }] = await Promise.all([

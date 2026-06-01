@@ -18,6 +18,7 @@ import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getS
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
+import { strengthCardSummary } from '@/guided/strength-model';
 import { isInjuryActive, buildInjuryCaption } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { clearIllness } from './illness-modal';
@@ -1247,17 +1248,22 @@ function buildReadinessRing(s: SimulatorState): string {
       <div id="home-readiness-card" style="position:relative;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
 
         ${injuryActive ? `
-        <!-- Injury corner badge -->
-        <div style="position:absolute;top:10px;right:10px;display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;background:#fef2f2;border:1px solid #fecaca;font-size:10px;font-weight:600;letter-spacing:0.04em;color:#b91c1c;z-index:1">
+        <!-- Injury corner badge. Top-left so it clears the drill affordance -->
+        <div style="position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;background:#fef2f2;border:1px solid #fecaca;font-size:10px;font-weight:600;letter-spacing:0.04em;color:#b91c1c;z-index:1">
           <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#dc2626"></span>
           Injured
         </div>
         ` : ''}
 
+        <!-- Corner drill affordance. Signals the card opens the full Readiness breakdown -->
+        <div id="home-readiness-drill" role="button" aria-label="Open readiness breakdown" style="position:absolute;top:6px;right:6px;padding:8px;cursor:pointer;z-index:2;line-height:0">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </div>
+
         <!-- Readiness hero ring. Top centre -->
         <div style="display:flex;justify-content:center;padding:20px 8px 10px">
           <div id="home-readiness-ring" style="display:flex;flex-direction:column;align-items:center;cursor:pointer">
-            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Readiness</div>
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.02em;color:var(--c-faint);margin-bottom:8px">Readiness</div>
             <div style="position:relative;width:120px;height:120px">
               <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
                 <defs>
@@ -1283,7 +1289,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
           <!-- Sleep ring -->
           <div id="home-sleep-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && sleepScore == null ? ';opacity:0.35' : ''}">
-            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Sleep</div>
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.02em;color:var(--c-faint);margin-bottom:6px">Sleep</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <defs>
@@ -1312,7 +1318,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
           <!-- Strain ring -->
           <div id="home-strain-ring" data-readiness-label="${readiness.label}" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
-            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Strain</div>
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.02em;color:var(--c-faint);margin-bottom:6px">Strain</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <defs>
@@ -1341,7 +1347,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
           <!-- Physiology ring (was Recovery) -->
           <div id="home-recovery-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && !recoveryResult.hasData ? ';opacity:0.35' : ''}">
-            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Physiology</div>
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.02em;color:var(--c-faint);margin-bottom:6px">Physiology</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <defs>
@@ -2613,7 +2619,7 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
   const isFirstLaunch = !hasCtl && !hasWatch && !hasRecentActivity;
   const heroSubcopy = isFirstLaunch
     ? 'Connect Strava or record your first run to start seeing data.'
-    : 'Tracking only.';
+    : 'Sessions on demand.';
 
   return `
     <style>
@@ -2641,7 +2647,7 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
 
       <!-- Header: Tracking pill + account button (no race countdown in track-only) -->
       <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between;gap:8px" class="hf" data-delay="0.02">
-        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748B;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,0.06);padding:4px 10px;border-radius:100px">Tracking</span>
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748B;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,0.06);padding:4px 10px;border-radius:100px">On demand</span>
         <button id="home-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
       </div>
 
@@ -2649,6 +2655,21 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
       <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
         <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${heroTitle}</div>
         <div style="font-size:14px;font-weight:500;color:#64748B;margin-top:8px">${heroSubcopy}</div>
+      </div>
+
+      <!-- Primary action: generate a session. On-demand mode has no plan, so this is
+           the main thing the user does here. Whole-card tap target. No accent fill
+           (in-page action, not a form submit), per the colour rules. -->
+      <div style="padding:0 16px;margin-top:18px" class="hf" data-delay="0.08">
+        <button id="home-generate-session" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px;cursor:pointer;font-family:inherit">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+            <div>
+              <div style="font-size:16px;font-weight:700;color:#0F172A;letter-spacing:-0.01em;margin-bottom:4px">Generate a session</div>
+              <div style="font-size:13px;color:#64748B;line-height:1.45">Run, bike, swim or gym. We read your recovery and size it to today.</div>
+            </div>
+            <span style="font-size:20px;color:#94A3B8;flex:0 0 auto">&rarr;</span>
+          </div>
+        </button>
       </div>
 
       ${buildTrackOnlyDailyTarget(s)}
@@ -2666,11 +2687,9 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
 
-      <!-- Upgrade to plan: muted link, not a heavy CTA (track-only is a
-           first-class mode, not a funnel step). -->
-      <div style="padding:20px 16px 14px;text-align:center" class="hf" data-delay="0.2">
-        <button id="home-create-plan-btn" style="font-size:13px;color:#64748B;background:none;border:none;cursor:pointer;padding:6px 10px;text-decoration:underline">Want a plan? Create one →</button>
-      </div>
+      <!-- Plan-creation is not surfaced here. On-demand is a first-class mode, not a
+           funnel step, and switching to a plan resets the app, so it lives in
+           Account → Settings behind a reset warning rather than as a home CTA. -->
 
       </div>
     </div>
@@ -2806,7 +2825,9 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
-  const todayList = (wk.triWorkouts ?? []).filter((w) => w.dayOfWeek === ourDay);
+  // Include adhoc sessions (injury-safe substitutes) so today's suggestions
+  // show on the home card, not just `triWorkouts`. Mirrors the plan-view fix.
+  const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w) => w.dayOfWeek === ourDay);
   if (todayList.length === 0) {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
@@ -2826,6 +2847,10 @@ function buildTriathlonHeroCard(w: any): string {
   const label = kind === 'swim' ? 'Swim' : kind === 'bike' ? 'Bike' : kind === 'run' ? 'Run' : 'Strength';
   const rpe = w.rpe ?? w.r ?? 5;
   const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  // Strength sessions show a "N exercises · tap to view" summary, not the raw
+  // exercise list (which reads as a run-on paragraph). Shared helper keeps the
+  // count + wording identical to the plan cards.
+  const strengthSummary = strengthCardSummary(w);
   const desc = humaniseTriDesc(w.d || '');
   const duration = extractTriWorkoutDuration(w);
   const isBrick = w.t === 'brick' && w.brickSegments;
@@ -2847,7 +2872,7 @@ function buildTriathlonHeroCard(w: any): string {
         ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
       </div>
       <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${escapeAttr(desc)}</div>
+      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${strengthSummary ?? escapeAttr(desc)}</div>
       ${isBrick ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.06);font-size:11px;color:var(--c-faint)">Brick, bike ${w.brickSegments[0].durationMin ?? 0}m + run ${w.brickSegments[1].durationMin ?? 0}m</div>` : ''}
       <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
         <span>Tap for full breakdown</span>
@@ -2866,7 +2891,9 @@ function buildTodayWorkoutHyrox(s: SimulatorState): string {
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
-  const todayList = (wk.triWorkouts ?? []).filter((w: any) => w.dayOfWeek === ourDay);
+  // Include adhoc sessions (injury-safe substitutes: bike / safe strength) so
+  // today's suggestions show on the home card, not just `triWorkouts`.
+  const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w: any) => w.dayOfWeek === ourDay);
   if (todayList.length === 0) {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
@@ -2876,11 +2903,15 @@ function buildTodayWorkoutHyrox(s: SimulatorState): string {
 }
 
 function buildHyroxHeroCard(w: any): string {
-  const disc = String(w.discipline || 'run');
-  const accent = disc === 'station' ? '#b8742c' : disc === 'brick' ? '#5b6ea0' : '#7a845c';
-  const badgeBg = disc === 'station' ? 'rgba(184,116,44,0.14)' : disc === 'brick' ? 'rgba(91,110,160,0.14)' : 'rgba(122,132,92,0.14)';
-  const badgeText = disc === 'station' ? '#8a5820' : disc === 'brick' ? '#3d4f80' : '#4f5a3b';
-  const label = disc === 'station' ? 'Station' : disc === 'brick' ? 'Brick' : 'Run';
+  const wt = String(w.t || '');
+  const disc = (w.discipline === 'station' || w.discipline === 'brick') ? String(w.discipline)
+    : (wt === 'gym' || wt === 'strength') ? 'strength'
+    : wt === 'cross_training' ? 'cross'
+    : 'run';
+  const accent = disc === 'station' ? '#b8742c' : disc === 'brick' ? '#5b6ea0' : disc === 'strength' ? '#6b7280' : disc === 'cross' ? '#0d9488' : '#7a845c';
+  const badgeBg = disc === 'station' ? 'rgba(184,116,44,0.14)' : disc === 'brick' ? 'rgba(91,110,160,0.14)' : disc === 'strength' ? 'rgba(107,114,128,0.14)' : disc === 'cross' ? 'rgba(13,148,136,0.14)' : 'rgba(122,132,92,0.14)';
+  const badgeText = disc === 'station' ? '#8a5820' : disc === 'brick' ? '#3d4f80' : disc === 'strength' ? '#4b5563' : disc === 'cross' ? '#0f766e' : '#4f5a3b';
+  const label = disc === 'station' ? 'Station' : disc === 'brick' ? 'Brick' : disc === 'strength' ? 'Strength' : disc === 'cross' ? 'Cross-train' : 'Run';
   const rpe = w.rpe ?? w.r ?? 5;
   const mtl = w.musculoTendonLoad;
   const dur = w.estimatedDurationMin;
@@ -2901,7 +2932,7 @@ function buildHyroxHeroCard(w: any): string {
         ${mtl != null && mtl > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">MTL ${Math.round(mtl)}</span>` : ''}
       </div>
       <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${escapeAttr(w.d || '')}</div>
+      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${strengthCardSummary(w) ?? escapeAttr(w.d || '')}</div>
       <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
         <span>Tap for full breakdown</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -2990,9 +3021,10 @@ function wireHomeHandlers(): void {
     (window as any).openActivityReReview?.(() => renderHomeView(), weekNum);
   });
 
-  // Just-Track upgrade CTA → relaunch wizard at goals (trainingMode + trainingForEvent)
-  document.getElementById('home-create-plan-btn')?.addEventListener('click', () => {
-    import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
+  // On-demand: primary "Generate a session" CTA → session generator (multi-discipline
+  // picker for track-only users: run / bike / swim / gym).
+  document.getElementById('home-generate-session')?.addEventListener('click', () => {
+    import('./session-generator').then(({ openSessionGenerator }) => openSessionGenerator());
   });
 
   // Post-race banner: "Switch to tracking" button → downgradeToTrackOnly
@@ -3102,6 +3134,11 @@ function wireHomeHandlers(): void {
   // Readiness ring. Tap opens readiness detail page
   // Readiness ring. Tap opens readiness detail page
   document.getElementById('home-readiness-ring')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    import('./readiness-view').then(({ renderReadinessView }) => renderReadinessView());
+  });
+  // Corner drill arrow. Same destination as the readiness ring. Discoverable tap cue.
+  document.getElementById('home-readiness-drill')?.addEventListener('click', (e) => {
     e.stopPropagation();
     import('./readiness-view').then(({ renderReadinessView }) => renderReadinessView());
   });
@@ -3219,7 +3256,7 @@ function wireHomeHandlers(): void {
       const wk = st.wks?.[st.w - 1];
       if (!wk) return;
       const id = el.getAttribute('data-tri-workout-id');
-      const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      const w = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].find((x: any) => (x.id || x.n) === id);
       if (!w) return;
       import('./triathlon/workout-detail-modal').then(({ openTriWorkoutDetail }) => openTriWorkoutDetail(w));
     });
@@ -3232,30 +3269,26 @@ function wireHomeHandlers(): void {
       const wk = st.wks?.[st.w - 1];
       if (!wk) return;
       const id = el.getAttribute('data-hx-hero-workout-id');
-      const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      const w = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].find((x: any) => (x.id || x.n) === id);
       if (w) import('./hyrox/workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(w));
     });
   });
 
-  // Adhoc activity click → open activity detail
+  // Adhoc session click → open the read-only session detail (NOT the completed-
+  // activity view). An adhoc workout is something the user generated/added, not a
+  // synced activity — opening renderActivityDetail wrongly framed it as a completed
+  // Garmin activity with a run-to-work commute toggle. openTriWorkoutDetail is the
+  // general session viewer: it auto-routes gym/strength to the per-exercise modal
+  // and parses run/bike/swim descriptions into warm-up / main / cool-down blocks.
   document.querySelectorAll<HTMLElement>('.home-adhoc-row').forEach(el => {
     el.addEventListener('click', () => {
       const weekNum = Number(el.dataset.weekNum || 0);
       const adhocIdx = Number(el.dataset.adhocIdx || 0);
       const st = getState();
       const wk = (st.wks ?? [])[weekNum - 1];
-      const adhoc = (wk?.adhocWorkouts ?? [])[adhocIdx] as any;
+      const adhoc = (wk?.adhocWorkouts ?? [])[adhocIdx];
       if (adhoc) {
-        const fakeActual = {
-          startTime: adhoc.garminTimestamp || '',
-          durationSec: (adhoc.garminDurationMin || adhoc.durationMin || 0) * 60,
-          distanceKm: adhoc.garminDistKm || adhoc.distanceKm || 0,
-          activityType: adhoc.activityType || '',
-          displayName: adhoc.displayName || adhoc.workoutName || adhoc.name || 'Workout',
-        };
-        import('./activity-detail').then(({ renderActivityDetail }) => {
-          renderActivityDetail(fakeActual as any, fakeActual.displayName, 'home');
-        });
+        import('./triathlon/workout-detail-modal').then(({ openTriWorkoutDetail }) => openTriWorkoutDetail(adhoc, weekNum - 1));
       }
     });
   });

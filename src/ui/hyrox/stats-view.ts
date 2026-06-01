@@ -284,15 +284,24 @@ export function renderHyroxStatsView(): void {
     import('./critical-pace-detail-view').then(({ renderHyroxCriticalPaceDetail }) => renderHyroxCriticalPaceDetail());
   });
 
-  // Pro weights toggle. Flips hyroxConfig.benchmarksAtProWeights and re-renders.
-  document.getElementById('hx-pro-weights-toggle')?.addEventListener('click', async () => {
+  // Pro weights toggle. Flips hyroxConfig.benchmarksAtProWeights. The flag is
+  // only consumed by the prediction engine (forecast tab) and this button's own
+  // appearance — nothing else on the Stats page reads it — so we restyle the
+  // button in place rather than re-rendering the whole page.
+  document.getElementById('hx-pro-weights-toggle')?.addEventListener('click', async (e) => {
     const { getMutableState } = await import('@/state/store');
     const { saveState } = await import('@/state/persistence');
     const ms = getMutableState();
     if (!ms.hyroxConfig) return;
-    ms.hyroxConfig.benchmarksAtProWeights = !ms.hyroxConfig.benchmarksAtProWeights;
+    const on = !ms.hyroxConfig.benchmarksAtProWeights;
+    ms.hyroxConfig.benchmarksAtProWeights = on;
     saveState();
-    renderHyroxStatsView();
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.setAttribute('data-on', on ? 'true' : 'false');
+    btn.style.borderColor = on ? 'var(--c-black)' : 'rgba(0,0,0,0.18)';
+    btn.style.background = on ? 'var(--c-black)' : '#fff';
+    btn.style.color = on ? '#FDFCF7' : 'var(--c-black)';
+    btn.textContent = on ? 'On' : 'Off';
   });
 }
 

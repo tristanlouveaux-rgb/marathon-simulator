@@ -29,12 +29,35 @@ function snap(sec: number, stepSec: number): number {
   return Math.round(sec / stepSec) * stepSec;
 }
 
-function deriveBounds(predictedSec: number): { minSec: number; maxSec: number; stepSec: number } {
-  const STEP = 60;
-  const SNAP_END = 5 * 60;
-  const minSec = Math.max(STEP, snap(predictedSec * 0.8, SNAP_END));
-  const maxSec = Math.max(minSec + 30 * STEP, snap(predictedSec * 1.8, SNAP_END));
-  return { minSec, maxSec, stepSec: STEP };
+/**
+ * Per-distance goal-slider granularity. `step` is the slider increment; `window`
+ * is the +/- fraction of the prediction the slider spans. Short races need fine
+ * steps (a 5K's realistic range is a few minutes, so a 60s step leaps across the
+ * steep part of the probability curve); long races need coarse steps (a marathon
+ * spans ~50 min, so 5s steps would be hundreds of notches). Tuned so every
+ * distance lands at ~40-50 notches. UX granularity, not a model input.
+ */
+const GOAL_SLIDER_PARAMS: Record<string, { step: number; window: number }> = {
+  '5k':       { step: 5,  window: 0.10 },
+  '10k':      { step: 10, window: 0.10 },
+  'half':     { step: 20, window: 0.12 },
+  'marathon': { step: 30, window: 0.12 },
+};
+
+/**
+ * `fastestSec` (optional) extends the fast end of the slider to cover a faster
+ * achievable forecast — e.g. the onboarding overlay, where adding sessions pulls
+ * the forecast faster than the base prediction. Pass the forecast at the max
+ * addable session count so the range spans the whole add-session scenario from
+ * the start, without the bounds shifting as the user taps +. The slow end stays
+ * anchored to the base prediction.
+ */
+export function deriveBounds(predictedSec: number, rd?: string, fastestSec?: number): { minSec: number; maxSec: number; stepSec: number } {
+  const p = GOAL_SLIDER_PARAMS[rd ?? ''] ?? { step: 15, window: 0.12 };
+  const fastAnchor = (fastestSec && fastestSec > 0 && fastestSec < predictedSec) ? fastestSec : predictedSec;
+  const minSec = Math.max(p.step, snap(fastAnchor * (1 - p.window), p.step));
+  const maxSec = Math.max(minSec + 10 * p.step, snap(predictedSec * (1 + p.window), p.step));
+  return { minSec, maxSec, stepSec: p.step };
 }
 
 // ── Goal caption ladder ─────────────────────────────────────────────────────
@@ -44,14 +67,14 @@ const PROB_REALISTIC = 70;
 const PROB_HONEST    = 40;
 const PROB_AMBITIOUS = 15;
 
-function liveTone(probPct: number): string {
+export function liveTone(probPct: number): string {
   if (probPct >= PROB_REALISTIC) return '#16A34A';
   if (probPct >= PROB_HONEST)    return '#65A30D';
   if (probPct >= PROB_AMBITIOUS) return '#B45309';
   return '#B91C1C';
 }
 
-function liveLabel(probPct: number): string {
+export function liveLabel(probPct: number): string {
   if (probPct >= PROB_LIGHT)     return 'Looks light';
   if (probPct >= PROB_REALISTIC) return 'Realistic';
   if (probPct >= PROB_HONEST)    return 'Honest stretch';
@@ -69,7 +92,7 @@ export function openRunGoalOverlay(preSec?: number): void {
   const predictedSec = ms.forecastTimeAdjusted ?? ms.forecastTime ?? ms.blendedRaceTimeSec ?? 0;
   if (predictedSec <= 0) return;
 
-  const { minSec, maxSec, stepSec } = deriveBounds(predictedSec);
+  const { minSec, maxSec, stepSec } = deriveBounds(predictedSec, ms.rd);
 
   // Initial: explicit preSec > saved user goal > initial baseline > prediction * 0.95
   const baselineFallback = ms.initialBaseline && ms.initialBaseline > 0 ? ms.initialBaseline : predictedSec * 0.95;

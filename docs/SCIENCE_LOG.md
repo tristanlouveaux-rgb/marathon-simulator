@@ -6,6 +6,24 @@ New entries are added at the top. When modifying a model, update its entry rathe
 
 ---
 
+## §AN — Bike mass / CdA coupling and the weight-input clamp (2026-06-01)
+
+**Side of the line**: tracking (race-time prediction input).
+
+**The coupling.** The bike power-balance model (`bike-physics.ts`) solves CdA from a known ride by inverting the steady-state equation:
+
+```
+CdA = 2·(P·η − Crr·m·g·v − m·g·sinθ·v) / (ρ·v³)
+```
+
+Both the rolling term (`Crr·m·g·v`) and the climbing term (`m·g·sinθ·v`) scale with total mass `m`. For a fixed observed (power, speed, gradient), increasing `m` removes power from the aero residual, so the solved CdA falls. The prediction then re-uses that lowered CdA. On a flat course at race power the aero term (∝ v³) dominates the rolling penalty, so a *heavier* assumed mass produces a *faster* predicted bike split. This is the well-known mass/CdA identifiability problem in single-ride field testing (Martin et al. 1998, *J Appl Biomech* 14:276 — the power model; Chung's "virtual elevation" method exists precisely because mass and CdA cannot both be recovered from one steady ride without an independent constraint).
+
+**Why this is acceptable, not a model error.** Within a realistic mass range (a road/TT bike is 6–12 kg, a loaded setup rarely above ~20 kg) the CdA compensation is small and the net prediction error from a ±2 kg mis-entry is below the noise floor of a field calibration (which we already only rate `'medium'` confidence). The model is internally consistent: it reproduces the calibration ride exactly at its own operating point. The artifact only becomes visible — and wrong-signed — when the mass input is unphysical.
+
+**The guard (not a recalibration).** Rather than add an independent mass constraint (we don't have repeated-ride or virtual-elevation data), we clamp the weight inputs to physical bounds at entry: bike 4–30 kg, rider 30–200 kg (the bounds already declared on the inputs). HTML `min`/`max` only flag validity; they don't clamp a typed value, which is how a 100 kg "bike" reached the solver. Clamping keeps the calibration inside the range where the coupling is negligible.
+
+**Known limitation.** Even after clamping, changing mass without re-running the calibration leaves a stale CdA that was solved at the old mass. The auto-calibration re-solves on position change but not on every mass edit. For realistic mass edits the residual error is small; this is documented rather than fixed.
+
 ## §AM — Commute Plan Engine: Additive Model + Bidirectional Slot Split (2026-05-20)
 
 Supersedes §AC. The commute-aware substitution model shipped 2026-05-14 was reverted; commute runs are now appended to the prescribed plan, not substituted for prescribed easy slots. The plan also now emits two separate slots per commute day for bidirectional commutes (morning + evening at one-way distance) and spaces commute days across the week.
@@ -72,7 +90,7 @@ Running's prediction engine was missing four real factors that the tri engine al
 **Model**:
 - `trainingTempC` = 4-week average of `ambientTempC` from synced outdoor run activities (Open-Meteo populates this for activities with a GPS start location). Returns null when fewer than 4 activities in the window have temperature data.
 - `tempGap = raceAnchorTemp − trainingTempC` (positive = training cooler than race).
-- `discountFraction = max(0, MAX_DISCOUNT × (1 − tempGap / RAMP_GAP_C))` — linear ramp from 0% discount at gap=15°C to 50% discount at gap≤0°C.
+- `acclimFraction = clamp(MAX_DISCOUNT × tempGap / RAMP_GAP_C, −MAX_DISCOUNT, +MAX_DISCOUNT)`; `acclimFactor = 1 + climatePenaltyFraction × acclimFraction` (revised 2026-06-01, symmetric). Training hotter than race → `acclimFactor < 1` (credit); at race temp → 1 (no change); cooler → `acclimFactor > 1` (penalty). Mirrors the triathlon heat model (§T4). The prior versions only ever credited.
 - `acclimFactor = 1 − climatePenaltyFraction × discountFraction`. Applied as a sub-1.0 multiplier on top of the already-applied climate penalty so the climate row still shows the raw penalty.
 
 **Constants**:
@@ -772,6 +790,8 @@ The schedule is mode-agnostic. Per-discipline behaviour is driven by workout-kin
 - `reduced` → volume × volumeFactor; intensity cap applies only when ceiling is 'easy' or 'steady'.
 - **Strength suppression**: when `neckRule == 'below'`, all strength sessions across the schedule become rest, regardless of capacity. Rationale: lifting under viral load is the documented worst-case scenario for cardiac stress (Schwellnus). This single rule covers running, triathlon, cycling, and HYROX users equivalently.
 
+**Wiring reality (2026-06-01)**: the schedule-driven `applyIllnessMods` was only ever *called* from running's `plan-view.ts`; triathlon and HYROX plan-views rendered stored workouts without applying it. They now call `applyIllnessModsAllDisciplines`, which applies the same per-discipline logic for the **legacy `{severity}`** state the live modal currently writes (`resting` → rest all, `light` → volume × 0.6, intensity capped to easy). The 0.6 factor is the existing non-quality reduction ratio from the legacy path — not a new constant. Applying the same volume reduction to bike/swim/stations as to runs is defensible because acute-illness volume reduction is discipline-agnostic: the immune cost of training scales with total systemic load, not with which sport produced it (Schwellnus 2016 frames load in mode-neutral terms). **Holiday** mods use a facility-access model rather than a uniform reduction (Tristan, 2026-06-01): on holiday, running is the only reliably available discipline (shoes travel; bikes and HYROX boxes do not), so running is kept as the training spine and honours the existing "can you run?" answer, bike and stations/bricks always rest, and swim is gated on an explicit "pool or open water?" question for triathletes. This is a logistics model, not a physiological one — it reuses the running 0.7 reduction ratio for the sessions that survive, and adds no new constants. Holiday `forceDeload` weeks are now honoured by the tri/HYROX engines (`deload = forceDeload || isDeloadWeek`), matching running's `plan_engine.ts`.
+
 ### Limitations (call them out honestly)
 
 1. **Self-report bias**: severity, symptom presence, and day-of-symptoms are user-entered. We have no objective severity ground truth. RHR delta is the only autoreported objective signal.
@@ -1109,6 +1129,9 @@ Empirical T1/T2 already reflects the "sock-on at T1" baseline because that's wha
 - **No year-on-year weighting.** Same caveat as course factors (§G) — a venue with a 2018 layout change contributes the lifetime average rather than the post-change average.
 - **Bin width is uniform.** A 4:00 70.3 finisher and a 4:14 finisher land in the same 15-min bin; no smoothing across bins. The granularity is acceptable for a ~30-second-magnitude signal.
 - **Confidence floors are pragmatic, not derived.** 50 / 200 thresholds match the existing course-factor and split-distribution conventions; a formal SE-based gate would be more rigorous but the practical effect is similar.
+- **Mean only, no spread.** We store the cell mean, not its variance. Transition time scatters far more around its mean than swim/bike/run do, because it tracks fitness only loosely (a sub-5 70.3 finisher can take a 7-min T1, a 6-hour finisher a 3-min one). We cannot show the user a percentile, only a centre point.
+- **Venue logistics dominate T1 and are only captured where we have race-specific data.** T1 is set largely by the swim-exit-to-transition run distance and transition-zone size, which are venue properties, not fitness. For a venue absent from the dataset (e.g. Sandusky 70.3) the global fallback cannot know this and will tend to run optimistic. **Surfaced honestly in UI (2026-06-01)**: the Transitions detail caption states the global fallback plainly and warns that transitions vary widely by venue, rather than implying the number is calibrated to the user's race. The override path remains the accurate answer when the user has a real reference (e.g. their own past race or a known long-T1 venue).
+- **External validation (2026-06-01).** IM means cross-checked against Ironman.com (competitive 5–10 min, age-groupers 10–15 min) and Better Triathlete (avg male AG 12h38 finisher → 17 min; our 12h45 band → 16:58). Both match within seconds, confirming the calibration is correctly scaled. T1 > T2 holds in every 70.3 band (T1 is 53–59% of combined; share is largest for fast finishers because the wetsuit strip is a near-fixed cost).
 
 ### Sources
 
@@ -5985,15 +6008,18 @@ Where:
 
 ### §T4 — Heat acclimatisation discount on climate penalty (ISSUE-190)
 
-**Formula**: 
+**Formula** (revised 2026-06-01 — symmetric):
 ```
-discountFraction = max(0, 0.5 × (1 − tempGap / 15))
-where tempGap = raceAnchorTemp − trainingTempC
-runDiscount = baseRunSec × (CLIMATE_RUN_MULTIPLIER[climate] − 1.0) × discountFraction
-bikeDiscount = baseBikeSec × (CLIMATE_BIKE_MULTIPLIER[climate] − 1.0) × discountFraction
+tempGap = raceAnchorTemp − trainingTempC          (positive = training cooler than race)
+acclimFraction = clamp(tempGap / 30, −0.5, +0.5)  (±0.5 reached at a ±15°C gap)
+runDiscount  = −baseRunSec  × (CLIMATE_RUN_MULTIPLIER[climate]  − 1.0) × acclimFraction
+bikeDiscount = −baseBikeSec × (CLIMATE_BIKE_MULTIPLIER[climate] − 1.0) × acclimFraction
 ```
+The returned value is **subtracted** from the post-course leg time: positive = credit (faster, trained hotter than race), negative = penalty (slower, trained cooler). Zero at race temp. Applied in **both** the empirical and physical course-factor paths.
 
-Applied after course factors as athlete-level correction (subtracted from post-multiplier leg times).
+**Revision history**:
+- *Original*: `discountFraction = max(0, 0.5 × (1 − tempGap/15))` — credit-only, and it credited training *cooler* than the race (ramp to zero only at a 15°C gap). Backwards: heat acclimatisation is earned by training *in heat*, so 14°C training for a 24°C race wrongly earned a partial credit.
+- *2026-06-01, symmetric (Tristan)*: the climate penalty (+4% warm etc.) is the **average field**; an athlete's own heat preparation shifts their exposure to it. Pivot at race temp: training hotter → credit (better adapted than field), at race temp → no adjustment (field-average penalty stands), cooler → **penalty** (under-adapted). Magnitude ±50% of the climate penalty at ±15°C. **Science**: Périard/Racinais/Sawka 2015 (heat-acclimation consensus) and Racinais et al. 2015 (consensus recommendations) — the acclimatised-vs-unacclimatised performance gap is roughly symmetric and of the same order (~4–7%) as the heat decrement itself; Ely et al. 2007 (marathon vs WBGT) shows under-prepared runners slow more than the field. **No double-count in the empirical path**: because the adjustment is zero at race temp, it adds only the athlete's *personal deviation* from the field, not the absolute weather (which the empirical factor already carries). The climate-penalty magnitude (`CLIMATE_*_MULTIPLIER`) is reused as the reference scale for that deviation in both paths — an approximation for empirical venues, where the true climate share of the calibrated factor is unknown. Cliff-free, but the ±15°C ramp and ±50% cap are pragmatic (not study-fitted). Training temp from `computeTrainingTempC` (4-week `ambientTempC` average, ≥4 readings).
 
 **Anchors**: raceAnchorTemp from `CLIMATE_ANCHOR_TEMP_C` (cool=12°C, warm=24°C, hot=30°C). Training temp from `ambientTempC` on recent activities (Open-Meteo, 4-week window, minimum 4 readings required).
 
@@ -6287,3 +6313,133 @@ A `full` station is debited by the *worse* of its upper/lower build weeks (`min`
 3. **Capacity is a snapshot.** The debit uses the current capacity for the whole pre-return window rather than a graded ramp back to 100; matches the triathlon model's same simplification.
 
 **Code.** `src/calculations/hyrox-injury.ts` (`HYROX_STATION_REGION`, `stationInjuryBuildWeeks`), wired into `src/calculations/race-prediction.hyrox.ts` (`buildStationProjection`, per-station weeks) and `src/calculations/race-projection.hyrox.ts` (`buildHyroxProjection`, run horizon). UI note in `src/ui/hyrox/forecast-view.ts`. Tests: `hyrox-injury.test.ts` (10 — mapping, per-region debit, full-station worst-of, blocked/reduced, projection integration, no-injury invariance).
+
+## §AR — Per-workout user scaling (running): planning-side, prediction-neutral (2026-05-29)
+
+**What it is.** A user-facing "Adjust" control on running workout cards lets the athlete scale one session: a continuous duration slider (50%–115% of the prescribed total time) and stepped Easier/Harder intensity notches along the pace ladder, plus two "Got less time" presets. This is the self-service equivalent of the AI coach's `reduce_workout` + `adjust_intensity` tools. Code: `src/workouts/workout-scaling.ts` (pure helpers) + `src/ui/workout-adjust-overlay.ts`.
+
+**Scaling model (v2, 2026-05-29) — proportional "scale everything".** The duration slider applies a single scale factor `f ∈ [0.50, 1.15]` to the WHOLE session. Every distance (km / bare metres) and duration (min) token in the description scales by `f`, and the session's total minutes scale by `f`; paces (e.g. "3:52/km", "4:39/km+") are left untouched, because the intent is to shrink or grow the session, not re-pace it. This replaced the v1 distance-only scaler, which could only touch the first "Xkm" token — wrong for a structured tempo, where it grabbed the warm-up's "2km" as the whole session (the bug Tristan caught). "Scale everything proportionally" was Tristan's explicit choice (2026-05-29) over trimming the main set or cutting reps. So a tempo at `f = 0.75` becomes "1.5km warm up ... 10min @ 3:52/km (~2.5km) ... 1.5km cool down". Intensity notches are independent of `f` and change the run *type* (and its RPE), not the length.
+
+**Time is the universal unit.** Cards headline time (from `estimatedDurationMin`), which is the one honest scalar every session has. Distance-defined runs (easy/long/MP) also show their distance ("8.0 km · 38 min"); structured sessions show time only. This is why a tempo no longer mis-displays a single distance, and why the headline updates live with any scale (the mod carries `newDurationMin`).
+
+**Which side of the tracking/planning line.** Scaling sits squarely on the **planning** side: it changes the *prescription* for a single session. It is explicitly NOT a tracking input. It does not recompute CTL/ATL, VDOT, weekly load targets, the plan ramp, or the race prediction. Those respond only to the activity the athlete actually completes (the tracking side). The scaled session is persisted as a standard `WorkoutMod` re-applied at render; nothing reads it as achieved load.
+
+**Adherence treatment (defensible).** Running adherence is distance/time-based against the prescribed session. Because a scale rewrites the live `w.d` + `estimatedDurationMin`, adherence compares against the *scaled* target, not the original. This is deliberate and honest: the athlete made a conscious, informed decision to do less (or more), so it is not a missed session — penalising a chosen trim would punish exactly the behaviour the feature exists to support. The original session is retained on the mod (`originalDistance` holds the full plan description, `originalDurationMin` the plan minutes) and the "Adjusted" chip + "Original:" caption (for simple-distance runs) surface the change.
+
+**Constants — all anchored, none invented (CLAUDE.md "No Made-Up Numbers").**
+- Scale-factor floor **0.50** = the taper long-run multiplier (`plan_engine.ts`). Ceiling **1.15** = the `effortMultiplier` ceiling. These bound a single-session adjustment to the same envelope the plan engine itself uses for week-scale modulation, so a user scale can never prescribe a session more extreme than the system would. (The factor floor of 0.50 replaces v1's separate 3 km hard floor; a 0.5× minimum is a softer, type-agnostic equivalent.)
+- "Got less time" preset **0.75** = the maximum cross-training reduction tier (`getTier`, `timing-check.ts`).
+- Intensity notches reuse the existing `PACE_LADDER` (easy → marathon → threshold → vo2) and `RPE_BY_TYPE` verbatim; long runs step down their own sub-ladder. No new intensity model.
+
+**"Less time, same effort" — a stated approximation, not an equation.** This preset shortens duration to 75% AND steps intensity up one ladder notch, on the premise that a shorter, harder session preserves roughly equivalent training stimulus. This is a pragmatic approximation, NOT a TSS-preserving calculation. The true relationship (TSS ∝ duration × IF², so a 0.75 duration cut needs IF up ~1.15× to hold TSS) does not map cleanly onto the discrete zone ladder — one notch over/undershoots depending on the starting zone. We accept the approximation because (a) the athlete sees and confirms the resulting session before it applies, (b) the actual stimulus is measured from what they complete, not from this estimate, and (c) a precise per-zone IF table would be false precision over a user's in-the-moment intent. **Limitation flagged**: the preset can over- or under-shoot true iso-stimulus by up to roughly one zone's worth of intensity factor; it is a convenience, not a load-matched prescription.
+
+**Proportional-scaling limitations.** (1) Reps don't change count — "6x800m" at 0.75 becomes "6x600m", scaling rep distance not rep number (Tristan's "scale everything" choice; cutting reps was the rejected alternative). (2) Intensity notches change the type/RPE but do NOT rewrite the description's pace tokens, matching the coach's `adjust_intensity`; a tempo made "easier" keeps its written paces. (3) Token scaling is regex-based on km/min/m; an exotic description format with an unlabelled scalar would be missed (it would simply not scale that token).
+
+**Tests.** `src/workouts/workout-scaling.test.ts` (14 — leading-distance parse, simple-vs-structured classification, scalable-token detection, proportional scaling with pace-preservation and metre reps, factor clamping, minutes scaling, ladder stepping with long-run and end-of-ladder cases).
+
+**Addendum (2026-06-01) — all-modes + bike/swim intensity.** The control now covers triathlon, cycling, and HYROX (run + bike/erg/swim). For these the scale is written straight onto the persisted `triWorkouts`/`adhocWorkouts` object (reload-safe; running stays a `WorkoutMod` matched by stable slot id via `findWorkoutForMod`). Bike and swim gain a discipline intensity ladder — the running pace ladder has no swim/bike analogue, so two sourced ladders are used instead:
+- **Bike** (`BIKE_INTENSITY_LADDER`, triathlon-constants.ts): endurance 0.65 → tempo 0.82 → sweet-spot 0.91 → threshold 1.00 → VO2 1.15 (×FTP). Allen & Coggan (2010/2019) power-duration zones — the same source as `CYCLING_EVENT_INTENSITY_FACTOR` and the `BIKE_OPTIONS` picker. Target watt range = `FTP × pct × (1 ± BIKE_ADHERENCE_BAND[kind])`, identical to `pwLabel` in bike.ts.
+- **Swim** (`SWIM_INTENSITY_LADDER`): technique +18 → endurance +6 → CSS 0 → speed −6 sec/100m relative to critical swim speed. Target pace = `CSS + offset`. Mirrors the `SWIM_OPTIONS` picker.
+The chosen rung persists as `Workout.intensityLevel` and the target is recomputed live from the athlete's current FTP/CSS (so it tracks benchmark improvement; nothing is baked into the description, keeping duration scaling clean). **No new constants and no fabricated RPE** — for cycling power is the primary objective signal (Coggan & Allen 2019; CLAUDE.md bike-effort rule), so the watt/pace target *is* the prescription. Injury aerobic-maintenance sessions are allowed to step harder (Tristan's call — athlete intent over the Z2 default). Tests: `src/constants/intensity-ladder.test.ts` (7).
+
+---
+
+## §AS — Post-holiday detraining + discipline-aware comeback bridge (2026-06-01)
+
+**What.** Closes the P1 gap in `docs/CROSS_MODE_PARITY_PLAN.md`: triathlon/cycling/HYROX athletes returning from a holiday got their full week-N prescription on day one (an ACWR spike the running bridge exists to prevent), and FTP/CSS never detrained at all. Three pieces: a shared detraining decay curve, FTP/CSS/VDOT docks on holiday return, and a discipline-aware render-time comeback bridge.
+
+**The decay curve — `detrainingLossFraction(daysAway, retentionRatio)` (`welcome-back.ts`).** One curve now drives VDOT, FTP and CSS detraining rather than three invented ones (CLAUDE.md "two numbers, one source").
+
+- **Shape:** reuses the existing VDOT decay rates — ~1.2%/week for the first two detraining weeks, ~0.8%/week thereafter, compounding. Source: Mujika & Padilla (2000), *Detraining: loss of training-induced physiological and performance adaptations*. Short-term detraining shows VO2max declining ~6% over the first 3–4 weeks off, with measurable power/endurance loss; the staged rate captures the steeper early phase.
+- **Dead-zone: `DETRAINING_DEADZONE_DAYS = 10`** (Tristan, 2026-06-01). No loss inside the first 10 days. Mujika & Padilla find VO2max essentially preserved through roughly the first week off; a normal week's holiday is a taper, not detraining. Time is measured *past* the dead-zone, so the steep early-loss phase begins where the literature says detraining actually starts, not on day one. This also fixes a latent over-dock: the old holiday VDOT path fed `Math.ceil(daysAway/7)` into the decay, so a 3-day trip rounded up to "1 week" and lost 1.2%. `computeVdotLoss` now delegates to the shared curve, so the missed-week path inherits the dead-zone too.
+- **Activity-while-away attenuation:** loss is scaled by `(1 − retentionRatio)`, where `retentionRatio` is the holiday training load as a fraction of the pre-holiday weekly average (`classifyHolidayActivity`, total-TSS-based, discipline-agnostic). An athlete who kept training through the break detrains proportionally less; one who matched normal load detrains nothing. Ratios above 1 clamp to zero loss.
+
+**Why holiday-only, not effort-age (a deliberate rejection).** An earlier design faded FTP/CSS whenever the most recent hard effort aged. Rejected (Tristan, 2026-06-01): the FTP/CSS estimators key off the *best hard effort*, so a compliant athlete doing prescribed Z2 endurance — full training load, zero detraining — would see their FTP silently fall simply because no new max effort refreshed it. "No recent test" is not "lost fitness." The true detraining signal is a **drop in training load**, and the one place that is known with certainty is a declared holiday. Detraining therefore fires only on a holiday return; following the plan never lowers a benchmark.
+
+**The docks (`showHolidayWelcomeBack`, holiday-modal.ts).** With `frac = detrainingLossFraction(daysAway, ratio)`: VDOT and FTP move down by `×(1−frac)`, CSS (lower sec/100m = faster) moves up by `×(1+frac)`. Provenance flips to `derived`, a history sample is appended, and a `[holiday-detrain]` line is logged. Per CLAUDE.md "Manually-set Benchmarks Yield to Improvements", these stay overridable.
+
+**Anchor-gate (the clobber fix).** The launch benchmark refresh (`main.ts`) ratchets FTP/CSS *up* toward what ride/swim history implies — but right after a holiday, history is stale-high, so it would restore the docked value on the next launch. Fix: the dock records `ftpDetrainAnchorISO` / `cssDetrainAnchorISO` (= holiday end date). The refresh will not raise FTP / improve CSS from a contributing effort dated **on or before** the anchor: a pre-holiday ride is not evidence you have recovered. A ride/swim *after* the return supersedes the dock and clears the anchor. This is the existing "improvement must be demonstrated" rule, applied to recovery rather than progression. New state fields are optional (fresh-install safe).
+
+**The comeback bridge — `applyBridgeModsAllDisciplines` (holiday-modal.ts).** The run-only `applyBridgeMods_renderTime` scales `\d+km` strings and skips every non-run session, useless for watt/time/station sessions. The discipline-aware sibling reads the *same* `_holidayBridgeScale` (set by `buildBridgeWeekMods`: 0.50–0.85 over 1–3 weeks, keyed by holiday activity level — existing running constants, none invented) and scales swim/bike/run-leg/station `estimatedDurationMin` + `musculoTendonLoad`, plus run km strings. Applied at render in the tri and HYROX plan-views (mirrors today's `applyHolidayModsAllDisciplines` wiring). It governs **volume**; intensity targets remain FTP/CSS-derived (themselves now docked). Skips adhoc, holiday, and user-Adjusted (`userScaledAt`) sessions.
+
+**Mechanism note (why render-time, not engine `forceDeload`).** The tri/HYROX plan-views render stored `triWorkouts`, not freshly engine-generated weeks, so the engine's `forceDeload` (consumed only at generation) cannot scale the displayed comeback week. Running itself ramps the resume weeks at render via `applyBridgeMods_renderTime`; `forceDeload` is for the holiday weeks themselves. The discipline-aware bridge is the faithful mirror.
+
+**Tracking vs planning.** The bridge is **planning** (it changes the prescription). The detraining docks are **tracking** inputs to the benchmark state and the race prediction (they describe a real load drop). Both are honest: the prescription eases and the predicted time reflects the time off.
+
+**Limitations.** (1) The missed-week VDOT path (`advanceWeekToToday`) uses `retentionRatio = 0` — it has no per-discipline holiday-activity signal, so a multi-week app absence during which the athlete kept training (synced later) still docks VDOT fully. Pre-existing; the dead-zone now softens short gaps. (2) Potential VDOT double-dock if both `advanceWeekToToday` and `showHolidayWelcomeBack` fire on the same return launch — pre-existing interaction, not introduced here; flagged for device verification. (3) HYROX station benchmarks and MTL do not detrain (D3, Tristan): strength detrains slower than aerobic fitness, and the comeback bridge already eases station *volume*.
+
+**Tests.** `welcome-back.test.ts` (+5: dead-zone boundary, growth past the dead-zone, activity attenuation, clamp >1, `computeVdotLoss` inheriting the dead-zone). `illness-holiday-disciplines.test.ts` (+5: bridge scales bike/swim/station/brick + run km, quality downgrade, no-op without scale, skips user-Adjust and adhoc). Docks + anchor-gate are integration-level (DOM + launch refresh) and flagged NOT device-verified.
+
+---
+
+## §AT — Swim progression blends pace-vs-CSS adherence (P3a, 2026-06-01)
+
+**What.** Closes the P3a asymmetry in `CROSS_MODE_PARITY_PLAN.md`: `scoreSwimEffort` (tri-effort-scoring.ts) computes swim pace-vs-CSS adherence and the UI shows it, but `triTrailingEffortScore` (effort-multiplier.triathlon.ts) treated swim as RPE-only for next-week duration scaling. Bike blends its objective signal (power adherence) 60% with RPE 40%; swim ignored its objective signal entirely. The signal was computed-but-inert for adaptation.
+
+**Change.** Swim now mirrors bike's blend (D6, Tristan: mirror bike 60/40). The objective deviation is `swimObjectiveDev = (1 − paceAdherence) × 10`, blended `dev = rpeDev × 0.4 + swimObjectiveDev × 0.6`. Falls back to pure RPE when no pace signal exists (e.g. a technique/drill set with no usable distance).
+
+**Sign — why inverted vs bike.** `paceAdherence = actualPace ÷ targetPace` with pace in sec/100m, where lower is faster. So `paceAdherence < 1.0` means the athlete swam *faster* than the CSS-derived target — a harder effort than prescribed — which must read as a positive (harder) deviation that shortens next week. Bike's power signal is the opposite (`powerAdherence > 1.0` = more watts = harder = positive). Hence `(1 − paceAdherence)` for swim vs `(powerAdherence − 1.0)` for bike. The blend weights and the `1 − score × 0.05` multiplier are identical across disciplines.
+
+**Mirror rule (CLAUDE.md).** Bike: power adherence 60 / RPE 40. Swim: pace-vs-CSS 60 / RPE 40. Run: HR 60 / RPE 40 (in events.ts). All three now blend an objective intensity signal with RPE at the same weights. If the bike/run weights change, swim's must be re-evaluated.
+
+**Side of the line.** Planning — it scales the upcoming swim *duration*. CSS itself still re-derives separately from history (`deriveTriBenchmarksFromHistory`); this module only modulates volume.
+
+**Data dependency / limitation.** Relies on `actual.paceAdherence` being populated, which needs the matched swim to carry usable distance + duration and a current CSS (`scoreSwimEffort` returns null otherwise). Open-water swims with GPS drift can produce a noisy pace; the +RPE blend and the existing under-duration guard soften single bad reads, but a systematically mis-measured pool length would bias the signal. Pure-RPE fallback covers the no-signal case.
+
+**Tests.** `effort-multiplier.triathlon.test.ts` (+4: faster→harder, slower→easier, 60/40 blend arithmetic, pure-RPE fallback).
+
+---
+
+## §AU — HYROX execution → next-week-load multiplier (P2, RPE-primary, 2026-06-01)
+
+**What.** Closes the P2 gap in `CROSS_MODE_PARITY_PLAN.md`: `plan_engine.hyrox.ts` was purely phase-driven, with no per-session execution signal — crush a week or bomb it, next week's prescription was identical. There was no HYROX analogue of running's `effortMultiplier` / tri's `triEffortMultiplier`. Now there is: `hyroxEffortMultiplier` (`effort-multiplier.hyrox.ts`).
+
+**D5b (Tristan): yes, HYROX should adapt to execution.** The reasoning that made it defensible: HYROX race implements are fixed at division weight, so the athlete progresses by *work capacity at that weight* (more rounds/reps, less rest), not by adding load. Volume/density is therefore the correct progression lever, and scaling the weekly hours budget scales rounds/volume — exactly that lever. This is why a running-style volume multiplier fits HYROX (where it would be the wrong tool for a general load-periodised gym program).
+
+**Signal — RPE-primary, all sessions.** Trailing RPE-vs-expected over the last `TRI_EFFORT_LOOKBACK_WEEKS` (2) completed weeks, aggregated across *all* HYROX sessions (stations, bricks, run legs — HYROX is one integrated sport). Formula and bounds are identical to running and tri: `1 − score × 0.05`, clamped `[0.85, 1.15]`. Reuses the existing lookback + bounds constants; introduces none. Includes the same under-duration guard (a session cut to < 80% of planned duration can't inflate next week via a low RPE).
+
+**Why RPE-only (not the bike/swim-style objective blend).** A 3-agent data map established that the objective station signal does not exist for the general case:
+- *Synced* activities (Strava/Garmin/Apple) carry only a classification (station/brick/run) + total duration. No per-station reps/times — ever. So synced sessions are RPE-only no matter what.
+- *Guided* in-app sessions store best-round station times (`hyroxSession.stations[].bestSec`) but there is no stored *prescribed-target* scaffold to score adherence against (targets live as free text in the workout description).
+- `rep-adherence.ts` is run/bike-only (it scores pace/watts; stations have neither) and is not extensible without a redesign.
+
+Building the objective half would mean a structured station-target refactor + a new guided-only scorer + a sourced tolerance band (D4), for objective coverage that *only ever applies to guided sessions* while synced sessions still fall back to RPE. RPE is the one signal present on every session, and pure-RPE progression is already an accepted pattern here (running's no-HR fallback; tri's swim before §AT). So the loop is RPE-driven now; an objective 60/40 blend (D4/D5) is a deferred, guided-only enhancement. **HR is rejected** for stations: intermittent intervals make HR lag the work by 30–60s and there is no clean per-station target IF to score against.
+
+**Wiring + scoping.** Folded into the weekly budget at `plan_engine.hyrox.ts`: `effectiveHours = weeklyHoursAvailable × phaseMult × deloadFactor × effortMult`. Multiplicative on top of phase + deload, mirroring running's `dMult` composition (so a deload week still gets the bounded ±15% modulation, exactly as running does). Applied only to weeks ≥ current (past weeks keep their real prescribed load — we don't rewrite history), matching tri's `applyTriEffortMultipliersToFutureWeeks`. Non-compounding: HYROX regenerates from baseline before re-applying the current multiplier, so it never stacks across launches.
+
+**Side of the line.** Planning — it modulates the upcoming prescription. The race prediction continues to respond to execution separately via the station-benchmark PB refresh (`hyrox-session-benchmarks.ts`); this multiplier governs the *plan*, not the predicted time.
+
+**Limitations.** (1) RPE-only: a systematically mis-rated athlete (always says "5") gets no adaptation; the objective blend that would counterweight this is the deferred enhancement. (2) Applies to all future weeks at the current multiplier, so a transient hard block tilts the whole remaining plan until re-rated — same behaviour as tri, self-correcting week to week. (3) Surfaced inline on the HYROX plan-view current-week summary when the shift is ≥5% ("Load raised/eased N% this week after recent sessions were rated easier/harder than planned"), per the adaptation-transparency rule. HYROX has no week-debrief, so an inline caption (the feature-reveal preference) hosts it rather than a recap modal.
+
+**Tests.** `effort-multiplier.hyrox.test.ts` (11: neutral/positive/negative score, all-session aggregation, skip-ignored, 2-week lookback, under-duration guard, multiplier formula + both clamps + no-data).
+
+## §AV — Race-forecast Monte Carlo anchors to the blended prediction, not raw VDOT (2026-06-01)
+
+**What.** `runMarathonForecastSim` (`race-forecast-simulation.ts`) builds its cone by interpolating a *headline trajectory* from today to race day, then adding each trial's bare-VDOT deviation and form factor on top (see §AH-era design notes in the file: median = headline by construction). Today's headline anchor is `blendedRaceTimeSec` — what `blendPredictions` says the athlete can run now, which is PB-weighted. The race-day anchor was `s.forecastTimeAdjusted ?? s.forecastTime`.
+
+**The bug.** `s.forecastTime` is supposed to be blend-anchored too (`calculateLiveForecast` computes it as `blendedAnchor − horizonDelta`), but in practice it can be null (not yet written on a given surface) or computed off a different anchor than the live blend. For an athlete whose **PBs outpace their synced-run VDOT**, `blendedRaceTimeSec` is pulled fast (e.g. 17:55) while the VDOT-driven `forecastTime` stays slow (e.g. ~19:30). The cone then ran from a fast *today* anchor to a slow *race-day* anchor — sloping the wrong way, with a median ~2 min **slower** than the displayed prediction and the entire distribution sitting below (slower than) the headline. Result on a real build: initial prediction 17:55, simulated median 19:37, goal probability "<5%" — the simulator predicting regression across a training block.
+
+**The fix (two-part — first attempt overcorrected).** The initial fix *recomputed* the race-day anchor from the blend plus the sim's own horizon (`blendedRaceTimeSec − horizonDelta`). That removed the regression but introduced a second error: the sim's recompute omits the calibration bias, shoe boost, and course factors that `refreshBlendedFitness`/`calculateLiveForecast` bake into the displayed `forecastTime`, so the cone landed ~2.5 min slower than the headline — on a marathon, a goal set *equal to the displayed forecast* read ~32% instead of ~50% (real build: hero 3:24:20, sim median 3:26:57).
+
+The correct anchor is the forecast the UI actually shows, with the blend-derived value kept only as a fallback:
+
+```
+horizonDeltaSec   = bareTodaySec − bareMedianFinalSec          // ≥0 when improving (bare-VDOT space)
+courseRatio       = forecastTimeAdjusted / forecastTime         // pure climate/elevation multiplier, else 1
+blendDerived      = (blendedRaceTimeSec − horizonDeltaSec) × courseRatio
+displayedForecast = forecastTimeAdjusted ?? forecastTime
+forecastCoherent  = displayedForecast > 0 && displayedForecast ≤ blendedRaceTimeSec + 1   // improvement, not regression
+headlineRaceDay   = forecastCoherent ? displayedForecast : blendDerived
+```
+
+In the common case the cone centres exactly on the displayed forecast (so "goal == forecast" ≈ 50% by construction). The blend-derived fallback fires only when the stored forecast is missing or *slower than today* — the stale/PB-divergent state that caused the original regression — so the cone still slopes the right way there. Per-trial variance (VDOT response, adherence, form) is untouched; the deterministic median trial already equals the headline, and the empirical-median alignment shift (a few lines below) pins p50 onto `headlineRaceDaySec`.
+
+**Why defensible.** The displayed `forecastTime` is the canonical headline — it already includes calibration, shoes, and course factors, so anchoring to it is the "two numbers, one source" rule and guarantees the cone agrees with the number the user reads. The +1s float margin on the coherence test means only a forecast genuinely slower than today (regression) trips the fallback; equal-to-today (maintenance) is treated as coherent.
+
+**Effect.** Coherent marathon state: race-day p50 = 3:24:22 against a 3:24:22 headline, goal==forecast reads 50%, a 5-min-faster goal reads 20%. PB-divergent 5K state (forecast stale at ~19:30 while today's blend is 17:55): fallback engages, cone improves from the blend, goal of 17:55 reads ~86% instead of "<5%".
+
+**Limitations.** (1) The fallback trusts `blendedRaceTimeSec`; when it is absent too, `haveHeadlineAnchor` is false and the sim uses the bare-VDOT trajectory, as before. (2) When the displayed forecast is itself genuinely slower than today (true detraining/maintenance block), the fallback overrides it with an improving cone — acceptable because a race-forecast cone predicting regression reads as broken; the upstream forecast coherence is the real fix if that case is ever legitimate. (3) Course ratio is 1 unless both adjusted and raw are present.
+
+**Third part — "what-if" session adds (`forecastOverrideSec`).** Anchoring to the *stored* `forecastTime` broke the goal overlay's "add a session" preview: the displayed forecast caption recomputes for the hypothetical session count (gets faster), but the sim stayed pinned to the base `forecastTime`, so the chance barely moved — two forecasts that disagree on screen. Added an optional `forecastOverrideSec` param: when the caller is simulating a hypothetical (N extra sessions), it passes the forecast it computed for that count, and the cone centres there. The race-forecast page passes nothing and uses the stored forecast as above. Effect (marathon, goal 3:20:00): +0 sess forecast 3:24:22 / chance 24%, +1 sess 3:22:19 / 37%, +2 sess 3:20:46 / 46% — forecast and chance now move together.
+
+**Tests.** `race-forecast-simulation.test.ts` (6): PB-divergent fallback — cone improves from the blend (no regression), goal of the headline is sane (>0.4), a faster stretch still a tail outcome (<0.25); coherent case — goal == displayed forecast reads ~50% (0.42–0.58), race-day p50 equals the displayed forecast within 30s; override case — a faster forecast override raises the goal chance by >10pp.

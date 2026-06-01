@@ -364,6 +364,34 @@ export const BIKE_ADHERENCE_BAND: Record<string, number> = {
   bike_vlamax:     0.10,
 };
 
+/**
+ * Bike intensity ladder by ascending %FTP, for the per-session "Adjust" Harder/
+ * Easier control. `pct` = canonical midpoint %FTP; `band` (from BIKE_ADHERENCE_BAND)
+ * gives the watt range. Coggan & Allen 2019 power zones. Mirrors the `pct` values
+ * in `BIKE_OPTIONS` (session-generator.ts) — keep the two in sync. Climbing /
+ * neuromuscular variants are deliberately excluded so the ladder is monotonic.
+ */
+export const BIKE_INTENSITY_LADDER: Array<{ key: string; label: string; pct: number }> = [
+  { key: 'bike_endurance',  label: 'Endurance',  pct: 0.65 },
+  { key: 'bike_tempo',      label: 'Tempo',      pct: 0.82 },
+  { key: 'bike_sweet_spot', label: 'Sweet spot', pct: 0.91 },
+  { key: 'bike_threshold',  label: 'Threshold',  pct: 1.00 },
+  { key: 'bike_vo2',        label: 'VO2',        pct: 1.15 },
+];
+
+/**
+ * Swim intensity ladder by ascending speed (descending sec/100m offset from CSS).
+ * `cssOffsetSec` = sec/100m above (+) or below (-) critical swim speed. Mirrors
+ * the `cssOffsetSec` values in `SWIM_OPTIONS` (session-generator.ts) — keep in sync.
+ * The CSS test rung is excluded (it's a benchmark, not a training intensity).
+ */
+export const SWIM_INTENSITY_LADDER: Array<{ key: string; label: string; cssOffsetSec: number }> = [
+  { key: 'swim_technique', label: 'Technique',     cssOffsetSec: +18 },
+  { key: 'swim_endurance', label: 'Endurance',     cssOffsetSec: +6 },
+  { key: 'swim_threshold', label: 'CSS intervals', cssOffsetSec: 0 },
+  { key: 'swim_speed',     label: 'Speed',         cssOffsetSec: -6 },
+];
+
 // ───────────────────────────────────────────────────────────────────────────
 // Adaptation transparency. Marker auto-bump notification thresholds
 // ───────────────────────────────────────────────────────────────────────────

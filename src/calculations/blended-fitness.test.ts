@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { refreshBlendedFitness } from './blended-fitness';
+import { refreshBlendedFitness, predictStandardDistances, getStandardForecastDetail } from './blended-fitness';
 import type { SimulatorState } from '@/types';
 
 /** Build a 50-VDOT-ish 8-week run history that produces a medium+ HR regression. */
@@ -107,5 +107,117 @@ describe('refreshBlendedFitness — pre-guard HR-calibrated cache', () => {
     // Previous bogus values must be replaced by the actual computation.
     expect(s.hrCalibratedVdot!.vdot).not.toBe(99);
     expect(s.hrCalibratedVdot!.n).not.toBe(99);
+  });
+});
+
+describe('predictStandardDistances — no-target-race forecast', () => {
+  const now = new Date();
+
+  it('returns a time for every standard distance from run history alone (no target race)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    expect(s.rd).toBeUndefined();
+
+    const preds = predictStandardDistances(s);
+
+    for (const dist of ['5k', '10k', 'half', 'marathon'] as const) {
+      expect(preds[dist]).not.toBeNull();
+      expect(preds[dist]!).toBeGreaterThan(0);
+      expect(isFinite(preds[dist]!)).toBe(true);
+    }
+  });
+
+  it('predicts a longer time for longer distances (monotonic)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    const p = predictStandardDistances(s);
+    expect(p['5k']!).toBeLessThan(p['10k']!);
+    expect(p['10k']!).toBeLessThan(p['half']!);
+    expect(p['half']!).toBeLessThan(p['marathon']!);
+  });
+
+  it('supershoes apply a ~3% faster prediction than standard shoes', () => {
+    const std = predictStandardDistances(baseState({ onboardingRunHistory: mkRunHistory(now), shoeKind: 'standard' }));
+    const carbon = predictStandardDistances(baseState({ onboardingRunHistory: mkRunHistory(now), shoeKind: 'supershoes' }));
+    // Ratio is exactly the 0.97 shoe multiplier (calibration/durability identical).
+    expect(carbon['10k']! / std['10k']!).toBeCloseTo(0.97, 3);
+  });
+
+  it('returns all-null for a just-track user with no PBs', () => {
+    const s = baseState({ trackOnly: true, pbs: {} });
+    const preds = predictStandardDistances(s);
+    expect(preds['5k']).toBeNull();
+    expect(preds['marathon']).toBeNull();
+  });
+});
+
+describe('getStandardForecastDetail — per-distance drill-down', () => {
+  const now = new Date();
+
+  it('headline predictedSec matches the grid prediction for the same distance', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    const grid = predictStandardDistances(s);
+    const detail = getStandardForecastDetail(s, '10k');
+    expect(detail.predictedSec).toBe(grid['10k']);
+  });
+
+  it('builds a trend point per recorded VDOT-history week (longer time at longer distance)', () => {
+    const s = baseState({
+      onboardingRunHistory: mkRunHistory(now),
+      vdotHistory: [
+        { week: 1, vdot: 48, date: '2026-05-01' },
+        { week: 2, vdot: 49, date: '2026-05-08' },
+        { week: 3, vdot: 50, date: '2026-05-15' },
+      ],
+    });
+    const fiveK = getStandardForecastDetail(s, '5k');
+    const marathon = getStandardForecastDetail(s, 'marathon');
+    expect(fiveK.trend).toHaveLength(3);
+    // Same VDOT, longer distance → larger predicted time at each point.
+    expect(marathon.trend[0].value).toBeGreaterThan(fiveK.trend[0].value);
+    // Rising VDOT → falling predicted time over the weeks.
+    expect(fiveK.trend[2].value).toBeLessThan(fiveK.trend[0].value);
+  });
+
+  it('reports durability and calibration factor state', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    const detail = getStandardForecastDetail(s, 'marathon');
+    expect(detail.durabilityMultiplier).toBeGreaterThanOrEqual(1);
+    expect(detail.calibrationBiasSec).toBeNull(); // no logged races in baseState
+    expect(detail.vdot).not.toBeNull();
+  });
+});
+
+describe('manual VO2max override flows through to predictions', () => {
+  const now = new Date();
+
+  it('changing vo2Override moves the standard-distance prediction', () => {
+    const base = { onboardingRunHistory: mkRunHistory(now), pbs: { k5: 1200 } };
+    const low = predictStandardDistances(baseState({ ...base, vo2Override: { value: 45, setAt: now.toISOString() } }));
+    const high = predictStandardDistances(baseState({ ...base, vo2Override: { value: 60, setAt: now.toISOString() } }));
+    // A higher VO2max must predict a faster (smaller) time at every distance.
+    expect(high['5k']!).toBeLessThan(low['5k']!);
+    expect(high['marathon']!).toBeLessThan(low['marathon']!);
+  });
+
+  it('override is honoured over a stale device s.vo2', () => {
+    const base = { onboardingRunHistory: mkRunHistory(now), pbs: { k5: 1200 } };
+    // Device VO2 low, override high → prediction should reflect the override (faster).
+    const overridden = predictStandardDistances(baseState({ ...base, vo2: 45, vo2Override: { value: 62, setAt: now.toISOString() } }));
+    const deviceOnly = predictStandardDistances(baseState({ ...base, vo2: 45 }));
+    expect(overridden['10k']!).toBeLessThan(deviceOnly['10k']!);
+  });
+});
+
+describe('refreshBlendedFitness — records VDOT history for no-race users', () => {
+  const now = new Date();
+
+  it('appends a vdotHistory point even when no race distance is set', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    expect(s.rd).toBeUndefined();
+    expect(s.vdotHistory ?? []).toHaveLength(0);
+
+    refreshBlendedFitness(s);
+
+    expect((s.vdotHistory ?? []).length).toBeGreaterThanOrEqual(1);
+    expect(s.vdotHistory![0].vdot).toBeGreaterThan(0);
   });
 });

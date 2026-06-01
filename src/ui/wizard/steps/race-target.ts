@@ -56,7 +56,7 @@ const FOCUS_OPTIONS: { id: TrainingFocus; label: string; sub: string }[] = [
   { id: 'endurance', label: 'Endurance',  sub: 'Aerobic base, longer efforts.' },
   { id: 'speed',     label: 'Speed',      sub: 'Build raw speed at shorter distances.' },
   { id: 'both',      label: 'Balanced',   sub: 'Speed and endurance in equal measure.' },
-  { id: 'track',     label: 'Just track', sub: 'Log activities only. No plan, no workouts.' },
+  { id: 'track',     label: 'On demand',  sub: 'No fixed plan. Generate sessions when you want them.' },
 ];
 
 export function renderRaceTarget(container: HTMLElement, state: OnboardingState): void {

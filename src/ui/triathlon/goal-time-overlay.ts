@@ -25,6 +25,7 @@
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { runTriForecastSim } from '@/calculations/race-forecast-simulation.triathlon';
+import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { fmtProbPct } from '@/utils/format';
 
 // ── Format helpers ───────────────────────────────────────────────────────────
@@ -91,7 +92,14 @@ export function openTriGoalOverlay(preSec?: number): void {
   const tri = ms.triConfig;
   if (!tri) return;
 
-  const predictedSec = tri.prediction?.totalSec ?? 0;
+  // Derive the predicted total from the same source the cone card uses
+  // (predictTriathlonRace), not the stored tri.prediction. The stored copy
+  // can be missing or stale, and reading it directly silently no-oped every
+  // entry point (edit-goal link, set-goal CTA, all three outcome tiles).
+  const pred = predictTriathlonRace(ms);
+  const predictedSec = (pred?.totalSec && pred.totalSec > 0)
+    ? pred.totalSec
+    : (tri.prediction?.totalSec ?? 0);
   if (predictedSec <= 0) return;
 
   const { minSec, maxSec, stepSec } = deriveBounds(predictedSec);

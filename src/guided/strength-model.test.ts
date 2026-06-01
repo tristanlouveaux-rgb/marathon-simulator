@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseStrengthSession, parseRestSeconds, isStrengthWorkout, parseHyroxSession, parseGuidedSession } from './strength-model';
+import { parseStrengthSession, parseRestSeconds, isStrengthWorkout, parseHyroxSession, parseGuidedSession, strengthCardSummary } from './strength-model';
 import type { Workout } from '@/types';
 import type { HyroxComponent } from '@/types/triathlon';
 
@@ -188,5 +188,32 @@ describe('isStrengthWorkout', () => {
     expect(isStrengthWorkout(wk('x', { t: 'strength' as any }))).toBe(true);
     expect(isStrengthWorkout(wk('x', { t: 'easy' as any, n: 'Upper-body strength' }))).toBe(true);
     expect(isStrengthWorkout(wk('x', { t: 'easy' as any, n: 'Easy run' }))).toBe(false);
+  });
+});
+
+describe('strengthCardSummary', () => {
+  const desc = [
+    '3x12 Bodyweight Squat (Pain-free depth, controlled) (45s rest)',
+    '3x10 each leg Reverse Lunge (bodyweight) (Steady) (60s rest)',
+    '3x10 Dead Bug (Slow, lower back flat) (30s rest)',
+    'Stretch to finish: gentle range, nothing that aggravates the shoulder.',
+  ].join('\n');
+
+  it('summarises a strength session as a "N exercises · tap to view" line (stretch excluded)', () => {
+    expect(strengthCardSummary(wk(desc))).toBe('3 exercises · tap to view');
+  });
+
+  it('singularises for a one-exercise session', () => {
+    expect(strengthCardSummary(wk('3x10 Bodyweight Squat (cue) (45s rest)'))).toBe('1 exercise · tap to view');
+  });
+
+  it('returns null for a non-strength workout so the caller renders its own description', () => {
+    // A bike / cross-training substitute: single-line prose, not a strength session.
+    expect(strengthCardSummary(wk('45 min steady, zone 2', { t: 'cross_training' as any, n: 'Cross-training: Bike' }))).toBeNull();
+    expect(strengthCardSummary(wk('8 km easy', { t: 'easy' as any, n: 'Easy run' }))).toBeNull();
+  });
+
+  it('returns null for a strength workout with an empty description', () => {
+    expect(strengthCardSummary(wk('', { t: 'gym' }))).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
+import { strengthCardSummary } from '@/guided/strength-model';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
@@ -71,9 +72,9 @@ function renderComponents(components: HyroxComponent[]): string {
  */
 export function renderHyroxWorkoutCard(
   w: Workout,
-  opts: { interactive?: boolean; daysToRace?: number | null } = {}
+  opts: { interactive?: boolean; daysToRace?: number | null; statusChip?: string } = {}
 ): string {
-  const { interactive = true, daysToRace = null } = opts;
+  const { interactive = true, daysToRace = null, statusChip = '' } = opts;
   const disc = workoutDisc(w);
   const { accent, badgeBg, badgeText, label } = discColours(disc);
 
@@ -109,15 +110,18 @@ export function renderHyroxWorkoutCard(
         <span style="display:inline-flex;align-items:center;background:${badgeBg};color:${badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:100px">${label}</span>
         ${durStr ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${durStr}</span>` : ''}
         <span style="flex:1"></span>
+        ${statusChip}
         ${showMTL ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">MTL ${Math.round(mtl!)}</span>` : ''}
         <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${w.rpe ?? w.r ?? 5}</span>
       </div>
       <!-- Name -->
       <div style="font-size:18px;font-weight:700;color:#0F172A;margin-bottom:5px;letter-spacing:-0.01em">${escAttr(w.n)}</div>
       <!-- Description: station/brick cards carry their prescription in the
-           component list below, so the prose paragraph is suppressed to keep
-           the card scannable. Runs and other simple sessions keep their line. -->
-      ${showComponents ? '' : `<div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escAttr(w.d || '')}</div>`}
+           component list below, so the prose paragraph is suppressed. Strength
+           sessions store one exercise per line, so they render as a scannable
+           bullet list (matching the station/gym look) instead of a run-on
+           paragraph. Runs and single-line cross-training keep their line. -->
+      ${showComponents ? '' : renderCardDescription(w)}
       <!-- Component list for station/brick -->
       ${showComponents ? renderComponents(components!) : ''}
       <!-- Taper eccentric warning -->
@@ -135,6 +139,23 @@ export function renderHyroxWorkoutCard(
       ` : ''}
     </div>
   `;
+}
+
+/**
+ * Card description. Strength/cross sessions store exercises one-per-line; render
+ * them as a bullet list (like the station component list) so they read like
+ * every other HYROX/gym card instead of a paragraph wall. Single-line
+ * descriptions (runs, a bike substitute) stay as a line.
+ */
+function renderCardDescription(w: Workout): string {
+  // Strength/gym sessions collapse to a "N exercises · tap to view" summary —
+  // the full per-exercise list opens in the detail modal. Shared with the
+  // plan + home cards so the wording and count match everywhere.
+  const summary = strengthCardSummary(w);
+  if (summary) {
+    return `<div style="font-size:13px;color:var(--c-muted);line-height:1.5">${summary}</div>`;
+  }
+  return `<div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escAttr(String(w.d || ''))}</div>`;
 }
 
 function escAttr(s: string): string {

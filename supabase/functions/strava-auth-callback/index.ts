@@ -103,8 +103,15 @@ Deno.serve(async (req) => {
       ? new Date(tokenJson.expires_at * 1000).toISOString()
       : null;
 
-    // Strava embeds athlete in the token response
+    // Strava embeds a summary athlete in the token response. Capture the profile
+    // fields we can use to pre-fill onboarding so the user doesn't re-enter them:
+    //  - sex   ('M' | 'F')  → maps to biologicalSex
+    //  - weight (kg, float) → maps to bodyWeightKg
+    // Strava does NOT expose birthdate, so age is always asked in onboarding.
     const athleteId: number | null = tokenJson.athlete?.id ?? null;
+    const athleteSex: string | null = tokenJson.athlete?.sex ?? null;
+    const athleteWeightKg: number | null =
+      typeof tokenJson.athlete?.weight === "number" ? tokenJson.athlete.weight : null;
 
     if (!accessToken) {
       return new Response(
@@ -138,8 +145,14 @@ Deno.serve(async (req) => {
 
     console.log("[strava-auth-callback] Strava connected for user", userId, "athlete_id", athleteId);
 
-    // 5. Redirect back to the app (origin-aware — see pickRedirectTarget)
-    return Response.redirect(`${redirectTarget}?strava=connected`, 302);
+    // 5. Redirect back to the app (origin-aware — see pickRedirectTarget).
+    //    Pass the athlete's own sex/weight through the return URL so onboarding can
+    //    pre-fill them. This is the user's own data on their own redirect, no DB
+    //    column or extra fetch needed. about-you reads these off window.location.
+    const redirectParams = new URLSearchParams({ strava: "connected" });
+    if (athleteSex) redirectParams.set("sex", athleteSex);
+    if (athleteWeightKg != null) redirectParams.set("weight", String(athleteWeightKg));
+    return Response.redirect(`${redirectTarget}?${redirectParams.toString()}`, 302);
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,

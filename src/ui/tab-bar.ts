@@ -81,6 +81,23 @@ export function wireTabBarHandlers(onChange: (tab: TabId) => void): void {
 }
 
 /**
+ * Programmatic tab navigation through the live handler (same path as a tab tap).
+ * Used by the swipe-between-pages controller. No-op if no view is mounted.
+ */
+export function navigateToTab(tab: TabId): void {
+  _tabHandler?.(tab);
+}
+
+/** The currently active tab, read from the live tab bar in #app-root. */
+export function getActiveTab(): TabId | null {
+  const btn = document.querySelector('#app-root .tab-bar-btn.tab-active');
+  return (btn?.getAttribute('data-tab') as TabId) ?? null;
+}
+
+/** Left-to-right order of the swipeable main tabs (matches renderTabBar). */
+export const SWIPE_TAB_ORDER: TabId[] = ['home', 'plan', 'forecast', 'stats'];
+
+/**
  * Mode-aware navigation to the Forecast tab. EventType decides which forecast
  * view loads:
  *   - 'hyrox'     → renderHyroxForecastView

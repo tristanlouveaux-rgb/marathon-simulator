@@ -691,6 +691,51 @@ export function bodyRegionLoadability(
   return { upper, lower };
 }
 
+// ============================================================================
+// Aerobic substitute pick (capacity-vector, shared across modes)
+// ============================================================================
+
+export type AerobicSport = 'bike' | 'row_erg' | 'swim';
+
+export interface AerobicPick {
+  sport: AerobicSport;
+  label: string;
+  /** discipline key whose capacity gates the substitute. */
+  capacityKey: 'bike' | 'swim' | 'upperLoad';
+}
+
+/** Map the injury modal's `preferredCrossTraining` enum to an aerobic substitute. */
+const PREFERRED_AEROBIC_PICK: Record<string, AerobicPick> = {
+  cycling:  { sport: 'bike',    label: 'Bike',    capacityKey: 'bike' },
+  rowing:   { sport: 'row_erg', label: 'Row erg', capacityKey: 'upperLoad' },
+  swimming: { sport: 'swim',    label: 'Swim',    capacityKey: 'swim' },
+};
+
+/**
+ * Choose the aerobic substitute for a blocked/limited discipline, by what the
+ * athlete can still do. Honours a saved `preferredCrossTraining` when usable;
+ * otherwise bike (non-impact, legs permitting) → row erg (arm-driven, when arms
+ * are free) → swim. Returns null when nothing aerobic is safe. Shared by HYROX
+ * (`capability-substitution`) and running rehab (`generateRehabPhaseWorkouts`)
+ * so the "you can still pedal" pick is identical across modes.
+ */
+export function pickAerobicSubstitute(inj: InjuryState | undefined): AerobicPick | null {
+  if (!inj) return null;
+  const usable = (p: AerobicPick) => getDisciplineCapacity(inj, p.capacityKey) > 0;
+
+  const preferred = inj.preferredCrossTraining
+    ? PREFERRED_AEROBIC_PICK[inj.preferredCrossTraining]
+    : undefined;
+  if (preferred && usable(preferred)) return preferred;
+
+  const order: AerobicPick[] = [
+    { sport: 'bike',    label: 'Bike',    capacityKey: 'bike' },
+    { sport: 'row_erg', label: 'Row erg', capacityKey: 'upperLoad' },
+    { sport: 'swim',    label: 'Swim',    capacityKey: 'swim' },
+  ];
+  return order.find(usable) ?? null;
+}
+
 /**
  * Get the previous phase (for regression)
  */
@@ -1008,16 +1053,12 @@ export function generateAcutePhaseWorkouts(): Workout[] {
  * Generate workouts for rehab phase (cross-train + rehab strength)
  */
 export function generateRehabPhaseWorkouts(injuryState?: InjuryState): Workout[] {
-  // Use preferred cross-training if set and allowed
-  let crossLabel = 'pool, cycling';
-  if (injuryState?.preferredCrossTraining) {
-    const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
-    const allowedSet = new Set(protocol.allowedActivities);
-    if (allowedSet.has(injuryState.preferredCrossTraining as any)) {
-      crossLabel = injuryState.preferredCrossTraining.charAt(0).toUpperCase() +
-        injuryState.preferredCrossTraining.slice(1).replace(/_/g, ' ');
-    }
-  }
+  // Capacity-aware cross-training pick: "what can you still do" by the same
+  // bike → erg → swim order HYROX uses, honouring a saved preference. So a knee
+  // that still allows cycling gets "Bike", an arm injury gets "Swim", etc. Falls
+  // back to the generic low-impact label only when nothing aerobic is safe.
+  const pick = pickAerobicSubstitute(injuryState);
+  const crossLabel = pick ? pick.label : 'pool, cycling';
 
   return [
     {

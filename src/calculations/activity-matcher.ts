@@ -15,6 +15,7 @@ import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
+import { findWorkoutForMod } from '@/workouts/workout-scaling';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -355,10 +356,12 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
     trailingEffort,
   );
 
-  // Apply stored mods (before rename, same as renderer)
+  // Apply stored mods (before rename, same as renderer's computeRenderedWorkouts).
+  // Match by the stable slot id first (findWorkoutForMod), name+day fallback — so the grade
+  // reads the user's scaled target after a same-week reshuffle instead of the original slot.
   if (wk.workoutMods && wk.workoutMods.length > 0) {
     for (const mod of wk.workoutMods) {
-      const workout = wos.find(w => w.n === mod.name && (mod.dayOfWeek == null || w.dayOfWeek === mod.dayOfWeek));
+      const workout = findWorkoutForMod(wos as any[], mod);
       if (workout) {
         workout.status = mod.status as any;
         workout.modReason = mod.modReason;
@@ -371,6 +374,8 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
             workout.rpe = mod.newRpe;
             workout.r = mod.newRpe;
           }
+          if (mod.newDurationMin != null) (workout as any).estimatedDurationMin = mod.newDurationMin;
+          if (mod.originalDurationMin != null) (workout as any).originalDurationMin = mod.originalDurationMin;
           const newLoads = calculateWorkoutLoad(workout.t, workout.d, (workout.rpe || workout.r || 5) * 10);
           workout.aerobic = newLoads.aerobic;
           workout.anaerobic = newLoads.anaerobic;
@@ -1283,6 +1288,53 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       }
 
       if (appType !== 'run') {
+        // Guided-strength upgrade: when a gym session was completed in-app (its
+        // current actual carries a `guided-` garminId), a later watch/Strava
+        // sync of the same session UPGRADES that entry with HR instead of
+        // landing as a duplicate. Mirrors the HYROX station upgrade above and
+        // the Strava-beats-Garmin rule. Scans the stored guided actuals (planned
+        // running workouts aren't persisted on the Week), so it is mode-agnostic.
+        if (appType === 'gym') {
+          const activityMs = new Date(row.start_time).getTime();
+          const activityDurMin = row.duration_sec / 60;
+          let guidedId: string | null = null;
+          for (const [wid, ga] of Object.entries(wk.garminActuals ?? {})) {
+            if (!String(ga.garminId).startsWith('guided-')) continue;
+            if (!isStrengthActual(ga)) continue;
+            if (ga.startTime) {
+              // Same session ≈ same day: keep a generous ±36h window.
+              if (Math.abs(activityMs - new Date(ga.startTime).getTime()) > 36 * 3600 * 1000) continue;
+            }
+            const plannedDur = ga.durationSec > 0 ? ga.durationSec / 60 : 30;
+            const ratio = activityDurMin / plannedDur;
+            if (ratio < 0.5 || ratio > 2.0) continue;
+            guidedId = wid;
+            break;
+          }
+          if (guidedId) {
+            const prior = wk.garminActuals![guidedId];
+            const rpe = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
+            wk.rated![guidedId] = rpe;
+            wk.garminMatched![row.garmin_id] = guidedId;
+            wk.garminActuals![guidedId] = {
+              ...prior,
+              garminId: row.garmin_id,
+              startTime: row.start_time,
+              distanceKm: (row.distance_m ?? 0) / 1000,
+              durationSec: row.duration_sec,
+              avgHR: row.avg_hr ?? null,
+              maxHR: row.max_hr ?? null,
+              calories: row.calories ?? null,
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+              hrZones: row.hrZones ?? null,
+              activityType: row.activity_type,
+              rpe,
+            };
+            changed = true;
+            console.log(`[ActivityMatcher] Upgraded guided strength "${prior.displayName ?? guidedId}" with synced HR (week ${weekIdx})`);
+            continue;
+          }
+        }
         if (isPastWeek) {
           // Past week: log cross-training as adhoc directly. The plan for that week
           // is already done, so no point queuing for modal review.

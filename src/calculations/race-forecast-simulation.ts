@@ -92,6 +92,12 @@ export function runMarathonForecastSim(
   s: SimulatorState,
   trialCount: number = 2000,
   goalSec: number | null = null,
+  // Explicit race-day anchor for "what-if" scenarios (e.g. the goal overlay
+  // showing the chance with N extra sessions/week). When provided, the cone
+  // centres on THIS forecast instead of the stored `s.forecastTime`, so the
+  // simulated chance and the caller's displayed forecast move together. The
+  // caller passes the forecast it computed for the hypothetical session count.
+  forecastOverrideSec: number | null = null,
 ): ForecastSimResult | null {
   if (!s.rd) return null;
   const currentVdot = s.blendedEffectiveVdot ?? s.v;
@@ -181,16 +187,49 @@ export function runMarathonForecastSim(
   // - Calibration / durability / course factors are all baked into the
   //   headline trajectory once. No need to apply them per trial.
 
-  const headlineTodaySec = s.blendedRaceTimeSec ?? 0;
-  const headlineRaceDaySec = s.forecastTimeAdjusted ?? s.forecastTime ?? 0;
-  const haveHeadlineAnchor = headlineTodaySec > 0 && headlineRaceDaySec > 0;
-
   const bareTodaySec = vt(distKm, currentVdot);
   // Deterministic median trajectory. What the cone collapses to in the
   // absence of any sampled variance. Used as the reference for per-trial
   // deviation.
   const medianFinalVdot = currentVdot * (1 + meanImprovementPct / 100);
   const bareMedianFinalSec = vt(distKm, medianFinalVdot);
+
+  // **Anchor the cone to the forecast the UI actually displays.**
+  //
+  // `forecastTimeAdjusted ?? forecastTime` is the canonical headline — it
+  // already bakes in calibration bias, shoe boost, and course factors. The cone
+  // MUST centre on it, otherwise "goal == forecast" doesn't read ~50%.
+  // (A prior attempt recomputed the race-day anchor from the blend + the sim's
+  // own horizon; that drifted ~2.5 min slower than the displayed forecast
+  // because the recompute omitted calibration/shoe/course, so goal == forecast
+  // read ~32%.)
+  //
+  // Fallback: when the stored forecast is missing OR slower than today (a stale
+  // forecast left behind when today's blend was later refreshed faster — e.g.
+  // PBs that outpace synced-run VDOT, which made the cone predict *regression*
+  // and collapse the goal probability to <5%), derive race-day from today's
+  // blend minus the horizon delta so the cone still slopes the right way.
+  // Course factors are reapplied as a pure adjusted/raw ratio in that path.
+  const headlineTodaySec = s.blendedRaceTimeSec ?? 0;
+  const horizonDeltaSec = bareTodaySec - bareMedianFinalSec;
+  const courseRatio = (s.forecastTime && s.forecastTimeAdjusted && s.forecastTime > 0)
+    ? s.forecastTimeAdjusted / s.forecastTime
+    : 1;
+  const blendDerivedRaceDaySec = headlineTodaySec > 0
+    ? (headlineTodaySec - horizonDeltaSec) * courseRatio
+    : 0;
+  const overrideProvided = forecastOverrideSec != null && forecastOverrideSec > 0;
+  const displayedForecastSec = overrideProvided
+    ? forecastOverrideSec
+    : (s.forecastTimeAdjusted ?? s.forecastTime ?? 0);
+  // Trust the displayed forecast when it represents improvement (≤ today + 1s
+  // float margin). A forecast slower than today is the stale/divergent case.
+  // An explicit override is always trusted — it is the caller's computed
+  // forecast for the scenario being simulated.
+  const forecastIsCoherent = displayedForecastSec > 0
+    && (overrideProvided || headlineTodaySec <= 0 || displayedForecastSec <= headlineTodaySec + 1);
+  const headlineRaceDaySec = forecastIsCoherent ? displayedForecastSec : blendDerivedRaceDaySec;
+  const haveHeadlineAnchor = headlineRaceDaySec > 0;
 
   // Trial loop. trials[trialIdx][weekIdx] = race-time at that week (current..race).
   const trials: number[][] = [];
