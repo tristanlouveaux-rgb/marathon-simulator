@@ -1207,7 +1207,7 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
       .tri-fcd-fade { opacity:0; animation:triFcdFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="tri-fcd-view" style="
+    <div id="tri-fcd-view" data-chip="${key}" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">

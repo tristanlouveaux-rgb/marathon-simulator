@@ -22,7 +22,7 @@
  *     2026-04-24 schema migration.
  */
 
-import type { GarminActual } from '@/types/state';
+import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { SWIM_TYPE_MULTIPLIER } from '@/constants/triathlon-course-factors';
@@ -843,6 +843,60 @@ export function estimateDirectPerDisciplineCTLFromActivities(
     crossTrainingCtl: Math.round(normalise(crossCtlSum, CTL_TAU_DAYS) * 10) / 10,
     activityCount: count,
   };
+}
+
+/**
+ * Synthetic activities for tri/cycling sessions the user MANUALLY marked done
+ * (rated with an RPE) but that have NO synced/matched activity. Lets a manual
+ * completion deposit its planned load into per-discipline CTL — so the per-session
+ * Adjust "Harder/Easier" choice has a fitness consequence even without a watch.
+ *
+ * Feed the result ONLY to `estimateDirectPerDisciplineCTLFromActivities` (CTL),
+ * never to benchmark derivation (CSS/FTP) — these carry no pace/power, only load.
+ *
+ * Override guard (no double-count): a session with a real matched activity
+ * (`matchedActivityId` set, or `status==='completed'`) is skipped — the real
+ * activity is already in the activity log and always wins (Strava-canonical).
+ * The planned load is encoded as `iTrimp = TSS × 150` so `estimateTss` recovers
+ * exactly the planned (aerobic+anaerobic) TSS. The 120-day window is applied
+ * downstream by the CTL function.
+ */
+export function manualDoneTriActivities(
+  wks: Week[] | undefined,
+  planStartDate: string | undefined,
+): Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> {
+  if (!wks || !planStartDate) return [];
+  const startMs = Date.parse(planStartDate);
+  if (!Number.isFinite(startMs)) return [];
+
+  const DISC_TO_TYPE: Record<string, string> = { swim: 'SWIMMING', bike: 'CYCLING', run: 'RUNNING' };
+  const out: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> = [];
+
+  for (let i = 0; i < wks.length; i++) {
+    const wk = wks[i];
+    const rated = wk?.rated;
+    if (!rated) continue;
+    const sessions: Workout[] = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])];
+    for (const w of sessions) {
+      const id = (w as { id?: string }).id ?? w.n;
+      const rv = id != null ? rated[id] : undefined;
+      if (typeof rv !== 'number' || rv <= 0) continue;            // not manually marked done
+      if ((w as { matchedActivityId?: string }).matchedActivityId || w.status === 'completed') continue; // real activity wins
+      const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+      if (tss <= 0) continue;                                     // nothing planned to deposit
+      const activityType = DISC_TO_TYPE[(w.discipline as string) ?? ''];
+      if (!activityType) continue;                                // only swim/bike/run feed per-discipline CTL
+      const day = w.dayOfWeek ?? 0;
+      const startTime = new Date(startMs + ((i * 7 + day) * 86400000)).toISOString();
+      out.push({
+        activityType,
+        durationSec: (w.estimatedDurationMin ?? 0) * 60,
+        startTime,
+        iTrimp: Math.round(tss * 150),
+      });
+    }
+  }
+  return out;
 }
 
 function estimateTss(

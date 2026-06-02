@@ -6,7 +6,7 @@
 
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState, Week, Workout } from '@/types';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod } from '@/workouts/workout-scaling';
@@ -32,7 +32,7 @@ import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
-import { parseStrengthSession } from '@/guided/strength-model';
+import { parseStrengthSession, strengthCardSummary } from '@/guided/strength-model';
 import type { MorningPainResponse } from '@/types/injury';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
@@ -104,7 +104,10 @@ function navigateTab(tab: TabId): void {
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'forecast') {
-    import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
+    // Mode-aware: routes to the running standard-distance forecast (or the targeted
+    // race forecast) for running/On-demand, tri forecast for tri, etc. Was hardcoded
+    // to the triathlon forecast, which is broken for a running / On-demand user.
+    navigateToForecastTab();
   } else if (tab === 'stats') {
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   } else if (tab === 'account') {
@@ -616,16 +619,8 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     }
   } // end synced guard
 
-  // ── Move to day ───────────────────────────────────────────────────────────
-  const currentDay = w.dayOfWeek ?? 0;
-  html += `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--c-border)">`;
-  html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:7px">Move to day</div>`;
-  html += `<div style="display:flex;gap:4px;flex-wrap:wrap">`;
-  ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((day, i) => {
-    const isActive = i === currentDay;
-    html += `<button class="plan-move-btn" data-workout-id="${escapeHtml(id)}" data-target-day="${i}" data-current-day="${currentDay}" style="padding:5px 8px;font-size:11px;font-weight:600;border-radius:5px;border:1px solid ${isActive ? 'var(--c-accent)' : 'var(--c-border)'};background:${isActive ? 'var(--c-accent)' : 'transparent'};color:${isActive ? 'white' : 'var(--c-black)'};cursor:pointer;opacity:${isActive ? '1' : '0.7'}">${day}</button>`;
-  });
-  html += `</div></div>`;
+  // "Move to day" picker removed (Tristan, 2026-06-01) — drag-and-drop reorder
+  // covers day changes and the picker cluttered every expanded card.
 
   html += `</div></div>`;
   return html;
@@ -1259,9 +1254,10 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
  * to make it fit. Dismissal is tracked against the current `weeklyTrainingHours`
  * value, so the banner re-arms if the user later changes their target.
  *
- * Plan-engine context: `applyHoursBudget` uses standard floors (easy 20m / long 40m),
- * then drops to soft floors (15m / 30m) when standard would overflow, then accepts
- * the residual overflow. The banner is the user-facing surface for that residual.
+ * Plan-engine context: `applyHoursBudget` holds easy runs at a 25m floor and
+ * consolidates them (fewer, longer) when the budget is tight, trims the long
+ * run to its 40m/30m floors, then accepts the residual overflow. The banner is
+ * the user-facing surface for that residual.
  */
 function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number): string {
   // Only show on current and future weeks. Past weeks are immutable.
@@ -1290,6 +1286,33 @@ function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number)
       </div>
     </div>
   `;
+}
+
+/**
+ * Run-day ramp note. Surfaces the consolidation in `applyHoursBudget`: at low
+ * weekly volume the engine drops easy run-days and lengthens the survivors
+ * rather than slice the week into sub-25-min fragments (see plan_engine.ts).
+ * The result is fewer run-days than the athlete's chosen frequency in early
+ * weeks, climbing back as the volume budget ramps.
+ *
+ * Only fires on current/future base or build weeks. Suppressed when injury,
+ * illness, holiday, or a commute config is the reason for the run count (each
+ * has its own surface, and the "volume ramps" framing would be wrong).
+ */
+function buildRunDayRampNote(s: SimulatorState, workouts: any[], wk: Week | undefined, viewWeek: number): string {
+  if (!wk || viewWeek < s.w) return '';
+  if (wk.ph !== 'base' && wk.ph !== 'build') return '';
+  if (s.commuteConfig || s.holidayState || s.illnessState?.active || isInjuryActive()) return '';
+  const chosen = s.rw ?? 0;
+  if (chosen <= 0) return '';
+  const RUN_TYPES = new Set(['easy', 'progressive', 'long', 'threshold', 'vo2', 'marathon_pace', 'float']);
+  const runCount = workouts.filter(w => RUN_TYPES.has((w as any).t)).length;
+  if (runCount >= chosen) return '';
+  return `
+    <div style="margin:0 16px 8px;padding:11px 14px;border-radius:12px;background:var(--c-surface);border:1px solid var(--c-border)">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:2px">Fewer run days this week</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Week ${viewWeek} has ${runCount} runs rather than ${chosen}. At low weekly volume, a few longer runs deliver more aerobic stimulus than several short ones. Run days increase as your volume ramps.</div>
+    </div>`;
 }
 
 /**
@@ -2566,6 +2589,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           ${buildAdjustWeekRow(wk, s)}
           ${buildGoalFeasibilityBanner(s)}
           ${buildBudgetBanner(s, workouts, viewWeek)}
+          ${buildRunDayRampNote(s, workouts, wk, viewWeek)}
           ${buildInjuryBanner()}
           ${buildIllnessBanner()}
           ${buildHolidayBannerPlan(s)}
@@ -3980,6 +4004,7 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
           </button>
         </div>
 
+        ${buildTrackOnlyUpcoming(s)}
         ${currentWeekBlock}
         ${historyBlock}
 
@@ -4015,6 +4040,68 @@ function buildTrackOnlyWeekRow(s: SimulatorState, wk: Week, unit: 'km' | 'mi'): 
 }
 
 /** Current-week detail card: day-by-day list of activities. */
+/**
+ * Upcoming generated sessions for the On-demand Plan tab, rendered as interactive
+ * PLANNED-ACTIVITY cards (tap → workout detail with Start / Mark-as-done), so a
+ * generated session appears as a planned activity here exactly like running/tri
+ * plans show theirs — not just as a loose home "To do". Same filter + routing as
+ * the home `buildTrackOnlyTodo`: not-yet-synced, un-rated `adhoc-` sessions.
+ */
+function buildTrackOnlyUpcoming(s: SimulatorState): string {
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return '';
+  const rated: Record<string, number | 'skip'> = wk.rated ?? {};
+  const unit = s.unitPref ?? 'km';
+  const esc = (str: string) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const upcoming = (wk.adhocWorkouts ?? [])
+    .map((w, idx) => ({ w: w as any, idx }))
+    .filter(({ w }) => (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && rated[w.id] == null);
+  if (upcoming.length === 0) return '';
+
+  // Type / discipline badge. Sentence-case (uppercase labels fail the UI lint).
+  const TYPE_LABEL: Record<string, string> = {
+    easy: 'Easy', long: 'Long', threshold: 'Threshold', vo2: 'VO2',
+    marathon_pace: 'Marathon pace', progressive: 'Progressive', vibes: 'By feel', gym: 'Gym',
+  };
+  const cards = upcoming.map(({ w, idx }) => {
+    const name = w.n || w.name || w.workoutName || 'Session';
+    const dist = w.distanceKm;
+    const dur = w.durationMin ?? w.estimatedDurationMin;
+    const durLabel = typeof dur === 'number' && dur > 0 ? `${Math.round(dur)} min`
+      : typeof dist === 'number' && dist > 0 ? formatKm(dist, unit) : '';
+    const badge = w.discipline === 'bike' ? 'Bike' : w.discipline === 'swim' ? 'Swim'
+      : TYPE_LABEL[w.t as string] ?? (w.t ? String(w.t).replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Session');
+    // Structure preview: gym → "N exercises" summary; others → first lines of the
+    // description (warm-up / main / cool-down), mirroring the plan-mode workout card.
+    const summary = strengthCardSummary(w);
+    const structure = summary
+      ? `<div style="font-size:12px;color:#64748B;margin-top:6px;line-height:1.5">${esc(summary)}</div>`
+      : (w.d ? `<div style="font-size:12px;color:#64748B;margin-top:6px;line-height:1.5">${String(w.d).split('\n').filter((l: string) => l.trim()).slice(0, 3).map((l: string) => esc(l.trim())).join('<br>')}</div>` : '');
+    // Whole card is the tap target (→ session detail with Start / guided / Mark-done).
+    // The Start pill is a span, so its click bubbles to the card — no double-fire.
+    return `
+      <div class="tp-upcoming-row" data-week-num="${s.w}" data-adhoc-idx="${idx}" style="background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05);padding:15px 16px;cursor:pointer;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:11px;font-weight:600;color:#475569;background:rgba(15,23,42,0.05);border-radius:100px;padding:3px 9px">${esc(badge)}</span>
+          ${durLabel ? `<span style="font-size:12px;color:#64748B">${esc(durLabel)}</span>` : ''}
+        </div>
+        <div style="font-size:16px;font-weight:700;color:#0F172A;letter-spacing:-0.01em">${esc(name)}</div>
+        ${structure}
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;padding:9px 0;background:#0F172A;border-radius:10px;color:#FAF9F6;font-size:13px;font-weight:600">
+          <span style="width:9px;height:9px;background:#FAF9F6;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>
+          Start
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="tp-rise" style="margin-bottom:18px;animation-delay:0.04s">
+      <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.05em;text-transform:uppercase;padding:0 4px 10px">Planned</div>
+      ${cards}
+    </div>`;
+}
+
 function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): string {
   const unit = s.unitPref ?? 'km';
   const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
@@ -4039,6 +4126,10 @@ function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): s
     rows.push({ day: dayLabel, name, value: val });
   }
   for (const w of (wk.adhocWorkouts ?? [])) {
+    // Skip not-yet-done generated sessions — they render above as interactive
+    // "Planned" cards (buildTrackOnlyUpcoming), so this summary stays a record of
+    // what actually happened, not a double-listing of upcoming to-dos.
+    if (((w as any).id || '').startsWith('adhoc-') && !(w as any).garminTimestamp && ratedMap[(w as any).id] == null) continue;
     const dist = (w as any).garminDistKm ?? (w as any).distanceKm;
     if (typeof dist === 'number') km += dist;
     const ts = (w as any).garminTimestamp;
@@ -4086,6 +4177,18 @@ function wireTrackOnlyPlanHandlers(): void {
   // resets the app), so it is no longer surfaced on the On-demand Plan tab.
   document.getElementById('track-generate-session')?.addEventListener('click', () => {
     import('./session-generator').then(({ openSessionGenerator }) => openSessionGenerator());
+  });
+  // Upcoming generated sessions → open the workout detail (Start / guided / Mark
+  // done). Same routing as the home "To do"; openTriWorkoutDetail forwards gym
+  // sessions to the strength flow.
+  document.querySelectorAll<HTMLElement>('.tp-upcoming-row').forEach(el => {
+    el.addEventListener('click', () => {
+      const weekNum = Number(el.dataset.weekNum || 0);
+      const adhocIdx = Number(el.dataset.adhocIdx);
+      const st = getState();
+      const adhoc = (st.wks?.[weekNum - 1]?.adhocWorkouts ?? [])[adhocIdx];
+      if (adhoc) import('./triathlon/workout-detail-modal').then(({ openTriWorkoutDetail }) => openTriWorkoutDetail(adhoc, weekNum - 1));
+    });
   });
 }
 

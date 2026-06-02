@@ -581,8 +581,12 @@ export function wireVO2DetailHandlers(rerender: () => void): void {
     const m = getMutableState();
     m.vo2Override = { value, setAt: new Date().toISOString() };
     // Recompute the cached race prediction so the manual VO2max flows through to
-    // the forecast immediately (effectiveVo2max now reads the override).
+    // the forecast immediately (effectiveVo2max now reads the override). Running
+    // caches on s.forecastTime (refreshBlendedFitness rebuilds it); triathlon
+    // caches on triConfig.prediction (invalidate so it recomputes), mirroring
+    // the CSS/FTP override handlers above.
     refreshBlendedFitness(m);
+    if (m.triConfig?.prediction) m.triConfig.prediction = undefined;
     saveState();
     rerender();
   });
@@ -590,6 +594,7 @@ export function wireVO2DetailHandlers(rerender: () => void): void {
     const m = getMutableState();
     delete m.vo2Override;
     refreshBlendedFitness(m);
+    if (m.triConfig?.prediction) m.triConfig.prediction = undefined;
     saveState();
     rerender();
   });

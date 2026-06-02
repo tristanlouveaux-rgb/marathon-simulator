@@ -132,4 +132,10 @@ export interface TrainingHorizonInput {
   long_run_max_km?: number;
   hm_pb_seconds?: number;
   lt_pace_sec_per_km?: number;
+  /**
+   * Planned strength sessions per week (s.gs / onboarding gymSessionsPerWeek).
+   * Drives a future-projection running-economy gain (Beattie & Blagrove 2018).
+   * Omitted/0 → no contribution (non-lifters see no change). See SCIENCE_LOG §BC.
+   */
+  strength_sessions_per_week?: number;
 }

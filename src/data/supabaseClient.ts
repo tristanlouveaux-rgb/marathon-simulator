@@ -50,6 +50,19 @@ export async function getAccessToken(): Promise<string> {
   return session.access_token;
 }
 
+/**
+ * Current authenticated user's id (the `auth.uid()` UUID stamped onto every
+ * per-user row). Use this to scope REST reads of per-user tables by
+ * `user_id=eq.<id>`. `garmin_activities` currently has RLS disabled, so an
+ * unfiltered read returns EVERY user's rows — always pass this. Awaits session
+ * hydration (so it never reads before auth is ready, which is the real reason
+ * an early call once "returned 0 rows"). See docs/DATA_ISOLATION_AUDIT.md.
+ */
+export async function getUserId(): Promise<string> {
+  const session = await getValidSession();
+  return session.user.id;
+}
+
 /** Cached Garmin connection status — null means not yet checked */
 let _garminConnected: boolean | null = null;
 

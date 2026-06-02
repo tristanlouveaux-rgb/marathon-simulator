@@ -195,6 +195,21 @@ function refreshRunsCaption(): void {
   node.innerHTML = runsCaption(getOnboardingState());
 }
 
+/** Strength nudge: shown only at 0 gym sessions. Strength training raises
+ *  running economy and cuts injury risk, so we encourage at least one session.
+ *  Evidence: Beattie & Blagrove 2018 meta-analysis. */
+function gymCaption(state: OnboardingState | undefined): string {
+  if (!state || (state.gymSessionsPerWeek ?? 0) !== 0) return '';
+  const hintStyle = 'font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4';
+  return `<p style="${hintStyle}">Even one strength session a week makes runners measurably faster and more injury-resistant (Beattie &amp; Blagrove 2018). Try adding one.</p>`;
+}
+
+function refreshGymCaption(): void {
+  const node = document.getElementById('sc-gym-caption');
+  if (!node) return;
+  node.innerHTML = gymCaption(getOnboardingState());
+}
+
 /** Re-render the week-shape preview from live onboarding state. Called from
  * every input handler that touches a field feeding the preview math. */
 function refreshWeekPreview(): void {
@@ -374,9 +389,7 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
                 <button data-gym="${n}" class="sc-num ${state.gymSessionsPerWeek === n ? 'selected' : ''}">${n}</button>
               `).join('')}
             </div>
-            <p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">
-              Leave at 0 if you don't lift.
-            </p>
+            <div id="sc-gym-caption">${gymCaption(state)}</div>
           </div>
 
           <div id="sc-week-preview">${weekShapePreview(state)}</div>
@@ -584,6 +597,7 @@ function wireHandlers(state: OnboardingState): void {
         b.classList.toggle('selected', v === n);
       });
       refreshRunsCaption();
+      refreshGymCaption();
       refreshWeekPreview();
     });
   });

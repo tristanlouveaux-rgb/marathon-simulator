@@ -25,11 +25,31 @@ export interface VolumePerDiscipline {
   run: number;
 }
 
-/** Iterate the last `weeks` of `state.wks[w].garminActuals` newest-first. */
-function* iterateRecentActuals(state: SimulatorState, weeks: number) {
+interface RecentActual {
+  activityType?: string | null;
+  startTime?: string | null;
+  durationSec?: number | null;
+  distanceKm?: number | null;
+}
+
+/**
+ * Iterate the last `weeks` of `state.wks[w].garminActuals` newest-first, then
+ * top up from `state.recentDisciplineActivity` — the slim DB-backed summary
+ * persisted at launch. After a fresh sign-in `garminActuals` is empty until
+ * activities re-match forward, so without this fallback every per-discipline
+ * volume/longest signal reads 0 (the Endurance readiness card collapsed across
+ * all disciplines). The fallback is date-windowed to the same `weeks` span and
+ * deduped against the actuals already yielded (same sport, start within ±10
+ * min) so an actively-syncing user — whose summary largely duplicates
+ * garminActuals — sees no change.
+ */
+function* iterateRecentActuals(state: SimulatorState, weeks: number): Generator<RecentActual> {
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const startWeek = Math.max(0, currentWeek - weeks);
+  // Track yielded (sport, startMs) so the persisted fallback can skip overlaps.
+  const yielded: Array<{ sport: string; ms: number }> = [];
+  const TEN_MIN_MS = 10 * 60 * 1000;
   for (let w = currentWeek; w >= startWeek; w--) {
     const wk = wks[w];
     if (!wk) continue;
@@ -37,7 +57,26 @@ function* iterateRecentActuals(state: SimulatorState, weeks: number) {
     if (!actuals) continue;
     for (const actual of Object.values(actuals)) {
       if (!actual?.activityType) continue;
+      if (actual.startTime) {
+        const ms = Date.parse(actual.startTime);
+        if (isFinite(ms)) yielded.push({ sport: classifyActivity(actual.activityType), ms });
+      }
       yield actual;
+    }
+  }
+  // Sign-in-resilient fallback. Only entries within the `weeks` window that
+  // aren't already covered by garminActuals.
+  const persisted = state.recentDisciplineActivity ?? [];
+  if (persisted.length > 0) {
+    const cutoffMs = Date.now() - weeks * 7 * 24 * 60 * 60 * 1000;
+    for (const a of persisted) {
+      if (!a.activityType || !a.startTime) continue;
+      const ms = Date.parse(a.startTime);
+      if (!isFinite(ms) || ms < cutoffMs) continue;
+      const sport = classifyActivity(a.activityType);
+      const isDup = yielded.some(y => y.sport === sport && Math.abs(y.ms - ms) <= TEN_MIN_MS);
+      if (isDup) continue;
+      yield a;
     }
   }
 }

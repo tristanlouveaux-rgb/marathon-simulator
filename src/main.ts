@@ -20,6 +20,7 @@ import { healMissingITrimp } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
 import { STRAVA_ENABLED } from '@/constants/feature-flags';
+import { READINESS_LONGEST_WINDOW_WEEKS } from '@/constants/race-readiness-targets';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology, subscribeToWorkoutObserver, subscribeToForegroundResume } from '@/data/appleHealthSync';
@@ -508,6 +509,28 @@ async function launchApp(): Promise<void> {
         }
       }
 
+      // Persist a slim per-discipline activity summary so swim/bike weekly
+      // volume + longest-session survive a fresh sign-in. `garminActuals` is
+      // empty until activities re-match forward, and unlike run (which falls
+      // back to `onboardingRunHistory`) swim/bike had no resilient source —
+      // the Endurance readiness card collapsed to 0 across every discipline.
+      // Cap to the readiness longest-session window; store only the fields the
+      // volume/longest helpers read (no polylines/splits) to keep the snapshot
+      // small. The DB log is the canonical source and already deduped.
+      {
+        const cutoffMs = Date.now() - READINESS_LONGEST_WINDOW_WEEKS * 7 * 24 * 60 * 60 * 1000;
+        mutable.recentDisciplineActivity = activityLog
+          .filter(a => a.startTime && (a.durationSec ?? 0) > 0
+            && Date.parse(a.startTime) >= cutoffMs)
+          .map(a => ({
+            activityType: a.activityType ?? '',
+            startTime: a.startTime as string,
+            durationSec: a.durationSec ?? 0,
+            distanceKm: a.distanceKm ?? 0,
+          }));
+        console.log(`[tri] recentDisciplineActivity: persisted ${mutable.recentDisciplineActivity.length} activities (last ${READINESS_LONGEST_WINDOW_WEEKS}w) for sign-in-resilient readiness`);
+      }
+
       const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {
         swim400Sec: state.triConfig?.swim?.pbs?.m400,
         swim200Sec: state.triConfig?.swim?.pbs?.m200,
@@ -517,8 +540,13 @@ async function launchApp(): Promise<void> {
       // to race prediction internals because cross-training transfer is real
       // physiology; the direct version is what the user sees because they
       // expect "swim load" to mean what they did in the pool.
-      const { estimateDirectPerDisciplineCTLFromActivities } = await import('@/calculations/tri-benchmarks-from-history');
-      const directFitness = estimateDirectPerDisciplineCTLFromActivities(activityLog);
+      const { estimateDirectPerDisciplineCTLFromActivities, manualDoneTriActivities } = await import('@/calculations/tri-benchmarks-from-history');
+      // Manually-completed sessions (rated, no synced activity) deposit their
+      // planned load into CTL so the Adjust Harder/Easier choice has a fitness
+      // consequence even without a watch. Fitness-only (not benchmark derivation);
+      // a real matched activity overrides the estimate (handled in the helper).
+      const manualDoneActs = manualDoneTriActivities(state.wks, state.planStartDate);
+      const directFitness = estimateDirectPerDisciplineCTLFromActivities([...activityLog, ...manualDoneActs]);
 
       // Diagnostic. Once-per-launch so we can see why Training Load might be
       // zero. Activity count, derived fitness per discipline, and how many
@@ -737,6 +765,20 @@ async function launchApp(): Promise<void> {
       } else if (document.getElementById('tri-progress-back')) {
         const { renderTriProgressDetailView } = await import('@/ui/triathlon/progress-detail-view');
         renderTriProgressDetailView();
+      } else if (document.getElementById('tri-fcd-view')) {
+        // Forecast chip detail (e.g. Endurance) is open. Re-render the SAME
+        // chip so the just-persisted `recentDisciplineActivity` (per-discipline
+        // volume + longest) surfaces immediately. Without this, a cold sign-in
+        // that lands on this page shows 0 until a manual navigate-away/back,
+        // because the page rendered before the background distillation wrote.
+        const chip = document.getElementById('tri-fcd-view')?.getAttribute('data-chip');
+        if (chip) {
+          const { renderTriForecastChipDetail } = await import('@/ui/triathlon/forecast-chip-detail-view');
+          renderTriForecastChipDetail(chip as Parameters<typeof renderTriForecastChipDetail>[0]);
+        }
+      } else if (document.getElementById('tri-fc-account-btn')) {
+        const { renderTriathlonForecastView } = await import('@/ui/triathlon/forecast-view');
+        renderTriathlonForecastView();
       } else if (document.getElementById('home-tss-row')) {
         scheduleHomeRefresh();
       }
@@ -1548,6 +1590,10 @@ async function launchApp(): Promise<void> {
     }
   }
 
+  // Strength PRs. All modes. Surface a toast for any lift whose estimated-1RM
+  // beat its last-notified best, then snapshot. No-op when no weights logged.
+  await maybeShowStrengthPrToast();
+
   console.log('Mosaic Training Simulator initialized');
   // Signal that launchApp's task-collection phase is complete. Any caller
   // awaiting `awaitStartupSyncs()` was blocked on this. Now they can
@@ -1716,6 +1762,28 @@ async function maybeShowMarkerBumpToast(): Promise<void> {
   // Always snapshot. Even when no bumps fired. So first-launch baseline
   // gets seeded silently and subsequent comparisons are against fresh values.
   snapshotNotifiedMarkers(s);
+  saveState();
+}
+
+/**
+ * Strength PR toast (all modes). Mirrors maybeShowMarkerBumpToast: compares each
+ * lift's estimated-1RM against the last-notified snapshot, toasts improvements,
+ * then snapshots so the same PR doesn't re-pop. No-op when no weights logged.
+ */
+async function maybeShowStrengthPrToast(): Promise<void> {
+  const { getMutableState, saveState } = await import('@/state');
+  const s = getMutableState();
+  if (!s.strengthLog?.lifts) return;
+
+  const { detectStrengthPrs, snapshotNotifiedStrengthPrs } = await import('@/calculations/strength-marker-bumps');
+  const prs = detectStrengthPrs(s);
+
+  if (prs.length > 0) {
+    const { showMarkerBumpToast } = await import('@/ui/toast');
+    showMarkerBumpToast(prs.map(p => p.toastText));
+  }
+
+  snapshotNotifiedStrengthPrs(s);
   saveState();
 }
 

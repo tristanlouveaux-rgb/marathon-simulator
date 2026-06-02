@@ -8,13 +8,23 @@
  */
 
 import type { Workout } from '@/types/state';
-import { getState } from '@/state/store';
+import { getState, getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { openGuidedStrength } from '@/ui/guided-strength-overlay';
 import { completeStrengthSession } from '@/guided/strength-complete';
 
 export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
+  // HYROX sessions (station/brick) carry `hyroxComponents`; only the guided
+  // player understands them (via parseHyroxSession). This only matches a
+  // generated HYROX session in a non-HYROX mode — tri/cycling swim/bike/run/gym
+  // never carry hyroxComponents — so it can't affect those. Tap → guided.
+  const hyroxComponents = (workout as any).hyroxComponents;
+  if (Array.isArray(hyroxComponents) && hyroxComponents.length > 0) {
+    openGuidedStrength(workout);
+    return;
+  }
   // Strength/gym sessions use the shared clean per-exercise breakdown modal,
   // not the swim/bike/run block layout below.
   if (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n || '')) {
@@ -114,21 +124,15 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
           <button id="tri-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
         </div>
       ` : `
-        <div style="padding:8px 24px 24px;display:flex;justify-content:space-between;align-items:center">
-          ${canAdjust ? `<button id="tri-detail-adjust" style="
-            padding:13px 18px;
-            background:transparent;color:#0F172A;
-            border:1px solid var(--c-border);border-radius:10px;
-            font-size:14px;font-weight:600;
-            cursor:pointer;font-family:var(--f);
-          ">Adjust duration</button>` : '<span></span>'}
-          <button id="tri-detail-done" style="
-            padding:13px 22px;
-            background:#0F172A;color:#FAF9F6;
-            border:none;border-radius:10px;
-            font-size:14px;font-weight:600;
-            cursor:pointer;
-          ">Done</button>
+        <div style="padding:8px 24px 24px;display:flex;flex-direction:column;gap:14px">
+          <!-- Action row. Matches the running plan card: Mark as Done · Adjust · Skip -->
+          <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
+            <button id="tri-detail-mark-done" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Mark as Done</button>
+            ${canAdjust ? `<span style="color:var(--c-border)">·</span><button id="tri-detail-adjust" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Adjust</button>` : ''}
+            <span style="color:var(--c-border)">·</span>
+            <button id="tri-detail-skip" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Skip</button>
+          </div>
+          <button id="tri-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
         </div>
       `}
     </div>
@@ -152,6 +156,19 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
       });
     });
   });
+  overlay.querySelector('#tri-detail-mark-done')?.addEventListener('click', () => {
+    setRated(wkIdx, workout, rpe);
+    close();
+    // Mode-aware refresh: renderTriathlonPlanView no-ops for on-demand users (no
+    // triConfig), which would leave a just-completed generated session stuck in
+    // the "Planned" list. renderMainView routes to the right plan view per mode.
+    import('../main-view').then(m => m.renderMainView()).catch(() => {});
+  });
+  overlay.querySelector('#tri-detail-skip')?.addEventListener('click', () => {
+    setRated(wkIdx, workout, 'skip');
+    close();
+    import('../main-view').then(m => m.renderMainView()).catch(() => {});
+  });
   overlay.querySelector('#tri-detail-strength-start')?.addEventListener('click', () => {
     close();
     openGuidedStrength(workout);
@@ -161,6 +178,21 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
     close();
     import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(workout, result));
   });
+}
+
+/**
+ * Mark a tri session done (rpe number) or skipped ('skip') by writing the shared
+ * `wk.rated` map — the same map the running plan card writes and the shared status
+ * chip reads. This is a lightweight manual completion flag (no synced activity);
+ * effort/adherence still derive from a matched activity when one arrives.
+ */
+function setRated(weekIdx: number, workout: Workout, value: number | 'skip'): void {
+  const s = getMutableState();
+  const wk = s.wks?.[weekIdx];
+  if (!wk) return;
+  if (!wk.rated) wk.rated = {};
+  wk.rated[(workout as any).id ?? workout.n] = value;
+  saveState();
 }
 
 /**

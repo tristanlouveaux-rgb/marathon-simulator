@@ -349,7 +349,7 @@ function rpeForBike(kind: BikeSessionKind, phase: TrainingPhase): number {
   return rpe;
 }
 
-function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
+export function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
   // Rough TSS-per-minute values. Phase 4 replaces with real bTSS.
   const tssPerMin: Record<BikeSessionKind, number> = {
     endurance: 0.85,

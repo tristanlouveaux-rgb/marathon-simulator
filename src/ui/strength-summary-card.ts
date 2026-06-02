@@ -2,15 +2,16 @@
  * Post-session summary card for a completed strength / gym session.
  *
  * Shown after the user finishes a guided session or taps "Mark as done". Gives
- * the recap that was missing before: which muscle groups the session worked
- * (body-map silhouette + chips), the duration and RPE, and the heart-rate data
- * if a synced activity matched. When no HR is attached yet, a "Match heart rate"
- * action lets the user pick the synced activity that belongs to this session
- * (the manual fallback to the completion-time auto-match).
+ * the recap: the working weights just logged (with estimated-1RM and a quiet
+ * "New best" note), which muscle groups the session worked (text chips), the
+ * duration and RPE, and the heart-rate data if a synced activity matched. When
+ * no HR is attached yet, a "Match heart rate" action lets the user pick the
+ * synced activity that belongs to this session (the manual fallback to the
+ * completion-time auto-match).
  *
  * Modal follows the canonical centered-overlay pattern (UX_PATTERNS → Overlays
- * and Modals). Body-map is the single accent colour (data hue); everything else
- * neutral. No emoji, no accent on the navigation/action links.
+ * and Modals). Neutral palette; the green "New best" note is the only accent.
+ * No emoji, no accent on the navigation/action links.
  */
 
 import type { Workout } from '@/types';
@@ -18,7 +19,8 @@ import type { GarminPendingItem, Week } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { render } from '@/ui/renderer';
-import { renderBodyMap } from '@/ui/body-map';
+import { parseStrengthSession } from '@/guided/strength-model';
+import { STRENGTH_PR_THRESHOLD_KG } from '@/constants/strength-constants';
 import type { StrengthCompletionResult } from '@/guided/strength-complete';
 
 const OVERLAY_ID = 'strength-summary-overlay';
@@ -95,6 +97,57 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     saveState();
     pickingHR = false;
     build();
+  }
+
+  function fmtKg(kg: number): string {
+    const n = Math.round(kg * 100) / 100;
+    return `${n}kg`;
+  }
+
+  /**
+   * Recap of the working weights just logged for this session, read from the
+   * per-lift memory (persistStrengthLifts wrote them before this card opened).
+   * The "New best" note compares the two most recent est1RM history samples
+   * (today vs the previous training day), so it's independent of the launch
+   * toast's notifiedPr snapshot — no double-surfacing.
+   */
+  function weightsRecap(): string {
+    const session = parseStrengthSession(workout);
+    if (!session) return '';
+    const lifts = state.strengthLog?.lifts ?? {};
+    const today = new Date().toISOString().slice(0, 10);
+
+    const seen = new Set<string>();
+    const rows: string[] = [];
+    const prs: string[] = [];
+    for (const set of session.sets) {
+      if (!set.liftKey || seen.has(set.liftKey)) continue;
+      seen.add(set.liftKey);
+      const e = lifts[set.liftKey];
+      if (!e || e.lastDate !== today) continue;
+      const est = e.est1rmKg != null ? `<span style="color:var(--c-faint);margin-left:8px">est 1RM ${fmtKg(e.est1rmKg)}</span>` : '';
+      rows.push(`
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--c-border)">
+          <span style="font-size:13px;color:var(--c-black)">${esc(e.displayName)}</span>
+          <span style="font-size:13px;color:var(--c-muted);font-variant-numeric:tabular-nums;flex-shrink:0">${fmtKg(e.lastWeightKg)}${e.lastReps ? ` × ${esc(e.lastReps)}` : ''}${est}</span>
+        </div>`);
+      const hist = e.est1rmHistory ?? [];
+      if (hist.length >= 2) {
+        const prev = hist[hist.length - 2].value;
+        const now = hist[hist.length - 1].value;
+        if (now - prev >= STRENGTH_PR_THRESHOLD_KG) prs.push(e.displayName);
+      }
+    }
+    if (!rows.length) return '';
+    const prNote = prs.length
+      ? `<div style="font-size:12px;color:#15803d;margin-top:8px">New best: ${prs.map(esc).join(', ')}. Estimated 1RM beat your last.</div>`
+      : '';
+    return `
+      <div style="margin-top:14px">
+        <div style="font-size:12px;color:var(--c-faint);margin-bottom:6px">Weights logged</div>
+        ${rows.join('')}
+        ${prNote}
+      </div>`;
   }
 
   function muscleChips(): string {
@@ -175,7 +228,7 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
       </div>
 
       <div style="padding:6px 22px 0">
-        ${result.muscleGroups.length ? renderBodyMap(result.muscleGroups) : ''}
+        ${weightsRecap()}
         ${muscleChips()}
         ${hrSection()}
       </div>

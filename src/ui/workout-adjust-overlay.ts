@@ -31,6 +31,17 @@ import {
   DURATION_SCALE_MIN, DURATION_SCALE_MAX, LESS_TIME_FACTOR,
 } from '@/workouts/workout-scaling';
 import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER, BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
+import { loadForBike, type BikeSessionKind } from '@/workouts/bike';
+import { loadForSwim, type SwimSessionKind } from '@/workouts/swim';
+
+/** Planned aerobic/anaerobic load for an intensity-rung key at a given duration,
+ *  using the existing per-kind TSS/min helpers (loadForBike / loadForSwim, the
+ *  same source the plan engine uses). Returns null for an unknown key. */
+function loadForRung(key: string, minutes: number): { aerobic: number; anaerobic: number } | null {
+  if (key.startsWith('bike_')) return loadForBike(key.slice(5) as BikeSessionKind, minutes);
+  if (key.startsWith('swim_')) return loadForSwim(key.slice(5) as SwimSessionKind, minutes);
+  return null;
+}
 
 const TYPE_LABEL: Record<string, string> = {
   easy: 'Easy', marathon: 'Marathon pace', threshold: 'Threshold',
@@ -448,6 +459,9 @@ function applyObjectScale(weekIdx: number, store: 'triWorkouts' | 'adhocWorkouts
   // re-opened from them), so don't overwrite with the already-scaled values.
   if (w.originalDistance == null && args.origDesc) w.originalDistance = args.origDesc;
   if (w.originalDurationMin == null && args.origMin > 0) w.originalDurationMin = args.origMin;
+  // Stash original load once so Reset can restore it (the recompute below overwrites it).
+  if (w.originalAerobic == null && typeof w.aerobic === 'number') w.originalAerobic = w.aerobic;
+  if (w.originalAnaerobic == null && typeof w.anaerobic === 'number') w.originalAnaerobic = w.anaerobic;
 
   w.d = args.newDesc;
   if (args.newDurationMin != null) w.estimatedDurationMin = args.newDurationMin;
@@ -456,6 +470,26 @@ function applyObjectScale(weekIdx: number, store: 'triWorkouts' | 'adhocWorkouts
   // Bike/swim intensity rung (target watts/pace are derived live from FTP/CSS at
   // this rung; nothing baked into the description, so duration scaling stays clean).
   if (args.newIntensityLevel) w.intensityLevel = args.newIntensityLevel;
+
+  // Planned load reflects the adjustment (PLANNING side — feeds the load bars and,
+  // once the session is completed, the realized load; the forecast itself stays
+  // neutral to the plan, moving only on completed activities). Two cases:
+  //  • an intensity rung is in effect → recompute absolute load from kind + the
+  //    (possibly scaled) duration via the same per-kind helper the plan engine uses;
+  //  • duration-only change on a session that already carries load → scale it
+  //    proportionally (load ∝ duration at fixed intensity). No invented numbers.
+  const effectiveLevel = args.newIntensityLevel ?? w.intensityLevel;
+  const finalDur = (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0)
+    ? w.estimatedDurationMin : (args.origMin > 0 ? args.origMin : 0);
+  if (effectiveLevel && finalDur > 0) {
+    const load = loadForRung(effectiveLevel, finalDur);
+    if (load) { w.aerobic = load.aerobic; w.anaerobic = load.anaerobic; }
+  } else if (args.newDurationMin != null && args.origMin > 0 && typeof w.aerobic === 'number') {
+    const f = args.newDurationMin / args.origMin;
+    w.aerobic = Math.round(w.aerobic * f);
+    if (typeof w.anaerobic === 'number') w.anaerobic = Math.round(w.anaerobic * f);
+  }
+
   w.status = 'reduced';
   w.modReason = 'UserScaled: adjusted for this session';
   w.userScaledAt = new Date().toISOString();
@@ -468,6 +502,12 @@ function removeObjectScale(weekIdx: number, store: 'triWorkouts' | 'adhocWorkout
   if (!w) return;
   if (w.originalDistance != null) { w.d = w.originalDistance; delete w.originalDistance; }
   if (w.originalDurationMin != null) { w.estimatedDurationMin = w.originalDurationMin; delete w.originalDurationMin; }
+  // Restore original load (or clear it if the session never had any, e.g. an
+  // injury cross session that only gained load when first made harder).
+  if (w.originalAerobic != null) { w.aerobic = w.originalAerobic; delete w.originalAerobic; }
+  else delete w.aerobic;
+  if (w.originalAnaerobic != null) { w.anaerobic = w.originalAnaerobic; delete w.originalAnaerobic; }
+  else delete w.anaerobic;
   delete w.intensityLevel;
   delete w.userScaledAt;
   delete w.status;

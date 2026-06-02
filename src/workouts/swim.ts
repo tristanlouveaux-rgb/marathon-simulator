@@ -215,7 +215,7 @@ function rpeForSwim(kind: SwimSessionKind, phase: TrainingPhase): number {
   return rpe;
 }
 
-function loadForSwim(kind: SwimSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
+export function loadForSwim(kind: SwimSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
   // Rough TSS-per-minute multipliers for swim placeholder. Phase 4 replaces
   // this with the real cubed-IF formula once CSS lands on state.
   const tssPerMin: Record<SwimSessionKind, number> = {

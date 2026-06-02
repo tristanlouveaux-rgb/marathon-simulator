@@ -39,6 +39,28 @@ import { injuryStrengthDecision } from './injury-strength';
 export const TRI_GENERATOR_VERSION = 17;
 
 /**
+ * Representative average session length (hours) per discipline. The generator
+ * divides each discipline's weekly hour budget by this to decide how many
+ * sessions to emit (`countSessions`). Single source so the onboarding
+ * session-lever (`tri-session-lever.ts`) translates "+1 session" into the
+ * same hour increment the generator actually uses.
+ *
+ * Defensible: swim sets run ~40-50 min, club bike sessions ~75-90 min, and
+ * structured runs ~50-60 min — these match the per-session durations the
+ * swim/bike/run generators emit at the standard skill default.
+ */
+export const TRI_AVG_SESSION_HOURS = { swim: 0.75, bike: 1.3, run: 0.9 } as const;
+
+/**
+ * Maximum sessions per discipline for a full (multi-discipline) triathlon
+ * plan. Cycling-only mode lifts the bike cap to 5 (the discipline owns 100%
+ * of the week). Past this cap, extra hours lengthen sessions rather than
+ * adding one — the onboarding lever stops the stepper here.
+ */
+export const TRI_MAX_SESSIONS_PER_DISCIPLINE = 3;
+export const TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY = 5;
+
+/**
  * Generate a full triathlon plan for the current state.
  */
 export function generateTriathlonPlan(state: SimulatorState): Week[] {
@@ -182,9 +204,9 @@ function generateWeekForTriathlon(
   // discipline cycling mode the bike cap lifts to 5 because the discipline
   // owns 100% of the week's hours rather than ~50%.
   const isCyclingOnly = disciplines.length === 1 && hasBike;
-  const swimSessions = hasSwim ? countSessions(swimHours, 0.75, 3) : 0;
-  const bikeSessions = hasBike ? countSessions(bikeHours, 1.3, isCyclingOnly ? 5 : 3) : 0;
-  let   runSessions  = hasRun  ? countSessions(runHours,  0.9,  3) : 0;
+  const swimSessions = hasSwim ? countSessions(swimHours, TRI_AVG_SESSION_HOURS.swim, TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
+  const bikeSessions = hasBike ? countSessions(bikeHours, TRI_AVG_SESSION_HOURS.bike, isCyclingOnly ? TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY : TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
+  let   runSessions  = hasRun  ? countSessions(runHours,  TRI_AVG_SESSION_HOURS.run,  TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
 
   // Commute runs are appended on top of the prescribed tri run sessions,
   // not substituted for them (revised 2026-05-20. See SCIENCE_LOG §AK).
@@ -487,7 +509,7 @@ function applyTriInjuryGates(
 // Session count helpers
 // ───────────────────────────────────────────────────────────────────────────
 
-function countSessions(hours: number, avgSessionHours: number, maxSessions: number): number {
+export function countSessions(hours: number, avgSessionHours: number, maxSessions: number): number {
   if (hours <= 0) return 0;
   return Math.min(maxSessions, Math.max(1, Math.round(hours / avgSessionHours)));
 }

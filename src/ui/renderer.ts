@@ -214,6 +214,7 @@ export function render(): void {
       weeklyVolumeKm: planMeanKm ?? s.wkm,
       hmPbSeconds: s.pbs?.h || undefined,
       ltPaceSecPerKm: s.lt || undefined,
+      strengthSessionsPerWeek: s.gs,
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
     });

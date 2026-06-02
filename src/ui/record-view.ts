@@ -19,7 +19,7 @@ import {
   setOnTrackingTick,
   getActiveSplitScheme,
 } from './gps-events';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getState } from '@/state';
 import { formatKm, type UnitPref } from '@/utils/format';
@@ -32,7 +32,7 @@ function navigateTab(tab: TabId): void {
   } else if (tab === 'plan') {
     import('./main-view').then(({ renderMainView }) => renderMainView());
   } else if (tab === 'forecast') {
-    import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
+    navigateToForecastTab();  // mode-aware (running / On-demand → standard forecast)
   } else if (tab === 'account') {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   } else if (tab === 'stats') {

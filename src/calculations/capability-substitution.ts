@@ -27,7 +27,7 @@
 
 import type { SimulatorState, Workout, Week } from '@/types/state';
 import type { InjuryState } from '@/types/injury';
-import { pickAerobicSubstitute } from '@/injury/engine';
+import { pickAerobicSubstitute, getDisciplineCapacity } from '@/injury/engine';
 import { injuryStrengthDecision, RPE_BY_PHASE } from '@/workouts/injury-strength';
 
 // Re-export so existing importers (and the unit tests) keep their path. The
@@ -114,6 +114,55 @@ function recoveryClause(inj: InjuryState): string {
 }
 
 /**
+ * Build the aerobic-substitute offer for `minutes` of freed training time, or
+ * null when no aerobic sport is safe. Pure and generator-free so the offer
+ * shape (substitute pick, intensity scaling, duration, copy, discipline badge)
+ * is unit-testable without standing up the week generator.
+ *
+ * Intensity, not duration, absorbs a limited discipline: the freed minutes stay
+ * whole (the engine-maintenance stimulus is the point) and the prescribed RPE is
+ * dialled down in proportion to how loadable the substitute is. A 50%-capacity
+ * bike holds the same minutes at roughly half the RPE. Linear in capacity, no
+ * invented constant.
+ */
+export function buildAerobicOffer(
+  inj: InjuryState,
+  minutes: number,
+  day: number | null,
+): CapabilityOffer | null {
+  if (minutes <= 0) return null;
+  const aero = pickAerobicSubstitute(inj);
+  if (!aero) return null;
+
+  const baseRpe = RPE_BY_PHASE[inj.injuryPhase] ?? 4;
+  // pickAerobicSubstitute only returns a pick when capacity > 0, so cap is 1..100.
+  const cap = getDisciplineCapacity(inj, aero.capacityKey);
+  const rpe = Math.max(1, Math.round((baseRpe * cap) / 100));
+  const limited = cap < 100;
+  // Tag the discipline so the card renders natively (Bike / Swim badge in both
+  // the tri and HYROX surfaces). Row erg has no discipline lane, so it keeps the
+  // generic cross-training badge.
+  const disciplineField =
+    aero.sport === 'bike' ? { discipline: 'bike' as const } :
+    aero.sport === 'swim' ? { discipline: 'swim' as const } : {};
+  const description = limited
+    ? `${minutes} min, very easy. Holds your aerobic engine ${recoveryClause(inj)}. Effort stays low while the area is only partly ready to load.`
+    : `${minutes} min easy, conversational effort. Holds your aerobic engine ${recoveryClause(inj)}, without loading the injury.`;
+  const workout: Workout = {
+    t: 'cross_training',
+    n: `${aero.label}: aerobic maintenance`,
+    d: description,
+    r: rpe,
+    rpe,
+    estimatedDurationMin: minutes,
+    ...disciplineField,
+    ...(day != null ? { dayOfWeek: day } : {}),
+    modReason: `${aero.label} substitutes the training you can't currently do.`,
+  } as Workout;
+  return { workout, reason: `${aero.label.toLowerCase()} for the time you can't train` };
+}
+
+/**
  * Build the safe-session offers for the current week, for HYROX or triathlon
  * (running's aerobic substitute comes from its phase rehab path, so it is not
  * routed here). Returns [] when no active injury, an unsupported mode, or
@@ -130,30 +179,11 @@ export async function buildCapabilityOffers(state: SimulatorState): Promise<Capa
   const offers: CapabilityOffer[] = [];
 
   // Aerobic substitute for the training time the injury freed up ("you can
-  // still pedal"). 1:1 with the lost aerobic time, so it replaces rather than
-  // inflates volume.
+  // still pedal"). 1:1 minutes with the lost aerobic time, so it replaces rather
+  // than inflates volume; intensity scales with capacity (see buildAerobicOffer).
   const { minutes, day } = await freedAerobic(state, mode);
-  const aero = minutes > 0 ? pickAerobicSubstitute(inj) : null;
-  if (aero && minutes > 0) {
-    const rpe = RPE_BY_PHASE[inj.injuryPhase] ?? 4;
-    // Tag the discipline so the card renders natively (Bike / Swim badge in
-    // both the tri and HYROX surfaces) instead of falling back to a run badge.
-    const disciplineField =
-      aero.sport === 'bike' ? { discipline: 'bike' as const } :
-      aero.sport === 'swim' ? { discipline: 'swim' as const } : {};
-    const workout: Workout = {
-      t: 'cross_training',
-      n: `${aero.label}: aerobic maintenance`,
-      d: `${minutes} min easy, conversational effort. Holds your aerobic engine ${recoveryClause(inj)}, without loading the injury.`,
-      r: rpe,
-      rpe,
-      estimatedDurationMin: minutes,
-      ...disciplineField,
-      ...(day != null ? { dayOfWeek: day } : {}),
-      modReason: `${aero.label} substitutes the training you can't currently do.`,
-    } as Workout;
-    offers.push({ workout, reason: `${aero.label.toLowerCase()} for the time you can't train` });
-  }
+  const aerobic = buildAerobicOffer(inj, minutes, day);
+  if (aerobic) offers.push(aerobic);
 
   // Region-safe strength (existing generator).
   const strength = injuryStrengthDecision(inj);

@@ -73,6 +73,7 @@ import { getTriathlonById } from '@/data/triathlons';
 import { getAbilityBand } from './fatigue';
 import { cv } from './vdot';
 import { blendPredictions } from './predictions';
+import { effectiveVo2max } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import {
@@ -1290,7 +1291,7 @@ function blendOpenRunRaceTime(
     targetDistM,
     state.pbs,
     state.lt ?? null,
-    state.vo2 ?? null,
+    effectiveVo2max(state),
     state.b,
     (state.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? state.rec ?? null,

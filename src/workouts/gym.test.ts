@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateGymWorkouts } from './gym';
+import { parseStrengthSession } from '@/guided/strength-model';
 import type { InjuryState } from '@/types/injury';
 
 // ---------------------------------------------------------------------------
@@ -198,5 +199,36 @@ describe('generateGymWorkouts — deload weeks', () => {
     for (const w of result) {
       expect(w.n).toContain('Deload');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: intermediate+ auto-gym uses the rotating running-strength pool
+// ---------------------------------------------------------------------------
+
+describe('generateGymWorkouts — intermediate uses the running-strength pool', () => {
+  it('intermediate base sessions are the rotating pool (Running Strength), and parse', () => {
+    const result = generateGymWorkouts('base', 3, 'intermediate', 1, 16);
+    expect(result).toHaveLength(3);
+    for (const w of result) {
+      expect(w.n).toMatch(/^Running Strength/);
+      expect(parseStrengthSession(w)).not.toBeNull();
+    }
+    // 3 distinct sessions in the week (different rotation slots).
+    expect(new Set(result.map(w => w.d)).size).toBe(3);
+  });
+
+  it('the pool rotates week to week (deterministic by weekIndex)', () => {
+    const w1 = generateGymWorkouts('base', 1, 'intermediate', 1, 16)[0];
+    const w2 = generateGymWorkouts('base', 1, 'intermediate', 2, 16)[0];
+    expect(w1.d).not.toBe(w2.d);
+    // Same week => identical (determinism).
+    const w1b = generateGymWorkouts('base', 1, 'intermediate', 1, 16)[0];
+    expect(w1.d).toBe(w1b.d);
+  });
+
+  it('beginner/novice still get their bodyweight templates, not the pool', () => {
+    const beg = generateGymWorkouts('base', 2, 'total_beginner', 1, 16);
+    for (const w of beg) expect(w.n).not.toMatch(/^Running Strength/);
   });
 });

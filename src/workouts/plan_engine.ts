@@ -317,6 +317,35 @@ function applyRunnerTypeBias(priority: SlotType[], runnerType: RunnerType): Slot
 }
 
 // ---------------------------------------------------------------------------
+// Session-duration floors (single source for the budget logic and the
+// volume-aware quality cap). An easy run below EASY_FLOOR_MIN is not worth
+// prescribing; the long run keeps a two-tier floor.
+// ---------------------------------------------------------------------------
+const EASY_FLOOR_MIN = 25;
+const LONG_STD_FLOOR_MIN = 40;
+const LONG_SOFT_FLOOR_MIN = 30;
+
+/**
+ * The effective weekly minute budget = the tighter of the archetype ramp
+ * budget (km anchored to the athlete's current volume) and the user's weekly
+ * hours target. `Infinity` when neither is set (legacy generous behaviour).
+ * Single source so the quality cap and `applyHoursBudget` agree.
+ */
+function effectiveWeeklyBudgetMin(ctx: PlanContext): number {
+  let budget = Infinity;
+  if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
+    const peakKm = computePeakWeeklyKm(ctx);
+    const weekKm = weekVolumeBudgetKm(ctx.weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
+    const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
+    budget = Math.min(budget, Math.round((weekKm * easyPaceSecPerKm) / 60));
+  }
+  if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) {
+    budget = Math.min(budget, ctx.weeklyHoursTarget * 60);
+  }
+  return budget;
+}
+
+// ---------------------------------------------------------------------------
 // Main entry: planWeekSessions
 // ---------------------------------------------------------------------------
 
@@ -334,6 +363,25 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
 
   const intents: SessionIntent[] = [];
   let maxQuality = qualityCap(ability, fitnessLevel, runsPerWeek);
+
+  // Volume-aware quality cap. A quality session only earns its slot if the
+  // weekly volume budget can also seat a long run and at least one easy run at
+  // their floors. Low-volume weeks (early ramp, deload, taper) therefore carry
+  // fewer quality sessions, climbing to the ability cap as volume grows — this
+  // keeps the intensity distribution near 80/20 (Seiler 2010) instead of
+  // stacking intervals on a small base, and scales correctly with plan length
+  // (a short plan ramps volume faster, so the cap lifts sooner). Derived from
+  // the existing floors and the threshold-session cost — no new constants.
+  // Floored at 1 so a fit athlete keeps one quality session for intensity
+  // retention even at the lowest volume (the residual overflow is accepted and
+  // surfaced by the plan-view budget banner).
+  const weeklyBudgetMin = effectiveWeeklyBudgetMin(ctx);
+  if (Number.isFinite(weeklyBudgetMin)) {
+    const approxQualityMin = thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) + 20;
+    const aerobicReserve = LONG_SOFT_FLOOR_MIN + EASY_FLOOR_MIN;
+    const affordable = Math.floor((weeklyBudgetMin - aerobicReserve) / Math.max(1, approxQualityMin));
+    maxQuality = Math.max(1, Math.min(maxQuality, affordable));
+  }
 
   // ACWR-driven quality session reduction
   // caution: drop one quality session; high: drop two and cap long run
@@ -386,7 +434,11 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   // Fill quality sessions. Filter any slots the user has opted out of
   let qualityFilled = 0;
   const rawPriority = applyRunnerTypeBias(workoutPriority(raceDistance, phase), runnerType);
-  const priority = rawPriority.filter(s => !excludedSlots.has(s));
+  // Base-first periodisation: no VO2 intervals in the base phase. The aerobic
+  // and musculoskeletal base is built at lower intensity first; VO2 work enters
+  // in build/peak (Daniels; Bompa). This makes the base quality session a
+  // tempo, which is both gentler on a low-volume base and the right stimulus.
+  const priority = rawPriority.filter(s => !excludedSlots.has(s) && !(phase === 'base' && s === 'vo2'));
   let dayIdx = 0;
 
   for (const slot of priority) {
@@ -475,28 +527,14 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     slotsRemaining--;
   }
 
-  // Apply archetype-gated ramp budget BEFORE the hours budget. The km budget
-  // anchors week 1 at the user's current baseline and ramps geometrically toward
-  // the ability-driven peak (the same peak today's plan tries to deliver
-  // immediately, which is the bug). Quality minutes are preserved; easy and
-  // long are scaled via the same applyHoursBudget mechanism used for the
-  // weekly-hours target.
-  //
-  // Skipped when baselineKm or archetype is missing. Preserves legacy
-  // behaviour for users without Strava/Apple history.
-  if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
-    const peakKm = computePeakWeeklyKm(ctx);
-    const weekKm = weekVolumeBudgetKm(weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
-    const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
-    const weekMinutesBudget = Math.round((weekKm * easyPaceSecPerKm) / 60);
-    applyHoursBudget(intents, weekMinutesBudget);
-  }
-
-  // Apply weekly hours budget: scale easy sessions first, then long if still over.
-  // Quality session durations are never shortened. Their training stimulus depends
-  // on work interval duration (Seiler 2010, Billat 2001).
-  if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) {
-    applyHoursBudget(intents, ctx.weeklyHoursTarget * 60);
+  // Fit the sessions into the effective weekly budget — the tighter of the
+  // archetype ramp budget (km anchored to the athlete's current volume, ramping
+  // geometrically toward the ability-driven peak) and the user's weekly hours
+  // target. Easy runs are consolidated and the long run trimmed to its floors;
+  // quality minutes are preserved (stimulus depends on work-interval duration,
+  // Seiler 2010 / Billat 2001). `Infinity` (no ramp, no target) is a no-op.
+  if (Number.isFinite(weeklyBudgetMin)) {
+    applyHoursBudget(intents, weeklyBudgetMin);
   }
 
   return intents;
@@ -534,53 +572,87 @@ function computePeakWeeklyKm(ctx: PlanContext): number {
 }
 
 /**
- * Scale flexible sessions (easy, then long) to fit a weekly minute budget.
+ * Fit flexible sessions (easy, then long) into a weekly minute budget.
  * Quality sessions (threshold, vo2, marathon_pace, float) are never trimmed —
  * their stimulus depends on work-interval duration (Seiler 2010, Billat 2001).
  *
- * Two-tier floors:
- *   - Standard: easy ≥ 20 min, long ≥ 40 min (used when budget is comfortable)
- *   - Soft:     easy ≥ 15 min, long ≥ 30 min (used when standard would overflow)
+ * Easy-run policy (2026-06-02): a single floor, `EASY_FLOOR_MIN = 25` min. An
+ * easy run below 25 min is not worth prescribing — the aerobic stimulus is
+ * negligible relative to the fixed per-session overhead. When the budget
+ * cannot give every planned easy run-day at least the floor, we CONSOLIDATE:
+ * drop run-days and lengthen the survivors, rather than shrink them all into
+ * 15-min fragments. At equal weekly volume, fewer longer easy runs deliver
+ * more aerobic stimulus than many short ones — the continuous-duration
+ * adaptations (mitochondrial density, capillarisation, fat oxidation) are
+ * non-linear near the low end. The dropped run-days return automatically as
+ * the volume budget ramps; the plan-view note surfaces the reduction.
  *
- * Soft floors are scientifically defensible: 15-min recovery jogs are common in
- * elite polarised training (Seiler & Tønnessen 2009), and a 30-min long run
- * still delivers the aerobic stimulus that distinguishes a long session from
- * an easy one. Below the soft floor, we accept the overflow rather than
- * compress sessions into ineffective doses. The plan-view banner surfaces
- * the overflow so the user can choose to accept shorter sessions or raise
- * their weekly hours target.
+ * We never consolidate to ZERO easy runs: at least one survives (at the floor)
+ * even when that overflows the budget. A week of intervals + a long run alone
+ * is too little easy aerobic volume; the easy base matters more than a tidy
+ * total. The volume-aware quality cap upstream keeps that overflow small by
+ * limiting how much budget the quality sessions can claim.
+ *
+ * The long run keeps its two-tier floor (40 min standard, 30 min soft). Past
+ * all floors we accept the residual overflow; the plan-view budget banner is
+ * the user-facing surface for it.
  */
 function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
-  const STD_EASY_MIN = 20;
-  const STD_LONG_MIN = 40;
-  const SOFT_EASY_MIN = 15;
-  const SOFT_LONG_MIN = 30;
+  const EASY_MIN = EASY_FLOOR_MIN;
+  const STD_LONG_MIN = LONG_STD_FLOOR_MIN;
+  const SOFT_LONG_MIN = LONG_SOFT_FLOOR_MIN;
   const qualitySlots = new Set(['threshold', 'vo2', 'marathon_pace', 'float']);
 
   const total = () => intents.reduce((s, i) => s + i.totalMinutes, 0);
   if (total() <= budgetMin) return;
 
+  // ── Consolidate easy runs ──────────────────────────────────────────────────
+  // Compute the budget left for easy running after the untrimmable quality
+  // sessions and (for now) the full long run. Then choose the FEWEST easy
+  // run-days such that each survivor lands within [EASY_MIN, naturalEasyMin],
+  // dropping the rest. Never shrink an easy run below the floor.
   const easyIntents = intents.filter(i => i.slot === 'easy');
-  const longIntent = intents.find(i => i.slot === 'long');
-
-  // Pass 1: scale easy runs proportionally with the standard floor.
   if (easyIntents.length > 0) {
-    const nonEasyTotal = intents.filter(i => i.slot !== 'easy').reduce((s, i) => s + i.totalMinutes, 0);
-    const easyBudget = Math.max(easyIntents.length * STD_EASY_MIN, budgetMin - nonEasyTotal);
-    const easyTotal = easyIntents.reduce((s, i) => s + i.totalMinutes, 0);
-    if (easyBudget < easyTotal) {
-      const ratio = easyBudget / easyTotal;
-      for (const e of easyIntents) {
-        const scaled = Math.max(STD_EASY_MIN, Math.round(e.totalMinutes * ratio));
-        e.totalMinutes = scaled;
-        e.workMinutes = scaled;
+    const nonEasyTotal = intents
+      .filter(i => i.slot !== 'easy')
+      .reduce((s, i) => s + i.totalMinutes, 0);
+    const easyBudget = budgetMin - nonEasyTotal;
+    // All easy intents share the same natural length (easyRunMinutes).
+    const naturalEasyMin = Math.max(...easyIntents.map(i => i.totalMinutes));
+    const desired = easyIntents.length;
+
+    let finalCount: number;
+    if (easyBudget < EASY_MIN) {
+      // Not enough budget for even one floor-length easy run, but keep ONE
+      // anyway (sized to the floor below): a week needs some dedicated easy
+      // aerobic running. The resulting overflow is accepted and surfaced.
+      finalCount = 1;
+    } else {
+      // Fewest runs keeping each survivor ≤ natural; capped so each ≥ floor.
+      const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / naturalEasyMin));
+      const mostAboveFloor = Math.floor(easyBudget / EASY_MIN);
+      finalCount = Math.min(desired, fewestAtNatural, mostAboveFloor);
+    }
+
+    // Remove the dropped easy intents (keep the earliest `finalCount`).
+    let toRemove = desired - finalCount;
+    for (let i = intents.length - 1; i >= 0 && toRemove > 0; i--) {
+      if (intents[i].slot === 'easy') { intents.splice(i, 1); toRemove--; }
+    }
+    // Size the survivors: split the easy budget evenly, clamped to the floor
+    // and the natural length.
+    if (finalCount > 0) {
+      const per = Math.min(naturalEasyMin, Math.max(EASY_MIN, Math.round(easyBudget / finalCount)));
+      for (const e of intents) {
+        if (e.slot === 'easy') { e.totalMinutes = per; e.workMinutes = per; }
       }
     }
   }
 
   if (total() <= budgetMin) return;
 
-  // Pass 2: cap long run with the standard floor.
+  // ── Trim the long run (unchanged two-tier floor) ────────────────────────────
+  const longIntent = intents.find(i => i.slot === 'long');
   if (longIntent) {
     const nonLongTotal = intents.filter(i => i.slot !== 'long').reduce((s, i) => s + i.totalMinutes, 0);
     const longBudget = Math.max(STD_LONG_MIN, budgetMin - nonLongTotal);
@@ -592,18 +664,6 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
 
   if (total() <= budgetMin) return;
 
-  // Pass 3: drop to soft easy floor (15 min) for a tight budget.
-  if (easyIntents.length > 0) {
-    for (const e of easyIntents) {
-      if (e.totalMinutes > SOFT_EASY_MIN) {
-        e.totalMinutes = SOFT_EASY_MIN;
-        e.workMinutes = SOFT_EASY_MIN;
-      }
-      if (total() <= budgetMin) return;
-    }
-  }
-
-  // Pass 4: drop to soft long floor (30 min).
   if (longIntent && longIntent.totalMinutes > SOFT_LONG_MIN) {
     longIntent.totalMinutes = SOFT_LONG_MIN;
     longIntent.workMinutes = SOFT_LONG_MIN;
@@ -611,9 +671,9 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
 
   if (total() <= budgetMin) return;
 
-  // Past the soft floors. Accept the overflow rather than further compress
-  // sessions into ineffective doses. The plan-view banner reads the actual
-  // total vs. budget on render and lets the user pick a resolution.
+  // Past all floors. Accept the overflow rather than compress further. The
+  // plan-view budget banner reads the actual total vs. budget on render and
+  // lets the user pick a resolution.
   const qualityTotal = intents.filter(i => qualitySlots.has(i.slot)).reduce((s, i) => s + i.totalMinutes, 0);
   if (qualityTotal > budgetMin) {
     console.warn(`[planWeekSessions] Quality sessions alone (${qualityTotal}min) exceed budget (${budgetMin}min). Budget not enforced on quality sessions.`);

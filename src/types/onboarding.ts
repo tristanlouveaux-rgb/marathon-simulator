@@ -31,6 +31,7 @@ export type OnboardingStep =
   | 'hyrox-setup'
   | 'workout-preview'
   | 'tri-workout-preview'
+  | 'tri-plan-forecast'
   | 'hyrox-workout-preview'
   | 'main-view';
 

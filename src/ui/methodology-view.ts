@@ -1,4 +1,4 @@
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 
 // ─── Navigation ─────────────────────────────────────────────────────────────
 
@@ -7,9 +7,7 @@ function navigateTab(tab: TabId): void {
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
-  else if (tab === 'forecast') {
-    import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
-  }
+  else if (tab === 'forecast') navigateToForecastTab();  // mode-aware
   else if (tab === 'account') import('./account-view').then(m => m.renderAccountView());
 }
 

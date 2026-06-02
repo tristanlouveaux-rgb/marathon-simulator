@@ -192,6 +192,7 @@ Quick reference for reading code that uses `s = getState()`:
 | `s.rd` | Race distance | `RaceDistance` |
 | `s.rw` | Runs per week | `number` |
 | `s.gs` | Gym sessions per week | `number` |
+| `s.strengthLog` | Per-lift working-weight memory + est-1RM benchmark | `StrengthLog \| undefined` |
 | `s.epw` | Exercises per week | `number` |
 | `s.wkm` | Weekly km | `number` |
 | `s.typ` | Runner type (effective) | `RunnerType` |
@@ -356,6 +357,13 @@ Strength is a separate flow from guided runs — wall-clock + tap driven, no GPS
 - `completeStrengthSession(workout, opts)` in `strength-complete.ts` is the **single completion write** — wraps `rate()` to set `wk.rated[id] = rpe` mode-agnostically.
 - `openGuidedStrength(workout)` in `guided-strength-overlay.ts` mounts the overlay and owns the lifecycle (controller, voice, keep-awake). Entry points live on each mode's strength surface (`workout-detail-modal.ts`, `plan-view.ts`).
 
+**Strength weight tracking** (2026-06-01). Per-lift working-weight memory + estimated-1RM benchmark, stored on the optional `s.strengthLog` field (`{ lifts: Record<key, StrengthLiftEntry>, notifiedPr }`, `src/types/strength-log.ts`). Pipeline:
+- `strength-exercise-key.ts` — `isWeightTrackable(name)` + `normalizeExerciseKey(name)` (canonical slug, e.g. `back-squat`) + `cleanExerciseName(name)` (strips "@X% 1RM" for display). The parser (`parseStrengthSession`) computes `liftKey` from the raw line and stores the cleaned name on each `GuidedSet`; non-trackable movements get `liftKey: undefined`.
+- `strength-progression.ts` — `estimate1RM` (Epley, rep-capped), `plateRound`, and the phase-gated `suggestNextWeight` (bumps only base/build + reps-left; peak/taper/deload hold; injury suppress).
+- `strength-log-persist.ts` — `persistStrengthLifts(records, state)` upserts the memory + est-1RM history; called inside `completeStrengthSession` (standard-gym branch only, never HYROX). Weight/RIR reach it via optional `SetRecord.weightKg`/`rirBucket`, merged onto records by the overlay (controller stays weight-agnostic).
+- `strength-marker-bumps.ts` — `detectStrengthPrs` / `snapshotNotifiedStrengthPrs`, surfaced at launch by `maybeShowStrengthPrToast()` in `main.ts` (all modes; mirrors `maybeShowMarkerBumpToast`).
+- UI: capture in `guided-strength-overlay.ts` (per-exercise stepper + RIR), last/suggested sub-line + skippable confirm-weights in `strength-workout-detail-modal.ts`, trend drill-down in `strength-lift-detail.ts` (reuses `buildBenchmarkTrendChart`), recap in `strength-summary-card.ts`. Constants in `src/constants/strength-constants.ts`. Science: `SCIENCE_LOG.md → §AW`. The muscle-group body image (`src/ui/body-map.ts`) was removed.
+
 ### iOS Native (`ios/`, `ios-plugins/guided-voice/`, adapter swap points in `src/guided/`)
 
 Capacitor 8 + Swift Package Manager. App id `com.mosaic.training`, iOS 15 minimum, bundle name "Mosaic".
@@ -461,6 +469,10 @@ All activity paths produce `GarminActivityRow[]` and feed into `matchAndAutoComp
 **RPE derivation priority**: Garmin RPE → HR zone (Karvonen) → Training Effect → activity type heuristic → planned RPE.
 
 **Key state**: `wk.garminMatched: Record<string, string>` maps `garmin_id` → `workoutId` to prevent re-matching.
+
+**Sign-in resilience for per-discipline volume/longest** (2026-06-02): `wk.garminActuals` is only populated as activities re-match *forward*, so immediately after a fresh sign-in (or a plan regen) it is empty until the next sync cycle. Run signals survive because `collectRunsFromState` (blended-fitness) falls back to the persisted `onboardingRunHistory`, and run longest uses `getLongestRunSec` (which also reads `onboardingRunHistory`). Swim/bike had no equivalent, so the triathlon **Endurance readiness** card (`computeDisciplineReadiness` in `specific-endurance-penalty.ts`, score = `volumeRatio × longestRatio`) collapsed to 0 across all disciplines. Fix: `main.ts` distills a slim per-discipline summary `s.recentDisciplineActivity` (last 12w, no polylines/splits) from `loadActivitiesFromDB()` at launch; `iterateRecentActuals` (tri-volume-by-discipline) tops up from it when `garminActuals` is sparse, deduped by sport + ±10 min so synced users are unaffected. Any new per-discipline volume/longest signal that reads `garminActuals` should route through `iterateRecentActuals` rather than scanning `garminActuals` directly, so it inherits this fallback.
+
+**Triathlon onboarding session lever** (2026-06-02): `src/calculations/tri-session-lever.ts` is the triathlon analog of running's `forecastForSessions` / `bumpSessionsAndRegen` (which live inline in `plan-preview-v2.ts`). It is **pure** (no store/controller imports) so it is unit-testable; the side-effecting commit lives in the wizard step `ui/wizard/steps/tri-plan-forecast.ts`. Data flow for the preview: `applyTriSessionDelta(state, delta)` clones state, applies `computeBumpedVolume` (per-discipline session delta → new `volumeSplit` + `timeAvailableHoursPerWeek`, using `TRI_AVG_SESSION_HOURS` + `TRI_MAX_SESSIONS_PER_DISCIPLINE` exported from `plan_engine.triathlon.ts`), regenerates `clone.wks` via `generateTriathlonPlan`, and carries the historical activity log over by week index so current fitness is unchanged. `forecastTriWithDelta` then reads `predictTriathlonRace(clone).totalSec`; `goalChanceTriWithDelta` reads `runTriForecastSim(clone, 2000, goalSec).goalProbability`. Commit writes the bumped volume to the onboarding record and re-runs `initializeSimulator` (the only path that rebuilds the generated tri weeks). New wizard step ordering: tri flow is now `… → review → initializing → tri-plan-forecast → main-view`, mirroring running's `initializing → plan-preview-v2`.
 
 ### Continuous Mode
 

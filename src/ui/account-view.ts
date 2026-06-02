@@ -14,7 +14,7 @@ import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource, hasPhysiologySource } from '@/data/sources';
-import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { getState, getMutableState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { initializeSimulator } from '@/state/initialization';
@@ -188,8 +188,13 @@ function getAccountHTML(): string {
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const tierDisplay = tier ? (TIER_LABELS_ACCOUNT[tier] ?? tier) : null;
 
-  const displayName = sim ? 'Simulator' : email;
+  // A guest is an anonymous Supabase user with no email. getUserEmail() falls
+  // back to the literal 'Signed in' when no email is present, which misreads as
+  // a real account — so guests get an explicit 'Guest' label instead.
+  const isGuest = !sim && !!s.isGuestAccount;
+  const displayName = sim ? 'Simulator' : isGuest ? 'Guest' : email;
   const initials = sim ? 'SIM'
+    : isGuest ? 'G'
     : email.includes('@') ? (email[0] + (email.split('@')[0][1] ?? '')).toUpperCase()
     : email.slice(0, 2).toUpperCase();
 
@@ -1416,7 +1421,7 @@ function wireAccountHandlers(): void {
     } else if (tab === 'plan') {
       import('./main-view').then(({ renderMainView }) => renderMainView());
     } else if (tab === 'forecast') {
-      import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
+      navigateToForecastTab();  // mode-aware (running / On-demand → standard forecast)
     } else if (tab === 'record') {
       import('./record-view').then(({ renderRecordView }) => renderRecordView());
     } else if (tab === 'stats') {

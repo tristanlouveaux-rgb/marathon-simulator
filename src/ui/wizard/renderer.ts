@@ -18,6 +18,7 @@ import { renderCyclingSetup } from './steps/cycling-setup';
 import { renderHyroxSetup } from './steps/hyrox-setup';
 import { renderWorkoutPreview } from './steps/workout-preview';
 import { renderTriWorkoutPreview } from './steps/tri-workout-preview';
+import { renderTriPlanForecast } from './steps/tri-plan-forecast';
 import { renderHyroxWorkoutPreview } from './steps/hyrox-workout-preview';
 import { renderCommute } from './steps/commute';
 
@@ -115,6 +116,10 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderTriWorkoutPreview(container, state);
       break;
 
+    case 'tri-plan-forecast':
+      renderTriPlanForecast(container, state);
+      break;
+
     case 'hyrox-workout-preview':
       renderHyroxWorkoutPreview(container, state);
       break;
@@ -146,9 +151,13 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       saveState();
       document.getElementById('onboarding-banner')?.remove();
       document.getElementById('wizard-return-btn')?.remove();
-      import('@/ui/main-view').then(({ renderMainView }) => {
-        renderMainView();
-      });
+      // On-demand has no plan — land on Home (where sessions are generated), not the
+      // empty Plan view that renderMainView() shows.
+      if (s.trackOnly) {
+        import('@/ui/home-view').then(({ renderHomeView }) => renderHomeView());
+      } else {
+        import('@/ui/main-view').then(({ renderMainView }) => renderMainView());
+      }
     });
     document.body.appendChild(btn);
   }
@@ -165,9 +174,12 @@ function transitionToMainView(): void {
   saveState();
   document.getElementById('onboarding-banner')?.remove();
   document.getElementById('wizard-return-btn')?.remove();
-  import('@/ui/main-view').then(({ renderMainView }) => {
-    renderMainView();
-  });
+  // On-demand lands on Home (no plan to show); other modes land on the Plan view.
+  if (s.trackOnly) {
+    import('@/ui/home-view').then(({ renderHomeView }) => renderHomeView());
+  } else {
+    import('@/ui/main-view').then(({ renderMainView }) => renderMainView());
+  }
 }
 
 /**

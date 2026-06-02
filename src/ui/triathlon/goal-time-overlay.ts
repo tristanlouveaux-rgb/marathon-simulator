@@ -48,7 +48,7 @@ function snap(sec: number, stepSec: number): number {
 // race distance: a Sprint (~1:15) gets ~1:00-2:15, a 70.3 (~5:00) gets
 // ~4:00-9:00, an Iron (~10:00) gets ~8:00-18:00. Snapped to 5-min.
 
-function deriveBounds(predictedSec: number): { minSec: number; maxSec: number; stepSec: number } {
+export function deriveBounds(predictedSec: number): { minSec: number; maxSec: number; stepSec: number } {
   const STEP = 60; // 1 minute, matches the HH:MM display
   const SNAP_END = 5 * 60; // snap min/max to nearest 5 min for clean labels
   const minSec = Math.max(STEP, snap(predictedSec * 0.8, SNAP_END));
@@ -67,14 +67,14 @@ const PROB_REALISTIC = 70;
 const PROB_HONEST    = 40;
 const PROB_AMBITIOUS = 15;
 
-function liveTone(probPct: number): string {
+export function liveTone(probPct: number): string {
   if (probPct >= PROB_REALISTIC) return '#16A34A'; // realistic or better
   if (probPct >= PROB_HONEST)    return '#65A30D'; // honest stretch
   if (probPct >= PROB_AMBITIOUS) return '#B45309'; // ambitious
   return '#B91C1C';                                // aggressive
 }
 
-function liveLabel(probPct: number): string {
+export function liveLabel(probPct: number): string {
   if (probPct >= PROB_LIGHT)     return 'Looks light';
   if (probPct >= PROB_REALISTIC) return 'Realistic';
   if (probPct >= PROB_HONEST)    return 'Honest stretch';

@@ -54,6 +54,15 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
     updateState({ forecastTime, forecastTimeAdjusted: forecastTime });
   }
 
+  // Strength → forecast benefit. The hero forecast already folds in the planned
+  // strength contribution; isolate it (forecast at the same run count WITHOUT
+  // strength minus the shown forecast) for the motivating onboarding callout.
+  // Future-projection economy gain, Beattie & Blagrove 2018. See SCIENCE_LOG §BC.
+  const gymSessions = s.gs ?? state.gymSessionsPerWeek ?? 0;
+  const strengthBenefitSec = gymSessions >= 1 && forecastTime > 0
+    ? Math.max(0, forecastForSessions(s, sessionsForHorizon, 0) - forecastTime)
+    : 0;
+
   // User-entered goal (running). Persisted in `s.raceGoalTimeSec`, carries
   // through to the post-onboarding Race Forecast page. When set, the hero
   // reframes around the goal and shows the live Monte Carlo chance of hitting
@@ -187,7 +196,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
       .pp-goal-chance-cap { font-size:12px; color:var(--c-faint); }
 
       /* Secondary goal-entry button — bordered pill, no accent (nav-link colour rule). */
-      .pp-goal-btn { width:100%; height:46px; margin-top:10px; border-radius:23px; background:transparent; border:1px solid var(--c-border); color:var(--c-black); font-size:14px; font-weight:500; cursor:pointer; transition:transform 0.12s ease; }
+      .pp-goal-btn { width:100%; height:46px; margin-top:10px; border-radius:23px; background:#FFFFFF; border:1px solid rgba(0,0,0,0.12); color:var(--c-black); font-size:14px; font-weight:500; cursor:pointer; transition:transform 0.12s ease; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
       .pp-goal-btn:active { transform:translateY(1px); }
 
       /* Plan summary rows. */
@@ -292,6 +301,14 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
         <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.16s">
           <div class="pp-note-card">
             <p class="pp-note">Starting with <strong style="color:var(--c-black);font-weight:500">${Math.round((s.ctlBaseline ?? 0) / 7)} TSS/day</strong> of baseline fitness from your recent training. Your plan is pitched to continue from there, not restart you.</p>
+          </div>
+        </div>
+        ` : ''}
+
+        ${strengthBenefitSec >= 5 ? `
+        <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.17s">
+          <div class="pp-note-card">
+            <p class="pp-note">Your ${gymSessions} strength ${gymSessions === 1 ? 'session' : 'sessions'} a week ${gymSessions === 1 ? 'is' : 'are'} worth about <strong style="color:var(--c-black);font-weight:500">${fmtBenefitSec(strengthBenefitSec)}</strong> of the projected finish above. Resistance work raises running economy, so you hold goal pace at a lower cost (Beattie &amp; Blagrove 2018).</p>
           </div>
         </div>
         ` : ''}
@@ -451,6 +468,14 @@ function formatLTPace(secPerKm: number): string {
   return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
+/** Human delta for the strength callout: "2 min 14 s", "3 min", or "40 s". */
+function fmtBenefitSec(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  if (m > 0) return s > 0 ? `${m} min ${s} s` : `${m} min`;
+  return `${s} s`;
+}
+
 /* ---------- Forecast / goal helpers ---------- */
 
 /**
@@ -458,7 +483,11 @@ function formatLTPace(secPerKm: number): string {
  * the milestone feasibility check, and the goal overlay all read from this one
  * call so the numbers can never diverge between surfaces.
  */
-function forecastForSessions(s: ReturnType<typeof getState>, sessions: number): number {
+function forecastForSessions(
+  s: ReturnType<typeof getState>,
+  sessions: number,
+  strengthSessions?: number,
+): number {
   const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd);
   return calculateLiveForecast({
     currentVdot: s.v || 50,
@@ -470,6 +499,9 @@ function forecastForSessions(s: ReturnType<typeof getState>, sessions: number): 
     weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,
+    // Default to the plan's planned strength count; callers can override (e.g.
+    // pass 0 to compute the no-strength baseline for the benefit callout).
+    strengthSessionsPerWeek: strengthSessions ?? s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0,
     blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
   }).forecastTime;
 }
@@ -479,16 +511,23 @@ function forecastForSessions(s: ReturnType<typeof getState>, sessions: number): 
  * extra runs/week WITHOUT mutating state (spread-clone), so the overlay can
  * show the goal probability sliding up as the user adds sessions.
  */
-function goalChanceForState(s: ReturnType<typeof getState>, goalSec: number, addedSessions = 0): number | null {
+function goalChanceForState(
+  s: ReturnType<typeof getState>,
+  goalSec: number,
+  addedSessions = 0,
+  gymSessions?: number,
+): number | null {
   const commuteDays = s.commuteConfig?.enabled ? (s.commuteConfig.commuteDaysPerWeek ?? 0) : 0;
   const sessions = (s.epw || s.rw || 4) + commuteDays + addedSessions;
   // Anchor the sim to the SAME forecast the overlay caption shows for this
   // session count, so the chance and the displayed forecast move together as
   // sessions are added (the stored s.forecastTime knows only the base count).
-  const forecastOverride = forecastForSessions(s, sessions);
-  const simState = addedSessions > 0
+  // gymSessions, when supplied, feeds the strength-economy projection (§BC).
+  const forecastOverride = forecastForSessions(s, sessions, gymSessions);
+  let simState = addedSessions > 0
     ? { ...s, rw: (s.rw || 3) + addedSessions, epw: (s.epw ?? s.rw ?? 3) + addedSessions }
     : s;
+  if (gymSessions != null) simState = { ...simState, gs: gymSessions };
   const sim = runMarathonForecastSim(simState, 2000, goalSec, forecastOverride);
   if (!sim || sim.goalProbability == null) return null;
   return sim.goalProbability * 100;
@@ -517,6 +556,28 @@ function bumpSessionsAndRegen(added: number): void {
   }
 }
 
+/**
+ * Commit BOTH the added runs and the added strength sessions in one regen, so
+ * the goal overlay's "+N runs / +M strength" levers become real without running
+ * initializeSimulator twice. Runs cap at 7, strength at 3 (the onboarding
+ * `gymSessionsPerWeek` range, schedule.ts GYM_OPTIONS). Strength feeds the
+ * forecast's economy projection (§BC); both only take effect after this regen.
+ */
+function bumpSessionsAndGymAndRegen(addedRuns: number, addedGym: number): void {
+  if (addedRuns <= 0 && addedGym <= 0) return;
+  const ob = getState().onboarding;
+  if (!ob) return;
+  const nextRuns = Math.min(7, (ob.runsPerWeek ?? getState().rw ?? 3) + Math.max(0, addedRuns));
+  const nextGym = Math.min(3, (ob.gymSessionsPerWeek ?? getState().gs ?? 0) + Math.max(0, addedGym));
+  updateOnboarding({ runsPerWeek: nextRuns, gymSessionsPerWeek: nextGym });
+  try {
+    const ob2 = getState().onboarding;
+    if (ob2) initializeSimulator(ob2);
+  } catch (e) {
+    console.warn('[PlanPreview] session/gym-bump regen failed:', e);
+  }
+}
+
 /* ---------- Goal-time overlay (onboarding-local) ---------- */
 
 /**
@@ -535,21 +596,32 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
   const baseRunsPerWeek = s.rw || 3;
   const maxAdd = Math.max(0, 7 - baseRunsPerWeek);
 
+  // Strength lever. Strength sessions raise running economy, so adding them
+  // pulls the forecast faster (§BC). Range is 0-3 (onboarding gymSessionsPerWeek).
+  const baseGym = s.gs ?? onboarding.gymSessionsPerWeek ?? 0;
+  const maxGymAdd = Math.max(0, 3 - baseGym);
+
   const predictedSec = forecastForSessions(s, baseSessions);
   if (!predictedSec || predictedSec <= 0) return;
 
   // Extend the slider's fast end to cover the fastest plan the user could build
-  // here (base + every addable session), so adding sessions never runs the goal
-  // off the end of the range. The range is fixed at open time, not re-derived
-  // per tap, so the bounds don't shift under the user.
-  const fastestSec = maxAdd > 0 ? forecastForSessions(s, baseSessions + maxAdd) : undefined;
+  // here (every addable run AND every addable strength session), so adding either
+  // lever never runs the goal off the end of the range. The range is fixed at
+  // open time, not re-derived per tap, so the bounds don't shift under the user.
+  const fastestSec = (maxAdd > 0 || maxGymAdd > 0)
+    ? forecastForSessions(s, baseSessions + maxAdd, baseGym + maxGymAdd)
+    : undefined;
   const { minSec, maxSec, stepSec: STEP } = deriveBounds(predictedSec, s.rd, fastestSec);
   const snap = (v: number, st: number) => Math.round(v / st) * st;
   const savedGoal = s.raceGoalTimeSec && s.raceGoalTimeSec > 0 ? s.raceGoalTimeSec : null;
-  const initialSec = Math.min(maxSec, Math.max(minSec, snap(savedGoal ?? Math.round(predictedSec * 0.97), STEP)));
+  // Default to the forecast itself — a goal equal to the forecast sits on the
+  // simulation's median, so it opens at ~50% chance (a coin-flip target the user
+  // then drags harder or easier). A saved goal always takes precedence.
+  const initialSec = Math.min(maxSec, Math.max(minSec, snap(savedGoal ?? predictedSec, STEP)));
 
   let goalSec = initialSec;
   let added = 0;
+  let addedGym = 0;
 
   const overlay = document.createElement('div');
   overlay.id = 'pp-goal-overlay';
@@ -591,6 +663,22 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
         </div>
       ` : ''}
 
+      ${maxGymAdd > 0 ? `
+        <div style="border:1px solid rgba(0,0,0,0.06);border-radius:12px;padding:12px 14px;margin-bottom:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div style="font-size:13px;color:var(--c-black)">Add strength sessions</div>
+              <div id="ppg-gym-cap" style="font-size:11.5px;color:var(--c-faint);margin-top:2px">${baseGym} strength/week</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <button id="ppg-gym-minus" class="ppg-step" aria-label="Remove a strength session">−</button>
+              <span id="ppg-gym-added" style="font-size:14px;font-weight:500;color:var(--c-black);min-width:28px;text-align:center;font-variant-numeric:tabular-nums">+0</span>
+              <button id="ppg-gym-plus" class="ppg-step" aria-label="Add a strength session">+</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
       <button id="ppg-save" class="pp-overlay-btn-primary" style="width:100%">Set this goal</button>
       ${savedGoal ? `<button id="ppg-clear" style="width:100%;padding:10px 0 0;background:none;border:none;color:var(--c-muted);font-size:13px;cursor:pointer">Clear goal</button>` : ''}
     </div>
@@ -612,11 +700,21 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
   const sessCapEl = overlay.querySelector('#ppg-sess-cap') as HTMLElement | null;
   const minusBtn = overlay.querySelector('#ppg-minus') as HTMLButtonElement | null;
   const plusBtn = overlay.querySelector('#ppg-plus') as HTMLButtonElement | null;
+  const gymAddedEl = overlay.querySelector('#ppg-gym-added') as HTMLElement | null;
+  const gymCapEl = overlay.querySelector('#ppg-gym-cap') as HTMLElement | null;
+  const gymMinusBtn = overlay.querySelector('#ppg-gym-minus') as HTMLButtonElement | null;
+  const gymPlusBtn = overlay.querySelector('#ppg-gym-plus') as HTMLButtonElement | null;
 
   const recomputeChance = (): void => {
+    const gymCount = baseGym + addedGym;
+    const predicted = forecastForSessions(getState(), baseSessions + added, gymCount);
+    // Forecast lives with the sessions rows (cause → effect), not in the chance
+    // box, so it doesn't read as a competing number against the goal + hero. Both
+    // levers feed one combined forecast, so each row shows the same number.
+    if (sessCapEl) sessCapEl.textContent = `${baseRunsPerWeek + added} runs/week · forecast ${ft(predicted)}`;
+    if (gymCapEl) gymCapEl.textContent = `${gymCount} strength/week · forecast ${ft(predicted)}`;
     if (!chanceEl) return;
-    const predicted = forecastForSessions(getState(), baseSessions + added);
-    const pct = goalChanceForState(getState(), goalSec, added);
+    const pct = goalChanceForState(getState(), goalSec, added, gymCount);
     if (pct == null) {
       chanceEl.innerHTML = `<div style="font-size:12px;color:var(--c-faint)">Forecast unavailable.</div>`;
       return;
@@ -624,7 +722,7 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
     chanceEl.innerHTML = `
       <div style="display:flex;align-items:baseline;gap:8px">
         <span style="font-size:24px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums;line-height:1">${fmtProbPct(pct)}</span>
-        <span style="font-size:12px;color:var(--c-muted)">chance · forecast ${ft(predicted)}</span>
+        <span style="font-size:12px;color:var(--c-muted)">chance of ${ft(goalSec)}</span>
       </div>
       <span style="font-size:12px;font-weight:600;color:${liveTone(pct)}">${liveLabel(pct)}</span>
     `;
@@ -645,12 +743,18 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
 
   const syncSteppers = (): void => {
     if (addedEl) addedEl.textContent = `+${added}`;
-    if (sessCapEl) sessCapEl.textContent = `${baseRunsPerWeek + added} runs/week`;
+    // Caption text (runs/week + forecast) is set by recomputeChance, called
+    // right after this in the +/- handlers.
     if (minusBtn) minusBtn.disabled = added <= 0;
     if (plusBtn) plusBtn.disabled = added >= maxAdd;
+    if (gymAddedEl) gymAddedEl.textContent = `+${addedGym}`;
+    if (gymMinusBtn) gymMinusBtn.disabled = addedGym <= 0;
+    if (gymPlusBtn) gymPlusBtn.disabled = addedGym >= maxGymAdd;
   };
   minusBtn?.addEventListener('click', () => { if (added > 0) { added--; syncSteppers(); recomputeChance(); } });
   plusBtn?.addEventListener('click', () => { if (added < maxAdd) { added++; syncSteppers(); recomputeChance(); } });
+  gymMinusBtn?.addEventListener('click', () => { if (addedGym > 0) { addedGym--; syncSteppers(); recomputeChance(); } });
+  gymPlusBtn?.addEventListener('click', () => { if (addedGym < maxGymAdd) { addedGym++; syncSteppers(); recomputeChance(); } });
 
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -658,8 +762,8 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
 
   overlay.querySelector('#ppg-save')?.addEventListener('click', () => {
     // Regenerate first (initializeSimulator rewrites broad state), then pin the
-    // goal so the regen can't clobber it.
-    if (added > 0) bumpSessionsAndRegen(added);
+    // goal so the regen can't clobber it. One regen for both levers.
+    if (added > 0 || addedGym > 0) bumpSessionsAndGymAndRegen(added, addedGym);
     updateState({ raceGoalTimeSec: goalSec });
     saveState();
     close();

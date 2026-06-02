@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyTrainingHorizonAdjustment, calculateSkipPenalty, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import type { TrainingHorizonInput } from '@/types';
+import { STRENGTH_MAX_ECONOMY_GAIN_PCT, STRENGTH_TAU_WEEKS } from '@/constants/strength-constants';
 
 describe('Training Horizon', () => {
   describe('applyTrainingHorizonAdjustment', () => {
@@ -724,5 +725,92 @@ describe('getPlanPrescribedMeanWeeklyKm — ramp integration', () => {
     expect(getPlanPrescribedMeanWeeklyKm(0, MARATHON)).toBeNull();
     expect(getPlanPrescribedMeanWeeklyKm(null, MARATHON)).toBeNull();
     expect(getPlanPrescribedMeanWeeklyKm(undefined, MARATHON)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Strength → running-economy forecast contribution (Beattie & Blagrove 2018)
+// ---------------------------------------------------------------------------
+
+describe('Training Horizon — strength contribution', () => {
+  // Baseline VDOT 40 keeps the projection well clear of the marathon VDOT
+  // guardrails for an intermediate runner, so the strength delta is not masked
+  // by a barrier cap. taper_weeks:0 → weeks_eff = weeks_remaining.
+  const base: TrainingHorizonInput = {
+    baseline_vdot: 40,
+    target_distance: 'marathon',
+    weeks_remaining: 30,
+    sessions_per_week: 5,
+    runner_type: 'Balanced',
+    ability_band: 'intermediate',
+    experience_level: 'intermediate',
+    taper_weeks: 0,
+  };
+
+  const impr = (p: Partial<TrainingHorizonInput>) =>
+    applyTrainingHorizonAdjustment({ ...base, ...p }).improvement_pct;
+
+  it('0 (or omitted) strength sessions changes nothing — regression lock', () => {
+    const omitted = applyTrainingHorizonAdjustment(base);
+    const zero = applyTrainingHorizonAdjustment({ ...base, strength_sessions_per_week: 0 });
+    expect(zero.improvement_pct).toBe(omitted.improvement_pct);
+    expect(zero.vdot_gain).toBe(omitted.vdot_gain);
+  });
+
+  it('more planned strength sessions → monotonically faster projection', () => {
+    const none = impr({ strength_sessions_per_week: 0 });
+    const one = impr({ strength_sessions_per_week: 1 });
+    const two = impr({ strength_sessions_per_week: 2 });
+    expect(one).toBeGreaterThan(none);
+    expect(two).toBeGreaterThan(one);
+  });
+
+  it('the contribution scales with sessions and caps at 2/week', () => {
+    const none = impr({ strength_sessions_per_week: 0 });
+    const oneDelta = impr({ strength_sessions_per_week: 1 }) - none;
+    const twoDelta = impr({ strength_sessions_per_week: 2 }) - none;
+    const threeDelta = impr({ strength_sessions_per_week: 3 }) - none;
+    // 1/wk is half-dose of 2/wk (min(s/2,1)).
+    expect(oneDelta).toBeCloseTo(twoDelta / 2, 2);
+    // Dose saturates at 2/wk — a third session adds nothing.
+    expect(threeDelta).toBeCloseTo(twoDelta, 5);
+  });
+
+  it('at full adoption the contribution approaches the signed-off ceiling', () => {
+    const none = impr({ strength_sessions_per_week: 0 });
+    const full = impr({ strength_sessions_per_week: 2 });
+    const delta = full - none;
+    // 3% × (1 − e^(−30/10)) × 1 ≈ 2.85pp.
+    const expected = STRENGTH_MAX_ECONOMY_GAIN_PCT * (1 - Math.exp(-30 / STRENGTH_TAU_WEEKS));
+    expect(delta).toBeCloseTo(expected, 2);
+    expect(delta).toBeGreaterThan(0);
+    expect(delta).toBeLessThanOrEqual(STRENGTH_MAX_ECONOMY_GAIN_PCT);
+  });
+
+  it('the contribution saturates in plan length (less time → less gain)', () => {
+    const none6 = impr({ weeks_remaining: 6, strength_sessions_per_week: 0 });
+    const full6 = impr({ weeks_remaining: 6, strength_sessions_per_week: 2 });
+    const none30 = impr({ weeks_remaining: 30, strength_sessions_per_week: 0 });
+    const full30 = impr({ weeks_remaining: 30, strength_sessions_per_week: 2 });
+    const delta6 = full6 - none6;
+    const delta30 = full30 - none30;
+    expect(delta30).toBeGreaterThan(delta6);
+    // 6-week adoption is 1 − e^(−0.6) ≈ 0.45 of ceiling.
+    expect(delta6).toBeLessThan(STRENGTH_MAX_ECONOMY_GAIN_PCT * 0.6);
+  });
+
+  it('total improvement stays within the global cap even with strength', () => {
+    // Returning athlete + heavy dose + long block pushes the run gain high;
+    // strength is folded under the same max_gain_cap_pct (15%) clamp.
+    const hot = applyTrainingHorizonAdjustment({
+      ...base,
+      baseline_vdot: 50,
+      ability_band: 'advanced',
+      experience_level: 'returning',
+      sessions_per_week: 6,
+      weeks_remaining: 40,
+      strength_sessions_per_week: 2,
+    });
+    expect(hot.improvement_pct).toBeLessThanOrEqual(15 + 1e-9);
   });
 });

@@ -26,6 +26,10 @@ import { formatKm, formatPace } from '@/utils/format';
 import { getState } from '@/state/store';
 import { summariseHyroxSession, summariseHyroxRuns } from '@/calculations/hyrox-session-benchmarks';
 import type { SetRecord } from '@/guided/strength-controller';
+import type { TrainingPhase } from '@/types/training';
+import type { RirBucket } from '@/types/strength-log';
+import { suggestNextWeight } from '@/calculations/strength-progression';
+import { STRENGTH_MIN_INCREMENT_KG } from '@/constants/strength-constants';
 
 const OVERLAY_ID = 'guided-strength-overlay';
 
@@ -52,6 +56,20 @@ interface OverlayState {
   /** The currently-active run component, or null when the active set is a
    *  station / strength set. Cleared on every non-run setStart and on auto-fire. */
   activeRun: HyroxComponent | null;
+  // ── Strength weight capture ──
+  /** Per-exercise working weight + RIR the user entered, keyed by exerciseIndex.
+   *  Merged onto the SetRecords at finish. The controller stays weight-agnostic. */
+  exerciseInputs: Map<number, { weightKg?: number; rirBucket?: RirBucket }>;
+  /** Per-exercise pre-computed last/suggested weight, keyed by exerciseIndex. */
+  suggestions: Map<number, ExerciseSuggestion>;
+}
+
+interface ExerciseSuggestion {
+  liftKey: string;
+  lastWeightKg?: number;
+  lastReps?: string;
+  suggestedKg?: number;
+  bumped?: boolean;
 }
 
 let active: OverlayState | null = null;
@@ -73,6 +91,14 @@ export function openGuidedStrength(workout: Workout, opts: { onClose?: () => voi
     manualAdvance: session.manualAdvance === true,
   });
 
+  const suggestions = buildExerciseSuggestions(session, workout);
+  const exerciseInputs = new Map<number, { weightKg?: number; rirBucket?: RirBucket }>();
+  // Pre-seed the suggested weight so a user who lifts the suggestion gets it
+  // logged without touching the stepper. First-timers (no suggestion) stay blank.
+  for (const [exIdx, sug] of suggestions) {
+    if (sug.suggestedKg != null) exerciseInputs.set(exIdx, { weightKg: sug.suggestedKg });
+  }
+
   active = {
     workout,
     session,
@@ -86,6 +112,8 @@ export function openGuidedStrength(workout: Workout, opts: { onClose?: () => voi
     gpsState: 'off',
     runDistanceBaseline: 0,
     activeRun: null,
+    exerciseInputs,
+    suggestions,
   };
 
   mount();
@@ -225,6 +253,161 @@ function buildRunReadoutInner(delta: number, target: number, secPerKm: number): 
       <span style="color:var(--c-muted);font-size:11px">Pace</span>
       <span style="font-weight:600">${paceStr}</span>
     </div>`;
+}
+
+// ─── Strength weight capture (stepper + RIR) ─────────────────────────────────
+
+/**
+ * Pre-compute, per trackable exercise, the last working weight and the phase-
+ * aware suggested weight for this session. Suggestion holds in peak/taper/deload
+ * and only bumps in base/build when the last session left reps in reserve. The
+ * displayed lifts are loaded templates (injury sessions are bodyweight and carry
+ * no liftKey), so injuryKind is 'normal' here.
+ */
+function buildExerciseSuggestions(session: StrengthSession, workout: Workout): Map<number, ExerciseSuggestion> {
+  const s = getState();
+  const wk = s.wks?.[(s.w ?? 1) - 1];
+  const phase = (wk?.ph as TrainingPhase) ?? 'base';
+  const isDeload = phase === 'taper' || !!(wk as any)?.forceDeload || /\(deload\)/i.test(workout.n || '');
+  const lifts = s.strengthLog?.lifts ?? {};
+
+  const out = new Map<number, ExerciseSuggestion>();
+  const seen = new Set<number>();
+  for (const set of session.sets) {
+    if (seen.has(set.exerciseIndex)) continue;
+    seen.add(set.exerciseIndex);
+    if (!set.liftKey) continue;
+    const entry = lifts[set.liftKey];
+    if (!entry) { out.set(set.exerciseIndex, { liftKey: set.liftKey }); continue; }
+    const sug = suggestNextWeight({
+      lastWeightKg: entry.lastWeightKg,
+      lastRir: entry.lastRir,
+      phase,
+      isDeload,
+      injuryKind: 'normal',
+    });
+    out.set(set.exerciseIndex, {
+      liftKey: set.liftKey,
+      lastWeightKg: entry.lastWeightKg,
+      lastReps: entry.lastReps,
+      suggestedKg: sug.weightKg,
+      bumped: sug.changed,
+    });
+  }
+  return out;
+}
+
+/** "62.5kg" / "60kg" — drop a trailing .0. */
+function fmtKg(kg: number): string {
+  return `${trimNum(kg)}kg`;
+}
+function trimNum(n: number): string {
+  return (Math.round(n * 100) / 100).toString();
+}
+
+/**
+ * Weight stepper (first set) or read-only working-weight line (later sets), plus
+ * the one-tap RIR row on the final set of a trackable exercise. Returns '' for
+ * non-trackable movements and HYROX (no liftKey).
+ */
+function renderWeightBlock(cur: GuidedSet): string {
+  if (!active || !cur.liftKey) return '';
+  const exIdx = cur.exerciseIndex;
+  const input = active.exerciseInputs.get(exIdx);
+  const sug = active.suggestions.get(exIdx);
+  const curWeight = input?.weightKg;
+  const isFirstSet = cur.setIndex === 0;
+  const isLastSet = cur.setIndex === cur.setCount - 1;
+
+  // The stepper is editable on EVERY set, so the weight can be adjusted as you
+  // go (corrected mid-exercise, dropped for a back-off set, etc.). The rich
+  // last/suggested caption only shows on the first set; later sets get a short
+  // label so the control stays compact.
+  const caption = isFirstSet
+    ? (sug?.lastWeightKg
+        ? `Last time: ${fmtKg(sug.lastWeightKg)}${sug.lastReps ? ` × ${escapeHtml(sug.lastReps)}` : ''}${sug.bumped && sug.suggestedKg != null ? ` · suggested ${fmtKg(sug.suggestedKg)}` : ''}`
+        : 'First time. Enter the weight you use.')
+    : `Working weight · set ${cur.setIndex + 1} of ${cur.setCount}`;
+  const val = curWeight != null ? trimNum(curWeight) : '';
+  let html = `
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px">${caption}</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button id="gs-w-minus" aria-label="Decrease weight" style="width:44px;height:44px;flex-shrink:0;background:transparent;border:1px solid var(--c-border);border-radius:10px;font-size:20px;font-weight:600;color:#0F172A;cursor:pointer;font-family:var(--f)">−</button>
+          <div style="flex:1;display:flex;align-items:baseline;justify-content:center;gap:5px;border:1px solid var(--c-border);border-radius:10px;padding:8px 10px">
+            <input id="gs-w-input" inputmode="decimal" value="${val}" placeholder="—" aria-label="Working weight in kilograms" style="width:72px;text-align:right;border:none;background:transparent;font-size:22px;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums;font-family:var(--f);outline:none"/>
+            <span style="font-size:14px;color:var(--c-muted)">kg</span>
+          </div>
+          <button id="gs-w-plus" aria-label="Increase weight" style="width:44px;height:44px;flex-shrink:0;background:transparent;border:1px solid var(--c-border);border-radius:10px;font-size:20px;font-weight:600;color:#0F172A;cursor:pointer;font-family:var(--f)">+</button>
+        </div>
+      </div>`;
+
+  if (isLastSet) html += renderRirRow(exIdx, input?.rirBucket);
+  return html;
+}
+
+function renderRirRow(exIdx: number, selected: RirBucket | undefined): string {
+  const opts: Array<[RirBucket, string]> = [
+    ['reps-left', 'Had reps left'],
+    ['about-right', 'About right'],
+    ['barely', 'Barely'],
+  ];
+  const btns = opts.map(([k, label]) => {
+    const sel = selected === k;
+    return `<button class="gs-rir" data-rir="${k}" style="flex:1;padding:10px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#FAF9F6' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;font-family:var(--f);line-height:1.2">${label}</button>`;
+  }).join('');
+  return `
+    <div style="margin-bottom:16px" data-ex="${exIdx}">
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px">How did the last set feel?</div>
+      <div style="display:flex;gap:6px">${btns}</div>
+    </div>`;
+}
+
+/** Wire the stepper + RIR controls after renderActive sets innerHTML. */
+function wireWeightControls(cur: GuidedSet): void {
+  if (!active || !cur.liftKey) return;
+  const exIdx = cur.exerciseIndex;
+  const input = document.getElementById('gs-w-input') as HTMLInputElement | null;
+
+  const store = (patch: { weightKg?: number; rirBucket?: RirBucket }) => {
+    const prev = active!.exerciseInputs.get(exIdx) ?? {};
+    active!.exerciseInputs.set(exIdx, { ...prev, ...patch });
+  };
+  const readInput = (): number | undefined => {
+    if (!input) return undefined;
+    const n = parseFloat(input.value);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  input?.addEventListener('input', () => store({ weightKg: readInput() }));
+
+  const adjust = (delta: number) => {
+    const base = readInput() ?? 0;
+    const v = Math.max(0, Math.round((base + delta) * 100) / 100);
+    const out = v > 0 ? v : undefined;
+    if (input) input.value = out != null ? trimNum(out) : '';
+    store({ weightKg: out });
+  };
+  document.getElementById('gs-w-minus')?.addEventListener('click', () => adjust(-STRENGTH_MIN_INCREMENT_KG));
+  document.getElementById('gs-w-plus')?.addEventListener('click', () => adjust(STRENGTH_MIN_INCREMENT_KG));
+
+  // Restyle the RIR buttons in place rather than re-rendering the whole active
+  // screen — a full renderActive() would wipe a half-typed weight and flash the
+  // live clocks. Mirrors the in-place RPE restyle on the finish screen.
+  const restyleRir = (sel: RirBucket) => {
+    document.querySelectorAll<HTMLButtonElement>('.gs-rir').forEach(b => {
+      const isSel = b.dataset.rir === sel;
+      b.style.background = isSel ? '#0F172A' : 'transparent';
+      b.style.color = isSel ? '#FAF9F6' : '#0F172A';
+      b.style.borderColor = isSel ? '#0F172A' : 'var(--c-border)';
+    });
+  };
+  document.querySelectorAll<HTMLButtonElement>('.gs-rir').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.rir as RirBucket;
+      store({ rirBucket: k });
+      restyleRir(k);
+    });
+  });
 }
 
 // ─── Cue handler (DOM updates + voice + haptics) ─────────────────────────────
@@ -501,6 +684,7 @@ function renderActive(): void {
         <div style="font-size:24px;font-weight:700;color:#0F172A;line-height:1.2;letter-spacing:-0.01em;margin-bottom:6px">${escapeHtml(cur.exerciseName)}</div>
         ${cur.reps ? `<div style="font-size:14px;color:#0F172A;margin-bottom:8px">${escapeHtml(cur.reps)}</div>` : ''}
         ${cur.cue ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">${escapeHtml(cur.cue)}</div>` : ''}
+        ${renderWeightBlock(cur)}
         ${renderRunReadoutBlock()}
 
         <button id="gs-complete" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">
@@ -515,6 +699,7 @@ function renderActive(): void {
     ${shellClose()}
   `;
   wireCommonControls();
+  wireWeightControls(cur);
   document.getElementById('gs-complete')?.addEventListener('click', () => active?.controller.completeSet());
   document.getElementById('gs-finish')?.addEventListener('click', () => active?.controller.finish());
 }
@@ -742,8 +927,9 @@ function renderFinish(): void {
       ).join('');
       breakdownHtml = `<ul style="margin:0 0 22px;padding:0;list-style:none">${rows}</ul>`;
     } else {
-      // Strength: group by exercise, show "N sets · total". Keeps the summary
-      // tight when a session has 20+ sets.
+      // Strength: group by exercise, show the working weight · N sets · total
+      // time. Weight comes from the per-exercise inputs (records aren't merged
+      // until save). Keeps the summary tight when a session has 20+ sets.
       const byEx = new Map<number, { name: string; total: number; setCount: number }>();
       for (const r of records) {
         const cur = byEx.get(r.exerciseIndex) ?? { name: r.exerciseName, total: 0, setCount: 0 };
@@ -751,9 +937,11 @@ function renderFinish(): void {
         cur.setCount += 1;
         byEx.set(r.exerciseIndex, cur);
       }
-      const rows = Array.from(byEx.values()).map(g =>
-        `<li style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--c-border);font-size:13px"><span>${escapeHtml(g.name)}<span style="color:var(--c-muted);font-size:11px;margin-left:6px">${g.setCount} ${g.setCount === 1 ? 'set' : 'sets'}</span></span><span style="font-variant-numeric:tabular-nums;color:#0F172A;font-weight:600">${fmtElapsed(g.total)}</span></li>`
-      ).join('');
+      const rows = Array.from(byEx.entries()).map(([exIdx, g]) => {
+        const w = active!.exerciseInputs.get(exIdx)?.weightKg;
+        const weightLabel = w != null ? `<span style="color:#0F172A;font-weight:600">${fmtKg(w)}</span> · ` : '';
+        return `<li style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--c-border);font-size:13px"><span>${escapeHtml(g.name)}</span><span style="font-variant-numeric:tabular-nums;color:var(--c-muted);flex-shrink:0">${weightLabel}${g.setCount} ${g.setCount === 1 ? 'set' : 'sets'} · <span style="color:#0F172A;font-weight:600">${fmtElapsed(g.total)}</span></span></li>`;
+      }).join('');
       breakdownHtml = `<ul style="margin:0 0 22px;padding:0;list-style:none">${rows}</ul>`;
     }
   }
@@ -819,7 +1007,12 @@ function renderFinish(): void {
     if (!active) return;
     const rpe = active.finishRpe ?? initial;
     const wo = active.workout;
-    const result = completeStrengthSession(wo, { rpe, durationSec: elapsed, records });
+    // Merge the per-exercise weight + RIR the user entered onto the records.
+    const enriched = records.map(r => {
+      const inp = active!.exerciseInputs.get(r.exerciseIndex);
+      return inp ? { ...r, weightKg: inp.weightKg ?? r.weightKg, rirBucket: inp.rirBucket ?? r.rirBucket } : r;
+    });
+    const result = completeStrengthSession(wo, { rpe, durationSec: elapsed, records: enriched });
     closeOverlay();
     // Standard gym sessions get the muscle-group + HR recap (no-op for HYROX,
     // which has its own benchmark recap).

@@ -47,6 +47,7 @@ import type { AbilityBand } from '@/types/training';
 import { recentHoursByDiscipline, longestSessionByDiscipline } from './tri-volume-by-discipline';
 import { computePredictionInputs } from './prediction-inputs';
 import { collectRunsFromState } from './blended-fitness';
+import { getLongestRunSec } from './run-durability';
 import { getAbilityBand as getRunAbilityBandFromVdot } from './fatigue';
 
 // Local band classifiers. Duplicated rather than imported to avoid a
@@ -172,7 +173,14 @@ export function computeDisciplineReadiness(
     readWeeklyVolume(state, discipline);
 
   // ─── Specific peak prep (longest single session in last 12 weeks) ─────
-  const longestSec = longestSessionByDiscipline(state, READINESS_LONGEST_WINDOW_WEEKS)[discipline];
+  // Run uses `getLongestRunSec` (same source as the run forecast — reads
+  // garminActuals AND the persisted onboardingRunHistory), so the readiness
+  // longest matches the forecast's and survives a fresh sign-in. Swim/bike use
+  // `longestSessionByDiscipline`, which now tops up from the persisted
+  // recentDisciplineActivity summary for the same sign-in resilience.
+  const longestSec = discipline === 'run'
+    ? getLongestRunSec(state, READINESS_LONGEST_WINDOW_WEEKS)
+    : longestSessionByDiscipline(state, READINESS_LONGEST_WINDOW_WEEKS)[discipline];
   const longestSessionActualHours = longestSec / 3600;
 
   // ─── Ratios (cap each at 1.2. Over-preparing doesn't keep boosting) ──

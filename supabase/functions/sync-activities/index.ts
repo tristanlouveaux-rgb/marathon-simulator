@@ -17,6 +17,16 @@ Deno.serve(async (req) => {
             { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
         )
 
+        // Scope every read to the calling user. `garmin_activities` has RLS
+        // disabled, so without an explicit user_id filter these selects return
+        // EVERY user's rows (cross-user leak — see docs/DATA_ISOLATION_AUDIT.md).
+        const { data: { user }, error: userErr } = await supabaseClient.auth.getUser()
+        if (userErr || !user) {
+            return new Response(JSON.stringify({ error: 'unauthorized' }), {
+                status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            })
+        }
+
         const { since } = await req.json()
         const startDate = since ? new Date(since) : new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
 
@@ -24,6 +34,7 @@ Deno.serve(async (req) => {
         const { data, error } = await supabaseClient
             .from('garmin_activities')
             .select('garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, aerobic_effect, anaerobic_effect, garmin_rpe, itrimp, hr_zones, polyline')
+            .eq('user_id', user.id)
             .gte('start_time', startDate.toISOString())
             .order('start_time', { ascending: false })
 
@@ -38,6 +49,7 @@ Deno.serve(async (req) => {
                 const { data: extra } = await supabaseClient
                     .from('garmin_activities')
                     .select('garmin_id, km_splits, elevation_gain_m, hr_drift, ambient_temp_c')
+                    .eq('user_id', user.id)
                     .in('garmin_id', garminIds)
                 for (const r of (extra ?? [])) {
                     extraData[r.garmin_id] = r

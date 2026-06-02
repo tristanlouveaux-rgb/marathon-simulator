@@ -6,6 +6,57 @@ New entries are added at the top. When modifying a model, update its entry rathe
 
 ---
 
+## §BB — Injury cross-training substitute: intensity scales with capacity, duration does not (2026-06-02)
+
+**Where it sits**: tracking → planning (it prescribes a session), injury subsystem. Suggestion-only.
+
+**Model**: when an injury frees up aerobic training time, the cross-training substitute (`buildAerobicOffer`, `src/calculations/capability-substitution.ts`) replaces the lost minutes **1:1** but prescribes intensity in proportion to the substitute discipline's loadability:
+
+```
+prescribedRPE = max(1, round(baseRPE_by_phase × capacity / 100))
+duration      = freed aerobic minutes      (unchanged by capacity)
+```
+
+`baseRPE_by_phase` is the existing submaximal injury-phase table (`RPE_BY_PHASE`: acute 3, rehab 4, return 4, graduated 5). `capacity` is the 0–100 loadability of the chosen discipline (`getDisciplineCapacity`).
+
+**Why duration is held and intensity is scaled (not the reverse)**: the purpose of the substitute is aerobic-engine maintenance during a layoff. Detraining of VO2max and capillary/mitochondrial adaptations is driven by **time at an aerobic stimulus**; cutting duration directly erodes the thing the session exists to protect (Mujika & Padilla 2000, training-cessation review — aerobic decay is steep when volume is withdrawn). A compromised joint or muscle tolerates *load/intensity*, not *time per se*, so the safe lever is effort: a 50%-capacity bike holds the full minutes at roughly half the RPE. This keeps the maintenance dose while respecting that the area is only partly ready to bear load. (Endorsed by Tristan, 2026-06-02, correcting an initial duration-scaling proposal.)
+
+**Why linear in capacity**: `capacity/100` is the same continuous downmix the plan engines already apply to injured-discipline *volume* (`duration × cap/100`, §AN). Reusing it for intensity keeps one transform across the subsystem and introduces no new constant. It is a deliberate simplification: RPE-vs-load is not perfectly linear, but capacity is itself a coarse self-report, so a higher-order curve would be false precision.
+
+**Allow-list semantics**: a set `preferredCrossTraining` is treated as a hard allow-list, not a tie-break. If the athlete named the one cross-training sport they have access to (e.g. swimming) and the injury blocks it, no aerobic substitute is offered rather than defaulting to a bike or erg they may not own. An unknown preference string falls through to the capacity ladder (bike → row erg → swim). Shared across running rehab and tri/HYROX capability offers via `pickAerobicSubstitute`.
+
+**Limitations**:
+- Capacity is a self-reported snapshot; the RPE it produces is only as good as the slider.
+- The substitute's *load contribution* to weekly TSS is not modelled here (the offer is opt-in and adhoc); it is intentionally a maintenance prescription, not a load-balanced session.
+- No equipment model beyond `preferredCrossTraining`; a user with no pool and no preference set can still be offered a swim if bike and arms are both blocked.
+
+---
+
+## §BA — No-race forward projection ("if you hold the plan") (2026-06-02)
+
+The no-target-race forecast drill-down now shows a dashed forward projection of finish time at a 4 / 8 / 12-week horizon (`getStandardForecastProjection` in `blended-fitness.ts`). It reuses the existing VDOT-gain horizon model (`applyTrainingHorizonAdjustment`, the saturating-logistic model documented in the training-horizon entries and §AH/§AI), called once per week step `w = 1..N`:
+
+```
+projVdot(w) = anchorVdot + max(0, applyTrainingHorizonAdjustment({
+  baseline_vdot: anchorVdot, target_distance: dist, weeks_remaining: w,
+  sessions_per_week: s.rw, runner_type: s.typ, ability_band, taper_weeks: 0,
+  weekly_volume_km: getPlanPrescribedMeanWeeklyKm(s.rw, dist), hm_pb_seconds, lt_pace_sec_per_km
+}).vdot_gain)
+projTime(w)  = tv(projVdot(w), distKm)            // raw VDOT-derived, lower = faster
+```
+
+**Why each choice is defensible:**
+- **Same model as the targeted forecast.** No new constants. The horizon model is already calibrated (Daniels/Pfitzinger periodised plans; saturating gain that caps long-horizon improvement). Per-week sampling gives a faithful (non-linear) curve rather than a straight line to the endpoint, satisfying "visualisations derived from the real computation."
+- **`taper_weeks: 0`.** There is no race to taper into. The taper bonus models fitness consolidation as load drops before race day; an athlete who keeps training is not tapering, so applying it would overstate the gain. This is the one input that differs from the race-day path (`calculateLiveForecast` hardcodes `TAPER_NOMINAL`, so we call `applyTrainingHorizonAdjustment` directly).
+- **Dose = plan-prescribed weekly volume** (`getPlanPrescribedMeanWeeklyKm(s.rw, dist)` = sessions × `REF_KM_PER_SESSION` × build factor), the same dose input the targeted forecast uses (§AI). **Revised 2026-06-02 from "recent weekly km".** Recent km was wrong: a thin-history user reads as near-zero volume, which trips `applyTrainingHorizonAdjustment`'s `undertrain_penalty` at full strength (the penalty is volume-gated, not week-scaled). For half/marathon (high `min_sessions`) the penalty exceeded the gain, so the projection showed the athlete getting *slower* over 12 weeks, with a discontinuity at week 1 (w=0 is pinned to the hero, w=1 eats the full penalty → "falls off a cliff"). "If you hold the plan" means training at the plan's dose, so plan-prescribed volume is both more correct and clears the spurious penalty.
+- **Gain floored at 0** (`vdot_gain = max(0, modelled)`). Holding a structured plan is, at minimum, maintenance; a projected decline only arises from an undertrain assumption that contradicts the premise, and showing a runner getting slower *for training* is indefensible UX. The floor guarantees a monotonic non-worsening curve for every user and distance (the "should scale for every user" requirement). It floors a model output, not an invented number.
+- **Anchor = current effective VDOT** (`s.v + rpeAdj + physioAdj`), identical to what `recordVdotHistoryPoint` stores.
+- **Display anchored on the adjusted hero.** The model computes on the raw VDOT scale, but the chart scales the whole series multiplicatively so the "now" point equals the predicted-finish hero the user already sees (`scale = heroSec / tv(anchorVdot)`). This preserves the modelled fractional gain while making the left end of the projection read identically to the headline — fixes the confusion of a raw-scale time sitting next to the adjusted hero. Both endpoints are labelled (Now → +N wk). Durability/calibration/shoe adjustments are baked into the hero anchor, not re-modelled per projected week (the gain is a VDOT-fitness gain; a change in the long-run/durability gap is a separate lever, surfaced by the durability hint, not this projection).
+
+**Limitations (called out):** the horizon model assumes consistent training at the current dose with no injury/illness/detraining interruption; it does not model individual responder variation, plateau from a stale stimulus, or the ceiling a masters athlete faces. Gating: returns null (projection hidden) when there is no VDOT or `s.rw ≤ 0` — a just-track user with no plan has nothing to project along, and we do not invent a dose. Linear-per-week sampling of a continuous model is a discretisation, not a separate assumption. Tests: `blended-fitness.test.ts` (point count, monotonic improvement, longer-horizon-faster, null gating).
+
+---
+
 ## §AN — Bike mass / CdA coupling and the weight-input clamp (2026-06-01)
 
 **Side of the line**: tracking (race-time prediction input).
@@ -6342,6 +6393,11 @@ A `full` station is debited by the *worse* of its upper/lower build weeks (`min`
 - **Swim** (`SWIM_INTENSITY_LADDER`): technique +18 → endurance +6 → CSS 0 → speed −6 sec/100m relative to critical swim speed. Target pace = `CSS + offset`. Mirrors the `SWIM_OPTIONS` picker.
 The chosen rung persists as `Workout.intensityLevel` and the target is recomputed live from the athlete's current FTP/CSS (so it tracks benchmark improvement; nothing is baked into the description, keeping duration scaling clean). **No new constants and no fabricated RPE** — for cycling power is the primary objective signal (Coggan & Allen 2019; CLAUDE.md bike-effort rule), so the watt/pace target *is* the prescription. Injury aerobic-maintenance sessions are allowed to step harder (Tristan's call — athlete intent over the Z2 default). Tests: `src/constants/intensity-ladder.test.ts` (7).
 
+**Addendum (2026-06-02) — Adjust feeds training load; forecast stays plan-neutral.** The Harder/Easier (and duration) adjustment now flows into the session's *training load*, but deliberately NOT into the forecast directly. The principle: a planned adjustment is **intent**, not a tracked outcome; pre-crediting fitness from a slider would be phantom fitness and trivially gameable. So:
+- **Planned load (planning side):** a bike/swim rung recomputes the session's `aerobic`/`anaerobic` via the existing per-kind TSS/min helpers (`loadForBike`/`loadForSwim`); a duration change scales load proportionally (load ∝ duration at fixed intensity — exact). This only changes what the *plan* shows, not the prediction.
+- **Realized load (tracking side):** tri/cycling per-discipline CTL is rebuilt from completed activities. A session completed via a synced activity already contributes its **real** load (harder actual effort → more iTRIMP → more CTL → faster forecast) with no slider involvement — reality is measured, not assumed. A session marked done **manually** (no synced activity) now deposits its *planned* load as a synthetic CTL contribution (`iTrimp = TSS × 150`, fitness-only, excluded from CSS/FTP derivation), guarded so any real matched activity overrides it (Strava-canonical, no double-count).
+- **Why this is defensible / honest:** the forecast moves only on accumulated CTL, which moves only on completed load. So "train harder and do it → better forecast; train easier and do it → worse" holds, but the consequence is a *fitness* outcome, never an *adherence* penalty (a deliberately-chosen easier session is still "done, not missed" per the original §AR rationale). **Limitation flagged:** a single adjusted session is a rounding error on a 42-day-tau CTL; the effect is only material as a sustained pattern (correct behaviour). Manual-done load is self-reported (RPE-gated completion, no device verification) and is the weakest load signal — it is always superseded by a real activity. Tests: `manual-done-tri-load.test.ts` (6).
+
 ---
 
 ## §AS — Post-holiday detraining + discipline-aware comeback bridge (2026-06-01)
@@ -6443,3 +6499,134 @@ In the common case the cone centres exactly on the displayed forecast (so "goal 
 **Third part — "what-if" session adds (`forecastOverrideSec`).** Anchoring to the *stored* `forecastTime` broke the goal overlay's "add a session" preview: the displayed forecast caption recomputes for the hypothetical session count (gets faster), but the sim stayed pinned to the base `forecastTime`, so the chance barely moved — two forecasts that disagree on screen. Added an optional `forecastOverrideSec` param: when the caller is simulating a hypothetical (N extra sessions), it passes the forecast it computed for that count, and the cone centres there. The race-forecast page passes nothing and uses the stored forecast as above. Effect (marathon, goal 3:20:00): +0 sess forecast 3:24:22 / chance 24%, +1 sess 3:22:19 / 37%, +2 sess 3:20:46 / 46% — forecast and chance now move together.
 
 **Tests.** `race-forecast-simulation.test.ts` (6): PB-divergent fallback — cone improves from the blend (no regression), goal of the headline is sane (>0.4), a faster stretch still a tail outcome (<0.25); coherent case — goal == displayed forecast reads ~50% (0.42–0.58), race-day p50 equals the displayed forecast within 30s; override case — a faster forecast override raises the goal chance by >10pp.
+
+---
+
+## §AW — Strength weight tracking: working-weight memory, RIR autoregulation, phase-gated progression, Epley est-1RM (2026-06-01)
+
+**Context / side of the line.** Two sides. The **working-weight memory** and **estimated-1RM** are *tracking* (what the athlete lifted, and a derived strength benchmark). The **next-weight suggestion** is *planning* (what to do next), and it is deliberately subordinate to the endurance plan: strength here serves running/triathlon performance and injury resilience, not maximal hypertrophy. So progression is gated by the run/tri periodisation, not run as an independent linear-progression program.
+
+**Estimated 1RM — Epley (1957).** `1RM = w · (1 + reps/30)`. Standard, widely used, accurate to within a few percent for sets up to ~10 reps. We cap the rep term at `EPLEY_REP_CAP = 12` (`strength-constants.ts`) because the linear approximation degrades above ~10–12 reps (the true load–rep curve is convex), so a high-rep accessory set can't inflate the estimate. Reps are read as the lowest integer in the rep string ("8 each leg" → 8). Defensible as the *relative* progression signal even where the absolute number is approximate — what matters for the trend chart and PR detection is consistency, not a tested 1RM.
+
+**RIR autoregulation (Helms et al. 2016; Zourdos et al. 2016).** Reps-in-reserve is the validated cue for whether load can rise. We collect a coarse one-tap bucket after the final set — "had reps left" (≈ ≥2 RIR), "about right" (≈ 1 RIR), "barely" (≈ 0 RIR). Only "had reps left" triggers a bump. This is the lowest-friction faithful proxy: a single tap, no number entry, mapped to the established ≥2-RIR threshold for progression. RPE (the inverse) is already captured at session level; RIR is captured per lift because the progression decision is per lift.
+
+**Increment — 2.5%, plate-rounded (Tristan-endorsed, 2026-06-01).** `STRENGTH_PROGRESSION_PCT = 0.025`. A conservative linear step appropriate for an athlete whose strength work is supportive, not the primary stressor — it avoids the joint/tendon load spikes a 5–10% jump would add on top of running volume. Rounded to `STRENGTH_MIN_INCREMENT_KG = 2.5` (1.25kg plates per side) and never smaller than one plate, so a light lift still progresses. The 2.5% (vs a fixed kg) scales the step with how strong the athlete already is, which is the right shape: a 40kg lift and a 140kg lift should not get the same absolute jump.
+
+**Phase gating (Pfitzinger/Daniels periodisation, mirrored from the plan engine).** `suggestNextWeight` only bumps in **base/build**; **peak** holds (maintenance loading — keep the pattern, add no fatigue); **taper/deload** holds (the plan already cuts strength *volume* via the gym session-count drop in `gym.ts`, so we don't also strip *intensity* — holding intensity while cutting volume is the standard taper for strength qualities); **injury** suppresses (injury sessions are bodyweight/submaximal anyway and carry no trackable lifts). We deliberately do **not** auto-*reduce* weight in taper, which would need a fabricated reduction constant; holding is the defensible, no-made-up-numbers choice.
+
+**PR threshold.** `STRENGTH_PR_THRESHOLD_KG = 2.5` — one plate of estimated-1RM improvement counts as a celebrated PR. Mirrors `MARKER_BUMP_THRESHOLD_*` for FTP/CSS/VDOT (notify-once: compare current vs last-notified snapshot, surface improvements only, snapshot after). Proposed pending Tristan's confirmation.
+
+**Trackability (not a model — a lookup over the finite vocabulary).** `isWeightTrackable` accepts a movement only when it is a loadable pattern (squat/deadlift/hinge/thrust/bridge/split-squat/step-up/lunge/calf-raise) AND carries an actual load marker ("@X% 1RM" or an implement word like goblet/trap-bar/kettlebell). This excludes plyometrics (jump squat, bounds — power, not load), isometric core (plank, dead bug, pallof), and the beginner/novice bodyweight variants of the same movements. Tested exhaustively against every exercise string in `gym.ts` and `injury-strength.ts`.
+
+**Known limitations.** (1) Epley is a point estimate; we don't model the individual load–rep curve. (2) RIR self-report is coarse and athlete-calibrated. (3) The estimated-1RM "benchmark" is per lift and not cross-validated against an actual 1RM test (we never ask the athlete to max out — by design). (4) Bare "Squat @75% 1RM" (peak maintenance) keys to `squat`, distinct from `back-squat`, so peak-maintenance weights don't carry into the base back-squat memory — acceptable since peak holds and is a different stimulus.
+
+## §AX — Easy-run floor + consolidation: fewer longer runs over many fragments (2026-06-02)
+
+**Side of the line.** Planning. This is `applyHoursBudget` deciding how to spend a fixed weekly volume budget across run-days. It does not touch tracking, prediction, or quality-session prescription.
+
+**The problem it fixes.** The archetype-gated ramp (`§` athlete-archetype) anchors week 1 of a plan near the athlete's current volume (e.g. 14 km/wk → ~14.7 km), converted to a minute budget at the athlete's easy pace. For a fit-but-low-volume athlete (real case: VDOT 52, 3:22-marathon forecast, 14 km/wk), the untrimmable quality session and the long run consume nearly the whole budget, so the old logic shrank every easy run to a 15-min soft floor and overflowed the budget anyway. A 15-min easy run is a non-dose.
+
+**The model.** A single floor, `EASY_FLOOR_MIN = 25` min. When the budget cannot give every planned easy run-day at least the floor, consolidate: choose the **fewest** easy run-days such that each survivor lands in `[EASY_FLOOR_MIN, naturalEasyMin]`, drop the rest, and split the easy budget evenly across the survivors. `finalCount = min(desired, ceil(easyBudget/natural), floor(easyBudget/EASY_FLOOR_MIN))`. When `easyBudget < EASY_FLOOR_MIN`, we keep exactly **one** easy run at the floor (never zero) and accept the overflow — a week needs some dedicated easy aerobic running, not just a long run.
+
+**Why fewer-longer beats many-shorter at equal volume.** Aerobic adaptation to easy running is driven by *continuous time at low intensity*: mitochondrial biogenesis, capillarisation, fat-oxidation enzyme expression, and connective-tissue conditioning under sustained load (Holloszy & Coyle 1984; Hawley et al. 2018). These responses are non-linear near the low end — a session must clear a minimum duration before the stimulus is meaningful relative to the fixed warm-up/neuromuscular-onset phase. Below ~20-25 min, an easy run is mostly that onset phase. Splitting a small budget into many sub-25-min runs therefore delivers less aerobic stimulus than the same minutes in fewer longer runs, while adding per-session overhead and more running-start tissue-loading events.
+
+**The constant.** `EASY_MIN = 25` is a pragmatic floor endorsed by Tristan (2026-06-02), not a literature-derived breakpoint. It sits at the low end of the conventional "an easy run should be at least 20-30 min to be worth prescribing" coaching guideline. There is no upper target: easy runs are sized by `easyRunMinutes` (the natural length, ~46 min for an intermediate marathoner) and only ever shrunk toward the floor, so the rule never *caps* a run at 25-30 min.
+
+**Volume-aware quality cap + base-VO2 suppression (2026-06-02, same day, after seeing it rendered).** The consolidation alone exposed that the dominant fault was *upstream*: `qualityCap` is volume- and phase-blind (intermediate → 2 quality sessions in every week, including week 1), so the 14 km/wk week was prescribing Threshold + VO2, which ate the whole budget and pushed all easy running out. Three coordinated, budget-driven changes fix the *shape* of the week across the entire plan arc:
+
+- **Volume-aware quality cap** (`plan_engine.ts`, `planWeekSessions`): `maxQuality = clamp(floor((budget − (LONG_SOFT_FLOOR_MIN + EASY_FLOOR_MIN)) / approxQualityMin), 1, abilityCap)`, with `approxQualityMin = thresholdWorkMinutes(...) + 20` (a real threshold-session cost, not an invented number). A quality session only earns its slot if the budget can *also* seat a long run and one easy run. Low-volume weeks (early ramp, deload, taper) carry one quality session; the count climbs to the ability cap as the budget ramps. The budget ramps faster in a short plan, so the cap lifts sooner there — no plan-length special-casing.
+- **No VO2 in base** (`priority` filters `vo2` when `phase === 'base'`): base quality collapses to threshold/tempo (marathon-pace and float already return 0 work-minutes in base). VO2 enters in build/peak.
+- **Keep ≥ 1 easy run** (above): consolidation never reaches zero easy days.
+
+**Science basis (three principles).** (1) *Tissue tolerance lags cardiovascular fitness* — running injury tracks accumulated mechanical-load history (bone remodelling, tendon collagen turnover), which adapts slower than VO2max; a high VO2max predicts fast improvement, not licence to skip the volume ramp (Bertelsen et al. 2017; Nielsen et al. on volume progression). (2) *Progressive overload / ACWR* — Gabbett (2016): keep acute:chronic load ≈ 0.8–1.3, risk rises past ~1.5; two intervals + an easy run on a 14 km base is ~1.8 (spike), one quality + long + one easy lands ~1.2. (Caveat: ACWR's exact breakpoints are contested — Impellizzeri et al. 2019/2020 — but "ramp gently" is robust.) (3) *Polarised distribution* — Seiler & Kjerland (2006), Seiler (2010), Stöggl & Sperlich (2014): ~80/20 easy:hard by session; two quality in a 3–4 session week inverts it. Base-first periodisation (Daniels phases; Bompa) ties them together: a 40-week runway is the ideal case to defer VO2 to build/peak.
+
+**Limitations / tradeoffs.** (1) Consolidation reduces run *frequency* at low volume, and frequency has its own (smaller) benefits for economy and habit (Daniels); accepted only where the alternative is fragments, and it returns as the budget ramps. (2) The long run is trimmed (40/30 floors) *after* easy consolidation; at the lowest volume the long run can be no longer than the untrimmable quality session — unavoidable at ~15 km/wk, and it pulls ahead as volume grows. (3) `EASY_FLOOR_MIN = 25` and keep-one-easy are pragmatic and Tristan-endorsed; the 80/20 evidence is strongest for trained athletes (this athlete is, VDOT 52). (4) The quality cap uses a representative threshold cost per quality session, so a mixed threshold+VO2 week is mildly under-estimated and the cap errs slightly conservative — acceptable, it errs toward protecting easy volume.
+
+---
+
+## §AY — On-demand gym generator: goal-driven rep schemes (Strength / Muscle / General) (2026-06-02)
+
+**Context.** The on-demand gym generator lets a user pick a Focus (Running strength / Lower / Upper / Full / HYROX) and, for the strength focuses, a Goal that sets the rep scheme. Running-strength + Lower keep their existing running-specific templates; Upper + Full are composed from a goal-driven scheme (`GYM_GOAL_SCHEMES`, `strength-constants.ts`). Strength here serves the endurance athlete, so loads sit at the bottom of each band, not at a powerlifting max (same framing as §AW).
+
+**The schemes (PROPOSED, endorsed by Tristan 2026-06-02):**
+
+| Goal | Sets × reps | %1RM | Rest (traditional) | Rest (circuit) |
+|------|-------------|------|--------------------|----------------|
+| Strength | 4 × 5 | 80% | 180s | 90s |
+| Muscle (hypertrophy) | 3 × 10 | 70% | 75s | 45s |
+| General | 3 × 12 | 60% | 60s | 40s |
+
+**Why each is defensible:**
+- **Strength 4×5 @80%.** The ACSM Position Stand (2009, *Med Sci Sports Exerc* 41:687) prescribes ≥80–85% 1RM at 1–6 reps for maximal strength; the NSCA *Essentials* gives 2–6 reps, 2–5 min rest. de Salles et al. (2009, *Sports Med* 39:765) found 3–5 min rest preserves load across sets for strength work. We take the **bottom** of the strength band (80%, 5 reps) and 3 min rest as the supportive-athlete compromise: real strength stimulus without the CNS cost and next-day leg fatigue a true 1–3RM would add on top of run training.
+- **Muscle 3×10 @70%.** Schoenfeld's hypertrophy meta-analyses (2016 rest-interval RCT; 2017 *J Strength Cond Res* volume meta) show 6–12 RM with ≥60s rest drives hypertrophy, and weekly volume is the primary lever. 3×10 @70% with 60–90s rest is squarely in that window.
+- **General 3×12 @60%.** ACSM (2009) general muscular-fitness guidance is 8–15 reps at moderate load; the lighter 60% / 12 reps minimises eccentric joint load (kinder to a runner's legs) while still driving adaptation.
+
+**Circuit rests** are a compressed version of each (90/45/40s) — the v1 "circuit" style is **rest-duration + a name suffix only** ("Upper Body (circuit)"); it does NOT yet interleave exercises into supersets in the guided overlay (deferred). Schoenfeld & Contreras (2021) support circuit-style training reaching similar hypertrophy at lower perceived effort, which is the rationale for offering it.
+
+**Known limitations.** (1) These are population defaults, not individualised to training age. (2) %1RM presumes the user has a working-weight history (§AW) to anchor against; first-time lifts just take the entered weight. (3) The strength/general loads deliberately under-prescribe vs a dedicated lifter — by design, strength is subordinate to the run/tri plan. (4) v1 ships one ability tier for Upper/Full (bodyweight fallbacks for beginners); novice/beginner-specific tiers are deferred.
+
+**Generator time + intensity controls (2026-06-02).** The on-demand gym preview offers a time target (20/30/45/60 min) and an easier/standard/harder intensity notch. Time scales session size: ≤20 min → 3 exercises and one fewer working set, 30 → 4, 45 → 5 (full), 60 → 5 + an extra set (compounds lead, accessories/core trail when trimmed). Intensity shifts every `@X% 1RM` load by `GYM_INTENSITY_PCT_STEP = ±5` percentage points (clamped to [40, 90]) plus an RPE ±1; HYROX maps the notch to the station band (novice / intermediate / advanced). The ±5% is a conventional single intensity step (PROPOSED, confirm with Tristan); the exercise-count / set-delta mapping is a UI session-sizing heuristic, not a physiological constant. The injury-adapted rehab session is never tuned (controls hidden) and HYROX is suppressed entirely under injury (it combines running with loaded stations and can't be made injury-safe).
+
+## §AZ — Triathlon onboarding session lever: per-discipline "add training" → forecast (2026-06-02)
+
+**What it is.** The triathlon equivalent of running's onboarding "add quality sessions" control (§AV / `plan-preview-v2`). On the post-`initializing` forecast step, the athlete can add training **per discipline** (swim / bike / run) and watch the projected finish + goal probability move; Continue commits the chosen volume into the real plan.
+
+**Why per-discipline rather than a single "+1 session".** Running's plan is parameterised by an integer `runsPerWeek`, so "+1 session" is well-defined. Triathlon's generator (`plan_engine.triathlon.ts`) is **hours-budget-driven**: a weekly total (`timeAvailableHoursPerWeek`) is split across disciplines (`volumeSplit`), and each discipline's session count is `countSessions(disciplineHours, avgSessionHours, cap)`. There is no single "session" — a swim and a long ride are very different doses. So the lever operates on the discipline the athlete chooses.
+
+**No invented constants.** "+1 session in discipline D" is translated into D's representative session length, `TRI_AVG_SESSION_HOURS = { swim: 0.75, bike: 1.3, run: 0.9 }` h — the *same* constants the generator already divides by to decide session counts (lifted from inline literals to named exports this session; single source). The per-discipline cap (`TRI_MAX_SESSIONS_PER_DISCIPLINE = 3`) bounds the stepper. `computeBumpedVolume` sets D's hours to `targetSessions × avg`, but never below D's existing budget (a split can already over-allocate beyond `cap × avg`, so we take the max — a discipline already at cap is a no-op), then re-derives the split from the new absolute hours so the total grows only by the added time.
+
+**How the forecast actually moves (the defensible part).** The added volume flows into the projection through the existing per-discipline horizon model: `predictTriathlonRace` reads `plannedSessionsPerWeekByDiscipline` / `plannedHoursPerWeekByDiscipline` off the regenerated `triWorkouts`, and the horizon model (§ triathlon horizon) discounts each discipline's fitness gain independently (diminishing returns, confidence, build weeks). Consequently adding to a *weak* discipline moves the finish more than adding to a *saturated* one — emergent from the model, not a hand-tuned weighting. The preview is exact because it is the same code path as the commit: clone state → set new split + hours → `generateTriathlonPlan` → `predictTriathlonRace` (and `runTriForecastSim` for the goal chance). The clone carries the historical activity log over by week index so *current* fitness is unchanged; only the *projection* responds to the delta.
+
+**Limitations.** (1) The session-count math uses peak hours (`timeAvailableHoursPerWeek`); the generator scales weekly hours by phase, so the realised per-week session count varies — the displayed forecast is always the true regenerated value, so this only affects the stepper's "N sessions/week" label, not the number. (2) The clone-regen preview assumes a stable activity log; at onboarding the log is typically empty (exact), and for a running→tri switch it is carried over (coherent). (3) `weekdayHoursPerWeek` is not re-derived on commit, so a large added bump leans on the scheduler's per-day caps to place overflow.
+
+**Why the 3-session cap is kept (not raised) — device feedback 2026-06-02.** A real onboarding session surfaced that at a typical 70.3 hours budget the generator already places bike and run at the 3-session cap, leaving only swim addable. The cap is **deliberately retained**: (a) there is no physiological threshold where 3 sessions/discipline is safe and a 4th is not — injury/overtraining risk is governed by the *rate* of load increase relative to recent training (acute:chronic workload ratio, Gabbett 2016), not raw session count; (b) but adding frequency a user does not *currently* perform immediately raises the chronic-load baseline the plan must then honour, the ACWR-spike risk, and this matters most at onboarding where the baseline is being set; (c) running is the highest-impact, most overuse-injury-prone discipline (rapid run-frequency increases are the best-evidenced injury driver), so frequency restraint there is the most defensible part of the cap; (d) beyond ~3 quality sessions/discipline, endurance adaptation for an age-group athlete comes from session *duration* and intensity distribution (Seiler 80/20), not extra sessions. The true volume lever (longer sessions over the block, ramped by the phase model) is left to plan generation; the UI explains this on capped rows ("the plan builds volume over the block") rather than exposing an unbounded onboarding volume crank.
+
+**Hero likely-range.** The forecast hero shows the Monte Carlo interquartile band (`runTriForecastSim` raceDay p25–p75) as "Likely {fast} to {slow} on race day" so the simulation is visible without a goal; the goal-probability MC still surfaces only once a goal is set (matching running onboarding). Range is hidden when the cone is narrower than 60 s (e.g. race week).
+
+---
+
+## §BA — Rotating "Running strength" pool (categorised, evidence-graded) (2026-06-02)
+
+**Why a pool, not a goal scheme.** Running strength is multi-modal — heavy compounds (3-5 reps @80%), high-rep eccentric calf (15-20), timed isometric holds, low-rep explosive plyometrics, tibialis/foot drills. A single goal rep-scheme (the Upper/Lower/Full model in §AY) cannot express that, so each exercise in `src/workouts/running-pool.ts` carries its OWN prescription (sets/reps/load/rest). A session is BALANCED (one per category, in priority order), the variant within each category ROTATES by week (`slotIndex`, mirroring HYROX `pickStations`), and the number of categories scales with the user's available time (breadth, not just sets). On-demand generator only; the plan engine's auto-gym keeps its phase templates (Phase 2).
+
+**Categories + evidence.**
+- **Max strength** (heavy compound, leads every session): heavy resistance (>80% 1RM) improves running economy — Beattie & Blagrove 2018 (Sports Med meta-analysis); Blagrove et al. 2018 review.
+- **Single-leg / unilateral**: running is a single-leg task; unilateral loading addresses asymmetry and specificity.
+- **Posterior chain / hamstring**: Nordic curls reduce hamstring injury ~51% — Al Attar et al. 2017 (Sports Med meta-analysis).
+- **Calf / soleus / Achilles**: the soleus carries the largest force in running; bent-knee (seated) work isolates it; eccentric heel drops follow the Alfredson Achilles protocol; isometric/heavy-slow holds build tendon stiffness — Rio et al. 2015; O'Neill et al.
+- **Foot / tibialis / shin**: anterior tibialis strength for shin-splint resilience; intrinsic-foot/arch work for arch stiffness.
+- **Hip stability / adductor**: Copenhagen plank reduces groin problems ~41% — Harøy et al. 2019 (BJSM RCT); glute-med/abductor work for hip-drop and knee valgus.
+- **Reactive plyo / tendon**: stretch-shortening-cycle drills (pogos, bounds, jumps) improve tendon stiffness and running economy — Blagrove 2018.
+- **Anti-rotation / trunk core**: pelvic/trunk stability for force transfer through gait.
+
+**Rotation.** Deterministic, pure in `slotIndex` (week): variant = `pool[c][(slotIndex + offset_c) % n]`, with a per-category offset so week N doesn't pick variant 0 of every category. Base phase reorders `highSoreness` moves (Nordic, eccentric calf, bounds, depth jump) to the back of their category before rotation — identical to HYROX's eccentric reorder.
+
+**Count-by-time (PROPOSED, endorsed by Tristan 2026-06-02):** 20→4 · 30→5 · 45→6 · 60→7 · 75→8 (2nd calf-foot) · 90→9 (+2nd single-leg). Intensity (easier/standard/harder) shifts loaded `@%` by ±`GYM_INTENSITY_PCT_STEP` (5, clamp 40-90) + RPE; bodyweight/plyo/iso are unaffected.
+
+**PROPOSED doses (endorsed by Tristan 2026-06-02), the rest reuse existing template numbers or named protocols:** Soleus Calf Raise 4×15 @50%; Single-Leg Calf Raise 3×12/leg; Eccentric Calf Drop 3×15/leg (3s lower); Isometric Calf Hold 4×30s; Tibialis Raise 3×18 @40% (loaded so it weight-tracks — the only new tracked key); Heel Walks 3×20m; Short-Foot 3×12/foot; Copenhagen Plank 3×20s/side; Banded Lateral Walk 3×15; Side-Lying Hip Abduction 3×15/side; Pogo Hops 4×20; Depth Jump 3×5; Suitcase Carry 3×20m/side; Single-Leg Squat-to-box 3×6/leg; Nordic Curl 3×6; Step-Up/Lunge 75s rests.
+
+**Onboarding nudge.** The schedule step shows, only at 0 gym sessions, "Even one strength session a week makes runners measurably faster and more injury-resistant (Beattie & Blagrove 2018)." Caption-only — deliberately NOT a forced default of 1 (that would inflate every plan's load without consent).
+
+**Limitations.** (1) One ability tier in Phase 1 (the on-demand pool); beginner/novice variants are a follow-up. (2) Plan-engine auto-gym still uses the phase templates (Phase 2 — porting the pool there means rewriting gym.test.ts's literal-string assertions to property assertions). (3) Tibialis tracks only when prescribed loaded; band-only would not carry the `@X% 1RM` marker. (4) The per-exercise prescriptions are population defaults, not individualised to training age.
+
+## §BC — Strength training improves the race forecast (running-economy projection) (2026-06-02)
+
+**The claim.** Concurrent strength training (heavy resistance + plyometrics) raises running economy and so improves endurance race performance. Beattie, Carson, Lyons & Kenny 2018 (and the broader Blagrove/Beattie reviews) report ~2-4% running-economy improvement and ~2-5% time-trial improvement over 8-12 weeks of supportive strength work; Denadai et al. 2017 (Sports Med meta-analysis) and Balsalobre-Fernández et al. 2016 concur. Mosaic now projects up to **3% time improvement** at full adoption (`STRENGTH_MAX_ECONOMY_GAIN_PCT = 3`, `src/constants/strength-constants.ts`) — the optimistic-but-defensible upper edge of that range, signed off by Tristan 2026-06-02, consistent with the project's forecast-calibration stance (forecast leans optimistic, baseline honest).
+
+**Where it enters, and why there.** Strength is a **future-projection term in the training-horizon model** (`applyTrainingHorizonAdjustment`, `training-horizon.ts`), NOT a retroactive multiplier on current fitness. The forecast's five current-fitness predictors (PB, LT, VDOT/Daniels, Tanda, HR-calibrated) are all performance proxies that already contain the athlete's *present* running economy. A retroactive "−X% pace" multiplier (like the carbon-shoe factor) would therefore **double-count** economy already in the blend. The horizon model is the one place that projects *future* adaptation from the *planned* training (run volume, sessions, dual-tau saturation) on top of the blended "today" anchor; the run-volume term carries no strength signal, so adding an explicit strength term is **additive, not duplicative**.
+
+**The formula.** After the base improvement (`max_gain × type_mod × week_factor × session_factor × exp_factor`):
+
+```
+strength_gain_pct = STRENGTH_MAX_ECONOMY_GAIN_PCT
+                    × (1 − e^(−weeks_eff / STRENGTH_TAU_WEEKS))   // adoption, saturating
+                    × min(strength_sessions_per_week / 2, 1)       // dose, full at ≥2/wk
+```
+
+folded in alongside `taper_bonus`, then clamped by the existing `max_gain_cap_pct` (15%) and run through the VDOT-barrier guardrails. `weeks_eff` excludes taper (strength adaptation accrues during the training block). `STRENGTH_TAU_WEEKS = 10` puts ~63% of the ceiling at 10 weeks and ~86% at 20, matching the 8-12 week onset window. A short plan therefore credits proportionally less (less time to adapt); ≥2 sessions/week is full dose (further sessions add nothing — supportive, not maximal, strength).
+
+**Bounding / no run-away.** The shared `max_gain_cap_pct` clamp keeps strength + running under the empirical improvement ceiling, and the guardrails prevent strength from pushing an under-qualified athlete through a time barrier (e.g. a beginner cannot strength-train their way past sub-3). `strength_sessions_per_week` defaults to 0/undefined → **zero contribution and byte-identical output for non-lifters** (regression-locked test).
+
+**Signal + surfacing.** Gated on PLANNED strength (`s.gs` / onboarding `gymSessionsPerWeek`), threaded through every forecast site (`calculateLiveForecast` + `calculateForecast`, called from `refreshBlendedFitness`, the forecast-trajectory builder, `renderer.ts`, `events.ts`, and onboarding `forecastForSessions`) so all surfaces stay coherent. Onboarding plan-preview shows a callout isolating the contribution ("Your N strength sessions are worth about X of the projected finish… Beattie & Blagrove 2018") by differencing the forecast with vs without the strength term at the same run count.
+
+**Limitations.** (1) Projects from PLANNED sessions; it does not yet ease the projection when planned strength goes uncompleted (adherence-gating is a deferred refinement). (2) The 3% ceiling is a population figure, not individualised to training age or current strength base. (3) Linear-in-dose up to 2/wk is a simplification of a true dose-response curve. (4) The economy→time mapping is treated as ~1:1 in VDOT-improvement terms, which slightly overstates the marathon end where economy is one of three Joyner-Coyle factors; the conservative saturation and the cap absorb this.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultInjuryState } from '@/types/injury';
 import type { InjuryState } from '@/types/injury';
-import { pickAerobicSubstitute, buildCapabilityOffers } from './capability-substitution';
+import { pickAerobicSubstitute, buildCapabilityOffers, buildAerobicOffer } from './capability-substitution';
 import { generateRehabPhaseWorkouts } from '@/injury/engine';
 import type { SimulatorState } from '@/types/state';
 
@@ -41,8 +41,15 @@ describe('pickAerobicSubstitute', () => {
     expect(pickAerobicSubstitute(inj)?.sport).toBe('swim');
   });
 
-  it('ignores a preference whose discipline is blocked, using the next available', () => {
+  it('treats a set preference as a hard allow-list: blocked preferred sport offers nothing, not a fall-through', () => {
+    // Swimming is the only sport they have access to; the injury blocks it. We
+    // do NOT substitute a bike they may not own.
     const inj = injury({ bikeCapacity: 50, swimCapacity: 0, preferredCrossTraining: 'swimming' });
+    expect(pickAerobicSubstitute(inj)).toBeNull();
+  });
+
+  it('ignores an unknown preference string and falls through to the capacity ladder', () => {
+    const inj = injury({ bikeCapacity: 50, swimCapacity: 0, preferredCrossTraining: 'pilates' });
     expect(pickAerobicSubstitute(inj)?.sport).toBe('bike');
   });
 
@@ -71,6 +78,63 @@ describe('generateRehabPhaseWorkouts uses the capacity-aware pick (running mirro
 
   it('honours the saved cross-training preference', () => {
     expect(crossLabel(injury({ bikeCapacity: 50, swimCapacity: 100, preferredCrossTraining: 'swimming' }))).toBe('Swim');
+  });
+});
+
+describe('buildAerobicOffer (positive path: intensity scaling, duration, allow-list)', () => {
+  it('returns null when no minutes were freed', () => {
+    expect(buildAerobicOffer(injury({ runCapacity: 0, bikeCapacity: 100 }), 0, 2)).toBeNull();
+  });
+
+  it('returns null when nothing aerobic is safe even with freed time', () => {
+    const inj = injury({ bikeCapacity: 0, upperLoadCapacity: 0, swimCapacity: 0 });
+    expect(buildAerobicOffer(inj, 45, 2)).toBeNull();
+  });
+
+  it('keeps the FULL freed duration regardless of capacity (intensity absorbs the limit, not duration)', () => {
+    const full = buildAerobicOffer(injury({ runCapacity: 0, bikeCapacity: 100 }), 45, 2);
+    const limited = buildAerobicOffer(injury({ runCapacity: 0, bikeCapacity: 50 }), 45, 2);
+    expect(full?.workout.estimatedDurationMin).toBe(45);
+    expect(limited?.workout.estimatedDurationMin).toBe(45); // duration unchanged
+  });
+
+  it('scales RPE down in proportion to a limited capacity', () => {
+    // rehab base RPE = 4. Full bike (100%) → 4. Half-capacity bike (50%) → 2.
+    const full = buildAerobicOffer(injury({ injuryPhase: 'rehab', bikeCapacity: 100 }), 45, 2);
+    const limited = buildAerobicOffer(injury({ injuryPhase: 'rehab', bikeCapacity: 50 }), 45, 2);
+    expect(full?.workout.rpe).toBe(4);
+    expect(limited?.workout.rpe).toBe(2);
+  });
+
+  it('never drops RPE below 1, even at very low capacity', () => {
+    const offer = buildAerobicOffer(injury({ injuryPhase: 'rehab', bikeCapacity: 5 }), 30, 1);
+    expect(offer?.workout.rpe).toBe(1);
+  });
+
+  it('uses the "kept light" copy when capacity is limited and the standard copy at full', () => {
+    const full = buildAerobicOffer(injury({ bikeCapacity: 100 }), 40, 2);
+    const limited = buildAerobicOffer(injury({ bikeCapacity: 50 }), 40, 2);
+    expect(full?.workout.d).toContain('conversational effort');
+    expect(limited?.workout.d).toContain('very easy');
+  });
+
+  it('tags bike and swim with a discipline; row erg keeps the generic cross badge', () => {
+    const bike = buildAerobicOffer(injury({ bikeCapacity: 100 }), 40, 2);
+    const swim = buildAerobicOffer(injury({ bikeCapacity: 0, upperLoadCapacity: 0, swimCapacity: 100 }), 40, 2);
+    const erg = buildAerobicOffer(injury({ bikeCapacity: 0, upperLoadCapacity: 100, swimCapacity: 0 }), 40, 2);
+    expect((bike?.workout as { discipline?: string }).discipline).toBe('bike');
+    expect((swim?.workout as { discipline?: string }).discipline).toBe('swim');
+    expect((erg?.workout as { discipline?: string }).discipline).toBeUndefined();
+  });
+
+  it('respects the preferred-sport allow-list: a blocked preference yields no aerobic offer', () => {
+    const inj = injury({ bikeCapacity: 50, swimCapacity: 0, preferredCrossTraining: 'swimming' });
+    expect(buildAerobicOffer(inj, 45, 2)).toBeNull();
+  });
+
+  it('omits dayOfWeek when no day is supplied', () => {
+    const offer = buildAerobicOffer(injury({ bikeCapacity: 100 }), 40, null);
+    expect((offer?.workout as { dayOfWeek?: number }).dayOfWeek).toBeUndefined();
   });
 });
 

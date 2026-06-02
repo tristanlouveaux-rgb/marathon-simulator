@@ -71,7 +71,7 @@ export function initWizard(): void {
   // removed during cleanup, e.g. 'runner-type' after the merge into review),
   // bump the user to a sensible re-entry point. Preserves name/PBs.
   const current = getState().onboarding;
-  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup' && current.currentStep !== 'tri-past-race' && current.currentStep !== 'tri-workout-preview' && current.currentStep !== 'cycling-setup' && current.currentStep !== 'hyrox-setup' && current.currentStep !== 'hyrox-workout-preview' && current.currentStep !== 'workout-preview' && current.currentStep !== 'about-you') {
+  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup' && current.currentStep !== 'tri-past-race' && current.currentStep !== 'tri-workout-preview' && current.currentStep !== 'tri-plan-forecast' && current.currentStep !== 'cycling-setup' && current.currentStep !== 'hyrox-setup' && current.currentStep !== 'hyrox-workout-preview' && current.currentStep !== 'workout-preview' && current.currentStep !== 'about-you') {
     updateState({
       onboarding: { ...current, currentStep: current.name ? 'goals' : 'welcome' },
     });
@@ -162,6 +162,13 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'initializing') {
+      // The plan + prediction now exist. Show the interactive forecast reveal
+      // (goal time + per-discipline session lever) before the main view,
+      // mirroring running's initializing → plan-preview-v2.
+      goToStep('tri-plan-forecast');
+      return;
+    }
+    if (s.onboarding.currentStep === 'tri-plan-forecast') {
       completeOnboarding();
       goToStep('main-view');
       return;
@@ -374,6 +381,14 @@ export function previousStep(): void {
   // Branch: tri-workout-preview back → tri-past-race.
   if (s.onboarding.currentStep === 'tri-workout-preview') {
     goToStep('tri-past-race');
+    return;
+  }
+
+  // Branch: tri-plan-forecast back → review. The plan is regenerated on the
+  // forward pass through initializing, so returning to review (then forward)
+  // rebuilds and lands back on the forecast cleanly.
+  if (s.onboarding.currentStep === 'tri-plan-forecast') {
+    goToStep('review');
     return;
   }
 

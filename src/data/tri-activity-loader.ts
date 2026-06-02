@@ -12,14 +12,18 @@
  * feed directly into `deriveTriBenchmarksFromHistory`.
  *
  * Auth pattern: REST + JWT bearer token, same path the onboarding wizard's
- * `fetchRecentActivities` uses. The Supabase JS client's session is sometimes
- * out of sync with `getAccessToken()` (the canonical auth source for this
- * app), and using the JS client's `.eq('user_id', userId)` filter against
- * a session-derived id silently returned 0 rows when the user was actually
- * authenticated and had hundreds of activities. RLS handles the user-row
- * filter server-side via `auth.uid()`; we don't need to filter client-side.
+ * `fetchRecentActivities` uses.
+ *
+ * MUST filter by `user_id`. `garmin_activities` has RLS disabled, so an
+ * unfiltered read returns EVERY user's rows (a real cross-user leak — see
+ * docs/DATA_ISOLATION_AUDIT.md). We scope with `user_id=eq.<id>` from
+ * `getUserId()`. (An earlier note here claimed a session-derived id "returned
+ * 0 rows" so client filtering was skipped — that was a stale/unhydrated
+ * session at an early call site, not an id mismatch. `getUserId()` awaits
+ * session readiness and matches the id rows are written under, which the
+ * working `.eq('user_id', …)` reads in stravaSync.ts confirm.)
  */
-import { SUPABASE_URL, SUPABASE_ANON_KEY, getAccessToken } from './supabaseClient';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, getAccessToken, getUserId } from './supabaseClient';
 import type { GarminActual } from '@/types/state';
 
 /** Row shape returned by the REST query — snake_case, distance in metres. */
@@ -62,6 +66,16 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
       console.warn('[tri-activity-loader] No access token — falling back to empty activity list');
       return [];
     }
+    // Scope to the current user. `garmin_activities` has RLS disabled, so
+    // WITHOUT this filter the query returns every user's rows (cross-user
+    // leak). See docs/DATA_ISOLATION_AUDIT.md. The prior "session-derived id
+    // returns 0 rows" worry was a stale/unhydrated session; getUserId() awaits
+    // session readiness and matches the id rows are written under.
+    const userId = await getUserId().catch(() => null);
+    if (!userId) {
+      console.warn('[tri-activity-loader] No user id — falling back to empty activity list');
+      return [];
+    }
 
     const select = [
       'garmin_id', 'activity_type', 'start_time', 'duration_sec', 'distance_m',
@@ -73,6 +87,7 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
 
     const url = `${SUPABASE_URL}/rest/v1/garmin_activities`
       + `?select=${select}`
+      + `&user_id=eq.${userId}`
       + `&order=start_time.desc`
       + `&limit=${limit}`;
 
@@ -132,6 +147,18 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
       const preAvgW = preBikes.filter(b => b.averageWatts != null && b.averageWatts > 0).length;
       const preDev = preBikes.filter(b => b.deviceWatts === true).length;
       console.log(`[tri-activity-loader] PRE-dedup ${preBikes.length} bike rows from DB — power_curve:${preCurve} averageWatts:${preAvgW} device_watts(true):${preDev}`);
+      // Diagnostic: distinct stored activity_type strings for bike rides. The
+      // power-curve refresh edge function filters activity_type with an EXACT
+      // .in(["CYCLING","MOUNTAIN_BIKING","VIRTUAL_RIDE"]) — if these rows carry
+      // any other string (e.g. Garmin "INDOOR_CYCLING"/"ROAD_BIKING", raw
+      // Strava "Ride"/"VirtualRide"), the refresh sees 0 eligible rides and FTP
+      // is stuck on the whole-ride fallback. This log reveals the mismatch.
+      const typeCounts = preBikes.reduce<Record<string, number>>((m, b) => {
+        const t = b.activityType ?? 'null';
+        m[t] = (m[t] ?? 0) + 1;
+        return m;
+      }, {});
+      console.log('[tri-activity-loader] bike activity_type values:', typeCounts);
     }
 
     return dedupeActivities(activities);

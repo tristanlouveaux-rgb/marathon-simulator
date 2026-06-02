@@ -39,3 +39,28 @@ verify_jwt = false
 
 [functions.delete-account]
 verify_jwt = false
+
+# Browser-called functions that do their own auth.getUser() check internally
+# and must accept the auth-less CORS preflight at the gateway.
+[functions.export-user-data]
+verify_jwt = false
+
+[functions.coach-chat]
+verify_jwt = false
+
+[functions.coach-narrative]
+verify_jwt = false
+
+[functions.coach-generate-workout]
+verify_jwt = false
+
+[functions.screenshot-vision]
+verify_jwt = false
+
+# Cron-only: authenticates pg_cron via the x-cron-secret header, no JWT.
+[functions.purge-deleted-accounts]
+verify_jwt = false
+
+# External webhook: signed by RevenueCat, no Supabase JWT.
+[functions.revenuecat-webhook]
+verify_jwt = false

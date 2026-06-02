@@ -713,20 +713,31 @@ const PREFERRED_AEROBIC_PICK: Record<string, AerobicPick> = {
 
 /**
  * Choose the aerobic substitute for a blocked/limited discipline, by what the
- * athlete can still do. Honours a saved `preferredCrossTraining` when usable;
- * otherwise bike (non-impact, legs permitting) → row erg (arm-driven, when arms
- * are free) → swim. Returns null when nothing aerobic is safe. Shared by HYROX
- * (`capability-substitution`) and running rehab (`generateRehabPhaseWorkouts`)
- * so the "you can still pedal" pick is identical across modes.
+ * athlete can still do.
+ *
+ * A saved `preferredCrossTraining` is treated as a HARD allow-list, not a soft
+ * tie-break: if the athlete named the one cross-training sport they have access
+ * to (e.g. "swimming") and the injury blocks it, we offer nothing aerobic rather
+ * than substitute a sport they may have no bike or pool for. An unknown
+ * preference string (not one of cycling/rowing/swimming) is ignored and we fall
+ * through to the capacity ladder.
+ *
+ * With no preference set, fall through bike (non-impact, legs permitting) → row
+ * erg (arm-driven, when arms are free) → swim. Returns null when nothing aerobic
+ * is safe. Shared by HYROX/triathlon (`capability-substitution`) and running
+ * rehab (`generateRehabPhaseWorkouts`) so the "you can still pedal" pick is
+ * identical across modes.
  */
 export function pickAerobicSubstitute(inj: InjuryState | undefined): AerobicPick | null {
   if (!inj) return null;
   const usable = (p: AerobicPick) => getDisciplineCapacity(inj, p.capacityKey) > 0;
 
-  const preferred = inj.preferredCrossTraining
-    ? PREFERRED_AEROBIC_PICK[inj.preferredCrossTraining]
-    : undefined;
-  if (preferred && usable(preferred)) return preferred;
+  if (inj.preferredCrossTraining) {
+    const preferred = PREFERRED_AEROBIC_PICK[inj.preferredCrossTraining];
+    // Known preference → hard allow-list (offer it if usable, else nothing).
+    // Unknown string → ignore and fall through to the ladder below.
+    if (preferred) return usable(preferred) ? preferred : null;
+  }
 
   const order: AerobicPick[] = [
     { sport: 'bike',    label: 'Bike',    capacityKey: 'bike' },

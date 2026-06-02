@@ -373,6 +373,7 @@ export function init(): void {
     weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,
+    strengthSessionsPerWeek: s.gs,
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blendedTime,
   });

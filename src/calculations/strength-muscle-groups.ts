@@ -104,7 +104,7 @@ export function muscleGroupsForExercise(name: string): Array<{ g: MuscleGroup; w
  * Aggregate the worked muscle groups across a parsed strength session.
  * Each exercise contributes its set count to every group it trains (primary
  * full, secondary half). Returns groups ordered most-worked first with a
- * normalised `intensity` for the body-map tint and chip ordering.
+ * normalised `intensity` for chip ordering.
  */
 export function deriveWorkedMuscleGroups(session: StrengthSession): WorkedMuscleGroup[] {
   // Sets are flattened (one entry per working set), so count sets per exercise

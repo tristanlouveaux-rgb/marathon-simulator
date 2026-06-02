@@ -39,6 +39,8 @@ import { GARMIN_CONNECT_ENABLED } from '@/constants/feature-flags';
 
 /** Module flag: did the user complete a file import this visit? Feeds the Continue routing. */
 let didUpload = false;
+/** Did the user already tap Continue once with no data source? Arms the deliberate skip. */
+let skipArmed = false;
 
 export function renderConnectData(container: HTMLElement, state: OnboardingState): void {
   // Post-OAuth resume: a live connect (Strava or Garmin) bounced the browser back with
@@ -55,18 +57,35 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
     return null;
   })();
   if (returnedFrom) {
+    updateOnboarding({ skippedStrava: false });
     if (returnedFrom === 'strava') {
       updateState({ stravaConnected: true });
       updateOnboarding({ stravaUnlocked: true, chosenWatch: 'other' });
+      saveState();
+      // "Connect both": Strava covers runs, splits, and PBs but not recovery. On iPhone,
+      // Apple Health is the recovery pipe a Garmin user still wants, so land back on this
+      // step with Strava marked connected and Apple Health nudged, rather than auto-advancing.
+      // Advance only when nothing more is addable here: on web (HealthKit can't run in a
+      // browser), when Apple Health is already connected, or when direct Garmin is enabled
+      // (the recovery card is "Connect Garmin", a separate pairing we don't auto-nudge).
+      const appleConnected =
+        hasPhysiologySource(getState() as any, 'apple') || !!(getState() as any).appleHealthConnected;
+      if (!isNativeiOS() || appleConnected || GARMIN_CONNECT_ENABLED) {
+        nextStep();
+        return;
+      }
+      // Fall through to the normal render; main.ts strips the ?strava query after this pass.
+    } else {
+      // Garmin direct connect (?garmin=connected) provides runs + recovery in one — main.ts's
+      // handler set the physiology source, so nothing is left to pair. Advance.
+      saveState();
+      nextStep();
+      return;
     }
-    // Garmin's wearable / physiology source is set by main.ts's ?garmin=connected handler.
-    updateOnboarding({ skippedStrava: false });
-    saveState();
-    nextStep();
-    return;
   }
 
   didUpload = false;
+  skipArmed = false;
 
   const rawChoice = state.chosenWatch as 'apple' | 'other' | 'garmin' | undefined;
   // Legacy 'garmin' from the 3-tile picker → collapsed to 'other'.
@@ -224,11 +243,16 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
             </div>
           </div>
           ` : `
-          <!-- While direct Garmin is gated off, point Garmin users at the Apple Health bridge for recovery. -->
+          <!-- While direct Garmin is gated off, Apple Health is the recovery pipe for Garmin
+               users: sleep, HRV, and resting HR flow through HealthKit on iPhone. Real one-tap
+               button — prompts HealthKit on iOS, points at the iPhone app on web (upload is in
+               the card below). Mirrors the GARMIN_CONNECT_ENABLED "Connect Garmin" card above. -->
           <div class="cd-history-card shadow-ap">
             <div class="cd-history-row">
-              <p class="cd-history-label">Recovery data? Use Apple Health</p>
-              <p class="cd-history-sub">On an iPhone, your Garmin sleep and heart rate already sync to Apple Health. Tap "← Back" and choose Apple Watch / Apple Health to pull them in automatically. Strava below adds your per-km run splits.</p>
+              <p class="cd-history-label">Connect Apple Health</p>
+              <p class="cd-history-sub">On iPhone, your Garmin sleep, HRV, and resting heart rate flow through Apple Health. Connect it for your recovery signals. Strava below adds your per-km run splits.</p>
+              <button id="cd-connect-apple-health" class="cd-cta-primary" style="margin-top:6px">Connect Apple Health</button>
+              <p id="cd-apple-done" class="cd-history-sub" style="display:none;margin-top:8px"></p>
             </div>
           </div>
           `}
@@ -251,6 +275,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
                 ${connectWithStravaButton('cd-connect-strava', 44)}
                 <p id="cd-strava-err" class="cd-err" style="text-align:left"></p>
               </div>
+              <p id="cd-strava-done" class="cd-history-sub" style="display:none;margin-top:8px"></p>
             </div>
           </div>
 
@@ -302,10 +327,10 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
       markContinueReady('Apple Health connected. Workouts will sync after Continue.');
     }
   } else if (initialChoice === 'other') {
-    showHistory();
-    // Already unlocked (entered a code before, or just returned)? Reveal the button.
-    if (state.stravaUnlocked || getState().stravaConnected) revealStravaConnect();
-    if (getState().stravaConnected) markContinueReady('Strava connected. Your history is syncing.');
+    showHistory(); // reflects connected sources + nudges the other via refreshHistoryConnectedState
+    // Unlocked a code but not yet connected? Reveal the connect button. (revealStravaConnect
+    // is a no-op once Strava is connected — the card then shows its done line instead.)
+    if (state.stravaUnlocked) revealStravaConnect();
   } else {
     showPicker();
   }
@@ -330,7 +355,60 @@ function showHistory(): void {
   if (picker) picker.style.display = 'none';
   if (history) history.style.display = 'flex';
   if (heading) heading.textContent = 'Build your training history';
-  if (sub) sub.textContent = 'Connect Strava with a code for the full picture, or upload an export. We use it to size your fitness and read your personal bests.';
+  if (sub) {
+    // The two cards carry complementary data, so a Garmin user wants both: Apple Health for
+    // recovery (sleep/HRV/resting HR), Strava for runs, splits, and PBs. Frame it that way.
+    // When direct Garmin is enabled the recovery card is "Connect Garmin" instead, so the
+    // "connect both" framing only applies while GARMIN_CONNECT_ENABLED is off.
+    sub.textContent = GARMIN_CONNECT_ENABLED
+      ? 'Connect Garmin for your runs and recovery, or Strava for per-km splits. Upload an export if you prefer.'
+      : 'Two sources, both worth connecting: Apple Health for recovery, Strava for your runs and PBs. No Strava code? Upload an export below.';
+  }
+  refreshHistoryConnectedState();
+}
+
+/**
+ * "Connect both" hub: reflect which sources are connected and nudge the other. Apple Health
+ * (recovery: sleep/HRV/resting HR) and Strava (runs/splits/PBs) are complementary for Garmin
+ * users, so once one connects we mark it done and point at the other. Continue goes ready as
+ * soon as either lands. Safe to call on any phase — guarded getElementById no-ops when the
+ * cards aren't present (e.g. picker phase, or the GARMIN_CONNECT_ENABLED Garmin card).
+ */
+function refreshHistoryConnectedState(): void {
+  const s = getState() as any;
+  const appleConnected = hasPhysiologySource(s, 'apple') || !!s.appleHealthConnected;
+  const stravaConnected = !!s.stravaConnected;
+
+  // Apple Health card → connected line, button hidden. (Only exists while GARMIN_CONNECT_ENABLED is off.)
+  if (appleConnected) {
+    const appleBtn = document.getElementById('cd-connect-apple-health');
+    const appleDone = document.getElementById('cd-apple-done');
+    if (appleBtn) appleBtn.style.display = 'none';
+    if (appleDone) {
+      const nudge = stravaConnected ? '' : ' Add Strava below for your run splits and PBs.';
+      appleDone.innerHTML = `<span class="cd-status-dot"></span>Apple Health connected. Recovery signals will sync.${nudge}`;
+      appleDone.style.display = 'block';
+    }
+  }
+
+  // Strava card → connected line, code input + connect button hidden.
+  if (stravaConnected) {
+    const codeWrap = document.getElementById('cd-code-wrap');
+    const stravaWrap = document.getElementById('cd-strava-wrap');
+    const stravaDone = document.getElementById('cd-strava-done');
+    if (codeWrap) codeWrap.style.display = 'none';
+    if (stravaWrap) stravaWrap.style.display = 'none';
+    if (stravaDone) {
+      // Only nudge Apple Health when its card is actually present (GARMIN_CONNECT_ENABLED off).
+      const nudge = (!appleConnected && !GARMIN_CONNECT_ENABLED)
+        ? ' Add Apple Health above for your recovery signals.'
+        : '';
+      stravaDone.innerHTML = `<span class="cd-status-dot"></span>Strava connected. Runs and PBs are syncing.${nudge}`;
+      stravaDone.style.display = 'block';
+    }
+  }
+
+  if (appleConnected || stravaConnected) markContinueReady();
 }
 
 function wireHandlers(): void {
@@ -410,6 +488,24 @@ function wireHandlers(): void {
     }
   });
 
+  // Garmin users' recovery pipe while direct Garmin is gated off: connect Apple Health
+  // straight from the Garmin panel. One tap. (Element only present when GARMIN_CONNECT_ENABLED
+  // is off; on iOS this prompts HealthKit, on web it points at the iPhone app.)
+  document.getElementById('cd-connect-apple-health')?.addEventListener('click', () => {
+    updateOnboarding({ chosenWatch: 'apple' });
+    saveState();
+    if (!isNativeiOS()) {
+      // HealthKit can't run in a browser. Point at the iPhone app; upload is in the card below.
+      const statusEl = document.getElementById('cd-history-status');
+      if (statusEl) {
+        statusEl.textContent = 'Apple Health only connects in the Mosaic iPhone app. Open Mosaic on your iPhone, or upload an export below.';
+        statusEl.style.display = 'block';
+      }
+      return;
+    }
+    triggerAppleHealth();
+  });
+
   document.getElementById('cd-upload-strava')?.addEventListener('click', () => openImporter());
   document.getElementById('cd-upload-garmin')?.addEventListener('click', () => openImporter());
   document.getElementById('cd-upload-single')?.addEventListener('click', () => openImporter());
@@ -421,6 +517,22 @@ function wireHandlers(): void {
     const s = getState() as any;
     const appleConnected = hasPhysiologySource(s, 'apple') || !!s.appleHealthConnected;
     const hasData = appleConnected || !!s.stravaConnected || didUpload;
+
+    // Strongly nudge: skipping with no data source takes two deliberate taps. The first arms
+    // the skip and states the cost; the second proceeds. Connected/uploaded users (hasData)
+    // advance on the first tap as before.
+    if (!hasData && !skipArmed) {
+      skipArmed = true;
+      const btn = document.getElementById('cd-continue') as HTMLButtonElement | null;
+      const caption = document.getElementById('cd-continue-caption');
+      if (btn) btn.textContent = 'Continue without data';
+      if (caption) {
+        caption.textContent = 'Without a watch connection or upload, the plan and predictions run on personal bests alone. Connect above for a sharper plan, or tap Continue again to proceed.';
+        caption.style.display = 'block';
+      }
+      return;
+    }
+
     updateOnboarding({ skippedStrava: !hasData });
     saveState();
     nextStep();
@@ -527,6 +639,7 @@ function markContinueReady(appleStatusHtml?: string): void {
  * taps "Back" so they're not starting fresh with a green-lit Continue.
  */
 function resetContinueToPre(): void {
+  skipArmed = false;
   const btn = document.getElementById('cd-continue') as HTMLButtonElement | null;
   const caption = document.getElementById('cd-continue-caption');
   if (btn) {
@@ -534,5 +647,8 @@ function resetContinueToPre(): void {
     btn.classList.add('pre');
     btn.textContent = 'Continue without uploading';
   }
-  if (caption) caption.style.display = 'block';
+  if (caption) {
+    caption.textContent = 'Your plan will start from PBs only. Less accurate, but you can add data anytime from Account.';
+    caption.style.display = 'block';
+  }
 }

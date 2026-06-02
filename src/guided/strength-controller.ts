@@ -35,6 +35,13 @@ export interface SetRecord {
   setCount: number;
   reps: string;
   durationSec: number;
+  /** Canonical lift slug, carried from the GuidedSet for weight persistence. */
+  liftKey?: string;
+  /** Working weight the user entered for this exercise (kg). Merged in by the
+   *  overlay at finish (the controller stays weight-agnostic for HYROX reuse). */
+  weightKg?: number;
+  /** Reps-in-reserve bucket from the final set of the exercise. */
+  rirBucket?: import('@/types/strength-log').RirBucket;
 }
 
 /** Registers a 1Hz callback; returns a stop function. */
@@ -171,6 +178,7 @@ export class StrengthGuideController {
         setCount: cur.setCount,
         reps: cur.reps,
         durationSec: setDurationSec,
+        liftKey: cur.liftKey,
       });
     }
     const isLast = this.idx >= this.session.sets.length - 1;

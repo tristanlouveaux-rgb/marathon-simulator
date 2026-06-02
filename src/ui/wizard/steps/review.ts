@@ -12,6 +12,7 @@ import {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
   getAccessToken,
+  getUserId,
   isGarminConnected,
   triggerGarminBackfill,
 } from '@/data/supabaseClient';
@@ -150,12 +151,17 @@ async function fetchRecentActivities(): Promise<ActivityWithBestEfforts[]> {
   try {
     const since = new Date(Date.now() - ACTIVITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const token = await getAccessToken();
+    // Scope to the current user. `garmin_activities` has RLS disabled, so
+    // without this the run-count gate + PB auto-fill would be computed from
+    // EVERY user's activities (cross-user leak — docs/DATA_ISOLATION_AUDIT.md).
+    const userId = await getUserId();
     // limit=1000. Users with high activity density (10+/week) can exceed 200
     // rows within the 3-year window, so 200 dropped older PB-bearing runs
     // before the PB extractor saw them. 1000 fits all but the most extreme
     // volumes and stays well under PostgREST's default max_rows.
     const url = `${SUPABASE_URL}/rest/v1/garmin_activities`
       + `?select=garmin_id,start_time,activity_type,activity_name,distance_m,duration_sec,best_efforts`
+      + `&user_id=eq.${userId}`
       + `&start_time=gte.${encodeURIComponent(since)}`
       + `&order=start_time.desc`
       + `&limit=1000`;

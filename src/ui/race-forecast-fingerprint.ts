@@ -256,11 +256,12 @@ function buildShoes(s: SimulatorState): Cluster {
     };
   }
   return {
+    // Standard footwear is a deliberate, known selection, not absent data, so
+    // it counts as present (no carbon-plate credit, but nothing is "missing").
     key: 'shoes', label: 'Shoes',
     headline: 'Standard',
     detail: 'Tap to switch to supershoes',
-    present: false,
-    addCta: 'Configure',
+    present: true,
   };
 }
 

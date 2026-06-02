@@ -156,14 +156,26 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
       <!-- Session body -->
       ${renderSessionBody(workout, components, c.accent, disc)}
 
-      <!-- Guided session entry. Cross-training (bike/erg/swim) has no guided
-           set-by-set flow yet, so it shows only "Mark as done" rather than a
-           dead "Start session" button. Strength and HYROX sessions guide. -->
-      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
-        ${disc === 'cross' ? '' : `<button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>`}
-        <button id="hx-detail-strength-done" style="width:100%;padding:${disc === 'cross' ? '14px' : '11px'};background:${disc === 'cross' ? '#0F172A' : 'transparent'};color:${disc === 'cross' ? '#FAF9F6' : '#0F172A'};border:${disc === 'cross' ? 'none' : '1px solid var(--c-border)'};border-radius:${disc === 'cross' ? '12px' : '10px'};font-size:${disc === 'cross' ? '15px' : '13px'};font-weight:${disc === 'cross' ? '600' : '500'};cursor:pointer;font-family:var(--f)">Mark as done</button>
-        ${canAdjust ? `<button id="hx-detail-adjust" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Adjust duration</button>` : ''}
+      <!-- Footer. Time-defined sessions (run / bike / erg / swim) use the same
+           Mark as Done · Adjust · Skip action row as the running plan card.
+           Station / brick / strength keep their guided Start + Mark as done flow. -->
+      ${canAdjust ? `
+      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:14px">
+        <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
+          <button id="hx-detail-mark-done" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Mark as Done</button>
+          <span style="color:var(--c-border)">·</span>
+          <button id="hx-detail-adjust" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Adjust</button>
+          <span style="color:var(--c-border)">·</span>
+          <button id="hx-detail-skip" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Skip</button>
+        </div>
+        <button id="hx-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
       </div>
+      ` : `
+      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
+        <button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
+        <button id="hx-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+      </div>
+      `}
 
       <div style="height:6px"></div>
     </div>
@@ -174,6 +186,17 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#hx-detail-close')?.addEventListener('click', close);
+  overlay.querySelector('#hx-detail-done')?.addEventListener('click', close);
+  overlay.querySelector('#hx-detail-mark-done')?.addEventListener('click', () => {
+    setHxRated(wkIdx, workout, rpe);
+    close();
+    import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {});
+  });
+  overlay.querySelector('#hx-detail-skip')?.addEventListener('click', () => {
+    setHxRated(wkIdx, workout, 'skip');
+    close();
+    import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {});
+  });
   overlay.querySelector('#hx-detail-adjust')?.addEventListener('click', () => {
     close();
     import('@/ui/workout-adjust-overlay').then(({ openWorkoutAdjust }) => {
@@ -222,6 +245,20 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
       }
     });
   });
+}
+
+/**
+ * Mark a HYROX session done (rpe number) or skipped ('skip') via the shared
+ * `wk.rated` map — the same map the running plan card writes and the shared status
+ * chip reads. Lightweight manual completion flag; no synced activity required.
+ */
+function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): void {
+  const s = getMutableState();
+  const wk = s.wks?.[weekIdx];
+  if (!wk) return;
+  if (!wk.rated) wk.rated = {};
+  wk.rated[(workout as any).id ?? workout.n] = value;
+  saveState();
 }
 
 /** Persist a swap (or revert) on the workout, recomputing per-component MTL and total MTL. */

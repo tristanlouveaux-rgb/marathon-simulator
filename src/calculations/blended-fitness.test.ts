@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { refreshBlendedFitness, predictStandardDistances, getStandardForecastDetail } from './blended-fitness';
+import { refreshBlendedFitness, predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from './blended-fitness';
 import type { SimulatorState } from '@/types';
 
 /** Build a 50-VDOT-ish 8-week run history that produces a medium+ HR regression. */
@@ -183,6 +183,70 @@ describe('getStandardForecastDetail — per-distance drill-down', () => {
     expect(detail.durabilityMultiplier).toBeGreaterThanOrEqual(1);
     expect(detail.calibrationBiasSec).toBeNull(); // no logged races in baseState
     expect(detail.vdot).not.toBeNull();
+  });
+
+  it('waterfall stages reconcile to the hero (finalSec === predictedSec)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now) });
+    const detail = getStandardForecastDetail(s, '5k');
+    expect(detail.stages).not.toBeNull();
+    const st = detail.stages!;
+    // The hero IS the last stage.
+    expect(st.finalSec).toBe(detail.predictedSec);
+    // The staged chain reconstructs the final to floating-point precision.
+    const chain = st.calibratedSec * st.durability.multiplier * st.shoeMul;
+    expect(chain).toBeCloseTo(st.finalSec, 6);
+  });
+
+  it('supershoes stage shifts the final by the 3% boost', () => {
+    const std = getStandardForecastDetail(baseState({ onboardingRunHistory: mkRunHistory(now), shoeKind: 'standard' }), '10k');
+    const carbon = getStandardForecastDetail(baseState({ onboardingRunHistory: mkRunHistory(now), shoeKind: 'supershoes' }), '10k');
+    expect(std.stages!.shoeMul).toBe(1.0);
+    expect(carbon.stages!.shoeMul).toBe(0.97);
+    // Capacity blend is identical; only the shoe multiplier moves the final.
+    expect(carbon.stages!.blendedSec).toBeCloseTo(std.stages!.blendedSec, 6);
+    expect(carbon.stages!.finalSec).toBeLessThan(std.stages!.finalSec);
+  });
+});
+
+describe('getStandardForecastProjection — plan-progression forward forecast', () => {
+  const now = new Date();
+
+  it('returns weeks+1 points (0..weeks); index 0 is current fitness', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), rw: 5 });
+    const proj = getStandardForecastProjection(s, '5k', 8);
+    expect(proj).not.toBeNull();
+    expect(proj!).toHaveLength(9);
+    expect(proj![0].weeksAhead).toBe(0);
+    expect(proj![8].weeksAhead).toBe(8);
+  });
+
+  it('projects monotonic improvement (later weeks no slower than earlier)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), rw: 5 });
+    const proj = getStandardForecastProjection(s, '5k', 12)!;
+    for (let i = 1; i < proj.length; i++) {
+      expect(proj[i].value).toBeLessThanOrEqual(proj[i - 1].value + 1e-6);
+    }
+    // A 12-week hold yields a real gain over today.
+    expect(proj[proj.length - 1].value).toBeLessThan(proj[0].value);
+  });
+
+  it('a longer horizon forecasts a faster time than a shorter one', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), rw: 5 });
+    const four = getStandardForecastProjection(s, '5k', 4)!;
+    const twelve = getStandardForecastProjection(s, '5k', 12)!;
+    expect(twelve[twelve.length - 1].value).toBeLessThan(four[four.length - 1].value);
+    // Both share the same anchor ("now").
+    expect(twelve[0].value).toBeCloseTo(four[0].value, 6);
+  });
+
+  it('returns null when there is no plan to project along (rw = 0)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), rw: 0 });
+    expect(getStandardForecastProjection(s, '5k', 8)).toBeNull();
+  });
+
+  it('returns null when there is no VDOT', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), v: 0, rw: 5 });
+    expect(getStandardForecastProjection(s, '5k', 8)).toBeNull();
   });
 });
 

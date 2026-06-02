@@ -9,6 +9,7 @@ import type {
 import type { CrossTrainingAdjustment, LoadBudget } from './activities';
 import type { OnboardingState, Marathon, RecurringActivity, TrainingFocus } from './onboarding';
 import type { EventType, TriConfig, Discipline, HyroxConfig } from './triathlon';
+import type { StrengthLog } from './strength-log';
 
 /** Cross-modal VO2max estimate confidence tier. Mirrors `hrCalibratedVdot.confidence`. */
 export type VO2Confidence = 'high' | 'medium' | 'low' | 'none';
@@ -383,9 +384,19 @@ export interface GarminActual {
    *  Used by iTRIMP intensity calibration. Null for non-run matches or pre-migration actuals. */
   plannedType?: string | null;
   /** Muscle groups worked, ordered most-worked first (strength/gym sessions only).
-   *  Derived at completion from the parsed exercise list. Drives the body-map and
+   *  Derived at completion from the parsed exercise list. Drives the "Worked"
    *  chip summary on the post-session recap and the activity-log detail. */
   workedMuscleGroups?: string[];
+  /** Per-lift breakdown logged at completion (strength/gym sessions only): what
+   *  you hit and the weight. Stamped onto the activity so tapping a past gym
+   *  session shows its weights, independent of the rolling per-lift memory. */
+  loggedLifts?: Array<{
+    exerciseName: string;
+    weightKg?: number;
+    reps: string;
+    estimatedOneRmKg?: number;
+    liftKey?: string;
+  }>;
   /** HR effort score: how hard this was relative to target zone.
    *  0.8 = undercooked, 1.0 = nailed it, 1.2 = overcooked. Null if no HR data or no target zone. */
   hrEffortScore?: number | null;
@@ -677,6 +688,7 @@ export interface SimulatorState {
   epw: number;            // Exercises per week (total including cross-training)
   rw: number;             // Runs per week (derived: min(epw, 7))
   gs?: number;            // Gym sessions per week (0-3)
+  strengthLog?: StrengthLog; // Per-lift working-weight memory + est1RM benchmark
   wkm: number;            // Weekly km
 
   // Personal records
@@ -929,6 +941,24 @@ export interface SimulatorState {
     kmSplits?: number[] | null;
     elevationGainM?: number | null;
     ambientTempC?: number | null;
+  }>;
+
+  /**
+   * Slim per-activity history across ALL disciplines (swim/bike/run), distilled
+   * from the DB activity log at launch (`loadActivitiesFromDB`). Persisted so
+   * per-discipline weekly volume and longest-session signals survive a fresh
+   * sign-in, where `wks[].garminActuals` is empty until activities re-match
+   * forward. `onboardingRunHistory` already gives run this resilience; this
+   * extends the same coverage to swim and bike (the Endurance readiness card
+   * read garminActuals-only and so collapsed to 0 after sign-in). Capped to the
+   * last 12 weeks (the readiness longest-session window) and holds only the
+   * fields the volume/longest helpers need — no polylines/splits — to keep the
+   * snapshot small. Read by `iterateRecentActuals` in tri-volume-by-discipline. */
+  recentDisciplineActivity?: Array<{
+    activityType: string;
+    startTime: string;
+    durationSec: number;
+    distanceKm: number;
   }>;
 
   /** ISO timestamp of the user's earliest Strava activity, fetched once on first

@@ -1890,7 +1890,12 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
 
-  const isGym = (todayW as any).t === 'gym';
+  // Strength = any gym / strength-typed session (running S&C, tri/cycling/HYROX
+  // gym, injury-adapted, rehab), so the hero treats them the same and the Start
+  // button routes to the guided strength experience rather than GPS tracking.
+  // Type-based on purpose: a GPS run that merely has "strength" in its name must
+  // NOT be pulled out of GPS tracking, so we don't use the name-matching helper.
+  const isStrength = (todayW as any).t === 'gym' || (todayW as any).t === 'strength';
   const rawName = (todayW as any).n || 'Workout';
   const workoutId = (todayW as any).id || (todayW as any).n;
   const alreadyRated = wk.rated[workoutId] && wk.rated[workoutId] !== 'skip';
@@ -1899,7 +1904,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   const matchedActual = (wk.garminActuals as any)?.[workoutId];
   const actualDisplayName = matchedActual?.activityType ? formatActivityType(matchedActual.activityType) : (matchedActual?.displayName || null);
   // For gym sessions, append "Gym Session" if not already in the name
-  const planName = isGym && !rawName.toLowerCase().includes('gym') ? `${rawName} Gym Session` : rawName;
+  const planName = isStrength && !/(gym|strength)/i.test(rawName) ? `${rawName} Gym Session` : rawName;
   const name = actualDisplayName || planName;
 
   const rawDesc = (todayW as any).d || '';
@@ -1911,9 +1916,9 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   const rpe = (todayW as any).rpe || null;
 
   // For gym sessions: render exercises as an expandable list
-  const exercises = isGym && rawDesc ? rawDesc.split('\n').filter(Boolean) : [];
+  const exercises = isStrength && rawDesc ? rawDesc.split('\n').filter(Boolean) : [];
   // Suppress planned description when real activity data is available. It would be wrong (e.g. "90min general sport" for Alpine Skiing)
-  const desc = matchedActual ? '' : (isGym ? '' : fmtDesc(rawDesc, s.unitPref ?? 'km'));
+  const desc = matchedActual ? '' : (isStrength ? '' : fmtDesc(rawDesc, s.unitPref ?? 'km'));
 
   const metaItems = [
     durationMin ? { val: `${actualDurationMin ? '' : '~'}${Math.round(durationMin)} min`, lbl: 'Duration' } : null,
@@ -1929,7 +1934,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   `).join('');
 
   const startBtn = !alreadyRated
-    ? `<button id="home-start-btn" data-workout-id="${workoutId}" data-name="${name.replace(/"/g, '&quot;')}" data-desc="${rawDesc.replace(/"/g, '&quot;')}" style="background:var(--c-black);color:#fff;border:none;border-radius:100px;padding:9px 18px;font-size:13px;font-weight:600;font-family:var(--f);cursor:pointer;display:inline-flex;align-items:center;gap:6px;letter-spacing:0.01em">
+    ? `<button id="home-start-btn" data-workout-id="${workoutId}" data-name="${name.replace(/"/g, '&quot;')}" data-raw-name="${rawName.replace(/"/g, '&quot;')}" data-desc="${rawDesc.replace(/"/g, '&quot;')}" data-type="${(todayW as any).t ?? ''}" data-rpe="${rpe ?? ''}" data-dur="${(todayW as any).estimatedDurationMin ?? ''}" data-strength="${isStrength ? '1' : ''}" style="background:var(--c-black);color:#fff;border:none;border-radius:100px;padding:9px 18px;font-size:13px;font-weight:600;font-family:var(--f);cursor:pointer;display:inline-flex;align-items:center;gap:6px;letter-spacing:0.01em">
         <span style="width:12px;height:12px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
         Start
       </button>`
@@ -2042,6 +2047,48 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
 }
 
 
+/**
+ * On-demand "To do" card. Generated sessions land in `adhocWorkouts`; until the user
+ * does one (a synced activity matches it, or they mark it done/skipped), it's an
+ * upcoming session to do — not a "recent activity". Renders each as a tappable card
+ * (`.home-adhoc-row` → `openTriWorkoutDetail`, which carries Start / Mark-as-done),
+ * so On-demand gets the same "here's your session, go do it" affordance as plan modes.
+ */
+function buildTrackOnlyTodo(s: SimulatorState): string {
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return '';
+  const rated = wk.rated ?? {};
+  const esc = (str: string) => String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const todos = (wk.adhocWorkouts ?? [])
+    .map((w, idx) => ({ w: w as any, idx }))
+    .filter(({ w }) => (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && rated[w.id] == null);
+  if (todos.length === 0) return '';
+  const unit = s.unitPref ?? 'km';
+  const cards = todos.map(({ w, idx }) => {
+    const name = w.n || w.name || w.workoutName || 'Session';
+    const dist = w.distanceKm;
+    const dur = w.durationMin;
+    const meta = typeof dist === 'number' && dist > 0 ? formatKm(dist, unit)
+      : typeof dur === 'number' && dur > 0 ? `${Math.round(dur)} min` : '';
+    return `
+      <button class="home-adhoc-row" data-week-num="${s.w}" data-adhoc-idx="${idx}" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05);padding:14px 16px;cursor:pointer;font-family:inherit;margin-bottom:8px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div style="min-width:0">
+            <div style="font-size:15px;font-weight:600;color:#0F172A;letter-spacing:-0.01em">${esc(name)}</div>
+            ${meta ? `<div style="font-size:12px;color:#64748B;margin-top:2px">${meta}</div>` : ''}
+          </div>
+          <span style="font-size:18px;color:#94A3B8;flex:0 0 auto">&rarr;</span>
+        </div>
+      </button>`;
+  }).join('');
+  return `
+    <div style="padding:0 16px;margin-top:6px" class="hf" data-delay="0.10">
+      <div style="font-size:12px;font-weight:600;color:#64748B;padding:0 4px 8px">To do</div>
+      ${cards}
+    </div>`;
+}
+
 function buildRecentActivity(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   const prevWk = s.wks?.[s.w - 2];
@@ -2084,6 +2131,9 @@ function buildRecentActivity(s: SimulatorState): string {
     // Adhoc workouts. Skip if garminActuals already covers this id (garminActuals has richer/Strava data)
     (week.adhocWorkouts || []).forEach((w: any, idx: number) => {
       if (w.id && actualKeys.has(w.id)) return;
+      // On-demand: generated, not-yet-done sessions belong in the "To do" card
+      // (buildTrackOnlyTodo), not Recent. Once matched/marked done they fall through.
+      if (s.trackOnly && (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
       const actName = (w.activityType ? formatActivityType(w.activityType) : null) || w.workoutName || w.displayName || w.name || w.n || 'Workout';
@@ -2672,7 +2722,9 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
         </button>
       </div>
 
-      ${buildTrackOnlyDailyTarget(s)}
+      <!-- Sessions (To-do) live on the Plan tab now, not duplicated here. TSS lives
+           inside the Readiness ring (Strain), so the standalone "Today's load" card
+           was removed as redundant. Home is recovery-led: Generate + Readiness. -->
       ${buildReadinessRing(s)}
 
       <!-- Sleep logging affordance: readiness ring only reflects watch/manual sleep,
@@ -3077,6 +3129,21 @@ function wireHomeHandlers(): void {
     const btn = e.currentTarget as HTMLElement;
     const name = btn.getAttribute('data-name') || 'Workout';
     const desc = btn.getAttribute('data-desc') || '';
+    // Strength / gym sessions launch the guided strength experience (exercise
+    // list, weight stepper, RIR, per-lift tracking) instead of GPS tracking.
+    if (btn.getAttribute('data-strength') === '1') {
+      const workout = {
+        id: btn.getAttribute('data-workout-id') || undefined,
+        t: btn.getAttribute('data-type') || 'gym',
+        n: btn.getAttribute('data-raw-name') || name,
+        d: desc,
+        rpe: Number(btn.getAttribute('data-rpe')) || undefined,
+        estimatedDurationMin: Number(btn.getAttribute('data-dur')) || undefined,
+      };
+      import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) =>
+        openStrengthWorkoutDetail(workout as any));
+      return;
+    }
     if (window.trackWorkout) {
       window.trackWorkout(name, desc);
     } else {

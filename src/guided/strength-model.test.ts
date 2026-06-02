@@ -57,8 +57,17 @@ describe('parseStrengthSession', () => {
   it('handles normal gym templates with loads and minute rests', () => {
     const s = parseStrengthSession(wk('3x5 Back Squat @80% 1RM (2 reps in reserve) (2-3 min rest)'))!;
     expect(s.sets).toHaveLength(3);
-    expect(s.sets[0].exerciseName).toBe('Back Squat @80% 1RM');
+    // Display name strips the "@80% 1RM" garnish; the load marker survives only
+    // as the weight-tracking liftKey.
+    expect(s.sets[0].exerciseName).toBe('Back Squat');
+    expect(s.sets[0].liftKey).toBe('back-squat');
     expect(s.sets[0].restSec).toBe(120);
+  });
+
+  it('leaves bodyweight / non-loaded movements without a liftKey', () => {
+    const s = parseStrengthSession(wk('3x30s Front Plank (Flat back) (30s rest)'))!;
+    expect(s.sets[0].liftKey).toBeUndefined();
+    expect(s.sets[0].exerciseName).toBe('Front Plank');
   });
 
   it('treats a line with no Nx prefix as a single set', () => {

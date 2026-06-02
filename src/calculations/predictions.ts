@@ -367,6 +367,7 @@ export function calculateForecast(
     weekly_volume_km: planMeanKm ?? undefined,
     weekly_volume_hours: state.weeklyTrainingHours,
     hm_pb_seconds: state.pbs.h,
+    strength_sessions_per_week: state.gymSessionsPerWeek,
   });
 
   const forecastVdot = baselineVdot + horizon.vdot_gain;
@@ -398,6 +399,8 @@ export interface LiveForecastParams {
   weeklyVolumeHours?: number;
   hmPbSeconds?: number;
   ltPaceSecPerKm?: number;
+  /** Planned strength sessions per week (s.gs). Future-projection economy gain. */
+  strengthSessionsPerWeek?: number;
   adaptationRatio?: number;
   /**
    * Today's race time as predicted by `blendPredictions` at the target distance.
@@ -435,6 +438,7 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     weekly_volume_hours: p.weeklyVolumeHours,
     hm_pb_seconds: p.hmPbSeconds,
     lt_pace_sec_per_km: p.ltPaceSecPerKm,
+    strength_sessions_per_week: p.strengthSessionsPerWeek,
   });
 
   let adjustedGain = horizon.vdot_gain;

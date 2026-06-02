@@ -14,16 +14,20 @@
 import type { Workout } from '@/types';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { normalizeExerciseKey, cleanExerciseName } from '@/calculations/strength-exercise-key';
 
 /** One working set in the flattened guided sequence. */
 export interface GuidedSet {
-  exerciseName: string;
+  exerciseName: string;    // display name, "@X% 1RM" garnish already stripped
   exerciseIndex: number;   // 0-based index of the parent exercise
   setIndex: number;        // 0-based set within the exercise
   setCount: number;        // total sets for this exercise
   reps: string;            // "12", "10 each leg", "40s", "" when not parseable
   cue: string;             // feel cue(s), joined with " · "
   restSec: number;         // rest AFTER this set (0 = none parsed)
+  /** Canonical lift slug for weight tracking ("back-squat"); undefined when the
+   *  movement isn't weight-trackable (bodyweight / plyometric / isometric / HYROX). */
+  liftKey?: string;
 }
 
 export interface StrengthSession {
@@ -102,15 +106,22 @@ export function parseStrengthSession(workout: Workout): StrengthSession | null {
     const setCount = parseSetCount(main);
     const { reps, name } = parseRepsAndName(main);
 
+    // Compute the weight-tracking key from the RAW name (the "@X% 1RM" / implement
+    // markers are the load signal), then strip them for the display name so no
+    // surface shows the percentage-of-a-max-you-never-set garnish.
+    const liftKey = normalizeExerciseKey(name) || undefined;
+    const displayName = cleanExerciseName(name);
+
     for (let i = 0; i < setCount; i++) {
       sets.push({
-        exerciseName: name,
+        exerciseName: displayName,
         exerciseIndex,
         setIndex: i,
         setCount,
         reps,
         cue,
         restSec,
+        liftKey,
       });
     }
     exerciseIndex++;

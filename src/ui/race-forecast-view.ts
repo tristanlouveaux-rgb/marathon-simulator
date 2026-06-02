@@ -16,8 +16,8 @@ import type { SimulatorState } from '@/types/state';
 import { tv, rdKm } from '@/calculations/vdot';
 import { ft } from '@/utils/format';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
-import { predictStandardDistances, getStandardForecastDetail } from '@/calculations/blended-fitness';
-import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
+import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
+import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart, animateChartDrawOn as animateTrendCharts } from './triathlon/benchmark-charts';
 import { formatKm, formatPace } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
@@ -650,12 +650,41 @@ function navigateStdTab(tab: TabId): void {
 
 // ── Per-distance detail (drill-down from a grid tile) ────────────────────────
 
-function stdStatRow(label: string, value: string): string {
+function stdStatRow(label: string, value: string, hint?: string): string {
   return `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;padding:9px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.04)">
-      <span style="color:${TEXT_S}">${label}</span>
-      <span style="color:${TEXT_M};font-variant-numeric:tabular-nums">${value}</span>
+    <div style="padding:9px 0;border-top:1px solid rgba(0,0,0,0.04)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px">
+        <span style="color:${TEXT_S}">${label}</span>
+        <span style="color:${TEXT_M};font-variant-numeric:tabular-nums">${value}</span>
+      </div>
+      ${hint ? `<div style="font-size:11px;color:${TEXT_S};line-height:1.45;margin-top:4px;max-width:88%">${hint}</div>` : ''}
     </div>`;
+}
+
+/** Round seconds to a clean "N min" for the durability threshold hint. */
+function fmtMinThreshold(sec: number): string {
+  return `${Math.round(sec / 60)} min`;
+}
+
+// Selected projection horizon for the no-race forecast drill-down. Module-level
+// so it survives the in-place re-render but resets between visits (ephemeral UI
+// pref, not worth a state field). Default 8 weeks (mid of 4/8/12).
+const STD_PROJ_HORIZONS = [4, 8, 12] as const;
+let stdProjWeeks: number = 8;
+
+/** Segmented 4 / 8 / 12-week horizon selector. Mirrors the shoes toggle track. */
+function buildStdHorizonSelector(selected: number): string {
+  const segTrack = 'background:rgba(15,23,42,0.05);border-radius:100px;padding:4px;box-shadow:inset 0 1px 2px rgba(15,23,42,0.10),inset 0 0 0 1px rgba(15,23,42,0.04)';
+  const segActive = `background:#fff;color:${TEXT_M};box-shadow:0 1px 2px rgba(15,23,42,0.08),0 4px 10px rgba(15,23,42,0.10),inset 0 0 0 1px rgba(15,23,42,0.04)`;
+  const segInactive = `background:transparent;color:${TEXT_S};box-shadow:none`;
+  const btn = (w: number) => `
+    <button id="stdd-horizon-${w}" type="button" style="
+      flex:1;padding:8px 12px;border-radius:100px;border:none;font:inherit;font-size:12px;
+      font-weight:600;cursor:pointer;font-family:var(--f);-webkit-tap-highlight-color:transparent;
+      transition:background 0.18s cubic-bezier(0.2,0.8,0.2,1),color 0.18s cubic-bezier(0.2,0.8,0.2,1),box-shadow 0.18s cubic-bezier(0.2,0.8,0.2,1);
+      ${w === selected ? segActive : segInactive}
+    ">${w} wk</button>`;
+  return `<div style="display:flex;gap:0;${segTrack};margin-top:12px">${STD_PROJ_HORIZONS.map(btn).join('')}</div>`;
 }
 
 function fmtBias(sec: number): string {
@@ -664,16 +693,39 @@ function fmtBias(sec: number): string {
   return abs >= 60 ? `${sign}${Math.floor(abs / 60)}:${String(Math.round(abs % 60)).padStart(2, '0')}` : `${sign}${Math.round(abs)}s`;
 }
 
-export function renderStdDistanceDetail(dist: 'half' | 'marathon' | '5k' | '10k'): void {
-  const container = document.getElementById('app-root');
-  if (!container) return;
-  const s = getState();
+/** One row of the prediction waterfall: a step label (with its signed delta)
+ *  on the left, the running cumulative time on the right. Slower = red,
+ *  faster = green; the base/total rows pass `deltaSec = null`. */
+function stdWaterfallRow(label: string, cumStr: string, deltaSec: number | null, opts?: { total?: boolean; hint?: string }): string {
+  const isTotal = opts?.total === true;
+  const deltaHtml = deltaSec == null || Math.abs(deltaSec) < 1
+    ? ''
+    : `<span style="font-size:11px;font-variant-numeric:tabular-nums;margin-left:8px;color:${deltaSec > 0 ? '#FF3B30' : '#16A34A'}">${fmtBias(deltaSec)}</span>`;
+  return `
+    <div style="padding:9px 0;border-top:${isTotal ? '1px solid rgba(0,0,0,0.10)' : '1px solid rgba(0,0,0,0.04)'}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px">
+        <span style="color:${isTotal ? TEXT_M : TEXT_S};font-weight:${isTotal ? '600' : '400'}">${label}${deltaHtml}</span>
+        <span style="color:${TEXT_M};font-weight:${isTotal ? '700' : '400'};font-variant-numeric:tabular-nums">${cumStr}</span>
+      </div>
+      ${opts?.hint ? `<div style="font-size:11px;color:${TEXT_S};line-height:1.45;margin-top:4px;max-width:88%">${opts.hint}</div>` : ''}
+    </div>`;
+}
+
+type StdDist = 'half' | 'marathon' | '5k' | '10k';
+
+/**
+ * The dynamic body of the detail page (hero + cards). Extracted so the shoes
+ * toggle and horizon selector can rebuild just this region in place — preserving
+ * scroll and letting the chart's own line/dot animations replay — instead of
+ * re-rendering the whole page (which scrolled to top and flashed). `animate`
+ * adds the entrance float-up on first paint only; refreshes pass false so the
+ * cards appear instantly while the chart still animates.
+ */
+function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean): string {
   const unit = s.unitPref ?? 'km';
   const label = RACE_DIST_LABEL[dist] ?? 'Race';
   const detail = getStandardForecastDetail(s, dist);
-
-  const initials = (s.onboarding?.name || 'You')
-    .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+  const fade = (delay: string) => animate ? `class="stdd-fade" style="animation-delay:${delay};` : `style="`;
 
   const heroTime = detail.predictedSec && detail.predictedSec > 0 ? ft(detail.predictedSec) : '—';
   // Target pace = even pace for the predicted finish. Well-defined at every
@@ -686,32 +738,159 @@ export function renderStdDistanceDetail(dist: 'half' | 'marathon' | '5k' | '10k'
 
   // Trend: raw VDOT-derived predicted time over time. Lower time = better, so
   // invert the chart (improvement reads as up). Mirrors the targeted forecast's
-  // "fitness trajectory" line vs adjusted headline split.
-  const trendCard = detail.trend.length >= 2 ? `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
-      <div style="font-size:13px;color:${TEXT_S};font-weight:500;margin-bottom:10px">Predicted time over time</div>
-      ${buildBenchmarkTrendChart(detail.trend, '#16A34A', 'rgba(22,163,74,0.10)', '', /*inverted*/ true)}
-    </div>` : `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
-      <div style="font-size:13px;color:${TEXT_S};line-height:1.5">The trend fills in as your fitness is recorded week to week. Check back after a few more synced runs.</div>
-    </div>`;
+  // "fitness trajectory" line vs adjusted headline split. Gate the chart behind
+  // ≥3 points spanning ≥7 days — two points a day apart is not a trend, it just
+  // draws a flat line that reads as filler.
+  const trendDatesMs = detail.trend.map(p => Date.parse(p.date)).filter(t => !isNaN(t)).sort((a, b) => a - b);
+  const trendSpanDays = trendDatesMs.length >= 2
+    ? (trendDatesMs[trendDatesMs.length - 1] - trendDatesMs[0]) / (24 * 3600 * 1000)
+    : 0;
+  const trendReady = detail.trend.length >= 3 && trendSpanDays >= 7;
 
-  const durabilityVal = detail.durabilityCapped
-    ? `+${((detail.durabilityMultiplier - 1) * 100).toFixed(1)}% (long-run shortfall)`
-    : 'Threshold met';
+  // Forward projection: "what you could run if you hold the plan" for the
+  // selected horizon, rendered as a dashed continuation of the trajectory. Null
+  // for users with no plan to project along (just-track, no sessions) — then we
+  // fall back to the historical-only trend behaviour.
+  const projection = getStandardForecastProjection(s, dist, stdProjWeeks);
+  let trendCard: string;
+  if (projection) {
+    trendCard = `
+    <div style="${CARD};padding:18px;margin-bottom:14px">
+      ${buildForecastTrajectoryChart(projection, { nowSec: detail.predictedSec ?? 0, label })}
+      ${buildStdHorizonSelector(stdProjWeeks)}
+    </div>`;
+  } else if (trendReady) {
+    trendCard = `
+    <div style="${CARD};padding:18px;margin-bottom:14px">
+      <div style="font-size:13px;color:${TEXT_S};font-weight:500;margin-bottom:10px">Predicted ${label} time over time</div>
+      ${buildPredictedTimeTrendChart(detail.trend)}
+    </div>`;
+  } else {
+    trendCard = `
+    <div style="${CARD};padding:18px;margin-bottom:14px">
+      <div style="font-size:13px;color:${TEXT_M};font-weight:600;margin-bottom:6px">Predicted ${label} time over time</div>
+      <div style="font-size:13px;color:${TEXT_S};line-height:1.5">A trend needs a few weeks of recorded fitness. It appears here once there are at least three data points across a week or more.</div>
+    </div>`;
+  }
+
+  // Durability factor name + hint (shared by the waterfall row). For short
+  // races the deficit is aerobic economy, not a missing "long run", so the
+  // factor is named honestly per distance. The hint distinguishes the
+  // no-history case (longest run = 0, penalty maxes) from a measured short run.
+  const isShortRace = dist === '5k' || dist === '10k';
+  const durFactorName = isShortRace ? 'aerobic durability' : 'long-run shortfall';
+  const durThreshStr = fmtMinThreshold(detail.durabilityThresholdSec);
+  const durabilityHint = detail.durabilityCapped
+    ? (detail.durabilityLongestRunSec <= 0
+        ? `No recent runs of ${durThreshStr}+ on record, so the endurance base for ${label} is unproven. Log a longer run to clear this.`
+        : (isShortRace
+            ? `Longest recent run is under ${durThreshStr}, the easy-run duration that signals ${label}-ready economy.`
+            : `Longest recent run is under ${durThreshStr}, below the long-run base that supports a ${label}.`))
+    : undefined;
+
+  // Waterfall: capacity blend → race calibration → durability → supershoes,
+  // each row showing the running cumulative time and the delta it applied. The
+  // final row reconciles to the hero because both read `detail.stages.finalSec`
+  // (same computation as the grid tile). Steps that move the time < 1s are
+  // hidden. Only renders when the blend produced an estimate.
+  const stages = detail.stages;
+  const waterfallCard = stages ? (() => {
+    const rows: string[] = [];
+    rows.push(stdWaterfallRow('Capacity', ft(stages.blendedSec), null));
+    const calDelta = stages.calibratedSec - stages.blendedSec;
+    if (Math.abs(calDelta) >= 1) {
+      rows.push(stdWaterfallRow(`Race calibration`, ft(stages.calibratedSec), calDelta));
+    }
+    const afterDur = stages.calibratedSec * stages.durability.multiplier;
+    const durDelta = afterDur - stages.calibratedSec;
+    if (Math.abs(durDelta) >= 1) {
+      rows.push(stdWaterfallRow(`Durability · ${durFactorName}`, ft(afterDur), durDelta, { hint: durabilityHint }));
+    }
+    const shoeDelta = stages.finalSec - afterDur;
+    if (Math.abs(shoeDelta) >= 1) {
+      rows.push(stdWaterfallRow('Supershoes', ft(stages.finalSec), shoeDelta));
+    }
+    rows.push(stdWaterfallRow('Predicted finish', ft(stages.finalSec), null, { total: true }));
+    const onlyBase = rows.length === 2; // capacity + total, nothing in between
+    return `
+    <div style="${CARD};padding:18px;margin-bottom:14px">
+      <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">How we reach ${heroTime}</div>
+      ${onlyBase ? `<div style="font-size:11px;color:${TEXT_S};line-height:1.45;margin-bottom:2px">No adjustments apply right now, so the prediction equals your capacity blend.</div>` : ''}
+      ${rows.join('')}
+    </div>`;
+  })() : '';
+
   const calibrationVal = detail.calibrationBiasSec != null
-    ? `${fmtBias(detail.calibrationBiasSec)} (from ${detail.calibrationRaceCount} race${detail.calibrationRaceCount === 1 ? '' : 's'})`
+    ? `${fmtBias(detail.calibrationBiasSec)} from ${detail.calibrationRaceCount} race${detail.calibrationRaceCount === 1 ? '' : 's'}`
     : 'No race data yet';
 
+  // Feeds card: the raw capacity signals behind the blend (the "Capacity" row
+  // of the waterfall). Adjustments (durability, calibration delta) live in the
+  // waterfall; only the calibration *status* sits here.
   const factorsCard = `
     <div style="${CARD};padding:18px;margin-bottom:14px">
-      <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">What feeds this</div>
-      ${detail.vdot != null ? stdStatRow('Capacity', `VDOT ${detail.vdot.toFixed(1)}`) : ''}
-      ${detail.ltSecPerKm != null ? stdStatRow('Threshold pace', formatPace(detail.ltSecPerKm, unit)) : ''}
+      <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">What feeds your capacity</div>
+      ${detail.vdot != null ? stdStatRow('Aerobic capacity', `VDOT ${detail.vdot.toFixed(1)}`) : ''}
+      ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', formatPace(detail.ltSecPerKm, unit)) : ''}
       ${detail.weeklyKm != null ? stdStatRow('Training volume', `${formatKm(detail.weeklyKm, unit)}/wk`) : ''}
-      ${stdStatRow('Durability', durabilityVal)}
-      ${stdStatRow('Calibration', calibrationVal)}
+      ${stdStatRow('Race calibration', calibrationVal)}
     </div>`;
+
+  return `
+    <div ${fade('0.06s')}text-align:center;padding:20px 20px 16px">
+      <div style="font-size:11px;color:${TEXT_S};font-weight:500">Predicted finish</div>
+      <div style="font-size:40px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1.05;margin-top:6px;font-variant-numeric:tabular-nums">${heroTime}</div>
+      ${heroPace ? `<div style="font-size:16px;color:${TEXT_S};margin-top:6px;font-weight:600;font-variant-numeric:tabular-nums">${heroPace}</div>` : ''}
+      <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${label} · from your current fitness</div>
+    </div>
+
+    <div ${fade('0.12s')}padding:0 16px">
+      ${waterfallCard}
+      ${factorsCard}
+      ${buildStdShoesCard(s)}
+      ${trendCard}
+    </div>`;
+}
+
+/** Re-attach the shoe-toggle + horizon-selector listeners after a content
+ *  rebuild. Both mutate state/module-horizon then refresh the content region
+ *  in place (scroll preserved), so the chart re-animates without a page flash. */
+function wireStdDetailContent(dist: StdDist): void {
+  const refresh = () => {
+    const el = document.getElementById('stdd-content');
+    if (!el) return;
+    const y = window.scrollY;
+    el.innerHTML = buildStdDetailInner(getState(), dist, /*animate*/ false);
+    wireStdDetailContent(dist);
+    window.scrollTo(0, y);
+    animateTrendCharts(); // redraw the projection line on horizon/shoe change
+  };
+
+  const setShoeKindDetail = (kind: 'standard' | 'supershoes') => {
+    const ms = getMutableState();
+    if ((ms.shoeKind ?? 'standard') === kind) return;
+    ms.shoeKind = kind;
+    saveState();
+    refresh();
+  };
+  document.getElementById('std-shoes-standard')?.addEventListener('click', () => setShoeKindDetail('standard'));
+  document.getElementById('std-shoes-supershoes')?.addEventListener('click', () => setShoeKindDetail('supershoes'));
+
+  for (const w of STD_PROJ_HORIZONS) {
+    document.getElementById(`stdd-horizon-${w}`)?.addEventListener('click', () => {
+      if (stdProjWeeks === w) return;
+      stdProjWeeks = w;
+      refresh();
+    });
+  }
+}
+
+export function renderStdDistanceDetail(dist: StdDist): void {
+  const container = document.getElementById('app-root');
+  if (!container) return;
+  const s = getState();
+  const initials = (s.onboarding?.name || 'You')
+    .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   container.innerHTML = `
     <style>
@@ -737,17 +916,7 @@ export function renderStdDistanceDetail(dist: 'half' | 'marathon' | '5k' | '10k'
           <button id="stdd-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
 
-        <div class="stdd-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 16px">
-          <div style="font-size:11px;color:${TEXT_S};font-weight:500">Predicted finish</div>
-          <div style="font-size:40px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1.05;margin-top:6px;font-variant-numeric:tabular-nums">${heroTime}</div>
-          ${heroPace ? `<div style="font-size:16px;color:${TEXT_S};margin-top:6px;font-weight:600;font-variant-numeric:tabular-nums">${heroPace}</div>` : ''}
-          <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${label} · from your current fitness</div>
-        </div>
-
-        <div class="stdd-fade" style="animation-delay:0.12s;padding:0 16px">
-          ${trendCard}
-          ${factorsCard}
-        </div>
+        <div id="stdd-content">${buildStdDetailInner(s, dist, /*animate*/ true)}</div>
 
       </div>
 
@@ -758,5 +927,7 @@ export function renderStdDistanceDetail(dist: 'half' | 'marathon' | '5k' | '10k'
   document.getElementById('stdd-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
+  wireStdDetailContent(dist);
+  animateTrendCharts(); // draw the projection line in on first paint
   wireTabBarHandlers(navigateStdTab);
 }

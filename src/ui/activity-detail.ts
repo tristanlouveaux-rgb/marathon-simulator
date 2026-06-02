@@ -407,6 +407,31 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     `;
   }
 
+  // ─── Strength lifts breakdown ────────────────────────────────────────────────
+  // What you hit and at what weight, stamped on the actual at completion. Mirrors
+  // the HYROX recap card. Only renders for completed gym/strength sessions.
+  let liftsHtml = '';
+  if (actual.loggedLifts && actual.loggedLifts.length) {
+    const liftRows = actual.loggedLifts.map(l => {
+      const w = l.weightKg != null ? `${+l.weightKg.toFixed(1)}kg` : '';
+      const reps = l.reps ? ` × ${esc(l.reps)}` : '';
+      const e1rm = l.estimatedOneRmKg != null
+        ? ` <span style="color:${TEXT_L};font-weight:400;font-size:11px">est 1RM ${+l.estimatedOneRmKg.toFixed(1)}kg</span>`
+        : '';
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px">
+          <span style="color:${TEXT_M}">${esc(l.exerciseName)}</span>
+          <span style="font-variant-numeric:tabular-nums;font-weight:600;color:${TEXT_M}">${w}${reps}${e1rm}</span>
+        </div>`;
+    }).join('');
+    liftsHtml = `
+      <div class="ad-fade" style="animation-delay:0.2s;margin-bottom:16px">
+        ${secLabel('Lifts')}
+        <div style="${CARD};padding:8px 16px">${liftRows}</div>
+      </div>
+    `;
+  }
+
   // ─── Rep table + fade ────────────────────────────────────────────────────────
   // Only renders when reps were detected. Shows source ("Strava laps" / "Auto"),
   // per-rep table, fade chart, and a one-line commentary when the prescribed
@@ -640,6 +665,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           ${sportRowHtml}
           ${statsHtml}
           ${hyroxHtml}
+          ${liftsHtml}
           ${loadCompareHtml}
           ${teHtml}
           ${mapHtml}

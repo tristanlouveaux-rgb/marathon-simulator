@@ -1,6 +1,7 @@
 import type { TrainingHorizonInput, TrainingHorizonResult, RaceDistance, AbilityBand, RunnerType } from '@/types';
 import { TRAINING_HORIZON_PARAMS, TAPER_NOMINAL, EXPECTED_GAINS } from '@/constants';
 import { REF_KM_PER_SESSION, HOURS_TO_KM_RATE } from '@/constants/training-params';
+import { STRENGTH_MAX_ECONOMY_GAIN_PCT, STRENGTH_TAU_WEEKS } from '@/constants/strength-constants';
 import { inferLevel } from './fatigue';
 import { weekVolumeBudgetKm, type Archetype } from './athlete-archetype';
 
@@ -233,6 +234,26 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Base improvement (product of all factors)
   let improvement_pct = max_gain * type_mod * week_factor * session_factor * exp_factor;
 
+  // ── Strength → running-economy contribution (Beattie & Blagrove 2018) ────
+  //
+  // A FUTURE-PROJECTION term: the strength sessions the plan prescribes will
+  // raise running economy across the block (~2-4% RE, ~2-5% TT performance in
+  // the literature; we project up to STRENGTH_MAX_ECONOMY_GAIN_PCT% time gain).
+  // Additive on top of the run-volume gain, which carries no strength signal —
+  // so this does NOT double-count the economy already baked into the current
+  // blend (VDOT/LT/PB/Tanda/HR are present-fitness proxies; this projects the
+  // FUTURE adaptation). Saturates in training weeks (less time → less gain) and
+  // scales with planned sessions (full credit at ≥2/wk). Folded in below and
+  // bounded by the same max_gain_cap_pct ceiling + guardrails as the run gain,
+  // so strength can't push a beginner through a barrier. See SCIENCE_LOG §BC.
+  const strength_sessions = params.strength_sessions_per_week ?? 0;
+  let strength_gain_pct = 0;
+  if (strength_sessions > 0 && weeks_eff > 0) {
+    const adoption = 1 - Math.exp(-weeks_eff / STRENGTH_TAU_WEEKS);
+    const dose_scale = Math.min(strength_sessions / 2, 1);
+    strength_gain_pct = STRENGTH_MAX_ECONOMY_GAIN_PCT * adoption * dose_scale;
+  }
+
   // Undertraining penalty (if effective dose too low). Using effective_sessions
   // so a user running 4× very short sessions still trips the penalty.
   const min_sess = TRAINING_HORIZON_PARAMS.min_sessions[distance_key] || 3.0;
@@ -253,7 +274,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   const taper_bonus = TRAINING_HORIZON_PARAMS.taper_bonus_pct[distance_key] * taper_ratio;
 
   // Final improvement (with bounds)
-  improvement_pct = improvement_pct + taper_bonus - undertrain_penalty;
+  improvement_pct = improvement_pct + taper_bonus + strength_gain_pct - undertrain_penalty;
   improvement_pct = Math.max(
     -TRAINING_HORIZON_PARAMS.max_slowdown_pct,
     Math.min(TRAINING_HORIZON_PARAMS.max_gain_cap_pct, improvement_pct)

@@ -10,7 +10,7 @@
  * carries its physiological load into the model (previously a quick "mark done"
  * gym session contributed zero TSS — only synced gym sessions counted). The log
  * entry:
- *   - stores the worked muscle groups (for the post-session body-map summary),
+ *   - stores the worked muscle groups (for the post-session "Worked" chips),
  *   - uses a `guided-…` garminId so a later watch/Strava sync UPGRADES it with
  *     HR instead of double-logging (mirrors the HYROX guided-upgrade path), and
  *   - auto-attaches HR if a matching synced activity is already pending review,
@@ -32,6 +32,8 @@ import { applyHyroxSessionBenchmarks, buildHyroxSessionRecap } from '@/calculati
 import { parseStrengthSession } from './strength-model';
 import { deriveWorkedMuscleGroups, type WorkedMuscleGroup } from '@/calculations/strength-muscle-groups';
 import type { SetRecord } from './strength-controller';
+import { persistStrengthLifts, summariseLoggedLifts } from './strength-log-persist';
+import { snapshotNotifiedStrengthPrs } from '@/calculations/strength-marker-bumps';
 
 export interface CompleteStrengthOpts {
   /** RPE the user actually rated; defaults to the workout's prescribed RPE so
@@ -125,6 +127,19 @@ export function completeStrengthSession(workout: Workout, opts: CompleteStrength
   );
   result.actual = actual;
   result.hrAutoMatched = hrAutoMatched;
+
+  // Stamp the per-lift breakdown onto the activity so a past gym session shows
+  // what was hit and at what weight (independent of the rolling per-lift memory).
+  const loggedLifts = summariseLoggedLifts(opts.records);
+  if (loggedLifts && actual) actual.loggedLifts = loggedLifts;
+
+  // Persist the working weights the user entered (guided overlay merges them
+  // onto the records; quick "Mark as done" synthesises records with weights).
+  const wroteWeights = persistStrengthLifts(opts.records, state);
+  // Snapshot the PR baseline at completion so the launch toast can't re-surface
+  // a PR the summary card already showed (the card detects new bests from the
+  // est1RM history, independent of this snapshot).
+  if (wroteWeights) snapshotNotifiedStrengthPrs(state);
 
   saveState();
   return result;

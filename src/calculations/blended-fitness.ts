@@ -14,7 +14,9 @@
 
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast } from './predictions';
-import { getPlanPrescribedMeanWeeklyKm } from './training-horizon';
+import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
+import { getAbilityBand } from './fatigue';
+import type { RunnerType } from '@/types/training';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv, tv, rdKm } from './vdot';
@@ -89,48 +91,117 @@ const STANDARD_DISTANCES: RaceDistance[] = ['5k', '10k', 'half', 'marathon'];
  * Read-only: computes from state but writes nothing back. Safe to call on every
  * render.
  */
-export function predictStandardDistances(s: SimulatorState): Record<RaceDistance, number | null> {
-  const empty: Record<RaceDistance, number | null> = { '5k': null, '10k': null, 'half': null, 'marathon': null };
-  if (!s.pbs || !s.b) return empty;
+/**
+ * Shared inputs for a standard-distance prediction, built once from state so
+ * the grid (all four distances) and a single drill-down compute from exactly
+ * the same signal. Null when there is no usable blend signal at all.
+ */
+type BlendArgs = Parameters<typeof blendPredictions>;
+interface StandardPredictionContext {
+  pbs: BlendArgs[1];
+  lt: BlendArgs[2];
+  vo2: BlendArgs[3];
+  b: BlendArgs[4];
+  typ: BlendArgs[5];
+  recentRun: BlendArgs[6];
+  athleteTier: BlendArgs[7];
+  weeklyKm: BlendArgs[8];
+  avgPaceSecPerKm: BlendArgs[9];
+  quality: BlendArgs[10];
+  hrVdot: BlendArgs[11];
+  marathonPbAgeDays: BlendArgs[12];
+  calibration: ReturnType<typeof computeRunCalibration>;
+  longestRunSec: number;
+  shoeMul: number;
+}
+
+/** Ordered stages of a single standard-distance prediction. `finalSec` equals
+ *  the grid tile / hero (same computation), so a waterfall built from these
+ *  reconciles to the headline by construction. */
+export interface StandardPredictionStages {
+  /** Capacity blend (VDOT / LT / PB / recent-run), before any adjustment. */
+  blendedSec: number;
+  /** After per-distance calibration bias from logged races. */
+  calibratedSec: number;
+  /** Long-run durability multiplier (≥ 1.0). */
+  durability: RunDurabilityResult;
+  /** Carbon-shoe multiplier (0.97 = supershoes, 1.0 = standard). */
+  shoeMul: number;
+  /** Final adjusted finish: calibratedSec × durability × shoeMul. */
+  finalSec: number;
+}
+
+function buildStandardPredictionContext(s: SimulatorState): StandardPredictionContext | null {
+  if (!s.pbs || !s.b) return null;
   // Just-Track users without PBs have {} for s.pbs and the default s.b — no
   // real signal to blend. Mirror the guard in refreshBlendedFitness.
-  if (s.trackOnly && Object.keys(s.pbs).length === 0) return empty;
+  if (s.trackOnly && Object.keys(s.pbs).length === 0) return null;
 
   const runs = collectRunsFromState(s);
   const inputs = computePredictionInputs(runs);
-  const hrVdot = computeHRCalibratedVdot(runs, s.restingHR ?? null, s.maxHR ?? null);
-  const calibration = computeRunCalibration(s.runRaceLog);
-  const longestRunSec = getLongestRunSec(s, 12);
-
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
-  const marathonPbAgeDays = marathonPbDateISO
-    ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
-    : undefined;
-  // Carbon-plated racing flats: flat 3% pace boost (Hoogkamer 2018). Mirrors
-  // the targeted-forecast treatment so the toggle moves both views the same way.
-  const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
+  return {
+    pbs: s.pbs,
+    lt: s.lt ?? null,
+    vo2: effectiveVo2max(s),
+    b: s.b,
+    typ: (s.typ ?? 'Balanced').toLowerCase(),
+    recentRun: inputs.recentRun ?? s.rec ?? null,
+    athleteTier: s.athleteTier ?? undefined,
+    weeklyKm: inputs.weeklyKm,
+    avgPaceSecPerKm: inputs.avgPaceSecPerKm ?? undefined,
+    quality: { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
+    hrVdot: computeHRCalibratedVdot(runs, s.restingHR ?? null, s.maxHR ?? null),
+    // Carbon-plated racing flats: flat 3% pace boost (Hoogkamer 2018). Mirrors
+    // the targeted-forecast treatment so the toggle moves both views the same way.
+    shoeMul: s.shoeKind === 'supershoes' ? 0.97 : 1.0,
+    marathonPbAgeDays: marathonPbDateISO
+      ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
+      : undefined,
+    calibration: computeRunCalibration(s.runRaceLog),
+    longestRunSec: getLongestRunSec(s, 12),
+  };
+}
+
+/** Run one distance through the full staged pipeline. Returns null when the
+ *  blend cannot produce a usable estimate. */
+function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistance): StandardPredictionStages | null {
+  const blended = blendPredictions(
+    DIST_M[dist],
+    ctx.pbs,
+    ctx.lt,
+    ctx.vo2,
+    ctx.b,
+    ctx.typ,
+    ctx.recentRun,
+    ctx.athleteTier,
+    ctx.weeklyKm,
+    ctx.avgPaceSecPerKm,
+    ctx.quality,
+    ctx.hrVdot,
+    ctx.marathonPbAgeDays,
+  );
+  if (!blended || blended <= 0 || !isFinite(blended)) return null;
+  const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
+  const durability = applyLongRunCap(ctx.longestRunSec, dist);
+  return {
+    blendedSec: blended,
+    calibratedSec,
+    durability,
+    shoeMul: ctx.shoeMul,
+    finalSec: calibratedSec * durability.multiplier * ctx.shoeMul,
+  };
+}
+
+export function predictStandardDistances(s: SimulatorState): Record<RaceDistance, number | null> {
+  const empty: Record<RaceDistance, number | null> = { '5k': null, '10k': null, 'half': null, 'marathon': null };
+  const ctx = buildStandardPredictionContext(s);
+  if (!ctx) return empty;
 
   const out: Record<RaceDistance, number | null> = { ...empty };
   for (const dist of STANDARD_DISTANCES) {
-    const blended = blendPredictions(
-      DIST_M[dist],
-      s.pbs,
-      s.lt ?? null,
-      effectiveVo2max(s),
-      s.b,
-      (s.typ ?? 'Balanced').toLowerCase(),
-      inputs.recentRun ?? s.rec ?? null,
-      s.athleteTier ?? undefined,
-      inputs.weeklyKm,
-      inputs.avgPaceSecPerKm ?? undefined,
-      { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
-      hrVdot,
-      marathonPbAgeDays,
-    );
-    if (!blended || blended <= 0 || !isFinite(blended)) { out[dist] = null; continue; }
-    const calibrated = applyRunCalibrationBias(blended, dist, calibration);
-    const durability = applyLongRunCap(longestRunSec, dist);
-    out[dist] = calibrated * durability.multiplier * shoeMul;
+    const stages = predictDistanceStaged(ctx, dist);
+    out[dist] = stages ? stages.finalSec : null;
   }
   return out;
 }
@@ -161,10 +232,18 @@ export interface StandardForecastDetail {
   weeklyKm: number | null;
   durabilityMultiplier: number;
   durabilityCapped: boolean;
+  /** Longest single run in the last 12 weeks (seconds); 0 = no run history found. */
+  durabilityLongestRunSec: number;
+  /** Distance-specific long-run threshold the prediction compares against (seconds). */
+  durabilityThresholdSec: number;
   calibrationBiasSec: number | null;
   calibrationRaceCount: number;
   /** Predicted finish time at this distance per recorded week (raw VDOT-derived trajectory). */
   trend: { date: string; value: number }[];
+  /** Ordered prediction stages (capacity → calibration → durability → shoes).
+   *  `finalSec` equals `predictedSec`, so a waterfall built from these
+   *  reconciles to the hero. Null when the blend produced no estimate. */
+  stages: StandardPredictionStages | null;
 }
 
 /**
@@ -176,14 +255,19 @@ export interface StandardForecastDetail {
  * headline. Read-only.
  */
 export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance): StandardForecastDetail {
-  const predictedSec = predictStandardDistances(s)[dist];
+  const ctx = buildStandardPredictionContext(s);
+  const stages = ctx ? predictDistanceStaged(ctx, dist) : null;
+  const predictedSec = stages ? stages.finalSec : null;
 
   const inputs = computePredictionInputs(collectRunsFromState(s));
   const weeklyKm = inputs.weeklyKm > 0 ? inputs.weeklyKm : (s.detectedWeeklyKm ?? null);
 
-  const durability = applyLongRunCap(getLongestRunSec(s, 12), dist);
+  // Durability comes from the staged result when available (same longest-run
+  // read), otherwise compute directly for the no-blend case so the UI still
+  // has threshold context.
+  const durability = stages ? stages.durability : applyLongRunCap(getLongestRunSec(s, 12), dist);
 
-  const calibration = computeRunCalibration(s.runRaceLog);
+  const calibration = ctx ? ctx.calibration : computeRunCalibration(s.runRaceLog);
   const bias = calibration.perDistanceBiasSec?.[dist];
 
   const distKm = rdKm(dist);
@@ -198,10 +282,90 @@ export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance)
     weeklyKm,
     durabilityMultiplier: durability.multiplier,
     durabilityCapped: durability.multiplier > 1.0001,
+    durabilityLongestRunSec: durability.longestRunSec,
+    durabilityThresholdSec: durability.thresholdSec,
     calibrationBiasSec: bias != null ? bias : null,
     calibrationRaceCount: calibration.basedOnRaceCount ?? 0,
     trend,
+    stages,
   };
+}
+
+export interface ForecastProjectionPoint {
+  /** Weeks ahead of today. 0 = current fitness. */
+  weeksAhead: number;
+  /** Raw VDOT-derived finish time (sec) at this point. */
+  value: number;
+}
+
+/**
+ * Project the raw VDOT-derived finish time forward `weeks` weeks of continued
+ * training, for the no-target-race forecast ("what you could run if you hold
+ * the plan"). Returns one point per week (0..weeks); index 0 is today, so the
+ * series joins the historical trend line continuously.
+ *
+ * **Side of the line**: tracking-adjacent — it answers "what will the training
+ * you're already doing yield", using the same horizon model the targeted
+ * forecast uses, not a new prescription.
+ *
+ * **Model**: `applyTrainingHorizonAdjustment` (the saturating-logistic VDOT-gain
+ * model, SCIENCE_LOG §AB) with `taper_weeks: 0` — there is no race to taper
+ * into, so the taper bonus must not inflate the gain. Dose = recent weekly km
+ * (what the user is actually training), sessions = `s.rw`. Anchored on the same
+ * effective VDOT the latest `vdotHistory` point uses (`s.v + rpeAdj + physioAdj`)
+ * so the dashed projection meets the solid trajectory at "now".
+ *
+ * Returns null when there is no VDOT or no training dose to project along (a
+ * just-track user with no plan has nothing to project) — the caller hides the
+ * projection in that case.
+ */
+export function getStandardForecastProjection(
+  s: SimulatorState,
+  dist: RaceDistance,
+  weeks: number,
+): ForecastProjectionPoint[] | null {
+  if (!s.v || s.v <= 0 || weeks <= 0) return null;
+  const sessionsPerWeek = s.rw ?? 0;
+  if (sessionsPerWeek <= 0) return null; // not following a plan: nothing to project
+
+  const anchorVdot = s.v + (s.rpeAdj ?? 0) + (s.physioAdj ?? 0);
+  const distKm = rdKm(dist);
+  const abilityBand = getAbilityBand(anchorVdot);
+  const runnerType = (s.typ ?? 'Balanced') as RunnerType;
+
+  // Dose = PLAN-prescribed weekly volume, not recent km. "If you hold the plan"
+  // means training at the plan's dose, so mirror the targeted forecast
+  // (calculateForecast / §AI): sessions × REF_KM_PER_SESSION × build factor.
+  // Recent km is the wrong input here — a thin-history user reads as
+  // "undertrained", which trips applyTrainingHorizonAdjustment's full
+  // undertrain penalty and projects the athlete getting *slower* (the
+  // half/marathon "+24s / falls off a cliff" bug). Plan volume clears the
+  // penalty so every distance projects a sensible, monotonic improvement.
+  const planKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, dist) ?? undefined;
+
+  const out: ForecastProjectionPoint[] = [{ weeksAhead: 0, value: tv(anchorVdot, distKm) }];
+  for (let w = 1; w <= weeks; w++) {
+    const horizon = applyTrainingHorizonAdjustment({
+      baseline_vdot: anchorVdot,
+      target_distance: dist,
+      weeks_remaining: w,
+      sessions_per_week: sessionsPerWeek,
+      runner_type: runnerType,
+      ability_band: abilityBand,
+      taper_weeks: 0,
+      weekly_volume_km: planKm,
+      hm_pb_seconds: s.pbs?.h,
+      lt_pace_sec_per_km: s.lt ?? undefined,
+      strength_sessions_per_week: s.gs,
+    });
+    // Floor the gain at 0: "holding the plan" is, at minimum, maintenance. A
+    // negative projection would only come from an undertrain assumption that
+    // contradicts the premise, and showing the user getting slower for
+    // training is indefensible UX. Keeps the curve monotonic for every user.
+    const gain = Math.max(0, horizon.vdot_gain);
+    out.push({ weeksAhead: w, value: tv(anchorVdot + gain, distKm) });
+  }
+  return out;
 }
 
 /**
@@ -373,6 +537,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
         hmPbSeconds: s.pbs?.h || undefined,
         ltPaceSecPerKm: s.lt || undefined,
+        strengthSessionsPerWeek: s.gs,
         adaptationRatio: s.adaptationRatio,
         blendedAnchorSec: blended,
       });
