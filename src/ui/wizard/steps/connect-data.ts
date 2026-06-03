@@ -279,8 +279,9 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
             </div>
           </div>
 
-          <!-- Manual upload (no code, or no Strava) -->
-          <div class="cd-history-card shadow-ap">
+          <!-- Manual upload (no code, or no Strava). Hidden once Strava connects — the live
+               connection already carries the full history, so manual upload is redundant. -->
+          <div id="cd-upload-card" class="cd-history-card shadow-ap">
             <div class="cd-history-row">
               <p class="cd-history-label">Or upload your history</p>
               <p class="cd-history-sub">No code? Export from Strava (<a href="https://www.strava.com/athlete/delete_your_account" target="_blank" rel="noopener">Settings → Download or Delete</a>) or Garmin (<a href="https://www.garmin.com/account/datamanagement/" target="_blank" rel="noopener">garmin.com/account/datamanagement</a>) and upload the .zip. The email takes a few hours to a few days.</p>
@@ -391,13 +392,16 @@ function refreshHistoryConnectedState(): void {
     }
   }
 
-  // Strava card → connected line, code input + connect button hidden.
+  // Strava card → connected line, code input + connect button hidden. The live Strava
+  // connection already carries the full run history, so hide the manual upload card too.
   if (stravaConnected) {
     const codeWrap = document.getElementById('cd-code-wrap');
     const stravaWrap = document.getElementById('cd-strava-wrap');
     const stravaDone = document.getElementById('cd-strava-done');
+    const uploadCard = document.getElementById('cd-upload-card');
     if (codeWrap) codeWrap.style.display = 'none';
     if (stravaWrap) stravaWrap.style.display = 'none';
+    if (uploadCard) uploadCard.style.display = 'none';
     if (stravaDone) {
       // Only nudge Apple Health when its card is actually present (GARMIN_CONNECT_ENABLED off).
       const nudge = (!appleConnected && !GARMIN_CONNECT_ENABLED)
@@ -492,8 +496,8 @@ function wireHandlers(): void {
   // straight from the Garmin panel. One tap. (Element only present when GARMIN_CONNECT_ENABLED
   // is off; on iOS this prompts HealthKit, on web it points at the iPhone app.)
   document.getElementById('cd-connect-apple-health')?.addEventListener('click', () => {
-    updateOnboarding({ chosenWatch: 'apple' });
-    saveState();
+    // Keep chosenWatch as 'other' so the user stays in this "connect both" hub (re-entry
+    // returns them here to add Strava), rather than bouncing back to the Apple picker tile.
     if (!isNativeiOS()) {
       // HealthKit can't run in a browser. Point at the iPhone app; upload is in the card below.
       const statusEl = document.getElementById('cd-history-status');
@@ -553,6 +557,8 @@ function handleWatchChoice(choice: 'apple' | 'other'): void {
 
 /** Swap the access-code input for the Strava connect button. */
 function revealStravaConnect(): void {
+  // Already connected? refreshHistoryConnectedState owns the card (done line, no button).
+  if (getState().stravaConnected) return;
   const codeWrap = document.getElementById('cd-code-wrap');
   const stravaWrap = document.getElementById('cd-strava-wrap');
   if (codeWrap) codeWrap.style.display = 'none';
@@ -575,7 +581,7 @@ async function triggerAppleHealth(): Promise<void> {
 
   // Already connected? Just flag Continue as ready.
   if (hasPhysiologySource(getState() as any, 'apple')) {
-    markContinueReady('Apple Health connected. Workouts will sync after Continue.');
+    markAppleHealthConnected();
     return;
   }
 
@@ -586,7 +592,7 @@ async function triggerAppleHealth(): Promise<void> {
 
   const result = await connectAppleHealth();
   if (result.ok) {
-    markContinueReady('Apple Health connected. Workouts will sync after Continue.');
+    markAppleHealthConnected();
   } else {
     if (infoEl) infoEl.style.display = 'none';
     if (errEl) {
@@ -595,6 +601,24 @@ async function triggerAppleHealth(): Promise<void> {
         : `Apple Health connection failed (${result.reason}).`;
       errEl.style.display = 'block';
     }
+  }
+}
+
+/**
+ * Apple Health connected — surface it where the user is. In the "connect both" history hub
+ * (Garmin path) the card's own done line carries the confirmation and nudges Strava; on the
+ * Apple picker tile there's no card, so fall back to the global status line. Either way
+ * Continue goes ready.
+ */
+function markAppleHealthConnected(): void {
+  const onHistory = document.getElementById('cd-history')?.style.display === 'flex';
+  if (onHistory) {
+    refreshHistoryConnectedState();
+  } else {
+    // Apple picker tile = a native Apple Watch user. HealthKit carries the full picture
+    // (runs with GPS splits, heart rate, sleep/HRV/resting HR, and PBs from run history),
+    // so state plainly that nothing else is needed — they don't need Strava or an upload.
+    markContinueReady('Apple Health connected. Runs, heart rate, and recovery now sync automatically. Nothing else to add.');
   }
 }
 

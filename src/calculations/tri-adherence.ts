@@ -18,6 +18,14 @@
 import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
+import { wasIllnessRestDay } from './illness-rules';
+
+/** ISO 'YYYY-MM-DD' date `days` after `iso` (noon-UTC to dodge DST/timezone). */
+function addDaysISO(iso: string, days: number): string {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
 
 export interface DisciplineAdherenceSummary {
   plannedSessions: number;
@@ -90,11 +98,14 @@ export function computeTriAdherence(
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const startWeek = Math.max(0, currentWeek - weeks);
+  const illness = (state as any).illnessState;
+  const planStart = state.planStartDate;
 
   for (let w = currentWeek - 1; w >= startWeek; w--) {
     const wk = wks[w];
     const planned = wk?.triWorkouts;
     if (!planned) continue;
+    const weekStart = planStart ? addDaysISO(planStart, w * 7) : null;
 
     for (const workout of planned) {
       const disc = workout.discipline;
@@ -102,6 +113,14 @@ export function computeTriAdherence(
       if (!disc || disc === 'station' || disc === 'brick') continue;
       const summary = out[disc as Discipline];
       if (!summary) continue;
+
+      // Illness-rested sessions don't count for OR against adherence (the
+      // banner promises rest is unpenalised). Exclude them entirely rather than
+      // counting a no-show as a completion.
+      if (weekStart && illness?.schedule?.length && typeof workout.dayOfWeek === 'number'
+          && wasIllnessRestDay(illness, addDaysISO(weekStart, workout.dayOfWeek))) {
+        continue;
+      }
 
       summary.plannedSessions += 1;
       const skipped = workout.status === 'skipped';

@@ -29,6 +29,17 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+/** Constant-time string comparison — avoids leaking the secret via timing. */
+function constantTimeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder()
+  const ab = enc.encode(a)
+  const bb = enc.encode(b)
+  if (ab.length !== bb.length) return false
+  let diff = 0
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i]
+  return diff === 0
+}
+
 // ─── Types (subset of RevenueCat webhook payload) ────────────────────────────
 
 interface RevenueCatEvent {
@@ -153,8 +164,8 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'server_misconfigured' }, 500)
     }
     const provided = req.headers.get('Authorization') ?? ''
-    if (provided !== expected) {
-      console.warn(`[revenuecat-webhook] auth mismatch (provided=${provided.slice(0, 12)}…)`)
+    if (!constantTimeEqual(provided, expected)) {
+      console.warn('[revenuecat-webhook] auth mismatch')
       return jsonResponse({ error: 'unauthorized' }, 401)
     }
 
@@ -175,6 +186,16 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
+
+    // ── Verify app_user_id is a real account ─────────────────────────────────
+    // Limits blast radius if the shared secret is ever compromised: an attacker
+    // can't mint subscription rows for arbitrary UUIDs. RevenueCat's app_user_id
+    // is our Supabase auth user id.
+    const { data: userLookup, error: userLookupErr } = await supabaseAdmin.auth.admin.getUserById(event.app_user_id)
+    if (userLookupErr || !userLookup?.user) {
+      console.warn(`[revenuecat-webhook] unknown app_user_id ${event.app_user_id.slice(0, 8)} — rejected`)
+      return jsonResponse({ error: 'unknown_user' }, 400)
+    }
 
     // ── Dedup: ignore retries of an event we've already applied ──────────────
     const { data: existing } = await supabaseAdmin

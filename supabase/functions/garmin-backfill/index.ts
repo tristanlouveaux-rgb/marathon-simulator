@@ -19,16 +19,17 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const GARMIN_API_BASE = "https://apis.garmin.com";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", ...corsHeaders },
-  });
+// Exact-match production origins + any localhost port for local dev.
+const ALLOWED_ORIGINS = ["capacitor://localhost", "https://mosaicrunning.run"];
+function corsHeadersFor(req: Request): Record<string, string> {
+  const origin = req.headers.get("Origin") ?? "";
+  const allowed = ALLOWED_ORIGINS.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  return {
+    "Access-Control-Allow-Origin": allowed ? origin : ALLOWED_ORIGINS[0],
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Vary": "Origin",
+  };
 }
 
 function toDate(d: Date): string {
@@ -63,6 +64,13 @@ async function requestBackfill(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = corsHeadersFor(req);
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json", ...corsHeaders },
+    });
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }

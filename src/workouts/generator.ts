@@ -6,6 +6,7 @@ import { calculateWorkoutLoad } from './load';
 import { assignDefaultDays } from './scheduler';
 import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
+import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
 import { planWeekSessions } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
@@ -249,9 +250,13 @@ export function generateWeekWorkouts(
 
   // Add gym sessions if configured
   if (gymSessionsPerWeek && gymSessionsPerWeek > 0) {
+    // Contrast power-block in build phase is default-on for intermediate+; the
+    // user can turn it off in Settings (plyoInGymEnabled === false).
     const gymWorkouts = generateGymWorkouts(
       phase, gymSessionsPerWeek, fitnessLevel || 'intermediate',
-      weekIndex, totalWeeks, vdot, injuryState
+      weekIndex, totalWeeks, vdot, injuryState,
+      undefined, undefined, undefined, getState().plyoInGymEnabled !== false,
+      getState().bodyweightProgress,
     );
     workouts.push(...gymWorkouts);
   }
@@ -330,6 +335,23 @@ export function generateWeekWorkouts(
   const currentWeek = getState().w ?? 1;
   if (injuryState && injuryState.active && injuryAppliesToWeek(weekIndex, currentWeek)) {
     scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState, easyPaceSecPerKm);
+    // Acute / no-load phases collapse the week to "Complete Rest", but the
+    // relative-rest model keeps the UNAFFECTED region training (Tristan
+    // 2026-06-02). When a region-safe strength session is available and the
+    // adapted week doesn't already carry one (rehab already does), surface it so
+    // the plan AGREES with the injury nudge + on-demand generator, which already
+    // offer it. Removes the "Complete Rest" vs "do this strength session"
+    // contradiction. The session is region-filtered + submaximal (RPE ≤ 3).
+    const decision = injuryStrengthDecision(injuryState);
+    const hasStrength = scheduledWorkouts.some(w => w.t === 'gym' || w.t === 'strength');
+    if (decision.kind === 'adapted' && !hasStrength) {
+      const restCard = scheduledWorkouts.find(w => w.t === 'rest');
+      if (restCard) {
+        restCard.n = 'Rest the injured area';
+        restCard.d = 'Acute phase: rest and protect the injured area (RICE). The unaffected region can still train safely below.';
+      }
+      scheduledWorkouts.push(decision.workout);
+    }
     // Recalculate loads for adapted workouts (descriptions/RPE changed by injury engine)
     for (const w of scheduledWorkouts) {
       const loads = calculateWorkoutLoad(w.t, w.d, (w.rpe || w.r || 5) * 10, easyPaceSecPerKm);

@@ -1,0 +1,27 @@
+-- Drop the orphaned `public.vo2_trend` view (security fix, 2026-06-03 sweep).
+--
+-- Background: the Supabase Security Advisor flagged `public.vo2_trend` as a
+-- CRITICAL `SECURITY DEFINER` view. It was created ad-hoc in the dashboard SQL
+-- editor (it appears in NO migration and is referenced NOWHERE in the app —
+-- src/ or edge functions), almost certainly as a throwaway diagnostic during
+-- the Stats-VO2 / Forecast work.
+--
+-- Why it was dangerous:
+--   * `SECURITY DEFINER` makes the view run as its creator (postgres), so it
+--     BYPASSES row-level security on the underlying physiology data.
+--   * `anon` and `authenticated` both held SELECT on it, and PostgREST exposes
+--     any public-schema view → `GET /rest/v1/vo2_trend` was reachable with the
+--     public anon key WITHOUT authentication.
+--   * Its definition aggregated VO2max OVER (PARTITION BY garmin_user_id ORDER
+--     BY day_date), i.e. it rolled up EVERY user's VO2max time series + their
+--     garmin_user_id into one result set. Net effect: an unauthenticated caller
+--     could read all users' health trends and identifiers — a cross-user leak
+--     past all the table-level RLS we confirmed.
+--
+-- The app does not use this view, so dropping it is safe and is the cleanest
+-- remediation. (The alternative — `ALTER VIEW ... SET (security_invoker = on)`
+-- — would only make it respect the caller's RLS; we drop instead because the
+-- object serves no purpose.)
+--
+-- Idempotent: safe to run whether or not the view still exists.
+DROP VIEW IF EXISTS public.vo2_trend;

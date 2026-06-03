@@ -8,6 +8,56 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-256: Personal recovery rate (`k_user`) pins ~every athlete at the slow ceiling — predicted/observed scale mismatch *(P1 misleading, 2026-06-03)* — ✅ FIXED (device-confirmed value; card-polish reload pending)
+
+**RESOLUTION (2026-06-03)**: Full intensity-banded redesign shipped (Tristan chose the largest defensible build). Fit basis changed from `observed/predicted` (incompatible scales) to `observed / expectedRecoveryHours`, where the expectation is the literature anchor (Stanley et al. 2013: easy 24h / moderate 36h / hard 54h) for the session's **intensity band**, classified from `GarminActual.hrZones` (Strava zones → fitness-relative) with RPE fallback. Only clean rest-gap windows are measured (training-through excluded); never-rest athletes are flagged `densityLimited` instead of mislabelled. Robust log-space aggregation. `backfillIntensityBands` retrofits existing entries. 46 tests, full suite 2964 green, tsc + lint:ui clean. Details: CHANGELOG 2026-06-03, SCIENCE_LOG `k_user` Addendum 2.
+
+**DEVICE-CONFIRMED (Tristan, 2026-06-03)**: the value moved from the pinned **1.63× (worst)** to **1.02× (typical)** on his real data — the correct read for a fit athlete. Core fix verified. Card-presentation polish from the same check (verdict-first copy "Recovers at a typical rate", HRV pulse icon replacing the spinner-looking sun, and a **double-padding width bug** fixed — the card was nested in the already-padded Detailed Metrics section yet added its own `padding:0 16px`) ships in the same commit; awaits a reload to confirm it reads cleanly, but the substantive issue is resolved.
+
+**Symptom**: Tristan (well-trained, high CTL) saw "Personal recovery rate 1.63× slower than average" — the `K_USER_MAX = 13` clamp. The model rated a strong athlete as the *worst* recoverer.
+
+**Root cause (confirmed on real data, 2026-06-03)**: `fitKUser` fits `k = 8 × mean(observedHours / predictedHours)`, but the two terms are different physiological quantities on incompatible scales:
+- `predictedHours` = the recovery-countdown's *training-readiness debt* (`8 × tss/ctlDaily × …`), ~8h for an average session by design (so you can train again same-day after easy work). Tristan's data: predicted p10/p50/p90 = **4 / 8 / 18.4 h**.
+- `observedHours` = full *autonomic return* to the 28-day HRV/RHR baseline (z ≥ −0.25), sampled daily so the **floor is 24h**, and realistically 24–96h. Tristan's distribution: `{24:54, 48:10, 72:9, 96:10}`.
+- Result: ratio p10/p50/p90 = **1.43 / 3.91 / 10.82**. The clamp pins at ratio ≥ 1.625, so even the 10th percentile is at the ceiling.
+
+**Why it's universal, not athlete-specific**: to avoid pinning, predicted must average ≥ `24 / 1.625 ≈ 15h`, i.e. each session must be ~1.85× the athlete's *daily-average* load — most sessions aren't. **Any user reaching medium confidence (16+ closed sessions) lands at k=13.** Worse for fitter athletes (higher CTL → smaller predicted → bigger ratio). The feature has almost certainly reported "max slow" for every qualifying user; Tristan was the first to question the number.
+
+**Three compounding obstacles to a fix**:
+1. Scale mismatch (above) — predicted and observed measure different things.
+2. No population anchor for "expected observed-recovery hours," so we can't define a normal ratio. `8` is the countdown's debt constant, never an observed-hours expectation.
+3. The base constant serves two masters — raising it so ratio centres at 1 would 3–4× the user-facing recovery *countdown*, which is correctly calibrated at ~8h/session.
+
+A naive self-normalization (centre on the athlete's own median ratio) does **not** rescue it — the ratio distribution is right-skewed, so the heavy tail drags k back to 11.56 in Tristan's preview. Any self-normalization must be robust (median / log-space).
+
+**What the data CAN support**: a within-athlete, robust *deviation* signal — "are your markers returning slower than *your own* recent baseline" — a **state** signal (Plews/Buchheit HRV-vs-personal-baseline), not a population trait. This aligns with the card copy already de-peer-ified on 2026-06-03 ("vs the standard," not "vs other athletes").
+
+**Already shipped 2026-06-03 (partial, real but minor)**: dropped confounded right-censored entries; capped sub-24h-prediction first-reading recoveries at on-time; reframed the card off the false peer comparison. These are correct in isolation but do **not** resolve the pin (the 48–96h sessions still have ratios of 10–30× against tiny predicted). SCIENCE_LOG `k_user` addendum (2026-06-03) documents them.
+
+**DECISION PENDING (Tristan)** — pick the redesign direction:
+- **(A) Robust self-normalization** — re-anchor `k_user` to the athlete's own median/log baseline; it becomes "recovery vs your own norm" (state, not trait). Constant-free, matches the reframed card, feeds the ceiling-shift only on genuine deviation. Cost: loses cross-athlete "faster than others" meaning.
+- **(B) Separate population-anchored expected-observed-hours model** — decouple the learning's predicted from the countdown's predicted; needs a calibration number / literature anchor from Tristan (no made-up constants).
+- **(C) Decouple + stop surfacing the absolute multiplier** — keep the countdown on k=8, drop the misleading "X×" number, show only the within-baseline trend.
+- **(D) Disable/hide the card** until (A) or (B) is built.
+
+Until decided, the card still shows a structurally-pinned number to any medium-confidence user. Code: `src/calculations/adaptive-recovery.ts` (`fitKUser`), `src/calculations/fitness-model.ts` (`computeToBaseline`), `src/ui/recovery-view.ts` (`renderPersonalRecoveryCard`).
+
+### ISSUE-255: Residual edge-function CORS/auth hardening (deferred from 2026-06-02 security pass) *(P2, 2026-06-02)*
+
+**Context**: A server-side security review (see CHANGELOG 2026-06-02) fixed the exploitable issues. These remaining items are JWT-gated defence-in-depth — **not exploitable today** — and were deliberately deferred to avoid restructuring the load-bearing data pipe in an untested bulk deploy.
+
+**To do, with on-device sync testing**:
+1. Replace wildcard CORS (`Access-Control-Allow-Origin: *`) with the restricted allowlist on `sync-activities`, `sync-strava-activities`, `sync-physiology-snapshot` (use the same `corsHeadersFor` pattern already applied to `sync-activity-details`/`sync-today-steps`/`garmin-backfill`). `sync-strava-activities` is the canonical activity source — test sync end-to-end before/after. Also check `garmin-refresh-token` / `garmin-auth-start` (redirect/refresh; CORS may legitimately be `*`).
+2. `garmin-backfill` still verifies auth on a service-role client and reads/writes `garmin_tokens` through it. Not a bypass (token is cryptographically verified), but refactor to an anon client for auth + service client only for the token refresh write, matching `sync-activities`. Touches live Garmin token flow — test carefully.
+3. Move `coach-chat` tool *definitions* server-side. The 2026-06-02 fix allowlists the 6 tool names, but description/input_schema still come from the client. Build the canonical tool schemas in the function (as `coach-generate-workout` does).
+4. `garmin-backfill` refresh-error responses still return `details: txt`/`details: String(e)` to the client (minor info leak, same class as the callback leaks already fixed).
+5. **(NEW, 2026-06-03 sweep)** `garmin-reconcile` and `garmin-refresh-token` were **missed by the original CORS sweep entirely** — both still `Access-Control-Allow-Origin: *` (`garmin-reconcile/index.ts:44`, `garmin-refresh-token/index.ts:13`). Apply the restricted `corsHeaders(req)` pattern (convert the static `corsHeaders` object to a per-request function + thread `req` through `jsonResponse`). Auth'd (JWT/cron-secret) so lower risk, but they are the last two auth'd functions outside the restricted pattern. **Structural change to the preflight — test before deploy** (the reason this whole issue was deferred).
+6. **(NEW, 2026-06-03 sweep)** Extend the M2 error-leak cleanup beyond `garmin-backfill` (item 4): `garmin-refresh-token:90` (`details: text`), `garmin-auth-start:61,93`, `strava-auth-start:54,86`, and the `String(e)` fields in both OAuth callbacks still return raw provider/DB error strings. Log server-side, return a generic code.
+
+**✅ DEPLOYED + smoke-tested 2026-06-03 (token restored):**
+- `strava-auth-callback` (v28): dropped `raw: tokenJson` from the no-access-token error path (was returning a potentially-live OAuth token body to the client — HIGH). Smoke: bare GET → 400 `missing_code_or_state`.
+- `garmin-reconcile` (v13): cron-secret compare switched from `===` to `constantTimeEqual` (timing-safe). Smoke: unauth POST → 401 `unauthorized`.
+
 ### ISSUE-252: AI Coach must not use Strava data (Strava API Policy §5.3) *(P1 strategic, 2026-06-01)* — decided, build deferred to Coach GA
 
 **Context**: Strava's June 2026 API Policy (§5.3) bans using Strava Data — *including data derived/aggregated from it, and including ingestion into an LLM context window* — for the operation of any AI Application. §5.10 bans disclosing Strava Data to third parties (names AI providers). The AI Coach feeds Strava-derived training data (`coach-chat-client.ts:63-69`) to Anthropic.

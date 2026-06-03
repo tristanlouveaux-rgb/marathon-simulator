@@ -39,14 +39,13 @@ const MAX_STRING_LENGTH = 160             // intent text can be a short sentence
 const RECENT_SESSIONS_MAX = 10            // last 10 sessions max
 
 const ALLOWED_ORIGINS = [
-  'http://localhost',
-  'http://localhost:5173',
   'capacitor://localhost',
+  'https://mosaicrunning.run',
 ]
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('Origin') ?? ''
-  const allowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o))
+  const allowed = ALLOWED_ORIGINS.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
   return {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

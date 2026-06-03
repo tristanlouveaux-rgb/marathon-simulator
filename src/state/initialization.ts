@@ -304,6 +304,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.rpeAdj = 0;
       s.schemaVersion = STATE_SCHEMA_VERSION;
       s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
+      s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
       s.onboarding = state;
 
       // Persist whatever the user provided. PBs aren't required for trackOnly —
@@ -589,6 +590,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     // Anchor all week date ranges to the Monday of the week the plan was created
     s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
+    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
 
     // Store onboarding reference
     s.onboarding = state;

@@ -1,5 +1,24 @@
 # Mosaic AI Strategy
 
+## Update — 2026-06-02 (DECISION: AI Coach hidden for App Store v1)
+
+**DECISION (Tristan, 2026-06-02): hide the entire AI surface for v1. Ship a paid base app with no AI. Keep the Coach in our back pocket.**
+
+The base app is defensible without AI (see "Tier 3" below, and the 2026-06-01 finding that the paying cohort is exactly the cohort the Coach can no longer legally serve). Two reasons drove the hide:
+
+1. **Strava §5.3** already made the Coach unavailable to Strava-connected users, which is the whole Garmin cohort (2026-06-01 update below). The addressable market collapsed to Apple-Health-only and manual-entry users, who are also the data-poorest, so the Coach is weakest exactly where it is legal.
+2. **App Store review surface.** A visible LLM coach (training advice, external-AI wiring, generative content) invites health-claim and AI-content questions on a first submission. Hiding it removes the questions.
+
+**Mechanism.** New build flag `AI_COACH_ENABLED = false` in `src/constants/feature-flags.ts`, mirroring the `STRAVA_ENABLED` / `GARMIN_CONNECT_ENABLED` bury pattern. It gates the four reachable entry points: the "Coach" buttons on the running plan hero (`plan-view.ts`), triathlon plan hero (`triathlon/plan-view.ts`), and home hero (`home-view.ts`), and the Account "AI Coach" section (`account-view.ts`). `renderCoachView` (`coach-view.ts`) also hard-gates on the flag and routes back, so there is no ungated back door (the lesson from `GARMIN_CONNECT_ENABLED`'s "not yet gated" Account exception).
+
+**What this hides:** the LLM chat, the training-snapshot export (the `.txt` paste-into-claude.ai flow, clunky and dropped for v1 despite being the most ToS-defensible surface), the RevenueCat coach subscription + paywall, and the "Generate with Coach" brain-workout modal (already had zero callers, i.e. dead code).
+
+**What stays (deterministic, no LLM, no Strava-AI exposure):** the daily-coach narration `computeDailyCoach` (`src/calculations/daily-coach.ts`) rendered inline on home and plan, and the free rule-based workout generator. These are not gated by the flag and serve every user including Strava-connected ones.
+
+**Status of BYOK:** already removed from the client before this change (no key-entry surface remains; only a stale comment in `coach-view.ts` and the unrelated RevenueCat SDK key).
+
+**Unhiding depends on two open items:** the Strava BYOK/personal-use answer (ISSUE-252, the email to developers@strava.com that gates whether the Coach can ever serve Garmin users) and an App Store strategy for the AI surface. Do not flip `AI_COACH_ENABLED` without both. The edge functions (`coach-chat`, `coach-generate-workout`, `coach-narrative`) stay deployed but unreachable from the client.
+
 ## Update — 2026-06-01 (CRITICAL: Strava's new API Policy bans AI use of Strava data)
 
 Strava's June 2026 Developer Program overhaul shipped a new API Policy with a broad anti-AI clause. As read on 2026-06-01 (verify exact section numbers before quoting):

@@ -44,6 +44,14 @@ function timeLabel(iso?: string | null): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** "Mon 2 Jun" from an ISO string — disambiguates same-type recordings across days. */
+function dateLabel(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
 /** Friendly label for a pending activity in the HR picker. */
 function pendingLabel(p: GarminPendingItem): string {
   const t = (p.activityType || p.appType || 'Activity').replace(/_/g, ' ').toLowerCase();
@@ -129,13 +137,16 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
       rows.push(`
         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--c-border)">
           <span style="font-size:13px;color:var(--c-black)">${esc(e.displayName)}</span>
-          <span style="font-size:13px;color:var(--c-muted);font-variant-numeric:tabular-nums;flex-shrink:0">${fmtKg(e.lastWeightKg)}${e.lastReps ? ` × ${esc(e.lastReps)}` : ''}${est}</span>
+          <span style="font-size:13px;color:var(--c-muted);font-variant-numeric:tabular-nums;flex-shrink:0">${e.lastWeightKg != null ? `${fmtKg(e.lastWeightKg)}${e.lastReps ? ` × ${esc(e.lastReps)}` : ''}` : ''}${est}</span>
         </div>`);
       const hist = e.est1rmHistory ?? [];
       if (hist.length >= 2) {
+        const last = hist[hist.length - 1];
         const prev = hist[hist.length - 2].value;
-        const now = hist[hist.length - 1].value;
-        if (now - prev >= STRENGTH_PR_THRESHOLD_KG) prs.push(e.displayName);
+        // History is now a PB-staircase (only advancing samples appended), so the
+        // last delta can be from a PRIOR session. Only call it a "New best" when
+        // the advancing sample was set TODAY — i.e. this session actually beat it.
+        if (last.date === today && last.value - prev >= STRENGTH_PR_THRESHOLD_KG) prs.push(e.displayName);
       }
     }
     if (!rows.length) return '';
@@ -189,7 +200,7 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
       <button class="ss-pick" data-id="${esc(p.garminId)}" style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;padding:13px 14px;background:var(--c-bg);border:1px solid var(--c-border);border-radius:12px;cursor:pointer;font-family:var(--f)">
         <span style="min-width:0">
           <span style="display:block;font-size:14px;font-weight:600;color:var(--c-black)">${esc(pendingLabel(p))}</span>
-          <span style="display:block;font-size:12px;color:var(--c-muted)">${esc(timeLabel(p.startTime))}${durLabel(p.durationSec) ? ` · ${durLabel(p.durationSec)}` : ''}</span>
+          <span style="display:block;font-size:12px;color:var(--c-muted)">${[dateLabel(p.startTime), timeLabel(p.startTime)].filter(Boolean).map(esc).join(', ')}${durLabel(p.durationSec) ? ` · ${durLabel(p.durationSec)}` : ''}</span>
         </span>
         <span style="flex-shrink:0;font-size:13px;color:var(--c-muted);font-variant-numeric:tabular-nums">${Math.round(p.avgHR!)} bpm</span>
       </button>`).join('');
@@ -233,8 +244,11 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
         ${hrSection()}
       </div>
 
-      <div style="padding:18px 22px">
+      <div style="padding:18px 22px 10px">
         <button id="ss-done" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+      </div>
+      <div style="padding:0 22px 18px">
+        <button id="ss-delete" style="width:100%;padding:11px;background:transparent;color:#EF4444;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Delete this session</button>
       </div>`;
   }
 
@@ -259,6 +273,52 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     overlay.querySelector('#ss-close')?.addEventListener('click', closeAndRefresh);
     overlay.querySelector('#ss-done')?.addEventListener('click', closeAndRefresh);
     overlay.querySelector('#ss-match-hr')?.addEventListener('click', () => { pickingHR = true; build(); });
+    overlay.querySelector('#ss-delete')?.addEventListener('click', () => {
+      showDeleteConfirm(() => {
+        const st = getMutableState();
+        const wk2 = st.wks?.[result.weekIdx];
+        if (wk2) {
+          const id = result.workoutId;
+          if (wk2.rated) delete wk2.rated[id];
+          if (wk2.garminActuals) delete wk2.garminActuals[id];
+          // A user-added session (session generator / accepted suggestion) is a real
+          // slot in triWorkouts/adhocWorkouts — remove it entirely. A plan slot is
+          // only un-completed (rating + actual cleared); the planned session stays.
+          if (id.startsWith('adhoc-') || id.startsWith('holiday-')) {
+            if (wk2.triWorkouts) wk2.triWorkouts = wk2.triWorkouts.filter(w => (w.id ?? w.n) !== id);
+            if (wk2.adhocWorkouts) wk2.adhocWorkouts = wk2.adhocWorkouts.filter(w => (w.id ?? w.n) !== id);
+          }
+        }
+        saveState();
+        overlay.remove();
+        render();
+      });
+    });
+  }
+
+  /**
+   * In-app delete confirmation. Replaces the native `confirm()` dialog, which
+   * renders as a "localhost says…" system box in the browser and behaves poorly
+   * in the iOS WKWebView. A small centered card layered over the summary card.
+   */
+  function showDeleteConfirm(onConfirm: () => void): void {
+    if (overlay.querySelector('#ss-confirm')) return;
+    const el = document.createElement('div');
+    el.id = 'ss-confirm';
+    el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
+    el.innerHTML = `
+      <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+        <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Delete this session?</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">It is removed from your week.</div>
+        <div style="display:flex;gap:10px">
+          <button id="ss-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Cancel</button>
+          <button id="ss-confirm-yes" style="flex:1;padding:12px;background:#EF4444;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Delete</button>
+        </div>
+      </div>`;
+    overlay.appendChild(el);
+    el.addEventListener('click', e => { if (e.target === el) el.remove(); });
+    el.querySelector('#ss-confirm-cancel')?.addEventListener('click', () => el.remove());
+    el.querySelector('#ss-confirm-yes')?.addEventListener('click', () => { el.remove(); onConfirm(); });
   }
 
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAndRefresh(); });

@@ -643,11 +643,14 @@ function buildStatListCard(s: SimulatorState, unitPref: UnitPref, range: Progres
 
   const fmtKm = (km: number) => km > 0 ? formatKm(km, unitPref) : '—';
 
+  const cycling = isCyclingOnlyMode(s);
+
   // Longest rows only render when there's something to show.
+  // In cycling-only mode swim and run never apply, so suppress those rows.
   const longestRows: string[] = [];
-  if (aggs.swim.longestKm > 0) longestRows.push(row('Longest swim', fmtKm(aggs.swim.longestKm)));
+  if (!cycling && aggs.swim.longestKm > 0) longestRows.push(row('Longest swim', fmtKm(aggs.swim.longestKm)));
   if (aggs.bike.longestKm > 0) longestRows.push(row('Longest ride', fmtKm(aggs.bike.longestKm)));
-  if (aggs.run.longestKm > 0)  longestRows.push(row('Longest run',  fmtKm(aggs.run.longestKm)));
+  if (!cycling && aggs.run.longestKm > 0)  longestRows.push(row('Longest run',  fmtKm(aggs.run.longestKm)));
 
   const finalRows = [
     `${row('Plan adherence', adh.pct != null ? `${adh.pct}%` : '—')}`,
@@ -655,7 +658,6 @@ function buildStatListCard(s: SimulatorState, unitPref: UnitPref, range: Progres
     `${rowFinal('Total load', totalTSS > 0 ? `${Math.round(totalTSS).toLocaleString()} TSS` : '—')}`,
   ].join('');
 
-  const cycling = isCyclingOnlyMode(s);
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       ${cycling ? '' : row(`Swim · ${aggs.swim.count} session${aggs.swim.count === 1 ? '' : 's'}`, fmtKm(aggs.swim.distanceKm))}

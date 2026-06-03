@@ -1,134 +1,158 @@
 /**
  * Illness modal. Opened from the check-in overlay.
  *
- * Asks the user how they are managing their illness, then sets illnessState
- * on the simulator state. The plan is not mutated; an illness banner appears
- * on the plan and home views reassuring the user that skips won't hurt adherence.
+ * Captures the symptom picture (above-neck vs below-neck, plus a fever/body-aches
+ * flag and a severity) and builds the v2 illness schedule via the pure engine in
+ * `calculations/illness-rules.ts`. The schedule + classification are written to
+ * `s.illnessState`; the render-time plan mutation (`applyIllnessMods`) reads them
+ * and, crucially, REST the strength work for below-neck illness (viral
+ * myocarditis risk, Schwellnus 2016) — the legacy path silently left strength at
+ * full load. Plain `severity` is still derived for back-compat banners.
  */
 
-import { getMutableState, getState } from '@/state/store';
+import { getMutableState } from '@/state/store';
 import { saveState } from '@/state';
+import {
+  classifyIllness, buildSchedule, deriveLegacySeverity, summariseSchedule,
+  type Symptom, type IllnessType, type Classification, type ScheduleEntry,
+} from '@/calculations/illness-rules';
 
 const MODAL_ID = 'illness-modal';
 
-function isMultiSport(): boolean {
-  const s = getState();
-  const mode = s.onboarding?.trainingMode;
-  return mode === 'triathlon' || mode === 'cycling' || mode === 'hyrox' || s.eventType === 'triathlon' || s.eventType === 'hyrox';
+type SymptomChoice = 'above' | 'below' | 'systemic';
+type SeverityChoice = 'mild' | 'moderate' | 'severe';
+
+const SEVERITY_1TO10: Record<SeverityChoice, number> = { mild: 2, moderate: 5, severe: 8 };
+
+const SYMPTOM_CARDS: Array<{ key: SymptomChoice; title: string; body: string }> = [
+  { key: 'above', title: 'Above the neck',
+    body: 'Runny nose, sneezing, sore throat, mild headache. Easy training at reduced volume is usually fine.' },
+  { key: 'below', title: 'Below the neck',
+    body: 'Chest, cough, or gut symptoms. Rest first, then a graded return. Strength work pauses.' },
+  { key: 'systemic', title: 'Fever or body aches',
+    body: 'Systemic illness. Full rest. Training through a fever raises heart-muscle risk and blunts recovery.' },
+];
+
+/** Pure: map the modal's symptom + severity choice into the engine inputs and
+ *  the resulting classification + schedule. Shared by the live preview and the
+ *  commit so the user sees exactly what gets stored. */
+function computeIllnessPlan(symptom: SymptomChoice, severity: SeverityChoice): {
+  illnessType: IllnessType; symptoms: Symptom[]; severity1to10: number;
+  classification: Classification; schedule: ScheduleEntry[];
+} {
+  const illnessType: IllnessType = symptom === 'above' ? 'head_cold' : 'flu_chest';
+  const symptoms: Symptom[] =
+    symptom === 'above' ? (severity === 'mild' ? ['runny_nose'] : ['runny_nose', 'sore_throat'])
+    : symptom === 'systemic' ? ['fever', 'body_aches']
+    : ['cough'];
+  const severity1to10 = SEVERITY_1TO10[severity];
+  // RHR-delta refinement deferred (no daily resting-HR history wired to the
+  // modal); null keeps rhrFlag normal and does not affect below-neck suppression.
+  const classification = classifyIllness({ illnessType, symptoms, severity1to10, rhrDeltaBpm: null });
+  const schedule = buildSchedule(classification, '1-2');
+  return { illnessType, symptoms, severity1to10, classification, schedule };
 }
 
 export function openIllnessModal(): void {
   document.getElementById(MODAL_ID)?.remove();
 
-  const multiSport = isMultiSport();
+  let symptom: SymptomChoice | null = null;
+  let severity: SeverityChoice = 'moderate';
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
   modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   modal.style.background = 'rgba(0,0,0,0.45)';
 
-  modal.innerHTML = `
-    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
-      <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Illness</div>
-      <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px;line-height:1.5">Your plan will adjust for this week. Skipped workouts won't count against adherence.</div>
+  const cardStyle = (selected: boolean) =>
+    `width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;` +
+    `border:1px solid ${selected ? 'var(--c-black)' : 'var(--c-border)'};background:transparent;cursor:pointer;` +
+    `margin-bottom:8px;text-align:left`;
+  const chipStyle = (selected: boolean) =>
+    `flex:1;padding:9px 0;border-radius:10px;border:1px solid ${selected ? 'var(--c-black)' : 'var(--c-border)'};` +
+    `background:transparent;font-size:13px;font-weight:500;color:var(--c-black);cursor:pointer`;
 
-      <button id="illness-opt-light"
-        style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
-               border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:8px;text-align:left">
-        <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">${multiSport ? 'Still training' : 'Still running'}</div>
-        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${multiSport
-          ? 'Quality sessions converted to easy effort at 50% volume. Low-intensity sessions reduced to 60%.'
-          : 'Threshold, interval and tempo sessions converted to easy runs at 50% distance. Easy and long runs reduced to 60%.'}</div>
-      </button>
+  const render = () => {
+    modal.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Illness</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px;line-height:1.5">Tell us your symptoms. We'll adjust this week and protect your recovery. Skipped workouts won't count against adherence.</div>
 
-      <button id="illness-opt-resting"
-        style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
-               border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:18px;text-align:left">
-        <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">Full rest</div>
-        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${multiSport
-          ? 'All sessions replaced with rest. Resume training when you mark yourself recovered.'
-          : 'All running workouts replaced with rest. Resume training when you mark yourself recovered.'}</div>
-      </button>
+        <div style="font-size:11px;font-weight:600;color:var(--c-muted);margin-bottom:8px">SYMPTOMS</div>
+        ${SYMPTOM_CARDS.map(c => `
+          <button data-symptom="${c.key}" style="${cardStyle(symptom === c.key)}">
+            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">${c.title}</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${c.body}</div>
+          </button>
+        `).join('')}
 
-      <button id="illness-cancel"
-        style="width:100%;padding:11px;border-radius:12px;border:1px solid var(--c-border);
-               background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer">
-        Cancel
-      </button>
-    </div>
-  `;
+        <div style="font-size:11px;font-weight:600;color:var(--c-muted);margin:14px 0 8px">HOW BAD IS IT?</div>
+        <div style="display:flex;gap:8px;margin-bottom:${symptom ? '14' : '18'}px">
+          ${(['mild', 'moderate', 'severe'] as SeverityChoice[]).map(sv => `
+            <button data-severity="${sv}" style="${chipStyle(severity === sv)}">${sv[0].toUpperCase() + sv.slice(1)}</button>
+          `).join('')}
+        </div>
+
+        ${symptom ? (() => {
+          const { classification, schedule } = computeIllnessPlan(symptom, severity);
+          const lines = summariseSchedule(classification, schedule);
+          return `
+          <div style="border:1px solid var(--c-border);border-radius:12px;padding:12px 14px;margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:var(--c-muted);margin-bottom:6px">WHAT WE'LL DO</div>
+            ${lines.map(l => `<div style="font-size:12px;color:var(--c-black);line-height:1.5;margin-bottom:4px">${l}</div>`).join('')}
+          </div>`;
+        })() : ''}
+
+        <button id="illness-confirm"
+          style="width:100%;padding:12px;border-radius:12px;border:none;background:${symptom ? 'var(--c-black)' : 'var(--c-border)'};
+                 color:#fff;font-size:14px;font-weight:600;cursor:${symptom ? 'pointer' : 'default'};margin-bottom:8px"
+          ${symptom ? '' : 'disabled'}>Set this</button>
+        <button id="illness-cancel"
+          style="width:100%;padding:11px;border-radius:12px;border:1px solid var(--c-border);
+                 background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer">Cancel</button>
+      </div>
+    `;
+    wire();
+  };
+
+  const wire = () => {
+    modal.querySelectorAll<HTMLElement>('[data-symptom]').forEach(btn => {
+      btn.addEventListener('click', () => { symptom = btn.dataset.symptom as SymptomChoice; render(); });
+    });
+    modal.querySelectorAll<HTMLElement>('[data-severity]').forEach(btn => {
+      btn.addEventListener('click', () => { severity = btn.dataset.severity as SeverityChoice; render(); });
+    });
+    modal.querySelector('#illness-cancel')?.addEventListener('click', () => modal.remove());
+    modal.querySelector('#illness-confirm')?.addEventListener('click', () => { if (symptom) confirm(symptom, severity); });
+  };
 
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
   document.body.appendChild(modal);
+  render();
+}
 
-  document.getElementById('illness-cancel')?.addEventListener('click', () => modal.remove());
+function confirm(symptom: SymptomChoice, severity: SeverityChoice): void {
+  document.getElementById(MODAL_ID)?.remove();
 
-  const confirm = (severity: 'light' | 'resting') => {
-    modal.remove();
-    const s = getMutableState();
-    s.illnessState = {
-      startDate: new Date().toISOString().split('T')[0],
-      severity,
-      active: true,
-    };
-    saveState();
-    window.location.reload();
+  // Same computation the live preview showed, so the stored schedule matches.
+  const { illnessType, symptoms, severity1to10, classification, schedule } = computeIllnessPlan(symptom, severity);
+
+  const today = new Date().toISOString().split('T')[0];
+  const s = getMutableState();
+  s.illnessState = {
+    startDate: today,
+    onsetDate: today,
+    active: true,
+    severity: deriveLegacySeverity(schedule),
+    classification,
+    schedule,
+    symptoms,
+    illnessType,
+    severity1to10,
+    dayOfSymptoms: '1-2',
   };
-
-  document.getElementById('illness-opt-light')?.addEventListener('click', () => confirm('light'));
-  document.getElementById('illness-opt-resting')?.addEventListener('click', () => confirm('resting'));
-}
-
-// ─── Workout modification (render-time, not persisted) ───────────────────────
-
-const QUALITY_TYPES = ['threshold', 'interval', 'tempo', 'marathon_pace', 'race_pace', 'strides', 'fartlek'];
-const NON_RUN_TYPES = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'row', 'hik', 'walk',
-  'pilates', 'box', 'padel', 'tennis', 'football', 'soccer', 'basketball', 'rugby', 'elliptic', 'climb', 'ski'];
-
-function parseKmFromDesc(d: string): number {
-  const m = (d || '').match(/(\d+\.?\d*)km/);
-  return m ? parseFloat(m[1]) : 0;
-}
-
-/**
- * Apply illness modifications to a workouts array IN MEMORY (render-time only. Not saved to state).
- *
- * resting: mark all running workouts as rest.
- * light: downgrade quality sessions to easy at 50% km; reduce easy/long at 60% km.
- */
-export function applyIllnessMods(workouts: any[], severity: 'light' | 'resting'): void {
-  for (const w of workouts) {
-    const type = (w.t || '').toLowerCase();
-    const name = (w.n || '').toLowerCase();
-    const isNonRun = NON_RUN_TYPES.some(t => type.includes(t) || name.includes(t));
-    if (isNonRun) continue;
-
-    const origKm = parseKmFromDesc(w.d);
-
-    if (severity === 'resting') {
-      w.illnessMod = true;
-      w.illnessSeverity = 'resting';
-      w.originalDistance = origKm > 0 ? `${origKm}km` : (w.d || w.n);
-      w.d = 'Rest, illness';
-    } else {
-      // light: downgrade quality, reduce all distances
-      const isQuality = QUALITY_TYPES.some(t => type.includes(t) || name.includes(t));
-      if (origKm > 0) {
-        const ratio = isQuality ? 0.5 : 0.6;
-        const newKm = Math.max(2, Math.round(origKm * ratio * 2) / 2);
-        w.illnessMod = true;
-        w.illnessSeverity = 'light';
-        w.originalDistance = `${origKm}km`;
-        w.d = `${newKm}km easy pace`;
-        if (isQuality) {
-          w.t = 'easy';
-          w.r = 4;
-        } else {
-          w.r = Math.min(w.r || 5, 4);
-        }
-      }
-    }
-  }
+  saveState();
+  window.location.reload();
 }
 
 /** Clear illness state (mark recovered). */

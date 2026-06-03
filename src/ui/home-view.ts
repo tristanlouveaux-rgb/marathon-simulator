@@ -4,6 +4,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
+import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -17,9 +18,11 @@ import { computeDailyCoach, type StrainContext, type CoachState } from '@/calcul
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
+import { resolveWeekWorkouts } from './week-resolve';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { strengthCardSummary } from '@/guided/strength-model';
 import { isInjuryActive, buildInjuryCaption } from './injury/modal';
+import { isImpactBlockedByInjury } from '@/injury/engine';
 import { openCheckinOverlay } from './checkin-overlay';
 import { clearIllness } from './illness-modal';
 import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
@@ -28,8 +31,7 @@ import { setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType } from '@/calculations/activity-matcher';
-import { getEffectiveSport } from './sport-picker-modal';
-import { SPORT_LABELS } from '@/constants';
+import { resolveActivityDisplayName } from './sport-picker-modal';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { collectTriSuggestions, type TriSuggestionBundle } from '@/calculations/tri-suggestion-aggregator';
@@ -604,7 +606,7 @@ function buildIllnessBanner(s: SimulatorState): string {
     : 'Quality sessions → easy. Distances scaled.';
 
   return `
-    <div id="home-illness-banner" style="margin:0 14px 8px;border-radius:16px;overflow:hidden;
+    <div id="home-illness-banner" style="margin:0 16px 8px;border-radius:16px;overflow:hidden;
                 border:1px solid rgba(0,0,0,0.08);
                 background:rgba(255,251,235,0.9);
                 box-shadow:0 1px 8px rgba(0,0,0,0.06)">
@@ -942,7 +944,15 @@ function buildReadinessRing(s: SimulatorState): string {
     .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH) > 0).length || 4;
   const plannedWeekTSS = [0,1,2,3,4,5,6]
     .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH), 0);
-  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  let perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  // On-demand (no plan) has no per-session target, which left the Strain ring with no
+  // anchor — it auto-scaled to the actual and read ~80% for any load. Anchor it on the
+  // sustainable daily load (CTL/7, Banister) instead — the same baseline the removed
+  // "Today's load" card used — so the ring ranks today's load vs sustainable and the
+  // target/colour bands ("Building" → "Above target" → "Load exceeded") work.
+  if (perSessionAvg === 0 && s.trackOnly && (s.ctlBaseline ?? 0) > 0) {
+    perSessionAvg = (s.ctlBaseline as number) / 7;
+  }
   // Detect matched activity on a day with no generated workout
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
@@ -1010,6 +1020,7 @@ function buildReadinessRing(s: SimulatorState): string {
     weeksOfHistory: metrics.length,
     strainPct: todaySignalBTSS > 0 ? strainPctLinear : null,
     recentLegLoads: s.recentLegLoads ?? [],
+    impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     acwrSafeUpper: acwr.safeUpper,
     mtlAcwr,
@@ -1055,9 +1066,6 @@ function buildReadinessRing(s: SimulatorState): string {
   // Injury state is the dominant constraint when active. Lead with it so the
   // user reads "blocked / capped" before the systemic readiness commentary.
   const injuryCaption = buildInjuryCaption(s);
-  const readinessSentence = injuryCaption
-    ? `${injuryCaption} ${baseReadinessSentence}`
-    : baseReadinessSentence;
 
   const color = readinessColor(readiness.label);
   const rdnStops = readinessColorStops(readiness.label);
@@ -1399,7 +1407,10 @@ function buildReadinessRing(s: SimulatorState): string {
         ` : ''}
 
         <!-- Sentence -->
-        <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
+        ${injuryCaption
+          ? `<p style="font-size:14px;font-weight:600;color:var(--c-black);text-align:center;line-height:1.55;margin:0 16px 8px;max-width:none">${injuryCaption}</p>
+             ${baseReadinessSentence ? `<p style="font-size:14px;color:var(--c-muted);text-align:center;line-height:1.55;margin:0 16px 14px;max-width:none">${baseReadinessSentence}</p>` : ''}`
+          : `<p style="font-size:14px;color:var(--c-muted);text-align:center;line-height:1.55;margin:0 16px 14px;max-width:none">${baseReadinessSentence}</p>`}
         ${readiness.suppressStreak != null ? `<p style="font-size:12px;color:var(--c-muted);text-align:center;line-height:1.4;margin:-6px 16px 14px;opacity:0.75">Sleep has limited your score for ${readiness.suppressStreak} consecutive days.</p>` : ''}
         ${!isTri && coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
@@ -1826,7 +1837,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
           <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
           ${viewBtn}
         </div>
-        <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;margin-bottom:5px">${act.name}</div>
+        <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;margin-bottom:5px">${escapeAttr(act.name)}</div>
         <div style="display:flex;align-items:center;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09)">
           ${metaHtml}
         </div>
@@ -1841,29 +1852,11 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
     return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your training plan.', false);
   }
 
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
-
-  // Apply mods
-  if (wk.workoutMods) {
-    for (const mod of wk.workoutMods) {
-      const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
-      if (w) { (w as any).d = mod.newDistance; (w as any).status = mod.status; }
-    }
-  }
-
-  // Apply day moves (drag-and-drop reorder from plan tab)
-  if ((wk as any).workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
-      const w = workouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
+  // Canonical week resolution — the SAME list the Plan tab renders (mods via
+  // findWorkoutForMod, moves, adhoc/holiday sessions, illness + holiday + bridge
+  // scaling). Home must not re-derive a partial version of this or the Today
+  // card and "Next:" line drift from the plan. See CLAUDE.md "same source" rule.
+  const workouts = resolveWeekWorkouts(s, s.w);
 
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
@@ -1915,8 +1908,16 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   const durationMin = actualDurationMin ?? ((todayW as any).dur || null);
   const rpe = (todayW as any).rpe || null;
 
-  // For gym sessions: render exercises as an expandable list
-  const exercises = isStrength && rawDesc ? rawDesc.split('\n').filter(Boolean) : [];
+  // For gym sessions: render exercises as an expandable list. Strip the internal
+  // "@X% 1RM" load marker and the cue/rest parentheticals so the peek reads as a
+  // clean session ("3x5 Back Squat"), not the raw template line — the only place
+  // the marker used to leak to the user. Full detail is one tap away (Start →
+  // the clean strength modal).
+  const exercises = isStrength && rawDesc
+    ? rawDesc.split('\n').filter(Boolean).map((ex: string) =>
+        ex.replace(/\s*@\s*\d+%\s*1RM/gi, '').replace(/\s*\([^)]*\)/g, '').trim()
+      ).filter(Boolean)
+    : [];
   // Suppress planned description when real activity data is available. It would be wrong (e.g. "90min general sport" for Alpine Skiing)
   const desc = matchedActual ? '' : (isStrength ? '' : fmtDesc(rawDesc, s.unitPref ?? 'km'));
 
@@ -2002,16 +2003,23 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
   if (isRest && s) {
     const wk = s.wks?.[s.w - 1];
     if (wk) {
-      const workouts = generateWeekWorkouts(wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined, null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined, s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts);
-      // Apply day moves so "Next workout" reflects any plan-tab reorders
-      if ((wk as any).workoutMoves) {
-        for (const [workoutId, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
-          const wo = workouts.find((w: any) => (w.id || w.n) === workoutId);
-          if (wo) (wo as any).dayOfWeek = newDay;
-        }
-      }
+      // Mode-aware source. Triathlon and HYROX schedule into wk.triWorkouts (+
+      // adhoc substitutes); only running uses the run generator. Reading the run
+      // generator in tri/HYROX mode bled a "Sun: Long Run" into rest days.
+      const isTriOrHyrox = s.eventType === 'triathlon' || s.eventType === 'hyrox';
+      const workouts = isTriOrHyrox
+        ? [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])]
+        // Running: canonical resolution shared with the Plan tab + Today card.
+        : resolveWeekWorkouts(s, s.w);
+      const gActuals = (wk.garminActuals ?? {}) as Record<string, unknown>;
       const upcoming = workouts
-        .filter((w: any) => w.dayOfWeek != null && w.dayOfWeek > ourDay && w.t !== 'rest')
+        .filter((w: any) => {
+          if (w.dayOfWeek == null || w.dayOfWeek <= ourDay) return false;
+          if (w.t === 'rest' || w.status === 'skip' || w.status === 'replaced') return false;
+          // Already completed (matched to a real activity) — not "next".
+          if (gActuals[w.id || w.n]) return false;
+          return true;
+        })
         .sort((a: any, b: any) => a.dayOfWeek - b.dayOfWeek);
       if (upcoming.length > 0) {
         const next = upcoming[0] as any;
@@ -2047,48 +2055,6 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
 }
 
 
-/**
- * On-demand "To do" card. Generated sessions land in `adhocWorkouts`; until the user
- * does one (a synced activity matches it, or they mark it done/skipped), it's an
- * upcoming session to do — not a "recent activity". Renders each as a tappable card
- * (`.home-adhoc-row` → `openTriWorkoutDetail`, which carries Start / Mark-as-done),
- * so On-demand gets the same "here's your session, go do it" affordance as plan modes.
- */
-function buildTrackOnlyTodo(s: SimulatorState): string {
-  const wk = s.wks?.[s.w - 1];
-  if (!wk) return '';
-  const rated = wk.rated ?? {};
-  const esc = (str: string) => String(str ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const todos = (wk.adhocWorkouts ?? [])
-    .map((w, idx) => ({ w: w as any, idx }))
-    .filter(({ w }) => (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && rated[w.id] == null);
-  if (todos.length === 0) return '';
-  const unit = s.unitPref ?? 'km';
-  const cards = todos.map(({ w, idx }) => {
-    const name = w.n || w.name || w.workoutName || 'Session';
-    const dist = w.distanceKm;
-    const dur = w.durationMin;
-    const meta = typeof dist === 'number' && dist > 0 ? formatKm(dist, unit)
-      : typeof dur === 'number' && dur > 0 ? `${Math.round(dur)} min` : '';
-    return `
-      <button class="home-adhoc-row" data-week-num="${s.w}" data-adhoc-idx="${idx}" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.05);padding:14px 16px;cursor:pointer;font-family:inherit;margin-bottom:8px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-          <div style="min-width:0">
-            <div style="font-size:15px;font-weight:600;color:#0F172A;letter-spacing:-0.01em">${esc(name)}</div>
-            ${meta ? `<div style="font-size:12px;color:#64748B;margin-top:2px">${meta}</div>` : ''}
-          </div>
-          <span style="font-size:18px;color:#94A3B8;flex:0 0 auto">&rarr;</span>
-        </div>
-      </button>`;
-  }).join('');
-  return `
-    <div style="padding:0 16px;margin-top:6px" class="hf" data-delay="0.10">
-      <div style="font-size:12px;font-weight:600;color:#64748B;padding:0 4px 8px">To do</div>
-      ${cards}
-    </div>`;
-}
-
 function buildRecentActivity(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   const prevWk = s.wks?.[s.w - 2];
@@ -2107,32 +2073,19 @@ function buildRecentActivity(s: SimulatorState): string {
       const isRun = isRunKey(key, act.activityType);
       const dateStr = act.startTime ? fmtDate(act.startTime) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationSec ? `${Math.round(act.durationSec / 60)} min` : '';
-      // Prefer the user-effective sport label (respects manualSport override) over
-      // raw activityType. Falls back to formatActivityType if no override/mapping applies.
-      // When the resolved sport is the generic catch-all, prefer the activity's
-      // own workout/display name so the row reads as the real sport (e.g. "Padel"
-      // instead of "General Sport"). Drop a stale displayName === 'General Sport'.
-      const isRunAct = isRun;
-      const effSport = !isRunAct ? getEffectiveSport(act) : null;
-      const sportLabel = effSport && effSport !== 'generic_sport'
-        ? (SPORT_LABELS as Record<string, string>)[effSport]
-        : null;
-      const cleanDisplayName = act.displayName && act.displayName !== 'General Sport' ? act.displayName : null;
-      const genericFallback = effSport === 'generic_sport'
-        ? (act.workoutName || cleanDisplayName || (act.activityType ? formatActivityType(act.activityType) : null))
-        : null;
-      const actName = sportLabel
-        || genericFallback
-        || (act.activityType ? formatActivityType(act.activityType) : null)
-        || cleanDisplayName || act.workoutName
-        || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      // Canonical sport-aware name (respects manualSport override, drops a stale
+      // "General Sport", falls back to the raw activity-type label). Shared with
+      // the activity-detail page via resolveActivityDisplayName so the Recent row
+      // and the detail it opens always read the same label.
+      const keyFallback = key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const actName = resolveActivityDisplayName(act, keyFallback);
       rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
     });
     // Adhoc workouts. Skip if garminActuals already covers this id (garminActuals has richer/Strava data)
     (week.adhocWorkouts || []).forEach((w: any, idx: number) => {
       if (w.id && actualKeys.has(w.id)) return;
-      // On-demand: generated, not-yet-done sessions belong in the "To do" card
-      // (buildTrackOnlyTodo), not Recent. Once matched/marked done they fall through.
+      // On-demand: generated, not-yet-done sessions live in the Plan tab's "Planned"
+      // list (buildTrackOnlyUpcoming), not Recent. Once matched/marked done they fall through.
       if (s.trackOnly && (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
@@ -2214,7 +2167,7 @@ function buildRecentActivity(s: SimulatorState): string {
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:400;letter-spacing:-0.01em;margin-bottom:1px;display:flex;align-items:center;gap:6px">
-          ${r.name}
+          ${escapeAttr(r.name)}
           ${r.unmatched ? `<span style="font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,0.12);color:#b45309">Unmatched</span>` : ''}
         </div>
         <div style="font-size:11px;color:var(--c-muted)">${r.sub}</div>
@@ -2306,102 +2259,6 @@ function getHomePlanName(s: SimulatorState): string {
  *  - Account button, tab bar and sync actions reuse the same builders as the full home.
  */
 /**
- * Daily "sustainable load" target for Just-Track users.
- *
- * Anchor: CTL ÷ 7. The daily-equivalent of a fitness-flat week, per the
- * Banister impulse-response model. Modulated by readiness so the target
- * bends to how recovered the athlete actually is that day. Gabbett bands
- * colour the actual-vs-target ratio (0.8–1.3 sweet spot, 1.3–1.5 caution,
- * >1.5 injury-risk spike. Gabbett 2016).
- *
- * Returns null when CTL is too low to produce a meaningful target
- * (athlete has no sync history / is brand new). UI falls back to
- * "Sync activity to unlock" in that case.
- */
-function buildTrackOnlyDailyTarget(s: SimulatorState): string {
-  const ctlWeekly = s.ctlBaseline ?? 0;
-  if (ctlWeekly < 20) {
-    // Below ~3 TSS/day CTL: no meaningful anchor. Encourage sync.
-    return `
-      <div style="padding:0 16px;margin-top:18px;margin-bottom:14px" class="hf" data-delay="0.10">
-        <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
-          <div style="font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">Today's load</div>
-          <div style="font-size:13px;color:#475569;line-height:1.45">Connect Strava or record a run. Your sustainable daily load appears once we have enough training history.</div>
-        </div>
-      </div>`;
-  }
-
-  const ctlDaily = ctlWeekly / 7;
-
-  // Readiness multiplier. Four zones anchored on the composite 0–100.
-  // 80+ → push (×1.3), 60–79 → neutral (×1.0), 40–59 → easy (×0.7), <40 → rest (×0.3).
-  const hrvAll = (s.physiologyHistory ?? []).map(p => p.hrvRmssd).filter((v): v is number => v != null);
-  const hrvAvg = hrvAll.length >= 3 ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length) : null;
-  const r = computeReadiness({
-    tsb: computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, (s as any).previousPlanWks).tsb,
-    acwr: computeReadinessACWR(s).ratio,
-    ctlNow: ctlWeekly,
-    sleepScore: (s.physiologyHistory ?? []).slice(-1)[0]?.sleepScore ?? null,
-    sleepHistory: s.physiologyHistory ?? [],
-    hrvRmssd: (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null)?.hrvRmssd ?? null,
-    hrvPersonalAvg: hrvAvg,
-    sleepBankSec: null,
-    weeksOfHistory: Math.min(s.wks?.length ?? 0, 4),
-  });
-  const readinessScore = r?.score ?? 65;
-  const mult = readinessScore >= 80 ? 1.3
-             : readinessScore >= 60 ? 1.0
-             : readinessScore >= 40 ? 0.7
-             : 0.3;
-  const target = Math.round(ctlDaily * mult);
-
-  // Today's actual load. Sum of TSS for today's activities.
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const wk = s.wks?.[s.w - 1];
-  let todayTSS = 0;
-  if (wk) {
-    for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
-      const dateStr = (actual.startTime ?? '').slice(0, 10);
-      if (dateStr !== todayIso) continue;
-      if (actual.iTrimp != null && actual.iTrimp > 0) {
-        todayTSS += (actual.iTrimp * 100) / 15000;
-      } else if (actual.durationSec) {
-        todayTSS += (actual.durationSec / 60) * 0.92;
-      }
-    }
-  }
-  todayTSS = Math.round(todayTSS);
-
-  // Gabbett-band colour for actual-vs-CTL ratio.
-  // Note: bands apply to ratio of daily actual vs CTL/7, not vs the readiness-
-  // adjusted target. They're a safety signal, not a prescription signal.
-  const ratio = ctlDaily > 0 ? todayTSS / ctlDaily : 0;
-  const bandColor = ratio > 1.5 ? '#dc2626'     // red. Injury-risk spike
-                  : ratio > 1.3 ? '#f59e0b'     // amber. Overreaching
-                  : '#10b981';                   // green. Sustainable
-  const bandLabel = ratio > 1.5 ? 'High strain'
-                  : ratio > 1.3 ? 'Overreaching'
-                  : todayTSS > 0 ? 'Sustainable'
-                  : 'No load yet';
-
-  return `
-    <div style="padding:0 16px;margin-top:18px;margin-bottom:14px" class="hf" data-delay="0.10">
-      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-          <div style="font-size:12px;font-weight:600;color:#64748B">Today's load</div>
-          <div style="font-size:11px;font-weight:600;color:${bandColor};padding:2px 8px;border-radius:100px;background:${bandColor}1a">${bandLabel}</div>
-        </div>
-        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-          <span style="font-size:32px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;line-height:1;font-variant-numeric:tabular-nums">${todayTSS}</span>
-          <span style="font-size:13px;color:#64748B">TSS</span>
-          <span style="margin-left:auto;font-size:13px;color:#94A3B8" title="Your daily-sustainable load based on recent training and how recovered you are today. Not a prescription.">sustainable ${target}</span>
-        </div>
-        <div style="font-size:12px;line-height:1.45;color:#475569">${r?.sentence ?? 'Session sized to how recovered you are.'}</div>
-      </div>
-    </div>`;
-}
-
-/**
  * Just-Track week detail page. Opened from the home "This Week" card.
  *
  * Same visual shape as Load & Taper (hero ring + sport breakdown + activity
@@ -2471,7 +2328,7 @@ export function renderTrackOnlyWeekDetail(): void {
       ${rows.map(r => `
         <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.05)">
           <div style="min-width:54px;font-size:11px;color:#64748B">${r.day}</div>
-          <div style="flex:1;font-size:14px;color:#0F172A">${r.name}</div>
+          <div style="flex:1;font-size:14px;color:#0F172A">${escapeAttr(r.name)}</div>
           <div style="font-size:13px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${r.value}</div>
         </div>`).join('')}
     </div>`;
@@ -2733,7 +2590,8 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
         <button id="home-log-sleep-link" style="font-size:12px;color:#64748B;background:none;border:none;cursor:pointer;padding:4px 8px;text-decoration:underline">Log sleep</button>
       </div>
 
-      ${buildTrackOnlyThisWeek(s)}
+      <!-- "This week" lives on the Plan/Sessions tab now (was duplicated here). The
+           load sparkline stays as a quick trend glance (taps through to Stats). -->
       ${buildTrackOnlyLoadSpark(s)}
 
       ${buildSyncActions(s)}
@@ -2821,7 +2679,7 @@ function getHomeHTML(s: SimulatorState): string {
 
         <!-- Action buttons -->
         <div style="display:flex;justify-content:center;gap:8px;margin-top:18px">
-          <button id="home-coach-btn" class="m-btn-glass">Coach</button>
+          ${AI_COACH_ENABLED ? `<button id="home-coach-btn" class="m-btn-glass">Coach</button>` : ''}
           <button id="home-checkin-btn" class="m-btn-glass">Check-in</button>
           <button id="home-record-btn" class="m-btn-glass">Record</button>
         </div>
@@ -2866,9 +2724,69 @@ function buildTriCarryBanner(s: SimulatorState): string {
 }
 
 /**
- * Triathlon: today's planned workouts rendered in the same card language as
- * the running today-workout hero. Two-a-days produce two stacked cards
- * (e.g. AM swim + PM bike). Matches the running workflow: tap to drill in.
+ * One session rendered as a self-contained glass card in the running
+ * today-workout language (glass + faint ring + thin title + muted footer link).
+ * Each session is its own card with clear air between them, so a two-a-day
+ * reads as separate, distinct cards rather than a merged block. Keeps the
+ * `tri-hero-card` / `hx-hero-card` class + `data-*-workout-id` so the existing
+ * tap handlers (open the detail modal) fire unchanged. `isFirst` carries the
+ * one "DAY · Today" eyebrow so it appears once, on the top card.
+ */
+function buildHeroSessionCard(opts: {
+  cls: 'tri-hero-card' | 'hx-hero-card';
+  idAttr: string;
+  id: string;
+  label: string;
+  badgeBg: string;
+  badgeText: string;
+  duration: string;
+  title: string;
+  body: string;
+  metaRight: string; // e.g. "RPE 4 · TSS 20"
+  extra?: string;    // optional brick line etc.
+  isFirst: boolean;
+  ourDay: number;
+}): string {
+  const eyebrow = opts.isFirst
+    ? `<div style="margin-bottom:12px"><span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[opts.ourDay]} · Today</span></div>`
+    : '';
+  return `
+    <div ${opts.idAttr}="${escapeAttr(opts.id)}" class="${opts.cls} hf" style="margin:0 16px 14px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.05),0 12px 32px rgba(0,0,0,0.06);position:relative;overflow:hidden;cursor:pointer">
+      <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
+        <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.12)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="55" stroke="rgba(0,0,0,0.09)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="82" stroke="rgba(0,0,0,0.07)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="112" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="145" stroke="rgba(0,0,0,0.035)" stroke-width="1"/>
+        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
+        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
+      </svg>
+      <div style="position:relative;z-index:1;padding:20px 22px">
+        ${eyebrow}
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="display:inline-flex;align-items:center;background:${opts.badgeBg};color:${opts.badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:4px 10px;border-radius:100px">${opts.label}</span>
+          <span style="flex:1"></span>
+          ${opts.duration ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${opts.duration}</span>` : ''}
+        </div>
+        <div style="font-size:24px;font-weight:300;color:var(--c-black);letter-spacing:-0.035em;line-height:1.05;margin-bottom:5px">${opts.title}</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${opts.body}</div>
+        ${opts.extra ?? ''}
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09);display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">${opts.metaRight}</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;color:var(--c-muted)">
+            Breakdown
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Triathlon: today's planned workouts rendered in the running today-workout
+ * hero language. Two-a-days (e.g. AM swim + PM bike) render as separate glass
+ * cards with clear air between them. Tap a session to drill in.
  */
 function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
@@ -2884,16 +2802,14 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
 
-  const cards = todayList.map((w) => buildTriathlonHeroCard(w)).join('');
-  return `<div style="padding:0 20px 16px">${cards}</div>`;
+  return todayList.map((w, i) => buildTriathlonSessionBlock(w, i === 0, ourDay)).join('');
 }
 
-function buildTriathlonHeroCard(w: any): string {
+function buildTriathlonSessionBlock(w: any, isFirst: boolean, ourDay: number): string {
   const kind: 'swim' | 'bike' | 'run' | 'strength' =
     w.discipline ? w.discipline
     : (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n || '')) ? 'strength'
     : 'run';
-  const accent = kind === 'swim' ? '#5b8a8a' : kind === 'bike' ? '#c08460' : kind === 'run' ? '#7a845c' : '#6b6b76';
   const badgeBg = kind === 'swim' ? 'rgba(91,138,138,0.14)' : kind === 'bike' ? 'rgba(192,132,96,0.14)' : kind === 'run' ? 'rgba(122,132,92,0.14)' : 'rgba(100,100,110,0.14)';
   const badgeText = kind === 'swim' ? '#3d6666' : kind === 'bike' ? '#9c6245' : kind === 'run' ? '#4f5a3b' : '#4a4a55';
   const label = kind === 'swim' ? 'Swim' : kind === 'bike' ? 'Bike' : kind === 'run' ? 'Run' : 'Strength';
@@ -2906,32 +2822,20 @@ function buildTriathlonHeroCard(w: any): string {
   const desc = humaniseTriDesc(w.d || '');
   const duration = extractTriWorkoutDuration(w);
   const isBrick = w.t === 'brick' && w.brickSegments;
+  const metaRight = `RPE ${rpe}${tss > 0 ? ` · TSS ${Math.round(tss)}` : ''}`;
+  const extra = isBrick
+    ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.06);font-size:11px;color:var(--c-faint)">Brick, bike ${w.brickSegments[0].durationMin ?? 0}m + run ${w.brickSegments[1].durationMin ?? 0}m</div>`
+    : '';
 
-  return `
-    <div data-tri-workout-id="${escapeAttr(w.id || w.n)}" style="
-      position:relative;
-      background:#fff;border-radius:16px;
-      padding:20px 22px;margin-bottom:12px;
-      box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);
-      cursor:pointer;
-      transition:transform 0.15s ease,box-shadow 0.15s ease;
-    " class="tri-hero-card">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <span style="display:inline-flex;align-items:center;background:${badgeBg};color:${badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:4px 10px;border-radius:100px">${label}</span>
-        ${duration ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${duration}</span>` : ''}
-        <span style="flex:1"></span>
-        <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
-        ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
-      </div>
-      <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${strengthSummary ?? escapeAttr(desc)}</div>
-      ${isBrick ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.06);font-size:11px;color:var(--c-faint)">Brick, bike ${w.brickSegments[0].durationMin ?? 0}m + run ${w.brickSegments[1].durationMin ?? 0}m</div>` : ''}
-      <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
-        <span>Tap for full breakdown</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      </div>
-    </div>
-  `;
+  return buildHeroSessionCard({
+    cls: 'tri-hero-card',
+    idAttr: 'data-tri-workout-id',
+    id: w.id || w.n,
+    label, badgeBg, badgeText, duration,
+    title: escapeAttr(w.n),
+    body: strengthSummary ?? escapeAttr(desc),
+    metaRight, extra, isFirst, ourDay,
+  });
 }
 
 // ─── HYROX today's workout ────────────────────────────────────────────────────
@@ -2950,17 +2854,15 @@ function buildTodayWorkoutHyrox(s: SimulatorState): string {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
 
-  const cards = todayList.map((w: any) => buildHyroxHeroCard(w)).join('');
-  return `<div style="padding:0 20px 16px">${cards}</div>`;
+  return todayList.map((w: any, i: number) => buildHyroxSessionBlock(w, i === 0, ourDay)).join('');
 }
 
-function buildHyroxHeroCard(w: any): string {
+function buildHyroxSessionBlock(w: any, isFirst: boolean, ourDay: number): string {
   const wt = String(w.t || '');
   const disc = (w.discipline === 'station' || w.discipline === 'brick') ? String(w.discipline)
     : (wt === 'gym' || wt === 'strength') ? 'strength'
     : wt === 'cross_training' ? 'cross'
     : 'run';
-  const accent = disc === 'station' ? '#b8742c' : disc === 'brick' ? '#5b6ea0' : disc === 'strength' ? '#6b7280' : disc === 'cross' ? '#0d9488' : '#7a845c';
   const badgeBg = disc === 'station' ? 'rgba(184,116,44,0.14)' : disc === 'brick' ? 'rgba(91,110,160,0.14)' : disc === 'strength' ? 'rgba(107,114,128,0.14)' : disc === 'cross' ? 'rgba(13,148,136,0.14)' : 'rgba(122,132,92,0.14)';
   const badgeText = disc === 'station' ? '#8a5820' : disc === 'brick' ? '#3d4f80' : disc === 'strength' ? '#4b5563' : disc === 'cross' ? '#0f766e' : '#4f5a3b';
   const label = disc === 'station' ? 'Station' : disc === 'brick' ? 'Brick' : disc === 'strength' ? 'Strength' : disc === 'cross' ? 'Cross-train' : 'Run';
@@ -2968,29 +2870,17 @@ function buildHyroxHeroCard(w: any): string {
   const mtl = w.musculoTendonLoad;
   const dur = w.estimatedDurationMin;
   const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : '';
+  const metaRight = `RPE ${rpe}${mtl != null && mtl > 0 ? ` · MTL ${Math.round(mtl)}` : ''}`;
 
-  return `
-    <div data-hx-hero-workout-id="${escapeAttr(w.id || w.n)}" style="
-      background:#fff;border-radius:16px;
-      padding:20px 22px;margin-bottom:12px;
-      box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);
-      cursor:pointer;transition:transform 0.15s ease,box-shadow 0.15s ease;
-    " class="hx-hero-card">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <span style="display:inline-flex;align-items:center;background:${badgeBg};color:${badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:4px 10px;border-radius:100px">${label}</span>
-        ${durStr ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${durStr}</span>` : ''}
-        <span style="flex:1"></span>
-        <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
-        ${mtl != null && mtl > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">MTL ${Math.round(mtl)}</span>` : ''}
-      </div>
-      <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${strengthCardSummary(w) ?? escapeAttr(w.d || '')}</div>
-      <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
-        <span>Tap for full breakdown</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-      </div>
-    </div>
-  `;
+  return buildHeroSessionCard({
+    cls: 'hx-hero-card',
+    idAttr: 'data-hx-hero-workout-id',
+    id: w.id || w.n,
+    label, badgeBg, badgeText, duration: durStr,
+    title: escapeAttr(w.n),
+    body: strengthCardSummary(w) ?? escapeAttr(w.d || ''),
+    metaRight, isFirst, ourDay,
+  });
 }
 
 function humaniseTriDesc(d: string): string {

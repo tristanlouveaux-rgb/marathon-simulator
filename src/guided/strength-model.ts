@@ -72,8 +72,25 @@ function parseRepsAndName(main: string): { reps: string; name: string } {
 }
 
 /** True for the closing stretch / mobility line. */
-function isStretchLine(line: string): boolean {
+export function isStretchLine(line: string): boolean {
   return /^stretch\b/i.test(line.trim());
+}
+
+/**
+ * The display exercise name for one description line, or null when the line is
+ * not a parseable exercise (stretch note, blank, or a bare label with no Nx
+ * prefix). The "@X% 1RM" load garnish is stripped, matching the names rendered
+ * everywhere else. The exercise-swap feature uses this to key a line to its
+ * remembered substitute without re-implementing the parser.
+ */
+export function exerciseNameFromLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || isStretchLine(trimmed)) return null;
+  const main = trimmed.replace(/\s*\([^)]*\)/g, '').trim();
+  if (!main) return null;
+  const { name } = parseRepsAndName(main);
+  if (!name) return null;
+  return cleanExerciseName(name);
 }
 
 /**

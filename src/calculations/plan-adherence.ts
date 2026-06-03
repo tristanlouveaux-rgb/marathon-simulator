@@ -1,4 +1,26 @@
 import type { SimulatorState, Week, GarminActual } from '@/types';
+import { wasIllnessRestDay } from './illness-rules';
+
+/** ISO 'YYYY-MM-DD' date `days` after `iso` (noon-UTC to dodge DST/timezone). */
+function addDaysISO(iso: string, days: number): string {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+/** How many days in plan week `weekIdx` were full-REST under an active/recent
+ *  illness. Subtracted from that week's run denominator so a medically-rested
+ *  week isn't scored as missed runs. Capped by the caller. */
+function illnessRestDaysInWeek(s: SimulatorState, weekIdx: number): number {
+  const illness = (s as any).illnessState;
+  if (!illness?.schedule?.length || !s.planStartDate) return 0;
+  const weekStart = addDaysISO(s.planStartDate, weekIdx * 7);
+  let count = 0;
+  for (let d = 0; d < 7; d++) {
+    if (wasIllnessRestDay(illness, addDaysISO(weekStart, d))) count++;
+  }
+  return count;
+}
 
 /** Distance-completion threshold: a planned run counts as completed
  *  when the actual distance is at least 95% of the target distance. */
@@ -102,7 +124,10 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
     // runs that were pushed to the following week via week-debrief.
     const nextWk: Week | undefined = s.wks[idx + 1];
     const pushedCount = (nextWk?.skip ?? []).length;
-    const weekPlanned = Math.max(0, s.rw - pushedCount);
+    // Illness-rested days don't count as missed runs (the illness banner
+    // promises adherence is unaffected). Subtract them like pushed sessions.
+    const illnessRest = Math.min(illnessRestDaysInWeek(s, idx), Math.max(0, s.rw - pushedCount));
+    const weekPlanned = Math.max(0, s.rw - pushedCount - illnessRest);
 
     if (weekPlanned <= 0) continue;
 

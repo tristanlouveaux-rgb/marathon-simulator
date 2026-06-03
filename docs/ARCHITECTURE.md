@@ -244,6 +244,12 @@ generateWeekWorkouts(
 
 `effortScore` (trailing RPE from `getTrailingEffortScore()`) and `acwrStatus` (from `wk.scheduledAcwrStatus`) enable the plan engine to scale workout durations (5–15% reduction) and strip quality sessions when load is high.
 
+### `resolveWeekWorkouts()` — canonical week resolution (`src/ui/week-resolve.ts`)
+
+`generateWeekWorkouts()` produces the *base* week. The fully-resolved week a user sees layers render-time modifiers on top, in this order: adhoc/holiday-injected sessions → `workoutMods` (stable-id match via `findWorkoutForMod`, timing mods by name) → `workoutMoves` (drag reorders) → illness suppression (current week) → holiday suppression → comeback-bridge scaling. `resolveWeekWorkouts(s, viewWeek)` is the single, side-effect-free source for that resolved list.
+
+**Any running-mode surface that asks "what is this week's plan?" must call `resolveWeekWorkouts`, not re-derive it.** The Plan tab's `computeRenderedWorkouts` (plan-view.ts) delegates to it then populates its drag-and-drop `_workoutLookup`; the Home Today card (`buildTodayWorkout` / `buildNoWorkoutHero` in home-view.ts, including the "Next:" line) reads from it directly. Home can't statically import plan-view (plan-view imports home-view), which is why the resolver lives in its own module rather than being exported from plan-view. Re-implementing a partial version of this was the cause of the Home "Next:" line skipping intermediate sessions (CHANGELOG 2026-06-03).
+
 ### State access pattern
 
 ```ts

@@ -25,6 +25,8 @@ export interface WorkoutStatusFlags {
   isSkipped: boolean;
   isReplaced: boolean;
   isHoliday: boolean;
+  /** Rested or scaled by illness mode — a deliberate non-miss, like holiday. */
+  isIllness: boolean;
   isAdded: boolean;
   isReduced: boolean;
   isToday: boolean;
@@ -52,6 +54,7 @@ export function computeWorkoutStatus(f: WorkoutStatusFlags): WorkoutStatusChip {
   else if (f.isReduced) label = 'Adjusted';
   else if (f.isSkipped) label = 'Skipped';
   else if (f.isToday) label = 'Today';
+  else if (f.isIllness) label = 'Illness';
   else if (f.isPast) label = 'Missed';
   else label = 'Upcoming';
 
@@ -59,7 +62,7 @@ export function computeWorkoutStatus(f: WorkoutStatusFlags): WorkoutStatusChip {
     ? TODAY_ACCENT
     : f.isDone
       ? DONE_GREEN
-      : (f.isPast && !f.isDone && !f.isSkipped)
+      : (f.isPast && !f.isDone && !f.isSkipped && !f.isIllness)
         ? MISSED_ORANGE
         : 'var(--c-faint)';
 
@@ -73,11 +76,50 @@ export function renderWorkoutStatusChip(chip: WorkoutStatusChip): string {
     : '';
 }
 
+/**
+ * Earliest weekday index (Mon=0..Sun=6) the plan actually existed for, within the
+ * given week. Days before this were never schedulable, so they must not read
+ * "Missed" on a freshly built / regenerated plan (e.g. onboard on a Wednesday →
+ * Tuesday's session should not be "Missed"). Returns 0 when there is no
+ * `planCreatedAt`, when it can't be parsed, or when creation predates this week's
+ * start (the normal case for an established plan) — preserving legacy behaviour.
+ *
+ * Dates are parsed via component construction (local midnight) to match the rest
+ * of this module; `new Date("YYYY-MM-DD")` would parse as UTC and skew the
+ * same-day boundary in positive-UTC zones.
+ */
+export function firstTrackedDow(
+  planStartDate: string | undefined,
+  viewWeek: number,
+  planCreatedAt: string | undefined,
+): number {
+  if (!planStartDate || !planCreatedAt) return 0;
+  const [py, pm, pd] = planStartDate.split('-').map(Number);
+  const [cy, cm, cd] = planCreatedAt.split('-').map(Number);
+  if (!(py && pm && pd) || !(cy && cm && cd)) return 0;
+  const wkStart = new Date(py, pm - 1, pd);
+  wkStart.setDate(wkStart.getDate() + (viewWeek - 1) * 7);
+  const created = new Date(cy, cm - 1, cd);
+  created.setHours(0, 0, 0, 0);
+  for (let d = 0; d < 7; d++) {
+    const day = new Date(wkStart);
+    day.setDate(day.getDate() + d);
+    if (day >= created) return d;
+  }
+  return 7;
+}
+
 export interface WeekStatusContext {
   viewWeek: number;
   currentWeek: number;
   /** Mon = 0 .. Sun = 6 */
   actualToday: number;
+  /**
+   * Earliest weekday (Mon=0..Sun=6) the plan existed for in the current week.
+   * Days before this are pre-creation and never count as Missed. 0 (or absent)
+   * for past weeks / established plans / absent `planCreatedAt`.
+   */
+  firstTrackedDow?: number;
   /**
    * True only when `planStartDate` proves the *current* week's calendar range
    * has fully elapsed (a stale week that was never wrapped up). A missing or
@@ -106,6 +148,7 @@ export function computeWeekStatusContext(
   planStartDate: string | undefined,
   viewWeek: number,
   currentWeek: number,
+  planCreatedAt?: string,
 ): WeekStatusContext {
   const jsDay = new Date().getDay();
   const actualToday = jsDay === 0 ? 6 : jsDay - 1;
@@ -122,7 +165,10 @@ export function computeWeekStatusContext(
       weekEnded = now > wkEnd;
     }
   }
-  return { viewWeek, currentWeek, actualToday, weekEnded };
+  const ftd = viewWeek === currentWeek
+    ? firstTrackedDow(planStartDate, viewWeek, planCreatedAt)
+    : 0;
+  return { viewWeek, currentWeek, actualToday, weekEnded, firstTrackedDow: ftd };
 }
 
 /**
@@ -150,12 +196,13 @@ export function deriveWorkoutStatus(w: any, wk: any, ctx: WeekStatusContext): Wo
     isSkipped: ratingVal === 'skip' || w.status === 'skip' || w.status === 'skipped',
     isReplaced: w.status === 'replaced',
     isHoliday: w.status === 'holiday',
+    isIllness: !!w.illnessMod,
     isAdded: String(id).startsWith('holiday-') || String(id).startsWith('adhoc-'),
     isReduced: w.status === 'reduced',
     isToday: isCurrentWeek && !ctx.weekEnded && dow === ctx.actualToday,
     isPast:
       ctx.viewWeek < ctx.currentWeek
       || (isCurrentWeek && ctx.weekEnded)
-      || (isCurrentWeek && !ctx.weekEnded && dow >= 0 && dow < ctx.actualToday),
+      || (isCurrentWeek && !ctx.weekEnded && dow >= (ctx.firstTrackedDow ?? 0) && dow < ctx.actualToday),
   });
 }

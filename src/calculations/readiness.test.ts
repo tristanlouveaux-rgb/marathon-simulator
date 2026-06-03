@@ -254,3 +254,44 @@ describe('computeReadiness — same-signal TSB for cross-trainers', () => {
   });
 
 });
+
+describe('computeReadiness — leg-load floor is gated by injury (impactBlocked)', () => {
+  // Fresh, well-recovered athlete so the pre-floor score sits above the 54/34
+  // leg-load caps and the floor actually binds.
+  const FRESH: ReadinessInput = {
+    tsb: 14, acwr: 1.0, ctlNow: 60, weeksOfHistory: 5, precomputedRecoveryScore: 85,
+  };
+  // Fresh entry → decays ≈ 1, so total ≈ raw load.
+  const legLoad = (load: number) => [{
+    load, sport: 'generic_sport', sportLabel: 'General Sport', timestampMs: Date.now(),
+  }];
+
+  it('moderate leg load floors readiness to Manage Load and warns about running', () => {
+    const r = computeReadiness({ ...FRESH, recentLegLoads: legLoad(30) });
+    expect(r.hardFloor).toBe('legLoad');
+    expect(r.score).toBe(54);
+    expect(r.legLoadNote).toContain('if running');
+  });
+
+  it('drops the leg-load floor and the "if running" clause when running is injury-blocked', () => {
+    const blocked = computeReadiness({ ...FRESH, recentLegLoads: legLoad(30), impactBlocked: true });
+    const open    = computeReadiness({ ...FRESH, recentLegLoads: legLoad(30) });
+    expect(blocked.hardFloor).not.toBe('legLoad');
+    // No longer capped at 54 — score reflects what the athlete can still do.
+    expect(blocked.score).toBeGreaterThan(open.score);
+    expect(blocked.legLoadNote).not.toContain('if running');
+    // Factual lead retained.
+    expect(blocked.legLoadNote).toContain('General Sport');
+  });
+
+  it('drops the heavy leg-load floor and the impact-risk clause when injury-blocked', () => {
+    const open    = computeReadiness({ ...FRESH, recentLegLoads: legLoad(70) });
+    const blocked = computeReadiness({ ...FRESH, recentLegLoads: legLoad(70), impactBlocked: true });
+    expect(open.hardFloor).toBe('legLoad');
+    expect(open.score).toBe(34);
+    expect(blocked.hardFloor).not.toBe('legLoad');
+    expect(blocked.score).toBeGreaterThan(34);
+    expect(blocked.legLoadNote).not.toContain('impact risk');
+  });
+
+});

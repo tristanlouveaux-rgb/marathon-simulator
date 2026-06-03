@@ -108,7 +108,8 @@ Deno.serve(async (req) => {
 
     if (!tokenRes.ok) {
       const text = await tokenRes.text();
-      return new Response(JSON.stringify({ error: "token_exchange_failed", details: text }), {
+      console.error("[garmin-auth-callback] token exchange failed:", tokenRes.status, text);
+      return new Response(JSON.stringify({ error: "token_exchange_failed" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
@@ -122,8 +123,9 @@ Deno.serve(async (req) => {
     const tokenType: string | null = tokenJson.token_type ?? null;
 
     if (!accessToken) {
+      console.error("[garmin-auth-callback] no access_token in token response");
       return new Response(
-        JSON.stringify({ error: "no_access_token_in_response", raw: tokenJson }),
+        JSON.stringify({ error: "no_access_token_in_response" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -140,14 +142,17 @@ Deno.serve(async (req) => {
         refresh_token: refreshToken,
         expires_at: expiresAt,
         token_type: tokenType,
-        raw: tokenJson,
+        // Store only non-credential metadata in `raw` (tokens already live in
+        // their own columns; no need to duplicate them in a catch-all blob).
+        raw: { token_type: tokenType, scope: tokenJson.scope ?? null, expires_in: expiresIn },
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id" },
     );
 
     if (upsertErr) {
-      return new Response(JSON.stringify({ error: "token_store_failed", details: upsertErr }), {
+      console.error("[garmin-auth-callback] token store failed:", upsertErr);
+      return new Response(JSON.stringify({ error: "token_store_failed" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });

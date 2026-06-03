@@ -124,6 +124,7 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     const _dow = _planMonday.getDay();
     _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
+    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
     s.rd = 'marathon';  // Placeholder. Tri/cycling views ignore this.

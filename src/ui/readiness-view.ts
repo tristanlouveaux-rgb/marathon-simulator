@@ -35,9 +35,10 @@ import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildInjuryCaption, isInjuryActive } from './injury/modal';
+import { isImpactBlockedByInjury } from '@/injury/engine';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-import { buildFloweyHaloBackground, floweyHaloAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+import { buildFloweyHaloBackground, buildSunGlint, atmosphereGradient } from './page-flair';
 // Suppress unused warnings. Keeping legacy sky imports for safety
 void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M = '#0F172A';
@@ -208,6 +209,7 @@ function getReadinessHTML(s: SimulatorState): string {
     weeksOfHistory: metrics.length,
     strainPct: todaySignalBTSS > 0 ? strainPct : null,
     recentLegLoads: s.recentLegLoads ?? [],
+    impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     acwrSafeUpper: acwr.safeUpper,
     mtlAcwr: mtlAcwrValue,
@@ -258,6 +260,16 @@ function getReadinessHTML(s: SimulatorState): string {
   // surfaces read in sync (per CLAUDE.md "same number, same source" rule).
   // Daily-coach context is preserved below as sessionNote.
   const coachMessage = (() => {
+    // The hero score/ring is `readiness` (the running model, now fed leg load).
+    // When leg load is the binding floor it IS the single largest factor pulling
+    // the score down, so surface it — even in tri/injury mode, where the tri
+    // sentence would otherwise talk about bike load and bury the real cause.
+    // Surface the leg-load note when it's the binding floor, OR when running is
+    // injury-blocked (the floor is skipped then, but the factual note — already
+    // trimmed of its "if running" clause — is still useful context).
+    if (readiness.legLoadNote && (readiness.hardFloor === 'legLoad' || isImpactBlockedByInjury(s.injuryState))) {
+      return readiness.legLoadNote;
+    }
     if (!isTri || !triReadiness) return readiness.sentence;
 
     // Determine the most important systemic signal (sleep, HRV, load). May override
@@ -294,7 +306,6 @@ function getReadinessHTML(s: SimulatorState): string {
   // Injury state is the dominant constraint when active. Lead with it so the
   // user reads "blocked / capped" before the systemic readiness commentary.
   const injuryCaption = buildInjuryCaption(s);
-  const captionWithInjury = injuryCaption ? `${injuryCaption} ${coachMessage}` : coachMessage;
   const sessionNote = _coach.sessionNote;
   const activeStrainPct = todaySignalBTSS > 0 ? strainPct : 0;
 
@@ -638,7 +649,9 @@ function getReadinessHTML(s: SimulatorState): string {
       #rdn-view *, #rdn-view *::before, #rdn-view *::after { box-sizing:inherit; }
       @keyframes rdnFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .rdn-fade { opacity:0; animation:rdnFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${floweyHaloAnimationCSS('rdn')}
+      /* Halo is intentionally STATIC: the glass cards + hero ring use backdrop-filter,
+         and an animating halo behind them flickers the glass (RUNBOOK Cause 2 — the
+         2026-05-27 Readiness flicker). Do NOT re-add floweyHaloAnimationCSS('rdn'). */
     </style>
 
     <div id="rdn-view" data-readiness-label="${readiness.label}" style="
@@ -706,7 +719,10 @@ function getReadinessHTML(s: SimulatorState): string {
               <div style="font-size:12px;font-weight:600;color:${TEXT_M};margin-top:4px">${ringLabel}</div>
             </div>
           </div>
-          <div style="font-size:13px;color:${TEXT_S};margin-top:16px;text-align:center;padding:0 32px;line-height:1.45">${captionWithInjury}</div>
+          ${injuryCaption
+            ? `<div style="font-size:14px;font-weight:600;color:${TEXT_M};margin-top:16px;text-align:center;padding:0 24px;line-height:1.55">${injuryCaption}</div>
+               ${coachMessage ? `<div style="font-size:14px;font-weight:500;color:${TEXT_M};opacity:0.9;margin-top:10px;text-align:center;padding:0 24px;line-height:1.55">${coachMessage}</div>` : ''}`
+            : `<div style="font-size:14px;font-weight:500;color:${TEXT_M};opacity:0.9;margin-top:16px;text-align:center;padding:0 24px;line-height:1.55">${coachMessage}</div>`}
           ${sessionNote ? `<div style="font-size:13px;color:${TEXT_S};margin-top:10px;text-align:center;padding:0 32px;line-height:1.45;border-top:1px solid var(--c-border);padding-top:10px">${sessionNote}</div>` : ''}
           ${readiness.hardFloor === 'acwr' ? `<div style="margin-top:12px;padding:8px 16px;border-radius:12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
             <div style="font-size:12px;color:var(--c-warn);font-weight:600;line-height:1.45">Load ratio (${acwrRatioStr}) is the primary constraint. 7-day load ${acwr.status === 'high' ? 'significantly exceeds' : 'exceeds'} 28-day average.</div>

@@ -466,6 +466,109 @@ export function computeRollingRestingHR(
 }
 
 /**
+ * Collapse duplicate copies of the SAME real-world session that arrived from
+ * different sources. Priority: Strava > Apple Health > Garmin webhook (Strava
+ * carries HR zones, polyline, splits; the Garmin webhook summary carries none).
+ *
+ * This runs at the end of every `matchAndAutoComplete` AND on app load
+ * (network-independent) — a user with both a Garmin webhook feed and Strava (for
+ * now, only the single approved dev account; shipped users are Strava-only until
+ * Garmin approval) receives each session twice. The two copies carry DIFFERENT
+ * garminIds (`strava-…` vs the raw Garmin numeric id) and even differently-
+ * formatted-but-identical timestamps (`…Z` vs `…+00:00`), so the same-id dedup in
+ * Recent never collapses them. Match on start time (±4h) + duration (within 15%),
+ * falling back to ±10 min when a duration is missing.
+ *
+ * Pure local operation: reads/writes `s.wks` only, never the network. Returns
+ * true when it changed anything; the caller decides whether to persist.
+ */
+export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMutableState>): boolean {
+  const s = state ?? getMutableState();
+  if (!s.wks || s.wks.length === 0) return false;
+  let dedupChanged = false;
+
+  const collidesWith = (actual: GarminActual, other: GarminActual): boolean => {
+    if (!actual.startTime || !other.startTime) return false;
+    const timeDiff = Math.abs(new Date(actual.startTime).getTime() - new Date(other.startTime).getTime());
+    if (timeDiff > 4 * 60 * 60 * 1000) return false;
+    if (actual.durationSec > 0 && other.durationSec > 0) {
+      const durRatio = Math.abs(actual.durationSec - other.durationSec) / Math.max(actual.durationSec, other.durationSec);
+      return durRatio < 0.15;
+    }
+    return timeDiff < 10 * 60 * 1000;
+  };
+
+  const dropActual = (week: Week, wid: string, gid: string): void => {
+    delete week.garminActuals![wid];
+    if (week.garminMatched?.[gid] === wid) delete week.garminMatched[gid];
+    if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
+    // Drop the raw pending record too so a later re-import + re-match can't
+    // resurrect the suppressed copy (keeps the dirty-state cleanup permanent
+    // rather than oscillating every sync).
+    if (week.garminPending) week.garminPending = week.garminPending.filter(p => p.garminId !== gid);
+    dedupChanged = true;
+  };
+
+  // Strava-over-Garmin: drop a Garmin-webhook actual when a Strava actual exists.
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const stravaEntries = Object.values(week.garminActuals).filter(a => a.garminId.startsWith('strava-') && a.startTime);
+    if (stravaEntries.length === 0) continue;
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      if (actual.garminId.startsWith('strava-')) continue;
+      if (stravaEntries.some(sa => collidesWith(actual, sa))) {
+        console.log(`[dedup] Removed Garmin actual ${wid} (${actual.garminId}) — Strava entry exists`);
+        dropActual(week, wid, actual.garminId);
+      }
+    }
+  }
+
+  // Apple-over-Garmin: an Apple Health row carries the HR stream/zones/route a
+  // Garmin webhook summary lacks. Strava still wins over both — the pass above
+  // already cleared any Garmin row colliding with Strava.
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const appleEntries = Object.values(week.garminActuals).filter(a => a.garminId.startsWith('apple-') && a.startTime);
+    if (appleEntries.length === 0) continue;
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      const gid = actual.garminId;
+      if (gid.startsWith('strava-') || gid.startsWith('apple-')) continue;
+      if (appleEntries.some(ae => collidesWith(actual, ae))) {
+        console.log(`[dedup] Removed Garmin summary ${wid} (${gid}) — richer Apple Health entry exists`);
+        dropActual(week, wid, gid);
+      }
+    }
+  }
+
+  // Strava-vs-Strava: two actuals sharing the same strava garminId (a plan-slot
+  // entry and an adhoc both upgraded to the same `strava-XXX`). Keep the plan-slot
+  // (non-`garmin-` key), drop the adhoc.
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const seenStravaIds = new Map<string, string>();
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      if (!actual.garminId.startsWith('strava-')) continue;
+      const existing = seenStravaIds.get(actual.garminId);
+      if (!existing) { seenStravaIds.set(actual.garminId, wid); continue; }
+      const toDelete = wid.startsWith('garmin-') ? wid : existing;
+      const toKeep = wid.startsWith('garmin-') ? existing : wid;
+      delete week.garminActuals[toDelete];
+      if (week.garminMatched) {
+        for (const [gid, slot] of Object.entries(week.garminMatched)) {
+          if (slot === toDelete) week.garminMatched[gid] = toKeep;
+        }
+      }
+      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== toDelete);
+      seenStravaIds.set(actual.garminId, toKeep);
+      dedupChanged = true;
+      console.log(`[dedup] Removed duplicate Strava entry ${toDelete} — keeping ${toKeep} for ${actual.garminId}`);
+    }
+  }
+
+  return dedupChanged;
+}
+
+/**
  * Main entry point: match Garmin activities to planned workouts and auto-complete.
  *
  * Activities are distributed to their correct plan week based on planStartDate,
@@ -496,101 +599,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
   }
 
-  // Dedup pass: remove Garmin-sourced adhoc entries when a Strava-sourced entry
-  // already exists for the same activity (same start time ±10 min). This cleans up
-  // the case where the Garmin webhook stored an activity first, syncActivities()
-  // matched it, and then syncStravaActivities() created a second richer entry.
-  let dedupChanged = false;
-  for (const week of s.wks) {
-    if (!week.garminActuals) continue;
-    const stravaEntries = Object.values(week.garminActuals)
-      .filter(a => a.garminId.startsWith('strava-') && a.startTime);
-    if (stravaEntries.length === 0) continue;
-    for (const [wid, actual] of Object.entries(week.garminActuals)) {
-      if (actual.garminId.startsWith('strava-')) continue;
-      if (!actual.startTime) continue;
-      const startMs = new Date(actual.startTime).getTime();
-      const hasStravaDup = stravaEntries.some(sa => {
-        const timeDiff = Math.abs(startMs - new Date(sa.startTime!).getTime());
-        if (timeDiff > 4 * 60 * 60 * 1000) return false;
-        if (actual.durationSec > 0 && sa.durationSec > 0) {
-          const durRatio = Math.abs(actual.durationSec - sa.durationSec) / Math.max(actual.durationSec, sa.durationSec);
-          return durRatio < 0.15;
-        }
-        return timeDiff < 10 * 60 * 1000;
-      });
-      if (!hasStravaDup) continue;
-      const oldGarminId = actual.garminId;
-      delete week.garminActuals[wid];
-      if (week.garminMatched?.[oldGarminId] === wid) delete week.garminMatched[oldGarminId];
-      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
-      dedupChanged = true;
-      console.log(`[dedup] Removed Garmin adhoc ${wid} (${oldGarminId}) — Strava entry exists`);
-    }
-  }
-
-  // Apple-over-Garmin dedup: an Apple Health row (apple-) carries the HR stream,
-  // zones, route and km splits that a Garmin webhook summary (garmin-) lacks.
-  // When both exist for the same activity (start ±4h + duration within 15%, or
-  // ±10 min when duration is unknown), keep Apple and drop the Garmin summary.
-  // Strava still wins over both. The pass above already removed any non-Strava
-  // row colliding with a Strava row, so by here a surviving apple- row has no
-  // Strava counterpart. Mirrors the Strava-over-Garmin pass exactly.
-  for (const week of s.wks) {
-    if (!week.garminActuals) continue;
-    const appleEntries = Object.values(week.garminActuals)
-      .filter(a => a.garminId.startsWith('apple-') && a.startTime);
-    if (appleEntries.length === 0) continue;
-    for (const [wid, actual] of Object.entries(week.garminActuals)) {
-      const gid = actual.garminId;
-      // Only drop Garmin webhook summaries. Never touch strava- or apple- rows.
-      if (gid.startsWith('strava-') || gid.startsWith('apple-')) continue;
-      if (!actual.startTime) continue;
-      const startMs = new Date(actual.startTime).getTime();
-      const hasAppleDup = appleEntries.some(ae => {
-        const timeDiff = Math.abs(startMs - new Date(ae.startTime!).getTime());
-        if (timeDiff > 4 * 60 * 60 * 1000) return false;
-        if (actual.durationSec > 0 && ae.durationSec > 0) {
-          const durRatio = Math.abs(actual.durationSec - ae.durationSec) / Math.max(actual.durationSec, ae.durationSec);
-          return durRatio < 0.15;
-        }
-        return timeDiff < 10 * 60 * 1000;
-      });
-      if (!hasAppleDup) continue;
-      delete week.garminActuals[wid];
-      if (week.garminMatched?.[gid] === wid) delete week.garminMatched[gid];
-      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
-      dedupChanged = true;
-      console.log(`[dedup] Removed Garmin summary ${wid} (${gid}) — richer Apple Health entry exists`);
-    }
-  }
-
-  // Strava-vs-Strava dedup: if two garminActuals entries share the same strava garminId
-  // (e.g., a plan-slot entry and an adhoc both upgraded to the same 'strava-XXX'),
-  // keep the plan-slot entry (non-garmin- key prefix) and remove the adhoc (garmin- prefix).
-  for (const week of s.wks) {
-    if (!week.garminActuals) continue;
-    const seenStravaIds = new Map<string, string>(); // stravaId → workoutId
-    for (const [wid, actual] of Object.entries(week.garminActuals)) {
-      if (!actual.garminId.startsWith('strava-')) continue;
-      const existing = seenStravaIds.get(actual.garminId);
-      if (!existing) { seenStravaIds.set(actual.garminId, wid); continue; }
-      // Prefer plan-slot (non-garmin- key) over adhoc (garmin- key)
-      const toDelete = wid.startsWith('garmin-') ? wid : existing;
-      const toKeep = wid.startsWith('garmin-') ? existing : wid;
-      delete week.garminActuals[toDelete];
-      if (week.garminMatched) {
-        for (const [gid, slot] of Object.entries(week.garminMatched)) {
-          if (slot === toDelete) { week.garminMatched[gid] = toKeep; }
-        }
-      }
-      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== toDelete);
-      seenStravaIds.set(actual.garminId, toKeep);
-      dedupChanged = true;
-      console.log(`[dedup] Removed duplicate Strava entry ${toDelete} — keeping ${toKeep} for ${actual.garminId}`);
-    }
-  }
-
+  // Strava > Apple Health > Garmin-webhook dedup. Same logic now also runs on app
+  // load via reconcileCrossSourceDuplicates (network-independent), so a dev-account
+  // user receiving each session from both Garmin webhook and Strava doesn't keep
+  // both copies until the next successful sync.
+  const dedupChanged = reconcileCrossSourceDuplicates(s);
   if (dedupChanged) saveState();
 
   // Build a global set of garmin IDs already processed in ANY week.
@@ -1335,9 +1348,15 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             continue;
           }
         }
-        if (isPastWeek) {
-          // Past week: log cross-training as adhoc directly. The plan for that week
-          // is already done, so no point queuing for modal review.
+        // A `guided-` id only appears when a session completed IN-APP is re-fed
+        // by redistributeArchivedActivitiesToNewPlan (plan regen / mode switch).
+        // It was already reviewed when first completed, so re-attach it as a done
+        // adhoc session instead of re-queuing it for review (the bug: a gym
+        // session finished this week reappeared as "not done" after a regen).
+        const isRedistributedGuided = String(row.garmin_id).startsWith('guided-');
+        if (isPastWeek || isRedistributedGuided) {
+          // Past week (or an already-completed guided session): log as adhoc
+          // directly. The session is done, so no point queuing for modal review.
           const id = `garmin-${row.garmin_id}`;
           const rpe = deriveRPE(row, 5, s.maxHR, s.restingHR, s.onboarding?.age);
           addAdhocWorkout(wk, row, appType === 'gym' ? 'gym' : 'cross', id, rpe);
@@ -1796,6 +1815,13 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   const distPart = distKm > 0.1 ? `${distKm.toFixed(1)}km in ` : '';
   const description = `${distPart}${durationMin}min · ${dateStr} ${timeStr}`;
 
+  // Place the card on the day the activity actually happened (Mon=0..Sun=6).
+  // Without this the tri/HYROX plan views fall back to `dayOfWeek ?? 4` and dump
+  // every synced cross-training session onto Friday. (The running plan derives an
+  // effectiveDay from startTime at render, but tri/HYROX read dayOfWeek directly.)
+  const jsDay = startDate.getDay();
+  const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+
   const workout: Workout = {
     id,
     t: item.appType === 'run' ? 'easy' : item.appType === 'gym' ? 'gym' : 'cross',
@@ -1803,6 +1829,7 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
     d: description,
     r: rpe,
     rpe,
+    dayOfWeek,
     aerobic: item.aerobicEffect ?? undefined,
     anaerobic: item.anaerobicEffect ?? undefined,
   };

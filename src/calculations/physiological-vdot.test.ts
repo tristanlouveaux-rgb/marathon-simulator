@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPhysiologicalVdot, pbDerivedVdot } from './physiological-vdot';
+import { getPhysiologicalVdot, pbDerivedVdot, resolveRunningVdot, hasRunningFitnessSignal } from './physiological-vdot';
 import { cv } from './vdot';
 import type { SimulatorState } from '@/types';
 
@@ -221,5 +221,26 @@ describe('getPhysiologicalVdot — staleness edge cases', () => {
     const r = getPhysiologicalVdot(s, { now: NOW });
     expect(r.source).toBe('device');
     expect(r.deviceAgeDays).toBeNull();
+  });
+});
+
+describe('resolveRunningVdot / hasRunningFitnessSignal — canonical fitness gate', () => {
+  it('resolves the physiological chain when a real tier is present', () => {
+    const s = mkState({ pbs: { k5: 1058, k10: 2360 } });
+    const physio = getPhysiologicalVdot(s).vdot;
+    expect(resolveRunningVdot(s)).toBe(physio);
+    expect(hasRunningFitnessSignal(s)).toBe(true);
+  });
+
+  it('falls back to the effective VDOT (s.v) when the chain is bare', () => {
+    const s = mkState({ v: 45, pbs: {} });
+    expect(resolveRunningVdot(s)).toBeCloseTo(45, 5);
+    expect(hasRunningFitnessSignal(s)).toBe(true);
+  });
+
+  it('returns null / false when there is no usable running fitness at all', () => {
+    const s = mkState({ v: 0, pbs: {} });
+    expect(resolveRunningVdot(s)).toBeNull();
+    expect(hasRunningFitnessSignal(s)).toBe(false);
   });
 });

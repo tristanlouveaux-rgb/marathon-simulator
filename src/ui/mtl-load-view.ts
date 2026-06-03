@@ -18,7 +18,7 @@
 import { getState } from '@/state';
 import { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+import { buildSkyBackground } from './sky-background';
 import { atmosphereGradient } from './page-flair';
 
 const TEXT_M = '#0F172A';
@@ -248,7 +248,7 @@ function getMtlLoadHTML(): string {
         ${contributors.map(c => `
           <div style="padding:10px 0;border-top:1px solid #F1F5F9">
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:2px">
-              <div style="font-size:13px;font-weight:600;color:${TEXT_M}">${c.name}</div>
+              <div style="font-size:13px;font-weight:600;color:${TEXT_M}">${String(c.name ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
               <div style="font-size:11px;color:${TEXT_L}">${dayName(c.day)}</div>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
@@ -276,7 +276,7 @@ function getMtlLoadHTML(): string {
       #mtl-view *, #mtl-view *::before, #mtl-view *::after { box-sizing:inherit; }
       @keyframes mtlFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .mtl-fade { opacity:0; animation:mtlFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('mtl')}
+      /* Sky background is static under the glass cards (RUNBOOK Cause 1+2). Do not animate it. */
     </style>
 
     <div id="mtl-view" style="

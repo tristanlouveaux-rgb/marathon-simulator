@@ -89,7 +89,8 @@ Deno.serve(async (req) => {
 
     if (!tokenRes.ok) {
       const text = await tokenRes.text();
-      return new Response(JSON.stringify({ error: "token_exchange_failed", details: text }), {
+      console.error("[strava-auth-callback] token exchange failed:", tokenRes.status, text);
+      return new Response(JSON.stringify({ error: "token_exchange_failed" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
@@ -114,8 +115,11 @@ Deno.serve(async (req) => {
       typeof tokenJson.athlete?.weight === "number" ? tokenJson.athlete.weight : null;
 
     if (!accessToken) {
+      // Do NOT echo tokenJson — on a partial/edge response it can still carry a
+      // live refresh_token. Return the error code only (matches garmin-auth-callback).
+      console.error("[strava-auth-callback] token response missing access_token");
       return new Response(
-        JSON.stringify({ error: "no_access_token_in_response", raw: tokenJson }),
+        JSON.stringify({ error: "no_access_token_in_response" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }

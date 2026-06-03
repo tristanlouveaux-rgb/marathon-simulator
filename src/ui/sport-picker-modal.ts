@@ -12,8 +12,10 @@
  */
 
 import { getMutableState, saveState } from '@/state';
+import { formatActivityType } from '@/calculations/activity-matcher';
 import { SPORTS_DB, SPORT_LABELS, SPORT_ALIASES, TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
 import { applyRbeDiscount } from '@/calculations/readiness';
+import { buildStrengthLegLoadEntry, legFeelRawLoad, legFeelRecoveryMult } from '@/calculations/strength-leg-load';
 import type { GarminActual, SportKey, Week } from '@/types';
 
 // ── Running leg load ─────────────────────────────────────────────────────────
@@ -146,6 +148,34 @@ export function getEffectiveSport(actual: GarminActual): SportKey {
 }
 
 /**
+ * Canonical display name for a synced/logged activity. Single source of truth so
+ * the Home "Recent" list and the activity-detail page never diverge (a HIIT that
+ * read "HIIT" in the list but "General Sport" on the detail page was the symptom).
+ *
+ * Precedence mirrors getEffectiveSport: a manual override or unambiguously-derived
+ * sport gives the sport label; a generic catch-all prefers the activity's own
+ * descriptive name, then the raw activity-type label. A stale "General Sport"
+ * name (either workoutName or displayName) is dropped so it never wins.
+ */
+export function resolveActivityDisplayName(actual: GarminActual, fallback = 'Activity'): string {
+  const clean = (n?: string | null): string | null => (n && n !== 'General Sport' ? n : null);
+  const cleanName = clean(actual.workoutName) || clean(actual.displayName);
+  const isRun = isRunActivity(actual);
+  const effSport = !isRun ? getEffectiveSport(actual) : null;
+  const sportLabel = effSport && effSport !== 'generic_sport'
+    ? (SPORT_LABELS as Record<string, string>)[effSport]
+    : null;
+  const genericFallback = effSport === 'generic_sport'
+    ? (cleanName || (actual.activityType ? formatActivityType(actual.activityType) : null))
+    : null;
+  return sportLabel
+    || genericFallback
+    || (actual.activityType ? formatActivityType(actual.activityType) : null)
+    || cleanName
+    || fallback;
+}
+
+/**
  * Resolve a SportKey for an incoming activity during sync. Order of precedence:
  *   1. App-type mapping (from mapAppTypeToSport) when it gives a real sport
  *   2. Raw activityType deriving when it gives a real sport
@@ -205,9 +235,20 @@ function computeLegLoad(actual: GarminActual, sport: SportKey, weekRpe?: number)
     const rpe = deriveRunRpe(actual, weekRpe);
     return computeRunLegLoad(actual, rpe);
   }
+  const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
+  // Derived strength leg load (leg-group score × %1RM × RPE, stamped at in-app
+  // completion) is the most precise signal — it wins for any sport when present.
+  if (actual.legLoadRaw != null && actual.legLoadRaw > 0) return actual.legLoadRaw;
+  // Manual leg-involvement tag for ambiguous synced sessions (HIIT / General
+  // Sport / synced strength with no exercise detail). Overrides the sport rate.
+  if (actual.legFeel === 'moderate' || actual.legFeel === 'heavy') {
+    return legFeelRawLoad(actual.legFeel, durationMin);
+  }
+  // Strength with neither exercise detail nor a manual tag contributes nothing
+  // (a leg day and an upper day differ entirely; duration × rate doesn't apply).
+  if (sport === 'strength') return 0;
   const cfg = SPORTS_DB[sport];
   const rate = cfg?.legLoadPerMin ?? 0;
-  const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
   return durationMin * rate;
 }
 
@@ -301,6 +342,20 @@ export function reconcileRecentLegLoads(): boolean {
   let added = false;
   const TEN_MIN = 10 * 60_000;
   for (const c of candidates) {
+    // Derived strength (leg load computed from logged exercises, stamped on the
+    // actual): build via the shared helper so RBE + the heavy-day decay override
+    // match the completion write site exactly (single source). A synced strength
+    // session with only a manual `legFeel` tag (no legLoadRaw) falls through to
+    // the generic push below, which carries the legFeel decay override.
+    if (c.sport === 'strength' && c.actual.legLoadRaw != null && c.actual.legLoadRaw > 0) {
+      const entry = buildStrengthLegLoadEntry(c.actual, existing, c.ts);
+      if (entry) {
+        existing.push(entry);
+        if (c.actual.garminId) byGarminId.set(c.actual.garminId, true);
+        added = true;
+      }
+      continue;
+    }
     // Skip if a near-duplicate already exists (same sport, ±10 min). This blocks
     // the case where garminActuals carries two sibling rows for the same physical
     // bout (Strava and Garmin webhook with slightly different start times, or two
@@ -317,7 +372,7 @@ export function reconcileRecentLegLoads(): boolean {
         const { load, protected: rbeProtected } = skipRbe
           ? { load: c.rawLoad, protected: false }
           : applyRbeDiscount(c.sport, c.ts, c.rawLoad, otherExisting);
-        existing[dupIdx] = { load, sport: c.sport, sportLabel, timestampMs: c.ts, garminId: c.actual.garminId, rbeProtected };
+        existing[dupIdx] = { load, sport: c.sport, sportLabel, timestampMs: c.ts, garminId: c.actual.garminId, rbeProtected, recoveryMultOverride: legFeelRecoveryMult(c.actual.legFeel) };
         if (c.actual.garminId) byGarminId.set(c.actual.garminId, true);
         added = true;
       }
@@ -330,7 +385,7 @@ export function reconcileRecentLegLoads(): boolean {
     const { load, protected: rbeProtected } = skipRbe
       ? { load: c.rawLoad, protected: false }
       : applyRbeDiscount(c.sport, c.ts, c.rawLoad, existing);
-    existing.push({ load, sport: c.sport, sportLabel, timestampMs: c.ts, garminId: c.actual.garminId, rbeProtected });
+    existing.push({ load, sport: c.sport, sportLabel, timestampMs: c.ts, garminId: c.actual.garminId, rbeProtected, recoveryMultOverride: legFeelRecoveryMult(c.actual.legFeel) });
     byGarminId.set(c.actual.garminId!, true);
     added = true;
   }
@@ -414,6 +469,7 @@ export function reclassifyActivity(actual: GarminActual, newSport: SportKey): Ga
   // "Morning Activity") across unrelated sessions, so a single correction would
   // flip every same-named activity. If recurring auto-classification is needed
   // later, it should be an explicit user opt-in, not a side-effect.
+  actual.manualSport = newSport;
 
   saveState();
   return actual;

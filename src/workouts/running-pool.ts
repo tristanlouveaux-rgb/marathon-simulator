@@ -39,7 +39,7 @@ export interface RunningPoolExercise {
 
 // ── The library (docs/SCIENCE_LOG.md §BB). 4-8 variants per category. ─────────
 
-const RUNNING_POOL: Record<RunningStrengthCategory, RunningPoolExercise[]> = {
+export const RUNNING_POOL: Record<RunningStrengthCategory, RunningPoolExercise[]> = {
   'max-strength': [
     { name: 'Back Squat', sets: 4, reps: '5', loadPct: 80, restSec: 180, cue: 'Brace, sit between the hips, drive up' },
     { name: 'Trap-Bar Deadlift', sets: 3, reps: '5', loadPct: 80, restSec: 180, cue: 'Flat back, push the floor away' },
@@ -117,7 +117,11 @@ function pickVariant(category: RunningStrengthCategory, slotIndex: number, offse
   if (phase === 'base') {
     pool = [...pool.filter(e => !e.highSoreness), ...pool.filter(e => e.highSoreness)];
   }
-  return pool[(slotIndex + offset) % pool.length];
+  // Euclidean modulo: JS `%` keeps the sign, so a negative slotIndex (e.g. an
+  // s.w that drifted negative — a documented incident class) would index past
+  // the start and return undefined → crash. This keeps the pick in range.
+  const n = pool.length;
+  return pool[(((slotIndex + offset) % n) + n) % n];
 }
 
 const INTENSITY_RPE: Record<GymIntensity, number> = { easier: 6, standard: 7, harder: 8 };
@@ -143,11 +147,25 @@ function lineFor(ex: RunningPoolExercise, restStyle: GymRestStyle, loadStep: num
   return composeExerciseLine(poolEx, scheme, restStyle);
 }
 
+/** The plyo move that pairs with a heavy lead lift (dynamic correspondence): a
+ *  squat pattern → Jump Squat (vertical), a hinge/deadlift → Box Jumps. */
+function matchedPlyoFor(leadName: string): RunningPoolExercise {
+  const plyo = RUNNING_POOL['plyo'];
+  const find = (n: string) => plyo.find(e => e.name === n)!;
+  return /squat/i.test(leadName) ? find('Jump Squat') : find('Box Jumps');
+}
+
 /**
  * Build a rotating, balanced running-strength session. `slotIndex` (the week)
  * drives variant rotation so sessions vary week to week; `targetMin` scales the
  * number of categories; `intensity` shifts loaded %s + RPE; `phase` reorders
  * high-soreness moves in base. Owns its own sizing (do NOT run tuneGymWorkout).
+ *
+ * `contrastPairing` (build phase only) pairs the heavy lead lift with a matched
+ * jump as a power block (post-activation potentiation, Science for Sport). The
+ * pairing instruction lives in the lead's CUE — never a bare label line, which
+ * `parseStrengthSession` would turn into a junk set. When on, the standalone plyo
+ * pick is dropped so the session never prescribes two jumps.
  */
 export function buildRunningStrengthWorkout(
   slotIndex: number,
@@ -155,9 +173,11 @@ export function buildRunningStrengthWorkout(
   intensity: GymIntensity,
   restStyle: GymRestStyle,
   phase?: TrainingPhase,
+  contrastPairing = false,
 ): Workout {
   const count = exerciseCountForTime(targetMin);
   const loadStep = intensityLoadStep(intensity);
+  const useContrast = contrastPairing && phase === 'build';
 
   const chosen: RunningPoolExercise[] = [];
   // First pass: one per category in priority order, up to count.
@@ -175,11 +195,132 @@ export function buildRunningStrengthWorkout(
     extra++;
   }
 
-  const lines = chosen.map(ex => lineFor(ex, restStyle, loadStep));
+  const pairedPlyo = useContrast ? matchedPlyoFor(chosen[0].name) : null;
+  const lines: string[] = [];
+  chosen.forEach((ex, idx) => {
+    if (pairedPlyo && idx === 0) {
+      // Heavy lead lift carries the pairing note in its cue; the matched jump
+      // follows as its own (parser-safe) line.
+      const paired = { ...ex, cue: `${ex.cue}. Power pair: after each set, explode into the ${pairedPlyo.name.toLowerCase()} below, then rest 2 to 3 min` };
+      lines.push(lineFor(paired, restStyle, loadStep));
+      lines.push(lineFor(pairedPlyo, restStyle, 0));
+      return;
+    }
+    // The standalone plyo pick (only present on long sessions) is delivered as
+    // the power pair instead, so skip it to avoid two jumps.
+    if (useContrast && categoryOf(ex.name) === 'plyo') return;
+    lines.push(lineFor(ex, restStyle, loadStep));
+  });
   lines.push('Stretch to finish: 3-5 min full body');
 
   const rpe = INTENSITY_RPE[intensity];
   const name = restStyle === 'circuit' ? 'Running Strength (circuit)' : 'Running Strength';
+  return { t: 'gym', n: name, d: lines.join('\n'), r: rpe, rpe, estimatedDurationMin: targetMin } as Workout;
+}
+
+/**
+ * A standalone plyometric session, drawing ONLY from the plyo category. It is
+ * the on-demand "Plyometrics" focus — a deliberate menu choice, no opt-in.
+ *
+ * The easier/standard/harder lever selects a difficulty TIER rather than a load
+ * shift (plyo is bodyweight, so the loaded-% step is already a no-op on it). The
+ * `highSoreness` flag already marks the two high-CNS moves (Single-Leg Bounds,
+ * Depth Jump), so it doubles as the tier signal — no new constant:
+ *   easier   → low-CNS only (Pogo Hops, Box Jumps, Jump Squat); never depth jumps
+ *   harder   → leads with the high-CNS moves, still includes low ones
+ *   standard → low-led spread; spicy moves sit at the back
+ * Base phase pushes the high-CNS moves to the back unless the user explicitly
+ * picked `harder` (they asked for it), mirroring `pickVariant`'s base reorder.
+ *
+ * A plyo session is SHORT by design. Within a ~12–30 min window, time scales
+ * both the number of moves and the per-move sets to land near a foot-contact
+ * target. Total contacts run from a literature floor (60) up to the athlete's
+ * ability ceiling (`contactCeiling`, the caller passes 100 / 120 / 140 by
+ * experience — beginner / intermediate / advanced, the 80→140 progression range
+ * in the plyometrics literature). Sets are the standard plyometric volume dial;
+ * rep counts stay as the pool prescribes (`[PROP]`-endorsed). Bodyweight lines
+ * carry no load marker → no `liftKey` → not weight-tracked, but the session
+ * still logs as an activity and feeds leg-load like any gym session.
+ */
+export const PLYO_CONTACT_FLOOR = 60;
+const PLYO_MIN_MIN = 12;
+const PLYO_MAX_MIN = 30;
+
+/** Foot contacts one set of a plyo move produces (counts both legs for unilateral). */
+function plyoContactsPerSet(reps: string): number {
+  const m = reps.match(/(\d+)/);
+  const n = m ? Number(m[1]) : 0;
+  return /each\s+(leg|side)/i.test(reps) ? n * 2 : n;
+}
+
+export function buildPlyometricsWorkout(
+  slotIndex: number,
+  targetMin: number,
+  intensity: GymIntensity,
+  restStyle: GymRestStyle,
+  phase?: TrainingPhase,
+  contactCeiling = 120,
+): Workout {
+  const pool = RUNNING_POOL['plyo'];
+  const low = pool.filter(e => !e.highSoreness);   // Pogo Hops, Box Jumps, Jump Squat
+  const high = pool.filter(e => e.highSoreness);    // Single-Leg Bounds, Depth Jump
+
+  let tierPool: RunningPoolExercise[];
+  if (intensity === 'easier') tierPool = [...low];
+  else if (intensity === 'harder') tierPool = [...high, ...low];
+  else tierPool = [...low, ...high];
+
+  // Base phase de-prioritises the high-CNS moves, except when the user explicitly
+  // asked for the harder tier.
+  if (phase === 'base' && intensity !== 'harder') {
+    tierPool = [...tierPool.filter(e => !e.highSoreness), ...tierPool.filter(e => e.highSoreness)];
+  }
+
+  // Rotate the lead by week so the same tier varies session to session. Euclidean
+  // modulo guards a drifted-negative slotIndex (a documented incident class).
+  const n = tierPool.length;
+  const start = (((slotIndex % n) + n) % n);
+  const rotated = [...tierPool.slice(start), ...tierPool.slice(0, start)];
+
+  // Time → foot-contact target (floor → ability ceiling) over the short plyo
+  // window, and → move count. Both scale, so the slider always changes the
+  // session.
+  const minutes = Math.max(PLYO_MIN_MIN, Math.min(PLYO_MAX_MIN, targetMin));
+  const frac = (minutes - PLYO_MIN_MIN) / (PLYO_MAX_MIN - PLYO_MIN_MIN);
+  const targetContacts = Math.round(PLYO_CONTACT_FLOOR + (contactCeiling - PLYO_CONTACT_FLOOR) * frac);
+  const count = minutes <= 17 ? 3 : minutes <= 24 ? 4 : 5;
+  const chosen = rotated.slice(0, Math.min(count, n));
+
+  // Scale sets to approach the contact target (min 2, max 6 sets per move — a
+  // sane plyo range, not a model constant). rep counts are untouched.
+  const baseContacts = chosen.reduce((sum, ex) => sum + ex.sets * plyoContactsPerSet(ex.reps), 0);
+  const volumeScale = baseContacts > 0 ? targetContacts / baseContacts : 1;
+
+  const loadStep = intensityLoadStep(intensity); // no-op on bodyweight plyo, real on the loaded strength below
+  const lines: string[] = chosen.map(ex => {
+    const sets = Math.max(2, Math.min(6, Math.round(ex.sets * volumeScale)));
+    return lineFor({ ...ex, sets }, restStyle, loadStep);
+  });
+
+  // Past the short plyo window the jumping dose is already capped (contacts clamp
+  // at PLYO_MAX_MIN). Extra time becomes strength work placed AFTER the plyo
+  // (explosive first, while the CNS is fresh), drawn from the running-strength
+  // categories. The caller caps the slider at PLYO_MAX_MIN for beginners, so only
+  // intermediate+ reach the loaded compounds here.
+  const hasStrength = targetMin > PLYO_MAX_MIN;
+  if (hasStrength) {
+    const STRENGTH_AFTER_PLYO: RunningStrengthCategory[] = ['max-strength', 'single-leg', 'posterior', 'calf-foot', 'hip-stability', 'core'];
+    const strengthCount = Math.min(STRENGTH_AFTER_PLYO.length, Math.ceil((targetMin - PLYO_MAX_MIN) / 8));
+    for (let i = 0; i < strengthCount; i++) {
+      lines.push(lineFor(pickVariant(STRENGTH_AFTER_PLYO[i], slotIndex, i, phase), restStyle, loadStep));
+    }
+  }
+
+  lines.push('Stretch to finish: 3-5 min full body');
+
+  const rpe = INTENSITY_RPE[intensity];
+  const base = hasStrength ? 'Power + Strength' : 'Plyometrics';
+  const name = restStyle === 'circuit' ? `${base} (circuit)` : base;
   return { t: 'gym', n: name, d: lines.join('\n'), r: rpe, rpe, estimatedDurationMin: targetMin } as Workout;
 }
 
@@ -189,4 +330,23 @@ export function categoryOf(name: string): RunningStrengthCategory | null {
     if (RUNNING_POOL[cat].some(e => e.name === name)) return cat;
   }
   return null;
+}
+
+/** Find a pool exercise by exact (case-insensitive) name, or null. Used by the
+ *  exercise-swap feature to resolve a remembered substitute back to its full
+ *  prescription. */
+export function findRunningPoolExercise(name: string): RunningPoolExercise | null {
+  const want = name.trim().toLowerCase();
+  for (const cat of CATEGORY_ORDER) {
+    const hit = RUNNING_POOL[cat].find(e => e.name.toLowerCase() === want);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Compose one canonical, parser-safe prescription line for a pool exercise at
+ *  standard intensity (the swap feature substitutes a movement's own vetted
+ *  prescription, not a franken-line spliced from the original). */
+export function composeRunningPoolLine(ex: RunningPoolExercise, restStyle: GymRestStyle = 'traditional'): string {
+  return lineFor(ex, restStyle, 0);
 }

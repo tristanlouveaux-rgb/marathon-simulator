@@ -6,8 +6,7 @@ import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
-import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { getAbilityBand } from '@/calculations/fatigue';
+import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -72,81 +71,6 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   // Room to add sessions (same cap the bump helper enforces: 7 runs/week).
   const canAddSessions = baseRunsPerWeek < 7;
 
-  // ─── DIAGNOSTIC LOG (remove after horizon-input bug investigation) ───
-  // Dumps every input the horizon model receives and every component it
-  // returns, so we can see exactly why the predicted gain is what it is.
-  try {
-    const sessionsPerWeekForLog = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-    const baselineVdotForLog = s.v || 50;
-    const abilityBandForLog = getAbilityBand(baselineVdotForLog);
-    const planMeanKmForLog = getPlanPrescribedMeanWeeklyKm(sessionsPerWeekForLog, s.rd);
-    const horizonForLog = applyTrainingHorizonAdjustment({
-      baseline_vdot: baselineVdotForLog,
-      target_distance: s.rd,
-      weeks_remaining: s.tw || 16,
-      sessions_per_week: sessionsPerWeekForLog,
-      runner_type: getRunnerType(s.b || 1.06),
-      ability_band: abilityBandForLog,
-      taper_weeks: Math.max(1, Math.ceil((s.tw || 16) * 0.15)),
-      experience_level: s.onboarding?.experienceLevel || 'intermediate',
-      weekly_volume_km: planMeanKmForLog ?? s.wkm,
-      hm_pb_seconds: s.pbs?.h || undefined,
-      lt_pace_sec_per_km: s.lt || undefined,
-    });
-    console.log('[PlanPreview:DIAG] inputs:', {
-      'baselineVdot (s.v)': baselineVdotForLog,
-      abilityBand: abilityBandForLog,
-      raceDist: s.rd,
-      weeksRemaining: s.tw,
-      sessionsPerWeek_raw: s.epw || s.rw,
-      sessionsPerWeek_total: sessionsPerWeekForLog,
-      runnerType: getRunnerType(s.b || 1.06),
-      experienceLevel: s.onboarding?.experienceLevel,
-      weeklyVolumeKm_state: s.wkm,
-      planPrescribedMeanWeeklyKm: planMeanKmForLog,
-      doseUsedByHorizon: planMeanKmForLog ?? s.wkm,
-      pb_marathon: s.pbs?.m,
-      pb_half: s.pbs?.h,
-      pb_10k: s.pbs?.k10,
-      pb_5k: s.pbs?.k5,
-      pbDates_raw: s.onboarding?.pbDates,
-      marathonPbDateISO: s.onboarding?.pbDates?.m,
-      marathonPbAgeDays: s.onboarding?.pbDates?.m
-        ? Math.floor((Date.now() - new Date(s.onboarding.pbDates.m).getTime()) / 86400000)
-        : 'undefined (no date persisted)',
-      ltPaceSecPerKm: s.lt,
-      vo2: s.vo2,
-      blendedRaceTimeSec: s.blendedRaceTimeSec,
-      initialBaseline: s.initialBaseline,
-      blendedAnchorUsed: s.blendedRaceTimeSec ?? s.initialBaseline,
-    });
-    // Reverse-derive effective_sessions from session_factor and from
-    // undertrain_penalty separately. If they disagree, the model has a real bug.
-    const sf = horizonForLog.components.session_factor;
-    const up = horizonForLog.components.undertrain_penalty;
-    const effFromSf = sf > 0 && sf < 1 ? 6.5 - Math.log((1 / sf) - 1) : NaN;  // assumes ref=6.5 (advanced marathon)
-    const effFromUp = up > 0 ? 3.5 - (up * 3.5 / 4.0) : NaN;                  // assumes min_sess=3.5, penalty_pct=4 (marathon)
-    console.log('[PlanPreview:DIAG] horizon result:', {
-      vdot_gain: horizonForLog.vdot_gain.toFixed(3),
-      improvement_pct: horizonForLog.improvement_pct.toFixed(3),
-      week_factor: horizonForLog.components.week_factor.toFixed(3),
-      session_factor: horizonForLog.components.session_factor.toFixed(3),
-      type_modifier: horizonForLog.components.type_modifier.toFixed(3),
-      undertrain_penalty: horizonForLog.components.undertrain_penalty.toFixed(3),
-      taper_bonus: horizonForLog.components.taper_bonus.toFixed(3),
-      effSessions_derived_from_session_factor: effFromSf.toFixed(3),
-      effSessions_derived_from_undertrain_penalty: effFromUp.toFixed(3),
-    });
-    console.log('[PlanPreview:DIAG] forecast output:', {
-      forecastTime,
-      forecastTime_formatted: ft(forecastTime),
-      initialBaseline_formatted: ft(s.initialBaseline ?? 0),
-      improvement_sec: (s.initialBaseline ?? 0) - forecastTime,
-    });
-  } catch (e) {
-    console.warn('[PlanPreview:DIAG] log failed:', e);
-  }
-  // ─── END DIAGNOSTIC LOG ───
 
   const candidateMilestone = s.continuousMode
     ? null
@@ -519,16 +443,17 @@ function goalChanceForState(
 ): number | null {
   const commuteDays = s.commuteConfig?.enabled ? (s.commuteConfig.commuteDaysPerWeek ?? 0) : 0;
   const sessions = (s.epw || s.rw || 4) + commuteDays + addedSessions;
-  // Anchor the sim to the SAME forecast the overlay caption shows for this
-  // session count, so the chance and the displayed forecast move together as
-  // sessions are added (the stored s.forecastTime knows only the base count).
-  // gymSessions, when supplied, feeds the strength-economy projection (§BC).
+  // The forecast for this scenario (added runs + strength, §BC) becomes the cone
+  // CENTRE via the override. We deliberately do NOT mutate the session counts on
+  // the sim state. The sim re-derives its own mean improvement from the session
+  // count and the cone's *spread* scales with that mean — and because the
+  // VDOT→time map is nonlinear, a higher mean compresses the spread in seconds,
+  // which for an aggressive goal could make the chance JUMP and even move the
+  // wrong way (more sessions → narrower cone → lower chance). Pinning the spread
+  // to the base plan and letting only the override move the centre makes the
+  // chance a smooth, monotonic function of the forecast the user sees.
   const forecastOverride = forecastForSessions(s, sessions, gymSessions);
-  let simState = addedSessions > 0
-    ? { ...s, rw: (s.rw || 3) + addedSessions, epw: (s.epw ?? s.rw ?? 3) + addedSessions }
-    : s;
-  if (gymSessions != null) simState = { ...simState, gs: gymSessions };
-  const sim = runMarathonForecastSim(simState, 2000, goalSec, forecastOverride);
+  const sim = runMarathonForecastSim(s, 2000, goalSec, forecastOverride);
   if (!sim || sim.goalProbability == null) return null;
   return sim.goalProbability * 100;
 }

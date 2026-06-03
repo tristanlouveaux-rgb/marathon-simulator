@@ -252,6 +252,16 @@ export interface ReadinessInput {
    */
   recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; recoveryMultOverride?: number }>;
   /**
+   * True when an active injury has fully blocked running (run capacity 0).
+   *
+   * Leg-load fatigue caps readiness because force-absorption deficit raises
+   * impact-injury risk on foot strike — a running-only concern. When running is
+   * already blocked by injury that risk is moot, so the leg-load hard floor is
+   * skipped and the leg-load note drops its "if running" clause. Derived via
+   * `isImpactBlockedByInjury(s.injuryState)` at the call site.
+   */
+  impactBlocked?: boolean;
+  /**
    * Tier-adjusted ACWR safe upper bound from TIER_ACWR_CONFIG.
    * Used for the ACWR hard floor so it matches the Load Ratio card thresholds.
    * Defaults to 1.3 if not provided (beginner-level conservative).
@@ -358,6 +368,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     weeksOfHistory = 0,
     strainPct,
     recentLegLoads,
+    impactBlocked = false,
     precomputedRecoveryScore,
   } = input;
 
@@ -366,13 +377,20 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     ? computeDecayedLegLoad(recentLegLoads, nowMs)
     : { total: 0, topEntry: null };
 
+  // Leg-load fatigue raises impact-injury risk on foot strike, so the note
+  // warns about running. When running is already blocked by injury that warning
+  // is moot — drop the impact clause and state the fact only.
   let legLoadNote: string | null = null;
   if (legLoadTotal >= LEG_LOAD_HEAVY && legLoadTop) {
     const tf = legLoadTimeframe(legLoadTop.timestampMs, nowMs);
-    legLoadNote = `Leg load elevated from ${legLoadTop.sportLabel} ${tf}. Running today raises impact risk. Shorter, flat effort or rest recommended.`;
+    legLoadNote = impactBlocked
+      ? `Leg load elevated from ${legLoadTop.sportLabel} ${tf}.`
+      : `Leg load elevated from ${legLoadTop.sportLabel} ${tf}. Running today raises impact risk. Shorter, flat effort or rest recommended.`;
   } else if (legLoadTotal >= LEG_LOAD_MODERATE && legLoadTop) {
     const tf = legLoadTimeframe(legLoadTop.timestampMs, nowMs);
-    legLoadNote = `Moderate leg load from ${legLoadTop.sportLabel} ${tf}. Impact risk slightly elevated if running.`;
+    legLoadNote = impactBlocked
+      ? `Moderate leg load from ${legLoadTop.sportLabel} ${tf}.`
+      : `Moderate leg load from ${legLoadTop.sportLabel} ${tf}. Impact risk slightly elevated if running.`;
   }
 
   // Edge case: insufficient history → safe default "On Track"
@@ -641,7 +659,12 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Soft taper (10-20): linear onset so crossing 20 isn't a cliff. No hardFloor (no callout).
   // Precedence: each branch checks `score > cap` so a stricter prior floor (ACWR, sleep) is
   // never overwritten. LegLoad only wins when it is the strictest constraint.
-  if (legLoadTotal >= LEG_LOAD_HEAVY && score > 34) {
+  // Skipped entirely when running is blocked by injury: the floor's whole
+  // rationale is impact-injury risk on foot strike, which is moot if the user
+  // cannot run. The readiness score then reflects what they can still do.
+  if (impactBlocked) {
+    // no leg-load floor — running impact risk is not in play
+  } else if (legLoadTotal >= LEG_LOAD_HEAVY && score > 34) {
     score = 34;
     hardFloor = 'legLoad';
   } else if (legLoadTotal >= LEG_LOAD_MODERATE && score > 54) {

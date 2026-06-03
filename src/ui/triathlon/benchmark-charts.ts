@@ -239,7 +239,17 @@ export function buildForecastTrajectoryChart(
       `<span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtFinishTime(endSec)}<span style="font-size:11px;color:var(--c-muted);font-weight:400;margin-left:4px">in ${horizonWeeks} wk</span></span>`)
     .replace(/<span style="font-size:11px;color:[^"]+;font-variant-numeric:tabular-nums">[^<]*<\/span>/,
       `<span style="font-size:11px;color:${deltaCol};font-variant-numeric:tabular-nums">${deltaStr}</span>`);
-  return `${title}${chart}`;
+  // Reveal the chart left-to-right with a CSS clip-path wipe. Pure CSS so it
+  // runs on insert (and re-runs whenever the card is rebuilt on a horizon/shoe
+  // switch) — no stroke-dashoffset/getTotalLength, which is unreliable on this
+  // preserveAspectRatio="none" + non-scaling-stroke chart (it stuck mid-draw).
+  return `
+    <style>
+      @keyframes stdProjWipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+      .std-proj-wipe { animation: stdProjWipe 2.2s cubic-bezier(0.33,0,0.2,1) forwards; will-change: clip-path; }
+    </style>
+    ${title}
+    <div class="std-proj-wipe">${chart}</div>`;
 }
 
 export function smoothAreaPath(pts: [number, number][]): string {

@@ -197,6 +197,22 @@ export function getTodayCapacity(
   return null;
 }
 
+/**
+ * Was a given calendar date a full-REST day under this illness? Reads the
+ * persisted schedule + startDate (both survive recovery — clearIllness only
+ * flips `active`). Used by adherence so illness-rested days don't count as
+ * missed sessions (the banner promises "skipped workouts don't count against
+ * adherence"). Only the most-recent illness is on state, so older illnesses
+ * can't be corrected — an accepted limitation. Date strings are 'YYYY-MM-DD'.
+ */
+export function wasIllnessRestDay(
+  illness: { schedule?: ScheduleEntry[]; startDate?: string } | undefined,
+  dateISO: string,
+): boolean {
+  if (!illness?.schedule || illness.schedule.length === 0 || !illness.startDate) return false;
+  return getTodayCapacity(illness.schedule, illness.startDate, dateISO)?.capacity === 'rest';
+}
+
 /** Build a short, plain-English bullet list summarising the schedule. UI uses this for the "Mosaic's response" preview. */
 export function summariseSchedule(c: Classification, schedule: ScheduleEntry[]): string[] {
   if (schedule.length === 0) return [];
@@ -394,6 +410,13 @@ function markRest(w: any): void {
   w.originalDistance = origKm > 0 ? `${origKm}km` : (w.d || w.n);
   w.d = 'Rest — illness';
   w.r = 0;
+  // Duration-driven cards (bike/swim/station/brick/strength) render from the
+  // numeric fields, not `d`, so zero them too or the card shows full load.
+  if (w.estimatedDurationMin != null) {
+    w.originalDurationMin = w.estimatedDurationMin;
+    w.estimatedDurationMin = 0;
+  }
+  if (w.musculoTendonLoad != null) w.musculoTendonLoad = 0;
 }
 
 function scaleAndCap(w: any, entry: ScheduleEntry, kind: 'run' | 'bike' | 'swim' | 'strength'): void {
@@ -424,6 +447,16 @@ function scaleAndCap(w: any, entry: ScheduleEntry, kind: 'run' | 'bike' | 'swim'
     w.t = 'easy';
   }
   w.r = Math.min(typeof w.r === 'number' ? w.r : 4, downgradeIntensity ? 4 : 5);
+
+  // Duration-driven cards (bike/swim/station/brick/strength) render from the
+  // numeric fields, so scale them by the same volume factor as the description.
+  if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
+    w.originalDurationMin = w.originalDurationMin ?? w.estimatedDurationMin;
+    w.estimatedDurationMin = Math.max(15, Math.round(w.estimatedDurationMin * entry.volumeFactor / 5) * 5);
+  }
+  if (typeof w.musculoTendonLoad === 'number') {
+    w.musculoTendonLoad = Math.round(w.musculoTendonLoad * entry.volumeFactor);
+  }
 }
 
 /**
@@ -458,27 +491,10 @@ export function applyIllnessModsAllDisciplines(workouts: any[], severity: 'light
   for (const w of workouts) {
     const kind = classifyWorkoutKind(w);
     if (kind === 'rest_like' || kind === 'other') continue;
-    if (severity === 'resting') {
-      markRest(w);
-      // markRest only rewrites the description; HYROX/tri cards render from
-      // estimatedDurationMin and musculoTendonLoad, so zero those too.
-      if (w.estimatedDurationMin != null) {
-        w.originalDurationMin = w.estimatedDurationMin;
-        w.estimatedDurationMin = 0;
-      }
-      if (w.musculoTendonLoad != null) w.musculoTendonLoad = 0;
-      continue;
-    }
-    // light: scaleAndCap handles the description string + run km + quality
-    // downgrade. The duration-driven disciplines (bike/swim/station/brick) also
-    // need their numeric fields scaled, since the cards read those, not `d`.
-    scaleAndCap(w, ILLNESS_LIGHT_ENTRY, kind);
-    if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
-      w.estimatedDurationMin = Math.max(15, Math.round(w.estimatedDurationMin * ILLNESS_LIGHT_ENTRY.volumeFactor / 5) * 5);
-    }
-    if (typeof w.musculoTendonLoad === 'number') {
-      w.musculoTendonLoad = Math.round(w.musculoTendonLoad * ILLNESS_LIGHT_ENTRY.volumeFactor);
-    }
+    // markRest / scaleAndCap now scale the numeric duration + musculoTendonLoad
+    // fields too (the cards render from those, not `d`), so no manual scaling here.
+    if (severity === 'resting') markRest(w);
+    else scaleAndCap(w, ILLNESS_LIGHT_ENTRY, kind);
   }
 }
 
@@ -529,7 +545,12 @@ export function applyIllnessMods(
   todayISO: string = new Date().toISOString().split('T')[0],
 ): void {
   if (!illness.schedule || illness.schedule.length === 0) {
-    applyLegacyMods(workouts, illness.severity);
+    // Legacy state (pre-v2, only `severity`): scale ALL disciplines, not just
+    // runs. (The old run-only fallback silently left bike/swim/strength at full
+    // load — the bug this whole wiring closes.) No classification → no below-neck
+    // strength suppression, but the modal now always writes a schedule, so this
+    // only fires for an in-flight illness reported before the upgrade.
+    applyIllnessModsAllDisciplines(workouts, illness.severity);
     return;
   }
 
@@ -556,38 +577,5 @@ export function applyIllnessMods(
     if (kind === 'other') continue;
 
     scaleAndCap(w, entry, kind);
-  }
-}
-
-/** Legacy path — pre-v2 illnessState with only severity. Mirrors original behaviour. */
-function applyLegacyMods(workouts: any[], severity: 'light' | 'resting'): void {
-  const NON_RUN = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'row', 'hik', 'walk',
-    'pilates', 'box', 'padel', 'tennis', 'football', 'soccer', 'basketball', 'rugby', 'elliptic', 'climb', 'ski'];
-
-  for (const w of workouts) {
-    const type = (w.t || '').toLowerCase();
-    const name = (w.n || '').toLowerCase();
-    const hay = type + ' ' + name;
-    if (NON_RUN.some(t => hay.includes(t))) continue;
-
-    const origKm = parseKmFromDesc(w.d);
-    if (severity === 'resting') {
-      w.illnessMod = true;
-      w.illnessSeverity = 'resting';
-      w.originalDistance = origKm > 0 ? `${origKm}km` : (w.d || w.n);
-      w.d = 'Rest — illness';
-    } else {
-      const isQuality = QUALITY_RUN_KW.some(t => hay.includes(t));
-      if (origKm > 0) {
-        const ratio = isQuality ? 0.5 : 0.6;
-        const newKm = Math.max(2, Math.round(origKm * ratio * 2) / 2);
-        w.illnessMod = true;
-        w.illnessSeverity = 'light';
-        w.originalDistance = `${origKm}km`;
-        w.d = `${newKm}km easy pace`;
-        if (isQuality) { w.t = 'easy'; w.r = 4; }
-        else w.r = Math.min(w.r || 5, 4);
-      }
-    }
   }
 }

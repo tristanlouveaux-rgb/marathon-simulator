@@ -24,6 +24,9 @@ import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/gu
 import { getState } from '@/state/store';
 import { suggestNextWeight } from '@/calculations/strength-progression';
 import { STRENGTH_MIN_INCREMENT_KG } from '@/constants/strength-constants';
+import { alternativesFor, swapKeyForName } from '@/calculations/strength-alternatives';
+import { applyRememberedSwaps, getStrengthSwaps, setStrengthSwap, clearStrengthSwap } from '@/state/strength-swaps';
+import type { RunningPoolExercise } from '@/workouts/running-pool';
 
 const OVERLAY_ID = 'strength-workout-detail-overlay';
 
@@ -95,8 +98,15 @@ function uniqueExercises(sets: GuidedSet[]): GuidedSet[] {
   return [...byExercise.values()];
 }
 
-/** One clean row per exercise. Loaded lifts gain a memo sub-line + drill-down. */
-function renderRows(sets: GuidedSet[], ctx: PhaseContext): string {
+interface RowSwapInfo {
+  originalName: string;
+  swappable: boolean;
+  swapped: boolean;
+}
+
+/** One clean row per exercise. Loaded lifts gain a memo sub-line + drill-down.
+ *  Swappable movements gain a "Swap" control; swapped ones note their origin. */
+function renderRows(sets: GuidedSet[], ctx: PhaseContext, swapInfo: Map<number, RowSwapInfo>): string {
   return uniqueExercises(sets).map(ex => {
     const prescription = ex.reps
       ? `${ex.setCount} × ${esc(ex.reps)}`
@@ -104,6 +114,7 @@ function renderRows(sets: GuidedSet[], ctx: PhaseContext): string {
     const meta = [ex.cue ? esc(ex.cue) : '', restLabel(ex.restSec)].filter(Boolean).join(' · ');
     const memo = liftMemo(ex, ctx);
     const tappable = !!(memo?.hasHistory && ex.liftKey);
+    const swap = swapInfo.get(ex.exerciseIndex);
 
     let memoLine = '';
     if (memo?.hasHistory && memo.lastWeightKg != null) {
@@ -111,24 +122,61 @@ function renderRows(sets: GuidedSet[], ctx: PhaseContext): string {
       const suggested = memo.bumped && memo.suggestedKg != null ? ` · suggested ${fmtKg(memo.suggestedKg)}` : '';
       memoLine = `<div style="font-size:12px;color:var(--c-muted);margin-top:3px">${last}${suggested}</div>`;
     }
+    const swappedLine = swap?.swapped
+      ? `<div style="font-size:12px;color:var(--c-muted);margin-top:3px">Swapped from ${esc(swap.originalName)}</div>`
+      : '';
     const chevron = tappable
       ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="m9 18 6-6-6-6"/></svg>`
       : '';
+    // The swap control is a secondary nav action: muted text, no fill, no colour.
+    const swapBtn = swap?.swappable
+      ? `<button class="strength-swap-btn" data-ex="${ex.exerciseIndex}" style="margin-top:6px;padding:0;background:transparent;border:none;font-size:12px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f)">${swap.swapped ? 'Change swap' : 'Swap exercise'}</button>`
+      : '';
     return `
-      <div class="${tappable ? 'strength-lift-row' : ''}" ${tappable ? `data-lift="${esc(ex.liftKey!)}" data-name="${esc(ex.exerciseName)}" style="cursor:pointer"` : ''}>
-        <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--c-border)">
-          <span style="flex-shrink:0;width:3px;border-radius:2px;background:var(--c-border-strong)"></span>
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
-              <span style="font-size:14px;font-weight:600;color:var(--c-black)">${esc(ex.exerciseName)}</span>
-              <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${prescription}</span>${chevron}</span>
+      <div>
+        <div class="${tappable ? 'strength-lift-row' : ''}" ${tappable ? `data-lift="${esc(ex.liftKey!)}" data-name="${esc(ex.exerciseName)}" style="cursor:pointer"` : ''}>
+          <div style="display:flex;gap:12px;padding:12px 0 ${swapBtn ? '4px' : '12px'};border-bottom:${swapBtn ? 'none' : '1px solid var(--c-border)'}">
+            <span style="flex-shrink:0;width:3px;border-radius:2px;background:var(--c-border-strong)"></span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                <span style="font-size:14px;font-weight:600;color:var(--c-black)">${esc(ex.exerciseName)}</span>
+                <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${prescription}</span>${chevron}</span>
+              </div>
+              ${meta ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-top:2px">${meta}</div>` : ''}
+              ${memoLine}
+              ${swappedLine}
             </div>
-            ${meta ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-top:2px">${meta}</div>` : ''}
-            ${memoLine}
           </div>
         </div>
+        ${swapBtn ? `<div style="padding:0 0 12px 15px;border-bottom:1px solid var(--c-border)">${swapBtn}</div>` : ''}
       </div>`;
   }).join('');
+}
+
+/** "3 × 5" / "3 × 8 each leg" — the prescription summary for a candidate. */
+function altPrescription(ex: RunningPoolExercise): string {
+  return `${ex.sets} × ${esc(ex.reps)}`;
+}
+
+/** The swap sub-view body: same-pattern alternatives + a revert-to-original
+ *  option when the movement is currently swapped. */
+function renderSwapOptions(originalName: string, currentSwapped: boolean): string {
+  const alts = alternativesFor(originalName);
+  const optionRow = (label: string, sub: string, attrs: string) => `
+    <button class="${attrs}" style="width:100%;text-align:left;display:flex;gap:12px;padding:12px 0;border:none;border-bottom:1px solid var(--c-border);background:transparent;cursor:pointer;font-family:var(--f)">
+      <span style="flex-shrink:0;width:3px;border-radius:2px;background:var(--c-border-strong)"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:600;color:var(--c-black)">${esc(label)}</div>
+        ${sub ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-top:2px">${sub}</div>` : ''}
+      </div>
+    </button>`;
+  const revert = currentSwapped
+    ? optionRow(`Keep ${originalName}`, 'Revert to the original movement.', `swap-revert`)
+    : '';
+  const altRows = alts.map(ex =>
+    optionRow(ex.name, `${altPrescription(ex)} · ${esc(ex.cue)}`, `swap-pick" data-alt="${esc(ex.name)}`),
+  ).join('');
+  return `${revert}${altRows}`;
 }
 
 /** Confirm-weights sub-view: a stepper per trackable lift before a quick log. */
@@ -165,32 +213,65 @@ function renderConfirmWeights(sets: GuidedSet[], ctx: PhaseContext, entered: Map
 export function openStrengthWorkoutDetail(workout: Workout): void {
   document.getElementById(OVERLAY_ID)?.remove();
 
-  const session = parseStrengthSession(workout);
-  if (!session) return;
+  const baseSession = parseStrengthSession(workout);
+  if (!baseSession) return;
+  const originalSession: StrengthSession = baseSession;
   const ctx = phaseContext(workout);
-  const trackable = uniqueExercises(session.sets).filter(ex => ex.liftKey);
+
+  // Original display name per exercise index. A swap replaces a line in place,
+  // so the effective session keeps the same exercise indices; this lets each
+  // row recover its original movement to key the swap + offer a revert.
+  const originalNameByIndex = new Map<number, string>();
+  for (const ex of uniqueExercises(originalSession.sets)) {
+    originalNameByIndex.set(ex.exerciseIndex, ex.exerciseName);
+  }
 
   const overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
 
-  let mode: 'detail' | 'confirm' = 'detail';
-  // Pre-seed confirm-weights with each lift's suggested (or last) weight.
+  let mode: 'detail' | 'confirm' | 'swap' = 'detail';
+  let swapForIndex: number | null = null;
   const entered = new Map<number, number>();
-  for (const ex of trackable) {
-    const memo = liftMemo(ex, ctx);
-    const seed = memo?.bumped ? memo.suggestedKg : memo?.lastWeightKg;
-    if (seed != null) entered.set(ex.exerciseIndex, seed);
+
+  // Effective (swap-applied) state, recomputed each build so a swap re-renders.
+  let effectiveWorkout: Workout = workout;
+  let session: StrengthSession = originalSession;
+  let trackable: GuidedSet[] = [];
+  let swapInfo = new Map<number, RowSwapInfo>();
+
+  function recompute(): void {
+    const swaps = getStrengthSwaps();
+    effectiveWorkout = applyRememberedSwaps(workout);
+    session = parseStrengthSession(effectiveWorkout) ?? originalSession;
+    trackable = uniqueExercises(session.sets).filter(ex => ex.liftKey);
+    swapInfo = new Map();
+    for (const ex of uniqueExercises(session.sets)) {
+      const originalName = originalNameByIndex.get(ex.exerciseIndex) ?? ex.exerciseName;
+      swapInfo.set(ex.exerciseIndex, {
+        originalName,
+        swappable: alternativesFor(originalName).length > 0,
+        swapped: !!swaps[swapKeyForName(originalName)],
+      });
+    }
+    // Seed confirm-weights with each not-yet-entered lift's suggested (or last)
+    // weight; the guard preserves anything the user already typed.
+    for (const ex of trackable) {
+      if (entered.has(ex.exerciseIndex)) continue;
+      const memo = liftMemo(ex, ctx);
+      const seed = memo?.bumped ? memo.suggestedKg : memo?.lastWeightKg;
+      if (seed != null) entered.set(ex.exerciseIndex, seed);
+    }
   }
 
   const close = () => overlay.remove();
 
   function completeAndClose(records?: SetRecord[]): void {
     import('@/guided/strength-complete').then(({ completeStrengthSession }) => {
-      const result = completeStrengthSession(workout, records ? { records } : {});
+      const result = completeStrengthSession(effectiveWorkout, records ? { records } : {});
       close();
-      import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(workout, result));
+      import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(effectiveWorkout, result));
     });
   }
 
@@ -236,8 +317,8 @@ export function openStrengthWorkoutDetail(workout: Workout): void {
       </div>
 
       <div style="padding:4px 22px">
-        ${renderRows(session!.sets, ctx)}
-        ${session!.stretch ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding:12px 0">${esc(session!.stretch)}</div>` : ''}
+        ${renderRows(session.sets, ctx, swapInfo)}
+        ${session.stretch ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding:12px 0">${esc(session.stretch)}</div>` : ''}
       </div>
 
       <div style="padding:8px 22px 18px;display:flex;flex-direction:column;gap:10px">
@@ -268,22 +349,75 @@ export function openStrengthWorkoutDetail(workout: Workout): void {
       </div>`;
   }
 
+  function swapView(): string {
+    const info = swapForIndex != null ? swapInfo.get(swapForIndex) : undefined;
+    const originalName = info?.originalName ?? '';
+    return `
+      <div style="padding:20px 22px 14px;border-bottom:1px solid var(--c-border)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:4px">
+          <button id="strength-swap-back" style="width:30px;height:30px;background:var(--c-bg);border:1px solid var(--c-border);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--c-muted);flex-shrink:0" aria-label="Back">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <div style="flex:1;font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;line-height:1.2">Swap exercise</div>
+          <button id="strength-detail-close" style="width:30px;height:30px;background:var(--c-bg);border:1px solid var(--c-border);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--c-muted);flex-shrink:0" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Pick a movement that trains the same pattern as ${esc(originalName)}. We remember it for next time.</div>
+      </div>
+
+      <div style="padding:4px 22px 18px">
+        ${renderSwapOptions(originalName, !!info?.swapped)}
+      </div>`;
+  }
+
   function build(): void {
+    recompute();
     overlay.innerHTML = `
       <div style="background:var(--c-surface);width:100%;max-width:520px;max-height:90vh;overflow-y:auto;border-radius:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);position:relative">
-        ${mode === 'confirm' ? confirmView() : detailView()}
+        ${mode === 'confirm' ? confirmView() : mode === 'swap' ? swapView() : detailView()}
       </div>`;
 
     overlay.querySelector('#strength-detail-close')?.addEventListener('click', close);
 
+    if (mode === 'swap') {
+      const originalName = (swapForIndex != null ? swapInfo.get(swapForIndex) : undefined)?.originalName ?? '';
+      overlay.querySelector('#strength-swap-back')?.addEventListener('click', () => { mode = 'detail'; build(); });
+      overlay.querySelectorAll<HTMLButtonElement>('.swap-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const alt = btn.dataset.alt;
+          if (!alt || !originalName) return;
+          setStrengthSwap(originalName, alt);
+          entered.clear();   // the lift at this index changed; reseed fresh
+          mode = 'detail';
+          build();
+        });
+      });
+      overlay.querySelector('.swap-revert')?.addEventListener('click', () => {
+        if (!originalName) return;
+        clearStrengthSwap(originalName);
+        entered.clear();
+        mode = 'detail';
+        build();
+      });
+      return;
+    }
+
     if (mode === 'detail') {
       overlay.querySelector('#strength-detail-start')?.addEventListener('click', () => {
         close();
-        import('@/ui/guided-strength-overlay').then(({ openGuidedStrength }) => openGuidedStrength(workout));
+        import('@/ui/guided-strength-overlay').then(({ openGuidedStrength }) => openGuidedStrength(effectiveWorkout));
       });
       overlay.querySelector('#strength-detail-done')?.addEventListener('click', () => {
         if (trackable.length) { mode = 'confirm'; build(); }
         else completeAndClose();
+      });
+      overlay.querySelectorAll<HTMLButtonElement>('.strength-swap-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          swapForIndex = parseInt(btn.dataset.ex || '-1', 10);
+          mode = 'swap';
+          build();
+        });
       });
       overlay.querySelectorAll<HTMLElement>('.strength-lift-row').forEach(row => {
         row.addEventListener('click', () => {

@@ -37,7 +37,9 @@ export function plateRound(kg: number): number {
 }
 
 export interface NextWeightArgs {
-  lastWeightKg: number;
+  /** Optional: a manually-seeded 1RM lift may have no logged working weight yet.
+   *  When absent (or non-positive) the suggestion holds. */
+  lastWeightKg?: number;
   lastRir: RirBucket | undefined;
   phase: TrainingPhase;
   /** taper or a forced/scheduled deload week. */
@@ -66,12 +68,12 @@ export interface NextWeightSuggestion {
  */
 export function suggestNextWeight(a: NextWeightArgs): NextWeightSuggestion {
   const hold = (reason: NextWeightSuggestion['reason']): NextWeightSuggestion => ({
-    weightKg: a.lastWeightKg,
+    weightKg: a.lastWeightKg ?? 0,
     changed: false,
     reason,
   });
 
-  if (!(a.lastWeightKg > 0)) return hold('hold');
+  if (!(a.lastWeightKg && a.lastWeightKg > 0)) return hold('hold');
   if (a.injuryKind !== 'normal') return hold('suppressed');
   if (a.phase === 'peak') return hold('hold');
   if (a.isDeload || a.phase === 'taper') return hold('hold');

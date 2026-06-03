@@ -13,7 +13,7 @@
  */
 
 import type { SimulatorState, RaceDistance } from '@/types';
-import { blendPredictions, calculateLiveForecast } from './predictions';
+import { blendPredictions, calculateLiveForecast, predictFromVO2 } from './predictions';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
@@ -23,7 +23,7 @@ import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max } from './physiological-vdot';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -113,6 +113,15 @@ interface StandardPredictionContext {
   calibration: ReturnType<typeof computeRunCalibration>;
   longestRunSec: number;
   shoeMul: number;
+  /**
+   * Resolved running-fitness VDOT (`resolveRunningVdot`). Used as a last-resort
+   * predictor when the weighted blend produces nothing (e.g. a training-only
+   * athlete with a VDOT but no PBs, LT, device VO2, or recent runs to blend).
+   * Fed through the same Daniels `predictFromVO2` model the blend's VO2 slot
+   * uses, so the Forecast can show whenever the Stats VO2 bar shows. Always
+   * present when the context is built (the build gate requires a usable VDOT).
+   */
+  fallbackVdot: number | null;
 }
 
 /** Ordered stages of a single standard-distance prediction. `finalSec` equals
@@ -132,19 +141,23 @@ export interface StandardPredictionStages {
 }
 
 function buildStandardPredictionContext(s: SimulatorState): StandardPredictionContext | null {
-  if (!s.pbs || !s.b) return null;
-  // Just-Track users without PBs have {} for s.pbs and the default s.b — no
-  // real signal to blend. Mirror the guard in refreshBlendedFitness.
-  if (s.trackOnly && Object.keys(s.pbs).length === 0) return null;
+  // Canonical gate: build a context iff there is a usable running-fitness VDOT.
+  // This is the SAME predicate the Stats "VO2 Max" bar gates on, so the two
+  // surfaces can never disagree about whether the athlete has data. The old gate
+  // keyed on PBs (`!s.pbs` / trackOnly-without-PBs), which blocked exactly the
+  // training-only athletes the no-target-race Forecast was built for even when
+  // they had a real VDOT. The `fallbackVdot` below lets the blend predict from
+  // that VDOT alone (Daniels model) when no PB/LT/recent/device signal exists.
+  if (!hasRunningFitnessSignal(s)) return null;
 
   const runs = collectRunsFromState(s);
   const inputs = computePredictionInputs(runs);
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
   return {
-    pbs: s.pbs,
+    pbs: s.pbs ?? {},
     lt: s.lt ?? null,
     vo2: effectiveVo2max(s),
-    b: s.b,
+    b: s.b ?? 0,
     typ: (s.typ ?? 'Balanced').toLowerCase(),
     recentRun: inputs.recentRun ?? s.rec ?? null,
     athleteTier: s.athleteTier ?? undefined,
@@ -160,13 +173,14 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
       : undefined,
     calibration: computeRunCalibration(s.runRaceLog),
     longestRunSec: getLongestRunSec(s, 12),
+    fallbackVdot: resolveRunningVdot(s),
   };
 }
 
 /** Run one distance through the full staged pipeline. Returns null when the
  *  blend cannot produce a usable estimate. */
 function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistance): StandardPredictionStages | null {
-  const blended = blendPredictions(
+  let blended = blendPredictions(
     DIST_M[dist],
     ctx.pbs,
     ctx.lt,
@@ -181,6 +195,16 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
     ctx.hrVdot,
     ctx.marathonPbAgeDays,
   );
+  // Last-resort: the weighted blend found no usable predictor (no PB, LT, recent
+  // run, device VO2, or HR-calibrated signal) but the athlete still has a
+  // resolved running VDOT. Predict from that VDOT alone via the Daniels model
+  // (the same `predictFromVO2` the blend's VO2 slot uses — its parameter IS a
+  // VDOT). This only fires when the blend is empty, so it never double-counts a
+  // signal already in the blend. Keeps the Forecast in lock-step with the Stats
+  // VO2 bar, which shows from the same resolved VDOT.
+  if ((!blended || blended <= 0 || !isFinite(blended)) && ctx.fallbackVdot != null) {
+    blended = predictFromVO2(DIST_M[dist], ctx.fallbackVdot);
+  }
   if (!blended || blended <= 0 || !isFinite(blended)) return null;
   const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
   const durability = applyLongRunCap(ctx.longestRunSec, dist);
@@ -336,34 +360,42 @@ export function getStandardForecastProjection(
   // Dose = PLAN-prescribed weekly volume, not recent km. "If you hold the plan"
   // means training at the plan's dose, so mirror the targeted forecast
   // (calculateForecast / §AI): sessions × REF_KM_PER_SESSION × build factor.
-  // Recent km is the wrong input here — a thin-history user reads as
-  // "undertrained", which trips applyTrainingHorizonAdjustment's full
-  // undertrain penalty and projects the athlete getting *slower* (the
-  // half/marathon "+24s / falls off a cliff" bug). Plan volume clears the
-  // penalty so every distance projects a sensible, monotonic improvement.
   const planKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, dist) ?? undefined;
+  const horizonParams = (weeksRemaining: number) => ({
+    baseline_vdot: anchorVdot,
+    target_distance: dist,
+    weeks_remaining: weeksRemaining,
+    sessions_per_week: sessionsPerWeek,
+    runner_type: runnerType,
+    ability_band: abilityBand,
+    taper_weeks: 0,
+    weekly_volume_km: planKm,
+    hm_pb_seconds: s.pbs?.h,
+    lt_pace_sec_per_km: s.lt ?? undefined,
+    strength_sessions_per_week: s.gs,
+  });
 
+  // Total gain the plan's volume supports over the full horizon (the ceiling),
+  // floored at 0 — "holding the plan" is at minimum maintenance, never slower.
+  // The ceiling honestly reflects under-volume (a low-volume plan → smaller
+  // total gain), per Pfitzinger/Daniels volume-shortened deficits.
+  const full = applyTrainingHorizonAdjustment(horizonParams(weeks));
+  const totalGain = Math.max(0, full.vdot_gain);
+  const wfN = full.components.week_factor || 1;
+
+  // Shape the gain across weeks with the model's OWN dual-tau saturation
+  // (`week_factor`, SCIENCE_LOG §BA): adaptation rises fastest early and
+  // decelerates toward the ceiling (Hickson 1981; Joyner & Coyle 2008). We
+  // distribute `totalGain` by `week_factor(w) / week_factor(N)` rather than
+  // calling the model per-week and flooring each — the latter produced a
+  // dead-flat start then a kink, because the constant undertrain penalty
+  // delayed the onset of a positive net gain. Under-volume belongs on the
+  // ceiling (totalGain), not on adaptation onset.
   const out: ForecastProjectionPoint[] = [{ weeksAhead: 0, value: tv(anchorVdot, distKm) }];
   for (let w = 1; w <= weeks; w++) {
-    const horizon = applyTrainingHorizonAdjustment({
-      baseline_vdot: anchorVdot,
-      target_distance: dist,
-      weeks_remaining: w,
-      sessions_per_week: sessionsPerWeek,
-      runner_type: runnerType,
-      ability_band: abilityBand,
-      taper_weeks: 0,
-      weekly_volume_km: planKm,
-      hm_pb_seconds: s.pbs?.h,
-      lt_pace_sec_per_km: s.lt ?? undefined,
-      strength_sessions_per_week: s.gs,
-    });
-    // Floor the gain at 0: "holding the plan" is, at minimum, maintenance. A
-    // negative projection would only come from an undertrain assumption that
-    // contradicts the premise, and showing the user getting slower for
-    // training is indefensible UX. Keeps the curve monotonic for every user.
-    const gain = Math.max(0, horizon.vdot_gain);
-    out.push({ weeksAhead: w, value: tv(anchorVdot + gain, distKm) });
+    const wf = applyTrainingHorizonAdjustment(horizonParams(w)).components.week_factor;
+    const shape = wfN > 0 ? Math.min(1, wf / wfN) : w / weeks;
+    out.push({ weeksAhead: w, value: tv(anchorVdot + totalGain * shape, distKm) });
   }
   return out;
 }

@@ -504,7 +504,7 @@ describe('applyBridgeModsAllDisciplines — bridge scaling', () => {
         estimatedDurationMin: 60,
         musculoTendonLoad: 100,
       },
-    ];
+    ] as any[];
     const wk = makeWk(SCALE);
     applyBridgeModsAllDisciplines(workouts as any, wk);
 
@@ -528,7 +528,7 @@ describe('applyBridgeModsAllDisciplines — bridge scaling', () => {
         estimatedDurationMin: 40,
         musculoTendonLoad: 0,
       },
-    ];
+    ] as any[];
     const wk = makeWk(SCALE);
     applyBridgeModsAllDisciplines(workouts as any, wk);
 
@@ -549,7 +549,7 @@ describe('applyBridgeModsAllDisciplines — bridge scaling', () => {
         r: 3,
         discipline: 'run',
       },
-    ];
+    ] as any[];
     const wk = makeWk(SCALE);
     applyBridgeModsAllDisciplines(workouts as any, wk);
 

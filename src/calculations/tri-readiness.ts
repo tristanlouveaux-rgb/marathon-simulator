@@ -15,6 +15,7 @@ import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { ReadinessLabel, ReadinessResult } from './readiness';
 import { computeReadiness } from './readiness';
+import { isImpactBlockedByInjury } from '@/injury/engine';
 import { buildDailySignalBTSS, computeSleepDebtOutlook, deriveSleepTarget } from './sleep-insights';
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -95,7 +96,12 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
 
   // CTL is stored as weekly EMA; for the readiness engine's "ctlNow" we pass
   // daily-equivalent (÷7) since the running side uses daily CTL.
-  const buildInput = (f: { ctl: number; atl: number; tsb: number }) => ({
+  // Leg load (eccentric/footstrike fatigue from runs, bricks, gym leg days, and
+  // cross-training) gates the RUN discipline only: the floor models impact risk,
+  // which is a running concern. Swim is non-impact; cycling tolerates tired legs.
+  // So only the run input carries recentLegLoads — bike/swim/cross-training stay
+  // honest. Mirrors running mode exactly (same floor, same ledger).
+  const buildInput = (f: { ctl: number; atl: number; tsb: number }, withLegLoad = false) => ({
     tsb: f.tsb / 7,
     // Mirror perDisciplineACWR's guard: below CTL 10 the ratio is too noisy to
     // flag overreaching. Pass a safe neutral (1.0) instead.
@@ -108,11 +114,15 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     sleepDebtExcessSec,
     weeksOfHistory: state.triConfig?.fitnessHistory?.length ?? 0,
     hasUpcomingHardSession: upcomingHardForInput,
+    recentLegLoads: withLegLoad ? (state.recentLegLoads ?? []) : undefined,
+    // Run is blocked by injury → the leg-load floor (impact risk) is moot. Only
+    // the run input carries leg load, so this mirrors that gating exactly.
+    impactBlocked: withLegLoad ? isImpactBlockedByInjury(state.injuryState) : undefined,
   });
 
   const swim = computeReadiness(buildInput(fit.swim));
   const bike = computeReadiness(buildInput(fit.bike));
-  const run  = computeReadiness(buildInput(fit.run));
+  const run  = computeReadiness(buildInput(fit.run, true));
 
   // Only disciplines with actual direct activities drive the overall score and
   // sentence. Require directCount > 0 AND CTL ≥ 1. A single ghost swim from

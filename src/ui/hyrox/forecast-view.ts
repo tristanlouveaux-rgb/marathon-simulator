@@ -730,7 +730,7 @@ function buildHyroxHero(
   })() : '';
 
   return `
-    <div style="padding:0 16px;margin-bottom:14px">
+    <div style="margin-bottom:14px">
       <div style="position:relative;background:rgba(255,255,255,0.50);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);border-radius:24px;padding:22px 22px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 18px 48px rgba(0,0,0,0.10);border:1px solid rgba(255,255,255,0.55);overflow:hidden">
         <div style="position:absolute;top:14px;right:14px;z-index:2">
           <button id="hx-conf-badge" style="font-size:10px;color:var(--c-muted);background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.10);border-radius:6px;padding:3px 8px;cursor:pointer">${confidenceLabel}</button>

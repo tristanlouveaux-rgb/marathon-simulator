@@ -33,7 +33,10 @@ import { parseStrengthSession } from './strength-model';
 import { deriveWorkedMuscleGroups, type WorkedMuscleGroup } from '@/calculations/strength-muscle-groups';
 import type { SetRecord } from './strength-controller';
 import { persistStrengthLifts, summariseLoggedLifts } from './strength-log-persist';
+import { persistBodyweightProgress } from '@/calculations/bodyweight-progression';
+import type { TrainingPhase } from '@/types/training';
 import { snapshotNotifiedStrengthPrs } from '@/calculations/strength-marker-bumps';
+import { deriveStrengthLegLoad, buildStrengthLegLoadEntry, dropSupersededStrengthEntries } from '@/calculations/strength-leg-load';
 
 export interface CompleteStrengthOpts {
   /** RPE the user actually rated; defaults to the workout's prescribed RPE so
@@ -133,9 +136,42 @@ export function completeStrengthSession(workout: Workout, opts: CompleteStrength
   const loggedLifts = summariseLoggedLifts(opts.records);
   if (loggedLifts && actual) actual.loggedLifts = loggedLifts;
 
+  // Derive the session's leg load and feed it into the shared leg-fatigue ledger
+  // (`recentLegLoads`) so a heavy leg day suppresses readiness the same way a long
+  // run does. Stamp the raw value on the actual so the reconcile sweep
+  // (sport-picker-modal.ts) reads the same number. Leg-group score × %1RM × RPE;
+  // an upper/core day scores 0 and writes nothing. See strength-leg-load.ts.
+  if (actual) {
+    const { raw } = deriveStrengthLegLoad(muscleGroups, loggedLifts, chosen);
+    if (raw > 0) {
+      actual.legLoadRaw = raw;
+      const rawTs = actual.startTime ? Date.parse(actual.startTime) : Date.now();
+      const ts = Number.isFinite(rawTs) ? rawTs : Date.now();
+      // Drop any prior entry for this same activity (re-completion reusing the id)
+      // AND any strength entry within ±10 min (re-completion that minted a fresh
+      // `guided-{ts}` id, or a duplicate the reconcile sweep would later collapse).
+      // Same ±10-min same-sport rule reconcileRecentLegLoads uses, so a re-rate
+      // updates the one entry instead of stacking a second. Run/cross-training
+      // entries are untouched (RBE then applies against them correctly).
+      const prior = dropSupersededStrengthEntries(state.recentLegLoads ?? [], actual.garminId, ts);
+      const entry = buildStrengthLegLoadEntry(actual, prior, ts);
+      if (entry) {
+        state.recentLegLoads = [...prior, entry];
+        // eslint-disable-next-line no-console
+        console.log(`[strength] leg load ${raw.toFixed(1)} → recentLegLoads (${entry.rbeProtected ? 'RBE-discounted' : 'full'})`);
+      }
+    }
+  }
+
   // Persist the working weights the user entered (guided overlay merges them
   // onto the records; quick "Mark as done" synthesises records with weights).
   const wroteWeights = persistStrengthLifts(opts.records, state);
+  // Advance the beginner/novice bodyweight ladder from the same RIR feedback that
+  // drives the weight bump. Bodyweight movements have no liftKey, so they were
+  // previously dropped; this remembers a rung per movement family instead.
+  const bwPhase = state.wks?.[(state.w ?? 1) - 1]?.ph as TrainingPhase | undefined;
+  if (!state.bodyweightProgress) state.bodyweightProgress = {};
+  persistBodyweightProgress(opts.records ?? [], state.bodyweightProgress, bwPhase, new Date().toISOString().slice(0, 10));
   // Snapshot the PR baseline at completion so the launch toast can't re-surface
   // a PR the summary card already showed (the card detects new bests from the
   // est1RM history, independent of this snapshot).
@@ -143,6 +179,29 @@ export function completeStrengthSession(workout: Workout, opts: CompleteStrength
 
   saveState();
   return result;
+}
+
+/**
+ * Reconstruct a StrengthCompletionResult for an ALREADY-logged session, reading
+ * the stored `garminActual` rather than re-completing. Lets a tapped "Logged"
+ * strength card open the same recap (openStrengthSummary) the user saw at
+ * completion, instead of the Start/Mark-done overlay. Pure: never mutates state.
+ * Returns null when nothing is logged at this slot (caller falls back to the
+ * editable detail view).
+ */
+export function buildLoggedStrengthResult(workout: Workout, weekIdx: number): StrengthCompletionResult | null {
+  const id = String((workout as any).id ?? workout.n);
+  const state = getMutableState();
+  const wk = state.wks?.[weekIdx];
+  const actual = wk?.garminActuals?.[id] ?? null;
+  const isHyrox = Array.isArray((workout as any).hyroxComponents) && (workout as any).hyroxComponents.length > 0;
+  const session = parseStrengthSession(workout);
+  const muscleGroups = session ? deriveWorkedMuscleGroups(session) : [];
+  const rpe = (actual?.rpe ?? workout.rpe ?? (workout as any).r ?? 5) as number;
+  const durationSec = actual?.durationSec && actual.durationSec > 0
+    ? actual.durationSec
+    : Math.round((workout.estimatedDurationMin ?? 0) * 60);
+  return { workoutId: id, weekIdx, rpe, durationSec, muscleGroups, actual, hrAutoMatched: false, isHyrox };
 }
 
 /**

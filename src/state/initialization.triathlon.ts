@@ -173,6 +173,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     const _dow = _planMonday.getDay();
     _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
+    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
     // Triathlon doesn't use the running debrief gate. Seed lastCompleteDebriefWeek
     // so advanceWeekToToday can advance freely without waiting for a plan-preview.
     (s as any).lastCompleteDebriefWeek = 0;

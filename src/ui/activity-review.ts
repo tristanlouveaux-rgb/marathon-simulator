@@ -1170,7 +1170,12 @@ function applyReview(
         avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
-        displayName: formatActivityType(item.activityType),
+        // Keep the planned gym session's name (e.g. "Lower-body & core strength").
+        // The watch labels strength work as a generic "HIIT"; adopting that here
+        // makes the slot read as "HIIT" in Recent / activity-detail (which use
+        // resolveActivityDisplayName on the actual) and masquerades the planned
+        // session as a stray cross-training activity. The planned name wins.
+        displayName: matchName ?? formatActivityType(item.activityType),
         hrZones: item.hrZones ?? null,
         iTrimp: item.iTrimp ?? null,
         polyline: item.polyline ?? null,

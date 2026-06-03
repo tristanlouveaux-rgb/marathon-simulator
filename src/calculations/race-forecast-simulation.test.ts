@@ -106,4 +106,24 @@ describe('runMarathonForecastSim — centres on the displayed forecast', () => {
     const withSession = runMarathonForecastSim(coherentState(), 4000, goal, 11940); // 3:19:00
     expect(withSession!.goalProbability!).toBeGreaterThan(base!.goalProbability! + 0.1);
   });
+
+  it('chance is monotonic and smooth as the override ramps faster (overlay steppers)', () => {
+    // The goal overlay's "add runs / add strength" steppers move only the
+    // forecast override (NOT the sim's session counts), so the chance must rise
+    // monotonically in small steps — never jump wildly or reverse direction.
+    // Regression for the 2026-06-02 report: "+1 → 50%, +2 → <5%" wrong-direction
+    // cliff caused by mutating the sim's session count (which re-derived a
+    // narrower cone via the nonlinear VDOT→time map).
+    const goal = 12200; // a goal near the forecast so steps are visible
+    const overrides = [12262, 12180, 12100, 12020]; // ~3:24 → ~3:20, each step faster
+    const chances = overrides.map(
+      o => runMarathonForecastSim(coherentState(), 4000, goal, o)!.goalProbability!,
+    );
+    for (let i = 1; i < chances.length; i++) {
+      // Direction: faster override never lowers the chance.
+      expect(chances[i]).toBeGreaterThanOrEqual(chances[i - 1] - 0.001);
+      // Smoothness: an ~80s forecast step can't swing the chance by half.
+      expect(chances[i] - chances[i - 1]).toBeLessThan(0.5);
+    }
+  });
 });

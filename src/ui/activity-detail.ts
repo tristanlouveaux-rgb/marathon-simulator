@@ -17,7 +17,9 @@ import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { SPORT_LABELS, IMPACT_PER_KM } from '@/constants';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
-import { showSportPicker, reclassifyActivity, getEffectiveSport } from './sport-picker-modal';
+import { showSportPicker, reclassifyActivity, getEffectiveSport, resolveActivityDisplayName } from './sport-picker-modal';
+import { applyRbeDiscount } from '@/calculations/readiness';
+import { legFeelRawLoad, legFeelRecoveryMult } from '@/calculations/strength-leg-load';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 import {
   scoreRepAdherence, repCommentary, parseRepPrescription,
@@ -100,9 +102,13 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   const stravaActivityId = actual.garminId?.startsWith('strava-') ? actual.garminId.slice(7) : null;
   // Title: when the user has relabelled (manualSport set), prefer the sport label
   // over the raw Strava/Garmin workout name (which often reads "Cardio" for
-  // non-running activities and no longer reflects the chosen sport).
+  // non-running activities and no longer reflects the chosen sport). Otherwise a
+  // descriptive workout name (e.g. a Strava "Morning Run" title) wins, falling
+  // back to the canonical sport-aware resolver — the SAME helper the Home Recent
+  // list uses, so the two surfaces never disagree (HIIT vs "General Sport").
   const titleSport = actual.manualSport ? (SPORT_LABELS as Record<string, string>)[actual.manualSport] : null;
-  const actName = titleSport || actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
+  const cleanWorkoutName = actual.workoutName && actual.workoutName !== 'General Sport' ? actual.workoutName : null;
+  const actName = titleSport || cleanWorkoutName || resolveActivityDisplayName(actual, planWorkoutName || 'Activity');
   const dateStr = actual.startTime
     ? new Date(actual.startTime).toLocaleDateString('en-GB', {
       weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
@@ -123,11 +129,20 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   ` : '';
 
   // ─── Sport row (cross-training only. Lets user correct a mis-classified activity) ─
-  const isRunActual = !actual.activityType || actual.activityType.toUpperCase().includes('RUN');
+  // A run is an EXPLICIT run type, or a manual override to a run sport. An empty
+  // or ambiguous type must NOT default to run — a typeless synced session (e.g. a
+  // HIIT) was being rendered as a run (run-to-work card, no sport-change row), and
+  // auto-computing zero leg load. The user's manual sport choice always wins.
+  const isRunActual = actual.manualSport
+    ? actual.manualSport.includes('run')
+    : (!!actual.activityType && actual.activityType.toUpperCase().includes('RUN'));
+  // Show the sport-change row for non-runs AND for any "run" with no GPS distance
+  // (a real run has distance; a distanceless "run" is a mis-typed session the user
+  // needs to be able to correct).
+  const showSportRow = !isRunActual || (actual.distanceKm ?? 0) <= 0.1;
   let sportRowHtml = '';
-  if (!isRunActual) {
-    const effSport = getEffectiveSport(actual);
-    const sportLabel = (SPORT_LABELS as Record<string, string>)[effSport] ?? effSport;
+  if (showSportRow) {
+    const sportLabel = resolveActivityDisplayName(actual);
     sportRowHtml = `
       <div class="ad-fade" style="animation-delay:0.08s;margin-bottom:16px">
         <button id="ad-sport-row" style="
@@ -597,7 +612,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   // impact adjustment (Signal C). See SCIENCE_LOG §AD.
   const commuteOn = actual.commute === true;
   const commuteBackpackVal = actual.backpackKg != null && actual.backpackKg > 0 ? actual.backpackKg : '';
-  const commuteTagHtml = isRunActual ? `
+  const commuteTagHtml = (isRunActual && (actual.distanceKm ?? 0) > 0.1) ? `
     <div class="ad-fade" style="animation-delay:0.48s;margin-bottom:16px">
       <div style="${CARD};padding:14px 16px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
@@ -615,6 +630,42 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
             <input id="ad-commute-backpack" type="number" inputmode="decimal" min="0" max="25" step="0.5" placeholder="0" value="${commuteBackpackVal}" style="width:78px;background:rgba(255,255,255,0.95);border:1px solid var(--c-border);color:${TEXT_M};border-radius:9px;padding:8px 10px;font-size:14px;text-align:right;outline:none;font-variant-numeric:tabular-nums">
             <span style="font-size:13px;color:${TEXT_S}">kg</span>
           </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
+  // ─── Legs tag (ambiguous synced sessions only) ──────────────────────────────
+  // A Garmin/Strava session with no exercise detail (e.g. HIIT logged as General
+  // Sport, or synced strength) can't be auto-classified as leg work. This lets the
+  // user tell the leg-fatigue model whether it worked the legs. In-app gym
+  // sessions derive leg load from their exercises, so they don't need this.
+  // Gate on the activity, NOT on `isRunActual` — a HIIT can sync as a "Run"
+  // (or with an empty type that defaults to run), which would wrongly hide the
+  // tag. Show it for ambiguous sessions (General Sport / strength) AND for any
+  // "run" that carries no GPS distance (so it isn't a real run and auto-computes
+  // zero leg load). A genuine distance run keeps deriving leg load from km × RPE.
+  const legsEffSport = getEffectiveSport(actual);
+  const hasNoDistance = (actual.distanceKm ?? 0) <= 0.1;
+  const showLegsTag =
+    !(actual.legLoadRaw != null && actual.legLoadRaw > 0)
+    && (legsEffSport === 'generic_sport'
+        || legsEffSport === 'strength'
+        || (isRunActual && hasNoDistance));
+  const legFeelVal = actual.legFeel ?? 'none';
+  const legsSeg = (val: string, lbl: string) => {
+    const on = legFeelVal === val;
+    return `<button class="ad-legs-seg" data-legs="${val}" style="flex:1;padding:9px 0;border:1px solid ${on ? 'var(--c-black)' : 'var(--c-border)'};background:${on ? 'var(--c-black)' : 'transparent'};color:${on ? '#fff' : TEXT_M};font-size:13px;font-weight:500;border-radius:8px;cursor:pointer;font-family:var(--f)">${lbl}</button>`;
+  };
+  const legsTagHtml = showLegsTag ? `
+    <div class="ad-fade" style="animation-delay:0.46s;margin-bottom:16px">
+      <div style="${CARD};padding:14px 16px">
+        <div style="font-size:13px;font-weight:600;color:${TEXT_M}">Legs worked</div>
+        <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-top:3px">This synced session has no exercise detail. Tag leg involvement so it counts toward leg fatigue.</div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          ${legsSeg('none', 'None')}
+          ${legsSeg('moderate', 'Moderate')}
+          ${legsSeg('heavy', 'Heavy')}
         </div>
       </div>
     </div>
@@ -676,6 +727,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           ${cssPromptHtml}
           ${ftpPromptHtml}
           ${commuteTagHtml}
+          ${legsTagHtml}
           ${actual.polyline ? `
             <div class="ad-fade" style="animation-delay:0.50s;margin-bottom:16px">
               <button id="ad-safety-cta" style="
@@ -876,6 +928,36 @@ export function renderActivityDetail(
     const newCoef = carriageCoefFor(actual.commute === true, actual.backpackKg);
     applyCommuteImpactDelta(oldCoef, newCoef);
     saveState();
+  });
+
+  // Legs tag → write/clear a leg-load entry for this activity. Direct write
+  // (immediate), and computeLegLoad honours `legFeel` so the reconcile sweep
+  // recreates it consistently if the row is ever re-synced. Mirrors the documented
+  // legFeel rates (moderate 0.15/min ×1.05, heavy 0.35/min ×1.20).
+  document.querySelectorAll('.ad-legs-seg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const val = (btn as HTMLElement).dataset.legs as 'none' | 'moderate' | 'heavy';
+      actual.legFeel = val === 'none' ? undefined : val;
+      const ms = getMutableState();
+      // Drop any prior entry for this activity, then re-add from the new tag.
+      let entries = (ms.recentLegLoads ?? []).filter(e => e.garminId !== actual.garminId);
+      const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
+      const raw = legFeelRawLoad(actual.legFeel, durationMin);
+      if (raw > 0 && actual.garminId) {
+        const tsRaw = actual.startTime ? Date.parse(actual.startTime) : Date.now();
+        const ts = Number.isFinite(tsRaw) ? tsRaw : Date.now();
+        const sport = getEffectiveSport(actual);
+        const sportLabel = (SPORT_LABELS as Record<string, string>)[sport] ?? sport;
+        const { load, protected: rbeProtected } = applyRbeDiscount(sport, ts, raw, entries);
+        entries = [...entries, {
+          load, sport, sportLabel, timestampMs: ts, garminId: actual.garminId,
+          rbeProtected, recoveryMultOverride: legFeelRecoveryMult(actual.legFeel),
+        }];
+      }
+      ms.recentLegLoads = entries;
+      saveState();
+      renderActivityDetail(actual, planWorkoutName, returnView, plannedTSS, workoutId);
+    });
   });
 
   // Safety CTA. Opens rating modal, submits trimmed polyline on confirm

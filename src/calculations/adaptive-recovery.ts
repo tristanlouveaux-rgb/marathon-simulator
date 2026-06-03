@@ -44,6 +44,77 @@ export const K_USER_MAX = 13;
  * of EPOC clearance for typical aerobic loads. */
 export const RECOVERY_OBSERVATION_CAP_HOURS = 96;
 
+/** Physiology is sampled once per day, so the fastest recovery we can resolve
+ * is 24h. Also used to convert observedHours into a whole-day window for the
+ * clean-window (intervening-session) filter in the fit. */
+export const RECOVERY_SAMPLE_GRANULARITY_HOURS = 24;
+
+/**
+ * Expected hours for the HRV/RHR composite to return to baseline, by session
+ * intensity. The fit compares the athlete's *observed* recovery against these.
+ *
+ * Source: Stanley, Peake & Buchheit (2013), "Cardiac Parasympathetic
+ * Reactivation Following Exercise: Implications for Training Prescription",
+ * Sports Med 43(12):1259-77. Complete parasympathetic recovery requires ~24h
+ * after low-intensity, 24-48h after threshold, and >=48h after high-intensity
+ * exercise. We anchor easy at the 24h figure, moderate at the 24-48h midpoint
+ * (36h), and hard between the >=48h floor and the ~72h seen in strength/extreme
+ * studies (54h). Anchors approved by Tristan 2026-06-03. See SCIENCE_LOG.
+ *
+ * The comparison is fitness-relative because the intensity band is read from the
+ * athlete's own HR zones (Strava computes time-in-zone against their personal
+ * zones), so a fit athlete's easy run is correctly judged against the easy
+ * expectation, not a beginner's.
+ */
+export const EXPECTED_RECOVERY_HOURS = { easy: 24, moderate: 36, hard: 54 } as const;
+export type IntensityBand = 'easy' | 'moderate' | 'hard';
+
+export function expectedRecoveryHoursForBand(band: IntensityBand): number {
+  return EXPECTED_RECOVERY_HOURS[band];
+}
+
+/**
+ * Classify a completed session into the three intensity bands Stanley et al. use.
+ *
+ * Primary: HR time-in-zone. Strava computes z1-z5 against the athlete's own HR
+ * zones, so this is automatically fitness-relative. We take the time-weighted
+ * mean zone; the band boundaries fall at the integer-rounding midpoints (2.5 and
+ * 3.5), so there is no tuned cutoff — Z1-2 = below aerobic threshold (easy),
+ * Z3 = threshold (moderate), Z4-5 = above anaerobic threshold (hard).
+ *
+ * Fallback: session-RPE (Foster 2001 CR10 convention) when no HR zones exist —
+ * RPE <=4 easy, 5-6 moderate, >=7 hard.
+ *
+ * Returns null when neither signal is present; such sessions can't be placed on
+ * the recovery scale and are excluded from the fit (not guessed).
+ *
+ * Known limitation: the mean-zone rule under-weights a short hard-interval block
+ * inside an otherwise easy session, which the literature says still delays
+ * recovery. A threshold-crossing classifier is a deferred refinement (needs a
+ * "meaningful time above threshold" cutoff, which would be a tuned constant).
+ */
+export function classifySessionIntensity(
+  hrZones: { z1: number; z2: number; z3: number; z4: number; z5: number } | null | undefined,
+  rpe?: number | null,
+): IntensityBand | null {
+  if (hrZones) {
+    const total = hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5;
+    if (total > 0) {
+      const meanZone =
+        (1 * hrZones.z1 + 2 * hrZones.z2 + 3 * hrZones.z3 + 4 * hrZones.z4 + 5 * hrZones.z5) / total;
+      if (meanZone >= 3.5) return 'hard';
+      if (meanZone >= 2.5) return 'moderate';
+      return 'easy';
+    }
+  }
+  if (rpe != null && rpe > 0) {
+    if (rpe >= 7) return 'hard';
+    if (rpe >= 5) return 'moderate';
+    return 'easy';
+  }
+  return null;
+}
+
 /** Composite z-score (HRV positive, RHR sign-flipped) at or above this counts
  * as "recovered". A small negative tolerance acknowledges noise. Strict
  * z ≥ 0 would inflate observed hours. */
@@ -68,9 +139,9 @@ export const CEILING_SHIFT_PER_HOUR = 0.025;
 /** SessionImpactEntry rolling window. */
 export const IMPACT_LOG_MAX_DAYS = 90;
 
-/** Bayesian prior — equivalent to N "ghost" samples that say k=8 is correct.
- * Smooths early estimates toward population while data accumulates. */
-const PRIOR_RATIO = 1.0;
+/** Bayesian prior — equivalent to N "ghost" samples at recovery index 1.0
+ * (ln 1 = 0, i.e. k=8 is typical). Smooths early estimates toward typical while
+ * data accumulates. */
 const PRIOR_WEIGHT = 4;
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -327,14 +398,28 @@ interface FitOptions {
 /** Recompute `k_user` from the closed-out evidence and update state's
  * `adaptiveRecovery`. Returns the updated AdaptiveRecovery snapshot.
  *
+ * `k_user = 8 × recovery index`, where the index is how the athlete's observed
+ * recovery compares to the literature expectation *for the intensity of each
+ * session* (index 1.0 = typical; <1 faster; >1 slower). This replaces the old
+ * absolute observed/predicted ratio, which compared two different physiological
+ * scales (readiness-debt hours vs autonomic-return hours) and pinned every fit
+ * athlete at the ceiling. See SCIENCE_LOG / ISSUE-256.
+ *
  * Algorithm:
- *   - For each closed entry: ratio = observedHours / predictedHours.
- *   - Apply weighting: source weight (live=1.0 / historical=0.7) × recency
- *     decay (0.5^(ageWeeks / halfLife)).
- *   - Bayesian prior: ghost samples with ratio=1.0 and total weight 4. Keeps
- *     low-N estimates anchored near population while data accumulates.
- *   - Weighted mean ratio × 8, clamped to [5, 13], gives k_user.
- *   - Confidence band derives from N closed entries.
+ *   - Usable = closed entries that have an intensity band (→ expectedRecoveryHours)
+ *     AND recovered in a CLEAN window: no other session fell on the *intervening*
+ *     days T+1 .. T+(k-1) where observed = k×24h. Physiology is a morning reading,
+ *     so a session on the recovery day itself happens after that reading and does
+ *     not contaminate — hence strict `< windowDays`. A 24h recovery is therefore
+ *     always clean. This is what keeps high-frequency athletes from looking slow:
+ *     train-through sessions are excluded, not counted against them.
+ *   - index_i = observedHours_i / expectedRecoveryHours_i.
+ *   - Aggregate in LOG space (recovery ratios are right-skewed; a few very slow
+ *     sessions would drag a linear mean). Prior: ln(index)=0 (index 1) weight 4.
+ *   - Weight by source (live 1.0 / historical 0.7) × recency decay.
+ *   - k_user = clamp(8 × exp(weighted mean log index), [5, 13]).
+ *   - Confidence from N clean usable entries. `densityLimited` flags the case of
+ *     many closed sessions but few clean ones (trains too densely to read).
  */
 export function fitKUser(
   s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'>,
@@ -345,27 +430,52 @@ export function fitKUser(
   const now = options?.now ?? new Date();
   const nowIso = isoDate(now);
 
-  const closed = (s.sessionImpactLog ?? []).filter(e =>
-    e.observedHours != null && e.predictedHours > 0,
+  const log = s.sessionImpactLog ?? [];
+  // Need an observed recovery AND an intensity-banded expectation to place the
+  // session on the recovery scale. Sessions we can't classify are excluded, not
+  // guessed.
+  const closed = log.filter(e =>
+    e.observedHours != null && (e.expectedRecoveryHours ?? 0) > 0,
   );
 
-  let weightedSum = PRIOR_WEIGHT * PRIOR_RATIO;
+  // Clean-window filter. observed = k × 24h, so the intervening days are
+  // T+1 .. T+(k-1). A session on any of those days kept the markers suppressed
+  // and inflated this session's observed recovery, so the reading is confounded
+  // by training density rather than this session's recovery cost — drop it.
+  // (A session on the recovery day T+k itself is post-morning-reading, so it does
+  // not contaminate; hence strict `gap < windowDays`. observed=24h → windowDays=1
+  // → no intervening days possible → always clean.)
+  const allDates = log.map(e => e.date);
+  const usable = closed.filter(e => {
+    const windowDays = Math.round((e.observedHours as number) / RECOVERY_SAMPLE_GRANULARITY_HOURS);
+    const interveningSession = allDates.some(d => {
+      if (d === e.date) return false;
+      const gap = daysBetween(e.date, d);
+      return gap > 0 && gap < windowDays;
+    });
+    return !interveningSession;
+  });
+
+  // Log-space weighted mean. ln(prior index 1) = 0.
+  let weightedLogSum = PRIOR_WEIGHT * 0;
   let weightTotal = PRIOR_WEIGHT;
 
-  for (const e of closed) {
-    const ratio = (e.observedHours as number) / e.predictedHours;
-    const ageDays = Math.max(0, daysBetween(e.date, nowIso));
-    const ageWeeks = ageDays / 7;
+  for (const e of usable) {
+    const index = (e.observedHours as number) / (e.expectedRecoveryHours as number);
+    const logIndex = Math.log(index);
+    const ageWeeks = Math.max(0, daysBetween(e.date, nowIso)) / 7;
     const recency = Math.pow(0.5, ageWeeks / halfLife);
     const w = (e.fitWeight ?? LIVE_FIT_WEIGHT) * recency;
-    weightedSum += w * ratio;
+    weightedLogSum += w * logIndex;
     weightTotal += w;
   }
 
-  const meanRatio = weightTotal > 0 ? weightedSum / weightTotal : 1.0;
-  const kNew = clamp(K_USER_DEFAULT * meanRatio, K_USER_MIN, K_USER_MAX);
-  const n = closed.length;
+  const index = weightTotal > 0 ? Math.exp(weightedLogSum / weightTotal) : 1.0;
+  const kNew = clamp(K_USER_DEFAULT * index, K_USER_MIN, K_USER_MAX);
+  const n = usable.length;
   const confidence = confidenceFromN(n);
+  // Many closed sessions but few clean ones → we can't read this athlete cleanly.
+  const densityLimited = closed.length >= CONF_MEDIUM_FLOOR && n < CONF_LOW_FLOOR;
 
   const history = ar.history ? ar.history.slice() : [];
   // Append a history point if k or n changed materially since last fit.
@@ -380,6 +490,7 @@ export function fitKUser(
     kUserHours: Number(kNew.toFixed(3)),
     confidence,
     sessionsObserved: n,
+    densityLimited,
     lastFitAt: nowIso,
     emaHalfLifeWeeks: halfLife,
     history,
@@ -398,6 +509,7 @@ interface HistoricalSession {
   ctlAtTime: number;                   // daily-equiv CTL on that date
   recoveryMultAtTime: number;          // sport-derived
   recoveryAdjAtTime: number;           // transient adjustment used at the time
+  intensityBand?: IntensityBand;       // session intensity (fit basis); falls through if absent
 }
 
 interface BackfillResult {
@@ -438,6 +550,8 @@ export function backfillHistoricalImpacts(
       recoveryMultAtTime: sess.recoveryMultAtTime,
       recoveryAdjAtTime: sess.recoveryAdjAtTime,
       predictedHours: predicted,
+      intensityBand: sess.intensityBand,
+      expectedRecoveryHours: sess.intensityBand ? expectedRecoveryHoursForBand(sess.intensityBand) : undefined,
       observedHours: observed.hours,
       rightCensored: observed.censored,
       signalsUsed: observed.signalsUsed,
@@ -492,10 +606,14 @@ interface ActualLike {
   durationSec: number;
   iTrimp?: number | null;
   activityType?: string | null;
+  hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
 }
 
 interface WeekLike {
   garminActuals?: Record<string, ActualLike>;
+  /** User-rated RPE per workout id (1–10) or 'skip'. Used as the intensity
+   *  fallback when an activity has no HR zones. */
+  rated?: Record<string, number | 'skip'>;
 }
 
 /** Walk recent weeks of `wk.garminActuals` (current plan + archived plans) and
@@ -531,7 +649,7 @@ export function ingestNewActualsAsImpacts(
   for (const wk of allWeeks) {
     const actuals = wk?.garminActuals;
     if (!actuals) continue;
-    for (const actual of Object.values(actuals)) {
+    for (const [id, actual] of Object.entries(actuals)) {
       if (!actual.startTime) continue;
       if (known.has(actual.garminId)) continue;
 
@@ -550,6 +668,12 @@ export function ingestNewActualsAsImpacts(
       const recoveryAdjAtTime = recoveryAdjOnDate(physio, date);
       const predictedHours = K_USER_DEFAULT * tss / Math.max(1, ctlDaily) * recoveryMultAtTime * recoveryAdjAtTime;
 
+      // Intensity band → literature-anchored expected recovery (the fit basis).
+      // HR zones (Strava, fitness-relative) preferred; RPE fallback.
+      const ratedRpe = typeof wk.rated?.[id] === 'number' ? (wk.rated[id] as number) : null;
+      const intensityBand = classifySessionIntensity(actual.hrZones, ratedRpe) ?? undefined;
+      const expectedRecoveryHours = intensityBand ? expectedRecoveryHoursForBand(intensityBand) : undefined;
+
       // Sessions older than 7 days are tagged historical. They post-date the
       // current launch but pre-date the active engagement window where we
       // typically have RPE / check-in corrections. Down-weighted in the fit.
@@ -565,6 +689,8 @@ export function ingestNewActualsAsImpacts(
         recoveryMultAtTime,
         recoveryAdjAtTime,
         predictedHours,
+        intensityBand,
+        expectedRecoveryHours,
         signalsUsed: [],   // closeOutObservedRecovery will populate
         source,
         fitWeight,
@@ -579,4 +705,51 @@ export function ingestNewActualsAsImpacts(
     }
   }
   return { added, addedHistorical };
+}
+
+/** Retrofit `intensityBand` / `expectedRecoveryHours` onto existing impact-log
+ * entries that pre-date the intensity-banded model (ISSUE-256 redesign). Matches
+ * each entry back to its activity by garminId across current + archived weeks and
+ * classifies it from HR zones (or RPE). Idempotent: skips entries that already
+ * have an expectation. Returns the count filled. Without this, a user's existing
+ * 90-day log would carry no band and contribute nothing to the new fit until it
+ * aged out. */
+export function backfillIntensityBands(
+  s: Pick<SimulatorState, 'sessionImpactLog'> & {
+    wks?: WeekLike[];
+    previousPlanWks?: Array<{ weeks: WeekLike[] }>;
+  },
+): number {
+  const log = s.sessionImpactLog ?? [];
+  if (log.length === 0) return 0;
+
+  const allWeeks: WeekLike[] = [...(s.wks ?? [])];
+  for (const archived of (s.previousPlanWks ?? [])) {
+    if (Array.isArray(archived?.weeks)) {
+      for (const w of archived.weeks) if (w) allWeeks.push(w);
+    }
+  }
+
+  // Index activity intensity signals by garminId.
+  const signalById = new Map<string, { hrZones: ActualLike['hrZones']; rpe: number | null }>();
+  for (const wk of allWeeks) {
+    if (!wk?.garminActuals) continue;
+    for (const [id, actual] of Object.entries(wk.garminActuals)) {
+      const rpe = typeof wk.rated?.[id] === 'number' ? (wk.rated[id] as number) : null;
+      signalById.set(actual.garminId, { hrZones: actual.hrZones, rpe });
+    }
+  }
+
+  let filled = 0;
+  for (const e of log) {
+    if (e.expectedRecoveryHours != null) continue;
+    const sig = signalById.get(e.garminId);
+    if (!sig) continue;
+    const band = classifySessionIntensity(sig.hrZones, sig.rpe);
+    if (!band) continue;
+    e.intensityBand = band;
+    e.expectedRecoveryHours = expectedRecoveryHoursForBand(band);
+    filled++;
+  }
+  return filled;
 }

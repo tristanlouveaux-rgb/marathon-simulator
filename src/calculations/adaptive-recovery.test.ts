@@ -12,6 +12,10 @@ import {
   closeOutObservedRecovery,
   fitKUser,
   backfillHistoricalImpacts,
+  backfillIntensityBands,
+  classifySessionIntensity,
+  expectedRecoveryHoursForBand,
+  EXPECTED_RECOVERY_HOURS,
   K_USER_DEFAULT,
   K_USER_MIN,
   K_USER_MAX,
@@ -213,7 +217,9 @@ function makeEntry(overrides: Partial<SessionImpactEntry> & { date: string; garm
     ctlAtTime: 60,
     recoveryMultAtTime: 1.0,
     recoveryAdjAtTime: 1.0,
-    predictedHours: 100 / 60 * 8,  // = 13.33h
+    predictedHours: 100 / 60 * 8,  // = 13.33h (readiness-debt; not the fit basis)
+    intensityBand: 'moderate',     // → expectedRecoveryHours 36 by default
+    expectedRecoveryHours: 36,
     signalsUsed: [],
     source: 'live',
     fitWeight: 1.0,
@@ -275,53 +281,85 @@ describe('fitKUser', () => {
     expect(ar.confidence).toBe('none');
   });
 
-  it('fast recoverer (observed = 0.7 × predicted) settles below 8 with N=20 sessions', () => {
+  it('typical recoverer (observed == expected for the intensity) sits at k≈8', () => {
     const today = new Date('2026-05-01T12:00:00');
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    // observed 24h, easy band (expected 24h) → index 1.0. observed=24 is always a
+    // clean reading (no intervening days), so consecutive dates are fine.
     for (let i = 1; i <= 20; i++) {
       logSessionImpact(s, makeEntry({
-        garminId: `S${i}`,
-        date: isoOffset(-i, today),
-        predictedHours: 10,
-        observedHours: 7,
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 24,
+      }));
+    }
+    const ar = fitKUser(s, { now: today });
+    expect(ar.confidence).toBe('medium');
+    expect(ar.kUserHours).toBeCloseTo(K_USER_DEFAULT, 5);  // index 1 → k 8
+    expect(ar.sessionsObserved).toBe(20);
+  });
+
+  it('fast recoverer (recovers quicker than the intensity expectation) settles below 8', () => {
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    // moderate band (expected 36h) but back in 24h → index 0.667 → k ≈ 5.33.
+    for (let i = 1; i <= 20; i++) {
+      logSessionImpact(s, makeEntry({
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'moderate', expectedRecoveryHours: 36, observedHours: 24,
       }));
     }
     const ar = fitKUser(s, { now: today });
     expect(ar.confidence).toBe('medium');
     expect(ar.kUserHours).toBeGreaterThan(K_USER_MIN);
-    expect(ar.kUserHours).toBeLessThan(7.5);  // pulled down toward 8 × 0.7 = 5.6
-    expect(ar.sessionsObserved).toBe(20);
+    expect(ar.kUserHours).toBeLessThan(K_USER_DEFAULT);
   });
 
-  it('slow recoverer (observed = 1.4 × predicted) settles above 8 with N=20', () => {
+  it('slow recoverer (slower than the intensity expectation) settles above 8', () => {
     const today = new Date('2026-05-01T12:00:00');
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    // easy band (expected 24h) but took 48h → index 2. Space 2 days so the 48h
+    // window (windowDays=2, checks gap<2 i.e. gap=1) sees no intervening session.
     for (let i = 1; i <= 20; i++) {
       logSessionImpact(s, makeEntry({
-        garminId: `S${i}`,
-        date: isoOffset(-i, today),
-        predictedHours: 10,
-        observedHours: 14,
+        garminId: `S${i}`, date: isoOffset(-2 * i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 48,
       }));
     }
     const ar = fitKUser(s, { now: today });
-    expect(ar.confidence).toBe('medium');
-    expect(ar.kUserHours).toBeGreaterThan(8.5);
+    expect(ar.kUserHours).toBeGreaterThan(K_USER_DEFAULT);
   });
 
   it('clamps the result to [K_USER_MIN, K_USER_MAX]', () => {
     const today = new Date('2026-05-01T12:00:00');
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
-    for (let i = 1; i <= 50; i++) {
+    // hard band (expected 54h) but back in 24h → index 0.44 → 8×0.44 = 3.5 → floor 5.
+    for (let i = 1; i <= 30; i++) {
       logSessionImpact(s, makeEntry({
-        garminId: `S${i}`,
-        date: isoOffset(-i, today),
-        predictedHours: 10,
-        observedHours: 0.5,  // ratio 0.05. Would push k far below 1
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'hard', expectedRecoveryHours: 54, observedHours: 24,
       }));
     }
     const ar = fitKUser(s, { now: today });
     expect(ar.kUserHours).toBe(K_USER_MIN);
+  });
+
+  it('log-space aggregation is robust to right-skew (a few very slow sessions do not pin k)', () => {
+    // 18 typical (index 1) + 2 extreme-slow outliers (index 4). A linear mean would
+    // be dragged up; the log-space mean keeps k well below the ceiling.
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    for (let i = 1; i <= 18; i++) {
+      logSessionImpact(s, makeEntry({
+        garminId: `T${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 24,  // index 1
+      }));
+    }
+    // outliers spaced 5 days apart and recent-ish, with clean 96h windows
+    logSessionImpact(s, makeEntry({ garminId: 'O1', date: isoOffset(-40, today), intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 96 }));
+    logSessionImpact(s, makeEntry({ garminId: 'O2', date: isoOffset(-46, today), intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 96 }));
+    const ar = fitKUser(s, { now: today });
+    expect(ar.kUserHours).toBeLessThan(K_USER_MAX);     // not pinned by the tail
+    expect(ar.kUserHours).toBeGreaterThan(K_USER_DEFAULT); // but the slow tail still nudges up
   });
 
   it('historical evidence is weighted at 0.7 — pure historical pulls less than pure live', () => {
@@ -329,7 +367,7 @@ describe('fitKUser', () => {
     const sLive: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     const sHist: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 20; i++) {
-      const args = { date: isoOffset(-i, today), predictedHours: 10, observedHours: 6 };
+      const args = { date: isoOffset(-i, today), intensityBand: 'moderate' as const, expectedRecoveryHours: 36, observedHours: 24 };  // index 0.667
       logSessionImpact(sLive, makeEntry({ ...args, garminId: `L${i}`, source: 'live', fitWeight: 1.0 }));
       logSessionImpact(sHist, makeEntry({ ...args, garminId: `H${i}`, source: 'historical-backfill', fitWeight: 0.7 }));
     }
@@ -339,15 +377,13 @@ describe('fitKUser', () => {
     expect(live.kUserHours).toBeLessThan(hist.kUserHours);
   });
 
-  it('confidence reaches high at 30 closed sessions', () => {
+  it('confidence reaches high at 30 clean readings', () => {
     const today = new Date('2026-05-01T12:00:00');
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 30; i++) {
       logSessionImpact(s, makeEntry({
-        garminId: `S${i}`,
-        date: isoOffset(-i, today),
-        predictedHours: 10,
-        observedHours: 8,
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 24,
       }));
     }
     const ar = fitKUser(s, { now: today });
@@ -355,21 +391,136 @@ describe('fitKUser', () => {
     expect(ar.sessionsObserved).toBeGreaterThanOrEqual(CONF_HIGH_FLOOR);
   });
 
+  it('excludes sessions with no intensity band (cannot place them on the recovery scale)', () => {
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    for (let i = 1; i <= 20; i++) {
+      logSessionImpact(s, makeEntry({
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: undefined, expectedRecoveryHours: undefined, observedHours: 24,
+      }));
+    }
+    const ar = fitKUser(s, { now: today });
+    expect(ar.sessionsObserved).toBe(0);
+    expect(ar.confidence).toBe('none');
+  });
+
+  it('a 24h recovery is always a clean reading, even on consecutive training days', () => {
+    // Morning measurement: the next day's session happens after that morning's
+    // reading, so it cannot contaminate a same-day-resolved (24h) recovery.
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    for (let i = 1; i <= 16; i++) {
+      logSessionImpact(s, makeEntry({
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 24,
+      }));
+    }
+    const ar = fitKUser(s, { now: today });
+    expect(ar.sessionsObserved).toBe(16);   // none dropped
+  });
+
+  it('drops multi-day recoveries confounded by an intervening session (training-through)', () => {
+    // Daily training, each session "recovered" only at 48h because the next day's
+    // session kept markers down. The 48h window (gap<2 → gap=1) catches the next
+    // day's session → confounded. Only the most recent has no later session.
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    for (let i = 1; i <= 30; i++) {
+      logSessionImpact(s, makeEntry({
+        garminId: `C${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 48,
+      }));
+    }
+    const ar = fitKUser(s, { now: today });
+    expect(ar.sessionsObserved).toBe(1);            // only the most recent is clean
+    expect(ar.densityLimited).toBe(true);           // many closed, few clean
+    expect(ar.confidence).toBe('none');
+  });
+
+  it('keeps a clean-window slow recovery as genuine evidence', () => {
+    const today = new Date('2026-05-01T12:00:00');
+    const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
+    // 72h recovery (windowDays=3, checks gap<3) with nothing within 2 days.
+    logSessionImpact(s, makeEntry({
+      garminId: 'lonely', date: isoOffset(-6, today),
+      intensityBand: 'moderate', expectedRecoveryHours: 36, observedHours: 72,
+    }));
+    const ar = fitKUser(s, { now: today });
+    expect(ar.sessionsObserved).toBe(1);                   // retained
+    expect(ar.kUserHours).toBeGreaterThan(K_USER_DEFAULT); // 72/36 = index 2 → slow
+  });
+
   it('records a history entry with date / k / n on update', () => {
     const today = new Date('2026-05-01T12:00:00');
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 16; i++) {
       logSessionImpact(s, makeEntry({
-        garminId: `S${i}`,
-        date: isoOffset(-i, today),
-        predictedHours: 10,
-        observedHours: 9,
+        garminId: `S${i}`, date: isoOffset(-i, today),
+        intensityBand: 'easy', expectedRecoveryHours: 24, observedHours: 24,
       }));
     }
     const ar = fitKUser(s, { now: today });
     expect(ar.history).toBeDefined();
     expect(ar.history![ar.history!.length - 1].n).toBe(16);
     expect(ar.history![ar.history!.length - 1].date).toBe('2026-05-01');
+  });
+});
+
+describe('classifySessionIntensity', () => {
+  it('classifies by time-weighted mean HR zone (fitness-relative via Strava zones)', () => {
+    expect(classifySessionIntensity({ z1: 600, z2: 1800, z3: 120, z4: 0, z5: 0 })).toBe('easy');   // mean ≈ 1.8
+    expect(classifySessionIntensity({ z1: 0, z2: 300, z3: 2400, z4: 300, z5: 0 })).toBe('moderate');// mean ≈ 3.0
+    expect(classifySessionIntensity({ z1: 0, z2: 0, z3: 300, z4: 1200, z5: 1500 })).toBe('hard');   // mean ≈ 4.4
+  });
+
+  it('falls back to RPE (Foster CR10 bands) when no HR zones', () => {
+    expect(classifySessionIntensity(null, 3)).toBe('easy');
+    expect(classifySessionIntensity(null, 6)).toBe('moderate');
+    expect(classifySessionIntensity(null, 9)).toBe('hard');
+  });
+
+  it('prefers HR zones over RPE when both present', () => {
+    expect(classifySessionIntensity({ z1: 0, z2: 0, z3: 0, z4: 600, z5: 600 }, 3)).toBe('hard');
+  });
+
+  it('returns null when neither signal is available', () => {
+    expect(classifySessionIntensity(null, null)).toBeNull();
+    expect(classifySessionIntensity(undefined, 0)).toBeNull();
+    expect(classifySessionIntensity({ z1: 0, z2: 0, z3: 0, z4: 0, z5: 0 }, null)).toBeNull();
+  });
+
+  it('expectedRecoveryHoursForBand returns the literature anchors', () => {
+    expect(expectedRecoveryHoursForBand('easy')).toBe(EXPECTED_RECOVERY_HOURS.easy);
+    expect(expectedRecoveryHoursForBand('moderate')).toBe(EXPECTED_RECOVERY_HOURS.moderate);
+    expect(expectedRecoveryHoursForBand('hard')).toBe(EXPECTED_RECOVERY_HOURS.hard);
+    expect(EXPECTED_RECOVERY_HOURS).toEqual({ easy: 24, moderate: 36, hard: 54 });
+  });
+});
+
+describe('backfillIntensityBands', () => {
+  it('retrofits band + expected hours onto pre-existing entries via the activity', () => {
+    const s: any = {
+      sessionImpactLog: [
+        makeEntry({ garminId: 'A', date: '2026-04-20', intensityBand: undefined, expectedRecoveryHours: undefined }),
+      ],
+      wks: [{
+        garminActuals: { w1: { garminId: 'A', startTime: '2026-04-20T08:00', durationSec: 3600, hrZones: { z1: 0, z2: 0, z3: 0, z4: 600, z5: 900 } } },
+      }],
+    };
+    const filled = backfillIntensityBands(s);
+    expect(filled).toBe(1);
+    expect(s.sessionImpactLog[0].intensityBand).toBe('hard');
+    expect(s.sessionImpactLog[0].expectedRecoveryHours).toBe(54);
+  });
+
+  it('does not overwrite entries that already have an expectation', () => {
+    const s: any = {
+      sessionImpactLog: [makeEntry({ garminId: 'A', date: '2026-04-20', intensityBand: 'easy', expectedRecoveryHours: 24 })],
+      wks: [{ garminActuals: { w1: { garminId: 'A', startTime: '2026-04-20T08:00', durationSec: 3600, hrZones: { z1: 0, z2: 0, z3: 0, z4: 600, z5: 900 } } } }],
+    };
+    expect(backfillIntensityBands(s)).toBe(0);
+    expect(s.sessionImpactLog[0].intensityBand).toBe('easy');
   });
 });
 

@@ -24,6 +24,7 @@
 import type { SimulatorState } from '@/types';
 import { cv } from './vdot';
 import { deriveVdotFromLT } from './lt-derivation';
+import { getEffectiveVdot } from './effective-vdot';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -316,4 +317,36 @@ export function getPhysiologicalVdot(
     isDeviceFresh: false,
     deviceAgeDays,
   };
+}
+
+/**
+ * The single resolved running-fitness VDOT every fitness surface should read.
+ *
+ * Resolves the physiological chain (`getPhysiologicalVdot`), falling back to the
+ * blended/onboarding effective VDOT (`s.v + adjustments`) for the rare case where
+ * the chain returns 'none' but a bare baseline exists. This mirrors the inline
+ * `getPhysiologicalVdot(s).vdot ?? computeCurrentVDOT(s)` chain the Stats card
+ * used, lifted into one helper so the Stats "VO2 Max" bar and the no-target-race
+ * Forecast grid resolve the SAME number. Returns null when there is no usable
+ * running-fitness value at all.
+ */
+export function resolveRunningVdot(s: SimulatorState): number | null {
+  const physio = getPhysiologicalVdot(s).vdot;
+  if (physio != null && physio > 0) return physio;
+  const eff = getEffectiveVdot(s);
+  return eff > 0 ? eff : null;
+}
+
+/**
+ * THE canonical "do we have enough running-fitness data to show a number?" gate.
+ *
+ * True iff `resolveRunningVdot` yields a usable value. Both the Stats "VO2 Max"
+ * bar and the Forecast standard-distance grid gate on this, so a thin-data
+ * athlete can never see contradictory answers (e.g. a VO2 bar on Stats but
+ * "No predictions yet" on Forecast). See CLAUDE.md: "Two numbers that mean the
+ * same thing must come from the same source." Per-distance race times are still
+ * physically distinct from the VDOT itself; only the show/hide gate is shared.
+ */
+export function hasRunningFitnessSignal(s: SimulatorState): boolean {
+  return resolveRunningVdot(s) != null;
 }

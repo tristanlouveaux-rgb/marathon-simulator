@@ -141,8 +141,22 @@ describe('predictStandardDistances — no-target-race forecast', () => {
     expect(carbon['10k']! / std['10k']!).toBeCloseTo(0.97, 3);
   });
 
-  it('returns all-null for a just-track user with no PBs', () => {
-    const s = baseState({ trackOnly: true, pbs: {} });
+  it('predicts for a track-only user with a resolved VDOT but no PBs (matches the Stats VO2 bar gate)', () => {
+    // Canonical-gate behaviour: the forecast shows whenever there is a running-
+    // fitness signal (here the baseline VDOT v:45), even with no PBs/device/LT.
+    // The Daniels fallback predicts from that VDOT alone, so this surface stays
+    // in lock-step with the Stats "VO2 Max" bar, which shows from the same value.
+    const s = baseState({ trackOnly: true, pbs: {}, v: 45 });
+    const preds = predictStandardDistances(s);
+    expect(preds['5k']).not.toBeNull();
+    expect(preds['marathon']).not.toBeNull();
+    expect(preds['5k']!).toBeLessThan(preds['marathon']!);
+  });
+
+  it('returns all-null when there is no running-fitness signal at all', () => {
+    // No VDOT (v:0), no PBs, no device VO2, no LT, no run history → nothing to
+    // resolve. Both this grid and the Stats bar hide together (consistent empty).
+    const s = baseState({ trackOnly: true, pbs: {}, v: 0, iv: 0 });
     const preds = predictStandardDistances(s);
     expect(preds['5k']).toBeNull();
     expect(preds['marathon']).toBeNull();
@@ -228,6 +242,19 @@ describe('getStandardForecastProjection — plan-progression forward forecast', 
     }
     // A 12-week hold yields a real gain over today.
     expect(proj[proj.length - 1].value).toBeLessThan(proj[0].value);
+  });
+
+  it('rises from week 1 — no dead-flat start then a kink (saturating shape)', () => {
+    const s = baseState({ onboardingRunHistory: mkRunHistory(now), rw: 5 });
+    const proj = getStandardForecastProjection(s, 'half', 12)!;
+    // Week 1 already shows improvement (adaptation begins immediately), and the
+    // early gain per week is no smaller than the late gain (concave, fastest
+    // early — the dual-tau saturation, not a flat lag then linear ramp).
+    expect(proj[1].value).toBeLessThan(proj[0].value);
+    const earlyStep = proj[0].value - proj[1].value; // wk0 → wk1 (positive = faster)
+    const lateStep = proj[proj.length - 2].value - proj[proj.length - 1].value;
+    expect(earlyStep).toBeGreaterThan(0);
+    expect(earlyStep).toBeGreaterThanOrEqual(lateStep - 1e-6);
   });
 
   it('a longer horizon forecasts a faster time than a shorter one', () => {

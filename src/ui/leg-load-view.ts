@@ -19,7 +19,7 @@ import {
 } from '@/calculations/readiness';
 import { reconcileRecentLegLoads } from './sport-picker-modal';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+import { buildSkyBackground } from './sky-background';
 import { atmosphereGradient } from './page-flair';
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
@@ -265,7 +265,7 @@ function getLegLoadHTML(): string {
       #legload-view *, #legload-view *::before, #legload-view *::after { box-sizing:inherit; }
       @keyframes llFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .ll-fade { opacity:0; animation:llFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('ll')}
+      /* Sky background is static under the glass cards (RUNBOOK Cause 1+2). Do not animate it. */
     </style>
 
     <div id="legload-view" style="

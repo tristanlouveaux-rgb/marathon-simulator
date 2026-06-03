@@ -28,11 +28,12 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot } from '@/calculations/physiological-vdot';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
 import { gp } from '@/calculations/paces';
+import { buildStrengthProgressCard, openStrengthProgressDetail } from './strength-progress-view';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -690,9 +691,10 @@ function buildRunningNumbersCard(s: SimulatorState): string {
   const isFemale = s.biologicalSex === 'female';
   const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
 
-  // VO2 Max. Same priority chain the rest of the app uses.
+  // VO2 Max. Resolved via the canonical `resolveRunningVdot` so this bar and the
+  // Forecast grid show/hide on the same signal (CLAUDE.md canonical-source rule).
   const vo2physio = getPhysiologicalVdot(s);
-  const vo2bar = vo2physio.vdot ?? computeCurrentVDOT(s);
+  const vo2bar = resolveRunningVdot(s) ?? 0;
   const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
   const aerZoneIdx = aerBreaks.findIndex(b => vo2bar < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
@@ -838,6 +840,7 @@ function buildStatsSummary(s: SimulatorState): string {
           ${buildStatsHero(initials, '')}
           <div style="padding:0 18px">
             ${buildRunningNumbersCard(s)}
+            ${buildStrengthProgressCard(s)}
             <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px">Progress</div>
             ${buildProgressSection(s)}
           </div>
@@ -857,6 +860,7 @@ function buildStatsSummary(s: SimulatorState): string {
         ${buildStatsHero(initials, weekLabel)}
         <div style="padding:0 18px">
           ${buildRunningNumbersCard(s)}
+          ${buildStrengthProgressCard(s)}
           <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px">Progress</div>
           ${buildProgressSection(s)}
         </div>
@@ -2036,7 +2040,7 @@ function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummar
     const paceLabel = isRun && a.avgPaceSecKm ? fp(a.avgPaceSecKm, unitPref) : '';
     return `<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--c-border)">
       <div>
-        <div style="font-size:13px;font-weight:600;color:var(--c-black);line-height:1.3">${a.displayName}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);line-height:1.3">${escapeHtml(a.displayName ?? '')}</div>
         <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${date}${paceLabel ? ' · ' + paceLabel : ''}</div>
       </div>
       <div style="text-align:right;flex-shrink:0;margin-left:12px">
@@ -2383,11 +2387,12 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     ],
   });
 
-  // Bar 2: VO2 Max. Single source of truth via getPhysiologicalVdot.
-  // Watch (s.vo2) wins when fresh; otherwise priority chain falls through to
-  // HR-calibrated → LT-back-derived → PB-median → Tanda-blended `s.v`.
+  // Bar 2: VO2 Max. Single source of truth via the canonical `resolveRunningVdot`
+  // (physiological chain → effective-VDOT fallback). Watch (s.vo2) wins when
+  // fresh; otherwise the chain falls through HR-calibrated → LT-back-derived →
+  // PB-median → Tanda-blended `s.v`. The Forecast grid gates on the same signal.
   const vo2physio = getPhysiologicalVdot(s);
-  const vo2bar = vo2physio.vdot ?? computeCurrentVDOT(s);
+  const vo2bar = resolveRunningVdot(s) ?? 0;
   const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
   const aerZoneIdx = aerBreaks.findIndex(b => vo2bar < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
@@ -4413,6 +4418,7 @@ function wireDetailBack(s: SimulatorState): void {
   btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
 }
 
+
 // ---------------------------------------------------------------------------
 // ══════════════════════════════════════════════════════════════════════════════
 // DETAIL PAGE RENDERERS
@@ -4672,6 +4678,13 @@ export function renderStatsView(): void {
 
   // Progress section → full Progress detail page.
   tapHandler('stats-recent-weeks-card', () => renderProgressDetail(s));
+
+  // Strength section → strength-progress drill-down.
+  tapHandler('stats-strength-card', () => openStrengthProgressDetail(s, {
+    back: () => renderStatsView(),
+    navigateTab,
+    tabBar: renderTabBar('stats', isSimulatorMode()),
+  }));
 
   // Inline info buttons (ⓘ) on the Your Numbers bars.
   wireInfoButtons();

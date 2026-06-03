@@ -152,6 +152,47 @@ describe('computePlanAdherence', () => {
     expect(result.totalCompleted).toBe(3);
   });
 
+  it('subtracts illness-rested days from the denominator (rest is not a miss)', () => {
+    // Week 1 had 4 planned runs but the user was ill and told to rest 2 days.
+    // Without the fix: 2 completed / 4 = 50%. With it: 2 / (4-2) = 100%.
+    const wk1 = makeWeek(1, {
+      garminActuals: { 'a': makeRunActual(10, 10), 'b': makeRunActual(10, 10) },
+    });
+    const s = makeState({
+      rw: 4, w: 2, planStartDate: '2026-01-05',
+      wks: [wk1, makeWeek(2)],
+      illnessState: {
+        startDate: '2026-01-05', active: true, severity: 'resting',
+        schedule: [
+          { dateOffsetDays: 0, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest' },
+          { dateOffsetDays: 1, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest' },
+        ],
+      } as any,
+    });
+    const result = computePlanAdherence(s);
+    expect(result.totalPlanned).toBe(2);
+    expect(result.totalCompleted).toBe(2);
+    expect(result.pct).toBe(100);
+  });
+
+  it('a fully illness-rested week is excluded entirely', () => {
+    const wk1 = makeWeek(1, {}); // nothing completed — fully rested
+    const s = makeState({
+      rw: 4, w: 2, planStartDate: '2026-01-05',
+      wks: [wk1, makeWeek(2)],
+      illnessState: {
+        startDate: '2026-01-05', active: true, severity: 'resting',
+        schedule: Array.from({ length: 7 }, (_, i) => ({
+          dateOffsetDays: i, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest',
+        })),
+      } as any,
+    });
+    const result = computePlanAdherence(s);
+    // All 7 days rest → denominator 0 → week excluded, not 0%.
+    expect(result.weeksIncluded).toBe(0);
+    expect(result.pct).toBeNull();
+  });
+
   it('ignores non-run activities in garminActuals', () => {
     const wk1 = makeWeek(1, {
       garminActuals: {

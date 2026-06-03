@@ -15,8 +15,8 @@ import { generateGymWorkouts, type GymFocus } from '@/workouts/gym';
 import { generateHyroxBrick } from '@/workouts/hyrox-generators';
 import { injuryStrengthDecision } from '@/workouts/injury-strength';
 import type { GymGoal } from '@/constants/strength-constants';
-import { tuneGymWorkout, hyroxBandForIntensity, GYM_TIME_PRESETS, type GymRestStyle, type GymIntensity } from '@/workouts/gym-pool';
-import { buildRunningStrengthWorkout } from '@/workouts/running-pool';
+import { tuneGymWorkout, hyroxBandForIntensity, type GymRestStyle, type GymIntensity } from '@/workouts/gym-pool';
+import { buildRunningStrengthWorkout, buildPlyometricsWorkout } from '@/workouts/running-pool';
 
 /** Gym Focus options in the generator, plus the HYROX brick (its own path). */
 type GymFocusChoice = GymFocus | 'hyrox';
@@ -248,7 +248,13 @@ export function openSessionGenerator(): void {
   let selectedDiscipline: GenDiscipline | null = null;
   // True once the user reached a discipline via the picker (tri always; on-demand
   // when they chose "Pick your own"). Drives whether "Run" shows a Back vs Cancel.
-  const hasDisciplinePicker = isTri || isOnDemand;
+  // Running mode (a plan-following runner — not on-demand/tri/hyrox) now also gets
+  // the discipline picker: Run / Gym / Bike / Swim as top-level tiles, so Gym is no
+  // longer buried at the bottom of the run-type list and swim/cycling are reachable
+  // as cross-training. Swim/bike save as adhoc and the generators degrade gracefully
+  // without FTP/CSS.
+  const isRunningMode = !isTri && !isHyrox && !isOnDemand;
+  const hasDisciplinePicker = isTri || isOnDemand || isRunningMode;
 
   // Recovery signal for effort recommendation (vibes / Run by Feel step only).
   const acwr = computeReadinessACWR(s);
@@ -425,6 +431,22 @@ export function openSessionGenerator(): void {
   // ── Tri mode. Discipline picker (Step 0) ──────────────────────────────────
 
   function renderTriDiscipline() {
+    const DISC_TILES: Record<'run' | 'bike' | 'swim' | 'gym', { label: string; sub: string }> = {
+      run: { label: 'Run', sub: 'Easy, long, threshold, VO2 or Run by Feel.' },
+      gym: { label: 'Gym', sub: 'Running strength, plyometrics, upper, lower or full body.' },
+      bike: { label: 'Bike', sub: 'Endurance, sweet spot, threshold or VO2.' },
+      swim: { label: 'Swim', sub: 'Technique, endurance, CSS intervals or speed.' },
+    };
+    // Running mode leads with Gym (the cross-sell in a running app); tri / on-demand
+    // keep the swim/bike/run sports first, gym last.
+    const discOrder: Array<'run' | 'bike' | 'swim' | 'gym'> = isRunningMode
+      ? ['run', 'gym', 'bike', 'swim']
+      : ['run', 'bike', 'swim', 'gym'];
+    const discButtons = discOrder.map(d => `
+          <button class="sg-disc-btn" data-disc="${d}" style="${tilePickerStyle()}">
+            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">${DISC_TILES[d].label}</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">${DISC_TILES[d].sub}</div>
+          </button>`).join('');
     modal.innerHTML = `
       <div class="w-full max-w-sm rounded-2xl" style="background:#ffffff;position:relative;overflow:hidden;border:1px solid var(--c-border);box-shadow:0 4px 16px rgba(0,0,0,0.06), 0 16px 48px rgba(0,0,0,0.08);max-height:85vh;display:flex;flex-direction:column">
         <div aria-hidden="true" style="position:absolute;top:-30px;left:-30px;width:380px;height:380px;pointer-events:none;
@@ -435,32 +457,19 @@ export function openSessionGenerator(): void {
           <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Pick a discipline.</div>
           ${renderRecommendationCaption()}
 
-          <button class="sg-disc-btn" data-disc="run" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Run</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Easy, long, threshold, VO2 or Run by Feel.</div>
-          </button>
-          <button class="sg-disc-btn" data-disc="bike" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Bike</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Endurance, sweet spot, threshold or VO2.</div>
-          </button>
-          <button class="sg-disc-btn" data-disc="swim" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Swim</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Technique, endurance, CSS intervals or speed.</div>
-          </button>
-          <button class="sg-disc-btn" data-disc="gym" style="${tilePickerStyle()}">
-            <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Gym</div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Running strength, upper, lower or full body. Pick a focus and goal.</div>
-          </button>
+          ${discButtons}
 
           <button id="sg-disc-cancel" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">
-            ${isOnDemand ? 'Back' : 'Cancel'}
+            ${!isTri ? 'Back' : 'Cancel'}
           </button>
         </div>
       </div>
     `;
 
     document.getElementById('sg-disc-cancel')?.addEventListener('click', () => {
-      if (isOnDemand) renderEntryChoice();   // back to Suggested / Pick-your-own chooser
+      // Running + on-demand reach the picker via the entry chooser, so Back returns
+      // there. Tri opens straight to the picker, so its button closes the modal.
+      if (!isTri) renderEntryChoice();
       else modal.remove();
     });
     modal.querySelectorAll('.sg-disc-btn').forEach(btn => {
@@ -569,8 +578,9 @@ export function openSessionGenerator(): void {
               </div>
             </div>
           ` : `
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:14px;padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.5">
-              No CSS set yet. Distance is estimated from skill level.
+            <div style="margin-bottom:14px;padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.5">
+              <div style="font-size:11px;color:var(--c-muted)">No CSS set yet. Distance is estimated from skill level.</div>
+              <button id="sg-swim-add-css" style="background:none;border:none;padding:0;margin-top:6px;font-size:12px;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Add your CSS →</button>
             </div>
           `}
 
@@ -612,6 +622,7 @@ export function openSessionGenerator(): void {
         if (prev) prev.textContent = previewText();
       });
 
+      document.getElementById('sg-swim-add-css')?.addEventListener('click', () => renderBenchmarkPrompt('swim', 2));
       document.getElementById('sg-swim-variants')?.addEventListener('click', () => { step = 3; render(); });
       document.getElementById('sg-swim-back2')?.addEventListener('click', () => {
         // Going back to kind picker. Clear any explicit variant so the next kind starts fresh.
@@ -829,8 +840,9 @@ export function openSessionGenerator(): void {
               </div>
             </div>
           ` : `
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:14px;padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.5">
-              No FTP set yet. Targets shown as HR zones in the workout description.
+            <div style="margin-bottom:14px;padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.5">
+              <div style="font-size:11px;color:var(--c-muted)">No FTP set yet. Targets shown as HR zones in the workout description.</div>
+              <button id="sg-bike-add-ftp" style="background:none;border:none;padding:0;margin-top:6px;font-size:12px;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Add your FTP →</button>
             </div>
           `}
 
@@ -872,6 +884,7 @@ export function openSessionGenerator(): void {
         if (prev) prev.textContent = previewText();
       });
 
+      document.getElementById('sg-bike-add-ftp')?.addEventListener('click', () => renderBenchmarkPrompt('bike', 2));
       document.getElementById('sg-bike-variants')?.addEventListener('click', () => { step = 3; render(); });
       document.getElementById('sg-bike-back2')?.addEventListener('click', () => {
         selectedBikeVariant = null;
@@ -1043,7 +1056,7 @@ export function openSessionGenerator(): void {
   // value on triConfig (the canonical benchmark home — cycling mode reuses it too).
   // eventType stays non-triathlon, so this never flips the user into triathlon UI.
   // Skipping proceeds with RPE/duration targets — the generators degrade gracefully.
-  function renderBenchmarkPrompt(disc: 'bike' | 'swim') {
+  function renderBenchmarkPrompt(disc: 'bike' | 'swim', returnStep?: 0 | 1 | 2 | 3) {
     const isBike = disc === 'bike';
     const title = isBike ? 'Add your FTP?' : 'Add your CSS?';
     const blurb = isBike
@@ -1068,9 +1081,11 @@ export function openSessionGenerator(): void {
       ${modalShellClose()}
     `;
 
-    const proceed = () => { selectedDiscipline = disc; step = 1; render(); };
+    // returnStep set → reached inline from a duration preview ("Add FTP"), so go
+    // back there; otherwise it's the on-demand pre-flow (→ kind picker / picker).
+    const proceed = () => { selectedDiscipline = disc; step = returnStep ?? 1; render(); };
 
-    document.getElementById('sg-bench-back')?.addEventListener('click', () => { step = 0; render(); });
+    document.getElementById('sg-bench-back')?.addEventListener('click', () => { step = returnStep ?? 0; render(); });
     document.getElementById('sg-bench-skip')?.addEventListener('click', proceed);
     document.getElementById('sg-bench-save')?.addEventListener('click', () => {
       const raw = (document.getElementById('sg-bench-input') as HTMLInputElement)?.value?.trim() ?? '';
@@ -1115,13 +1130,16 @@ export function openSessionGenerator(): void {
     selectedGymRestStyle = 'traditional';
     const FOCI: Array<{ k: GymFocusChoice; label: string; sub: string }> = [
       { k: 'running', label: 'Running strength', sub: 'Lower body + core for running economy. Matched to your phase.' },
+      { k: 'plyometrics', label: 'Plyometrics', sub: 'Explosive jumps and bounds for reactive strength and economy.' },
       { k: 'lower', label: 'Lower body', sub: 'Squats, hinges, single-leg and calves.' },
       { k: 'upper', label: 'Upper body', sub: 'Press, pull and arms.' },
       { k: 'full', label: 'Full body', sub: 'A squat, hinge, press, pull and core.' },
     ];
     // HYROX renders + guides correctly via the ad-hoc / tri card path; the running
-    // plan card can't host a brick yet, so only offer it where it works.
-    if (hasDisciplinePicker) {
+    // plan card can't host a brick yet, so only offer it where it works (tri /
+    // on-demand). Running mode now has the discipline picker too, but must NOT get
+    // a HYROX brick focus.
+    if (isTri || isOnDemand) {
       FOCI.push({ k: 'hyrox', label: 'HYROX', sub: 'Runs paired with sled, ski-erg and carry stations.' });
     }
     modal.innerHTML = `
@@ -1140,10 +1158,10 @@ export function openSessionGenerator(): void {
     modal.querySelectorAll('.sg-gym-focus').forEach(btn => {
       btn.addEventListener('click', () => {
         selectedGymFocus = (btn as HTMLElement).dataset.focus as GymFocusChoice;
-        // Lower / Upper / Full are goal-driven (goal → rest). Running uses the
-        // existing running-supportive templates and HYROX is a fixed brick — both
-        // skip straight to the preview.
-        gymStep = (selectedGymFocus === 'running' || selectedGymFocus === 'hyrox') ? 'preview' : 'goal';
+        // Lower / Upper / Full are goal-driven (goal → rest). Running, Plyometrics
+        // and HYROX own their prescription (no goal/load choice) — all skip
+        // straight to the preview.
+        gymStep = (selectedGymFocus === 'running' || selectedGymFocus === 'plyometrics' || selectedGymFocus === 'hyrox') ? 'preview' : 'goal';
         render();
       });
     });
@@ -1210,6 +1228,10 @@ export function openSessionGenerator(): void {
   function renderGymSession() {
     const phase = (s.wks?.[(s.w ?? 1) - 1]?.ph as TrainingPhase) ?? 'base';
     const fitnessLevel = s.onboarding?.experienceLevel ?? 'intermediate';
+    // Beginners/novices never get the heavy @80% running-strength pool — mirrors
+    // the gym.ts gate (total_beginner/beginner → bodyweight; novice/returning →
+    // light templates). They route through generateGymWorkouts instead.
+    const isBeginnerOrNovice = ['total_beginner', 'beginner', 'novice', 'returning'].includes(fitnessLevel);
     const focus = selectedGymFocus ?? 'running';
     // Injury wins over the chosen focus: when loaded strength is paused/adapted,
     // the session is the rehab one and the time/intensity controls are hidden.
@@ -1230,23 +1252,39 @@ export function openSessionGenerator(): void {
         slotIndex: s.w ?? 1,
         bodyWeightKg: s.bodyWeightKg ?? 75,
       });
-    } else if (focus === 'running' && !injured) {
+    } else if (focus === 'running' && !injured && !isBeginnerOrNovice) {
       // World-class running strength: a rotating, balanced, evidence-based pool
       // (varies by week, time scales the exercise count). Owns its own sizing,
-      // so it bypasses generateGymWorkouts + tuneGymWorkout.
-      wo = buildRunningStrengthWorkout(s.w ?? 1, selectedGymMinutes, selectedGymIntensity, selectedGymRestStyle, phase);
+      // so it bypasses generateGymWorkouts + tuneGymWorkout. INTERMEDIATE+ ONLY —
+      // the pool leads with heavy @80% barbell compounds (§BA), unsafe for a
+      // beginner. Beginners/novices fall through to generateGymWorkouts below,
+      // which returns their bodyweight-appropriate templates.
+      wo = buildRunningStrengthWorkout(s.w ?? 1, selectedGymMinutes, selectedGymIntensity, selectedGymRestStyle, phase, s.plyoInGymEnabled !== false);
+    } else if (focus === 'plyometrics' && !injured) {
+      // Standalone explosive session from the plyo pool. Low-intensity plyo is
+      // safe for everyone, so (unlike running strength) beginners get it too —
+      // but clamped to the easier tier, which never serves depth jumps or
+      // single-leg bounds. Intensity selects difficulty tier, not load. When
+      // injured, plyo is suppressed (it's higher-impact than loaded strength):
+      // it falls through to the injury-adapted path below.
+      const plyoIntensity: GymIntensity = isBeginnerOrNovice ? 'easier' : selectedGymIntensity;
+      // Foot-contact ceiling by ability (literature 80→140 progression): beginners
+      // 100, intermediate 120, advanced/competitive 140.
+      const plyoCeiling = ['advanced', 'competitive'].includes(fitnessLevel) ? 140 : isBeginnerOrNovice ? 100 : 120;
+      wo = buildPlyometricsWorkout(s.w ?? 1, selectedGymMinutes, plyoIntensity, selectedGymRestStyle, phase, plyoCeiling);
     } else {
       // Lower / Upper / Full (goal-driven pool), or the injury-adapted session
       // for any focus (generateGymWorkouts returns it; never tuned).
       const gymList = generateGymWorkouts(
         phase, 1, fitnessLevel, s.w ?? 1, s.tw ?? 18, s.v, s.injuryState ?? null,
         focus, selectedGymGoal ?? undefined, selectedGymRestStyle,
+        s.plyoInGymEnabled !== false, s.bodyweightProgress,
       );
       wo = gymList[0];
       if (wo && !injured) wo = tuneGymWorkout(wo, selectedGymMinutes, selectedGymIntensity);
     }
     const gymBack = () => {
-      gymStep = (focus === 'running' || focus === 'hyrox') ? 'focus' : 'rest';
+      gymStep = (focus === 'running' || focus === 'plyometrics' || focus === 'hyrox') ? 'focus' : 'rest';
       render();
     };
 
@@ -1275,14 +1313,25 @@ export function openSessionGenerator(): void {
     const showTune = !!wo && !injured;
     const tile = (sel: boolean, extra = '') =>
       `flex:1;padding:9px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#FAF9F6' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f);${extra}`;
-    const timeTiles = GYM_TIME_PRESETS.map(m =>
-      `<button class="sg-gym-time" data-min="${m}" style="${tile(selectedGymMinutes === m, 'font-variant-numeric:tabular-nums')}">${m}m</button>`).join('');
+    // Time control: a slider. Plyo is a short, contact-dosed session (12–30 min);
+    // other focuses run 20–90. Clamp the stored minutes into the active range so
+    // switching focus can't leave the slider out of bounds.
+    const isPlyo = focus === 'plyometrics';
+    // Plyo is short (12-30); intermediate+ can extend to 60, where time past 30
+    // becomes appended strength (a "Power + Strength" session). Beginners stay
+    // capped at the pure plyo dose.
+    const plyoMax = isBeginnerOrNovice ? 30 : 60;
+    const tMin = isPlyo ? 12 : 20, tMax = isPlyo ? plyoMax : 90, tStep = isPlyo ? 2 : 5;
+    if (selectedGymMinutes < tMin || selectedGymMinutes > tMax) selectedGymMinutes = isPlyo ? 20 : 45;
     const intensityTiles = ([['easier', 'Easier'], ['standard', 'As prescribed'], ['harder', 'Harder']] as Array<[GymIntensity, string]>)
       .map(([k, label]) => `<button class="sg-gym-inten" data-inten="${k}" style="${tile(selectedGymIntensity === k)}">${label}</button>`).join('');
     const tuneControls = showTune ? `
       <div style="margin-bottom:14px">
-        <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">How long have you got?</div>
-        <div style="display:flex;gap:6px;margin-bottom:12px">${timeTiles}</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+          <span style="font-size:11px;color:var(--c-faint)">How long have you got?</span>
+          <span id="sg-gym-time-label" style="font-size:12px;color:var(--c-black);font-weight:600;font-variant-numeric:tabular-nums">${selectedGymMinutes}m</span>
+        </div>
+        <input type="range" id="sg-gym-time-slider" class="m-slider-glass" min="${tMin}" max="${tMax}" step="${tStep}" value="${selectedGymMinutes}" style="margin:2px 0 14px">
         <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">Intensity</div>
         <div style="display:flex;gap:6px">${intensityTiles}</div>
       </div>` : '';
@@ -1307,10 +1356,14 @@ export function openSessionGenerator(): void {
     `;
 
     document.getElementById('sg-gym-back')?.addEventListener('click', gymBack);
-    modal.querySelectorAll('.sg-gym-time').forEach(btn => btn.addEventListener('click', () => {
-      selectedGymMinutes = Number((btn as HTMLElement).dataset.min) || 45;
+    const timeSlider = document.getElementById('sg-gym-time-slider') as HTMLInputElement | null;
+    const timeLabel = document.getElementById('sg-gym-time-label');
+    // Live label while dragging (cheap textContent); rebuild the session on release.
+    timeSlider?.addEventListener('input', () => { if (timeLabel) timeLabel.textContent = `${timeSlider.value}m`; });
+    timeSlider?.addEventListener('change', () => {
+      selectedGymMinutes = Number(timeSlider.value) || selectedGymMinutes;
       renderGymSession();
-    }));
+    });
     modal.querySelectorAll('.sg-gym-inten').forEach(btn => btn.addEventListener('click', () => {
       selectedGymIntensity = (btn as HTMLElement).dataset.inten as GymIntensity;
       renderGymSession();
@@ -1818,14 +1871,14 @@ export function openSessionGenerator(): void {
         </button>
         <button id="sg-entry-pick" style="${tilePickerStyle()}">
           <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Pick your own</div>
-          <div style="font-size:12px;color:var(--c-muted);line-height:1.45">${isOnDemand ? 'Choose a discipline (run, bike, swim or gym) and set it up yourself.' : 'Browse every session type and set it up yourself.'}</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.45">${hasDisciplinePicker ? 'Choose a discipline (run, gym, bike or swim) and set it up yourself.' : 'Browse every session type and set it up yourself.'}</div>
         </button>
 
         <button id="sg-entry-cancel" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">Cancel</button>
       ${modalShellClose()}
     `;
     document.getElementById('sg-entry-suggested')?.addEventListener('click', () => renderSuggestion());
-    document.getElementById('sg-entry-pick')?.addEventListener('click', () => { step = isOnDemand ? 0 : 1; render(); });
+    document.getElementById('sg-entry-pick')?.addEventListener('click', () => { step = hasDisciplinePicker ? 0 : 1; render(); });
     document.getElementById('sg-entry-cancel')?.addEventListener('click', () => modal.remove());
   }
 
@@ -1839,6 +1892,24 @@ export function openSessionGenerator(): void {
   function renderSuggestion() {
     const effort: 'easy' | 'steady' | 'hard' =
       sessionRec.readinessScore == null ? 'easy' : sessionRec.recommendedSlot;
+
+    // The run stays the suggestion. On a genuine low-recovery read (not just "no
+    // data yet") we nudge a lower-impact swap rather than overriding it. The swaps
+    // (easy bike, or easy gym when strength is in the plan) are always offered.
+    const lowRecovery = effort === 'easy' && sessionRec.readinessScore != null;
+    const planHasStrength = (s.gs ?? 0) > 0;
+    const phaseNow = (s.wks?.[(s.w ?? 1) - 1]?.ph as TrainingPhase) ?? 'base';
+    const fitLevel = s.onboarding?.experienceLevel ?? 'intermediate';
+    const buildEasyBike = () => generateBikeSession({
+      phase: phaseNow, skill: (s.triConfig?.skillRating?.bike ?? 3) as 1 | 2 | 3 | 4 | 5,
+      weekIndex: s.w ?? 1, totalWeeks: s.tw ?? 18, targetMinutes: 45, kind: 'endurance',
+      ftp: s.triConfig?.bike?.ftp, hasPowerMeter: !!s.triConfig?.bike?.ftp,
+    });
+    const buildEasyGym = () => generateGymWorkouts(
+      phaseNow, 2, fitLevel, s.w ?? 1, s.tw ?? 18, s.v, s.injuryState ?? null,
+      'running', undefined, 'traditional', s.plyoInGymEnabled !== false, s.bodyweightProgress,
+    )[0];
+
     const slot = SUGGESTED_SLOT_BY_EFFORT[effort];
     const type = SESSION_TYPES.find(t => t.slot === slot) ?? SESSION_TYPES[0];
     const mins = type.defaultMinutes;
@@ -1862,13 +1933,26 @@ export function openSessionGenerator(): void {
           <div style="font-size:13px;color:var(--c-black);line-height:1.5">${whyLine}</div>
         </div>
 
+        ${lowRecovery ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:10px">Recovery is low. An easy bike${planHasStrength ? ' or gym session' : ''} is a lower-impact swap today.</div>` : ''}
         <button id="sg-sugg-accept" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Accept</button>
         <button id="sg-sugg-adjust" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Adjust</button>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button id="sg-sugg-swap-bike" style="flex:1;padding:11px 8px;background:transparent;border:1px solid var(--c-border);border-radius:10px;color:var(--c-black);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Swap for an easy bike</button>
+          ${planHasStrength ? `<button id="sg-sugg-swap-gym" style="flex:1;padding:11px 8px;background:transparent;border:1px solid var(--c-border);border-radius:10px;color:var(--c-black);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Swap for easy gym</button>` : ''}
+        </div>
         <button id="sg-sugg-back" class="m-btn-glass m-btn-glass--inset" style="width:100%">Back</button>
       ${modalShellClose()}
     `;
 
     document.getElementById('sg-sugg-back')?.addEventListener('click', () => renderEntryChoice());
+    document.getElementById('sg-sugg-swap-bike')?.addEventListener('click', () => {
+      const wo = buildEasyBike();
+      if (wo) renderRecoverySuggestion(wo, 'bike');
+    });
+    document.getElementById('sg-sugg-swap-gym')?.addEventListener('click', () => {
+      const wo = buildEasyGym();
+      if (wo) renderRecoverySuggestion(wo, 'gym');
+    });
 
     // Adjust: pre-select the suggested type and drop into its normal setup step
     // (duration / effort), so the user tweaks this exact session rather than
@@ -1911,6 +1995,44 @@ export function openSessionGenerator(): void {
       // Land on the plan view in every mode (on-demand included) so the new
       // session shows as a planned activity, consistent with the gym/bike/swim path.
       import('./main-view').then(({ renderMainView }) => renderMainView());
+    });
+  }
+
+  /** Low-recovery alternative card: a pre-built strength or easy-bike session
+   *  (built by `renderSuggestion`'s diversion). Accept saves it; Adjust drops into
+   *  that discipline's setup; "Rather run?" forces the run suggestion. */
+  function renderRecoverySuggestion(wo: Workout, disc: 'gym' | 'bike') {
+    const why = disc === 'gym'
+      ? 'Recovery is low. A strength session keeps training productive without the impact of a run.'
+      : 'Recovery is low. An easy bike holds the aerobic stimulus and takes the pounding off your legs.';
+    const dur = (wo as { estimatedDurationMin?: number }).estimatedDurationMin;
+    const esc = (str: string) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const previewLines = String(wo.d ?? '').split('\n').filter(l => l.trim()).slice(0, 3)
+      .map(l => `<div style="font-size:12px;color:var(--c-muted);line-height:1.5">${esc(l)}</div>`).join('');
+    modal.innerHTML = `
+      ${modalShellOpen()}
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">Suggested for today</div>
+        <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.06);box-shadow:0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.4);margin-bottom:14px">
+          <div style="font-size:20px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${esc(wo.n)}</div>
+          ${dur ? `<div style="font-size:13px;color:var(--c-muted);margin-bottom:10px;font-variant-numeric:tabular-nums">${dur} min</div>` : ''}
+          <div style="font-size:13px;color:var(--c-black);line-height:1.5;margin-bottom:8px">${why}</div>
+          ${previewLines}
+        </div>
+        <button id="sg-rsug-accept" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Accept</button>
+        <button id="sg-rsug-adjust" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">Adjust</button>
+        <button id="sg-rsug-back" class="m-btn-glass m-btn-glass--inset" style="width:100%">Back</button>
+        <button id="sg-rsug-run" style="width:100%;margin-top:12px;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-family:var(--f)">Back to the run suggestion →</button>
+      ${modalShellClose()}
+    `;
+    document.getElementById('sg-rsug-back')?.addEventListener('click', () => renderEntryChoice());
+    document.getElementById('sg-rsug-run')?.addEventListener('click', () => renderSuggestion());
+    document.getElementById('sg-rsug-accept')?.addEventListener('click', async () => {
+      modal.remove();
+      await saveTriAdhoc(wo, disc);
+    });
+    document.getElementById('sg-rsug-adjust')?.addEventListener('click', () => {
+      if (disc === 'gym') { selectedDiscipline = 'gym'; selectedGymFocus = 'running'; gymStep = 'preview'; render(); }
+      else { selectedDiscipline = 'bike'; step = 1; render(); }
     });
   }
 

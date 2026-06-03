@@ -45,16 +45,13 @@ const DAILY_SPEND_CAP_CENTS = 1000  // $10/day global circuit breaker
 // ─── CORS ─────────────────────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS = [
-  'http://localhost',
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:5175',
   'capacitor://localhost',
+  'https://mosaicrunning.run',
 ]
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('Origin') ?? ''
-  const allowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o))
+  const allowed = ALLOWED_ORIGINS.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
   return {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -86,10 +83,18 @@ function sanitiseMessages(raw: unknown): Array<{ role: 'user' | 'assistant'; con
 }
 
 /** Validate tool definitions array (pass-through with basic type check). */
+// The only tools the coach is allowed to use. A tampered client must not be
+// able to inject arbitrary tool definitions — description/input_schema fields
+// are a known prompt-injection vector — so we allowlist by name.
+const ALLOWED_TOOL_NAMES = new Set([
+  'swap_workout', 'reduce_workout', 'skip_workout', 'adjust_intensity', 'remember', 'forget',
+])
 function sanitiseTools(raw: unknown): unknown[] | null {
   if (!Array.isArray(raw)) return null
   if (raw.length > 10) return null
-  return raw
+  return raw.filter(
+    (t) => !!t && typeof t === 'object' && ALLOWED_TOOL_NAMES.has((t as { name?: unknown }).name as string),
+  )
 }
 
 // ─── Entitlement ──────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@
 
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import { computeDailyCoach, type CoachState, type CoachSignals, type CoachBlocker } from '@/calculations/daily-coach';
 import { fmtSleepDebt } from '@/calculations/sleep-insights';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -1139,6 +1140,16 @@ export async function renderCoachView(opts?: RenderCoachOpts | (() => void)): Pr
   const container = document.getElementById('app-root');
   if (!container) return;
   coachOnBack = opt.onBack ?? coachOnBack;
+
+  // Hard gate: the AI Coach is hidden for v1 (see AI_COACH_ENABLED in
+  // feature-flags.ts). Every reachable entry point is already gated, so this
+  // should never fire — it exists so there is no ungated back door if a future
+  // caller forgets the flag. Route back rather than render anything.
+  if (!AI_COACH_ENABLED) {
+    if (coachOnBack) coachOnBack();
+    else void import('./home-view').then(({ renderHomeView }) => renderHomeView());
+    return;
+  }
 
   const state = getState();
   const { hasActiveCoachSubscription } = await import('@/coach/entitlement');

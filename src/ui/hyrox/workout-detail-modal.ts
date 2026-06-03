@@ -88,6 +88,19 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
 
   const wkIdx = weekIdx ?? (getMutableState().w - 1);
 
+  // Pure gym/strength sessions (injury-adapted rehab or any @%1RM loaded work)
+  // that are NOT hyrox stations/bricks route to the shared strength modal, so a
+  // "Mark as done" offers the confirm-weights step and captures working weights
+  // — mirrors the triathlon path. Without this, the hyrox-native handler below
+  // completes with no records and silently logs zero weights. Stations/bricks
+  // (hyroxComponents) stay in the hyrox modal: they log station benchmarks, not
+  // lift weights, so a no-records completion is correct for them.
+  const hxComponents = (workout as any).hyroxComponents as HyroxComponent[] | undefined;
+  if ((!hxComponents || hxComponents.length === 0) && (workout.t === 'gym' || workout.t === 'strength')) {
+    import('@/ui/strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(workout));
+    return;
+  }
+
   const rawDisc = workout.discipline as string;
   const wt = (workout.t || '') as string;
   const disc: HyroxDisc =
@@ -220,6 +233,9 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
     import('@/guided/strength-complete').then(({ completeStrengthSession }) => {
       completeStrengthSession(workout);
       close();
+      // Re-render so the card flips to "done" immediately (it used to stay
+      // "Planned" until the next navigation). Station/brick benchmark path.
+      import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {});
     });
   });
 

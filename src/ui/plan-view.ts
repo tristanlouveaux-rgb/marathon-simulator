@@ -5,6 +5,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
+import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState, Week, Workout } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
@@ -15,8 +16,9 @@ import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWe
 import { openActivityReReview, showActivityReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
-import { applyIllnessMods, clearIllness, openIllnessModal } from './illness-modal';
-import { applyHolidayMods, buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
+import { firstTrackedDow } from './workout-status';
+import { clearIllness, openIllnessModal } from './illness-modal';
+import { buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal } from './holiday-modal';
 import { openSessionGenerator, openVibesScienceModal } from './session-generator';
 import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-overlay';
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
@@ -32,7 +34,9 @@ import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
+import { resolveWeekWorkouts } from './week-resolve';
 import { parseStrengthSession, strengthCardSummary } from '@/guided/strength-model';
+import { gymLegLoadNudgeForWorkout } from '@/calculations/strength-leg-load';
 import type { MorningPainResponse } from '@/types/injury';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
@@ -300,6 +304,33 @@ function fmtPacePlan(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
 
 function safeDetailId(id: string): string {
   return 'detail-' + id.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * Open the right modal for a tapped strength/gym card. A session already logged
+ * opens its recap (openStrengthSummary — what was logged: weights, RPE, HR), not
+ * the Start / Mark-done overlay. An undone session opens the editable detail.
+ * HYROX has its own recap, so a logged HYROX card falls through to the detail
+ * view. Shared by both card-header click bindings so they never diverge.
+ */
+function openGymCardDetail(id: string, viewWeek: number): void {
+  const wo = _workoutLookup.get(id);
+  if (!wo) return;
+  const wk = getState().wks?.[viewWeek - 1];
+  const ratingVal = wk?.rated?.[id];
+  const isDone = (typeof ratingVal === 'number' && ratingVal > 0) || !!(wk?.garminActuals as any)?.[id];
+  if (isDone) {
+    import('@/guided/strength-complete').then(({ buildLoggedStrengthResult }) => {
+      const result = buildLoggedStrengthResult(wo, viewWeek - 1);
+      if (result && !result.isHyrox) {
+        import('./strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(wo, result));
+      } else {
+        import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
+      }
+    });
+    return;
+  }
+  import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
 }
 
 
@@ -760,6 +791,9 @@ function buildWorkoutCards(
   const isCurrentWeek = viewWeek === s.w;
   const jsDay = new Date().getDay();
   const actualToday = jsDay === 0 ? 6 : jsDay - 1;
+  // Days before the plan was created were never schedulable — don't mark them
+  // "Missed" on a freshly built plan (e.g. onboard Wed → Tue is not a miss).
+  const firstTracked = isCurrentWeek ? firstTrackedDow(s.planStartDate, viewWeek, s.planCreatedAt) : 0;
 
   // Check if today actually falls within this week's date range.
   // If the week ended (e.g. week not wrapped up yet), don't mark any day as "today".
@@ -842,7 +876,7 @@ function buildWorkoutCards(
       const id = w.id || w.n;
       const ratingVal = rated[id];
       const isToday = isCurrentWeek && todayInRange && dayIdx === actualToday;
-      const isPast = viewWeek < s.w || (isCurrentWeek && !todayInRange) || (isCurrentWeek && todayInRange && dayIdx < actualToday);
+      const isPast = viewWeek < s.w || (isCurrentWeek && !todayInRange) || (isCurrentWeek && todayInRange && dayIdx >= firstTracked && dayIdx < actualToday);
       const isRest = w.t === 'rest' || w.n?.toLowerCase().includes('rest');
 
       if (isRest) {
@@ -920,9 +954,13 @@ function buildWorkoutCards(
       else if (isReduced) statusLabel = 'Adjusted';
       else if (isSkipped) statusLabel = 'Skipped';
       else if (isToday) statusLabel = 'Today';
+      else if ((w as any).illnessMod) statusLabel = 'Illness';
       else if (isPast) statusLabel = 'Missed';
       else statusLabel = 'Upcoming';
 
+      // An illness-rested/scaled day is a deliberate non-miss (like holiday), so
+      // it must not pick up the orange "Missed" colour/weight on a past day.
+      const isIllnessMod = !!(w as any).illnessMod;
       // Visual hierarchy: Today = terracotta accent, Logged = solid muted, Missed = faint + italic
       const dayLabelColor = isToday
         ? TODAY_ACCENT
@@ -930,9 +968,9 @@ function buildWorkoutCards(
       const statusLabelColor = isToday
         ? TODAY_ACCENT
         : isDone ? '#34C759'
-        : (isPast && !isDone && !isSkipped) ? '#FF9500'
+        : (isPast && !isDone && !isSkipped && !isIllnessMod) ? '#FF9500'
         : 'var(--c-faint)';
-      const statusLabelWeight = isDone || (isPast && !isDone && !isSkipped) ? '600' : '400';
+      const statusLabelWeight = isDone || (isPast && !isDone && !isSkipped && !isIllnessMod) ? '600' : '400';
       const borderLeft = isToday ? `border-left:3px solid ${TODAY_ACCENT};` : '';
 
       const headerPad = isToday ? '16px 18px 16px 15px' : '15px 18px';
@@ -1061,6 +1099,15 @@ function buildWorkoutCards(
         descRow = '';
       }
 
+      // Leg-load nudge: a leg-heavy gym day on already-loaded legs gets a passive
+      // "consider easing" note (surface + suggest, no plan mutation). Shared helper
+      // so this matches the tri plan-view card exactly. See strength-leg-load.ts.
+      let legLoadNudgeRow = '';
+      if (isGymCard && !isDone && !isSkipped) {
+        const msg = gymLegLoadNudgeForWorkout(w as any, s.recentLegLoads ?? [], (w as any).rpe ?? 7, Date.now());
+        if (msg) legLoadNudgeRow = `<div style="margin-top:4px"><span style="font-size:10px;font-weight:500;color:var(--c-muted)">${escapeHtml(msg)}</span></div>`;
+      }
+
       // Status chip (right side of badge row. Only show non-trivial states)
       const showStatusChip = statusLabel !== 'Upcoming';
       const statusChip = showStatusChip
@@ -1097,6 +1144,7 @@ function buildWorkoutCards(
                 ${descRow}
                 ${actMatchRow}
                 ${isTimingMod((w as any).modReason) && !isDone ? `<div style="margin-top:4px"><span style="font-size:10px;font-weight:500;color:var(--c-muted)">Suggestion: hard session yesterday</span></div>` : ''}
+                ${legLoadNudgeRow}
                 ${reducedBadge}
               </div>
               <div style="flex-shrink:0;display:flex;align-items:center;gap:6px">
@@ -1359,7 +1407,7 @@ function buildInjuryBanner(): string {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
         <div style="flex:1;min-width:0;padding-right:12px">
           <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Recovery mode</div>
-          <div style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${displayName}</div>
+          <div style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(displayName)}</div>
           <div style="font-size:12px;color:var(--c-muted);margin-top:3px;font-weight:500">${phaseLabelText}</div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -2219,72 +2267,11 @@ function _renderPills(pills: SignalPill[]): string {
 
 // Computes the resolved workout list for a given week with all mods/moves/illness/holiday/bridge applied.
 // Shared between getPlanHTML (full render) and rerenderWeekListLocal (localized drag-and-drop rerender).
+// Delegates to the canonical resolveWeekWorkouts (week-resolve.ts) so the Home
+// Today card reads the SAME plan — see CLAUDE.md "same source" rule. The only
+// thing this wrapper adds is populating the drag-and-drop _workoutLookup.
 function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
-  const wk = s.wks?.[viewWeek - 1];
-  const isCurrentWeek = viewWeek === s.w;
-  const workouts = wk
-    ? generateWeekWorkouts(
-      wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-      null, s.recurringActivities,
-      s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus, (wk as any).forceDeload,
-      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-    )
-    : [];
-
-  if (wk?.adhocWorkouts) {
-    for (const aw of wk.adhocWorkouts) {
-      if ((aw.id || '').startsWith('holiday-') || (aw.id || '').startsWith('adhoc-')) {
-        workouts.push(aw);
-      }
-    }
-  }
-
-  if (wk?.workoutMods) {
-    for (const mod of wk.workoutMods) {
-      // Timing mods match by name only; all others prefer the stable slot id
-      // (see findWorkoutForMod — keeps user-scale Adjust from reverting on reshuffle).
-      const w = isTimingMod(mod.modReason)
-        ? workouts.find((wo: any) => wo.n === mod.name)
-        : findWorkoutForMod(workouts as any[], mod);
-      if (w) {
-        (w as any).modReason = mod.modReason;
-        if (mod.autoReduceNote != null) (w as any).autoReduceNote = mod.autoReduceNote;
-        if (!isTimingMod(mod.modReason)) {
-          if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
-          (w as any).d = mod.newDistance;
-          (w as any).status = mod.status;
-          if (mod.newType) (w as any).t = mod.newType;
-          if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
-          if (mod.userScaledAt) (w as any).userScaledAt = mod.userScaledAt;
-          if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
-          if (mod.originalDurationMin != null) (w as any).originalDurationMin = mod.originalDurationMin;
-        }
-      }
-    }
-  }
-
-  if (wk?.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
-      const w = workouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
-
-  const _illness = (s as any).illnessState;
-  if (_illness?.active && isCurrentWeek) {
-    applyIllnessMods(workouts, _illness.severity);
-  }
-
-  const _holiday = s.holidayState;
-  const _today = new Date().toISOString().split('T')[0];
-  if (_holiday?.active && _today >= _holiday.startDate && _today <= _holiday.endDate
-      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, _holiday)) {
-    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, _holiday);
-    applyHolidayMods(workouts, _holiday.canRun, holidayDays);
-  }
-
-  if (wk) applyBridgeMods_renderTime(workouts, wk);
+  const workouts = resolveWeekWorkouts(s, viewWeek);
 
   _workoutLookup = new Map();
   for (const w of workouts) {
@@ -2548,7 +2535,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
           <!-- Action buttons — part of the hero block -->
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
-            ${isCurrentWeek ? `<button id="plan-coach-btn" class="m-btn-glass">Coach</button>` : ''}
+            ${isCurrentWeek && AI_COACH_ENABLED ? `<button id="plan-coach-btn" class="m-btn-glass">Coach</button>` : ''}
             ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
             ${_wrapBtn}
             ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" class="m-btn-glass">Review past week</button>` : ''}
@@ -2887,8 +2874,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
       // Strength/gym cards open the clean detail modal instead of expanding.
       if (card?.hasAttribute('data-gym-detail')) {
-        const wo = _workoutLookup.get(id);
-        if (wo) import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
+        openGymCardDetail(id, viewWeek);
         return;
       }
 
@@ -3676,8 +3662,7 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       if (!id) return;
       // Strength/gym cards open the clean detail modal instead of expanding.
       if (card?.hasAttribute('data-gym-detail')) {
-        const wo = _workoutLookup.get(id);
-        if (wo) import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
+        openGymCardDetail(id, viewWeek);
         return;
       }
       const detail = document.getElementById(safeDetailId(id));
@@ -4039,13 +4024,12 @@ function buildTrackOnlyWeekRow(s: SimulatorState, wk: Week, unit: 'km' | 'mi'): 
     </div>`;
 }
 
-/** Current-week detail card: day-by-day list of activities. */
 /**
  * Upcoming generated sessions for the On-demand Plan tab, rendered as interactive
  * PLANNED-ACTIVITY cards (tap → workout detail with Start / Mark-as-done), so a
  * generated session appears as a planned activity here exactly like running/tri
- * plans show theirs — not just as a loose home "To do". Same filter + routing as
- * the home `buildTrackOnlyTodo`: not-yet-synced, un-rated `adhoc-` sessions.
+ * plans show theirs. Filter: not-yet-synced, un-rated `adhoc-` sessions in the
+ * current week (the same ones `buildRecentActivity` excludes from Recent).
  */
 function buildTrackOnlyUpcoming(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
@@ -4149,7 +4133,7 @@ function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): s
     : rows.map(r => `
         <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.04)">
           <div style="min-width:54px;font-size:11px;color:#64748B">${r.day}</div>
-          <div style="flex:1;min-width:0;font-size:14px;color:#0F172A">${r.name}</div>
+          <div style="flex:1;min-width:0;font-size:14px;color:#0F172A">${escapeHtml(r.name)}</div>
           <div style="font-size:13px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${r.value}</div>
         </div>`).join('');
 

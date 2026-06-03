@@ -5,6 +5,8 @@ import { injuryStrengthDecision } from './injury-strength';
 import type { AbilityBand } from '@/types';
 import { buildPoolWorkout, type GymRestStyle, type GymIntensity } from './gym-pool';
 import { buildRunningStrengthWorkout } from './running-pool';
+import { applyBodyweightProgress } from '@/calculations/bodyweight-progression';
+import type { BodyweightProgressEntry } from '@/types/strength-log';
 import type { GymGoal } from '@/constants/strength-constants';
 
 /** Phase periodisation for the auto-planned running-strength pool (Phase 2):
@@ -19,8 +21,10 @@ const RUNNING_STRENGTH_PHASE: Record<TrainingPhase, { min: number; intensity: Gy
 
 /** What a generated gym session targets. 'running'/'lower'/undefined use the
  *  existing running-supportive templates; 'upper'/'full' use the goal-driven
- *  pool (gym-pool.ts); 'hyrox' is handled by the generator UI, not here. */
-export type GymFocus = 'running' | 'lower' | 'upper' | 'full';
+ *  pool (gym-pool.ts); 'plyometrics' is a standalone explosive session built by
+ *  buildPlyometricsWorkout in the generator UI; 'hyrox' is handled by the
+ *  generator UI, not here. */
+export type GymFocus = 'running' | 'lower' | 'upper' | 'full' | 'plyometrics';
 
 /**
  * Generate gym workouts for a given week.
@@ -48,6 +52,8 @@ export function generateGymWorkouts(
   focus?: GymFocus,
   goal?: GymGoal,
   restStyle?: GymRestStyle,
+  plyoInGym = false,
+  bodyweightProgress?: Record<string, BodyweightProgressEntry>,
 ): Workout[] {
   if (gymSessionsPerWeek <= 0) return [];
 
@@ -97,14 +103,16 @@ export function generateGymWorkouts(
   // periodised, each session a distinct rotation slot so the week varies.
   let workouts: Workout[];
   if (isBeginner) {
-    workouts = getBeginnerTemplates(phase).slice(0, sessionCount);
+    // Bodyweight progression: rewrite each movement to the athlete's earned rung
+    // (no-op for a fresh athlete, so the template is unchanged until they progress).
+    workouts = getBeginnerTemplates(phase).slice(0, sessionCount).map(w => applyBodyweightProgress(w, bodyweightProgress));
   } else if (isNovice) {
-    workouts = getNoviceTemplates(phase).slice(0, sessionCount);
+    workouts = getNoviceTemplates(phase).slice(0, sessionCount).map(w => applyBodyweightProgress(w, bodyweightProgress));
   } else {
     const { min, intensity } = RUNNING_STRENGTH_PHASE[phase];
     workouts = [];
     for (let i = 0; i < sessionCount; i++) {
-      const w = buildRunningStrengthWorkout((weekIndex ?? 1) * 3 + i, min, intensity, 'traditional', phase);
+      const w = buildRunningStrengthWorkout((weekIndex ?? 1) * 3 + i, min, intensity, 'traditional', phase, plyoInGym);
       if (sessionCount > 1) w.n = `Running Strength ${String.fromCharCode(65 + i)}`; // A / B / C
       workouts.push(w);
     }
@@ -140,76 +148,6 @@ function getPhaseSessionCount(phase: TrainingPhase, maxSessions: number): number
       return 1;
     case 'taper':
       return maxSessions >= 2 ? 1 : 0;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Full templates (intermediate+, hybrid)
-// ---------------------------------------------------------------------------
-
-function getFullTemplates(phase: TrainingPhase): Workout[] {
-  switch (phase) {
-    case 'base':
-      return [
-        { t: 'gym', n: 'Heavy Lower Body', d: [
-          '3x5 Back Squat @80% 1RM (Should feel heavy, 2 reps in reserve) (2-3 min rest)',
-          '3x8 Romanian Deadlift @60% 1RM (Moderate, feel the hamstring stretch) (90s rest)',
-          '3x10 Hip Thrust @60% 1RM (Squeeze glutes at the top for 1s) (60-90s rest)',
-          '3x45s Front Plank (Flat back, brace core) (30-60s rest)',
-          'Stretch between sets: hip flexors, quads, calves',
-        ].join('\n'), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Unilateral & Core', d: [
-          '3x8 each leg Bulgarian Split Squat @60% 1RM (Challenging but steady) (90s rest)',
-          '3x10 each leg Step-Ups @50% 1RM (Drive through the heel) (60-90s rest)',
-          '3x15 Banded Clamshells (Slow and controlled) (30s rest)',
-          '3x10 Pallof Press (Resist rotation, brace core) (30-60s rest)',
-          'Stretch between sets: hip flexors, glutes, ankles',
-        ].join('\n'), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Posterior Chain', d: [
-          '3x5 Deadlift @80% 1RM (Should feel heavy, 2 reps in reserve) (2-3 min rest)',
-          '3x10 each leg Single-Leg RDL @40% 1RM (Balance first, then load) (60-90s rest)',
-          '4x12 Calf Raises (Full range, pause at the top) (30-60s rest)',
-          '3x10 Nordic Curl assisted (Slow eccentric, push back up to reset) (60-90s rest)',
-          'Stretch between sets: hamstrings, calves, hip flexors',
-        ].join('\n'), r: 7, rpe: 7 },
-      ];
-    case 'build':
-      return [
-        { t: 'gym', n: 'Power & Plyometrics', d: [
-          '4x3 Jump Squat bodyweight or light (Explosive, maximum height, land soft) (90s rest)',
-          '3x5 Front Squat @85% 1RM (Heavy, last rep should be tough) (2-3 min rest)',
-          '3x5 each leg Single-Leg Bounds (Powerful push through the ankle) (60-90s rest)',
-          '3x8 Glute Bridge @60% 1RM (Squeeze 2s at top) (60s rest)',
-          'Stretch between sets: hip flexors, quads, ankles',
-        ].join('\n'), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Explosive Strength', d: [
-          '3x5 Trap-Bar Deadlift @85% 1RM (Heavy, last rep should be tough) (2-3 min rest)',
-          '3x5 Box Jumps (Land softly, step down to reset) (60-90s rest)',
-          '3x8 each leg Weighted Lunges @50% 1RM (Controlled descent) (60-90s rest)',
-          '2x30s each side Side Plank (Stack hips, brace hard) (30s rest)',
-          'Stretch between sets: hamstrings, hip flexors, calves',
-        ].join('\n'), r: 7, rpe: 7 },
-      ];
-    case 'peak':
-      return [
-        { t: 'gym', n: 'Maintenance', d: [
-          '2x5 Squat @75% 1RM (Should feel comfortable, maintaining patterns) (2 min rest)',
-          '2x5 Deadlift @75% 1RM (Smooth reps, not grinding) (2 min rest)',
-          '2x8 each leg Lunges @40% 1RM (Light and controlled) (60s rest)',
-          '2x15 Calf Raises (Easy, maintain range of motion) (30s rest)',
-          'Stretch between sets: full lower body',
-        ].join('\n'), r: 5, rpe: 5 },
-      ];
-    case 'taper':
-      return [
-        { t: 'gym', n: 'Activation', d: [
-          '2x5 Jump Squat bodyweight (Light and snappy, wake up the legs) (60s rest)',
-          '2x5 Trap-Bar Deadlift @70% 1RM (Smooth and fast, no grinding) (90s rest)',
-          '2x8 each leg Lunges bodyweight (Just moving well) (30s rest)',
-          'Core circuit: 30s plank + 20s each side plank (No rest between exercises)',
-          'Stretch to finish: 5 min full lower body',
-        ].join('\n'), r: 4, rpe: 4 },
-      ];
   }
 }
 

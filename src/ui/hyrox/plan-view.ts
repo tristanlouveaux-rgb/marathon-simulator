@@ -19,7 +19,7 @@ import {
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import type { Workout, Week } from '@/types/state';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
-import { applyIllnessModsAllDisciplines } from '@/calculations/illness-rules';
+import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
 import { formatKm } from '@/utils/format';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
@@ -110,7 +110,8 @@ export function renderHyroxPlanView(): void {
   const isCurrentWeek = viewWeek === s.w;
   const _illness = (s as any).illnessState;
   if (_illness?.active && isCurrentWeek) {
-    applyIllnessModsAllDisciplines(workouts, _illness.severity);
+    // v2 engine: schedule + classification aware, rests strength for below-neck.
+    applyIllnessMods(workouts, _illness);
   }
   const _holiday = s.holidayState;
   const _todayIso = new Date().toISOString().split('T')[0];
@@ -156,7 +157,10 @@ export function renderHyroxPlanView(): void {
   // Group by day
   const byDay: Record<number, Workout[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
   for (const w of workouts) {
-    const d = w.dayOfWeek ?? 4;
+    // Synced cross-training adhocs may carry no dayOfWeek. Derive it from the
+    // activity timestamp (Mon=0..Sun=6) rather than dumping it on Friday.
+    const ts = (w as any).garminTimestamp ?? (w as any).startTime;
+    const d = w.dayOfWeek ?? (ts ? (new Date(ts).getDay() + 6) % 7 : 4);
     byDay[d] = byDay[d] ?? [];
     byDay[d].push(w);
   }
@@ -261,7 +265,7 @@ export function renderHyroxPlanView(): void {
         <!-- Day-by-day -->
         <div class="hxf" style="padding:12px 20px;animation-delay:0.18s">
           ${(() => {
-            const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w) };
+            const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w, s.planCreatedAt) };
             return Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], isFutureWeek, raceDays > 0 ? raceDays : null, statusCtx)).join('');
           })()}
         </div>

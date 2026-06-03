@@ -321,6 +321,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     const planMonday = getMondayOf(new Date());
     s.planStartDate = planMonday.toISOString().slice(0, 10);
+    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
 
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;

@@ -4,6 +4,7 @@ import {
   renderWorkoutStatusChip,
   computeWeekStatusContext,
   deriveWorkoutStatus,
+  firstTrackedDow,
   TODAY_ACCENT,
   type WorkoutStatusFlags,
 } from './workout-status';
@@ -14,6 +15,7 @@ const base: WorkoutStatusFlags = {
   isSkipped: false,
   isReplaced: false,
   isHoliday: false,
+  isIllness: false,
   isAdded: false,
   isReduced: false,
   isToday: false,
@@ -38,6 +40,17 @@ describe('computeWorkoutStatus — labels and precedence', () => {
     const chip = computeWorkoutStatus({ ...base, isPast: true });
     expect(chip.label).toBe('Missed');
     expect(chip.color).toBe('#FF9500');
+  });
+
+  it('past illness-rested day is "Illness" (faint), NOT Missed', () => {
+    const chip = computeWorkoutStatus({ ...base, isPast: true, isIllness: true });
+    expect(chip.label).toBe('Illness');
+    expect(chip.color).toBe('var(--c-faint)');   // deliberate rest, not an orange miss
+  });
+
+  it('a done session logged during illness still reads Done, not Illness', () => {
+    const chip = computeWorkoutStatus({ ...base, isPast: true, isIllness: true, isDone: true });
+    expect(chip.label).toBe('Done');
   });
 
   it('done manually is Done (green)', () => {
@@ -183,5 +196,54 @@ describe('computeWeekStatusContext', () => {
     // Week 1 anchored on a date years ago is unambiguously elapsed.
     const ctx = computeWeekStatusContext('2020-01-06', 1, 1);
     expect(ctx.weekEnded).toBe(true);
+  });
+
+  it('threads planCreatedAt into firstTrackedDow for the current week', () => {
+    // Week 1 starts Mon 2026-06-01; plan created Wed 2026-06-03 → Mon/Tue (0,1)
+    // are pre-creation, Wed (2) is the first tracked day.
+    const ctx = computeWeekStatusContext('2026-06-01', 1, 1, '2026-06-03');
+    expect(ctx.firstTrackedDow).toBe(2);
+  });
+
+  it('does not apply firstTrackedDow to a non-current week', () => {
+    const ctx = computeWeekStatusContext('2026-06-01', 2, 4, '2026-06-03');
+    expect(ctx.firstTrackedDow).toBe(0);
+  });
+});
+
+describe('firstTrackedDow — pre-creation days', () => {
+  it('returns 0 when planCreatedAt is absent (legacy behaviour)', () => {
+    expect(firstTrackedDow('2026-06-01', 1, undefined)).toBe(0);
+  });
+
+  it('returns the weekday of the creation date when created mid-week', () => {
+    // Mon 06-01 .. created Wed 06-03 → first tracked is Wed = index 2.
+    expect(firstTrackedDow('2026-06-01', 1, '2026-06-03')).toBe(2);
+  });
+
+  it('returns 0 when creation predates the week start (established plan)', () => {
+    // Viewing week 3; creation was weeks earlier → whole week is tracked.
+    expect(firstTrackedDow('2026-06-01', 3, '2026-05-20')).toBe(0);
+  });
+});
+
+describe('pre-creation days are not Missed (onboard mid-week)', () => {
+  // Plan created Wed (firstTrackedDow 2); today is Thu (actualToday 3).
+  const ctx = { viewWeek: 1, currentWeek: 1, weekEnded: false, actualToday: 3, firstTrackedDow: 2 };
+  const emptyWk = { garminActuals: {}, rated: {} };
+
+  it('a pre-creation day (Tue, before Wed build) is not Missed', () => {
+    const w = { id: 't', n: 'Tue swim', dayOfWeek: 1 };
+    expect(deriveWorkoutStatus(w, emptyWk, ctx).show).toBe(false); // Upcoming, no chip
+  });
+
+  it('a post-creation earlier day (Wed) still reads Missed', () => {
+    const w = { id: 'w', n: 'Wed ride', dayOfWeek: 2 };
+    expect(deriveWorkoutStatus(w, emptyWk, ctx).label).toBe('Missed');
+  });
+
+  it("today's session still reads Today", () => {
+    const w = { id: 'th', n: 'Thu run', dayOfWeek: 3 };
+    expect(deriveWorkoutStatus(w, emptyWk, ctx).label).toBe('Today');
   });
 });

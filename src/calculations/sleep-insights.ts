@@ -864,19 +864,23 @@ export function buildSleepBankLineChart(
   }).join('');
 
   // Hour reference lines (−1h, −2h, …) drawn within the visible range.
-  // Every 1h up to 4h of deficit; every 2h beyond that to avoid clutter.
+  // The step is derived from the chart's actual pixels-per-hour so labels never
+  // crowd: on a wide range (e.g. 9h+ in a 100px-tall chart, ~8px/hour) a fixed
+  // 1h step packs 2h/3h/4h on top of each other. We pick a single step for the
+  // whole chart such that adjacent labels stay >= MIN_LABEL_PX apart.
   let hourLinesSVG = '';
   let hourLabelsHTML = '';
   if (hourReferenceLines) {
     const maxHour = Math.ceil(Math.abs(Math.min(0, minD)) / 3600);
-    for (let h = 1; h <= maxHour; h++) {
-      const stepOK = h <= 4 ? true : h % 2 === 0;
-      if (!stepOK) continue;
+    const MIN_LABEL_PX = 12;
+    const pxPerHour = (H - PV * 2) / Math.max(1, range / 3600);
+    const hourStep = Math.max(1, Math.ceil(MIN_LABEL_PX / Math.max(0.01, pxPerHour)));
+    for (let h = hourStep; h <= maxHour; h += hourStep) {
       const v = -h * 3600;
       if (v < minD || v > maxD) continue;
       const y = yOf(v);
       // Skip if collides with the target line (zero) or runs off the chart
-      if (Math.abs(y - zeroY) < 8 || y < PV / 2 || y > H - PV / 2) continue;
+      if (Math.abs(y - zeroY) < MIN_LABEL_PX || y < PV / 2 || y > H - PV / 2) continue;
       hourLinesSVG += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}"
         stroke="rgba(0,0,0,0.06)" stroke-width="1" stroke-dasharray="2 3"
         vector-effect="non-scaling-stroke"/>`;

@@ -22,6 +22,7 @@ import {
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
 import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
@@ -356,6 +357,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     weeksOfHistory: metrics.length,
     recentLegLoads: s.recentLegLoads ?? [],
+    impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     strainPct: strain?.trainedToday ? strain.strainPct : null,
     acwrSafeUpper: acwr.safeUpper,

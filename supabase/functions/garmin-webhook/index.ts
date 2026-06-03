@@ -23,14 +23,51 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+const WEBHOOK_SECRET = Deno.env.get("GARMIN_WEBHOOK_SECRET");
+
+/** Constant-time string comparison — avoids leaking the secret via timing. */
+function constantTimeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
 Deno.serve(async (req) => {
-  // Garmin sends GET to verify the endpoint exists
+  // Garmin sends GET to verify the endpoint exists (no data, no auth needed).
   if (req.method === "GET") {
     return new Response("ok", { status: 200 });
   }
 
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
+  }
+
+  // Authenticate the caller. Garmin's Health API has no HMAC signature, so we
+  // require a shared secret embedded in the configured push URL as ?key=...
+  // (or an x-webhook-secret header). Until GARMIN_WEBHOOK_SECRET is set we fail
+  // OPEN and log loudly — deploying this code never breaks the live pipe, and
+  // enforcement turns on the moment the env var is populated AND the Garmin
+  // Developer Portal push URL is updated to include ?key=<secret>.
+  if (WEBHOOK_SECRET) {
+    const url = new URL(req.url);
+    // Garmin's portal strips query strings (?key=) on save but preserves the
+    // URL path, so the secret rides as the path segment after /garmin-webhook
+    // (configured URL: .../functions/v1/garmin-webhook/<secret>). Query + header
+    // are kept as fallbacks for non-Garmin callers / testing.
+    const parts = url.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("garmin-webhook");
+    const pathSecret = idx >= 0 && parts.length > idx + 1 ? parts[idx + 1] : "";
+    const provided = pathSecret || url.searchParams.get("key") || req.headers.get("x-webhook-secret") || "";
+    if (!constantTimeEqual(provided, WEBHOOK_SECRET)) {
+      console.warn("[garmin-webhook] rejected: bad or missing webhook secret");
+      return new Response("unauthorized", { status: 401 });
+    }
+  } else {
+    console.warn("[garmin-webhook] GARMIN_WEBHOOK_SECRET not set — endpoint is UNAUTHENTICATED. Append ?key=<secret> to the Garmin push URL and set the env var to enforce.");
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -98,7 +135,8 @@ async function resolveUserId(
   supabase: ReturnType<typeof createClient>,
   identifier: string,
 ): Promise<string | null> {
-  console.log("[garmin-webhook] resolveUserId lookup:", identifier);
+  // Redact: identifier may be an OAuth access token. Never log it in full.
+  console.log("[garmin-webhook] resolveUserId lookup:", String(identifier).slice(0, 8) + "…");
 
   // Primary: stable Garmin user ID
   const { data, error } = await supabase
@@ -317,8 +355,9 @@ async function handleUserMetrics(
   for (const m of metrics) {
     // Log raw payload so we can diagnose when fields land as null — Garmin's
     // webhook occasionally uses `vo2Max` instead of `vo2MaxRunning` and other
-    // field-name drift shows up here.
-    console.log(`[garmin-webhook] userMetrics raw:`, JSON.stringify(m));
+    // field-name drift shows up here. Strip credential fields before logging.
+    const { userAccessToken: _t, userId: _u, ...mSafe } = m;
+    console.log(`[garmin-webhook] userMetrics raw:`, JSON.stringify(mSafe));
 
     const userId = await resolveUserId(supabase, m.userId ?? m.userAccessToken);
     if (!userId) {

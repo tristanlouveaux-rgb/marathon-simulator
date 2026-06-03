@@ -17,7 +17,8 @@ import { tv, rdKm } from '@/calculations/vdot';
 import { ft } from '@/utils/format';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
-import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart, animateChartDrawOn as animateTrendCharts } from './triathlon/benchmark-charts';
+import { hasRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
 import { formatKm, formatPace } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
@@ -34,6 +35,11 @@ const TEXT_L  = '#94A3B8';
 const CHART_STROKE = '#64748B';
 const GOAL_STROKE  = '#C48A3A'; // warm amber. Distinct from the grey projection line
 const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
+// Glassy card for the no-target-race (On-demand / continuous) forecast, so it reads
+// like the other modes' forecast surfaces rather than flat white tiles. Canonical
+// glass recipe (mirrors the track Plan's tp-week-row): white-translucent + blur +
+// light inner border. White rgba (not black) so it passes the tinted-bg UI lint.
+const GLASS_CARD = `background:rgba(255,255,255,0.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.6);border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.07)`;
 
 const RACE_DIST_LABEL: Record<string, string> = {
   '5k': '5K',
@@ -483,10 +489,16 @@ function buildStdDistanceTile(key: string, label: string, note: string, sec: num
   // empty tiles stay inert divs.
   const tag = tappable ? 'button' : 'div';
   const attrs = tappable
-    ? `class="std-tile" data-dist="${key}" type="button" style="${CARD};padding:16px 14px;text-align:center;border:none;cursor:pointer;font:inherit;font-family:var(--f);-webkit-tap-highlight-color:transparent"`
-    : `style="${CARD};padding:16px 14px;text-align:center"`;
+    ? `class="std-tile" data-dist="${key}" type="button" style="${GLASS_CARD};position:relative;padding:16px 14px;text-align:center;cursor:pointer;font:inherit;font-family:var(--f);-webkit-tap-highlight-color:transparent"`
+    : `style="${GLASS_CARD};padding:16px 14px;text-align:center;opacity:0.7"`;
+  // Drill-in affordance: a corner chevron on tappable tiles so it's obvious each one
+  // opens its own detail page (trend + the factors behind the prediction).
+  const chevron = tappable
+    ? `<span style="position:absolute;top:10px;right:11px;color:${TEXT_L};font-size:13px;line-height:1">&rsaquo;</span>`
+    : '';
   return `
     <${tag} ${attrs}>
+      ${chevron}
       <div style="font-size:12px;color:${TEXT_S};font-weight:600;margin-bottom:8px">${label}</div>
       ${value}
       <div style="font-size:11px;color:${TEXT_L};margin-top:6px">${note}</div>
@@ -520,7 +532,7 @@ function buildStdShoesCard(s: SimulatorState): string {
       ${active ? segActive : segInactive}
     ">${label}</button>`;
   return `
-    <div id="std-shoes-card" style="${CARD};padding:18px;margin-bottom:14px">
+    <div id="std-shoes-card" style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
         <span style="font-size:14px;color:${TEXT_M};font-weight:600">Racing shoes</span>
         <span style="font-size:18px;font-weight:600;color:${tone};font-variant-numeric:tabular-nums">${headline}</span>
@@ -538,7 +550,11 @@ function getStandardForecastHTML(s: SimulatorState): string {
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   const preds = predictStandardDistances(s);
-  const hasAny = STD_DISTANCES.some(d => (preds[d.key] ?? 0) > 0);
+  // Canonical gate: identical to the Stats "VO2 Max" bar's show/hide predicate,
+  // so a thin-data athlete sees both surfaces populate or both show their empty
+  // state. `predictStandardDistances` always yields times when this is true
+  // (it falls back to the resolved VDOT), so the two stay in lock-step.
+  const hasAny = hasRunningFitnessSignal(s);
 
   const body = hasAny
     ? `
@@ -548,7 +564,7 @@ function getStandardForecastHTML(s: SimulatorState): string {
         Tap a distance for its trend and the factors behind it. Predictions come from your current fitness, not a target race, and move as your training does.
       </div>`
     : `
-      <div style="${CARD};padding:22px;text-align:center">
+      <div style="${GLASS_CARD};padding:22px;text-align:center">
         <div style="font-size:15px;font-weight:600;color:${TEXT_M};margin-bottom:6px">No predictions yet</div>
         <div style="font-size:13px;color:${TEXT_S};line-height:1.5;margin-bottom:16px">Sync or import a few runs and your 5K to marathon times appear here.</div>
         <button id="std-import-runs" style="
@@ -755,19 +771,19 @@ function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean)
   let trendCard: string;
   if (projection) {
     trendCard = `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
+    <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       ${buildForecastTrajectoryChart(projection, { nowSec: detail.predictedSec ?? 0, label })}
       ${buildStdHorizonSelector(stdProjWeeks)}
     </div>`;
   } else if (trendReady) {
     trendCard = `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
+    <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:13px;color:${TEXT_S};font-weight:500;margin-bottom:10px">Predicted ${label} time over time</div>
       ${buildPredictedTimeTrendChart(detail.trend)}
     </div>`;
   } else {
     trendCard = `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
+    <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:13px;color:${TEXT_M};font-weight:600;margin-bottom:6px">Predicted ${label} time over time</div>
       <div style="font-size:13px;color:${TEXT_S};line-height:1.5">A trend needs a few weeks of recorded fitness. It appears here once there are at least three data points across a week or more.</div>
     </div>`;
@@ -813,7 +829,7 @@ function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean)
     rows.push(stdWaterfallRow('Predicted finish', ft(stages.finalSec), null, { total: true }));
     const onlyBase = rows.length === 2; // capacity + total, nothing in between
     return `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
+    <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">How we reach ${heroTime}</div>
       ${onlyBase ? `<div style="font-size:11px;color:${TEXT_S};line-height:1.45;margin-bottom:2px">No adjustments apply right now, so the prediction equals your capacity blend.</div>` : ''}
       ${rows.join('')}
@@ -828,7 +844,7 @@ function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean)
   // of the waterfall). Adjustments (durability, calibration delta) live in the
   // waterfall; only the calibration *status* sits here.
   const factorsCard = `
-    <div style="${CARD};padding:18px;margin-bottom:14px">
+    <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">What feeds your capacity</div>
       ${detail.vdot != null ? stdStatRow('Aerobic capacity', `VDOT ${detail.vdot.toFixed(1)}`) : ''}
       ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', formatPace(detail.ltSecPerKm, unit)) : ''}
@@ -863,7 +879,7 @@ function wireStdDetailContent(dist: StdDist): void {
     el.innerHTML = buildStdDetailInner(getState(), dist, /*animate*/ false);
     wireStdDetailContent(dist);
     window.scrollTo(0, y);
-    animateTrendCharts(); // redraw the projection line on horizon/shoe change
+    // The projection chart re-runs its CSS clip-path wipe on insert — no JS draw.
   };
 
   const setShoeKindDetail = (kind: 'standard' | 'supershoes') => {
@@ -928,6 +944,5 @@ export function renderStdDistanceDetail(dist: StdDist): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
   wireStdDetailContent(dist);
-  animateTrendCharts(); // draw the projection line in on first paint
   wireTabBarHandlers(navigateStdTab);
 }

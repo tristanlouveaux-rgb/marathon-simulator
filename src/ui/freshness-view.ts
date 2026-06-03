@@ -592,15 +592,6 @@ function injectTriPerDisciplineForm(s: SimulatorState): void {
   const TEXT_M = '#0F172A';
   const TEXT_L = '#94A3B8';
 
-  // Common scale across all three disciplines so the tiny bars are comparable
-  // (a Run with high CTL should clearly outweigh a Swim with low CTL visually).
-  const maxScale = Math.max(
-    1,
-    fit.swim.ctl / 7, fit.swim.atl / 7,
-    fit.bike.ctl / 7, fit.bike.atl / 7,
-    fit.run.ctl  / 7, fit.run.atl  / 7,
-  );
-
   const row = (sport: 'swim' | 'bike' | 'run', label: string) => {
     const f = fit[sport];
     const formD = f.tsb / 7;
@@ -615,8 +606,13 @@ function injectTriPerDisciplineForm(s: SimulatorState): void {
       `;
     }
     const colour = formD < -10 ? '#EF4444' : formD < 0 ? '#F59E0B' : '#22C55E';
-    const ctlPct = Math.round((ctlD / maxScale) * 100);
-    const atlPct = Math.round((atlD / maxScale) * 100);
+    // Self-scale each discipline to its own larger metric, mirroring the combined
+    // "Fitness vs Fatigue" card above (maxVal = max(ctl, atl)). This keeps the bars
+    // the same width as that card; the form number carries the magnitude, the bars
+    // show the fitness/fatigue balance within each discipline.
+    const rowMax = Math.max(ctlD, atlD, 1);
+    const ctlPct = Math.round((ctlD / rowMax) * 100);
+    const atlPct = Math.round((atlD / rowMax) * 100);
     return `
       <div style="padding:12px 0;border-top:1px solid #F1F5F9">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -636,7 +632,7 @@ function injectTriPerDisciplineForm(s: SimulatorState): void {
   };
 
   const insertedHTML = `
-    <div class="f-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin:0 16px 14px">
+    <div class="f-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin:0 0 14px">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:8px">Form by Discipline</div>
       <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:6px">Each discipline's Fitness − Fatigue, separately. A single discipline can be carrying significant fatigue while another is fresh. Useful when planning today's session.</div>
       ${row('swim', 'Swim')}

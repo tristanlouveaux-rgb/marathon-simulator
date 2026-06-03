@@ -563,7 +563,7 @@ describe('applyIllnessMods', () => {
     expect(workouts[1].d).toBe('gym session');
   });
 
-  it('legacy state (no schedule, severity=resting) rests run-shaped workouts only', () => {
+  it('legacy state (no schedule, severity=resting) now rests ALL disciplines, not just runs', () => {
     const illness = { startDate: today, severity: 'resting' as const, active: true };
     const workouts = [
       { t: 'easy', n: 'Easy', d: '8km easy', r: 4 },
@@ -571,7 +571,10 @@ describe('applyIllnessMods', () => {
     ];
     applyIllnessMods(workouts, illness, today);
     expect(workouts[0].d).toBe('Rest — illness');
-    expect(workouts[1].d).toBe('60min');                 // legacy path doesn't touch bike
+    // Fixed 2026-06-02: the legacy fallback now routes through
+    // applyIllnessModsAllDisciplines, so bike/swim/strength are no longer left
+    // at full load when a pre-v2 illness state has only a severity.
+    expect(workouts[1].d).toBe('Rest — illness');
   });
 
   it('past schedule end → no mutation', () => {

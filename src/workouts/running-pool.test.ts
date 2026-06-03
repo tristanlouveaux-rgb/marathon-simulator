@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRunningStrengthWorkout, categoryOf, type RunningStrengthCategory } from './running-pool';
+import { buildRunningStrengthWorkout, buildPlyometricsWorkout, categoryOf, type RunningStrengthCategory } from './running-pool';
 import { parseStrengthSession } from '@/guided/strength-model';
 import { isWeightTrackable, normalizeExerciseKey } from '@/calculations/strength-exercise-key';
 
@@ -79,6 +79,122 @@ describe('intensity', () => {
   it('easier shifts loaded %s down 5', () => {
     const easy = buildRunningStrengthWorkout(0, 60, 'easier', 'traditional');
     expect(easy.d).toContain('@75% 1RM'); // 80 -> 75
+  });
+});
+
+describe('contrast power-block (build phase)', () => {
+  it('build + contrast pairs a matched jump onto the lead lift, with the note in its cue', () => {
+    const wo = buildRunningStrengthWorkout(0, 60, 'standard', 'traditional', 'build', true);
+    expect(wo.d).toContain('Power pair');
+    expect(/Jump Squat|Box Jumps/.test(wo.d)).toBe(true);
+    expect(parseStrengthSession(wo)).not.toBeNull();
+  });
+
+  it('contrast off is byte-identical to today (no pairing)', () => {
+    const off = buildRunningStrengthWorkout(0, 60, 'standard', 'traditional', 'build', false);
+    const legacy = buildRunningStrengthWorkout(0, 60, 'standard', 'traditional', 'build');
+    expect(off.d).toBe(legacy.d);
+    expect(off.d).not.toContain('Power pair');
+  });
+
+  it('only fires in build phase (base with contrast on = no pairing)', () => {
+    const base = buildRunningStrengthWorkout(0, 60, 'standard', 'traditional', 'base', true);
+    expect(base.d).not.toContain('Power pair');
+  });
+
+  it('never prescribes two jumps — the standalone plyo pick is replaced by the pair', () => {
+    // 90-min sessions otherwise include a standalone plyo move; with contrast on,
+    // exactly one plyo-category move should remain (the paired jump).
+    const wo = buildRunningStrengthWorkout(0, 90, 'standard', 'traditional', 'build', true);
+    const names = parseStrengthSession(wo)!.sets.map(s => s.exerciseName).filter((n, i, a) => a.indexOf(n) === i);
+    expect(names.filter(n => categoryOf(n) === 'plyo').length).toBe(1);
+  });
+});
+
+describe('buildPlyometricsWorkout — standalone plyo session', () => {
+  function plyoNames(min: number, intensity: 'easier' | 'standard' | 'harder', week = 0, phase?: any): string[] {
+    const wo = buildPlyometricsWorkout(week, min, intensity, 'traditional', phase);
+    return parseStrengthSession(wo)!.sets
+      .map(s => s.exerciseName)
+      .filter((n, i, a) => a.indexOf(n) === i);
+  }
+
+  it('parses cleanly and only draws from the plyo category', () => {
+    const wo = buildPlyometricsWorkout(0, 30, 'standard', 'traditional');
+    const session = parseStrengthSession(wo);
+    expect(session).not.toBeNull();
+    expect(session!.sets.length).toBeGreaterThan(0);
+    for (const name of plyoNames(30, 'standard')) {
+      expect(categoryOf(name)).toBe('plyo');
+    }
+    expect((wo as any).estimatedDurationMin).toBe(30);
+    expect(wo.n).toBe('Plyometrics');
+  });
+
+  function totalSets(min: number, intensity: 'easier' | 'standard' | 'harder', ceiling?: number): number {
+    const wo = buildPlyometricsWorkout(0, min, intensity, 'traditional', undefined, ceiling);
+    return parseStrengthSession(wo)!.sets.length;
+  }
+
+  it('move count scales with available time (3 / 4 / 5) over the short plyo window', () => {
+    expect(plyoNames(15, 'standard').length).toBe(3);
+    expect(plyoNames(20, 'standard').length).toBe(4);
+    expect(plyoNames(28, 'standard').length).toBe(5);
+  });
+
+  it('easier tier never serves the high-CNS moves; harder includes them', () => {
+    const easy = plyoNames(28, 'easier');
+    expect(easy).not.toContain('Depth Jump');
+    expect(easy).not.toContain('Single-Leg Bounds');
+    // easier draws from the 3 low-CNS moves only
+    expect(easy.length).toBe(3);
+
+    const hard = plyoNames(28, 'harder');
+    expect(hard.some(n => n === 'Depth Jump' || n === 'Single-Leg Bounds')).toBe(true);
+  });
+
+  it('harder lifts RPE above easier', () => {
+    const easy = buildPlyometricsWorkout(0, 28, 'easier', 'traditional');
+    const hard = buildPlyometricsWorkout(0, 28, 'harder', 'traditional');
+    expect(hard.rpe ?? 0).toBeGreaterThan(easy.rpe ?? 0);
+  });
+
+  it('a longer session carries more total sets than a shorter one (the slider does something)', () => {
+    expect(totalSets(28, 'standard')).toBeGreaterThan(totalSets(15, 'standard'));
+  });
+
+  it('a higher ability ceiling adds volume at the same duration', () => {
+    expect(totalSets(28, 'standard', 140)).toBeGreaterThan(totalSets(28, 'standard', 100));
+  });
+
+  it('all lines are bodyweight — no liftKey, nothing weight-tracks', () => {
+    const session = parseStrengthSession(buildPlyometricsWorkout(0, 28, 'harder', 'traditional'))!;
+    for (const set of session.sets) {
+      expect(set.liftKey).toBeFalsy();
+      expect(set.exerciseName).not.toMatch(/1RM/i);
+    }
+  });
+
+  it('base phase keeps the high-CNS moves off the lead at standard intensity', () => {
+    // standard tier is low-led; base reorder pushes Depth Jump / SL Bounds to the
+    // back, so a short (3-move) base session is all low-CNS.
+    const base3 = plyoNames(15, 'standard', 0, 'base');
+    expect(base3).not.toContain('Depth Jump');
+    expect(base3).not.toContain('Single-Leg Bounds');
+  });
+
+  it('past 30 min appends strength → a Power + Strength session (plyo still first)', () => {
+    const short = buildPlyometricsWorkout(0, 25, 'standard', 'traditional', undefined, 140);
+    const long = buildPlyometricsWorkout(0, 50, 'standard', 'traditional', undefined, 140);
+    expect(short.n).toBe('Plyometrics');
+    expect(long.n).toBe('Power + Strength');
+    const names = parseStrengthSession(long)!.sets.map(s => s.exerciseName).filter((n, i, a) => a.indexOf(n) === i);
+    expect(names.some(n => categoryOf(n) === 'plyo')).toBe(true);               // jumps present
+    expect(names.some(n => { const c = categoryOf(n); return c !== null && c !== 'plyo'; })).toBe(true); // strength appended
+    // plyo leads, strength follows
+    const firstStrengthIdx = names.findIndex(n => { const c = categoryOf(n); return c !== null && c !== 'plyo'; });
+    const lastPlyoIdx = names.map(n => categoryOf(n)).lastIndexOf('plyo');
+    expect(lastPlyoIdx).toBeLessThan(firstStrengthIdx);
   });
 });
 

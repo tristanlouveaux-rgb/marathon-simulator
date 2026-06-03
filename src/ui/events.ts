@@ -2602,6 +2602,20 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
       if (wk.adhocWorkouts) {
         wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== `garmin-${garminId}`);
       }
+      // Scrub any garminActuals entry carrying this garminId, matched by VALUE not
+      // key. A guided/manual completion is keyed by the workout NAME (not
+      // `garmin-<id>`) and has no garminMatched entry, so the lookup above misses
+      // it entirely — without this, Discard silently no-ops on a guided strength
+      // session (the exact "I pressed delete and it didn't delete" bug).
+      if (wk.garminActuals) {
+        for (const [slotKey, actual] of Object.entries(wk.garminActuals)) {
+          if (actual.garminId !== garminId) continue;
+          delete wk.garminActuals[slotKey];
+          if (wk.rated) delete wk.rated[slotKey];
+          if (wk.garminMatched?.[garminId]) delete wk.garminMatched[garminId];
+          if (wk.adhocWorkouts) wk.adhocWorkouts = wk.adhocWorkouts.filter(w => (w.id || w.n) !== slotKey);
+        }
+      }
     }
     saveState();
     render();

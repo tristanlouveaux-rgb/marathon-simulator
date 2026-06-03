@@ -81,6 +81,26 @@ export function isStrengthActual(actual: {
 }
 
 /**
+ * Whether a synced activity counts as a "gym" session the way the matcher does
+ * (`mapGarminType` → 'gym'): weight training OR HIIT. Broader than
+ * `isStrengthActual` — a watch HIIT slots against a planned gym session and
+ * counts for adherence/load, so it should also count toward the strength
+ * surface's session/streak number (even when the user matched it from the watch
+ * rather than starting it in-app). It carries no per-lift weights, so it adds 0
+ * to tonnage / est-1RM — those stay `isStrengthActual` / `loggedLifts` based.
+ */
+export function isGymSessionActual(actual: {
+  activityType?: string | null;
+  manualSport?: string;
+  workoutName?: string;
+  displayName?: string;
+}): boolean {
+  if (isStrengthActual(actual)) return true;
+  const raw = (actual.activityType ?? '').toLowerCase();
+  return raw.includes('hiit') || raw.includes('high_intensity_interval');
+}
+
+/**
  * Get RPE multiplier for load calculation
  * @param rpe - RPE value (1-10)
  * @returns Multiplier

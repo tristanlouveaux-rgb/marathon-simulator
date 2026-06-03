@@ -616,6 +616,21 @@ export function getDisciplineCapacity(
   return 100;
 }
 
+/**
+ * True when an active injury has fully blocked running (run capacity 0).
+ *
+ * Leg-load impact risk is a running-only concern: the force-absorption deficit
+ * after heavy eccentric loading (Clarkson & Hubal 2002) only converts to injury
+ * risk on foot strike. When running is already blocked by injury, the leg-load
+ * readiness floor and its "impact risk if running" caption describe a risk the
+ * user cannot take, so callers thread this into `computeReadiness` as
+ * `impactBlocked` to suppress both.
+ */
+export function isImpactBlockedByInjury(state: InjuryState | undefined): boolean {
+  if (!state || !state.active) return false;
+  return getDisciplineCapacity(state, 'run') === 0;
+}
+
 function clampCapacity(v: number): number {
   if (!Number.isFinite(v)) return 100;
   if (v < 0) return 0;

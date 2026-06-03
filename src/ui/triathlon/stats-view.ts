@@ -18,6 +18,7 @@ import { getTriathlonById } from '@/data/triathlons';
 import { buildYourNumbersCard } from './fitness-detail-view';
 import { buildProgressContent, type ProgressRange } from './progress-detail-view';
 import { animateChartDrawOn } from './benchmark-charts';
+import { buildStrengthProgressCard, openStrengthProgressDetail } from '../strength-progress-view';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 
 function navigateTab(tab: TabId): void {
@@ -78,6 +79,11 @@ export function renderTriathlonStatsView(): void {
           <!-- Your Numbers: CSS / FTP / LT / VO2max zone bars -->
           <div class="hf" data-delay="0.10">
             ${buildYourNumbersCard(s)}
+          </div>
+
+          <!-- Strength card sits between the benchmarks and Progress -->
+          <div class="hf" data-delay="0.14">
+            ${buildStrengthProgressCard(s)}
           </div>
 
           <!-- Progress section -->
@@ -146,6 +152,18 @@ export function renderTriathlonStatsView(): void {
   document.getElementById('tri-recent-weeks-card')?.addEventListener('click', () => {
     import('./progress-detail-view').then(({ renderTriProgressDetailView }) => renderTriProgressDetailView());
   });
+
+  // Strength card → shared strength-progress drill-down (back returns here).
+  const strengthCard = document.getElementById('stats-strength-card');
+  if (strengthCard) {
+    const openStrength = () => openStrengthProgressDetail(s, {
+      back: () => renderTriathlonStatsView(),
+      navigateTab,
+      tabBar: renderTabBar('stats'),
+    });
+    strengthCard.addEventListener('click', openStrength);
+    strengthCard.addEventListener('touchend', (e) => { e.preventDefault(); openStrength(); }, { passive: false });
+  }
 
   // Drill-through from the "Your Numbers" bars. Each bar id (css/ftp/lt/vo2)
   // routes to its own detail page with a matching override card. LT reuses

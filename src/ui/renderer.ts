@@ -746,7 +746,8 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
         if (rtd && calGarmin) {
           // For gym/cross slots: show the matched activity name instead of the generic Garmin dot
           if ((w.t === 'gym' || w.t === 'cross') && calGarmin.displayName) {
-            statusLabel = ` → ${calGarmin.displayName}`;
+            // displayName is the external Garmin/Strava activity title — escape before HTML.
+            statusLabel = ` → ${escapeAttr(calGarmin.displayName)}`;
           } else {
             statusLabel = ' <span style="color:#F97316">&#9673;</span>';
           }
@@ -936,7 +937,8 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     // Modification banner
     if (isModified && w.modReason) {
-      const activityName = w.modReason.replace(/^Garmin:\s*/i, '').trim();
+      // modReason carries the external Garmin/Strava activity title — escape before HTML.
+      const activityName = escapeAttr(w.modReason.replace(/^Garmin:\s*/i, '').trim());
       const modStyleAttr = isReplaced
         ? 'background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.3);color:var(--c-accent)'
         : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.3);color:var(--c-accent)';
@@ -1411,7 +1413,7 @@ function renderGarminSyncedSection(wk: Week): string {
     h += `>`;
     h += `<div class="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">`;
     h += sourceBadge(source);
-    h += `<span class="font-medium" style="color:var(--c-black)">${row.name}</span>`;
+    h += `<span class="font-medium" style="color:var(--c-black)">${escapeAttr(row.name)}</span>`;
     if (meta) h += `<span style="color:var(--c-muted)">${meta}</span>`;
     h += `</div>`;
     if (hasDetail) h += `<svg id="${expandId}-chevron" class="w-3 h-3 transition-transform flex-shrink-0 mr-1" style="color:var(--c-faint)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>`;

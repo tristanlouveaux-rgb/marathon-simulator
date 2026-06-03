@@ -9,13 +9,15 @@
 
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
+import { gymLegLoadNudgeForWorkout } from '@/calculations/strength-leg-load';
 import { deriveWorkoutStatus, renderWorkoutStatusChip, computeWeekStatusContext, type WeekStatusContext } from '../workout-status';
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind } from './colours';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
-import { applyIllnessModsAllDisciplines } from '@/calculations/illness-rules';
+import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
 import { formatKm } from '@/utils/format';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
@@ -91,7 +93,8 @@ function applyTriRenderMods(workouts: any[], s: any, viewWeek: number): void {
   const isCurrentWeek = viewWeek === s.w;
   const illness = s.illnessState;
   if (illness?.active && isCurrentWeek) {
-    applyIllnessModsAllDisciplines(workouts, illness.severity);
+    // v2 engine: schedule + classification aware, rests strength for below-neck.
+    applyIllnessMods(workouts, illness);
   }
   const holiday = s.holidayState;
   const todayIso = new Date().toISOString().split('T')[0];
@@ -211,7 +214,7 @@ export function renderTriathlonPlanView(): void {
           ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`}</div>` : ''}
 
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
-            <button id="tri-coach-btn" class="m-btn-glass">Coach</button>
+            ${AI_COACH_ENABLED ? `<button id="tri-coach-btn" class="m-btn-glass">Coach</button>` : ''}
             ${injuryActive
               ? `<button id="tri-injury-header-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(234,88,12,0.12);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#92400E;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">In Recovery</button>`
               : `<button id="tri-checkin-btn" class="m-btn-glass">Check-in</button>`}
@@ -462,7 +465,10 @@ function buildTriDayList(s: any, viewWeek: number): string {
 
   const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
   for (const w of workouts) {
-    const d = w.dayOfWeek ?? 4;
+    // Synced cross-training adhocs may carry no dayOfWeek. Derive it from the
+    // activity timestamp (Mon=0..Sun=6) rather than dumping it on Friday.
+    const ts = (w as any).garminTimestamp ?? (w as any).startTime;
+    const d = w.dayOfWeek ?? (ts ? (new Date(ts).getDay() + 6) % 7 : 4);
     byDay[d] = byDay[d] ?? [];
     byDay[d].push(w);
   }
@@ -471,7 +477,7 @@ function buildTriDayList(s: any, viewWeek: number): string {
   const injState = (injuryActive && injuryAppliesToWeek(viewWeek, s.w)) ? getInjuryStateForDisplay() : null;
   const injStatus = injState ? injuryDisciplineStatus(injState) : null;
 
-  const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w) };
+  const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w, s.planCreatedAt) };
   return Array.from({ length: 7 }, (_, d) =>
     renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri?.swim?.cssSecPer100m ?? null, ftp: tri?.bike?.ftp ?? null, dismissedTests }, injStatus, statusCtx),
   ).join('');
@@ -1239,7 +1245,14 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     const rawDisc = w.discipline as 'swim' | 'bike' | 'run' | undefined;
     // Non-tri-discipline workouts (strength, gym) are never injury-restricted
     if (!injStatus || !rawDisc || (rawDisc !== 'swim' && rawDisc !== 'bike' && rawDisc !== 'run')) {
-      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w) });
+      // Leg-load nudge on a leg-day gym card when the legs are already loaded
+      // (shared helper — matches the running plan-view card). Suggest-only.
+      const isStrength = w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n);
+      const isActiveCard = w.status !== 'completed' && w.status !== 'skipped' && w.status !== 'replaced';
+      const legLoadNudge = isStrength && isActiveCard
+        ? (gymLegLoadNudgeForWorkout(w, getState().recentLegLoads ?? [], w.rpe ?? w.r ?? 7, Date.now()) ?? undefined)
+        : undefined;
+      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w), legLoadNudge });
     }
     // For bricks: use the more restrictive of bike/run status
     let disc: 'swim' | 'bike' | 'run' = rawDisc;

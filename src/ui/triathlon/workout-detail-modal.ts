@@ -25,9 +25,39 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
     openGuidedStrength(workout);
     return;
   }
-  // Strength/gym sessions use the shared clean per-exercise breakdown modal,
-  // not the swim/bike/run block layout below.
+  // Strength/gym sessions. A session already DONE opens its recap (what was
+  // logged — exercises, RPE, duration, and a Delete), not the "Start session"
+  // breakdown. An undone one opens the editable breakdown. Mirrors the running
+  // plan's openGymCardDetail so tapping a completed gym card never offers to
+  // re-start the session.
   if (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n || '')) {
+    const sWkIdx = weekIdx ?? (getState().w - 1);
+    const sWk = getState().wks?.[sWkIdx];
+    const sId = String((workout as any).id ?? workout.n);
+    const ratingVal = sWk?.rated?.[sId];
+    const isDone = (typeof ratingVal === 'number' && ratingVal > 0) || !!(sWk?.garminActuals as Record<string, unknown> | undefined)?.[sId];
+    if (isDone) {
+      // A matched SYNCED activity (e.g. a HIIT logged onto this slot) opens the
+      // rich activity detail — HR zones, stats, sport, and a Discard bin — the
+      // same view Recent opens. A guided/manual strength session (no synced
+      // actual) opens its exercise recap instead.
+      const syncedActual: any = (sWk?.garminActuals as Record<string, unknown> | undefined)?.[sId];
+      const gid = syncedActual?.garminId ? String(syncedActual.garminId) : '';
+      const isSynced = gid.startsWith('strava-') || gid.startsWith('garmin-') || gid.startsWith('apple-');
+      if (syncedActual && isSynced) {
+        import('@/ui/activity-detail').then(({ renderActivityDetail }) => renderActivityDetail(syncedActual, workout.n, 'plan', undefined, sId));
+        return;
+      }
+      import('@/guided/strength-complete').then(({ buildLoggedStrengthResult }) => {
+        const result = buildLoggedStrengthResult(workout, sWkIdx);
+        if (result && !result.isHyrox) {
+          import('@/ui/strength-summary-card').then(({ openStrengthSummary }) => openStrengthSummary(workout, result));
+        } else {
+          import('@/ui/strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(workout));
+        }
+      });
+      return;
+    }
     import('@/ui/strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(workout));
     return;
   }
@@ -132,7 +162,9 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
             <span style="color:var(--c-border)">·</span>
             <button id="tri-detail-skip" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Skip</button>
           </div>
-          <button id="tri-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+          ${getState().trackOnly && discipline === 'run'
+            ? `<button id="tri-detail-start" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);display:flex;align-items:center;justify-content:center;gap:7px"><span style="width:9px;height:9px;background:#FAF9F6;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>Start session</button>`
+            : `<button id="tri-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>`}
         </div>
       `}
     </div>
@@ -144,6 +176,13 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#tri-detail-close')?.addEventListener('click', close);
   overlay.querySelector('#tri-detail-done')?.addEventListener('click', close);
+  // On-demand run: launch the same guided/tracked-run flow plan mode uses
+  // (window.trackWorkout). gym uses openGuidedStrength below; bike/swim keep
+  // Mark-as-done (no suitable guided recorder for those yet).
+  overlay.querySelector('#tri-detail-start')?.addEventListener('click', () => {
+    close();
+    (window as any).trackWorkout?.(workout.n || 'Session', workout.d || '');
+  });
   overlay.querySelector('#tri-detail-adjust')?.addEventListener('click', () => {
     close();
     import('@/ui/workout-adjust-overlay').then(({ openWorkoutAdjust }) => {

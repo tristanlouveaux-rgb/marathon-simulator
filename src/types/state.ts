@@ -9,7 +9,7 @@ import type {
 import type { CrossTrainingAdjustment, LoadBudget } from './activities';
 import type { OnboardingState, Marathon, RecurringActivity, TrainingFocus } from './onboarding';
 import type { EventType, TriConfig, Discipline, HyroxConfig } from './triathlon';
-import type { StrengthLog } from './strength-log';
+import type { StrengthLog, BodyweightProgressEntry } from './strength-log';
 
 /** Cross-modal VO2max estimate confidence tier. Mirrors `hrCalibratedVdot.confidence`. */
 export type VO2Confidence = 'high' | 'medium' | 'low' | 'none';
@@ -256,7 +256,13 @@ export interface SessionImpactEntry {
   ctlAtTime: number;                // daily-equiv CTL at session time
   recoveryMultAtTime: number;       // sport/intensity multiplier used in countdown
   recoveryAdjAtTime: number;        // transient HRV/RHR/sleep adjustment used
-  predictedHours: number;           // hours-to-baseline predicted by current model
+  predictedHours: number;           // readiness-debt estimate (countdown model); not the fit basis
+  /** Session intensity band (HR-zone or RPE derived). The fit compares observed
+   *  recovery to the literature expectation for this band. See `classifySessionIntensity`. */
+  intensityBand?: 'easy' | 'moderate' | 'hard';
+  /** Literature-anchored expected HRV/RHR return time for the intensity band
+   *  (Stanley et al. 2013). The fit basis: index = observedHours / expectedRecoveryHours. */
+  expectedRecoveryHours?: number;
   observedHours?: number;           // hours until composite signal returned to baseline
   rightCensored?: boolean;          // true if observed hit the 96h cap without recovery
   signalsUsed: Array<'hrv' | 'rhr' | 'checkin' | 'rpe'>;
@@ -278,13 +284,17 @@ export interface SessionImpactEntry {
  * Updated weekly on rollover. See `fitKUser` in `adaptive-recovery.ts`.
  */
 export interface AdaptiveRecovery {
-  kUserHours: number;               // default 8 until learned; clamped [5, 13]
+  kUserHours: number;               // default 8 until learned; clamped [5, 13]. = 8 × recovery index
   confidence: 'none' | 'low' | 'medium' | 'high';
-  sessionsObserved: number;         // count of entries with observedHours filled
+  sessionsObserved: number;         // count of clean-window observations used in the fit
   lastFitAt?: string;               // ISO date of last weekly fit
   emaHalfLifeWeeks: number;         // 4. Recency decay for the fit
   history?: Array<{ date: string; k: number; n: number }>; // sparkline (cap 12)
   notifiedMilestones?: string[];    // e.g. 'first-medium', 'first-high'
+  /** True when the athlete trains too densely to read recovery cleanly: many
+   *  closed sessions, but few survive the clean-window filter. The card explains
+   *  this instead of showing a misleading value. */
+  densityLimited?: boolean;
 }
 
 /** Single day of Garmin physiology data */
@@ -394,9 +404,18 @@ export interface GarminActual {
     exerciseName: string;
     weightKg?: number;
     reps: string;
+    /** Working sets logged for this exercise. Optional — absent on sessions
+     *  logged before set-count capture; tonnage readers treat absent as 1. */
+    sets?: number;
     estimatedOneRmKg?: number;
     liftKey?: string;
   }>;
+  /** Derived leg load (raw units, pre-decay/pre-RBE) for a strength/gym session,
+   *  stamped at completion from the worked leg groups × %1RM × session RPE. Read
+   *  by the leg-load ledger (`recentLegLoads`) so heavy leg days feed recovery the
+   *  same way runs and cross-training do. Absent for non-strength activities and
+   *  for synced strength sessions with no exercise detail. See strength-leg-load.ts. */
+  legLoadRaw?: number;
   /** HR effort score: how hard this was relative to target zone.
    *  0.8 = undercooked, 1.0 = nailed it, 1.2 = overcooked. Null if no HR data or no target zone. */
   hrEffortScore?: number | null;
@@ -689,6 +708,13 @@ export interface SimulatorState {
   rw: number;             // Runs per week (derived: min(epw, 7))
   gs?: number;            // Gym sessions per week (0-3)
   strengthLog?: StrengthLog; // Per-lift working-weight memory + est1RM benchmark
+  bodyweightProgress?: Record<string, BodyweightProgressEntry>; // Beginner/novice bodyweight ladder rung per movement family (src/calculations/bodyweight-progression.ts)
+  /** Remembered exercise swaps for gym sessions (equipment substitutions), keyed
+   *  by the original movement's swap-key -> { original display name, substitute
+   *  pool-exercise name }. A swap auto-applies to every future session containing
+   *  that movement, stays visible + re-editable in the pre-session modal, and is
+   *  reviewable / revertible from Account. See strength-alternatives.ts. */
+  strengthSwaps?: Record<string, { from: string; to: string }>;
   wkm: number;            // Weekly km
 
   // Personal records
@@ -825,9 +851,17 @@ export interface SimulatorState {
   bodyWeightKg?: number;  // Bodyweight in kg. FTP→W/kg, load refinements. Falls back to 75kg M / 62kg F when unset.
   heightCm?: number;      // Height in cm. With bodyWeightKg → body surface area for heat personalisation. Optional; absent → no heat-size adjustment.
   bodyMassSwapEnabled?: boolean;  // Cross-training swap opt-in. undefined = undecided (default-on for heavy users, onboarding popup pending); true = kept; false = user turned it off.
+  plyoInGymEnabled?: boolean;  // Contrast power-block in build-phase running-strength gym sessions (heavy lift + matched jump). Default-on for intermediate+; undefined/true = on, false = user turned it off in Settings.
 
   // Plan start date (ISO YYYY-MM-DD). Anchor for all week date ranges
   planStartDate?: string;
+
+  // Date this plan instance was created/regenerated (ISO YYYY-MM-DD). Days in the
+  // current week that fall BEFORE this date were never schedulable, so they must
+  // not read "Missed" on a freshly built plan (e.g. onboard mid-week → yesterday).
+  // Set only on a genuine plan build, never on a per-launch re-anchor. Optional:
+  // absent → no pre-creation suppression (legacy behaviour preserved).
+  planCreatedAt?: string;
 
   // Selected event (locked from onboarding)
   selectedMarathon?: Marathon;

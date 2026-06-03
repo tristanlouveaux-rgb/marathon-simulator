@@ -16,19 +16,20 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Append (or replace today's entry on) a lift's est1RM history. Mutates `entry`. */
-export function appendEst1rmSample(entry: StrengthLiftEntry, value: number): void {
+/** Append (or replace today's entry on) a lift's est1RM history. Mutates `entry`.
+ *  `reps` records the effort the best was set at (rep-aware display). */
+export function appendEst1rmSample(entry: StrengthLiftEntry, value: number, reps?: number): void {
   if (!Number.isFinite(value) || value <= 0) return;
   const date = todayISO();
   const list = entry.est1rmHistory ? [...entry.est1rmHistory] : [];
 
   const last = list[list.length - 1];
   if (last && last.date === date) {
-    list[list.length - 1] = { date, value };
+    list[list.length - 1] = { date, value, reps };
   } else if (last && last.value === value) {
     return;
   } else {
-    list.push({ date, value });
+    list.push({ date, value, reps });
   }
 
   entry.est1rmHistory = list.slice(-MAX_HISTORY);

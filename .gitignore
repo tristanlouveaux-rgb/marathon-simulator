@@ -1,7 +1,9 @@
 node_modules/
 dist/
 coverage/
-.env.local
+.env
+.env.*
+!.env.example
 ios/
 android/
 .capacitor/

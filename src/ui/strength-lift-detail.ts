@@ -56,18 +56,23 @@ export function openStrengthLiftDetail(liftKey: string, displayName: string): vo
       injuryKind: 'normal',
     });
 
+    const hasWorkingSet = entry.lastWeightKg != null && entry.lastWeightKg > 0;
     let suggestion: string;
-    if (sug.changed) {
-      suggestion = `Next session: try ${fmtKg(sug.weightKg)}, up from ${fmtKg(entry.lastWeightKg)}. The last set left reps in reserve.`;
+    if (!hasWorkingSet) {
+      suggestion = `1RM set manually. Log a working set in a guided session and the per-session weight suggestion builds here.`;
+    } else if (sug.changed) {
+      suggestion = `Next session: try ${fmtKg(sug.weightKg)}, up from ${fmtKg(entry.lastWeightKg!)}. The last set left reps in reserve.`;
     } else if (phase === 'peak') {
-      suggestion = `Hold ${fmtKg(entry.lastWeightKg)} through peak. Strength maintains while race sharpness builds.`;
+      suggestion = `Hold ${fmtKg(entry.lastWeightKg!)} through peak. Strength maintains while race sharpness builds.`;
     } else if (isDeload) {
-      suggestion = `Hold ${fmtKg(entry.lastWeightKg)} through the taper. No new load before race day.`;
+      suggestion = `Hold ${fmtKg(entry.lastWeightKg!)} through the taper. No new load before race day.`;
     } else {
-      suggestion = `Hold ${fmtKg(entry.lastWeightKg)}. It rises when a session leaves 2 or more reps in reserve.`;
+      suggestion = `Hold ${fmtKg(entry.lastWeightKg!)}. It rises when a session leaves 2 or more reps in reserve.`;
     }
 
-    const lastLine = `${fmtKg(entry.lastWeightKg)}${entry.lastReps ? ` × ${esc(entry.lastReps)}` : ''}${entry.lastDate ? ` · ${fmtDate(entry.lastDate)}` : ''}`;
+    const lastLine = hasWorkingSet
+      ? `${fmtKg(entry.lastWeightKg!)}${entry.lastReps ? ` × ${esc(entry.lastReps)}` : ''}${entry.lastDate ? ` · ${fmtDate(entry.lastDate)}` : ''}`
+      : '';
 
     body = `
       <div style="padding:6px 22px 4px">
@@ -75,10 +80,11 @@ export function openStrengthLiftDetail(liftKey: string, displayName: string): vo
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px">Estimated 1RM</div>
           ${buildBenchmarkTrendChart(history, ACCENT, FILL, 'kg', /*inverted*/ false)}
         ` : ''}
+        ${hasWorkingSet ? `
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--c-border)">
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:3px">Last working set</div>
           <div style="font-size:15px;color:var(--c-black);font-variant-numeric:tabular-nums">${lastLine}</div>
-        </div>
+        </div>` : ''}
         <div style="margin-top:14px;padding:12px 14px;border:1px solid var(--c-border);border-radius:10px;font-size:13px;color:var(--c-black);line-height:1.5">${suggestion}</div>
       </div>`;
   }

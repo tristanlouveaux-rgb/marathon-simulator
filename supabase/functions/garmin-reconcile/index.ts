@@ -52,6 +52,17 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+/** Timing-safe string compare — avoids leaking the cron secret byte-by-byte. */
+function constantTimeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
 interface GarminTokenRow {
   user_id: string;
   access_token: string | null;
@@ -151,7 +162,7 @@ Deno.serve(async (req) => {
     // --- Auth: cron secret OR user JWT ---
     const cronSecretHeader = req.headers.get("x-cron-secret");
     const expectedCronSecret = Deno.env.get("RECONCILE_CRON_SECRET");
-    const isCron = !!(cronSecretHeader && expectedCronSecret && cronSecretHeader === expectedCronSecret);
+    const isCron = !!(cronSecretHeader && expectedCronSecret && constantTimeEqual(cronSecretHeader, expectedCronSecret));
 
     let userIds: string[] = [];
     let mode: "cron" | "user" = "cron";

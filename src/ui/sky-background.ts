@@ -212,21 +212,24 @@ export function buildSkyBackground(prefix: string, palette: SkyPaletteName | Sky
         <rect width="100%" height="100%" fill="url(#${prefix}SkyGrad)"/>
         <!-- Glow -->
         <ellipse cx="200" cy="130" rx="100" ry="80" fill="url(#${prefix}Glow)" filter="url(#${prefix}Sb)" opacity="0.7"/>
-        <!-- Far mountains -->
-        <g style="animation:${prefix}Drift1 12s ease-in-out infinite">
+        <!-- Far mountains. STATIC: these layers carry an feTurbulence/displacement
+             filter and sit under backdrop-filter glass cards. Animating their
+             transform re-rasterises the filtered region every frame (RUNBOOK
+             Cause 1) AND flickers the glass above (Cause 2). Held still. -->
+        <g>
           <path d="M-60,190 Q20,150 80,180 T200,160 T350,170 T460,150 L460,480 L-60,480 Z" fill="url(#${prefix}Far)" filter="url(#${prefix}Wc)"/>
         </g>
         <!-- Clouds -->
         <ellipse cx="100" cy="210" rx="80" ry="25" fill="${p.cloud}" filter="url(#${prefix}Hb)" opacity="0.45"/>
         <ellipse cx="320" cy="195" rx="60" ry="20" fill="${p.cloud}" filter="url(#${prefix}Hb)" opacity="0.35"/>
-        <!-- Mid mountains -->
-        <g style="animation:${prefix}Drift2 15s ease-in-out infinite">
+        <!-- Mid mountains. STATIC (see Far note). -->
+        <g>
           <path d="M-40,270 Q50,210 130,250 T280,220 T420,250 L420,480 L-40,480 Z" fill="url(#${prefix}Mid)" filter="url(#${prefix}Wc)"/>
         </g>
         <!-- Mist -->
         <ellipse cx="280" cy="285" rx="120" ry="40" fill="#FFFFFF" opacity="0.45" filter="url(#${prefix}Hb)"/>
-        <!-- Near mountains -->
-        <g style="animation:${prefix}Drift3 18s ease-in-out infinite">
+        <!-- Near mountains. STATIC (see Far note). -->
+        <g>
           <path d="M-20,350 Q60,290 150,330 T320,310 T440,340 L440,480 L-20,480 Z" fill="url(#${prefix}Near)" filter="url(#${prefix}Wc)"/>
         </g>
         <!-- Bottom mist layers -->

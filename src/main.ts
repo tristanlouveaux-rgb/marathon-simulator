@@ -14,9 +14,9 @@ import { checkHolidayEnd, showHolidayWelcomeBack } from '@/ui/holiday-modal';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
 import { refreshVO2Estimates } from '@/data/vo2Sync';
-import { closeOutObservedRecovery, fitKUser, ingestNewActualsAsImpacts } from '@/calculations/adaptive-recovery';
+import { backfillIntensityBands, closeOutObservedRecovery, fitKUser, ingestNewActualsAsImpacts } from '@/calculations/adaptive-recovery';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
-import { healMissingITrimp } from '@/calculations/activity-matcher';
+import { healMissingITrimp, reconcileCrossSourceDuplicates } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
 import { STRAVA_ENABLED } from '@/constants/feature-flags';
@@ -1343,6 +1343,14 @@ async function launchApp(): Promise<void> {
     // primary is already Apple.
     const appleConnected = !!state.appleHealthConnected || hasPhysiologySource(state, 'apple');
 
+    // Collapse any same-session duplicates already sitting in local state BEFORE
+    // the network syncs run. The per-sync dedup only fires when a sync completes;
+    // if syncActivities errors (revoked token, RLS) the duplicates persist across
+    // loads. Running it here is network-independent, so a dev-account user who
+    // receives each session from both Garmin webhook and Strava sees one copy
+    // immediately on launch. Idempotent; re-render only when it changed something.
+    if (reconcileCrossSourceDuplicates()) { saveState(); scheduleHomeRefresh(); }
+
     // ── ACTIVITIES ────────────────────────────────────────────────────────────
     if (activitySrc === 'apple') {
       // Apple Watch primary: activities via HealthKit (iOS only. No-op on web)
@@ -1733,6 +1741,9 @@ function refreshAdaptiveRecovery(): void {
   const ms = getMutableState();
   const before = ms.adaptiveRecovery?.confidence ?? 'none';
   const { added, addedHistorical } = ingestNewActualsAsImpacts(ms as any);
+  // Retrofit intensity bands onto pre-existing entries (ISSUE-256 redesign) so
+  // the new intensity-banded fit applies to the user's existing 90-day log.
+  backfillIntensityBands(ms as any);
   const closed = closeOutObservedRecovery(ms);
   const fitted = fitKUser(ms);
   if (fitted.confidence !== before && (fitted.confidence === 'medium' || fitted.confidence === 'high')) {

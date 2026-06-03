@@ -39,15 +39,13 @@ const SIGNAL_HASH_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 // ─── CORS (restricted — not open to the world) ──────────────────────────────
 
 const ALLOWED_ORIGINS = [
-  'http://localhost',
-  'http://localhost:5173',
   'capacitor://localhost',
-  'http://localhost',
+  'https://mosaicrunning.run',
 ]
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('Origin') ?? ''
-  const allowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o))
+  const allowed = ALLOWED_ORIGINS.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
   return {
     'Access-Control-Allow-Origin': allowed ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',

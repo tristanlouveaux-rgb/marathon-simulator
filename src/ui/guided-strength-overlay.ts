@@ -30,6 +30,7 @@ import type { TrainingPhase } from '@/types/training';
 import type { RirBucket } from '@/types/strength-log';
 import { suggestNextWeight } from '@/calculations/strength-progression';
 import { STRENGTH_MIN_INCREMENT_KG } from '@/constants/strength-constants';
+import { applyRememberedSwaps } from '@/state/strength-swaps';
 
 const OVERLAY_ID = 'guided-strength-overlay';
 
@@ -78,6 +79,11 @@ let active: OverlayState | null = null;
 export function openGuidedStrength(workout: Workout, opts: { onClose?: () => void } = {}): void {
   // Single active overlay at a time.
   if (active) closeOverlay();
+
+  // Honour the user's remembered equipment swaps wherever a session is started
+  // (the pre-session modal, the tri/HYROX detail modals, the home hero). No-op
+  // for HYROX (parsed from components) and for sessions with no swapped lines.
+  workout = applyRememberedSwaps(workout);
 
   const session = parseGuidedSession(workout);
   if (!session || session.sets.length === 0) {
@@ -301,6 +307,19 @@ function buildExerciseSuggestions(session: StrengthSession, workout: Workout): M
 function fmtKg(kg: number): string {
   return `${trimNum(kg)}kg`;
 }
+
+/**
+ * First-time guidance: with no weight history, tell the user how hard it should
+ * feel so they can pick a starting load. Anchored to the project's RIR-2
+ * autoregulation target (Helms et al. 2016): the working set should leave ~2
+ * reps in reserve, so an all-out set would be ~reps+2. No 1RM needed.
+ */
+function firstTimeWeightCue(reps: string): string {
+  const m = reps.match(/(\d+)/);
+  if (!m) return 'First time. Pick a weight that is challenging but stays controlled.';
+  const n = Number(m[1]);
+  return `First time. Choose a weight you could lift about ${n + 2} times all-out, so ${n} reps feels hard with 2 left in reserve.`;
+}
 function trimNum(n: number): string {
   return (Math.round(n * 100) / 100).toString();
 }
@@ -326,7 +345,7 @@ function renderWeightBlock(cur: GuidedSet): string {
   const caption = isFirstSet
     ? (sug?.lastWeightKg
         ? `Last time: ${fmtKg(sug.lastWeightKg)}${sug.lastReps ? ` × ${escapeHtml(sug.lastReps)}` : ''}${sug.bumped && sug.suggestedKg != null ? ` · suggested ${fmtKg(sug.suggestedKg)}` : ''}`
-        : 'First time. Enter the weight you use.')
+        : firstTimeWeightCue(cur.reps))
     : `Working weight · set ${cur.setIndex + 1} of ${cur.setCount}`;
   const val = curWeight != null ? trimNum(curWeight) : '';
   let html = `
@@ -847,6 +866,33 @@ function showFinishConfirm(onConfirm: () => void): void {
   el.querySelector('#gs-confirm-yes')?.addEventListener('click', () => { el.remove(); onConfirm(); });
 }
 
+/**
+ * In-app discard confirmation for the finish screen. Closing the overlay there
+ * never persists the session (only "Save and close" calls completeStrengthSession),
+ * so a stray tap would silently lose the logged sets. This double-checks first.
+ * Same centered-card pattern as showFinishConfirm; the confirm button is red.
+ */
+function showDiscardConfirm(onConfirm: () => void): void {
+  const host = document.getElementById(OVERLAY_ID);
+  if (!host || host.querySelector('#gs-confirm')) return;
+  const el = document.createElement('div');
+  el.id = 'gs-confirm';
+  el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
+  el.innerHTML = `
+    <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+      <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Discard this session?</div>
+      <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">Your sets and time will not be saved.</div>
+      <div style="display:flex;gap:10px">
+        <button id="gs-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Keep it</button>
+        <button id="gs-confirm-yes" style="flex:1;padding:12px;background:#EF4444;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Discard</button>
+      </div>
+    </div>`;
+  host.appendChild(el);
+  el.addEventListener('click', e => { if (e.target === el) el.remove(); });
+  el.querySelector('#gs-confirm-cancel')?.addEventListener('click', () => el.remove());
+  el.querySelector('#gs-confirm-yes')?.addEventListener('click', () => { el.remove(); onConfirm(); });
+}
+
 /** Format a time delta: "8s" under a minute, "1:20" above. */
 function fmtDelta(sec: number): string {
   const a = Math.abs(Math.round(sec));
@@ -983,11 +1029,17 @@ function renderFinish(): void {
         <button id="gs-save" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">
           Save and close
         </button>
+        <button id="gs-discard" style="width:100%;padding:11px;margin-top:8px;background:transparent;color:#EF4444;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">
+          Discard session
+        </button>
       </div>
     ${shellClose()}
   `;
-  // Mute button hidden on finish (no further cues to mute).
-  document.getElementById('gs-close')?.addEventListener('click', () => closeOverlay());
+  // Mute button hidden on finish (no further cues to mute). Closing the overlay
+  // here never persists the session, so both the × and the explicit Discard
+  // link double-check before throwing the logged sets away.
+  document.getElementById('gs-close')?.addEventListener('click', () => showDiscardConfirm(() => closeOverlay()));
+  document.getElementById('gs-discard')?.addEventListener('click', () => showDiscardConfirm(() => closeOverlay()));
 
   document.querySelectorAll<HTMLButtonElement>('.gs-rpe').forEach(btn => {
     btn.addEventListener('click', () => {

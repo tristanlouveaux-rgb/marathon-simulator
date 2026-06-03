@@ -4,6 +4,7 @@
 
 import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard, triggerGarminReconcile } from '@/data/supabaseClient';
 import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
+import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, restoreHistoryFromServer } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
@@ -23,6 +24,7 @@ import type { SimulatorState } from '@/types/state';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 import { poweredByStrava, connectWithStravaButton } from './strava-brand';
+import { listStrengthSwaps, clearStrengthSwap, clearAllStrengthSwaps } from '@/state/strength-swaps';
 
 let garminConnected = false;
 let stravaConnectedStatus = false;
@@ -154,6 +156,10 @@ function groupCard(rows: string): string {
   return `<div style="border-radius:var(--r-card);overflow:hidden;background:var(--c-surface);border:1px solid var(--c-border)">${rows}</div>`;
 }
 
+function esc(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function rowDivider(ml = 16): string {
   return `<div style="height:1px;background:var(--c-border);margin-left:${ml}px"></div>`;
 }
@@ -192,7 +198,9 @@ function getAccountHTML(): string {
   // back to the literal 'Signed in' when no email is present, which misreads as
   // a real account — so guests get an explicit 'Guest' label instead.
   const isGuest = !sim && !!s.isGuestAccount;
-  const displayName = sim ? 'Simulator' : isGuest ? 'Guest' : email;
+  // email is user-supplied (auth) — escape before it lands in innerHTML.
+  const escHtml = (str: string) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const displayName = escHtml(sim ? 'Simulator' : isGuest ? 'Guest' : email);
   const initials = sim ? 'SIM'
     : isGuest ? 'G'
     : email.includes('@') ? (email[0] + (email.split('@')[0][1] ?? '')).toUpperCase()
@@ -232,14 +240,19 @@ function getAccountHTML(): string {
         ${sectionLabel('Preferences')}
         ${renderPreferencesGroup()}
 
-        ${sectionLabel('AI Coach')}
-        ${renderCoachGroup()}
+        ${AI_COACH_ENABLED ? sectionLabel('AI Coach') + renderCoachGroup() : ''}
 
         ${(s.stravaConnected || s.stravaHistoryFetched || s.appleHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
 
         ${renderRecurringActivitiesRow(s)}
 
         ${renderCommuteRow(s)}
+
+        ${renderStrengthRow(s)}
+
+        ${renderExerciseSwapsRow(s)}
+
+        ${renderPlyoInGymRow(s)}
 
         ${sectionLabel('Plan')}
         ${groupCard(`
@@ -1153,6 +1166,190 @@ function renderCommuteRow(s: ReturnType<typeof getState>): string {
 }
 
 /**
+ * Render the Strength-sessions row on the Account page. The post-onboarding
+ * lever for `gymSessionsPerWeek` (the wizard sets it once; this lets the user
+ * change it later). Hidden for track-only (no plan to rebuild) and HYROX
+ * (functional stations are the strength stimulus, `s.gs` is forced to 0).
+ * Applies to running, triathlon, and cycling, which all plan strength off `s.gs`.
+ */
+function renderStrengthRow(s: ReturnType<typeof getState>): string {
+  if (s.trackOnly || s.eventType === 'hyrox') return '';
+  const gym = s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0;
+  const detail = gym > 0
+    ? `${gym} session${gym > 1 ? 's' : ''} per week`
+    : 'Add strength to your plan';
+  return groupCard(`
+    <button id="btn-strength-config" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;color:var(--c-black)">Strength sessions</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${detail}</div>
+      </div>
+      ${chevron()}
+    </button>
+  `);
+}
+
+/** Manage remembered exercise swaps (equipment substitutions). Only shown once
+ *  the user has at least one swap — there's nothing to manage otherwise, and
+ *  the swap is created in-session from the workout modal, not here. */
+function renderExerciseSwapsRow(s: ReturnType<typeof getState>): string {
+  const count = Object.keys(s.strengthSwaps ?? {}).length;
+  if (count <= 0) return '';
+  return groupCard(`
+    <button id="btn-exercise-swaps" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;color:var(--c-black)">Exercise swaps</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${count} substitution${count > 1 ? 's' : ''} remembered</div>
+      </div>
+      ${chevron()}
+    </button>
+  `);
+}
+
+/**
+ * Toggle: pair a matched explosive jump with the heavy lift in build-phase
+ * running-strength gym sessions (the contrast power-block). Default-on for
+ * intermediate+; shown only to those it applies to (a plan-following runner with
+ * strength sessions, intermediate or above — beginners never get the heavy pool).
+ */
+function renderPlyoInGymRow(s: ReturnType<typeof getState>): string {
+  if (s.trackOnly || s.eventType === 'hyrox') return '';
+  const gym = s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0;
+  const isBeginnerOrNovice = ['total_beginner', 'beginner', 'novice', 'returning']
+    .includes(s.onboarding?.experienceLevel ?? 'intermediate');
+  if (gym <= 0 || isBeginnerOrNovice) return '';
+  const on = s.plyoInGymEnabled !== false;
+  return groupCard(`
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Plyometrics in gym</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Pairs an explosive jump with the heavy lift in build-phase strength sessions. Builds running power.</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0">
+        <button id="btn-plyogym-off"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">Off</button>
+        <button id="btn-plyogym-on"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">On</button>
+      </div>
+    </div>
+  `);
+}
+
+/**
+ * Modal for editing weekly strength sessions from the Account page. Writes
+ * `onboarding.gymSessionsPerWeek` and rebuilds the plan via
+ * `initializeSimulator`, mirroring the runner-type editor's rebuild flow.
+ * Centered overlay (never a bottom sheet).
+ */
+function showStrengthSessionsModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  const current = getState().gs ?? getState().onboarding?.gymSessionsPerWeek ?? 0;
+  let selected = current;
+
+  function render(): void {
+    overlay.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">Strength sessions</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:16px;line-height:1.4">Even one strength session a week makes runners measurably faster and more injury-resistant (Beattie &amp; Blagrove 2018). The plan adds full-body strength work and folds it into your weekly load.</div>
+
+        <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--c-border)">
+          <div>
+            <div style="font-size:14px;color:var(--c-black)">Sessions per week</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:2px">How many strength sessions to plan.</div>
+          </div>
+          <div style="display:flex;gap:4px">
+            ${[0, 1, 2, 3].map(n => `<button class="ss-acct-num" data-num="${n}" style="width:32px;height:32px;border-radius:8px;border:1px solid ${selected === n ? 'var(--c-black)' : 'var(--c-border)'};background:${selected === n ? 'var(--c-black)' : '#fff'};color:${selected === n ? 'var(--c-surface)' : 'var(--c-black)'};font-size:13px;cursor:pointer">${n}</button>`).join('')}
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:var(--c-faint);margin-top:12px;line-height:1.4">${selected === current ? 'Pick a different count to rebuild your plan. Training history is preserved.' : 'Saving rebuilds your plan. Training history is preserved.'}</div>
+
+        <button id="ss-acct-save" ${selected === current ? 'disabled' : ''} style="width:100%;margin-top:14px;padding:12px;border-radius:12px;border:none;background:${selected === current ? 'rgba(0,0,0,0.12)' : 'var(--c-black)'};color:${selected === current ? 'var(--c-muted)' : 'var(--c-surface)'};font-size:14px;font-weight:600;cursor:${selected === current ? 'default' : 'pointer'};font-family:var(--f)">Save</button>
+      </div>
+    `;
+
+    overlay.querySelectorAll<HTMLButtonElement>('.ss-acct-num').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const value = Number(btn.dataset.num);
+        if (!Number.isFinite(value)) return;
+        selected = value;
+        render();
+      });
+    });
+
+    overlay.querySelector('#ss-acct-save')?.addEventListener('click', () => {
+      if (selected === current) return;
+      overlay.remove();
+      applyGymSessionsChange(selected);
+    });
+  }
+
+  render();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+/**
+ * Review and undo remembered exercise swaps. Each row shows "Original → Swap"
+ * with a Revert action; "Revert all" clears the lot. No plan rebuild needed —
+ * swaps apply at render time, so we just refresh the account view (which drops
+ * this row once the last swap is gone).
+ */
+function showExerciseSwapsModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  const refreshAccount = () => {
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+  };
+
+  function render(): void {
+    const swaps = listStrengthSwaps();
+    if (swaps.length === 0) { overlay.remove(); refreshAccount(); return; }
+    const rows = swaps.map(sw => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--c-border)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;color:var(--c-black);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(sw.to)}</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Replaces ${esc(sw.from)}</div>
+        </div>
+        <button class="es-revert" data-from="${esc(sw.from)}" style="flex-shrink:0;padding:7px 14px;background:transparent;border:1px solid var(--c-border);border-radius:9px;font-size:13px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Revert</button>
+      </div>
+    `).join('');
+    overlay.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">Exercise swaps</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.4">Movements you swapped for equipment reasons. They apply to every gym session that prescribes them. Revert one to go back to the original.</div>
+        <div style="margin-bottom:14px">${rows}</div>
+        <button id="es-revert-all" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Revert all</button>
+        <button id="es-done" style="width:100%;margin-top:6px;padding:12px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+      </div>
+    `;
+    overlay.querySelectorAll<HTMLButtonElement>('.es-revert').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const from = btn.dataset.from;
+        if (!from) return;
+        clearStrengthSwap(from);
+        render();
+      });
+    });
+    overlay.querySelector('#es-revert-all')?.addEventListener('click', () => {
+      clearAllStrengthSwaps();
+      render();
+    });
+    overlay.querySelector('#es-done')?.addEventListener('click', () => { overlay.remove(); refreshAccount(); });
+  }
+
+  render();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); refreshAccount(); } });
+  document.body.appendChild(overlay);
+}
+
+/**
  * Modal for editing commute config from the Account page. Mirrors the
  * onboarding step's data model. Writes the same `s.commuteConfig` shape.
  */
@@ -1686,6 +1883,26 @@ function wireAccountHandlers(): void {
     import('./gps-events').then(({ setActiveGuideSplitAnnouncements }) => setActiveGuideSplitAnnouncements(false));
   });
 
+  // Plyometrics-in-gym (contrast power-block) toggle. Read at session generation,
+  // so it applies to on-demand running-strength immediately and to the plan as
+  // weeks regenerate (same model as bodyMassSwapEnabled — no forced rebuild).
+  const setPlyoGymButtonActive = (on: boolean): void => {
+    const onBtn = document.getElementById('btn-plyogym-on') as HTMLButtonElement | null;
+    const offBtn = document.getElementById('btn-plyogym-off') as HTMLButtonElement | null;
+    if (onBtn) onBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+    if (offBtn) offBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  };
+  document.getElementById('btn-plyogym-on')?.addEventListener('click', () => {
+    getMutableState().plyoInGymEnabled = true;
+    saveState();
+    setPlyoGymButtonActive(true);
+  });
+  document.getElementById('btn-plyogym-off')?.addEventListener('click', () => {
+    getMutableState().plyoInGymEnabled = false;
+    saveState();
+    setPlyoGymButtonActive(false);
+  });
+
   const rateInput = document.getElementById('input-guided-rate') as HTMLInputElement | null;
   const rateLabel = document.getElementById('label-guided-rate');
   rateInput?.addEventListener('input', () => {
@@ -1759,6 +1976,14 @@ function wireAccountHandlers(): void {
 
   document.getElementById('btn-commute-config')?.addEventListener('click', () => {
     showCommuteModal();
+  });
+
+  document.getElementById('btn-strength-config')?.addEventListener('click', () => {
+    showStrengthSessionsModal();
+  });
+
+  document.getElementById('btn-exercise-swaps')?.addEventListener('click', () => {
+    showExerciseSwapsModal();
   });
 
   document.getElementById('btn-create-plan')?.addEventListener('click', () => {
@@ -2349,6 +2574,40 @@ function applyRunnerTypeChange(newType: string): void {
 
   s.onboarding.confirmedRunnerType = newType as any;
   s.onboarding.calculatedRunnerType = newType as any;
+  saveState();
+
+  setTimeout(() => {
+    const result = initializeSimulator(s.onboarding!);
+    if (result.success) {
+      window.location.reload();
+    } else {
+      spinner.remove();
+      showSimpleToast('Failed to recalculate: ' + (result.error || 'Unknown error'), 'error');
+    }
+  }, 1000);
+}
+
+/**
+ * Write the new weekly strength count to onboarding and rebuild the plan.
+ * Mirrors `applyRunnerTypeChange`: spinner, `initializeSimulator`, reload.
+ * `initializeSimulator` dispatches by `trainingMode`, so this rebuilds the
+ * correct mode's plan (running / triathlon / cycling) and preserves history.
+ */
+function applyGymSessionsChange(n: number): void {
+  const s = getMutableState();
+  if (!s.onboarding) return;
+
+  const spinner = document.createElement('div');
+  spinner.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;';
+  spinner.innerHTML = `
+    <div style="width:40px;height:40px;border:3px solid var(--c-border);border-top-color:var(--c-black);border-radius:50%;animation:spin 0.7s linear infinite;margin-bottom:16px"></div>
+    <div style="font-size:15px;font-weight:600;color:var(--c-black)">Rebuilding plan…</div>
+    <div style="font-size:12px;color:var(--c-muted);margin-top:4px">Recalculating your workouts</div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  `;
+  document.body.appendChild(spinner);
+
+  s.onboarding.gymSessionsPerWeek = n;
   saveState();
 
   setTimeout(() => {

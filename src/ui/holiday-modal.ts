@@ -882,7 +882,7 @@ export function buildHolidayBannerHome(s: SimulatorState): string {
   if (isFuture) {
     const daysUntil = daysBetween(today, holiday.startDate);
     return `
-      <div id="home-holiday-banner" style="margin:0 14px 8px;border-radius:16px;overflow:hidden;
+      <div id="home-holiday-banner" style="margin:0 16px 8px;border-radius:16px;overflow:hidden;
                   border:1px solid rgba(0,0,0,0.08);background:var(--c-surface);
                   box-shadow:0 1px 8px rgba(0,0,0,0.06)">
         <div style="height:3px;background:var(--c-border-strong)"></div>
@@ -912,7 +912,7 @@ export function buildHolidayBannerHome(s: SimulatorState): string {
     : 'No running';
 
   return `
-    <div id="home-holiday-banner" style="margin:0 14px 8px;border-radius:16px;overflow:hidden;
+    <div id="home-holiday-banner" style="margin:0 16px 8px;border-radius:16px;overflow:hidden;
                 border:1px solid rgba(0,0,0,0.08);
                 background:var(--c-surface);
                 box-shadow:0 1px 8px rgba(0,0,0,0.06)">

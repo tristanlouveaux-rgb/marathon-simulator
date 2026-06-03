@@ -73,12 +73,27 @@ export function persistStrengthLifts(records: SetRecord[] | undefined, state: Si
     entry.lastRir = rir;
     entry.lastDate = date;
 
-    const est = estimate1RM(weightKg, repCount(reps));
+    const newReps = repCount(reps);
+    const est = estimate1RM(weightKg, newReps);
     if (est > 0) {
-      entry.est1rmKg = Math.round(est * 10) / 10;
-      entry.est1rmSource = 'derived';
-      entry.est1rmUpdatedAt = date;
-      appendEst1rmSample(entry, entry.est1rmKg);
+      const newEst = Math.round(est * 10) / 10;
+      // 1RM estimates inflate with reps and are not comparable across rep
+      // schemes (Epley is only valid near the load tested — a 12-rep set's
+      // estimate routinely exceeds a heavier 5-rep set's). Advance the 1RM
+      // benchmark + trend history ONLY on a comparable-or-stronger effort: reps
+      // <= the prior best's reps AND a higher estimate. A higher-rep day still
+      // updates working-weight memory (above) but does not move the benchmark or
+      // mint a false PR. First observation sets the baseline. See SCIENCE_LOG §BD.
+      const prevEst = entry.est1rmKg;
+      const prevReps = entry.est1rmReps;
+      const comparable = prevReps == null || (Number.isFinite(newReps) && newReps <= prevReps);
+      if (prevEst == null || (comparable && newEst > prevEst)) {
+        entry.est1rmKg = newEst;
+        entry.est1rmReps = Number.isFinite(newReps) ? newReps : undefined;
+        entry.est1rmSource = 'derived';
+        entry.est1rmUpdatedAt = date;
+        appendEst1rmSample(entry, newEst, Number.isFinite(newReps) ? newReps : undefined);
+      }
     }
 
     log.lifts[key] = entry;
@@ -87,6 +102,60 @@ export function persistStrengthLifts(records: SetRecord[] | undefined, state: Si
 
   if (wrote) state.strengthLog = log;
   return wrote;
+}
+
+/**
+ * Seed (or correct) a lift's estimated-1RM from a manual entry on the Stats
+ * strength page. The athlete supplies EITHER a direct 1RM (caller passes
+ * `reps = 1`) OR a working weight x reps (caller passes the real reps); both
+ * land here as a (weightKg, reps) pair and we Epley-derive the 1RM the same way
+ * a logged set does. Marked `est1rmSource: 'user'`.
+ *
+ * Manual entry is authoritative: it overwrites whatever was there (the user is
+ * stating their current number), unlike the auto-derive path which only
+ * advances. A later logged set still overrides this via the est1rmReps gate in
+ * persistStrengthLifts (provenance flips back to 'derived' on a comparable PR).
+ *
+ * `lastWeightKg` / `lastReps` are seeded too so future workout prescriptions can
+ * target a real load instead of the "@X% 1RM" placeholder.
+ */
+export function seedManualLift(
+  state: SimulatorState,
+  opts: { key: string; displayName: string; weightKg: number; reps: number },
+): boolean {
+  const { key, displayName, weightKg, reps } = opts;
+  if (!key || !(weightKg > 0) || !(reps > 0)) return false;
+  // A 1-rep effort IS the 1RM — don't run Epley (which returns w*(1+1/30) at
+  // reps=1 and would inflate a directly-entered max by ~3%). Only weight x reps
+  // gets the Epley estimate.
+  const est = reps === 1 ? weightKg : estimate1RM(weightKg, reps);
+  if (!(est > 0)) return false;
+  const newEst = Math.round(est * 10) / 10;
+  const date = todayISO();
+
+  const log: StrengthLog = state.strengthLog ?? { lifts: {} };
+  if (!log.lifts) log.lifts = {};
+
+  const entry: StrengthLiftEntry = log.lifts[key] ?? { key, displayName, lastDate: date };
+  entry.displayName = displayName || entry.displayName;
+  // Working-weight memory is seeded ONLY from a real working set (weight x reps).
+  // A direct 1RM is not a working weight — seeding lastWeightKg=1RM would make the
+  // next session prescribe "Last: <1RM> x 1" and bump from a max. For a pure 1RM we
+  // set the benchmark only and leave any existing working-weight memory untouched.
+  if (reps > 1) {
+    entry.lastWeightKg = weightKg;
+    entry.lastReps = String(reps);
+  }
+  entry.lastDate = date;
+  entry.est1rmKg = newEst;
+  entry.est1rmReps = reps;
+  entry.est1rmSource = 'user';
+  entry.est1rmUpdatedAt = date;
+  appendEst1rmSample(entry, newEst, reps);
+
+  log.lifts[key] = entry;
+  state.strengthLog = log;
+  return true;
 }
 
 /**
@@ -114,6 +183,7 @@ export function summariseLoggedLifts(records: SetRecord[] | undefined): GarminAc
       exerciseName: weighted.exerciseName,
       weightKg: weighted.weightKg,
       reps,
+      sets: group.length,   // working sets logged for this exercise (for tonnage)
       estimatedOneRmKg: est > 0 ? Math.round(est * 10) / 10 : undefined,
       liftKey: weighted.liftKey,
     });

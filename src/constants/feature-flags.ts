@@ -55,3 +55,29 @@ export const STRAVA_ENABLED: boolean = true;
  * Garmin connect button is NOT yet gated by this flag (dev still needs it).
  */
 export const GARMIN_CONNECT_ENABLED: boolean = false;
+
+/**
+ * AI Coach surface (LLM chat, training-snapshot export, "Generate with Coach"
+ * brain workouts, the RevenueCat coach subscription + paywall).
+ *
+ * HIDDEN 2026-06-02 (Tristan) for App Store v1. Two independent reasons:
+ *  1. Strava's June 2026 API Policy §5.3 bans feeding Strava Data (and anything
+ *     derived from it) into an AI Application. Strava is the REQUIRED pipe for
+ *     Garmin users, so the Coach cannot serve that cohort. See docs/AI_STRATEGY.md.
+ *  2. A visible LLM coach (training advice, external-AI wiring, generative
+ *     content) adds avoidable App Store review surface. v1 ships as a paid base
+ *     app with no AI; the Coach stays in our back pocket.
+ *
+ * `false` buries every reachable entry point: the "Coach" buttons on the running,
+ * triathlon, and home heroes, and the Account "AI Coach" section. `renderCoachView`
+ * also hard-gates on this constant so there is NO ungated back door (the lesson
+ * from GARMIN_CONNECT_ENABLED's "not yet gated" Account exception above).
+ *
+ * KEPT (deterministic, no LLM, no Strava-AI exposure): the daily-coach narration
+ * (`computeDailyCoach`) rendered inline on home/plan, and the free rule-based
+ * workout generator. Those are not gated by this flag.
+ *
+ * Unhiding depends on the Strava BYOK/personal-use answer (ISSUE-252) and an
+ * App Store strategy for the AI surface. Do not flip without both.
+ */
+export const AI_COACH_ENABLED: boolean = false;

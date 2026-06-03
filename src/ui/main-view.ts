@@ -233,7 +233,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
         <div style="max-width:600px;margin:0 auto;padding:16px 20px">
           <div class="flex items-center justify-between">
             <div>
-              <h1 class="text-xl font-semibold" style="${titleStyle}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name + "'s" : 'Your'} ${getPlanName(s)}`}</h1>
+              <h1 class="text-xl font-semibold" style="${titleStyle}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + "'s" : 'Your'} ${getPlanName(s)}`}</h1>
               <p class="text-xs" style="${subtitleStyle}">${injured ? 'Recovery Plan Active' : getHeaderSubtitle(s, blockNum)}</p>
             </div>
             <div class="flex items-center gap-3">

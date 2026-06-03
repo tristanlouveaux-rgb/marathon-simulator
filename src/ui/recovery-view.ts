@@ -11,7 +11,7 @@ import { getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import { CONF_MEDIUM_FLOOR, K_USER_DEFAULT } from '@/calculations/adaptive-recovery';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+import { buildFloweyBackground, buildSunGlint, atmosphereGradient } from './page-flair';
 void buildSkyBackground; void skyAnimationCSS;
 const GREEN_A  = '#4ADE80';
 const GREEN_B  = '#22C55E';
@@ -369,7 +369,11 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
       #rec-view *, #rec-view *::before, #rec-view *::after { box-sizing:inherit; }
       @keyframes recFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .r-fade { opacity:0; animation:recFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${floweyAnimationCSS('rec')}
+      /* Background is intentionally STATIC: the glass cards + hero ring use
+         backdrop-filter, and an animating flowey background behind them flickers
+         the glass (RUNBOOK Cause 2, the 2026-05-27 Readiness flicker — same fault
+         here). The waves rest at translateX(0), so static looks identical.
+         Do NOT re-add floweyAnimationCSS('rec'). */
       .rec-date-pill:hover { background:rgba(34,197,94,0.1)!important; }
     </style>
 
@@ -632,41 +636,78 @@ function renderPersonalRecoveryCard(s: SimulatorState): string {
   const ar = s.adaptiveRecovery;
   if (!ar) return '';
 
-  const ratio = ar.kUserHours / K_USER_DEFAULT;
-  const ratioPct = Math.round(ratio * 100);
-  const fasterOrSlower = ar.kUserHours < K_USER_DEFAULT
-    ? 'faster than average'
-    : ar.kUserHours > K_USER_DEFAULT
-    ? 'slower than average'
-    : 'on par with average';
+  // index 1.0 = recovers as fast as a typical person for the intensity of the
+  // sessions they do (the expectation is HR-zone / intensity matched, so it is
+  // fitness-relative and a fair cross-person comparison). <1 faster, >1 slower.
+  const index = ar.kUserHours / K_USER_DEFAULT;
+  const measured = ar.confidence === 'medium' || ar.confidence === 'high';
 
-  const valueLine = ar.confidence === 'medium' || ar.confidence === 'high'
-    ? `<div style="display:flex;align-items:baseline;gap:6px;margin-top:4px">
-         <span style="font-size:24px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${ratio.toFixed(2)}×</span>
-         <span style="font-size:13px;font-weight:500;color:${TEXT_S}">${fasterOrSlower}</span>
+  // Density-limited: many sessions logged, too few followed by a rest gap to read
+  // cleanly. Show the honest explanation instead of a value or a "needs more
+  // sessions" meter (more sessions won't help — rest gaps will).
+  if (ar.densityLimited && !measured) {
+    return recoveryCardShell(
+      `<div style="font-size:15px;font-weight:600;color:${TEXT_S};margin-top:4px">Training too densely to read</div>`,
+      `Mosaic reads your recovery from sessions that are followed by a rest gap. You have been training back-to-back, so there is not yet a clean window to measure. An easy or rest day opens one.`,
+    );
+  }
+
+  // Lead with the plain verdict, not the bare multiplier (the number alone read as
+  // "not ready"). Show the index to 1 decimal — it is a noisy estimate, so finer
+  // precision is false. The "typical" band is whatever rounds to 1.0× (i.e. within
+  // 5%), tied to the display rounding rather than a separate tuned threshold.
+  const display = index.toFixed(1);
+  const isTypical = display === '1.0';
+  const faster = !isTypical && index < 1;
+  const verdict = isTypical ? 'Recovers at a typical rate'
+    : faster ? 'Recovers faster than typical'
+    : 'Recovers slower than typical';
+
+  const valueLine = measured
+    ? `<div style="margin-top:4px">
+         <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em;line-height:1.1">${verdict}</div>
+         <div style="font-size:13px;font-weight:500;color:${TEXT_S};margin-top:3px">${display}× the typical recovery time</div>
        </div>`
     : `<div style="display:flex;align-items:baseline;gap:6px;margin-top:4px">
          <span style="font-size:24px;font-weight:700;color:${TEXT_S};letter-spacing:-0.02em;line-height:1">${ar.sessionsObserved} / ${CONF_MEDIUM_FLOOR}</span>
-         <span style="font-size:13px;font-weight:500;color:${TEXT_S}">sessions</span>
+         <span style="font-size:13px;font-weight:500;color:${TEXT_S}">clean readings</span>
        </div>`;
 
-  const impactLine = ar.confidence === 'high'
-    ? `Used in your recovery countdown and load ramp.`
-    : ar.confidence === 'medium'
-    ? `Used in your recovery countdown. The load ramp picks this up at 30 sessions.`
-    : ar.confidence === 'low'
-    ? `Logging RPE and check-ins makes this faster.`
-    : `Each completed session and check-in teaches Mosaic how you recover.`;
+  // The comparison is to a typical person AT THE SAME RELATIVE INTENSITY (HR-zone
+  // matched), so being fit and training a lot does not make you read slow.
+  const meaning = isTypical
+    ? `Your heart-rate markers return to baseline about as fast as typical for the intensity of the sessions you do.`
+    : faster
+    ? `Your heart-rate markers return to baseline faster than typical for the intensity of the sessions you do.`
+    : `Your heart-rate markers take longer than typical to return to baseline for the intensity of the sessions you do.`;
 
+  const impactLine = !measured
+    ? (ar.confidence === 'low'
+        ? `Mosaic is learning how quickly your recovery markers return to baseline. It reads sessions that are followed by a rest day.`
+        : `Each session followed by a rest day teaches Mosaic how quickly your recovery markers return to baseline.`)
+    : ar.confidence === 'high'
+    ? `${meaning} Mosaic uses this to set how long your recovery countdown runs and how quickly your weekly training load climbs.`
+    : `${meaning} Mosaic uses this to set how long your recovery countdown runs.`;
+
+  return recoveryCardShell(valueLine, impactLine);
+}
+
+/** Shared card chrome (icon + title + value line + caption) for the personal
+ * recovery rate surface, so the measured, learning, and density-limited states
+ * render identically. */
+function recoveryCardShell(valueLineHtml: string, captionText: string): string {
+  // No horizontal padding here: this card renders INSIDE the Detailed Metrics
+  // section (already padded 0 16px), so it matches the HRV/RHR chart cards' width.
+  // border-radius 16 + padding 20 mirror those sibling cards exactly.
   return `
-    <div class="r-fade" style="animation-delay:0.32s;padding:0 16px;margin-bottom:14px">
-      <div style="background:white;border-radius:16px;padding:18px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+    <div class="r-fade" style="animation-delay:0.32s;margin-bottom:14px">
+      <div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${TEXT_L}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
-          <span style="font-size:14px;font-weight:600;color:${TEXT_S}">Personal recovery rate</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${TEXT_S}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span style="font-size:15px;font-weight:600;color:${TEXT_M}">Personal recovery rate</span>
         </div>
-        ${valueLine}
-        <div style="font-size:12px;color:${TEXT_L};margin-top:8px;line-height:1.5">${impactLine}</div>
+        ${valueLineHtml}
+        <div style="font-size:12px;color:${TEXT_L};margin-top:8px;line-height:1.5">${captionText}</div>
       </div>
     </div>
   `;

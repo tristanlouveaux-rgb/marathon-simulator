@@ -142,6 +142,9 @@ export function runMarathonForecastSim(
     weekly_volume_hours: s.onboarding?.weeklyTrainingHours,
     hm_pb_seconds: s.pbs?.h || undefined,
     lt_pace_sec_per_km: s.lt || undefined,
+    // Keep the cone's mean (and thus its spread) on the same basis as the
+    // strength-aware displayed forecast (§BC) so they don't diverge.
+    strength_sessions_per_week: s.gs,
   });
 
   // Apply the same adaptation-ratio multiplier the deterministic path uses.
