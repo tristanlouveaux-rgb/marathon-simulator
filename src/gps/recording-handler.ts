@@ -11,6 +11,7 @@ import { render } from '@/ui/renderer';
 import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion-modal';
 import { deleteGpsRecording } from '@/gps/persistence';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
@@ -160,7 +161,7 @@ function handleImpromptuRun(
         const w = weekWorkouts.find(w => w.n === mod.name && w.dayOfWeek === mod.dayOfWeek);
         if (w) {
           w.status = mod.status as any;
-          w.d = mod.newDistance;
+          w.d = modDisplayDescription(mod, ms.pac?.e);
           w.t = mod.newType || w.t;
           const loads = calculateWorkoutLoad(w.t, w.d, (mod.newRpe || 5) * 10);
           w.aerobic = loads.aerobic;

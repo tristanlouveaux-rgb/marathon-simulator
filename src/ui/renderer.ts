@@ -28,6 +28,7 @@ import { showMatchProposal } from './sync-modal';
 import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
+import { modDisplayDescription } from '@/workouts/workout-scaling';
 
 // Expose explanation modals globally for onclick handlers
 declare global {
@@ -315,7 +316,8 @@ export function render(): void {
         workout.confidence = mod.confidence as any;
         if (mod.status === 'reduced' || mod.status === 'replaced') {
           workout.originalDistance = mod.originalDistance;
-          workout.d = mod.newDistance;
+          // Same easy pace generation used, so a retargeted pace matches the plan.
+          workout.d = modDisplayDescription(mod, gp(currentVDOT, s.lt).e);
           if (mod.newType) workout.t = mod.newType;
           if (mod.newRpe != null) {
             workout.rpe = mod.newRpe;

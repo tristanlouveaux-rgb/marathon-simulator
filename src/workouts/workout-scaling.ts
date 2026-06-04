@@ -27,6 +27,8 @@
  * invented (per CLAUDE.md "No Made-Up Numbers").
  */
 
+import { paceSecPerKmForRunType, fmtDist } from './intent_to_workout';
+
 /** Ascending intensity ladder. Mirrors PACE_LADDER in cross-training/timing-check.ts:37
  *  (index 0 = easiest). Long runs step through their own sub-ladder below. */
 export const INTENSITY_LADDER = ['easy', 'marathon', 'threshold', 'vo2'] as const;
@@ -52,6 +54,18 @@ export const LESS_TIME_FACTOR = 0.75;
  *  blocks, warm-up/cool-down, an explicit minutes block). For these there is no
  *  single honest "distance", so the card headlines time only. */
 const STRUCTURED_HINT = /\d\s*[x×]\s*\d|@|interval|\brep\b|\bWU\b|\bCD\b|warm\s*up|cool\s*down|\bmin\b/i;
+
+/** A bare pace target appended to a distance run: "@ 6:10/km", "@ MP (4:55/km)",
+ *  or the suggester's "@ 5:33/km (steady)" form. These don't make a session
+ *  structured — "7km @ 6:10/km" is still a simple distance run. Mi variants are
+ *  matched too since fmtDesc-converted strings occasionally round-trip. */
+const PACE_TOKEN = /\s*@\s*(?:MP\s*\()?\d+:\d{2}\/(?:km|mi)\)?(?:\s*\((?:steady|easy|hard)\))?/gi;
+
+/** Strip pace targets from a description, leaving the structural tokens. Used to
+ *  classify simple-distance sessions and to render clean "Original: 8km" captions. */
+export function stripPaceTokens(desc: string | undefined): string {
+  return (desc ?? '').replace(PACE_TOKEN, '').replace(/\s{2,}/g, ' ').trim();
+}
 
 const clampFactor = (f: number) => Math.max(DURATION_SCALE_MIN, Math.min(DURATION_SCALE_MAX, f));
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -88,7 +102,9 @@ export function supportsDurationScale(desc: string | undefined): boolean {
  *  time only — this is what prevents a tempo from mis-displaying its warm-up
  *  distance ("2.0 km") as the whole session. */
 export function isSimpleDistanceDesc(desc: string | undefined): boolean {
-  const d = desc ?? '';
+  // A pace target alone ("7km @ 6:10/km") doesn't make a run structured —
+  // strip it before testing, so paced easy/long runs keep their km headline.
+  const d = stripPaceTokens(desc);
   if (STRUCTURED_HINT.test(d)) return false;
   return /^\s*\d+(?:\.\d+)?\s*km\b/i.test(d);
 }
@@ -127,6 +143,122 @@ export function stepIntensity(type: string, dir: 'easier' | 'harder'): string {
  *  disable the Easier/Harder buttons at the ladder ends. */
 export function canStepIntensity(type: string, dir: 'easier' | 'harder'): boolean {
   return stepIntensity(type, dir) !== type;
+}
+
+// ── Intensity retargeting (descriptions stay truthful after Adjust) ──────────
+// When the user steps a session Easier/Harder, the prescription numbers baked
+// into the description must follow. Running paces come from the canonical
+// RUN_PACE_FACTOR_VS_EASY map (intent_to_workout.ts) — the same factors
+// generation uses. Bike watts scale by the intensity-ladder %FTP ratio; swim
+// paces shift by the ladder's CSS-offset delta. No new constants.
+
+const fmtPaceMSS = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+/**
+ * Rewrite the work-pace targets in a running description for a new run type.
+ * Handles the shapes our generators emit:
+ *  - "7km @ 6:10/km"                        → pace replaced
+ *  - "22min @ MP (4:55/km)"                 → MP label kept only for marathon
+ *  - "5×6min @ 4:30/km (~1.3km), 1 min..."  → pace replaced, distance hint recomputed
+ *  - "7km" (legacy, no pace)                → pace appended
+ * Warm-up/cool-down paces ("(6:10/km+)") are easy-anchored and stay untouched.
+ * Returns the description unchanged when the new type has no pace mapping or
+ * easy pace is unknown.
+ */
+export function retargetDescriptionPace(desc: string, newType: string, easyPaceSecPerKm?: number): string {
+  const paceSec = paceSecPerKmForRunType(newType, easyPaceSecPerKm);
+  if (!paceSec || !desc) return desc;
+  const isMp = newType === 'marathon' || newType === 'marathon_pace';
+  const newLabel = isMp ? `MP (${fmtPaceMSS(paceSec)}/km)` : `${fmtPaceMSS(paceSec)}/km`;
+
+  let out = desc;
+  // Rep/continuous blocks with a distance hint: "6min @ 4:30/km (~1.3km)".
+  // The hint is the rep duration at the work pace, so recompute it.
+  out = out.replace(
+    /(\d+(?:\.\d+)?)\s*min @ (?:MP\s*\()?\d+:\d{2}\/km\)?(?!\+)\s*\(~[^)]*\)/g,
+    (_m, min) => `${min}min @ ${newLabel} (~${fmtDist(parseFloat(min), paceSec)})`,
+  );
+  // Remaining work-pace tokens, with or without the MP wrapper. A trailing
+  // "(steady)"-style annotation from the suggester is dropped (it described
+  // the old intensity).
+  out = out.replace(
+    /@\s*(?:MP\s*\()?\d+:\d{2}\/km\)?(?!\+)(\s*\((?:steady|easy|hard)\))?/g,
+    `@ ${newLabel}`,
+  );
+  // Legacy pace-less simple distance ("7km"): append the target.
+  if (out === desc && !/@/.test(desc) && /^\s*\d+(?:\.\d+)?\s*km\s*$/i.test(desc)) {
+    out = `${desc.trim()} @ ${newLabel}`;
+  }
+  return out;
+}
+
+/** The description a re-applied WorkoutMod should display. User-scale mods that
+ *  changed intensity retarget their pace live from the current easy pace — this
+ *  heals mods saved before paces were embedded in descriptions AND keeps an
+ *  adjusted session's pace tracking marker updates, exactly like unadjusted
+ *  sessions (which regenerate fresh every render). Non-user mods (timing /
+ *  coach / auto) pass through untouched — their authors own their copy. */
+export function modDisplayDescription(
+  mod: { newDistance: string; newType?: string; userScaledAt?: string },
+  easyPaceSecPerKm?: number,
+): string;
+export function modDisplayDescription(
+  mod: { newDistance?: string; newType?: string; userScaledAt?: string },
+  easyPaceSecPerKm?: number,
+): string | undefined;
+export function modDisplayDescription(
+  mod: { newDistance?: string; newType?: string; userScaledAt?: string },
+  easyPaceSecPerKm?: number,
+): string | undefined {
+  if (mod.newDistance && mod.userScaledAt && mod.newType) {
+    return retargetDescriptionPace(mod.newDistance, mod.newType, easyPaceSecPerKm);
+  }
+  return mod.newDistance;
+}
+
+/**
+ * Display-layer pace append for persisted simple-distance run descriptions that
+ * predate pace embedding or were written by producers that only store distance:
+ * ad-hoc sessions ("7km" objects in adhocWorkouts never regenerate), coach/auto
+ * reductions ("4km (was 6.1km)"), km-nudge ("4km easy"). Returns the description
+ * with the type's target pace appended — never mutates state, so the pace stays
+ * live against the current easy pace. No-op when the description already carries
+ * a target, isn't a simple distance shape, or the type has no pace mapping.
+ */
+export function displayDescWithPace(desc: string | undefined, type: string | undefined, easyPaceSecPerKm?: number): string {
+  const d = (desc ?? '').trim();
+  if (!d || !type) return d;
+  if (/@|\d:\d{2}\//.test(d)) return d; // already carries a target
+  const pace = paceSecPerKmForRunType(type, easyPaceSecPerKm);
+  if (!pace) return d;
+  // Simple distance shapes only: "7km", "4km easy", "4km (was 6.1km)".
+  const m = /^(\d+(?:\.\d+)?\s*km)(\s+(?:easy|steady))?(\s*\(was [^)]+\))?$/i.exec(d);
+  if (!m) return d;
+  const isMp = type === 'marathon' || type === 'marathon_pace';
+  const label = isMp ? `MP (${fmtPaceMSS(pace)}/km)` : `${fmtPaceMSS(pace)}/km`;
+  return `${m[1]} @ ${label}${m[3] ?? ''}`;
+}
+
+/** Scale every "lo–hiW" watt range in a bike description by `ratio`
+ *  (new rung %FTP ÷ original rung %FTP). Preserves the session's segment
+ *  structure and per-kind tolerance band. */
+export function scaleWattRanges(desc: string, ratio: number): string {
+  if (!desc || !Number.isFinite(ratio) || ratio <= 0 || ratio === 1) return desc;
+  return desc.replace(/(\d+)–(\d+)\s*W/g, (_m, lo, hi) =>
+    `${Math.round(parseInt(lo, 10) * ratio)}–${Math.round(parseInt(hi, 10) * ratio)}W`);
+}
+
+/** Replace every absolute "M:SS/100m" swim pace in a description with the
+ *  target pace for the chosen intensity rung (CSS + the rung's offset). Direct
+ *  replacement — not a relative shift — so the card always agrees with the
+ *  detail modal's live Target line, which derives from the same rung. */
+export function setSwimPaceTokens(desc: string, secPer100m: number): string {
+  if (!desc || !Number.isFinite(secPer100m) || secPer100m <= 0) return desc;
+  const sec = Math.round(secPer100m);
+  const label = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}/100m`;
+  // A trailing "(CSS)" annotation described the original pace — drop it, the
+  // new pace is rung-relative, not CSS itself.
+  return desc.replace(/\d+:\d{2}\/100m(\s*\(CSS\))?/g, label);
 }
 
 /** Minimal shape a WorkoutMod needs for matching (avoids a type import here). */

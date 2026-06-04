@@ -16,7 +16,7 @@ import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
-import { findWorkoutForMod } from '@/workouts/workout-scaling';
+import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -369,7 +369,9 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
         workout.confidence = mod.confidence as any;
         if (mod.status === 'reduced' || mod.status === 'replaced') {
           workout.originalDistance = mod.originalDistance;
-          workout.d = mod.newDistance;
+          // Same easy pace the generation above used (gp(currentVDOT, s.lt).e),
+          // so the graded target carries the same retargeted pace the plan shows.
+          workout.d = modDisplayDescription(mod, gp(currentVDOT, s.lt).e);
           if (mod.newType) workout.t = mod.newType;
           if (mod.newRpe != null) {
             workout.rpe = mod.newRpe;

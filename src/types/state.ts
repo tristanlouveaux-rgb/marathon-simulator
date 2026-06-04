@@ -136,6 +136,10 @@ export interface Workout extends WorkoutDefinition {
    *  per-session Adjust "Harder/Easier" control on object-mode (tri/cycling/HYROX)
    *  sessions; the target watts/pace are derived live from FTP/CSS at this rung. */
   intensityLevel?: string;
+  /** Generation-time intensityLevel before the first user rung change (null =
+   *  "had none"). Anchors description retargeting on re-adjusts and lets Reset
+   *  restore a generation-stamped rung instead of clearing it. */
+  originalIntensityLevel?: string | null;
   /** Garmin/Strava activity ID matched to this workout. Populated by the tri matcher so
    *  the effort multiplier can read powerAdherence from the matched actual. */
   matchedActivityId?: string;

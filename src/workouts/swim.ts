@@ -163,11 +163,11 @@ const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: st
     },
   ],
   speed: [
-    (m, _) => {
+    (m, hint) => {
       const mainM = Math.max(300, m - 400);
       const reps = Math.min(12, Math.max(6, Math.round(mainM / 50)));
       void mainM;
-      return `${m}m total. 200m Warm up. Main: ${reps}×50m fast (CSS −5s/100m), 30s rest. 200m Cool down.`;
+      return `${m}m total. 200m Warm up. Main: ${reps}×50m fast${hint}, 30s rest. 200m Cool down.`;
     },
     (m, _) => {
       const mainM = Math.max(300, m - 400);
@@ -175,7 +175,7 @@ const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: st
       void mainM;
       return `${m}m total. 200m Warm up. Main: ${reps}×25m sprint on 30s. 200m Cool down.`;
     },
-    (m, _) => `${m}m total. 200m Warm up. Main: 8×75m as 25m fast + 50m easy, 20s rest. 200m Cool down.`,
+    (m, hint) => `${m}m total. 200m Warm up. Main: 8×75m as 25m fast${hint} + 50m easy, 20s rest. 200m Cool down.`,
   ],
 };
 
@@ -191,6 +191,8 @@ export function describeSwimSession(
   const paceHint = css ? ` @ ${formatPace(css)}/100m (CSS)` : '';
   // Technique sessions swim ~10s/100m slower than CSS. Show absolute pace when CSS is known.
   const techHint = css ? ` @ ${formatPace(css + 10)}/100m` : '';
+  // Speed reps target CSS −5s/100m (the in-variant spec). Absolute when CSS known.
+  const speedHint = css ? ` @ ${formatPace(css - 5)}/100m` : ' (CSS −5s/100m)';
   const drillHint = skill <= 2 ? ' Focus on body position and breathing.' : '';
   const variants = SWIM_VARIANTS[kind];
   // Rotate by weekIndex + slotIndex so two same-kind sessions in one week
@@ -199,7 +201,7 @@ export function describeSwimSession(
   const idx = (explicitVariantIndex != null
     ? explicitVariantIndex
     : Math.abs((weekIndex - 1) + slotIndex * 2)) % variants.length;
-  const hint = kind === 'technique' ? techHint : paceHint;
+  const hint = kind === 'technique' ? techHint : kind === 'speed' ? speedHint : paceHint;
   return variants[idx](totalM, hint) + (kind === 'technique' ? drillHint : '');
 }
 

@@ -238,7 +238,7 @@ export function describeBikeSession(
     case 'endurance': {
       const variants = [
         () => `${pretty(minutes)} steady @ ${hasPower && ftp ? pw(0.65) : `Z2 endurance${hr('2')}`}. Conversational throughout.`,
-        () => `${pretty(minutes)} rolling endurance — stay in Z2 on the flats, allow Z3 spikes on climbs. Recover on descents.`,
+        () => `${pretty(minutes)} rolling endurance — stay in Z2${hasPower && ftp ? ` (${pw(0.65)})` : ''} on the flats, allow Z3 spikes on climbs. Recover on descents.`,
         () => `${pretty(minutes)} fasted endurance (optional) @ ${pw(0.60)}. Low intensity, long duration — aerobic base.`,
       ];
       return variants[idx % variants.length]();

@@ -1,7 +1,7 @@
 import type { SimulatorState } from '@/types';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
-import { findWorkoutForMod } from '@/workouts/workout-scaling';
+import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayMods, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
 import { isTimingMod } from '@/cross-training/timing-check';
@@ -64,7 +64,9 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
         if (mod.autoReduceNote != null) (w as any).autoReduceNote = mod.autoReduceNote;
         if (!isTimingMod(mod.modReason)) {
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
-          (w as any).d = mod.newDistance;
+          // User intensity changes re-derive their pace live (heals pre-pacing
+          // mods, tracks marker updates like freshly-generated sessions do).
+          (w as any).d = modDisplayDescription(mod, s.pac?.e);
           (w as any).status = mod.status;
           if (mod.newType) (w as any).t = mod.newType;
           if (mod.newRpe != null) (w as any).rpe = mod.newRpe;

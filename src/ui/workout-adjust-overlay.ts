@@ -29,6 +29,7 @@ import {
   scaleDescriptionProportional, scaleDurationMin,
   stepIntensity, canStepIntensity, RPE_BY_TYPE,
   DURATION_SCALE_MIN, DURATION_SCALE_MAX, LESS_TIME_FACTOR,
+  retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens,
 } from '@/workouts/workout-scaling';
 import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER, BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 import { loadForBike, type BikeSessionKind } from '@/workouts/bike';
@@ -338,10 +339,14 @@ export function openWorkoutAdjust(workout: Workout, weekIdx: number, opts: Adjus
     if (!typeChanged && !rungChanged && !durChanged) { close(); return; } // nothing to apply
 
     const f = pct / 100;
+    let newDesc = canDuration ? scaleDescriptionProportional(origDesc, f) : origDesc;
+    // Intensity change → the pace baked into the description must follow.
+    // Same canonical factors generation uses, anchored to the live easy pace.
+    if (typeChanged) newDesc = retargetDescriptionPace(newDesc, selectedType, s.pac?.e);
     const args: ScaleArgs = {
       origDesc,
       origMin,
-      newDesc: canDuration ? scaleDescriptionProportional(origDesc, f) : origDesc,
+      newDesc,
       newDurationMin: origMin > 0 ? scaleDurationMin(origMin, f) : undefined,
       newType: typeChanged ? selectedType : undefined,
       newRpe: typeChanged ? RPE_BY_TYPE[selectedType] : undefined,
@@ -462,8 +467,33 @@ function applyObjectScale(weekIdx: number, store: 'triWorkouts' | 'adhocWorkouts
   // Stash original load once so Reset can restore it (the recompute below overwrites it).
   if (w.originalAerobic == null && typeof w.aerobic === 'number') w.originalAerobic = w.aerobic;
   if (w.originalAnaerobic == null && typeof w.anaerobic === 'number') w.originalAnaerobic = w.anaerobic;
+  // Stash the generation-time rung once (null = "had none"), so re-adjusts and
+  // Reset anchor to the plan, not to a previous user rung.
+  if (args.newIntensityLevel && w.originalIntensityLevel === undefined) {
+    w.originalIntensityLevel = w.intensityLevel ?? null;
+  }
 
-  w.d = args.newDesc;
+  // Rung change → the watt/pace targets baked into the description must follow.
+  // newDesc derives from the ORIGINAL description, so scale relative to the
+  // original rung: the stashed generation rung, else the rung matching the
+  // session type. Kinds with no ladder rung (hills, over-unders, micros,
+  // sprints) keep their description — the detail modal's live Target line
+  // carries the adjusted prescription there.
+  let finalDesc = args.newDesc;
+  if (args.newIntensityLevel) {
+    const baseKey = (w.originalIntensityLevel ?? w.t) as string;
+    if (args.newIntensityLevel.startsWith('bike_')) {
+      const from = BIKE_INTENSITY_LADDER.find(r => r.key === baseKey);
+      const to = BIKE_INTENSITY_LADDER.find(r => r.key === args.newIntensityLevel);
+      if (from && to) finalDesc = scaleWattRanges(finalDesc, to.pct / from.pct);
+    } else if (args.newIntensityLevel.startsWith('swim_')) {
+      const to = SWIM_INTENSITY_LADDER.find(r => r.key === args.newIntensityLevel);
+      const css = getMutableState().triConfig?.swim?.cssSecPer100m;
+      if (to && css && css > 0) finalDesc = setSwimPaceTokens(finalDesc, css + to.cssOffsetSec);
+    }
+  }
+
+  w.d = finalDesc;
   if (args.newDurationMin != null) w.estimatedDurationMin = args.newDurationMin;
   if (args.newType) w.t = args.newType;
   if (args.newRpe != null) w.rpe = args.newRpe;
@@ -508,7 +538,11 @@ function removeObjectScale(weekIdx: number, store: 'triWorkouts' | 'adhocWorkout
   else delete w.aerobic;
   if (w.originalAnaerobic != null) { w.anaerobic = w.originalAnaerobic; delete w.originalAnaerobic; }
   else delete w.anaerobic;
-  delete w.intensityLevel;
+  // Restore a generation-stamped rung (injury substitutes carry one); plain
+  // sessions had none, so clear it.
+  if (w.originalIntensityLevel != null) w.intensityLevel = w.originalIntensityLevel;
+  else delete w.intensityLevel;
+  delete w.originalIntensityLevel;
   delete w.userScaledAt;
   delete w.status;
   delete w.modReason;

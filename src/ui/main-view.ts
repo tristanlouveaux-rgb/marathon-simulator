@@ -16,6 +16,7 @@ import { initializeSimulator } from '@/state/initialization';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SPORTS_DB } from '@/constants';
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
@@ -135,7 +136,7 @@ function _computeTotalKm(s: any): number {
     if (wk.workoutMods) {
       for (const mod of wk.workoutMods) {
         const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
-        if (w) w.d = mod.newDistance;
+        if (w) w.d = modDisplayDescription(mod, s.pac?.e);
       }
     }
 
@@ -1142,7 +1143,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
       const w = workouts.find(wo => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
       if (w) {
         w.status = mod.status as any;
-        w.d = mod.newDistance;
+        w.d = modDisplayDescription(mod, s.pac?.e);
         if (mod.newType) w.t = mod.newType;
       }
     }

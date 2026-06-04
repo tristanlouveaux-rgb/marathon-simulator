@@ -17,6 +17,32 @@ export interface SessionIntent {
 }
 
 /**
+ * Canonical pace multiplier vs easy pace per run type. Single source for both
+ * generation (this file) and the Adjust overlay's intensity retarget
+ * (workout-scaling.ts retargetDescriptionPace), so an adjusted session shows
+ * exactly the pace generation would have prescribed.
+ * Keys cover both the plan-engine slot names and the Adjust ladder's type
+ * names ('marathon' in INTENSITY_LADDER ≡ 'marathon_pace' here).
+ */
+export const RUN_PACE_FACTOR_VS_EASY: Record<string, number> = {
+  easy: 1,
+  long: 1,
+  marathon: 0.913,
+  marathon_pace: 0.913,
+  threshold: 1 / 1.20,
+  vo2: 0.809,
+  float: 0.84, // 10K pace, the float-fartlek work pace
+};
+
+/** Target pace (sec/km) for a run type, derived from easy pace. Null when the
+ *  type has no defined pace mapping or easy pace is unknown. */
+export function paceSecPerKmForRunType(type: string, easyPaceSecPerKm?: number): number | null {
+  if (!easyPaceSecPerKm || easyPaceSecPerKm <= 0) return null;
+  const factor = RUN_PACE_FACTOR_VS_EASY[type];
+  return factor ? easyPaceSecPerKm * factor : null;
+}
+
+/**
  * Convert a time-based SessionIntent into a Workout with a description string
  * that matches our existing parser formats (simple, time_at_pace, intervals_time, progressive).
  */
@@ -28,13 +54,15 @@ export function intentToWorkout(
 ): Workout {
   const { slot, totalMinutes, workMinutes, reps, repMinutes, recoveryMinutes, variantId } = intent;
 
-  // Derive actual paces from easy pace for readable descriptions
+  // Derive actual paces from easy pace for readable descriptions.
+  // Factors come from the canonical RUN_PACE_FACTOR_VS_EASY map above.
   const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-  const vo2PaceSec = easyPaceSecPerKm ? easyPaceSecPerKm * 0.809 : 0;
-  const thresholdPaceSec = easyPaceSecPerKm ? easyPaceSecPerKm / 1.20 : 0;
-  const vo2Pace = easyPaceSecPerKm ? fmtPace(vo2PaceSec) : null;   // ~VO2max/5K pace
-  const thresholdPace = easyPaceSecPerKm ? fmtPace(thresholdPaceSec) : null;  // ~LT pace
-  const mpPace = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm * 0.913) : null;     // ~Marathon pace
+  const vo2PaceSec = paceSecPerKmForRunType('vo2', easyPaceSecPerKm) ?? 0;
+  const thresholdPaceSec = paceSecPerKmForRunType('threshold', easyPaceSecPerKm) ?? 0;
+  const vo2Pace = vo2PaceSec ? fmtPace(vo2PaceSec) : null;   // ~VO2max/5K pace
+  const thresholdPace = thresholdPaceSec ? fmtPace(thresholdPaceSec) : null;  // ~LT pace
+  const mpPaceSec = paceSecPerKmForRunType('marathon_pace', easyPaceSecPerKm);
+  const mpPace = mpPaceSec ? fmtPace(mpPaceSec) : null;     // ~Marathon pace
   const hmPace = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm * 0.87) : null;      // ~HM pace
 
   // Zone labels with actual pace when available
@@ -50,7 +78,7 @@ export function intentToWorkout(
       return {
         t: 'easy',
         n: nameForSlot(slot, intent),
-        d: `${km}km`,
+        d: easyPaceSecPerKm ? `${km}km @ ${easyLabel}` : `${km}km`,
         r: 3,
         rpe: 3,
         estimatedDurationMin: totalMinutes,
@@ -74,7 +102,7 @@ export function intentToWorkout(
       return {
         t: 'long',
         n: 'Long Run',
-        d: `${km}km`,
+        d: easyPaceSecPerKm ? `${km}km @ ${easyLabel}` : `${km}km`,
         r: 3,
         rpe: 3,
         estimatedDurationMin: totalMinutes,
@@ -160,7 +188,7 @@ export function intentToWorkout(
     case 'float': {
       // Float fartlek: hard reps at 10K/HM effort with "float" recovery at ~MP
       // Recovery is moderate (not jog), training lactate clearance under load
-      const tenKLabel = easyPaceSecPerKm ? `${fmtPace(easyPaceSecPerKm * 0.84)}/km` : '10K pace';
+      const tenKLabel = easyPaceSecPerKm ? `${fmtPace(paceSecPerKmForRunType('float', easyPaceSecPerKm)!)}/km` : '10K pace';
       const floatLabel = mpLabel; // Float recovery ≈ marathon pace
       if (reps && repMinutes && recoveryMinutes) {
         const mainSet = `${reps}×${fmtMin(repMinutes)}min @ ${tenKLabel}, ${fmtMin(recoveryMinutes)}min float @ ${floatLabel}`;
@@ -203,7 +231,7 @@ export function intentToWorkout(
       return {
         t: 'easy',
         n: 'Easy Run',
-        d: `${km}km`,
+        d: easyPaceSecPerKm ? `${km}km @ ${easyLabel}` : `${km}km`,
         r: 3,
         rpe: 3,
         estimatedDurationMin: totalMinutes,
@@ -235,8 +263,10 @@ function wucdKm(sessionMinutes: number, easyPaceSecPerKm?: number): number {
   return Math.ceil(kmPerSide);
 }
 
-/** Format distance from minutes at a given pace — e.g. "800m" or "3.2km" */
-function fmtDist(minutes: number, paceSecPerKm: number): string {
+/** Format distance from minutes at a given pace — e.g. "800m" or "3.2km".
+ *  Exported so retargetDescriptionPace (workout-scaling.ts) recomputes the
+ *  "(~3.2km)" hints with the identical formatting. */
+export function fmtDist(minutes: number, paceSecPerKm: number): string {
   if (!paceSecPerKm) return '?';
   const km = minutes * 60 / paceSecPerKm;
   if (km < 1) return `${Math.round(km * 100) * 10}m`;

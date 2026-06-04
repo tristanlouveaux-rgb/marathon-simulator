@@ -27,6 +27,7 @@ import {
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { generateWeekWorkouts } from '@/workouts';
+import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { isTimingMod } from '@/cross-training/timing-check';
 import type { WorkoutMod } from '@/types';
 import { formatKm } from '@/utils/format';
@@ -58,7 +59,7 @@ function getWeekWorkouts(offset: 0 | 1 = 0) {
     if (!w) continue;
     if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
     (w as any).status = mod.status;
-    if (mod.newDistance != null) (w as any).d = mod.newDistance;
+    if (mod.newDistance != null) (w as any).d = modDisplayDescription(mod, s.pac?.e);
     if (mod.newType) (w as any).t = mod.newType;
   }
 

@@ -133,3 +133,151 @@ describe('findWorkoutForMod (mod re-attachment on render)', () => {
     expect(findWorkoutForMod(week(), mod)).toBeUndefined();
   });
 });
+
+// ── Pace targets on descriptions (2026-06-04 "all workouts have pacings") ────
+
+import {
+  stripPaceTokens, retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens, modDisplayDescription, displayDescWithPace,
+} from './workout-scaling';
+import { paceSecPerKmForRunType, RUN_PACE_FACTOR_VS_EASY } from './intent_to_workout';
+
+const EASY = 370; // 6:10/km
+
+describe('stripPaceTokens / pace-aware isSimpleDistanceDesc', () => {
+  it('strips a bare pace target', () => {
+    expect(stripPaceTokens('7km @ 6:10/km')).toBe('7km');
+  });
+  it('strips the MP wrapper and suggester annotations', () => {
+    expect(stripPaceTokens('20km @ MP (4:55/km)')).toBe('20km');
+    expect(stripPaceTokens('6.1km @ 5:33/km (steady)')).toBe('6.1km');
+  });
+  it('keeps a paced easy run classified as a simple distance run (km chip)', () => {
+    expect(isSimpleDistanceDesc('7km @ 6:10/km')).toBe(true);
+    expect(isSimpleDistanceDesc('6.1km @ 5:33/km (steady)')).toBe(true);
+  });
+  it('still classifies structured sessions as structured', () => {
+    expect(isSimpleDistanceDesc('5×6min @ 4:30/km (~1.3km), 1 min recovery between sets')).toBe(false);
+    expect(isSimpleDistanceDesc('13min @ 4:05/km (~3.2km)')).toBe(false);
+  });
+});
+
+describe('paceSecPerKmForRunType', () => {
+  it('derives the canonical per-type paces from easy pace', () => {
+    expect(paceSecPerKmForRunType('easy', EASY)).toBe(EASY);
+    expect(paceSecPerKmForRunType('vo2', EASY)).toBeCloseTo(EASY * 0.809);
+    expect(paceSecPerKmForRunType('threshold', EASY)).toBeCloseTo(EASY / 1.2);
+    expect(paceSecPerKmForRunType('marathon', EASY)).toBeCloseTo(EASY * 0.913);
+    expect(paceSecPerKmForRunType('marathon_pace', EASY)).toBe(paceSecPerKmForRunType('marathon', EASY));
+  });
+  it('returns null without easy pace or for unmapped types', () => {
+    expect(paceSecPerKmForRunType('vo2', undefined)).toBeNull();
+    expect(paceSecPerKmForRunType('rest', EASY)).toBeNull();
+  });
+  it('ladder type names and plan-engine slot names share factors', () => {
+    expect(RUN_PACE_FACTOR_VS_EASY['marathon']).toBe(RUN_PACE_FACTOR_VS_EASY['marathon_pace']);
+  });
+});
+
+describe('retargetDescriptionPace', () => {
+  it('replaces a bare pace on a simple run (easy → vo2)', () => {
+    // 370 * 0.809 = 299.3 → 4:59/km
+    expect(retargetDescriptionPace('7km @ 6:10/km', 'vo2', EASY)).toBe('7km @ 4:59/km');
+  });
+  it('appends a pace to a legacy pace-less distance run', () => {
+    expect(retargetDescriptionPace('6km', 'vo2', EASY)).toBe('6km @ 4:59/km');
+  });
+  it('uses the MP wrapper when retargeting to marathon', () => {
+    // 370 * 0.913 = 337.8 → 5:37/km
+    expect(retargetDescriptionPace('7km @ 6:10/km', 'marathon', EASY)).toBe('7km @ MP (5:37/km)');
+  });
+  it('unwraps MP when stepping away from marathon pace', () => {
+    expect(retargetDescriptionPace('22min @ MP (5:37/km)', 'threshold', EASY)).toBe('22min @ 5:08/km');
+  });
+  it('drops a stale suggester annotation', () => {
+    expect(retargetDescriptionPace('6.1km @ 5:33/km (steady)', 'easy', EASY)).toBe('6.1km @ 6:10/km');
+  });
+  it('recomputes interval distance hints at the new pace', () => {
+    // threshold 370/1.2 = 308.3 → 5:08/km; 6min at 5:08 = 1.2km
+    const out = retargetDescriptionPace('5×6min @ 4:30/km (~1.3km), 1 min recovery between sets', 'threshold', EASY);
+    expect(out).toContain('5×6min @ 5:08/km (~1.2km)');
+  });
+  it('leaves warm-up/cool-down easy anchors untouched', () => {
+    const desc = '2km warm up (6:10/km+)\n13min @ 5:08/km (~2.5km)\n2km cool down (6:10/km+)';
+    const out = retargetDescriptionPace(desc, 'vo2', EASY);
+    expect(out).toContain('(6:10/km+)');
+    expect(out).toContain('@ 4:59/km');
+  });
+  it('no-ops without easy pace or for unmapped types', () => {
+    expect(retargetDescriptionPace('7km @ 6:10/km', 'vo2', undefined)).toBe('7km @ 6:10/km');
+    expect(retargetDescriptionPace('7km @ 6:10/km', 'rest', EASY)).toBe('7km @ 6:10/km');
+  });
+});
+
+describe('scaleWattRanges', () => {
+  it('scales every watt range by the rung ratio', () => {
+    // endurance 0.65 → tempo 0.82: ratio ≈ 1.2615
+    const ratio = 0.82 / 0.65;
+    expect(scaleWattRanges('60min steady @ 146–179W. Conversational throughout.', ratio))
+      .toBe('60min steady @ 184–226W. Conversational throughout.');
+  });
+  it('scales multi-segment sessions per token (over-unders keep their shape)', () => {
+    const out = scaleWattRanges('3×(3min @ 250–270W → 3min @ 230–250W)', 0.5);
+    expect(out).toBe('3×(3min @ 125–135W → 3min @ 115–125W)');
+  });
+  it('no-ops on ratio 1, bad ratios, and watt-less descriptions', () => {
+    expect(scaleWattRanges('60min @ 146–179W', 1)).toBe('60min @ 146–179W');
+    expect(scaleWattRanges('60min @ 146–179W', 0)).toBe('60min @ 146–179W');
+    expect(scaleWattRanges('Z2 endurance (HR Z2)', 1.2)).toBe('Z2 endurance (HR Z2)');
+  });
+});
+
+describe('setSwimPaceTokens', () => {
+  it('replaces absolute swim paces with the rung target', () => {
+    // CSS 98s, rung speed offset −6 → 92s = 1:32/100m
+    expect(setSwimPaceTokens('Main: 10×100m @ 1:38/100m (CSS), 15s rest.', 92))
+      .toBe('Main: 10×100m @ 1:32/100m, 15s rest.');
+  });
+  it('drops the stale (CSS) annotation but leaves structure intact', () => {
+    const out = setSwimPaceTokens('2000m total. Main: 8×200m @ 1:38/100m (CSS), 25s rest.', 104);
+    expect(out).toBe('2000m total. Main: 8×200m @ 1:44/100m, 25s rest.');
+  });
+  it('no-ops on invalid pace', () => {
+    expect(setSwimPaceTokens('Main: 8×200m @ 1:38/100m', 0)).toBe('Main: 8×200m @ 1:38/100m');
+  });
+});
+
+describe('modDisplayDescription', () => {
+  it('retargets user-scale mods with an intensity change (heals stale pace-less mods)', () => {
+    const mod = { newDistance: '6km', newType: 'vo2', userScaledAt: '2026-06-01T00:00:00Z' };
+    expect(modDisplayDescription(mod, EASY)).toBe('6km @ 4:59/km');
+  });
+  it('passes duration-only user mods through untouched', () => {
+    const mod = { newDistance: '5.6km @ 6:10/km', userScaledAt: '2026-06-01T00:00:00Z' };
+    expect(modDisplayDescription(mod, EASY)).toBe('5.6km @ 6:10/km');
+  });
+  it('passes non-user mods (timing / coach / auto) through untouched', () => {
+    const mod = { newDistance: '6.1km @ 5:33/km (steady)', newType: 'marathon_pace' };
+    expect(modDisplayDescription(mod, EASY)).toBe('6.1km @ 5:33/km (steady)');
+  });
+});
+
+describe('displayDescWithPace', () => {
+  it('appends the type pace to a persisted bare-distance adhoc', () => {
+    expect(displayDescWithPace('7km', 'easy', EASY)).toBe('7km @ 6:10/km');
+  });
+  it('handles coach/auto reductions, keeping the (was …) suffix', () => {
+    expect(displayDescWithPace('4km (was 6.1km)', 'easy', EASY)).toBe('4km @ 6:10/km (was 6.1km)');
+  });
+  it('replaces the redundant easy/steady word with the actual pace', () => {
+    expect(displayDescWithPace('4km easy', 'easy', EASY)).toBe('4km @ 6:10/km');
+  });
+  it('leaves descriptions that already carry a target untouched', () => {
+    expect(displayDescWithPace('7km @ 6:10/km', 'easy', EASY)).toBe('7km @ 6:10/km');
+    expect(displayDescWithPace('6.1km @ 5:33/km (steady)', 'marathon_pace', EASY)).toBe('6.1km @ 5:33/km (steady)');
+  });
+  it('no-ops for structured shapes, unmapped types, and unknown easy pace', () => {
+    expect(displayDescWithPace('5×6min @ threshold, 1min rest', 'threshold', EASY)).toBe('5×6min @ threshold, 1min rest');
+    expect(displayDescWithPace('7km', 'gym', EASY)).toBe('7km');
+    expect(displayDescWithPace('7km', 'easy', undefined)).toBe('7km');
+  });
+});

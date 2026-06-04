@@ -1609,7 +1609,11 @@ export function openSessionGenerator(): void {
         id: `adhoc-${Date.now()}`,
         t: workout.t,
         n: workout.n,
-        d: correctedKm !== null ? `${correctedKm}km` : workout.d,
+        // Persisted objects never regenerate, so the chosen effort pace is
+        // embedded in the description (the card's Target row dedupes on it).
+        d: correctedKm !== null
+          ? `${correctedKm}km @ ${Math.floor(effortPace / 60)}:${String(Math.floor(effortPace % 60)).padStart(2, '0')}/km`
+          : workout.d,
         r: workout.r,
         rpe: rpeOverride ?? workout.rpe ?? workout.r,
         dayOfWeek: ourDay,

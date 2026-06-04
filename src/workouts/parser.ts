@@ -205,6 +205,23 @@ export function parseWorkoutDescription(desc: string, paces: Paces): ParsedWorko
     return result;
   }
 
+  // Format 6a: Distance at explicit pace (e.g., "7km @ 6:10/km",
+  // "6.1km @ 5:33/km (steady)"). Must run before Format 6, whose \w+ zone
+  // capture would otherwise swallow the pace's leading digit as a "zone".
+  const distExplicitPaceMatch = desc.match(/^(\d+\.?\d*)km\s*@\s*(\d+:\d+)\/km/i);
+  if (distExplicitPaceMatch) {
+    const dist = parseFloat(distExplicitPaceMatch[1]) * 1000;
+    const [pm, ps] = distExplicitPaceMatch[2].split(':').map(Number);
+    const paceSec = pm * 60 + ps;
+
+    result.totalDistance = dist;
+    result.workTime = (dist / 1000) * paceSec;
+    result.totalTime = result.workTime;
+    result.avgPace = paceSec;
+    result.format = 'dist_at_pace';
+    return result;
+  }
+
   // Format 6: Simple distance @ pace (e.g., "20km @ MP")
   const distAtPaceMatch = desc.match(/^(\d+\.?\d*)km\s*@\s*(\w+)/i);
   if (distAtPaceMatch) {

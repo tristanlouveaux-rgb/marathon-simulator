@@ -21,6 +21,7 @@ import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capaci
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
+import { displayDescWithPace } from '@/workouts/workout-scaling';
 import { resolveWeekWorkouts } from './week-resolve';
 import { getPlannedDayTSSContext } from './planned-day-tss';
 import { isHardWorkout } from '@/workouts/scheduler';
@@ -1960,7 +1961,12 @@ function buildTodayWorkout(s: SimulatorState): string {
   const planName = isStrength && !/(gym|strength)/i.test(rawName) ? `${rawName} Gym Session` : rawName;
   const name = actualDisplayName || planName;
 
-  const rawDesc = (todayW as any).d || '';
+  // Persisted simple-distance descs (adhoc objects, coach/auto reductions) gain
+  // their type's pace at display time, mirroring the plan card. Skipped when an
+  // effort-picker target pace exists on the session (that number is shown elsewhere).
+  const rawDesc = (todayW as any).targetPaceSecKm
+    ? ((todayW as any).d || '')
+    : displayDescWithPace((todayW as any).d, (todayW as any).t, s.pac?.e);
   // When matched to a real activity, derive meta from the actual rather than the plan template
   const actualDistKm = matchedActual?.distanceKm ?? null;
   const actualDurationMin = matchedActual?.durationSec ? Math.round(matchedActual.durationSec / 60) : null;
@@ -2138,9 +2144,16 @@ function buildRecentActivity(s: SimulatorState): string {
     // Adhoc workouts. Skip if garminActuals already covers this id (garminActuals has richer/Strava data)
     (week.adhocWorkouts || []).forEach((w: any, idx: number) => {
       if (w.id && actualKeys.has(w.id)) return;
-      // On-demand: generated, not-yet-done sessions live in the Plan tab's "Planned"
-      // list (buildTrackOnlyUpcoming), not Recent. Once matched/marked done they fall through.
-      if (s.trackOnly && (w.id || '').startsWith('adhoc-') && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
+      // Planned-but-not-done injected sessions (on-demand generated, holiday
+      // replacements, benchmark check-ins) live on the Plan tab — as "Planned"
+      // cards in track-only mode (buildTrackOnlyUpcoming) or as "Added" workout
+      // cards in plan modes (resolveWeekWorkouts). Recent is a record of what
+      // actually happened, so they only fall through once synced or marked done.
+      // (Was track-only-gated; running plan mode leaked them as undated
+      // "This week" rows — 2026-06-04 dogfood.)
+      const wid = w.id || '';
+      const isPlannedInjected = wid.startsWith('adhoc-') || wid.startsWith('holiday-') || wid.startsWith('benchmark-');
+      if (isPlannedInjected && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
       const actName = (w.activityType ? formatActivityType(w.activityType) : null) || w.workoutName || w.displayName || w.name || w.n || 'Workout';

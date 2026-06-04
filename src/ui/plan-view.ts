@@ -10,10 +10,9 @@ import type { SimulatorState, Week, Workout } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod } from '@/workouts/workout-scaling';
+import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod, stripPaceTokens, modDisplayDescription, retargetDescriptionPace, displayDescWithPace } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
-import { openActivityReReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { firstTrackedDow } from './workout-status';
@@ -660,105 +659,50 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
 
 // ─── Activity log section ─────────────────────────────────────────────────────
 
+// Past weeks only — mirrors the triathlon plan's activity log (2026-06-04).
+// The current week's actuals already show inline on the day cards, and Home →
+// Recent carries the Review entry point, so a current-week duplicate list with
+// its own Review button, pending banner and × unmatch controls restated the
+// same data three ways. Past weeks keep a compact record of what happened.
+// Rows come from the shared week-activity gatherer (collectWeekActivities) so
+// this log, the home feed, and the tri/HYROX logs show the identical deduped set.
 function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: number): string {
-  if (!wk) return '';
+  if (!wk || viewWeek >= currentWeek) return '';
   const s = getState();
-  const actuals = wk.garminActuals || {};
-  const adhocGarmin = (wk.adhocWorkouts || []).filter((w: any) => w.id?.startsWith('garmin-'));
-  const garminMatched = wk.garminMatched || {};
-  const pendingItems = (wk.garminPending || []).filter(p => garminMatched[p.garminId] === '__pending__');
+  const entries = collectWeekActivities(wk);
+  if (entries.length === 0) return '';
 
-  // Deduplicate: garmin-* keys in garminActuals that also exist in adhocGarmin are the same activity.
-  // Count each activity once. Orphaned garmin-* actuals (adhoc removed via ×) are counted from actuals.
-  const adhocIds = new Set(adhocGarmin.map((w: any) => w.id || ''));
-  const dedupedActualKeys = Object.keys(actuals).filter(k => !(k.startsWith('garmin-') && adhocIds.has(k)));
-  const totalItems = dedupedActualKeys.length + adhocGarmin.length + pendingItems.length;
-  if (totalItems === 0) return '';
-
-  const matchedCount = dedupedActualKeys.length + adhocGarmin.length;
-  const _plannedBForLog = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-  );
-  const _carriedForLog = computeDecayedCarry(s.wks ?? [], wk.w ?? s.w, _plannedBForLog, s.planStartDate);
-  const excessLoad = _plannedBForLog > 0 ? Math.round(getWeeklyExcess(wk, _plannedBForLog, s.planStartDate, _carriedForLog)) : 0;
+  const unit = s.unitPref ?? 'km';
+  // Same status vocabulary as the tri log: matched planned sessions read
+  // "Logged"; only genuinely extra or unplaced activities call themselves out.
+  const STATUS_LABEL: Record<string, string> = { matched: 'Logged', logged: 'Logged', excess: 'Excess', pending: 'Pending' };
 
   let h = `<div class="fade" style="margin:10px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE};animation-delay:0.12s">`;
+  h += `<div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Activity log</div>`;
 
-  // Header
-  h += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">`;
-  h += `<div>`;
-  h += `<span style="font-size:12px;font-weight:600;color:var(--c-black)">Activity Log</span>`;
-  if (matchedCount > 0) {
-    h += `<span style="font-size:11px;color:var(--c-muted);margin-left:8px">${matchedCount} matched`;
-    if (excessLoad > 0) h += ` · +${excessLoad} excess TSS`;
-    h += `</span>`;
-  }
-  h += `</div>`;
-  if (viewWeek === currentWeek) {
-    h += `<button id="plan-review-btn" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font-family:var(--f);font-weight:500">`;
-    if (pendingItems.length > 0) h += `${pendingItems.length} pending · `;
-    h += `Review <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle"><path d="M9 18l6-6-6-6"/></svg></button>`;
-  }
-  h += `</div>`;
-
-  // Pending banner
-  if (pendingItems.length > 0 && viewWeek === currentWeek) {
-    h += `<div style="margin-bottom:8px;padding:10px 12px;border:1px solid var(--c-border-strong);border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">`;
-    h += `<div>`;
-    h += `<div style="font-size:13px;font-weight:600;color:var(--c-black)">${pendingItems.length} activit${pendingItems.length === 1 ? 'y' : 'ies'} pending review</div>`;
-    const types = [...new Set(pendingItems.map(p => p.appType || p.activityType))].slice(0, 3).join(', ');
-    if (types) h += `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${types}</div>`;
-    h += `</div>`;
-    h += `<button id="plan-review-btn-2" style="font-size:12px;padding:7px 14px;flex-shrink:0;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">Review</button>`;
-    h += `</div>`;
-  }
-
-  h += `<div style="padding:8px 0 4px">`;
-
-  // Item rows come from the shared week-activity gatherer (collectWeekActivities)
-  // so the running log, the home feed, and the tri/HYROX logs all show the
-  // identical deduped set. Markup + handlers stay here; only the data is shared.
-  const unit = s.unitPref ?? 'km';
-  const BADGE_LABEL: Record<string, string> = { matched: 'Matched', logged: 'Logged', excess: 'Excess', pending: 'Pending' };
-  for (const e of collectWeekActivities(wk)) {
+  for (const e of entries) {
     const dateStr = e.sortTime ? new Date(e.sortTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
     const statsArr: string[] = [];
-    if (e.distanceKm > 0.1) statsArr.push(formatKm(e.distanceKm, unit));
-    if (e.paceSecPerKm) statsArr.push(fmtPacePlan(e.paceSecPerKm, unit));
-    if (e.avgHR) statsArr.push(`HR ${e.avgHR}`);
-    // Matched/orphaned actuals always showed a minutes line; adhoc/pending only when > 0.
-    if (e.durationMin > 0 || e.source === 'actual') statsArr.push(`${e.durationMin} min`);
     if (dateStr) statsArr.push(dateStr);
-    if (e.slotName) statsArr.push(`→ ${e.slotName}`);
+    if (e.distanceKm > 0.1) statsArr.push(formatKm(e.distanceKm, unit));
+    if (e.durationMin > 0) statsArr.push(`${e.durationMin} min`);
+    const meta = statsArr.join(' · ');
 
-    const badgeHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${BADGE_LABEL[e.badge]}</span>`;
-
-    const cls = e.source === 'actual' ? 'm-list-item plan-act-open'
-      : e.source === 'adhoc' ? 'm-list-item plan-adhoc-open'
-      : 'm-list-item';
+    const cls = e.source === 'actual' ? 'plan-act-open' : e.source === 'adhoc' ? 'plan-adhoc-open' : '';
     const dataAttr = e.source === 'actual' ? ` data-workout-key="${escapeHtml(e.key)}" data-week-num="${viewWeek}"`
       : e.source === 'adhoc' ? ` data-adhoc-id="${escapeHtml(e.key)}" data-week-num="${viewWeek}"`
       : '';
 
-    let row = `<div class="${cls}"${dataAttr} style="cursor:pointer">`;
-    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
-    row += `<div style="flex:1;min-width:0">`;
-    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(e.name)}</div>`;
-    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
-    row += `</div>`;
-    row += `<div style="display:flex;align-items:center;gap:6px">`;
-    row += badgeHtml;
-    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
-    if (e.source === 'actual' && e.garminId) {
-      row += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(e.garminId)}" style="font-size:20px;line-height:1;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">×</button>`;
-    }
-    row += `</div>`;
-    row += `</div>`;
-    h += row;
+    h += `<div${cls ? ` class="${cls}"` : ''}${dataAttr} style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.05);${cls ? 'cursor:pointer' : ''}">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(e.name)}</div>
+        ${meta ? `<div style="font-size:11px;color:var(--c-muted)">${meta}</div>` : ''}
+      </div>
+      <div style="flex-shrink:0"><span style="font-size:11px;color:var(--c-muted)">${STATUS_LABEL[e.badge] ?? ''}</span></div>
+    </div>`;
   }
 
-  h += `</div></div>`;
+  h += `</div>`;
   return h;
 }
 
@@ -1059,8 +1003,15 @@ function buildWorkoutCards(
         // sessions (tempo / intervals) have no single honest distance, so a
         // "Original: 2km" caption there is meaningless (it was the warm-up). This
         // also heals stale mods from the earlier distance-only scaling build.
-        if (origLabel && /^\s*\d+(?:\.\d+)?\s*km\s*$/i.test(origLabel) && isSimpleDistanceDesc((w as any).d)) {
-          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Original: ${fmtDesc(origLabel, cardUnitPref)}</div>`);
+        const origLabelClean = origLabel ? stripPaceTokens(origLabel) : origLabel;
+        if (origLabelClean && /^\s*\d+(?:\.\d+)?\s*km\s*$/i.test(origLabelClean) && isSimpleDistanceDesc((w as any).d)) {
+          // Show the original WITH its pace so the adjustment reads as
+          // what → what ("6km @ 6:10/km" → "6km @ MP (4:44/km)"). Every
+          // original that passes the clean-distance gate is a simple easy/long
+          // run, whose prescription pace is the easy pace — re-derived live so
+          // it matches what an unadjusted card would show today.
+          const origDisplay = retargetDescriptionPace(origLabelClean, 'easy', s.pac?.e);
+          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Original: ${fmtDesc(origDisplay, cardUnitPref)}</div>`);
         }
         reducedBadge = lines.join('');
       }
@@ -1085,7 +1036,13 @@ function buildWorkoutCards(
 
       // Type badge + description (always visible)
       const typeBadgeLabel = runWorkoutTypeBadgeLabel(w.t, w.n || '');
-      const descText = (w as any).d?.trim() ? fmtDesc((w as any).d, s.unitPref ?? 'km') : '';
+      // Persisted simple-distance descs (adhoc objects, coach/auto reductions)
+      // gain their type's pace at display time. Skipped when an effort-picker
+      // target exists — the Target row below carries that (more precise) number.
+      const descWithPace = (w as any).targetPaceSecKm
+        ? (w as any).d
+        : displayDescWithPace((w as any).d, w.t, s.pac?.e);
+      const descText = descWithPace?.trim() ? fmtDesc(descWithPace, s.unitPref ?? 'km') : '';
       // Strength/gym sessions collapse their exercise list to a "tap to view"
       // summary; the full breakdown opens in the strength detail modal. The raw
       // multi-exercise description reads as a run-on paragraph inline.
@@ -1117,8 +1074,9 @@ function buildWorkoutCards(
         ? `<span style="font-size:10px;font-weight:600;color:${statusLabelColor}">${statusLabel}</span>`
         : '';
 
-      // Target pace note (below name)
-      const targetPaceRow = !isDone && !isSkipped && (w as any).targetPaceSecKm
+      // Target pace note (below name). Suppressed when the description already
+      // carries a pace — two targets on one card is the duplicate-surface fail.
+      const targetPaceRow = !isDone && !isSkipped && (w as any).targetPaceSecKm && !/@/.test(descText)
         ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fmtPacePlan((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>`
         : '';
 
@@ -1878,7 +1836,7 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
         if (!isTimingMod(mod.modReason)) {
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
           (w as any).status = mod.status;
-          (w as any).d = mod.newDistance;
+          (w as any).d = modDisplayDescription(mod, s.pac?.e);
           if (mod.newType) (w as any).t = mod.newType;
           if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
           if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
@@ -3027,7 +2985,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
         const w = findWorkoutForMod(nudgeWorkouts as any[], mod);
         if (w && !mod.modReason?.startsWith('Timing:')) {
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
-          (w as any).d = mod.newDistance;
+          (w as any).d = modDisplayDescription(mod, s2.pac?.e);
           (w as any).status = mod.status;
         }
       }
@@ -3176,21 +3134,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // ─── Activity log review buttons ───────────────────────────────────────────
-  const _reviewClick = () => {
-    const _s = getMutableState();
-    const _wk = _s.wks?.[_s.w - 1];
-    if (!_wk) return;
-
-    // Always the full re-review: it reconstitutes already-matched recordings into
-    // the tray (pre-assigned to their slots) and shows every plan slot, so the
-    // user can swap placements freely. The previous still-pending shortcut showed
-    // only the new items and hid occupied slots.
-    openActivityReReview(() => renderPlanView());
-  };
-  document.getElementById('plan-review-btn')?.addEventListener('click', _reviewClick);
-  document.getElementById('plan-review-btn-2')?.addEventListener('click', _reviewClick);
-
+  // (Activity-log Review buttons removed 2026-06-04 — the log is past-weeks-only
+  // now, mirroring triathlon; the review entry point lives on Home → Recent.)
 
   // Wrap up week (Sunday / all-done pill in header)
   document.getElementById('plan-wrap-up-btn')?.addEventListener('click', () => {

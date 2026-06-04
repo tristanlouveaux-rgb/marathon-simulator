@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateBikeSession, pickBikeKind, type BikeSessionKind } from './bike';
+import { generateBikeSession, pickBikeKind, describeBikeSession, type BikeSessionKind } from './bike';
 
 const baseInput = {
   phase: 'build' as const,
@@ -121,5 +121,19 @@ describe('pickBikeKind phase rotation', () => {
       expect(slot1Kinds.size).toBe(1);
       expect(slot1Kinds.has('endurance')).toBe(true);
     }
+  });
+});
+
+describe('describeBikeSession watt targets', () => {
+  it('rolling endurance shows the Z2 watt range when power is present', () => {
+    // variant index 1 = rolling endurance; FTP 250, endurance band 0.10 → 146–179W
+    const d = describeBikeSession('endurance', 90, 250, true, 1, 0, 1);
+    expect(d).toContain('Z2 (146–179W)');
+  });
+
+  it('rolling endurance stays zone-only without a power meter', () => {
+    const d = describeBikeSession('endurance', 90, undefined, false, 1, 0, 1);
+    expect(d).toContain('stay in Z2 on the flats');
+    expect(d).not.toContain('W)');
   });
 });

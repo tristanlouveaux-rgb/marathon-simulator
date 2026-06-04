@@ -65,6 +65,12 @@ export function generateWeekWorkouts(
 
   const workouts: Workout[] = [];
 
+  // Easy-pace target appended to plain distance runs (legacy path + commutes),
+  // mirroring the plan-engine path (intentToWorkout's easyLabel format).
+  const easySuffix = easyPaceSecPerKm
+    ? ` @ ${Math.floor(easyPaceSecPerKm / 60)}:${String(Math.floor(easyPaceSecPerKm % 60)).padStart(2, '0')}/km`
+    : '';
+
   if (weekIndex != null && totalWeeks != null) {
     // Read archetype + baseline from state. Drives the ramp budget inside
     // planWeekSessions so week 1 starts near the user's current km rather than
@@ -121,7 +127,7 @@ export function generateWeekWorkouts(
         workouts.push({
           t: 'long',
           n: 'Long Run',
-          d: `${Math.round(longDist * adj)}km`,
+          d: `${Math.round(longDist * adj)}km${easySuffix}`,
           rpe: 3,
           r: 3,
         });
@@ -131,7 +137,7 @@ export function generateWeekWorkouts(
         workouts.push({
           t: 'easy',
           n: `Easy ${easyIdx}`,
-          d: `${distance}km`,
+          d: `${distance}km${easySuffix}`,
           rpe: 3,
           r: 3,
         });
@@ -154,7 +160,7 @@ export function generateWeekWorkouts(
           workouts.push({
             t: 'easy',
             n: `Easy ${easyIdx}`,
-            d: `${distance}km`,
+            d: `${distance}km${easySuffix}`,
             rpe: 3,
             r: 3,
           });
@@ -187,12 +193,14 @@ export function generateWeekWorkouts(
     const keep = 1 - bodyMassSwapFraction;
     for (const w of workouts) {
       if (w.t !== 'easy') continue;
-      const m = /^(\d+(?:\.\d+)?)km$/.exec(w.d ?? '');
+      // Tolerate the appended pace target ("7km @ 6:10/km") — the pace suffix
+      // is preserved, only the distance shrinks.
+      const m = /^(\d+(?:\.\d+)?)km(\s*@.*)?$/.exec(w.d ?? '');
       if (!m) continue;
       const km = parseFloat(m[1]);
       const reduced = Math.max(3, Math.round(km * keep));
       if (reduced < km) {
-        w.d = `${reduced}km`;
+        w.d = `${reduced}km${m[2] ?? ''}`;
         if (typeof w.estimatedDurationMin === 'number') {
           w.estimatedDurationMin = Math.round(w.estimatedDurationMin * (reduced / km));
         }
@@ -222,7 +230,7 @@ export function generateWeekWorkouts(
         workouts.push({
           t: 'easy',
           n: `Commute ${i + 1} (morning)`,
-          d: `${oneWayKm}km`,
+          d: `${oneWayKm}km${easySuffix}`,
           rpe: 3,
           r: 3,
           commute: true,
@@ -230,7 +238,7 @@ export function generateWeekWorkouts(
         workouts.push({
           t: 'easy',
           n: `Commute ${i + 1} (evening)`,
-          d: `${oneWayKm}km`,
+          d: `${oneWayKm}km${easySuffix}`,
           rpe: 3,
           r: 3,
           commute: true,
@@ -239,7 +247,7 @@ export function generateWeekWorkouts(
         workouts.push({
           t: 'easy',
           n: `Commute ${i + 1}`,
-          d: `${oneWayKm}km`,
+          d: `${oneWayKm}km${easySuffix}`,
           rpe: 3,
           r: 3,
           commute: true,
