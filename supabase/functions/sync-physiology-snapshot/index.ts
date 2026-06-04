@@ -70,11 +70,14 @@ Deno.serve(async (req) => {
                 .order('calendar_date', { ascending: false })
                 .limit(1),
 
-            // Robust max HR: 95th percentile of all activity max HRs.
-            // Wrist sensors produce spikes; percentile filters them automatically.
+            // Max HR inputs: session max + date. The client computes the
+            // corroborated max (highest reading witnessed by a second session
+            // within 5 bpm on a different day — max-hr-estimator.ts), so dates
+            // are required. All rows fetched because the legacy p95 aggregate
+            // (kept for older clients) needs the full distribution.
             supabaseClient
                 .from('garmin_activities')
-                .select('max_hr')
+                .select('max_hr, start_time')
                 .eq('user_id', userId)
                 .not('max_hr', 'is', null)
         ])

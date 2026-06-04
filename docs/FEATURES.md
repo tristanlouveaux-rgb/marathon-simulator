@@ -327,6 +327,8 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 
 The blended prediction (`refreshBlendedFitness`) combines Tanda (2011) marathon regression, VDOT-from-PBs, LT pace, and VO2max into a single weighted race time. Confidence scales with how many recent runs fed the blend. The blended effective VDOT is written back to `s.v` so plan generation and pace derivation always use the live value (except in taper/deload weeks where `s.v` is held — Mujika & Padilla 2000). `getEffectiveVdot(s)` layers RPE and physio adjustments on top.
 
+**Onboarding anchor parity (2026-06-04, §BN)**: `initializeSimulator` applies the same long-run durability cap the refresher applies (blend → cap → VDOT) before seeding `blendedRaceTimeSec` / `initialBaseline` / forecast anchor, and stores `s.runDurability` from day 1 — previously a thin-data onboarding (single typed PB, empty scrape) showed the raw Riegel extrapolation until the first backfill silently slowed it. The weekly-km signal feeding the blend is resolved by `resolveWeeklyKmSignal` (`prediction-inputs.ts`): history-derived when the 8-week window has coverage, falling back to the user's typed manual-entry volume (`detectedWeeklyKm`, which now survives a zero-row Strava aggregation and sets `weeklyVolumeConfirmed` so it also seeds the plan's starting `wkm`). Tests ✅ `initialization.durability.test.ts`, `prediction-inputs.test.ts`, `initialization.volume.test.ts`.
+
 **Single canonical model** (refactored 2026-05-05): "Forecast finish" (end-of-plan projection) and "Current Race Estimate" (today's predicted race time) now share a single anchor. `calculateLiveForecast` and `calculateForecast` accept an optional `blendedAnchorSec`; when supplied, the horizon model's VDOT gain is converted to a seconds delta via Daniels' table on both ends and subtracted from the blend's view of today. Prior to this fix, the headline was bare `tv(currentVdot+gain, dist)` while "Current Race Estimate" was the `blendPredictions` blend — two different models on different scales that could disagree by minutes (a 3:12 marathoner saw a "Slightly behind" pill at Week 1 with zero training done because the bare-VDOT forecast was 3:21). The "Slightly behind / On track" pill on the stats card was killed at the same time — after the fix, `forecastTime ≤ blendedToday ≤ initialBaseline` whenever the horizon predicts any positive gain, so the pill carried no information.
 
 **Course-factor adjustment** (added 2026-05-05): when the user has selected a known race, the predictor layers race-specific factors on top of the raw VDOT prediction — climate (Ely 2007), altitude (Bonetti 2009), and elevation gain (Minetti 2002). The adjusted finish becomes the headline number; the raw fitness pace and per-factor delta are shown beneath. Pre-loaded course profiles cover Berlin, Boston, NYC, Chicago, London, Tokyo, Paris and 18+ other major marathons / 17 halfs (`src/data/marathon-course-profiles.ts`). `s.forecastTimeAdjusted` and `s.forecastCourseFactors` populate alongside `s.forecastTime`.
@@ -386,14 +388,14 @@ Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode
 ### 6b. Lactate Threshold Derivation (own engine, decoupled from Garmin)
 **What it does**: When Garmin's watch-side LT reading is missing, stale, or gated, the app derives its own LT pace + LTHR from three blended methods: Daniels T-pace from VDOT (88% vVO2max), Critical Speed from race-distance PBs (LT = 0.93 × CS), and empirical detection from sustained tempo efforts (20+ min runs, 85–92% HRmax band, decoupling <5%). Outlier guards exclude treadmill, hot weather, hilly runs, and unsteady pacing.
 
-**State integration**: `recomputeLT(s)` runs after every physio + activity sync. Priority chain: `s.ltOverride` > fresh Garmin reading (<60d) > blended derived. When Garmin and our derived value differ by >10s/km, a `s.ltSuggestion` is set so the LT detail page can prompt the user to choose; `s.lt` is not silently overwritten in that case.
+**State integration**: `recomputeLT(s)` runs after every physio + activity sync, and (2026-06-04, §BO) at onboarding finalize when the wizard supplied no measured LT — so `s.lt`/`ltSource`/`ltConfidence` are consistent from day 1. Priority chain: `s.ltOverride` > fresh Garmin reading (<60d) > blended derived. When Garmin and our derived value differ by >10s/km, a `s.ltSuggestion` is set so the LT detail page can prompt the user to choose; `s.lt` is not silently overwritten in that case. PBs feed the chain via `effectivePhysiologyPbs` (per-key fastest of `s.pbs` + in-progress wizard `s.onboarding.pbs`), so mid-wizard typed PBs are visible before finalize. The blended estimate is bounded by demonstrated performance: LT pace can never be slower than the average pace of a race PB longer than 60 minutes (clamped, provenance notes "Capped at your race-PB pace", confidence downgraded from high).
 
 **Stats UI**: The LT metric detail page (Stats → LT card) shows the active value with provenance + confidence chip, a per-method breakdown (pace and weight contribution), the Garmin sparkline when present, the conflict-resolution prompt, and slider overrides for pace + LTHR with reset-to-derived.
 
 **Workout pacing**: `s.lt` flows into `paces.gp(vdot, ltPace)` so threshold workouts and pace zones use the resolved value automatically.
 
 **Key files**: `src/calculations/lt-derivation.ts`, `src/data/ltSync.ts`, `src/ui/stats-view.ts → buildLTMetricPage`
-**Tests**: `src/calculations/lt-derivation.test.ts` — ✅ Passing (29 tests)
+**Tests**: `src/calculations/lt-derivation.test.ts` — ✅ Passing (34 tests, incl. race-PB pace cap); finalize consistency in `src/state/initialization.physiology.test.ts`
 **Science**: `docs/SCIENCE_LOG.md → Lactate Threshold Derivation` (Daniels, Jones & Vanhatalo, Nixon et al. 2021, Friel)
 
 ---
@@ -962,11 +964,13 @@ Unstructured run with no pace target. Workout type `'vibes'` internally; user-fa
 **Science**: full rationale + literature in `docs/SCIENCE_LOG.md §AJ`.
 
 ### 17. Universal Load Model
-**What it does**: Converts any cross-training activity (swimming, cycling, rugby, padel, etc.) into a "load" number comparable to running load. Four tiers of accuracy:
-- **Tier A+** (iTRIMP, 0.95 confidence): Second-by-second HR stream via Strava API. Uses Individual TRIMP — Banister/Morton model with Heart Rate Reserve fraction and sex-specific β coefficient.
-- **Tier A** (Garmin Training Effect, 0.90): Garmin/Firstbeat aerobic + anaerobic effect.
-- **Tier B** (HR zones, 0.75–0.80): Time-in-zone TRIMP-like calculation. HR zones now flow from `GarminActivityRow` → `GarminPendingItem` → `CrossActivity` → `ActivityInput` so Tier B is reached when zone data is available.
-- **Tier C** (RPE only, 0.45–0.55): Duration × RPE × sport multiplier with uncertainty penalty.
+**What it does**: Converts any cross-training activity (swimming, cycling, rugby, padel, etc.) into **canonical TSS** (1h@LT=100 — the app-wide load currency since 2026-06-04, SCIENCE_LOG §BP). Four tiers of accuracy, all emitting the same unit (pre-canonicalisation the tiers diverged up to 3.2× for one identical session):
+- **Tier A+** (iTRIMP, 0.95 confidence): Second-by-second HR stream via Strava API. Individual TRIMP (Banister/Morton, HRR fraction, sex-specific β) → TSS via the plausibility-gated personal normalizer. No sport multiplier (measured).
+- **Tier A** (Garmin raw Firstbeat load, 0.90): converted at ingest via the per-RPE `garminToTssRatio` (~1.63 easy → ~2.03 VO2). No sport multiplier (measured).
+- **Tier B** (HR zones, 0.75–0.85): Time-in-zone × per-zone TSS/min anchored to the definition (Z4 = threshold zone = 100/h; hourly [25, 50, 75, 100, 125]). No sport multiplier (measured).
+- **Tier C** (RPE only, 0.55–0.70): Duration × `TL_PER_MIN[rpe]` × sport multiplier × active fraction × 0.80 uncertainty discount (estimates are deliberately conservative).
+
+**Saturation**: replacement credit = `TAU(1−e^(−raw/TAU))`, TAU=491 TSS — slope 1 at the origin so a session's credit can never exceed its own load (the old two-parameter curve amplified ×1.87).
 
 **Impact load**: `computeUniversalLoad()` now returns `impactLoad = durationMin × sport.impactPerMin` (musculoskeletal/leg stress). Separate from cardiovascular FCL. Per-sport values live in `SPORTS_DB.impactPerMin`.
 
@@ -1223,7 +1227,11 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 - Sign-in tab shows a yellow warning that signing into an existing account leaves guest data behind.
 - "Not now" cancel returns to Home without changing auth state.
 
-**Test status**: ✅ — typecheck + 1146 tests pass; in-app behaviour pending manual verification on device.
+**Save-account overlay at data connect (ISSUE-270, 2026-06-04)** (`src/ui/wizard/save-account-overlay.ts`): shown once per onboarding the moment a data source connects — Strava/Garmin OAuth return on connect-data, or the Continue tap for Apple Health / file-upload users. Same in-place `updateUser` upgrade; skippable ("Later", `onboarding.accountSaveOffered` flag); no-data skippers never see it. Closes the common fork case: a user with an email can recover their account on any device.
+
+**Strava fork guard + history claim (ISSUE-270, 2026-06-04)**: `strava-auth-callback` counts activities held by other non-deleted accounts with the same `strava_athlete_id` and appends `existing=N` to the OAuth redirect. The client then reunites the history via the `strava-claim-history` edge function (`src/data/strava-claim.ts`): silently mid-wizard (benchmarks see the full record), via a confirm overlay on the main view (`src/ui/history-claim-overlay.ts`). Ownership proof is server-side (the caller's own token row, which only exists via completed OAuth); the move rewrites `garmin_activities.user_id` (collision-free — `garmin_id` is globally unique) and retires the old token rows so the refresh cron stops keeping forks alive.
+
+**Test status**: ✅ — typecheck + suite green (3173); edge functions deployed 2026-06-04 (claim-history verify_jwt true, callback false); save-account + fork-guard flows NOT device-verified.
 
 ---
 
@@ -1556,10 +1564,12 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - Rest day: ring shows "Rest day" in grey; if any activity logged, shows "X TSS logged" sub-label. No % on rest days.
 - 100% = you've completed what was planned. > 100% = went beyond plan. < 100% = session in progress.
 - Colours: grey (rest/0%) → amber (partial) → green (on target) → red (exceeded).
+- **Ring fill scale (2026-06-04)**: `target.hi` = full ring on BOTH the Home mini ring and the Strain detail ring ("Target reached" closes the ring, Apple-rings convention). Overshoot clamps at full; colour alone carries it — green up to `hi × 1.3` ("Above target"), red beyond ("Load exceeded"); both surfaces share the 1.3× tolerance band. No-target days (just-track / no plan) fall back to auto-scale (actual × 1.1 detail / × 1.25 home) so the arc stays partial.
 - **Strain ring is tappable** → opens `src/ui/strain-view.ts` (full-screen detail page).
 
 **Strain detail page** (`src/ui/strain-view.ts`) — answers "What did I do today and how hard was it?":
-- Terracotta/orange gradient header with animated SVG ring (orange gradient, 1.4s cubic-bezier). Rest days show "Rest day" with grey ring.
+- Animated SVG ring (1.4s cubic-bezier). Rest days show "Rest day" with grey ring.
+- **State-coloured background (2026-06-04)**: atmosphere + flowey waves follow the day's state — coral while working toward target, mint once target reached (lo to hi × 1.3), red beyond the band or on rest-day overreach. The `'red'` palette lives in `page-flair.ts` alongside the others. Background tracks the selected date (full re-render on date switch).
 - 7-day week position bars: one row per day (Mon–Sun) of the current plan week. Each row shows day label, horizontal bar with actual TSS filled against planned TSS track, today highlighted in orange, future days show ghost track only.
 - Activity timeline for the selected date (from `garminActuals`); tapping a row opens a detail overlay (duration, HR, TSS, kCal).
 - Steps placeholder card: "Daily steps / — / Garmin steps coming soon".
@@ -1567,7 +1577,7 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - Info (`?`) button opens a strain explainer overlay (Signal B, thresholds table).
 - Back button returns to Home. No tab bar on this page (iPhone sub-page pattern).
 
-**Sentence logic (tri mode)**: tri mode bypasses `coach.primaryMessage` and shows the per-discipline `computeTriReadiness` sentence — except after a completed session. Priority: (1) **injury-cap overshoot** — injury active and actual > planned × 1.3 → `injuryCapOvershootSentence` ("42 TSS logged against an injury-capped day of 20. Load is within your normal range, but well above the rehab cap."; sterner variant when capacity is also exceeded). (2) `postSessionSentence()` (shared with running's Tier 1, `daily-coach.ts`): "Big session today (X TSS)…" at 130%+ of the capacity anchor, "Solid session today (X TSS)…" at 100%+, and — when the anchor is CTL-dominated — "Good training today (X TSS), most of a typical day's load." at 80%+. Running mode's Tier-0 injury branch mirrors the overshoot call-out. Restored + extended 2026-06-03 — the original tri override ("Trained hard today.") was lost in the May crash; `isPostSessionState` had survived as dead code.
+**Sentence logic (tri mode)**: tri mode bypasses `coach.primaryMessage` and shows the per-discipline `computeTriReadiness` sentence — except after a completed session. Priority: (1) **injury-cap overshoot** — injury active and actual > planned × 1.3 → `injuryCapOvershootSentence` ("42 TSS logged against an injury-capped day of 20. Load is within your normal range, but well above the rehab cap."; sterner variant when capacity is also exceeded). (2) `postSessionSentence()` (shared with running's Tier 1, `daily-coach.ts`): "Big session today (X TSS)…" at 130%+ of the capacity anchor, "Solid session today (X TSS)…" at 100%+, and — when the anchor is CTL-dominated — "Good training today (X TSS), most of a typical day's load." at 80%+. (3) **Trained-day acknowledgment (2026-06-04)**: any day with a real logged session (`loggedSessionToday`, passive steps excluded) below the tiers leads with the factual load before the chronic sentence: "42 TSS logged today. Bike load is elevated relative to your baseline." — the commentary never looks unphased on a trained day. Composed by `capacityStrainNote(cs, fallback)`; both Home and the Readiness detail page pass their chronic sentence as the fallback. Running mode's Tier-0 injury branch mirrors the overshoot call-out. Restored + extended 2026-06-03 — the original tri override ("Trained hard today.") was lost in the May crash; `isPostSessionState` had survived as dead code.
 
 **Sentence logic**: A single `primaryMessage` from `computeDailyCoach()` replaces the old separate readiness sentence + HRV banner. Priority chain: injury/illness blockers → strain complete/exceeded → **leg-load hard floor (surfaces `readiness.legLoadNote`)** → ACWR spike → combined sleep + HRV → poor sleep → deep HRV drop → sleep debt → ACWR caution → moderate sleep/HRV → recovery driving signal → recent cross-training → session in progress → taper phase → HRV elevated → positive conditions (fresh/safe/good recovery with workout-aware copy) → CTL trend → week RPE → TSB/ACWR matrix fallback. Every tier produces workout-aware copy (references today's planned session name, hard vs easy). Hard-floor signals (leg-load, ACWR) are routed by `readiness.hardFloor` *before* sleep-debt copy, so the message always explains whatever is actually capping the score.
 

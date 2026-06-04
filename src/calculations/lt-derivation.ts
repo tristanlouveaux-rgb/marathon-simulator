@@ -15,6 +15,28 @@
  * Pure functions. No state mutation.
  */
 
+/**
+ * LTHR plausibility band as a fraction of maxHR.
+ * HR at the individual anaerobic threshold sits at ~86–92% of maxHR in trained
+ * endurance athletes (Faude, Kindermann & Meyer 2009, Sports Med 39:469–490);
+ * field-test conventions (Friel 30-min TT) land in the same range. The floor
+ * leaves margin for less-trained users. A stored ltHR outside this band is far
+ * more likely a stale auto-detect, a default, or corrupted data than a real
+ * threshold. Motivating case (2026-06-04 audit): an ltHR of 144 at maxHR 192
+ * (75%) would silently inflate every iTRIMP→TSS conversion by +66% via the
+ * personal normalizer — nothing upstream prevented it.
+ */
+export const LTHR_PLAUSIBLE_MIN_FRAC = 0.80;
+export const LTHR_PLAUSIBLE_MAX_FRAC = 0.95;
+
+/** Return the ltHR if physiologically plausible against maxHR, else null. */
+export function plausibleLtHR(ltHR: number | null | undefined, maxHR: number | null | undefined): number | null {
+  if (ltHR == null || !maxHR || maxHR <= 0) return ltHR ?? null;
+  const frac = ltHR / maxHR;
+  if (frac < LTHR_PLAUSIBLE_MIN_FRAC || frac > LTHR_PLAUSIBLE_MAX_FRAC) return null;
+  return ltHR;
+}
+
 export type LTMethod = 'daniels' | 'critical-speed' | 'empirical' | 'override' | 'garmin';
 export type LTConfidence = 'high' | 'medium' | 'low';
 
@@ -653,7 +675,10 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
     if (input.garmin?.ltPaceSecKm) {
       return {
         ltPaceSecKm: input.garmin.ltPaceSecKm,
-        ltHR: input.garmin.ltHR ?? deriveLTHRFromMaxHR(input.maxHR),
+        // Plausibility-gate the watch LTHR: an implausible reading (e.g. 75%
+        // of maxHR) falls through to the 0.88×maxHR derivation instead of
+        // poisoning s.ltHR and the personal iTRIMP normalizer.
+        ltHR: plausibleLtHR(input.garmin.ltHR, input.maxHR) ?? deriveLTHRFromMaxHR(input.maxHR),
         source: 'garmin',
         confidence: 'medium',
         methods: [
@@ -682,6 +707,23 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
     methods.reduce((s, m) => s + m.ltPaceSecKm * m.weight, 0) /
     methods.reduce((s, m) => s + m.weight, 0);
 
+  // ── Definitional consistency bound vs race PBs ──────────────────────────
+  // LT pace is the best ~60-minute pace (Daniels' T; Coyle 1995). Any race
+  // PB with a duration LONGER than 60 minutes was, by definition, sustained
+  // for more than an hour — so LT can never be SLOWER than that race's
+  // average pace. When the blend lands slower (e.g. Daniels fed by a stale
+  // degraded VDOT, or easy runs polluting the empirical method — real case
+  // 2026-06-04: LT 4:56/km shown to a 3:09 marathoner whose marathon pace
+  // is 4:30/km), clamp to the tightest such PB pace and downgrade
+  // confidence: the methods contradicted demonstrated performance, so
+  // "high" would be dishonest. The bound IS the PB pace — no tuned margin.
+  const longRacePaces = (input.bestEfforts ?? [])
+    .filter(e => e.elapsedSec >= 3600 && e.distanceM > 0)
+    .map(e => e.elapsedSec / (e.distanceM / 1000));
+  const ltUpperBoundSecKm = longRacePaces.length > 0 ? Math.min(...longRacePaces) : null;
+  const capped = ltUpperBoundSecKm != null && blendedPace > ltUpperBoundSecKm;
+  const finalPace = capped ? ltUpperBoundSecKm! : blendedPace;
+
   // LTHR: prefer empirical; else 0.88 × HRmax; else null.
   const ltHR = emp ? Math.round(emp.ltHR) : deriveLTHRFromMaxHR(input.maxHR);
 
@@ -689,6 +731,8 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   //   high  = empirical present AND (CS or Daniels). Triangulated
   //   medium = one method only, or empirical absent
   //   low = Daniels only
+  // A PB-pace cap overrides upward: capped means the estimate is only as
+  // good as the bound, never better than 'medium'.
   let confidence: LTConfidence;
   if (hasEmp && (hasCS || hasDaniels)) {
     confidence = 'high';
@@ -697,19 +741,21 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   } else {
     confidence = 'low';
   }
+  if (capped && confidence === 'high') confidence = 'medium';
 
   // Provenance one-liner.
   const parts: string[] = [];
   if (hasEmp) parts.push(`${emp!.nQualifying} steady run${emp!.nQualifying === 1 ? '' : 's'}`);
   if (hasCS) parts.push(`critical speed from ${cs!.nEfforts} PBs`);
   if (hasDaniels) parts.push(`VDOT ${input.vdot!.toFixed(1)}`);
-  const provenance =
+  let provenance =
     methods.length === 1
       ? `Derived from ${parts[0]}`
       : `Blended: ${parts.join(' + ')}`;
+  if (capped) provenance += '. Capped at your race-PB pace';
 
   return {
-    ltPaceSecKm: blendedPace,
+    ltPaceSecKm: finalPace,
     ltHR,
     source: methods.length === 1 ? methods[0].method : 'blended',
     confidence,
@@ -719,14 +765,28 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
 }
 
 /**
+ * Garmin LT supersede gap: a derived estimate only displaces a watch reading
+ * when it is FASTER by at least this much at medium+ confidence. Same gap the
+ * manual-override auto-improve rule uses (ltSync LT_AUTO_IMPROVE_GAP_SEC_KM) —
+ * one "clearly better" definition for both benchmark kinds.
+ */
+export const LT_GARMIN_SUPERSEDE_GAP_SEC_KM = 3;
+
+/**
  * Selector: resolve the LT value the app should use, given state inputs.
  *
- * Priority: override > Garmin (if fresh) > derived > null
+ * Priority: override > Garmin (until superseded) > derived > null
  *
- * Garmin is preferred over derived when the reading is <60 days old, because
- * when it *is* present it comes from the FirstBeat algorithm running
- * continuously on the watch. Higher fidelity than any field-data estimator.
- * When stale or absent, our derived value takes over.
+ * Garmin is preferred over derived because when it *is* present it comes from
+ * the FirstBeat algorithm running continuously on the watch — higher fidelity
+ * than any field-data estimator. Garmin pushes userMetrics ONLY on change, so
+ * the absence of a newer reading means "unchanged", not "stale" — the watch
+ * itself keeps displaying the same LT (the old 60-day expiry silently reverted
+ * users to the VDOT estimate; Tristan, 2026-06-04). The reading is trusted
+ * until superseded by a newer Garmin value, a manual override, or a derived
+ * estimate that clearly beats it: faster by ≥ LT_GARMIN_SUPERSEDE_GAP_SEC_KM
+ * at medium+ confidence (benchmarks-yield-to-improvements; a SLOWER derived
+ * estimate never displaces a measured reading).
  */
 export function resolveLT(input: DeriveLTInput): LTDerivationResult {
   if (input.override) return deriveLT(input);
@@ -734,13 +794,19 @@ export function resolveLT(input: DeriveLTInput): LTDerivationResult {
   const derived = deriveLT(input);
 
   if (input.garmin?.ltPaceSecKm && input.garmin.asOf) {
-    const now = input.now ? new Date(input.now) : new Date();
-    const ageDays = (now.getTime() - new Date(input.garmin.asOf).getTime()) / (1000 * 86400);
-    if (ageDays <= 60) {
-      // Prefer Garmin when fresh. Return as a single-method result for provenance clarity.
+    const derivedBeatsGarmin =
+      derived.ltPaceSecKm != null &&
+      input.garmin.ltPaceSecKm - derived.ltPaceSecKm >= LT_GARMIN_SUPERSEDE_GAP_SEC_KM &&
+      (derived.confidence === 'high' || derived.confidence === 'medium');
+    if (!derivedBeatsGarmin) {
+      // Prefer Garmin. Return as a single-method result for provenance clarity.
+      const now = input.now ? new Date(input.now) : new Date();
+      const ageDays = (now.getTime() - new Date(input.garmin.asOf).getTime()) / (1000 * 86400);
       return {
         ltPaceSecKm: input.garmin.ltPaceSecKm,
-        ltHR: input.garmin.ltHR ?? derived.ltHR,
+        // Same plausibility gate as deriveLT's garmin branch: implausible
+        // watch LTHR falls back to the derived estimate.
+        ltHR: plausibleLtHR(input.garmin.ltHR, input.maxHR) ?? derived.ltHR ?? deriveLTHRFromMaxHR(input.maxHR),
         source: 'garmin',
         confidence: 'high',
         methods: [

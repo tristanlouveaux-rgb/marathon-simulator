@@ -186,14 +186,17 @@ export function showSuggestionModal(
   // Direction-explicit wording: the excess is work already done, so the options
   // cut upcoming planned runs to make room for it. The header owns the ask;
   // each card states only what it delivers.
-  // "Equivalent of easy running" because cuts mix two levers: a downgrade keeps
-  // the distance and drops intensity, a reduce keeps intensity and drops distance.
-  // Both land in one load currency; easy-run-equivalent is its display unit.
-  // (TSS display blocked until the internal load scales are reconciled — ISSUE-263.)
+  // TSS-led copy (Tristan, 2026-06-04, unblocked by the ISSUE-263 canonical
+  // currency): the headline number is canonical TSS, identical to the strain
+  // ring's unit; the easy-running km is the plain-language caption derived at
+  // render time. loadReduction values ARE TSS now, so the sum needs no
+  // conversion.
+  const optionTss = (adjs: Adjustment[]): number =>
+    Math.round(adjs.reduce((sum, a) => sum + (a.loadReduction || 0), 0));
   const absorbLine = (adjs: Adjustment[]): string | undefined => {
     const km = optionEasyKm(adjs);
     if (km == null) return undefined;
-    return `Cuts the equivalent of ≈ ${formatKm(km, unitPref)} of easy running.`;
+    return `Cuts ≈ ${optionTss(adjs)} TSS, about ${formatKm(km, unitPref)} of easy running.`;
   };
 
   // Data tier label (neutral chip — provenance, not a status colour)
@@ -301,20 +304,21 @@ export function showSuggestionModal(
     // Human-consequence headline carries the ask: the achievable trim, in
     // Tristan's framing ("you've been training harder than normal, so we need
     // to reduce by X"). The unreachable full excess lives in See details.
+    const askTss = Math.max(optionTss(popup.replaceOutcome.adjustments), optionTss(popup.reduceOutcome.adjustments));
     const humanConsequence = status === 'high'
       ? (askKm > 0
-          ? `You've been training harder than normal. This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by the equivalent of ≈ ${formatKm(askKm, unitPref)} of easy running.`
+          ? `You've been training harder than normal. This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by ≈ ${askTss} TSS, about ${formatKm(askKm, unitPref)} of easy running.`
           : `You've been training harder than normal. This week is ${pctAboveBaseline}% above your usual load. Extra recovery is needed before the next hard effort.`)
       : pctAboveCeiling <= 5
       ? `Your load is just above the safe ceiling (${ratio.toFixed(2)}× vs ${safeUpper.toFixed(1)}×). A small adjustment is enough.`
       : (askKm > 0
-          ? `This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by the equivalent of ≈ ${formatKm(askKm, unitPref)} of easy running.`
+          ? `This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by ≈ ${askTss} TSS, about ${formatKm(askKm, unitPref)} of easy running.`
           : `This week is ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`);
     // Full-excess accounting, shown on demand. States plainly why the trim can
     // be smaller than the excess and where the remainder goes (fatigue decay +
     // next-week carry, week-rollover carriedTSS in events.ts).
     const excessDetail = popup.equivalentEasyKm > 0
-      ? `<p style="font-size:12px;color:${MUTED};line-height:1.55;margin:0 0 4px">The full excess is ≈ ${formatKm(popup.equivalentEasyKm, unitPref)} of easy running equivalent, training stress already done. The plan only trims what it can without dropping runs below their minimums. What isn't cut clears through recovery, and a week that ends over target starts the next one with a smaller budget.</p>`
+      ? `<p style="font-size:12px;color:${MUTED};line-height:1.55;margin:0 0 4px">The full excess is ≈ ${Math.round(popup.runReplacementCredit)} TSS, about ${formatKm(popup.equivalentEasyKm, unitPref)} of easy running, training stress already done. The plan only trims what it can without dropping runs below their minimums. What isn't cut clears through recovery, and a week that ends over target starts the next one with a smaller budget.</p>`
       : '';
     // Plain header on the glass card — no tinted sub-box, no severity colour
     // (UX_PATTERNS → "No tinted card backgrounds"). Severity is carried by the

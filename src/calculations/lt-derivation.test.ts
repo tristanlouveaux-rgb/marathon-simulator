@@ -309,7 +309,10 @@ describe('resolveLT', () => {
     expect(res.ltPaceSecKm).toBe(235);
   });
 
-  it('ignores stale Garmin reading (>60d) and uses derived', () => {
+  it('trusts an old Garmin reading — change-event semantics, no expiry (2026-06-04)', () => {
+    // Garmin only pushes userMetrics when LT CHANGES; no newer push means
+    // "unchanged", not "stale". The old 60-day expiry silently reverted users
+    // to the VDOT estimate.
     const res = resolveLT({
       vdot: 55,
       maxHR: 185,
@@ -320,7 +323,38 @@ describe('resolveLT', () => {
       garmin: { ltPaceSecKm: 235, ltHR: 167, asOf: '2025-12-01T00:00:00Z' },
       now: NOW.toISOString(),
     });
+    expect(res.source).toBe('garmin');
+    expect(res.ltPaceSecKm).toBe(235);
+  });
+
+  it('a clearly-faster derived estimate supersedes the Garmin reading', () => {
+    // Derived (CS + Daniels, medium confidence) lands at ~267s/km for these
+    // inputs; a 4:40/km watch reading is clearly slower and yields per the
+    // benchmarks-yield-to-improvements rule.
+    const res = resolveLT({
+      vdot: 55,
+      maxHR: 185,
+      bestEfforts: [
+        { distanceM: 5000, elapsedSec: 1200 },
+        { distanceM: 10000, elapsedSec: 2520 },
+      ],
+      garmin: { ltPaceSecKm: 280, ltHR: 167, asOf: '2026-04-10T00:00:00Z' },
+      now: NOW.toISOString(),
+    });
     expect(res.source).not.toBe('garmin');
+    expect(res.ltPaceSecKm!).toBeLessThan(280 - 3);
+  });
+
+  it('a slower derived estimate never displaces the Garmin reading', () => {
+    // Watch says 3:55/km; the derived blend is slower. Measured wins.
+    const res = resolveLT({
+      vdot: 50,
+      maxHR: 185,
+      garmin: { ltPaceSecKm: 235, ltHR: 167, asOf: '2026-01-10T00:00:00Z' },
+      now: NOW.toISOString(),
+    });
+    expect(res.source).toBe('garmin');
+    expect(res.ltPaceSecKm).toBe(235);
   });
 
   it('override beats Garmin', () => {
@@ -333,5 +367,68 @@ describe('resolveLT', () => {
     });
     expect(res.source).toBe('override');
     expect(res.ltPaceSecKm).toBe(250);
+  });
+});
+
+describe('deriveLT — race-PB pace cap (definitional bound)', () => {
+  // Real case, 2026-06-04: 3:09 marathoner (pace 4:30/km) shown LT 4:56/km
+  // "high confidence" — Daniels fed by a stale degraded VDOT plus easy runs
+  // in the empirical method. LT is the best ~60-min pace, so it can never be
+  // slower than the average pace of any race PB longer than 60 minutes.
+  const maxHR = 177;
+  const longRaceEfforts: BestEffortInput[] = [
+    { distanceM: 5000, elapsedSec: 1058 },     // 17:38 — <60min, no bound
+    { distanceM: 21097.5, elapsedSec: 5490 },  // 1:31:30 — pace 260.2 s/km (tightest)
+    { distanceM: 42195, elapsedSec: 11382 },   // 3:09:42 — pace 269.7 s/km
+  ];
+  // Easy runs that sneak through the empirical filter at ~4:56/km.
+  const easyRunsAsSustained: SustainedEffortInput[] = [
+    {
+      startTime: '2026-04-20T08:00:00Z',
+      durationSec: 2400,
+      avgPaceSecKm: 296,
+      avgHR: 155, // 87.6% of 177 — inside the 85-92% band
+      kmSplits: [296, 295, 297, 296, 295, 297, 296, 296],
+    },
+  ];
+
+  it('caps a contaminated blend at the tightest long-race PB pace and downgrades confidence', () => {
+    const res = deriveLT({
+      vdot: 41.3, // stale degraded VDOT → Daniels ~4:58/km
+      maxHR,
+      bestEfforts: longRaceEfforts,
+      sustainedEfforts: easyRunsAsSustained,
+      now: NOW.toISOString(),
+    });
+    // Tightest bound = half PB pace 5490 / 21.0975 = 260.2 s/km.
+    expect(res.ltPaceSecKm).toBeCloseTo(5490 / 21.0975, 1);
+    expect(res.confidence).not.toBe('high');
+    expect(res.provenance).toContain('Capped');
+  });
+
+  it('does not cap when the blend is already faster than every long-race pace', () => {
+    const res = deriveLT({
+      vdot: 55,
+      maxHR,
+      bestEfforts: longRaceEfforts,
+      now: NOW.toISOString(),
+    });
+    expect(res.ltPaceSecKm).not.toBeNull();
+    expect(res.ltPaceSecKm!).toBeLessThan(5490 / 21.0975);
+    expect(res.provenance).not.toContain('Capped');
+  });
+
+  it('applies no bound when all PBs are shorter than 60 minutes', () => {
+    const res = deriveLT({
+      vdot: 41.3,
+      maxHR,
+      bestEfforts: [{ distanceM: 5000, elapsedSec: 1058 }],
+      sustainedEfforts: easyRunsAsSustained,
+      now: NOW.toISOString(),
+    });
+    // Slow blend survives — a 17:38 5K bound says nothing definitional
+    // about a 60-min pace ceiling in this direction.
+    expect(res.ltPaceSecKm).toBeGreaterThan(280);
+    expect(res.provenance).not.toContain('Capped');
   });
 });

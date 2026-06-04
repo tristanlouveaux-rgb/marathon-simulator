@@ -288,6 +288,18 @@ All user-facing copy should read like a knowledgeable consultant, not a wellness
 - All header action buttons must use SVG icons or plain text labels
 - The check-in system uses plain text labels only — no icons in the button
 
+## The Load Currency Law — canonical TSS, conversions only at boundaries
+
+**Every training-load number in the app is canonical TSS (1 hour at lactate threshold = 100; the `TL_PER_MIN` table).** Established 2026-06-04 after the ISSUE-263 audit found 8 coexisting scales with cross-scale arithmetic (full record: `docs/LOAD_CURRENCY_PLAN.md`, SCIENCE_LOG §BP).
+
+- **A new load producer either emits canonical TSS or converts at its OWN ingest boundary.** iTRIMP → `normalizeiTrimp()` (personal, plausibility-gated). Raw Garmin/Firstbeat load → `÷ garminToTssRatio(rpe)` (per-RPE, never a flat factor). Planned sessions → `plannedTssPerMin(type)` (type-keyed: an easy run is prescribed RPE 3 but valued at the RPE-4 row).
+- **No consumer ever rescales.** If you find yourself multiplying a load by ~1.6 "to match", you are reintroducing the bug.
+- **Never hardcode `/15000` or `/150`** for iTRIMP→TSS — always `normalizeiTrimp`. An anchor test greps for violations.
+- **Garmin Training Effect (0–5) is not a load.** It never touches `Workout.aerobic/anaerobic`.
+- **A credit can't exceed its load**: saturation curves must have slope ≤ 1 at the origin.
+- **Threshold/budget constants are denominated in TSS.** Rescaling a pipeline without its absolute constants (or vice versa) silently changes behaviour — the audit's saturation-constant trap.
+- Guard rail: `src/calculations/load-currency-anchors.test.ts` — if an anchor fails, fix the producer; do not loosen the anchor.
+
 ## Quality: Two numbers that mean the same thing must come from the same source
 
 If a card and its drill-down (or any two surfaces) display the same metric, they must read from a single canonical computation. Never recompute "the same thing" with a different argument list — archived plans, seeds, or fallback paths almost always diverge between sites and produce numbers that disagree.

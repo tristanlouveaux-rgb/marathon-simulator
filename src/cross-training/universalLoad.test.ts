@@ -316,13 +316,18 @@ describe('Universal Load: Garmin activity with high anaerobic', () => {
     dayOfWeek: 2,
   };
 
-  it('should use Tier A (Garmin) with high confidence', () => {
+  it('should use Tier A (Garmin) with high confidence, converted to canonical TSS', () => {
     const load = computeUniversalLoad(garminActivity, 'half');
 
     expect(load.tier).toBe('garmin');
     expect(load.confidence).toBe(0.9);
-    expect(load.aerobicLoad).toBe(120);
-    expect(load.anaerobicLoad).toBe(80);
+    // ISSUE-263: raw Firstbeat load is converted to canonical TSS at the
+    // ingest boundary via garminToTssRatio(rpe). At RPE 8 the ratio is
+    // 4.5 / 2.22 ≈ 2.027, so 120 → ~59.2 and 80 → ~39.5. The old assertion
+    // pinned raw passthrough, which is the exact bug this conversion fixes.
+    const ratio = 4.5 / 2.22;
+    expect(load.aerobicLoad).toBeCloseTo(120 / ratio, 1);
+    expect(load.anaerobicLoad).toBeCloseTo(80 / ratio, 1);
   });
 
   it('should have better vibe similarity with quality workouts (high anaerobic ratio)', () => {

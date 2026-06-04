@@ -32,6 +32,7 @@ import type { GarminActual } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
 import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constants
@@ -305,7 +306,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     if (countedIds.has(workoutId)) continue;
     if (planIds.has(workoutId)) continue;
     if (actual.iTrimp == null || actual.iTrimp <= 0) continue;
-    const tss = actual.iTrimp / 150;
+    const tss = normalizeiTrimp(actual.iTrimp); // personal normalizer (ISSUE-262)
     const affinity = classifyAffinity(actual.activityType, actual.displayName);
     credit(tss, affinity);
   }
@@ -314,7 +315,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
 }
 
 function tssOfWorkout(w: Workout): number {
-  if (w.iTrimp != null && w.iTrimp > 0) return w.iTrimp / 150;
+  if (w.iTrimp != null && w.iTrimp > 0) return normalizeiTrimp(w.iTrimp); // personal normalizer (ISSUE-262)
   return (w.aerobic ?? 0) + (w.anaerobic ?? 0);
 }
 

@@ -298,6 +298,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     let currentStep = 0;
     const setStep = (n: number): void => {
       currentStep = n;
+      loadingDetail = null; // new phase → its explainer leads until a real fact lands
       renderLoading(container, currentStep, false);
     };
     setStep(0);
@@ -343,6 +344,12 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
           `processed:${backfillResult?.processed ?? 0} ` +
           `wkKm:${sNow.detectedWeeklyKm?.toFixed(1) ?? 'null'} ` +
           `histTSS:${sNow.historicWeeklyTSS?.length ?? 0}w`);
+        // Narrate the completed import with real numbers on the loading card.
+        const runCount = sNow.onboardingRunHistory?.length ?? 0;
+        const histWeeks = sNow.historicWeeklyTSS?.length ?? 0;
+        if (runCount > 0) {
+          setLoadingDetail(`${runCount} runs imported${histWeeks > 0 ? ` across ${histWeeks} weeks of training` : ''}.`);
+        }
       }
       t0 = performance.now();
       try {
@@ -363,6 +370,12 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         const sNow = getState();
         tickStep('syncPhysiologySnapshot', t0, true,
           `vo2:${sNow.vo2 ?? 'null'} maxHR:${sNow.maxHR ?? 'null'} rhr:${sNow.restingHR ?? 'null'} history:${sNow.physiologyHistory?.length ?? 0}d`);
+        // Narrate found physiology (only the fields that actually landed).
+        const found: string[] = [];
+        if (sNow.restingHR) found.push(`resting HR ${sNow.restingHR}`);
+        if (sNow.maxHR) found.push(`max HR ${sNow.maxHR}`);
+        if (sNow.vo2) found.push(`VO2max ${sNow.vo2}`);
+        if (found.length > 0) setLoadingDetail(`Found ${found.join(', ')}.`);
       }
     }).then(async () => {
       t0 = performance.now();
@@ -387,6 +400,9 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         `withBE:${rows.filter(r => Array.isArray((r as any).best_efforts) && (r as any).best_efforts.length > 0).length}`);
       cachedActivities = rows;
       cachedPbSources = readPBsFromHistory(rows);
+      // Narrate PB extraction with the real count.
+      const pbCount = Object.values(cachedPbSources).filter(p => p?.timeSec != null).length;
+      if (pbCount > 0) setLoadingDetail(`${pbCount} personal best${pbCount === 1 ? '' : 's'} found in your race history.`);
 
       // ─── DIAG: what did readPBsFromHistory produce? ───
       // Particularly want to verify `startDate` is present for each PB —
@@ -862,6 +878,21 @@ const LOADING_STEPS = [
   'Calculating FTP, CSS and threshold pace',
 ];
 
+// One sentence per step explaining the work in progress. Consultant tone:
+// concrete, no padding. Shown on the note line until a dynamic detail
+// (real numbers from a completed phase) replaces it via `setLoadingDetail`.
+const LOADING_STEP_DETAIL = [
+  'Securing the connection and preparing your data.',
+  'Importing up to a year of activities with heart rate and pace. This runs once.',
+  'Pulling resting heart rate, max heart rate and VO2max.',
+  'Scanning best efforts across 5K, 10K, half and marathon.',
+  'Fitting threshold pace, FTP and swim CSS from the imported data.',
+];
+
+// Dynamic fact line from the pipeline ("312 activities imported"). Survives
+// in-place updates until the next milestone overwrites it. Reset on mount.
+let loadingDetail: string | null = null;
+
 const LOAD_RADIUS = 44;
 const LOAD_CIRCUMFERENCE = 2 * Math.PI * LOAD_RADIUS; // ~276.5
 
@@ -874,10 +905,11 @@ function loadStepLabel(activeStep: number): string {
   return LOADING_STEPS[Math.min(activeStep, LOADING_STEPS.length - 1)];
 }
 
-function loadNote(timedOut: boolean): string {
-  return timedOut
-    ? 'Still syncing — taking longer than usual. You can keep waiting, or come back from the Stats page later.'
-    : 'This can take 20 to 30 seconds on first connect.';
+function loadNote(activeStep: number, timedOut: boolean): string {
+  if (timedOut) {
+    return 'Still syncing. Large training histories take longer to import. You can keep waiting or come back from the Stats page later.';
+  }
+  return loadingDetail ?? LOADING_STEP_DETAIL[Math.min(activeStep, LOADING_STEP_DETAIL.length - 1)];
 }
 
 /**
@@ -904,9 +936,17 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean): boolean {
   }
 
   const noteEl = document.getElementById('revl-note');
-  if (noteEl) noteEl.textContent = loadNote(timedOut);
+  if (noteEl) noteEl.textContent = loadNote(activeStep, timedOut);
 
   return true;
+}
+
+/** Push a real fact from the pipeline onto the loading note line
+ *  ("312 activities imported"). In-place, no re-render. */
+function setLoadingDetail(detail: string): void {
+  loadingDetail = detail;
+  const noteEl = document.getElementById('revl-note');
+  if (noteEl) noteEl.textContent = detail;
 }
 
 function renderLoading(container: HTMLElement, activeStep: number, timedOut: boolean): void {
@@ -915,9 +955,10 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
   if (updateLoadingProgress(activeStep, timedOut)) return;
 
   // Initial mount. Build the full glass shell.
+  loadingDetail = null; // fresh mount → fresh narration
   const dashoffset = loadDashoffset(activeStep);
   const currentLabel = loadStepLabel(activeStep);
-  const note = loadNote(timedOut);
+  const note = loadNote(activeStep, timedOut);
 
   container.innerHTML = `
     <style>
@@ -929,6 +970,15 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
       }
       .rev-load-fill { animation: revLoadBreathe 2.6s ease-in-out infinite; }
       .rev-load-label-fade { transition: opacity 0.45s ease; }
+      /* Continuous orbit so the screen visibly works during long single
+         steps (the history import is one await with no sub-progress; the
+         fill ring only moves on step changes). Pure SVG transform rotation:
+         GPU-composited, no filter over motion (UX_PATTERNS perf rule). */
+      @keyframes revLoadSweep { to { transform: rotate(360deg); } }
+      .rev-load-sweep {
+        animation: revLoadSweep 1.8s linear infinite;
+        transform-origin: 50px 50px;
+      }
     </style>
 
     <div style="min-height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;background:#FAF9F6">
@@ -973,6 +1023,13 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
               <!-- Track -->
               <circle cx="50" cy="50" r="${LOAD_RADIUS}" fill="none"
                       stroke="rgba(0,0,0,0.07)" stroke-width="3"/>
+              <!-- Orbiting sweep: always-on motion between step changes -->
+              <g class="rev-load-sweep">
+                <circle cx="50" cy="50" r="${LOAD_RADIUS}" fill="none"
+                        stroke="rgba(63,143,132,0.35)" stroke-width="3"
+                        stroke-linecap="round"
+                        stroke-dasharray="${(LOAD_CIRCUMFERENCE * 0.16).toFixed(1)} ${(LOAD_CIRCUMFERENCE * 0.84).toFixed(1)}"/>
+              </g>
               <!-- Fill (rotates from top) -->
               <circle id="revl-fill" class="rev-load-fill"
                       cx="50" cy="50" r="${LOAD_RADIUS}" fill="none"
@@ -2651,4 +2708,31 @@ function rerender(state: OnboardingState): void {
     const container = document.getElementById('app-root');
     if (container) renderReview(container, current);
   });
+}
+
+// ─── Dev-only console preview ────────────────────────────────────────────────
+// `__previewOnboardingLoading()` in the browser console cycles the loading
+// screen through every step with sample narration, then the timeout state —
+// so the sweep animation, step transitions, and live-fact line can be
+// reviewed without running a real onboarding. Stripped from prod builds by
+// the DEV guard. Returns a stop() function.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__previewOnboardingLoading = () => {
+    const container = document.getElementById('app-root');
+    if (!container) { console.warn('no #app-root'); return; }
+    const timers: number[] = [];
+    const at = (ms: number, fn: () => void) => timers.push(window.setTimeout(fn, ms));
+
+    renderLoading(container, 0, false);
+    at(2500, () => renderLoading(container, 1, false));
+    at(5500, () => setLoadingDetail('187 runs imported across 38 weeks of training.'));
+    at(8500, () => renderLoading(container, 2, false));
+    at(11000, () => setLoadingDetail('Found resting HR 48, max HR 188, VO2max 56.'));
+    at(13500, () => renderLoading(container, 3, false));
+    at(16000, () => setLoadingDetail('3 personal bests found in your race history.'));
+    at(18500, () => renderLoading(container, 4, false));
+    at(22000, () => renderLoading(container, 4, true)); // timeout copy
+    console.log('[preview] cycling loading screen over ~22s — reload the page to exit');
+    return () => timers.forEach(clearTimeout);
+  };
 }

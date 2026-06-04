@@ -17,20 +17,27 @@
  */
 
 import { resolveLT, deriveLT, diagnoseSustainedEfforts, type BestEffortInput, type SustainedEffortInput, type DeriveLTInput, type LTDerivationResult, type SustainedEffortDiagnostic } from '@/calculations/lt-derivation';
-import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
 import type { SimulatorState } from '@/types';
 
-/** Conflict threshold — Garmin and derived must agree within this band to apply silently. */
-const LT_CONFLICT_THRESHOLD_SEC_KM = 10;
+/** Meaningful-change threshold — an applied LT shift of at least this many
+ *  s/km is surfaced to the user (small toast, per the adaptation-transparency
+ *  rule). Below it, the value updates silently. Formerly the Garmin-vs-derived
+ *  conflict threshold; the suggestion flow it gated was removed 2026-06-04
+ *  (watch readings now auto-apply). */
+export const LT_NOTIFY_THRESHOLD_SEC_KM = 10;
 
 /** Auto-improvement gap — derived must beat user override by ≥ this many s/km
  *  before we silently replace the override (see CLAUDE.md). */
 const LT_AUTO_IMPROVE_GAP_SEC_KM = 3;
 
-/** Build BestEffortInputs from PB times. Distances in metres, times in seconds. */
+/** Build BestEffortInputs from PB times. Distances in metres, times in seconds.
+ *  Reads via `effectivePhysiologyPbs` so freshly-typed wizard PBs are visible
+ *  to LT derivation BEFORE finalize commits them to `s.pbs` (the review
+ *  screen's LT row previously derived against the previous plan's PBs). */
 function pbsToBestEfforts(s: SimulatorState): BestEffortInput[] {
   const efforts: BestEffortInput[] = [];
-  const pbs = s.pbs ?? {};
+  const pbs = effectivePhysiologyPbs(s);
   if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5 });
   if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10 });
   if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h });
@@ -219,34 +226,12 @@ export function recomputeLT(
     return 'override';
   }
 
-  // Garmin–derived conflict check: only fires when both values exist *and*
-  // differ by more than the threshold. `resolveLT()` would silently prefer
-  // Garmin in that case; we want the user's voice instead.
-  const garminFresh = garmin && garmin.ltPaceSecKm > 0 && garmin.asOf
-    && (new Date(now).getTime() - new Date(garmin.asOf).getTime()) / (1000 * 86400) <= 60;
-  const derivedPace = derivedOnly.ltPaceSecKm;
-
-  if (garminFresh && derivedPace != null) {
-    const gap = Math.abs(garmin!.ltPaceSecKm - derivedPace);
-    if (gap > LT_CONFLICT_THRESHOLD_SEC_KM) {
-      s.ltSuggestion = {
-        garmin: { ltPaceSecKm: garmin!.ltPaceSecKm, ltHR: garmin!.ltHR ?? null, asOf: garmin!.asOf },
-        derived: {
-          ltPaceSecKm: derivedPace,
-          ltHR: derivedOnly.ltHR,
-          provenance: derivedOnly.provenance,
-        },
-        detectedAt: now,
-      };
-      // Don't change the active value while a suggestion is pending. If s.lt
-      // is empty though, fall back to the resolved value so workouts still
-      // generate sensibly.
-      if (!s.lt) applyResolved(s, resolved, now);
-      return 'pending';
-    }
-  }
-
-  // No conflict (or no Garmin). Clear any stale suggestion and apply.
+  // Watch readings auto-apply — measured beats modelled (Tristan, 2026-06-04).
+  // The old behaviour parked any >10s/km Garmin–derived disagreement behind a
+  // suggestion card; a user who never opened it never got their watch LT.
+  // resolveLT already arbitrates: Garmin wins unless the derived estimate is
+  // clearly better (faster ≥3s/km at medium+ confidence). Clear any pending
+  // suggestion from the old flow so stale cards don't linger.
   if (s.ltSuggestion) delete s.ltSuggestion;
   if (!resolved.ltPaceSecKm) return 'none';
   applyResolved(s, resolved, now);

@@ -16,6 +16,8 @@ import { getMutableState, saveState } from '@/state';
 import { processPendingCrossTraining, resetPendingModalGuard } from './activitySync';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 
 /**
  * Derive athlete tier from weekly-scale CTL baseline plus a performance floor.
@@ -295,23 +297,15 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
 
     if (extraPatched) saveState();
 
-    // Derive maxHR from Strava activities. Uses 95th percentile of max_hr values,
-    // filtering wrist-sensor noise. Max HR is a physiological ceiling. Only raise,
-    // never lower an existing value.
+    // Derive maxHR from Strava activities via the canonical corroborated-max
+    // estimator (max-hr-estimator.ts — shared with the Garmin and Apple pipes).
+    // Max HR is a physiological ceiling. Only raise, never lower.
     {
-      const maxHrs = activityRows
-        .map(r => r.max_hr)
-        .filter((hr): hr is number => hr != null && hr > 100 && hr < 230);
-      if (maxHrs.length >= 3) {
-        maxHrs.sort((a, b) => a - b);
-        const idx = Math.floor(maxHrs.length * 0.95);
-        const derived = maxHrs[Math.min(idx, maxHrs.length - 1)];
-        if (derived > (s.maxHR ?? 0)) {
-          s.maxHR = derived;
-          saveState();
-          console.log(`[StravaSync] Derived maxHR=${derived} from ${maxHrs.length} activities (95th pct)`);
-        }
-      }
+      const readings = (activityRows as GarminActivityRow[])
+        .filter(r => r.max_hr != null && r.start_time)
+        .map(r => ({ maxHR: r.max_hr!, date: r.start_time }));
+      const { changed: hrChanged } = applyCorroboratedMaxHR(s, readings, 'StravaSync');
+      if (hrChanged) saveState();
     }
 
     // Recompute timing downgrade mods after each sync
@@ -606,7 +600,7 @@ function calibrateFromState(): { totalCalibrated: number; byZone: Record<'easy' 
       const zone = TYPE_TO_ZONE[rawType] ?? classifyByName(rawType);
       if (!zone) continue;
 
-      const normTSS = (actual.iTrimp * 100) / 15000;
+      const normTSS = normalizeiTrimp(actual.iTrimp);
       const tssPerHour = normTSS / (actual.durationSec / 3600);
 
       if (tssPerHour < 10 || tssPerHour > 200) continue; // sanity bounds
@@ -699,7 +693,7 @@ export async function calibrateIntensityThresholds(weeks = 12): Promise<void> {
     for (const row of rows) {
       const zone = classifyByName(row.name);
       if (!zone) continue;
-      const normTSS = (row.iTrimp * 100) / 15000;
+      const normTSS = normalizeiTrimp(row.iTrimp);
       const tssPerHour = normTSS / (row.durationMin / 60);
       if (tssPerHour > 10 && tssPerHour < 200) {
         merged[zone].push(tssPerHour);

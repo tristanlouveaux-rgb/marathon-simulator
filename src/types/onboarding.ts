@@ -237,6 +237,10 @@ export interface OnboardingState {
    *  reveals the live "Connect Strava" button. Gates the capped Strava pipe so public
    *  users don't consume the 10 Standard-Tier athlete slots. See constants/access-codes.ts. */
   stravaUnlocked?: boolean;
+  /** True once the save-account overlay (anonymous → email upgrade, ISSUE-270) has been
+   *  offered this onboarding — shown at the post-OAuth return on connect-data. Offered
+   *  once; decliners keep the Home guest banner + Account upgrade as fallbacks. */
+  accountSaveOffered?: boolean;
 
   // Step 5 (fitness path): "Just track". Activity tracking only, no plan generated
   trackOnly?: boolean;

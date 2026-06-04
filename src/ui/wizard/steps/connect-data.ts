@@ -1,5 +1,6 @@
 import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, updateOnboarding } from '../controller';
+import { maybeOfferAccountSave } from '../save-account-overlay';
 import { saveState } from '@/state/persistence';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
@@ -71,15 +72,19 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
       const appleConnected =
         hasPhysiologySource(getState() as any, 'apple') || !!(getState() as any).appleHealthConnected;
       if (!isNativeiOS() || appleConnected || GARMIN_CONNECT_ENABLED) {
-        nextStep();
+        // Data now syncing → the one moment the anonymous account is worth
+        // saving (ISSUE-270). Overlay no-ops for non-anonymous sessions.
+        maybeOfferAccountSave(() => nextStep());
         return;
       }
       // Fall through to the normal render; main.ts strips the ?strava query after this pass.
+      // Offer the account save on top of the rendered step (no navigation on close).
+      setTimeout(() => maybeOfferAccountSave(() => {}), 0);
     } else {
       // Garmin direct connect (?garmin=connected) provides runs + recovery in one — main.ts's
       // handler set the physiology source, so nothing is left to pair. Advance.
       saveState();
-      nextStep();
+      maybeOfferAccountSave(() => nextStep());
       return;
     }
   }
@@ -539,6 +544,13 @@ function wireHandlers(): void {
 
     updateOnboarding({ skippedStrava: !hasData });
     saveState();
+    if (hasData) {
+      // Apple Health / file-upload users have syncing data too — same one-time
+      // save-account moment as the OAuth-return paths (ISSUE-270). No-data
+      // skippers are not prompted; nothing is at stake yet.
+      maybeOfferAccountSave(() => nextStep());
+      return;
+    }
     nextStep();
   });
 }

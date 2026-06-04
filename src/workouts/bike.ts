@@ -351,6 +351,11 @@ function rpeForBike(kind: BikeSessionKind, phase: TrainingPhase): number {
 
 export function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
   // Rough TSS-per-minute values. Phase 4 replaces with real bTSS.
+  // ISSUE-263 IF audit (IF = sqrt(TSS/h ÷ 100)): endurance 0.71, tempo 0.87,
+  // sweet_spot 0.95, threshold 1.01, vo2 1.07, hills/over_under 0.99,
+  // vo2_micros 1.02, vlamax 0.81 — all physiologically sensible session
+  // averages (Coggan zone IFs), so the placeholder values are KEPT as
+  // canonical TSS pending real power-based bTSS (ISSUE-259).
   const tssPerMin: Record<BikeSessionKind, number> = {
     endurance: 0.85,
     tempo: 1.25,

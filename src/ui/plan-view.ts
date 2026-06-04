@@ -24,7 +24,7 @@ import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
@@ -414,7 +414,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     // Compute actual TSS: prefer iTRIMP-based (HR-measured), fall back to duration estimate
     const rpeVal = typeof rated[id] === 'number' ? (rated[id] as number) : (w.rpe || w.r || 5);
     const actualTSS = garminActual.iTrimp != null && garminActual.iTrimp > 0
-      ? Math.round((garminActual.iTrimp * 100) / 15000)
+      ? Math.round(normalizeiTrimp(garminActual.iTrimp))
       : dur > 0 ? Math.round(dur * (TL_PER_MIN[Math.round(rpeVal)] ?? 0.92)) : null;
     const statsArr: string[] = [];
     if (garminActual.distanceKm > 0.1) statsArr.push(formatKm(garminActual.distanceKm, _s.unitPref ?? 'km'));
@@ -525,7 +525,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     const rpeForLoad = typeof rated[id] === 'number' ? (rated[id] as number) : (w.rpe || w.r || 5);
     const actualTSSForBars = garminActual
       ? (garminActual.iTrimp != null && garminActual.iTrimp > 0
-        ? Math.round((garminActual.iTrimp * 100) / 15000)
+        ? Math.round(normalizeiTrimp(garminActual.iTrimp))
         : Math.round((garminActual.durationSec / 60) * (TL_PER_MIN[Math.round(rpeForLoad)] ?? 0.92)))
       : null;
 

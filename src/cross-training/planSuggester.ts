@@ -41,6 +41,7 @@ import {
   MAX_MODS_EXTREME,
   EXTREME_WEEK_PCT,
   LOAD_SMOOTHING,
+  EASY_LOAD_PER_KM,
   RATIO_WEIGHT,
   LOAD_WEIGHT,
   SAME_DAY_BONUS,
@@ -120,10 +121,11 @@ function parseDistanceKm(desc: string, paces?: Paces, aerobicLoad?: number): num
     km = match ? parseFloat(match[1]) : 0;
   }
 
-  // If still 0 and we have aerobic load, estimate distance
-  // Rough estimate: 1km easy ≈ 35 aerobic load
+  // If still 0 and we have aerobic load, estimate distance.
+  // aerobicLoad is canonical TSS (ISSUE-263); easy running ≈ EASY_LOAD_PER_KM
+  // TSS per km (derived: 6:00/km × TL_PER_MIN[4]).
   if (km <= 0 && aerobicLoad && aerobicLoad > 0) {
-    km = aerobicLoad / 35;
+    km = aerobicLoad / EASY_LOAD_PER_KM;
   }
 
   // Round to 1 decimal place

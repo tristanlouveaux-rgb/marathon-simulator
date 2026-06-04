@@ -37,7 +37,6 @@ export {
   RPE_UNCERTAINTY_PENALTY,
   ACTIVE_FRACTION_BY_SPORT,
   getActiveFraction,
-  LOAD_PER_MIN_BY_RPE,
   RPE_AEROBIC_SPLIT,
   computeGoalFactor,
 } from './universal-load-constants';

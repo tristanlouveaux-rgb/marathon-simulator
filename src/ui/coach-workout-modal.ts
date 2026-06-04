@@ -22,7 +22,7 @@
 import { getState, getMutableState, saveState } from '@/state';
 import type { Workout } from '@/types';
 import { hasActiveCoachSubscription } from '@/coach/entitlement';
-import { computeReadinessACWR, computeLiveSameSignalTSB } from '@/calculations/fitness-model';
+import { computeReadinessACWR, computeLiveSameSignalTSB, normalizeiTrimp } from '@/calculations/fitness-model';
 import { computeReadiness } from '@/calculations/readiness';
 import { SUPABASE_URL, supabase } from '@/data/supabaseClient';
 
@@ -431,7 +431,7 @@ function buildContextPayload(formState: IntentFormState): Record<string, unknown
 
   // Week TSS context. Use this week's typical/actual from historicWeeklyKm if available.
   const weekTssActual = wk
-    ? Math.round(Object.values(wk.garminActuals ?? {}).reduce((sum, a) => sum + (a.iTrimp ? a.iTrimp / 150 : (a.durationSec ?? 0) / 60 * 0.92), 0))
+    ? Math.round(Object.values(wk.garminActuals ?? {}).reduce((sum, a) => sum + (a.iTrimp ? normalizeiTrimp(a.iTrimp) : (a.durationSec ?? 0) / 60 * 0.92), 0))
     : null;
   const ctlWeekly = s.ctlBaseline ?? null;
   const weekTssTypical = ctlWeekly ?? null;

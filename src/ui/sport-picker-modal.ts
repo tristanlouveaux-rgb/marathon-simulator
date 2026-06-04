@@ -17,6 +17,7 @@ import { SPORTS_DB, SPORT_LABELS, SPORT_ALIASES, TL_PER_MIN, IMPACT_PER_KM } fro
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { buildStrengthLegLoadEntry, legFeelRawLoad, legFeelRecoveryMult } from '@/calculations/strength-leg-load';
 import type { GarminActual, SportKey, Week } from '@/types';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ── Running leg load ─────────────────────────────────────────────────────────
 //
@@ -215,7 +216,7 @@ function computeCrossTL(actual: GarminActual, sport: SportKey): number {
   const runSpec = cfg?.runSpec ?? 0.35;
   const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
   if (actual.iTrimp != null && actual.iTrimp > 0) {
-    return (actual.iTrimp * 100) / 15000 * runSpec;
+    return normalizeiTrimp(actual.iTrimp) * runSpec;
   }
   // Fallback to RPE-based. No RPE on GarminActual → use moderate default (5 ≈ 1.15/min).
   const rpeRate = TL_PER_MIN[5] ?? 1.15;

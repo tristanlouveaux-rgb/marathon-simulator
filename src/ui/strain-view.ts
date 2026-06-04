@@ -470,10 +470,11 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
 
   // ── Ring: full circle, matches readiness/freshness/rolling-load pattern exactly ──
   // SVG is rotated -90deg so dashoffset sweeps from 12 o'clock CW.
-  // Scale: target.hi maps to ~67% of the circle so the arc is visually informative
-  // even at low TSS values. Color communicates status: blue=below, green=in, red=over.
+  // Scale: target.hi maps to a FULL ring ("target reached" = ring closes, Apple-rings
+  // convention). Overshoot clamps at full; color carries it (red above target.hi × 1.3).
+  // No-target days fall back to actual × 1.1 so the arc stays partial.
   const hasTarget = target.mid > 0;
-  const ringMax = Math.max(target.hi * 1.5, actualTSS * 1.1, 1);
+  const ringMax = target.hi > 0 ? target.hi : Math.max(actualTSS * 1.1, 1);
 
   // Status label
   let statusLabel = '';
@@ -481,19 +482,27 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
   if (isRestDay && isOverreaching) {
     statusLabel = s.trackOnly ? 'High load today' : 'High for a rest day';
     statusColor = '#FF6B6B';
-  } else if (target.mid > 0 && actualTSS > target.hi) {
+  } else if (target.mid > 0 && actualTSS > target.hi * 1.3) {
+    // Red only beyond the 1.3× tolerance band — matches the Home mini ring's threshold.
     statusLabel = 'Load exceeded';
     statusColor = '#FF6B6B';
   } else if (target.mid > 0 && actualTSS >= target.lo) {
-    statusLabel = 'Target reached';
+    statusLabel = actualTSS > target.hi ? 'Above target' : 'Target reached';
     statusColor = '#34C759';
   }
 
-  // Progress color: one of three states.
+  // Progress color: one of three states. Slightly over target stays green (1.3× band, mirrors Home).
   const progressColor = !hasTarget ? '#007AFF'
-    : actualTSS > target.hi ? '#FF3B30'
+    : actualTSS > target.hi * 1.3 ? '#FF3B30'
     : actualTSS >= target.lo ? '#34C759'
     : '#007AFF';
+
+  // Page atmosphere follows the same states: coral while working, mint once the
+  // target is reached, red beyond the 1.3× band (and on rest-day overreach).
+  const bgPalette: 'coral' | 'mint' | 'red' =
+    (isRestDay && isOverreaching) || (hasTarget && actualTSS > target.hi * 1.3) ? 'red'
+    : hasTarget && actualTSS >= target.lo ? 'mint'
+    : 'coral';
 
   // Stroke-dashoffset target: RING_CIRC × (1 − fill fraction). Starts at RING_CIRC (hidden).
   const strainTargetOffset = +(RING_CIRC * (1 - Math.min(actualTSS / ringMax, 1))).toFixed(2);
@@ -589,11 +598,11 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
     </style>
 
     <div id="strain-view" style="
-      position:relative;min-height:100vh;background:${atmosphereGradient('coral')};
+      position:relative;min-height:100vh;background:${atmosphereGradient(bgPalette)};
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      ${buildFloweyBackground('str', 'coral')}${buildSunGlint('low')}
+      ${buildFloweyBackground('str', bgPalette)}${buildSunGlint('low')}
 
       <!-- ── Scrollable content ──────────────────────────────────────── -->
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">

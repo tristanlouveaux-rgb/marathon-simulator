@@ -36,6 +36,7 @@ import { isImpactBlockedByInjury } from '@/injury/engine';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyHaloBackground, buildSunGlint, atmosphereGradient } from './page-flair';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 // Suppress unused warnings. Keeping legacy sky imports for safety
 void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M = '#0F172A';
@@ -220,7 +221,7 @@ function getReadinessHTML(s: SimulatorState): string {
         if (sport === 'run') continue;  // only cross-training
         const day = Math.floor((now - Date.parse(a.startTime)) / 86400000);
         if (day < 0 || day > 120) continue;
-        const tss = a.iTrimp != null && a.iTrimp > 0 ? a.iTrimp / 150
+        const tss = a.iTrimp != null && a.iTrimp > 0 ? normalizeiTrimp(a.iTrimp)
           : (a.durationSec ?? 0) / 60 * 0.8;
         if (tss <= 0) continue;
         atlSum += tss * Math.exp(-day / ATL_TAU_DAYS);
@@ -255,46 +256,54 @@ function getReadinessHTML(s: SimulatorState): string {
     if (readiness.legLoadNote && (readiness.hardFloor === 'legLoad' || isImpactBlockedByInjury(s.injuryState))) {
       return readiness.legLoadNote;
     }
-    // Post-session note (canonical capacityStrainNote — same helper as the
-    // Home card): injury-cap overshoot first, then Big/Solid/Good-training
-    // tiers vs the capacity anchor. Without this, Home acknowledges the
-    // session and this page lectures about chronic load.
-    if (isTri) {
-      const note = capacityStrainNote(capStrain);
-      if (note) return note;
-    }
-    if (!isTri || !triReadiness) return readiness.sentence;
+    // Chronic / systemic sentence this page would otherwise lead with. Computed
+    // first so the canonical capacityStrainNote can use it as the trained-day
+    // fallback ("X TSS logged today. <chronic>") instead of looking unphased.
+    const chronicSentence = (() => {
+      if (!isTri || !triReadiness) return readiness.sentence;
 
-    // Determine the most important systemic signal (sleep, HRV, load). May override
-    // or augment the discipline sentence depending on severity.
-    const hrvDrop = (hrvRmssd != null && hrvPersonalAvg != null && hrvPersonalAvg > 0)
-      ? (hrvPersonalAvg - hrvRmssd) / hrvPersonalAvg
-      : null;
-    const debtExcessHours = debtOutlook.typicalDebtSec != null
-      ? (debtOutlook.debtSec - debtOutlook.typicalDebtSec) / 3600
-      : null;
+      // Determine the most important systemic signal (sleep, HRV, load). May override
+      // or augment the discipline sentence depending on severity.
+      const hrvDrop = (hrvRmssd != null && hrvPersonalAvg != null && hrvPersonalAvg > 0)
+        ? (hrvPersonalAvg - hrvRmssd) / hrvPersonalAvg
+        : null;
+      const debtExcessHours = debtOutlook.typicalDebtSec != null
+        ? (debtOutlook.debtSec - debtOutlook.typicalDebtSec) / 3600
+        : null;
 
-    const systemicNote = (() => {
-      if (hrvDrop != null && hrvDrop > 0.30)
-        return 'HRV is significantly suppressed. Avoid high-intensity work today.';
-      if (hrvDrop != null && hrvDrop > 0.20)
-        return 'HRV is moderately suppressed. High-intensity work carries more risk today.';
-      if (sleepScore != null && sleepScore < 50)
-        return 'Last night\'s sleep was poor. Recovery is reduced.';
-      if (debtExcessHours != null && debtExcessHours >= 2)
-        return `Sleep debt is ${Math.round(debtExcessHours)}h above your typical level. Prioritise sleep tonight.`;
-      return null;
+      const systemicNote = (() => {
+        if (hrvDrop != null && hrvDrop > 0.30)
+          return 'HRV is significantly suppressed. Avoid high-intensity work today.';
+        if (hrvDrop != null && hrvDrop > 0.20)
+          return 'HRV is moderately suppressed. High-intensity work carries more risk today.';
+        if (sleepScore != null && sleepScore < 50)
+          return 'Last night\'s sleep was poor. Recovery is reduced.';
+        if (debtExcessHours != null && debtExcessHours >= 2)
+          return `Sleep debt is ${Math.round(debtExcessHours)}h above your typical level. Prioritise sleep tonight.`;
+        return null;
+      })();
+
+      // If systemic signals are the primary driver (HRV or sleep) and disciplines are clear,
+      // lead with the systemic note rather than defaulting to "all disciplines are clear".
+      const discIssue = triReadiness.overall !== 'On Track' && triReadiness.overall !== 'Primed';
+      if (!discIssue && systemicNote) return systemicNote;
+
+      // Disciplines have an issue. Lead with that, append systemic context if notable.
+      const discSentence = triReadiness.sentence;
+      if (systemicNote) return `${discSentence} ${systemicNote}`;
+      return discSentence;
     })();
 
-    // If systemic signals are the primary driver (HRV or sleep) and disciplines are clear,
-    // lead with the systemic note rather than defaulting to "all disciplines are clear".
-    const discIssue = triReadiness.overall !== 'On Track' && triReadiness.overall !== 'Primed';
-    if (!discIssue && systemicNote) return systemicNote;
-
-    // Disciplines have an issue. Lead with that, append systemic context if notable.
-    const discSentence = triReadiness.sentence;
-    if (systemicNote) return `${discSentence} ${systemicNote}`;
-    return discSentence;
+    // Post-session note (canonical capacityStrainNote — same helper as the
+    // Home card): injury-cap overshoot first, then Big/Solid/Good-training
+    // tiers vs the capacity anchor, then the trained-day acknowledgment
+    // composed onto the chronic sentence. Without this, Home acknowledges
+    // the session and this page lectures about chronic load.
+    if (isTri) {
+      const note = capacityStrainNote(capStrain, chronicSentence);
+      if (note) return note;
+    }
+    return chronicSentence;
   })();
   // Injury state is the dominant constraint when active. Lead with it so the
   // user reads "blocked / capped" before the systemic readiness commentary.

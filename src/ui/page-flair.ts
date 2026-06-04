@@ -62,7 +62,8 @@ export type RingPalette =
   | 'grey'      // archive contexts
   | 'coral'     // Strain (warm intensity)
   | 'rose'      // Recovery (warm soft pink)
-  | 'amber';    // Injury Risk (warning warmth)
+  | 'amber'     // Injury Risk (warning warmth)
+  | 'red';      // Strain exceeded (load beyond tolerance — alarm state)
 /** Entrance animation intensity. 'small' is the default; 'large' is the hero
  * water-droplet ripple (used only on the user's first ever ring experience). */
 export type EntranceMode = 'large' | 'small' | 'none';
@@ -109,6 +110,7 @@ const RING_PALETTES: Record<RingPalette, { highlight: string; mid: string; shado
   coral:    { highlight: '#FFFFFF', mid: '#C56B5C', shadow: '#7A2E20' },
   rose:     { highlight: '#FFFFFF', mid: '#C5707A', shadow: '#7A2E40' },
   amber:    { highlight: '#FFFFFF', mid: '#D08B3A', shadow: '#7A4A14' },
+  red:      { highlight: '#FFFFFF', mid: '#C4564A', shadow: '#7A1E16' },
 };
 
 /** Atmosphere base palettes — soft radial gradient tinted to each page's family.
@@ -125,6 +127,7 @@ const ATMOSPHERE_GRADIENTS: Record<RingPalette, string> = {
   coral:    'radial-gradient(ellipse 85% 75% at 50% 42%, #F2DCD7 0%, #F5E5E1 35%, #F8EDEB 65%, #FAF9F6 100%)',
   rose:     'radial-gradient(ellipse 85% 75% at 50% 42%, #F2D8DD 0%, #F5E1E5 35%, #F8EBED 65%, #FAF9F6 100%)',
   amber:    'radial-gradient(ellipse 85% 75% at 50% 42%, #F2E5CC 0%, #F5EAD8 35%, #F8F0E5 65%, #FAF9F6 100%)',
+  red:      'radial-gradient(ellipse 85% 75% at 50% 42%, #F4D3CC 0%, #F6DED9 35%, #F9E9E6 65%, #FAF9F6 100%)',
 };
 
 const ACCENT_GRADIENT = { hi: 0.45, lo: 0.12 } as const;

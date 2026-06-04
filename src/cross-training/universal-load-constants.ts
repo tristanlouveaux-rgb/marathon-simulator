@@ -18,8 +18,13 @@ export const REPLACE_THRESHOLD = 0.95;
 /** Minimum confidence required to allow replacement */
 export const CONF_REPLACE_MIN = 0.75;
 
-/** Smoothing factor for load similarity scoring */
-export const LOAD_SMOOTHING = 30.0;
+/**
+ * Smoothing factor for load similarity scoring (TSS units).
+ * Was 30 in the old Garmin units; re-denominated 2026-06-04 via the
+ * easy-anchor ratio (30 ÷ 1.63 ≈ 18.4) so load-delta sensitivity in
+ * vibeSimilarity is unchanged now that both inputs are canonical TSS (B2).
+ */
+export const LOAD_SMOOTHING = 18.4;
 
 /** Weight of ratio score in vibe similarity */
 export const RATIO_WEIGHT = 0.60;
@@ -79,11 +84,31 @@ export const EXTREME_RPE_LEVEL = 7;
 // Saturation Curve (for Replacement Credit only)
 // ---------------------------------------------------------------------------
 
-/** Time constant for saturation curve */
-export const TAU = 800;
+/**
+ * Saturation scale for a single session's replacement credit (TSS).
+ *
+ * Curve: credit = TAU × (1 − e^(−raw/TAU)). One parameter; slope exactly 1 at
+ * the origin, asymptote TAU. A credit can therefore never EXCEED its raw load
+ * — saturation is a cap, as the spec intended.
+ *
+ * HISTORY (ISSUE-263): the old two-parameter form CREDIT_MAX(1−e^(−raw/TAU))
+ * with CREDIT_MAX=1500, TAU=800 had slope CREDIT_MAX/TAU = 1.875 at zero — it
+ * AMPLIFIED every realistic session's credit ~1.6–1.9×. That amplification was
+ * accidentally compensating for the budget-vs-cuts scale mismatch (B1): a
+ * TSS-ish budget was inflated to roughly Garmin-cut currency. With every
+ * pipeline canonical TSS, the amplification is a pure bug, so the slope-1 form
+ * replaces it. TAU = 491 derives from the old time constant re-denominated to
+ * TSS (800 ÷ 1.63 easy-anchor ratio) — compression starts gently around
+ * ~100 TSS (0.9×) and a monster session saturates toward 491 TSS.
+ */
+export const TAU = 491;
 
-/** Maximum credit from any single session */
-export const CREDIT_MAX = 1500;
+/**
+ * @deprecated ISSUE-263: the separate CREDIT_MAX asymptote is gone — the
+ * slope-1 saturation curve uses TAU as its single parameter (see above).
+ * Kept as an alias so legacy imports fail loudly in review, not silently.
+ */
+export const CREDIT_MAX = TAU;
 
 // ---------------------------------------------------------------------------
 // Tier C (RPE-only) Adjustments
@@ -134,20 +159,10 @@ export function getActiveFraction(sportKey: string): number {
 // ---------------------------------------------------------------------------
 // RPE → Load per Minute Mapping (Tier C)
 // ---------------------------------------------------------------------------
-
-/** Load per minute by RPE (aligned with Garmin scale) */
-export const LOAD_PER_MIN_BY_RPE: Record<number, number> = {
-  1: 0.5,   // Recovery
-  2: 0.8,   // Easy
-  3: 1.1,   // Easy-moderate
-  4: 1.6,   // Moderate
-  5: 2.0,   // Moderate-hard
-  6: 2.7,   // Tempo
-  7: 3.5,   // Threshold
-  8: 4.5,   // VO2
-  9: 5.3,   // Very hard
-  10: 6.0,  // Max
-};
+// REMOVED 2026-06-04 (ISSUE-263): the old LOAD_PER_MIN_BY_RPE table here was a
+// THIRD per-minute scale ("aligned with Garmin scale" but disagreeing with
+// LOAD_PER_MIN_BY_INTENSITY at several RPEs). Tier C now reads the canonical
+// TL_PER_MIN table from '@/constants' directly — one RPE→TSS curve everywhere.
 
 // ---------------------------------------------------------------------------
 // RPE → Aerobic/Anaerobic Split (Tier C)
@@ -179,8 +194,20 @@ export const RPE_AEROBIC_SPLIT: Record<number, number> = {
 // Tier B (HR-only) Zone Weights
 // ---------------------------------------------------------------------------
 
-/** Zone weights for TRIMP-like calculation */
+/** Relative zone weights for TRIMP-like calculation (Z1..Z5 linear ramp) */
 export const HR_ZONE_WEIGHTS: [number, number, number, number, number] = [1, 2, 3, 4, 5];
+
+/**
+ * Per-zone TSS per minute (canonical, ISSUE-263).
+ * Derived, not invented: the existing 1:2:3:4:5 relative ramp anchored to the
+ * TSS definition — Z4 is the threshold zone, and 1 h at threshold = 100 TSS,
+ * so Z4 = 100/60 per minute and the rest scale linearly. Hourly values:
+ * [25, 50, 75, 100, 125]. Sanity vs IF²×100: Z1 25/h → IF 0.50 (recovery),
+ * Z2 50/h → IF 0.71 (easy), Z3 75/h → IF 0.87 (tempo), Z5 125/h → IF 1.12
+ * (VO2) — the linear ramp lands on physiologically sensible intensity factors.
+ */
+export const HR_ZONE_TSS_PER_MIN: [number, number, number, number, number] =
+  HR_ZONE_WEIGHTS.map(w => (w * 100) / (HR_ZONE_WEIGHTS[3] * 60)) as [number, number, number, number, number];
 
 /** Confidence for Tier B based on data completeness */
 export const TIER_B_CONFIDENCE_FULL = 0.85;
@@ -224,8 +251,15 @@ export function computeGoalFactor(
 // Equivalence Calculation
 // ---------------------------------------------------------------------------
 
-/** Average load per km for easy running (for equivalence messaging) */
-export const EASY_LOAD_PER_KM = 12;
+/**
+ * Average TSS per km of easy running (for equivalence messaging).
+ * Derived: default easy pace 6:00/km (the same 360 s/km default the suggester
+ * uses for ctx.easyPaceSecPerKm) × TL_PER_MIN[4] (easy RPE4 = 0.92 TSS/min)
+ * = 5.52 TSS/km. Replaces the old EASY_LOAD_PER_KM = 12 (Garmin units), which
+ * disagreed with two other orphan easy-km constants (35 and "15 load/TSS") —
+ * all three are now retired in favour of this single derived value.
+ */
+export const EASY_LOAD_PER_KM = 5.52;
 
 /** Maximum equivalent km shown in UI (cap for sanity) */
 export const MAX_EQUIVALENT_EASY_KM = 25;

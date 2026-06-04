@@ -13,7 +13,7 @@ import { generateWorkoutInsight, findPreviousSession } from '@/calculations/work
 import { looksLikeCssTest, looksLikeFtpTest } from '@/calculations/tri-benchmarks-from-history';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { generateWeekWorkouts } from '@/workouts';
-import { getTrailingEffortScore } from '@/calculations/fitness-model';
+import { getTrailingEffortScore, normalizeiTrimp} from '@/calculations/fitness-model';
 import { SPORT_LABELS, IMPACT_PER_KM } from '@/constants';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
@@ -168,7 +168,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
 
   const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
   const actualTSS = actual.iTrimp != null && actual.iTrimp > 0
-    ? Math.round((actual.iTrimp * 100) / 15000)
+    ? Math.round(normalizeiTrimp(actual.iTrimp))
     : durMin > 0 ? Math.round(durMin * 0.92) : null;
 
   // Build grid: only include stats that have real values (no "—" filler cells)

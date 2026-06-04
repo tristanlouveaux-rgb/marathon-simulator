@@ -8,6 +8,7 @@ import { gp } from '@/calculations/paces';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary } from './trimp';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
 import { log } from '@/ui/renderer';
@@ -754,7 +755,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // Signal B TSS
       const rawITrimp = item.iTrimp ?? null;
       const rawTSS = (rawITrimp != null && rawITrimp > 0)
-        ? (rawITrimp * 100) / 15000
+        ? normalizeiTrimp(rawITrimp)
         : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
       wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 
@@ -887,7 +888,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     // HR fraction exceeded 1 due to wrong maxHR), recompute from avg_hr.
     const storedForCheck = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
     const durationMin = row.duration_sec / 60;
-    const storedTSS = storedForCheck != null ? (storedForCheck * 100) / 15000 : 0;
+    const storedTSS = storedForCheck != null ? normalizeiTrimp(storedForCheck) : 0;
     const freshITrimp = (storedForCheck != null && durationMin > 0 && storedTSS > durationMin * 3
       && row.avg_hr != null && rhrBaseline != null && s.maxHR != null)
       ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, rhrBaseline, s.maxHR, s.biologicalSex as 'male' | 'female' | undefined)
@@ -1144,7 +1145,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           // Signal B TSS (no runSpec discount. Station work is primary load in HYROX)
           const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
           const rawTSS = (rawITrimp != null && rawITrimp > 0)
-            ? (rawITrimp * 100) / 15000
+            ? normalizeiTrimp(rawITrimp)
             : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
           wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 
@@ -1309,7 +1310,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
           const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
           const runTSS = (runITrimp != null && runITrimp > 0)
-            ? (runITrimp * 100) / 15000
+            ? normalizeiTrimp(runITrimp)
             : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
           wk.actualTSS = (wk.actualTSS ?? 0) + runTSS;
 
@@ -1527,7 +1528,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         // Compute TSS-calibrated Training Load for this matched run
         const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
         const runTL = (runITrimp != null && runITrimp > 0)
-          ? (runITrimp * 100) / 15000
+          ? normalizeiTrimp(runITrimp)
           : (actual.durationSec / 60) * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
         wk.actualTSS = (wk.actualTSS ?? 0) + runTL;
 
@@ -1794,7 +1795,7 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
   // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
   const rawITrimp = row.iTrimp ?? null;
   const rawTSS = (rawITrimp != null && rawITrimp > 0)
-    ? (rawITrimp * 100) / 15000
+    ? normalizeiTrimp(rawITrimp)
     : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
   wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 }
@@ -1865,6 +1866,31 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   const jsDay = startDate.getDay();
   const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
 
+  // ISSUE-263 (SEV-1): w.aerobic/w.anaerobic are canonical TSS everywhere.
+  // This used to stamp Garmin Training Effect (a 0–5 score) onto them, so a
+  // real synced cross session contributed ~3–8 instead of ~50 to every
+  // consumer summing w.aerobic as TSS (tri planned-day TSS, AI coach, tri
+  // overload). TE remains available for display via the GarminActual record
+  // created below. Measured path: iTRIMP → personal-normalized TSS (same as
+  // universalLoad's Tier A+, same fixed 85/15 split). Estimate path:
+  // calculateWorkoutLoad (canonical type-keyed TSS).
+  const durationMinForLoad = item.durationSec / 60;
+  let aerobicTss: number | undefined;
+  let anaerobicTss: number | undefined;
+  if (item.iTrimp != null && item.iTrimp > 0) {
+    const tss = normalizeiTrimp(item.iTrimp);
+    aerobicTss = Math.round(tss * 0.85);
+    anaerobicTss = Math.round(tss * 0.15);
+  } else if (durationMinForLoad > 0) {
+    const loads = calculateWorkoutLoad(
+      item.appType === 'run' ? 'easy' : item.appType === 'gym' ? 'gym' : 'cross',
+      durationMinForLoad,
+      rpe * 10,
+    );
+    aerobicTss = loads.aerobic;
+    anaerobicTss = loads.anaerobic;
+  }
+
   const workout: Workout = {
     id,
     t: item.appType === 'run' ? 'easy' : item.appType === 'gym' ? 'gym' : 'cross',
@@ -1873,8 +1899,8 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
     r: rpe,
     rpe,
     dayOfWeek,
-    aerobic: item.aerobicEffect ?? undefined,
-    anaerobic: item.anaerobicEffect ?? undefined,
+    aerobic: aerobicTss,
+    anaerobic: anaerobicTss,
   };
 
   (workout as any).garminTimestamp = item.startTime;
@@ -1919,7 +1945,7 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
   const rawITrimp = item.iTrimp ?? null;
   const rawTSS = (rawITrimp != null && rawITrimp > 0)
-    ? (rawITrimp * 100) / 15000
+    ? normalizeiTrimp(rawITrimp)
     : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
   wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 }

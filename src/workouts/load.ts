@@ -1,5 +1,5 @@
 import type { WorkoutLoad } from '@/types';
-import { LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
+import { LOAD_PROFILES, plannedTssPerMin } from '@/constants';
 
 /**
  * Calculate expected aerobic and anaerobic load for a workout
@@ -91,9 +91,17 @@ export function calculateWorkoutLoad(
 
   if (!dur || dur <= 0) dur = 40; // Fallback
 
-  // Calculate load to match GARMIN scale
+  // Calculate load in canonical TSS (1 h at LT = 100; TL_PER_MIN calibration).
+  // Valuation is keyed off the workout TYPE (TSS_RPE_BY_TYPE — an easy run is
+  // prescribed at RPE 3 but costs the RPE-4 row, ~55 TSS/h), falling back to
+  // the prescribed RPE for unmapped types.
+  // HISTORY: until 2026-06-04 this used LOAD_PER_MIN_BY_INTENSITY ("Garmin
+  // scale", ~1.6× TSS), which made every w.aerobic stamp a different currency
+  // from the weekly-target/strain/CTL pipelines (ISSUE-263). All planned
+  // workout loads are now TSS; convert Garmin-raw inputs at THEIR boundary
+  // via garminToTssRatio, never here.
   const estimatedRPE = (intensityPct || 50) / 10; // Convert back to 1-10 scale
-  const baseRate = LOAD_PER_MIN_BY_INTENSITY[Math.round(estimatedRPE)] || 2.0;
+  const baseRate = plannedTssPerMin(workoutType, estimatedRPE);
   const totalLoad = dur * baseRate;
 
   // Split into aerobic/anaerobic based on workout type

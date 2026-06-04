@@ -11,7 +11,9 @@ import { callEdgeFunction } from './supabaseClient';
 import type { PhysiologyDayEntry } from '@/types';
 import { rmssdToHrvStatus } from '@/recovery/engine';
 import type { RecoveryEntry } from '@/recovery/engine';
-import { recomputeLT } from './ltSync';
+import { recomputeLT, LT_NOTIFY_THRESHOLD_SEC_KM } from './ltSync';
+import { formatPace } from '@/utils/format';
+import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 
 /** Shape of a single day row from sync-physiology-snapshot */
 interface PhysiologyRow {
@@ -38,7 +40,10 @@ interface PhysiologyRow {
 /** Full response envelope from sync-physiology-snapshot */
 interface PhysiologyResponse {
   days: PhysiologyRow[];
+  /** Legacy aggregate (p95 of session maxes). Only read when maxHRReadings is absent. */
   maxHR: number | null;
+  /** Top session max-HR readings with dates — input to corroboratedMaxHR() */
+  maxHRReadings?: { max_hr: number; date: string }[] | null;
   /** Latest physiology_snapshots row (no date filter) — for infrequent metrics like LT */
   latestPhysio: {
     calendar_date: string;
@@ -159,14 +164,21 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
     }
 
     // Max HR is a physiological ceiling. Only raise, never lower.
-    // A value from a low-intensity or wrist-sensor session is not the athlete's max.
-    if (data.maxHR != null && data.maxHR > 0) {
+    // Estimate = highest corroborated session max (canonical helper — shared
+    // with stravaSync and appleHealthSync so the ceiling can't depend on
+    // which pipe a session arrived through).
+    if (data.maxHRReadings?.length) {
+      const readings = data.maxHRReadings.map(rd => ({ maxHR: rd.max_hr, date: rd.date }));
+      const { estimate, changed: hrChanged } = applyCorroboratedMaxHR(s, readings, 'PhysiologySync');
+      result.maxHR = estimate;
+      if (hrChanged) changed = true;
+    } else if (data.maxHR != null && data.maxHR > 0) {
+      // Legacy edge-fn response (p95 aggregate, no readings). Up-only ratchet;
+      // a lower p95 is expected (it tracks training mix, not the ceiling).
       result.maxHR = data.maxHR;
       if (data.maxHR > (s.maxHR ?? 0)) {
         s.maxHR = data.maxHR;
         changed = true;
-      } else if (s.maxHR != null && data.maxHR < s.maxHR) {
-        console.warn(`[PhysiologySync] Ignored lower maxHR=${data.maxHR} (current=${s.maxHR}). Max HR can only increase.`);
       }
     }
 
@@ -181,24 +193,34 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       : (data.latestPhysio?.lt_heart_rate ?? null);
 
     // Garmin LT "as of" date: latestPhysio.calendar_date if it carried LT, else
-    // the latest dailies row's date. Used by recomputeLT to gate Garmin freshness.
+    // the latest dailies row's date. Shown in the LT card provenance line.
     const garminLT = (ltPaceValue != null && ltPaceValue > 0) ? {
       ltPaceSecKm: ltPaceValue,
       ltHR: ltHRValue ?? null,
       asOf: (data.latestPhysio?.calendar_date ?? latest.calendar_date ?? new Date().toISOString().slice(0, 10)),
     } : null;
 
-    // Hand off to ltSync. It builds derive inputs from PBs + activities,
-    // applies the override > Garmin > derived priority, and surfaces a
-    // suggestion if Garmin and derived disagree by >10s/km.
+    // Hand off to ltSync. It builds derive inputs from PBs + activities and
+    // applies the override > Garmin (until superseded) > derived priority.
+    // Watch readings auto-apply; a meaningful shift gets a toast below.
+    const prevLtPace = s.lt ?? null;
     const action = recomputeLT(s, { garmin: garminLT });
     if (action !== 'none') {
       result.ltPace = s.lt ?? null;
       result.ltHR = s.ltHR ?? null;
       changed = true;
     }
-    if (action === 'pending') {
-      console.warn(`[PhysiologySync] LT conflict (>10s/km) — surfacing suggestion: garmin=${garminLT?.ltPaceSecKm}s/km derived=${s.ltSuggestion?.derived.ltPaceSecKm.toFixed(0)}s/km`);
+    // Adaptation transparency: a watch-driven LT shift of ≥10s/km changes
+    // threshold prescriptions noticeably — say so, don't silently swap.
+    if (action === 'garmin' && prevLtPace != null && s.lt != null
+        && Math.abs(s.lt - prevLtPace) >= LT_NOTIFY_THRESHOLD_SEC_KM) {
+      const unitPref = s.unitPref ?? 'km';
+      import('@/ui/toast').then(({ showAssignmentToast }) => {
+        showAssignmentToast([
+          `Lactate threshold updated from your watch: ${formatPace(prevLtPace, unitPref)} → ${formatPace(s.lt!, unitPref)}.`,
+        ]);
+      }).catch(() => {});
+      console.log(`[PhysiologySync] LT updated from Garmin: ${prevLtPace}s/km → ${s.lt}s/km`);
     }
 
     // Store up to 28 days of history for recovery score baseline and physiology dashboard.

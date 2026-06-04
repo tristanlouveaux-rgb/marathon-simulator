@@ -22,6 +22,7 @@
  *     2026-04-24 schema migration.
  */
 
+import { normalizeiTrimp, getAthleteNormalizer } from '@/calculations/fitness-model';
 import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
@@ -767,7 +768,7 @@ export function estimatePerDisciplineCTLFromActivities(
  * iTRIMP (Banister 1991) is the canonical raw physiological load metric
  * stored on garmin_activities. To compare it against TSS-space (where
  * 100 = 1h at threshold), divide by 150. The same conversion the
- * running-side activity-matcher uses (`rawITrimp * 100 / 15000`).
+ * running-side activity-matcher uses (`normalizeiTrimp`, personal-gated).
  *
  * Without this conversion, CTL estimates run ~150× too high (e.g. 2296
  * instead of ~15 for a base of one 60-min Z2 run per day).
@@ -857,7 +858,7 @@ export function estimateDirectPerDisciplineCTLFromActivities(
  * Override guard (no double-count): a session with a real matched activity
  * (`matchedActivityId` set, or `status==='completed'`) is skipped — the real
  * activity is already in the activity log and always wins (Strava-canonical).
- * The planned load is encoded as `iTrimp = TSS × 150` so `estimateTss` recovers
+ * The planned load is encoded as `iTrimp = TSS × normalizer / 100` so `estimateTss` recovers
  * exactly the planned (aerobic+anaerobic) TSS. The 120-day window is applied
  * downstream by the CTL function.
  */
@@ -892,7 +893,7 @@ export function manualDoneTriActivities(
         activityType,
         durationSec: (w.estimatedDurationMin ?? 0) * 60,
         startTime,
-        iTrimp: Math.round(tss * 150),
+        iTrimp: Math.round((tss * getAthleteNormalizer()) / 100), // exact inverse of normalizeiTrimp (round-trip safe)
       });
     }
   }
@@ -904,7 +905,11 @@ function estimateTss(
   sport: 'swim' | 'bike' | 'run' | 'other'
 ): number {
   if (a.iTrimp != null && a.iTrimp > 0) {
-    return a.iTrimp / 150;
+    // Personal athlete normalizer (plausibility-gated, population fallback) —
+    // the same conversion running-mode CTL/ATL uses, so tri and running
+    // fitness agree on what a session is worth (ISSUE-262/263; was /150
+    // population, ~1.65× divergent for a corrupted profile).
+    return normalizeiTrimp(a.iTrimp);
   }
   // Fallback when iTRIMP is missing: coarse TSS estimate per minute.
   // Values tuned so a 60-min Z2 ride ≈ 60 TSS, 60-min easy run ≈ 65 TSS.

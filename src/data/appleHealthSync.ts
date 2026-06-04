@@ -54,6 +54,8 @@ import {
   findRouteForWorkout,
   type SyntheticBestEffort,
 } from '@/data/appleHealthRoute';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import {
   detectRunRepsFromStream,
   detectBikeRepsFromPower,
@@ -1016,25 +1018,21 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
   // Observed-maxHR refinement. Apple Watch doesn't expose a true maxHR field,
   // but a user's HR during their hardest interval session lands within 1–2 bpm
   // of their lab-measured max. Far closer than Tanaka's population formula
-  // (208 − 0.7×age can be off by 10–15 bpm individually). After 16 weeks of
-  // workouts we have enough hard sessions for an observed peak to be a better
-  // estimate than the Tanaka fallback.
+  // (208 − 0.7×age can be off by 10–15 bpm individually).
   //
-  // Gating:
-  //   1. ≥ 3 workouts with peak ≥ 150 bpm. Single-workout glitch (cold-start
-  //      sensor jumps) won't move the value; need a pattern of hard efforts.
-  //   2. Observed > current s.maxHR (or s.maxHR null). Never write a lower
-  //      value, since maxHR can only be observed-or-greater than what's stored.
+  // Uses the canonical corroborated-max estimator (max-hr-estimator.ts —
+  // shared with the Garmin and Strava pipes): the peak must be witnessed by a
+  // second workout within 5 bpm on a different day, so a single wrist
+  // cadence-lock spike can no longer ratchet in permanently (the old raw
+  // Math.max path had exactly that failure mode). Up-only ratchet preserved.
   // Mirrors the CLAUDE.md "Manually-set Benchmarks Yield to Improvements" rule.
-  const workoutPeaks = [...result.values()].map(e => e.maxHR).filter(p => p >= 150);
-  if (workoutPeaks.length >= 3) {
-    const observedPeak = Math.max(...workoutPeaks);
-    const current = s.maxHR;
-    if (!current || observedPeak > current) {
-      console.log(`[AppleHealthSync] Observed maxHR ${observedPeak} bpm from ${workoutPeaks.length} hard workouts (was ${current ?? 'unset'})`);
-      s.maxHR = observedPeak;
-      saveState();
-    }
+  {
+    const readings = workouts.flatMap(w => {
+      const e = result.get(workoutKey(w));
+      return e ? [{ maxHR: e.maxHR, date: w.startDate }] : [];
+    });
+    const { changed } = applyCorroboratedMaxHR(s, readings, 'AppleHealthSync');
+    if (changed) saveState();
   }
 
   return result;
@@ -1602,7 +1600,7 @@ function buildAppleWeekTotals(rows: GarminActivityRow[]): {
     // RPE-4 fallback (~0.92 TL/min) which matches the matcher's heuristic
     // at activity-matcher.ts:611.
     const raw = (iTrimp != null && iTrimp > 0)
-      ? (iTrimp * 100) / 15000
+      ? normalizeiTrimp(iTrimp)
       : durationMin * 0.92;
     rawTSS += raw;
     // Signal A (run-equiv): runs count fully, cross-training gets discounted by runSpec.

@@ -30,10 +30,16 @@ import { isTimingMod } from '@/cross-training/timing-check';
 export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] {
   const wk = s.wks?.[viewWeek - 1];
   const isCurrentWeek = viewWeek === s.w;
+  // injuryState is threaded so an active running injury renders its adapted
+  // week (acute/rehab/return-to-run) instead of the healthy plan. The generator
+  // gates this forward-only via injuryAppliesToWeek (past weeks never rewritten),
+  // and the activity matcher already regenerates with injuryState for matching
+  // (activity-matcher.ts) — without this the Plan tab rendered a different week
+  // than the one actuals were matched against. ISSUE-261.
   const workouts = wk
     ? generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-      null, s.recurringActivities,
+      s.injuryState ?? null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
       getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus, (wk as any).forceDeload,
       s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,

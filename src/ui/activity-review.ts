@@ -47,7 +47,7 @@ import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
 import { TL_PER_MIN, SPORTS_DB, SPORT_LABELS } from '@/constants';
 import { resolveSportForActivity } from '@/ui/sport-picker-modal';
-import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp} from '@/calculations/fitness-model';
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { formatKm } from '@/utils/format';
 
@@ -1507,7 +1507,7 @@ function applyReview(
       const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
       const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? (combinedActivity.iTrimp * 100) / 15000 * runSpec
+        ? normalizeiTrimp(combinedActivity.iTrimp) * runSpec
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
@@ -2162,7 +2162,7 @@ export function autoProcessActivities(
       const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
       const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? (combinedActivity.iTrimp * 100) / 15000 * runSpec
+        ? normalizeiTrimp(combinedActivity.iTrimp) * runSpec
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);

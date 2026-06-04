@@ -12,10 +12,10 @@
  *   Tier 3 (>40 TSS or elevated ACWR): blocking modal fires instead.
  */
 
-import type { Week } from '@/types/state';
+import type { Week, SimulatorState } from '@/types/state';
 import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import { getMutableState, saveState } from '@/state';
-import { getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeDecayedCarry, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeDecayedCarry, computeACWR, computeRunningFloorKm, getNormalizerFromState, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computeRecoveryTrend } from '@/calculations/readiness';
 import { render } from '@/ui/renderer';
 import {
@@ -217,10 +217,13 @@ export function wireExcessLoadCard(): void {
  * Compute weighted runSpec for the week's activities.
  * Excess from running (runSpec 1.0) → full reduction. Cycling (0.55) → smaller reduction.
  */
-function computeWeightedRunSpec(wk: Week): number {
+function computeWeightedRunSpec(wk: Week, s: SimulatorState): number {
   let totalRawTSS = 0;
   let weightedSum = 0;
-  const ITRIMP_NORMALIZER = 15000;
+  // Personal normalizer (plausibility-gated, population fallback) — same
+  // conversion as strain/CTL (ISSUE-262 sweep). Ratio output, so the exact
+  // normalizer barely matters, but two scales in one file is how this started.
+  const ITRIMP_NORMALIZER = getNormalizerFromState(s);
   const seenIds = new Set<string>();
 
   for (const actual of Object.values(wk.garminActuals ?? {})) {
@@ -335,11 +338,14 @@ export function triggerExcessLoadAdjustment(): void {
   } else {
     // No unspent items. Excess came from matched activities being harder than expected.
     // Create a synthetic activity representing the excess TSS so the suggester can
-    // size reductions correctly. iTrimp = excessTSS * 150 (inverse of TSS = iTrimp*100/15000).
+    // size reductions correctly. Encode with the SAME personal normalizer that
+    // universalLoad's iTRIMP tier decodes with (ISSUE-263: the old population
+    // ×150 encode against a personal decode inflated the synthetic ~1.65×):
+    // iTrimp = excessTSS × normalizer / 100 (exact inverse of normalizeiTrimp).
     sport = 'cross_training';
     const syntheticDurationMin = Math.round(excess * 2); // rough estimate
     combinedActivity = createActivity(sport, syntheticDurationMin, 5, undefined, undefined, s.w);
-    combinedActivity.iTrimp = excess * 150;
+    combinedActivity.iTrimp = (excess * getNormalizerFromState(s)) / 100;
     combinedActivity.dayOfWeek = 6; // end of week
     sportLabel = 'Week overload';
   }
@@ -374,7 +380,7 @@ export function triggerExcessLoadAdjustment(): void {
   );
   const targetTSS = plannedB ?? 0;
   const activityTSS = combinedActivity.iTrimp
-    ? combinedActivity.iTrimp * 100 / 15000
+    ? normalizeiTrimp(combinedActivity.iTrimp)
     : items.reduce((sum, it) => sum + it.durationMin * (TL_PER_MIN[5] ?? 1.15), 0);
 
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier, excess);

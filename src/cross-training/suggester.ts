@@ -11,16 +11,19 @@
  * - "Beautiful split": RecoveryCostLoad vs RunReplacementCredit
  * - Equivalence messaging: "Your 90 min padel is ~X km easy run"
  *
- * Load tiers:
- * - TIER 1 (Garmin): Use aerobic_load + anaerobic_load directly
- * - TIER 2 (HR): Compute TRIMP-like load from time-in-zone
- * - TIER 3 (RPE only): Estimate from duration * RPE-based rate
+ * CURRENCY (ISSUE-263, 2026-06-04): every load number in this file is
+ * canonical TSS (1 h at LT = 100). The budget (effectiveRRC, from
+ * computeUniversalLoad) and the cuts (computeWorkoutWeightedLoad, via
+ * calculateWorkoutLoad) share the scale — subtracting one from the other is
+ * legal again. Load production lives in universalLoad.ts (activities) and
+ * load.ts (planned runs); this file only consumes.
  */
 
 import type { Workout, RaceDistance, WorkoutType, SportKey, CrossActivity, Paces } from '@/types';
 import { SPORTS_DB, ANAEROBIC_WEIGHT } from '@/constants';
 import { normalizeSport } from './activities';
 import { computeUniversalLoad, classifyWorkoutType } from './universalLoad';
+import { EASY_LOAD_PER_KM } from './universal-load-constants';
 import type { DataTier, HRZoneData } from './universal-load-types';
 import type { WorkoutClassification, IntensityThresholds } from './universalLoad';
 import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
@@ -167,16 +170,16 @@ export interface SuggestionPopup extends SuggestionPayload {
 
 const ANAEROBIC_WEIGHT_SUGGESTER = 1.50;
 
-// Saturation curve
-const TAU = 800.0;
-const MAX_CREDIT = 1500.0;
-
 // Distance clamps
 const MIN_EASY_KM = 4.0;
 const MIN_LONG_KM = 10.0;
 
-// Similarity model
-const LOAD_SMOOTHING = 30.0;
+// Similarity model.
+// LOAD_SMOOTHING is in canonical TSS (ISSUE-263): both vibeSimilarity inputs —
+// activity loads (universalLoad) and planned-run loads (calculateWorkoutLoad)
+// — are TSS now. Re-denominated from the old Garmin-units 30 via the
+// easy-anchor ratio (30 ÷ 1.63 ≈ 18.4) so delta sensitivity is unchanged (B2).
+const LOAD_SMOOTHING = 18.4;
 const RATIO_WEIGHT = 0.60;
 const LOAD_WEIGHT = 0.40;
 const SAME_DAY_BONUS = 0.15;
@@ -193,34 +196,15 @@ const MAX_ADJUSTMENTS_LIGHT = 1;
 const MAX_ADJUSTMENTS_HEAVY = 2;
 const MAX_ADJUSTMENTS_EXTREME = 3;
 
-// Cap equivalence messaging at this km
-const MAX_EQUIVALENT_EASY_KM = 25;
-
-// RPE → load-per-minute (Tier 3 fallback)
-const LOAD_PER_MIN: Record<number, number> = {
-  1: 0.5,
-  2: 0.8,
-  3: 1.1,
-  4: 1.6,
-  5: 2.0,
-  6: 2.7,
-  7: 3.5,
-  8: 4.5,
-  9: 5.3,
-  10: 6.0,
-};
-
-// RPE → aerobic/anaerobic split
-const RPE_AEROBIC_SPLIT: Record<number, number> = {
-  1: 0.98, 2: 0.97, 3: 0.95, 4: 0.93,  // mostly aerobic
-  5: 0.88, 6: 0.82,                     // moderate
-  7: 0.72, 8: 0.65,                     // hard
-  9: 0.58, 10: 0.55,                    // very hard
-};
-
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+// REMOVED 2026-06-04 (ISSUE-263): this file used to carry private duplicates
+// of TAU/MAX_CREDIT (saturation), a third RPE→load/min table, an RPE split
+// table, and a 35-load-per-easy-km constant — all on scales that disagreed
+// with universal-load-constants.ts. Load production is centralised in
+// computeUniversalLoad (activities) and calculateWorkoutLoad (planned runs),
+// both canonical TSS.
 
 function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
@@ -235,46 +219,8 @@ function anaerobicRatio(aerobic: number, anaerobic: number): number {
   return total <= 1e-9 ? 0.0 : anaerobic / total;
 }
 
-function saturate(rawLoad: number): number {
-  // Caps how much "credit" a single session can provide
-  return MAX_CREDIT * (1.0 - Math.exp(-rawLoad / TAU));
-}
-
 function defaultRpe(rpe: number | undefined | null): number {
   return rpe == null ? 5 : clamp(Math.round(rpe), 1, 10);
-}
-
-/**
- * @deprecated Use computeUniversalLoad from ./universalLoad instead.
- * Kept for reference only. No longer called by buildCrossTrainingPopup.
- */
-function resolveActivityLoad(
-  act: CrossActivity,
-  sport: SportProfile
-): { aerobic: number; anaerobic: number; tier: 1 | 2 | 3 } {
-  // TIER 1: Garmin/Firstbeat loads
-  if (act.fromGarmin && act.aerobic_load != null && act.anaerobic_load != null) {
-    return {
-      aerobic: act.aerobic_load,
-      anaerobic: act.anaerobic_load,
-      tier: 1,
-    };
-  }
-
-  // TIER 2: HR data (future enhancement - for now fall through to Tier 3)
-  // TODO: If HR time-in-zone is available, compute TRIMP-like load
-
-  // TIER 3: RPE + duration estimate
-  const r = defaultRpe(act.rpe);
-  const lpm = LOAD_PER_MIN[r] || 2.0;
-  const rawLoad = act.duration_min * lpm * sport.mult;
-
-  // Split into aerobic/anaerobic based on RPE
-  const aerobicFrac = RPE_AEROBIC_SPLIT[r] || 0.85;
-  const aerobic = rawLoad * aerobicFrac;
-  const anaerobic = (rawLoad - aerobic) / ANAEROBIC_WEIGHT_SUGGESTER;
-
-  return { aerobic, anaerobic, tier: 3 };
 }
 
 /**
@@ -366,17 +312,6 @@ function computeWeeklyRunLoad(runs: PlannedRun[]): number {
   return runs
     .filter(r => r.status === 'planned')
     .reduce((sum, r) => sum + weightedLoad(r.plannedAerobic, r.plannedAnaerobic), 0);
-}
-
-/**
- * @deprecated Use computeUniversalLoad's equivalentEasyKm instead.
- */
-function computeEquivalentEasyKm(runReplacementCredit: number, easyPaceSecPerKm?: number): number {
-  // Estimate load per km for easy running
-  // Use a conservative estimate: ~35 load per km at easy pace
-  const easyLoadPerKm = 35;
-  const equiv = runReplacementCredit / easyLoadPerKm;
-  return Math.min(MAX_EQUIVALENT_EASY_KM, Math.round(equiv * 10) / 10);
 }
 
 function getSportProfile(sportKey: SportKey | string): SportProfile {
@@ -497,8 +432,9 @@ function buildReduceAdjustments(
                          severity === 'heavy' ? MAX_ADJUSTMENTS_HEAVY :
                          MAX_ADJUSTMENTS_LIGHT;
 
-  // Minimum load worth adjusting (below this, not worth changing the plan)
-  const minLoadThreshold = 5;
+  // Minimum load worth adjusting (TSS; below this, not worth changing the
+  // plan). Was 5 in the old Garmin units; re-denominated 5 ÷ 1.63 ≈ 3 (ISSUE-263).
+  const minLoadThreshold = 3;
 
   // ── Km floor constraint ──────────────────────────────────────────────────
   // When ACWR is safe or low, don't reduce total planned running below the floor.
@@ -732,7 +668,7 @@ function buildReplaceAdjustments(
                          severity === 'heavy' ? MAX_ADJUSTMENTS_HEAVY :
                          MAX_ADJUSTMENTS_LIGHT;
 
-  const minLoadThreshold = 5;
+  const minLoadThreshold = 3; // TSS (was 5 Garmin units, ISSUE-263)
   const usedIds = new Set<string>();
   const candidateKey = (r: PlannedRun) => `${r.workoutId}:${r.dayIndex}`;
 
@@ -928,7 +864,7 @@ export function buildCrossTrainingPopup(
    * Maximum TSS worth of reductions to apply. When the projected week total
    * only slightly exceeds the target, the caller passes the overshoot TSS so
    * adjustments only remove enough load to bring the week back to target.
-   * Converted to load units internally using EASY_LOAD_PER_KM.
+   * Same canonical TSS unit as the RRC budget (ISSUE-263) — applied directly.
    */
   maxReductionTSS?: number,
   /**
@@ -1045,29 +981,28 @@ export function buildCrossTrainingPopup(
   }
 
   // Apply recovery multiplier to the reduction budget.
-  // Cap the additional recovery contribution at 20 TSS equivalent (spec §6 guardrail).
+  // Cap the additional recovery contribution at 20 TSS (spec §6 guardrail).
   // Recovery modulates reduction aggressiveness. Doesn't dominate it.
+  // (Pre-ISSUE-263 this cap was "20 × 15 load units per TSS approx" — the
+  // budget is canonical TSS now, so the cap is simply 20.)
   const recoveryExtra = runReplacementCredit * (recoveryMultiplier - 1.0);
-  let effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
+  let effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20);
 
   // Cap budget to only the overshoot amount. Don't reduce more than needed to hit target.
-  // Use equivalentEasyKm to derive TSS capacity of full RRC, then scale proportionally.
+  // RRC is canonical TSS (ISSUE-263), so the overshoot cap is a direct ratio —
+  // the old round-trip through equivalentEasyKm × pace × 0.92 is gone.
   // Also dampen adjustment severity: small overshoot shouldn't touch many workouts.
   let adjustmentSeverity = severity; // may be dampened; severity stays for headline
-  if (maxReductionTSS != null && maxReductionTSS >= 0 && equivalentEasyKm > 0) {
-    const easyPaceMin = (ctx.easyPaceSecPerKm ?? 360) / 60;
-    const fullRrcTSS = equivalentEasyKm * easyPaceMin * 0.92; // total TSS the full RRC would reduce
-    if (fullRrcTSS > 0) {
-      const capFraction = Math.min(1, maxReductionTSS / fullRrcTSS);
-      if (capFraction < 1) {
-        console.log(`[CrossTraining] Budget capped: ${maxReductionTSS.toFixed(0)} TSS overshoot / ${fullRrcTSS.toFixed(0)} TSS full RRC → ${(capFraction * 100).toFixed(0)}% budget`);
-        effectiveRRC = effectiveRRC * capFraction;
-        // Dampen adjustment count: small overshoot shouldn't touch many workouts
-        if (capFraction <= 0.35) {
-          adjustmentSeverity = 'light'; // max 1 adjustment
-        } else if (capFraction <= 0.65 && severity === 'extreme') {
-          adjustmentSeverity = 'heavy'; // max 2 adjustments
-        }
+  if (maxReductionTSS != null && maxReductionTSS >= 0 && effectiveRRC > 0) {
+    const capFraction = Math.min(1, maxReductionTSS / effectiveRRC);
+    if (capFraction < 1) {
+      console.log(`[CrossTraining] Budget capped: ${maxReductionTSS.toFixed(0)} TSS overshoot / ${effectiveRRC.toFixed(0)} TSS full RRC → ${(capFraction * 100).toFixed(0)}% budget`);
+      effectiveRRC = effectiveRRC * capFraction;
+      // Dampen adjustment count: small overshoot shouldn't touch many workouts
+      if (capFraction <= 0.35) {
+        adjustmentSeverity = 'light'; // max 1 adjustment
+      } else if (capFraction <= 0.65 && severity === 'extreme') {
+        adjustmentSeverity = 'heavy'; // max 2 adjustments
       }
     }
   }
@@ -1242,10 +1177,11 @@ export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): Plann
         km = kmMatch ? parseFloat(kmMatch[1]) : 0;
       }
 
-      // If still 0 and we have workout load, estimate distance from load
-      // Rough estimate: 1km easy ≈ 35 aerobic load
+      // If still 0 and we have workout load, estimate distance from load.
+      // w.aerobic is canonical TSS (ISSUE-263); easy running ≈ EASY_LOAD_PER_KM
+      // TSS per km (derived: 6:00/km × TL_PER_MIN[4]).
       if (km <= 0 && w.aerobic && w.aerobic > 0) {
-        km = w.aerobic / 35;
+        km = w.aerobic / EASY_LOAD_PER_KM;
       }
 
       // Round to 1 decimal place

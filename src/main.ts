@@ -17,7 +17,9 @@ import { refreshVO2Estimates } from '@/data/vo2Sync';
 import { backfillIntensityBands, closeOutObservedRecovery, fitKUser, ingestNewActualsAsImpacts } from '@/calculations/adaptive-recovery';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp, reconcileCrossSourceDuplicates } from '@/calculations/activity-matcher';
-import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
+import { setAthleteNormalizer, calibrateTssPerActiveMinute, normalizeiTrimp } from '@/calculations/fitness-model';
+import { plannedTssPerMin } from '@/constants';
+import { calculateWorkoutLoad } from '@/workouts';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
 import { STRAVA_ENABLED } from '@/constants/feature-flags';
 import { READINESS_LONGEST_WINDOW_WEEKS } from '@/constants/race-readiness-targets';
@@ -1311,6 +1313,10 @@ async function launchApp(): Promise<void> {
     // them (about-you). Strava exposes no birthdate, so age is still asked.
     const stravaSex = params.get('sex');
     const stravaWeight = params.get('weight');
+    // Fork guard (ISSUE-270): the callback counted activities this Strava
+    // athlete holds under PRIOR user accounts (anonymous-auth forks). > 0 means
+    // history exists to reclaim via strava-claim-history.
+    const existingCount = Number(params.get('existing') ?? '0') || 0;
     window.history.replaceState({}, '', window.location.pathname);
     import('@/state').then(({ updateState, saveState }) => {
       updateState({ stravaConnected: true });
@@ -1336,7 +1342,33 @@ async function launchApp(): Promise<void> {
     showStravaConnectedToast();
     // Always kick off the sync after OAuth. The wizard's review step reads from
     // the DB and needs activities there before it can decide to show vs divert.
-    setTimeout(() => syncStravaActivities().catch(() => {}), 500);
+    // When prior-account history exists (fork guard), reunite it FIRST so the
+    // sync + review/benchmarks see the full record:
+    //   - mid-wizard: claim silently — it is the user's own data and the
+    //     onboarding numbers are strictly better with it
+    //   - main view: confirm via overlay — an established plan exists, the
+    //     user decides when their history merges in
+    const runStravaSync = () => syncStravaActivities().catch(() => {});
+    if (existingCount > 0 && !onMainView) {
+      setTimeout(() => {
+        import('@/data/strava-claim')
+          .then(({ claimStravaHistory }) => claimStravaHistory())
+          .then((result) => {
+            // Visible, not silent: fresh-starters should see their history return.
+            if (result && result.moved > 0) showHistoryImportedToast(result.moved);
+          })
+          .catch(() => null)
+          .finally(runStravaSync);
+      }, 500);
+    } else if (existingCount > 0 && onMainView) {
+      setTimeout(() => {
+        import('@/ui/history-claim-overlay')
+          .then(({ openHistoryClaimOverlay }) => openHistoryClaimOverlay(existingCount, runStravaSync))
+          .catch(runStravaSync);
+      }, 500);
+    } else {
+      setTimeout(runStravaSync, 500);
+    }
     if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
     }
@@ -1346,8 +1378,73 @@ async function launchApp(): Promise<void> {
     // here was never cleared and made connect-data auto-skip on every later visit.
   }
 
+  // ── ISSUE-263 one-time load-currency migration ─────────────────────────────
+  // Local-state migration: MUST run on every launch path, including simulator
+  // mode (it was originally placed inside the !isSimulatorMode() sync block and
+  // silently skipped on the dev server — caught in device verification).
+  // Workouts saved before 2026-06-04 carry pre-canonical load stamps:
+  // tri/cycling plan sessions on the old ~60/h-easy engine scale, and synced
+  // adhoc cross sessions with Garmin Training Effect (0–5) on w.aerobic
+  // (SEV-1). Running-mode workouts regenerate every render, so only stored
+  // workouts need healing. PLANNED tri run sessions are restamped from the
+  // canonical type-keyed valuation; adhoc TE relics are restamped from
+  // iTRIMP (personal normalizer) or duration. Completed sessions keep their
+  // historical values (the freeze-check accounts for them).
+  if (!state.loadCurrencyV2) {
+    let restamped = 0;
+    const TRI_RUN_SHARES: Record<string, { a: number; an: number }> = {
+      easy: { a: 0.95, an: 0.05 }, long: { a: 0.88, an: 0.12 }, threshold: { a: 0.77, an: 0.23 },
+    };
+    for (const wk of state.wks ?? []) {
+      for (const w of (wk as any).triWorkouts ?? []) {
+        if (w.discipline !== 'run') continue;
+        if (w.status === 'completed' || (w as any).matchedActivityId) continue;
+        const shares = TRI_RUN_SHARES[w.t ?? ''];
+        const durMin = w.estimatedDurationMin;
+        if (!shares || !durMin || durMin <= 0) continue;
+        const total = durMin * plannedTssPerMin(w.t ?? '');
+        const newAero = Math.round(total * shares.a);
+        if (w.aerobic === newAero) continue;
+        w.aerobic = newAero;
+        w.anaerobic = Math.round(total * shares.an);
+        restamped++;
+      }
+      for (const w of wk.adhocWorkouts ?? []) {
+        const wa = w as any;
+        // TE relic detection: synced item whose stamped load is on the 0–5
+        // scale. Real TSS loads for any session are ≥ ~10.
+        if (!wa.garminTimestamp) continue;
+        const total = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+        if (total <= 0 || total > 10) continue;
+        if (wa.iTrimp != null && wa.iTrimp > 0) {
+          const tss = normalizeiTrimp(wa.iTrimp);
+          w.aerobic = Math.round(tss * 0.85);
+          w.anaerobic = Math.round(tss * 0.15);
+          restamped++;
+        } else if (wa.garminDurationMin > 0) {
+          const loads = calculateWorkoutLoad(w.t ?? 'cross', wa.garminDurationMin, (w.rpe ?? w.r ?? 5) * 10);
+          w.aerobic = loads.aerobic;
+          w.anaerobic = loads.anaerobic;
+          restamped++;
+        }
+      }
+    }
+    state.loadCurrencyV2 = true;
+    saveState();
+    console.log(`[load-currency] one-time migration ran: restamped ${restamped} workout load(s) to canonical TSS`);
+  }
+
   // Sync wearable data on launch (skip in simulator mode. No auth)
   if (!isSimulatorMode()) {
+    // Fork-convergence check (ISSUE-270): once a day, ask whether this Strava
+    // athlete has history stranded under prior accounts (a fork can form while
+    // this device is idle). Main view + Strava connected only; the OAuth
+    // return path handles the connect moment itself.
+    if (onMainView && state.stravaConnected) {
+      setTimeout(() => {
+        import('@/data/strava-claim').then(m => m.maybeOfferClaimOnLaunch()).catch(() => {});
+      }, 3000);
+    }
     const activitySrc = getActivitySource(state);
     const hasGarminPhysio = hasPhysiologySource(state, 'garmin');
     // Apple Health is a SUPPLEMENTARY source. It can run alongside a Garmin/Strava
@@ -1363,6 +1460,7 @@ async function launchApp(): Promise<void> {
     // receives each session from both Garmin webhook and Strava sees one copy
     // immediately on launch. Idempotent; re-render only when it changed something.
     if (reconcileCrossSourceDuplicates()) { saveState(); scheduleHomeRefresh(); }
+
 
     // ── ACTIVITIES ────────────────────────────────────────────────────────────
     if (activitySrc === 'apple') {
@@ -2060,6 +2158,25 @@ function showStravaConnectedToast(): void {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 500);
   }, 3500);
+}
+
+/**
+ * Visibility for the silent onboarding history claim (ISSUE-270): a returning
+ * athlete whose prior-session activities were just reunited should see it
+ * happen, not discover old sessions in their log. Neutral styling — this is
+ * information, not a Strava-branded event.
+ */
+function showHistoryImportedToast(count: number): void {
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-opacity duration-500';
+  toast.style.background = 'var(--c-black)';
+  toast.style.color = '#FFFFFF';
+  toast.textContent = `Imported ${count} activities from your training history.`;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 500);
+  }, 4000);
 }
 
 // Initialize on DOM ready

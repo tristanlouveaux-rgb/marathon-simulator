@@ -1,12 +1,16 @@
 import type { SportConfig, SportKey } from '@/types';
 
 /**
- * Training Load per minute by RPE (TSS-calibrated).
+ * Training Load per minute by RPE — THE CANONICAL TSS TABLE.
+ * Calibration: 1 hour at lactate threshold = 100 TSS (Coggan). Every load
+ * producer in the app either reads this table or converts to it at its
+ * boundary (ISSUE-263 canonicalisation, 2026-06-04).
  * Verification:
- *   Easy 60min RPE 4: 60 × 0.92 = 55.2 TL ✓
- *   Threshold 45min RPE 7: 45 × 1.78 = 80.1 TL ✓
- *   VO2 45min RPE 8: 45 × 2.22 = 99.9 TL ✓
- *   Long 2h RPE 4 (× 1.2 long multiplier): 120 × 0.92 × 1.2 = 132 TL ✓
+ *   Easy 60min RPE 4: 60 × 0.92 = 55.2 TSS ✓ (easy ≈ IF 0.74 → 0.74² × 100)
+ *   Threshold 45min RPE 7: 45 × 1.78 = 80.1 TSS ✓
+ *   VO2 45min RPE 8: 45 × 2.22 = 99.9 TSS ✓
+ *   Long 2h RPE 4: 120 × 0.92 = 110.4 TSS ✓ (long runs are valued linearly;
+ *   no long multiplier exists in any pipeline)
  */
 export const TL_PER_MIN: Record<number, number> = {
   1: 0.30,
@@ -20,6 +24,49 @@ export const TL_PER_MIN: Record<number, number> = {
   9: 2.75,
   10: 3.00,
 };
+
+/**
+ * Valuation RPE per workout type — which TL_PER_MIN row values a PLANNED
+ * session of this type (ISSUE-263).
+ *
+ * Why type, not the prescribed r: prescription and valuation are different
+ * dimensions. An easy run is PRESCRIBED at RPE 3 (conversational — telling
+ * users "RPE 4" would push easy runs too hard), but its physiological cost is
+ * IF ≈ 0.74 → ~55 TSS/h → the RPE-4 row. Perceived exertion systematically
+ * undershoots physiological load at low intensity; keying valuation off the
+ * session type resolves the 39-vs-55 easy-anchor split without touching the
+ * coaching labels.
+ *
+ * Values are derived from pre-existing mappings, not invented: easy/long = 4
+ * (the week-rollover carry map's 0.92), marathon_pace/progressive/mixed = 6
+ * (1.45), threshold/race_pace/float = 7 (1.78, the suggester's RPE map),
+ * vo2/intervals = 8 (2.22), hill_repeats = 8 (was an off-table 2.0 — mapped
+ * to the vo2-class row the suggester already assigns it), recovery = 3.
+ */
+export const TSS_RPE_BY_TYPE: Record<string, number> = {
+  recovery: 3,
+  easy: 4,
+  long: 4,
+  marathon_pace: 6,
+  progressive: 6,
+  mixed: 6,
+  threshold: 7,
+  race_pace: 7,
+  float: 7,
+  hill_repeats: 8,
+  vo2: 8,
+  intervals: 8,
+};
+
+/**
+ * Canonical TSS-per-minute for a PLANNED session: the type's valuation row
+ * when the type is known, else the (rounded, clamped) prescribed RPE row.
+ */
+export function plannedTssPerMin(workoutType: string, rpe?: number): number {
+  const vr = TSS_RPE_BY_TYPE[workoutType]
+    ?? (rpe != null ? Math.max(1, Math.min(10, Math.round(rpe))) : 5);
+  return TL_PER_MIN[vr];
+}
 
 /**
  * Musculoskeletal impact load per km by run intensity.
@@ -215,7 +262,13 @@ export const ANAEROBIC_WEIGHT = 1.15;
 export const RPE_WEIGHT = 0.06;
 export const DEFAULT_RPE = 5;
 
-/** Garmin-calibrated load rates (load per minute at different intensities) */
+/**
+ * Garmin/Firstbeat-calibrated load rates (load per minute by RPE).
+ * NOT a producer scale any more (ISSUE-263): no pipeline emits these units.
+ * Kept ONLY as the reference half of `garminToTssRatio` so raw Garmin
+ * "Training Load" numbers arriving from the watch can be converted to
+ * canonical TSS at their ingest boundary.
+ */
 export const LOAD_PER_MIN_BY_INTENSITY: Record<number, number> = {
   1: 0.5,   // Recovery
   2: 0.8,   // Easy
@@ -229,10 +282,26 @@ export const LOAD_PER_MIN_BY_INTENSITY: Record<number, number> = {
   10: 6.0,  // Max
 };
 
+/**
+ * Canonical Garmin→TSS conversion law (ISSUE-263).
+ * Both tables describe the same per-minute load at the same RPE on two
+ * calibrations, so their per-RPE ratio IS the conversion — derived, not
+ * invented. Ranges ~1.63 (easy RPE3–4) to ~2.03 (VO2 RPE8). Use this at any
+ * boundary where a raw Garmin/Firstbeat load number enters the app; never
+ * apply a single flat factor.
+ */
+export function garminToTssRatio(rpe: number): number {
+  const r = Math.max(1, Math.min(10, Math.round(rpe)));
+  return LOAD_PER_MIN_BY_INTENSITY[r] / TL_PER_MIN[r];
+}
+
 /** Load budget configuration for cross-training modifications */
 export const LOAD_BUDGET_CONFIG = {
   maxReplacementPct: 0.30,    // Max 30% of weekly workout load can be replaced
   maxAdjustmentPct: 0.40,     // Max 40% can be adjusted (reduced)
-  minLoadToTrigger: 30,       // Minimum effective load to trigger modification
+  // Minimum effective load (TSS) to trigger modification. Was 30 in the old
+  // Garmin units; re-denominated 2026-06-04 via the easy-anchor ratio
+  // (30 ÷ garminToTssRatio(4) = 30 ÷ 1.63 ≈ 18) — same trigger point, new unit.
+  minLoadToTrigger: 18,
   previousWeekDecay: 0.70,    // Previous week activities count at 70%
 };

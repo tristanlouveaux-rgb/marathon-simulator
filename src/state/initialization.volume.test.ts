@@ -91,3 +91,42 @@ describe('initializeSimulator — plan starting-volume gate (D3)', () => {
     expect(getState().wkm).toBe(62);
   });
 });
+
+describe('initializeSimulator — typed volume reaches the prediction blend', () => {
+  beforeEach(() => resetState());
+
+  /**
+   * Single 5K PB + empty scrape, marathon target. With weeklyKm=0 the
+   * marathon-specificity penalty fires at max (×1.15); with the typed
+   * volume falling back via resolveWeeklyKmSignal (25 km/wk) it softens to
+   * ×1.05. The anchor ratio between the two runs isolates exactly that
+   * term (durability cap and all other inputs are identical), pinning that
+   * the typed manual-entry volume reaches blendPredictions at finalize.
+   * Real case, 2026-06-04: typed "10 km/week" + 0 scraped activities meant
+   * the blend saw an explicit zero instead of the stated volume.
+   */
+  it('typed weekly volume softens the marathon-specificity penalty vs an empty scrape', () => {
+    const onboarding = buildRunningOnboarding({
+      raceDistance: 'marathon',
+      pbs: { k5: 1059 },
+    });
+
+    // Run 1: empty scrape, no typed volume → explicit zero → max penalty.
+    let result = initializeSimulator(onboarding);
+    expect(result.success).toBe(true);
+    const anchorZero = getState().blendedRaceTimeSec!;
+
+    // Run 2: same athlete, typed 25 km/week in manual entry.
+    resetState();
+    const s = getMutableState();
+    s.detectedWeeklyKm = 25;
+    s.weeklyVolumeConfirmed = true;
+    result = initializeSimulator(onboarding);
+    expect(result.success).toBe(true);
+    const anchorTyped = getState().blendedRaceTimeSec!;
+
+    // 1.15 / 1.05 ≈ 1.095 — the typed-volume anchor must be faster by
+    // exactly the penalty-band difference.
+    expect(anchorZero / anchorTyped).toBeCloseTo(1.15 / 1.05, 3);
+  });
+});

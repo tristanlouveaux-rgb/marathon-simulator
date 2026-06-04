@@ -147,10 +147,24 @@ export function injuryCapOvershootSentence(actualTSS: number, plannedTSS: number
  * The canonical post-session readiness sentence for a CapacityStrain —
  * injury-cap overshoot wins over the strain tiers. Null when nothing fires
  * (caller falls through to its normal chronic-load / coach sentence).
+ *
+ * `fallback` (the caller's chronic/coach sentence) enables the trained-day
+ * acknowledgment: on any day with a real logged session that lands BELOW the
+ * strain tiers, the sentence leads with the factual load before the chronic
+ * commentary, instead of looking unphased (Tristan, 2026-06-04: "the day
+ * you've trained the commentary should at least reflect that"). Gated on
+ * `loggedSessionToday` — the existing guard that excludes passive step TSS —
+ * so no new threshold is introduced. Callers that don't pass a fallback keep
+ * the old tiers-or-null contract.
  */
-export function capacityStrainNote(cs: CapacityStrain): string | null {
+export function capacityStrainNote(cs: CapacityStrain, fallback?: string | null): string | null {
   if (cs.injuryCapOvershoot) {
     return injuryCapOvershootSentence(cs.todayTSS, cs.plannedDayTSS, cs.pctCapacity);
   }
-  return postSessionSentence(cs.todayTSS, cs.pctCapacity, { ctlAnchored: cs.ctlAnchored });
+  const tier = postSessionSentence(cs.todayTSS, cs.pctCapacity, { ctlAnchored: cs.ctlAnchored });
+  if (tier) return tier;
+  if (cs.loggedSessionToday && cs.todayTSS > 0 && fallback) {
+    return `${Math.round(cs.todayTSS)} TSS logged today. ${fallback}`;
+  }
+  return null;
 }

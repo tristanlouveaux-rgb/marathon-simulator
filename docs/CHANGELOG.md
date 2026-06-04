@@ -4,6 +4,81 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-06-04 — Strain ring closes at target (both surfaces)
+
+- **"Target reached" now draws a full ring.** Dogfood: detail view said "Target reached" (34 TSS, target 18–34) while the ring sat at ~67% — the text said done, the picture said two-thirds done. Worse, the Home mini ring used a different scale again (`target.hi × 2` → ~50% at target), so the same TSS filled the two surfaces differently.
+- **Fix**: `target.hi` maps to 100% fill on both rings, clamped at full; colour alone carries overshoot (red above `target.hi`), which it already did — the spatial headroom was redundant. `strain-view.ts` `ringMax` (was `max(hi × 1.5, actual × 1.1)`) and `home-view.ts` `strainRingMax` (was `max(hi × 2, actual × 1.25)`) now both use `target.hi` directly; the old auto-scale survives only as the no-target fallback (trackOnly/no-plan days keep a partial arc instead of an instantly-full ring).
+- **Follow-up (same day, "36 vs 34 should be green")**: the detail view flipped red the instant actual crossed `target.hi`, while Home only goes red beyond `target.hi × 1.3` — same metric, two thresholds. Detail view now mirrors Home: green "Above target" between `hi` and `hi × 1.3`, red "Load exceeded" only beyond that.
+- **Background follows the state (same day)**: the Strain detail page atmosphere + waves were hardcoded coral; now palette-per-state — coral while working, mint once target reached (lo to hi × 1.3), red beyond the band or on rest-day overreach. New `'red'` palette added to `page-flair.ts` (RingPalette + RING_PALETTES + ATMOSPHERE_GRADIENTS — one notch more saturated than coral, same family DNA), per the "extend page-flair, don't invent backgrounds" rule. Date switching re-renders, so the palette tracks the displayed day.
+- tsc clean, UI tests green (192), lint:ui clean. NOT device-verified.
+
+## 2026-06-04 — ISSUE-270 protections built: save-account onboarding moment + Strava fork guard / history claim
+
+- **Why**: anonymous-by-default auth (`main.ts:213`) forks a user's data on reinstall / device change / storage eviction; verified the onboarding never asks for an email (welcome asks the first NAME; the auth screen only appears on explicit sign-out). One Strava athlete in the dev DB has tokens under 20 user_ids. `garmin_id` is globally UNIQUE, so a forked account cannot even re-sync history the old account owns.
+- **Save-account overlay** (`src/ui/wizard/save-account-overlay.ts`): shown ONCE per onboarding at the moment a data source connects (Strava/Garmin OAuth return on connect-data, plus the Continue tap for Apple Health / file-upload users). In-place anonymous upgrade via `supabase.auth.updateUser` (same user_id, data preserved — the auth-view mechanism). Skippable ("Later"); Home guest banner + Account remain the fallbacks. New optional `onboarding.accountSaveOffered` flag. No-data skippers are not prompted.
+- **Fork guard** (`strava-auth-callback`): after the token upsert, counts activities held by other non-deleted accounts with the same `strava_athlete_id` and appends `existing=N` to the redirect. Failures degrade to "no hint" — never breaks OAuth.
+- **History claim** (new edge function `strava-claim-history` + `src/data/strava-claim.ts`): JWT-verified; ownership proof = the caller's own strava_tokens row (only exists via completed OAuth). Moves `garmin_activities.user_id` from all prior same-athlete accounts to the caller (collision-free: garmin_id unchanged) and retires the old token rows (`deleted_at`) so the refresh cron stops resurrecting forks. `?status=1` for a read-only count.
+- **Client wiring** (`main.ts` ?strava=connected): mid-wizard → claim silently, then sync (onboarding benchmarks see full history — also the fix path for the dev account's own fragmentation); main view → confirm overlay (`src/ui/history-claim-overlay.ts`) before merging into an established plan.
+- tsc clean, 3173 tests green, lint:ui clean. **Edge functions DEPLOYED 2026-06-04** (Tristan-approved): strava-claim-history v1 (verify_jwt true, unauthed smoke test → 401), strava-auth-callback v29 (verify_jwt false, OAuth flow intact). NOT device-verified — next Strava reconnect exercises the full path.
+- **Hardening round 2 (same day, "fix these for users")**: (1) reconnect OAuth upsert clears `deleted_at` — a claimed-from or deletion-cancelled account resurrects on legitimate reconnect; (2) `sync-strava-activities` token select filters soft-deleted rows — a retired fork can no longer sync new activities under the abandoned user_id (two-device re-fork loop closed); (3) daily claim-on-launch convergence check (`maybeOfferClaimOnLaunch` in `strava-claim.ts`, 24h device-local throttle, main view + Strava connected only) — catches forks that form while a device is idle; (4) the mid-wizard silent claim now shows an "Imported N activities from your training history" toast; (5) save-account overlay maps Supabase errors to actionable copy ("email already registered" → use Sign in from welcome) and the success card honestly states recovery requires clicking the confirmation link. Both functions redeployed. **Sign in with Apple assessed and parked as ISSUE-271**: NOT an App Store 4.8 requirement (primary auth is first-party email/password; Strava/Garmin are data connections, not login); the native `signInWithIdToken` path would orphan anonymous data — use `linkIdentity` web flow + dashboard/Apple-portal config when built.
+
+---
+
+## 2026-06-04 — Canonical load currency: TSS everywhere (ISSUE-263/262 fix, SCIENCE_LOG §BP)
+
+- **One canonical load unit across all 5 modes**: TSS, 1h@LT=100 (`TL_PER_MIN`). A 15-agent audit + empirical measurement found 8 distinct load scales with cross-scale arithmetic (full record: `docs/LOAD_CURRENCY_PLAN.md`). Every producer now emits TSS or converts at its ingest boundary (`garminToTssRatio` per-RPE law in `sports.ts`).
+- **Suggester B1+B2 fixed**: budget (RRC) and cuts (`calculateWorkoutLoad`) now same-scale; severity classifier inputs same-scale; the saturation curve's hidden 1.87× amplification replaced with the slope-1 form (TAU=491 TSS, "the 1500 hardcode" retired); orphan conversion constants (35/km, 20×15, third RPE table, suggester-local TAU/MAX_CREDIT duplicates) deleted. Expect LARGER suggested cuts for HR-tracked activities, smaller credits for RPE-only ones.
+- **Type-keyed planned valuation** (`TSS_RPE_BY_TYPE` → `plannedTssPerMin`): easy runs prescribed RPE 3 but valued at 55 TSS/h (IF 0.74) in every planned pipeline — resolves the 39-vs-55 easy-anchor split without changing coaching labels.
+- **universalLoad tiers unified** (same session ≈ same credit regardless of data source; measured tiers lose sportMult; Tier B zone weights anchored Z4=100/h; Tier C keeps its 0.80 estimate discount).
+- **SEV-1**: Garmin Training Effect (0–5) no longer stamped onto `w.aerobic` — synced cross sessions now contribute real TSS to tri/coach sums (was 10–20× under).
+- **Tri**: run-leg stamps re-anchored to canonical valuation (mirror parity test: tri easy hour == running easy hour); tri fitness model (CTL/ATL) migrated from population `/150` to the plausibility-gated personal normalizer; bike/swim placeholder rates IF-audited and kept (documented).
+- **ltHR plausibility gate** (general-population): personal normalizer rejects ltHR outside 80–95% of maxHR (Faude 2009) → population fallback; also gated at the watch-intake source in `resolveLT`. *Correction: Tristan's live profile (177/43/201, 88%) is in-band — the handover's "68% HRR" premise was stale; no CTL inflation occurred.*
+- **B3 sweep**: all ~25 hardcoded `/15000` and `/150` decodes routed through `normalizeiTrimp` (displays, sync pipes, matcher `wk.actualTSS` cache, adaptive-recovery) — re-grep zero, guarded by a filesystem anchor test.
+- **Migration**: one-time `loadCurrencyV2` launch restamp for stored tri-run and TE-relic adhoc loads.
+- **Durable guard**: `src/calculations/load-currency-anchors.test.ts` (17 anchors). Suite 3,173 green (+32). NOT device-verified — modal copy moves to "≈ N TSS — about X km easy running" next.
+
+## 2026-06-04 — Onboarding loading screen: always-on motion + live narration
+
+- **Why**: clean-slate rebuild dogfood — the "Reading your training" card sat visually frozen for the entire history import. The fill ring only advances on step *transitions*, and the import is one long await, so for ~90% of the wall time the only motion was a 2.6s opacity breathe (imperceptible). Copy also carried an em dash.
+- **Always-on sweep**: a thin teal arc (16% of circumference, existing palette, no new colour) orbits the progress ring continuously via pure SVG transform rotation (GPU-composited, no filter-over-motion). The fill ring still shows step progress on top.
+- **Live narration**: each step now shows a one-sentence explainer of the work in progress (`LOADING_STEP_DETAIL`), replaced in-place by real facts as phases complete via `setLoadingDetail` — "187 runs imported across 38 weeks of training.", "Found resting HR 48, max HR 188, VO2max 56.", "3 personal bests found in your race history." Facts reset at each step change so the new phase's explainer leads.
+- Timeout copy rewritten without the em dash ("Still syncing. Large training histories take longer to import...").
+- tsc + lint:ui + UI tests green. NOT device-verified.
+
+---
+
+## 2026-06-04 — LT 4:56/km contamination + stale sub-3 goal on a half plan (onboarding dogfood, round 2)
+
+- **Why**: re-onboarding with four typed PBs (17:38 5K → 3:09:42 M) showed "LT 4:56/km, blended from your PBs, high confidence" (impossible — marathon pace is 4:30/km), a "TARGET TIME 3:00:00 · >95%" hero on a HALF plan, and an anchor of 1:38:52 against a demonstrated 1:31:30 half PB. State dump pinned three defects.
+- **Wizard PBs now visible to the physiology chain**: new `effectivePhysiologyPbs` (per-key fastest of `s.pbs` + `s.onboarding.pbs`) feeds the PB-median VDOT tier and LT critical-speed inputs, so mid-wizard derivation sees what the user just typed instead of the previous plan's state. Breaks the cross-pass degradation loop (bad blend → low s.v → Daniels-from-low-VDOT → worse blend) at its entry point.
+- **Definitional LT bound** (`deriveLT`): LT pace can never be slower than the average pace of a race PB longer than 60 minutes. Clamped to the tightest such PB pace, provenance notes the cap, confidence downgraded from 'high'. No invented constants. SCIENCE_LOG §BO.
+- **Finalize consistency**: with no measured wizard LT, `initializeSimulator` now runs `recomputeLT` after committing PBs (kills the `lt: null` + `ltSource: 'blended'/'high'` contradiction) and re-derives `s.pac`; `s.raceGoalTimeSec` is cleared on every plan init (goals are per-plan).
+- **Logged, not fixed**: ISSUE-267 — `predictFromRecent` documents "recent race/time trial" but `computePredictionInputs.recentRun` feeds it any qualifying run; a fresh easy run extrapolated to a 1:45:50 half outvoted the same-distance 1:31:30 race PB (~25% vs ~24% weight), dragging the anchor 7 min slow. Model-shifting fix, needs Tristan's call.
+- 9 new tests; suite 3131 green, tsc clean. NOT device-verified — re-onboard to confirm sane LT + no phantom target.
+
+---
+
+## 2026-06-04 — Readiness maths verification: floor sensitivity tests + capacity-strain scale mismatch pinned
+
+- **Why**: Tristan dogfooded "readiness barely moves after a workout, the commentary is static, and the score flickered 65↔61 between clicks". Device `[readiness-debug]` log showed the 66→61 flicker happens with IDENTICAL strain inputs — the moving leg is one the log didn't print (launch data race: first Home render computes readiness before the async sync lands).
+- **New maths test** (`src/calculations/readiness-strain-sensitivity.test.ts`, 15 tests) pins three findings with real dogfood numbers: (1) the strain floor is a CAP not a penalty — a tired athlete (ambient < 60) training at 93% of capacity sees zero score change; (2) the ISSUE-259 TSS undercount alone spans two label bands — the same VO2 ride floors at 59 "On Track" (HR-iTRIMP 43 TSS) vs 24 "Ease Back" (honest power ~70 TSS); (3) **new finding**: `computeCapacityStrain`'s numerator (`todayTSS`, personal iTRIMP normalizer) and denominator (tri `weeklyCtl`, hardcoded `/150` population scale in `estimateTss`) are on different scales — every tri pctCapacity is inflated ~1.23× for an athlete with a personal HR profile. ISSUE-263 class; logged for the queued load-currency session.
+- **weeklyCtl anomaly resolved (mostly)**: the live 83 was stale persisted `triConfig.fitness` read by pre-refresh renders (the anchor shares the launch race); the boot's refresh computed direct CTL 123.7 + cross. The 317→~124+cross drop is the cross-source dedup removing Strava+Garmin double-counting — the audit's "93% of capacity" was calibrated against inflated chronic load, so the system has likely flipped to OVER-reacting (a 43-TSS session now reads ~155-240% → floor 10-24). Load-currency reconciliation (ISSUE-263) is now a prerequisite for trusting capacity-anchored scores. Full detail: `READINESS_AUDIT.md §9d`.
+- **Debug log extended** (`home-view.ts` TEMP block): now prints tsb / acwr / ctlNow / sleep / HRV / sleepBank / recovery / legLoad / physioLen / actualsLen so the next reload identifies the flickering leg. Remove with the block after device verification.
+- **Trained-day acknowledgment** (Tristan: "the day you've trained the commentary should at least reflect that"): `capacityStrainNote(cs, fallback)` gains a fallback param — any day with a real logged session below the strain tiers now leads with "X TSS logged today." before the chronic sentence, instead of looking unphased. Gated on the existing `loggedSessionToday` guard (passive steps excluded), no new thresholds. Home + Readiness detail both pass their chronic sentence; legacy no-fallback callers unchanged. 4 new tests (capacity-strain.test.ts), suite 3141 green. Running-mode parity note: `derivePrimaryMessage` has its own sub-tier copy chain; evaluate a matching acknowledgment tier there if running mode draws the same complaint.
+- **FTP 295→153 root cause found (account fragmentation, not estimator)**: the live DB shows the dev history split across 4+ user accounts (gmail 12 activities; anon 06-01 with 29; anon 06-02 with the 294-activity Strava backfill holding the ONLY power_curve ride; an old 246-activity import), all with live Strava tokens refreshing daily. The 295W auto-derive only ever worked through the data-isolation leak (unfiltered loader saw all accounts); the correct `user_id=eq` filter now scopes to the signed-in fragment → 153W low-conf fallback. The same fragmentation contributes to the weeklyCtl collapse. Fix = consolidate fragments onto one canonical account (data migration, needs Tristan's sign-off), NOT relaxing the filter.
+
+---
+
+## 2026-06-04 — Onboarding anchor: durability cap parity + typed weekly volume survives an empty scrape
+
+- **Why**: Tristan dogfooded a thin-data onboarding (typed 17:39 5K, typed "10 km/week", Strava connected but 0 activities found) and got a 1:26:00 half "current estimate" — exactly the raw `predictFromPB` Riegel extrapolation. Step-by-step diagnosis traced three holes: the onboarding anchor skipped the long-run durability cap the canonical refresher applies; the typed weekly volume was erased by a 0-row Strava history aggregation and never reached the blend; and at half distance both volume penalties are marathon-gated, so nothing braked the number.
+- **Durability cap at finalize** (`initialization.ts`): `initializeSimulator` now mirrors `refreshBlendedFitness` — blend → durability cap → VDOT — seeding `blendedRaceTimeSec` / `initialBaseline` / `currentFitness` / forecast anchor from the capped time and storing `s.runDurability` for the Forecast chip from day 1. Thin-data case: 1:26:00 → 1:29:26 today. No new constants. SCIENCE_LOG §BN (+ §AL.4 note).
+- **Typed volume persists and feeds the blend**: `stravaSync` no longer clears `detectedWeeklyKm` on a zero-row aggregation; manual-entry's volume field now sets `weeklyVolumeConfirmed` (so the D3 gate seeds `s.wkm` from it — previously only the Apple import path set the flag); new canonical `resolveWeeklyKmSignal` (`prediction-inputs.ts`) falls back to the typed volume ONLY when the 8-week window has zero qualifying runs, preserving the "explicit zero is signal" contract. Wired at all three blend call sites (onboarding finalize, `refreshBlendedFitness`, `buildStandardPredictionContext`).
+- Diagnosis artefacts: the first onboarding pass also lost the typed PB entirely (`s.pbs: {}` at finalize) — not reproduced on the second pass; and the onboarding hero's horizon gain ran ~7 min because `plan-preview-v2.forecastForSessions` doesn't thread `rampCtx` (baseline km + archetype) the way init's `calculateForecast` call does. Both logged in OPEN_ISSUES rather than fixed here.
+- 8 new tests (`initialization.durability.test.ts` 4, `prediction-inputs.test.ts` +3, `initialization.volume.test.ts` +1); suite 3106 green, tsc clean. NOT device-verified — Tristan to re-onboard and confirm the capped anchor.
+
+---
+
 ## 2026-06-04 — Fitness placement: WMA band as factual verdict word
 
 - **Why**: Tristan asked whether to add a "you're a good/average athlete" commentary line. Recommended against a praise sentence (violates the consultant-tone copy rules, duplicates the athlete-tier row) and instead surfaced the published WMA classification — factual, tied to the standard, one word.
@@ -24,6 +99,24 @@ Session-by-session record of significant changes. Most recent first.
 - **Full week visible without scrolling** (device round 2, Tristan): Plan Slots and Your Activities strips changed from fixed-width horizontal scrollers (anything past the third card was off-screen) to wrapping grids (`repeat(auto-fill, minmax(150px, 1fr))`).
 - **Expected strain follows the slide** (device round 2, Tristan): a workout matched to a recording on another day carries its planned TSS to the actual day. No code change needed — falls out of the day shift because every strain surface reads the canonical `getPlannedDayTSSContext`, which reads the stored (day-shifted) `wk.triWorkouts`. Locked in with an end-to-end test (`planned-day-tss.test.ts`: reconcile shifts Thu→Wed, Wed target = the ride's 50 TSS, Thu = 0).
 - 13 new tests (`activity-matcher.triathlon.test.ts` 11, workout-status +1, planned-day-tss +1; suite 3094 green), tsc + lint:ui clean. NOT device-verified.
+
+---
+
+## 2026-06-04 — Watch LT is trusted until superseded (ISSUE-268)
+
+- **Why**: Tristan's watch holds a measured LT (4:12/km, 168 bpm) but the app showed the VDOT-derived 3:59/km · 177 bpm "low confidence" — threshold prescriptions ~13s/km too fast. Two compounding policies buried watch readings: a 60-day Garmin expiry (but Garmin pushes userMetrics only on CHANGE, so silence means "unchanged", not stale) and a >10s/km conflict-suggestion card that parked the watch value until the user noticed it.
+- **Retention** (`lt-derivation.ts resolveLT`): expiry removed. A Garmin reading holds until a newer reading, a manual override, or a derived estimate that clearly beats it (faster ≥3s/km at medium+ confidence, `LT_GARMIN_SUPERSEDE_GAP_SEC_KM` — same gap as the override auto-improve rule). Slower derived never displaces measured.
+- **Auto-apply** (`ltSync.ts recomputeLT`): the Garmin-vs-derived suggestion flow is retired; watch readings apply directly, stale pending suggestions are cleared. Shifts ≥10s/km (`LT_NOTIFY_THRESHOLD_SEC_KM`) surface a toast (physiologySync → showAssignmentToast, unit-pref formatted).
+- **Webhook hardening** (`garmin-webhook handleUserMetrics`): merge-preserving upsert — a VO2-only push no longer nulls a same-day LT reading (LT events are rare; losing one could mean never seeing another). NOT yet deployed.
+- **Deliberately dropped** (Tristan): deep historical userMetrics backfill — the existing 8-week connect-time backfill is enough for future users; LT predating it arrives on their next hard run.
+- SCIENCE_LOG "Lactate Threshold Derivation" revised (rationale + detraining limitation). 8 new tests (ltSync.test.ts new, lt-derivation.test.ts stale-expiry test inverted). Suite 3141 green. NOT device-verified; Tristan's own LT still needs the manual override (his change event predates the webhook).
+
+---
+
+## 2026-06-04 — Running injury adaptations now render on the plan (ISSUE-261)
+
+- **Why**: Follow-up from the strain-target fix, Tristan approved. `resolveWeekWorkouts` passed `injuryState=null` while the activity matcher regenerated WITH it — so during a running injury, the Plan tab rendered the healthy week but actuals were matched against the adapted one.
+- **Fix**: `s.injuryState` threaded into `resolveWeekWorkouts` (week-resolve.ts). Generator gates forward-only (`injuryAppliesToWeek`), so past weeks never rewrite. Plan tab, Home Today card, strain target, and coach now all render the injury-adapted week (relative-rest model). New test in `planned-day-tss.test.ts`. Suite 3107 green. NOT device-verified.
 
 ---
 

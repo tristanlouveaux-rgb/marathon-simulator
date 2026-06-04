@@ -49,6 +49,7 @@ import {
 } from './benchmark-charts';
 import { computeTriPlanAdherence } from '@/calculations/plan-adherence.triathlon';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 type Discipline = 'swim' | 'bike' | 'run';
 export type ProgressRange = '4w' | '12w' | 'all' | 'forecast';
@@ -122,7 +123,7 @@ function emptySlice(): WeekDisciplineSlice {
  * codebase (1 hour at threshold ≈ 15000 iTRIMP ≈ 100 TSS). */
 export function iTrimpToTSS(iTrimp: number | null | undefined): number {
   if (iTrimp == null || iTrimp <= 0) return 0;
-  return (iTrimp * 100) / 15000;
+  return normalizeiTrimp(iTrimp);
 }
 
 /** Build per-week per-discipline km + TSS slices across all `s.wks`. */

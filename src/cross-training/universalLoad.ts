@@ -3,10 +3,21 @@
  * ================
  * Computes a universal load currency for any logged activity.
  *
- * Three tiers:
- * - TIER A (Garmin): Use aerobic_load + anaerobic_load directly
- * - TIER B (HR-only): Compute TRIMP-like load from time-in-zone
- * - TIER C (RPE-only): Estimate from duration * RPE * sport factors
+ * CANONICAL UNIT (ISSUE-263, 2026-06-04): every tier emits TSS
+ * (1 h at lactate threshold = 100). Before this, the four tiers emitted four
+ * different scales (personal-TSS / raw Garmin / zone-minutes / Garmin-ish RPE)
+ * and the same session could earn up to 3.2× different credit depending only
+ * on which data source ingested it.
+ *
+ * Four tiers (highest quality first):
+ * - TIER A+ (iTRIMP): personal-normalized TSS from the HR stream (measured)
+ * - TIER A (Garmin): raw Firstbeat load ÷ garminToTssRatio(rpe) (measured)
+ * - TIER B (HR-only): time-in-zone × HR_ZONE_TSS_PER_MIN (measured)
+ * - TIER C (RPE-only): duration × TL_PER_MIN[rpe] × sport factors (estimated)
+ *
+ * Sport multiplier law: `mult` corrects RPE-duration ESTIMATES for a sport's
+ * systemic load rate; measured tiers (A+/A/B) already capture the sport's
+ * true cardiovascular cost in the measurement, so mult applies ONLY in Tier C.
  *
  * Outputs:
  * - fatigueCostLoad (FCL): drives reductions/downgrades (NOT saturated)
@@ -21,21 +32,19 @@ import type {
   ZonesConfig,
   HRZoneData,
 } from './universal-load-types';
-import { SPORTS_DB } from '@/constants';
+import { SPORTS_DB, TL_PER_MIN, garminToTssRatio } from '@/constants';
 import { normalizeSport } from './activities';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import {
   TAU,
-  CREDIT_MAX,
   TIER_A_CONFIDENCE,
   TIER_B_CONFIDENCE_FULL,
   TIER_B_CONFIDENCE_PARTIAL,
   TIER_C_CONFIDENCE_HIGH_RPE,
   TIER_C_CONFIDENCE_MID_RPE,
   RPE_UNCERTAINTY_PENALTY,
-  LOAD_PER_MIN_BY_RPE,
   RPE_AEROBIC_SPLIT,
-  HR_ZONE_WEIGHTS,
+  HR_ZONE_TSS_PER_MIN,
   EASY_LOAD_PER_KM,
   MAX_EQUIVALENT_EASY_KM,
   getActiveFraction,
@@ -56,10 +65,12 @@ function defaultRpe(rpe: number | undefined | null): number {
 
 /**
  * Saturation curve: caps how much "credit" a single session can provide.
- * credit = CREDIT_MAX * (1 - exp(-rawRRC / TAU))
+ * credit = TAU × (1 − exp(−rawRRC / TAU)) — slope 1 at the origin, so a
+ * credit can never exceed its raw load (see universal-load-constants.ts for
+ * the ISSUE-263 history of the old amplifying two-parameter form).
  */
 function saturateCredit(rawRRC: number): number {
-  return CREDIT_MAX * (1.0 - Math.exp(-rawRRC / TAU));
+  return TAU * (1.0 - Math.exp(-rawRRC / TAU));
 }
 
 /**
@@ -93,26 +104,23 @@ function getSportConfig(sportKey: SportKey | string) {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert iTRIMP value to aerobic/anaerobic split using sport profile.
+ * Convert iTRIMP value to canonical TSS with aerobic/anaerobic split.
  *
  * iTRIMP from `src/calculations/trimp.ts` is seconds-weighted Banister TRIMP
  * (Σ Δt_sec × HRR × e^(β·HRR)) so a 1-hour session lands at iTRIMP ≈ 5000–10000.
- * Every other consumer in the codebase converts this to TSS-equivalent units
- * via `iTrimp × 100 / 15000` (1 hour at threshold ≈ 15000 iTRIMP ≈ 100 TSS).
- * We do the same here BEFORE applying sport multiplier. Without it, baseLoad
- * is ~150× too large, blowing up FCL/RRC, slamming `equivalentEasyKm` into its
- * 25 km cap, and falsely flagging any HR-tracked cross-training session as
- * "Very heavy training load". See `tri-benchmarks-from-history.ts` for the
- * same normalisation rule (and a prior incident comment).
+ * `normalizeiTrimp` converts to TSS via the PERSONAL athlete normalizer
+ * (plausibility-gated, population 15000 fallback) — the same conversion the
+ * strain ring and CTL/ATL use, so this tier is canonical by construction.
+ * NOTE (ISSUE-263): no sport multiplier here — iTRIMP measures the actual
+ * cardiovascular load of the session; multiplying a measurement by the
+ * RPE-estimate corrector double-counted the sport (cycling iTRIMP loads were
+ * silently deflated ×0.75).
  */
 function computeTierAPlus(
   iTrimp: number,
-  sportMult: number,
-  runSpec: number,
   explanations: string[]
 ): { aerobic: number; anaerobic: number; confidence: number } {
-  const tssEquivalent = normalizeiTrimp(iTrimp);
-  const baseLoad = tssEquivalent * sportMult;
+  const baseLoad = normalizeiTrimp(iTrimp);
 
   // Split aerobic/anaerobic: use a fixed 85/15 split as iTRIMP doesn't
   // distinguish zones. It is purely a cardiovascular load signal.
@@ -120,9 +128,7 @@ function computeTierAPlus(
   const aerobic = baseLoad * aerobicFrac;
   const anaerobic = baseLoad * (1 - aerobicFrac);
 
-  void runSpec; // Available for future use in RRC override
-
-  explanations.push(`iTRIMP-based load (second-by-second HR stream, highest accuracy). Base load: ${baseLoad.toFixed(1)}.`);
+  explanations.push(`iTRIMP-based load (second-by-second HR stream, highest accuracy). Base load: ${baseLoad.toFixed(1)} TSS.`);
 
   return { aerobic, anaerobic, confidence: 0.95 };
 }
@@ -134,12 +140,17 @@ function computeTierAPlus(
 function computeTierA(
   garminAerobic: number,
   garminAnaerobic: number,
+  rpe: number,
   explanations: string[]
 ): { aerobic: number; anaerobic: number; confidence: number } {
-  explanations.push('Using Garmin/Firstbeat load data (high accuracy).');
+  // Firstbeat "Training Load" runs ~1.6–2.0× the TSS calibration; convert at
+  // this ingest boundary via the canonical per-RPE ratio (ISSUE-263). No
+  // sport multiplier: the measurement already reflects the sport.
+  const ratio = garminToTssRatio(rpe);
+  explanations.push('Using Garmin/Firstbeat load data (high accuracy), converted to TSS.');
   return {
-    aerobic: garminAerobic,
-    anaerobic: garminAnaerobic,
+    aerobic: garminAerobic / ratio,
+    anaerobic: garminAnaerobic / ratio,
     confidence: TIER_A_CONFIDENCE,
   };
 }
@@ -166,8 +177,10 @@ function computeTierB(
 
   if (totalZoneTime < 5) return null; // Not enough data
 
-  // TRIMP-like calculation with zone weights [1,2,3,4,5]
-  const [w1, w2, w3, w4, w5] = HR_ZONE_WEIGHTS;
+  // Time-in-zone TSS: per-zone TSS/min anchored to the canonical definition
+  // (Z4 = threshold zone, 1 h at threshold = 100 TSS; ISSUE-263). No sport
+  // multiplier: HR zones already measure the session's cardiovascular cost.
+  const [w1, w2, w3, w4, w5] = HR_ZONE_TSS_PER_MIN;
 
   // Aerobic: Z1-Z3 contribute to aerobic capacity
   const aerobicLoad =
@@ -210,8 +223,9 @@ function computeTierC(
   const rpe = defaultRpe(input.rpe);
   const durationMin = input.durationMin;
 
-  // Step 1: Base load from RPE table
-  const lpm = LOAD_PER_MIN_BY_RPE[rpe] ?? 2.0;
+  // Step 1: Base load from the canonical TSS-per-minute table (ISSUE-263 —
+  // was a third "aligned with Garmin" per-minute table before).
+  const lpm = TL_PER_MIN[rpe] ?? 1.15;
   let rawLoad = durationMin * lpm;
 
   // Step 2: Apply sport multiplier
@@ -283,8 +297,6 @@ export function computeUniversalLoad(
   if (input.iTrimp != null && input.iTrimp > 0) {
     const tierAPlus = computeTierAPlus(
       input.iTrimp,
-      config.mult,
-      config.runSpec,
       explanations
     );
     aerobicLoad = tierAPlus.aerobic;
@@ -302,6 +314,7 @@ export function computeUniversalLoad(
     const tierA = computeTierA(
       input.garminAerobicLoad,
       input.garminAnaerobicLoad,
+      defaultRpe(input.rpe),
       explanations
     );
     aerobicLoad = tierA.aerobic;
@@ -492,7 +505,8 @@ export interface WorkoutClassification {
 /**
  * Classify workout intensity using iTRIMP.
  *
- * Normalisation: iTRIMP × 100 / 15000 ≈ TSS
+ * Normalisation: `normalizeiTrimp` → canonical TSS via the personal athlete
+ * normalizer (plausibility-gated, population 15000 fallback).
  * (≈55 TSS for easy 60min, ≈85 TSS for tempo 60min, ≈120+ for intervals)
  * Classifier then uses TSS/hr against thresholds.
  */
@@ -584,14 +598,16 @@ export function classifyWorkoutType(input: {
   } else if (useZones) {
     const result = classifyByZones(input.hrZones!);
     type = result.type;
-    // Estimate TSS from zone distribution when iTRIMP absent (TSS/min × duration)
-    const intensityFactor = type === 'easy' ? 0.55 : type === 'threshold' ? 0.85 : 1.1;
-    tss = input.durationMin * intensityFactor;
+    // Estimate TSS from zone distribution when iTRIMP absent — read the
+    // canonical TL_PER_MIN table at the type's characteristic RPE (easy=4,
+    // threshold=7, vo2=8) instead of a private per-minute scale (ISSUE-263).
+    const tssPerMin = type === 'easy' ? TL_PER_MIN[4] : type === 'threshold' ? TL_PER_MIN[7] : TL_PER_MIN[8];
+    tss = input.durationMin * tssPerMin;
     method = 'zones';
   } else {
-    // No HR data. Safe default
+    // No HR data. Safe default: easy at the canonical easy rate
     type = 'easy';
-    tss = input.durationMin * 0.55;
+    tss = input.durationMin * TL_PER_MIN[4];
     method = 'profile';
   }
 

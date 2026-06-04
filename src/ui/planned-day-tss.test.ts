@@ -12,6 +12,7 @@ import { resolveWeekWorkouts } from './week-resolve';
 import { computePlannedDaySignalBTSS } from '@/calculations/fitness-model';
 import { TL_PER_MIN } from '@/constants';
 import { setState, resetState, getDefaultState } from '@/state/store';
+import { createDefaultInjuryState } from '@/types/injury';
 import type { SimulatorState } from '@/types/state';
 
 function triState(overrides: Partial<SimulatorState> = {}): SimulatorState {
@@ -162,6 +163,31 @@ describe('getPlannedDayTSSContext — running', () => {
       expect(ctx.plannedTSSForDay(day)).toBe(expected);
     }
     expect(ctx.plannedWeekTSS).toBeGreaterThan(0);
+  });
+
+  it('an active acute injury collapses the rendered week and zeroes the strain target (ISSUE-261)', () => {
+    const s = runningState();
+    (s as any).injuryState = {
+      ...createDefaultInjuryState(),
+      active: true,
+      injuryPhase: 'acute',
+      startDate: new Date().toISOString(),
+      acutePhaseStartDate: new Date().toISOString(),
+      currentPain: 6,
+    };
+    setState(s);
+    // The canonical resolver now renders the injury-adapted week (relative-rest
+    // model: rest the injured area + region-safe strength), not the healthy plan.
+    const resolved = resolveWeekWorkouts(s, 1);
+    expect(resolved.some((w: any) => (w.n || '').toLowerCase().includes('rest'))).toBe(true);
+    expect(resolved.some((w: any) => (w.t || '') === 'long' || (w.t || '') === 'intervals')).toBe(false);
+    // … and the strain target follows: far below the healthy week's load.
+    const healthy = { ...runningState() };
+    setState(healthy);
+    const healthyWeekTSS = getPlannedDayTSSContext(healthy, 1).plannedWeekTSS;
+    setState(s);
+    const ctx = getPlannedDayTSSContext(s, 1);
+    expect(ctx.plannedWeekTSS).toBeLessThan(healthyWeekTSS / 2);
   });
 
   it('reflects workoutMoves (drag-and-drop day changes)', () => {

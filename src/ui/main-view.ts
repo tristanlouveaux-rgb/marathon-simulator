@@ -21,7 +21,7 @@ import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
-import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp} from '@/calculations/fitness-model';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
@@ -1573,14 +1573,15 @@ function updateLoadChart(s: SimulatorState): void {
     s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   ) : [];
 
-  // Sum planned loads in TL units (scale FCL output by TL_PER_MIN/LOAD_PER_MIN ratio)
+  // Sum planned loads. calculateWorkoutLoad emits canonical TSS (ISSUE-263) —
+  // the old TL_PER_MIN/LOAD_PER_MIN per-RPE rescale here is gone because the
+  // producer now does it for everyone.
   let plannedAero = 0, plannedAnaero = 0;
   let plannedBase = 0, plannedThreshold = 0, plannedIntensity = 0;
   for (const w of plannedWorkouts) {
     if (w.t === 'rest' || w.t === 'gym') continue;
     const rpe = w.rpe || w.r || 5;
     const fcl = calculateWorkoutLoad(w.t, w.d, rpe * 10, easyPace);
-    const scale = (TL_PER_MIN[Math.round(rpe)] ?? 1.15) / (LOAD_PER_MIN_BY_INTENSITY[Math.round(rpe)] ?? 2.0);
     // Apply sport runSpec for cross-training. Prevents tennis/cycling/etc from inflating the planned target
     let sportRunSpec = 1.0;
     if (w.t === 'cross' && w.n) {
@@ -1588,11 +1589,11 @@ function updateLoadChart(s: SimulatorState): void {
       const sportKey = (SPORT_ALIASES as Record<string, string>)[raw] ?? raw;
       sportRunSpec = (SPORTS_DB as any)[sportKey]?.runSpec ?? 0.40;
     }
-    plannedAero += fcl.aerobic * scale * sportRunSpec;
-    plannedAnaero += fcl.anaerobic * scale * sportRunSpec;
-    plannedBase += (fcl.base ?? 0) * scale * sportRunSpec;
-    plannedThreshold += (fcl.threshold ?? 0) * scale * sportRunSpec;
-    plannedIntensity += (fcl.intensity ?? 0) * scale * sportRunSpec;
+    plannedAero += fcl.aerobic * sportRunSpec;
+    plannedAnaero += fcl.anaerobic * sportRunSpec;
+    plannedBase += (fcl.base ?? 0) * sportRunSpec;
+    plannedThreshold += (fcl.threshold ?? 0) * sportRunSpec;
+    plannedIntensity += (fcl.intensity ?? 0) * sportRunSpec;
   }
 
   // Sum actual loads from matched Garmin runs (TSS units. Same scale as individual card display)
@@ -1606,7 +1607,7 @@ function updateLoadChart(s: SimulatorState): void {
       const rpe = typeof ratedRpe === 'number' ? ratedRpe : 5;
       let tl: number;
       if (actual.iTrimp != null && actual.iTrimp > 0) {
-        tl = (actual.iTrimp * 100) / 15000;
+        tl = normalizeiTrimp(actual.iTrimp);
       } else {
         const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
         tl = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1668,7 +1669,7 @@ function updateLoadChart(s: SimulatorState): void {
       const rpe = typeof ratedRpe === 'number' ? ratedRpe : 5;
       let tl: number;
       if (actual.iTrimp != null && actual.iTrimp > 0) {
-        tl = (actual.iTrimp * 100) / 15000;
+        tl = normalizeiTrimp(actual.iTrimp);
       } else {
         const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
         tl = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1689,7 +1690,7 @@ function updateLoadChart(s: SimulatorState): void {
     const cfg = (SPORTS_DB as any)[sport];
     const runSpec = cfg?.runSpec ?? 0.35;
     if (wo.iTrimp != null && wo.iTrimp > 0) {
-      actualCrossTSS += (wo.iTrimp * 100) / 15000 * runSpec;
+      actualCrossTSS += normalizeiTrimp(wo.iTrimp) * runSpec;
     } else {
       const rpe = wo.rpe ?? 5;
       const durMatch = wo.d?.match(/(\d+)min/);
@@ -2291,6 +2292,11 @@ export function triggerACWRReduction(): void {
       const projectedTotal = currentTSS + (carried ?? 0) + remainingRunTSS;
       if (projectedTotal <= plannedB) {
         console.log(`[ACWRReduction] Skipping. Projected ${Math.round(projectedTotal)} TSS ≤ target ${Math.round(plannedB)}. Remaining runs won't exceed target.`);
+        // Dead-button fix (2026-06-04 dogfood): the nudge button must always
+        // respond. The week is already on target, so say that instead of
+        // silently eating the tap.
+        import('@/ui/toast').then(({ showSimpleToast }) =>
+          showSimpleToast(`Remaining sessions already bring the week in at ~${Math.round(projectedTotal)} TSS, under the ~${Math.round(plannedB)} TSS target. No cuts needed.`));
         return;
       }
       overshootTSS = projectedTotal - plannedB;
@@ -2322,7 +2328,7 @@ export function triggerACWRReduction(): void {
     // Compute TSS from the activities themselves (not week excess over baseline).
     // Use aggregated iTrimp if available (HR-based), otherwise duration × RPE-5 rate.
     const activityTSS = combinedActivity.iTrimp
-      ? Math.round(combinedActivity.iTrimp * 100 / 15000)
+      ? Math.round(normalizeiTrimp(combinedActivity.iTrimp))
       : Math.round(items2.reduce((sum, it) => sum + it.durationMin * (TL_PER_MIN[5] ?? 1.15), 0));
     const loadNote = popup.tier === 'rpe' ? ' (estimated from RPE)' : '';
     const equivKmStr = popup.equivalentEasyKm > 0

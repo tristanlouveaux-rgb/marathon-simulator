@@ -30,6 +30,7 @@ import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisp
 import { recordMorningPain, injuryAppliesToWeek, getDisciplineCapacity } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import type { InjuryState } from '@/types/injury';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ─── Module-level navigation state ───────────────────────────────────────────
 // null = show the live current week (s.w). Non-null = preview another week
@@ -59,7 +60,7 @@ export function summarizeWeekActuals(
     if (a.garminId) seen.add(a.garminId);
     min += (a.durationSec ?? 0) / 60;
     count += 1;
-    if (a.iTrimp != null && a.iTrimp > 0) tss += (a.iTrimp * 100) / 15000;
+    if (a.iTrimp != null && a.iTrimp > 0) tss += normalizeiTrimp(a.iTrimp);
   }
   return { min, count, tss };
 }

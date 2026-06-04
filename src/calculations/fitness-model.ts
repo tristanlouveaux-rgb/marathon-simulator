@@ -15,11 +15,12 @@
 
 import type { Week, Workout, PhysiologyDayEntry } from '@/types';
 import type { ReadinessLabel } from '@/calculations/readiness';
-import { TL_PER_MIN, SPORTS_DB } from '@/constants';
+import { TL_PER_MIN, SPORTS_DB, plannedTssPerMin } from '@/constants';
 import { normalizeSport, isStrengthActual } from '@/cross-training/activities';
 import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
+import { plausibleLtHR } from '@/calculations/lt-derivation';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -262,11 +263,19 @@ export const ATL_DECAY = Math.exp(-7 / 7);   // ≈ 0.368
  * Compute the per-athlete iTRIMP normalizer from lactate threshold HR.
  * Based on Coggan hrTSS: 1 hour at LTHR = 100 TSS.
  * normalizer = 3600 × LTHR_HRR × e^(β × LTHR_HRR) where β = 1.92 (male default).
- * Falls back to 15000 when LTHR data is unavailable.
+ * Falls back to 15000 when LTHR data is unavailable OR implausible —
+ * ltHR outside the LTHR plausibility band (80–95% of maxHR, canonical
+ * constants + rationale in lt-derivation.ts). A wrong personal normalizer
+ * silently rescales every iTRIMP→TSS conversion feeding CTL/ATL, so an
+ * implausible profile must never reach the formula.
  */
 export function computeAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: number): number {
   if (!ltHR || !restingHR || !maxHR || maxHR <= restingHR || ltHR <= restingHR || ltHR >= maxHR) {
     return 15000; // fallback
+  }
+  if (plausibleLtHR(ltHR, maxHR) == null) {
+    console.log(`[normalizer] ltHR ${ltHR} is ${((ltHR / maxHR) * 100).toFixed(0)}% of maxHR ${maxHR} — outside plausible LTHR band (80–95%), using population normalizer 15000`);
+    return 15000; // implausible profile → population fallback
   }
   const hrr = (ltHR - restingHR) / (maxHR - restingHR);
   const beta = 1.92; // Banister male coefficient (standard)
@@ -290,6 +299,16 @@ export function setAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: 
 /** Normalise iTRIMP to a TSS-equivalent TL value. 1 hour at LTHR = 100 TSS. */
 export function normalizeiTrimp(itrimp: number, normalizer?: number): number {
   return (itrimp * 100) / (normalizer ?? _athleteNorm);
+}
+
+/**
+ * Current athlete normalizer (for ENCODING TSS back into iTRIMP space:
+ * iTrimp = tss × normalizer / 100 — the exact inverse of normalizeiTrimp).
+ * Every encode/decode pair MUST use the same normalizer or synthetic
+ * round-trips inflate/deflate (ISSUE-263, excess-card lesson).
+ */
+export function getAthleteNormalizer(): number {
+  return _athleteNorm;
 }
 
 /** Parse duration in minutes from an adhoc workout description (e.g. "45min · 12 Feb") */
@@ -771,7 +790,9 @@ export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: numb
     if (w.dayOfWeek !== dayOfWeek) continue;
     const rpe = w.rpe ?? w.r ?? 5;
     const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
-    tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+    // Type-keyed valuation (ISSUE-263): an easy run is prescribed RPE 3 but
+    // valued at the RPE-4 row (~55 TSS/h) — same rule as calculateWorkoutLoad.
+    tl += durMin * plannedTssPerMin(w.t, rpe);
   }
   return Math.round(tl);
 }
@@ -1713,7 +1734,7 @@ export function computeToBaseline(
         // no HR signal but rated 9/10 read identically to an easy 90-min walk.
         let actTss: number;
         if (actual.iTrimp != null && actual.iTrimp > 0) {
-          actTss = actual.iTrimp / 150;
+          actTss = normalizeiTrimp(actual.iTrimp); // personal normalizer (ISSUE-262)
         } else {
           const durMin = (actual.durationSec ?? 0) / 60;
           const rated = wk.rated?.[id];

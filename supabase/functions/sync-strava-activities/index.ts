@@ -1070,11 +1070,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Load Strava tokens
+    // Load Strava tokens. Soft-deleted rows are dead: either the account is
+    // scheduled for deletion, or strava-claim-history retired this row after
+    // the athlete's history moved to another account (ISSUE-270). Syncing on a
+    // retired row would re-fork new activities under the abandoned user_id —
+    // the client must reconnect (the OAuth upsert clears deleted_at).
     const { data: tokenRow, error: tokenErr } = await supabase
       .from("strava_tokens")
       .select("access_token, refresh_token, expires_at")
       .eq("user_id", user.id)
+      .is("deleted_at", null)
       .maybeSingle();
 
     if (tokenErr || !tokenRow) return jsonError(400, { error: "strava_not_connected" });

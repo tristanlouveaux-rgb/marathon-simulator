@@ -34,7 +34,31 @@ describe('capacityStrainNote — note priority', () => {
       .toBe("Good training today (42 TSS), most of a typical day's load.");
   });
 
-  it('null below all tiers', () => {
+  it('null below all tiers when no fallback is supplied (legacy contract)', () => {
     expect(capacityStrainNote({ ...base, injuryCapOvershoot: false, pctCapacity: 60 })).toBeNull();
+  });
+
+  // Trained-day acknowledgment (Tristan, 2026-06-04): a real logged session
+  // below the strain tiers must not leave the commentary unphased — the
+  // sentence leads with the factual load before the chronic copy.
+  it('below the tiers with a fallback, leads with "X TSS logged today."', () => {
+    expect(capacityStrainNote(
+      { ...base, injuryCapOvershoot: false, pctCapacity: 60 },
+      'Bike load is elevated relative to your baseline.',
+    )).toBe('42 TSS logged today. Bike load is elevated relative to your baseline.');
+  });
+
+  it('no acknowledgment without a real logged session (passive steps only)', () => {
+    expect(capacityStrainNote(
+      { ...base, injuryCapOvershoot: false, pctCapacity: 60, loggedSessionToday: false },
+      'Bike load is elevated relative to your baseline.',
+    )).toBeNull();
+  });
+
+  it('tier sentences still win over the acknowledgment when they fire', () => {
+    expect(capacityStrainNote(
+      { ...base, injuryCapOvershoot: false },
+      'Bike load is elevated relative to your baseline.',
+    )).toBe("Good training today (42 TSS), most of a typical day's load.");
   });
 });

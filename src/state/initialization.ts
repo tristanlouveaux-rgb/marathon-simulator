@@ -14,6 +14,7 @@ import { applyLongRunCap, getLongestRunSec } from '@/calculations/run-durability
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
+import { recomputeLT } from '@/data/ltSync';
 import { initializeWeeks } from '@/workouts';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
@@ -518,6 +519,20 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.b = b;
     s.schemaVersion = STATE_SCHEMA_VERSION;
     s.pac = pac;
+    // No measured LT from the wizard → derive one from the just-committed
+    // PBs so s.lt / s.ltSource / s.ltConfidence are consistent from day 1.
+    // Previously s.lt was left null while a stale ltSource ('blended') and
+    // ltConfidence ('high') from a pre-finalize recompute survived — the
+    // review row then showed a contaminated value with false provenance.
+    // recomputeLT reads PBs via effectivePhysiologyPbs (s.pbs now set) and
+    // applies the race-PB-pace cap, so the derived value cannot be slower
+    // than a demonstrated long-race pace. When the wizard DID supply a
+    // measured ltPace (device sync), keep it untouched. Pace zones re-derive
+    // from the fresh LT so s.pac and s.lt agree.
+    if (!ltPace) {
+      recomputeLT(s);
+      s.pac = gp(curr, s.lt ?? null);
+    }
     // Seed blended-fitness cache with wizard-only blend. Backfill will refresh
     // this with Tanda inputs once per-run history lands.
     s.blendedRaceTimeSec = cappedBlendedTime;
@@ -550,6 +565,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.racePhaseStart = undefined;
     s.skip = [];
     s.timp = 0;
+    // Race goals are per-plan. A goal set against a previous plan's distance
+    // must not survive re-onboarding (real case, 2026-06-04: a sub-3
+    // MARATHON goal carried onto a fresh HALF plan and rendered as
+    // "TARGET TIME 3:00:00 · >95% chance" on the plan-ready hero). The
+    // plan-preview goal overlay re-sets it if the user picks a new target.
+    s.raceGoalTimeSec = undefined;
 
     // Store recurring activities
     if (state.recurringActivities && state.recurringActivities.length > 0) {
@@ -574,7 +595,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     }
 
     // Store initial physiology
-    s.initialLT = ltPace;
+    s.initialLT = s.lt ?? ltPace; // s.lt covers both the measured and freshly-derived cases
     s.initialVO2 = vo2max;
     s.initialBaseline = cappedBlendedTime;
     s.currentFitness = cappedBlendedTime;

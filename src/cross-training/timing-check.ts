@@ -25,6 +25,7 @@ import type { Week, WorkoutMod } from '@/types/state';
 import type { SimulatorState } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore, normalizeiTrimp } from '@/calculations/fitness-model';
+import { TL_PER_MIN } from '@/constants';
 
 const QUALITY_TYPES = new Set(['threshold', 'vo2', 'long']);
 const SIGNAL_B_TRIGGER = 50;       // TSS: minimum to show any suggestion
@@ -80,10 +81,8 @@ function applyDistReduction(originalDesc: string, reduction: number): string {
 
 // ─── Signal B helpers ─────────────────────────────────────────────────────────
 
-const TSS_PER_MIN: Record<number, number> = {
-  1: 0.3, 2: 0.5, 3: 0.65, 4: 0.8, 5: 0.92,
-  6: 1.05, 7: 1.25, 8: 1.45, 9: 1.65, 10: 1.9,
-};
+// ISSUE-263: this file used to carry its OWN RPE→TSS/min curve (a fourth
+// scale, shifted ~1 RPE from the canonical table). It now reads TL_PER_MIN.
 
 function actSignalBTSS(iTrimp: number | null | undefined, durationSec: number): number {
   if (iTrimp != null && iTrimp > 0) return normalizeiTrimp(iTrimp);
@@ -92,7 +91,7 @@ function actSignalBTSS(iTrimp: number | null | undefined, durationSec: number): 
 
 function adhocSignalBTSS(iTrimp: number | null | undefined, durationMin: number, rpe: number): number {
   if (iTrimp != null && iTrimp > 0) return normalizeiTrimp(iTrimp);
-  return durationMin * (TSS_PER_MIN[Math.round(rpe)] ?? 0.92);
+  return durationMin * (TL_PER_MIN[Math.max(1, Math.min(10, Math.round(rpe)))] ?? 0.92);
 }
 
 function dayOfWeekFromISO(isoTimestamp: string, weekStartISO: string): number {

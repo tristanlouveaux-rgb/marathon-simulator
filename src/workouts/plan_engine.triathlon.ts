@@ -20,6 +20,7 @@ import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import { computeTriPlanPhases } from '@/constants/triathlon-constants';
+import { plannedTssPerMin } from '@/constants';
 import { generateSwimSession, pickSwimKind } from './swim';
 import { generateBikeSession, pickBikeKind } from './bike';
 import { generateBrick } from './brick';
@@ -657,6 +658,13 @@ function generateRunSessionForTri(
   // in the same week land on different variants rather than cloning.
   const rotKey = Math.abs((weekIndex - 1) + slotIndex * 2);
 
+  // ISSUE-263: run-leg loads are anchored to the canonical type-keyed TSS
+  // valuation (plannedTssPerMin — same rule as running mode's
+  // calculateWorkoutLoad), so a 60-min tri easy run values identically to a
+  // 60-min running-mode easy run (mirror rule). The old per-min pairs were a
+  // private ~60/h-easy scale (easy 1.0/min, long 1.25/min = IF 0.87 for an
+  // easy-pace run). Aerobic/anaerobic SHARES are preserved from those pairs
+  // (long 0.88/0.12, threshold 0.77/0.23, easy 0.95/0.05).
   if (isLong) {
     const r = roundMin(minutes);
     const km = Math.round(((r * 60) / pace) * 2) / 2;  // nearest 0.5 km
@@ -665,16 +673,18 @@ function generateRunSessionForTri(
     desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r), easyLabel);
     t = 'long';
     rpe = phase === 'peak' ? 6 : 5;
-    aerobic = Math.round(r * 1.1);
-    anaerobic = Math.round(r * 0.15);
+    const total = r * plannedTssPerMin('long');
+    aerobic = Math.round(total * 0.88);
+    anaerobic = Math.round(total * 0.12);
   } else if (isQuality) {
     const idx = rotKey % THRESHOLD_RUN_VARIANTS.length;
     name = 'Threshold run';
     desc = THRESHOLD_RUN_VARIANTS[idx](thresholdLabel, vo2Label, easyLabel);
     t = 'threshold';
     rpe = 8;
-    aerobic = Math.round(minutes * 1.2);
-    anaerobic = Math.round(minutes * 0.35);
+    const total = minutes * plannedTssPerMin('threshold');
+    aerobic = Math.round(total * 0.77);
+    anaerobic = Math.round(total * 0.23);
   } else {
     durMin = minutes * easyVolumeKeep;  // body-mass swap trims easy aerobic volume only
     const r = roundMin(durMin);
@@ -683,8 +693,9 @@ function generateRunSessionForTri(
     desc = EASY_RUN_VARIANTS[idx](fmtMin(r), easyLabel);
     t = 'easy';
     rpe = 4;
-    aerobic = Math.round(r * 0.95);
-    anaerobic = Math.round(r * 0.05);
+    const total = r * plannedTssPerMin('easy');
+    aerobic = Math.round(total * 0.95);
+    anaerobic = Math.round(total * 0.05);
   }
 
   return {

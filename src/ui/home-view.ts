@@ -10,7 +10,7 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
@@ -145,7 +145,7 @@ export function breakdownShade(index: number): string {
 }
 
 function normalizeiTrimpLocal(itrimp: number): number {
-  return (itrimp * 100) / 15000;
+  return normalizeiTrimp(itrimp);
 }
 
 function parseDurMinLocal(d: string): number {
@@ -225,7 +225,7 @@ export function computeLoadBreakdown(
     let tss: number;
     let durationMin: number;
     if (w.iTrimp != null && w.iTrimp > 0) {
-      tss = (w.iTrimp * 100) / 15000;
+      tss = normalizeiTrimp(w.iTrimp);
       durationMin = parseDurMinLocal(w.d);
     } else {
       const rpe = w.rpe ?? w.r ?? 5;
@@ -1058,7 +1058,11 @@ function buildReadinessRing(s: SimulatorState): string {
   // Readiness detail page reads, so the two surfaces cannot diverge. Running
   // mode gets the same copy via coach.primaryMessage. (Override restored from
   // the 2026-05-19 snapshot — lost in the May crash.)
-  const triPostSessionNote = isTri ? capacityStrainNote(capStrain) : null;
+  // Fallback = the chronic sentence this card would otherwise show, so a
+  // trained day below the strain tiers still leads with "X TSS logged today."
+  const triPostSessionNote = isTri
+    ? capacityStrainNote(capStrain, triReadinessResult?.sentence ?? readiness.sentence)
+    : null;
   // TEMP DEBUG (2026-06-03, remove after dogfood verification)
   console.log('[readiness-debug]', JSON.stringify({
     todayTSS: capStrain.todayTSS, plannedDayTSS: Math.round(capStrain.plannedDayTSS),
@@ -1068,6 +1072,18 @@ function buildReadinessRing(s: SimulatorState): string {
     weeksOfHistory: metrics.length, w: s.w,
     score: readiness.score, label: readiness.label, floor: readiness.hardFloor,
     note: triPostSessionNote,
+    // Extended legs (2026-06-04): the 66→61 launch flicker had identical strain
+    // inputs, so the moving leg is one of these. Remove with the whole block
+    // after device verification.
+    tsb: Math.round(tsb * 10) / 10, acwr: Math.round(acwr.ratio * 100) / 100,
+    ctlNow: Math.round(ctlNow * 10) / 10,
+    sleepScore, hrvRmssd, hrvPersonalAvg,
+    sleepBank: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
+    sleepDebtExcess: sleepDebtExcessSec,
+    recovery: recoveryResult.hasData ? recoveryResult.score : null,
+    legLoad: Math.round(readiness.legLoadTotal * 10) / 10,
+    physioLen: (s.physiologyHistory ?? []).length,
+    actualsLen: Object.keys(strainWk?.garminActuals ?? {}).length,
   }));
   const baseReadinessSentence = isTri
     ? (triPostSessionNote ?? triReadinessResult?.sentence ?? readiness.sentence)
@@ -1098,8 +1114,9 @@ function buildReadinessRing(s: SimulatorState): string {
     isRestDay,
     matchedActivityToday,
   );
-  // Auto-scaling: ringMax = max(2 × target.hi, actual × 1.25)
-  const strainRingMax = Math.max(strainTarget.hi * 2, todaySignalBTSS * 1.25, 1);
+  // target.hi maps to a FULL arc ("target reached" = ring closes); overshoot clamps,
+  // colour carries it. Matches strain-view's detail ring. No-target fallback keeps a partial arc.
+  const strainRingMax = strainTarget.hi > 0 ? strainTarget.hi : Math.max(todaySignalBTSS * 1.25, 1);
 
   // Colour: orange (working) → green (in range) → red (exceeded)
   let strainColor: string;
@@ -2319,7 +2336,7 @@ export function renderTrackOnlyWeekDetail(): void {
               : actual.durationSec ? `${Math.round(actual.durationSec / 60)} min` : '';
     const color = isRun ? '#3b82f6' : sportColor(name.toLowerCase());
     const rowTSS = actual.iTrimp != null && actual.iTrimp > 0
-      ? Math.round((actual.iTrimp * 100) / 15000)
+      ? Math.round(normalizeiTrimp(actual.iTrimp))
       : Math.round((actual.durationSec / 60) * 0.92);
     rows.push({ day: dayLabel, name, value: val, color, tss: rowTSS });
   }

@@ -387,13 +387,24 @@ async function handleUserMetrics(
       continue;
     }
 
+    // Merge-preserving upsert: Garmin sends partial userMetrics (a VO2-only
+    // push is common). A plain upsert would null out a same-day LT reading —
+    // LT events are rare (pushed only on change), so losing one means the app
+    // may never see another. Read the existing row and keep non-null values.
+    const { data: existing } = await supabase
+      .from("physiology_snapshots")
+      .select("vo2_max_running, lactate_threshold_pace, lt_heart_rate")
+      .eq("user_id", userId)
+      .eq("calendar_date", calendarDate)
+      .maybeSingle();
+
     const { error } = await supabase.from("physiology_snapshots").upsert(
       {
         user_id: userId,
         calendar_date: calendarDate,
-        vo2_max_running: vo2Value,
-        lactate_threshold_pace: ltPaceSecKm,
-        lt_heart_rate: ltHR,
+        vo2_max_running: vo2Value ?? existing?.vo2_max_running ?? null,
+        lactate_threshold_pace: ltPaceSecKm ?? existing?.lactate_threshold_pace ?? null,
+        lt_heart_rate: ltHR ?? existing?.lt_heart_rate ?? null,
       },
       { onConflict: "user_id,calendar_date" },
     );

@@ -10,7 +10,7 @@ import {
   calculateZones, getWorkoutHRTarget, calculateIntensityScore, calculateEfficiencyShift,
   initializePhysiologyTracking, recordMeasurement, assessAdaptation
 } from '@/calculations';
-import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
+import { IMP, TIM, EXPECTED_GAINS, plannedTssPerMin } from '@/constants';
 import { TL_PER_MIN } from '@/constants/sports';
 import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
@@ -1076,7 +1076,10 @@ export async function next(): Promise<void> {
   // The carry banner in main-view reads this and applies CTL decay per elapsed week.
   {
     const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated, s.planStartDate);
-    const TL_BY_TYPE: Record<string, number> = { easy: 0.92, long: 0.92, marathon_pace: 1.45, threshold: 1.78, vo2: 2.22, intervals: 2.22, hill_repeats: 2.0, progressive: 1.45, mixed: 1.45 };
+    // Type-keyed canonical valuation (ISSUE-263) — this map used to be a
+    // private literal copy (with an off-table hill_repeats 2.0); it now reads
+    // the same TSS_RPE_BY_TYPE → TL_PER_MIN chain as calculateWorkoutLoad and
+    // computePlannedDaySignalBTSS, so carry == the other planned pipelines.
     const ZONE_PROFILES: Record<string, { base: number; threshold: number; intensity: number }> = {
       easy: { base: 0.95, threshold: 0.04, intensity: 0.01 },
       long: { base: 0.90, threshold: 0.09, intensity: 0.01 },
@@ -1094,7 +1097,7 @@ export async function next(): Promise<void> {
       if (nonRunTs.has(wo.t)) continue;
       const durMatch = wo.d?.match(/(\d+\.?\d*)\s*km/);
       const durMin = durMatch ? parseFloat(durMatch[1]) * 6 : 30;
-      const tss = durMin * (TL_BY_TYPE[wo.t] ?? 1.15);
+      const tss = durMin * plannedTssPerMin(wo.t, wo.rpe ?? wo.r);
       const p = ZONE_PROFILES[wo.t] ?? { base: 0.70, threshold: 0.20, intensity: 0.10 };
       pBase += tss * p.base;
       pThresh += tss * p.threshold;

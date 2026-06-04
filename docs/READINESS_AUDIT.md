@@ -122,3 +122,34 @@ Direction (two parts):
 2. If verified: **remove the TEMP `[readiness-debug]` console.log in `src/ui/home-view.ts`** and mark the CHANGELOG entries device-verified.
 3. Start ISSUE-260 Phase 0 (quiet window, single agent).
 4. Then ISSUE-259 (sRPE quick win first, power-TSS second).
+
+---
+
+## 9. Addendum (2026-06-04, later session) — maths verified, two new findings
+
+Tristan re-reported the symptoms ("score doesn't reflect training, commentary static, 65↔61 flicker") and pasted a live `[readiness-debug]` log. Findings:
+
+### 9a. Flicker = launch data race, NOT input-assembly drift
+The pasted log showed render 1 → score **66**, renders 2–5 → score **61**, with **identical strain fields** (`todayTSS 2, anchor 0, pctCapacity 0, floor null` — a rest day, all correct). The moving leg is one the log didn't print (tsb / acwr / sleep / HRV / recovery): render 1 fires before the async sync + physiology fetch lands, the rest after. The TEMP debug log in `home-view.ts` now prints **all** the legs plus `physioLen` / `actualsLen`; the next reload identifies the mover. Candidate fix once identified: don't compute/paint the ring until first sync completes (or re-render silently), to be folded into ISSUE-260.
+
+### 9b. Maths verified — `src/calculations/readiness-strain-sensitivity.test.ts` (15 tests)
+- **Floor shape** (readiness.ts:627): 93% → 60, 100% → 54, 130% → 38, 155% → 24, 180%+ → 10. All asserted.
+- **The floor is a cap, not a penalty**: an athlete whose ambient composite is already below the floor sees ZERO change from a sub-100% session. This is the design explanation for "the score ignores my training" on tired days.
+- **ISSUE-259 quantified**: the same dogfood ride (iTRIMP 5202, anchor 45.3) floors at **59 "On Track"** undercounted vs **24 "Ease Back"** with honest power TSS (~70). The measurement gap alone spans two label bands. Confirms §5's priority.
+
+### 9c. NEW — capacity-strain numerator/denominator scale mismatch (ISSUE-263 class)
+`computeCapacityStrain`'s `todayTSS` uses the **personal** iTRIMP normalizer (`normalizeiTrimp`, fitness-model.ts:291); the tri `weeklyCtl` denominator comes from `triConfig.fitness`, built by `estimateTss` = `iTrimp / 150` — the **population** 15000 scale (tri-benchmarks-from-history.ts:907). Same ride, two TSS values, divided by each other: every tri `pctCapacity` is inflated by `15000 / personalNorm` (~1.23× for Tristan). Owned by the queued load-currency session (`docs/LOAD_CURRENCY_PLAN.md`) — do not point-fix.
+
+### 9d. weeklyCtl anomaly RESOLVED (mostly) — stale persisted fitness + dedup-halved chronic
+Tristan pasted `[tri:fitness-diag]`: activityCount 40, DIRECT CTL swim 0 / bike 106.4 / run 17.3 (= 123.7 + crossTrainingCtl, cross not printed). Two conclusions:
+
+1. **The `weeklyCtl: 83` in the readiness logs was STALE persisted `triConfig.fitness` from a previous boot** — the readiness renders fire before main.ts's benchmark refresh writes the new direct CTLs. The capacity anchor is subject to the same launch race as the other inputs. (Open sub-question: a post-refresh `scheduleHomeRefresh` render should have logged weeklyCtl ≈ 124+cross; all pasted lines showed 83 — verify on next reload with the extended log that the refresh write reaches the rendered state.)
+2. **317 → ~124+cross is mostly the cross-source dedup (2026-06-03) removing Strava+Garmin double-counting** — the audit's "93% of capacity" was calibrated against inflated chronic load. With honest chronic, the same 43-TSS session reads ~155-240% → floor 10-24, ON TOP of the 9c scale inflation (~1.23×). The system has likely flipped from under-reacting to OVER-reacting. This makes the load-currency reconciliation (ISSUE-263, `docs/LOAD_CURRENCY_PLAN.md`) a prerequisite for trusting any capacity-anchored score — the anchor now divides personal-scale acute TSS by deduped population-scale chronic.
+
+NOTE for anyone reading the `[tri] benchmarks refreshed` console line: it prints the MATRIX-ADJUSTED per-discipline CTLs (race-prediction set, e.g. run 113.2); the capacity anchor reads the DIRECT set from `triConfig.fitness` (run 17.3). Do not compare them.
+
+### 9e. Trained-day acknowledgment SHIPPED (2026-06-04)
+Tristan: "the day you've trained the commentary should at least reflect that rather than look unphased." `capacityStrainNote(cs, fallback)` now takes the caller's chronic sentence; on any day with a real logged session (`loggedSessionToday` — passive steps excluded, no new threshold) that lands below the strain tiers, the lead sentence becomes "X TSS logged today. <chronic sentence>". Home (`home-view.ts`) and the detail page (`readiness-view.ts`) both pass their chronic fallback; priority unchanged (injury-cap overshoot > tiers > acknowledgment > chronic). 4 tests added, suite 3141 green, NOT device-verified. Running mode (`derivePrimaryMessage`) was evaluated per the mirror rule: it has its own copy chain with plan-relative tiers; add a matching acknowledgment tier there only if the same complaint appears in running mode.
+
+### 9f. FTP regression root-caused — account fragmentation (2026-06-04)
+"We used to auto find the 295" decoded via live DB queries: the dev athlete's history is split across 4+ user_ids — gmail `44bd716f` (12 activities, holds the Garmin token), anon `9de72f10` (created 06-01, 29 activities, likely the current app sign-in), anon `4886ffb0` (created 06-02, the 294-activity Strava backfill holding the ONLY `power_curve` ride = the 295W source), anon `1c55ea4b` (246 old-dated activities). FOUR live Strava token rows refresh daily for the same athlete. The 295 auto-derive worked only via the data-isolation leak (pre-filter, the loader read every account's rows). With the correct `user_id=eq` filter (`tri-activity-loader.ts:90`), the signed-in fragment has no power curves → fallback 153W low-conf. The same fragmentation is part of the weeklyCtl story (§9d). **Fix = consolidate activities/tokens onto one canonical account + make every device/webhook authenticate as it (data migration, Tristan sign-off pending). Do NOT relax the user_id filter.**

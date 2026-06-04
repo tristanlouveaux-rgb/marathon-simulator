@@ -17,7 +17,7 @@ import {
 // Plan modifications must only happen via explicit user confirmation in events.ts.
 import { ft, fp, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
-import { computeACWR, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { computeACWR, getTrailingEffortScore, normalizeiTrimp} from '@/calculations/fitness-model';
 import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
@@ -1028,7 +1028,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         const rpeVal = typeof rtd === 'number' ? rtd : (w.rpe || w.r || 5);
         const hasITrimp = garminActual && garminActual.iTrimp != null && garminActual.iTrimp > 0;
         const actualTSSVal = hasITrimp
-          ? Math.round((garminActual!.iTrimp! * 100) / 15000)
+          ? Math.round(normalizeiTrimp(garminActual!.iTrimp!))
           : garminActual && garminActual.durationSec > 0
             ? Math.round((garminActual.durationSec / 60) * (TL_PER_MIN[Math.round(rpeVal)] ?? 0.92))
             : null;
@@ -1080,17 +1080,16 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           h += `<div class="text-xs mb-1" style="color:var(--c-border)">Training Effect: <span style="color:rgba(239,68,68,0.7)">${ae} aerobic</span> · <span style="color:rgba(245,158,11,0.7)">${ane} anaerobic</span></div>`;
         }
       } else {
-        // Show planned TSS (converted from FCL scale) with 3-zone breakdown
+        // Show planned TSS with 3-zone breakdown. calculateWorkoutLoad emits
+        // canonical TSS directly (ISSUE-263); the per-RPE rescale is gone.
         // Zones are derived first; total is their sum to avoid rounding mismatches
-        const rpeVal = w.rpe || w.r || 5;
-        const scale = (TL_PER_MIN[Math.round(rpeVal)] ?? 1.0) / (LOAD_PER_MIN_BY_INTENSITY[Math.round(rpeVal)] ?? 2.0);
-        const pBase      = loads.base      != null ? Math.round(loads.base      * scale) : null;
-        const pThreshold = loads.threshold != null ? Math.round(loads.threshold * scale) : null;
-        const pIntensity = loads.intensity != null ? Math.round(loads.intensity * scale) : null;
+        const pBase      = loads.base      != null ? Math.round(loads.base)      : null;
+        const pThreshold = loads.threshold != null ? Math.round(loads.threshold) : null;
+        const pIntensity = loads.intensity != null ? Math.round(loads.intensity) : null;
         // If zone data available, sum zones for total so numbers always add up
         const plannedTSS = (pBase != null)
           ? (pBase ?? 0) + (pThreshold ?? 0) + (pIntensity ?? 0)
-          : Math.round(loads.total * scale);
+          : Math.round(loads.total);
         const zoneParts: string[] = [];
         if (pBase      != null && pBase      > 0) zoneParts.push(`<span style="color:rgba(59,130,246,0.8)">${pBase} base</span>`);
         if (pThreshold != null && pThreshold > 0) zoneParts.push(`<span style="color:rgba(245,158,11,0.8)">${pThreshold} threshold</span>`);

@@ -6,6 +6,68 @@ New entries are added at the top. When modifying a model, update its entry rathe
 
 ---
 
+## §BP — Canonical load currency: TSS everywhere, conversions only at boundaries (2026-06-04)
+
+**The problem (ISSUE-263 + ISSUE-262; full audit in `docs/LOAD_CURRENCY_PLAN.md`).** A 15-agent audit + empirical measurement found the app computing "training load" on **8 distinct numeric scales** and doing arithmetic across them. The same 60-min easy run was worth 39, 55, 69, 86, 90, 96, 115–130, or 60 units depending on which pipeline touched it. Live consequences: the cross-training suggester subtracted Garmin-scale cuts (~90/h easy) from a personal-TSS budget (~55/h) → systematic under-cut (the "absorbs 4.7 of 15.7 km" modal); its severity classifier divided a TSS-ish FCL by a Garmin-scale weekly load → hard cross sessions under-classified → the 1-adjustment guard bound first; universalLoad's four ingest tiers gave the same session up to 3.2× different credit depending only on the data source; Garmin Training Effect (a 0–5 score) was stamped onto `w.aerobic` and summed as TSS (10–20× under); the tri fitness model ran on the population normalizer while running mode ran personal (~1.65× cross-mode CTL divergence for a corrupted profile).
+
+**The canonical unit (Tristan sign-off): TSS, 1 h at lactate threshold = 100** (Coggan). `TL_PER_MIN` (`sports.ts`) is the canonical RPE→TSS/min curve. **The law: every load producer either emits canonical TSS or converts at its own ingest boundary. No consumer ever rescales.**
+
+**Type-keyed planned valuation (`TSS_RPE_BY_TYPE` → `plannedTssPerMin`).** Prescription and valuation are different dimensions: an easy run is *prescribed* at RPE 3 (conversational; telling users "RPE 4" would push easy pace too hard) but *costs* IF ≈ 0.74 → 0.74² × 100 ≈ 55 TSS/h — the RPE-4 row. Perceived exertion undershoots physiological load at low intensity (Borg-RPE vs %HRR nonlinearity), so planned valuation keys off the session TYPE; the per-type rows were derived from the pre-existing week-rollover carry map, not invented (easy/long→4, MP/progressive/mixed→6, threshold/race_pace/float→7, vo2/intervals/hill→8, recovery→3). This resolved the 39-vs-55 easy-anchor split without touching coaching labels or RPE-vs-expected effort scoring.
+
+**Conversion law for raw Garmin/Firstbeat loads: `garminToTssRatio(rpe)`** = `LOAD_PER_MIN_BY_INTENSITY[rpe] / TL_PER_MIN[rpe]` (~1.63 easy → ~2.03 VO2). Both tables describe the same per-minute load on two calibrations, so their per-RPE ratio IS the conversion — derived, never a flat factor.
+
+**universalLoad tiers unified.** A+ (iTRIMP): personal-normalized TSS, sport multiplier REMOVED (a measurement already reflects the sport; multiplying by the RPE-estimate corrector silently deflated cycling iTRIMP ×0.75). A (raw Firstbeat): ÷ `garminToTssRatio(rpe)` at ingest. B (time-in-zone): per-zone TSS/min anchored to the definition — Z4 is the threshold zone so Z4 = 100/60 per min, the existing 1:2:3:4:5 ramp scales linearly → hourly [25, 50, 75, 100, 125], whose implied IFs (0.50/0.71/0.87/1.00/1.12) land on physiologically sensible zone intensities. C (RPE estimate): `TL_PER_MIN` × sportMult × activeFraction × 0.80 uncertainty discount (kept — estimates SHOULD be conservative). Measured tiers now agree within 15%; Tier C sits at 0.80× by design.
+
+**Saturation fixed: slope-1 form.** The old credit curve `CREDIT_MAX(1−e^(−x/TAU))` with CREDIT_MAX=1500, TAU=800 had slope 1.875 at the origin — it AMPLIFIED every realistic session's credit ~1.6–1.9×, accidentally compensating the B1 scale mismatch (a curve tuned to convert TSS-ish budgets toward Garmin-scale cuts). Replaced with the one-parameter saturating exponential `TAU(1−e^(−x/TAU))`, TAU = 491 TSS (old 800 re-denominated by the easy-anchor ratio): slope exactly 1 at zero, so **credit ≤ raw load always** — saturation is a cap, as specified.
+
+**iTRIMP normalizer: personal, plausibility-gated, everywhere.** `computeAthleteNormalizer` = `3600·hrr·e^(1.92·hrr)` (Coggan hrTSS anchor, Banister β=1.92) now rejects ltHR outside 80–95% of maxHR (HR at the individual anaerobic threshold ≈ 86–92% HRmax in trained athletes — Faude, Kindermann & Meyer 2009, *Sports Med* 39:469–490; floor at 80% leaves margin for less-trained users) → population 15000 fallback (itself ≈ an 84%-HRR profile, so the gate never makes things more extreme). The gate also fires at the watch-intake source (`resolveLT`/`deriveLT`: implausible Garmin LTHR falls to the 0.88×maxHR derivation). Real case: a Garmin snapshot of ltHR 144 @ maxHR 192 (75%) had silently inflated all running CTL/ATL +66% via a ~9,033 normalizer. The tri fitness model (tri-benchmarks CTL, tri overload, recovery countdown) migrated from hardcoded population `/150` to the same gated personal normalizer — cross-mode CTL coherence; encode/decode pairs (`getAthleteNormalizer`/`normalizeiTrimp`) are exact inverses so synthetic round-trips are identity.
+
+**Rescaled together (the saturation-constant trap):** LOAD_SMOOTHING 30→18.4, minLoadThreshold 5→3, minLoadToTrigger 30→18, EASY_LOAD_PER_KM 12→5.52 (= 6:00/km × TL_PER_MIN[4]; retires the disagreeing 35/km and "15 load/TSS" orphans), recovery-extra cap 20×15→20 TSS, suggester capFraction now a direct `maxReductionTSS / effectiveRRC` ratio (the equivalentEasyKm round-trip is gone). All re-denominations divide by the easy-anchor ratio 1.63 — behaviour-preserving re-denomination, not retuning.
+
+**Confidence**: high on the unit algebra (anchor tests assert it); medium on absolute behaviour shifts (suggester cuts get LARGER on the iTRIMP path, smaller credits on RPE/Garmin paths; severity for hard cross-training rises) — device verification required before ISSUE-262/263 close.
+
+**Limitations**: (1) RPE-only ACTUAL ratings still value a user-rated easy run at the RPE-3 row (39/h) vs the planned 55/h — perceptual-vs-physiological reconciliation of low-RPE actuals is out of scope (most actuals arrive via iTRIMP/HR); (2) bike/swim per-session TSS rates remain placeholders (IF-audited as sensible, documented in `bike.ts`/`swim.ts`) pending real power/pace TSS (ISSUE-259); (3) tri strength sessions keep their legacy 20+10 stamp; (4) the LTHR band can floor a genuinely untrained user (LT < 80% maxHR) to the population normalizer — acceptable because the fallback assumes a mid-band profile anyway.
+
+**Durable guard**: `src/calculations/load-currency-anchors.test.ts` — 17 anchors: 60-min easy ≈ 55 in every planned pipeline (incl. tri↔running parity on a real generated plan), 1h@LT=100 exact, tier agreement bands, credit ≤ load, round-trip identity, per-RPE conversion law, and a filesystem grep that fails on any new hardcoded `/15000`-style decode.
+
+**Key files**: `sports.ts` (TL_PER_MIN canonical header, TSS_RPE_BY_TYPE, plannedTssPerMin, garminToTssRatio), `load.ts`, `universalLoad.ts` + `universal-load-constants.ts`, `suggester.ts`/`planSuggester.ts`, `fitness-model.ts` (gate, getter, /150), `lt-derivation.ts` (plausibleLtHR), `plan_engine.triathlon.ts`/`bike.ts`/`swim.ts`, `activity-matcher.ts` (SEV-1 + actualTSS cache), `tri-benchmarks-from-history.ts`, `main.ts` (one-time `loadCurrencyV2` restamp migration), ~20 display sites.
+
+---
+
+## §BO — LT estimate: race-PB pace bound + wizard-PB visibility (2026-06-04)
+
+**The problem (Tristan dogfooding, same session as §BN).** The onboarding review screen showed "Lactate threshold pace 4:56/km — Blended from your PBs and recent threshold-effort runs. High confidence." to an athlete whose typed PBs were 17:38 / 39:20 / 1:31:30 / 3:09:42. A 3:09 marathon is run at 4:30/km; a threshold pace 26 s/km SLOWER than marathon pace is physiologically impossible (LT ≈ best ~60-min pace; Daniels' T; Coyle 1995 *Exerc Sport Sci Rev* 23:25–63). Two mechanisms: (1) every mid-wizard physiology consumer read `s.pbs` (written only at finalize) — so LT derivation saw the PREVIOUS plan's PBs and a degraded VDOT (41.3, residue of an earlier broken pass's feedback loop: bad blend → low `s.v` → Daniels T from low VDOT → bad LT → worse blend); (2) easy runs passing the empirical filter at ~4:56/km dominated the blend at weight 0.5. A third inconsistency: finalize set `s.lt = null` (wizard had no measured LT) but left `ltSource: 'blended'` / `ltConfidence: 'high'` stale from the pre-finalize recompute.
+
+**Fix 1 — `effectivePhysiologyPbs` (physiological-vdot.ts).** Per-key fastest-of(`s.pbs`, `s.onboarding.pbs`), consumed by the PB-median VDOT tier and `pbsToBestEfforts` (LT critical-speed inputs). Mid-wizard, freshly-typed PBs are immediately visible to the whole physiology chain; fastest-wins per key means a stale wizard snapshot can never regress a fresher post-plan PB. This also breaks the cross-pass degradation loop at its entry point: CS-from-PBs and PB-median Daniels re-anchor the estimate on demonstrated performance regardless of how degraded `s.v` got.
+
+**Fix 2 — definitional race-PB bound in `deriveLT`.** Any race PB with duration ≥ 3600 s was, by definition, sustained for longer than an hour, so LT pace can never be slower than that race's average pace. The blend is clamped to the tightest such PB pace; provenance appends "Capped at your race-PB pace"; confidence is downgraded from 'high' (the methods contradicted demonstrated performance). The bound IS the PB pace — no tuned margin, no invented constant. Races shorter than 60 min impose no bound in this direction (a 17:38 5K pace is legitimately faster than LT). Garmin/override paths bypass the bound (measured/user values have their own provenance rules).
+
+**Fix 3 — fresh LT + per-plan goal at finalize (`initializeSimulator`).** When the wizard supplies no measured `ltPace`, finalize now calls `recomputeLT(s)` after committing `s.pbs`, so `s.lt`/`ltSource`/`ltConfidence` are consistent from day 1, and re-derives `s.pac` from the fresh LT. `s.raceGoalTimeSec` is cleared on plan initialization — goals are per-plan (the live bug: a sub-3 MARATHON goal surviving onto a HALF plan rendered "TARGET TIME 3:00:00 · >95% chance" on the plan-ready hero).
+
+**Confidence**: high. Fix 2 is definitional; fixes 1 and 3 are data-provenance corrections.
+
+**Limitations**: the empirical method can still be polluted by easy runs inside the 85–92% HRmax band when maxHR is misestimated — the bound contains the damage but doesn't fix the classifier. The recent-run predictor's parallel contract violation (training runs fed where the docstring expects a race/time-trial) is logged separately (ISSUE-267) pending a calibration decision.
+
+**Key files**: `src/calculations/physiological-vdot.ts` (`effectivePhysiologyPbs`), `src/data/ltSync.ts` (`pbsToBestEfforts`), `src/calculations/lt-derivation.ts` (bound in `deriveLT`), `src/state/initialization.ts` (finalize recompute + goal reset). Tests: `lt-derivation.test.ts` (+3), `physiological-vdot.test.ts` (+3), `initialization.physiology.test.ts` (3).
+
+---
+
+## §BN — Onboarding anchor parity: durability cap + stated-volume fallback (2026-06-04)
+
+**The problem (real case, Tristan dogfooding 2026-06-04).** A thin-data onboarding (typed 17:39 5K PB, typed "10 km/week", Strava connected but 0 activities scraped) produced a half-marathon "current race estimate" of exactly 1:26:00 — the raw `predictFromPB` Riegel extrapolation (b≥1.10 short-anchor floor, §audit-11) with every endurance brake switched off. Diagnosis: (1) `initializeSimulator` seeded `blendedRaceTimeSec` WITHOUT the long-run durability cap that the canonical refresher (`refreshBlendedFitness`, §AL.4) applies — so the anchor the user first sees is systematically faster than what the first backfill silently corrects it to; (2) the typed weekly volume was erased by a 0-row history aggregation (`stravaSync` set `detectedWeeklyKm = undefined`) and was never passed to the blend, so volume-sensitive terms saw an explicit zero instead of the stated 10 km/wk; (3) at half distance both volume-specificity penalties are marathon-gated, leaving the durability cap as the only endurance brake — and it wasn't applied.
+
+**Fix 1 — durability cap at finalize (parity, no new constants).** `initializeSimulator` now applies `applyLongRunCap(getLongestRunSec(s,12), targetDist)` to the wizard blend before deriving VDOT, exactly mirroring §AL.4's order in the refresher (blend → calibration → durability → VDOT). The capped time seeds `blendedRaceTimeSec`, `initialBaseline`, `currentFitness`, and the forecast anchor; `s.runDurability` is stored for the Forecast chip from day 1. Calibration bias is not mirrored (no logged races at onboarding; first refresh applies it). For the real case: 1:26:00 → 1:29:26 today (max 4% half penalty, no run history), forecast shifts by the same delta. The cap reaches `forecastTime` only through the anchor (never applied twice), preserving §AL.4's "projection assumes the plan delivers long runs" rule.
+
+**Fix 2 — stated volume as the no-scrape fallback (`resolveWeeklyKmSignal`).** History-derived weekly km (`computePredictionInputs`) stays the primary signal, including an explicit 0 when the 8-week window is empty but history exists. Only when the window has NO qualifying runs at all (`weeksCovered === 0`) does the blend fall back to `detectedWeeklyKm`, which now survives an empty scrape and carries the typed manual-entry volume (`weeklyVolumeConfirmed` is also set there, so the D3 plan-volume gate seeds `s.wkm` from it — previously only the Apple Health import path set the flag). Self-reported volume is a weaker signal than measured history (athletes systematically over-report training; Borresen & Lambert 2009, Sports Med 39:779–795 document self-report vs measured discrepancies) but strictly better than treating "we found nothing" as "trains zero": the marathon-specificity penalty otherwise fires at maximum severity (×1.15) against a user who stated their volume.
+
+**Confidence**: high for fix 1 (pure parity with an already-logged model). Medium for fix 2's fallback trust (self-report bias is unmodelled; mitigated by the fallback only engaging when no measured signal exists, and measured data replacing it on first real sync).
+
+**Limitations**: the typed volume has no pace attached, so Tanda can never fire from it (correct — Tanda needs measured P and K). Half/10K remain exempt from volume-based specificity penalties (marathon-gated); the durability cap is the only endurance brake at those distances. Extending the unified readiness framework (half: 50 km/wk target, max 8%) to running's half predictions is a deliberate open calibration decision — see `predictions.ts` parallel-implementation notice.
+
+**Key files**: `src/state/initialization.ts` (cap at finalize), `src/calculations/prediction-inputs.ts` (`resolveWeeklyKmSignal`), `src/calculations/blended-fitness.ts` (fallback at both blend call sites), `src/data/stravaSync.ts` (no-clobber on empty aggregation), `src/ui/wizard/steps/manual-entry.ts` (`weeklyVolumeConfirmed`). Tests: `initialization.durability.test.ts`, `prediction-inputs.test.ts`, `initialization.volume.test.ts`.
+
+---
+
 ## §BM — Runner population percentiles: "faster than X% of runners" at every standard distance (2026-06-03)
 
 **Where it sits**: tracking. Places times within the recreational racing population; prescribes nothing.
@@ -331,6 +393,7 @@ Running's prediction engine was missing four real factors that the tri engine al
 - Linear shortfall ramp: `penalty = MAX_PENALTY × max(0, 1 − longestRunSec/thresholdSec)`.
 - Distance-specific `MAX_PENALTY` (5K → 2%, 10K → 3%, Half → 4%, Marathon → 5%).
 - Applied to `blendedRaceTimeSec` (today). NOT applied to `forecastTime` (race-day projection) — projection assumes the plan delivers long runs by race day. Mirrors tri's `executionFactor` treatment.
+- **2026-06-04 (§BN)**: also applied at onboarding finalize (`initializeSimulator`), which previously seeded the anchor uncapped — a thin-data user's first "current race estimate" was the raw capacity extrapolation until the first backfill refresh silently slowed it.
 
 **Constants**:
 - `LONG_RUN_THRESHOLD_SEC` marathon = 165 min ≈ 30 km easy. Calibrated to Daniels' "minimum 25 km for finish-focused, 30+ km for time-goal" guidance.
@@ -3315,10 +3378,20 @@ Empirical gets the highest weight because it's the only direct observation. CS n
 ### Source priority (resolveLT)
 
 ```
-override   >  fresh Garmin (<60d)  >  blended derivation  >  stale Garmin  >  null
+override   >  Garmin (until superseded)  >  blended derivation  >  null
 ```
 
-User override always wins. Fresh Garmin beats derived because the watch has continuous HR access and proprietary FirstBeat calibration — higher fidelity than any field-data estimator when available. Stale Garmin (>60 days) is dropped in favour of derived, because LT drifts with fitness.
+User override always wins. Garmin beats derived because the watch has continuous HR access and proprietary FirstBeat calibration — higher fidelity than any field-data estimator when available.
+
+**Revision 2026-06-04 (Tristan): the 60-day Garmin expiry is removed.** Garmin pushes `userMetrics` only when the value *changes* (change-event semantics), so the absence of a newer reading means "unchanged", not "stale" — the watch itself keeps displaying the same LT. The old expiry silently reverted real users to the Daniels estimate (observed live: watch LT 4:12/km·168bpm, app showing VDOT-derived 3:59/km·177bpm "low confidence", threshold prescriptions ~13s/km too fast). A Garmin reading is now trusted until superseded by:
+
+1. a newer Garmin reading,
+2. a manual override, or
+3. a derived estimate that is **faster by ≥ 3 s/km at medium+ confidence** (`LT_GARMIN_SUPERSEDE_GAP_SEC_KM`, the same "clearly better" gap the manual-override auto-improve rule uses — benchmarks-yield-to-improvements). A *slower* derived estimate never displaces a measured reading.
+
+**Limitation**: a detrained athlete who stops hard running keeps an old (now too-fast) Garmin LT, since neither the watch nor the supersede rule corrects downward. Accepted — the watch itself has the same behaviour, and the derived blend cannot distinguish "detrained" from "no recent hard efforts" either.
+
+**Conflict suggestion removed (same revision)**: `recomputeLT` previously parked any >10 s/km Garmin-vs-derived disagreement behind a suggestion card; a user who never opened the card never received their watch LT. Watch readings now auto-apply; shifts ≥ 10 s/km (`LT_NOTIFY_THRESHOLD_SEC_KM`, the old conflict threshold repurposed) surface a small toast per the adaptation-transparency rule. The suggestion card path is retired (stale pending suggestions are cleared on the next recompute).
 
 ### Confidence
 

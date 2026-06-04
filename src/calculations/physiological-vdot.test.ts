@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPhysiologicalVdot, pbDerivedVdot, resolveRunningVdot, hasRunningFitnessSignal } from './physiological-vdot';
+import { getPhysiologicalVdot, pbDerivedVdot, resolveRunningVdot, hasRunningFitnessSignal, effectivePhysiologyPbs } from './physiological-vdot';
 import { cv } from './vdot';
 import type { SimulatorState } from '@/types';
 
@@ -242,5 +242,30 @@ describe('resolveRunningVdot / hasRunningFitnessSignal — canonical fitness gat
     const s = mkState({ v: 0, pbs: {} });
     expect(resolveRunningVdot(s)).toBeNull();
     expect(hasRunningFitnessSignal(s)).toBe(false);
+  });
+});
+
+describe('effectivePhysiologyPbs — wizard PBs visible to the physiology chain', () => {
+  it('mid-wizard typed PBs are seen before finalize commits s.pbs', () => {
+    const s = mkState({
+      pbs: {}, // previous broken pass finalized empty
+      onboarding: { pbs: { k5: 1058, m: 11382 } } as any,
+    });
+    expect(effectivePhysiologyPbs(s)).toEqual({ k5: 1058, m: 11382 });
+    // And the PB-median VDOT tier resolves from them.
+    expect(pbDerivedVdot(s)).not.toBeNull();
+  });
+
+  it('fastest wins per key — a stale wizard snapshot cannot regress a fresher plan PB', () => {
+    const s = mkState({
+      pbs: { k5: 1020, h: 5600 },                   // post-plan Strava refresh improved the 5K
+      onboarding: { pbs: { k5: 1058, h: 5490 } } as any, // wizard snapshot
+    });
+    expect(effectivePhysiologyPbs(s)).toEqual({ k5: 1020, h: 5490 });
+  });
+
+  it('no wizard state → identical to s.pbs', () => {
+    const s = mkState({ pbs: { k10: 2360 } });
+    expect(effectivePhysiologyPbs(s)).toEqual({ k10: 2360 });
   });
 });

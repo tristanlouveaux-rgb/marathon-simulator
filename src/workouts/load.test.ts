@@ -65,19 +65,32 @@ describe('Workout Load Calculations', () => {
       });
     });
 
-    describe('intensity effect', () => {
-      it('should give higher load for higher intensity', () => {
-        const lowIntensity = calculateWorkoutLoad('easy', '10km', 30);
-        const highIntensity = calculateWorkoutLoad('easy', '10km', 80);
+    describe('intensity effect (ISSUE-263: valuation is type-keyed)', () => {
+      // Since the load-currency canonicalisation, a MAPPED workout type is
+      // valued at its physiological row (TSS_RPE_BY_TYPE) regardless of the
+      // prescribed RPE — an easy run costs ~55 TSS/h whether the user calls
+      // it RPE 3 or 4 (perceived exertion undershoots physiological load at
+      // low intensity). Intensity differences are expressed through the TYPE
+      // (easy vs threshold vs vo2), not the RPE knob on one type.
+      it('higher-intensity TYPES carry higher load at the same distance', () => {
+        const easy = calculateWorkoutLoad('easy', '10km', 30);
+        const threshold = calculateWorkoutLoad('threshold', '10km', 70);
+        const vo2 = calculateWorkoutLoad('vo2', '10km', 80);
 
-        expect(highIntensity.total).toBeGreaterThan(lowIntensity.total);
+        expect(threshold.total).toBeGreaterThan(easy.total);
+        // vo2 pace is faster (shorter duration) but the rate dominates:
+        expect(vo2.total).toBeGreaterThan(easy.total);
       });
 
-      it('should scale load with RPE', () => {
-        // Intensity is 0-100, roughly RPE * 10
-        const rpe5 = calculateWorkoutLoad('threshold', '10km', 50);
-        const rpe8 = calculateWorkoutLoad('threshold', '10km', 80);
+      it('the prescribed RPE does NOT rescale a mapped type (valuation is stable)', () => {
+        const rpe3 = calculateWorkoutLoad('easy', '10km', 30);
+        const rpe5 = calculateWorkoutLoad('easy', '10km', 50);
+        expect(rpe3.total).toBe(rpe5.total);
+      });
 
+      it('UNMAPPED types still scale with the prescribed RPE (fallback path)', () => {
+        const rpe5 = calculateWorkoutLoad('gym', 45, 50);
+        const rpe8 = calculateWorkoutLoad('gym', 45, 80);
         expect(rpe8.total).toBeGreaterThan(rpe5.total);
       });
     });

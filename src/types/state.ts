@@ -557,7 +557,11 @@ export interface UnspentLoadItem {
   displayName: string;        // e.g. "Tennis", "HIIT", "Run +5.2km surplus"
   sport: string;              // normalised sport label
   durationMin: number;
+  /** Garmin Training Effect (0–5 scale) — NOT TSS. Only consumed TE-aware
+   *  (excess-load-card infers an RPE from it). Never sum with load fields
+   *  (ISSUE-263: Workout.aerobic is canonical TSS; this field is not). */
   aerobic: number;
+  /** Garmin Training Effect anaerobic (0–5 scale) — NOT TSS. See above. */
   anaerobic: number;
   date: string;               // ISO date string
   reason: 'overflow' | 'surplus_run' | 'unmatched';
@@ -1043,6 +1047,10 @@ export interface SimulatorState {
    * a Garmin/Strava primary. Launch reads this to additively run the Apple sync
    * (gap-fills physiology, prefers Garmin) without demoting the primary source. */
   appleHealthConnected?: boolean;
+  /** ISSUE-263: one-time load-currency migration ran (pre-2026-06-04 stored
+   *  workout loads restamped to canonical TSS). Optional — fresh installs
+   *  start canonical and the migration is a no-op. */
+  loadCurrencyV2?: boolean;
   ambientTempHealDone?: boolean;            // True once the post-column backfill heal has fetched ambient_temp_c for historical runs
   /** ISO timestamp of the most recent successful backfillStravaHistory completion.
    * Drives the weekly refresh of historicWeeklyTSS / signalBBaseline / ctlBaseline:

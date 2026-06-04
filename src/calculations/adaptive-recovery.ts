@@ -32,6 +32,7 @@ import type {
 } from '@/types/state';
 import { clamp } from '@/utils/helpers';
 import { SPORTS_DB } from '@/constants/sports';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -658,9 +659,10 @@ export function ingestNewActualsAsImpacts(
       if (ageDays < 0 || ageDays > IMPACT_LOG_MAX_DAYS) continue;
 
       // Run-equiv TSS. Mirrors the fallback used in computeToBaseline. Uses
-      // iTRIMP / 150 when available, otherwise rough duration-based fallback.
+      // the personal-gated normalizer when iTRIMP is available (ISSUE-262),
+      // otherwise rough duration-based fallback.
       const tss = actual.iTrimp != null
-        ? actual.iTrimp / 150
+        ? normalizeiTrimp(actual.iTrimp)
         : (actual.durationSec ?? 0) / 60 / 100 * 30;
       if (tss < 5) continue;  // skip tiny sessions; not enough load to fit on
 

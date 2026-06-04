@@ -77,6 +77,39 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // ─── PB-derived VDOT (relocated from ltSync.ts so VDOT-source logic lives in one file) ───
 
 /**
+ * PBs as the physiology chain should see them: per-key fastest of the
+ * committed plan PBs (`s.pbs`) and the in-progress wizard PBs
+ * (`s.onboarding.pbs`).
+ *
+ * Why: `s.pbs` is only written at onboarding FINALIZE, so every mid-wizard
+ * physiology consumer (LT derivation, PB-median VDOT → Daniels T-pace, the
+ * review screen's LT row) previously read the PREVIOUS plan's PBs and
+ * ignored what the user just typed. Real case, 2026-06-04: a runner with
+ * freshly-typed 17:38/39:20/1:31:30/3:09 PBs was shown LT 4:56/km
+ * "blended from your PBs, high confidence" because the derivation saw a
+ * stale single-PB state and a degraded VDOT from a prior broken pass.
+ *
+ * Fastest-wins per key (lower seconds = better) so a stale wizard snapshot
+ * can never regress a fresher post-plan PB (post-finalize, `s.onboarding`
+ * is the stored reference and Strava auto-PB refreshes write to `s.pbs`).
+ */
+export function effectivePhysiologyPbs(s: SimulatorState): NonNullable<SimulatorState['pbs']> {
+  const base = s.pbs ?? {};
+  const wizard = s.onboarding?.pbs ?? {};
+  const keys = ['k5', 'k10', 'h', 'm'] as const;
+  const out: Record<string, number> = {};
+  for (const k of keys) {
+    const a = (base as Record<string, number | undefined>)[k];
+    const b = (wizard as Record<string, number | undefined>)[k];
+    const best = a != null && a > 0
+      ? (b != null && b > 0 ? Math.min(a, b) : a)
+      : (b != null && b > 0 ? b : undefined);
+    if (best != null) out[k] = best;
+  }
+  return out;
+}
+
+/**
  * Median VDOT across the user's race-distance PBs (5K / 10K / HM / marathon).
  *
  * Median (not max) because PB profiles are often imbalanced. A fast 5K
@@ -85,7 +118,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * The median collapses both biases.
  */
 export function pbDerivedVdot(s: SimulatorState): number | null {
-  const pbs = s.pbs ?? {};
+  const pbs = effectivePhysiologyPbs(s);
   const candidates: number[] = [];
   if (pbs.k5 && pbs.k5 > 0) candidates.push(cv(5000, pbs.k5));
   if (pbs.k10 && pbs.k10 > 0) candidates.push(cv(10000, pbs.k10));

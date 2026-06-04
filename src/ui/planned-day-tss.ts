@@ -2,7 +2,7 @@ import type { SimulatorState } from '@/types/state';
 import { resolveWeekWorkouts } from './week-resolve';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-resolve.triathlon';
 import { computePlannedDaySignalBTSS, estimateWorkoutDurMin } from '@/calculations/fitness-model';
-import { TL_PER_MIN } from '@/constants';
+import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 
 /**
@@ -100,7 +100,9 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           // fallback computePlannedDaySignalBTSS applies in running mode.
           const rpe = Math.round(w.rpe ?? w.r ?? 5);
           if (rpe <= 0) continue; // defensive: zero-RPE = no prescribed load
-          tss = durMin * (TL_PER_MIN[rpe] ?? TL_PER_MIN[5] ?? 1.15);
+          // Type-keyed canonical valuation (ISSUE-263) — same rule as
+          // calculateWorkoutLoad / computePlannedDaySignalBTSS.
+          tss = durMin * plannedTssPerMin(w.t ?? '', rpe);
         }
         byDay[day].push({
           name: w.n ?? '',

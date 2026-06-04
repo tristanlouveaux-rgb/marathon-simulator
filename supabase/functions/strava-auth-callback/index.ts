@@ -124,7 +124,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 3. Persist tokens
+    // 3. Persist tokens. deleted_at is explicitly cleared: a fresh OAuth on a
+    //    previously retired account (claimed-from fork, or cancelled deletion)
+    //    is a legitimate reconnect and must resurrect the row — otherwise the
+    //    sync pipe (which skips soft-deleted tokens) would stay dead forever.
     const { error: upsertErr } = await supabase.from("strava_tokens").upsert(
       {
         user_id: userId,
@@ -133,6 +136,7 @@ Deno.serve(async (req) => {
         refresh_token: refreshToken,
         expires_at: expiresAt,
         updated_at: new Date().toISOString(),
+        deleted_at: null,
       },
       { onConflict: "user_id" },
     );
@@ -149,6 +153,38 @@ Deno.serve(async (req) => {
 
     console.log("[strava-auth-callback] Strava connected for user", userId, "athlete_id", athleteId);
 
+    // 4b. Fork guard (ISSUE-270): the same Strava athlete may already have
+    //     activity history under OTHER user accounts (anonymous-by-default auth
+    //     forks on reinstall / device change). The completed OAuth handshake is
+    //     proof this user controls the Strava account, so it is safe to tell
+    //     them their own history exists. The client offers an import via the
+    //     strava-claim-history function. Failures here must never break the
+    //     OAuth flow — the guard degrades to "no hint".
+    let existingCount = 0;
+    if (athleteId != null) {
+      try {
+        const { data: priorTokens } = await supabase
+          .from("strava_tokens")
+          .select("user_id")
+          .eq("strava_athlete_id", athleteId)
+          .neq("user_id", userId)
+          .is("deleted_at", null);
+        const priorIds = (priorTokens ?? []).map((t: { user_id: string }) => t.user_id);
+        if (priorIds.length > 0) {
+          const { count } = await supabase
+            .from("garmin_activities")
+            .select("id", { count: "exact", head: true })
+            .in("user_id", priorIds);
+          existingCount = count ?? 0;
+          if (existingCount > 0) {
+            console.log(`[strava-auth-callback] fork guard: athlete ${athleteId} has ${existingCount} activities under ${priorIds.length} prior account(s)`);
+          }
+        }
+      } catch (guardErr) {
+        console.error("[strava-auth-callback] fork guard check failed (non-fatal)", guardErr);
+      }
+    }
+
     // 5. Redirect back to the app (origin-aware — see pickRedirectTarget).
     //    Pass the athlete's own sex/weight through the return URL so onboarding can
     //    pre-fill them. This is the user's own data on their own redirect, no DB
@@ -156,6 +192,7 @@ Deno.serve(async (req) => {
     const redirectParams = new URLSearchParams({ strava: "connected" });
     if (athleteSex) redirectParams.set("sex", athleteSex);
     if (athleteWeightKg != null) redirectParams.set("weight", String(athleteWeightKg));
+    if (existingCount > 0) redirectParams.set("existing", String(existingCount));
     return Response.redirect(`${redirectTarget}?${redirectParams.toString()}`, 302);
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
