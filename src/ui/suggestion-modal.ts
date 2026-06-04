@@ -203,16 +203,19 @@ export function showSuggestionModal(
   const tierLabelMap: Record<string, string> = { itrimp: 'HR Stream', garmin: 'Garmin', hr: 'HR Zones', rpe: 'Estimated' };
   const tierLabel = tierLabelMap[popup.tier] ?? 'Estimated';
 
-  // Leg impact — meaning carried by the word, rendered as neutral text (no colour spent)
-  const impactText = popup.impactLoad <= 0 ? 'No leg impact'
-    : popup.impactLoad < 4   ? 'Low leg impact'
-    : popup.impactLoad < 10  ? 'Moderate leg impact'
-    :                          'High leg impact';
+  // Impact stress — standard non-impact/low/high terminology. "No leg impact"
+  // face-read as "your legs are fine" after a maximal ride (Tristan,
+  // 2026-06-04); cycling IS leg work, it just carries no ground-strike
+  // stress, which is what this chip measures (the tap explainer defines it).
+  const impactText = popup.impactLoad <= 0 ? 'Non-impact'
+    : popup.impactLoad < 4   ? 'Low impact'
+    : popup.impactLoad < 10  ? 'Moderate impact'
+    :                          'High impact';
 
   // Tappable impact label → one-line explainer ("leg impact" means ground-strike
   // stress, not muscular work — a hard ride is correctly "No leg impact").
   const impactBtn = `<button id="impact-info-btn" style="background:none;border:none;cursor:pointer;padding:0;font:inherit;font-size:12px;color:${MUTED};border-bottom:1px dotted rgba(15,23,42,0.3)">${impactText}</button>`;
-  const impactExplainer = `<div id="impact-info" style="display:none;font-size:12px;color:${FAINT};line-height:1.55;width:100%">Leg impact is the ground-strike stress on bones and tendons, separate from aerobic effort. A hard ride or swim can carry zero impact. The easy-running equivalent is aerobic load only.</div>`;
+  const impactExplainer = `<div id="impact-info" style="display:none;font-size:12px;color:${FAINT};line-height:1.55;width:100%">Impact is the ground-strike stress on bones and tendons, separate from aerobic effort and from muscular leg work. A hard ride works the legs but carries zero impact. The easy-running equivalent is aerobic load only.</div>`;
 
   // Tappable excess label → what the excess actually is and where it goes if
   // nothing is cut (the mental model: work already done, paid for now or later).

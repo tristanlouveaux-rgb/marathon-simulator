@@ -265,7 +265,10 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     if (hasApple) {
       // Show the existing loading state while the backfill runs (5–15s on
       // first install). renderContent fires after both async tasks settle.
+      // Heartbeat gives ring creep + live facts; it self-terminates when
+      // renderContent replaces the card.
       renderLoading(container, 1, false);
+      startLoadingHeartbeat(() => 1, () => false);
       Promise.resolve()
         .then(async () => {
           const { syncAppleHealth } = await import('@/data/appleHealthSync');
@@ -296,6 +299,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
   // arrives gets surfaced. Partial data is better than blocking the wizard.
   if (cachedActivities === null) {
     let currentStep = 0;
+    let timedOutFlag = false;
     const setStep = (n: number): void => {
       currentStep = n;
       loadingDetail = null; // new phase → its explainer leads until a real fact lands
@@ -303,8 +307,12 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     };
     setStep(0);
     const timeoutId = window.setTimeout(() => {
+      timedOutFlag = true;
       renderLoading(container, currentStep, true);
     }, LOADING_TIMEOUT_MS);
+    // Heartbeat: ring creep + state-watching facts + 90s escalation. Runs
+    // every 1.5s and self-terminates when the loading card unmounts.
+    const heartbeatId = startLoadingHeartbeat(() => currentStep, () => timedOutFlag);
 
     // Full 26-week history backfill so best_efforts (race PBs) are populated.
     // Order matters:
@@ -841,6 +849,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
       );
 
       window.clearTimeout(timeoutId);
+      window.clearInterval(heartbeatId);
       // Re-read onboarding state from the store before rendering. The pipeline
       // above ran `updateOnboarding({ triBike, triSwim, ... })` to patch derived
       // FTP/CSS into state, but `updateOnboarding` creates a new onboarding
@@ -853,6 +862,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     }).catch((e) => {
       console.warn(`[Pipeline] FAILED — falling through to render with whatever state has: ${e}`);
       window.clearTimeout(timeoutId);
+      window.clearInterval(heartbeatId);
       // Fall through to render whatever the state already has.
       cachedActivities = cachedActivities ?? [];
       cachedPbSources = cachedPbSources ?? {};
@@ -896,8 +906,21 @@ let loadingDetail: string | null = null;
 const LOAD_RADIUS = 44;
 const LOAD_CIRCUMFERENCE = 2 * Math.PI * LOAD_RADIUS; // ~276.5
 
-function loadDashoffset(activeStep: number): number {
-  const pct = Math.min(1, (activeStep + 1) / LOADING_STEPS.length);
+/** Asymptotic within-step creep: 1 − e^(−t/τ), τ=25s, capped at 92% of the
+ *  step's span. The ring advances continuously while a phase runs but only
+ *  crosses the step boundary when the phase genuinely completes — honest
+ *  progress, never claims done. Without this the fill sat frozen for the
+ *  entire history import (a single long await with no sub-events). */
+const LOAD_CREEP_TAU_MS = 25_000;
+const LOAD_CREEP_CAP = 0.92;
+
+function loadCreepFrac(msInStep: number): number {
+  return Math.min(LOAD_CREEP_CAP, 1 - Math.exp(-Math.max(0, msInStep) / LOAD_CREEP_TAU_MS));
+}
+
+function loadDashoffset(activeStep: number, creepFrac = 1): number {
+  // Base credit = completed steps; creep advances within the active step.
+  const pct = Math.min(1, (activeStep + Math.max(0, Math.min(1, creepFrac))) / LOADING_STEPS.length);
   return LOAD_CIRCUMFERENCE * (1 - pct);
 }
 
@@ -905,10 +928,16 @@ function loadStepLabel(activeStep: number): string {
   return LOADING_STEPS[Math.min(activeStep, LOADING_STEPS.length - 1)];
 }
 
-function loadNote(activeStep: number, timedOut: boolean): string {
-  if (timedOut) {
-    return 'Still syncing. Large training histories take longer to import. You can keep waiting or come back from the Stats page later.';
-  }
+/** Long-wait reassurance ladder. First message at the 30s timeout, second at
+ *  90s. Both honest about cause and exit option. */
+function loadTimeoutNote(msSinceMount: number): string {
+  return msSinceMount >= 90_000
+    ? 'Still working. Nothing is stuck, large histories simply take a while. You can come back from the Stats page later and the import continues.'
+    : 'Still syncing. Large training histories take longer to import. You can keep waiting or come back from the Stats page later.';
+}
+
+function loadNote(activeStep: number, timedOut: boolean, msSinceMount = 0): string {
+  if (timedOut) return loadTimeoutNote(msSinceMount);
   return loadingDetail ?? LOADING_STEP_DETAIL[Math.min(activeStep, LOADING_STEP_DETAIL.length - 1)];
 }
 
@@ -917,11 +946,13 @@ function loadNote(activeStep: number, timedOut: boolean): string {
  * after the initial render. The fill ring smoothly transitions to the new % via
  * its CSS transition; the label cross-fades.
  */
-function updateLoadingProgress(activeStep: number, timedOut: boolean): boolean {
+function updateLoadingProgress(activeStep: number, timedOut: boolean, msSinceMount = 0): boolean {
   const fillEl = document.getElementById('revl-fill') as SVGCircleElement | null;
   if (!fillEl) return false; // Not currently mounted; caller should do full render
 
-  fillEl.style.strokeDashoffset = loadDashoffset(activeStep).toFixed(1);
+  // Step changes snap the ring to the start of the new step; the heartbeat
+  // then creeps it forward. (creepFrac 0 = boundary of the new step.)
+  fillEl.style.strokeDashoffset = loadDashoffset(activeStep, 0).toFixed(1);
 
   const labelEl = document.getElementById('revl-step-label');
   if (labelEl) {
@@ -936,7 +967,7 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean): boolean {
   }
 
   const noteEl = document.getElementById('revl-note');
-  if (noteEl) noteEl.textContent = loadNote(activeStep, timedOut);
+  if (noteEl) noteEl.textContent = loadNote(activeStep, timedOut, msSinceMount);
 
   return true;
 }
@@ -949,14 +980,80 @@ function setLoadingDetail(detail: string): void {
   if (noteEl) noteEl.textContent = detail;
 }
 
+/**
+ * Heartbeat: drives everything that should move *between* pipeline events.
+ *   - Creeps the ring asymptotically within the active step.
+ *   - Watches state and surfaces genuine facts the moment ANY async path
+ *     lands them (main.ts background syncs write the same fields the review
+ *     pipeline does, so data can appear before a phase formally completes).
+ *   - Escalates the long-wait note at 90s.
+ * Self-terminates when the loading card unmounts. Returns the interval id.
+ */
+function startLoadingHeartbeat(getStep: () => number, isTimedOut: () => boolean): number {
+  const mountedAt = performance.now();
+  let stepEnteredAt = performance.now();
+  let lastStep = getStep();
+  const surfaced = new Set<string>();
+
+  const tick = () => {
+    const fillEl = document.getElementById('revl-fill') as SVGCircleElement | null;
+    if (!fillEl) { window.clearInterval(id); return; } // card unmounted
+
+    const step = getStep();
+    if (step !== lastStep) { lastStep = step; stepEnteredAt = performance.now(); }
+
+    // Ring creep within the active step.
+    fillEl.style.strokeDashoffset =
+      loadDashoffset(step, loadCreepFrac(performance.now() - stepEnteredAt)).toFixed(1);
+
+    // Surface genuine data as soon as it exists in state, once per fact.
+    const sNow = getState();
+    const facts: Array<[string, boolean, () => string]> = [
+      ['runs', (sNow.onboardingRunHistory?.length ?? 0) > 0,
+        () => {
+          const n = sNow.onboardingRunHistory!.length;
+          const w = sNow.historicWeeklyTSS?.length ?? 0;
+          return `${n} run${n === 1 ? '' : 's'} imported${w > 0 ? ` across ${w} weeks of training` : ''}.`;
+        }],
+      ['volume', (sNow.detectedWeeklyKm ?? 0) > 0,
+        () => `Recent volume ${Math.round(sNow.detectedWeeklyKm!)} km per week.`],
+      ['physio', !!(sNow.restingHR || sNow.maxHR || sNow.vo2),
+        () => {
+          const found: string[] = [];
+          if (sNow.restingHR) found.push(`resting HR ${sNow.restingHR}`);
+          if (sNow.maxHR) found.push(`max HR ${sNow.maxHR}`);
+          if (sNow.vo2) found.push(`VO2max ${sNow.vo2}`);
+          return `Found ${found.join(', ')}.`;
+        }],
+    ];
+    if (!isTimedOut()) {
+      for (const [key, ready, render] of facts) {
+        if (ready && !surfaced.has(key)) {
+          surfaced.add(key);
+          setLoadingDetail(render());
+          break; // one new fact per tick so each gets read
+        }
+      }
+    } else {
+      // Long-wait ladder: refresh the note so the 90s escalation appears.
+      const noteEl = document.getElementById('revl-note');
+      if (noteEl) noteEl.textContent = loadTimeoutNote(performance.now() - mountedAt);
+    }
+  };
+
+  const id = window.setInterval(tick, 1500);
+  return id;
+}
+
 function renderLoading(container: HTMLElement, activeStep: number, timedOut: boolean): void {
   // Smooth in-place updates after first mount. Avoids re-rendering the whole
   // shell on every step change (the source of the "jumpy" feel).
   if (updateLoadingProgress(activeStep, timedOut)) return;
 
-  // Initial mount. Build the full glass shell.
+  // Initial mount. Build the full glass shell. Ring starts at the active
+  // step's boundary (creep 0); the heartbeat advances it from there.
   loadingDetail = null; // fresh mount → fresh narration
-  const dashoffset = loadDashoffset(activeStep);
+  const dashoffset = loadDashoffset(activeStep, 0);
   const currentLabel = loadStepLabel(activeStep);
   const note = loadNote(activeStep, timedOut);
 
@@ -2717,22 +2814,30 @@ function rerender(state: OnboardingState): void {
 // reviewed without running a real onboarding. Stripped from prod builds by
 // the DEV guard. Returns a stop() function.
 if (import.meta.env.DEV && typeof window !== 'undefined') {
-  (window as unknown as Record<string, unknown>).__previewOnboardingLoading = () => {
+  (window as unknown as Record<string, unknown>).__previewOnboardingLoading = (opts?: { slow?: boolean }) => {
     const container = document.getElementById('app-root');
     if (!container) { console.warn('no #app-root'); return; }
     const timers: number[] = [];
     const at = (ms: number, fn: () => void) => timers.push(window.setTimeout(fn, ms));
+    // Slow mode stretches the import step to ~45s so the ring creep and the
+    // 30s timeout copy are observable. Default mode tours everything in ~30s.
+    const mul = opts?.slow ? 3 : 1;
+    let step = 0;
+    let timedOut = false;
+    const go = (n: number) => { step = n; loadingDetail = null; renderLoading(container, n, false); };
 
-    renderLoading(container, 0, false);
-    at(2500, () => renderLoading(container, 1, false));
-    at(5500, () => setLoadingDetail('187 runs imported across 38 weeks of training.'));
-    at(8500, () => renderLoading(container, 2, false));
-    at(11000, () => setLoadingDetail('Found resting HR 48, max HR 188, VO2max 56.'));
-    at(13500, () => renderLoading(container, 3, false));
-    at(16000, () => setLoadingDetail('3 personal bests found in your race history.'));
-    at(18500, () => renderLoading(container, 4, false));
-    at(22000, () => renderLoading(container, 4, true)); // timeout copy
-    console.log('[preview] cycling loading screen over ~22s — reload the page to exit');
-    return () => timers.forEach(clearTimeout);
+    go(0);
+    const hb = startLoadingHeartbeat(() => step, () => timedOut);
+    at(2500, () => go(1));
+    // Long import phase: creep visibly advances; fact lands mid-phase.
+    at(2500 + 6000 * mul, () => setLoadingDetail('187 runs imported across 38 weeks of training.'));
+    at(2500 + 9000 * mul, () => go(2));
+    at(2500 + 11000 * mul, () => setLoadingDetail('Found resting HR 48, max HR 188, VO2max 56.'));
+    at(2500 + 13000 * mul, () => go(3));
+    at(2500 + 15000 * mul, () => setLoadingDetail('3 personal bests found in your race history.'));
+    at(2500 + 17000 * mul, () => go(4));
+    at(2500 + 20000 * mul, () => { timedOut = true; renderLoading(container, step, true); }); // 30s ladder copy
+    console.log(`[preview] cycling loading screen (~${Math.round((2.5 + 20 * mul))}s) — reload the page to exit. Try __previewOnboardingLoading({slow:true}) for the long-import feel.`);
+    return () => { timers.forEach(clearTimeout); window.clearInterval(hb); };
   };
 }

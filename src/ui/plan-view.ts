@@ -20,6 +20,7 @@ import { firstTrackedDow } from './workout-status';
 import { clearIllness, openIllnessModal } from './illness-modal';
 import { buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal } from './holiday-modal';
 import { openSessionGenerator, openVibesScienceModal } from './session-generator';
+import { openLogActivityOverlay } from './log-activity-overlay';
 import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-overlay';
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
@@ -2541,7 +2542,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
             ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
             ${_wrapBtn}
             ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" class="m-btn-glass">Review past week</button>` : ''}
-            ${viewWeek === s.w ? `<button id="plan-generate-session" class="m-btn-glass">+ Add session</button>` : ''}
+            ${viewWeek === s.w ? `<button id="plan-generate-session" class="m-btn-glass">+ Add session</button><button id="plan-log-activity" class="m-btn-glass">+ Log activity</button>` : ''}
           </div>
         </div>
 
@@ -2731,6 +2732,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // Generate session button (current week only)
   document.getElementById('plan-generate-session')?.addEventListener('click', () => openSessionGenerator());
+  document.getElementById('plan-log-activity')?.addEventListener('click', () => openLogActivityOverlay());
 
   // Week navigation. Crosses plan boundaries:
   //   prev at live wk1 → enter most recent archive at its last week

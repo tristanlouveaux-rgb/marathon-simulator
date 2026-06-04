@@ -3512,8 +3512,11 @@ function showRecoveryAdviceSheet(): boolean {
   const btnTitle = 'font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px';
   const btnBody = 'font-size:12px;color:var(--c-muted);line-height:1.6;margin:0';
 
-  // "Reduce intensity" only makes sense if there's a running workout today
-  const reduceBtn = todayAnyWorkout
+  // "Reduce intensity" only renders when the hard-session card is absent —
+  // when today IS a hard session, the card's "Convert to easy run" performs
+  // the identical downgrade, and two buttons for one action is noise
+  // (2026-06-04 dogfood). For a non-hard run it applies the easy-flag.
+  const reduceBtn = (todayAnyWorkout && !todayWorkout)
     ? `<button id="rec-advice-reduce" style="${btnStyle}">
         <div style="${btnTitle}">Reduce intensity</div>
         <p style="${btnBody}">Convert today's session to an easy effort: same distance, Zone 2 only. Aerobic stimulus without the additional stress on an under-recovered system.</p>
@@ -3528,11 +3531,11 @@ function showRecoveryAdviceSheet(): boolean {
       </button>`
     : '';
 
-  const genericRows = `<button id="rec-advice-rest" style="${btnStyle}">
-      <div style="${btnTitle}">Rest today</div>
-      <p style="${btnBody}">Skip the session and carry it to later in the week. A single missed day has no meaningful impact on fitness. Sustained fatigue does.</p>
-    </button>
-    ${reorderBtn}
+  // "Rest today" was removed (Tristan, 2026-06-04): its handler only closed
+  // the modal while the copy claimed to skip-and-carry; with "Move to <day>"
+  // doing the real reschedule and ✕ covering "I'm just not training", a
+  // do-nothing button is noise. Simply dismissing IS resting.
+  const genericRows = `${reorderBtn}
     ${reduceBtn}`;
 
   const overlay = document.createElement('div');
@@ -3576,11 +3579,6 @@ function showRecoveryAdviceSheet(): boolean {
     saveState();
     close();
     renderHomeView();
-  });
-  // Rest today. Close modal; user decides not to train
-  // Rest today. Close modal; user decides not to train
-  overlay.querySelector('#rec-advice-rest')?.addEventListener('click', () => {
-    close();
   });
   // Reorder the week. Navigate to plan view so user can rearrange
   // Reorder the week. Navigate to plan view so user can rearrange

@@ -980,7 +980,7 @@ Unstructured run with no pace target. Workout type `'vibes'` internally; user-fa
 - `classifyWorkoutType({ sport, durationMin, iTrimp?, hrZones?, thresholds? })` — decision tree: uses iTRIMP for intermittent sports (football, rugby, basketball), high-HR spike activities (>15% Z4+Z5), or short sessions (<20min zone data); uses zone distribution otherwise; falls back to profile. Returns `{ type, tss, runningEquivTSS, method }`.
 - Personal intensity thresholds stored at `SimulatorState.intensityThresholds` — automatically calibrated from labelled Strava runs via `calibrateIntensityThresholds()` in `data/stravaSync.ts`. Strava workout names classified by keyword (e.g. "Tempo Run" → tempo zone; "Interval" → interval zone). 90th-percentile TSS/hr per zone, clamped to sane bounds. Requires ≥3 labelled sessions per zone to update from defaults (easy≤70, tempo≤95 TSS/hr). Calibration status shown in Stats → Advanced.
 
-**How to test manually**: Trigger any cross-training popup (e.g. log a 60min football session). The console will show `[CrossTraining] Zone classification: threshold (itrimp) — TSS 84.3, runEquiv 37.9` confirming method and type.
+**How to test manually**: Plan tab → "+ Log activity" (current week only) → sport/duration/RPE → the suggestion modal fires through the full pipeline. The console will show `[CrossTraining] Zone classification: threshold (itrimp) — TSS 84.3, runEquiv 37.9` confirming method and type.
 
 **Key file**: `src/cross-training/universalLoad.ts`, `src/cross-training/universal-load-types.ts`
 **Tests**: `src/cross-training/universalLoad.test.ts` (48 tests including 15 classifier-specific), `src/cross-training/activities.test.ts` — ✅ Passing
