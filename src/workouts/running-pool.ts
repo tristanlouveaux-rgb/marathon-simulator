@@ -201,7 +201,10 @@ export function buildRunningStrengthWorkout(
     if (pairedPlyo && idx === 0) {
       // Heavy lead lift carries the pairing note in its cue; the matched jump
       // follows as its own (parser-safe) line.
-      const paired = { ...ex, cue: `${ex.cue}. Power pair: after each set, explode into the ${pairedPlyo.name.toLowerCase()} below, then rest 2 to 3 min` };
+      // NB: the pairing cue must not contain the word "rest" — parseStrengthSession
+      // classifies the first parenthetical matching /rest/i as the rest note, which
+      // would swallow the cue (found in Playwright dogfooding).
+      const paired = { ...ex, cue: `${ex.cue}. Power pair: after each set, explode into the ${pairedPlyo.name.toLowerCase()} below, then take 2 to 3 min` };
       lines.push(lineFor(paired, restStyle, loadStep));
       lines.push(lineFor(pairedPlyo, restStyle, 0));
       return;
@@ -265,22 +268,22 @@ export function buildPlyometricsWorkout(
   const low = pool.filter(e => !e.highSoreness);   // Pogo Hops, Box Jumps, Jump Squat
   const high = pool.filter(e => e.highSoreness);    // Single-Leg Bounds, Depth Jump
 
-  let tierPool: RunningPoolExercise[];
-  if (intensity === 'easier') tierPool = [...low];
-  else if (intensity === 'harder') tierPool = [...high, ...low];
-  else tierPool = [...low, ...high];
-
-  // Base phase de-prioritises the high-CNS moves, except when the user explicitly
-  // asked for the harder tier.
-  if (phase === 'base' && intensity !== 'harder') {
-    tierPool = [...tierPool.filter(e => !e.highSoreness), ...tierPool.filter(e => e.highSoreness)];
-  }
-
-  // Rotate the lead by week so the same tier varies session to session. Euclidean
-  // modulo guards a drifted-negative slotIndex (a documented incident class).
-  const n = tierPool.length;
-  const start = (((slotIndex % n) + n) % n);
-  const rotated = [...tierPool.slice(start), ...tierPool.slice(0, start)];
+  // Rotate WITHIN the low/high groups so week-to-week variety can never defeat
+  // the tier ordering. (A global rotation could lead a base-phase session with
+  // depth jumps and rotate the cheap high-contact pogos out of a short session,
+  // which also inflated sets past time-feasibility — caught in dogfooding.)
+  // Euclidean modulo guards a drifted-negative slotIndex.
+  const rot = (arr: RunningPoolExercise[], k: number): RunningPoolExercise[] => {
+    const len = arr.length;
+    if (len === 0) return arr;
+    const start = ((k % len) + len) % len;
+    return [...arr.slice(start), ...arr.slice(0, start)];
+  };
+  let rotated: RunningPoolExercise[];
+  if (intensity === 'easier') rotated = rot(low, slotIndex);
+  else if (intensity === 'harder') rotated = [...rot(high, slotIndex), ...rot(low, slotIndex)];
+  else rotated = [...rot(low, slotIndex), ...rot(high, slotIndex)]; // standard: low always leads (base-safe by construction)
+  const n = rotated.length;
 
   // Time → foot-contact target (floor → ability ceiling) over the short plyo
   // window, and → move count. Both scale, so the slider always changes the

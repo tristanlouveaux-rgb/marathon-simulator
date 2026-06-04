@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { computeDailyCoach, getTodayFeeling, buildCoachSignalsPayload, type StrainContext } from './daily-coach';
+import { computeDailyCoach, getTodayFeeling, buildCoachSignalsPayload, postSessionSentence, injuryCapOvershootSentence, type StrainContext } from './daily-coach';
 import type { SimulatorState, Week } from '@/types';
 
 // ─── Minimal state factory ───────────────────────────────────────────────────
@@ -359,5 +359,63 @@ describe('buildCoachSignalsPayload — illness widening', () => {
     expect(payload.illness?.daysRemainingAcute).toBe(0);
     expect(payload.illness?.daysRemainingRamp).toBe(0);
     expect(payload.illness?.effectiveCapacity).toBe('full');
+  });
+});
+
+describe('postSessionSentence — shared post-session copy (running Tier 1 + tri override)', () => {
+  it('returns null below 100% strain', () => {
+    expect(postSessionSentence(43, 0)).toBeNull();
+    expect(postSessionSentence(43, 99.4)).toBeNull();   // rounds to 99
+  });
+
+  it('returns "Solid session" at 100–129%', () => {
+    expect(postSessionSentence(43, 100)).toBe('Solid session today (43 TSS). Rest up and recover.');
+    expect(postSessionSentence(43, 99.5)).toBe('Solid session today (43 TSS). Rest up and recover.'); // rounds to 100
+    expect(postSessionSentence(60, 129.4)).toContain('Solid session');
+  });
+
+  it('returns "Big session" at 130%+', () => {
+    const msg = postSessionSentence(85, 145);
+    expect(msg).toContain('Big session today (85 TSS)');
+    expect(msg).toContain('prioritise recovery');
+  });
+
+  it('rounds the TSS figure shown in the sentence', () => {
+    expect(postSessionSentence(42.6, 110)).toContain('(43 TSS)');
+  });
+});
+
+describe('postSessionSentence — CTL-anchored 80% tier (adhoc days)', () => {
+  it('80-99% acknowledges only when ctlAnchored (session is done, not in progress)', () => {
+    expect(postSessionSentence(43, 87)).toBeNull();                          // planned-target case: caller keeps "Nearly at today's target"
+    expect(postSessionSentence(43, 87, { ctlAnchored: true }))
+      .toBe("Good training today (43 TSS), most of a typical day's load.");
+  });
+
+  it('below 80% returns null even when ctlAnchored', () => {
+    expect(postSessionSentence(20, 79.4, { ctlAnchored: true })).toBeNull(); // rounds to 79
+  });
+
+  it('100%+ tiers are identical regardless of anchor', () => {
+    expect(postSessionSentence(50, 105, { ctlAnchored: true }))
+      .toBe(postSessionSentence(50, 105));
+  });
+});
+
+describe('injuryCapOvershootSentence — rehab-cap call-out (capacity-based ring ruling)', () => {
+  it('load within capacity: states the overshoot without a rest directive', () => {
+    expect(injuryCapOvershootSentence(42, 20, 93)).toBe(
+      '42 TSS logged against an injury-capped day of 20. Load is within your normal range, but well above the rehab cap.',
+    );
+  });
+
+  it('load above capacity too: adds the rest directive', () => {
+    expect(injuryCapOvershootSentence(90, 20, 180)).toBe(
+      '90 TSS logged against an injury-capped day of 20. That exceeds both the rehab cap and your typical daily load. Rest up and recover.',
+    );
+  });
+
+  it('rounds all displayed numbers', () => {
+    expect(injuryCapOvershootSentence(41.6, 19.7, 92.9)).toContain('42 TSS logged against an injury-capped day of 20.');
   });
 });

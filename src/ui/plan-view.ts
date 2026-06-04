@@ -13,7 +13,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
-import { openActivityReReview, showActivityReview } from './activity-review';
+import { openActivityReReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { firstTrackedDow } from './workout-status';
@@ -965,10 +965,12 @@ function buildWorkoutCards(
       const dayLabelColor = isToday
         ? TODAY_ACCENT
         : (isDone ? 'var(--c-black)' : (isPast && !isDone && !isSkipped ? 'var(--c-faint)' : 'var(--c-faint)'));
-      const statusLabelColor = isToday
-        ? TODAY_ACCENT
-        : isDone ? '#34C759'
-        : (isPast && !isDone && !isSkipped && !isIllnessMod) ? '#FF9500'
+      // Done wins the colour as well as the label (mirrors workout-status.ts):
+      // a session completed today must read green, not terracotta.
+      const statusLabelColor = isDone
+        ? '#34C759'
+        : isToday ? TODAY_ACCENT
+        : (isPast && !isSkipped && !isIllnessMod) ? '#FF9500'
         : 'var(--c-faint)';
       const statusLabelWeight = isDone || (isPast && !isDone && !isSkipped && !isIllnessMod) ? '600' : '400';
       const borderLeft = isToday ? `border-left:3px solid ${TODAY_ACCENT};` : '';
@@ -3178,16 +3180,11 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const _wk = _s.wks?.[_s.w - 1];
     if (!_wk) return;
 
-    const _pending = (_wk.garminPending ?? []).filter(
-      p => (_wk.garminMatched?.[p.garminId] ?? '__pending__') === '__pending__',
-    );
-    if (_pending.length > 0) {
-      // Still-unprocessed items: process them without undoing prior decisions
-      showActivityReview(_pending, () => renderPlanView());
-    } else {
-      // All items processed: full re-review (undoes, shows with saved slot assignments)
-      openActivityReReview(() => renderPlanView());
-    }
+    // Always the full re-review: it reconstitutes already-matched recordings into
+    // the tray (pre-assigned to their slots) and shows every plan slot, so the
+    // user can swap placements freely. The previous still-pending shortcut showed
+    // only the new items and hid occupied slots.
+    openActivityReReview(() => renderPlanView());
   };
   document.getElementById('plan-review-btn')?.addEventListener('click', _reviewClick);
   document.getElementById('plan-review-btn-2')?.addEventListener('click', _reviewClick);

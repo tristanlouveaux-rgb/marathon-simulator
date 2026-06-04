@@ -17,7 +17,7 @@ import { blendPredictions, calculateLiveForecast, predictFromVO2 } from './predi
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
-import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
+import { computePredictionInputs, resolveWeeklyKmSignal, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
@@ -161,7 +161,9 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     typ: (s.typ ?? 'Balanced').toLowerCase(),
     recentRun: inputs.recentRun ?? s.rec ?? null,
     athleteTier: s.athleteTier ?? undefined,
-    weeklyKm: inputs.weeklyKm,
+    // History-derived, with typed manual-entry volume as the no-scrape
+    // fallback (see resolveWeeklyKmSignal).
+    weeklyKm: resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm),
     avgPaceSecPerKm: inputs.avgPaceSecPerKm ?? undefined,
     quality: { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot: computeHRCalibratedVdot(runs, s.restingHR ?? null, s.maxHR ?? null),
@@ -464,14 +466,13 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const runs = runsAll;
   const inputs = computePredictionInputs(runs);
 
-  // Pass `inputs.weeklyKm` directly (including 0) so blendPredictions can
-  // distinguish "explicit zero recent training" from "no volume signal at all".
-  // The marathon-specificity penalty (Tanda-gated path) only fires when an
-  // explicit signal is present, so passing the actual computed value (even 0)
-  // is the right behaviour. A user with 145 historical runs but zero in the
-  // 8-week window genuinely has zero recent training, which is signal, not noise.
-  // Marathon PB age scales the penalty: recent PB → demonstrated capability →
-  // lighter penalty.
+  // Pass the resolved weekly-km signal: history-derived when the 8-week
+  // window has any coverage (including an explicit 0 — a user with 145
+  // historical runs but zero in the window genuinely has zero recent
+  // training, which is signal, not noise), falling back to the user's typed
+  // manual-entry volume (s.detectedWeeklyKm) only when the scrape found
+  // nothing at all. See resolveWeeklyKmSignal. Marathon PB age scales the
+  // penalty: recent PB → demonstrated capability → lighter penalty.
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
   const marathonPbAgeDays = marathonPbDateISO
     ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
@@ -485,7 +486,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
     s.athleteTier ?? undefined,
-    inputs.weeklyKm,
+    resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm),
     inputs.avgPaceSecPerKm ?? undefined,
     { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot,

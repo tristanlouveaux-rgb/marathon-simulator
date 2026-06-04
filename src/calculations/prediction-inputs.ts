@@ -233,3 +233,33 @@ export function computePredictionInputs(
     paceConfidence,
   };
 }
+
+/**
+ * Resolve the weekly-km signal for the prediction blend.
+ *
+ * History-derived volume (computePredictionInputs over synced runs) is the
+ * primary signal. When the 8-week window contains NO qualifying runs at all
+ * (`weeksCovered === 0`), fall back to `detectedWeeklyKm` — which carries
+ * the user's typed weekly volume from manual entry when nothing was scraped
+ * (and the last history aggregation otherwise). A stated volume is weaker
+ * than measured history but strictly better than treating an empty scrape
+ * as "explicitly zero recent training": the volume-sensitive blend terms
+ * (lowVolumeDiscount weight shift, marathon-specificity penalty) otherwise
+ * fire at maximum severity against a user who told us what they run.
+ * Real case, 2026-06-04: typed "10 km/week" + 0 scraped activities → blend
+ * saw weeklyKm=0.
+ *
+ * When neither signal exists, returns `inputs.weeklyKm` (0) unchanged —
+ * preserving blendPredictions' "explicit zero is signal" contract. For a
+ * user with real history but an empty recent window, `detectedWeeklyKm`
+ * is itself recomputed from the last 4 aggregated weeks (≈0), so the
+ * fallback cannot resurrect stale volume there.
+ */
+export function resolveWeeklyKmSignal(
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  detectedWeeklyKm: number | null | undefined,
+): number {
+  if (inputs.weeksCovered > 0) return inputs.weeklyKm;
+  if (detectedWeeklyKm != null && detectedWeeklyKm > 0) return detectedWeeklyKm;
+  return inputs.weeklyKm;
+}

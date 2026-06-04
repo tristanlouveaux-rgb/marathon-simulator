@@ -13,7 +13,7 @@ import {
 } from '@/calculations/activity-matcher';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
-import { showActivityReview, autoProcessActivities } from '@/ui/activity-review';
+import { openActivityReReview, autoProcessActivities } from '@/ui/activity-review';
 import { reconcileRecentLegLoads } from '@/ui/sport-picker-modal';
 import type { GarminLap } from '@/types';
 import { mergeTimingMods } from '@/cross-training/timing-check';
@@ -177,8 +177,12 @@ export function processPendingCrossTraining(): void {
     });
   };
   if (isBatchSync(unprocessed)) {
-    // Backlog: show Activity Review so user can review each activity
-    showActivityReview(unprocessed, onReviewDone);
+    // Backlog: open the full review. openActivityReReview (not showActivityReview)
+    // so already-matched recordings are reconstituted into the tray and their plan
+    // slots are visible — a mid-week sync used to show only the new items, hiding
+    // every occupied slot and making reassignment impossible ("this page doesn't
+    // show all planned workouts").
+    openActivityReReview(onReviewDone);
   } else {
     // Flowing week: auto-match to slots, show load modal only for overflow
     autoProcessActivities(unprocessed, onReviewDone);

@@ -9,9 +9,6 @@ import type { SimulatorState, GarminActual, Week } from '@/types/state';
 import {
   computeTodaySignalBTSS,
   computeTodayStrainTSS,
-  computePlannedDaySignalBTSS,
-  getTrailingEffortScore,
-  estimateWorkoutDurMin,
   computeDayTargetTSS,
   computePassiveTSS,
   PASSIVE_TSS_PER_ACTIVE_MIN,
@@ -20,9 +17,7 @@ import {
   type TargetTSSRange,
 } from '@/calculations/fitness-model';
 import type { ReadinessLabel } from '@/calculations/readiness';
-import { TL_PER_MIN } from '@/constants';
-import { generateWeekWorkouts } from '@/workouts';
-import { isTimingMod } from '@/cross-training/timing-check';
+import { getPlannedDayTSSContext } from './planned-day-tss';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
@@ -216,49 +211,16 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
   const passiveExcess = Math.max(0, passiveTSS - minuteComponent);
 
   // ── Planned day TSS ────────────────────────────────────────────────────
+  // Canonical mode-aware source (planned-day-tss.ts): reads the REAL plan per
+  // mode (running resolver / tri-cycling-HYROX stored weeks), replacing the
+  // phantom regenerated running week that produced bogus targets in tri mode.
   const dayOfWeek = (new Date(date + 'T12:00:00').getDay() + 6) % 7;
-  let plannedDayTSS = 0;
-  let plannedWorkouts: any[] = [];
-  if (wkForPlan && !s.trackOnly) {
-    const viewWeek = wkIdx + 1;
-    plannedWorkouts = generateWeekWorkouts(
-      wkForPlan.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-      null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-      viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wkForPlan.scheduledAcwrStatus, undefined,
-      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-    );
-    if (wkForPlan.workoutMoves) {
-      for (const [workoutId, newDay] of Object.entries(wkForPlan.workoutMoves)) {
-        const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-        if (w) (w as any).dayOfWeek = newDay;
-      }
-    }
-    if (wkForPlan.workoutMods) {
-      for (const mod of wkForPlan.workoutMods) {
-        const w = isTimingMod(mod.modReason)
-          ? plannedWorkouts.find((wo: any) => wo.n === mod.name)
-          : plannedWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
-        if (w && !isTimingMod(mod.modReason)) {
-          (w as any).d = mod.newDistance;
-          if (mod.newType) (w as any).t = mod.newType;
-          if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
-        }
-      }
-    }
-    const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
-    const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
-    plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, dayOfWeek, baseMinPerKm);
-  }
+  const plannedCtx = getPlannedDayTSSContext(s, wkIdx + 1);
+  const plannedDayTSS = plannedCtx.plannedTSSForDay(dayOfWeek);
 
   // ── Per-session average + day type ─────────────────────────────────────
   // Based on planned week TSS (tracks plan intent, not CTL history)
-  const baseMinPerKmSess = s.pac?.e ? s.pac.e / 60 : 5.5;
-  const runWorkoutsForAvg = plannedWorkouts.filter((w: any) => w.t !== 'cross');
-  const trainingDayCount = wkForPlan ? [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(runWorkoutsForAvg, d, baseMinPerKmSess) > 0).length || 4 : 4;
-  const plannedWeekTSS = [0,1,2,3,4,5,6]
-    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkoutsForAvg, d, baseMinPerKmSess), 0);
-  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  const perSessionAvg = plannedCtx.perSessionAvg;
 
   let matchedActivityDay = false;
   if (plannedDayTSS === 0 && wkForPlan) {
@@ -433,37 +395,9 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
         return d;
       })();
 
-  const viewWeek = wkIdx + 1;
-  // Skip planned-workout generation for Just-Track users. No plan exists.
-  const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
-  // Apply day moves so bar TSS matches what the plan view shows
-  if (wk.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
-      const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
-  // Apply distance/type/RPE mods so bar TSS matches plan card
-  if (wk.workoutMods) {
-    for (const mod of wk.workoutMods) {
-      const w = isTimingMod(mod.modReason)
-        ? plannedWorkouts.find((wo: any) => wo.n === mod.name)
-        : plannedWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
-      if (w && !isTimingMod(mod.modReason)) {
-        (w as any).d = mod.newDistance;
-        if (mod.newType) (w as any).t = mod.newType;
-        if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
-      }
-    }
-  }
-
-  // Exclude cross-training from planned bars (consistent with strain target logic)
-  const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
+  // Canonical mode-aware planned TSS (planned-day-tss.ts) so bar TSS matches
+  // what the plan view shows in every mode (running / tri / cycling / HYROX).
+  const plannedCtx = getPlannedDayTSSContext(s, wkIdx + 1);
   const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const tssPerActiveMin = s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN;
   return dayLabels.map((label, i) => {
@@ -471,7 +405,7 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
     d.setDate(weekStartDate.getDate() + i);
     const date = d.toISOString().split('T')[0];
     const isFuture = date > today;
-    const plannedTSS = computePlannedDaySignalBTSS(runWorkouts, i, s.pac?.e ? s.pac.e / 60 : 5.5);
+    const plannedTSS = plannedCtx.plannedTSSForDay(i);
     const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
     const actualTSS = !isFuture ? computeTodayStrainTSS(wk, date, physioEntry, tssPerActiveMin) : 0;
     return { date, label, plannedTSS, actualTSS, isToday: date === today, isFuture };

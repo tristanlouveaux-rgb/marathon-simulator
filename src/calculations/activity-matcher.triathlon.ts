@@ -18,8 +18,9 @@
  * can flow into per-discipline CTL.
  */
 
-import type { Workout } from '@/types/state';
+import type { Week, Workout } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
+import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 
 export interface MatchableActivity {
   id: string;
@@ -109,6 +110,96 @@ export function matchTriathlonWeek(
   }
 
   return matches;
+}
+
+/**
+ * Reconcile one week's tri/cycling completion state with its stored actuals.
+ * Pure local mutation of `wk`; returns true when anything changed.
+ *
+ * Responsibilities (all tracking — describing what happened):
+ *   1. Backfill a missing `startTime` on an actual from its raw pending record
+ *      (older applyReview wrote cross-matched actuals without one, which broke
+ *      Recent's sort and every day-of-week derivation downstream).
+ *   2. Direct-bind: an actual stored under a slot's own key IS that slot's
+ *      completion — the matching screen put it there. Never re-matched fuzzily.
+ *   3. Clear stale completions: a `matchedActivityId` whose actual no longer
+ *      exists (re-review undid it), or one pointing at a recording the user
+ *      explicitly placed as an extra/excess session (`garmin-…` adhoc key in
+ *      `garminMatched`). The launch-time fuzzy matcher must not override a
+ *      matching-screen decision.
+ *   4. Day shift: a completed slot moves to the weekday the session actually
+ *      happened (actuals live in this week by construction, so the weekday of
+ *      `startTime` is the right axis). A ride planned Thursday but ridden
+ *      Wednesday shows under Wednesday.
+ */
+export function reconcileTriCompletions(wk: Week): boolean {
+  const workouts = wk.triWorkouts ?? [];
+  if (workouts.length === 0) return false;
+  const actuals = wk.garminActuals ?? {};
+  const rated = wk.rated ?? {};
+  const matched = wk.garminMatched ?? {};
+  let changed = false;
+
+  // 1. startTime backfill from the raw pending record
+  for (const a of Object.values(actuals)) {
+    if (a.startTime || !a.garminId) continue;
+    const p = wk.garminPending?.find(x => x.garminId === a.garminId);
+    if (p?.startTime) { a.startTime = p.startTime; changed = true; }
+  }
+
+  // 1b. Orphaned adhoc twin: a `garmin-…`-keyed actual whose recording the user
+  // has since moved onto a plan slot (garminMatched points at the slot, and the
+  // slot carries the same garminId). The leftover copy double-counts and can be
+  // re-claimed by the fuzzy matcher — drop it.
+  for (const [key, a] of Object.entries(actuals)) {
+    if (!key.startsWith('garmin-') || !a.garminId) continue;
+    const placed = matched[a.garminId];
+    if (!placed || placed === key || placed === '__pending__') continue;
+    if (actuals[placed]?.garminId === a.garminId) {
+      delete actuals[key];
+      if (wk.adhocWorkouts) wk.adhocWorkouts = wk.adhocWorkouts.filter(x => x.id !== key);
+      changed = true;
+    }
+  }
+
+  for (const w of workouts) {
+    const id = w.id ?? w.n;
+
+    const direct = actuals[id];
+    if (direct?.garminId) {
+      // 2. Direct bind
+      if (w.status !== 'completed') { w.status = 'completed'; changed = true; }
+      if (w.matchedActivityId !== id) { w.matchedActivityId = id; changed = true; }
+    } else if (w.matchedActivityId) {
+      const link = w.matchedActivityId;
+      const target = actuals[link];
+      const userDecidedAdhoc = !!target?.garminId
+        && link.startsWith('garmin-')
+        && matched[target.garminId] === link;
+      const stale = !target && typeof rated[id] !== 'number';
+      if (stale || userDecidedAdhoc) {
+        // 3. Stale or user-overridden link
+        delete w.matchedActivityId;
+        if (w.status === 'completed') w.status = 'planned';
+        changed = true;
+      }
+    }
+
+    // 4. Day shift for completed slots
+    if (w.status !== 'completed' || !w.matchedActivityId) continue;
+    const a = actuals[w.matchedActivityId];
+    if (!a?.startTime) continue;
+    const t = new Date(a.startTime);
+    if (isNaN(t.getTime())) continue;
+    const actualDay = (t.getDay() + 6) % 7; // Mon=0..Sun=6
+    if (w.dayOfWeek !== actualDay) {
+      w.dayOfWeek = actualDay;
+      w.dayName = DAY_NAMES[actualDay];
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

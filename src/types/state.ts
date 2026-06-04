@@ -208,6 +208,9 @@ export interface WorkoutMod {
   newType?: string;    // New workout type if downgraded (e.g., 'easy')
   newRpe?: number;     // New RPE to match downgraded type
   autoReduceNote?: string; // Set when mod was silently applied by Tier 1 auto-reduce
+  /** yyyy-mm-dd the mod was applied. Stamped by the ACWR reduction flow so
+   *  `undoACWRReduction` can remove exactly that day's mods and nothing else. */
+  appliedAt?: string;
   /** ISO timestamp when the AI coach created this mod. Used to render a
    *  "Coach" badge in the plan view. */
   aiModifiedAt?: string;
@@ -608,6 +611,18 @@ export interface Week {
    *  Decayed via 7-day ATL τ when read by `computeDecayedTriCarry` (Tier 2). */
   carriedCrossTrainingTSS?: number;
   acwrOverridden?: boolean;                     // User dismissed "Reduce this week". Adds synthetic ATL debt
+  /** Undo snapshot for the most recent ACWR reduction (readiness "Reduce session
+   *  load" flow). Set when the user confirms Replace/Reduce in the suggestion
+   *  modal; lets the Home readiness card show "Session load reduced" with an
+   *  Undo for the rest of that day. Undo removes the matching `appliedAt`-stamped
+   *  ACWR workoutMods and restores the unspent items that were cleared. A second
+   *  reduction overwrites the snapshot (undo targets the latest only). */
+  acwrReductionUndo?: {
+    date: string;                               // yyyy-mm-dd the reduction was applied
+    sportLabel: string;                         // what drove it, for the undo caption
+    unspentLoadItems?: UnspentLoadItem[];       // items cleared on apply, restored on undo
+    unspentLoad?: number;
+  };
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
   hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
   carryOverCardDismissed?: boolean;             // User dismissed the carry-over card for this week

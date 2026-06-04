@@ -35,6 +35,15 @@ export const LAST_VERIFIED_SEASON: string = 'S4–S6 (Kaggle jgug05/hyrox-result
 /** Source identifier for telemetry / debug. */
 export const POPULATION_DATA_SOURCE: 'kaggle' | 'hyroxresultapi' | 'scraped' | null = 'kaggle';
 
+/** Real finisher rows behind each format's tables (ingestion counts from the
+ *  format mapping above). Drives provenance captions; 0 = no real data. */
+export const HYROX_FORMAT_FINISHER_COUNTS: Record<Format, number> = {
+  open_singles: 50364,
+  pro_singles: 11458,
+  open_doubles: 28046,
+  pro_doubles: 0,
+};
+
 /**
  * Per-metric percentile breakpoint table per format.
  * Each entry: `[seconds, cumulativePercentile]` sorted ascending by seconds.

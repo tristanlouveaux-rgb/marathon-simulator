@@ -2389,6 +2389,7 @@ export function triggerACWRReduction(): void {
       // User saw the recommendation but chose to keep full load. Record override
       wk3.acwrOverridden = true;
     } else if (decision.adjustments.length > 0) {
+      const appliedAt = new Date().toISOString().split('T')[0];
       const freshW = getWeekWorkoutsForACWR(s3);
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
       if (!wk3.workoutMods) wk3.workoutMods = [];
@@ -2399,8 +2400,17 @@ export function triggerACWRReduction(): void {
           name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
           modReason: `ACWR: ${sportLabel}`, confidence: mw.confidence,
           originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
+          appliedAt,
         } as WorkoutMod);
       }
+      // Undo snapshot: lets the Home readiness card offer "Undo reduction" for
+      // the rest of the day. Captured before unspent items are cleared below.
+      wk3.acwrReductionUndo = {
+        date: appliedAt,
+        sportLabel,
+        unspentLoadItems: wk3.unspentLoadItems?.length ? [...wk3.unspentLoadItems] : undefined,
+        unspentLoad: wk3.unspentLoad,
+      };
     }
 
     // Clear unspent items only when the user acted on them (Reduce/Replace).
@@ -2413,6 +2423,31 @@ export function triggerACWRReduction(): void {
     saveState();
     render();
   }, acwrCtx);
+}
+
+/**
+ * Undo the most recent ACWR reduction for the current week. Removes the
+ * `appliedAt`-stamped ACWR workoutMods (mods are a render-time layer applied in
+ * week-resolve.ts, so removal restores the original sessions) and restores the
+ * unspent cross-training items that were cleared on apply. Returns false when
+ * there is nothing to undo.
+ */
+export function undoACWRReduction(): boolean {
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  const undo = wk?.acwrReductionUndo;
+  if (!wk || !undo) return false;
+
+  wk.workoutMods = (wk.workoutMods ?? []).filter(
+    m => !(m.modReason?.startsWith('ACWR') && (m as WorkoutMod).appliedAt === undo.date),
+  );
+  if (undo.unspentLoadItems?.length) {
+    wk.unspentLoadItems = undo.unspentLoadItems;
+    wk.unspentLoad = undo.unspentLoad ?? 0;
+  }
+  delete wk.acwrReductionUndo;
+  saveState();
+  return true;
 }
 
 function showACWRInfoSheet(): void {

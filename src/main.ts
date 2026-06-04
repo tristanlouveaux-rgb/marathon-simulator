@@ -728,7 +728,15 @@ async function launchApp(): Promise<void> {
         const freshWeeks = generateTriathlonPlan(mutable);
         if (freshWeeks.length > 0) {
           for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
-            mutable.wks[i].triWorkouts = freshWeeks[i].triWorkouts;
+            // Replacing the array wholesale drops USER-ADDED sessions (session
+            // generator / accepted suggestions / holiday bridges live in the
+            // same triWorkouts array with adhoc-/holiday- ids). Real incident
+            // 2026-06-03: the v18 regen wiped an added Tuesday gym session.
+            // Carry them over; only generator-owned slots are replaced.
+            const userAdded = (mutable.wks[i].triWorkouts ?? []).filter(
+              (w: any) => typeof w.id === 'string' && (w.id.startsWith('adhoc-') || w.id.startsWith('holiday-')),
+            );
+            mutable.wks[i].triWorkouts = [...freshWeeks[i].triWorkouts!, ...userAdded];
             mutable.wks[i].ph = freshWeeks[i].ph;
           }
           if (mutable.triConfig) mutable.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
@@ -889,7 +897,12 @@ async function launchApp(): Promise<void> {
         const freshWeeks = generateHyroxPlan(mutable);
         if (freshWeeks.length > 0) {
           for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
-            mutable.wks[i].triWorkouts = freshWeeks[i].triWorkouts;
+            // Mirror of the tri regen: preserve user-added sessions (adhoc-/
+            // holiday- ids) — wholesale replacement deletes them.
+            const userAdded = (mutable.wks[i].triWorkouts ?? []).filter(
+              (w: any) => typeof w.id === 'string' && (w.id.startsWith('adhoc-') || w.id.startsWith('holiday-')),
+            );
+            mutable.wks[i].triWorkouts = [...freshWeeks[i].triWorkouts!, ...userAdded];
             mutable.wks[i].ph = freshWeeks[i].ph;
           }
           mutable.hyroxConfig.generatorVersion = HYROX_GENERATOR_VERSION;
@@ -1810,25 +1823,59 @@ async function runTriActivityMatching(): Promise<void> {
   const wk = s.wks?.[(s.w ?? 1) - 1];
   if (!wk?.triWorkouts || !wk.garminActuals) return;
 
-  const { matchTriathlonWeek } = await import('@/calculations/activity-matcher.triathlon');
+  const { matchTriathlonWeek, reconcileTriCompletions } = await import('@/calculations/activity-matcher.triathlon');
   const { detectBricks } = await import('@/calculations/brick-detector');
   const { scoreTriEffort, hrProfileFromState } = await import('@/calculations/tri-effort-scoring');
   const { classifyActivity } = await import('@/calculations/tri-benchmarks-from-history');
   const hrProfile = hrProfileFromState(s);
 
-  const activities = Object.entries(wk.garminActuals).map(([id, a]) => ({
-    id,
-    sport: a.activityType ?? '',
-    startTs: a.startTime ? Math.floor(Date.parse(a.startTime) / 1000) : Math.floor(Date.now() / 1000),
-    durationSec: a.durationSec,
-    distanceM: a.distanceKm * 1000,
-  }));
+  // Split actuals into three groups. The previous version fed EVERY actual —
+  // including recordings the user explicitly placed as extra/excess sessions on
+  // the matching screen — through the fuzzy matcher, whose any-day fallback then
+  // claimed plan slots on the wrong weekday and overrode user decisions
+  // ("Excess Load" ride re-appearing as a Logged Tuesday ride).
+  const slotKeys = new Set(wk.triWorkouts.map(w => w.id ?? w.n));
+  const ratedMap = wk.rated ?? {};
+  const matchedMap = wk.garminMatched ?? {};
 
-  const matches = matchTriathlonWeek(activities, wk.triWorkouts);
+  type TriMatchLite = { activityId: string; workoutId?: string; matched: boolean };
+  const directMatches: TriMatchLite[] = [];
+  const fuzzyActivities: { id: string; sport: string; startTs: number; durationSec: number; distanceM: number }[] = [];
+  for (const [id, a] of Object.entries(wk.garminActuals)) {
+    // Direct-bound: stored under a slot's own key — the matching screen put it
+    // there. Bind 1:1; never re-match.
+    if (slotKeys.has(id)) {
+      directMatches.push({ activityId: id, workoutId: id, matched: true });
+      continue;
+    }
+    // User-decided placement (extra / excess / log-only, or moved onto a slot
+    // whose copy direct-binds above): respect the decision. Only recordings with
+    // no decided placement at all remain fuzzy-matchable.
+    const decided = a.garminId ? matchedMap[a.garminId] : undefined;
+    if (id.startsWith('garmin-') && decided && decided !== '__pending__') continue;
+    fuzzyActivities.push({
+      id,
+      sport: a.activityType ?? '',
+      startTs: a.startTime ? Math.floor(Date.parse(a.startTime) / 1000) : Math.floor(Date.now() / 1000),
+      durationSec: a.durationSec,
+      distanceM: a.distanceKm * 1000,
+    });
+  }
+
+  // Fuzzy pool: only slots that aren't already spoken for.
+  const fuzzyPool = wk.triWorkouts.filter(w => {
+    const wid = w.id ?? w.n;
+    if (wk.garminActuals?.[wid]?.garminId) return false;                               // direct-bound
+    if (w.matchedActivityId && wk.garminActuals?.[w.matchedActivityId]) return false;  // live link
+    if (typeof ratedMap[wid] === 'number') return false;                               // user marked done
+    return true;
+  });
+
+  const matches: TriMatchLite[] = [...directMatches, ...matchTriathlonWeek(fuzzyActivities, fuzzyPool)];
   let changed = false;
   for (const m of matches) {
     if (!m.matched || !m.workoutId) continue;
-    const workout = wk.triWorkouts.find(x => x.id === m.workoutId);
+    const workout = wk.triWorkouts.find(x => (x.id ?? x.n) === m.workoutId);
     const actual = wk.garminActuals[m.activityId];
     if (!workout || !actual) continue;
     if (workout.status !== 'completed') {
@@ -1887,7 +1934,11 @@ async function runTriActivityMatching(): Promise<void> {
     }
   }
 
-  if (changed) saveState();
+  // Stale-link cleanup + day shift: completed slots move to the weekday the
+  // session actually happened; links the re-review undid are cleared.
+  const reconciled = reconcileTriCompletions(wk);
+
+  if (changed || reconciled) saveState();
 }
 
 async function maybeShowTriSuggestionModal(): Promise<void> {

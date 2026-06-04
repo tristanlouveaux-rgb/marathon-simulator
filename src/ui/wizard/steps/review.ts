@@ -31,6 +31,10 @@ import { cv } from '@/calculations/vdot';
 import { recomputeLT, diagnoseLTForState } from '@/data/ltSync';
 import { awaitStartupSyncs } from '@/main';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, ageGradeForFitness, wmaKeyForRaceDist, runnerFieldPlacement, runnerFieldPlacementForFitness } from '@/calculations/fitness-placement';
+import { vo2BandAnchors } from '@/data/vo2max-norms';
+import { openStandardSec } from '@/data/wma-age-grading';
+import { HYROX_FORMAT_FINISHER_COUNTS } from '@/data/hyrox-population-distributions';
 import { poweredByStrava } from '@/ui/strava-brand';
 
 /**
@@ -1202,6 +1206,10 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
               const sessions = state.hyroxWeeklySessionCount ?? null;
               const benchmarkCount = state.hyroxPreviousStationSplits ? Object.keys(state.hyroxPreviousStationSplits).length : 0;
               const hours = state.triTimeAvailableHoursPerWeek;
+              // Field position against the real per-format finisher table.
+              // Null for pro_doubles (no ingested data) or no previous time.
+              const hyroxPlace = prevTime != null ? hyroxPlacement(fmt, prevTime) : null;
+              const hyroxFinishers = HYROX_FORMAT_FINISHER_COUNTS[fmt] ?? 0;
               return `
                 ${renderSectionLabel('HYROX setup')}
                 <div class="r-row readonly" style="cursor:default">
@@ -1211,6 +1219,21 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
                     ${prevTimeStr ? `<p class="r-row-sub">Previous finish: ${prevTimeStr}</p>` : ''}
                   </div>
                 </div>
+                ${hyroxPlace ? `
+                <div class="r-row readonly" style="cursor:default">
+                  <div class="r-row-body">
+                    <p class="r-row-label">Field position</p>
+                    <p class="r-row-value">Faster than ${hyroxPlace.fasterThanPct}% of ${fmtLabel} finishers</p>
+                    <p class="r-row-sub">Live HYROX field. ${hyroxFinishers.toLocaleString('en-US')} finishers across seasons 4 to 6.</p>
+                    ${placementScaleBar(
+                      ((hyroxPlace.scale.slowSec - (prevTime ?? 0)) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,
+                      ((hyroxPlace.scale.slowSec - hyroxPlace.scale.medianSec) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,
+                      formatTime(hyroxPlace.scale.slowSec),
+                      `Median ${formatTime(hyroxPlace.scale.medianSec)}`,
+                      formatTime(hyroxPlace.scale.fastSec),
+                    )}
+                  </div>
+                </div>` : ''}
                 ${(sessions != null || hours != null) ? `
                 <div class="r-row readonly" style="cursor:default">
                   <div class="r-row-body">
@@ -1242,8 +1265,9 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
           ${(state.trainingMode === 'triathlon' || state.trainingMode === 'cycling') ? renderFtpRow(state) : ''}
           ${state.trainingMode === 'triathlon' ? renderCssRow(state) : ''}
           ${state.trainingMode === 'triathlon' ? renderSwimEnvironmentRow(state) : ''}
-          ${state.trainingMode === 'hyrox' ? '' : renderSectionLabel('Athlete profile')}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderSectionLabel('Athlete profile')}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderAthleteTierRow()}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderFieldPositionRow()}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderRunnerTypeRow(activeRunnerType)}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderTriPbsSection(state, pbs, pbSources)}
         </div>
@@ -1548,6 +1572,33 @@ function renderPbRow(
   const dataAttr = `data-row="${editKey}"`;
   const chev = `<div class="r-row-chev">${CHEV}</div>`;
 
+  // Place the PB within the runner population at this distance, with the
+  // age grade as a plain-words bracket. Uses current age for the grade
+  // (PBs span up to 3 years; the factor drift over that window is small).
+  // The population claim works without age/sex (falls back to the overall
+  // table); the bracket drops out when age or sex is unknown.
+  const sNow = getState();
+  const wmaKey = ({ k5: 'k5', k10: 'k10', h: 'half', m: 'marathon' } as const)[key];
+  const pbSex = sNow.biologicalSex ?? sNow.onboarding?.biologicalSex;
+  const pbPlace = displaySec != null ? runnerFieldPlacement(wmaKey, displaySec, pbSex) : null;
+  const pbGrade = displaySec != null
+    ? ageGradeForTime(wmaKey, displaySec, sNow.onboarding?.age, pbSex)
+    : null;
+  const pbSexNoun = pbPlace?.sexUsed === 'male' ? 'male runners' : pbPlace?.sexUsed === 'female' ? 'female runners' : 'runners';
+  // Percentile sentence above the bar; age grade below it (same layout as
+  // the Field position row).
+  let gradeBlock = '';
+  if (pbPlace && displaySec != null) {
+    gradeBlock = `
+      <p class="r-row-sub">Faster than ${pbPlace.fasterThanPct}% of ${pbSexNoun}.</p>
+      ${renderRunnerScaleBar(
+        displaySec,
+        pbPlace.scale,
+        openStandardSec(wmaKey, pbSex),
+        pbGrade ? `${pbGrade.gradePct.toFixed(0)}% of world-record speed for your age${pbGrade.bandLabel ? `, ${pbGrade.bandLabel.toLowerCase()}` : ''}.` : undefined,
+      )}`;
+  }
+
   return `
     <${rowTag} class="${rowCls}" ${dataAttr}>
       <div class="r-row-icon">${ICON_CLOCK}</div>
@@ -1555,6 +1606,7 @@ function renderPbRow(
         <p class="r-row-label">${label}</p>
         <p class="r-row-value">${formatted}</p>
         <p class="r-row-sub">${subline}</p>
+        ${gradeBlock}
       </div>
       ${chev}
     </${rowTag}>
@@ -1659,8 +1711,35 @@ function renderVdotRow(_vdot: number | undefined): string {
   }
 
   // Manual override wins the priority chain; caption it as such rather than
-  // leaving the derived-source copy that doesn't apply.
-  if (physio.source === 'override') sub = 'Set manually. Tap to change.';
+  // leaving the derived-source copy that doesn't apply. The revert link
+  // clears the override and falls back to the derived chain (same path as
+  // saving an empty editor, but discoverable).
+  if (physio.source === 'override') {
+    sub = `Set manually. Tap to change.<span data-action="vdot-revert" style="color:var(--c-muted);text-decoration:underline;cursor:pointer;margin-left:6px">Revert to measured</span>`;
+  }
+
+  // Age/sex placement against the FRIEND treadmill norms. Same value the row
+  // displays (two-numbers rule). Hidden when age or sex is unknown — no
+  // percentile claims against a guessed reference group. The scale's anchors
+  // are the band's published 5th/50th/95th percentile values.
+  const age = s.onboarding?.age;
+  const sex = s.biologicalSex ?? s.onboarding?.biologicalSex;
+  const vo2Place = vo2maxPlacement(physio.vdot, age, sex);
+  const anchors = vo2BandAnchors(age, sex);
+  let placeLine = '';
+  if (vo2Place && anchors && physio.vdot != null) {
+    const span = anchors.p95 - anchors.p5;
+    placeLine = `
+      <p class="r-row-sub">Higher than ${vo2Place.percentile}% of ${vo2Place.sexLabel} aged ${vo2Place.bandLabel}.</p>
+      ${placementScaleBar(
+        ((physio.vdot - anchors.p5) / span) * 100,
+        ((anchors.p50 - anchors.p5) / span) * 100,
+        String(anchors.p5),
+        `Median ${anchors.p50}`,
+        String(anchors.p95),
+        'FRIEND fitness registry: 7,783 lab VO2max tests.',
+      )}`;
+  }
 
   return `
     <div class="r-row shadow-ap" data-row="vdot" style="cursor:pointer">
@@ -1669,6 +1748,7 @@ function renderVdotRow(_vdot: number | undefined): string {
         <p class="r-row-label">Current VO2max${renderInfoButton('vdot')}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${sub}</p>
+        ${placeLine}
       </div>
       <div class="r-row-chev">${CHEV}</div>
     </div>
@@ -1712,7 +1792,7 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
   if (src === 'garmin') {
     sub = `From your Garmin LT reading${conf ? ` (${conf} confidence)` : ''}.`;
   } else if (src === 'override') {
-    sub = 'Set manually. Tap to change.';
+    sub = `Set manually. Tap to change.<span data-action="lt-revert" style="color:var(--c-muted);text-decoration:underline;cursor:pointer;margin-left:6px">Revert to measured</span>`;
   } else if (src) {
     // Caption reflects which derivation method actually fired. Anchored to
     // the same `ltSource` value `deriveLT` returned in `recomputeLT`.
@@ -1756,6 +1836,73 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
   `;
 }
 
+/**
+ * Position-bar scale for placement rows. Mirrors `baselineRangeBar` in
+ * recovery-view.ts (the HRV tile): faint track, 1px tick at the reference
+ * position, dot at the athlete's position, three labels beneath. Neutral
+ * colours only. Positions are 0-100, left to right.
+ */
+function placementScaleBar(
+  dotPct: number,
+  tickPct: number,
+  leftLabel: string,
+  midLabel: string,
+  rightLabel: string,
+  footer?: string,
+): string {
+  const dp = Math.min(100, Math.max(0, dotPct));
+  const tp = Math.min(100, Math.max(0, tickPct));
+  // Footer: secondary context line in the whitespace under the bar (e.g.
+  // "69% of world-record speed for your age"), kept apart from the dense
+  // caption above the bar (Tristan, 2026-06-03).
+  const footerLine = footer
+    ? `<p class="r-row-sub" style="margin-top:8px">${footer}</p>`
+    : '';
+  return `
+    <div style="margin-top:8px">
+      <div style="position:relative;height:6px;background:#F1F5F9;border-radius:100px">
+        <div style="position:absolute;left:${tp.toFixed(1)}%;top:-2px;bottom:-2px;width:1px;background:var(--c-faint);opacity:0.6"></div>
+        <div style="position:absolute;left:${dp.toFixed(1)}%;top:50%;transform:translate(-50%,-50%);width:11px;height:11px;border-radius:50%;background:#0A0A0A;box-shadow:0 0 0 2px #FFFFFF"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:var(--c-faint)">
+        <span>${leftLabel}</span><span>${midLabel}</span><span>${rightLabel}</span>
+      </div>
+      ${footerLine}
+    </div>`;
+}
+
+/**
+ * Runner-population scale bar with a world-record fast anchor. The axis runs
+ * from the population's slowest decile (p90) on the left to the world-record
+ * standard on the right (Tristan, 2026-06-03 — the raw p1 anchor stopped at
+ * "17:30" and read as truncated). The median tick stays at the population p50.
+ *
+ * Note: the dot's horizontal position is a *time* position on this axis, NOT
+ * the population percentile. A 99th-percentile runner sits mid-bar because the
+ * fast tail stretches all the way to the WR. The percentile claim lives in the
+ * row's headline (from the population table); the bar shows how far the athlete
+ * is from the limit of human performance. Do not "reconcile" the two.
+ *
+ * Falls back to the population p1 anchor when sex is unknown (no WR table).
+ */
+function renderRunnerScaleBar(
+  timeSec: number,
+  scale: { fastSec: number; medianSec: number; slowSec: number },
+  wrSec: number | null,
+  footer?: string,
+): string {
+  const fastSec = wrSec ?? scale.fastSec;
+  const span = scale.slowSec - fastSec;
+  return placementScaleBar(
+    ((scale.slowSec - timeSec) / span) * 100,
+    ((scale.slowSec - scale.medianSec) / span) * 100,
+    formatTime(scale.slowSec),
+    `Median ${formatTime(scale.medianSec)}`,
+    wrSec ? `${formatTime(fastSec)} WR` : formatTime(fastSec),
+    footer,
+  );
+}
+
 function renderAthleteTierRow(): string {
   const tier = getState().athleteTier;
   if (!tier) return '';
@@ -1768,6 +1915,49 @@ function renderAthleteTierRow(): string {
         <p class="r-row-label">Athlete profile</p>
         <p class="r-row-value">${meta.label}</p>
         <p class="r-row-sub">${meta.sub}</p>
+      </div>
+    </div>
+  `;
+}
+
+/** Display names for the WMA distance keys on the placement surfaces. */
+const WMA_DIST_LABELS = { k5: '5K', k10: '10K', half: 'half marathon', marathon: 'marathon' } as const;
+
+/**
+ * Field-position row. Places current running fitness within the runner
+ * population at the user's own target distance: the same VDOT the VO2max
+ * row displays → projected time via Daniels → percentile against the
+ * 35M-result population tables (sex-specific when sex is known). The age
+ * grade appears only as a bracket inside the projection sentence —
+ * "Age grade 73%" as a headline read like a population percentile and
+ * undersold strong runners (Tristan, 2026-06-03). Scale anchors are the
+ * real table's p90 (slow) / median / p1 (fast) times; faster sits right.
+ */
+function renderFieldPositionRow(): string {
+  const s = getState();
+  const wmaKey = wmaKeyForRaceDist(s.rd);
+  if (!wmaKey) return '';
+  const physio = getPhysiologicalVdot(s);
+  const sex = s.biologicalSex ?? s.onboarding?.biologicalSex;
+  const place = runnerFieldPlacementForFitness(wmaKey, physio.vdot, sex);
+  if (!place) return '';
+  const sexNoun = place.sexUsed === 'male' ? 'male runners' : place.sexUsed === 'female' ? 'female runners' : 'runners';
+  // Age grade lives below the bar where there's whitespace, not crammed
+  // into the caption as a bracket.
+  const g = ageGradeForFitness(wmaKey, physio.vdot, s.onboarding?.age, sex);
+  return `
+    <div class="r-row shadow-ap readonly">
+      <div class="r-row-icon">${ICON_VOLUME}</div>
+      <div class="r-row-body">
+        <p class="r-row-label">Field position</p>
+        <p class="r-row-value">Faster than ${place.fasterThanPct}% of ${sexNoun}</p>
+        <p class="r-row-sub">Current fitness projects to a ${formatTime(Math.round(place.timeSec))} ${WMA_DIST_LABELS[wmaKey]}.</p>
+        ${renderRunnerScaleBar(
+          place.timeSec,
+          place.scale,
+          openStandardSec(wmaKey, sex),
+          `${g ? `${g.gradePct.toFixed(0)}% of world-record speed for your age${g.bandLabel ? `, ${g.bandLabel.toLowerCase()}` : ''}. ` : ''}35 million race results, 28,000 races.`,
+        )}
       </div>
     </div>
   `;
@@ -1903,6 +2093,15 @@ function renderFtpRow(state: OnboardingState): string {
   const showDetailsLink = derived && derived.bikeActivityCount > 0
     ? `<span data-action="ftp-why" style="color:var(--c-muted);text-decoration:underline;cursor:pointer;margin-left:4px">Show details →</span>`
     : '';
+  // W/kg placement on the Coggan power profile. Requires a real user
+  // bodyweight — the sex-based fallback must not back a placement claim.
+  // Scale axis 2.0-5.6 W/kg: 3.8 (good/very-good boundary) lands at the
+  // exact centre; band edges from `wattsPerKgTier`.
+  const ftpPlace = ftpPlacement(ftp, getState().bodyWeightKg);
+  const ftpPlaceLine = ftpPlace
+    ? `<p class="r-row-sub">${ftpPlace.wkg.toFixed(1)} W/kg. ${ftpPlace.label} on the Coggan power profile.</p>
+       ${placementScaleBar(((ftpPlace.wkg - 2.0) / 3.6) * 100, 50, '2.0', '3.8', '5.6 W/kg')}`
+    : '';
   return `
     <button class="r-row shadow-ap" data-row="ftp">
       <div class="r-row-icon">${ICON_BIKE}</div>
@@ -1910,6 +2109,7 @@ function renderFtpRow(state: OnboardingState): string {
         <p class="r-row-label">Bike FTP</p>
         <p class="r-row-value">${value}${ftpChip}</p>
         <p class="r-row-sub">${sub}${showDetailsLink}</p>
+        ${ftpPlaceLine}
       </div>
       <div class="r-row-chev">${CHEV}</div>
     </button>
@@ -2128,6 +2328,18 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
         if (!cachedTriBenchmarks?.ftp) return;
         const { openFtpDebugOverlay } = await import('@/ui/ftp-debug-overlay');
         openFtpDebugOverlay(cachedTriBenchmarks.ftp);
+      }
+      // Clear a manual VO2max / LT override and fall back to the derived
+      // chain. Same effect as saving an empty editor, but discoverable.
+      if (action === 'vdot-revert' || action === 'lt-revert') {
+        const m = getMutableState();
+        if (action === 'vdot-revert') delete m.vo2Override;
+        else delete m.ltOverride;
+        recomputeLT(m);
+        saveState();
+        editing = null;
+        rerender(state);
+        return;
       }
     });
   });

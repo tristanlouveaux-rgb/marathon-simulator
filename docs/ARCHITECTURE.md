@@ -250,6 +250,16 @@ generateWeekWorkouts(
 
 **Any running-mode surface that asks "what is this week's plan?" must call `resolveWeekWorkouts`, not re-derive it.** The Plan tab's `computeRenderedWorkouts` (plan-view.ts) delegates to it then populates its drag-and-drop `_workoutLookup`; the Home Today card (`buildTodayWorkout` / `buildNoWorkoutHero` in home-view.ts, including the "Next:" line) reads from it directly. Home can't statically import plan-view (plan-view imports home-view), which is why the resolver lives in its own module rather than being exported from plan-view. Re-implementing a partial version of this was the cause of the Home "Next:" line skipping intermediate sessions (CHANGELOG 2026-06-03).
 
+### `resolveTriWeekWorkouts()` — tri/cycling/HYROX week resolution (`src/ui/triathlon/week-resolve.triathlon.ts`)
+
+The scheduled-mode mirror of `resolveWeekWorkouts`. All three modes store their plan in `wk.triWorkouts`; the resolver assembles `triWorkouts + adhocWorkouts` and applies the render-time mods in the order both plan views previously inlined: illness (current week, `applyIllnessMods`) → holiday (`applyHolidayModsAllDisciplines`) → comeback-bridge (`applyBridgeModsAllDisciplines`). Injury needs no handling here — logging a tri/cycling/HYROX injury regenerates the stored current+future weeks (injury/modal.ts).
+
+**Clone contract**: deep-clones by default (idempotent, safe for read-only consumers); the tri + HYROX plan-views pass `{ clone: false }` because their click/drag handlers re-read `wk.triWorkouts` directly and rely on render mods being visible on those shared objects. `estimateTriWorkoutMin` (same module) is the shared duration estimator both plan views import.
+
+### `getPlannedDayTSSContext()` — canonical planned-day TSS (`src/ui/planned-day-tss.ts`)
+
+The single, **mode-aware** source for "what does the plan prescribe on day X, in TSS terms?". Running delegates to `resolveWeekWorkouts` + `computePlannedDaySignalBTSS`; tri/cycling sums `aerobic + anaerobic` per workout (same number as the plan card badge); HYROX falls back to duration × `TL_PER_MIN[rpe]` (MTL-only workouts); just-track returns zeros. Excludes synced actuals (`garmin-`/`strava-` ids, `garminTimestamp`) and illness/holiday-rested sessions. Consumers: Home strain ring (home-view.ts), Strain view ring + week bars (strain-view.ts), Readiness card (readiness-view.ts), `deriveStrainContext` (daily-coach.ts — the one calc→ui import; nothing in the resolver chain imports daily-coach, so no cycle). **Any new surface that shows a daily/weekly planned-TSS target must read this context** — regenerating a week via `generateWeekWorkouts` at a display site is the bug this replaced (phantom running targets in tri mode, CHANGELOG 2026-06-03).
+
 ### State access pattern
 
 ```ts

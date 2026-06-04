@@ -18,6 +18,8 @@ import {
   addAdhocWorkoutFromPending,
   formatActivityType,
   mapAppTypeToSport,
+  mapGarminType,
+  reconcileCrossSourceDuplicates,
   deriveRPE,
   getHREffort,
   getPaceAdherence,
@@ -37,6 +39,7 @@ import {
   type ExternalActivity,
   type MatchResult,
 } from '@/calculations/matching';
+import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 import { classifyByName } from '@/data/stravaSync';
 import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } from '@/types';
 import type { SportKey } from '@/types/activities';
@@ -249,7 +252,61 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
   // weekNum is 1-based (same as s.w). Fall back to current week.
   const wkIdx = weekNum != null ? weekNum - 1 : s.w - 1;
   const wk = s.wks?.[wkIdx];
-  if (!wk?.garminPending?.length) return;
+  if (!wk) return;
+
+  // Cross-source dedup FIRST. The dev account receives each session from both
+  // pipes (Strava `strava-…` + Garmin raw numeric id — different garminIds for
+  // the same ride), and the launch-time reconcile can't catch a twin that
+  // arrived from a mid-session sync. Without this, the reconstitution below
+  // rebuilds BOTH copies and the auto-matcher assigns the same ride to two
+  // plan slots ("Indoor Cycling 56 min" on Wed AND Thu).
+  reconcileCrossSourceDuplicates(s);
+
+  // Reconstitute reviewable items from synced actuals. A sync can consume
+  // `garminPending` once everything is placed, which used to make re-review
+  // impossible exactly when the user wants to change a placement ("the Review
+  // button is gone"). Any actual carrying a real synced garminId — a standalone
+  // `garmin-<gid>` card or a slot-bound match — is reviewable; rebuild its
+  // pending record so the undo/redo machinery below can operate on it.
+  if (!wk.garminPending) wk.garminPending = [];
+  const pendingGids = new Set(wk.garminPending.map(p => p.garminId));
+  for (const [key, a] of Object.entries(wk.garminActuals ?? {})) {
+    const gid = a.garminId;
+    if (!gid || gid.startsWith('guided-') || pendingGids.has(gid)) continue;
+    const isSynced = key.startsWith('garmin-') || wk.garminMatched?.[gid] === key;
+    if (!isSynced) continue;
+    wk.garminPending.push({
+      garminId: gid,
+      activityType: a.activityType ?? '',
+      appType: mapGarminType(a.activityType ?? '', a.displayName ?? null),
+      startTime: a.startTime ?? '',
+      durationSec: a.durationSec ?? 0,
+      distanceM: a.distanceKm ? Math.round(a.distanceKm * 1000) : null,
+      avgPaceSecKm: a.avgPaceSecKm ?? null,
+      avgHR: a.avgHR ?? null,
+      maxHR: a.maxHR ?? null,
+      aerobicEffect: a.aerobicEffect ?? null,
+      anaerobicEffect: a.anaerobicEffect ?? null,
+      garminRpe: null,
+      calories: a.calories ?? null,
+      iTrimp: a.iTrimp ?? null,
+      hrZones: a.hrZones ?? null,
+      polyline: a.polyline ?? null,
+      kmSplits: a.kmSplits ?? null,
+      averageWatts: a.averageWatts ?? null,
+      normalizedPowerW: a.normalizedPowerW ?? null,
+      maxWatts: a.maxWatts ?? null,
+      deviceWatts: a.deviceWatts ?? null,
+      kilojoules: a.kilojoules ?? null,
+    });
+    pendingGids.add(gid);
+    // The undo pass below keys off garminMatched to un-rate the current
+    // placement — make sure it knows where this recording currently lives.
+    if (!wk.garminMatched) wk.garminMatched = {};
+    if (!wk.garminMatched[gid]) wk.garminMatched[gid] = key;
+  }
+
+  if (!wk.garminPending.length) return;
 
   // Only weeks two or more back trigger the silent auto-log fallback. Last
   // week's items can still be reviewed/re-matched from the home Recent list,
@@ -397,7 +454,18 @@ function showMatchingEntryScreen(
     });
   }
 
-  const unrated = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
+  // Slots shown on the matching screen: everything not yet done, PLUS done
+  // sessions that have no synced recording attached (guided/manual completions —
+  // their `garminActuals` entry is absent or still a `guided-` stub). Those are
+  // exactly the slots a late-arriving recording should merge into; hiding them
+  // made the week look incomplete and left the recording with nowhere to go.
+  // Slots already carrying a synced recording stay hidden (they're spoken for).
+  const unrated = allWorkouts.filter(w => {
+    const id = w.id || w.n;
+    if (wk?.rated[id] === undefined) return true;
+    const act = wk?.garminActuals?.[id];
+    return !act || !act.garminId || act.garminId.startsWith('guided-');
+  });
 
   let weekStartDate: Date | undefined;
   let weekLabel: string | undefined;
@@ -1209,16 +1277,25 @@ function applyReview(
       wk.rated[matchId] = rpe;
       wk.garminMatched[item.garminId] = matchId;
 
-      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc.
+      // startTime is REQUIRED here: Recent sorts rows by startTime desc and caps at 8,
+      // so an actual written without it sank to the bottom and fell off the list
+      // (a ride matched to a planned bike slot "disappeared from Recent").
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[matchId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        activityType: item.activityType ?? null,
+        hrZones: item.hrZones ?? null,
+        iTrimp: item.iTrimp ?? null,
+        polyline: item.polyline ?? null,
+        kmSplits: item.kmSplits ?? null,
       } as GarminActual;
 
       const idx = planCandidates.findIndex(w => (w.id || w.n) === matchId);
@@ -1305,6 +1382,12 @@ function applyReview(
     log(`Garmin ${formatActivityType(item.activityType)}: no gym slot, logged as extra adhoc`);
     matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
+
+  // Tri/cycling: sync triWorkouts with the slot writes above — completion
+  // status, matchedActivityId, and the day shift to the actual weekday — so the
+  // plan view reflects the user's matching decisions immediately, not on the
+  // next launch.
+  if (s.eventType === 'triathlon') reconcileTriCompletions(wk);
 
   const remainingCross = [...trueOverflow];
 
@@ -1508,21 +1591,38 @@ function proposeMatchings(
     }
   }
 
-  // 2. Gym → findMatchingWorkout
+  // 2. Gym → findMatchingWorkout. Two passes: same-day matches claim their
+  // slots first, then the leftovers take adjacent-day matches. The previous
+  // single greedy pass ran in pending-array order, so whichever recording the
+  // sync happened to list first could consume another day's slot with an
+  // adjacent-day match (a Tuesday HIIT landed on the Monday gym slot while the
+  // Monday recording overflowed).
   const gymCandidates = unrated.filter(w => !used.has(w.id || w.n));
-  for (const item of gym) {
-    const match = findMatchingWorkout(buildExternalActivity(item), gymCandidates);
-    if (match && !used.has(match.workoutId)) {
-      used.add(match.workoutId);
-      const idx = gymCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
-      if (idx >= 0) gymCandidates.splice(idx, 1);
-      pairings.push({ item, proposedWorkoutId: match.workoutId, proposedWorkoutName: match.workoutName, confidence: match.confidence, matchType: 'gym' });
-    } else {
-      pairings.push({ item, proposedWorkoutId: null, proposedWorkoutName: null, confidence: null, matchType: 'overflow' });
+  const itemDay = (i: GarminPendingItem): number => {
+    const d = new Date(i.startTime).getDay();
+    return d === 0 ? 6 : d - 1;
+  };
+  const sortedGymItems = [...gym].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const gymLeftovers: GarminPendingItem[] = [];
+  for (const pass of [0, 1] as const) {
+    const queue = pass === 0 ? sortedGymItems : gymLeftovers;
+    for (const item of queue) {
+      const match = findMatchingWorkout(buildExternalActivity(item), gymCandidates);
+      const sameDay = match != null && match.matchedWorkout.dayOfWeek === itemDay(item);
+      if (match && !used.has(match.workoutId) && (pass === 1 || sameDay)) {
+        used.add(match.workoutId);
+        const idx = gymCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
+        if (idx >= 0) gymCandidates.splice(idx, 1);
+        pairings.push({ item, proposedWorkoutId: match.workoutId, proposedWorkoutName: match.workoutName, confidence: match.confidence, matchType: 'gym' });
+      } else if (pass === 0) {
+        gymLeftovers.push(item);
+      } else {
+        pairings.push({ item, proposedWorkoutId: null, proposedWorkoutName: null, confidence: null, matchType: 'overflow' });
+      }
     }
   }
 
-  // 3. Cross-training → named match → generic cross slot → overflow
+  // 3. Cross-training → named match → discipline slot (bike/swim) → generic cross slot → overflow
   const crossCandidates = unrated.filter(w => !used.has(w.id || w.n));
   const crossSlots = [...crossCandidates.filter(w => w.t === 'cross')];
   for (const item of cross) {
@@ -1534,9 +1634,32 @@ function proposeMatchings(
       pairings.push({ item, proposedWorkoutId: namedMatch.workoutId, proposedWorkoutName: namedMatch.workoutName, confidence: namedMatch.confidence, matchType: 'sport' });
       continue;
     }
-    // Try closest cross slot by day
     const jsDay  = new Date(item.startTime).getDay();
     const actDay = jsDay === 0 ? 6 : jsDay - 1;
+    // Discipline slots: a synced ride can fill a planned bike session, a synced
+    // swim a planned swim session (tri / cycling plans schedule these as
+    // `bike_*` / `swim_*` types, which the generic `cross` filter below never
+    // sees — so rides used to fall straight to Excess Load even with a same-day
+    // planned ride). Closest-day pick, same as the generic cross slots; the
+    // user can still reassign on the matching screen before anything applies.
+    const discPrefix = item.appType === 'ride' ? 'bike_' : item.appType === 'swim' ? 'swim_' : null;
+    if (discPrefix) {
+      let bestDisc: (typeof crossCandidates)[0] | null = null;
+      let bestDiscDiff = Infinity;
+      for (const w of crossCandidates) {
+        const wid = w.id || w.n;
+        if (used.has(wid) || !(w.t ?? '').startsWith(discPrefix) || w.dayOfWeek === undefined) continue;
+        const diff = Math.min(Math.abs(w.dayOfWeek - actDay), 7 - Math.abs(w.dayOfWeek - actDay));
+        if (diff < bestDiscDiff) { bestDiscDiff = diff; bestDisc = w; }
+      }
+      if (bestDisc) {
+        const slotId = bestDisc.id || bestDisc.n;
+        used.add(slotId);
+        pairings.push({ item, proposedWorkoutId: slotId, proposedWorkoutName: bestDisc.n, confidence: bestDiscDiff === 0 ? 'medium' : 'low', matchType: 'sport' });
+        continue;
+      }
+    }
+    // Try closest cross slot by day
     let best: typeof crossSlots[0] | null = null;
     let bestDiff = Infinity;
     for (const slot of crossSlots) {
@@ -1795,7 +1918,8 @@ export function autoProcessActivities(
     autoMatchedRuns.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
 
-  // Sports → named recurring slot, then generic cross slot
+  // Sports → named recurring slot, then generic cross slot (tri reconcile runs
+  // after this loop — see below)
   const genericCrossSlots = planCandidates.filter(
     w => w.t === 'cross' && !usedWorkoutIds.has(w.id || w.n),
   );
@@ -1872,6 +1996,10 @@ export function autoProcessActivities(
       autoAssignLines.push(`${formatActivityType(item.activityType)} → Excess load`);
     }
   }
+
+  // Tri/cycling: mirror applyReview — sync triWorkouts completion + day shift
+  // with the slot writes above before any exit path renders.
+  if (s.eventType === 'triathlon') reconcileTriCompletions(wk);
 
   if (overflow.length === 0) {
     saveState();

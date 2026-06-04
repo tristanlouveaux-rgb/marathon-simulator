@@ -10,8 +10,9 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
+import { applyLongRunCap, getLongestRunSec } from '@/calculations/run-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { initializeWeeks } from '@/workouts';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
@@ -427,7 +428,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       runnerType.toLowerCase(),
       blendInputs.recentRun ?? rec ?? null,
       undefined,                             // athleteTier (set later)
-      blendInputs.weeklyKm,                  // pass actual value (0 = explicit zero)
+      // History-derived weekly km, falling back to the user's typed manual-
+      // entry volume (s.detectedWeeklyKm) when the scrape found nothing.
+      // 0 with no typed value stays an explicit zero. See resolveWeeklyKmSignal.
+      resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm),
       blendInputs.avgPaceSecPerKm ?? undefined,
       {
         weeksCovered: blendInputs.weeksCovered,
@@ -442,8 +446,24 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       return { success: false, error: 'Could not calculate race prediction' };
     }
 
-    // Convert to VDOT
-    const curr = cv(targetDistMeters, blendedTime);
+    // Long-run durability cap — parity with refreshBlendedFitness (the
+    // canonical refresher applies this cap before deriving VDOT; see
+    // blended-fitness.ts). Without it, the onboarding anchor is a raw
+    // capacity extrapolation (e.g. a single 5K PB Riegel-projected to a
+    // half with zero run history behind it), and the first backfill
+    // refresh would silently slow it by up to 4-5%. Longest run reads the
+    // freshly-seeded onboardingRunHistory plus any prior-plan actuals
+    // (s.wks is not yet archived here) over the same 12-week window the
+    // refresher uses. Calibration bias (runRaceLog) is intentionally not
+    // mirrored: onboarding users have no logged races against THIS plan
+    // yet, and the first refresh applies it regardless.
+    const longestRunSec = getLongestRunSec(sCurrent, 12);
+    const durability = applyLongRunCap(longestRunSec, targetDistStr);
+    const cappedBlendedTime = blendedTime * durability.multiplier;
+
+    // Convert to VDOT (from the capped time — mirrors the refresher pushing
+    // the durability-adjusted VDOT into s.v, so paces and the anchor agree)
+    const curr = cv(targetDistMeters, cappedBlendedTime);
     const pac = gp(curr, ltPace);
 
     // Calculate effective cross-training sessions from recurring activities
@@ -500,9 +520,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.pac = pac;
     // Seed blended-fitness cache with wizard-only blend. Backfill will refresh
     // this with Tanda inputs once per-run history lands.
-    s.blendedRaceTimeSec = blendedTime;
+    s.blendedRaceTimeSec = cappedBlendedTime;
     s.blendedEffectiveVdot = curr;
     s.blendedLastRefreshedISO = new Date().toISOString();
+    // Durability result stored for the Forecast durability chip (same field
+    // the refresher writes), so the drill-down can explain the cap from day 1.
+    s.runDurability = durability;
     archiveCurrentWksIfPopulated();
     s.wks = initializeWeeks(s.tw);
     // Continuous mode: override phases to repeating 4-week blocks
@@ -553,8 +576,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // Store initial physiology
     s.initialLT = ltPace;
     s.initialVO2 = vo2max;
-    s.initialBaseline = blendedTime;
-    s.currentFitness = blendedTime;
+    s.initialBaseline = cappedBlendedTime;
+    s.currentFitness = cappedBlendedTime;
 
     // Store heart rate data for HR zone calculations
     if (state.restingHR) s.restingHR = state.restingHR;
@@ -575,7 +598,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
       : 0;
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, blendedTime,
+      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, cappedBlendedTime,
       { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;

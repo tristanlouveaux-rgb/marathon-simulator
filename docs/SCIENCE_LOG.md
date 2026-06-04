@@ -6,6 +6,114 @@ New entries are added at the top. When modifying a model, update its entry rathe
 
 ---
 
+## §BM — Runner population percentiles: "faster than X% of runners" at every standard distance (2026-06-03)
+
+**Where it sits**: tracking. Places times within the recreational racing population; prescribes nothing.
+
+**What it does.** `src/data/runner-population-distributions.ts` holds percentile tables (p1/10/20/.../90) for 5K, 10K, half and marathon, each in three variants (overall / male / female). `runnerFieldPlacement` (fitness-placement.ts) converts a time to "faster than X% of {male|female} runners" via linear interpolation; `runnerFieldPlacementForFitness` first projects current VDOT to a time at the distance via Daniels. The review screen's Field position row and all PB rows use this.
+
+**Source.** RunRepeat percentile calculator ("Compare Running Finish Times"). Methodology per the published page: "Results are based on 35 million results collected in the last 20 years from more than 28,000 races." Tables were extracted verbatim from the server-rendered page on 2026-06-03 (times converted to seconds). This is an aggregated secondary source rather than raw rows we pooled ourselves (unlike §AF's five-majors ingest), accepted because it spans all four distances with sex splits and a population three orders of magnitude beyond anything we could ingest raw.
+
+**Why this replaced age grade as the headline (Tristan, 2026-06-03).** A 17:39 5K graded 73% on the WMA scale, and "73%" read as "better than 73% of people" — underselling a top-1% performance. Population percentile is what users intuitively expect a percentage to mean. The age grade survives as a plain-words bracket ("73% of world-record speed for your age") inside the projection sentence (§BL amended). Verified case: male 5K p1 = 17:30, so 17:39 → "faster than ~99% of male runners".
+
+**Refusal/fallback rules.** Sex unknown or 'prefer_not_to_say' → overall table (a population claim needs no demographic table, unlike FRIEND/WMA which refuse). Claims clamp at the published ends: max "faster than 99%", min "faster than 10%".
+
+**Scale bar anchoring (Tristan, 2026-06-03).** The bar's fast end was originally the population's 1st percentile, which "stopped at 17:30" and read as truncated. The fast anchor is now the **world-record standard** (the WMA open standard, `openStandardSec`, which equals the current road WR at these distances — male 5K 12:49, marathon 2:00:35). Axis: population p90 (slow) on the left → WR on the right, median tick at population p50. The dot's horizontal position is therefore a **time position on this axis, not the population percentile** — a 99th-percentile runner sits mid-bar because the elite tail stretches to the WR. The percentile claim stays in the row headline (from the population table); the bar conveys distance from the human limit. These are two intentionally different mappings; do not reconcile them. Falls back to the population p1 anchor when sex is unknown (the WR table is sex-specific and refuses to guess).
+
+**Limitations.** (1) Race finishers are a self-selected population; "faster than 87% of runners" means runners who entered timed races, not everyone who jogs. (2) The percentile table ends at p1/p90; elite and back-of-pack tails are flat (clamped). (3) RunRepeat does not publish per-age variants on this page, so the population claim is age-blind; the age-grade bracket carries the age context. (4) Secondary aggregated source — if RunRepeat revises the page the provenance date matters; `RUNNER_POP_SOURCE` records the extraction date. (5) Half-marathon male table has a visible flattening at p40-p50 (7096→7188s) — verbatim from the source. (6) The scale-bar axis mixes two datasets (population p90/p50 + WMA WR anchor); accepted as a visual aid, with the load-bearing number (percentile) sourced purely from the population table.
+
+---
+
+## §BL — WMA age grading: cross-distance fitness placement + PB comparisons (2026-06-03)
+
+**Where it sits**: tracking. Grades performances and projected fitness against published standards; prescribes nothing.
+
+**What it does.** Age grade = `ageStandardSec(age, sex, distance) / timeSec` as a percentage, where the age standard is the world-best-level time for that age and sex. 100% = world-standard. Three surfaces on the onboarding review screen:
+
+1. **Age grade row** (running mode with a target distance): current fitness (the same VDOT the VO2max row displays) is projected to the athlete's own target distance via the Daniels curve (`tv`), then graded. Replaces the marathon-equivalent framing for non-marathon athletes (§BK reversal below). **AMENDED same day (§BM)**: the standalone row was demoted — the headline "Age grade 73%" read like a population percentile and undersold strong runners. Age grade now appears only as a bracket inside the Field position row's projection sentence ("73% of world-record speed for your age"); the headline number is the §BM population percentile.
+2. **PB rows**: every filled PB (5K/10K/half/marathon) gets its own age grade line. This grades real performances, the cleanest use of the tables.
+3. **Position scale** on the age-grade row: 40-100% axis, tick at 70%.
+
+**The tables.** Official WMA/USATF 2025 road standards (Alan Jones tables, "Version 2025-07-27", approved 2025-01-10 by the USATF Masters Long Distance Running council). Ingested from the official repository (github.com/AlanLyttonJones/Age-Grade-Tables, 2025 Files, `AgeStdSec` sheets) via `scripts/ingest-wma-age-grading.py` on 2026-06-03 — parsed straight from the published xlsx, not recalled from memory. CC-BY-4.0. Per-sex, per-age (5-100) standard seconds for 5K/10K/half/marathon in `src/data/wma-age-grading.ts`. Interpretation bands are the published convention: 90%+ world class, 80%+ national, 70%+ regional, 60%+ local.
+
+**Refusal rules.** No grade without age AND binary sex ('prefer_not_to_say' → no claim). Ages clamp to the published 5-100 range.
+
+**Limitations.** (1) PB grades use the athlete's *current* age; PBs span up to 3 years, so a PB set at age N-3 grades very slightly soft (factor drift over 3 adult years is <2%). (2) The published table has non-monotonic values at child ages 5-7 for half/marathon (verbatim from the official file); irrelevant for the app's adult users. (3) Grading a *projected* time (age-grade row) inherits the VDOT proxy caveats from §BK; the PB rows carry no such caveat. (4) Standards assume road courses; trail/track PBs grade unfairly.
+
+---
+
+## §BK — Onboarding fitness placement: FRIEND VO2max norms + marathon-equivalent field position (2026-06-03)
+
+**Where it sits**: tracking. Describes where the athlete's measured fitness sits relative to real reference populations; prescribes nothing.
+
+**What it does.** The onboarding review screen ("Here's what we found") now contextualises the athlete's numbers against real populations via canonical helpers in `src/calculations/fitness-placement.ts`:
+
+1. **VO2max percentile** — the displayed VO2max (whatever `getPhysiologicalVdot` resolves) is placed within the FRIEND registry age/sex treadmill norms (`src/data/vo2max-norms.ts`). Caption: "Higher than X% of men aged 30-39."
+2. **Run-speed field position** — the same VDOT is converted to a marathon-equivalent time via the Daniels curve (`tv`, the canonical inverse already used across the app) and looked up against the pooled five-majors table (888,989 real finishes, §AF). Caption: "Faster than X% of marathon finishers."
+3. **Bike FTP** — placed on the Coggan W/kg power profile (`wattsPerKgTier`, bike-physics.ts), only when a real user bodyweight exists (the 75/62 kg sex default must not back a placement claim).
+4. **HYROX field position** — previous finish time against the real per-format finisher tables (89,868 rows S4-S6, §R), with per-format finisher counts exported as `HYROX_FORMAT_FINISHER_COUNTS`.
+
+**The FRIEND table.** Kaminsky LA, Arena R, Myers J. *Reference Standards for Cardiorespiratory Fitness Measured With Cardiopulmonary Exercise Testing: Data From FRIEND.* Mayo Clin Proc 2015;90(11):1515-1523. 7,783 maximal treadmill CPX tests (4,611 men / 3,172 women), ages 20-79, CVD-free, 8 US labs; the dataset behind current ACSM reference standards. Values were verified against the open-access PMC copy (PMC4919021) on 2026-06-03, not recalled from memory. Percentile breakpoints 5/10/25/50/75/90/95 per sex per age decade; linear interpolation between breakpoints (mirrors §AF's table lookups); clamped at 5/95 outside the published range. Ages outside 20-79 clamp to the nearest decade band and the caption names the band actually compared, keeping the claim honest.
+
+**Marathon-equivalent framing REVERSED (Tristan, 2026-06-03, same day).** The original decision projected every athlete to a marathon-equivalent time so the real five-majors table could cover all distances. On device this read as "weird marathon predictions for other distances". The field-position row is now **marathon-target users only** (the one distance with real population data); everyone else gets the WMA age-grade row instead (§BL), which frames fitness at the athlete's own target distance. `runSpeedPlacement` (the marathon-equivalent conversion) still backs the marathon-target row. LT placement was considered and skipped: the review screen's LT is derived from the same VO2/VDOT signal, so a percentile on it would restate the VO2 row's placement, and no real LT population dataset exists.
+
+**Refusal rules (no guessed reference groups).** VO2 placement returns null without a known age AND binary sex ('prefer_not_to_say' → no claim). FTP placement returns null without a real `bodyWeightKg`. HYROX placement returns null for pro_doubles (no ingested data). Every surface hides rather than guesses.
+
+**Limitations.** (1) The displayed "Current VO2max" can be a Daniels VDOT proxy (LT-derived or PB-median tiers), which understates lab VO2max for economy-poor athletes and overstates it for efficient ones; the placement inherits this. Acceptable because the placement always refers to the number the user is looking at (two-numbers rule). (2) FRIEND is a US clinical-referral population, not endurance athletes; well-trained users will cluster above the 90th percentile, where the table flattens (clamped at 95). (3) A 2022 FRIEND update exists (16,278 treadmill tests, ages 20-89; Mayo Clin Proc 2022;97(2):285-293) but its tables are paywalled and could not be verified; swap in when verifiable. The 2015/2022 p50 deltas are ~1-2 mL/kg/min. (4) Marathon finishers are a self-selected population; "faster than 64% of finishers" describes people who completed a major, not the general public. (5) Coggan W/kg bands are male 60-min-power referenced; female athletes read about one band low (documented at `wattsPerKgTier`).
+
+---
+
+## §BJ — Adhoc strain anchor: unplanned sessions floor readiness via CTL/7 (2026-06-03)
+
+**Where it sits**: tracking. Describes how hard today was relative to what this athlete sustainably absorbs; prescribes nothing.
+
+**Problem.** The readiness strain floor (50–100% → 100→54, 100–180% → 54→10) reads `strainPct = todayTSS / plannedDayTSS`. With no planned session today the percent stayed 0 and the floor never fired. Three ways to hit that hole: a rest-day adhoc session, an injury-reduced plan with the day's session removed, and **all of triathlon mode** — home-view's planned-day TSS comes from the running workout generator, which has no basis for a tri plan. Dogfood case (2026-06-03): 60 min hard bike while injured (run/swim blocked, bike capped 40%) → Strain ring showed 43 TSS but the headline score and sentence ignored the session entirely.
+
+**Fix (final form, capacity anchor — Tristan 2026-06-03).** The floor/sentence strain percent anchors on `max(plannedDayTSS, weeklyCTL / 7)`: an athlete is only "overreached" when today's load exceeds BOTH the planned dose and the sustainable daily load (Banister CTL as the sustainable-load proxy). Rationale: pure %-of-plan craters the score on physiologically normal days whenever the plan-of-record is small — injury-capped days (dogfood case: planned 20, logged 42 → 210% of plan but only 93% of capacity), taper, easy days. This extends Tristan's standing ruling that the ring is capacity-based and injury is a separate constraint layer (§BG). The anchor components are not new models: the trackOnly Strain ring already anchors on `ctlBaseline / 7`, and the lost tri post-session trigger (May-19 snapshot `isPostSessionState`) used the identical `actualTSS / dailyCTL` fallback. In tri mode weekly CTL = swim + bike + run per-discipline weekly EMAs **plus `crossTrainingCtl`** (`triConfig.fitness`); in running mode `ctlNow` from `computeLiveSameSignalTSB` is already weekly-equivalent. Cross-training CTL must be included because the numerator (`todaySignalBTSS`) counts all sports: dogfood data (2026-06-03) had cross CTL as the largest component (143 of 345 weekly) — excluding it would make every routine HIIT day read ~167% and pin the floor near 17, false-alarming on normal baseline load. Side effect, deliberate: in running mode, completing a planned easy session smaller than CTL/7 no longer pins the floor at 54 — a sub-average completed day leaves capacity, and the floor now says so.
+
+**Injury-cap overshoot call-out.** When injury is active and `todayTSS > plannedDayTSS × 1.3` (the existing "Load exceeded" ring margin), the sentence becomes `injuryCapOvershootSentence`: "42 TSS logged against an injury-capped day of 20. Load is within your normal range, but well above the rehab cap." (or, when capacity is also exceeded, "...That exceeds both the rehab cap and your typical daily load. Rest up and recover."). The ring stays capacity-based; this sentence is the injury layer's message. Mirrored into running mode's `derivePrimaryMessage` Tier-0 injury branch (fires when trained and plan-strain ≥ 130%).
+
+**Acknowledgment tier at 80% (CTL-dominated anchor only).** Tristan (2026-06-03): "if strain is high from 80% up, we say good training." When the capacity anchor is CTL-dominated (`CTL/7 ≥ plannedDayTSS` — adhoc days and small-plan days), the session is finished, so 80–99% earns "Good training today (X TSS), most of a typical day's load." When the planned dose dominates the anchor, 80–99% can mean a session still in progress, so that path keeps the running-mode "Nearly at today's target" copy — the tier is gated on `ctlAnchored` in `postSessionSentence`. The 80 breakpoint mirrors running's existing Tier-4 partial-strain threshold; it is not a new constant.
+
+**Guards.** (1) A real logged session must exist today (`garminActuals` or a Garmin-imported adhoc workout). `computeTodayStrainTSS` includes passive step/active-minute TSS, so without this guard a long walk on a rest day would anchor against CTL/7 and crater the score for low-CTL athletes; rest-day passive load stays the domain of `isRestDayOverreaching`. (2) Weekly CTL < 10 → no anchor (percent stays 0). Mirrors `perDisciplineACWR`'s existing CTL ≥ 10 noise guard: dividing by a near-zero chronic load produces degenerate percentages (a detrained athlete's first session would pin the floor at 10).
+
+**Canonical module (2026-06-04).** The anchor lives in `src/calculations/capacity-strain.ts` (`computeCapacityStrain`, `capacityStrainNote`, plus the sentence helpers re-exported via daily-coach). Incident that forced it: Home fed the capacity percent (93% → 61) while the Readiness detail page kept its own plan-anchored percent (210% → strain floor 10 "Ease Back") — two hand-rolled assemblies of "the same" input. All three strainPct producers (home-view, readiness-view, daily-coach `deriveStrainContext`) now read the helper; hand-rolling a strain percent for `computeReadiness` is forbidden. `StrainContext.capacityStrainPct` carries it into daily-coach's internal readiness call while plan-relative `strainPct` stays for copy tiers.
+
+**Coherence.** The same `strainPctEffective` feeds the floor *and* the tri-mode post-session sentence (`postSessionSentence`, shared with running's Tier 1 copy), so the score, the ring label, and the sentence move together — no more "Manage Load + chronic-load lecture" while the Strain ring shows a just-completed hard session.
+
+**Limitations.** CTL/7 understates a planned hard day's intended dose (plans periodise; CTL is the average), so on adhoc days the floor engages slightly earlier than it would against a true planned target. Acceptable: adhoc days have no planned target by definition, and erring toward "rest up" after an unplanned hard session is the conservative direction. Planned days are unchanged.
+
+---
+
+## §BI — Bodyweight progression ladder for beginners/novices (2026-06-03)
+
+**Where it sits**: planning (it prescribes session content), strength subsystem. Pure tracking-to-planning loop; no forecast number.
+
+**Model**: weaker athletes train bodyweight movements that carry no external load, so the weight-autoregulation that progresses lifters (`suggestNextWeight`, §AW) has nothing to act on. This adds a parallel **ladder progression** per movement family (squat, lunge, hinge, calf, plank, step-up). Each family has an ordered set of rungs — more reps → a harder variant → a light external load — and the app remembers the athlete's current rung (`s.bodyweightProgress`), advancing it from the same one-tap RIR feedback (`reps-left` / `about-right` / `barely`).
+
+**Progression rule** (mirrors the weight bump's structure):
+```
+base/build only (peak/taper/injury → hold):
+  reps-left  → easyStreak++; advance one rung at easyStreak >= 2 (BODYWEIGHT_ADVANCE_STREAK)
+  barely     → step DOWN one rung (then climb back up via the normal rule)
+  about-right→ hold (reset streak)
+```
+
+**Why this is defensible**:
+- **Progressive overload by reps then load** is the textbook beginner progression (ACSM/NSCA): a movement is mastered by accumulating reps in good form, then advanced to a harder variant, then loaded. The ladder encodes exactly that path.
+- **RIR-2 autoregulation** (Helms et al. 2016): advancing only when the athlete has reps in reserve ("reps-left") is the same evidence-based cue the weight system uses — progress when the current dose is comfortably managed, not before.
+- **2-session confirmation** avoids advancing off a single good day; **regress-on-"barely"** is a safety self-correction (a too-hard rung is walked back, then re-earned), endorsed by Tristan over a plain hold.
+- **No invented prescriptions**: every rung's movement and load (e.g. Goblet Squat @50%, Step-Ups @30/40%, RDL @40%) already appears in the beginner/novice templates (`gym.ts`); the ladder only sequences existing, endorsed content with modest standard rep/time steps (10→15→20 reps; 30→45→60s holds).
+
+**Phase gate**: identical to the weight bump — only base/build advance; peak/taper/injury hold. The top rungs hand off to weight-tracking (the loaded variant has a `@%1RM` marker, so `persistStrengthLifts` then owns load progression).
+
+**Limitations**:
+- RIR is a single self-reported tap on one set, not per-set; a miscalibrated tap advances or regresses one rung (bounded, self-correcting).
+- The ladder is a fixed path, not individualised to the athlete's specific weakness; it assumes the standard family progression suits most beginners.
+- Read-back rewrites the first occurrence of each family per session (a second same-family line keeps its template prescription) and only touches movements the athlete has progressed (level > 0), so a fresh beginner's session is unchanged.
+
+---
+
 ## §BH — In-gym contrast power-block (plyometric paired with the heavy lift) (2026-06-03)
 
 **Where it sits**: planning (it prescribes session content), strength subsystem. Does not change any forecast number.

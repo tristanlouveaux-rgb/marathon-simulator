@@ -1323,6 +1323,9 @@ export function openSessionGenerator(): void {
     const plyoMax = isBeginnerOrNovice ? 30 : 60;
     const tMin = isPlyo ? 12 : 20, tMax = isPlyo ? plyoMax : 90, tStep = isPlyo ? 2 : 5;
     if (selectedGymMinutes < tMin || selectedGymMinutes > tMax) selectedGymMinutes = isPlyo ? 20 : 45;
+    // Snap onto the slider's step grid so the thumb and the state agree (45 is
+    // not on plyo's 12+2k grid; the browser would show 46 while we held 45).
+    selectedGymMinutes = tMin + Math.round((selectedGymMinutes - tMin) / tStep) * tStep;
     const intensityTiles = ([['easier', 'Easier'], ['standard', 'As prescribed'], ['harder', 'Harder']] as Array<[GymIntensity, string]>)
       .map(([k, label]) => `<button class="sg-gym-inten" data-inten="${k}" style="${tile(selectedGymIntensity === k)}">${label}</button>`).join('');
     const tuneControls = showTune ? `
@@ -2002,9 +2005,11 @@ export function openSessionGenerator(): void {
    *  (built by `renderSuggestion`'s diversion). Accept saves it; Adjust drops into
    *  that discipline's setup; "Rather run?" forces the run suggestion. */
   function renderRecoverySuggestion(wo: Workout, disc: 'gym' | 'bike') {
+    // Recovery-agnostic copy: the swap is reachable on any day (the low-recovery
+    // nudge lives on the run card), so this card must not claim recovery is low.
     const why = disc === 'gym'
-      ? 'Recovery is low. A strength session keeps training productive without the impact of a run.'
-      : 'Recovery is low. An easy bike holds the aerobic stimulus and takes the pounding off your legs.';
+      ? 'A strength session keeps training productive without the impact of a run.'
+      : 'An easy bike holds the aerobic stimulus and takes the pounding off your legs.';
     const dur = (wo as { estimatedDurationMin?: number }).estimatedDurationMin;
     const esc = (str: string) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const previewLines = String(wo.d ?? '').split('\n').filter(l => l.trim()).slice(0, 3)

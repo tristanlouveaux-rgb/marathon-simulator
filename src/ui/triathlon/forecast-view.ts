@@ -127,7 +127,7 @@ export function renderTriathlonForecastView(): void {
             <div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:6px 16px 0">${calibrationDatasetCaption(fingerprintPrediction?.courseFactors ?? [])}</div>
           `}
           <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
-            <button id="tri-fc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+            <button id="tri-fc-methodology-btn" type="button" style="font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">How this is calculated →</button>
           </div>
         </div>
       </div>

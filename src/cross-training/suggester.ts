@@ -102,6 +102,12 @@ export interface SuggestionPayload {
   equivalentEasyKm: number;
   recoveryCostLoad: number;
   runReplacementCredit: number;
+  /** The reduction budget the adjustment lists were actually built against
+   *  (effectiveRRC after the overshoot cap and recovery multiplier), in the
+   *  same load units as runReplacementCredit. When the budget was capped to
+   *  the week's overshoot, this is smaller than the raw credit — the UI uses
+   *  it as the honest "how much needs cutting" denominator. */
+  effectiveReductionBudget?: number;
   sportName: string;
   durationMin: number;
 
@@ -1194,6 +1200,7 @@ export function buildCrossTrainingPopup(
     equivalentEasyKm,
     recoveryCostLoad: Math.round(recoveryCostLoad * 10) / 10,
     runReplacementCredit: Math.round(runReplacementCredit * 10) / 10,
+    effectiveReductionBudget: Math.round(effectiveRRC * 10) / 10,
     sportName: sportDisplayName,
     durationMin: activity.duration_min,
     tier: loadResult.tier,

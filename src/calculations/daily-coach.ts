@@ -17,8 +17,6 @@ import {
   computePlannedWeekTSS,
   getTrailingEffortScore,
   computeTodaySignalBTSS,
-  computePlannedDaySignalBTSS,
-  estimateWorkoutDurMin,
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
@@ -26,8 +24,8 @@ import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
 import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
-import { generateWeekWorkouts } from '@/workouts';
-import { isHardWorkout } from '@/workouts/scheduler';
+import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
+import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
 import {
   computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
   resolveEffectiveEntry,
@@ -104,6 +102,12 @@ export interface CoachSignals {
 export interface StrainContext {
   /** Today's actual TSS as % of target (0 = nothing logged yet). */
   strainPct: number;
+  /**
+   * Today's TSS as % of the capacity anchor (max(planned, CTL/7)) — the
+   * canonical `computeCapacityStrain(s).pctCapacity`. This is what feeds the
+   * readiness strain floor; `strainPct` (plan-relative) stays for copy tiers.
+   */
+  capacityStrainPct?: number;
   /** True when no planned workout AND no matched activity today. */
   isRestDay: boolean;
   /** Rest day but load > 33% of chronic daily TSS. */
@@ -143,8 +147,8 @@ export interface CoachState {
   sessionNote: string | null;
   /**
    * UI ring label. Always the underlying `readiness.label`. The post-session
-   * "Trained hard today" wording lives in the sentence below the ring (see
-   * `isPostSessionState`), since the ring is too narrow for long copy.
+   * wording lives in the sentence below the ring (see `postSessionSentence`),
+   * since the ring is too narrow for long copy.
    */
   ringLabel: string;
   /**
@@ -183,26 +187,13 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
   const todayTSS = computeTodaySignalBTSS(wk, today);
 
-  // Just-Track users have no plan. Skip workout generation entirely. Plan-
-  // derived fields (s.rd, s.v, s.pac) are stale defaults in trackOnly and
-  // would produce a bogus planned list that poisons the coach ring + copy.
-  // Downstream: plannedDayTSS stays 0, hasPlannedWorkout=false, which lets
-  // isRestDay / matchedActivityToday drive the ring label off real actuals.
-  const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    s.injuryState, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
-  );
-  if (wk.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
-      const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
-
-  const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
-  const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
-  const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKm);
+  // Canonical mode-aware planned TSS (src/ui/planned-day-tss.ts): reads the
+  // real plan per mode (running resolver / tri-cycling-HYROX stored weeks).
+  // Just-Track returns zeros (no plan): plannedDayTSS stays 0,
+  // hasPlannedWorkout=false, which lets isRestDay / matchedActivityToday drive
+  // the ring label off real actuals.
+  const plannedCtx = getPlannedDayTSSContext(s, s.w);
+  const plannedDayTSS = plannedCtx.plannedTSSForDay(todayDayOfWeek);
   const hasPlannedWorkout = plannedDayTSS > 0;
 
   // Detect matched activity on a day with no generated workout
@@ -216,36 +207,27 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   }
 
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
-  const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKm) > 0).length || 4;
   // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
-  const plannedWeekTSS = [0,1,2,3,4,5,6]
-    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKm), 0);
-  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  const perSessionAvg = plannedCtx.perSessionAvg;
   const isRestDayOverreaching = isRestDay && todayTSS > 0 && perSessionAvg > 0 && todayTSS > perSessionAvg * REST_DAY_OVERREACH_RATIO;
 
   const strainPct = hasPlannedWorkout && todayTSS > 0 && plannedDayTSS > 0
     ? (todayTSS / plannedDayTSS) * 100 : 0;
 
-  const todayPlanned = plannedWorkouts
-    .filter((w: any) => w.status !== 'skip' && w.status !== 'replaced')
-    .find((w: any) => w.dayOfWeek === todayDayOfWeek);
-  const todayIsHard = todayPlanned ? isHardWorkout(todayPlanned.t) : false;
+  const todayPlanned = plannedCtx.workoutsForDay(todayDayOfWeek)
+    .find(w => w.status !== 'skip' && w.status !== 'replaced');
+  const todayIsHard = todayPlanned?.isHard ?? false;
 
   // Expose the planned workout shape so Brain/LLM can prescribe concrete action.
   let todayPlannedWorkout: StrainContext['todayPlannedWorkout'] = null;
   if (todayPlanned) {
-    const rpe = (todayPlanned as any).rpe ?? (todayPlanned as any).r ?? 5;
-    const durMin = Math.round(estimateWorkoutDurMin(todayPlanned as any, baseMinPerKm));
-    const plannedDayTSSForToday = computePlannedDaySignalBTSS([todayPlanned as any], todayDayOfWeek, baseMinPerKm);
     todayPlannedWorkout = {
-      name: (todayPlanned as any).n ?? '',
-      type: (todayPlanned as any).t ?? '',
-      description: (todayPlanned as any).d ?? null,
-      plannedTSS: plannedDayTSSForToday > 0 ? Math.round(plannedDayTSSForToday) : null,
-      plannedDurationMin: durMin > 0 ? durMin : null,
+      name: todayPlanned.name,
+      type: todayPlanned.type,
+      description: todayPlanned.description,
+      plannedTSS: todayPlanned.plannedTSS > 0 ? todayPlanned.plannedTSS : null,
+      plannedDurationMin: todayPlanned.plannedDurationMin > 0 ? todayPlanned.plannedDurationMin : null,
     };
-    void rpe;
   }
 
   // Look ahead 1-2 days for the next quality/hard session. Used by primary-message
@@ -254,18 +236,21 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   let upcomingHard: StrainContext['upcomingHard'] = null;
   for (let offset = 1; offset <= 2; offset++) {
     const targetDow = (todayDayOfWeek + offset) % 7;
-    if (targetDow < todayDayOfWeek) break; // wraps to next week. Current plannedWorkouts only covers this week
-    const hit = plannedWorkouts.find((w: any) =>
-      w.dayOfWeek === targetDow && w.status !== 'skip' && w.status !== 'replaced' && isHardWorkout(w.t),
-    );
+    if (targetDow < todayDayOfWeek) break; // wraps to next week. The context only covers this week
+    const hit = plannedCtx.workoutsForDay(targetDow)
+      .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
     if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: (hit as any).t };
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
       break;
     }
   }
 
   return {
     strainPct,
+    // Canonical capacity-anchored percent — what the readiness strain floor
+    // reads. Keeps the coach's internal readiness consistent with the Home
+    // card and the Readiness detail page (same computeCapacityStrain source).
+    capacityStrainPct: computeCapacityStrain(s).pctCapacity,
     isRestDay,
     isRestDayOverreaching,
     trainedToday: todayTSS > 0,
@@ -359,7 +344,9 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     recentLegLoads: s.recentLegLoads ?? [],
     impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
-    strainPct: strain?.trainedToday ? strain.strainPct : null,
+    // Capacity-anchored percent (canonical computeCapacityStrain) feeds the
+    // strain floor; the plan-relative strainPct stays for sentence tiers.
+    strainPct: strain?.trainedToday ? (strain.capacityStrainPct ?? strain.strainPct) : null,
     acwrSafeUpper: acwr.safeUpper,
     hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
   });
@@ -432,7 +419,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   })();
 
   // ── Today's workout ───────────────────────────────────────────────────────
-  // Sourced from the strain-context lookup (which already calls generateWeekWorkouts).
+  // Sourced from the strain-context lookup (mode-aware planned-day-tss context).
   // Previous `_cachedWorkouts` path never populated, so today's workout was missing
   // from signals sent to the LLM. Restored here via StrainContext.todayPlannedWorkout.
   const todayPlannedW = strain?.todayPlannedWorkout ?? null;
@@ -610,33 +597,10 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   };
 }
 
-/**
- * Returns true when today's session has hit at least 100% of planned strain
- * (or actualTSS ≥ daily CTL on adhoc / rest-day sessions). Used to override
- * the tri-mode chronic-load sentence with descriptive copy that reflects
- * what just happened. Mirrors the running-mode `derivePrimaryMessage`
- * "Solid session today…" branch. Fires on strain alone, regardless of the
- * underlying readiness tier.
- *
- * Handles two cases:
- *   1. Planned session completed → uses `strainCtx.strainPct` (actual vs plan)
- *   2. Adhoc / rest-day session  → uses `actualTSS / dailyCTL` (actual vs chronic)
- */
-export function isPostSessionState(
-  _readiness: ReadinessResult,
-  strainCtx: StrainContext | null,
-  dailyCTL: number,
-): boolean {
-  if (!strainCtx) return false;
-
-  let pct = Math.round(strainCtx.strainPct);
-
-  if (pct <= 0 && strainCtx.actualTSS > 0 && dailyCTL > 0) {
-    pct = Math.round((strainCtx.actualTSS / dailyCTL) * 100);
-  }
-
-  return pct >= 100;
-}
+// Post-session + injury-cap-overshoot sentences live in the canonical
+// capacity-strain module (single source with the strain percent itself).
+// Re-exported here so existing imports keep working.
+export { postSessionSentence, injuryCapOvershootSentence };
 
 /**
  * Legacy wrapper kept for the existing `coach.ringLabel` plumbing. Returns
@@ -888,6 +852,15 @@ function derivePrimaryMessage(
 
   // ── Tier 0: Hard blockers ───────────────────────────────────────────────
   if (blockers.includes('injury')) {
+    // Session exceeded the injury-capped plan by the "Load exceeded" margin
+    // (sp ≥ 130% of plan). Mirrors the tri-mode home-view call-out: the ring
+    // stays capacity-based, the sentence carries the rehab-cap message.
+    if (trained && sp >= 130 && actualTSS > 0) {
+      const plannedTSS = actualTSS / (sp / 100);
+      const capacityAnchor = Math.max(plannedTSS, dailyCTL ?? 0);
+      const capacityPct = capacityAnchor > 0 ? (actualTSS / capacityAnchor) * 100 : sp;
+      return injuryCapOvershootSentence(actualTSS, plannedTSS, capacityPct);
+    }
     // Tailor the message to whether the user actually has training options.
     // Full-stop message only when the stance routed to 'rest' above; for
     // partially-restricted injuries (e.g. tri user with shoulder injury still
@@ -901,14 +874,10 @@ function derivePrimaryMessage(
     return 'Illness flag is set. Rest until symptoms resolve.';
 
   // ── Tier 1: Session complete (strain-based) ─────────────────────────────
-  // Round before comparing so the threshold matches the displayed percent.
-  const spRounded = Math.round(sp);
   if (strain?.isRestDayOverreaching)
     return 'High load on a rest day. Recovery for upcoming sessions is impaired.';
-  if (spRounded >= 130)
-    return `Big session today (${Math.round(actualTSS)} TSS). Rest up and prioritise recovery for the next 24 hours.`;
-  if (spRounded >= 100)
-    return `Solid session today (${Math.round(actualTSS)} TSS). Rest up and recover.`;
+  const postNote = postSessionSentence(actualTSS, sp);
+  if (postNote) return postNote;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────
   // Hard-floor signals first. The message must explain whatever is capping

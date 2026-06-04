@@ -86,12 +86,44 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
   }
 
   function hrCandidates(): GarminPendingItem[] {
-    return (wk!.garminPending ?? []).filter(p => p.avgHR != null && p.avgHR > 0);
+    // Exclude whatever is already attached to this session — "Change recording"
+    // should only offer the alternatives.
+    const attachedGid = currentActual()?.garminId;
+    const fromPending = (wk!.garminPending ?? []).filter(p => p.avgHR != null && p.avgHR > 0);
+    const seenGids = new Set(fromPending.map(p => p.garminId));
+    // Standalone synced activities (their own `garmin-<gid>` card, not bound to a
+    // plan slot) are offerable too. After a sync cleans up garminPending they are
+    // the only remaining copy of the recording, and they're exactly the "floating
+    // HIIT next to a done gym session" the user wants to merge in. Slot-bound
+    // actuals (key = a plan-slot id) are deliberately not offered — they already
+    // belong to another session.
+    const fromActuals: GarminPendingItem[] = Object.entries(wk!.garminActuals ?? {})
+      .filter(([key, a]) =>
+        key.startsWith('garmin-') && key !== result.workoutId
+        && a.avgHR != null && a.avgHR > 0 && !!a.garminId && !seenGids.has(a.garminId))
+      .map(([, a]) => ({
+        garminId: a.garminId,
+        activityType: a.activityType ?? a.displayName ?? 'Activity',
+        appType: 'gym',
+        startTime: a.startTime ?? '',
+        durationSec: a.durationSec ?? 0,
+        distanceM: null,
+        avgHR: a.avgHR ?? null,
+        maxHR: a.maxHR ?? null,
+        aerobicEffect: a.aerobicEffect ?? null,
+        anaerobicEffect: a.anaerobicEffect ?? null,
+        garminRpe: null,
+        calories: a.calories ?? null,
+        iTrimp: a.iTrimp ?? null,
+        hrZones: a.hrZones ?? null,
+      }));
+    return [...fromPending, ...fromActuals].filter(p => p.garminId !== attachedGid);
   }
 
   function attachHR(p: GarminPendingItem): void {
     const a = currentActual();
     if (!a) return;
+    const prevGid = a.garminId;
     a.avgHR = p.avgHR;
     a.maxHR = p.maxHR;
     a.hrZones = p.hrZones ?? a.hrZones ?? null;
@@ -102,6 +134,22 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     if (!wk!.garminMatched) wk!.garminMatched = {};
     wk!.garminMatched[p.garminId] = result.workoutId;
     wk!.garminPending = (wk!.garminPending ?? []).filter(x => x.garminId !== p.garminId);
+    // Merge: the picked recording may already exist as its own standalone card (a
+    // `garmin-<gid>` actual + adhoc created when it was reviewed before this match).
+    // Remove those copies so the session shows once, not as a planned card plus a
+    // floating "HIIT".
+    const dupKey = `garmin-${p.garminId}`;
+    if (dupKey !== result.workoutId) {
+      if (wk!.garminActuals?.[dupKey]) delete wk!.garminActuals[dupKey];
+      if (wk!.adhocWorkouts?.length) wk!.adhocWorkouts = wk!.adhocWorkouts.filter(w => w.id !== dupKey);
+      if (wk!.rated?.[dupKey] !== undefined) delete wk!.rated[dupKey];
+    }
+    // Re-match: release the recording that was attached before (if it was a real
+    // synced one, not the guided- stub) back to review, so it can be bound to the
+    // session it actually belongs to.
+    if (prevGid && prevGid !== p.garminId && !prevGid.startsWith('guided-') && wk!.garminMatched[prevGid] === result.workoutId) {
+      wk!.garminMatched[prevGid] = '__pending__';
+    }
     saveState();
     pickingHR = false;
     build();
@@ -177,11 +225,19 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     const a = currentActual();
     if (a?.avgHR != null && a.avgHR > 0) {
       const max = a.maxHR != null && a.maxHR > 0 ? `<span style="color:var(--c-faint);margin:0 8px">·</span>Max ${Math.round(a.maxHR)}` : '';
-      const note = result.hrAutoMatched ? 'Matched from a synced activity.' : '';
+      // Name the attached recording's date and time. A mis-matched recording (the
+      // wrong day's session bound to this slot) is then visible at a glance, and
+      // "Change recording" is the recovery path.
+      const attachedMeta = [dateLabel(a.startTime), timeLabel(a.startTime)].filter(Boolean).join(', ');
+      const note = attachedMeta
+        ? `From the recording on ${attachedMeta}.`
+        : (result.hrAutoMatched ? 'Matched from a synced activity.' : '');
+      const canRematch = hrCandidates().length > 0;
       return `
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--c-border)">
           <div style="font-size:14px;color:var(--c-black);font-variant-numeric:tabular-nums">Avg HR ${Math.round(a.avgHR)} bpm${max}</div>
-          ${note ? `<div style="font-size:12px;color:var(--c-faint);margin-top:3px">${note}</div>` : ''}
+          ${note ? `<div style="font-size:12px;color:var(--c-faint);margin-top:3px">${esc(note)}</div>` : ''}
+          ${canRematch ? `<button id="ss-rematch-hr" style="margin-top:8px;padding:0;background:none;border:none;color:var(--c-muted);font-size:12px;font-weight:500;cursor:pointer;font-family:var(--f);text-decoration:underline;text-underline-offset:2px">Change recording</button>` : ''}
         </div>`;
     }
     const candidates = hrCandidates();
@@ -273,6 +329,7 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     overlay.querySelector('#ss-close')?.addEventListener('click', closeAndRefresh);
     overlay.querySelector('#ss-done')?.addEventListener('click', closeAndRefresh);
     overlay.querySelector('#ss-match-hr')?.addEventListener('click', () => { pickingHR = true; build(); });
+    overlay.querySelector('#ss-rematch-hr')?.addEventListener('click', () => { pickingHR = true; build(); });
     overlay.querySelector('#ss-delete')?.addEventListener('click', () => {
       showDeleteConfirm(() => {
         const st = getMutableState();

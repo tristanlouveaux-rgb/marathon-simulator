@@ -14,11 +14,13 @@ import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, c
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
-import { computeDailyCoach, type StrainContext, type CoachState } from '@/calculations/daily-coach';
+import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
+import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { resolveWeekWorkouts } from './week-resolve';
+import { getPlannedDayTSSContext } from './planned-day-tss';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { strengthCardSummary } from '@/guided/strength-model';
 import { isInjuryActive, buildInjuryCaption } from './injury/modal';
@@ -921,30 +923,13 @@ function buildReadinessRing(s: SimulatorState): string {
   const todayActiveMin = todayPhysio?.activeMinutes ?? null;
   const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysio, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
-  const plannedWorkouts = strainWk ? generateWeekWorkouts(
-    strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  ) : [];
-  // Apply day moves so target matches what the plan view shows
-  if (strainWk?.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(strainWk.workoutMoves)) {
-      const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
-  const baseMinPerKmH = s.pac?.e ? s.pac.e / 60 : 5.5;
-  // Exclude cross-training from planned strain targets. Cross-training is flexible/adhoc,
-  // handled by matched-activity zones when it actually happens.
-  const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
-  const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKmH);
+  // Canonical mode-aware planned TSS (planned-day-tss.ts): reads the real plan
+  // per mode (running resolver / tri-cycling-HYROX stored weeks) so the ring's
+  // target matches what the plan view shows in every mode.
+  const plannedCtx = getPlannedDayTSSContext(s, s.w);
+  const plannedDayTSS = strainWk ? plannedCtx.plannedTSSForDay(todayDayOfWeek) : 0;
   // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
-  const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH) > 0).length || 4;
-  const plannedWeekTSS = [0,1,2,3,4,5,6]
-    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH), 0);
-  let perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  let perSessionAvg = strainWk ? plannedCtx.perSessionAvg : 0;
   // On-demand (no plan) has no per-session target, which left the Strain ring with no
   // anchor — it auto-scaled to the actual and read ~80% for any load. Anchor it on the
   // sustainable daily load (CTL/7, Banister) instead — the same baseline the removed
@@ -981,6 +966,14 @@ function buildReadinessRing(s: SimulatorState): string {
   const strainPctLog = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
     ? (Math.log(1 + todaySignalBTSS) / Math.log(1 + plannedDayTSS)) * 100
     : 0;
+  // Canonical capacity-anchored strain (capacity-strain.ts): anchor =
+  // max(plannedDayTSS, weeklyCTL/7) — overreached only when today exceeds
+  // BOTH the planned dose and sustainable daily load. Science + guards in
+  // SCIENCE_LOG §BJ. Every surface that feeds computeReadiness.strainPct
+  // (this card, readiness-view, daily-coach) reads the SAME helper — the
+  // 2026-06-04 incident (Home 61 vs detail page 10) was two surfaces
+  // hand-rolling different percents.
+  const capStrain = computeCapacityStrain(s);
 
   // Compute recovery score first so the same value feeds both the readiness composite and the display.
   const todayStr0 = new Date().toISOString().split('T')[0];
@@ -1018,7 +1011,7 @@ function buildReadinessRing(s: SimulatorState): string {
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     sleepDebtExcessSec,
     weeksOfHistory: metrics.length,
-    strainPct: todaySignalBTSS > 0 ? strainPctLinear : null,
+    strainPct: capStrain.todayTSS > 0 ? capStrain.pctCapacity : null,
     recentLegLoads: s.recentLegLoads ?? [],
     impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
@@ -1030,26 +1023,25 @@ function buildReadinessRing(s: SimulatorState): string {
   // Replaces the old readinessSentence + HRV banner with one coherent message
   // computed by daily-coach using all available signals.
   const trainedToday = todaySignalBTSS > 0;
-  const todayPlannedWorkout = plannedWorkouts
-    .filter((w: any) => w.status !== 'skip' && w.status !== 'replaced')
-    .find((w: any) => w.dayOfWeek === todayDayOfWeek);
-  const todayIsHard = todayPlannedWorkout ? isHardWorkout(todayPlannedWorkout.t) : false;
+  const todayPlannedWorkout = plannedCtx.workoutsForDay(todayDayOfWeek)
+    .find(w => w.status !== 'skip' && w.status !== 'replaced');
+  const todayIsHard = todayPlannedWorkout?.isHard ?? false;
 
   let upcomingHard: StrainContext['upcomingHard'] = null;
   for (let offset = 1; offset <= 2; offset++) {
     const targetDow = (todayDayOfWeek + offset) % 7;
     if (targetDow < todayDayOfWeek) break;
-    const hit = plannedWorkouts.find((w: any) =>
-      w.dayOfWeek === targetDow && w.status !== 'skip' && w.status !== 'replaced' && isHardWorkout(w.t),
-    );
+    const hit = plannedCtx.workoutsForDay(targetDow)
+      .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
     if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: (hit as any).t };
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
       break;
     }
   }
 
   const strainCtx: StrainContext = {
     strainPct: strainPctLinear,
+    capacityStrainPct: capStrain.pctCapacity,
     isRestDay,
     isRestDayOverreaching,
     trainedToday,
@@ -1060,8 +1052,25 @@ function buildReadinessRing(s: SimulatorState): string {
   };
 
   const coach = computeDailyCoach(s, strainCtx);
+  // Tri-mode post-session override: canonical capacityStrainNote — injury-cap
+  // overshoot first ("X TSS logged against an injury-capped day of Y…"), then
+  // the Big/Solid/Good-training tiers vs the capacity anchor. Same helper the
+  // Readiness detail page reads, so the two surfaces cannot diverge. Running
+  // mode gets the same copy via coach.primaryMessage. (Override restored from
+  // the 2026-05-19 snapshot — lost in the May crash.)
+  const triPostSessionNote = isTri ? capacityStrainNote(capStrain) : null;
+  // TEMP DEBUG (2026-06-03, remove after dogfood verification)
+  console.log('[readiness-debug]', JSON.stringify({
+    todayTSS: capStrain.todayTSS, plannedDayTSS: Math.round(capStrain.plannedDayTSS),
+    anchor: Math.round(capStrain.anchorTSS), pctPlan: Math.round(capStrain.pctPlan),
+    pctCapacity: Math.round(capStrain.pctCapacity),
+    weeklyCtl: Math.round(capStrain.weeklyCtl), injuryCapOvershoot: capStrain.injuryCapOvershoot,
+    weeksOfHistory: metrics.length, w: s.w,
+    score: readiness.score, label: readiness.label, floor: readiness.hardFloor,
+    note: triPostSessionNote,
+  }));
   const baseReadinessSentence = isTri
-    ? (triReadinessResult?.sentence ?? readiness.sentence)
+    ? (triPostSessionNote ?? triReadinessResult?.sentence ?? readiness.sentence)
     : coach.primaryMessage;
   // Injury state is the dominant constraint when active. Lead with it so the
   // user reads "blocked / capped" before the systemic readiness commentary.
@@ -1208,8 +1217,18 @@ function buildReadinessRing(s: SimulatorState): string {
   // the remaining week for the legLoad branch only.
   const acwrElevatedForBtn = acwr.status === 'caution' || acwr.status === 'high';
   const hasUnspentForBtn = (strainWk?.unspentLoadItems?.length ?? 0) > 0;
+  // An ACWR reduction applied today replaces the adjust button with a
+  // "Session load reduced." caption + Undo, valid for the rest of that day.
+  // Running mode only (tri routes through its own suggestion pipeline).
+  const acwrUndoAvailable = !isTriMode
+    && s.wks?.[s.w - 1]?.acwrReductionUndo?.date === new Date().toISOString().split('T')[0];
   const ratedForBtn = strainWk?.rated ?? {};
-  const remainingUnratedWorkouts = plannedWorkouts.filter((w: any) => {
+  // Running-only logic (tri routes through triHasMods below). Reads the
+  // canonical running resolver; tri/HYROX/just-track get an empty list rather
+  // than a phantom regenerated running week.
+  const runPlanForBtn = (!s.trackOnly && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && strainWk)
+    ? resolveWeekWorkouts(s, s.w) : [];
+  const remainingUnratedWorkouts = runPlanForBtn.filter((w: any) => {
     const day = w.dayOfWeek ?? -1;
     if (day < todayDayOfWeek) return false;
     if (w.t === 'cross' || w.t === 'strength' || w.t === 'rest' || w.t === 'gym') return false;
@@ -1414,7 +1433,13 @@ function buildReadinessRing(s: SimulatorState): string {
         ${readiness.suppressStreak != null ? `<p style="font-size:12px;color:var(--c-muted);text-align:center;line-height:1.4;margin:-6px 16px 14px;opacity:0.75">Sleep has limited your score for ${readiness.suppressStreak} consecutive days.</p>` : ''}
         ${!isTri && coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
-        ${showAdjustButton ? `
+        ${acwrUndoAvailable ? `
+        <div style="padding:0 14px 16px">
+          <div style="font-size:12px;color:var(--c-muted);text-align:center;margin-bottom:8px">Session load reduced.</div>
+          <button id="readiness-undo-btn" class="m-btn-glass m-btn-glass--inset" style="width:100%">
+            Undo reduction
+          </button>
+        </div>` : showAdjustButton ? `
         <div style="padding:0 14px 16px">
           <button id="readiness-adjust-btn" class="m-btn-glass m-btn-glass--inset" style="width:100%">
             ${adjustText}
@@ -1846,7 +1871,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
   `;
 }
 
-function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
+function buildTodayWorkout(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   if (!wk) {
     return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your training plan.', false);
@@ -1943,17 +1968,12 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
       ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" class="m-btn-glass m-btn-glass--inset" style="padding:6px 14px;font-size:12px">Done · View</button>`
       : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
-  // Coach workout modifier. Render only the lead clause on home; the body
-  // (coach.primaryMessage) is already shown by the readiness-ring card directly
-  // below, so repeating it here is double messaging. Plan view keeps the full
-  // sentence because it doesn't show the readiness sentence on the same page.
-  const coachMod = coach && !alreadyRated ? coach.workoutMod : 'none';
-  const workoutIsAlreadyEasy = (todayW as any).t === 'easy' || ((todayW as any).rpe != null && (todayW as any).rpe <= 3);
-  const coachNote = coachMod === 'downgrade' && !workoutIsAlreadyEasy
-    ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Go easier today.</div>`
-    : coachMod === 'skip'
-      ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Consider rest today.</div>`
-      : '';
+  // Coach workout modifier is intentionally NOT surfaced as a standalone note
+  // here. The readiness-ring card directly below already carries the
+  // take-it-lighter / consider-rest message via its driving-signal CTA, so a
+  // floating pill in the gap between the cards was redundant double-messaging.
+  // Plan view keeps its full-sentence note because it has no readiness sentence
+  // on the same view.
 
   return `
     <div style="margin:0 16px 14px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.05),0 12px 32px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
@@ -1992,7 +2012,6 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
         </div>
       </div>
     </div>
-    ${coachNote}
   `;
 }
 
@@ -2188,7 +2207,12 @@ function buildRecentActivity(s: SimulatorState): string {
   const prevWkForReview = s.wks?.[s.w - 2];
   const currentPending = wkForReview?.garminPending?.length ?? 0;
   const prevPending = prevWkForReview?.garminPending?.length ?? 0;
-  const hasReviewable = currentPending > 0 || prevPending > 0;
+  // Synced actuals are re-reviewable even after a sync consumed the pending
+  // records (openActivityReReview reconstitutes them) — keep the Review entry
+  // point available so a placement can always be changed.
+  const hasSyncedActuals = (week: typeof wkForReview): boolean =>
+    Object.values(week?.garminActuals ?? {}).some((a: any) => a?.garminId && !String(a.garminId).startsWith('guided-'));
+  const hasReviewable = currentPending > 0 || prevPending > 0 || hasSyncedActuals(wkForReview) || hasSyncedActuals(prevWkForReview);
 
   return `
     <div style="padding:0 16px;margin-bottom:14px" class="hf" data-delay="0.32">
@@ -2636,8 +2660,6 @@ function getHomeHTML(s: SimulatorState): string {
   const phase = s.wks?.[s.w - 1]?.ph;
   const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
 
-  // Single coach compute per render; passed to card builders that need workoutMod.
-  const coach = computeDailyCoach(s);
 
   return `
     <style>
@@ -2690,7 +2712,7 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildRaceCompleteBanner(s)}
       ${buildGuestAccountBanner(s)}
       ${s.eventType === 'triathlon' ? buildTriCarryBanner(s) : ''}
-      ${s.eventType === 'hyrox' ? buildTodayWorkoutHyrox(s) : s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
+      ${s.eventType === 'hyrox' ? buildTodayWorkoutHyrox(s) : s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s)}
       ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
@@ -2958,8 +2980,13 @@ function wireHomeHandlers(): void {
   // open the right matching surface).
   document.getElementById('home-tri-review-btn')?.addEventListener('click', () => {
     const st = getState();
-    const cur = st.wks?.[st.w - 1]?.garminPending?.length ?? 0;
-    const weekNum = cur > 0 ? st.w : st.w - 1;
+    const wk = st.wks?.[st.w - 1];
+    // Prefer the current week when it has anything reviewable — pending records
+    // OR synced actuals (re-review reconstitutes the latter). Only fall back to
+    // last week when the current one is genuinely empty.
+    const curPending = wk?.garminPending?.length ?? 0;
+    const curActuals = Object.values(wk?.garminActuals ?? {}).some((a: any) => a?.garminId && !String(a.garminId).startsWith('guided-'));
+    const weekNum = (curPending > 0 || curActuals) ? st.w : st.w - 1;
     (window as any).openActivityReReview?.(() => renderHomeView(), weekNum);
   });
 
@@ -3153,14 +3180,28 @@ function wireHomeHandlers(): void {
     if (acwrElevated || hasUnspent) {
       // ACWR is elevated or there's unspent cross-training load → plan adjustment modal
       import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
-      // Low readiness driven by sleep/recovery. Show rest advice if there's a run to act on,
-      // Low readiness driven by sleep/recovery: show rest advice if there's a run to act on,
-      // otherwise navigate to plan so the user can see their week
+    } else {
+      // Low readiness driven by sleep/recovery: show rest advice if there's a run
+      // to act on, otherwise navigate to plan so the user can see their week.
+      // (A lost `else` here used to open the advice sheet / navigate to Plan on
+      // top of the reduction modal — both branches ran on the same tap.)
       const opened = showRecoveryAdviceSheet();
       if (!opened) {
         import('./main-view').then(({ renderMainView }) => renderMainView());
       }
     }
+  });
+
+  // Undo today's ACWR reduction (shown in place of the adjust button)
+  document.getElementById('readiness-undo-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    import('./main-view').then(({ undoACWRReduction }) => {
+      const undone = undoACWRReduction();
+      if (undone) {
+        import('./toast').then(({ showSimpleToast }) => showSimpleToast('Reduction undone. Original sessions restored.'));
+      }
+      renderHomeView();
+    });
   });
 
   // TSS row → Load & Taper page

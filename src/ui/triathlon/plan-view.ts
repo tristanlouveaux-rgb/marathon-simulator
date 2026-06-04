@@ -17,8 +17,7 @@ import { deriveWorkoutStatus, renderWorkoutStatusChip, computeWeekStatusContext,
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind } from './colours';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
-import { applyIllnessMods } from '@/calculations/illness-rules';
-import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
+import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from './week-resolve.triathlon';
 import { formatKm } from '@/utils/format';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
@@ -82,33 +81,6 @@ function navigateTab(tab: TabId): void {
 // Main render
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Render-time illness + holiday suppression for a tri/cycling week's workouts.
- * Mirrors the running plan-view (plan-view.ts) but via the discipline-aware
- * helpers so swim, bike, and run legs are all scaled, not just the run. Mutates
- * the passed array in place (the array is a fresh copy of stored workouts, so
- * this is not persisted). Both render entry points call this.
- */
-function applyTriRenderMods(workouts: any[], s: any, viewWeek: number): void {
-  const isCurrentWeek = viewWeek === s.w;
-  const illness = s.illnessState;
-  if (illness?.active && isCurrentWeek) {
-    // v2 engine: schedule + classification aware, rests strength for below-neck.
-    applyIllnessMods(workouts, illness);
-  }
-  const holiday = s.holidayState;
-  const todayIso = new Date().toISOString().split('T')[0];
-  if (holiday?.active && todayIso >= holiday.startDate && todayIso <= holiday.endDate
-      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, holiday)) {
-    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, holiday);
-    applyHolidayModsAllDisciplines(workouts, holiday.canRun, holidayDays, holiday.canSwim);
-  }
-  // Post-holiday comeback ramp. No-ops unless buildBridgeWeekMods set a scale on this week.
-  // Runs after the holiday gate (the two never overlap: bridge weeks come after the holiday).
-  const wk = s.wks?.[viewWeek - 1];
-  if (wk) applyBridgeModsAllDisciplines(workouts, wk);
-}
-
 export function renderTriathlonPlanView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
@@ -123,8 +95,9 @@ export function renderTriathlonPlanView(): void {
   // Include adhoc sessions (e.g. injury-safe strength accepted from the
   // capability nudge) so suggested sessions render on the plan, not just
   // `triWorkouts`. Mirrors the HYROX plan-view fix.
-  const workouts = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
-  applyTriRenderMods(workouts, s, viewWeek);
+  // clone:false — click/drag handlers re-read wk.triWorkouts directly and rely
+  // on render mods being visible on those shared objects (historical behaviour).
+  const workouts = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
   const phase = wk?.ph ? capitalize(wk.ph) : '';
   const cyclingLabel = getCyclingEventLabel(s);
   const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
@@ -459,8 +432,8 @@ let _touchHoldMet = false;
 function buildTriDayList(s: any, viewWeek: number): string {
   const tri = s.triConfig;
   const wk = s.wks?.[viewWeek - 1];
-  const workouts = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
-  applyTriRenderMods(workouts, s, viewWeek);
+  // clone:false — see renderTriathlonPlanView; handlers depend on shared refs.
+  const workouts = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
   const dismissedTests = new Set<string>((tri as any)?.dismissedTests as string[] ?? []);
 
   const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
@@ -1225,6 +1198,22 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
   // Done / Logged / Missed / Today flag, mirroring the running plan-view card.
   const chipFor = (w: any): string =>
     statusCtx ? renderWorkoutStatusChip(deriveWorkoutStatus(w, statusCtx.wk, statusCtx.ctx)) : '';
+  // "Completed · 56 min · Wed 3 Jun" footnote on a completed card — what was
+  // actually done, so a logged session reads unambiguously as finished.
+  const completedSummaryFor = (w: any): string | undefined => {
+    if (!statusCtx) return undefined;
+    const actuals = statusCtx.wk?.garminActuals ?? {};
+    const a = (w.matchedActivityId && actuals[w.matchedActivityId]) || actuals[w.id ?? w.n];
+    if (!a?.garminId) return undefined;
+    const parts: string[] = ['Completed'];
+    if (a.durationSec) parts.push(`${Math.round(a.durationSec / 60)} min`);
+    if (a.distanceKm && a.distanceKm > 0.1) parts.push(formatKm(a.distanceKm, getState().unitPref ?? 'km'));
+    if (a.startTime) {
+      const t = new Date(a.startTime);
+      if (!isNaN(t.getTime())) parts.push(t.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }));
+    }
+    return parts.join(' · ');
+  };
   if (list.length === 0) {
     // Empty rest day: the row itself is the drop zone (mirrors running's
     // single `.plan-drop-zone`). No inner `.tri-day-header`, so the row's
@@ -1252,7 +1241,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
       const legLoadNudge = isStrength && isActiveCard
         ? (gymLegLoadNudgeForWorkout(w, getState().recentLegLoads ?? [], w.rpe ?? w.r ?? 7, Date.now()) ?? undefined)
         : undefined;
-      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w), legLoadNudge });
+      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w), legLoadNudge, completedSummary: completedSummaryFor(w) });
     }
     // For bricks: use the more restrictive of bike/run status
     let disc: 'swim' | 'bike' | 'run' = rawDisc;
@@ -1262,7 +1251,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     }
     const status = injStatus[disc];
     if (status === 'stop') return renderInjuryRestCard(w, rawDisc);
-    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy', statusChip: chipFor(w) });
+    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy', statusChip: chipFor(w), completedSummary: completedSummaryFor(w) });
   }).join('');
 
   return `
@@ -1320,20 +1309,6 @@ function fmtHours(mins: number): string {
 function fmtHoursZero(mins: number): string {
   if (mins <= 0) return '0h';
   return fmtHours(mins);
-}
-
-function estimateMinutes(w: any): number {
-  if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
-    return w.estimatedDurationMin;
-  }
-  if (w.brickSegments) {
-    return (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
-  }
-  const hm = String(w.d || '').match(/(\d+)\s*h\s*(\d+)\s*min/i);
-  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
-  const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g)) as RegExpMatchArray[];
-  if (!matches.length) return 60;
-  return matches.reduce((acc: number, m: RegExpMatchArray) => Math.max(acc, parseInt(m[1], 10)), 0);
 }
 
 function daysUntil(isoDate: string): number {

@@ -263,9 +263,6 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             ${s.initialLT ? `
               <div class="pp-row"><span class="pp-row-k">LT threshold</span><span class="pp-row-v">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span></div>
             ` : ''}
-            ${s.initialVO2 ? `
-              <div class="pp-row"><span class="pp-row-k">VO2 max</span><span class="pp-row-v">${s.initialVO2.toFixed(1)} ml/kg/min</span></div>
-            ` : ''}
           </div>
         </div>
       </div>

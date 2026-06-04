@@ -901,7 +901,7 @@ export function renderHyroxForecastView(): void {
         ${renderHyroxRaceOutcomeRetroCard(s)}
         ${body}
         <div style="padding:10px 0 4px;text-align:center">
-          <button id="hx-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+          <button id="hx-methodology-btn" type="button" style="font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">How this is calculated →</button>
         </div>
         ${buildHyroxTrademarkFooter()}
       </div>

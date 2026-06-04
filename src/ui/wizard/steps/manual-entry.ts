@@ -343,10 +343,17 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
     const s = getMutableState();
     if (!raw) {
       s.detectedWeeklyKm = undefined;
+      s.weeklyVolumeConfirmed = undefined;
     } else {
       const num = parseFloat(raw);
       if (isFinite(num) && num >= 0) {
         s.detectedWeeklyKm = unitPref === 'mi' ? num * 1.609 : num;
+        // A typed volume is explicitly provided — flag it so the plan
+        // starting-volume gate (initializeSimulator, D3) seeds s.wkm from
+        // it instead of the runs-per-week lookup. The flag was previously
+        // only set by the Apple Health import path, so manual-entry users'
+        // typed volume reached prediction/archetype but never the plan.
+        s.weeklyVolumeConfirmed = true;
       }
     }
     saveState();

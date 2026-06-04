@@ -19,8 +19,7 @@ import {
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import type { Workout, Week } from '@/types/state';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
-import { applyIllnessMods } from '@/calculations/illness-rules';
-import { applyHolidayModsAllDisciplines, applyBridgeModsAllDisciplines, isWeekInHoliday, getHolidayDaysForWeek } from '../holiday-modal';
+import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from '../triathlon/week-resolve.triathlon';
 import { formatKm } from '@/utils/format';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 
@@ -102,26 +101,10 @@ export function renderHyroxPlanView(): void {
   const wk = s.wks?.[viewWeek - 1];
   // Include adhoc sessions (e.g. injury-substitute bike / safe strength accepted
   // from the capability nudge) so suggested sessions actually show on the plan.
-  const workouts: Workout[] = [...(wk?.triWorkouts ?? []), ...(wk?.adhocWorkouts ?? [])];
-
-  // Render-time illness + holiday suppression. Mirrors the running plan-view
-  // (plan-view.ts) but via the discipline-aware helpers so stations, bricks, and
-  // runs are all scaled, not just the run legs. Not persisted.
-  const isCurrentWeek = viewWeek === s.w;
-  const _illness = (s as any).illnessState;
-  if (_illness?.active && isCurrentWeek) {
-    // v2 engine: schedule + classification aware, rests strength for below-neck.
-    applyIllnessMods(workouts, _illness);
-  }
-  const _holiday = s.holidayState;
-  const _todayIso = new Date().toISOString().split('T')[0];
-  if (_holiday?.active && _todayIso >= _holiday.startDate && _todayIso <= _holiday.endDate
-      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, _holiday)) {
-    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, _holiday);
-    applyHolidayModsAllDisciplines(workouts, _holiday.canRun, holidayDays, _holiday.canSwim);
-  }
-  // Post-holiday comeback ramp. No-ops unless buildBridgeWeekMods set a scale on this week.
-  if (wk) applyBridgeModsAllDisciplines(workouts, wk);
+  // Render-time illness + holiday + bridge mods applied by the shared resolver.
+  // clone:false — handlers re-read wk.triWorkouts directly and rely on render
+  // mods being visible on those shared objects (historical behaviour).
+  const workouts: Workout[] = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
 
   const band = hx.athleteBand;
   const format = hx.format ?? 'open_singles';
@@ -556,13 +539,6 @@ function fmtHours(mins: number): string {
   if (h > 0 && m > 0) return `${h}h ${m}m`;
   if (h > 0) return `${h}h`;
   return `${m}m`;
-}
-
-function estimateMinutes(w: any): number {
-  if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) return w.estimatedDurationMin;
-  const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g)) as RegExpMatchArray[];
-  if (!matches.length) return 45;
-  return matches.reduce((acc: number, m: RegExpMatchArray) => Math.max(acc, parseInt(m[1], 10)), 0);
 }
 
 function daysUntil(isoDate: string): number {

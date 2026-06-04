@@ -148,13 +148,13 @@ function buildConeCardHTML(s: SimulatorState): string {
           <div style="font-size:28px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${fmtProbPct(probPct)}</div>
           <div style="font-size:12px;color:${TEXT_S};line-height:1.5;flex:1">${caption}</div>
         </div>
-        <button id="run-cone-edit-goal" type="button" style="margin-top:12px;font-size:12px;color:${TEXT_S};background:none;border:none;cursor:pointer;padding:0;font:inherit;text-decoration:underline">${isUserGoal ? 'Edit goal time' : 'Set your own goal time'}</button>
+        <button id="run-cone-edit-goal" type="button" style="font:inherit;margin-top:12px;font-size:12px;color:${TEXT_S};background:none;border:none;cursor:pointer;padding:0;text-decoration:underline">${isUserGoal ? 'Edit goal time' : 'Set your own goal time'}</button>
       </div>`;
   } else {
     goalBlock = `
       <div style="background:rgba(148,163,184,0.10);border-radius:12px;padding:14px;margin-top:18px;text-align:center">
         <div style="font-size:13px;color:${TEXT_M};margin-bottom:8px">Set a goal time to see your chance of beating it.</div>
-        <button id="run-cone-set-goal" type="button" style="font-size:13px;color:${TEXT_M};background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:999px;padding:8px 16px;cursor:pointer;font:inherit;font-weight:500">Set a goal time</button>
+        <button id="run-cone-set-goal" type="button" style="font:inherit;font-size:13px;color:${TEXT_M};background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:999px;padding:8px 16px;cursor:pointer;font-weight:500">Set a goal time</button>
       </div>`;
   }
 

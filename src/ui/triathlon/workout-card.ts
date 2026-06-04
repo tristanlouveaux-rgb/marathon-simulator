@@ -9,7 +9,7 @@ import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { parseStrengthSession } from '@/guided/strength-model';
 
-export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean; statusChip?: string; legLoadNudge?: string } = {}): string {
+export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean; statusChip?: string; legLoadNudge?: string; completedSummary?: string } = {}): string {
   const discipline: BadgeKind = badgeKindFor(w);
   const c = DISCIPLINE_COLOURS[discipline];
   const label = DISCIPLINE_LABEL[discipline];
@@ -63,6 +63,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
       <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${descLine}</div>
       ${opts.legLoadNudge ? `<div style="margin-top:6px"><span style="font-size:10px;font-weight:500;color:var(--c-muted)">${escapeHtml(opts.legLoadNudge)}</span></div>` : ''}
+      ${opts.completedSummary ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.08);font-size:11px;color:var(--c-muted)">${escapeHtml(opts.completedSummary)}</div>` : ''}
       ${brickFootnote}
       ${opts.injuryEasy ? `<div style="margin-top:8px;padding:5px 10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:11px;color:#92400E;font-weight:500">Easy intensity only. Injury management</div>` : ''}
     </div>
@@ -84,6 +85,11 @@ function badgeKindFor(w: Workout): BadgeKind {
     return w.discipline;
   }
   if (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n)) return 'strength';
+  // Synced adhoc cross-training carries no discipline (t='cross'); its name is the
+  // formatted activity type ("Indoor Cycling", "Swimming"). Classify from it so a
+  // logged ride doesn't wear a RUN badge.
+  if (/cycl|bike|ride/i.test(w.n)) return 'bike';
+  if (/swim/i.test(w.n)) return 'swim';
   return 'run';
 }
 

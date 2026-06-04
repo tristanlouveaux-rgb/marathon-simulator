@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
+import { computePredictionInputs, resolveWeeklyKmSignal, type RunActivityInput } from './prediction-inputs';
 
 /**
  * Build a deterministic run N days before `anchor`, with given distance and
@@ -169,5 +169,31 @@ describe('computePredictionInputs', () => {
     expect(r.recentRun).not.toBeNull();
     expect(r.recentRun!.d).toBe(10);
     expect(r.recentRun!.weeksAgo).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('resolveWeeklyKmSignal', () => {
+  const NOW = new Date('2026-04-15T12:00:00Z');
+
+  it('history coverage wins — typed volume is ignored when the window has runs', () => {
+    const inputs = computePredictionInputs(
+      [run(1, 10, 300), run(3, 10, 300), run(8, 10, 300)], NOW,
+    );
+    expect(inputs.weeksCovered).toBeGreaterThan(0);
+    // Typed 50 must not override measured history.
+    expect(resolveWeeklyKmSignal(inputs, 50)).toBe(inputs.weeklyKm);
+  });
+
+  it('empty scrape falls back to the typed manual-entry volume', () => {
+    const inputs = computePredictionInputs([], NOW);
+    expect(resolveWeeklyKmSignal(inputs, 10)).toBe(10);
+  });
+
+  it('empty scrape with no typed volume stays an explicit zero (blend contract)', () => {
+    const inputs = computePredictionInputs([], NOW);
+    expect(resolveWeeklyKmSignal(inputs, undefined)).toBe(0);
+    expect(resolveWeeklyKmSignal(inputs, null)).toBe(0);
+    // 0 typed volume is not a usable signal either.
+    expect(resolveWeeklyKmSignal(inputs, 0)).toBe(0);
   });
 });

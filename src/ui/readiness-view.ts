@@ -12,12 +12,10 @@ import {
   computeLiveSameSignalTSB,
   computeFitnessModel,
   computeTodayStrainTSS,
-  computePlannedDaySignalBTSS,
-  estimateWorkoutDurMin,
-  getTrailingEffortScore,
   computeToBaseline,
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
+import { getPlannedDayTSSContext } from './planned-day-tss';
 import {
   computeReadiness,
   readinessColor,
@@ -27,9 +25,8 @@ import {
   LEG_LOAD_HEAVY,
 } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
-import { generateWeekWorkouts } from '@/workouts';
-import { TL_PER_MIN } from '@/constants';
 import { computeDailyCoach } from '@/calculations/daily-coach';
+import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
@@ -146,31 +143,13 @@ function getReadinessHTML(s: SimulatorState): string {
   const todayPhysioR = (s.physiologyHistory ?? []).find(e => e.date === today);
   const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysioR, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
-  // Just-Track users have no plan. Skip the planned-workout comparison entirely.
-  // Plan-derived fields (s.rd, s.v, s.pac) are stale defaults in trackOnly and
-  // would produce a bogus "planned" list that poisons plannedDayTSS maths.
-  const plannedWorkouts = (strainWk && !s.trackOnly) ? generateWeekWorkouts(
-    strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  ) : [];
-  if (strainWk?.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(strainWk.workoutMoves)) {
-      const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
-      if (w) (w as any).dayOfWeek = newDay;
-    }
-  }
-  const baseMinPerKmR = s.pac?.e ? s.pac.e / 60 : 5.5;
-  // Exclude cross-training from planned strain targets
-  const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
-  const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKmR);
+  // Canonical mode-aware planned TSS (planned-day-tss.ts): reads the real plan
+  // per mode (running resolver / tri-cycling-HYROX stored weeks). Just-Track
+  // returns zeros (no plan), matching the old trackOnly guard.
+  const plannedCtx = getPlannedDayTSSContext(s, s.w);
+  const plannedDayTSS = plannedCtx.plannedTSSForDay(todayDayOfWeek);
   // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
-  const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmR) > 0).length || 4;
-  const plannedWeekTSS = [0,1,2,3,4,5,6]
-    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmR), 0);
-  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  const perSessionAvg = plannedCtx.perSessionAvg;
   // Detect matched activity on a day with no generated workout
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
@@ -185,11 +164,17 @@ function getReadinessHTML(s: SimulatorState): string {
   // Rest-day overreach: activity exceeds 50% of per-session average
   const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
   const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
-  // Strain: planned days vs plan, adhoc vs per-session avg
+  // Strain: planned days vs plan, adhoc vs per-session avg (display semantics
+  // for the Today's Strain card — % of daily target).
   const strainPct = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
     ? (todaySignalBTSS / plannedDayTSS) * 100
     : 0;
   const adhocPct = matchedActivityToday && perSessionAvg > 0 ? (todaySignalBTSS / perSessionAvg) * 100 : 0;
+  // Canonical capacity-anchored strain — the ONLY valid strainPct input to
+  // computeReadiness. 2026-06-04 incident: this page fed plan-anchored 210%
+  // (→ floor 10 "Ease Back") while Home fed the capacity anchor (93% → 61).
+  // Same helper everywhere or the rings disagree.
+  const capStrain = computeCapacityStrain(s);
 
   const isHyroxMode = s.eventType === 'hyrox';
   const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
@@ -207,7 +192,7 @@ function getReadinessHTML(s: SimulatorState): string {
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     sleepDebtExcessSec,
     weeksOfHistory: metrics.length,
-    strainPct: todaySignalBTSS > 0 ? strainPct : null,
+    strainPct: capStrain.todayTSS > 0 ? capStrain.pctCapacity : null,
     recentLegLoads: s.recentLegLoads ?? [],
     impactBlocked: isImpactBlockedByInjury(s.injuryState),
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
@@ -269,6 +254,14 @@ function getReadinessHTML(s: SimulatorState): string {
     // trimmed of its "if running" clause — is still useful context).
     if (readiness.legLoadNote && (readiness.hardFloor === 'legLoad' || isImpactBlockedByInjury(s.injuryState))) {
       return readiness.legLoadNote;
+    }
+    // Post-session note (canonical capacityStrainNote — same helper as the
+    // Home card): injury-cap overshoot first, then Big/Solid/Good-training
+    // tiers vs the capacity anchor. Without this, Home acknowledges the
+    // session and this page lectures about chronic load.
+    if (isTri) {
+      const note = capacityStrainNote(capStrain);
+      if (note) return note;
     }
     if (!isTri || !triReadiness) return readiness.sentence;
 
@@ -393,6 +386,11 @@ function getReadinessHTML(s: SimulatorState): string {
       : isRestDay && todaySignalBTSS > 0 ? 'Light activity on a rest day. No significant effect on recovery.'
       : isRestDay ? 'Scheduled rest day. No activity expected.'
       : isAdhoc ? `${Math.round(todaySignalBTSS)} TSS from unplanned activity. Readiness adjusted accordingly.`
+      // Injury-capped plan exceeded: the % is plan-relative (and stays — that
+      // is the card's semantic), but the canonical call-out explains the
+      // overshoot without the misleading "recovery is the priority" framing
+      // when the absolute load was normal (capacity anchor, SCIENCE_LOG §BJ).
+      : capStrain.injuryCapOvershoot ? capacityStrainNote(capStrain) ?? `Daily target exceeded (${Math.round(todaySignalBTSS)} TSS).`
       : displayStrainPct >= 130 ? `Big session logged (${Math.round(todaySignalBTSS)} TSS). Daily target well exceeded. Recovery is the priority for the next 24 hours.`
       : displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
       : displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
@@ -789,7 +787,7 @@ function getReadinessHTML(s: SimulatorState): string {
         </div>
 
         <div style="padding:8px 22px 24px;text-align:center">
-          <button id="rdn-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+          <button id="rdn-methodology-btn" type="button" style="font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">How this is calculated →</button>
         </div>
 
       </div>

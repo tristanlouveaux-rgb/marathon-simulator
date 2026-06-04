@@ -99,6 +99,10 @@ function renderScreen(
   weekLabel?: string,
 ): void {
   const unitPref = getState().unitPref ?? 'km';
+  // Done-but-recordingless slots are shown too (see activity-review's slot
+  // filter) — mark them so the user reads "done, can still attach a recording".
+  const stateNow = getState();
+  const ratedMap = stateNow.wks?.[stateNow.w - 1]?.rated ?? {};
   // Items the user chose to integrate from the review screen
   const integrateItems = pending.filter(i => choices[i.garminId] === 'integrate');
 
@@ -158,9 +162,9 @@ function renderScreen(
     const descSnippet = fmtDesc(w.d || '', unitPref).slice(0, 32);
     return `
       <div class="slot-card" data-workout-id="${escHtml(wid)}"
-           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;flex-shrink:0;width:164px;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;opacity:${opacity};box-shadow:${boxShadow}">
+           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;min-width:0;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;opacity:${opacity};box-shadow:${boxShadow}">
         <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em">${escHtml(w.n)}</div>
-        <div style="font-size:10px;color:var(--c-muted)">${dayLabel ? dayLabel + ' · ' : ''}${workoutTypeShort(w.t)}</div>
+        <div style="font-size:10px;color:var(--c-muted)">${dayLabel ? dayLabel + ' · ' : ''}${workoutTypeShort(w.t)}${ratedMap[wid] !== undefined ? ' · done' : ''}</div>
         ${descSnippet ? `<div style="font-size:10px;color:var(--c-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(descSnippet)}${w.d.length > 32 ? '…' : ''}</div>` : ''}
         ${assignedBadge}
         ${hint}
@@ -177,16 +181,17 @@ function renderScreen(
     const isSelected = state.selectedGarminId === item.garminId;
     const dur        = Math.round(item.durationSec / 60);
     const dist       = item.distanceM ? `${formatKm(item.distanceM / 1000, unitPref)} · ` : '';
-    const actDateStr = new Date(item.startTime).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    const actDate    = new Date(item.startTime);
+    const actDateStr = isNaN(actDate.getTime()) ? '' : actDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
     const baseShadow = '0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05)';
     const boxShadow = isSelected ? `0 0 0 1.5px var(--c-accent), ${baseShadow}` : baseShadow;
 
     return `
       <div class="activity-card" data-garmin-id="${escHtml(item.garminId)}"
-           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;flex-shrink:0;width:164px;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;box-shadow:${boxShadow}">
+           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;min-width:0;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;box-shadow:${boxShadow}">
         <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px;letter-spacing:-0.01em">${escHtml(formatActivityType(item.activityType))}</div>
-        <div style="font-size:10px;color:var(--c-muted)">${actDateStr}</div>
+        ${actDateStr ? `<div style="font-size:10px;color:var(--c-muted)">${actDateStr}</div>` : ''}
         <div style="font-size:10px;color:var(--c-muted);margin-top:1px">${dist}${dur} min</div>
         <div style="font-size:10px;margin-top:6px;font-weight:${isSelected ? '600' : '500'};color:${isSelected ? 'var(--c-accent)' : 'var(--c-faint)'}">
           ${isSelected ? '↑ Now tap a slot' : 'Tap to select'}
@@ -287,7 +292,7 @@ function renderScreen(
             </div>
             ${sortedWorkouts.length === 0
               ? `<p style="font-size:12px;color:var(--c-muted)">No unrated sessions this week.</p>`
-              : `<div style="display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${slotCards}</div>`}
+              : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:2px 0 6px">${slotCards}</div>`}
           </div>
 
           <!-- Activities (tray) -->
@@ -302,7 +307,7 @@ function renderScreen(
             </div>
             ${trayItems.length === 0
               ? `<p style="font-size:12px;color:var(--c-muted)">${sortedIntegrate.length > 0 ? 'All placed.' : 'Nothing to assign.'}</p>`
-              : `<div style="display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${trayCards}</div>`}
+              : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:2px 0 6px">${trayCards}</div>`}
           </div>
 
           <!-- Excess Load bucket -->

@@ -67,7 +67,7 @@ export interface GarminActivityRow {
  *  (e.g. Strava `Workout` with a user-provided name like "Strength"). Without
  *  this, those activities would slot into the cross-training bucket and never
  *  match a planned gym workout. See `isStrengthActual` for the detection rules. */
-function mapGarminType(garminType: string, activityName?: string | null): ExternalActivity['type'] {
+export function mapGarminType(garminType: string, activityName?: string | null): ExternalActivity['type'] {
   switch (garminType) {
     // Running
     case 'RUNNING':
@@ -502,6 +502,12 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
     delete week.garminActuals![wid];
     if (week.garminMatched?.[gid] === wid) delete week.garminMatched[gid];
     if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
+    // Clear the rating that this copy's match created. Leaving it produced a
+    // phantom "Logged" plan card with no activity under it (real incident: a
+    // dropped ride twin left its slot rated, so two Endurance rides both read
+    // Logged after one real ride). The surviving copy re-rates the slot when
+    // it matches.
+    if (week.rated?.[wid] !== undefined) delete week.rated[wid];
     // Drop the raw pending record too so a later re-import + re-match can't
     // resurrect the suppressed copy (keeps the dirty-state cleanup permanent
     // rather than oscillating every sync).
@@ -565,6 +571,35 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
     }
   }
 
+  // Excess-ledger twins: an unspent (Excess Load) item with a raw Garmin-webhook
+  // id whose session also exists as a Strava record is the same session counted
+  // twice — the Strava copy carries the matched/logged load AND the Garmin twin
+  // keeps inflating "excess load" (and with it the load-warning coach notes).
+  // Same calendar day + duration within 15% = the same session (the unspent
+  // ledger only stores day resolution, so this mirrors collidesWith at the
+  // precision available).
+  for (const week of s.wks) {
+    if (!week.unspentLoadItems?.length) continue;
+    const stravaRecords = [
+      ...Object.values(week.garminActuals ?? {}).filter(a => a.garminId?.startsWith('strava-') && a.startTime),
+      ...(week.garminPending ?? []).filter(p => p.garminId.startsWith('strava-') && p.startTime),
+    ];
+    if (!stravaRecords.length) continue;
+    const before = week.unspentLoadItems.length;
+    week.unspentLoadItems = week.unspentLoadItems.filter(u => {
+      if (!u.garminId || u.garminId.startsWith('strava-') || u.garminId.startsWith('apple-')) return true;
+      const twin = stravaRecords.some(r => {
+        if ((r.startTime ?? '').slice(0, 10) !== u.date) return false;
+        const rMin = Math.round((r.durationSec ?? 0) / 60);
+        if (!rMin || !u.durationMin) return false;
+        return Math.abs(rMin - u.durationMin) / Math.max(rMin, u.durationMin) < 0.15;
+      });
+      if (twin) console.log(`[dedup] Removed excess-load twin ${u.garminId} (${u.displayName} ${u.date}) — Strava record exists`);
+      return !twin;
+    });
+    if (week.unspentLoadItems.length !== before) dedupChanged = true;
+  }
+
   return dedupChanged;
 }
 
@@ -612,7 +647,15 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   const globalProcessed = new Set<string>();
   for (const week of s.wks) {
     if (week.garminMatched) {
-      for (const id of Object.keys(week.garminMatched)) {
+      for (const [id, target] of Object.entries(week.garminMatched)) {
+        // A '__pending__' marker whose pending record no longer exists is a limbo
+        // entry: the record was consumed by an undo/re-review cycle but the marker
+        // kept the row out of every later sync, so the session had NO local data
+        // anywhere and was invisible in Recent/Review (real data-loss incident,
+        // 2026-06-03). Let the row reprocess so the sync rebuilds the record. A
+        // '__pending__' marker WITH a surviving record stays processed (no
+        // double-queue); real targets stay processed as before.
+        if (target === '__pending__' && !week.garminPending?.some(p => p.garminId === id)) continue;
         globalProcessed.add(id);
       }
     }

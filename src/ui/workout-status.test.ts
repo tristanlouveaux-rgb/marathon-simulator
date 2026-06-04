@@ -71,6 +71,15 @@ describe('computeWorkoutStatus — labels and precedence', () => {
     expect(chip.color).toBe('#34C759');
   });
 
+  it('done wins over today — a session logged TODAY is green, not terracotta', () => {
+    // Regression: label came from the done-first cascade ("Logged") but colour
+    // from a today-first cascade (terracotta), so today's completed session
+    // looked different from every other completed session in the week.
+    const chip = computeWorkoutStatus({ ...base, isDone: true, hasMatchedActivity: true, isToday: true });
+    expect(chip.label).toBe('Logged');
+    expect(chip.color).toBe('#34C759');
+  });
+
   it('skipped is not coloured orange (distinct from Missed)', () => {
     const chip = computeWorkoutStatus({ ...base, isSkipped: true, isPast: true });
     expect(chip.label).toBe('Skipped');

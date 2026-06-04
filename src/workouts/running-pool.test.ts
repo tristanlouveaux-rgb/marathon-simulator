@@ -102,6 +102,14 @@ describe('contrast power-block (build phase)', () => {
     expect(base.d).not.toContain('Power pair');
   });
 
+  it('the pairing cue survives parsing — cue keeps "Power pair", rest stays the lift rest (regression: a cue containing "rest" was misfiled as the rest note)', () => {
+    const wo = buildRunningStrengthWorkout(0, 60, 'standard', 'traditional', 'build', true);
+    const lead = parseStrengthSession(wo)!.sets[0];
+    expect(lead.cue).toContain('Power pair');
+    expect(lead.cue).not.toMatch(/rest/i);   // would be swallowed by the rest-note classifier
+    expect(lead.restSec).toBe(180);          // the lift's own 3 min rest, not the pair note
+  });
+
   it('never prescribes two jumps — the standalone plyo pick is replaced by the pair', () => {
     // 90-min sessions otherwise include a standalone plyo move; with contrast on,
     // exactly one plyo-category move should remain (the paired jump).
@@ -181,6 +189,16 @@ describe('buildPlyometricsWorkout — standalone plyo session', () => {
     const base3 = plyoNames(15, 'standard', 0, 'base');
     expect(base3).not.toContain('Depth Jump');
     expect(base3).not.toContain('Single-Leg Bounds');
+  });
+
+  it('week rotation never defeats the tier ordering (regression: slot 1 led with high-CNS)', () => {
+    for (let w = 0; w < 6; w++) {
+      const names = plyoNames(20, 'standard', w);
+      // a short standard session always leads with a low-CNS move, never a depth jump
+      expect(['Pogo Hops', 'Box Jumps', 'Jump Squat']).toContain(names[0]);
+      expect(names[0]).not.toBe('Depth Jump');
+      expect(names[0]).not.toBe('Single-Leg Bounds');
+    }
   });
 
   it('past 30 min appends strength → a Power + Strength session (plyo still first)', () => {

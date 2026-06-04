@@ -491,11 +491,15 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       };
     }
 
-    // Average weekly running km (last 4 weeks or all available, whichever is fewer)
+    // Average weekly running km (last 4 weeks or all available, whichever is fewer).
+    // A zero-row aggregation carries no signal and must NOT clear the existing
+    // value — it may be the user's typed manual-entry volume (real case,
+    // 2026-06-04: typed "10 km/week" was erased by a 0-row history fetch,
+    // leaving the prediction blend with weeklyKm=0 instead of the stated 10).
     const recentKm = s.historicWeeklyKm.slice(-4);
-    s.detectedWeeklyKm = recentKm.length > 0
-      ? Math.round(recentKm.reduce((a, b) => a + b, 0) / recentKm.length * 10) / 10
-      : undefined;
+    if (recentKm.length > 0) {
+      s.detectedWeeklyKm = Math.round(recentKm.reduce((a, b) => a + b, 0) / recentKm.length * 10) / 10;
+    }
 
     s.athleteTier = deriveAthleteTier(s.ctlBaseline ?? 0, {
       vdot: s.v,

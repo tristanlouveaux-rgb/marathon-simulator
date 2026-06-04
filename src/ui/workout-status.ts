@@ -58,11 +58,15 @@ export function computeWorkoutStatus(f: WorkoutStatusFlags): WorkoutStatusChip {
   else if (f.isPast) label = 'Missed';
   else label = 'Upcoming';
 
-  const color = f.isToday
-    ? TODAY_ACCENT
-    : f.isDone
-      ? DONE_GREEN
-      : (f.isPast && !f.isDone && !f.isSkipped && !f.isIllness)
+  // Done wins the colour as well as the label. The label cascade already puts
+  // done first, so a session completed *today* must read green "Logged"/"Done",
+  // not terracotta — label and colour coming from different precedence orders
+  // made "Logged" appear multi-coloured across the week.
+  const color = f.isDone
+    ? DONE_GREEN
+    : f.isToday
+      ? TODAY_ACCENT
+      : (f.isPast && !f.isSkipped && !f.isIllness)
         ? MISSED_ORANGE
         : 'var(--c-faint)';
 

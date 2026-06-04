@@ -36,7 +36,11 @@ import { injuryStrengthDecision } from './injury-strength';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 17;
+// v18: stampTriWorkoutIds — generated workouts now carry stable W{wk}-{type}-{idx}
+// ids. The bump forces a regen so PERSISTED weeks pick the ids up; without it,
+// pre-existing weeks keep id-less workouts and every `w.id ?? w.n` consumer
+// stays name-keyed (the duplicate-name collision the ids exist to fix).
+export const TRI_GENERATOR_VERSION = 18;
 
 /**
  * Representative average session length (hours) per discipline. The generator
@@ -386,7 +390,7 @@ function generateWeekForTriathlon(
     ? { swim, bike, run, brick, gym }
     : applyTriInjuryGates(swim, bike, run, brick, gym, injuryState, weeksFromCurrent);
 
-  return scheduleTriathlonWeek(
+  const scheduled = scheduleTriathlonWeek(
     adapted.swim,
     adapted.bike,
     adapted.run,
@@ -395,6 +399,31 @@ function generateWeekForTriathlon(
     adapted.gym,
     minutesCapByDay
   );
+  stampTriWorkoutIds(scheduled, weekIndex);
+  return scheduled;
+}
+
+/**
+ * Stable per-slot IDs (W{week}-{type}-{idx}) — mirrors the running generator's
+ * id loop (generator.ts). Every consumer of a tri workout keys on `w.id ?? w.n`
+ * (drag-and-drop, `rated`, `garminActuals`, `garminMatched`, the matching
+ * screen). Without ids, a week with duplicate names — two "Endurance ride"
+ * bike sessions, two same-region injury-adapted gym sessions — collides on the
+ * name: one day's done-state/HR bleeds onto the other, dragging one card moves
+ * its same-named sibling, and a synced recording can't bind to its own slot.
+ * User-added sessions (`adhoc-` / `holiday-` prefixed) keep their ids.
+ * Deterministic given the same generation inputs, so a version-bump regen
+ * reproduces the same ids (same fragility class as the running engine).
+ */
+export function stampTriWorkoutIds(workouts: Workout[], weekNum: number): void {
+  const typeCount: Record<string, number> = {};
+  for (const w of workouts) {
+    if (w.id) continue; // user-added (adhoc-/holiday-) keep their ids and consume no index
+    const typeKey = w.t || 'unknown';
+    const idx = typeCount[typeKey] || 0;
+    typeCount[typeKey] = idx + 1;
+    w.id = `W${weekNum}-${typeKey}-${idx}`;
+  }
 }
 
 /**

@@ -5,6 +5,11 @@
  * - REPLACE: Apply full recommendation (includes replacements)
  * - REDUCE: Apply only downgrades/reductions (no replacements)
  * - KEEP: No changes, warn about overtraining risk
+ *
+ * Visual system: glass overlay (modelled on goal-time-overlay.ts) with a single
+ * muted severity accent on the alert header. Option cards are neutral; the
+ * recommended one carries dark-border emphasis rather than its own colour, so the
+ * whole modal stays within the 2-colour budget (see UX_PATTERNS Visual Constraints).
  */
 
 import type { SuggestionPopup, GlobalChoice, Adjustment } from '@/cross-training/suggester';
@@ -12,6 +17,7 @@ import { classifyWorkoutType } from '@/cross-training/universalLoad';
 import { getState } from '@/state'; // used for intensityThresholds in cross-training header
 import { SPORT_LABELS } from '@/constants/sports';
 import { formatKm } from '@/utils/format';
+import { showSimpleToast } from '@/ui/toast';
 
 export interface SuggestionDecision {
   choice: GlobalChoice;
@@ -40,6 +46,28 @@ export interface ACWRModalContext {
   consecutiveIntensityWeeks?: number; // # consecutive past weeks >40% intensity (Rule 4)
 }
 
+// ── Glass-modal palette (slate, self-contained — matches goal-time-overlay) ───
+const INK = '#0F172A';        // headings / primary text
+const BODY = '#334155';       // body copy in tinted alert
+const MUTED = '#64748B';      // secondary text
+const FAINT = '#94A3B8';      // tertiary / captions
+const HAIR = 'rgba(15,23,42,0.08)'; // neutral border
+// Frosted inner card: white 0.66 + the m-btn-glass--inset two-layer shadow
+// (styles.css). No backdrop-filter on inner cards — stacking glass is the
+// documented perf cliff (UX_PATTERNS → Rendering performance).
+const FROST = 'background:rgba(255,255,255,0.66);box-shadow:0 1px 2px rgba(0,0,0,0.04),0 2px 6px rgba(0,0,0,0.05),inset 0 1px 0 rgba(255,255,255,0.8)';
+
+const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// Only one suggestion modal may exist at a time. Triggers can race (auto-fire on
+// sync + a readiness tap, or two processed activities) and stacked instances
+// compound the dim/blur backdrop into a near-opaque navy sheet, with the upper
+// overlay's backdrop blur smearing the lower card into a white halo. The stale
+// instance is dismissed exactly like a backdrop tap (onComplete(null)), so its
+// load still routes to the excess-load card at the call site. The tri modal has
+// the same guard (tri-suggestion-modal.ts).
+let dismissActiveModal: (() => void) | null = null;
+
 /**
  * Show the suggestion popup modal with 3 global choices.
  * When acwrContext is provided, an ACWR explanation header is rendered at the top.
@@ -54,41 +82,22 @@ export function showSuggestionModal(
   crossTrainingCtx?: CrossTrainingModalContext,
   onPushToNextWeek?: () => void,
 ): void {
-  const unitPref = getState().unitPref ?? 'km';
-  const severityStyles = {
-    light: {
-      bg: 'background:rgba(37,99,235,0.06)',
-      border: 'border:1px solid rgba(37,99,235,0.3)',
-      textColor: 'color:#2563EB',
-      iconColor: 'color:#2563EB',
-      badgeStyle: 'background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.3);color:#2563EB',
-    },
-    heavy: {
-      bg: 'background:rgba(245,158,11,0.06)',
-      border: 'border:1px solid rgba(245,158,11,0.3)',
-      textColor: 'color:var(--c-caution)',
-      iconColor: 'color:var(--c-caution)',
-      badgeStyle: 'background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);color:var(--c-caution)',
-    },
-    extreme: {
-      bg: 'background:rgba(239,68,68,0.06)',
-      border: 'border:1px solid rgba(239,68,68,0.3)',
-      textColor: 'color:var(--c-warn)',
-      iconColor: 'color:var(--c-warn)',
-      badgeStyle: 'background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);color:var(--c-warn)',
-    },
-  };
-  const sv = severityStyles[popup.severity];
+  // Dismiss any already-open instance before building a new one (see
+  // dismissActiveModal above). Belt-and-braces removal covers an orphaned
+  // element whose closure was lost (e.g. across a hot reload).
+  dismissActiveModal?.();
+  document.getElementById('suggestion-modal')?.remove();
 
-  // Build adjustment details for expandable sections
+  const unitPref = getState().unitPref ?? 'km';
+
+  // Build adjustment details for expandable sections — neutral rows, no per-action colour
   const buildAdjustmentList = (adjustments: Adjustment[]): string => {
     if (adjustments.length === 0) {
-      return '<div style="color:var(--c-faint);font-size:13px;padding:8px 0">No changes to your running plan.</div>';
+      return `<div style="color:${FAINT};font-size:13px;padding:6px 0">No changes to your running plan.</div>`;
     }
 
     return adjustments.map(adj => {
       let actionLabel = '';
-      let actionStyle = '';
       let detail = '';
 
       const origKm = Math.round(adj.originalDistanceKm * 10) / 10;
@@ -97,18 +106,15 @@ export function showSuggestionModal(
       if (adj.action === 'replace') {
         if (newKm > 0) {
           actionLabel = 'Convert';
-          actionStyle = 'color:#2563EB';
           detail = `${adj.originalType} → ${formatKm(newKm, unitPref)} easy shakeout`;
         } else {
           actionLabel = 'Replace';
-          actionStyle = 'color:var(--c-warn)';
           detail = 'Replaced by cross-training';
         }
       } else if (adj.action === 'downgrade') {
         actionLabel = 'Downgrade';
-        actionStyle = 'color:var(--c-caution)';
         const paceLabel = adj.newType === 'easy' ? 'easy effort'
-                        : adj.newType === 'marathon_pace' && adj.originalType === 'threshold' ? 'steady pace (MP–easy midpoint)'
+                        : adj.newType === 'marathon_pace' && adj.originalType === 'threshold' ? 'steady pace'
                         : adj.newType === 'marathon_pace' ? 'marathon pace'
                         : adj.newType === 'threshold' ? 'threshold pace'
                         : 'lower intensity';
@@ -117,22 +123,19 @@ export function showSuggestionModal(
           : `Drop to ${paceLabel}`;
       } else {
         actionLabel = 'Reduce';
-        actionStyle = 'color:var(--c-caution)';
         detail = origKm > 0
           ? `${formatKm(origKm, unitPref)} → ${formatKm(newKm, unitPref)}`
           : `Reduce intensity`;
       }
 
+      const day = DAY_SHORT[adj.dayIndex] ?? '';
       return `
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--c-border)">
-          <div>
-            <span style="color:var(--c-black);font-weight:500">${adj.workoutId}</span>
-            <span style="color:var(--c-faint);font-size:12px;margin-left:8px">${adj.originalType}</span>
+        <div class="sm-adj" style="padding:9px 0;border-bottom:1px solid rgba(15,23,42,0.06)">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+            <span style="color:${INK};font-weight:500;font-size:13px">${day ? `${day} · ` : ''}${adj.workoutId}</span>
+            <span style="color:${INK};font-weight:600;font-size:12px;flex-shrink:0">${actionLabel}</span>
           </div>
-          <div style="text-align:right">
-            <span style="${actionStyle};font-weight:500">${actionLabel}</span>
-            <div style="color:var(--c-muted);font-size:11px">${detail}</div>
-          </div>
+          <div style="color:${MUTED};font-size:12px;margin-top:2px">${detail}</div>
         </div>
       `;
     }).join('');
@@ -140,50 +143,137 @@ export function showSuggestionModal(
 
   const hasReplacements = popup.replaceOutcome.adjustments.some(a => a.action === 'replace');
   const hasReductions = popup.reduceOutcome.adjustments.length > 0;
+  const noTrimPossible = !hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch;
+
+  // Single recommended option (priority order) — only one gets dark emphasis
+  const recommended: GlobalChoice | 'push' =
+      hasReplacements ? 'replace'
+    : hasReductions ? 'reduce'
+    : (onPushToNextWeek && noTrimPossible) ? 'push'
+    : 'keep';
 
   // Equivalent easy km display
   const equivKm = popup.equivalentEasyKm > 0
     ? `≈ ${formatKm(popup.equivalentEasyKm, unitPref)} easy running equivalent`
     : '';
 
-  // Data tier badge
-  const tierStyles: Record<string, string> = {
-    itrimp: 'color:#16a34a;background:rgba(22,163,74,0.08);border:1px solid rgba(22,163,74,0.3)',
-    garmin: 'color:#2563EB;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.3)',
-    hr:     'color:#0891B2;background:rgba(8,145,178,0.08);border:1px solid rgba(8,145,178,0.3)',
-    rpe:    'color:var(--c-muted);background:rgba(0,0,0,0.05);border:1px solid var(--c-border-strong)',
+  // Per-option absorption, in the same easy-km currency as the header strip.
+  // loadReduction and runReplacementCredit share the suggester's load units, and
+  // the header's equivalentEasyKm is derived from that credit — so a pure
+  // proportion converts each option's total into comparable km. Clamped to the
+  // header value (effectiveRRC can slightly exceed the raw credit via the
+  // recovery multiplier). Answers "do these cover the same load?" at a glance.
+  const loadToKm = (load: number): number =>
+    Math.min(popup.equivalentEasyKm, (load / popup.runReplacementCredit) * popup.equivalentEasyKm);
+  const optionEasyKm = (adjs: Adjustment[]): number | null => {
+    if (adjs.length === 0 || popup.runReplacementCredit <= 0 || popup.equivalentEasyKm <= 0) return null;
+    const total = adjs.reduce((sum, a) => sum + (a.loadReduction || 0), 0);
+    if (total <= 0) return null;
+    return Math.round(loadToKm(total) * 10) / 10;
   };
+  const replaceCutKm = optionEasyKm(popup.replaceOutcome.adjustments) ?? 0;
+  const reduceCutKm = optionEasyKm(popup.reduceOutcome.adjustments) ?? 0;
+  // The user-facing ask is what the recommended option actually delivers. The
+  // full physiological excess can exceed what the plan can safely cut (run
+  // minimums, preserve fraction); headlining an unreachable number reads as
+  // failure, so the header states the achievable trim and the full accounting
+  // lives in See details.
+  const askKm = Math.max(replaceCutKm, reduceCutKm);
+  // Reduce exists to spread an equivalent cut across runs without replacing one.
+  // When the floors stop it reaching ≈ the same total as Replace & Reduce it is
+  // not a real alternative — hide it (Tristan, 2026-06-03).
+  const showReduce = hasReductions && (!hasReplacements || reduceCutKm >= replaceCutKm * 0.9);
+  // Direction-explicit wording: the excess is work already done, so the options
+  // cut upcoming planned runs to make room for it. The header owns the ask;
+  // each card states only what it delivers.
+  // "Equivalent of easy running" because cuts mix two levers: a downgrade keeps
+  // the distance and drops intensity, a reduce keeps intensity and drops distance.
+  // Both land in one load currency; easy-run-equivalent is its display unit.
+  // (TSS display blocked until the internal load scales are reconciled — ISSUE-263.)
+  const absorbLine = (adjs: Adjustment[]): string | undefined => {
+    const km = optionEasyKm(adjs);
+    if (km == null) return undefined;
+    return `Cuts the equivalent of ≈ ${formatKm(km, unitPref)} of easy running.`;
+  };
+
+  // Data tier label (neutral chip — provenance, not a status colour)
   const tierLabelMap: Record<string, string> = { itrimp: 'HR Stream', garmin: 'Garmin', hr: 'HR Zones', rpe: 'Estimated' };
-  const tierStyle = tierStyles[popup.tier] ?? tierStyles.rpe;
   const tierLabel = tierLabelMap[popup.tier] ?? 'Estimated';
 
-  // Impact load label
-  const impactStyle = popup.impactLoad <= 0 ? { text: 'No leg impact', color: '#16a34a' }
-    : popup.impactLoad < 4   ? { text: 'Low leg impact',      color: '#16a34a' }
-    : popup.impactLoad < 10  ? { text: 'Moderate leg impact', color: 'var(--c-caution)' }
-    :                          { text: 'High leg impact',      color: 'var(--c-warn)' };
+  // Leg impact — meaning carried by the word, rendered as neutral text (no colour spent)
+  const impactText = popup.impactLoad <= 0 ? 'No leg impact'
+    : popup.impactLoad < 4   ? 'Low leg impact'
+    : popup.impactLoad < 10  ? 'Moderate leg impact'
+    :                          'High leg impact';
+
+  // Tappable impact label → one-line explainer ("leg impact" means ground-strike
+  // stress, not muscular work — a hard ride is correctly "No leg impact").
+  const impactBtn = `<button id="impact-info-btn" style="background:none;border:none;cursor:pointer;padding:0;font:inherit;font-size:12px;color:${MUTED};border-bottom:1px dotted rgba(15,23,42,0.3)">${impactText}</button>`;
+  const impactExplainer = `<div id="impact-info" style="display:none;font-size:12px;color:${FAINT};line-height:1.55;width:100%">Leg impact is the ground-strike stress on bones and tendons, separate from aerobic effort. A hard ride or swim can carry zero impact. The easy-running equivalent is aerobic load only.</div>`;
+
+  // Tappable excess label → what the excess actually is and where it goes if
+  // nothing is cut (the mental model: work already done, paid for now or later).
+  const equivBtn = equivKm
+    ? `<button id="equiv-info-btn" style="background:none;border:none;cursor:pointer;padding:0;font:inherit;font-size:12px;color:${FAINT};border-bottom:1px dotted rgba(15,23,42,0.3)">${equivKm}</button>`
+    : '';
+  const equivExplainer = `<div id="equiv-info" style="display:none;font-size:12px;color:${FAINT};line-height:1.55;width:100%">This excess is training stress already done, not upcoming distance, expressed as easy running. Reducing trades planned sessions for it. Keeping the plan carries it as fatigue: readiness stays lower, and a week that ends over target starts the next one with a smaller training budget.</div>`;
 
   // Warning text based on severity. Only shown when ACWR is actually elevated.
   // A heavy session alone doesn't mean fatigue risk is high (e.g. high-volume athlete with
   // high CTL baseline can absorb a big session without ACWR spiking).
   const keepWarning = acwrContext
     ? (popup.severity === 'extreme'
-        ? 'Warning: Your load this week is above your usual base. Consider reducing intensity or duration of remaining sessions.'
+        ? 'Your load this week is above your usual base. Consider reducing intensity or duration of remaining sessions.'
         : popup.severity === 'heavy'
-        ? 'Note: Fatigue has built this week. Monitor how you feel.'
+        ? 'Fatigue has built this week. Monitor how you feel.'
         : '')
     : '';
 
-  // Build optional ACWR context header
+  // ── Option-card renderer ────────────────────────────────────────────────────
+  // Cards are div[role=button], not <button>: the "View changes" <details> inside
+  // is interactive content, which is invalid inside a real <button> and breaks
+  // keyboard tab focus. Enter/Space activation is wired below.
+  const optionCard = (opts: {
+    id: string;
+    title: string;
+    desc: string;
+    recommended?: boolean;
+    /** "Absorbs ≈ X of the Y excess." comparison line, shown under the description */
+    loadLine?: string;
+    expander?: { count: number; body: string; open?: boolean };
+    warning?: string;
+  }): string => {
+    const border = opts.recommended
+      ? 'border:1.5px solid rgba(15,23,42,0.82)'
+      : `border:1px solid ${HAIR}`;
+    const chip = opts.recommended
+      ? `<span style="font-size:11px;font-weight:600;color:${MUTED};background:rgba(15,23,42,0.05);border:1px solid rgba(15,23,42,0.10);padding:2px 9px;border-radius:999px;flex-shrink:0">Recommended</span>`
+      : '';
+    return `
+      <div id="${opts.id}" class="sm-choice" role="button" tabindex="0" aria-pressed="${opts.recommended ? 'true' : 'false'}" style="width:100%;text-align:left;padding:14px 16px;border-radius:14px;${border};${FROST};cursor:pointer;display:block">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px">
+          <span style="font-weight:600;color:${INK};font-size:15px;letter-spacing:-0.01em">${opts.title}</span>
+          ${chip}
+        </div>
+        <p style="color:${MUTED};font-size:13px;line-height:1.5;margin:0">${opts.desc}</p>
+        ${opts.loadLine ? `<p style="color:${INK};font-size:12px;font-weight:500;line-height:1.5;margin:6px 0 0">${opts.loadLine}</p>` : ''}
+        ${opts.expander ? `
+          <details style="font-size:12px;margin-top:10px" ${opts.expander.open ? 'open' : ''}>
+            <summary style="color:${FAINT};cursor:pointer;list-style:none"><span class="sm-caret">▸</span> View changes (${opts.expander.count})</summary>
+            <div style="margin-top:6px;border-top:1px solid rgba(15,23,42,0.06)">
+              ${opts.expander.body}
+            </div>
+          </details>` : ''}
+        ${opts.warning ? `<p style="color:${MUTED};font-size:12px;line-height:1.5;margin:8px 0 0">${opts.warning}</p>` : ''}
+      </div>`;
+  };
+
+  // ── ACWR context header (the "Heavy training week" alert) ────────────────────
   const acwrHeader = (() => {
     if (!acwrContext) return '';
     const { ratio, status, safeUpper, intensityPct } = acwrContext;
     const pctAboveCeiling = Math.round((ratio / safeUpper - 1) * 100);
     const pctAboveBaseline = Math.round((ratio - 1) * 100);
-    const statusBg = status === 'high'
-      ? 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25)'
-      : 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25)';
-    const statusTextColor = status === 'high' ? 'color:var(--c-warn)' : 'color:var(--c-caution)';
     // §8. 5-rule plain language reduction advice
     const { kmSpiked, crossTrainingCause, consecutiveIntensityWeeks } = acwrContext;
     const iHeavy = (intensityPct ?? 0) > 50;
@@ -208,38 +298,52 @@ export function showSuggestionModal(
       // Rule 5. Trailing zone mix / general
       zoneAdvice = `Your load has built quickly. The safest cuts are to your highest-volume runs. Quality sessions stay intact where possible.`;
     }
-    // Human-consequence headline: reference actual load vs baseline (not vs safety ceiling)
+    // Human-consequence headline carries the ask: the achievable trim, in
+    // Tristan's framing ("you've been training harder than normal, so we need
+    // to reduce by X"). The unreachable full excess lives in See details.
     const humanConsequence = status === 'high'
-      ? `This week is ${pctAboveBaseline}% above your usual weekly load. Extra recovery is needed before the next hard effort.`
+      ? (askKm > 0
+          ? `You've been training harder than normal. This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by the equivalent of ≈ ${formatKm(askKm, unitPref)} of easy running.`
+          : `You've been training harder than normal. This week is ${pctAboveBaseline}% above your usual load. Extra recovery is needed before the next hard effort.`)
       : pctAboveCeiling <= 5
       ? `Your load is just above the safe ceiling (${ratio.toFixed(2)}× vs ${safeUpper.toFixed(1)}×). A small adjustment is enough.`
-      : `This week is ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`;
+      : (askKm > 0
+          ? `This week is ${pctAboveBaseline}% above your usual load, so the remaining runs come down by the equivalent of ≈ ${formatKm(askKm, unitPref)} of easy running.`
+          : `This week is ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`);
+    // Full-excess accounting, shown on demand. States plainly why the trim can
+    // be smaller than the excess and where the remainder goes (fatigue decay +
+    // next-week carry, week-rollover carriedTSS in events.ts).
+    const excessDetail = popup.equivalentEasyKm > 0
+      ? `<p style="font-size:12px;color:${MUTED};line-height:1.55;margin:0 0 4px">The full excess is ≈ ${formatKm(popup.equivalentEasyKm, unitPref)} of easy running equivalent, training stress already done. The plan only trims what it can without dropping runs below their minimums. What isn't cut clears through recovery, and a week that ends over target starts the next one with a smaller budget.</p>`
+      : '';
+    // Plain header on the glass card — no tinted sub-box, no severity colour
+    // (UX_PATTERNS → "No tinted card backgrounds"). Severity is carried by the
+    // title and the copy. The impact label and details toggle share one quiet
+    // meta row; the advice + full-excess accounting live in the expander.
     return `
-      <div style="padding:16px 20px 0">
-        <div style="${statusBg};border-radius:10px;padding:14px 16px;margin-bottom:4px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <svg style="width:14px;height:14px;${statusTextColor};flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
-            </svg>
-            <span style="font-weight:600;${statusTextColor};font-size:14px">${status === 'high' ? 'Heavy training week' : 'Load building up'}</span>
-          </div>
-          <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin-bottom:8px">${humanConsequence}</p>
-          <p style="font-size:12px;color:var(--c-faint)">${zoneAdvice}</p>
-          <button id="acwr-details-toggle" style="margin-top:10px;font-size:11px;color:var(--c-faint);display:flex;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
+      <div style="padding:22px 20px 0">
+        <h3 style="color:${INK};font-weight:700;font-size:18px;letter-spacing:-0.01em;margin:0 0 6px;padding-right:28px">${status === 'high' ? 'Heavy training week' : 'Load building up'}</h3>
+        <p style="font-size:13px;color:${MUTED};line-height:1.55;margin:0 0 9px">${humanConsequence}</p>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          ${impactBtn}
+          <button id="acwr-details-toggle" style="font:inherit;font-size:12px;color:${FAINT};display:inline-flex;align-items:center;gap:5px;background:none;border:none;cursor:pointer;padding:0">
             <span id="acwr-details-caret">▸</span> See details
           </button>
-          <div id="acwr-details-body" style="display:none;margin-top:10px;flex-direction:column;gap:4px">
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint)"><span>ATL (acute fatigue)</span><span style="color:var(--c-black)">${Math.round(acwrContext.ratio * (safeUpper * 50))}</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint)"><span>Safe upper (your tier)</span><span style="color:var(--c-black)">${safeUpper.toFixed(1)}×</span></div>
-            <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--c-faint)">Current ratio</span><span style="${statusTextColor};font-weight:500">${ratio.toFixed(2)}×</span></div>
-            ${intensityPct != null ? `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint)"><span>Week intensity %</span><span style="color:var(--c-black)">${intensityPct}% threshold+hi</span></div>` : ''}
-          </div>
+          ${impactExplainer}
+        </div>
+        <div id="acwr-details-body" style="display:none;margin-top:10px;flex-direction:column;gap:6px">
+          <p style="font-size:12px;color:${MUTED};line-height:1.55;margin:0 0 4px">${zoneAdvice}</p>
+          ${excessDetail}
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:${FAINT}"><span>ATL (acute fatigue)</span><span style="color:${INK}">${Math.round(acwrContext.ratio * (safeUpper * 50))}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:${FAINT}"><span>Safe upper (your tier)</span><span style="color:${INK}">${safeUpper.toFixed(1)}×</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px"><span style="color:${FAINT}">Current ratio</span><span style="color:${INK};font-weight:600">${ratio.toFixed(2)}×</span></div>
+          ${intensityPct != null ? `<div style="display:flex;justify-content:space-between;font-size:12px;color:${FAINT}"><span>Week intensity</span><span style="color:${INK}">${intensityPct}% at threshold or above</span></div>` : ''}
         </div>
       </div>
     `;
   })();
 
-  // Build optional cross-training activity header (Phase B v3)
+  // ── Cross-training activity header (Phase B v3) — neutral, no decorative emoji ─
   const ctxHeader = (() => {
     if (!crossTrainingCtx) return '';
 
@@ -271,85 +375,110 @@ export function showSuggestionModal(
       : null;
     const kmGap = matchedRunKm ? -matchedRunKm : null;
 
-    const sportEmoji: Record<string, string> = {
-      football: '⚽', soccer: '⚽', cycling: '🚴', bike: '🚴', swim: '🏊', swimming: '🏊',
-      yoga: '🧘', gym: '💪', strength: '💪', tennis: '🎾', rowing: '🚣', hiking: '🥾',
-      basketball: '🏀', rugby: '🏉', running: '🏃',
-    };
-    const sportKey = sport.toLowerCase();
-    const emoji = Object.entries(sportEmoji).find(([k]) => sportKey.includes(k))?.[1] ?? '🏅';
     const sportLabel = sport.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-
     const hasHR = iTrimp != null || hrZones != null;
 
     return `
-      <div style="padding:12px 20px 0">
-        <div style="border:1px solid var(--c-border);border-radius:10px;padding:12px 14px;background:var(--c-bg);margin-bottom:4px">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-            <span style="color:var(--c-black);font-weight:500;font-size:14px">${emoji} ${sportLabel} · ${Math.round(durationMin)} min</span>
-          </div>
-          <div style="color:var(--c-muted);font-size:12px">
+      <div style="padding:14px 20px 0">
+        <div style="border:1px solid ${HAIR};border-radius:14px;padding:13px 15px;${FROST}">
+          <div style="color:${INK};font-weight:600;font-size:13px;margin-bottom:4px">${sportLabel} · ${Math.round(durationMin)} min</div>
+          <div style="color:${MUTED};font-size:12px">
             ${hasHR ? `HR-based load: ${totalLoad2} · ` : `Estimated load: ${totalLoad2} · `}Effort type: ${effortLabel}
           </div>
           ${matchedRunName || matchedRunKm ? `
-          <div style="border-top:1px solid var(--c-border);margin-top:10px;padding-top:10px">
-            ${matchedRunName ? `<div style="color:var(--c-muted);font-size:12px;margin-bottom:4px">Matched to: <span style="color:var(--c-black)">${matchedRunName}${matchedRunKm ? ` (${formatKm(matchedRunKm, unitPref)})` : ''}</span></div>` : ''}
-            <div style="display:flex;gap:12px;font-size:12px">
+          <div style="border-top:1px solid rgba(15,23,42,0.06);margin-top:11px;padding-top:11px">
+            ${matchedRunName ? `<div style="color:${MUTED};font-size:12px;margin-bottom:6px">Matched to: <span style="color:${INK}">${matchedRunName}${matchedRunKm ? ` (${formatKm(matchedRunKm, unitPref)})` : ''}</span></div>` : ''}
+            <div style="display:flex;gap:14px;font-size:12px">
               ${cardioCoveredPct !== null ? `
-                <button class="ctx-info-btn" data-ctx-info="cardio" style="background:none;border:none;cursor:pointer;color:var(--c-muted);padding:0">
-                  Cardio covered: <span style="color:var(--c-black);font-weight:500">${cardioCoveredPct}%</span>
+                <button class="ctx-info-btn" data-ctx-info="cardio" style="background:none;border:none;cursor:pointer;color:${MUTED};padding:0;font:inherit">
+                  Cardio covered: <span style="color:${INK};font-weight:600">${cardioCoveredPct}%</span>
                 </button>` : ''}
               ${kmGap !== null ? `
-                <button class="ctx-info-btn" data-ctx-info="km" style="background:none;border:none;cursor:pointer;color:var(--c-muted);padding:0">
-                  Running km gap: <span style="color:var(--c-black);font-weight:500">${formatKm(kmGap as number, unitPref)}</span>
+                <button class="ctx-info-btn" data-ctx-info="km" style="background:none;border:none;cursor:pointer;color:${MUTED};padding:0;font:inherit">
+                  Running km gap: <span style="color:${INK};font-weight:600">${formatKm(kmGap as number, unitPref)}</span>
                 </button>` : ''}
             </div>
-            <div id="ctx-info-cardio" style="display:none;margin-top:8px;font-size:12px;color:var(--c-faint);line-height:1.6">Cardio covered compares the aerobic load of this activity to your planned run. Above 80% means your heart and lungs get a similar stimulus without the running stress.</div>
-            <div id="ctx-info-km" style="display:none;margin-top:8px;font-size:12px;color:var(--c-faint);line-height:1.6">Running km gap shows how many km of road running this session doesn't replace. Cross-training builds aerobic fitness but misses the bone, tendon, and neuromuscular adaptations of running.</div>
+            <div id="ctx-info-cardio" style="display:none;margin-top:8px;font-size:12px;color:${FAINT};line-height:1.55">Cardio covered compares the aerobic load of this activity to your planned run. Above 80% means your heart and lungs get a similar stimulus without the running stress.</div>
+            <div id="ctx-info-km" style="display:none;margin-top:8px;font-size:12px;color:${FAINT};line-height:1.55">Running km gap shows how many km of road running this session doesn't replace. Cross-training builds aerobic fitness but misses the bone, tendon, and neuromuscular adaptations of running.</div>
           </div>
           ` : ''}
         </div>
       </div>`;
   })();
 
-  // When ACWR context is present, the amber box above already explains what happened.
-  // Show a compact strip (just data provenance + impact) rather than duplicating the session details.
+  // When ACWR context is present, the header above already carries the impact
+  // label, easy-km equivalent, and details toggle — nothing more to render here.
+  const sevWord = popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate';
   const mainHeader = acwrContext
-    ? `<div style="padding:8px 20px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-size:11px;color:${impactStyle.color}">${impactStyle.text}</span>
-        ${equivKm ? `<span style="font-size:11px;color:var(--c-faint)">${equivKm}</span>` : ''}
-      </div>`
-    : `<div style="padding:20px;border-bottom:1px solid var(--c-border)">
-        <div style="display:flex;align-items:flex-start;gap:16px">
-          <div style="width:44px;height:44px;border-radius:50%;${sv.bg};${sv.border};display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg style="width:20px;height:20px;${sv.iconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-            </svg>
-          </div>
-          <div style="flex:1">
-            <h3 style="color:var(--c-black);font-weight:700;font-size:17px;margin-bottom:4px">${popup.headline}</h3>
-            <p style="color:var(--c-muted);font-size:13px;line-height:1.6">${popup.summary}</p>
-          </div>
-        </div>
-        <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:20px;${sv.badgeStyle};font-size:13px;font-weight:500">
-            ${popup.durationMin} min ${popup.sportName}. ${popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate'} load
+    ? ''
+    : `<div style="padding:22px 20px 0">
+        <h3 style="color:${INK};font-weight:700;font-size:18px;letter-spacing:-0.01em;margin:0 0 6px;padding-right:28px">${popup.headline}</h3>
+        <p style="color:${MUTED};font-size:13px;line-height:1.55;margin:0 0 12px">${popup.summary}</p>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="display:inline-flex;align-items:center;padding:4px 11px;border-radius:999px;background:rgba(15,23,42,0.05);border:1px solid ${HAIR};color:${INK};font-size:12px;font-weight:500">
+            ${popup.durationMin} min ${popup.sportName} · ${sevWord} load
           </span>
-          ${equivKm ? `<span style="font-size:12px;color:var(--c-faint)">${equivKm}</span>` : ''}
-          ${popup.warnings.length > 0 ? `<span style="font-size:12px;color:var(--c-caution)">${popup.warnings[0]}</span>` : ''}
+          ${equivBtn}
+          ${popup.warnings.length > 0 ? `<span style="font-size:12px;color:${MUTED}">${popup.warnings[0]}</span>` : ''}
+          ${equivExplainer}
         </div>
-        <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px">
-          <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-weight:500;${tierStyle}">${tierLabel}</span>
-          <span style="color:${impactStyle.color}">${impactStyle.text}</span>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px">
+          <span style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:6px;font-weight:500;background:rgba(15,23,42,0.05);border:1px solid ${HAIR};color:${MUTED}">${tierLabel}</span>
+          ${impactBtn}
+          ${impactExplainer}
         </div>
       </div>`;
 
+  // ── Assemble option cards ───────────────────────────────────────────────────
+  const optionsHtml = [
+    noTrimPossible ? `
+      <div style="padding:13px 15px;border-radius:14px;${FROST};border:1px solid ${HAIR};font-size:13px;color:${MUTED};line-height:1.5">
+        Your remaining runs are already at minimum intensity and distance. The extra load can't be absorbed by trimming this week's plan. Push it to next week or keep the plan and accept the added stimulus.
+      </div>` : '',
+    hasReplacements ? optionCard({
+      id: 'choice-replace',
+      title: 'Replace & Reduce',
+      desc: 'Replace runs where possible, downgrade the rest. Best for heavy cross-training.',
+      recommended: recommended === 'replace',
+      loadLine: absorbLine(popup.replaceOutcome.adjustments),
+      expander: { count: popup.replaceOutcome.adjustments.length, body: buildAdjustmentList(popup.replaceOutcome.adjustments), open: recommended === 'replace' },
+    }) : '',
+    showReduce ? optionCard({
+      id: 'choice-reduce',
+      title: 'Reduce',
+      desc: 'Trims intensity or distance across your runs. Keeps every run in the plan.',
+      recommended: recommended === 'reduce',
+      loadLine: absorbLine(popup.reduceOutcome.adjustments),
+      expander: { count: popup.reduceOutcome.adjustments.length, body: buildAdjustmentList(popup.reduceOutcome.adjustments), open: recommended === 'reduce' },
+    }) : '',
+    onPushToNextWeek ? optionCard({
+      id: 'choice-push-next-week',
+      title: 'Push to next week',
+      desc: 'Keep this week unchanged. The excess load carries to next week.',
+      recommended: recommended === 'push',
+    }) : '',
+    optionCard({
+      id: 'choice-keep',
+      title: 'Keep plan',
+      desc: 'Keep your running plan unchanged.',
+      recommended: recommended === 'keep',
+      loadLine: askKm > 0
+        ? 'Cuts nothing. The excess stays as fatigue.'
+        : undefined,
+      // The cut line already says the fatigue stays; only the extreme-severity
+      // warning adds actionable advice beyond it.
+      warning: keepWarning && (popup.severity === 'extreme' || askKm <= 0) ? keepWarning : undefined,
+    }),
+  ].filter(Boolean).join('');
+
   const overlay = document.createElement('div');
   overlay.id = 'suggestion-modal';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;overflow-y:auto';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,0.42);backdrop-filter:blur(12px) saturate(1.1);-webkit-backdrop-filter:blur(12px) saturate(1.1);overflow-y:auto';
 
   overlay.innerHTML = `
-    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto">
+    <div style="position:relative;background:rgba(255,255,255,0.78);backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4);border:1px solid rgba(255,255,255,0.6);border-radius:24px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(15,23,42,0.18),0 0 0 1px rgba(15,23,42,0.04)">
+      <button id="close-modal-top" aria-label="Close" style="font:inherit;position:absolute;top:14px;right:14px;background:none;border:none;cursor:pointer;color:${FAINT};font-size:22px;line-height:1;padding:4px;z-index:2">×</button>
+
       ${acwrHeader}
       ${ctxHeader}
       ${mainHeader}
@@ -357,106 +486,57 @@ export function showSuggestionModal(
       <!-- §6.5 edge case: already completed run or no matching run -->
       ${popup.alreadyCompletedMatch ? `
       <div style="padding:16px 20px 0">
-        <div style="background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.2);border-radius:10px;padding:14px 16px">
-          <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:6px">
+        <div style="${FROST};border:1px solid ${HAIR};border-radius:14px;padding:14px 16px">
+          <div style="font-size:13px;color:${INK};font-weight:600;margin-bottom:6px">
             Matched to: ${popup.alreadyCompletedMatch.runName}. But you already completed it
           </div>
-          <p style="font-size:12px;color:var(--c-muted);line-height:1.6;margin-bottom:10px">
+          <p style="font-size:12px;color:${MUTED};line-height:1.55;margin-bottom:12px">
             Your session contributes to your weekly load (ACWR updated). Apply the load credit to next week's ${popup.alreadyCompletedMatch.runType.replace(/_/g,' ')} run instead?
           </p>
           <div style="display:flex;gap:8px">
-            <button id="choice-apply-next-week" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid rgba(37,99,235,0.4);background:rgba(37,99,235,0.06);cursor:pointer;font-size:12px;font-weight:500;color:var(--c-accent);font-family:var(--f)">Apply to next week</button>
-            <button id="choice-log-load-only" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid var(--c-border);background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--c-muted);font-family:var(--f)">Log load only</button>
+            <button id="choice-apply-next-week" style="font:inherit;flex:1;padding:11px 12px;border-radius:999px;border:none;background:${INK};cursor:pointer;font-size:13px;font-weight:600;color:#fff">Apply to next week</button>
+            <button id="choice-log-load-only" style="font:inherit;flex:1;padding:11px 12px;border-radius:999px;border:1px solid ${HAIR};background:rgba(255,255,255,0.7);cursor:pointer;font-size:13px;font-weight:500;color:${MUTED}">Log load only</button>
           </div>
         </div>
       </div>` : ''}
       ${popup.noMatchingRun ? `
       <div style="padding:16px 20px 0">
-        <div style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border);border-radius:10px;padding:14px 16px">
-          <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:6px">No matching planned run this week</div>
-          <p style="font-size:12px;color:var(--c-muted);line-height:1.6;margin-bottom:10px">
+        <div style="${FROST};border:1px solid ${HAIR};border-radius:14px;padding:14px 16px">
+          <div style="font-size:13px;color:${INK};font-weight:600;margin-bottom:6px">No matching planned run this week</div>
+          <p style="font-size:12px;color:${MUTED};line-height:1.55;margin-bottom:12px">
             Your session's load is counted in your weekly TSS. Apply the credit toward next week's plan?
           </p>
           <div style="display:flex;gap:8px">
-            <button id="choice-apply-next-week" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid rgba(37,99,235,0.4);background:rgba(37,99,235,0.06);cursor:pointer;font-size:12px;font-weight:500;color:var(--c-accent);font-family:var(--f)">Match to next week</button>
-            <button id="choice-log-load-only" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid var(--c-border);background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--c-muted);font-family:var(--f)">Log as load only</button>
+            <button id="choice-apply-next-week" style="font:inherit;flex:1;padding:11px 12px;border-radius:999px;border:none;background:${INK};cursor:pointer;font-size:13px;font-weight:600;color:#fff">Match to next week</button>
+            <button id="choice-log-load-only" style="font:inherit;flex:1;padding:11px 12px;border-radius:999px;border:1px solid ${HAIR};background:rgba(255,255,255,0.7);cursor:pointer;font-size:13px;font-weight:500;color:${MUTED}">Log as load only</button>
           </div>
         </div>
       </div>` : ''}
 
-      <!-- 3 Global Choices -->
+      <!-- Global choices -->
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
-
-        ${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? `
-        <div style="padding:12px 14px;border-radius:10px;background:var(--c-surface);border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);line-height:1.5">
-          Your remaining runs are already at minimum intensity and distance. The extra load can't be absorbed by trimming this week's plan. Push it to next week or keep the plan and accept the added stimulus.
-        </div>
-        ` : ''}
-
-        <!-- REPLACE option (only show if there are replacements) -->
-        ${hasReplacements ? `
-        <button id="choice-replace" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;border:1.5px solid var(--c-border-strong);background:var(--c-bg);cursor:pointer">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:var(--c-warn);font-size:16px">Replace & Reduce</span>
-            <span style="font-size:11px;color:var(--c-faint)">Recommended for heavy loads</span>
-          </div>
-          <p style="color:var(--c-muted);font-size:13px;margin-bottom:10px">Replace runs where possible, downgrade the rest. Best for heavy cross-training.</p>
-          <details style="font-size:12px">
-            <summary style="color:var(--c-faint);cursor:pointer">View changes (${popup.replaceOutcome.adjustments.length})</summary>
-            <div style="margin-top:8px;background:var(--c-surface);border-radius:8px;padding:10px">
-              ${buildAdjustmentList(popup.replaceOutcome.adjustments)}
-            </div>
-          </details>
-        </button>
-        ` : ''}
-
-        <!-- REDUCE option -->
-        ${hasReductions ? `
-        <button id="choice-reduce" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReplacements ? 'border:2px solid var(--c-caution);background:rgba(245,158,11,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:var(--c-caution);font-size:16px">Reduce</span>
-            ${!hasReplacements ? '<span style="font-size:11px;background:rgba(245,158,11,0.15);color:var(--c-caution);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
-          </div>
-          <p style="color:var(--c-muted);font-size:13px;margin-bottom:10px">Downgrade intensity and/or reduce distance. Keeps all runs in your plan.</p>
-          <details style="font-size:12px" ${!hasReplacements ? 'open' : ''}>
-            <summary style="color:var(--c-faint);cursor:pointer">View changes (${popup.reduceOutcome.adjustments.length})</summary>
-            <div style="margin-top:8px;background:var(--c-surface);border-radius:8px;padding:10px">
-              ${buildAdjustmentList(popup.reduceOutcome.adjustments)}
-            </div>
-          </details>
-        </button>
-        ` : ''}
-
-        <!-- PUSH TO NEXT WEEK option (only shown when callback provided) -->
-        ${onPushToNextWeek ? `
-        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Push to next week</span>
-            ${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
-          </div>
-          <p style="color:var(--c-muted);font-size:13px">Keep this week unchanged. The excess load carries to next week.</p>
-        </button>
-        ` : ''}
-
-        <!-- KEEP option -->
-        <button id="choice-keep" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !onPushToNextWeek ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:${!hasReductions && !onPushToNextWeek ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Keep Plan</span>
-            ${!hasReductions && !onPushToNextWeek ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
-          </div>
-          <p style="color:var(--c-muted);font-size:13px">Keep your running plan unchanged.</p>
-          ${keepWarning ? `<p style="color:var(--c-caution);font-size:12px;margin-top:6px">${keepWarning}</p>` : ''}
-        </button>
-
+        ${optionsHtml}
       </div>
 
-      <!-- Footer -->
-      <div style="padding:0 20px 20px">
-        <button id="close-modal" style="width:100%;padding:10px;background:none;border:none;color:var(--c-faint);font-size:13px;cursor:pointer">
+      <!-- Footer: tap selects an option above, Confirm applies it -->
+      <div style="padding:0 20px 18px">
+        <button id="confirm-choice" style="font:inherit;width:100%;padding:14px;border:none;border-radius:999px;background:${INK};color:#fff;font-size:15px;font-weight:600;cursor:pointer">
+          Confirm
+        </button>
+        <button id="close-modal" style="font:inherit;width:100%;padding:12px 0 0;background:none;border:none;color:${FAINT};font-size:13px;cursor:pointer">
           Dismiss
         </button>
       </div>
     </div>
+
+    <style id="suggestion-modal-style">
+      #suggestion-modal details > summary::-webkit-details-marker { display:none; }
+      #suggestion-modal .sm-choice:focus-visible { outline:2px solid rgba(15,23,42,0.8); outline-offset:2px; }
+      #suggestion-modal details > summary:focus-visible { outline:1px solid rgba(15,23,42,0.4); outline-offset:2px; border-radius:4px; }
+      #suggestion-modal .sm-caret { display:inline-block; transition:transform 0.15s ease; }
+      #suggestion-modal details[open] > summary .sm-caret { transform:rotate(90deg); }
+      #suggestion-modal .sm-adj:last-child { border-bottom:none; padding-bottom:2px; }
+    </style>
   `;
 
   document.body.appendChild(overlay);
@@ -469,6 +549,30 @@ export function showSuggestionModal(
       const box = overlay.querySelector(`#ctx-info-${id}`) as HTMLElement | null;
       if (box) box.style.display = box.style.display === 'none' ? '' : 'none';
     });
+  });
+
+  // Keyboard activation for the option cards (div[role=button]). Only when focus
+  // is on the card itself — the <summary> inside handles its own Enter/Space.
+  overlay.querySelectorAll<HTMLElement>('.sm-choice').forEach(card => {
+    card.addEventListener('keydown', (e) => {
+      if (e.target !== card) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        card.click();
+      }
+    });
+  });
+
+  // Wire impact-label + excess-label explainer toggles
+  overlay.querySelector('#impact-info-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const box = overlay.querySelector('#impact-info') as HTMLElement | null;
+    if (box) box.style.display = box.style.display === 'none' ? '' : 'none';
+  });
+  overlay.querySelector('#equiv-info-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const box = overlay.querySelector('#equiv-info') as HTMLElement | null;
+    if (box) box.style.display = box.style.display === 'none' ? '' : 'none';
   });
 
   // Wire ACWR details toggle if present
@@ -484,6 +588,7 @@ export function showSuggestionModal(
   });
 
   const close = (choice: GlobalChoice | null, adjustments: Adjustment[]) => {
+    if (dismissActiveModal === ownDismiss) dismissActiveModal = null;
     overlay.remove();
     if (choice) {
       onComplete({ choice, adjustments });
@@ -491,6 +596,8 @@ export function showSuggestionModal(
       onComplete(null);
     }
   };
+  const ownDismiss = () => close(null, []);
+  dismissActiveModal = ownDismiss;
 
   // Event handlers
   overlay.addEventListener('click', (e) => {
@@ -514,24 +621,66 @@ export function showSuggestionModal(
     close('keep', []);
   });
 
-  overlay.querySelector('#choice-push-next-week')?.addEventListener('click', () => {
-    close(null, []);
-    onPushToNextWeek?.();
+  // Transient confirmation after a plan-mutating choice (CLAUDE.md → adaptation
+  // transparency: small meaningful change gets a small toast). Fired after close()
+  // so onComplete has already applied the adjustments at the call site.
+  const summariseAdjustments = (adjs: Adjustment[]): string => {
+    const counts: Record<string, number> = {};
+    for (const a of adjs) {
+      const key = a.action === 'replace'
+        ? (a.newDistanceKm > 0 ? 'converted to easy' : 'replaced')
+        : a.action === 'downgrade' ? 'downgraded' : 'reduced';
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    const parts = Object.entries(counts).map(([k, n]) => `${n} ${n === 1 ? 'run' : 'runs'} ${k}`);
+    return `Plan updated: ${parts.join(', ')}.`;
+  };
+
+  // Tap selects, Confirm applies. Guards against accidental application from a
+  // stray tap on a large card (the cards also host the "View changes" expanders).
+  const CHOICE_IDS = ['choice-replace', 'choice-reduce', 'choice-push-next-week', 'choice-keep'] as const;
+  let selectedId: string =
+      recommended === 'replace' ? 'choice-replace'
+    : recommended === 'reduce' ? 'choice-reduce'
+    : recommended === 'push' ? 'choice-push-next-week'
+    : 'choice-keep';
+
+  const refreshSelection = (): void => {
+    for (const id of CHOICE_IDS) {
+      const card = overlay.querySelector<HTMLElement>(`#${id}`);
+      if (!card) continue;
+      const isSel = id === selectedId;
+      card.style.border = isSel ? '1.5px solid rgba(15,23,42,0.82)' : `1px solid ${HAIR}`;
+      card.setAttribute('aria-pressed', String(isSel));
+    }
+  };
+
+  CHOICE_IDS.forEach(id => {
+    overlay.querySelector(`#${id}`)?.addEventListener('click', () => {
+      selectedId = id;
+      refreshSelection();
+    });
   });
 
-  overlay.querySelector('#choice-replace')?.addEventListener('click', () => {
-    close('replace', popup.replaceOutcome.adjustments);
-  });
-
-  overlay.querySelector('#choice-reduce')?.addEventListener('click', () => {
-    close('reduce', popup.reduceOutcome.adjustments);
-  });
-
-  overlay.querySelector('#choice-keep')?.addEventListener('click', () => {
-    close('keep', []);
+  overlay.querySelector('#confirm-choice')?.addEventListener('click', () => {
+    if (selectedId === 'choice-replace') {
+      close('replace', popup.replaceOutcome.adjustments);
+      if (popup.replaceOutcome.adjustments.length > 0) showSimpleToast(summariseAdjustments(popup.replaceOutcome.adjustments));
+    } else if (selectedId === 'choice-reduce') {
+      close('reduce', popup.reduceOutcome.adjustments);
+      if (popup.reduceOutcome.adjustments.length > 0) showSimpleToast(summariseAdjustments(popup.reduceOutcome.adjustments));
+    } else if (selectedId === 'choice-push-next-week') {
+      close(null, []);
+      onPushToNextWeek?.();
+    } else {
+      close('keep', []);
+    }
   });
 
   overlay.querySelector('#close-modal')?.addEventListener('click', () => {
+    close(null, []);
+  });
+  overlay.querySelector('#close-modal-top')?.addEventListener('click', () => {
     close(null, []);
   });
 }

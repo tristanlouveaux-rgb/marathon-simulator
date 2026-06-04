@@ -156,13 +156,13 @@ export function openTriGoalOverlay(preSec?: number): void {
       "></div>
 
       <button id="tri-goal-save" type="button" style="
-        width:100%;padding:14px;border:none;border-radius:999px;background:#0F172A;color:#fff;
-        font-size:15px;font-weight:600;cursor:pointer;font:inherit;font-weight:600
+        font:inherit;width:100%;padding:14px;border:none;border-radius:999px;background:#0F172A;color:#fff;
+        font-size:15px;font-weight:600;cursor:pointer
       ">Save goal time</button>
 
       <button id="tri-goal-clear" type="button" style="
-        width:100%;padding:12px 0 0;background:none;border:none;color:#64748B;font-size:13px;
-        cursor:pointer;font:inherit;text-align:center;margin-top:6px
+        font:inherit;width:100%;padding:12px 0 0;background:none;border:none;color:#64748B;font-size:13px;
+        cursor:pointer;text-align:center;margin-top:6px
       ">Clear goal</button>
     </div>
 
