@@ -4,6 +4,13 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-06-04 — Max HR: one corroborated-max estimator for all three sync pipes (SCIENCE_LOG §BQ)
+
+- **Why**: dogfood question on the "Ignored lower maxHR=184 (current=201)" warning. The three pipes used three different statistics feeding one up-only ratchet — Garmin edge fn p95 (median below 5 readings: the path that once wrote 144), Strava p95, Apple Health raw `Math.max` (a single wrist cadence-lock spike could ratchet in forever). Live data check: 201 is real (witnessed by 202/203 on other days); a lone 216 is the spike; 184 was just p95-of-session-maxes, which sits below true max by construction — the warning fired on every sync.
+- **Fix**: canonical `corroboratedMaxHR()` (`src/calculations/max-hr-estimator.ts`) — highest session max witnessed by a second session within 5 bpm on a *different* day (cross-source duplicate twins can't witness each other), gates ≥150 / <230 bpm. Shared `applyCorroboratedMaxHR` keeps the up-only ratchet; lower estimates log at info, not warn. All three writers switched (`physiologySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`); `sync-physiology-snapshot` now returns the top 40 readings with dates (legacy p95 aggregate kept for old clients; new client falls back to it when readings are absent).
+- Downward revision (age-related ~0.7 bpm/yr decline) deliberately deferred — logged as a limitation in §BQ.
+- 12 new tests, suite 3185 green, tsc clean. **Edge fn change STAGED, NOT deployed** (deploy permission denied mid-session). NOT device-verified.
+
 ## 2026-06-04 — Strain ring closes at target (both surfaces)
 
 - **"Target reached" now draws a full ring.** Dogfood: detail view said "Target reached" (34 TSS, target 18–34) while the ring sat at ~67% — the text said done, the picture said two-thirds done. Worse, the Home mini ring used a different scale again (`target.hi × 2` → ~50% at target), so the same TSS filled the two surfaces differently.
@@ -35,7 +42,8 @@ Session-by-session record of significant changes. Most recent first.
 - **ltHR plausibility gate** (general-population): personal normalizer rejects ltHR outside 80–95% of maxHR (Faude 2009) → population fallback; also gated at the watch-intake source in `resolveLT`. *Correction: Tristan's live profile (177/43/201, 88%) is in-band — the handover's "68% HRR" premise was stale; no CTL inflation occurred.*
 - **B3 sweep**: all ~25 hardcoded `/15000` and `/150` decodes routed through `normalizeiTrimp` (displays, sync pipes, matcher `wk.actualTSS` cache, adaptive-recovery) — re-grep zero, guarded by a filesystem anchor test.
 - **Migration**: one-time `loadCurrencyV2` launch restamp for stored tri-run and TE-relic adhoc loads.
-- **Durable guard**: `src/calculations/load-currency-anchors.test.ts` (17 anchors). Suite 3,173 green (+32). NOT device-verified — modal copy moves to "≈ N TSS — about X km easy running" next.
+- **Durable guard**: `src/calculations/load-currency-anchors.test.ts` (17 anchors). Suite 3,173 green (+32). Modal copy now TSS-led ("≈ N TSS, about X km of easy running").
+- **Device-verification round (Tristan, same day)**: migration confirmed running (was silently skipped in simulator mode — moved out of the `!isSimulatorMode()` block, log now unconditional); tri plan TSS badges verified sane on live state. **Dead-button fix**: Home "Reduce session load" appeared while the handler silently concluded "week already on target" — new canonical `computeAcwrReductionProjection` (acwr-reduction-projection.ts) now gates BOTH the button's visibility and the handler's skip (which also gets a toast as fallback); replaced the handler's private TYPE_RPE valuation map with `plannedTssPerMin`.
 
 ## 2026-06-04 — Onboarding loading screen: always-on motion + live narration
 

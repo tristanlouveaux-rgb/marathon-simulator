@@ -22,6 +22,7 @@ import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
@@ -2269,38 +2270,24 @@ export function triggerACWRReduction(): void {
   const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
 
   // Compute overshoot: only reduce enough to bring projected week back to target.
+  // Canonical projection shared with the Home nudge's button-visibility logic
+  // (acwr-reduction-projection.ts) — the button is hidden when this concludes
+  // "no cuts needed", and the toast below is the belt-and-braces fallback for
+  // any path that still lands here (2026-06-04 dogfood dead-button fix).
   let overshootTSS: number | undefined;
   let targetTSS: number | undefined;
   if (wk.unspentLoadItems?.length) {
-    const plannedB = computePlannedSignalB(
-      s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-      s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-    );
-    if (plannedB) {
-      targetTSS = plannedB;
-      const currentTSS = computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
-      const carried = computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate);
-      const paceMinPerKm = (s.pac?.e ?? 360) / 60;
-      const TYPE_RPE: Record<string, number> = { easy: 4, long: 4, threshold: 7, marathon_pace: 6, float: 6, vo2: 8, intervals: 8, progressive: 5 };
-      const remainingRunTSS = weekRuns
-        .filter(r => r.status === 'planned')
-        .reduce((sum, r) => {
-          const rpe = TYPE_RPE[r.workoutType] ?? 5;
-          const durMin = r.plannedDistanceKm * paceMinPerKm * (rpe >= 7 ? 0.85 : 1.0);
-          return sum + durMin * (TL_PER_MIN[rpe] ?? 1.15);
-        }, 0);
-      const projectedTotal = currentTSS + (carried ?? 0) + remainingRunTSS;
-      if (projectedTotal <= plannedB) {
-        console.log(`[ACWRReduction] Skipping. Projected ${Math.round(projectedTotal)} TSS ≤ target ${Math.round(plannedB)}. Remaining runs won't exceed target.`);
-        // Dead-button fix (2026-06-04 dogfood): the nudge button must always
-        // respond. The week is already on target, so say that instead of
-        // silently eating the tap.
+    const projection = computeAcwrReductionProjection(s, weekRuns);
+    if (projection) {
+      targetTSS = projection.target;
+      if (!projection.over) {
+        console.log(`[ACWRReduction] Skipping. Projected ${Math.round(projection.projected)} TSS ≤ target ${Math.round(projection.target)}. Remaining runs won't exceed target.`);
         import('@/ui/toast').then(({ showSimpleToast }) =>
-          showSimpleToast(`Remaining sessions already bring the week in at ~${Math.round(projectedTotal)} TSS, under the ~${Math.round(plannedB)} TSS target. No cuts needed.`));
+          showSimpleToast(`Remaining sessions already bring the week in at ~${Math.round(projection.projected)} TSS, under the ~${Math.round(projection.target)} TSS target. No cuts needed.`));
         return;
       }
-      overshootTSS = projectedTotal - plannedB;
-      console.log(`[ACWRReduction] Overshoot ${Math.round(overshootTSS)} TSS (projected ${Math.round(projectedTotal)} vs target ${Math.round(plannedB)})`);
+      overshootTSS = projection.projected - projection.target;
+      console.log(`[ACWRReduction] Overshoot ${Math.round(overshootTSS)} TSS (projected ${Math.round(projection.projected)} vs target ${Math.round(projection.target)})`);
     }
   }
 

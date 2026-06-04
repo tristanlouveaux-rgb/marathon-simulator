@@ -8,6 +8,19 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-272: Reschedule is the missing third lever — timing-aware readiness suggestions *(P2 design, Tristan, 2026-06-04)*
+
+Found dogfooding the load-currency build. Scenario: readiness 15 driven by ACWR (safety), week projection ON target, hard session imminent (e.g. long run today/tomorrow). The system's two levers both fit badly: Reduce cuts volume the athlete doesn't need to lose (the week's budget is fine), Keep carries acute risk onto a high-impact session. The correct lever is **moving the session** — fatigue decays ~13%/day (7-day ATL constant), so a 2–3 day shift absorbs the spike at zero training cost.
+
+**Decision tree (agreed in-session)**:
+- Week projected OVER target → Reduce (existing modal, `triggerACWRReduction`).
+- Week ON target + hard session within ~2 days + readiness floor (safety/recovery driven) → **offer Reschedule**: "Move [session] to [day]?" Target day = earliest day where projected readiness/ACWR recovers, respecting no-consecutive-hard-days (`checkConsecutiveHardDays`) and week boundaries. Reuse the existing workout-move machinery (workoutMods moves); suggestion-acceptance contract applies (user accepts before plan mutates).
+- Week ON target + nothing hard imminent → caption only (shipped 2026-06-04: the canonical `computeAcwrReductionProjection` now gates the Reduce button's visibility/label/routing so no dead button shows).
+
+**Related refinement (same session)**: when a cut IS warranted, the reduce modal ranks candidates by load-similarity, not date — it can downgrade Sunday's session when the risk peaks tomorrow. Date-aware candidate ordering belongs in the same build.
+
+**Fork points for the build session**: auto-pick one target day vs offer 2 options; interaction with week debrief + mid-week moves; whether tri mode mirrors (per-discipline ramps complicate "move the run").
+
 ### ISSUE-271: Sign in with Apple — one-tap durable identity *(P3 nice-to-have, 2026-06-04)*
 
 NOT an App Store 4.8 compliance requirement: 4.8 targets third-party/social login for the PRIMARY account; Mosaic's primary auth is first-party email/password (Supabase), and Strava/Garmin OAuth are data connections, not login. Worth building eventually because one tap beats typing an email mid-onboarding. **Landmine for whoever builds it**: native `signInWithIdToken({provider:'apple'})` LOGS OUT the anonymous user and signs into a different account — it would orphan the onboarding data ISSUE-270 protects. The anonymous-upgrade path must use `linkIdentity` (web-redirect OAuth, requires "manual linking" enabled in the Supabase dashboard + Apple Service ID config in the Apple Developer portal). Sources: supabase docs auth-apple, supabase-swift#588, supabase discussion #25976.
@@ -75,10 +88,10 @@ Tristan's watch has a measured LT (4:12/km, 168 bpm) but the app shows "3:59/km 
 **Fix shipped (Tristan's policy decisions, 2026-06-04)**:
 1. **Retention**: 60-day Garmin expiry removed (`resolveLT`) — watch LT holds until a newer reading, manual override, or a clearly-faster derived estimate (≥3s/km at medium+ confidence). Rationale: Garmin pushes userMetrics only on change; silence = unchanged. SCIENCE_LOG revised.
 2. **Auto-apply**: the >10s/km Garmin-vs-derived suggestion card is retired (`recomputeLT`); watch readings apply directly, ≥10s/km shifts get a toast.
-3. **Webhook hardening**: merge-preserving upsert in `handleUserMetrics` so a VO2-only push can't null a same-day LT. **STAGED, NOT DEPLOYED** — deploy garmin-webhook before next tester onboarding.
+3. **Webhook hardening**: merge-preserving upsert in `handleUserMetrics` so a VO2-only push can't null a same-day LT. **DEPLOYED 2026-06-04** (garmin-webhook v87; smoke-tested: GET 200, unauthenticated POST 401).
 4. **Deep historical backfill DROPPED** (Tristan): the existing 8-week connect-time backfill suffices for future users; older LT arrives on the next hard run.
 
-**Remaining**: deploy the webhook change; Tristan sets the manual override (4:12/km, 168 bpm) since his own LT change event predates the webhook and will not arrive by itself.
+**Remaining**: Tristan has set the manual override (4:12/km, 168 bpm — his own LT change event predates the webhook). Verifies fully the first time Garmin pushes a fresh LT and it auto-applies with a toast.
 
 ### ISSUE-260: Activity identity invariants — one binding, every surface, correct day *(P1, Tristan's 4-point spec, 2026-06-03)*
 

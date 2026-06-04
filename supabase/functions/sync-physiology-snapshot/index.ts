@@ -148,10 +148,19 @@ Deno.serve(async (req) => {
         const mergedDays = Array.from(mergedData.values())
             .sort((a, b) => a.calendar_date.localeCompare(b.calendar_date))
 
-        // Robust max HR: 95th percentile of all activity max HRs (filters wrist-sensor spikes)
-        // Exclude obvious wrist-sensor noise: walking/swimming wrist HR frequently
-        // reads 50-120 bpm without reflecting true exertion. Floor at 120 so only
-        // sessions where the heart was actually working contribute to the estimate.
+        // Max HR readings: top session maxes with dates. The client computes
+        // the corroborated max from these (max-hr-estimator.ts) — a witness
+        // for a top reading is itself a top reading, so 40 rows is plenty.
+        const maxHRRows = (maxHRRes.data ?? []).filter((r: any) => r.max_hr != null && r.max_hr > 100 && r.start_time)
+        const maxHRReadings = maxHRRows
+            .slice()
+            .sort((a: any, b: any) => b.max_hr - a.max_hr)
+            .slice(0, 40)
+            .map((r: any) => ({ max_hr: r.max_hr as number, date: (r.start_time as string).slice(0, 10) }))
+
+        // LEGACY aggregate for older clients: 95th percentile of session maxes
+        // above a 120 bpm wrist-noise floor (median below 5 readings). New
+        // clients ignore this when maxHRReadings is present.
         const allMaxHRs = (maxHRRes.data ?? []).map((r: any) => r.max_hr as number).filter(v => v > 120)
         let allTimeMaxHR: number | null = null
         if (allMaxHRs.length >= 5) {
@@ -172,7 +181,7 @@ Deno.serve(async (req) => {
             lt_heart_rate: latestPhysioRow.lt_heart_rate,
         } : null
 
-        return new Response(JSON.stringify({ days: mergedDays, maxHR: allTimeMaxHR, latestPhysio }), {
+        return new Response(JSON.stringify({ days: mergedDays, maxHR: allTimeMaxHR, maxHRReadings, latestPhysio }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 200,
         })

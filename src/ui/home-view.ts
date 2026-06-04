@@ -11,6 +11,8 @@ import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } f
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
 import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
+import { workoutsToPlannedRuns } from '@/cross-training/suggester';
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
@@ -1209,17 +1211,6 @@ function buildReadinessRing(s: SimulatorState): string {
   const triHasMods = (triBundle?.mods.length ?? 0) > 0;
   const triDominantSource = triBundle?.mods[0]?.source;
 
-  // ISSUE 3: Adjust button text varies by driving signal
-  const adjustText = isTriMode
-    ? (triDominantSource === 'cross_training_overload' || triDominantSource === 'readiness'
-        ? 'Reduce session load'
-        : 'Adjust plan')
-    : readiness.drivingSignal === 'fitness' ? 'Adjust plan'
-      : readiness.drivingSignal === 'safety' ? 'Reduce session load'
-        : readiness.drivingSignal === 'recovery' ? 'Take it lighter today'
-          : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
-            : "Keep consistency, don't skip";
-
   // Hide the adjust button when its handler has nothing to do. Otherwise the
   // user taps and lands silently on the plan view. Mirror the click-handler's
   // branches: ACWR elevated → reduction modal, unspent cross-training →
@@ -1234,6 +1225,12 @@ function buildReadinessRing(s: SimulatorState): string {
   // the remaining week for the legLoad branch only.
   const acwrElevatedForBtn = acwr.status === 'caution' || acwr.status === 'high';
   const hasUnspentForBtn = (strainWk?.unspentLoadItems?.length ?? 0) > 0;
+  // "Reduce session load" must only be offered when the reduction handler
+  // would actually cut something. Mirror triggerACWRReduction's own skip via
+  // the shared canonical projection (2026-06-04 dogfood: the button appeared,
+  // the handler concluded "week already on target", nothing happened). The
+  // projection check applies in the same case the handler applies it: unspent
+  // cross-training items present. Null projection = cannot judge → allow.
   // An ACWR reduction applied today replaces the adjust button with a
   // "Session load reduced." caption + Undo, valid for the rest of that day.
   // Running mode only (tri routes through its own suggestion pipeline).
@@ -1254,14 +1251,35 @@ function buildReadinessRing(s: SimulatorState): string {
   });
   const hasRemainingRun = remainingUnratedWorkouts.length > 0;
   const hasRemainingHardRun = remainingUnratedWorkouts.some((w: any) => isHardWorkout(w.t));
+  const reductionProjection = (!isTriMode && hasUnspentForBtn && strainWk)
+    ? computeAcwrReductionProjection(s, workoutsToPlannedRuns(
+        runPlanForBtn.filter((w: any) => !(strainWk.rated ?? {})[w.id || w.n]) as any, s.pac))
+    : null;
+  const reductionWouldAct = !hasUnspentForBtn || (reductionProjection?.over ?? true);
+
+  // ISSUE 3: Adjust button text varies by driving signal. When the canonical
+  // projection says a reduction would be a no-op, the safety label falls back
+  // to rest advice — visibility, label, and click routing must all share the
+  // projection's conclusion (2026-06-04 dogfood round 2: the button survived
+  // on the remaining-run justification but still promised "Reduce session
+  // load" and still routed to the reduction branch).
+  const adjustText = isTriMode
+    ? (triDominantSource === 'cross_training_overload' || triDominantSource === 'readiness'
+        ? 'Reduce session load'
+        : 'Adjust plan')
+    : readiness.drivingSignal === 'fitness' ? 'Adjust plan'
+      : readiness.drivingSignal === 'safety' ? (reductionWouldAct ? 'Reduce session load' : 'Take it lighter today')
+        : readiness.drivingSignal === 'recovery' ? 'Take it lighter today'
+          : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
+            : "Keep consistency, don't skip";
   const showAdjustButton = isTriMode
     // Tri: only show the button when the suggestion pipeline has something to
     // act on. A poor readiness score with no actionable mod is a dead button.
     ? triHasMods
     : readiness.score <= 59 && (
         readiness.drivingSignal === 'legLoad'
-          ? (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingHardRun)
-          : (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingRun)
+          ? ((acwrElevatedForBtn || hasUnspentForBtn) && reductionWouldAct) || hasRemainingHardRun
+          : ((acwrElevatedForBtn || hasUnspentForBtn) && reductionWouldAct) || hasRemainingRun
       );
 
   const recoveryPillHtml = recoveryResult.hasData
@@ -3194,7 +3212,16 @@ function wireHomeHandlers(): void {
     const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
     const acwrElevated = acwr2.status === 'caution' || acwr2.status === 'high';
     const hasUnspent = (wk2?.unspentLoadItems?.length ?? 0) > 0;
-    if (acwrElevated || hasUnspent) {
+    // Same canonical projection gate as render-time visibility: if the
+    // reduction handler would conclude "week already on target", skip straight
+    // to the rest-advice branch instead of a no-op modal path.
+    const clickPlan = (!s2.trackOnly && s2.eventType !== 'hyrox' && wk2) // tri already returned above
+      ? resolveWeekWorkouts(s2, s2.w).filter((w: any) => !(wk2.rated ?? {})[w.id || w.n]) : [];
+    const clickProjection = hasUnspent
+      ? computeAcwrReductionProjection(s2, workoutsToPlannedRuns(clickPlan as any, s2.pac))
+      : null;
+    const reductionWouldAct2 = !hasUnspent || (clickProjection?.over ?? true);
+    if ((acwrElevated || hasUnspent) && reductionWouldAct2) {
       // ACWR is elevated or there's unspent cross-training load → plan adjustment modal
       import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
     } else {
