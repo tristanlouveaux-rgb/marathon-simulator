@@ -1,14 +1,14 @@
-import { isNative } from '@/utils/platform';
-
 /**
- * Web-only top overscroll spring.
+ * Top overscroll spring — all platforms.
  *
- * iOS WKWebView rubber-bands the document natively (see the `html { background }`
- * note in styles.css), so on device the bounce at the top of a page is already
- * real and this controller stays a no-op there. On the web build (desktop +
- * mobile browsers) the document does NOT rubber-band: scrolling up at the very
- * top hits a dead wall. This adds a matching elastic pull at the top of every
- * page so web feels like the native app.
+ * Neither build rubber-bands natively. On the web (desktop + mobile browsers)
+ * the document scroller hits a dead wall at the top. On iOS, Capacitor
+ * hardcodes `webView.scrollView.bounces = false` in
+ * CAPBridgeViewController.swift (unconditional, no config flag), so WKWebView's
+ * native rubber-band never fires either — an earlier version of this file
+ * assumed it did and no-op'd on native, which is why the bounce existed on web
+ * but not on device. This controller now runs everywhere and adds a matching
+ * elastic pull at the top of every page.
  *
  * Mechanics
  * - The scroller is <body>. Page content and the fixed tab bar both live inside
@@ -39,13 +39,13 @@ const WHEEL_DECAY = 0.82; // per-frame pull bleed-off for trackpad/wheel momentu
 const SPRING = 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)'; // touch release ease
 
 export function installWebOverscrollBounce(): void {
-  if (isNative()) return; // native iOS already rubber-bands the document
   if (typeof window === 'undefined') return;
 
   // Suppress the browser's own overscroll (white rubber-band on iOS Safari,
   // pull-to-refresh / glow on Chrome) so our spring is the only overscroll
   // affordance and a hard momentum fling to the top can never flash the bare body
   // colour. Set on both html and body since which one is the scroller varies.
+  // Harmless on the Capacitor build — native bounce is already off there.
   document.documentElement.style.overscrollBehavior = 'none';
   document.body.style.overscrollBehavior = 'none';
 

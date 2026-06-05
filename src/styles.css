@@ -41,10 +41,11 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-family: var(--f);
-  /* iOS WKWebView rubber-band overscroll reveals the html backing behind the
-     body. Without a background it shows bare white, which reads as a jolty
-     white flash at the top/bottom of every page. Match the page colour so the
-     bounce dissolves into the off-white edge of every atmosphere gradient. */
+  /* Backstop colour behind the body. Any gap that ever exposes the html
+     backing (the JS overscroll spring in web-overscroll-bounce.ts pins page
+     gradients, but a missed edge case would land here) shows the page colour
+     instead of a jolty white flash. Note: native WKWebView rubber-band is OFF
+     (Capacitor hardcodes scrollView.bounces = false). */
   background-color: var(--c-bg);
   /* Lock text scale — stop iOS auto-inflating text in landscape/large-text mode,
      which silently widens layouts. Pinch-zoom itself is disabled via the
