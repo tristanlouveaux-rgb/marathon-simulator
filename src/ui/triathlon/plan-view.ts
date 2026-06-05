@@ -192,7 +192,7 @@ export function renderTriathlonPlanView(): void {
             ${injuryActive
               ? `<button id="tri-injury-header-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(234,88,12,0.12);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#92400E;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">In Recovery</button>`
               : `<button id="tri-checkin-btn" class="m-btn-glass">Check-in</button>`}
-            ${!isFutureWeek ? `<button id="tri-plan-generate-session" class="m-btn-glass">+ Add session</button>` : ''}
+            ${!isFutureWeek ? `<button id="tri-plan-generate-session" class="m-btn-glass">+ Add session</button><button id="tri-plan-log-activity" class="m-btn-glass">+ Log activity</button>` : ''}
           </div>
         </div>
 
@@ -323,6 +323,9 @@ export function renderTriathlonPlanView(): void {
   // Add session button → opens the session generator picker. In tri mode the
   // picker is filtered to Vibes Run only for V1; full discipline-aware picker
   // (swim/bike/run × types each) is a follow-up.
+  document.getElementById('tri-plan-log-activity')?.addEventListener('click', () => {
+    import('../log-activity-overlay').then(({ openLogActivityOverlay }) => openLogActivityOverlay());
+  });
   document.getElementById('tri-plan-generate-session')?.addEventListener('click', () => {
     import('../session-generator').then(({ openSessionGenerator }) => openSessionGenerator());
   });

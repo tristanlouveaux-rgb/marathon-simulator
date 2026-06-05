@@ -190,7 +190,7 @@ export function renderHyroxPlanView(): void {
 
           ${viewWeek === s.w ? `
             <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
-              <button id="hx-add-session-btn" class="m-btn-glass">+ Add session</button>
+              <button id="hx-add-session-btn" class="m-btn-glass">+ Add session</button><button id="hx-log-activity-btn" class="m-btn-glass">+ Log activity</button>
             </div>
           ` : ''}
         </div>
@@ -275,6 +275,9 @@ export function renderHyroxPlanView(): void {
 
   // Add session button. Opens the HYROX-specific session picker.
   // Lets the user add a session in keeping with the current week's phase.
+  document.getElementById('hx-log-activity-btn')?.addEventListener('click', () => {
+    import('../log-activity-overlay').then(({ openLogActivityOverlay }) => openLogActivityOverlay());
+  });
   document.getElementById('hx-add-session-btn')?.addEventListener('click', () => {
     import('./add-session-modal').then(({ openHyroxAddSessionModal }) =>
       openHyroxAddSessionModal(() => renderHyroxPlanView())

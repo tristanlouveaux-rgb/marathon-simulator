@@ -24,6 +24,8 @@ import {
 import { showSuggestionModal } from './suggestion-modal';
 import { resolveWeekWorkouts } from './week-resolve';
 import { showSimpleToast } from './toast';
+import { addAdhocWorkoutFromPending } from '@/calculations/activity-matcher';
+import type { GarminPendingItem } from '@/types';
 
 /** Sports offered in the picker, common ones first. */
 const SPORT_ORDER: SportKey[] = [
@@ -38,6 +40,13 @@ const SPORT_ORDER: SportKey[] = [
 export function openLogActivityOverlay(): void {
   document.getElementById('log-activity-overlay')?.remove();
 
+  // Mode-aware subtitle: only running mode runs the replace/reduce suggester.
+  const s0 = getMutableState();
+  const isRunningMode = s0.eventType !== 'triathlon' && s0.eventType !== 'hyrox' && !s0.trackOnly;
+  const subtitle = isRunningMode
+    ? 'A session done outside the plan. Its load counts toward the week and can reduce upcoming runs.'
+    : 'A session done outside the plan. Its load counts toward the week.';
+
   const options = SPORT_ORDER
     .filter(k => SPORT_LABELS[k])
     .map(k => `<option value="${k}">${SPORT_LABELS[k]}</option>`)
@@ -50,7 +59,7 @@ export function openLogActivityOverlay(): void {
   overlay.innerHTML = `
     <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
       <div style="font-size:16px;font-weight:600;color:var(--c-black)">Log an activity</div>
-      <p style="font-size:12px;color:var(--c-muted);line-height:1.5;margin:4px 0 16px">A session done outside the plan. Its load counts toward the week and can reduce upcoming runs.</p>
+      <p style="font-size:12px;color:var(--c-muted);line-height:1.5;margin:4px 0 16px">${subtitle}</p>
       <label style="display:block;font-size:12px;color:var(--c-muted);margin-bottom:4px">Sport</label>
       <select id="la-sport" class="m-select" style="width:100%;margin-bottom:12px">${options}</select>
       <div style="display:flex;gap:10px;margin-bottom:16px">
@@ -88,11 +97,19 @@ export function openLogActivityOverlay(): void {
   });
 }
 
-/** The legacy renderer.ts submit flow, on the canonical Plan-tab resolver. */
+/** Mode fork: running gets the full replace/reduce suggester; the other
+ * modes land the activity exactly where a synced one lands (the SEV-1-fixed
+ * adhoc path, canonical TSS stamps + Recent-list record) and let their own
+ * pipelines (tri cross-training overload, strain) pick it up. */
 function submitManualActivity(sport: string, durationMin: number, rpe: number): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return;
+
+  if (s.eventType === 'triathlon' || s.eventType === 'hyrox' || s.trackOnly) {
+    submitAdhocForMode(s, wk, sport, durationMin, rpe);
+    return;
+  }
 
   const activity = createActivity(sport, durationMin, rpe, undefined, undefined, s.w);
   const jsDay = new Date().getDay();
@@ -152,4 +169,42 @@ function submitManualActivity(sport: string, durationMin: number, rpe: number): 
     saveState();
     rerender();
   });
+}
+
+/** Tri/cycling/HYROX/just-track: synthetic pending-item accept — the same
+ * canonical path a synced activity takes (addAdhocWorkoutFromPending stamps
+ * TSS-scale loads and creates the GarminActual record with startTime). */
+function submitAdhocForMode(
+  s: ReturnType<typeof getMutableState>,
+  wk: NonNullable<ReturnType<typeof getMutableState>['wks']>[number],
+  sport: string,
+  durationMin: number,
+  rpe: number,
+): void {
+  const sportKey = normalizeSport(sport);
+  const now = new Date();
+  const garminId = `manual-${now.getTime()}`;
+  const id = `garmin-${garminId}`;
+  const item = {
+    garminId,
+    activityType: sportKey.toUpperCase(),
+    appType: sportKey === 'strength' ? 'gym' : 'cross',
+    startTime: now.toISOString(),
+    durationSec: durationMin * 60,
+    distanceM: null,
+    avgHR: null,
+    maxHR: null,
+    aerobicEffect: null,
+    anaerobicEffect: null,
+    garminRpe: rpe,
+    calories: null,
+    iTrimp: null,
+  } as GarminPendingItem;
+
+  addAdhocWorkoutFromPending(wk, item, id, rpe);
+  if (!wk.rated) wk.rated = {};
+  wk.rated[id] = rpe; // manual log is a completed session, not a plan slot
+  saveState();
+  showSimpleToast(`${SPORT_LABELS[sportKey as SportKey] ?? 'Activity'} logged: ${durationMin} min, RPE ${rpe}.`);
+  import('./main-view').then(({ renderMainView }) => renderMainView());
 }
