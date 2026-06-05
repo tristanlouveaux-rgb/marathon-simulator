@@ -1524,11 +1524,10 @@ async function launchApp(): Promise<void> {
     }
 
     // ── PHYSIOLOGY (additive: Garmin primary, Apple fills the gaps) ─────────────
-    // Both providers can contribute. Order is load-bearing: Garmin's
-    // syncPhysiologySnapshot OVERWRITES physiologyHistory wholesale, while the
-    // Apple sync MERGES and prefers existing (Garmin) values. So Garmin must land
-    // first, then Apple gap-fills any night Garmin missed. Running Apple before (or
-    // racing) Garmin would let a late Garmin write clobber the Apple fill.
+    // Both providers can contribute. Both merge per-day/per-field now: Garmin's
+    // syncPhysiologySnapshot overwrites only the fields it has data for, and the
+    // Apple sync prefers existing (Garmin) values. Garmin still runs first so it
+    // stays the primary; Apple gap-fills any night Garmin missed.
     // syncAppleHealthPhysiology is a no-op on web, so this is safe on localhost.
     const syncAllPhysiology = async (): Promise<void> => {
       if (hasGarminPhysio) {
@@ -2200,6 +2199,30 @@ document.addEventListener('visibilitychange', () => {
   if (hasPhysiologySource(s, 'garmin')) {
     syncTodaySteps().then(() => {
       scheduleHomeRefresh();
+    }).catch(() => {});
+    // Full physiology refresh, not just steps. On iOS the WKWebView stays
+    // alive for days, so the launch-time syncPhysiologySnapshot(90) never
+    // re-runs and sleep/HRV/RHR that Garmin delivered while the app was
+    // backgrounded stay invisible until a cold launch. (On web every page
+    // load IS a cold launch, which is why this gap only shows on device.)
+    // syncPhysiologySnapshot merges by date, so the 7-day window cannot
+    // truncate the 28-day baseline.
+    syncPhysiologySnapshot(7).then(() => {
+      const ps = getState();
+      setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+      scheduleHomeRefresh();
+      // If today's sleep is still missing from the DB, ask Garmin directly
+      // (cooldown-guarded) and restart the poller — its setInterval was
+      // suspended while the app was backgrounded.
+      const todayISO = new Date().toISOString().split('T')[0];
+      const todaySleep = getState().physiologyHistory?.find(d => d.date === todayISO);
+      if (!todaySleep?.sleepScore) {
+        refreshRecentSleepScores()
+          .then(() => syncPhysiologySnapshot(7))
+          .then(() => scheduleHomeRefresh())
+          .catch(() => {});
+      }
+      startSleepPollerIfNeeded();
     }).catch(() => {});
   } else if (hasPhysiologySource(s, 'apple')) {
     // HealthKit is local. Re-read on every foreground resume so new sleep/HRV

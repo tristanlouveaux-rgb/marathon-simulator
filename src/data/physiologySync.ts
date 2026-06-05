@@ -226,8 +226,14 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
     // Store up to 28 days of history for recovery score baseline and physiology dashboard.
     // 28 days is required so computeRecoveryScore() has enough HRV/sleep readings to
     // build a personal baseline (needs ≥3 readings in its 28-day window).
+    //
+    // MERGE by date, never wholesale replace. A short-window call (the sleep
+    // poller and the foreground-resume sync use days=7) must not truncate the
+    // 28-day baseline that the 90-day launch sync built. Garmin wins per-field
+    // where it has data; fields it lacks keep their existing (e.g. Apple
+    // gap-fill) values.
     if (days > 1 && rows.length > 0) {
-      s.physiologyHistory = rows
+      const incoming = rows
         .filter(r => r.calendar_date)
         .map((r): PhysiologyDayEntry => ({
           date: r.calendar_date!,
@@ -248,7 +254,21 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
           highlyActiveMinutes: r.highly_active_minutes ?? undefined,
           ltPace: r.lt_pace_sec_km ?? undefined,
           ltHR: r.lt_heart_rate ?? undefined,
-        }))
+        }));
+      const byDate = new Map((s.physiologyHistory ?? []).map(e => [e.date, e]));
+      for (const entry of incoming) {
+        const prev = byDate.get(entry.date);
+        if (!prev) {
+          byDate.set(entry.date, entry);
+          continue;
+        }
+        // Per-field: only overwrite with values Garmin actually sent.
+        const defined = Object.fromEntries(
+          Object.entries(entry).filter(([, v]) => v !== undefined),
+        ) as Partial<PhysiologyDayEntry>;
+        byDate.set(entry.date, { ...prev, ...defined });
+      }
+      s.physiologyHistory = [...byDate.values()]
         .sort((a, b) => a.date.localeCompare(b.date))
         .slice(-28);
       changed = true;

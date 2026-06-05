@@ -4,6 +4,19 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-06-05 — Sleep/physiology now refresh on iOS foreground resume
+
+- **Why (dogfood)**: new build on device showed stale sleep/physiology while the DB had today's rows (webhook healthy, `sync-physiology-snapshot` 200s). Root cause: the full physiology sync (`syncPhysiologySnapshot(90)`) only runs at cold launch. On web every page load is a cold launch; on iOS the WKWebView stays alive for days, and the foreground-resume handler's Garmin branch only synced **steps** (the Apple branch already re-synced full physiology). The 3-min sleep poller also died when iOS suspended timers and could never restart (`started` flag).
+- **Fix (3 files)**: (1) `main.ts` visibilitychange Garmin branch now mirrors Apple — `syncPhysiologySnapshot(7)` + normalizer refresh + conditional `refreshRecentSleepScores` when today's sleep is missing + sleep-poller restart, still throttled to once per 5 min. (2) `sleepPoller.ts` is restartable: guard is "poll already running", not "ever started". (3) `physiologySync.ts` history write is now a per-date, per-field **merge** instead of wholesale replace — a 7-day call can no longer truncate the 28-day recovery baseline (latent bug: the poller and the manual sleep-sync button did exactly that), and Apple gap-fill values survive where Garmin has no data. Stale "OVERWRITES wholesale" ordering comment in `main.ts` corrected.
+- 4 new tests (`physiologySync.test.ts` — merge semantics), suite 3227 green, tsc clean. NOT device-verified.
+
+## 2026-06-05 — Top overscroll bounce now runs on iOS too
+
+- **Why (dogfood)**: the elastic top bounce worked on web but not on device. Root cause: `web-overscroll-bounce.ts` no-op'd on native (`isNative()` early return) on the assumption WKWebView rubber-bands the document natively — but Capacitor **hardcodes** `webView.scrollView.bounces = false` in `CAPBridgeViewController.swift` (unconditional, no config flag), so there was never any native bounce to defer to.
+- **Fix**: removed the native guard — the JS spring now runs on all platforms. Chosen over re-enabling native bounce via a Swift subclass because the JS spring pins the fixed tab bar and the atmosphere gradient during the pull (native bounce drags the whole viewport, Safari-style) and keeps web/iOS feel identical with no native code to maintain.
+- Stale comments corrected in `capacitor.config.ts` (claimed `contentInset: 'never'` "restores natural rubber-band bounce" — it never did) and `styles.css` (html background is now a backstop, not a native-bounce companion). New FEATURES.md entry "Top Overscroll Spring".
+- tsc + lint:ui clean. NOT device-verified — needs a rebuild (`npx vite build && npx cap sync ios`) to land on the phone.
+
 ## 2026-06-04 — Every workout carries its pacing; targets follow the Adjust control
 
 - **Why (dogfood)**: easy and long runs showed bare distance ("7km") while threshold/VO2 showed a pace; a Long Run adjusted to VO2 kept the pace-less description. Tristan: "some of our workouts have pacings, all of them should and they should change if we adjust the workouts — same for cycling (watts) and swimming."

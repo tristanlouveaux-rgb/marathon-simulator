@@ -1253,7 +1253,7 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **Apple Watch physiology path** ✅: `syncAppleHealthPhysiology()` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. Converts to `PhysiologyDayEntry[]` and stores in `s.physiologyHistory`. Sleep score computed from stage breakdown (duration 55%, deep 25%, REM 20%). Runs on launch for Apple Watch users (both Apple-only and Strava+Apple Watch).
 
-**Apple Health as a supplementary physiology source** ✅ (2026-05-27): a Garmin user can additionally connect Apple Health so it gap-fills any night Garmin missed, without losing Garmin's native sleep score. `connectAppleHealth()` sets the device-local `s.appleHealthConnected` flag and only claims the labelled primary if nothing else holds it, so connecting never demotes Garmin. On launch `syncAllPhysiology()` (`main.ts`) runs Garmin first (wholesale write) then Apple last (merge that prefers existing Garmin values). Post-onboarding entry point: Account → Connected Apps → Apple Health row (iOS-only, mirrors the Strava-enrich row); triggers the HealthKit permission sheet and shows a Settings-path hint if the user denies the sleep/HR scopes. Garmin gives a validated sleep score; Apple's is reconstructed from stage durations, so Garmin stays primary by design.
+**Apple Health as a supplementary physiology source** ✅ (2026-05-27): a Garmin user can additionally connect Apple Health so it gap-fills any night Garmin missed, without losing Garmin's native sleep score. `connectAppleHealth()` sets the device-local `s.appleHealthConnected` flag and only claims the labelled primary if nothing else holds it, so connecting never demotes Garmin. On launch `syncAllPhysiology()` (`main.ts`) runs Garmin first then Apple last (both merge per-day/per-field since 2026-06-05: Garmin overwrites only the fields it has data for, Apple prefers existing Garmin values — so a short-window sync can no longer truncate the 28-day history). Post-onboarding entry point: Account → Connected Apps → Apple Health row (iOS-only, mirrors the Strava-enrich row); triggers the HealthKit permission sheet and shows a Settings-path hint if the user denies the sleep/HR scopes. Garmin gives a validated sleep score; Apple's is reconstructed from stage durations, so Garmin stays primary by design.
 
 **Week filtering**: Only activities within the current plan week (`planStartDate + (w-1)*7` to `+7`) are presented. Cross-week bleed from re-syncs is suppressed.
 
@@ -1275,6 +1275,8 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 **Excess Load Card** (`src/ui/excess-load-card.ts`): amber card on the Training tab when total week Signal B exceeds `computePlannedSignalB()` by 15–40 TSS (Tier 2). Detection is from the full week picture — whether activities matched plan slots or not is irrelevant. Shows TSS over target and [Adjust Plan] / [Dismiss] buttons. "Adjust Plan" triggers reduce/replace modal using total excess × weightedRunSpec × recoveryMultiplier. Tier 1 (≤15 TSS): auto-suppressed. Tier 3 (>40 TSS): blocking modal fires instead.
 
 **UnspentLoadItem** (`src/types/state.ts`): `garminId`, `displayName`, `sport`, `durationMin`, `aerobic`, `anaerobic`, `date`, `reason`.
+
+**Foreground-resume physiology refresh** ✅ (2026-06-05): the full physiology sync historically ran only at cold launch — fine on web (every page load is a cold launch), invisible-staleness on iOS where the WKWebView stays alive for days. The `visibilitychange` handler (`main.ts`) now refreshes the Garmin branch fully on each resume (throttled 5 min): `syncTodaySteps()` + `syncPhysiologySnapshot(7)` + normalizer refresh + `refreshRecentSleepScores()` when today's sleep is still missing + sleep-poller restart. The sleep poller (`src/data/sleepPoller.ts`) is restartable — its guard is "poll currently running", not "ever started" — because iOS suspends `setInterval` when backgrounded. Apple branch already re-synced on resume.
 
 **Garmin token refresh**: `isGarminConnected()` checks `expires_at` from `garmin_tokens`. If expired, calls `refreshGarminToken()` → `garmin-refresh-token` edge function → Garmin OAuth2 refresh_token flow. Account page shows "Connected · Last sync: [date]" when healthy, "Token expired" when refresh fails. Webhook handlers (`handleDailies`, `handleSleeps`) log successful upserts.
 
@@ -1793,6 +1795,21 @@ Collects anonymous safety scores from runners after each GPS-tracked run, to pow
 **Tests**: ✅ `src/gps/anonymize-route.test.ts` — 9 tests covering trim correctness, short-route null-return, edge cases, bounds/center, polyline roundtrip.
 
 **Out of scope (Phase 2)**: map display, heatmap aggregation, retroactive batch rating, edit/delete existing rating.
+
+---
+
+## Top Overscroll Spring (all platforms)
+
+**Key file**: `src/ui/web-overscroll-bounce.ts` (installed once at startup in `main.ts`)
+
+Pulling down past the top of any page produces an iOS-style elastic bounce. Neither platform rubber-bands natively: the web document scroller hits a dead wall, and on device Capacitor hardcodes `webView.scrollView.bounces = false` (`CAPBridgeViewController.swift` — unconditional, no config flag), so the JS spring runs everywhere (the original build no-op'd on native under the false assumption WKWebView bounced on its own; fixed 2026-06-05).
+
+- Translates only the **in-flow children** of each page wrapper — the fixed tab bar stays pinned and the page's atmosphere gradient stays anchored, so the gap revealed at the top shows the sky end of the gradient, never a white flash.
+- Pull distance damped with Apple's UIScrollView rubber-band curve (`c = 0.55`, capped at 130px).
+- Touch: finger drives the pull 1:1, springs back on release. Wheel/trackpad: impulse + per-frame decay so momentum tails ease out instead of holding.
+- Skips gestures inside overlays/modals (they live outside `#app-root`).
+
+**Tests**: ⚠️ No tests — gesture/transform behaviour, verified manually per platform.
 
 ---
 

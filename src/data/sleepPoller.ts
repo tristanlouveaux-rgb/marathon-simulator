@@ -18,7 +18,6 @@ const POLL_INTERVAL_MS = 3 * 60 * 1000;       // 3 minutes
 const MAX_POLL_DURATION_MS = 6 * 60 * 60 * 1000; // stop after 6 h
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-let started = false;
 
 function todayStr(): string {
   return new Date().toISOString().split('T')[0];
@@ -33,16 +32,21 @@ export function isSleepDataPending(): boolean {
   return pollTimer !== null;
 }
 
-/** Start polling if today's sleep score is not yet in state. Safe to call multiple times. */
+/**
+ * Start polling if today's sleep score is not yet in state. Safe to call
+ * multiple times — a no-op while a poll is already running. Deliberately
+ * restartable after self-termination: on iOS the WKWebView suspends timers
+ * when backgrounded, so the foreground-resume handler calls this again to
+ * begin a fresh poll window if sleep still hasn't arrived.
+ */
 export function startSleepPollerIfNeeded(): void {
-  if (started) return;
+  if (pollTimer !== null) return;
   if (hasTodaySleep()) {
     console.log('[sleepPoller] Today\'s sleep already in state — not polling');
     return;
   }
 
   console.log('[sleepPoller] Today\'s sleep missing — starting background poll every 3 min');
-  started = true;
   const deadline = Date.now() + MAX_POLL_DURATION_MS;
 
   pollTimer = setInterval(() => {
