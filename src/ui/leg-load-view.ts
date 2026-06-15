@@ -263,12 +263,12 @@ function getLegLoadHTML(): string {
     <style>
       #legload-view { box-sizing:border-box; }
       #legload-view *, #legload-view *::before, #legload-view *::after { box-sizing:inherit; }
-      @keyframes llFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes llFloatUp { from { opacity:0; } to { opacity:1; } }
       .ll-fade { opacity:0; animation:llFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       /* Sky background is static under the glass cards (RUNBOOK Cause 1+2). Do not animate it. */
     </style>
 
-    <div id="legload-view" style="
+    <div id="legload-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -280,7 +280,7 @@ function getLegLoadHTML(): string {
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="legload-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

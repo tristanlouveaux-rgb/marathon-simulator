@@ -20,20 +20,25 @@ import { initializeSimulator } from '@/state/initialization';
  * empty, which is the normal state for a brand-new account and reads as such.
  */
 
+/**
+ * Race day for the demo plan: the first Sunday at least 16 weeks (112 days) from
+ * today, matching planDurationWeeks. Computed at seed time so the demo never goes
+ * stale — a hardcoded date (originally '2026-04-26') eventually fell into the past
+ * and the seeded account booted with a "race is done" banner over a Week-1 plan.
+ */
+function demoRaceDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 112);
+  d.setDate(d.getDate() + ((7 - d.getDay()) % 7)); // roll forward to Sunday
+  return d.toISOString().slice(0, 10);
+}
+
 /** A believable returning marathoner: ~19:15 / 40:00 / 1:27:30 PBs, 5 runs/week, cross-trains. */
 const REVIEWER_ONBOARDING: Partial<OnboardingState> = {
   name: 'Sample Athlete',
   trainingMode: 'running',
   trainingForEvent: true,
   raceDistance: 'marathon',
-  selectedRace: {
-    id: 'london-2026',
-    name: 'London Marathon',
-    city: 'London',
-    country: 'UK',
-    date: '2026-04-26',
-    distance: 'marathon',
-  },
   planDurationWeeks: 16,
   age: 34,
   biologicalSex: 'male',
@@ -60,7 +65,18 @@ const REVIEWER_ONBOARDING: Partial<OnboardingState> = {
  * populated main view.
  */
 export function seedReviewerDemo(): boolean {
-  const onboarding: OnboardingState = { ...defaultOnboardingState, ...REVIEWER_ONBOARDING };
+  const onboarding: OnboardingState = {
+    ...defaultOnboardingState,
+    ...REVIEWER_ONBOARDING,
+    selectedRace: {
+      id: 'reviewer-demo-marathon',
+      name: 'London Marathon',
+      city: 'London',
+      country: 'UK',
+      date: demoRaceDate(),
+      distance: 'marathon',
+    },
+  };
   updateState({ onboarding });
 
   const result = initializeSimulator(onboarding);

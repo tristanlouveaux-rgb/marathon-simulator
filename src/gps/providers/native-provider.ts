@@ -20,7 +20,7 @@ export class NativeGpsProvider implements GpsProvider {
       const mod = await import('@transistorsoft/capacitor-background-geolocation');
       this.bgGeo = mod.default;
 
-      const state = await this.bgGeo.ready({
+      await this.bgGeo.ready({
         desiredAccuracy: this.bgGeo.DESIRED_ACCURACY_HIGH,
         distanceFilter: 10,
         stopOnTerminate: false,
@@ -38,7 +38,15 @@ export class NativeGpsProvider implements GpsProvider {
         },
       });
 
-      return state.enabled !== undefined;
+      // ready() resolves regardless of the permission outcome — its State.enabled
+      // only reflects whether the SDK is started, not whether location is
+      // authorized. The old `state.enabled !== undefined` check was therefore
+      // always true, so a user who DENIED location still got `true` and the app
+      // recorded 0.00 km forever instead of falling back to timer-only mode.
+      // requestPermission() explicitly prompts and resolves with the real status.
+      const status = await this.bgGeo.requestPermission();
+      return status === this.bgGeo.AUTHORIZATION_STATUS_ALWAYS
+        || status === this.bgGeo.AUTHORIZATION_STATUS_WHEN_IN_USE;
     } catch {
       return false;
     }
@@ -83,7 +91,21 @@ export class NativeGpsProvider implements GpsProvider {
       }
     });
 
-    this.bgGeo.start();
+    // start() boots the SDK in its battery-saving 'stationary' state: it emits
+    // NO locations until its motion-detector decides the device is moving, which
+    // for a runner starting from a standstill can take ~200m — or never fire if
+    // Motion & Fitness permission was declined. changePace(true) forces the SDK
+    // straight into the active 'moving' state so location tracking engages the
+    // moment the user presses Start. This is the documented pattern for fitness
+    // apps; without it the timer runs but distance stays 0.00 km.
+    this.bgGeo.start()
+      .then(() => this.bgGeo.changePace(true))
+      .catch((error: any) => {
+        console.warn('GPS start error:', error);
+        if (this.onErrorCb) {
+          this.onErrorCb(new Error(error?.message || 'Failed to start GPS'));
+        }
+      });
   }
 
   stopWatching(): void {

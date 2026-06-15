@@ -30,6 +30,7 @@ import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
+import { isTouchPrimary } from '@/utils/platform';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
@@ -42,7 +43,7 @@ import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
@@ -75,8 +76,8 @@ document.addEventListener('click', (e) => {
     <div style="position:relative;width:100%;max-width:360px;background:var(--c-surface);border-radius:18px;padding:24px 20px 20px;z-index:1">
       <div style="font-size:16px;font-weight:600;margin-bottom:6px">Undo adjustment?</div>
       <div style="font-size:14px;color:var(--c-muted);margin-bottom:24px">This will restore the workout to <strong style="color:var(--c-text)">${origLabel}</strong>.</div>
-      <button id="undo-adj-confirm-btn" style="width:100%;padding:13px;border-radius:12px;border:none;background:var(--c-accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Restore original</button>
-      <button id="undo-adj-cancel-btn" style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--c-border);background:transparent;color:var(--c-text);font-size:15px;cursor:pointer;font-family:var(--f)">Cancel</button>
+      <button id="undo-adj-confirm-btn" class="m-btn-primary" style="width:100%;padding:13px;font-size:15px;margin-bottom:8px">Restore original</button>
+      <button id="undo-adj-cancel-btn" class="m-btn-secondary" style="width:100%;padding:13px;font-size:15px">Cancel</button>
     </div>`;
   document.body.appendChild(sheet);
   const close = () => sheet.remove();
@@ -1744,7 +1745,7 @@ export function showRecoveryLogModal(): void {
   }).join('');
 
   overlay.innerHTML = `
-    <div style="width:100%;max-width:480px;background:var(--c-bg);border-radius:20px 20px 0 0;
+    <div style="width:100%;max-width:480px;background:var(--c-surface);border-radius:20px 20px 0 0;
                 padding:0 0 env(safe-area-inset-bottom,16px);overflow:hidden">
       <div style="display:flex;justify-content:center;padding:12px 0 4px">
         <div style="width:36px;height:4px;border-radius:2px;background:rgba(0,0,0,0.12)"></div>
@@ -2445,19 +2446,23 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   const _TL = '#94A3B8';
   const _BG = '#FAF9F6';
 
+  // Entrance plays on the first Plan visit per session only. Revisits (and week
+  // paging) render settled — instant, and nothing moves behind the glass cards.
+  const animate = shouldPlayEntrance('plan');
+
   return `
     <style>
       #plan-view { box-sizing:border-box; }
       #plan-view *, #plan-view *::before, #plan-view *::after { box-sizing:inherit; }
-      @keyframes planFloat { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
-      .plan-fade { opacity:0; animation:planFloat 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes planFloat { from { opacity:0; } to { opacity:1; } }
+      .plan-fade { ${animate ? 'opacity:0; animation:planFloat 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
       @keyframes barGrow { from { width:0% } }
-      .m-prog-fill { animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .m-prog-fill { ${animate ? 'animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards;' : ''} }
     </style>
 
     <div id="plan-view" style="position:relative;min-height:100vh;background:${atmosphereGradient('sky')};font-family:var(--f);overflow-x:hidden">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('rp', { variant: 'sweep', palette: 'sky', pulse: true })}
+        ${buildRingBackground('rp', { variant: 'sweep', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 
@@ -3198,7 +3203,6 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   // ─── Drag-and-drop reorder within week ──────────────────────────────────────
   let _dragId = '';
   let _dragDay = -1;
-  let _touchDraggingCard = false; // guards the page-level swipe handler
   document.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
     card.addEventListener('dragstart', (e) => {
       _dragId = card.dataset.workoutId || '';
@@ -3275,174 +3279,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // ─── Touch DnD for iOS WKWebView (HTML5 drag events don't fire there) ────────
-  {
-    // Long-press to reorder: the finger must rest TOUCH_DRAG_HOLD_MS before a
-    // drag arms, so scrolling the plan no longer reorders days by accident.
-    // Until the hold elapses, any real movement is treated as a scroll and the
-    // card is never picked up. (Tristan, 2026-06-01: 350ms. Mirrored in tri + HYROX.)
-    const TOUCH_DRAG_HOLD_MS = 350;
-    let _touchDragId = '';
-    let _touchDragDay = -1;
-    let _touchStartX = 0;
-    let _touchStartY = 0;
-    let _touchDragging = false;
-    let _touchClone: HTMLElement | null = null;
-    let _touchSourceCard: HTMLElement | null = null;
-    let _touchLastHighlight: HTMLElement | null = null;
-    let _touchHoldTimer: number | null = null;
-    let _touchHoldMet = false;
-
-    document.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
-      card.addEventListener('touchstart', (e) => {
-        const touch = e.touches[0];
-        _touchDragId = card.dataset.workoutId || '';
-        _touchDragDay = parseInt(card.dataset.dayOfWeek || '-1', 10);
-        _touchStartX = touch.clientX;
-        _touchStartY = touch.clientY;
-        _touchDragging = false;
-        _touchSourceCard = card;
-        _touchHoldMet = false;
-        if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
-        _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
-      }, { passive: true });
-
-      card.addEventListener('touchmove', (e) => {
-        if (!_touchDragId) return;
-        const touch = e.touches[0];
-        const dx = touch.clientX - _touchStartX;
-        const dy = touch.clientY - _touchStartY;
-        if (!_touchDragging) {
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          // Long-press gate. Before the hold elapses, real movement means the
-          // user is scrolling: abandon the drag candidate and let the page
-          // scroll (no preventDefault). After the hold, a small intentional
-          // move arms the drag.
-          if (!_touchHoldMet) {
-            if (dist >= 8) {
-              if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
-              _touchDragId = '';
-            }
-            return;
-          }
-          if (dist < 8) return;
-          _touchDragging = true;
-          _touchDraggingCard = true;
-          if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
-          _touchClone = card.cloneNode(true) as HTMLElement;
-          _touchClone.style.cssText = `position:fixed;pointer-events:none;opacity:0.75;z-index:9999;width:${card.offsetWidth}px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);`;
-          document.body.appendChild(_touchClone);
-        }
-
-        e.preventDefault();
-
-        if (_touchClone) {
-          _touchClone.style.left = `${touch.clientX - card.offsetWidth / 2}px`;
-          _touchClone.style.top  = `${touch.clientY - 30}px`;
-        }
-
-        if (_touchClone) _touchClone.style.visibility = 'hidden';
-        const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
-        if (_touchClone) _touchClone.style.visibility = '';
-
-        if (_touchLastHighlight) {
-          _touchLastHighlight.style.outline = '';
-          _touchLastHighlight.style.background = '';
-          const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
-          if (lbl) lbl.textContent = 'Rest';
-          _touchLastHighlight = null;
-        }
-
-        const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
-        if (targetCard && targetCard !== card) {
-          targetCard.style.outline = '2px solid var(--c-accent)';
-          targetCard.style.outlineOffset = '-2px';
-          _touchLastHighlight = targetCard;
-          return;
-        }
-        const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
-        if (targetZone && !el?.closest('.plan-workout-card')) {
-          const tDay = parseInt(targetZone.dataset.dayOfWeek || '-1', 10);
-          if (tDay >= 0 && tDay !== _touchDragDay) {
-            targetZone.style.background = 'rgba(99,102,241,0.08)';
-            const lbl = targetZone.querySelector('.plan-drop-label') as HTMLElement | null;
-            if (lbl) lbl.textContent = 'Drop here';
-            _touchLastHighlight = targetZone;
-          }
-        }
-      }, { passive: false });
-
-      card.addEventListener('touchend', (e) => {
-        _touchDraggingCard = false;
-        if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
-        _touchHoldMet = false;
-        if (!_touchDragging || !_touchDragId) {
-          _touchDragId = '';
-          _touchDragDay = -1;
-          _touchSourceCard = null;
-          _touchDragging = false;
-          return;
-        }
-
-        if (_touchClone) { _touchClone.remove(); _touchClone = null; }
-        if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
-        if (_touchLastHighlight) {
-          _touchLastHighlight.style.outline = '';
-          _touchLastHighlight.style.background = '';
-          const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
-          if (lbl) lbl.textContent = 'Rest';
-          _touchLastHighlight = null;
-        }
-
-        const touch = e.changedTouches[0];
-        const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
-
-        const srcId = _touchDragId;
-        const srcDay = _touchDragDay;
-        _touchDragId = '';
-        _touchDragDay = -1;
-        _touchDragging = false;
-        _touchSourceCard = null;
-
-        const applyMove = (targetId: string, targetDay: number) => {
-          if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
-          const ms = getMutableState();
-          const wk2 = ms.wks?.[viewWeek - 1];
-          if (!wk2) return;
-          const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
-          moves[srcId] = targetDay;
-          if (targetId) moves[targetId] = srcDay;
-          mergeTimingMods(ms, wk2);
-          saveState();
-          rerenderWeekListLocal(viewWeek);
-        };
-
-        const applyMoveToDay = (targetDay: number) => {
-          if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
-          const ms = getMutableState();
-          const wk2 = ms.wks?.[viewWeek - 1];
-          if (!wk2) return;
-          const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
-          moves[srcId] = targetDay;
-          mergeTimingMods(ms, wk2);
-          saveState();
-          rerenderWeekListLocal(viewWeek);
-        };
-
-        const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
-        if (targetCard && targetCard !== card) {
-          const targetId = targetCard.dataset.workoutId || '';
-          const targetDay = parseInt(targetCard.dataset.dayOfWeek || '-1', 10);
-          applyMove(targetId, targetDay);
-          return;
-        }
-        const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
-        if (targetZone && !el?.closest('.plan-workout-card')) {
-          applyMoveToDay(parseInt(targetZone.dataset.dayOfWeek || '-1', 10));
-        }
-      });
-    });
-  }
+  // Touch DnD (iOS WKWebView + mobile web) is wired by the shared module-level
+  // helper so the same code path re-attaches after every localized rerender.
+  wirePlanCardTouchDnd(document, viewWeek);
 
   // Horizontal swipe on Plan now changes tabs (global page-swipe nav), not weeks.
   // Week navigation lives on the chevron buttons (#plan-week-prev / #plan-week-next)
@@ -3554,6 +3393,184 @@ export function renderPlanView(): void {
 // header/banners above the list stay correct. Rebuilding them causes a flicker.
 // We replace only the list's innerHTML and re-wire handlers scoped to the new nodes.
 // Non-card handlers (coach btn, banners, nav) are untouched and keep their original listeners.
+// ─── Touch DnD for iOS WKWebView (HTML5 drag events don't fire there) ────────
+// Long-press to reorder: the finger must rest TOUCH_DRAG_HOLD_MS before a drag
+// arms, so scrolling the plan no longer reorders days by accident. Until the
+// hold elapses, any real movement is treated as a scroll and the card is never
+// picked up. (Tristan, 2026-06-01: 350ms. Mirrored in tri + HYROX.)
+//
+// Lives at module scope so BOTH the initial render (wirePlanHandlers) and every
+// localized rerender (wireCardScopedHandlers, after each reorder) re-attach it.
+// Earlier it was inline in wirePlanHandlers only, so touch reorder went dead
+// after the first drag once the cards were rebuilt. Pass `root` so a local
+// rerender rebinds only the fresh card nodes.
+function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
+  const TOUCH_DRAG_HOLD_MS = 350;
+  let _touchDragId = '';
+  let _touchDragDay = -1;
+  let _touchStartX = 0;
+  let _touchStartY = 0;
+  let _touchDragging = false;
+  let _touchClone: HTMLElement | null = null;
+  let _touchSourceCard: HTMLElement | null = null;
+  let _touchLastHighlight: HTMLElement | null = null;
+  let _touchHoldTimer: number | null = null;
+  let _touchHoldMet = false;
+  const _touchPrimary = isTouchPrimary();
+
+  root.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
+    // On touch devices the native HTML5 `draggable` makes WKWebView lift its
+    // own drag preview, doubling up with the custom clone below. Disable it so
+    // only the touch DnD runs; desktop keeps it for mouse drag.
+    if (_touchPrimary) card.draggable = false;
+    card.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      _touchDragId = card.dataset.workoutId || '';
+      _touchDragDay = parseInt(card.dataset.dayOfWeek || '-1', 10);
+      _touchStartX = touch.clientX;
+      _touchStartY = touch.clientY;
+      _touchDragging = false;
+      _touchSourceCard = card;
+      _touchHoldMet = false;
+      if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
+      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+      if (!_touchDragId) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - _touchStartX;
+      const dy = touch.clientY - _touchStartY;
+      if (!_touchDragging) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // Long-press gate. Before the hold elapses, real movement means the
+        // user is scrolling: abandon the drag candidate and let the page
+        // scroll (no preventDefault). After the hold, a small intentional
+        // move arms the drag.
+        if (!_touchHoldMet) {
+          if (dist >= 8) {
+            if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+            _touchDragId = '';
+          }
+          return;
+        }
+        if (dist < 8) return;
+        _touchDragging = true;
+        if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
+        _touchClone = card.cloneNode(true) as HTMLElement;
+        _touchClone.style.cssText = `position:fixed;pointer-events:none;opacity:0.75;z-index:9999;width:${card.offsetWidth}px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);`;
+        document.body.appendChild(_touchClone);
+      }
+
+      e.preventDefault();
+
+      if (_touchClone) {
+        _touchClone.style.left = `${touch.clientX - card.offsetWidth / 2}px`;
+        _touchClone.style.top  = `${touch.clientY - 30}px`;
+      }
+
+      if (_touchClone) _touchClone.style.visibility = 'hidden';
+      const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+      if (_touchClone) _touchClone.style.visibility = '';
+
+      if (_touchLastHighlight) {
+        _touchLastHighlight.style.outline = '';
+        _touchLastHighlight.style.background = '';
+        const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
+        if (lbl) lbl.textContent = 'Rest';
+        _touchLastHighlight = null;
+      }
+
+      const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
+      if (targetCard && targetCard !== card) {
+        targetCard.style.outline = '2px solid var(--c-accent)';
+        targetCard.style.outlineOffset = '-2px';
+        _touchLastHighlight = targetCard;
+        return;
+      }
+      const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
+      if (targetZone && !el?.closest('.plan-workout-card')) {
+        const tDay = parseInt(targetZone.dataset.dayOfWeek || '-1', 10);
+        if (tDay >= 0 && tDay !== _touchDragDay) {
+          targetZone.style.background = 'rgba(99,102,241,0.08)';
+          const lbl = targetZone.querySelector('.plan-drop-label') as HTMLElement | null;
+          if (lbl) lbl.textContent = 'Drop here';
+          _touchLastHighlight = targetZone;
+        }
+      }
+    }, { passive: false });
+
+    card.addEventListener('touchend', (e) => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
+      if (!_touchDragging || !_touchDragId) {
+        _touchDragId = '';
+        _touchDragDay = -1;
+        _touchSourceCard = null;
+        _touchDragging = false;
+        return;
+      }
+
+      if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+      if (_touchLastHighlight) {
+        _touchLastHighlight.style.outline = '';
+        _touchLastHighlight.style.background = '';
+        const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
+        if (lbl) lbl.textContent = 'Rest';
+        _touchLastHighlight = null;
+      }
+
+      const touch = e.changedTouches[0];
+      const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+
+      const srcId = _touchDragId;
+      const srcDay = _touchDragDay;
+      _touchDragId = '';
+      _touchDragDay = -1;
+      _touchDragging = false;
+      _touchSourceCard = null;
+
+      const applyMove = (targetId: string, targetDay: number) => {
+        if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
+        const ms = getMutableState();
+        const wk2 = ms.wks?.[viewWeek - 1];
+        if (!wk2) return;
+        const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+        moves[srcId] = targetDay;
+        if (targetId) moves[targetId] = srcDay;
+        mergeTimingMods(ms, wk2);
+        saveState();
+        rerenderWeekListLocal(viewWeek);
+      };
+
+      const applyMoveToDay = (targetDay: number) => {
+        if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
+        const ms = getMutableState();
+        const wk2 = ms.wks?.[viewWeek - 1];
+        if (!wk2) return;
+        const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+        moves[srcId] = targetDay;
+        mergeTimingMods(ms, wk2);
+        saveState();
+        rerenderWeekListLocal(viewWeek);
+      };
+
+      const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
+      if (targetCard && targetCard !== card) {
+        const targetId = targetCard.dataset.workoutId || '';
+        const targetDay = parseInt(targetCard.dataset.dayOfWeek || '-1', 10);
+        applyMove(targetId, targetDay);
+        return;
+      }
+      const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
+      if (targetZone && !el?.closest('.plan-workout-card')) {
+        applyMoveToDay(parseInt(targetZone.dataset.dayOfWeek || '-1', 10));
+      }
+    });
+  });
+}
+
 function rerenderWeekListLocal(viewWeek: number): void {
   const listEl = document.getElementById('plan-week-list');
   if (!listEl) { renderPlanView(); return; }
@@ -3867,6 +3884,11 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       rerenderWeekListLocal(viewWeek);
     });
   });
+
+  // Re-attach touch DnD on the freshly rebuilt cards. Without this, touch
+  // reorder went dead after the first drag (only the HTML5 mouse path above was
+  // rewired) and the native `draggable` ghost reappeared on iOS.
+  wirePlanCardTouchDnd(root, viewWeek);
 }
 
 // ─── Just-Track empty state ─────────────────────────────────────────────────
@@ -3898,10 +3920,12 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
       </div>
     </div>`;
 
+  const animate = shouldPlayEntrance('plan');
+
   return `
     <style>
-      @keyframes floatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
-      .tp-rise { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes floatUp { from { opacity:0; } to { opacity:1; } }
+      .tp-rise { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
       .tp-week-row { background:rgba(255,255,255,0.78); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid rgba(255,255,255,0.65); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04); padding:14px 16px; display:flex; align-items:center; gap:14px; }
       .tp-week-num { font-size:10px; font-weight:600; color:#94A3B8; letter-spacing:0.05em; text-transform:uppercase; }
       .tp-week-total { font-size:18px; font-weight:700; color:#0F172A; letter-spacing:-0.01em; font-variant-numeric:tabular-nums; }
@@ -3909,7 +3933,7 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('pln', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: true })}
+        ${buildRingBackground('pln', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding:56px 16px 120px">

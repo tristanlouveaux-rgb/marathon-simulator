@@ -247,7 +247,7 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     return `
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--c-border)">
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:${candidates.length ? '10px' : '0'}">${caption}</div>
-        ${candidates.length ? `<button id="ss-match-hr" style="padding:9px 14px;background:transparent;color:var(--c-black);border:1px solid var(--c-border);border-radius:18px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Match heart rate</button>` : ''}
+        ${candidates.length ? `<button id="ss-match-hr" class="m-btn-secondary" style="padding:9px 14px;font-size:13px">Match heart rate</button>` : ''}
       </div>`;
   }
 
@@ -301,7 +301,7 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
       </div>
 
       <div style="padding:18px 22px 10px">
-        <button id="ss-done" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+        <button id="ss-done" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">Done</button>
       </div>
       <div style="padding:0 22px 18px">
         <button id="ss-delete" style="width:100%;padding:11px;background:transparent;color:#EF4444;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Delete this session</button>
@@ -364,12 +364,12 @@ export function openStrengthSummary(workout: Workout, result: StrengthCompletion
     el.id = 'ss-confirm';
     el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
     el.innerHTML = `
-      <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+      <div style="background:#fff;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
         <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Delete this session?</div>
         <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">It is removed from your week.</div>
         <div style="display:flex;gap:10px">
-          <button id="ss-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Cancel</button>
-          <button id="ss-confirm-yes" style="flex:1;padding:12px;background:#EF4444;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Delete</button>
+          <button id="ss-confirm-cancel" class="m-btn-glass m-btn-glass--inset" style="flex:1;padding:12px;font-size:14px">Cancel</button>
+          <button id="ss-confirm-yes" class="m-btn-danger" style="flex:1;padding:12px;font-size:14px">Delete</button>
         </div>
       </div>`;
     overlay.appendChild(el);

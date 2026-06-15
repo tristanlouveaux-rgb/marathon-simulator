@@ -18,6 +18,11 @@ import {
   setOnTrackingStop,
   setOnTrackingTick,
   getActiveSplitScheme,
+  isArming,
+  getArmingData,
+  setOnArmingUpdate,
+  cancelTracking,
+  type ArmingData,
 } from './gps-events';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
@@ -27,6 +32,10 @@ import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint 
 
 function navigateTab(tab: TabId): void {
   setOnTrackingTick(null);
+  setOnArmingUpdate(null);
+  // Leaving the Record tab mid-acquisition: drop the GPS watch so it doesn't
+  // keep draining battery while the user is elsewhere.
+  if (isArming()) cancelTracking();
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'plan') {
@@ -101,6 +110,10 @@ function isPhasedWorkout(scheme: SplitScheme): boolean {
 /** Reset to -1 on each renderRecordView(); used to detect split completions for auto-scroll */
 let lastCompletedIdx = -1;
 
+/** Tracks the last-rendered GPS-ready state so the gate full-re-renders on the
+ * acquiring → ready transition (flips the corner dot and the Start button). */
+let lastArmReady = false;
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -134,7 +147,7 @@ function controlButtons(): string {
   return `
     <div class="flex gap-3 px-4">
       <button onclick="gpsPause()" class="flex-1 m-btn-glass">${paused ? 'Resume' : 'Pause'}</button>
-      <button onclick="gpsStop()" class="flex-1 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
+      <button onclick="gpsStop()" class="flex-1 m-btn-danger py-3">Stop</button>
     </div>
   `;
 }
@@ -207,7 +220,7 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
       <div class="flex gap-3">
         ${!scheme ? `<button onclick="gpsLap()" class="m-btn-glass">Lap</button>` : ''}
         <button onclick="gpsPause()" class="m-btn-glass">${isTrackingPaused() ? 'Resume' : 'Pause'}</button>
-        <button onclick="gpsStop()" class="px-6 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
+        <button onclick="gpsStop()" class="m-btn-danger px-6 py-3">Stop</button>
       </div>
     </div>
   `;
@@ -547,6 +560,90 @@ function updateRecordStats(data: GpsLiveData): void {
 }
 
 // ---------------------------------------------------------------------------
+// Acquisition gate. Pre-run "Acquiring GPS… → GPS ready" (Garmin-style)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared 64px target icon used by the Record idle screen and the GPS gate.
+ * `cornerDot` is optional absolutely-positioned status HTML (the gate's
+ * acquiring/ready dot); the idle screen passes none.
+ */
+function targetIcon(cornerDot = ''): string {
+  return `
+    <div class="flex items-center justify-center mb-4" style="width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,0.06);position:relative">
+      <svg class="w-8 h-8" style="color:var(--c-faint)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10" stroke-width="2"/>
+        <circle cx="12" cy="12" r="4" fill="currentColor"/>
+      </svg>
+      ${cornerDot}
+    </div>
+  `;
+}
+
+function gpsSignalCopy(data: ArmingData): { title: string; sub: string } {
+  if (data.timerOnly) {
+    return {
+      title: 'Location off',
+      sub: 'GPS is unavailable. You can start a timer-only run. Distance and pace will not be recorded.',
+    };
+  }
+  if (data.ready) {
+    const acc = data.accuracy != null ? ` Accuracy ${Math.round(data.accuracy)} m.` : '';
+    return { title: 'GPS ready', sub: `Signal locked.${acc} Start when you are ready to move.` };
+  }
+  const sub = data.accuracy != null
+    ? `Signal ${Math.round(data.accuracy)} m and improving. Hold on for a tighter lock.`
+    : 'Searching for satellites. Step into the open for a faster lock.';
+  return { title: 'Acquiring GPS', sub };
+}
+
+/** Action buttons for the gate, patched live as the fix improves. */
+function buildAcquisitionActions(data: ArmingData): string {
+  if (data.timerOnly) {
+    return `<button onclick="gpsConfirmStart()" class="m-btn-primary px-8 py-3">Start timer-only run</button>`;
+  }
+  if (data.ready) {
+    return `<button onclick="gpsConfirmStart()" class="m-btn-ok px-8 py-3">Start run</button>`;
+  }
+  // Still acquiring: hold the primary action, offer a quiet "Start anyway".
+  return `
+    <button class="m-btn-glass px-8 py-3" disabled style="opacity:0.55">Acquiring GPS…</button>
+    <button onclick="gpsConfirmStart()" class="text-sm" style="background:transparent;border:none;color:var(--c-muted)">Start anyway</button>
+  `;
+}
+
+function buildAcquisitionUI(data: ArmingData, workoutName: string | null): string {
+  const { title, sub } = gpsSignalCopy(data);
+  const dotColor = data.ready ? 'var(--c-ok)' : 'var(--c-warn)';
+  const dotCls = data.ready ? '' : 'animate-pulse';
+  const dot = `<span class="absolute ${dotCls}" style="top:5px;right:5px;width:11px;height:11px;border-radius:50%;background:${dotColor}"></span>`;
+  return `
+    <div class="flex-1 flex flex-col items-center justify-center px-6">
+      ${targetIcon(dot)}
+      <h2 id="rec-acq-title" class="text-lg font-semibold mb-1" style="color:var(--c-black)">${title}</h2>
+      <p id="rec-acq-sub" class="text-sm text-center max-w-xs mb-6" style="color:var(--c-muted)">${sub}</p>
+      <div id="rec-acq-actions" class="flex flex-col items-center gap-2">
+        ${buildAcquisitionActions(data)}
+      </div>
+      <button onclick="gpsCancelStart()" class="text-sm mt-6" style="background:transparent;border:none;color:var(--c-faint)">Cancel</button>
+      <p class="text-xs mt-6" style="color:var(--c-faint)">${workoutName ?? 'Run'}</p>
+    </div>
+  `;
+}
+
+/** Patch the gate's text + actions in place (no full re-render, no flicker). */
+function patchAcquisition(data: ArmingData): void {
+  const titleEl = document.getElementById('rec-acq-title');
+  const subEl = document.getElementById('rec-acq-sub');
+  const actionsEl = document.getElementById('rec-acq-actions');
+  if (!titleEl && !actionsEl) return; // not on the gate screen
+  const { title, sub } = gpsSignalCopy(data);
+  if (titleEl) titleEl.textContent = title;
+  if (subEl) subEl.textContent = sub;
+  if (actionsEl) actionsEl.innerHTML = buildAcquisitionActions(data);
+}
+
+// ---------------------------------------------------------------------------
 // Root render
 // ---------------------------------------------------------------------------
 
@@ -565,7 +662,24 @@ export function renderRecordView(): void {
 
   let content: string;
 
-  if (tracking && liveData) {
+  // Pre-run acquisition gate. Checked BEFORE the tracking branch because an
+  // armed tracker reports status 'acquiring', which isTrackingActive() counts
+  // as active — without this guard the gate would never show.
+  if (isArming()) {
+    const armData = getArmingData();
+    lastArmReady = armData.ready;
+    content = buildAcquisitionUI(armData, workoutName);
+    setOnTrackingTick(null);
+    setOnArmingUpdate((d) => {
+      if (d.ready !== lastArmReady) {
+        lastArmReady = d.ready;
+        renderRecordView();           // flip the corner dot + Start button
+      } else {
+        patchAcquisition(d);          // cheap accuracy-text refresh, no flicker
+      }
+    });
+  } else if (tracking && liveData) {
+    setOnArmingUpdate(null);
     const scheme = getActiveSplitScheme();
     let mode: 'simple' | 'phased' | 'interval' = 'simple';
     if (scheme && scheme.segments.length > 0) {
@@ -584,23 +698,19 @@ export function renderRecordView(): void {
     setOnTrackingTick(updateRecordStats);
   } else {
     setOnTrackingTick(null);
+    setOnArmingUpdate(null);
     const { trackOnly } = getState() as { trackOnly?: boolean };
     const subcopy = trackOnly
       ? 'Start a run. We\'ll log distance, pace, and heart rate.'
       : 'Unstructured run. Recorded and fitted to your plan.';
     content = `
       <div class="flex-1 flex flex-col items-center justify-center px-6">
-        <div class="flex items-center justify-center mb-4" style="width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,0.06)">
-          <svg class="w-8 h-8" style="color:var(--c-faint)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="10" stroke-width="2"/>
-            <circle cx="12" cy="12" r="4" fill="currentColor"/>
-          </svg>
-        </div>
+        ${targetIcon()}
         <h2 class="text-lg font-semibold mb-2" style="color:var(--c-black)">${trackOnly ? 'Record a run' : 'Just Run'}</h2>
         <p class="text-sm text-center max-w-xs mb-6" style="color:var(--c-muted)">
           ${subcopy}
         </p>
-        <button onclick="justRun()" class="m-btn-primary px-8 py-3 rounded-xl font-semibold">
+        <button onclick="justRun()" class="m-btn-primary px-8 py-3">
           Start Run
         </button>
       </div>

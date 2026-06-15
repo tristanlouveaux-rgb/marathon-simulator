@@ -32,6 +32,7 @@ import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyr
 import { scheduleHyroxWeek } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
+import { ctlGapMultiplier } from './plan_engine';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
@@ -221,7 +222,18 @@ function generateWeekSessions(
   // regeneration rebuilds the baseline budget before re-applying the current multiplier.
   // See effort-multiplier.hyrox.ts / SCIENCE_LOG §AU.
   const effortMult = weekIndex >= (state.w ?? 1) ? hyroxEffortMultiplier(state) : 1.0;
-  const effectiveHours = hx.weeklyHoursAvailable * mult * (deload ? HYROX_DELOAD_FACTOR : 1) * effortMult;
+  // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR). When chronic MTL fell behind
+  // the plan, scale the week's hours down in proportion (reduce-only). Suppressed on deload/taper
+  // (already reduced) and on past weeks. Combined with effort under ONE clamp [HYROX_DELOAD_FACTOR,
+  // 1.15] so the two volume levers can't overstack. Reading the stored wk.ctlRatio mirrors the
+  // forceDeload read above. Converges because effectiveHours drives both duration and planned MTL.
+  const mtlGapMult = (weekIndex >= (state.w ?? 1) && !deload && phase !== 'taper')
+    ? ctlGapMultiplier((state.wks?.[weekIndex - 1] as any)?.ctlRatio ?? 1)
+    : 1.0;
+  const adaptive = mtlGapMult === 1.0
+    ? effortMult
+    : Math.max(HYROX_DELOAD_FACTOR, Math.min(1.15, effortMult * mtlGapMult));
+  const effectiveHours = hx.weeklyHoursAvailable * mult * (deload ? HYROX_DELOAD_FACTOR : 1) * adaptive;
 
   // Distribute hours
   let runHours       = effectiveHours * HYROX_TIME_SPLIT.runs;

@@ -16,6 +16,7 @@
  */
 
 import { getState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { getMutableState, saveState } from '@/state';
 import type { SimulatorState, VO2Estimate, VO2Confidence } from '@/types';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
@@ -487,7 +488,7 @@ function buildRaceEstimatesCard(s: SimulatorState): string {
   const p = tri.prediction ?? predictTriathlonRace(s);
   if (!p) return '';
 
-  const targetLabel = tri.distance === 'ironman' ? 'Ironman' : '70.3';
+  const targetLabel = getTriDistanceLabel(tri.distance);
   const rows: Array<{ label: string; value: string }> = [];
   if (p.sprintTotalSec) rows.push({ label: 'Sprint',  value: fmtDuration(p.sprintTotalSec) });
   if (p.olympicTotalSec) rows.push({ label: 'Olympic', value: fmtDuration(p.olympicTotalSec) });

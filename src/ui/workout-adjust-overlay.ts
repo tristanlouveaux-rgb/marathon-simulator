@@ -219,8 +219,8 @@ export function openWorkoutAdjust(workout: Workout, weekIdx: number, opts: Adjus
             <span style="font-size:13px;font-weight:600;color:var(--c-black)">Duration</span>
             <span id="wadj-dur-readout" style="font-size:13px;color:var(--c-muted);font-variant-numeric:tabular-nums"></span>
           </div>
-          <input id="wadj-slider" type="range" min="${minPct}" max="${maxPct}" step="5" value="${pct}"
-            style="width:100%;accent-color:var(--c-black);cursor:pointer">
+          <input id="wadj-slider" class="m-slider-glass" type="range" min="${minPct}" max="${maxPct}" step="5" value="${pct}"
+            style="width:100%">
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);margin-top:4px">
             <span>Shorter</span><span>Planned</span><span>Longer</span>
           </div>

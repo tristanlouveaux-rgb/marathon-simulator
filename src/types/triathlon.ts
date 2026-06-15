@@ -11,8 +11,18 @@
 /** Three primary triathlon disciplines. Matches Strava/Garmin activity types. */
 export type Discipline = 'swim' | 'bike' | 'run';
 
-/** Triathlon race distance. Sprint/Olympic are predicted as side-effects (§18.10) but are not first-class race targets in v1. */
-export type TriathlonDistance = '70.3' | 'ironman';
+/**
+ * Triathlon race distance. All five are first-class, plannable race targets.
+ * 'sprint' / 'olympic' were originally side-effect predictions only (§18.10); they
+ * were promoted to plannable formats alongside the new PTO 't100' (2km/80km/18km).
+ * Ordered by overall race demand: sprint < olympic < t100 ≈ 70.3 < ironman.
+ * Note: t100's swim (2000m) is longer than 70.3's (1900m), so it does not
+ * interpolate cleanly on every leg — it is handled per-leg.
+ */
+export type TriathlonDistance = 'sprint' | 'olympic' | 't100' | '70.3' | 'ironman';
+
+/** Every triathlon distance, in demand order. Use for exhaustive iteration in tests/UI. */
+export const ALL_TRI_DISTANCES: readonly TriathlonDistance[] = ['sprint', 'olympic', 't100', '70.3', 'ironman'];
 
 /** Event type at the top level. Undefined/absent = running (back-compat). */
 export type EventType = 'running' | 'triathlon' | 'hyrox';

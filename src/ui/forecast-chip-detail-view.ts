@@ -114,7 +114,7 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
 
   const metaParts: string[] = [`${escapeText(tierLabel)} tier`];
   if (ctl > 0) metaParts.push(`CTL ${ctl}`);
-  if (typeof age === 'number' && age > 0) metaParts.push(`${age} yrs`);
+  if (typeof age === 'number' && age > 0) metaParts.push(`age ${age}`);
   const profileMeta = metaParts.join(' · ');
 
   const profileCard = `
@@ -1372,11 +1372,11 @@ export function renderForecastChipDetail(key: ChipKey): void {
 
   container.innerHTML = `
     <style>
-      @keyframes fcdFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes fcdFloatUp { from { opacity:0; } to { opacity:1; } }
       .fcd-fade { opacity:0; animation:fcdFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="fcd-view" style="
+    <div id="fcd-view" class="safe-top-bleed" style="
       position:relative;min-height:100dvh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">

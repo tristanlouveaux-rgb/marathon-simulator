@@ -38,6 +38,7 @@ import type {
   BikeTire,
   BikeCourseProfile,
   BikeAeroProfile,
+  TriathlonDistance,
 } from '@/types/triathlon';
 
 const G = 9.80665;          // m/s²
@@ -91,8 +92,14 @@ export const WIND_LOSS_FACTOR: Record<BikeCourseProfileExtended, number> = {
 export const DEFAULT_DRIVETRAIN_EFF = 0.97;
 
 /** Typical race intensity factor (% of FTP) by distance. Standard
- *  TrainingPeaks/Allen-Coggan guidance: IM ~0.68–0.72, 70.3 ~0.78–0.82. */
-export const RACE_INTENSITY_BY_DISTANCE: Record<'70.3' | 'ironman', number> = {
+ *  TrainingPeaks/Allen-Coggan guidance: IM ~0.68–0.72, 70.3 ~0.78–0.82.
+ *  Shorter bike legs sustain higher IF (Coyle 1984 fractional-utilization decay):
+ *  sprint ~30min → 0.88, olympic ~70min → 0.83. t100 (80km) sits just below 70.3.
+ *  Confidence: medium-high. */
+export const RACE_INTENSITY_BY_DISTANCE: Record<TriathlonDistance, number> = {
+  sprint:    0.88,
+  olympic:   0.83,
+  t100:      0.76,
   '70.3':    0.78,
   'ironman': 0.70,
 };

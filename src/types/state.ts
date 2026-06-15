@@ -442,6 +442,12 @@ export interface GarminActual {
   plannedDistanceKm?: number | null;
   /** Elevation gain in metres (from Strava total_elevation_gain). Null if unavailable. */
   elevationGainM?: number | null;
+  /** True when this activity's rich fields (HR zones, splits, route, iTRIMP) were
+   *  added by the user uploading the original file from the activity detail page
+   *  ("Add detail from Strava"). The `garminId` provenance prefix is preserved, so
+   *  a later live Strava row for the same session still wins via the Strava-upgrade
+   *  path. Used to flip the detail caption and to hide the enrich action once done. */
+  enrichedFromFile?: boolean;
   /** User-set sport override. When present, supersedes activityType-derived sport for load/impact/leg-load
    *  calculations. Set via the "Change sport" control on the activity detail page. */
   manualSport?: import('./activities').SportKey;
@@ -603,6 +609,7 @@ export interface Week {
   garminActuals?: Record<string, GarminActual>;                  // workoutId → actual data from Garmin
   garminPending?: GarminPendingItem[];                           // All Garmin activities queued for review (kept after processing for re-review)
   garminReviewChoices?: Record<string, 'integrate' | 'log'>;    // Last user choice per garmin_id (for re-review pre-population)
+  autoReviewShownDate?: string;                  // YYYY-MM-DD (local) the Match Activities screen last auto-opened this week — caps auto-open to once/day (manual "Review" always works)
   injuryCheckedIn?: boolean;                    // Whether injury was updated this week
   strengthNudgeSeen?: boolean;                  // Whether the injury-driven "add a strength session" nudge was offered this week (once-only guard)
   passedCapacityTests?: string[];               // Capacity tests passed this week
@@ -612,6 +619,20 @@ export interface Week {
   hrEffort?: number;                             // Average hrEffortScore from Strava HR data (1.0 = on target)
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
   scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time. Passed to generator
+  /** Load-gap re-anchor ratio (actual ÷ plan-expected load) of the PREVIOUS week, stamped on this
+   *  week at rollover. < 1 re-anchors this week's prescribed volume down in proportion
+   *  (plan_engine.ctlGapMultiplier). Single-scalar modes: RUNNING (combined CTL) and HYROX (MTL).
+   *  Set in events.next(), read at generation. Stored, never recomputed at render. Mirror of
+   *  scheduledAcwrStatus. (Triathlon uses the per-discipline `ctlRatioByDiscipline` instead.) */
+  ctlRatio?: number;
+  /** Triathlon per-discipline load-gap re-anchor: swim/bike/run ratios of the PREVIOUS week's
+   *  completion, stamped at rollover. Only disciplines that fell behind (< 1) are present. Read by
+   *  applyTriEffortMultipliers, which scales that discipline's upcoming durations down. */
+  ctlRatioByDiscipline?: { swim?: number; bike?: number; run?: number };
+  /** True when multi-week detraining (VDOT loss or the ≥3-week base downgrade) was applied to this
+   *  week on launch. Suppresses the CTL-gap re-anchor for the week so the two re-anchoring paths
+   *  don't double-count. Set in welcome-back.advanceWeekToToday. */
+  detrainApplied?: boolean;
   carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
   /** Triathlon-mode equivalent of `carriedTSS`: cross-training TSS pushed forward
    *  from this week to next via the tri suggestion modal's "Push to next week"
@@ -742,6 +763,7 @@ export interface SimulatorState {
 
   // Personal records
   pbs: PBs;               // All-time PBs
+  startingFitnessEstimated?: boolean; // pbs is a conservative no-PB beginner/hybrid seed (see beginner-fitness.ts), not a real time — yields to real runs; label honestly in UI
   rec: RecentRun | null;  // Recent race/time trial
 
   // Physiology
@@ -856,6 +878,10 @@ export interface SimulatorState {
   isGuestAccount?: boolean;
   // User dismissed the one-time Home banner. The Account view section stays.
   guestBannerDismissed?: boolean;
+  // User dismissed the "add HR + splits from Strava" enrich-prompt Home banner.
+  // Shown to non-Strava-connected users whose activities synced thin through
+  // Apple Health. The Account > Strava History affordance stays regardless.
+  enrichPromptDismissed?: boolean;
 
   // User dismissed (or accepted) the build-phase Vibes Run nudge for the current plan.
   // Reset implicitly when state is reset (new plan).
@@ -1211,6 +1237,7 @@ export interface SimulatorState {
   guidedSplitAnnouncements?: boolean; // Per-km voice splits (default true; off if Strava/Garmin already doing it)
   guidedVoiceRate?: number;           // Speech rate multiplier, 0.8–1.4, default 1.0
   guidedKeepScreenOn?: boolean;       // Keep screen on during guided runs (Screen Wake Lock). Default true; web-only interim until Capacitor KeepAwake.
+  gpsAutoPause?: boolean;             // Speed-based auto-pause/resume during tracked runs (default true; off keeps the clock running while stopped).
 
   // Sleep target. User-set override in seconds; if absent, derived from 75th percentile of last 30 nights
   sleepTargetSec?: number;

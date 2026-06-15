@@ -15,7 +15,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import type { BikePosition, BikeTire, BikeCourseProfile, BikeAeroProfile } from '@/types/triathlon';
+import type { BikePosition, BikeTire, BikeCourseProfile, BikeAeroProfile, TriathlonDistance } from '@/types/triathlon';
 import type { GarminActual } from '@/types/state';
 import {
   CDA_PRESET,
@@ -32,6 +32,7 @@ import {
 } from '@/calculations/bike-physics';
 import { BIKE_SETUP_AUTO_FILL } from '@/constants/feature-flags';
 import { getTriathlonById } from '@/data/triathlons';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { applyCourseFactors } from '@/calculations/course-factors';
 import { lookupEmpiricalCourseFactors, pickCourseFactors } from '@/calculations/empirical-course-factors';
 import { computeTriRaceReadiness } from '@/calculations/race-readiness';
@@ -421,7 +422,7 @@ function buildProfile(form: FormState): BikeAeroProfile {
   };
 }
 
-export function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'): { kph: number; splitSec: number } {
+export function predictBikeSplit(form: FormState, distance: TriathlonDistance): { kph: number; splitSec: number } {
   const profile = buildProfile(form);
   const params = paramsFromProfile(profile, form.riderKg, form.bikeKg, form.course);
   const raceWatts = form.ftp * RACE_INTENSITY_BY_DISTANCE[distance];
@@ -539,10 +540,10 @@ export function openBikeSetupOverlay(onSaved?: () => void): void {
   rerender();
 }
 
-function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
+function renderShell(form: FormState, distance: TriathlonDistance): string {
   const split = predictBikeSplit(form, distance);
   const tier = wattsPerKgTier(form.ftp, form.riderKg);
-  const distLabel = distance === 'ironman' ? 'Ironman' : '70.3';
+  const distLabel = getTriDistanceLabel(distance);
 
   return `
     <div class="w-full rounded-2xl" style="background:var(--c-surface);overflow:hidden;max-height:90vh;overflow-y:auto;max-width:480px">
@@ -616,8 +617,8 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
 
       <!-- Footer actions -->
       <div style="padding:14px 20px 20px;border-top:1px solid var(--c-border);display:flex;gap:10px">
-        <button id="bike-setup-cancel" style="flex:1;height:44px;border-radius:12px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="bike-setup-save" style="flex:1;height:44px;border-radius:12px;border:none;background:var(--c-accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer">Save</button>
+        <button id="bike-setup-cancel" class="m-btn-secondary" style="flex:1;height:44px;font-size:14px">Cancel</button>
+        <button id="bike-setup-save" class="m-btn-primary" style="flex:1;height:44px;font-size:14px">Save</button>
       </div>
     </div>
   `;
@@ -656,7 +657,7 @@ function renderCourseSection(form: FormState): string {
     hint(climbingLabel);
 }
 
-function renderCalibration(form: FormState, distance: '70.3' | 'ironman'): string {
+function renderCalibration(form: FormState, distance: TriathlonDistance): string {
   if (!form.showCalib) {
     const autoBtn = BIKE_SETUP_AUTO_FILL ? `
       <button id="bike-setup-auto-calib" style="width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;color:var(--c-black);cursor:pointer;text-align:left;margin-bottom:8px">
@@ -791,7 +792,7 @@ function cdaCaption(form: FormState): string {
   return `CdA: ${CDA_PRESET[form.position].toFixed(2)} m² · ${POSITION_LABEL[form.position]} preset. `;
 }
 
-function renderWhatIf(form: FormState, distance: '70.3' | 'ironman'): string {
+function renderWhatIf(form: FormState, distance: TriathlonDistance): string {
   // When the user has a calibrated/user CdA, anchor the comparison on THAT
   // measured value and shift it by each position's published preset delta,
   // rather than dropping back to raw presets. This keeps the active-position
@@ -896,7 +897,7 @@ function infoBox(text: string): string {
 // Wiring
 // ───────────────────────────────────────────────────────────────────────────
 
-function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 'ironman', rerender: () => void, onSaved?: () => void): void {
+function wireHandlers(overlay: HTMLElement, form: FormState, distance: TriathlonDistance, rerender: () => void, onSaved?: () => void): void {
   void distance;
 
   overlay.querySelector('#bike-setup-close')?.addEventListener('click', () => overlay.remove());

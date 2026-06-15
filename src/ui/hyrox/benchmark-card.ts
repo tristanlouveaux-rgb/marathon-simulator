@@ -169,8 +169,8 @@ function openStationTimeModal(station: HyroxStation, onUpdate: () => void): void
         style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:16px"
       />
       <div style="display:flex;gap:10px">
-        <button id="hx-bench-cancel" style="flex:1;padding:12px;border-radius:10px;border:1px solid rgba(0,0,0,0.1);background:transparent;font-size:14px;font-weight:600;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="hx-bench-save" style="flex:1;padding:12px;border-radius:10px;border:none;background:#0F172A;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Save</button>
+        <button id="hx-bench-cancel" class="m-btn-secondary" style="flex:1;padding:12px;font-size:14px">Cancel</button>
+        <button id="hx-bench-save" class="m-btn-primary" style="flex:1;padding:12px;font-size:14px">Save</button>
       </div>
     </div>
   `;

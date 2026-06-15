@@ -311,11 +311,6 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
       .sc-remove-x:hover { background:rgba(0,0,0,0.07); color:var(--c-black); }
       .sc-remove-x:active { transform: scale(0.95); }
 
-      /* Per-activity duration slider — monochrome, matches readiness-view sliders. */
-      .sc-dur-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:2px; background:rgba(0,0,0,0.1); outline:none; cursor:pointer; }
-      .sc-dur-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; border-radius:50%; background:#0A0A0A; border:2px solid #FDFCF7; box-shadow: 0 1px 3px rgba(0,0,0,0.2); cursor:pointer; }
-      .sc-dur-slider::-moz-range-thumb { width:20px; height:20px; border-radius:50%; background:#0A0A0A; border:2px solid #FDFCF7; box-shadow: 0 1px 3px rgba(0,0,0,0.2); cursor:pointer; border:none; }
-
       /* Toggle-open "add another" link. */
       .sc-add-toggle {
         background:none; border:none; color:var(--c-muted); font-size:13px; cursor:pointer;
@@ -427,7 +422,7 @@ function renderOtherActivities(state: OnboardingState): string {
     <div class="sc-section">
       <div>
         <label class="sc-q">Do you play other sports regularly?</label>
-        <p class="sc-q-sub">Don't worry if it's not regular — we'll auto-adjust your plan. Each session reduces your run load.</p>
+        <p class="sc-q-sub">It doesn't need to be regular. We auto-adjust your plan, and each session reduces your run load.</p>
         <div class="sc-yesno">
           <button data-sports-toggle="no" class="sc-num ${playsSports ? '' : 'selected'}">No</button>
           <button data-sports-toggle="yes" class="sc-num ${playsSports ? 'selected' : ''}">Yes</button>
@@ -471,7 +466,7 @@ function renderActiveRow(a: RecurringActivity, idx: number): string {
       <div style="display:flex;align-items:center;gap:12px">
         <span class="sc-active-sub" style="flex:0 0 auto;margin:0;min-width:68px"><span data-dur-readout="${idx}">${a.durationMin}</span> min</span>
         <input type="range"
-          class="sc-dur-slider"
+          class="m-slider-glass"
           data-dur="${idx}"
           min="${DUR_MIN}" max="${DUR_MAX}" step="${DUR_STEP}" value="${a.durationMin}"
           aria-label="${label} duration in minutes"

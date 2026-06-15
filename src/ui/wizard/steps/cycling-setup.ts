@@ -81,9 +81,6 @@ export function renderCyclingSetup(container: HTMLElement, state: OnboardingStat
       .cyc-pill { flex:1; min-width:78px; padding:10px 11px; border-radius:12px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); font-size:13px; color:var(--c-black); cursor:pointer; text-align:left; transition: all 0.15s ease; }
       .cyc-pill.active { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
       .cyc-pill .cyc-pill-sub { display:block; font-size:11px; opacity:0.65; margin-top:2px; }
-      .cyc-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:rgba(0,0,0,0.12); border-radius:4px; outline:none; margin:10px 0 2px; }
-      .cyc-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
-      .cyc-slider::-moz-range-thumb { width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; border:none; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
       .cyc-row { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--c-black); }
       .cyc-row .cyc-value { font-size:16px; font-weight:500; font-variant-numeric: tabular-nums; }
       .cyc-input { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.08); color:var(--c-black); border-radius:10px; padding:9px 12px; font-size:14px; width:100%; box-sizing:border-box; outline:none; }
@@ -139,7 +136,7 @@ export function renderCyclingSetup(container: HTMLElement, state: OnboardingStat
               <span>Peak weekly hours</span>
               <span class="cyc-value" id="cyc-hours-value">${hoursPerWeek}h</span>
             </div>
-            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="cyc-slider" id="cyc-hours">
+            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="m-slider-glass" id="cyc-hours">
             <p class="cyc-hint" id="cyc-hours-hint">${hoursCommentary(distance, hoursPerWeek)}</p>
 
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
@@ -147,7 +144,7 @@ export function renderCyclingSetup(container: HTMLElement, state: OnboardingStat
                 <span style="font-size:13px;color:var(--c-black)">Mon–Fri split</span>
                 <span class="cyc-value" id="cyc-weekday-value">${weekdayHours}h weekday / ${weekendHours.toFixed(1)}h weekend</span>
               </div>
-              <input type="range" min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}" class="cyc-slider" id="cyc-weekday">
+              <input type="range" min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}" class="m-slider-glass" id="cyc-weekday">
               <p class="cyc-hint">Long rides land Sat/Sun by default. Keep weekdays short if you work a 9-to-5.</p>
             </div>
           </div>
@@ -159,7 +156,7 @@ export function renderCyclingSetup(container: HTMLElement, state: OnboardingStat
               <span>Strength sessions per week</span>
               <span class="cyc-value" id="cyc-gym-value">${gymSessions}</span>
             </div>
-            <input type="range" min="0" max="3" step="1" value="${gymSessions}" class="cyc-slider" id="cyc-gym">
+            <input type="range" min="0" max="3" step="1" value="${gymSessions}" class="m-slider-glass" id="cyc-gym">
             <p class="cyc-hint">Optional. 1–2 sessions/week of full-body strength supports power output and resilience over long rides. Set to 0 to skip.</p>
           </div>
 

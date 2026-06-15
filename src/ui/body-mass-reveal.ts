@@ -40,8 +40,8 @@ export function maybeShowBodyMassReveal(s: SimulatorState): void {
     <div role="dialog" aria-modal="true" aria-label="Plan tuned for your size" style="position:relative;max-width:420px;width:100%;background:rgba(255,255,255,0.92);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-radius:16px;padding:26px 24px 20px;box-shadow:0 12px 40px rgba(0,0,0,0.18);border:1px solid rgba(255,255,255,0.6)">
       <h2 style="font-size:18px;font-weight:600;color:var(--c-black);margin:0 0 12px">Tuned for your size</h2>
       <p style="font-size:14px;line-height:1.6;color:var(--c-muted);margin:0 0 18px">At your weight, more load goes through your joints each kilometre. We've eased back some of your easy running and leaned on low-impact cross-training (bike, swim, or elliptical) to protect your joints as you build. As your training data comes in, the plan adapts to you automatically. You can switch this off any time in Account.</p>
-      <button id="bmr-keep" style="width:100%;padding:12px;border-radius:999px;border:none;background:#1a1a1a;color:#fff;font-size:14px;font-weight:500;cursor:pointer;margin-bottom:8px">Keep it</button>
-      <button id="bmr-off" style="width:100%;padding:11px;border-radius:999px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:14px;font-weight:500;cursor:pointer">No thanks</button>
+      <button id="bmr-keep" class="m-btn-primary" style="width:100%;padding:12px;font-size:14px;margin-bottom:8px">Keep it</button>
+      <button id="bmr-off" class="m-btn-secondary" style="width:100%;padding:11px;font-size:14px">No thanks</button>
     </div>
   `;
   document.body.appendChild(overlay);

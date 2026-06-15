@@ -342,7 +342,7 @@ function renderConfirmStep(
 
       ${field('ss-date', 'When', `<input id="ss-date" type="datetime-local" value="${nowLocal}" ${inputStyle()} />`)}
       ${field('ss-dist', distLabel, `<input id="ss-dist" type="number" inputmode="decimal" step="0.01" min="0" value="${distInput}" ${inputStyle()} />`)}
-      ${field('ss-dur', 'Time (mm:ss or h:mm:ss)', `<input id="ss-dur" type="text" inputmode="numeric" placeholder="42:34" value="${durInput}" ${inputStyle()} />`)}
+      ${field('ss-dur', 'Time (mm:ss or h:mm:ss)', `<input id="ss-dur" type="text" placeholder="42:34" value="${durInput}" ${inputStyle()} />`)}
       ${field('ss-hr', 'Avg heart rate (bpm)', `<input id="ss-hr" type="number" inputmode="numeric" min="60" max="240" value="${hrInput}" ${inputStyle()} />`)}
 
       <div id="ss-confirm-error" style="font-size:12px;color:#b91c1c;min-height:1px;margin-top:2px"></div>

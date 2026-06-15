@@ -14,9 +14,20 @@
 
 import factorsJson from '@/constants/empirical-course-factors.json';
 import type { CourseFactor, CourseFactorOutput } from './course-factors';
+import type { TriathlonDistance } from '@/types/triathlon';
 
 type RawConfidence = 'high' | 'medium' | 'low' | 'insufficient';
+/** Distances with their own ingested course-factor dataset. */
 type Distance = '70.3' | 'ironman';
+
+/**
+ * Map any race format to the nearest distance with ingested course-factor data.
+ * Sprint/Olympic/T100 borrow 70.3 (no dedicated ingest). Surfaced course factors
+ * for those formats should be captioned as estimated from 70.3 data.
+ */
+function resolveEmpiricalDistance(distance: TriathlonDistance): Distance {
+  return distance === 'ironman' ? 'ironman' : '70.3';
+}
 
 interface RawCourseFactors {
   swimFactor: number;
@@ -136,10 +147,11 @@ export interface EmpiricalCourseFactorsResult {
  */
 export function lookupEmpiricalCourseFactors(
   raceName: string | undefined,
-  distance: Distance,
+  rawDistance: TriathlonDistance,
   baseSec: { swimSec: number; bikeSec: number; runSec: number },
 ): EmpiricalCourseFactorsResult | null {
   if (!raceName) return null;
+  const distance = resolveEmpiricalDistance(rawDistance);
   const resolved = RACE_NAME_ALIASES[raceName] ?? raceName;
   const key = normaliseLocationKey(resolved);
   const raw = NORMALISED_LOOKUP[distance].get(key);

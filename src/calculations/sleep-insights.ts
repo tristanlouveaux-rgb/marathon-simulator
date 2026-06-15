@@ -316,6 +316,47 @@ export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
   return Math.max(SLEEP_TARGET_FLOOR_SEC, Math.min(SLEEP_TARGET_CEIL_SEC, median));
 }
 
+/**
+ * Fold manually-logged sleep (recoveryHistory) into the device physiology
+ * history so a manual night counts toward the SAME sleep signals a watch feeds:
+ * the recovery composite, the sleep-cap decay, and the 14-day chronic average.
+ *
+ * Without this merge, a user with no watch logs a bad night into recoveryHistory
+ * but computeReadiness/computeRecoveryScore read sleep history from
+ * physiologyHistory only, so the entry never accumulates: the cap never decays
+ * across a bad-sleep streak and a manual-only user never reaches the 3-night
+ * floor that unlocks a real recovery score.
+ *
+ * Precedence: device/Garmin sleep wins per date (it is sleep-stage calibrated
+ * and population-normalised). A manual rating only fills a date the device did
+ * not cover, or a device row that carries no sleepScore. Only `source: 'manual'`
+ * entries are folded in — device-sourced recoveryHistory rows already live in
+ * physiologyHistory and would otherwise double-count.
+ *
+ * Returns a date-sorted PhysiologyDayEntry[] (oldest-first). Manual-only dates
+ * get a thin entry carrying just date + sleepScore.
+ */
+export function mergeManualSleepHistory(
+  physiology: PhysiologyDayEntry[],
+  recovery: ReadonlyArray<{ date: string; sleepScore: number; source: string }>,
+): PhysiologyDayEntry[] {
+  const byDate = new Map<string, PhysiologyDayEntry>();
+  for (const p of physiology) {
+    if (p?.date) byDate.set(p.date, p);
+  }
+  for (const r of recovery) {
+    if (!r?.date || r.source !== 'manual' || r.sleepScore == null) continue;
+    const existing = byDate.get(r.date);
+    if (existing) {
+      // Device sleep wins. Only fill if the device row has no sleepScore.
+      if (existing.sleepScore == null) byDate.set(r.date, { ...existing, sleepScore: r.sleepScore });
+    } else {
+      byDate.set(r.date, { date: r.date, sleepScore: r.sleepScore });
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 // ─── Load-adjusted nightly target ────────────────────────────────────────────
 
 /** Minutes of additional sleep per TSS point (k = 0.25 min/TSS). */

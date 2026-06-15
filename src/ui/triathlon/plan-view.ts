@@ -8,6 +8,7 @@
  */
 
 import { getState, getMutableState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { saveState } from '@/state/persistence';
 import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
@@ -19,13 +20,14 @@ import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind }
 import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from './week-resolve.triathlon';
 import { formatKm } from '@/utils/format';
+import { isTouchPrimary } from '@/utils/platform';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 import type { Workout } from '@/types/state';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from '../injury/modal';
 import { recordMorningPain, injuryAppliesToWeek, getDisciplineCapacity } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
@@ -101,7 +103,7 @@ export function renderTriathlonPlanView(): void {
   const workouts = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
   const phase = wk?.ph ? capitalize(wk.ph) : '';
   const cyclingLabel = getCyclingEventLabel(s);
-  const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
+  const baseEventLabel = cyclingLabel ?? getTriDistanceLabel(tri.distance);
   const raceCity = cyclingLabel ? null : (getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null);
   const eventLabel = raceCity ? `${raceCity} ${baseEventLabel}` : baseEventLabel;
   const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${eventLabel}` : `Your ${eventLabel}`;
@@ -154,17 +156,20 @@ export function renderTriathlonPlanView(): void {
   const injuryActive = isInjuryActive();
   const injState = (injuryActive && injuryAppliesToWeek(viewWeek, s.w)) ? getInjuryStateForDisplay() : null;
 
+  // Entrance plays on the first Plan visit per session only; revisits render settled.
+  const animate = shouldPlayEntrance('tri-plan');
+
   container.innerHTML = `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hf { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('tp', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: true })}
+        ${buildRingBackground('tp', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 
@@ -269,7 +274,7 @@ export function renderTriathlonPlanView(): void {
                   </div>
                   <button id="tri-vibes-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:#64748B;font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
                 </div>
-                <button id="tri-vibes-nudge-try" style="margin-top:6px;display:inline-flex;align-items:center;padding:9px 14px;font-size:12px;font-weight:600;color:#0F172A;background:transparent;border:1px solid rgba(0,0,0,0.15);border-radius:10px;cursor:pointer;font-family:inherit">Try one</button>
+                <button id="tri-vibes-nudge-try" class="m-btn-secondary" style="margin-top:6px;padding:9px 14px;font-size:12px">Try one</button>
               </div>
             </div>
           </div>
@@ -623,7 +628,12 @@ function wireTriWorkoutDnd(): void {
  * moves ≥8px so vertical scroll still works for short taps.
  */
 function wireTriWorkoutTouchDnd(): void {
+  const touchPrimary = isTouchPrimary();
   document.querySelectorAll<HTMLElement>('.tri-workout-card').forEach((card) => {
+    // On touch devices the native HTML5 `draggable` makes WKWebView lift its own
+    // drag preview, doubling up with the custom clone below. Disable it so only
+    // the touch DnD runs; desktop keeps it for mouse drag.
+    if (touchPrimary) card.draggable = false;
     card.addEventListener('touchstart', (e) => {
       const touch = e.touches[0];
       _touchDragId = card.getAttribute('data-tri-workout-id') || '';
@@ -920,8 +930,8 @@ function buildTriInjuryBanner(inj: InjuryState): string {
         ${discRow('run', 'Run')}
       </div>
       <div style="display:flex;gap:8px">
-        <button id="tri-injury-update" style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">Update injury</button>
-        <button id="tri-injury-recovered" style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#fff;font-weight:500;cursor:pointer;font-family:var(--f)">I'm recovered</button>
+        <button id="tri-injury-update" class="m-btn-secondary" style="flex:1;font-size:13px;padding:10px 0;text-align:center">Update injury</button>
+        <button id="tri-injury-recovered" class="m-btn-primary" style="flex:1;font-size:13px;padding:10px 0;justify-content:center">I'm recovered</button>
       </div>
     </div>
   `;
@@ -935,7 +945,7 @@ function buildTriMorningPainCheck(inj: InjuryState): string {
   const protocol = INJURY_PROTOCOLS[inj.type];
   const injName = protocol?.displayName || inj.type;
   const pain = inj.currentPain || 0;
-  const btnBase = 'padding:12px 0;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:13px;font-weight:500;color:var(--c-black);font-family:var(--f)';
+  const btnBase = 'padding:12px 0;font-size:13px;text-align:center';
 
   return `
     <div id="tri-morning-pain-check" style="margin-bottom:12px;padding:16px;background:#fff;border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05)">
@@ -944,9 +954,9 @@ function buildTriMorningPainCheck(inj: InjuryState): string {
         <div style="font-size:12px;color:var(--c-muted);line-height:1.5">How does your ${injName.toLowerCase()} feel vs yesterday? <span style="color:var(--c-faint);font-weight:500">Pain ${pain}/10</span></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">
-        <button class="tri-morning-pain-btn" data-response="worse" style="${btnBase}">Worse</button>
-        <button class="tri-morning-pain-btn" data-response="same" style="${btnBase}">Same</button>
-        <button class="tri-morning-pain-btn" data-response="better" style="${btnBase}">Better</button>
+        <button class="tri-morning-pain-btn m-btn-secondary" data-response="worse" style="${btnBase}">Worse</button>
+        <button class="tri-morning-pain-btn m-btn-secondary" data-response="same" style="${btnBase}">Same</button>
+        <button class="tri-morning-pain-btn m-btn-secondary" data-response="better" style="${btnBase}">Better</button>
       </div>
     </div>
   `;
@@ -1164,7 +1174,7 @@ function openCompletedEffortDetail(workoutId: string, wk: any, s: any): void {
   overlay.style.background = 'rgba(0,0,0,0.45)';
 
   overlay.innerHTML = `
-    <div style="background:#FAF9F6;width:100%;max-width:420px;border-radius:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);overflow:hidden">
+    <div style="background:#fff;width:100%;max-width:420px;border-radius:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);overflow:hidden">
       <div style="background:linear-gradient(180deg,${c.bg},rgba(255,255,255,0));padding:20px 22px 16px;border-bottom:1px solid rgba(0,0,0,0.05)">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <span style="display:inline-flex;align-items:center;gap:5px;background:${c.badge};color:${c.badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:100px">${icon} ${label}</span>
@@ -1182,7 +1192,7 @@ function openCompletedEffortDetail(workoutId: string, wk: any, s: any): void {
             <div style="font-size:12px;font-weight:600;color:${signal.color};margin-bottom:3px">${signal.label}</div>
             ${signalDetail ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.5">${signalDetail}</div>` : ''}
           </div>` : ''}
-        <button id="tri-completed-done" style="margin-top:16px;width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+        <button id="tri-completed-done" class="m-btn-primary" style="margin-top:16px;width:100%;padding:13px;font-size:14px">Done</button>
       </div>
     </div>`;
 
@@ -1382,8 +1392,8 @@ function maybePromptHighRpeBike(): void {
           Consider retesting your FTP or reducing watt targets. Nothing in your plan changes automatically.
         </div>
         <div style="display:flex;gap:10px">
-          <button id="high-rpe-review-ftp" style="flex:1;padding:12px;border-radius:12px;border:1px solid #CBD5E1;background:#fff;font-size:13px;font-weight:600;color:#0F172A;cursor:pointer">Review FTP</button>
-          <button id="high-rpe-dismiss" style="flex:1;padding:12px;border-radius:12px;border:none;background:#0F172A;font-size:13px;font-weight:600;color:#fff;cursor:pointer">Got it</button>
+          <button id="high-rpe-review-ftp" class="m-btn-secondary" style="flex:1;padding:12px;font-size:13px">Review FTP</button>
+          <button id="high-rpe-dismiss" class="m-btn-primary" style="flex:1;padding:12px;font-size:13px">Got it</button>
         </div>
       </div>
     `;

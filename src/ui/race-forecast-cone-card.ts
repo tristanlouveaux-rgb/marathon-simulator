@@ -154,7 +154,7 @@ function buildConeCardHTML(s: SimulatorState): string {
     goalBlock = `
       <div style="background:rgba(148,163,184,0.10);border-radius:12px;padding:14px;margin-top:18px;text-align:center">
         <div style="font-size:13px;color:${TEXT_M};margin-bottom:8px">Set a goal time to see your chance of beating it.</div>
-        <button id="run-cone-set-goal" type="button" style="font:inherit;font-size:13px;color:${TEXT_M};background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:999px;padding:8px 16px;cursor:pointer;font-weight:500">Set a goal time</button>
+        <button id="run-cone-set-goal" type="button" class="m-btn-secondary" style="font-size:13px;padding:8px 16px">Set a goal time</button>
       </div>`;
   }
 

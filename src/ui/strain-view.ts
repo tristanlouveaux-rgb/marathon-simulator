@@ -589,15 +589,15 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
       #strain-view { box-sizing: border-box; }
       #strain-view *, #strain-view *::before, #strain-view *::after { box-sizing: inherit; }
       @keyframes strainFloatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
       .s-fade { opacity:0; animation:strainFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .strain-act-row:active { transform:scale(0.98); }
       .strain-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
     </style>
 
-    <div id="strain-view" style="
+    <div id="strain-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient(bgPalette)};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -611,7 +611,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="strain-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

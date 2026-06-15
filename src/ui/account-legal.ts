@@ -47,7 +47,7 @@ export function openDeleteAccountModal(): void {
       <div id="delete-status" style="min-height:18px;font-size:12px;color:var(--c-warn);margin-bottom:14px"></div>
       <div style="display:flex;gap:10px;align-items:center;justify-content:flex-end">
         <button id="delete-cancel" style="padding:10px 16px;border:none;background:none;font-size:14px;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="delete-confirm" disabled style="padding:10px 20px;border:none;background:#1a1a1a;color:#fff;border-radius:999px;font-size:14px;font-weight:500;cursor:not-allowed;opacity:0.4">Delete account</button>
+        <button id="delete-confirm" class="m-btn-primary" disabled style="padding:10px 20px;font-size:14px;cursor:not-allowed;opacity:0.4">Delete account</button>
       </div>
     </div>
   `;

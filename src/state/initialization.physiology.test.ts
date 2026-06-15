@@ -101,11 +101,23 @@ describe('initializeSimulator — LT consistency at finalize', () => {
 describe('initializeSimulator — race goal is per-plan', () => {
   beforeEach(() => resetState());
 
-  it('clears a stale race goal from a previous plan', () => {
+  it('clears a stale race goal when the race distance changes', () => {
     const s = getMutableState();
-    s.raceGoalTimeSec = 10800; // sub-3 marathon goal from the previous plan
-    const result = initializeSimulator(buildOnboarding());
+    s.rd = 'marathon';          // previous plan was a marathon
+    s.raceGoalTimeSec = 10800;  // sub-3 marathon goal from the previous plan
+    const result = initializeSimulator(buildOnboarding({ raceDistance: 'half' }));
     expect(result.success).toBe(true);
     expect(getState().raceGoalTimeSec).toBeUndefined();
+  });
+
+  it('keeps the race goal across an in-place rebuild at the same distance', () => {
+    // Runner-type change / add-sessions regen re-run initializeSimulator for
+    // the SAME race. The goal must survive so it stays on the forecast page.
+    const s = getMutableState();
+    s.rd = 'half';
+    s.raceGoalTimeSec = 5400; // 1:30 half goal
+    const result = initializeSimulator(buildOnboarding({ raceDistance: 'half' }));
+    expect(result.success).toBe(true);
+    expect(getState().raceGoalTimeSec).toBe(5400);
   });
 });

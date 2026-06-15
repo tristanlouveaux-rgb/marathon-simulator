@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "MosaicScreenshotOCR",
+    name: "MosaicScreenshotOcr",
     platforms: [.iOS(.v15)],
     products: [
         .library(
-            name: "MosaicScreenshotOCR",
+            name: "MosaicScreenshotOcr",
             targets: ["ScreenshotOCRPlugin"])
     ],
     dependencies: [

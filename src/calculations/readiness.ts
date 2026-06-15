@@ -393,23 +393,16 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
       : `Moderate leg load from ${legLoadTop.sportLabel} ${tf}. Impact risk slightly elevated if running.`;
   }
 
-  // Edge case: insufficient history → safe default "On Track"
-  if (weeksOfHistory < 3) {
-    return {
-      score: 65,
-      label: 'On Track',
-      sentence: 'Keep training consistently — your baseline builds over the first 4 weeks.',
-      drivingSignal: 'fitness',
-      fitnessScore: 65,
-      safetyScore: 65,
-      recoveryScore: null,
-      hasRecovery: false,
-      legLoadNote,
-      legLoadTotal,
-      hardFloor: null,
-      suppressStreak: null,
-    };
-  }
+  // Insufficient history (< 3 completed weeks): TSB, ACWR, and momentum need
+  // accumulated logged load to be trustworthy, so the freshness and load-safety
+  // sub-scores fall back to a neutral 65 and the ACWR hard floor is skipped.
+  // Recovery (sleep / HRV) and today's strain / leg load are valid from day one,
+  // so they still feed the composite and the safety floors run as normal.
+  //
+  // Previously this branch returned a flat 65/On Track, which silently discarded
+  // a logged sleep score: a terrible night had zero effect on readiness through
+  // weeks 1-3 of a fresh plan (the most common time a new user logs a check-in).
+  const insufficientHistory = weeksOfHistory < 3;
 
   // Tier-aware ACWR threshold (used in both sub-score and hard floors)
   const safeUpper = input.acwrSafeUpper ?? 1.3;
@@ -434,7 +427,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // TSB daily 0 → 39% (was 45 linear). TSB daily -10 → 21% (was 27 linear).
   const tsbDailyEq = tsb / 7;
   const fitnessFrac = clamp((tsbDailyEq + 25) / 55, 0, 1);
-  const fitnessScore = Math.pow(fitnessFrac, 1.2) * 100;
+  const fitnessScore = insufficientHistory ? 65 : Math.pow(fitnessFrac, 1.2) * 100;
 
   // Load Safety. Tier-aware, non-linear.
   // Anchored to athlete's personal safeUpper: score hits 0 at safeUpper + 0.6,
@@ -444,7 +437,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Exponent 1.6: matches Gabbett's finding that injury risk accelerates
   // exponentially above the safe zone.
   const safetyFrac = clamp((safeUpper + 0.6 - acwr) / 1.2, 0, 1);
-  const safetyScore = Math.pow(safetyFrac, 1.6) * 100;
+  const safetyScore = insufficientHistory ? 65 : Math.pow(safetyFrac, 1.6) * 100;
 
   // Recovery sub-score: use the pre-computed composite (HRV + sleep + RHR) when provided.
   // This ensures the recovery value feeding into readiness matches what is displayed to the user.
@@ -540,12 +533,17 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Old caps (59/74/39) mapped to old boundaries (60/80/40).
   // New caps: 54 = top of Manage Load, 74 = just below Primed, 34 = top of Ease Back.
 
-  if (acwr > cautionUpper) {
-    score = Math.min(score, 34);
-    hardFloor = 'acwr';
-  } else if (acwr > safeUpper) {
-    score = Math.min(score, 54);
-    hardFloor = 'acwr';
+  // ACWR is unreliable until chronic load has accrued (< 3 weeks): the ratio
+  // swings wildly off a near-zero or seeded baseline. Skip its floor early on;
+  // the recovery and strain floors below still apply.
+  if (!insufficientHistory) {
+    if (acwr > cautionUpper) {
+      score = Math.min(score, 34);
+      hardFloor = 'acwr';
+    } else if (acwr > safeUpper) {
+      score = Math.min(score, 54);
+      hardFloor = 'acwr';
+    }
   }
 
   // Sleep floor. Severe bad night (< 45) caps at effectiveSleepCap (decays/recovers over time).
@@ -715,7 +713,22 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     : acwr <= cautionUpper ? 'moderate'
     :                        'high';
 
-  const sentence = resolveSentence(SENTENCES[tsbZone][acwrZone], input.hasUpcomingHardSession ?? true);
+  // Under insufficient history the TSB/ACWR zones are not meaningful, so the
+  // decision-matrix sentence is replaced. If a recovery or strain floor pulled
+  // the score down, lead with that fact; otherwise reassure that the baseline
+  // is still building over the first weeks.
+  let sentence: string;
+  if (insufficientHistory) {
+    if (drivingSignal === 'recovery' && score < 55) {
+      sentence = 'Recovery is low. Keep today easy. Your training baseline still builds over the first weeks.';
+    } else if (hardFloor === 'strain') {
+      sentence = "Today's load is logged. Your training baseline builds over the first weeks.";
+    } else {
+      sentence = 'Keep training consistently. Your baseline builds over the first 4 weeks.';
+    }
+  } else {
+    sentence = resolveSentence(SENTENCES[tsbZone][acwrZone], input.hasUpcomingHardSession ?? true);
+  }
 
   const suppressStreak = (hardFloor === 'sleep' || hardFloor === 'sleepBank') && sleepStreak >= 2
     ? sleepStreak

@@ -269,8 +269,16 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       }
     }
 
+    // Carry the user's target finish time across an in-place rebuild at the
+    // SAME race format. Only a format change makes the goal stale. Mirrors
+    // running's gated raceGoalTimeSec clear in initialization.ts.
+    const carriedTargetFinishSec = s.hyroxConfig?.format === format
+      ? s.hyroxConfig?.targetFinishTimeSec
+      : undefined;
+
     const hyroxConfig: HyroxConfig = {
       format,
+      targetFinishTimeSec: carriedTargetFinishSec,
       athleteBand: band,
       hyroxPhase: 'base',
       stationAccess: {

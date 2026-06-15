@@ -7,7 +7,7 @@
 import { getState, getMutableState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
 import { saveState } from '@/state/persistence';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '@/ui/page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '@/ui/page-flair';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
@@ -876,10 +876,13 @@ export function renderHyroxForecastView(): void {
         `;
       })();
 
+  // Ring entrance + drift play on the first Forecast visit per session only.
+  const animate = shouldPlayEntrance('hyrox-forecast');
+
   root.innerHTML = `
     <div class="mosaic-page" style="min-height:100vh;background:${atmosphereGradient('sky')};position:relative;overflow:hidden">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('hxf', { variant: 'sweep', palette: 'sky', pulse: true })}
+        ${buildRingBackground('hxf', { variant: 'sweep', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
       ${renderTabBar('forecast')}
@@ -1044,8 +1047,8 @@ function openHyroxPrevFormatModal(): void {
       </div>
       <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-bottom:14px">If the format changes, your training plan will be regenerated against the corrected ability band. Completed activities are preserved.</div>
       <div style="display:flex;gap:10px">
-        <button id="hx-prev-fmt-cancel" style="flex:1;padding:11px;border-radius:10px;border:1px solid rgba(0,0,0,0.10);background:transparent;font-size:13px;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="hx-prev-fmt-save" style="flex:1;padding:11px;border-radius:10px;border:none;background:#0F172A;color:#fff;font-size:13px;font-weight:500;cursor:pointer;opacity:0.5" disabled>Save</button>
+        <button id="hx-prev-fmt-cancel" class="m-btn-secondary" style="flex:1;padding:11px;font-size:13px">Cancel</button>
+        <button id="hx-prev-fmt-save" class="m-btn-primary" style="flex:1;padding:11px;font-size:13px;opacity:0.5" disabled>Save</button>
       </div>
     </div>
   `;

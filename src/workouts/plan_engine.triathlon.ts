@@ -117,7 +117,10 @@ function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: We
   for (const wk of weeks) {
     if ((wk.w ?? 0) < currentWeek) continue;
     if (wk.triWorkouts && wk.triWorkouts.length > 0) {
-      applyTriEffortMultipliers(state, wk.triWorkouts);
+      // The CTL-gap stamp lives on the STORED week (state.wks), not on this freshly-generated `wk`,
+      // so look it up by week number. (Effort reads from `state` directly, so it never had this issue.)
+      const stamp = (state.wks?.[(wk.w ?? 1) - 1] as any)?.ctlRatioByDiscipline;
+      applyTriEffortMultipliers(state, wk.triWorkouts, stamp);
     }
   }
 }
@@ -135,10 +138,10 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   const phase = p.ph;
   const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
 
-  // Apply per-discipline effort multiplier when regenerating a future week.
+  // Apply per-discipline effort multiplier + CTL-gap re-anchor when regenerating a future week.
   // For a same-week or past-week regen, skip. Preserves historical duration.
   if (weekIndex >= (state.w ?? 1)) {
-    applyTriEffortMultipliers(state, weekWorkouts);
+    applyTriEffortMultipliers(state, weekWorkouts, (state.wks[weekIndex - 1] as any)?.ctlRatioByDiscipline);
   }
 
   const existing = state.wks[weekIndex - 1];

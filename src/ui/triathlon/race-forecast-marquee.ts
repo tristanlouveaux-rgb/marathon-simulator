@@ -19,6 +19,7 @@
 import type { SimulatorState } from '@/types/state';
 import type { InjuryState } from '@/types/injury';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { isInjuryActive } from '@/ui/injury/modal';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { legSplitLine } from './race-forecast-card';
@@ -151,7 +152,7 @@ export function renderTriForecastMarquee(s: SimulatorState): string {
   const p = tri.prediction ?? predictTriathlonRace(s);
   if (!p || !p.totalSec) return '';
 
-  const distLabel = tri.distance === 'ironman' ? 'Ironman forecast' : '70.3 forecast';
+  const distLabel = `${getTriDistanceLabel(tri.distance)} forecast`;
   const halfBandSec = Math.round((p.totalRangeSec[1] - p.totalRangeSec[0]) / 4);
   const halfBandMin = Math.max(1, Math.round(halfBandSec / 60));
   const weeksRemaining = p.projection?.weeksRemaining ?? 0;

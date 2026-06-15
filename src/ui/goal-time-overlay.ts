@@ -128,13 +128,13 @@ export function openRunGoalOverlay(preSec?: number): void {
 
       <div style="margin:18px 0 6px">
         <input
+          class="m-slider-glass"
           id="run-goal-slider"
           type="range"
           min="${minSec}"
           max="${maxSec}"
           step="${stepSec}"
           value="${initialSec}"
-          style="width:100%;-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer"
         />
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:#94A3B8;font-variant-numeric:tabular-nums;margin-bottom:18px">
@@ -157,24 +157,6 @@ export function openRunGoalOverlay(preSec?: number): void {
         cursor:pointer;text-align:center;margin-top:6px
       ">Clear goal</button>
     </div>
-
-    <style id="run-goal-slider-style">
-      #run-goal-slider::-webkit-slider-runnable-track {
-        height:4px;background:#E2E8F0;border-radius:2px;
-      }
-      #run-goal-slider::-webkit-slider-thumb {
-        -webkit-appearance:none;appearance:none;width:24px;height:24px;border-radius:50%;
-        background:#fff;border:1px solid rgba(15,23,42,0.18);box-shadow:0 2px 6px rgba(15,23,42,0.18);
-        margin-top:-10px;cursor:pointer;
-      }
-      #run-goal-slider::-moz-range-track {
-        height:4px;background:#E2E8F0;border-radius:2px;
-      }
-      #run-goal-slider::-moz-range-thumb {
-        width:24px;height:24px;border-radius:50%;background:#fff;
-        border:1px solid rgba(15,23,42,0.18);box-shadow:0 2px 6px rgba(15,23,42,0.18);cursor:pointer;
-      }
-    </style>
   `;
   document.body.appendChild(overlay);
 

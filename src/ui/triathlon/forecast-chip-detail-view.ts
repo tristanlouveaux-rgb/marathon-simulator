@@ -9,6 +9,7 @@
  */
 
 import { getState, getMutableState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { saveState } from '@/state/persistence';
 import type { SimulatorState } from '@/types/state';
 import type { TriRacePrediction, CourseFactorEntry } from '@/types/triathlon';
@@ -214,7 +215,7 @@ function pageYou(s: SimulatorState): PageContent {
           const gap = r.predictedTotalSec - r.actualTotalSec;
           const gapTxt = Math.abs(gap) < 60 ? 'on prediction' : (gap > 0 ? `beat by ${Math.round(gap / 60)} min` : `behind by ${Math.round(-gap / 60)} min`);
           const tone = Math.abs(gap) < 60 ? TEXT_S : (gap > 0 ? '#1F7A3D' : '#9A6A20');
-          const distLabel = r.distance === 'ironman' ? 'Ironman' : '70.3';
+          const distLabel = getTriDistanceLabel(r.distance);
           return `
             <div style="padding:9px 0;border-top:1px solid rgba(0,0,0,0.04);font-size:13px">
               <div style="display:flex;justify-content:space-between;align-items:baseline">
@@ -1203,11 +1204,11 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
 
   container.innerHTML = `
     <style>
-      @keyframes triFcdFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes triFcdFloatUp { from { opacity:0; } to { opacity:1; } }
       .tri-fcd-fade { opacity:0; animation:triFcdFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="tri-fcd-view" data-chip="${key}" style="
+    <div id="tri-fcd-view" class="safe-top-bleed" data-chip="${key}" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">

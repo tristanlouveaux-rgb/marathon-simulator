@@ -128,13 +128,28 @@ export class StrengthGuideController {
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
-  start(): void {
+  /**
+   * Begin the session. Pass a positive `countdownSec` for a visible "get ready"
+   * countdown before the first set goes active (mirrors the between-station
+   * countdown). Pass 0 (the default) to jump straight into the first set.
+   */
+  start(countdownSec = 0): void {
     if (this._phase !== 'idle') return;
-    this._phase = 'active';
-    this.idx = 0;
     this._elapsedSec = 0;
     this.setStartElapsed = 0;
     this.stopTicker = this.ticker(() => this.tick(1));
+    const s = Math.max(0, Math.floor(countdownSec));
+    if (s > 0) {
+      // idx = -1 so the countdown -> advance() transition lands on the first
+      // set (idx 0), reusing the exact path the between-station countdown uses.
+      this.idx = -1;
+      this._phase = 'countdown';
+      this._countdownRemainingSec = s;
+      this.emit({ type: 'countdownStart', nextSet: this.nextSet(), countdownRemainingSec: s, elapsedSec: 0 });
+      return;
+    }
+    this._phase = 'active';
+    this.idx = 0;
     this.emit({ type: 'setStart', set: this.currentSet() ?? undefined, elapsedSec: 0 });
   }
 

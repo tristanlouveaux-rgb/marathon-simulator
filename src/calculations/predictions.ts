@@ -42,6 +42,72 @@ export function calculateAdherencePenalty(summary: SkipSummary): number {
 }
 
 /**
+ * Returns the user's PB at the EXACT target distance (within 1%), or null.
+ * Used as a demonstrated-performance floor: the blend must not predict slower
+ * than a time the athlete has actually run at this distance, absent positive
+ * evidence of detraining. A marathon PB does NOT floor a half prediction (and
+ * vice versa) — only same-distance PBs qualify.
+ */
+function exactDistancePB(targetDist: number, pbs: PBs): number | null {
+  const candidates: { d: number; t: number | undefined }[] = [
+    { d: 5000, t: pbs.k5 },
+    { d: 10000, t: pbs.k10 },
+    { d: 21097, t: pbs.h },
+    { d: 42195, t: pbs.m },
+  ];
+  for (const { d, t } of candidates) {
+    if (t && t > 0 && Math.abs(d - targetDist) / d < 0.01) return t;
+  }
+  return null;
+}
+
+/**
+ * Demonstrated-PB floor (2026-06-15).
+ *
+ * A PB at the EXACT target distance is a demonstrated performance. A prediction
+ * must never come out slower than it UNLESS we have positive evidence the athlete
+ * has lost that fitness. The penalties in the prediction pipeline (marathon-
+ * specificity, long-run durability cap) exist to correct a *returning* athlete or
+ * a short-anchor extrapolation; they must not override a stated same-distance PB
+ * for a brand-new user with no contradicting data.
+ *
+ * "No training data" is NOT evidence of detraining. Two things ARE:
+ *   1. A real weekly-volume signal below the maintenance floor (30 km/wk — the
+ *      cutoff above which the marathon-specificity penalty treats fractional-
+ *      utilization decay as negligible, Coyle 1984).
+ *   2. A recent run/race that itself projects SLOWER than the PB at the target
+ *      distance — direct evidence of reduced current fitness (e.g. a returning
+ *      runner whose 1:28 half PB is contradicted by a recent 24:00 5K).
+ *
+ * When either holds, the floor stands down and the penalised blend is trusted.
+ * Limitation: a genuinely stale PB with no volume signal and no recent run is
+ * still trusted as the floor — we prefer optimism over telling an athlete they
+ * are slower than a proven time with zero supporting evidence.
+ *
+ * Pure function. Idempotent: flooring an already-floored value is a no-op, so it
+ * is safe to call again after an externally-applied penalty (e.g. the durability
+ * cap that callers multiply on after blendPredictions).
+ */
+export function demonstratedPBFloor(
+  timeSec: number,
+  targetDist: number,
+  pbs: PBs,
+  ctx: { weeklyRunKm?: number; recentRun?: RecentRun | null; b: number },
+): number {
+  const exactPb = exactDistancePB(targetDist, pbs);
+  if (exactPb == null || timeSec <= exactPb) return timeSec;
+
+  const lowVolumeEvidence = ctx.weeklyRunKm != null && ctx.weeklyRunKm < 30;
+  const tRecent = ctx.recentRun && ctx.recentRun.t > 0
+    ? predictFromRecent(targetDist, ctx.recentRun, pbs, ctx.b)
+    : null;
+  const recentContradictsPb = tRecent != null && tRecent > exactPb;
+
+  if (lowVolumeEvidence || recentContradictsPb) return timeSec;
+  return exactPb;
+}
+
+/**
  * PB predictor - uses all-time PBs to predict target distance
  * @param targetDist - Target distance in meters
  * @param pbs - Personal bests
@@ -776,5 +842,14 @@ export function blendPredictions(
     console.log(`[blendPredictions] no-long-race-PB penalty fired: runnerType=${runnerType}, hasHmPb=${pbs.h != null}, hasMPb=${pbs.m != null}, tTanda=${tTanda != null} → penalty ${noLongRacePenalty.toFixed(3)}× (no demonstrated marathon endurance)`);
   }
 
-  return (sum / totW) * marathonSpecificityPenalty * noLongRacePenalty;
+  const penalised = (sum / totW) * marathonSpecificityPenalty * noLongRacePenalty;
+
+  // Never predict slower than a demonstrated same-distance PB without positive
+  // detraining evidence. See demonstratedPBFloor for the full rationale.
+  const result = demonstratedPBFloor(penalised, targetDist, pbs, { weeklyRunKm, recentRun, b });
+  if (result !== penalised) {
+    console.log(`[blendPredictions] demonstrated-PB floor: penalised blend ${penalised.toFixed(0)}s slower than same-distance PB ${result.toFixed(0)}s with no detraining evidence → floored to PB`);
+  }
+
+  return result;
 }

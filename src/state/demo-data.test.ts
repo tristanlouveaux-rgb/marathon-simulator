@@ -38,6 +38,18 @@ describe('seedReviewerDemo', () => {
     expect(typeof s.trialExpiry).toBe('string');
   });
 
+  it('seeds a race that is always in the future (a hardcoded date went stale once)', () => {
+    seedReviewerDemo();
+    const s = getState();
+    // Regression: the original seed hardcoded date '2026-04-26'; once that passed,
+    // a fresh REVIEW account booted with a "race is done" banner over a Week-1 plan.
+    const raceDate = new Date(s.onboarding?.selectedRace?.date ?? '1970-01-01');
+    const daysOut = (raceDate.getTime() - Date.now()) / 86400000;
+    expect(daysOut).toBeGreaterThan(105); // ~15 weeks minimum
+    expect(daysOut).toBeLessThan(126);    // and not absurdly far (≤18 weeks)
+    expect(raceDate.getDay()).toBe(0);    // race day lands on a Sunday
+  });
+
   it('generates a real multi-week phased training block (not an empty shell)', () => {
     seedReviewerDemo();
     const s = getState();

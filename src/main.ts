@@ -21,9 +21,10 @@ import { setAthleteNormalizer, calibrateTssPerActiveMinute, normalizeiTrimp } fr
 import { plannedTssPerMin } from '@/constants';
 import { calculateWorkoutLoad } from '@/workouts';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
-import { STRAVA_ENABLED } from '@/constants/feature-flags';
+import { STRAVA_ENABLED, NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { READINESS_LONGEST_WINDOW_WEEKS } from '@/constants/race-readiness-targets';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
+import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology, subscribeToWorkoutObserver, subscribeToForegroundResume } from '@/data/appleHealthSync';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
@@ -32,6 +33,8 @@ import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnos
 import { initRevenueCat, identifyRevenueCatUser } from '@/coach/revenuecat-client';
 import { isNative } from '@/utils/platform';
 import { installWebOverscrollBounce } from '@/ui/web-overscroll-bounce';
+import { initSharedFileIntake } from '@/data/shared-file-intake';
+import { mergeEnrichmentsFromServer } from '@/data/enrichmentSync';
 import { installPageSwipeNav } from '@/ui/page-swipe-nav';
 import '@/ui/strava-detail';
 
@@ -168,6 +171,13 @@ async function bootstrap(): Promise<void> {
   applyWebViewportPolicy();
   installWebOverscrollBounce();
   installPageSwipeNav();
+  // Register the global the native "Share to Mosaic" file handler calls.
+  initSharedFileIntake();
+  // On foreground, pull enrichments done on another device (throttled to 5 min
+  // inside). Catches a web-app enrich while the phone was suspended.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void mergeEnrichmentsFromServer();
+  });
 
   // Dev: install window.__debugForecast() for prediction-stack diagnostics.
   const { installDebugForecast } = await import('@/dev/debug-forecast');
@@ -194,17 +204,35 @@ async function bootstrap(): Promise<void> {
   // Check for existing Supabase session
   let { data: { session } } = await supabase.auth.getSession();
 
-  // If session exists but is expired, try refresh; if that fails, treat as no session.
+  // If session exists but is expired, try refresh. How a refresh failure is
+  // handled depends on WHY it failed — a network blip must never destroy a
+  // valid refresh token (that used to silently convert real accounts into
+  // anonymous guests, and the owner-mismatch check then wiped local state).
   if (session) {
     const expiresAt = session.expires_at ?? 0;
     if (expiresAt <= Math.floor(Date.now() / 1000) + 60) {
       const { data: refreshed, error } = await supabase.auth.refreshSession();
-      if (error || !refreshed.session) {
-        console.warn('[auth] Stale session could not refresh, clearing and signing in anonymously');
-        await supabase.auth.signOut().catch(() => {});
-        session = null;
-      } else {
+      if (refreshed.session) {
         session = refreshed.session;
+      } else if (isAuthRetryableFetchError(error)) {
+        // Network-shaped failure (offline, DNS, 5xx). The refresh token is
+        // still good — launch with the stale session. Per-call getValidSession
+        // throws (all callers catch) and the SDK auto-refreshes when the
+        // network returns.
+        console.warn('[auth] Session refresh failed (network), launching with stale session', error);
+      } else if (!session.user.is_anonymous) {
+        // Genuinely invalid token on a real account: honest logout to the
+        // sign-in screen (email prefilled from last sign-in). Never downgrade
+        // a real account to an anonymous guest.
+        console.warn('[auth] Refresh token invalid for signed-in account, showing sign-in', error);
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        renderAuthView();
+        setupAuthListener();
+        return;
+      } else {
+        console.warn('[auth] Stale anonymous session could not refresh, clearing and signing in anonymously');
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        session = null;
       }
     }
   }
@@ -1280,6 +1308,12 @@ async function launchApp(): Promise<void> {
     }
   });
 
+  // Native iOS OAuth return is handled by ASWebAuthenticationSession inside
+  // startStravaConnect/startGarminConnect (the @mosaic/web-auth plugin): it
+  // intercepts the mosaic://oauth?... callback and the connect flow re-enters
+  // the app with that query string itself. No appUrlOpen listener needed — the
+  // `?strava=connected` / `?garmin=connected` handlers below do the rest.
+
   // Handle OAuth redirects.
   // Only route to account-view when the user is actually on main-view. A user
   // mid-wizard (e.g. editing goals after having completed onboarding once) has
@@ -1460,6 +1494,11 @@ async function launchApp(): Promise<void> {
     // receives each session from both Garmin webhook and Strava sees one copy
     // immediately on launch. Idempotent; re-render only when it changed something.
     if (reconcileCrossSourceDuplicates()) { saveState(); scheduleHomeRefresh(); }
+
+    // Pull any activity enrichments done on another device (e.g. a Strava file
+    // uploaded on the web app) into this device's thin copies. Independent of
+    // the full-snapshot backup; safe to run every launch. Fire-and-forget.
+    void mergeEnrichmentsFromServer({ force: true });
 
 
     // ── ACTIVITIES ────────────────────────────────────────────────────────────

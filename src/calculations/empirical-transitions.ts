@@ -21,8 +21,20 @@ import {
   IM_T1_SHARE_OF_TOTAL,
   SOCK_ON_COST_SEC,
 } from '@/constants/triathlon-constants';
+import type { TriathlonDistance } from '@/types/triathlon';
 
+/** Distances with their own ingested transition dataset. */
 type Distance = '70.3' | 'ironman';
+
+/**
+ * Map any race format to the nearest distance that has ingested transition data.
+ * Sprint/Olympic/T100 have no Kaggle ingest, so they borrow the 70.3 field
+ * (closest short/middle-distance transition behaviour). Callers should caption
+ * these as estimated from 70.3 data where surfaced.
+ */
+function resolveEmpiricalDistance(distance: TriathlonDistance): Distance {
+  return distance === 'ironman' ? 'ironman' : '70.3';
+}
 
 interface RawBinStats {
   centerSec: number;
@@ -104,9 +116,10 @@ export interface EmpiricalTransitionsResult {
  */
 export function lookupEmpiricalTransitions(
   raceName: string,
-  distance: Distance,
+  rawDistance: TriathlonDistance,
   predictedMovingSec: number,
 ): EmpiricalTransitionsResult {
+  const distance = resolveEmpiricalDistance(rawDistance);
   const key = normaliseLocationKey(raceName);
   const raceBins = NORMALISED_BY_LOCATION[distance].get(key);
   const raceBin = raceBins ? pickBinClosest(raceBins, predictedMovingSec) : null;
@@ -173,12 +186,13 @@ export interface TransitionFieldContext extends EmpiricalTransitionsResult {
  */
 export function lookupTransitionFieldContext(
   raceName: string,
-  distance: Distance,
+  rawDistance: TriathlonDistance,
   predictedMovingSec: number,
 ): TransitionFieldContext {
+  const distance = resolveEmpiricalDistance(rawDistance);
   const table = TABLES[distance];
   const datasetFinishers = table.totalRecords;
-  const base = lookupEmpiricalTransitions(raceName, distance, predictedMovingSec);
+  const base = lookupEmpiricalTransitions(raceName, rawDistance, predictedMovingSec);
 
   if (base.source === 'race-empirical') {
     const key = normaliseLocationKey(raceName);

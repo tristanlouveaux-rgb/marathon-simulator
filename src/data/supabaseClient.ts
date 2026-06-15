@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, isAuthRetryableFetchError } from '@supabase/supabase-js';
 
 /** Supabase project config — values injected by Vite from .env.local */
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
@@ -30,9 +30,32 @@ export async function getValidSession() {
     return refreshed.session;
   }
 
-  // Refresh failed. Last resort, sign in anonymously so the user isn't stranded.
+  // Network-shaped failure (offline, DNS, 5xx): the refresh token is still
+  // good. Keep the session untouched — the SDK's auto-refresh retries when
+  // connectivity returns, and the caller skips this round. Destroying the
+  // session here is what used to silently convert a real account into an
+  // anonymous guest on a Wi-Fi blip (common on iOS resume-from-background).
+  if (isAuthRetryableFetchError(error)) {
+    console.warn('[auth] Session refresh failed (network), keeping session for retry', error);
+    throw new Error('SESSION_EXPIRED');
+  }
+
+  // Genuinely invalid/revoked refresh token on a REAL account: sign out
+  // honestly (local only — other devices keep their sessions). SIGNED_OUT
+  // renders the auth view with the remembered email prefilled. Never
+  // downgrade a real account to an anonymous guest — that forks the user's
+  // data onto a throwaway user and makes the guest-upgrade warning point at
+  // their own account data.
+  if (session?.user && !session.user.is_anonymous) {
+    console.warn('[auth] Refresh token invalid for signed-in account, signing out', error);
+    await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    throw new Error('SESSION_EXPIRED');
+  }
+
+  // Anonymous (or no) session with an invalid token: nothing recoverable.
+  // Fall back to a fresh anonymous user so the user isn't stranded.
   console.warn('[auth] Session refresh failed, attempting anonymous sign-in', error);
-  await supabase.auth.signOut().catch(() => {});
+  await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
   const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
   if (anonError || !anon.session) {
     console.error('[auth] Anonymous sign-in also failed', anonError);

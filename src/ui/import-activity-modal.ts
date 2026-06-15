@@ -107,8 +107,10 @@ async function onFile(e: Event): Promise<void> {
       });
       msg = result.summary;
     } else {
-      const { importActivityFile } = await import('@/data/fitImport');
-      msg = await importActivityFile(file);
+      // Single file: auto-attach to the thin run it belongs to (no need for the
+      // user to find it), or import as new if nothing matches.
+      const { ingestActivityFile } = await import('@/data/fitImport');
+      msg = (await ingestActivityFile(file)).message;
     }
     if (statusEl) statusEl.textContent = msg;
     showSimpleToast(msg, 'info');

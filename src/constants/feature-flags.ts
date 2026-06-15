@@ -37,6 +37,20 @@ export const BIKE_SETUP_AUTO_FILL = true;
 export const STRAVA_ENABLED: boolean = true;
 
 /**
+ * Per-activity "Add detail from Strava" enrichment on the activity detail page.
+ *
+ * A Garmin watch syncing into Apple Health only delivers average HR + duration:
+ * HR zones, splits, route and iTRIMP are dropped at the Garmin→HealthKit
+ * boundary. While Strava is capped at 10 athletes (no live pipe for most users),
+ * this lets a user upload that activity's original .fit and enrich the existing
+ * record in place (no duplicate, provenance preserved). Opt-in, per activity.
+ *
+ * Turn OFF once live full Strava access enriches automatically — the live
+ * Strava-upgrade path then makes the manual button redundant.
+ */
+export const STRAVA_ENRICH_UPLOAD_ENABLED: boolean = true;
+
+/**
  * Live Garmin Connect integration (OAuth connect UI + launch-time physiology /
  * activity sync + backfill).
  *
@@ -81,3 +95,31 @@ export const GARMIN_CONNECT_ENABLED: boolean = false;
  * App Store strategy for the AI surface. Do not flip without both.
  */
 export const AI_COACH_ENABLED: boolean = false;
+
+/**
+ * Native OAuth (iOS). When ON, Strava/Garmin connect on native iOS opens the
+ * authorize page in ASWebAuthenticationSession (the `@mosaic/web-auth` plugin),
+ * which intercepts the `mosaic://oauth?...` callback and returns it to JS,
+ * instead of throwing the whole WKWebView out to the provider with a full-page
+ * `window.location.href` redirect (which can fail to bounce back on iOS).
+ *
+ * History (2026-06-15): an earlier attempt used `@capacitor/browser`
+ * (SFSafariViewController) + a `mosaic://` deep link via `@capacitor/app`
+ * `appUrlOpen`. That hit two walls — SFSafariViewController refuses to follow a
+ * 302 to a custom scheme ("address is invalid"), and the Supabase edge gateway
+ * force-rewrites responses to text/plain so the HTML JS-redirect workaround
+ * rendered as raw source. ASWebAuthenticationSession is iOS's purpose-built
+ * OAuth presentation and handles the custom-scheme callback natively.
+ *
+ * Prerequisite checklist:
+ *   1. `@mosaic/web-auth` plugin synced into the iOS project — needs `cap sync
+ *      ios` + an Xcode rebuild + a fresh TestFlight build (native code change).
+ *   2. The `mosaic://` URL scheme registered in `ios/App/App/Info.plist` — DONE.
+ *   3. `strava-auth-callback` + `garmin-auth-callback` deployed (302 → mosaic://
+ *      for native; idempotent) — DONE 2026-06-15.
+ *   4. A fresh native build installed + device-tested — pending (Tristan).
+ *
+ * On web this is always a no-op (gated by isNativeiOS()); web keeps the
+ * full-page redirect. See docs/RUNBOOK.md → Native OAuth.
+ */
+export const NATIVE_OAUTH_ENABLED: boolean = true;

@@ -79,6 +79,11 @@ export function generateWeekWorkouts(
     const sNow = getState();
     const baselineKm = sNow.detectedWeeklyKm;
     const archetype = sNow.athleteArchetype?.archetype;
+    // CTL-gap re-anchor for this week. Stamped on the week at rollover (events.next()); read live
+    // here — exactly like baselineKm/archetype — so every resolver call applies the same reduction
+    // the debrief previewed. A stored scalar, so reading it here never re-enters the adherence
+    // computation (which itself resolves this week's planned TSS).
+    const ctlRatio = (sNow.wks?.[weekIndex - 1] as any)?.ctlRatio;
 
     // New plan engine path: time-based sessions with progression & deload
     const intents = planWeekSessions({
@@ -98,6 +103,7 @@ export function generateWeekWorkouts(
       baselineKm,
       archetype,
       easyPaceSecPerKm,
+      ctlRatio,
     });
     for (const intent of intents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));

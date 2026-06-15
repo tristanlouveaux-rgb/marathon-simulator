@@ -15,6 +15,18 @@ import { submitRouteSafetyRating } from '@/data/safetyRatingSync';
 
 const MODAL_ID = 'gps-completion-modal';
 
+/** Frosted dim behind the modal — matches the goal-time overlay recipe. */
+const OVERLAY_STYLE =
+  'background:rgba(15,23,42,0.42);backdrop-filter:blur(12px) saturate(1.1);-webkit-backdrop-filter:blur(12px) saturate(1.1)';
+/** The floating card: white surface (canonical modal colour). Inner tiles read as
+ *  raised via their own shadow stack, large radius, soft layered shadow, no hard border. */
+const CARD_STYLE =
+  'background:var(--c-surface);border-radius:24px;box-shadow:0 24px 64px rgba(0,0,0,0.18),0 0 0 1px rgba(0,0,0,0.04)';
+/** Raised grouped tile: white surface lifted off the card with the canonical
+ *  m-card shadow stack plus a subtle bevel — the app's 3D glass-card depth. */
+const RAISED_TILE =
+  'background:var(--c-surface);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,0.05),0 5px 14px rgba(0,0,0,0.07),inset 0 1px 0 rgba(255,255,255,0.7),inset 0 -1px 0 rgba(0,0,0,0.03)';
+
 export interface CompletionData {
   recording: GpsRecording;
   workout: Workout | null;
@@ -47,32 +59,32 @@ export function openGpsCompletionModal(
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
-  modal.className = 'fixed inset-0 flex items-center justify-center z-50';
-  modal.style.background = 'rgba(0,0,0,0.45)';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50 p-4';
+  modal.style.cssText = OVERLAY_STYLE;
   modal.innerHTML = `
-    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl max-h-[90vh] overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
-      <h2 class="text-lg font-semibold mb-1" style="color:var(--c-black)">Run Complete</h2>
-      <div class="text-sm mb-4" style="color:var(--c-muted)">${escapeHtml(workoutLabel)}</div>
+    <div class="w-full max-w-md max-h-[90vh] overflow-y-auto" style="${CARD_STYLE};padding:24px">
+      <h2 style="font-size:19px;font-weight:700;letter-spacing:-0.01em;color:var(--c-black);margin-bottom:2px">Run Complete</h2>
+      <div class="text-sm mb-5" style="color:var(--c-muted)">${escapeHtml(workoutLabel)}</div>
 
       <!-- Summary grid -->
-      <div class="grid grid-cols-3 gap-2 mb-4">
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Distance</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${formatKm(actualDistKm, unitPref, 2)}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${formatKm(actualDistKm, unitPref, 2)}</div>
         </div>
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Time</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${formatWorkoutTime(recording.totalElapsed)}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${formatWorkoutTime(recording.totalElapsed)}</div>
         </div>
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Avg Pace</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref) : '--'}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref) : '--'}</div>
         </div>
       </div>
 
       <!-- Planned vs Actual -->
       ${plannedDistKm > 0 ? `
-        <div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">
+        <div class="mb-3" style="${RAISED_TILE};padding:12px 14px">
           <div class="text-xs font-semibold mb-2" style="color:var(--c-faint)">Planned vs Actual</div>
           <div class="flex justify-between text-sm">
             <span style="color:var(--c-muted)">Distance</span>
@@ -94,12 +106,12 @@ export function openGpsCompletionModal(
 
       <!-- RPE selector -->
       <div class="mb-5">
-        <div class="text-sm mb-2" style="color:var(--c-black)">How did it feel? <span id="gps-rpe-label" class="font-bold" style="color:var(--c-ok)"></span></div>
-        <div class="grid grid-cols-10 gap-1">
-          ${Array.from({ length: 10 }, (_, i) => i + 1).map(r => `
-            <button data-rpe="${r}" class="gps-rpe-btn px-1 py-2 text-sm rounded transition-colors" style="border:1.5px solid var(--c-border-strong);color:var(--c-black);background:var(--c-surface)">${r}</button>
-          `).join('')}
+        <div class="text-sm mb-3" style="color:var(--c-black)">How did it feel?</div>
+        <div style="text-align:center;margin-bottom:8px">
+          <span id="gps-rpe-value" style="font-size:26px;font-weight:700;color:var(--c-faint)">&ndash;&ndash;</span>
+          <span id="gps-rpe-desc" style="display:block;font-size:12px;margin-top:2px;min-height:16px;color:var(--c-faint)">Slide to rate your effort</span>
         </div>
+        <input id="gps-rpe-slider" type="range" class="m-slider-glass" min="1" max="10" value="5" step="1">
         <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
           <span>Easy</span>
           <span>Max effort</span>
@@ -133,13 +145,19 @@ export function openGpsCompletionModal(
     row.innerHTML = '';
     row.className = 'flex gap-3';
 
+    // Discard: frosted glass float with press-in, but borderless (the white rim
+    // reads heavy on the off-white card). Float shadow keeps the depth.
     const discardBtn = document.createElement('button');
-    discardBtn.className = 'm-btn-secondary px-4 py-2 rounded-lg text-sm font-medium';
+    discardBtn.className = 'm-btn-glass m-btn-glass--inset';
+    discardBtn.style.cssText = 'padding:13px 22px;font-size:14px;border:none';
     discardBtn.textContent = 'Discard';
     discardBtn.addEventListener('click', showDiscardConfirm);
 
+    // Complete is the primary CTA: dark pill, full-width. Depth + press-in now
+    // come from the .m-btn-primary class (app-wide default).
     const saveBtn = document.createElement('button') as HTMLButtonElement;
-    saveBtn.className = 'flex-1 m-btn-primary px-4 py-2 rounded-lg text-sm font-medium';
+    saveBtn.className = 'flex-1 m-btn-primary';
+    saveBtn.style.cssText = 'justify-content:center;padding:13px 18px;font-size:14px';
     saveBtn.style.opacity = selectedRpe === 0 ? '0.4' : '1';
     saveBtn.textContent = saveLabel;
     saveBtn.disabled = selectedRpe === 0;
@@ -207,26 +225,32 @@ export function openGpsCompletionModal(
     row.appendChild(btnRow);
   }
 
-  // RPE buttons
-  modal.querySelectorAll('.gps-rpe-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      selectedRpe = parseInt((btn as HTMLElement).dataset.rpe || '0');
-      modal.querySelectorAll('.gps-rpe-btn').forEach(b => {
-        (b as HTMLElement).style.background = 'var(--c-surface)';
-        (b as HTMLElement).style.color = 'var(--c-black)';
-        (b as HTMLElement).style.borderColor = 'var(--c-border-strong)';
-      });
-      (btn as HTMLElement).style.background = 'var(--c-ok)';
-      (btn as HTMLElement).style.color = 'white';
-      (btn as HTMLElement).style.borderColor = 'var(--c-ok)';
-      const label = document.getElementById('gps-rpe-label');
-      if (label) label.textContent = `RPE ${selectedRpe}`;
-      if (currentSaveBtn) {
-        currentSaveBtn.disabled = false;
-        currentSaveBtn.style.opacity = '1';
-      }
-    });
-  });
+  // RPE slider. Untouched until the user interacts, so Complete stays disabled
+  // and the readout shows a prompt rather than a default value.
+  const rpeSlider = modal.querySelector('#gps-rpe-slider') as HTMLInputElement | null;
+  const rpeValueEl = modal.querySelector('#gps-rpe-value') as HTMLElement | null;
+  const rpeDescEl = modal.querySelector('#gps-rpe-desc') as HTMLElement | null;
+  function commitRpe(): void {
+    if (!rpeSlider) return;
+    selectedRpe = parseInt(rpeSlider.value, 10);
+    const colour = rpeColour(selectedRpe);
+    if (rpeValueEl) {
+      rpeValueEl.textContent = String(selectedRpe);
+      rpeValueEl.style.color = colour;
+    }
+    if (rpeDescEl) {
+      rpeDescEl.textContent = RPE_DESCRIPTORS[selectedRpe] ?? '';
+      rpeDescEl.style.color = colour;
+    }
+    if (currentSaveBtn) {
+      currentSaveBtn.disabled = false;
+      currentSaveBtn.style.opacity = '1';
+    }
+  }
+  // 'input' covers drag + keyboard; 'click' covers a tap that lands on the
+  // current thumb position (no value change, so 'input' would not fire).
+  rpeSlider?.addEventListener('input', commitRpe);
+  rpeSlider?.addEventListener('click', commitRpe);
 
   showMainButtons();
 }
@@ -252,7 +276,7 @@ function renderAdherenceSection(summary: AdherenceSummary): string {
   const breakdown = bits.length > 0 ? bits.join(' · ') : 'all within ±5s/km';
 
   return `
-    <div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">
+    <div class="mb-3" style="${RAISED_TILE};padding:12px 14px">
       <div class="text-xs font-semibold mb-2" style="color:var(--c-faint)">Pace adherence</div>
       <div class="flex items-baseline justify-between mb-1">
         <span class="text-sm" style="color:var(--c-black)">${summary.onPaceCount} of ${summary.paced.length} splits on pace</span>
@@ -264,7 +288,7 @@ function renderAdherenceSection(summary: AdherenceSummary): string {
 }
 
 function renderSplitsSection(splits: GpsSplit[], unitPref: 'km' | 'mi' = 'km'): string {
-  let h = `<div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">`;
+  let h = `<div class="mb-3" style="${RAISED_TILE};padding:12px 14px">`;
   h += `<div class="text-xs font-semibold mb-2" style="color:var(--c-faint)">Splits</div>`;
   h += `<table class="w-full text-xs">`;
   h += `<thead><tr style="border-bottom:1px solid var(--c-border);color:var(--c-faint)">`;
@@ -292,6 +316,28 @@ function renderSplitsSection(splits: GpsSplit[], unitPref: 'km' | 'mi' = 'km'): 
   return h;
 }
 
+/** Borg CR10 effort anchors for the 1–10 session-RPE scale. Descriptive only;
+ *  the numeric RPE passed to rate() is unchanged. */
+const RPE_DESCRIPTORS: Record<number, string> = {
+  1: 'Very easy',
+  2: 'Easy',
+  3: 'Easy',
+  4: 'Moderate',
+  5: 'Moderate',
+  6: 'Comfortably hard',
+  7: 'Hard',
+  8: 'Very hard',
+  9: 'Very hard',
+  10: 'Max effort',
+};
+
+/** Effort-graded colour, mirroring the safety slider in this same modal. */
+function rpeColour(rpe: number): string {
+  if (rpe <= 3) return 'var(--c-ok)';
+  if (rpe <= 6) return 'var(--c-caution)';
+  return 'var(--c-warn)';
+}
+
 function distanceStyle(actual: number, planned: number): string {
   const ratio = actual / planned;
   if (ratio >= 0.9 && ratio <= 1.1) return `color:var(--c-ok)`;
@@ -317,12 +363,12 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
-  modal.className = 'fixed inset-0 flex items-center justify-center z-50';
-  modal.style.background = 'rgba(0,0,0,0.45)';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50 p-4';
+  modal.style.cssText = OVERLAY_STYLE;
   modal.innerHTML = `
-    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl max-h-[90vh] overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold" style="color:var(--c-black)">${escapeHtml(recording.workoutName)}</h2>
+    <div class="w-full max-w-md max-h-[90vh] overflow-y-auto" style="${CARD_STYLE};padding:24px">
+      <div class="flex items-center justify-between mb-1">
+        <h2 style="font-size:19px;font-weight:700;letter-spacing:-0.01em;color:var(--c-black)">${escapeHtml(recording.workoutName)}</h2>
         <button id="gps-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -330,28 +376,28 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
         </button>
       </div>
 
-      <div class="text-xs mb-3" style="color:var(--c-faint)">${new Date(recording.date).toLocaleDateString()}</div>
+      <div class="text-xs mb-4" style="color:var(--c-faint)">${new Date(recording.date).toLocaleDateString()}</div>
 
       <!-- Summary grid -->
-      <div class="grid grid-cols-3 gap-2 mb-4">
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Distance</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${formatKm(actualDistKm, unitPref2, 2)}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${formatKm(actualDistKm, unitPref2, 2)}</div>
         </div>
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Time</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${formatWorkoutTime(recording.totalElapsed)}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${formatWorkoutTime(recording.totalElapsed)}</div>
         </div>
-        <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
+        <div class="text-center" style="${RAISED_TILE};padding:12px 8px">
           <div class="text-xs" style="color:var(--c-faint)">Avg Pace</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref2) : '--'}</div>
+          <div class="font-bold" style="color:var(--c-black);font-size:18px;margin-top:2px">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref2) : '--'}</div>
         </div>
       </div>
 
       ${recording.splits.length > 0 ? renderAdherenceSection(summariseAdherence(recording.splits)) : ''}
       ${recording.splits.length > 0 ? renderSplitsSection(recording.splits, unitPref2) : ''}
 
-      <button id="gps-detail-close" class="w-full m-btn-glass m-btn-glass--inset">
+      <button id="gps-detail-close" class="w-full m-btn-glass m-btn-glass--inset" style="margin-top:8px">
         Close
       </button>
     </div>

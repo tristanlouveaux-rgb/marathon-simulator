@@ -6,6 +6,50 @@ New entries are added at the top. When modifying a model, update its entry rathe
 
 ---
 
+## §BR — CTL-gap re-anchor: next week's volume tracks the chronic load actually carried (2026-06-09)
+
+**The problem.** The plan marched forward on schedule regardless of whether the athlete trained. Two levers reacted to *how* sessions were executed (`effortMultiplier` on trailing RPE deviation; ACWR on acute-load spikes) but neither reacted to *not training at all*. A zero-session week records no `effortScore` and is skipped from the trailing average (`getTrailingEffortScore`), so the effort lever stays neutral. VDOT detraining only fires on multi-week *calendar gaps* (`welcome-back.advanceWeekToToday`), and even then the 10-day dead-zone makes a one-week miss dock **zero** VDOT — correctly, since VO2max is preserved across a week off (Mujika & Padilla 2000). The number that *does* react to a missed week is CTL: built from actual logged TSS (`computeWeekTSS`), it decays `exp(-7/42) ≈ 0.847` per fully-idle week (≈ −15%). But CTL fed only readiness/forecast, never the prescription — `planWeekSessions` reads VDOT/ability/phase, not CTL. So a dutiful non-trainer who clicked through each weekly debrief got a plan that ignored their absence and a debrief that said "tracking to plan." (Diagnosis: Tristan, 2026-06-09.)
+
+**The model.** A one-step expected-vs-actual CTL ratio for the just-completed week, seeded from the *same* prior-week chronic load so the ratio isolates that week's adherence and nothing else:
+
+```
+expectedCTL = priorCtl·d + plannedWeekTSS·(1−d)      d = CTL_DECAY = exp(-7/42) ≈ 0.847
+actualCTL   = priorCtl·d + actualWeekTSS ·(1−d)
+ctlRatio    = actualCTL / expectedCTL                 (≤ 1 = behind plan)
+```
+
+`plannedWeekTSS` is the canonical mode-aware planned load (`getPlannedDayTSSContext`, valued type-first via `plannedTssPerMin` — the Load Currency Law path, §BP); illness/holiday-rested sessions are already zeroed from it, so legitimate rest is never scored as a miss. `actualWeekTSS` and `priorCtl` come from the canonical `computeFitnessModel`. Next week's prescribed **duration** is then scaled by `ctlGapMultiplier(ctlRatio) = min(1, ctlRatio)` — reduce-only.
+
+**Why the scaling magnitude is derived, not invented.** The multiplier *is* the ratio: volume scales in direct proportion to the chronic load the athlete actually carries versus what the plan assumed. This is the foundational ACWR / ramp-rate principle — progress load relative to your *current* chronic load, not an aspirational one (Gabbett 2016). Because the shared seed is weighted ~85%, one missed week moves the multiplier by only ~15% of the load shortfall (a fully-missed steady-state week → ratio ≈ 0.847 → −15% volume). The dead-zone intuition falls out of the arithmetic rather than a hand-picked constant. It compounds correctly over consecutive weeks (next week's seed is this week's now-lower actual CTL) and self-limits because `expectedCTL` also decays toward the maintenance load: three consecutive zero weeks reach only ≈ 0.80, not collapse. During a build phase `plannedWeekTSS > priorCtl`, so a miss is penalised harder — also correct.
+
+**No double-counting (the design constraint).** The lever is deliberately **reduce-only and one-sided**, partitioning the four adaptive levers so no two fire for the same reason in the same direction:
+- *vs `effortMultiplier`* — effort measures the *intensity of sessions done* (two-sided), CTL-gap measures *how much was done* (reduce-only). Orthogonal. The partial-week case (1 of 5 done, rated hard) is the only overlap; it is neutralised by clamping the **combined** `effortMult × ctlMult` to `[deloadMultiplier(ability), 1.15]`, so the two levers can never stack past what either alone may do. When `ctlRatio` is absent the application is byte-identical to the effort-only path.
+- *vs ACWR* — opposite triggers (acute load *high* vs chronic *low*) and different target (quality-session count vs duration). After skipping, ATL collapses fast → ACWR reads *safe*, so they essentially never co-fire.
+- *vs VDOT detraining / ≥3-week base downgrade* — the one real overlap (both reduce volume on a long layoff). Guarded: `welcome-back` stamps `Week.detrainApplied` when VDOT loss or the base downgrade fires, and `resolveCtlAdherence` returns invalid for such weeks, ceding to the coarse multi-week path. VDOT detraining (a *pace* axis) is untouched.
+- *vs the existing adherence→VDOT-gain gate* (`events.ts`: missed runs withhold VDOT *increments*) — that is an intensity/pace axis (it changes future paces), CTL-gap is the duration axis. Different axes, no double-count.
+
+Suppressed entirely on deload weeks (already a planned reduction) and floored at `deloadMultiplier(ability)` (0.80–0.90) so a re-anchor never prescribes below a deload — both reuse existing constants, no new number.
+
+**Lifecycle.** Mirrors `scheduledAcwrStatus`: computed once at rollover (`events.next()`), stored on the upcoming week as `Week.ctlRatio`, read back by the on-demand resolver (`generateWeekWorkouts` reads the stored scalar, exactly like `baselineKm`/`archetype`). Recursion-safe — the resolver only *reads* the stored scalar, never recomputes the adherence (which itself resolves planned TSS via the resolver). The debrief preview computes the same value live through the one shared helper so the previewed week matches what ships.
+
+**Transparency.** The debrief headline replaces the misleading "tracking to plan" with a factual, no-judgement line when materially behind (`ratio < 0.97` ≈ under ~80% of last week's planned load): *"{pct}% of last week's planned training completed. Next week scales to your recent load."* (Tristan, 2026-06-09: factual, no judgement; debrief headline only, no per-session annotation.)
+
+**Hardening (2026-06-09, adversarial review — 6 dimensions × refute-each-finding verifiers).** Fixes applied after the initial build:
+- **Expected side uses the UN-reduced baseline plan.** `getPlannedDayTSSContext` resolves the week through `generateWeekWorkouts`, which reads the stored `ctlRatio` — so without care the "expected" denominator would be the *already re-anchored* plan, making a 64%-of-original week read as 80%-of-reduced and the headline % drift. `resolveCtlAdherence` now temporarily clears the week's `ctlRatio` while computing planned TSS (synchronous clear+restore), so the ratio and the displayed % always measure against the real prescription. Next-week *volume* is algebraically identical either way (both converge the plan toward last week's actual); only the stored ratio value and the honesty of the headline % change.
+- **Mode guard.** `next()` is shared across modes, so `resolveCtlAdherence` now returns neutral for `eventType` triathlon/HYROX (cycling reuses 'triathlon') — otherwise it would mix the running combined-CTL model with tri/HYROX planned load and stamp a meaningless ratio.
+- **Taper suppression.** Taper weeks return neutral — re-anchoring a deliberately-low taper (or the race week after it) down further would sabotage race prep. Same spirit as the deload suppression.
+- **Silent-advance guard.** `advanceWeekToToday` (calendar catch-up, never runs `next()`) now stamps `detrainApplied` on *any* silently-advanced landing week, not just detrained ones, so a week skipped without a debrief can't feed a stale re-anchor.
+- **Narrative coherence.** The debrief's effort-change list suppresses its "volume scaled up" line when the CTL-gap pulled the week down, so the headline can't say "behind" and "scaled up" together.
+- **deload × effort is intentionally allowed to compound** (`deloadMult × eMult`, e.g. 0.72). A deload week where recent sessions were rated harder than prescribed signals accumulated fatigue, and a deeper recovery week is correct (RPE autoregulation, Helms 2018). The combined-band clamp scopes only the two *volume-re-anchor* levers (effort + CTL-gap), which can measure the same shortfall; it deliberately does not touch deload. Locked by a regression test.
+
+**Mirror — HYROX and triathlon (2026-06-09).** The re-anchor now covers all three planned modes, each reusing the pure `ctlAdherenceRatio` and the same reduce-only / excused-week / converge-on-completion contract:
+- **HYROX** — single scalar `mtlRatio` on the MTL axis. `resolveMtlAdherence` (`mtl.ts`): planned = `computeWeekMTL`, actual = `computeWeekActualMTL` (matched sessions' prescribed MTL — a completion signal), seed = the completed-only chronic-MTL EMA across prior weeks (weekly units). Stored on `wk.ctlRatio`, applied in `plan_engine.hyrox` by scaling `effectiveHours` (combined-clamped with `hyroxEffortMultiplier`, floor `HYROX_DELOAD_FACTOR`). Converges because `effectiveHours` drives both duration and generated MTL. **No debrief surface** — HYROX has no week-debrief yet (`week-debrief.ts:114` early-return), so the engine re-anchor applies silently until one is built.
+- **Triathlon** — PER DISCIPLINE (`wk.ctlRatioByDiscipline`), because a tri athlete can keep up on the bike while skipping every swim; a combined ratio would wrongly cut the bike. `resolveTriDisciplineAdherence` (`fitness-model.triathlon.ts`): per swim/bike/run, planned = Σ prescribed `aerobic+anaerobic`, actual = Σ of the *matched* ones (completion), seed = prior weeks' completed load. Applied in `applyTriEffortMultipliers` by scaling that discipline's durations, combined-clamped with `triEffortMultiplier`. No baseline-contamination temp-clear is needed (the tri re-anchor scales duration, never the `aerobic/anaerobic` the ratio reads). The tri plan-preview debrief shows a per-discipline behind-plan headline ("Swim 40%, Run 60% of last week's planned sessions completed. Those disciplines scale to match recent load.").
+- **Mode exclusivity.** `events.next()` branches on `eventType` so exactly one resolver fires; the running resolver bails for tri/HYROX and vice-versa. Reduce-only and excused-week guards (injury / silent-advance `detrainApplied` / taper) are identical across all three.
+- **Application timing — instant on rollover (Tristan, 2026-06-09).** Running re-bakes on every render (`resolveWeekWorkouts` is on-demand), so its re-anchor is live. Tri/HYROX *store* `triWorkouts` and otherwise re-bake only on incidental triggers (generator-version bump, CSS/FTP refresh, injury modal, session lever) — **not** on the plain weekly rollover, which means both the re-anchor and the pre-existing per-discipline effort multiplier would have sat dormant until one of those fired. So `events.next()` now calls `rebakeFutureWeeksInPlace` for tri/HYROX after stamping the ratio: it regenerates only the current + future weeks (which carry no matched actuals at rollover, so completions are never clobbered; user-added / holiday sessions are carried over exactly like the launch regen) so the stamp — and the effort multiplier — take effect immediately. A required wiring fix went with it: `applyTriEffortMultipliersToFutureWeeks` reads the per-discipline stamp from the *stored* `state.wks[w-1]`, not the freshly-generated week object (which never carries it). Net effect: tri/HYROX adaptive volume now responds the week after a shortfall, matching running.
+
+**Limitations.** (1) The actual side (running) is built from Signal-A TSS (run-equivalent: cross-training discounted by runSpec) while `plannedWeekTSS` excludes cross-training; for running-only athletes the seam is second-order — it only bites when the athlete logs *unplanned* cross-training, and it sits inside the ~15% (1−CTL_DECAY) term. Kept as a documented limitation rather than refactoring the signal basis in v1. (2) The ratio re-anchors *volume*; it does not by itself shift paces — intensity re-anchoring remains the VDOT/effort path, and the existing adherence→VDOT-gain gate (withholds VDOT increments when runs are missed) is the orthogonal intensity-axis counterpart. (3) HYROX re-anchors silently (no debrief surface yet). (4) Not device-verified — behaviour confirmed by unit tests (`ctl-gap.test.ts` 15 + `ctl-gap-mirror.test.ts` 8), not yet against a live under-training week in any mode.
+
 ## §BQ — Max HR: corroborated-max estimator, one algorithm for all three pipes (2026-06-04)
 
 **The problem.** Three sync pipes estimated max HR with three different statistics, all feeding the same up-only ratchet on `s.maxHR`: the Garmin edge fn used p95 of all session maxes (median below 5 readings), Strava used p95 client-side, Apple Health used a raw `Math.max` of workout peaks. Two live failure modes: (1) the small-n median path once wrote **144 bpm** (median of a few easy sessions — measures training mix, not the ceiling) and the ratchet preserved it; (2) Apple's raw max meant a single optical cadence-lock spike could ratchet in permanently. Real data (Tristan, 2026-06-04): a lone 216 HIIT reading sat 13 bpm above a 201/202/203 cluster — p95 of the same history said 184, so every sync logged a spurious "ignored lower maxHR" warning. p95-of-session-maxes is structurally wrong as a max-HR estimator: most sessions are submaximal, so it sits permanently below true max and drifts with training distribution, not physiology.
@@ -5061,6 +5105,14 @@ Recovery >= 70: 1.00x (normal)
 - Hard floors are conservative; some athletes tolerate high ACWR without injury
 - Without wearable data, the score loses 35% of its information (recovery component)
 
+### Insufficient history (< 3 completed weeks) — updated 2026-06-15
+
+TSB, ACWR, and momentum are derived from accumulated logged load. With fewer than 3 completed weeks they are unreliable: ACWR especially swings wildly off a near-zero or seeded chronic baseline. The model therefore **neutralises the freshness and load-safety sub-scores to 65 and skips the ACWR hard floor** until 3 weeks of history exist.
+
+Recovery (sleep, HRV) and today's strain / leg load are **point-in-time signals that are valid from day one** — a bad night is a bad night regardless of how many weeks of training precede it. These still feed the composite and their floors still apply during the insufficient-history window. Concretely, with no recovery data the score stays at the neutral 65 ("On Track", preserving the prior safe default), but a logged sleep of 25/100 in week 1 now drives the recovery sub-score to ~25 and pulls the composite to ~51 ("Manage Load"), with driving signal "recovery".
+
+This corrects a bug (pre-2026-06-15) where the insufficient-history branch returned a flat 65/On Track and discarded the recovery, strain, and leg-load signals entirely — so a terrible sleep score had zero effect on readiness through the first three weeks of a fresh plan, the exact window in which a new user is most likely to log a check-in. **Defensibility**: the load-history signals are genuinely uninformative early on (this is why the guard exists), but recovery is not load-history-dependent, so suppressing it was a category error rather than a conservative simplification.
+
 ---
 
 ## Recovery Score (sleep + HRV, RHR override)
@@ -5172,6 +5224,23 @@ weights (all proprietary), but the duration-dominant, slight deep bias aligns wi
 scientific literature on sleep and athletic performance.
 
 Audited 2026-04-10: kept at 55/25/20.
+
+**Stage-less sources — "works for all watches" (2026-06-12).** The 55/25/20 formula
+assumes the source reports sleep architecture (deep/REM segments). Apple Watch does,
+but Apple Health is an aggregation layer: a Garmin, Coros, Polar or basic tracker may
+write only a generic `'asleep'` state to HealthKit with no stage breakdown. That yields
+`deepSec = 0` and `remSec = 0`, so `deepScore` and `remScore` both collapse to 0 and the
+score is hard-capped at `durationScore × 0.55 = 55/100` — an 8h healthy night scored as
+mediocre, which then drags Readiness down for every non-Apple-Watch user.
+
+Fix: when no architecture is reported (`sleepDeepSec === 0 && sleepRemSec === 0`), score on
+the only measured signal — duration — i.e. renormalise the 55% duration weight to 100%
+(`score = durationScore`). This introduces **no new constants**; it is the standard
+"don't penalise for unmeasured data, score on available signal" handling. Staged nights
+(any deep OR REM present) keep the full 55/25/20 formula, so a genuinely low-deep night is
+still penalised correctly. Limitation: a stage-less score reflects quantity only, not
+architecture quality — but a duration-true score is strictly more honest than a fixed 55
+cap. Guarded by `sleep-score.test.ts`.
 
 ### Debt accumulation (exponential decay + capped surplus credit)
 ```
@@ -6942,3 +7011,89 @@ folded in alongside `taper_bonus`, then clamped by the existing `max_gain_cap_pc
 **The readiness label stays capacity-based, by decision (Tristan, 2026-06-03).** An injured-but-fresh athlete may now read "On Track" or even "Primed." That is correct, not a gap: injury does not mean "cannot train," it means the trainable menu is shorter (an injured runner can still cycle, lift, train legs in the gym). The Readiness ring measures **recoverable capacity** — how ready the body is to spend training stress; the injury caption is the **separate constraint layer** that scopes *what* that capacity is spent on. Deliberately decoupled. We do NOT add an injury-aware "recover/limited" relabel, because that would conflate "your body is tired" with "this discipline is off the menu" — two orthogonal facts. Tissue-specific contraindication (e.g. a leg session loading the injured area) is the injury-capacity layer's job (`lowerLoad`/protocol bans), not a readiness-score modifier.
 
 **Limitations.** (1) "Running blocked" is binary on run capacity 0; a run capacity of, say, 20% still fires the full floor, which is correct (the athlete can still strike the ground). (2) The score rising when injured relies on the injury caption remaining the dominant, first-read line on the surface to supply the "but you still can't run" context — if a future surface shows the bare number without the caption, the band-label gap above becomes more visible.
+
+## §BS — Conservative seeded starting fitness for no-PB beginners (2026-06-15)
+
+**Problem.** A running plan needs a fitness anchor: `initializeSimulator` returns `{ success:false, error:'No personal bests provided' }` and the review screen disables "Build my plan" when `pbs` is empty. That walls out exactly the users least likely to know a 5K time: true beginners and cross-sport "hybrid" athletes who have never raced. Requiring a test 5K to enter is worse (drop-off at signup, plus an all-out cold 5K is an injury/discouragement risk for a beginner), and asking a beginner to *estimate* a 5K time yields noise (they have no reference).
+
+**Decision.** For experience levels that may legitimately have no time — `beginner`, `total_beginner`, `hybrid` — seed a conservative, DERIVED 5K when no PB is present, instead of blocking. `beginner-fitness.ts` maps level → anchor VDOT, converts to a 5K via Daniels `tv(vdot, 5)`, and `initialization.ts` uses it as the `pbs.k5` anchor while setting `state.startingFitnessEstimated = true`. The review gate (`review.ts`) allows these levels through with an honest note ("No recent times? We'll start you at a careful estimate and dial it in from your first runs.") rather than the blocking hint; `plan-preview-v2.ts` repeats the caveat so the prediction is never presented as measured.
+
+**Constants are sourced, not invented.** The anchor VDOTs are the documented ability-band **floors** already in the codebase (`experience-level-validation.ts`, Daniels 2014 + Pfitzinger 2009 cohort bands; also the band-implied VDOTs in `hyrox-staleness.ts`):
+
+- `beginner` / `total_beginner` → **VDOT 28** (floor of the 28–35 beginner band) ≈ a 32:30 5K.
+- `hybrid` → **VDOT 35** (novice floor) — aerobically fit from other sports, not running-specific.
+
+We anchor at the band **floor** on purpose: a no-data start must **under-prescribe** (low injury risk) rather than over-prescribe. A single seeded `k5` yields the default fatigue exponent (1.06) from `calculateFatigueExponent` — identical to any single-PB user, no NaN.
+
+**Why this is defensible.** A beginner's day-one fitness is unknowable to any method; the honest move is a safe conservative prior that the system corrects from data. The seed is one input to `blendPredictions`, which already incorporates the athlete's recent runs (pace, HR-calibrated VDOT, weekly volume) on every launch via `refreshBlendedFitness` — so the estimate yields to real fitness within the first week or two, consistent with the "benchmarks yield to improvements" rule. The seed is also overwritten outright the moment the user enters a real PB. Verified end-to-end: a no-PB `beginner` builds an 8-week 5K plan starting at VDOT ~27.3 (28 before the no-volume blend penalty), `startingFitnessEstimated` set, no NaN anywhere.
+
+**Limitations.** (1) The blend still weights a stored PB fairly heavily, so a beginner who improves rapidly *without* logging a race may track upward more slowly than reality until enough run signal accrues; the HR-calibrated path mitigates this for watch users. (2) `total_beginner` and `beginner` share the VDOT-28 floor; the UI currently only exposes `beginner` and `hybrid`, so the distinction is latent. (3) This addresses the fitness anchor only — beginner *volume* sizing (runs/week × distance) is a separate lever and is not changed here.
+
+## §BT — Conservative starting volume for beginners (30-min run cap) (2026-06-15)
+
+**Problem.** Starting weekly volume in `initialization.ts` had no fitness/experience awareness. The no-history fallback was `runsPerWeek × 10 km` (and the "proper" `getPlanPrescribedMeanWeeklyKm` is target-based: `sessions × REF_KM_PER_SESSION[5k]=8 × 1.2 ≈ 29`). Both assume an experienced runner, so a true beginner (or no-PB seeded beginner, §BS) opened week 1 at ~30 km across 3 runs ≈ 10 km/run. At a beginner's easy pace (VDOT ~28, ~8:00/km) that is a ~75-minute run — an injury and adherence risk for "running under 6 months".
+
+**Decision.** For the experience levels that may lack a real time — `beginner`, `total_beginner`, `hybrid` (same set as §BS, no-history path only) — cap the STARTING per-run to **30 minutes at the athlete's easy pace**, then let the plan ramp up from there. `cappedBeginnerStartWeeklyKm()` (`beginner-fitness.ts`) computes `runsPerWeek × (30·60 / easyPaceSecPerKm)` and returns it only when it's *lower* than the existing default (it never raises volume); `initialization.ts:525` uses it in place of the flat fallback. Detected-history users are unaffected — the real-volume override (`s.detectedWeeklyKm` when Strava/volume confirmed) still wins downstream.
+
+**Why 30 minutes, and why duration not distance.** 30 minutes continuous is the NHS Couch-to-5K graduation standard and sits within ACSM beginner guidance (20–30 min continuous). Capping by *duration* rather than km is the key design choice: it auto-scales by pace from a single rule. A true beginner (VDOT 28, ~8:00/km) gets ~3.7 km/run → ~11 km/wk at 3 runs; a fit-but-not-running hybrid (VDOT 35, ~6:00/km) gets ~5 km/run → ~15 km/wk — each appropriate to their actual easy pace without separate constants. The plan then ramps from this conservative base toward the target, which is the correct progression for a new runner (start low, build).
+
+**Defensibility / limitations.** (1) The 30-min anchor is a sourced external standard (C25K/ACSM), the only new constant, confirmed with the product owner. (2) This is a *starting* cap; the ramp shape and peak are unchanged, so it shortens the first weeks rather than the whole plan. (3) It deliberately does not implement run/walk intervals — the app prescribes continuous easy running, so a genuine couch-to-zero starter still gets continuous (if short) runs; true run/walk progression is a separate, larger piece. (4) Applies only to the no-detected-history path; a "beginner" who connected Strava showing real higher volume keeps it (they are not actually fragile). Verified end-to-end: a no-PB beginner now opens at 11 km/wk (was 30), VDOT-28 seed and estimate copy intact, no NaN.
+
+## §BU — Sprint / Olympic / T100 promoted to plannable triathlon formats (2026-06-15)
+
+**Problem.** `TriathlonDistance` was `'70.3' | 'ironman'` only. Sprint and Olympic existed as side-effect predictions and past-race benchmark options but could not be trained toward; the PTO T100 (2km / 80km / 18km) was absent entirely. This section records the per-format constants chosen for the three new formats and their defensibility. The cross-mode mirror rule does **not** apply here — this adds distances *within* triathlon mode, not a new mode, so there is no running/HYROX parity obligation.
+
+**Distances (factual).** sprint 750/20/5, olympic 1500/40/10, t100 2000/80/18, vs 70.3 1900/90/21.1 and ironman 3800/180.2/42.2. Note t100's swim (2000m) is *longer* than 70.3's (1900m) while its bike and run are shorter — so t100 is handled per-leg, not as a single interpolation point.
+
+**Bike race intensity (% FTP), `RACE_INTENSITY_BY_DISTANCE`.** sprint 0.88, olympic 0.83, t100 0.76 (70.3 0.78, IM 0.70). Allen & Coggan (2010) power-duration zones + Coyle (1984) fractional-utilization decay: shorter bike legs sustain higher IF. t100 modelled just below 70.3 (same ~2h15 duration band, 80 vs 90 km). **Confidence: medium-high.**
+
+**Bike-to-run fatigue discount, `RUN_FATIGUE_DISCOUNT` (now a table).** sprint 0.02, olympic 0.04, t100 0.05 (70.3 0.05, IM 0.11). Bentley 2007 and Landers 2008 anchor only the 70.3/IM endpoints; the three new values are **extrapolations along that gradient with NO published intermediate-distance data**. **Confidence: LOW — the weakest link in this work.** TRACKING side only (never training load); refine against logged race outcomes. t100 ≈ 70.3 (near-identical bike+run load).
+
+**Periodisation & volume.** PLAN_WEEKS_DEFAULT sprint 12 / olympic 16 / t100 20; PHASE_WEEKS ratios mirror 70.3 (base 0.40 / build 0.30 / peak 0.20 / taper 0.10); HOURS_RANGE sprint 3–12 / olympic 3–15 / t100 4–20; DEFAULT_WEEKLY_PEAK_HOURS by skill band scaled from Friel typical-volume tables. **Confidence: medium** (Friel *Triathlete's Training Bible* per-distance norms).
+
+**Taper.** TAPER_DAYS sprint [4,7] / olympic [5,8] / t100 [7,10]; per-discipline `TRI_TAPER_WEEKS` scaled with swim longest, bike shortest. Mujika 2002/2010 (detraining onset scales with race duration) + Friel 2018. **Confidence: medium.**
+
+**Durability thresholds.** sprint 1.0h ride / 0.5h run; olympic 1.5h / 0.75h; t100 = 70.3 (2.5h / 1.5h). Pfitzinger & Douglas per-distance long-session guidance + Rüst 2012. **Confidence: medium.**
+
+**Run-horizon (VDOT projection).** t100 reuses the 70.3 params verbatim; olympic and sprint reuse 70.3's max_gain/tau but lower the run-frequency bands by 0.5 and 1.0 sessions respectively (floored at 1.0/wk) via `withReducedRunFrequency` — concurrent swim/bike stimulus + a short run leg need fewer run sessions (Friel 2012, Dixon 2015). Keeping 70.3's max_gain/tau for 10k/5k legs is a deliberate simplification (modelling distance-specific Daniels curves for the tri run leg is deferred). **Confidence: medium.**
+
+**Discipline volume split, now format-aware (`DEFAULT_VOLUME_SPLIT_BY_DISTANCE`).** Replaces the old flat `{swim 0.175, bike 0.475, run 0.350}` applied identically to every format. swim share falls with distance (sprint/oly 0.20 → 70.3/t100 0.175 → IM 0.15), bike rises (0.45 → 0.475 → 0.50), run held at 0.35 throughout. Short course is swim/intensity-weighted (swim is a larger fraction of race time, ~18% vs ~10%, and technique/economy gains dominate); long course is bike-volume-and-durability bound. Run capped because it has the highest injury risk per hour (Vleck & Garbutt 1998) and cycling crossover lets run volume stay below standalone (Millet 2002). Sources: race-time proportional analysis + Bentley 2007, Toussaint & Beek 1992, Rüst 2012. **Confidence: medium** (coaching consensus; exact percentages vary by coach). **This changes the Ironman default** from the old flat value — an intentional correction; IM was previously under-biking relative to its race profile. The user-set `triVolumeSplit` override still wins; the distance default only seeds the picker.
+
+**Race-readiness targets.** sprint/olympic entries already existed (forward-compatible placeholders, now active); t100 added at ≈70.3 with slightly higher swim, lower bike/run (maxPenalty 0.10, closureWeeks 9, balanced score weights). Cross-credit (`TRI_DISTANCE_CROSS_CREDIT`) extended with a t100 row/column (t100↔70.3 = 1.0; shorter→longer partial credit otherwise).
+
+**Empirical-data fallback.** The ingested transition-time and course-factor tables cover only 70.3/ironman. Sprint/olympic/t100 resolve to the 70.3 dataset via `resolveEmpiricalDistance` (nearest distance with data); surfaced values should be captioned as estimated from 70.3 data. The split-distribution banner simply skips for formats without a table.
+
+**Prediction-helper generalisation.** Two internal fallback helpers were generalised away from binary 70.3/IM branches: `vdotToRacePaceSecPerKm` now uses canonical Daniels `vt(runKm, vdot)` at the actual run-leg distance (replacing a hardcoded linear half/marathon approximation), and `estimateRunPaceFromSkill` scales a reference IM-distance pace to the leg distance via Riegel's power law (T ∝ d^1.06; Riegel 1981), replacing a flat −15s/km 70.3 offset. Both are deep fallbacks (no PB/VDOT data); the change removes magic numbers and is more defensible than what it replaced.
+
+**Race calendar.** The official PTO T100 2026 calendar was seeded into `triathlons.ts` (`distance: 't100'`). Sprint/Olympic have no curated events (local races are regional and go stale); the wizard offers a manual target-date path for those.
+
+**Guard rail.** `src/constants/tri-distance-completeness.test.ts` asserts every per-format table has an entry for every `TriathlonDistance`, each volume split sums to 1.0, and the monotonic relationships above hold. Adding a sixth format will fail this test (and `tsc`) until the tables are filled.
+
+## §BV — "No training data" is not "detrained": the demonstrated-PB floor (2026-06-15)
+
+**Problem.** Two onboarding cases produced indefensible marathon predictions. A user whose only input was a 2:00:00 marathon PB was predicted **2:24:54** (25 min slower than a proven time). A user with a 20:00 5K and nothing else was predicted **4:02:39**. Both numbers were reproduced exactly from the live code path (`blendPredictions` → `applyLongRunCap` in `initialization.ts`).
+
+**Root cause — an overloaded zero.** The running predictor carries three penalties for insufficient marathon-specific endurance, each individually well-sourced:
+- `marathonSpecificityPenalty` (up to ×1.15 at `weeklyRunKm < 10`) — fractional-utilization decay, Coyle 1984 / Mujika & Padilla 2000.
+- `applyLongRunCap` (up to ×1.05 at `longestRunSec = 0`) — long-run durability shortfall, Pfitzinger 2009 (§BN).
+- `noLongRacePenalty` (×1.01–1.02) — no demonstrated long-race endurance, audit #11.
+
+All three are gated on the *absence of synced training history*. At onboarding a brand-new user always has zero history, so `resolveWeeklyKmSignal` returns `0` and `getLongestRunSec` returns `0`. The penalty code reads those zeros as "the athlete runs zero km / their longest run is zero" — i.e. maximal detraining — when they actually mean "we have not ingested any activity yet". **Absence of evidence was being treated as evidence of detraining.** Stacked multiplicatively, a 2:00 marathon PB (the single most direct, distance-specific data point possible) was turned into 2:24:54.
+
+**Principle.** You may not predict an athlete slower than a time they have demonstrably run at the *exact* target distance unless you hold *positive* evidence they have lost that fitness. "No data" is not such evidence. This is the prediction-side complement to the "Manually-set Benchmarks Yield to Improvements" law: a same-distance PB is a demonstrated performance, and the burden of proof is on the engine to justify any slower number.
+
+**Fix 1 — distinguish no-data from zero-training.** `initialization.ts` passes `undefined` (no signal) rather than `0` for the weekly-volume argument when `weeksCovered === 0` and no manual volume was typed. `marathonSpecificityPenalty` only fires on `weeklyRunKm != null`, so it stays dormant for true no-data users and continues to fire for users whose *real* history shows low volume. The durability cap is unchanged (still applies to short-anchor extrapolations such as the §BN 5K→half case, which has no same-distance PB to protect).
+
+**Fix 2 — the demonstrated-PB floor (`demonstratedPBFloor`).** A pure, idempotent function: a prediction is floored at the PB for the exact target distance (within 1%) unless one of two positive detraining signals holds:
+1. A real weekly-volume signal below the maintenance floor (`< 30 km/wk` — the same cutoff above which `marathonSpecificityPenalty` treats fractional-utilization decay as negligible, Coyle 1984).
+2. A recent run/race that itself projects *slower* than the PB at the target distance (`predictFromRecent > exactPb`) — direct demonstration of reduced current fitness.
+
+Applied inside `blendPredictions` (so all callers benefit) and again after the externally-applied durability cap in `initialization.ts` (idempotent, so it catches the cap's multiplicative overshoot without double-flooring). The recent-run gate is what keeps a *returning* runner honest: a 1:28 half PB contradicted by a recent 24:00 5K is correctly predicted ≥1:30, because the recent race is real evidence the PB is stale.
+
+**Results.** 2:00 marathon-only → **2:00:00**. 20:00 5K-only marathon → **~3:31** (Riegel ceiling + ×1.01 no-long-race; the phantom ×1.15 and ×1.05 no longer fire). Returning-runner profile unchanged (≥1:30). §BN thin-data 5K→half cap preserved.
+
+**Confidence: high** for the principle and Fix 1 (removes a category error). **Medium** for the 30 km/wk and recent-run thresholds in Fix 2 — they reuse existing calibrated cutoffs rather than introducing new constants.
+
+**Known limitation.** A genuinely stale PB with *no* volume signal and *no* recent run is still trusted as the floor (we predict the proven time, optimistically). This is the deliberate trade: absent any contradicting data, trusting a demonstrated performance is more defensible than inventing a slowdown. The first backfill refresh corrects it the moment real history lands.
+
+**Guard rail.** `predictions.test.ts` → "no-data does not trigger detraining penalties" (3 cases: same-distance-PB floor, real-low-volume still penalised, 5K-only not over-penalised). `initialization.volume.test.ts` and `initialization.durability.test.ts` updated to the corrected behaviour.

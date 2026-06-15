@@ -15,7 +15,7 @@ import { applyHyroxPrevTimeUpdate } from '@/state/hyrox-prev-time-update';
 import { getPastHyroxEvents, getHyroxEventById } from '@/data/hyrox-events';
 import { STATION_DISPLAY, STATION_MIN_SEC, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
-import { parseHyroxResultsText } from '@/ui/wizard/steps/hyrox-setup';
+import { parseHyroxResultsText } from '@/ui/wizard/steps/hyrox-results-parse';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -118,9 +118,11 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
           <span id="lpt-splits-chev" style="font-size:12px;color:var(--c-faint);transition:transform 0.2s">▼</span>
         </div>
         <div id="lpt-splits-body" style="display:none;margin-top:12px">
-          <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px;line-height:1.5">Paste your results text from hyrox.com (select all → copy → paste) or enter manually below.</div>
-          <textarea id="lpt-paste" rows="3" placeholder="Paste hyrox.com results here…" style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:10px;border:1px solid rgba(0,0,0,0.10);background:rgba(255,255,255,0.95);font-size:12px;line-height:1.4;font-family:inherit;outline:none;resize:vertical;margin-bottom:8px"></textarea>
-          <button id="lpt-parse-btn" style="width:100%;padding:9px;border:1px solid rgba(0,0,0,0.12);border-radius:10px;background:transparent;font-size:13px;font-weight:500;cursor:pointer;color:var(--c-black);margin-bottom:12px">Parse splits from text</button>
+          <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px;line-height:1.5">Open hyresult.com, search your name, open your result, and go to the Timings tab. Copy as much of the splits as you can. A rough selection is fine. Tap "Paste from clipboard", or paste manually below.</div>
+          <a id="lpt-results-open" href="https://hyresult.com/" target="_blank" rel="noopener" style="display:block;margin:0 0 8px;padding:10px 12px;border-radius:10px;background:transparent;border:1px solid var(--c-border);color:var(--c-black);font-size:13px;font-weight:500;text-align:center;text-decoration:none">Search hyresult.com →</a>
+          <button id="lpt-paste-clip-btn" class="m-btn-secondary" style="width:100%;padding:10px 12px;font-size:13px;margin-bottom:8px">Paste from clipboard</button>
+          <textarea id="lpt-paste" rows="3" placeholder="…or paste results here manually" style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:10px;border:1px solid rgba(0,0,0,0.10);background:rgba(255,255,255,0.95);font-size:12px;line-height:1.4;font-family:inherit;outline:none;resize:vertical;margin-bottom:8px"></textarea>
+          <button id="lpt-parse-btn" class="m-btn-secondary" style="width:100%;padding:9px;font-size:13px;margin-bottom:12px">Parse splits from text</button>
           <div id="lpt-parse-status" style="font-size:11px;color:var(--c-faint);margin-bottom:10px;display:none"></div>
 
           ${HYROX_STATION_ORDER.map(st => {
@@ -136,8 +138,8 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       </div>
 
       <div style="display:flex;gap:10px">
-        <button id="lpt-cancel" style="flex:1;padding:11px;border-radius:10px;border:1px solid rgba(0,0,0,0.10);background:transparent;font-size:13px;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="lpt-save" style="flex:1;padding:11px;border-radius:10px;border:none;background:#0F172A;color:#fff;font-size:13px;font-weight:500;cursor:pointer;opacity:0.5" disabled>Save</button>
+        <button id="lpt-cancel" class="m-btn-secondary" style="flex:1;padding:11px;font-size:13px">Cancel</button>
+        <button id="lpt-save" class="m-btn-primary" style="flex:1;padding:11px;font-size:13px;opacity:0.5" disabled>Save</button>
       </div>
     </div>
   `;
@@ -214,6 +216,13 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
 
   // Manual split inputs
   overlay.querySelectorAll<HTMLInputElement>('.lpt-split-input').forEach(input => {
+    // Focusing a flagged field counts as reviewing it: drop the amber border.
+    input.addEventListener('focus', () => {
+      if (input.dataset.lowConfidence) {
+        input.style.borderColor = 'rgba(0,0,0,0.10)';
+        delete input.dataset.lowConfidence;
+      }
+    });
     input.addEventListener('change', () => {
       const station = input.getAttribute('data-station') as HyroxStation;
       const raw = input.value.trim();
@@ -238,22 +247,35 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   });
 
   // Paste parser
-  overlay.querySelector('#lpt-parse-btn')?.addEventListener('click', () => {
-    const textarea = overlay.querySelector('#lpt-paste') as HTMLTextAreaElement;
+  // Shared forgiving parse — a rough or partial copy is enough; unmatched
+  // stations just stay blank for manual entry.
+  const applyParsed = (rawText: string): void => {
     const status = overlay.querySelector('#lpt-parse-status') as HTMLDivElement;
-    const result = parseHyroxResultsText(textarea.value);
+    const result = parseHyroxResultsText(rawText);
     const stationCount = Object.keys(result.stations).length;
     if (stationCount === 0 && result.totalRaceSec == null) {
       status.style.display = 'block';
-      status.textContent = 'No times found. Make sure you copied all the text from the result page.';
+      status.textContent = rawText.trim()
+        ? "Couldn't find any times in that text. A rough selection of the splits is enough, or enter them by hand below."
+        : 'Nothing to read yet. Copy your result page, then paste or tap "Paste from clipboard".';
       return;
     }
+    // Fields from the looser fallback scan get an amber "check this" border;
+    // it clears when the user focuses the field (see focus handler below).
+    let lowConfidenceCount = 0;
     overlay.querySelectorAll<HTMLInputElement>('.lpt-split-input').forEach(input => {
       const station = input.getAttribute('data-station') as HyroxStation;
       const sec = (result.stations as Record<string, number>)[station];
-      if (sec != null) {
-        input.value = fmtMmSs(sec);
-        splits[station] = sec;
+      if (sec == null) return;
+      input.value = fmtMmSs(sec);
+      splits[station] = sec;
+      if (result.stationSource[station] === 'fallback') {
+        input.style.borderColor = 'var(--c-caution)';
+        input.dataset.lowConfidence = '1';
+        lowConfidenceCount++;
+      } else {
+        input.style.borderColor = 'rgba(0,0,0,0.10)';
+        delete input.dataset.lowConfidence;
       }
     });
     if (result.totalRaceSec != null) {
@@ -265,7 +287,29 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     const parts: string[] = [];
     if (stationCount > 0) parts.push(`${stationCount} of 8 station times`);
     if (result.totalRaceSec != null) parts.push(`finish ${fmtMmSs(result.totalRaceSec)}`);
-    status.textContent = `Found: ${parts.join(', ')}.`;
+    const missing = stationCount > 0 && stationCount < 8 ? ` Add the other ${8 - stationCount} below.` : '';
+    const review = lowConfidenceCount > 0
+      ? ` ${lowConfidenceCount} ${lowConfidenceCount === 1 ? 'time is' : 'times are'} highlighted as a looser match. Check ${lowConfidenceCount === 1 ? 'it' : 'those'} and tap to edit.`
+      : ' Tap any time below to edit.';
+    status.textContent = `Found ${parts.join(', ')}.${missing}${review}`;
+  };
+
+  const lptPaste = overlay.querySelector('#lpt-paste') as HTMLTextAreaElement;
+  overlay.querySelector('#lpt-parse-btn')?.addEventListener('click', () => applyParsed(lptPaste.value));
+  lptPaste?.addEventListener('paste', () => { setTimeout(() => applyParsed(lptPaste.value), 0); });
+  overlay.querySelector('#lpt-paste-clip-btn')?.addEventListener('click', async () => {
+    const status = overlay.querySelector('#lpt-parse-status') as HTMLDivElement;
+    try {
+      const text = await navigator.clipboard?.readText();
+      if (!text || !text.trim()) {
+        status.style.display = 'block'; status.textContent = 'Clipboard is empty. Copy your result page first, then tap this again.';
+        return;
+      }
+      lptPaste.value = text;
+      applyParsed(text);
+    } catch {
+      status.style.display = 'block'; status.textContent = "Couldn't read the clipboard. Paste into the box below instead.";
+    }
   });
 
   // Cancel / overlay click

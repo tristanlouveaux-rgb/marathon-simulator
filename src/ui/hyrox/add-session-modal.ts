@@ -175,8 +175,8 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
 
         ${overCap ? `<div style="padding:0 16px 6px;font-size:11px;color:var(--c-muted)">This session would push you over your weekly MTL cap. Proceed only if you have headroom from prior recovery.</div>` : ''}
         <div style="display:flex;gap:8px;padding:12px 16px 18px;border-top:1px solid rgba(0,0,0,0.06)">
-          <button id="hx-add-cancel" style="flex:1;padding:11px;border-radius:12px;border:1px solid rgba(0,0,0,0.10);background:#fff;color:var(--c-black);font-size:14px;cursor:pointer">Cancel</button>
-          <button id="hx-add-confirm" style="flex:2;padding:11px;border-radius:12px;border:none;background:var(--c-black);color:#FDFCF7;font-size:14px;font-weight:500;cursor:pointer">Add session</button>
+          <button id="hx-add-cancel" class="m-btn-secondary" style="flex:1;padding:11px;font-size:14px">Cancel</button>
+          <button id="hx-add-confirm" class="m-btn-primary" style="flex:2;padding:11px;font-size:14px">Add session</button>
         </div>
       </div>
     `;

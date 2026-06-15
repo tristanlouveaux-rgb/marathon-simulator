@@ -17,6 +17,7 @@
  */
 
 import type { AbilityBand } from '@/types';
+import type { TriathlonDistance } from '@/types/triathlon';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Swim. CSS adaptation
@@ -315,6 +316,44 @@ export const RUN_HORIZON_PARAMS_IM: DisciplineHorizonParams = {
 };
 
 /**
+ * Derive a shorter-course run-horizon variant from the 70.3 params by lowering
+ * the run-frequency bands (concurrent swim/bike stimulus + a short run leg need
+ * fewer run sessions; Friel 2012, Dixon 2015). max_gain_pct/tau are kept from
+ * 70.3 as a simplification — modelling 5k/10k-specific Daniels curves for the
+ * tri run leg is deferred (confidence: medium). Sessions floored at 1.0/wk.
+ */
+function withReducedRunFrequency(base: DisciplineHorizonParams, delta: number): DisciplineHorizonParams {
+  const shift = (rec: Record<AbilityBand, number>): Record<AbilityBand, number> => {
+    const out = {} as Record<AbilityBand, number>;
+    for (const band of Object.keys(rec) as AbilityBand[]) out[band] = Math.max(1.0, rec[band] - delta);
+    return out;
+  };
+  return {
+    ...base,
+    ref_sessions: shift(base.ref_sessions),
+    min_sessions: shift(base.min_sessions),
+  };
+}
+
+/** Olympic run leg (10km): one fewer half-step of weekly run frequency than 70.3. */
+export const RUN_HORIZON_PARAMS_OLYMPIC: DisciplineHorizonParams = withReducedRunFrequency(RUN_HORIZON_PARAMS_703, 0.5);
+
+/** Sprint run leg (5km): a full step below 70.3 run frequency. */
+export const RUN_HORIZON_PARAMS_SPRINT: DisciplineHorizonParams = withReducedRunFrequency(RUN_HORIZON_PARAMS_703, 1.0);
+
+/**
+ * Run-horizon params keyed by race format. t100 reuses 70.3 verbatim (≈ same
+ * run demand: 18km off an 80km bike). Index this instead of branching on distance.
+ */
+export const RUN_HORIZON_PARAMS_BY_DISTANCE: Record<TriathlonDistance, DisciplineHorizonParams> = {
+  sprint:  RUN_HORIZON_PARAMS_SPRINT,
+  olympic: RUN_HORIZON_PARAMS_OLYMPIC,
+  t100:    RUN_HORIZON_PARAMS_703,
+  '70.3':  RUN_HORIZON_PARAMS_703,
+  ironman: RUN_HORIZON_PARAMS_IM,
+};
+
+/**
  * Logistic steepness for the session-factor curve. Softened from 1.0 → 0.7
  * (recalibration 2026-05-06) in lockstep with running's `TRAINING_HORIZON_PARAMS.
  * k_sessions`. The k=1.0 curve over-penalised plans below the ref_sessions
@@ -330,10 +369,10 @@ export const TRI_K_SESSIONS = 0.7;
  * Bike taper is shortest, swim longest (technique consolidation needs more
  * time per Mujika 2002).
  */
-export const TRI_TAPER_WEEKS: Record<'swim' | 'bike' | 'run', { '70.3': number; ironman: number }> = {
-  swim: { '70.3': 1.5, ironman: 2.5 },
-  bike: { '70.3': 1.0, ironman: 2.0 },
-  run:  { '70.3': 1.5, ironman: 3.0 },
+export const TRI_TAPER_WEEKS: Record<'swim' | 'bike' | 'run', Record<TriathlonDistance, number>> = {
+  swim: { sprint: 1.0, olympic: 1.0,  t100: 1.5, '70.3': 1.5, ironman: 2.5 },
+  bike: { sprint: 0.5, olympic: 0.75, t100: 1.0, '70.3': 1.0, ironman: 2.0 },
+  run:  { sprint: 1.0, olympic: 1.0,  t100: 1.5, '70.3': 1.5, ironman: 3.0 },
 };
 
 /**

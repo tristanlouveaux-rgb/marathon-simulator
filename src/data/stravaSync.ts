@@ -18,6 +18,9 @@ import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
+import { NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
+import { isNativeiOS } from './appleHealthSync';
+import { NATIVE_OAUTH_RETURN_URL, runNativeOAuth } from './oauth-native';
 
 /**
  * Derive athlete tier from weekly-scale CTL baseline plus a performance floor.
@@ -71,14 +74,28 @@ export function deriveAthleteTier(ctlBaseline: number, perf: AthleteTierInputs =
  * if the edge function returns no URL so callers can surface a retry message.
  */
 export async function startStravaConnect(): Promise<void> {
+  // Native iOS (flag-gated): open OAuth in an in-app Safari view and return via
+  // the mosaic:// deep link. Pass the deep link as appOrigin so the callback
+  // redirects there (the edge function's pickRedirectTarget must allowlist it).
+  const native = NATIVE_OAUTH_ENABLED && isNativeiOS();
   const data = await callEdgeFunction<{ url?: string }>('strava-auth-start', {
-    appOrigin: window.location.origin,
+    appOrigin: native ? NATIVE_OAUTH_RETURN_URL : window.location.origin,
   });
-  if (data?.url) {
-    window.location.href = data.url;
+  if (!data?.url) throw new Error('strava-auth-start returned no url');
+  if (native) {
+    // ASWebAuthenticationSession returns the mosaic://oauth?... callback URL
+    // directly. Re-enter the app with that query string so the existing,
+    // tested main.ts `?strava=connected` return handler runs — the same path
+    // the web full-page redirect uses. If cancelled/missed, the self-heal
+    // (recoverPendingStravaOAuth) still completes it on the next render.
+    const params = await runNativeOAuth(data.url);
+    if (params && params.get('strava') === 'connected') {
+      const qs = params.toString();
+      window.location.href = window.location.pathname + (qs ? `?${qs}` : '');
+    }
     return;
   }
-  throw new Error('strava-auth-start returned no url');
+  window.location.href = data.url;
 }
 
 /**

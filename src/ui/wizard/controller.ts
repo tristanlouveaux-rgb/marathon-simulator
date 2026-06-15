@@ -71,7 +71,7 @@ export function initWizard(): void {
   // removed during cleanup, e.g. 'runner-type' after the merge into review),
   // bump the user to a sensible re-entry point. Preserves name/PBs.
   const current = getState().onboarding;
-  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup' && current.currentStep !== 'tri-past-race' && current.currentStep !== 'tri-workout-preview' && current.currentStep !== 'tri-plan-forecast' && current.currentStep !== 'cycling-setup' && current.currentStep !== 'hyrox-setup' && current.currentStep !== 'hyrox-workout-preview' && current.currentStep !== 'workout-preview' && current.currentStep !== 'about-you') {
+  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup' && current.currentStep !== 'tri-past-race' && current.currentStep !== 'tri-workout-preview' && current.currentStep !== 'tri-plan-forecast' && current.currentStep !== 'cycling-setup' && current.currentStep !== 'hyrox-setup' && current.currentStep !== 'hyrox-workout-preview' && current.currentStep !== 'workout-preview' && current.currentStep !== 'coach-contract' && current.currentStep !== 'about-you') {
     updateState({
       onboarding: { ...current, currentStep: current.name ? 'goals' : 'welcome' },
     });
@@ -169,8 +169,9 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'tri-plan-forecast') {
-      completeOnboarding();
-      goToStep('main-view');
+      // The plan + forecast now exist. Show the coach contract (how the
+      // adaptive plan behaves) as the final beat before the app.
+      goToStep('coach-contract');
       return;
     }
   }
@@ -211,8 +212,9 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'initializing') {
-      completeOnboarding();
-      goToStep('main-view');
+      // HYROX has no in-wizard forecast reveal, so the coach contract is the
+      // post-plan beat. initializing → coach-contract → main-view.
+      goToStep('coach-contract');
       return;
     }
   }
@@ -312,6 +314,20 @@ export function nextStep(): void {
   }
   if (s.onboarding.currentStep === 'commute') {
     goToStep('review');
+    return;
+  }
+
+  // Branch: coach-contract forward. Running has a post-plan session demo next
+  // (workout-preview, which completes onboarding); tri / HYROX have no further
+  // reveal, so the contract is the final beat → complete and enter the app.
+  if (s.onboarding.currentStep === 'coach-contract') {
+    const isRunning = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
+    if (isRunning) {
+      goToStep('workout-preview');
+    } else {
+      completeOnboarding();
+      goToStep('main-view');
+    }
     return;
   }
 
@@ -417,11 +433,26 @@ export function previousStep(): void {
     return;
   }
 
+  // Branch: coach-contract back → the step that revealed the plan. Mode-specific:
+  // running came from the plan reveal, tri from its forecast, HYROX from commute
+  // (initializing is silent and skipped on back, so commute is the real prior step).
+  if (s.onboarding.currentStep === 'coach-contract') {
+    if (s.onboarding.trainingMode === 'triathlon') {
+      goToStep('tri-plan-forecast');
+    } else if (s.onboarding.trainingMode === 'hyrox') {
+      goToStep('commute');
+    } else {
+      goToStep('plan-preview-v2');
+    }
+    return;
+  }
+
   // Branch: workout-preview back. Cycling's is pre-plan (→ cycling-setup). Running's
-  // is now the post-plan demonstration, so back returns to the plan reveal.
+  // is the post-plan demonstration, so back returns to the coach contract (which
+  // sits between the plan reveal and the session library).
   if (s.onboarding.currentStep === 'workout-preview') {
     const isRunning = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
-    goToStep(isRunning ? 'plan-preview-v2' : 'cycling-setup');
+    goToStep(isRunning ? 'coach-contract' : 'cycling-setup');
     return;
   }
 
@@ -434,7 +465,11 @@ export function previousStep(): void {
     } else if (s.onboarding.trainingMode === 'hyrox') {
       goToStep('hyrox-workout-preview');
     } else if (s.onboarding.trackOnly) {
-      goToStep('race-target');
+      // On-demand (track-only) has no race, so race-target auto-skips itself
+      // forward (race-target.ts:66). Landing Back on it would bounce straight
+      // back to commute — the user would be stuck. Go to the real previous
+      // visible step instead: manual-entry if Strava was skipped, else connect-data.
+      goToStep(s.onboarding.skippedStrava ? 'manual-entry' : 'connect-data');
     } else {
       goToStep('workout-preview');
     }
@@ -475,10 +510,13 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: race-target back → goals (the immediately-preceding step in the new
-  // linear order).
+  // Branch: race-target back → the data step that precedes it, NOT goals. The
+  // running/fitness forward path is always goals → connect-data → race-target
+  // (about-you is skipped for these modes), so the real previous visible step is
+  // manual-entry if Strava was skipped, else connect-data. Jumping straight to
+  // goals would silently skip the connect/PB screen on the way back.
   if (s.onboarding.currentStep === 'race-target') {
-    goToStep('goals');
+    goToStep(s.onboarding.skippedStrava ? 'manual-entry' : 'connect-data');
     return;
   }
 

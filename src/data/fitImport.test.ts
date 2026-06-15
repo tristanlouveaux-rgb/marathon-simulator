@@ -10,15 +10,28 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { gzipSync, strToU8 } from 'fflate';
 import {
   mapFitSport,
   parseGpx,
   parseTcx,
+  parseActivityFileToRow,
   streamsToActivityRow,
   toISO,
   type StreamRecord,
   type ActivitySummary,
 } from './fitImport';
+
+function sampleGpx(): string {
+  const t0 = Date.UTC(2026, 5, 1, 7, 0, 0);
+  const pt = (i: number, hr: number) =>
+    `<trkpt lat="51.50${i}" lon="-0.10${i}"><time>${new Date(t0 + i * 30000).toISOString()}</time>` +
+    `<extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>${hr}</gpxtpx:hr>` +
+    `</gpxtpx:TrackPointExtension></extensions></trkpt>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="test"><metadata><time>2026-06-01T07:00:00Z</time></metadata>
+<trk><type>running</type><trkseg>${pt(1, 140)}${pt(2, 150)}${pt(3, 158)}</trkseg></trk></gpx>`;
+}
 
 // ---------------------------------------------------------------------------
 // mapFitSport
@@ -407,5 +420,36 @@ describe('toISO — fit-file-parser timestamp coercion', () => {
     const iso = toISO(new Date('2026-05-19T07:00:00.000Z'));
     expect(() => iso.replace(/[^0-9T]/g, '')).not.toThrow();
     expect(iso.replace(/[^0-9T]/g, '').slice(0, 15)).toBe('20260519T070000');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseActivityFileToRow — gzip handling (the per-activity "Add detail from
+// Strava" path). Strava "Export Original" for a Garmin run commonly returns a
+// gzipped file; before the fix the single-file parser threw on it.
+// ---------------------------------------------------------------------------
+
+describe('parseActivityFileToRow gzip handling', () => {
+  it('parses a plain .gpx', async () => {
+    const file = new File([sampleGpx()], 'run.gpx', { type: 'application/gpx+xml' });
+    const { row } = await parseActivityFileToRow(file);
+    expect(row.activity_type).toBe('RUNNING');
+    expect(row.duration_sec).toBeGreaterThan(0);
+  });
+
+  it('transparently gunzips a .gpx.gz (named)', async () => {
+    const gz = gzipSync(strToU8(sampleGpx()));
+    const file = new File([gz], 'run.gpx.gz', { type: 'application/gzip' });
+    const { row } = await parseActivityFileToRow(file);
+    expect(row.activity_type).toBe('RUNNING');
+    expect(row.duration_sec).toBeGreaterThan(0);
+  });
+
+  it('gunzips by magic number even when the picker drops the .gz suffix', async () => {
+    // iOS sometimes hands the gzipped bytes back under a bare name.
+    const gz = gzipSync(strToU8(sampleGpx()));
+    const file = new File([gz], 'run.gpx', { type: '' });
+    const { row } = await parseActivityFileToRow(file);
+    expect(row.activity_type).toBe('RUNNING');
   });
 });

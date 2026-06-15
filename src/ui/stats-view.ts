@@ -16,6 +16,7 @@ import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { plannedWeekKm } from '@/calculations/plan-shape';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { blendPredictions } from '@/calculations/predictions';
@@ -30,7 +31,7 @@ import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
 import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot } from '@/calculations/physiological-vdot';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
 import { gp } from '@/calculations/paces';
 import { buildStrengthProgressCard, openStrengthProgressDetail } from './strength-progress-view';
@@ -163,37 +164,6 @@ function avg(arr: number[]): number {
 
 // ---------------------------------------------------------------------------
 // Plan workout helpers
-
-function parseDistanceKm(d: string): number {
-  if (!d) return 0;
-  if (/^\d+min\s/i.test(d) && !d.includes('km')) return 0;
-  const simple = d.match(/^(\d+(?:\.\d+)?)\s*km/i);
-  if (simple) return parseFloat(simple[1]);
-  const intKm = d.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*km/i);
-  if (intKm) return parseInt(intKm[1]) * parseFloat(intKm[2]);
-  const intM = d.match(/(\d+)\s*x\s*(\d+)\s*m\b/i);
-  if (intM) return parseInt(intM[1]) * parseInt(intM[2]) / 1000;
-  return 0;
-}
-
-/** Sum planned running km for a future week using actual generated workouts. */
-function plannedWeekKm(s: SimulatorState, wkIdx: number): number {
-  const wk = s.wks?.[wkIdx];
-  if (!wk) return 0;
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities, s.onboarding?.experienceLevel,
-    undefined, s.pac?.e, wkIdx + 1, s.tw, s.v, s.gs,
-    undefined, undefined, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
-  let km = 0;
-  for (const w of workouts) {
-    if (w.t === 'cross' || w.t === 'strength' || w.t === 'rest' || w.t === 'gym') continue;
-    km += parseDistanceKm(w.d);
-  }
-  return km;
-}
 
 /** Sum planned Signal B TSS for a future week using actual generated workouts. */
 function plannedWeekTSS(s: SimulatorState, wkIdx: number): number {
@@ -637,15 +607,18 @@ function buildCompletedPlansCard(s: SimulatorState): string {
 }
 
 /** Staggered float-in used by the stats hero + cards. Mirrors the triathlon
- *  stats page (`triathlon/stats-view.ts`). */
-const STATS_HERO_STYLE = `
+ *  stats page (`triathlon/stats-view.ts`). Entrance plays on the first Stats
+ *  visit per session only; revisits render settled (instant tab switches). */
+function statsHeroStyle(animate: boolean): string {
+  return `
   <style>
     @keyframes statsFloatUp {
-      from { opacity:0; transform:translateY(16px) scale(0.97); }
-      to   { opacity:1; transform:translateY(0) scale(1); }
+      from { opacity:0; }
+      to   { opacity:1; }
     }
-    .stats-sf { opacity:0; animation:statsFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+    .stats-sf { ${animate ? 'opacity:0; animation:statsFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
   </style>`;
+}
 
 /** Centered "Stats" hero: account button on its own row, large title, optional
  *  contextual subtitle. Copied from the triathlon stats hero so all modes share
@@ -828,12 +801,14 @@ function buildStatsSummary(s: SimulatorState): string {
     ? (s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`)
     : '';
 
+  const animate = shouldPlayEntrance('stats');
+
   if (s.trackOnly) {
     return `
-      ${STATS_HERO_STYLE}
+      ${statsHeroStyle(animate)}
       <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
         <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-          ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: true })}
+          ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: animate, entrance: animate ? 'small' : 'none' })}
         </div>
         ${buildSunGlint('low')}
         <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
@@ -850,10 +825,10 @@ function buildStatsSummary(s: SimulatorState): string {
   }
 
   return `
-    ${STATS_HERO_STYLE}
+    ${statsHeroStyle(animate)}
     <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: true })}
+        ${buildRingBackground('sts', { variant: 'centered', palette: 'mint', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">

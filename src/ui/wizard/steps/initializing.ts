@@ -3,7 +3,7 @@ import { MILESTONE_THRESHOLDS, MILESTONE_LABELS } from '@/types/onboarding';
 import { initializeSimulator } from '@/state/initialization';
 import { cv } from '@/calculations/vdot';
 import type { PBs } from '@/types/training';
-import { nextStep, updateOnboarding } from '../controller';
+import { nextStep, previousStep, updateOnboarding } from '../controller';
 import { getState } from '@/state/store';
 import { renderProgressIndicator } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
@@ -260,6 +260,20 @@ function showError(message: string): void {
   const s = document.getElementById('init-status');
   if (t) { t.textContent = 'Initialization failed'; t.style.color = 'var(--c-warn)'; }
   if (s) { s.textContent = message; s.style.color = 'var(--c-warn)'; }
+
+  // Recovery path: plan generation failing must NOT strand the user on this
+  // screen with no way forward. Offer a bordered "Go back" pill that returns to
+  // the previous step so they can adjust inputs (e.g. add a PB) and retry.
+  if (s && !document.getElementById('init-recover-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'init-recover-btn';
+    btn.textContent = 'Go back';
+    btn.style.cssText =
+      'margin-top:18px;padding:10px 20px;border:1px solid var(--c-border);border-radius:100px;' +
+      'background:transparent;color:var(--c-black);font-size:14px;font-weight:500;cursor:pointer';
+    btn.addEventListener('click', () => previousStep());
+    s.insertAdjacentElement('afterend', btn);
+  }
 }
 
 function delay(ms: number): Promise<void> {

@@ -4,11 +4,12 @@ import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState } from '@/state/store';
 import {
-  DEFAULT_VOLUME_SPLIT,
+  DEFAULT_VOLUME_SPLIT_BY_DISTANCE,
   DEFAULT_WEEKLY_PEAK_HOURS,
   PLAN_WEEKS_DEFAULT,
   RACE_LEG_DISTANCES,
   HOURS_RANGE,
+  getTriDistanceLabel,
 } from '@/constants/triathlon-constants';
 import { getTriathlonsByDistance, getTriathlonById } from '@/data/triathlons';
 import { formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
@@ -38,7 +39,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   const distance: TriathlonDistance = state.triDistance ?? '70.3';
   const defaultHours = DEFAULT_WEEKLY_PEAK_HOURS[distance][3];
   const hoursPerWeek = state.triTimeAvailableHoursPerWeek ?? defaultHours;
-  const split: TriVolumeSplit = state.triVolumeSplit ?? { ...DEFAULT_VOLUME_SPLIT };
+  const split: TriVolumeSplit = state.triVolumeSplit ?? { ...DEFAULT_VOLUME_SPLIT_BY_DISTANCE[distance] };
   const raceDate = state.customRaceDate ?? '';
   const gymSessions = state.gymSessionsPerWeek ?? 0;
   const hoursRange = HOURS_RANGE[distance];
@@ -113,6 +114,18 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
           <div class="tri-card t-rise" style="animation-delay:0.1s">
             <div class="tri-label">Race distance</div>
             <div class="tri-pill-row">
+              <button class="tri-pill ${distance === 'sprint' ? 'active' : ''}" data-distance="sprint">
+                Sprint
+                <span class="tri-pill-sub">0.75 km / 20 km / 5 km</span>
+              </button>
+              <button class="tri-pill ${distance === 'olympic' ? 'active' : ''}" data-distance="olympic">
+                Olympic
+                <span class="tri-pill-sub">1.5 km / 40 km / 10 km</span>
+              </button>
+              <button class="tri-pill ${distance === 't100' ? 'active' : ''}" data-distance="t100">
+                T100
+                <span class="tri-pill-sub">2 km / 80 km / 18 km</span>
+              </button>
               <button class="tri-pill ${distance === '70.3' ? 'active' : ''}" data-distance="70.3">
                 70.3 (Half)
                 <span class="tri-pill-sub">1.9 km / 90 km / 21.1 km</span>
@@ -216,7 +229,7 @@ function renderRacePicker(state: OnboardingState, distance: TriathlonDistance): 
   const usingCustomDate = !selectedId && !!state.customRaceDate;
   const showCustom = usingCustomDate || races.length === 0;
 
-  const headingLabel = distance === 'ironman' ? 'Pick your Ironman' : 'Pick your 70.3';
+  const headingLabel = `Pick your ${getTriDistanceLabel(distance)}`;
 
   if (showCustom) {
     return `
@@ -385,7 +398,7 @@ function wireEventHandlers(): void {
     // on slider change, but if the user never touched them, persist defaults).
     const current = getCurrentOnboarding();
     const finalPatch: Partial<OnboardingState> = {};
-    if (!current.triVolumeSplit) finalPatch.triVolumeSplit = { ...DEFAULT_VOLUME_SPLIT };
+    if (!current.triVolumeSplit) finalPatch.triVolumeSplit = { ...DEFAULT_VOLUME_SPLIT_BY_DISTANCE[current.triDistance ?? '70.3'] };
     if (!current.triSkillRating) finalPatch.triSkillRating = { swim: 3, bike: 3, run: 3 };
     if (!current.triTimeAvailableHoursPerWeek) {
       const d = current.triDistance ?? '70.3';
@@ -568,7 +581,7 @@ function onSplitHandleKeyDown(ev: KeyboardEvent, handle: HTMLElement): void {
 
 function applySplitFromHandle(which: 'swim-bike' | 'bike-run', pctRaw: number): void {
   const onb = getCurrentOnboarding();
-  const split = { ...(onb.triVolumeSplit ?? DEFAULT_VOLUME_SPLIT) };
+  const split = { ...(onb.triVolumeSplit ?? DEFAULT_VOLUME_SPLIT_BY_DISTANCE[onb.triDistance ?? '70.3']) };
   const swimPct = split.swim * 100;
   const bikePct = split.bike * 100;
   const handle1 = swimPct;                  // swim|bike position
@@ -607,18 +620,33 @@ function applySplitFromHandle(which: 'swim-bike' | 'bike-run', pctRaw: number): 
  */
 function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   const base = `This is your peak-week target. Early and recovery weeks will be lighter.`;
-  if (distance === '70.3') {
-    if (hours < 5) return `${base}<br><span style="color:#c06a50">Minimum viable. At 4h/week the plan is completion-only with no margin for missed sessions. 8–12h/week at peak is the typical competitive range.</span>`;
-    if (hours < 7) return `${base}<br><span style="color:#c06a50">Aggressive for 70.3. This is a "just finish" plan. 8–12h/week at peak is the typical competitive range.</span>`;
-    if (hours < 10) return `${base}<br>Realistic for a first 70.3 or a time-constrained athlete.`;
-    if (hours < 14) return `${base}<br>Competitive intermediate range. Good balance of volume and recovery.`;
-    return `${base}<br>Advanced / podium-target volume. Make sure recovery is matched.`;
+  const warn = (msg: string) => `${base}<br><span style="color:#c06a50">${msg}</span>`;
+
+  if (distance === 'sprint') {
+    if (hours < 4) return warn('Minimum viable. 5–8h/week at peak is the typical competitive range for sprint.');
+    if (hours < 6) return `${base}<br>Realistic for a first sprint. Short race, so intensity matters more than volume.`;
+    if (hours < 8) return `${base}<br>Competitive sprint range. Good balance of speed work and recovery.`;
+    return `${base}<br>Advanced / podium-target volume for sprint.`;
   }
-  // Ironman
-  if (hours < 10) return `${base}<br><span style="color:#c06a50">Very aggressive for full Ironman. Most first-timers need 12h+ at peak to avoid late-race trouble.</span>`;
-  if (hours < 14) return `${base}<br>Realistic for a first Ironman, especially with a solid training background.`;
-  if (hours < 20) return `${base}<br>Competitive age-grouper range.`;
-  return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
+  if (distance === 'olympic') {
+    if (hours < 5) return warn('Minimum viable. 8–11h/week at peak is the typical competitive range for Olympic.');
+    if (hours < 8) return `${base}<br>Realistic for a first Olympic or a time-constrained athlete.`;
+    if (hours < 11) return `${base}<br>Competitive intermediate range. Good balance of volume and intensity.`;
+    return `${base}<br>Advanced / podium-target volume for Olympic.`;
+  }
+  if (distance === 'ironman') {
+    if (hours < 10) return warn('Very aggressive for full Ironman. Most first-timers need 12h+ at peak to avoid late-race trouble.');
+    if (hours < 14) return `${base}<br>Realistic for a first Ironman, especially with a solid training background.`;
+    if (hours < 20) return `${base}<br>Competitive age-grouper range.`;
+    return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
+  }
+  // 70.3 and T100 (similar middle-distance demand)
+  const label = getTriDistanceLabel(distance);
+  if (hours < 5) return warn(`Minimum viable. At 4h/week the plan is completion-only with no margin for missed sessions. 8–12h/week at peak is the typical competitive range for ${label}.`);
+  if (hours < 7) return warn(`Aggressive for ${label}. This is a "just finish" plan. 8–12h/week at peak is the typical competitive range.`);
+  if (hours < 10) return `${base}<br>Realistic for a first ${label} or a time-constrained athlete.`;
+  if (hours < 14) return `${base}<br>Competitive intermediate range. Good balance of volume and recovery.`;
+  return `${base}<br>Advanced / podium-target volume. Make sure recovery is matched.`;
 }
 
 
@@ -631,7 +659,7 @@ function updateWeekdayLabel(wd: number, total: number): void {
 
 function refreshSplitCells(): void {
   const current = getCurrentOnboarding();
-  const split = current.triVolumeSplit ?? DEFAULT_VOLUME_SPLIT;
+  const split = current.triVolumeSplit ?? DEFAULT_VOLUME_SPLIT_BY_DISTANCE[current.triDistance ?? '70.3'];
   const hours = current.triTimeAvailableHoursPerWeek ?? DEFAULT_WEEKLY_PEAK_HOURS[current.triDistance ?? '70.3'][3];
   (['swim', 'bike', 'run'] as const).forEach((k) => {
     const pct = document.querySelector(`[data-pct="${k}"]`);

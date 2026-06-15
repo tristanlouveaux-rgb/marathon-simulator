@@ -539,7 +539,7 @@ export function render(): void {
     h += `<div class="font-bold mb-1" style="color:var(--c-caution)">LT Change Detected (${pc.deviationPct.toFixed(1)}%)</div>`;
     h += `<div class="mb-2" style="color:var(--c-muted)">Estimated LT: ${fmtP(pc.estimate.ltPaceSecPerKm)} (current: ${fmtP(pc.currentLT)})</div>`;
     h += `<div class="flex gap-2">`;
-    h += `<button onclick="window.acceptLTUpdate()" class="px-3 py-1.5 rounded font-medium" style="background:var(--c-ok);color:white">Accept</button>`;
+    h += `<button onclick="window.acceptLTUpdate()" class="m-btn-ok px-3 py-1.5">Accept</button>`;
     h += `<button onclick="window.dismissLTUpdate()" class="px-3 py-1.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Dismiss</button>`;
     h += `</div></div>`;
   }
@@ -691,10 +691,9 @@ export function render(): void {
   if (bnEl) {
     bnEl.disabled = don < tot;
     bnEl.className = don >= tot
-      ? 'w-full font-bold py-2 rounded text-xs'
-      : 'w-full font-bold py-2 rounded text-xs cursor-not-allowed';
-  bnEl.style.background = don >= tot ? 'var(--c-ok)' : 'rgba(0,0,0,0.06)';
-  bnEl.style.color = don >= tot ? 'white' : 'var(--c-faint)';
+      ? 'm-btn-ok w-full py-2 text-xs'
+      : 'm-btn-secondary w-full py-2 text-xs cursor-not-allowed';
+    bnEl.style.cssText = don >= tot ? '' : 'opacity:0.55';
   }
   const stEl = document.getElementById('st');
   if (stEl) stEl.innerHTML = don >= tot ? `Complete ${don}/${tot}` : `Progress ${don}/${tot}`;
@@ -888,7 +887,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           const unrateId = (w.id || w.n).replace(/'/g, "\\'");
           h += `<button onclick="window.unrateWorkout('${unrateId}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Unmark as done</button>`;
         } else {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Mark as done</button>`;
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',false)" class="m-btn-ok w-full mt-1 py-1.5 text-xs">Mark as done</button>`;
         }
       } else if (viewOnly && rtd) {
         h += `<div class="text-xs" style="color:var(--c-ok)">Done</div>`;
@@ -1197,7 +1196,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           h += `<span class="text-xs font-semibold" style="color:var(--c-ok)">Complete</span>`;
           h += `</div>`;
         } else {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',1,1,'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Complete Rest Day</button>`;
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',1,1,'${w.t}',false)" class="m-btn-ok w-full mt-1 py-1.5 text-xs">Complete Rest Day</button>`;
         }
       } else if (w.t === 'capacity_test' && (w as any).testType) {
         if ((w as any).status === 'passed') {
@@ -1217,7 +1216,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         if (rtd) {
           h += `<button onclick="window.unrateWorkout('${wId.replace(/'/g, "\\'")}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Unmark as done</button>`;
         } else {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Mark as done</button>`;
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="m-btn-ok w-full mt-1 py-1.5 text-xs">Mark as done</button>`;
         }
       } else {
         // Running: ask for RPE (always same label; highlight current selection)
@@ -1250,7 +1249,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       const gpsRecId = wk.gpsRecordings?.[w.id || w.n];
       if (gpsRecId && rtd) {
         // Completed with GPS. Show "View Run" button
-        h += `<button class="gps-view-btn w-full mt-1 text-xs py-1 rounded font-medium" style="background:var(--c-ok);color:white" data-recid="${escapeAttr(gpsRecId)}">View Run</button>`;
+        h += `<button class="gps-view-btn m-btn-ok w-full mt-1 text-xs py-1" data-recid="${escapeAttr(gpsRecId)}">View Run</button>`;
       } else if (!viewOnly && !rtd) {
         const tracking = isTrackingActive();
         if (tracking && getActiveWorkoutName() === w.n) {
@@ -1261,7 +1260,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         } else if (tracking) {
           h += `<button class="w-full mt-1 text-xs py-0.5 rounded font-medium cursor-not-allowed" style="background:rgba(0,0,0,0.06);color:var(--c-faint)" disabled>Tracking in progress...</button>`;
         } else {
-          h += `<button class="gps-track-btn w-full mt-1 text-xs py-1.5 rounded font-bold" style="background:var(--c-ok);color:white" data-name="${escapeAttr(w.n)}" data-desc="${escapeAttr(w.d)}">Start Run</button>`;
+          h += `<button class="gps-track-btn m-btn-ok w-full mt-1 text-xs py-1.5" data-name="${escapeAttr(w.n)}" data-desc="${escapeAttr(w.d)}">Start Run</button>`;
         }
       }
     }
@@ -1567,7 +1566,7 @@ function renderCrossTrainingForm(): string {
   h += `<div class="relative"><input type="number" id="crossRPE" placeholder="RPE (1-10)" class="m-input" style="font-size:12px;padding:6px 8px" min="1" max="10">`;
   h += `<span class="rpe-help absolute right-1 top-1 cursor-help text-xs" style="color:var(--c-faint)" title="1-3: Easy conversation\n4-6: Short sentences\n7-8: 1-2 words\n9-10: Gasping/Max">(?)</span></div>`;
   h += `</div>`;
-  h += `<button onclick="window.logActivity()" class="w-full py-1.5 rounded text-xs font-bold" style="background:var(--c-ok);color:white">Add Activity</button>`;
+  h += `<button onclick="window.logActivity()" class="m-btn-ok w-full py-1.5 text-xs">Add Activity</button>`;
   h += `</div>`;
   return h;
 }

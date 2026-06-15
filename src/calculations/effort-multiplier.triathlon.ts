@@ -25,6 +25,7 @@ import {
   TRI_EFFORT_MULT_BOUNDS,
 } from '@/constants/triathlon-constants';
 import { scoreRepAdherence, repAdherenceToEffortDev } from './rep-adherence';
+import { ctlGapMultiplier } from '@/workouts/plan_engine';
 
 /**
  * Per-discipline trailing effortScore over the last
@@ -151,12 +152,20 @@ export function triEffortMultiplier(state: SimulatorState, discipline: Disciplin
 export function applyTriEffortMultipliers(
   state: SimulatorState,
   workouts: Workout[],
+  ctlRatioByDiscipline?: { swim?: number; bike?: number; run?: number },
 ): void {
-  const multipliers: Record<Discipline, number> = {
-    swim: triEffortMultiplier(state, 'swim'),
-    bike: triEffortMultiplier(state, 'bike'),
-    run:  triEffortMultiplier(state, 'run'),
-  };
+  const disciplines: Discipline[] = ['swim', 'bike', 'run'];
+  // Per discipline, combine the trailing-effort multiplier with the CTL-gap re-anchor under ONE
+  // clamp so the two volume levers can't overstack (mirror of running's plan_engine combined clamp).
+  // Floor = the tri effort band's lower bound; CTL-gap is reduce-only so it only pulls down.
+  const multipliers: Record<Discipline, number> = { swim: 1, bike: 1, run: 1 };
+  for (const d of disciplines) {
+    const eff = triEffortMultiplier(state, d);
+    const cMult = ctlGapMultiplier(ctlRatioByDiscipline?.[d] ?? 1);
+    multipliers[d] = cMult === 1.0
+      ? eff
+      : Math.max(TRI_EFFORT_MULT_BOUNDS[0], Math.min(TRI_EFFORT_MULT_BOUNDS[1], eff * cMult));
+  }
   for (const workout of workouts) {
     const d = workout.discipline;
     if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;

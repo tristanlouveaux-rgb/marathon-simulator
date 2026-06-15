@@ -155,12 +155,6 @@ export function renderTriPlanForecast(container: HTMLElement, _state: Onboarding
 
       .tpf-goal-toggle { width:100%; background:none; border:none; color:var(--c-muted); font-size:13px; cursor:pointer; padding:8px 0; text-align:center; }
 
-      .tpf-slider { width:100%; margin:14px 0 4px; -webkit-appearance:none; appearance:none; background:transparent; cursor:pointer; }
-      .tpf-slider::-webkit-slider-runnable-track { height:4px; background:rgba(0,0,0,0.10); border-radius:2px; }
-      .tpf-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:24px; height:24px; border-radius:50%; background:#fff; border:1px solid rgba(0,0,0,0.18); box-shadow:0 2px 6px rgba(0,0,0,0.18); margin-top:-10px; cursor:pointer; }
-      .tpf-slider::-moz-range-track { height:4px; background:rgba(0,0,0,0.10); border-radius:2px; }
-      .tpf-slider::-moz-range-thumb { width:24px; height:24px; border-radius:50%; background:#fff; border:1px solid rgba(0,0,0,0.18); box-shadow:0 2px 6px rgba(0,0,0,0.18); cursor:pointer; }
-
       .tpf-chance { border:1px solid rgba(0,0,0,0.06); border-radius:12px; padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
       .tpf-cta { width:100%; padding:14px 20px; height:50px; background:var(--c-black); color:#FDFCF7; border:none; border-radius:25px; font-size:15px; font-weight:500; cursor:pointer; margin-top:18px; box-shadow:0 2px 8px rgba(0,0,0,0.15); }
     </style>
@@ -196,7 +190,7 @@ export function renderTriPlanForecast(container: HTMLElement, _state: Onboarding
             <div style="text-align:center">
               <div id="tpf-goal-time" style="font-size:34px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${ft(goalSec)}</div>
             </div>
-            <input id="tpf-goal-slider" class="tpf-slider" type="range" min="${bounds.minSec}" max="${bounds.maxSec}" step="${bounds.stepSec}" value="${goalSec}" />
+            <input id="tpf-goal-slider" class="m-slider-glass" type="range" min="${bounds.minSec}" max="${bounds.maxSec}" step="${bounds.stepSec}" value="${goalSec}" />
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-bottom:14px">
               <span>${ft(bounds.minSec)}</span><span>${ft(bounds.maxSec)}</span>
             </div>

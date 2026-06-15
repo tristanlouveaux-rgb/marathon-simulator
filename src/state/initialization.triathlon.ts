@@ -118,8 +118,17 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       appendCssSample(swim, swim.cssSecPer100m, swim.cssSource ?? 'user', swim.cssConfidence);
     }
 
+    // Carry the user's target finish time across an in-place rebuild at the
+    // SAME distance (runner-type change, add-sessions regen, mode toggle back).
+    // Only a distance change makes the goal stale. Mirrors running's gated
+    // raceGoalTimeSec clear in initialization.ts.
+    const carriedTargetFinishSec = s.triConfig?.distance === distance
+      ? s.triConfig?.targetFinishTimeSec
+      : undefined;
+
     const triConfig: TriConfig = {
       distance,
+      targetFinishTimeSec: carriedTargetFinishSec,
       timeAvailableHoursPerWeek: timeAvailable,
       weekdayHoursPerWeek: weekdayHours,
       volumeSplit,

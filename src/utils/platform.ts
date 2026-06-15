@@ -26,3 +26,22 @@ export function getPlatform(): string {
     return 'web';
   }
 }
+
+/**
+ * True on touch-primary devices (native iOS/Android shells and mobile web).
+ * The native HTML5 `draggable` attribute makes WKWebView/mobile Safari lift its
+ * own translucent drag preview on long-press, which collides with our custom
+ * touch DnD clone and shows doubled, mis-positioned ghosts. On these devices we
+ * disable `draggable` and rely on the touch handlers; the HTML5 drag path only
+ * ever fired with a mouse anyway.
+ */
+export function isTouchPrimary(): boolean {
+  if (isNative()) return true;
+  try {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}

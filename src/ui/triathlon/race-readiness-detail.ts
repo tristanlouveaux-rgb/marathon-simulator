@@ -154,8 +154,8 @@ export function renderRaceReadinessDetailView(): void {
   container.innerHTML = `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
       .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>

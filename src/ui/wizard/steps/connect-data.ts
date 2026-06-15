@@ -1,17 +1,21 @@
 import type { OnboardingState } from '@/types/onboarding';
-import { nextStep, updateOnboarding } from '../controller';
+import { nextStep, updateOnboarding, goToStep, getOnboardingState } from '../controller';
 import { maybeOfferAccountSave } from '../save-account-overlay';
 import { saveState } from '@/state/persistence';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { isNativeiOS, connectAppleHealth } from '@/data/appleHealthSync';
+import { openAppSettings } from '@/data/healthExtras';
 import { getState, updateState } from '@/state/store';
 import { hasPhysiologySource } from '@/data/sources';
 import { openImportActivityModal } from '@/ui/import-activity-modal';
+import { openStravaHistoryGuide } from '@/ui/strava-history-guide';
+import { openGarminAppleHealthGuide } from '@/ui/garmin-apple-health-guide';
 import { isValidAccessCode, isReviewerCode } from '@/constants/access-codes';
 import { connectWithStravaButton } from '@/ui/strava-brand';
 import { startStravaConnect } from '@/data/stravaSync';
 import { startGarminConnect } from '@/data/garminOAuth';
+import { isStravaConnected, resetStravaCache } from '@/data/supabaseClient';
 import { GARMIN_CONNECT_ENABLED } from '@/constants/feature-flags';
 
 /**
@@ -38,6 +42,11 @@ import { GARMIN_CONNECT_ENABLED } from '@/constants/feature-flags';
  * are routed to manual PB entry.
  */
 
+/** Upper bound on how long the Apple Health connect can show "Connecting…" before
+ *  it falls back to the recovery card. A 28-day HealthKit read resolves in 1-2s;
+ *  20s is generous headroom that still guarantees the spinner can never stick. */
+const APPLE_CONNECT_TIMEOUT_MS = 20_000;
+
 /** Module flag: did the user complete a file import this visit? Feeds the Continue routing. */
 let didUpload = false;
 /** Did the user already tap Continue once with no data source? Arms the deliberate skip. */
@@ -58,7 +67,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
     return null;
   })();
   if (returnedFrom) {
-    updateOnboarding({ skippedStrava: false });
+    updateOnboarding({ skippedStrava: false, oauthPending: undefined });
     if (returnedFrom === 'strava') {
       updateState({ stravaConnected: true });
       updateOnboarding({ stravaUnlocked: true, chosenWatch: 'other' });
@@ -87,6 +96,14 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
       maybeOfferAccountSave(() => nextStep());
       return;
     }
+  }
+
+  // Self-heal a live Strava OAuth whose return bounce dropped the
+  // ?strava=connected signal (iOS WKWebView can reload the cached app without
+  // the query string). If we marked an attempt in flight and aren't connected
+  // yet, confirm against the server and complete the flow if the token landed.
+  if (!returnedFrom && state.oauthPending === 'strava' && !getState().stravaConnected) {
+    void recoverPendingStravaOAuth();
   }
 
   didUpload = false;
@@ -187,7 +204,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
           </p>
         </div>
 
-        <!-- ─────────── Phase 1: watch picker (2 tiles) ─────────── -->
+        <!-- ─────────── Phase 1: watch picker (3 tiles) ─────────── -->
         <div id="cd-picker" class="cd-rise" style="width:100%;max-width:460px;margin-top:28px;flex-direction:column;gap:10px;animation-delay:0.12s">
 
           <button class="cd-watch" data-watch="apple">
@@ -200,7 +217,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
             </div>
             <div class="cd-watch-text">
               <p class="cd-watch-label">Apple Watch / Apple Health</p>
-              <p class="cd-watch-sub">Runs, sleep, HRV, and resting heart rate sync automatically. We even find your PBs from your run history. One tap.</p>
+              <p class="cd-watch-sub">Apple Watch syncs runs, sleep, HRV, and resting heart rate automatically, and finds your PBs from your run history. Garmin, COROS, and Polar route their workouts here too once you enable Apple Health in their app.</p>
             </div>
             <div class="cd-watch-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></div>
           </button>
@@ -216,7 +233,23 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
               <p class="cd-watch-label">Garmin</p>
               <p class="cd-watch-sub">${GARMIN_CONNECT_ENABLED
                 ? 'Connect Garmin for your runs, sleep, HRV, and resting heart rate.'
-                : 'On iPhone, your Garmin sleep and heart rate come in through Apple Health. For run splits, connect Strava or upload an export.'}</p>
+                : 'On iPhone, Garmin workouts come in through Apple Health once you enable it in Garmin Connect. Add per-run splits and route from each activity, or connect Strava.'}</p>
+            </div>
+            <div class="cd-watch-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></div>
+          </button>
+
+          <!-- No-watch path. Routes to the same history hub as Garmin (data-watch="other"):
+               Strava + file upload live there, so a watchless user can still seed their history. -->
+          <button class="cd-watch" data-watch="other">
+            <div class="cd-watch-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 16V8"/><path d="M9 11l3-3 3 3"/>
+                <path d="M5 19h14"/>
+              </svg>
+            </div>
+            <div class="cd-watch-text">
+              <p class="cd-watch-label">No watch yet</p>
+              <p class="cd-watch-sub">Connect Strava for your runs and PBs, or upload a .fit, .gpx, or .zip export. No watch needed.</p>
             </div>
             <div class="cd-watch-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></div>
           </button>
@@ -229,6 +262,18 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
               <p class="cd-history-label">Apple Health needs the iPhone app</p>
               <p class="cd-history-sub">Apple Watch syncs through Apple Health, which only works in the Mosaic iOS app. Open Mosaic on your iPhone to connect your watch and we'll pull everything automatically. Testing on a computer? Upload an export instead.</p>
               <button id="cd-apple-web-upload" class="cd-cta-secondary" style="margin-top:6px">Upload an export</button>
+            </div>
+          </div>
+
+          <!-- Apple-on-iOS recovery: shown when a connect attempt returns no data. iOS
+               never re-presents the HealthKit sheet once answered, so the only fixes are
+               turning access on in Settings or switching to Strava / an upload. -->
+          <div id="cd-apple-recovery" class="cd-history-card shadow-ap" style="display:none;text-align:left;margin-top:16px">
+            <div class="cd-history-row">
+              <p class="cd-history-label">No Apple Health data came through</p>
+              <p id="cd-apple-recovery-sub" class="cd-history-sub"></p>
+              <button id="cd-apple-open-settings" class="cd-open-settings cd-cta-primary" style="margin-top:6px">Open Settings</button>
+              <button id="cd-apple-recovery-fallback" class="cd-cta-secondary">Use Strava or upload instead</button>
             </div>
           </div>
         </div>
@@ -257,7 +302,15 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
               <p class="cd-history-label">Connect Apple Health</p>
               <p class="cd-history-sub">On iPhone, your Garmin sleep, HRV, and resting heart rate flow through Apple Health. Connect it for your recovery signals. Strava below adds your per-km run splits.</p>
               <button id="cd-connect-apple-health" class="cd-cta-primary" style="margin-top:6px">Connect Apple Health</button>
+              <button id="cd-apple-health-help" class="cd-link" style="align-self:flex-start;margin-top:8px">How do I enable this for Garmin?</button>
               <p id="cd-apple-done" class="cd-history-sub" style="display:none;margin-top:8px"></p>
+
+              <!-- Inline recovery (no data came through). Strava + upload are already
+                   on-screen below, so this only needs the Settings path. -->
+              <div id="cd-apple-recovery-hub" style="display:none;margin-top:8px">
+                <p id="cd-apple-recovery-hub-sub" class="cd-history-sub"></p>
+                <button id="cd-apple-open-settings-hub" class="cd-open-settings cd-cta-secondary" style="margin-top:8px">Open Settings</button>
+              </div>
             </div>
           </div>
           `}
@@ -308,8 +361,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
           <button id="cd-change-watch" class="cd-link" style="align-self:center">← Back</button>
         </div>
 
-        <!-- ─────────── Apple Watch status (errors / iOS permission flow) ─────────── -->
-        <p id="cd-apple-error" class="cd-err" style="max-width:460px"></p>
+        <!-- ─────────── Apple Watch success status (picker tile → near Continue) ─────────── -->
         <p id="cd-apple-info" class="cd-info" style="max-width:460px"></p>
 
         <!-- ─────────── Footer: Continue (always visible) + caption ─────────── -->
@@ -329,7 +381,13 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
   // them where they expect.
   if (initialChoice === 'apple') {
     showPicker();
-    if (hasPhysiologySource(getState() as any, 'apple')) {
+    // Persisted connect memory: `appleHealthConnected` is set on a successful connect and
+    // never cleared, so backing into this step shows the connected state instead of a fresh
+    // "Connect". Read the same combined flag every other site uses (source OR the device-local
+    // flag), not the physiology source alone — a supplementary-Apple user keeps a non-Apple
+    // primary, so the source check alone would miss them and re-offer the connect.
+    const s = getState() as any;
+    if (hasPhysiologySource(s, 'apple') || !!s.appleHealthConnected) {
       markContinueReady('Apple Health connected. Workouts will sync after Continue.');
     }
   } else if (initialChoice === 'other') {
@@ -475,9 +533,17 @@ function wireHandlers(): void {
     if (err) err.style.display = 'none';
     try {
       if (btn) btn.style.pointerEvents = 'none';
+      // Persist "OAuth in flight" BEFORE the redirect navigates the page away.
+      // If the return bounce loses the ?strava=connected query (iOS WKWebView
+      // can reload the cached app without it), renderConnectData's recovery
+      // check uses this marker to confirm the connection server-side instead.
+      updateOnboarding({ oauthPending: 'strava' });
+      saveState();
       await startStravaConnect();
     } catch {
       if (btn) btn.style.pointerEvents = 'auto';
+      updateOnboarding({ oauthPending: undefined });
+      saveState();
       if (err) { err.textContent = 'Could not start Strava connect. Try again in a moment.'; err.style.display = 'block'; }
     }
   });
@@ -515,7 +581,24 @@ function wireHandlers(): void {
     triggerAppleHealth();
   });
 
-  document.getElementById('cd-upload-strava')?.addEventListener('click', () => openImporter());
+  document.getElementById('cd-apple-health-help')?.addEventListener('click', () => openGarminAppleHealthGuide());
+
+  // Open Settings (both recovery cards share the class). One tap into iOS Settings;
+  // the copy points the rest of the way to the Health toggle.
+  document.querySelectorAll<HTMLElement>('.cd-open-settings').forEach(btn => {
+    btn.addEventListener('click', () => { void openAppSettings(); });
+  });
+
+  // Recovery card's "Use Strava or upload instead" (picker phase only) → jump to the hub.
+  document.getElementById('cd-apple-recovery-fallback')?.addEventListener('click', () => {
+    updateOnboarding({ chosenWatch: 'other' });
+    saveState();
+    showHistory();
+  });
+
+  // Strava history gets the dedicated, linear guide (request → wait for email →
+  // upload). Garmin / single-file stay on the generic importer.
+  document.getElementById('cd-upload-strava')?.addEventListener('click', () => openStravaHistoryGuide({ onComplete: onUploadComplete }));
   document.getElementById('cd-upload-garmin')?.addEventListener('click', () => openImporter());
   document.getElementById('cd-upload-single')?.addEventListener('click', () => openImporter());
 
@@ -577,42 +660,153 @@ function revealStravaConnect(): void {
   if (stravaWrap) stravaWrap.style.display = 'block';
 }
 
+/**
+ * Confirm a pending Strava OAuth server-side after a lost return bounce.
+ * Mirrors the `?strava=connected` success path, but is driven by checking the
+ * `strava_tokens` table instead of the query string — so the flow completes
+ * even when the iOS redirect fails to re-deliver the signal into the app.
+ */
+async function recoverPendingStravaOAuth(): Promise<void> {
+  resetStravaCache();
+  let connected = false;
+  try { connected = await isStravaConnected(); } catch { connected = false; }
+
+  // The user may have navigated away while the async check ran.
+  if (getOnboardingState()?.currentStep !== 'connect-data') return;
+
+  if (!connected) {
+    // Attempt didn't complete (denied/abandoned, or token not written yet).
+    // Clear the marker so we don't re-check on every render; the connect button
+    // stays available for a manual retry.
+    updateOnboarding({ oauthPending: undefined });
+    saveState();
+    return;
+  }
+
+  updateState({ stravaConnected: true });
+  updateOnboarding({ skippedStrava: false, stravaUnlocked: true, chosenWatch: 'other', oauthPending: undefined });
+  saveState();
+
+  // Same "connect both" branching as the live return handler: advance when
+  // nothing more is addable here, otherwise re-render so the connected state +
+  // Apple Health nudge shows.
+  const appleConnected =
+    hasPhysiologySource(getState() as any, 'apple') || !!(getState() as any).appleHealthConnected;
+  if (!isNativeiOS() || appleConnected || GARMIN_CONNECT_ENABLED) {
+    maybeOfferAccountSave(() => nextStep());
+  } else {
+    goToStep('connect-data');
+    setTimeout(() => maybeOfferAccountSave(() => {}), 0);
+  }
+}
+
 async function triggerAppleHealth(): Promise<void> {
-  const errEl = document.getElementById('cd-apple-error');
-  const infoEl = document.getElementById('cd-apple-info');
-  if (errEl) errEl.style.display = 'none';
-  if (infoEl) infoEl.style.display = 'none';
+  // Which surface are we on? The hub (Garmin "connect both") has its own card and
+  // Strava/upload right below; the Apple picker tile does not. Feedback must land
+  // next to the button the user tapped, never at the page bottom (off-screen).
+  const onHistory = document.getElementById('cd-history')?.style.display === 'flex';
+  hideAppleRecovery();
 
   // On web / Android the HealthKit bridge is a no-op. Surface the loud card that
   // makes the "open the iOS app" case and offers an export fallback.
   if (!isNativeiOS()) {
-    const webCard = document.getElementById('cd-apple-web');
-    if (webCard) webCard.style.display = 'flex';
+    if (onHistory) {
+      const statusEl = document.getElementById('cd-history-status');
+      if (statusEl) {
+        statusEl.textContent = 'Apple Health only connects in the Mosaic iPhone app. Open Mosaic on your iPhone, or upload an export below.';
+        statusEl.style.display = 'block';
+      }
+    } else {
+      const webCard = document.getElementById('cd-apple-web');
+      if (webCard) webCard.style.display = 'flex';
+    }
     return;
   }
 
-  // Already connected? Just flag Continue as ready.
-  if (hasPhysiologySource(getState() as any, 'apple')) {
+  // Already connected? Just flag Continue as ready. Check the appleHealthConnected
+  // flag too, not only the labelled physiology source: a Garmin/Strava user keeps
+  // their existing primary physiology source, so connecting Apple sets the flag but
+  // never claims 'apple' as the source. Checking only the source missed that case
+  // and re-ran a full sync on every tap.
+  const s0 = getState() as any;
+  if (hasPhysiologySource(s0, 'apple') || !!s0.appleHealthConnected) {
     markAppleHealthConnected();
     return;
   }
 
-  if (infoEl) {
-    infoEl.textContent = 'Requesting Apple Health permissions…';
-    infoEl.style.display = 'block';
-  }
+  setAppleConnecting(onHistory, true);
 
-  const result = await connectAppleHealth();
+  // connectAppleHealth catches its own errors and resolves to { ok:false }, but a
+  // hung native HealthKit read would never resolve OR throw, sticking the button on
+  // "Connecting…" forever. Race it against a timeout so the connecting state can
+  // always recover. connectAppleHealth is in-flight-guarded, so a late real result
+  // still completes its state writes in the background even if we showed recovery.
+  let result: { ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' };
+  try {
+    result = await Promise.race([
+      connectAppleHealth(),
+      new Promise<{ ok: boolean; reason: 'sync-error' }>(resolve =>
+        setTimeout(() => resolve({ ok: false, reason: 'sync-error' }), APPLE_CONNECT_TIMEOUT_MS)),
+    ]);
+  } catch (err) {
+    console.warn('[connect-data] Apple Health connect threw unexpectedly', err);
+    result = { ok: false, reason: 'sync-error' };
+  }
+  setAppleConnecting(onHistory, false);
+
   if (result.ok) {
     markAppleHealthConnected();
   } else {
-    if (infoEl) infoEl.style.display = 'none';
-    if (errEl) {
-      errEl.textContent = result.reason === 'permission-denied'
-        ? 'Permissions not granted. Open Settings → Privacy → Health → Mosaic to allow access.'
-        : `Apple Health connection failed (${result.reason}).`;
-      errEl.style.display = 'block';
+    showAppleHealthRecovery(onHistory, result.reason);
+  }
+}
+
+/** Toggle the "Connecting…" state on the hub's Connect button. The picker tile
+ *  triggers the iOS sheet instantly, so it needs no separate spinner. */
+function setAppleConnecting(onHistory: boolean, connecting: boolean): void {
+  if (!onHistory) return;
+  const btn = document.getElementById('cd-connect-apple-health') as HTMLButtonElement | null;
+  if (!btn) return;
+  btn.disabled = connecting;
+  btn.textContent = connecting ? 'Connecting…' : 'Connect Apple Health';
+}
+
+/** Hide both recovery surfaces (called before each fresh attempt). */
+function hideAppleRecovery(): void {
+  const pick = document.getElementById('cd-apple-recovery');
+  const hub = document.getElementById('cd-apple-recovery-hub');
+  if (pick) pick.style.display = 'none';
+  if (hub) hub.style.display = 'none';
+}
+
+/**
+ * Surface the no-data recovery path inline, next to the button the user tapped.
+ *
+ * HealthKit can't tell us whether the read was denied or simply empty (Apple's
+ * privacy model), so the copy stays honest: check the Settings toggle, or switch
+ * to Strava / an upload. iOS won't re-show the permission sheet once answered, so
+ * re-tapping Connect can't help — the Settings deep-link is the real recovery.
+ */
+function showAppleHealthRecovery(onHistory: boolean, reason?: 'not-ios' | 'no-data' | 'sync-error'): void {
+  const settingsHint = 'In Settings, open Privacy & Security, then Health, then Mosaic, and turn the data on.';
+  if (onHistory) {
+    const card = document.getElementById('cd-apple-recovery-hub');
+    const sub = document.getElementById('cd-apple-recovery-hub-sub');
+    if (sub) {
+      sub.textContent = reason === 'sync-error'
+        ? `Apple Health could not be reached. ${settingsHint} Or use Strava or an upload below.`
+        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap Connect again. ${settingsHint} Or use Strava or an upload below.`;
     }
+    if (card) card.style.display = 'block';
+  } else {
+    const card = document.getElementById('cd-apple-recovery');
+    const sub = document.getElementById('cd-apple-recovery-sub');
+    if (sub) {
+      sub.textContent = reason === 'sync-error'
+        ? `Apple Health could not be reached. ${settingsHint} You can also use Strava or upload an export.`
+        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap the Apple Watch tile again. ${settingsHint} No Apple Watch data yet? Use Strava or an upload instead.`;
+    }
+    if (card) card.style.display = 'block';
   }
 }
 
@@ -625,27 +819,36 @@ async function triggerAppleHealth(): Promise<void> {
 function markAppleHealthConnected(): void {
   const onHistory = document.getElementById('cd-history')?.style.display === 'flex';
   if (onHistory) {
+    // Garmin "connect both" hub: Apple Health is the recovery pipe, Strava still adds runs
+    // and splits. Stay here and nudge Strava rather than advancing — mirrors the Strava-return
+    // "connect both" branch, which holds on this step to nudge Apple when only one has landed.
     refreshHistoryConnectedState();
   } else {
     // Apple picker tile = a native Apple Watch user. HealthKit carries the full picture
     // (runs with GPS splits, heart rate, sleep/HRV/resting HR, and PBs from run history),
-    // so state plainly that nothing else is needed — they don't need Strava or an upload.
-    markContinueReady('Apple Health connected. Runs, heart rate, and recovery now sync automatically. Nothing else to add.');
+    // so there's nothing else to add here. Progress onwards immediately, mirroring the
+    // Strava/Garmin OAuth-return auto-advance — the user connected, so don't make them hunt
+    // for the Continue link. Morph Continue first so the connected state is visible behind the
+    // account-save overlay (anonymous users); non-anonymous sessions advance straight through.
+    markContinueReady('Apple Health connected. Runs, heart rate, and recovery now sync automatically.');
+    updateOnboarding({ skippedStrava: false });
+    saveState();
+    maybeOfferAccountSave(() => nextStep());
   }
 }
 
+function onUploadComplete(): void {
+  didUpload = true;
+  const statusEl = document.getElementById('cd-history-status');
+  if (statusEl) {
+    statusEl.innerHTML = '<span class="cd-status-dot"></span>Import complete. You can upload more, or continue.';
+    statusEl.style.display = 'block';
+  }
+  markContinueReady();
+}
+
 function openImporter(): void {
-  openImportActivityModal({
-    onComplete: () => {
-      didUpload = true;
-      const statusEl = document.getElementById('cd-history-status');
-      if (statusEl) {
-        statusEl.innerHTML = '<span class="cd-status-dot"></span>Import complete. You can upload more, or continue.';
-        statusEl.style.display = 'block';
-      }
-      markContinueReady();
-    },
-  });
+  openImportActivityModal({ onComplete: onUploadComplete });
 }
 
 /**

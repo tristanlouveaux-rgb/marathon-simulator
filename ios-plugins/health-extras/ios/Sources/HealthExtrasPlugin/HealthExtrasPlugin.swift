@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import CoreLocation
 import Capacitor
+import UIKit
 
 /**
  * HealthExtrasPlugin — exposes HealthKit fields that @capgo/capacitor-health
@@ -30,6 +31,7 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "HealthExtras"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkAvailability", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readQuantitySamples", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readLatestQuantity", returnType: CAPPluginReturnPromise),
@@ -76,6 +78,24 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         call.resolve(["available": available, "unavailable": unavailable])
+    }
+
+    /// Open iOS Settings to Mosaic's app page. The only recovery path once the
+    /// HealthKit permission sheet has been answered: iOS will not re-present the
+    /// sheet via requestAuthorization, so a denied user must toggle access in
+    /// Settings. (HealthKit toggles live under Privacy & Security → Health →
+    /// Mosaic; the app page is the closest deep-link iOS exposes.)
+    @objc public func openAppSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: UIApplication.openSettingsURLString),
+                  UIApplication.shared.canOpenURL(url) else {
+                call.resolve(["opened": false])
+                return
+            }
+            UIApplication.shared.open(url, options: [:]) { success in
+                call.resolve(["opened": success])
+            }
+        }
     }
 
     @objc public override func requestPermissions(_ call: CAPPluginCall) {

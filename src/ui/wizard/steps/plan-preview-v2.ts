@@ -224,7 +224,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
         ${(s.ctlBaseline ?? 0) >= 20 ? `
         <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.16s">
           <div class="pp-note-card">
-            <p class="pp-note">Starting with <strong style="color:var(--c-black);font-weight:500">${Math.round((s.ctlBaseline ?? 0) / 7)} TSS/day</strong> of baseline fitness from your recent training. Your plan is pitched to continue from there, not restart you.</p>
+            <p class="pp-note">Starting with <strong style="color:var(--c-black);font-weight:500">${Math.round((s.ctlBaseline ?? 0) / 7)} TSS/day</strong> of baseline fitness from your recent training. TSS is a daily training-load score, so your plan continues from where you are rather than restarting you.</p>
           </div>
         </div>
         ` : ''}
@@ -236,6 +236,13 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
           </div>
         </div>
         ` : ''}
+
+        ${s.startingFitnessEstimated ? `
+        <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.17s">
+          <div class="pp-note-card">
+            <p class="pp-note">Your starting fitness is a careful estimate for a new runner, not a measured time. It sharpens automatically from your first few runs.</p>
+          </div>
+        </div>` : ''}
 
         <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.18s">
           <div class="pp-note-card">
@@ -261,7 +268,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             </div>
             ${renderVdotMethodSubline(s)}
             ${s.initialLT ? `
-              <div class="pp-row"><span class="pp-row-k">LT threshold</span><span class="pp-row-v">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span></div>
+              <div class="pp-row"><span class="pp-row-k">Threshold pace</span><span class="pp-row-v">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span></div>
             ` : ''}
           </div>
         </div>
@@ -269,7 +276,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
 
       <div class="pp-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.30s">
         <div style="max-width:480px;margin:0 auto">
-          <button id="pp-start" class="pp-cta">See your sessions</button>
+          <button id="pp-start" class="pp-cta">See how it works</button>
           ${!noEvent ? `<button id="pp-goal" class="pp-goal-btn">${goalSec ? 'Edit goal time' : 'Do you have a goal time?'}</button>` : ''}
         </div>
       </div>
@@ -562,7 +569,7 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
       <div style="text-align:center;margin-bottom:4px">
         <div id="ppg-time" style="font-size:40px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${ft(goalSec)}</div>
       </div>
-      <input id="ppg-slider" type="range" min="${minSec}" max="${maxSec}" step="${STEP}" value="${goalSec}" style="width:100%;margin:16px 0 4px;-webkit-appearance:none;appearance:none;background:transparent;cursor:pointer" />
+      <input id="ppg-slider" class="m-slider-glass" type="range" min="${minSec}" max="${maxSec}" step="${STEP}" value="${goalSec}" style="margin:16px 0 4px" />
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-bottom:16px">
         <span>${ft(minSec)}</span><span>${ft(maxSec)}</span>
       </div>
@@ -606,10 +613,6 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
     </div>
 
     <style>
-      #ppg-slider::-webkit-slider-runnable-track { height:4px;background:rgba(0,0,0,0.10);border-radius:2px; }
-      #ppg-slider::-webkit-slider-thumb { -webkit-appearance:none;appearance:none;width:24px;height:24px;border-radius:50%;background:#fff;border:1px solid rgba(0,0,0,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.18);margin-top:-10px;cursor:pointer; }
-      #ppg-slider::-moz-range-track { height:4px;background:rgba(0,0,0,0.10);border-radius:2px; }
-      #ppg-slider::-moz-range-thumb { width:24px;height:24px;border-radius:50%;background:#fff;border:1px solid rgba(0,0,0,0.18);box-shadow:0 2px 6px rgba(0,0,0,0.18);cursor:pointer; }
       .ppg-step { width:32px;height:32px;border-radius:50%;background:#FFFFFF;border:1px solid var(--c-border);color:var(--c-black);font-size:18px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center; }
       .ppg-step:disabled { opacity:0.35;cursor:default; }
     </style>
@@ -704,9 +707,10 @@ function openOnboardingGoalOverlay(onboarding: OnboardingState): void {
 
 function wireHandlers(state: OnboardingState, milestone: MilestoneTarget | null, _showMilestone: boolean): void {
   document.getElementById('pp-start')?.addEventListener('click', () => {
-    // The plan reveal now hands off to the post-plan workout demonstration, which is
-    // the final step and completes onboarding. (plan-preview-v2 is running-only.)
-    goToStep('workout-preview');
+    // The plan reveal hands off to the coach contract (how the adaptive plan
+    // behaves), then on to the post-plan workout demonstration. (Both are
+    // running-only.)
+    goToStep('coach-contract');
   });
 
   document.getElementById('pp-vdot-info')?.addEventListener('click', showVDOTExplanation);

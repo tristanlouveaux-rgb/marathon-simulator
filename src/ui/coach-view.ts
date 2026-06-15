@@ -1003,7 +1003,7 @@ function getClassicCoachHTML(coach: CoachState): string {
     <style>
       #coach-view { box-sizing:border-box; }
       #coach-view *, #coach-view *::before, #coach-view *::after { box-sizing:inherit; }
-      @keyframes coachFloatUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
+      @keyframes coachFloatUp { from{opacity:0} to{opacity:1} }
       .cv-fade { opacity:0;animation:coachFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 

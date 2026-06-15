@@ -270,14 +270,15 @@ function renderScreen(
 
     <div style="position:relative;z-index:10;display:flex;flex-direction:column;flex:1;min-height:0;width:100%">
 
-      <!-- Header -->
+      <!-- Header. Top safe-area inset comes from the fixed overlay's padding-top
+           (app convention) so the title sits below the iOS status bar. -->
       <div style="background:rgba(255,255,255,0.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid rgba(0,0,0,0.05);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0">
-        <button id="ms-back" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0;flex-shrink:0">← Cancel</button>
+        <button id="ms-back" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0;flex-shrink:0;min-width:64px;text-align:left">← Cancel</button>
         <div style="text-align:center;min-width:0">
           <div style="font-size:15px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Match Activities</div>
           <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Auto-matched below. Tap to reassign.</div>
         </div>
-        <button id="ms-confirm" class="m-btn-glass m-btn-glass--inset" style="font-size:12px;font-weight:600;padding:6px 18px;flex-shrink:0;height:32px">Save</button>
+        <div style="min-width:64px;flex-shrink:0"></div>
       </div>
 
       <!-- Scroll body -->
@@ -351,6 +352,17 @@ function renderScreen(
             </div>
           </div>` : '<div style="height:24px"></div>'}
 
+        </div>
+      </div>
+
+      <!-- Sticky bottom action bar. Primary way forward — was previously a small
+           chip in the top-right that collided with the status bar and users
+           missed it. -->
+      <div style="flex-shrink:0;background:rgba(255,255,255,0.82);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-top:1px solid rgba(0,0,0,0.06);padding:12px 18px calc(env(safe-area-inset-bottom, 0px) + 12px)">
+        <div style="max-width:560px;margin:0 auto">
+          <button id="ms-confirm" class="m-btn-ok" style="width:100%;padding:14px;font-size:15px;cursor:pointer">
+            ${unassignedCount > 0 ? `Save · ${unassignedCount} to Excess Load` : 'Save'}
+          </button>
         </div>
       </div>
     </div>

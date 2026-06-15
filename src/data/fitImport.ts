@@ -46,6 +46,8 @@ import { unzipSync, gunzipSync } from 'fflate';
 // set of rows; applyPBsFromRows merges fastest-wins best efforts into s.pbs.
 import { aggregateHistoryFromRows, applyPBsFromRows } from '@/data/appleHealthSync';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import type { GarminActual } from '@/types';
+import { enrichActualFromParsedRow, fileMatchesActual, isThinActivity, type EnrichResult } from '@/data/activity-enrich-merge';
 
 // ---------------------------------------------------------------------------
 // Common intermediate types
@@ -641,32 +643,48 @@ export function streamsToActivityRow(
  * TODO(onboarding): reuse importActivityFile() in the wizard so a first-time
  *   user with only a FIT file can bootstrap the plan without any connected source.
  */
-export async function importActivityFile(file: File): Promise<string> {
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+/**
+ * Parse a single .fit/.gpx/.tcx file into a stream + summary, with a content-sniff
+ * fallback for files whose extension doesn't disclose their type. Shared by the
+ * single-file importer and the per-activity enrichment path.
+ *
+ * Transparently gunzips: Strava "Export Original" for a Garmin activity commonly
+ * hands back a gzipped file (`.fit.gz`), and the iOS file picker sometimes drops
+ * the `.gz` suffix on the way in, so we detect gzip by the magic number
+ * (0x1f 0x8b) as well as the extension. Without this the per-activity "Add
+ * detail from Strava" upload failed on the exact file Strava gives you.
+ */
+async function parseActivityFileToStreams(
+  file: File,
+): Promise<{ summary: ActivitySummary; records: StreamRecord[] }> {
+  let name = file.name.toLowerCase();
+  let bytes = new Uint8Array(await file.arrayBuffer());
 
-  let summary: ActivitySummary;
-  let records: StreamRecord[];
-
-  if (ext === 'fit') {
-    const buf = await file.arrayBuffer();
-    ({ summary, records } = await parseFit(buf));
-  } else if (ext === 'gpx') {
-    const text = await file.text();
-    ({ summary, records } = parseGpx(text));
-  } else if (ext === 'tcx') {
-    const text = await file.text();
-    ({ summary, records } = parseTcx(text));
-  } else {
-    // Content-sniff fallback: check if it looks like XML
-    const text = await file.text();
-    if (text.trim().startsWith('<') && text.includes('<trkpt')) {
-      ({ summary, records } = parseGpx(text));
-    } else if (text.trim().startsWith('<') && text.includes('<Trackpoint')) {
-      ({ summary, records } = parseTcx(text));
-    } else {
-      throw new Error(`Unsupported file type "${file.name}". Upload a .fit, .gpx, or .tcx file.`);
-    }
+  const isGzip = name.endsWith('.gz') || (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
+  if (isGzip) {
+    bytes = gunzipSync(bytes);
+    if (name.endsWith('.gz')) name = name.slice(0, -3);
   }
+
+  const ext = name.split('.').pop() ?? '';
+  if (ext === 'fit') return parseFit(bytes.slice().buffer);
+  if (ext === 'gpx') return parseGpx(new TextDecoder().decode(bytes));
+  if (ext === 'tcx') return parseTcx(new TextDecoder().decode(bytes));
+
+  // Extension didn't disclose the type (common once a `.gz` is stripped or the
+  // picker mangles the name). Sniff: GPX/TCX are XML; FIT is binary with the
+  // ASCII tag ".FIT" at byte offset 8.
+  const text = new TextDecoder().decode(bytes);
+  if (text.trim().startsWith('<') && text.includes('<trkpt')) return parseGpx(text);
+  if (text.trim().startsWith('<') && text.includes('<Trackpoint')) return parseTcx(text);
+  if (bytes.length > 12 && bytes[8] === 0x2e && bytes[9] === 0x46 && bytes[10] === 0x49 && bytes[11] === 0x54) {
+    return parseFit(bytes.slice().buffer);
+  }
+  throw new Error(`Unsupported file type "${file.name}". Upload a .fit, .gpx, or .tcx file (gzipped is fine).`);
+}
+
+export async function importActivityFile(file: File): Promise<string> {
+  const { summary, records } = await parseActivityFileToStreams(file);
 
   if (records.length === 0 && summary.durationSec === 0) {
     throw new Error(`Could not read activity data from "${file.name}". The file may be empty or corrupted.`);
@@ -702,6 +720,144 @@ export async function importActivityFile(file: File): Promise<string> {
   parts.push(dateLabel);
 
   return `Imported: ${parts.join(', ')}`;
+}
+
+export interface EnrichFromFileResult extends EnrichResult {
+  /** Human-readable label for the parsed file's activity (for toasts / warnings). */
+  fileLabel: string;
+}
+
+export interface ParsedEnrichFile {
+  /** The enriched row to merge into an existing actual. */
+  row: GarminActivityRow;
+  /** Human-readable label for the parsed file's activity (for toasts / warnings). */
+  fileLabel: string;
+}
+
+/**
+ * Parse an activity file ONCE into an enriched row, for the "Add detail from
+ * Strava" flow. Split from the apply step so the caller can parse a single time
+ * and then attempt the merge twice (once strict, once forced after a confirm)
+ * without re-reading and re-parsing the file from disk.
+ */
+export async function parseActivityFileToRow(file: File): Promise<ParsedEnrichFile> {
+  const { summary, records } = await parseActivityFileToStreams(file);
+  if (records.length === 0 && summary.durationSec === 0) {
+    throw new Error(`Could not read activity data from "${file.name}". The file may be empty or corrupted.`);
+  }
+  const s = getMutableState();
+  const restingHR = s.restingHR && s.restingHR > 0 ? s.restingHR : null;
+  const userMaxHR = s.maxHR && s.maxHR > 0 ? s.maxHR : null;
+  const age = s.onboarding?.age ?? null;
+  const sex: 'male' | 'female' | undefined =
+    s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const row = streamsToActivityRow(summary, records, restingHR, userMaxHR, age, sex);
+
+  const distKm = summary.distanceM ? (summary.distanceM / 1000).toFixed(1) + ' km ' : '';
+  const fileLabel = `${distKm}${formatActivityType(summary.activityType).toLowerCase()}, ${formatDateLabel(summary.startTimeISO)}`;
+  return { row, fileLabel };
+}
+
+/**
+ * Merge an already-parsed file row into an EXISTING activity in place. The "Add
+ * detail from Strava" flow: a thin Apple-Health/Garmin row (avg HR + duration
+ * only) gains HR zones, splits, route and iTRIMP without a duplicate. The
+ * `garminId` provenance is preserved (see activity-enrich-merge); the matcher's
+ * re-enrich loop is guarded against clobbering the result (activity-matcher.ts).
+ *
+ * Returns `accepted:false` when the file doesn't match (wrong time/duration) or
+ * carries nothing new; pass `{ force:true }` to merge anyway after the user
+ * confirms. On accept the patch is applied to `actual` in place, PBs + blended
+ * fitness refresh (mirroring importActivityFile), and state is saved.
+ */
+export function applyEnrichment(
+  actual: GarminActual,
+  row: GarminActivityRow,
+  opts: { force?: boolean } = {},
+): EnrichResult {
+  const result = enrichActualFromParsedRow(actual, row, opts);
+  if (!result.accepted) return result;
+
+  Object.assign(actual, result.patch);
+  // An enriched run can beat a PB and shift blended fitness, exactly as a fresh
+  // import would. Mirror importActivityFile's post-step so the numbers move.
+  applyPBsFromRows([row]);
+  const s = getMutableState();
+  try { refreshBlendedFitness(s); } catch (e) { console.warn('[Enrich] refreshBlendedFitness failed:', e); }
+  saveState();
+  // Back up just this enrichment to its own row so the user's other devices
+  // (e.g. a phone, when the file was uploaded on web) pick it up — independent
+  // of the fragile full-snapshot backup. Fire-and-forget.
+  if (actual.garminId && result.patch) {
+    void import('@/data/enrichmentSync').then(m => m.pushEnrichment(actual.garminId!, result.patch!));
+  }
+  return result;
+}
+
+/**
+ * Convenience composer: parse + apply in one call. The UI uses the two-step
+ * (`parseActivityFileToRow` then `applyEnrichment`) so a forced retry reuses the
+ * already-parsed row; this is here for any caller that doesn't need that.
+ */
+export async function enrichActualFromFile(
+  actual: GarminActual,
+  file: File,
+  opts: { force?: boolean } = {},
+): Promise<EnrichFromFileResult> {
+  const { row, fileLabel } = await parseActivityFileToRow(file);
+  return { ...applyEnrichment(actual, row, opts), fileLabel };
+}
+
+export interface IngestActivityResult {
+  /** enriched: attached to an existing thin run. already-detailed: that run was
+   *  already rich. imported: nothing matched, brought in as a new activity. */
+  outcome: 'enriched' | 'already-detailed' | 'imported';
+  /** Toast-ready, user-facing message. */
+  message: string;
+}
+
+/**
+ * One file in, the right thing happens. The "easiest from the phone" entry: the
+ * user drops a single activity file (a Strava "Export Original" .fit, picked
+ * in-app or shared to the app) and we attach it to the run it belongs to
+ * WITHOUT making them find that run first.
+ *
+ * The file carries its own start time, so we scan the live state for a thin
+ * activity (avg HR + time, no zones/splits/route — `isThinActivity`) whose
+ * start + duration match (`fileMatchesActual`, ±10 min / ±15%) and enrich that
+ * record in place, preserving its provenance. If nothing matches, the file is
+ * imported as a new activity exactly like the manual importer. We only attach
+ * to THIN rows: a run that is already rich (e.g. Strava-sourced) is left to the
+ * matcher's normal dedup so we never overwrite better data or duplicate it.
+ */
+export async function ingestActivityFile(file: File): Promise<IngestActivityResult> {
+  const { row, fileLabel } = await parseActivityFileToRow(file);
+
+  const s = getMutableState();
+  let match: GarminActual | null = null;
+  for (const wk of s.wks ?? []) {
+    for (const a of Object.values(wk.garminActuals ?? {})) {
+      if (a && isThinActivity(a) && fileMatchesActual(a, row).ok) { match = a; break; }
+    }
+    if (match) break;
+  }
+
+  if (match) {
+    const result = applyEnrichment(match, row);
+    if (result.accepted) {
+      render();
+      const added = result.added && result.added.length ? result.added.join(', ') : 'detail';
+      return { outcome: 'enriched', message: `Added ${added} to your ${fileLabel}.` };
+    }
+    if (result.reason === 'no-new-data') {
+      return { outcome: 'already-detailed', message: `Your ${fileLabel} already has that detail.` };
+    }
+    // Matched a thin row but the merge was rejected for an unexpected reason:
+    // fall through and import as a new activity rather than silently dropping it.
+  }
+
+  const message = await importActivityFile(file);
+  return { outcome: 'imported', message };
 }
 
 export interface ArchiveImportResult {

@@ -184,10 +184,10 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
             : `Only ${calibratedStationCount} station${calibratedStationCount === 1 ? '' : 's'} tested. Each tested station replaces a seed estimate with your actual capacity.`
       }</div>
       ${!prevSec ? `
-        <button id="hx-cd-log-prev" style="display:block;width:100%;padding:11px;border-radius:10px;background:transparent;border:1px solid var(--c-border-strong);color:${TEXT_M};font-size:14px;font-weight:600;cursor:pointer;margin-bottom:8px">Log a previous HYROX time</button>
+        <button id="hx-cd-log-prev" class="m-btn-secondary" style="display:block;width:100%;padding:11px;font-size:14px;margin-bottom:8px">Log a previous HYROX time</button>
       ` : ''}
       ${sparseStations ? `
-        <button id="hx-cd-test-stations" style="display:block;width:100%;padding:11px;border-radius:10px;background:transparent;border:1px solid var(--c-border);color:${TEXT_M};font-size:13px;cursor:pointer">Test station benchmarks</button>
+        <button id="hx-cd-test-stations" class="m-btn-secondary" style="display:block;width:100%;padding:11px;font-size:13px">Test station benchmarks</button>
       ` : ''}
     </div>
   ` : '';
@@ -198,7 +198,7 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
         <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Previous HYROX</div>
         <div style="font-size:24px;font-weight:600;color:${TEXT_M};letter-spacing:-0.01em;font-variant-numeric:tabular-nums">${fmtMmSs(prevSec)}</div>
         <div style="font-size:13px;color:${TEXT_S};margin-top:4px">${prevFmtLabel}${prevEvent ? ` · ${escapeText(prevEvent.city)}` : ''}</div>
-        <button id="hx-cd-prev-format" style="margin-top:12px;padding:8px 12px;border-radius:8px;background:transparent;border:1px solid var(--c-border);color:${TEXT_M};font-size:12px;cursor:pointer">Change format</button>
+        <button id="hx-cd-prev-format" class="m-btn-secondary" style="margin-top:12px;padding:8px 12px;font-size:12px">Change format</button>
       </div>
     `
     : '';
@@ -267,8 +267,6 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
   }
   const paceSecKm = Math.round(prediction.runSec / 8);
   const vdot = s.v ?? 0;
-  const pac = s.pac;
-  const unitPref = s.unitPref ?? 'km';
   const sourceCopy = prediction.runPaceSource === 'derived'
     ? `Updated from your VDOT (${vdot.toFixed(1)}). Recalculates from your runs as fitness changes.`
     : prediction.runPaceSource === 'seed'
@@ -282,18 +280,9 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
     ? buildBenchmarkTrendChart(vdotSamples, '#3B82F6', 'rgba(59,130,246,0.08)', '', false)
     : '';
 
-  const paceZonesCard = pac
-    ? `
-      <div style="${CARD};margin-bottom:14px">
-        <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Training pace zones</div>
-        ${statRow('Easy pace', fp(pac.e, unitPref))}
-        ${statRow('Marathon pace', fp(pac.m, unitPref))}
-        ${statRow('Threshold pace', fp(pac.t, unitPref))}
-        ${statRow('Interval pace', fp(pac.i, unitPref))}
-        ${statRow('Repetition pace', fp(pac.r, unitPref))}
-      </div>
-    `
-    : '';
+  // ISSUE-274: the Daniels training-zone card (Easy/Marathon/Threshold/Interval/Rep
+  // from s.pac) was running-mode content leaking into the HYROX run-pace detail.
+  // HYROX coaching is built on Critical Pace, not marathon zones — card removed.
 
   const body = `
     <div style="${CARD};margin-bottom:14px">
@@ -309,7 +298,6 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Population avg' : 'Set manually')}
     </div>
 
-    ${paceZonesCard}
 
     ${captionCard(sourceCopy + ' Run pace is the largest single contributor to the predicted finish, so a recent run sharpens the headline number more than any single station test.')}
   `;
@@ -397,7 +385,7 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
       </div>
       ${calibBar}
       ${improvementRow}
-      <button id="hx-cd-test-stations" style="width:100%;margin-top:14px;padding:10px;border-radius:8px;background:var(--c-black);border:none;color:#FDFCF7;font-size:13px;font-weight:500;cursor:pointer">Test stations</button>
+      <button id="hx-cd-test-stations" class="m-btn-primary" style="width:100%;margin-top:14px;padding:10px;font-size:13px">Test stations</button>
     </div>
 
     <div style="${CARD};margin-bottom:14px">
@@ -618,7 +606,7 @@ function pageVenue(s: SimulatorState): { title: string; subhead: string; body: s
         <div style="${CARD};margin-bottom:14px;text-align:center">
           <div style="font-size:14px;color:${TEXT_M};line-height:1.5;margin-bottom:6px">Pick your race</div>
           <div style="font-size:12px;color:${TEXT_S};margin-bottom:14px">Mosaic builds your plan around the race date and applies floor surface, run-loop geometry, temperature, and altitude adjustments to the prediction.</div>
-          <button id="hx-cd-pick-race" style="width:100%;padding:10px;border-radius:8px;background:var(--c-black);border:none;color:#FDFCF7;font-size:13px;font-weight:500;cursor:pointer">Pick race</button>
+          <button id="hx-cd-pick-race" class="m-btn-primary" style="width:100%;padding:10px;font-size:13px">Pick race</button>
         </div>
         ${captionCard('Course factors apply peer-reviewed estimates of time cost per condition: Minetti for elevation grade, Ely for heat, Bassett for altitude. Climate dominates at hot venues even when the course itself is flat.')}
       `,
@@ -702,7 +690,7 @@ function pageVenue(s: SimulatorState): { title: string; subhead: string; body: s
     </div>
 
     <div style="margin-bottom:14px">
-      <button id="hx-cd-pick-race" style="width:100%;padding:11px;border-radius:10px;background:transparent;border:1px solid rgba(0,0,0,0.12);color:${TEXT_M};font-size:13px;font-weight:500;cursor:pointer;font-family:inherit">Change race</button>
+      <button id="hx-cd-pick-race" class="m-btn-secondary" style="width:100%;padding:11px;font-size:13px">Change race</button>
     </div>
 
     ${captionCard('Course factors apply peer-reviewed estimates of time cost per condition: Minetti for elevation grade, Ely for heat, Bassett for altitude. Climate dominates at hot venues even when the course itself is flat. The factor is applied to your raw fitness pace to get the adjusted finish on the hero.')}
@@ -738,11 +726,11 @@ export function renderHyroxChipDetail(key: HyroxChipKey): void {
 
   container.innerHTML = `
     <style>
-      @keyframes hxcdFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes hxcdFloatUp { from { opacity:0; } to { opacity:1; } }
       .hxcd-fade { opacity:0; animation:hxcdFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="hxcd-view" style="
+    <div id="hxcd-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -882,8 +870,8 @@ function openHyroxRacePickerModal(): void {
         ${events.map(eventRow).join('')}
       </div>
       <div style="display:flex;gap:10px">
-        <button id="hx-race-cancel" style="flex:1;padding:11px;border-radius:10px;border:1px solid rgba(0,0,0,0.10);background:transparent;font-size:13px;color:var(--c-muted);cursor:pointer">Cancel</button>
-        <button id="hx-race-save" style="flex:1;padding:11px;border-radius:10px;border:none;background:#0F172A;color:#fff;font-size:13px;font-weight:500;cursor:pointer;opacity:0.5" disabled>Save</button>
+        <button id="hx-race-cancel" class="m-btn-secondary" style="flex:1;padding:11px;font-size:13px">Cancel</button>
+        <button id="hx-race-save" class="m-btn-primary" style="flex:1;padding:11px;font-size:13px;opacity:0.5" disabled>Save</button>
       </div>
     </div>
   `;

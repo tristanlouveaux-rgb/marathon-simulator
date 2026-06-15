@@ -6,7 +6,8 @@ import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUN
 import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
 import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
-import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, restoreHistoryFromServer } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, restoreHistoryFromServer, startStravaConnect } from '@/data/stravaSync';
+import { startGarminConnect } from '@/data/garminOAuth';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { vt } from '@/calculations/vdot';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
@@ -24,6 +25,7 @@ import type { SimulatorState } from '@/types/state';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 import { poweredByStrava, connectWithStravaButton } from './strava-brand';
+import { openStravaHistoryGuide } from './strava-history-guide';
 import { listStrengthSwaps, clearStrengthSwap, clearAllStrengthSwaps } from '@/state/strength-swaps';
 
 let garminConnected = false;
@@ -134,7 +136,7 @@ async function checkGarminStatus(): Promise<void> {
 }
 
 function getUserEmail(): string {
-  if (isSimulatorMode()) return 'Simulator mode';
+  if (isSimulatorMode()) return 'No account';
   const sessionStr = localStorage.getItem('sb-' + new URL(SUPABASE_URL).hostname.split('.')[0] + '-auth-token');
   if (sessionStr) {
     try {
@@ -200,8 +202,10 @@ function getAccountHTML(): string {
   const isGuest = !sim && !!s.isGuestAccount;
   // email is user-supplied (auth) — escape before it lands in innerHTML.
   const escHtml = (str: string) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const displayName = escHtml(sim ? 'Simulator' : isGuest ? 'Guest' : email);
-  const initials = sim ? 'SIM'
+  // Sim users entered a first name in onboarding — use it; never show "Simulator".
+  const simName = (s.onboarding?.name ?? '').trim();
+  const displayName = escHtml(sim ? (simName || 'Guest') : isGuest ? 'Guest' : email);
+  const initials = sim ? (simName ? simName.slice(0, 2).toUpperCase() : 'G')
     : isGuest ? 'G'
     : email.includes('@') ? (email[0] + (email.split('@')[0][1] ?? '')).toUpperCase()
     : email.slice(0, 2).toUpperCase();
@@ -217,7 +221,7 @@ function getAccountHTML(): string {
         <div style="width:72px;height:72px;border-radius:50%;background:var(--c-black);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#fff;letter-spacing:-0.02em;flex-shrink:0">${initials}</div>
         <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-top:8px">${displayName}</div>
         ${tierDisplay ? `<div style="font-size:12px;color:var(--c-muted);padding:3px 0">${tierDisplay}</div>` : ''}
-        ${sim ? `<div style="font-size:12px;color:var(--c-muted);padding:2px 0">Simulator Mode</div>` : ''}
+        ${sim ? `<div style="font-size:12px;color:var(--c-muted);padding:2px 0">Using Mosaic without an account</div>` : ''}
       </div>
 
       <div style="padding:0 16px 90px">
@@ -340,7 +344,7 @@ function getAccountHTML(): string {
         <div style="margin-top:28px">
           ${sim ? `
             <button id="btn-exit-simulator" style="width:100%;padding:15px;border-radius:var(--r-card);border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;color:var(--c-muted);cursor:pointer">
-              Exit Simulator Mode
+              Sign in or create an account
             </button>
           ` : `
             <button id="btn-sign-out" style="width:100%;padding:15px;border-radius:var(--r-card);border:none;background:none;font-size:15px;font-weight:500;color:#dc2626;cursor:pointer">
@@ -768,6 +772,12 @@ function renderTrainingHistoryGroup(): string {
         </div>
         ${pillBtn('btn-fetch-history', 'Load', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')}
       </div>
+      <div style="padding:0 16px 14px">
+        <button id="btn-import-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
+          Import history from file
+        </button>
+        <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:8px">No Strava connection? Export your history from Strava and upload the .zip. Walks you through it.</div>
+      </div>
     `);
   }
 
@@ -807,7 +817,10 @@ function renderTrainingHistoryGroup(): string {
       <button id="btn-restore-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
         Restore Activity History
       </button>
-      <div style="font-size:11px;color:var(--c-faint);line-height:1.5">Restore reads the last 90 days of activities from the server and rebuilds the daily history shown on rolling load, freshness, and coach views. Use after a plan reset that wiped your timeline.</div>
+      <button id="btn-import-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
+        Import history from file
+      </button>
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.5">Restore reads the last 90 days of activities from the server and rebuilds the daily history shown on rolling load, freshness, and coach views. Use after a plan reset that wiped your timeline. Import history loads a Strava export .zip from your own files.</div>
     </div>
   `);
 }
@@ -896,6 +909,19 @@ function renderPreferencesGroup(): string {
     </div>
     ${rowDivider()}`;
     })()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Auto-pause</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Pauses the clock automatically when you stop and resumes when you move. Turn off to keep the timer running through stops.</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0">
+        <button id="btn-autopause-off"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.gpsAutoPause === false ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">Off</button>
+        <button id="btn-autopause-on"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.gpsAutoPause !== false ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">On</button>
+      </div>
+    </div>
+    ${rowDivider()}
     <div id="sleep-target-display">
       <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
         <div>
@@ -1943,6 +1969,25 @@ function wireAccountHandlers(): void {
     });
   });
 
+  const setAutoPauseButtonActive = (on: boolean): void => {
+    const onBtn = document.getElementById('btn-autopause-on') as HTMLButtonElement | null;
+    const offBtn = document.getElementById('btn-autopause-off') as HTMLButtonElement | null;
+    if (onBtn) onBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+    if (offBtn) offBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  };
+  document.getElementById('btn-autopause-on')?.addEventListener('click', () => {
+    getMutableState().gpsAutoPause = true;
+    saveState();
+    setAutoPauseButtonActive(true);
+    import('./gps-events').then(({ setActiveTrackerAutoPause }) => setActiveTrackerAutoPause(true));
+  });
+  document.getElementById('btn-autopause-off')?.addEventListener('click', () => {
+    getMutableState().gpsAutoPause = false;
+    saveState();
+    setAutoPauseButtonActive(false);
+    import('./gps-events').then(({ setActiveTrackerAutoPause }) => setActiveTrackerAutoPause(false));
+  });
+
   document.getElementById('btn-edit-plan')?.addEventListener('click', () => {
     import('./events').then(({ editSettings }) => editSettings());
   });
@@ -2012,6 +2057,11 @@ function wireAccountHandlers(): void {
         btn.disabled = false;
       }, 3000);
     }
+  });
+
+  // Import history from a Strava export .zip (no API, works for any user).
+  document.getElementById('btn-import-history')?.addEventListener('click', () => {
+    openStravaHistoryGuide({ onComplete: () => renderAccountView() });
   });
 
   // Strava history: Fetch or refresh
@@ -2111,28 +2161,10 @@ function wireAccountHandlers(): void {
     const errorEl = document.getElementById('garmin-error');
     resetGarminBackfillGuard();
     try {
-      const token = await getAccessToken();
-      const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/garmin-auth-start`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'apikey': SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ appOrigin: window.location.origin }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        if (errorEl) {
-          errorEl.textContent = `Failed to start Garmin auth (${res.status}): ${text}`;
-          errorEl.classList.remove('hidden');
-        }
-        return;
-      }
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      }
+      // Native-aware helper: in-app browser + mosaic:// deep-link return on iOS,
+      // full-page redirect on web. Hardcoding appOrigin to capacitor://localhost
+      // (the old inline call) is what iOS can't reopen.
+      await startGarminConnect();
     } catch (err) {
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
         if (errorEl) {
@@ -2352,30 +2384,20 @@ function wireAccountHandlers(): void {
     };
     try {
       btn.disabled = true;
-      const token = await getAccessToken();
-      const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/strava-auth-start`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'apikey': SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ appOrigin: window.location.origin }),
-      });
-      if (!res.ok) {
-        console.error('[Strava] auth start failed', res.status);
-        fail('Could not start Strava connect. Try again in a moment.');
-        return;
-      }
-      const data = await res.json();
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        fail('Could not start Strava connect. Try again in a moment.');
-      }
+      // Routes through the native-aware helper: on iOS it opens the in-app
+      // browser and returns via the mosaic:// deep link (app stays alive, no
+      // capacitor://localhost bounce that iOS can't reopen); on web it's the
+      // full-page redirect. Do NOT hardcode appOrigin here.
+      await startStravaConnect();
+      // Native path returns here with the app still alive (web navigated away).
+      // Re-enable so a cancelled in-app-browser flow leaves a usable button.
+      btn.disabled = false;
+      if (originalText != null) btn.textContent = originalText;
     } catch (err) {
       console.error('[Strava] connect error', err);
-      fail('Could not start Strava connect. Check your connection and try again.');
+      fail(err instanceof Error && err.message === 'SESSION_EXPIRED'
+        ? 'Session expired. Sign in again to connect Strava.'
+        : 'Could not start Strava connect. Check your connection and try again.');
     }
   });
 

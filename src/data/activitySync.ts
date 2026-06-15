@@ -129,6 +129,16 @@ export function processPendingCrossTraining(): void {
   if (_pendingModalActive) return;
   _pendingModalActive = true;
 
+  // Plan day 1 (the start of a plan — which may not be a Monday): no planned
+  // session day has elapsed yet, so there is nothing to reconcile. Don't auto-open
+  // the Match Activities screen on day one. Items still queue and stay reachable
+  // via the "Review" button; the screen auto-shows from day two onward.
+  if (s.planStartDate) {
+    const startMs = new Date(s.planStartDate + 'T00:00:00').getTime();
+    const daysSinceStart = Math.floor((Date.now() - startMs) / 86_400_000);
+    if (daysSinceStart < 1) { _pendingModalActive = false; return; }
+  }
+
   // Compute current week date range so we only show this week's activities
   let weekStart: Date | undefined;
   let weekEnd: Date | undefined;
@@ -177,11 +187,19 @@ export function processPendingCrossTraining(): void {
     });
   };
   if (isBatchSync(unprocessed)) {
-    // Backlog: open the full review. openActivityReReview (not showActivityReview)
-    // so already-matched recordings are reconstituted into the tray and their plan
-    // slots are visible — a mid-week sync used to show only the new items, hiding
-    // every occupied slot and making reassignment impossible ("this page doesn't
-    // show all planned workouts").
+    // Auto-open the full Match Activities review for new activities, but cap it to
+    // ONCE PER CALENDAR DAY so it never re-nags on every launch/sync within a day.
+    // A new activity tomorrow (or anything still unmatched) re-opens it once that
+    // day. The "Review" button (home + plan) reopens it on demand any time.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    if (wk.autoReviewShownDate === today) { _pendingModalActive = false; return; }
+    wk.autoReviewShownDate = today;
+    saveState();
+    // openActivityReReview (not showActivityReview) so already-matched recordings
+    // are reconstituted into the tray and their plan slots are visible — a mid-week
+    // sync used to show only the new items, hiding every occupied slot and making
+    // reassignment impossible ("this page doesn't show all planned workouts").
     openActivityReReview(onReviewDone);
   } else {
     // Flowing week: auto-match to slots, show load modal only for overflow

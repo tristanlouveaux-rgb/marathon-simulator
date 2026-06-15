@@ -37,8 +37,9 @@ import type { AbilityBand } from '@/types/training';
 /** Discipline keys used throughout the race-readiness model. */
 export type ReadinessDiscipline = 'swim' | 'bike' | 'run';
 
-/** Distance keys spanning all triathlon races + standalone running. */
-export type ReadinessDistance = TriathlonDistance | 'sprint' | 'olympic'
+/** Distance keys spanning all triathlon races (sprint/olympic/t100/70.3/ironman
+ *  via TriathlonDistance) + standalone running. */
+export type ReadinessDistance = TriathlonDistance
   | 'marathon' | 'half' | '10k' | '5k';
 
 interface BandTargets {
@@ -137,6 +138,16 @@ export const RACE_READINESS_TARGETS: Record<ReadinessDistance, DistanceTargets> 
     maxPenalty: 0.05,
     closureWeeks: 6,
     scoreWeights: { volume: 0.60, longest: 0.40 },
+  },
+  t100: {
+    // PTO T100: 2km swim / 80km bike / 18km run. Sits ≈70.3 with a slightly
+    // larger swim and shorter bike/run. Targets scaled from the 70.3 row.
+    swim: { byBand: makeBandTargets(2.0,  0.85) },  // ~2.5 km longest (swim = 70.3)
+    bike: { byBand: makeBandTargets(5.0,  2.75) },  // 80km < 90km → just under 70.3
+    run:  { byBand: makeBandTargets(36,   1.6)  },  // 18km < 21.1km
+    maxPenalty: 0.10,
+    closureWeeks: 9,
+    scoreWeights: { volume: 0.50, longest: 0.50 },  // balanced (≈70.3)
   },
   '70.3': {
     swim: { byBand: makeBandTargets(2.0,  0.85) },  // ~2.5 km longest
@@ -261,10 +272,9 @@ export const RUN_PB_RECENCY_BANDS = [
  */
 export type CrossCreditDiscipline = 'swim' | 'bike' | 'run';
 
-/** Distance keys for the tri cross-credit table — broader than `TriathlonDistance`
- *  (which is only 70.3/ironman) because we need to express credit between sprint,
- *  olympic, 70.3 and ironman. */
-export type TriCrossCreditDistance = 'sprint' | 'olympic' | '70.3' | 'ironman';
+/** Distance keys for the tri cross-credit table. Equivalent to `TriathlonDistance`;
+ *  kept as a distinct alias for documentation of this table's intent. */
+export type TriCrossCreditDistance = 'sprint' | 'olympic' | 't100' | '70.3' | 'ironman';
 
 export const TRI_DISTANCE_CROSS_CREDIT: Partial<Record<
   TriCrossCreditDistance,
@@ -273,24 +283,35 @@ export const TRI_DISTANCE_CROSS_CREDIT: Partial<Record<
   ironman: {
     ironman: { swim: 1.0, bike: 1.0, run: 1.0 },
     '70.3':  { swim: 1.0, bike: 1.0, run: 1.0 },
+    t100:    { swim: 1.0, bike: 1.0, run: 1.0 },
     olympic: { swim: 1.0, bike: 1.0, run: 1.0 },
     sprint:  { swim: 1.0, bike: 1.0, run: 1.0 },
   },
   '70.3': {
     ironman: { swim: 0.6, bike: 0.6, run: 0.5 },
     '70.3':  { swim: 1.0, bike: 1.0, run: 1.0 },
+    t100:    { swim: 1.0, bike: 1.0, run: 1.0 },  // ≈ equal demand
+    olympic: { swim: 1.0, bike: 1.0, run: 1.0 },
+    sprint:  { swim: 1.0, bike: 1.0, run: 1.0 },
+  },
+  t100: {
+    ironman: { swim: 0.6, bike: 0.6, run: 0.5 },  // shorter → IM partial
+    '70.3':  { swim: 1.0, bike: 1.0, run: 1.0 },  // ≈ equal demand
+    t100:    { swim: 1.0, bike: 1.0, run: 1.0 },
     olympic: { swim: 1.0, bike: 1.0, run: 1.0 },
     sprint:  { swim: 1.0, bike: 1.0, run: 1.0 },
   },
   olympic: {
     ironman: { swim: 0.3, bike: 0.3, run: 0.3 },
     '70.3':  { swim: 0.6, bike: 0.6, run: 0.5 },
+    t100:    { swim: 0.6, bike: 0.6, run: 0.5 },  // ≈ 70.3 (shorter → longer)
     olympic: { swim: 1.0, bike: 1.0, run: 1.0 },
     sprint:  { swim: 1.0, bike: 1.0, run: 1.0 },
   },
   sprint: {
     ironman: { swim: 0.2, bike: 0.2, run: 0.2 },
     '70.3':  { swim: 0.3, bike: 0.3, run: 0.3 },
+    t100:    { swim: 0.3, bike: 0.3, run: 0.3 },  // ≈ 70.3 (much shorter → longer)
     olympic: { swim: 0.7, bike: 0.7, run: 1.0 },
     sprint:  { swim: 1.0, bike: 1.0, run: 1.0 },
   },

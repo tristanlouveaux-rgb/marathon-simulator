@@ -27,6 +27,7 @@ import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { loadActivitiesFromDB } from '@/data/tri-activity-loader';
 import { deriveTriBenchmarksFromHistory, type TriBenchmarks } from '@/calculations/tri-benchmarks-from-history';
 import { deriveVdotFromLT } from '@/calculations/lt-derivation';
+import { levelAllowsEstimatedStart } from '@/calculations/beginner-fitness';
 import { cv } from '@/calculations/vdot';
 import { recomputeLT, diagnoseLTForState } from '@/data/ltSync';
 import { awaitStartupSyncs } from '@/main';
@@ -903,6 +904,45 @@ const LOADING_STEP_DETAIL = [
 // in-place updates until the next milestone overwrites it. Reset on mount.
 let loadingDetail: string | null = null;
 
+// Label cross-fade duration. The text swap MUST wait for the full fade so the
+// old glyphs reach opacity 0 before being replaced — otherwise WKWebView leaves
+// the half-faded old text un-rastered and the new text paints on top of it
+// (the "LcReading your physiologyry" ghost). Keep this in lockstep with the
+// `.rev-load-label-fade` CSS transition below.
+const LABEL_FADE_MS = 240;
+
+// Pending fade-swap timers. A new change cancels any in-flight swap so
+// multiple fades can't stack and race each other. The note gets its own
+// timer because facts (`setLoadingDetail`) and step changes can both swap it.
+let labelFadeTimer: number | null = null;
+let noteFadeTimer: number | null = null;
+
+/**
+ * Cross-fade an element's text. Fades to opacity 0, swaps `textContent` only
+ * once the old glyphs are fully invisible, then fades back in. Swapping
+ * mid-fade is what produces the overlapping-text ghost on WKWebView (the old
+ * half-faded glyphs stay un-rastered and the new text paints on top). The
+ * caller owns the pending-timer slot so a fresh swap can cancel an in-flight
+ * one. No-op when the text is unchanged (prevents needless re-fades on the
+ * 1.5s heartbeat). Requires the element to carry `.rev-load-label-fade`.
+ */
+function swapFadedText(
+  el: HTMLElement,
+  newText: string,
+  getTimer: () => number | null,
+  setTimer: (id: number | null) => void,
+): void {
+  if ((el.textContent ?? '').trim() === newText.trim()) return;
+  const pending = getTimer();
+  if (pending !== null) window.clearTimeout(pending);
+  el.style.opacity = '0';
+  setTimer(window.setTimeout(() => {
+    setTimer(null);
+    el.textContent = newText;
+    el.style.opacity = '1';
+  }, LABEL_FADE_MS));
+}
+
 const LOAD_RADIUS = 44;
 const LOAD_CIRCUMFERENCE = 2 * Math.PI * LOAD_RADIUS; // ~276.5
 
@@ -956,28 +996,28 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean, msSinceMou
 
   const labelEl = document.getElementById('revl-step-label');
   if (labelEl) {
-    const newLabel = loadStepLabel(activeStep);
-    if (labelEl.textContent !== newLabel) {
-      labelEl.style.opacity = '0';
-      setTimeout(() => {
-        labelEl.textContent = newLabel;
-        labelEl.style.opacity = '1';
-      }, 220);
-    }
+    swapFadedText(labelEl, loadStepLabel(activeStep),
+      () => labelFadeTimer, (id) => { labelFadeTimer = id; });
   }
 
-  const noteEl = document.getElementById('revl-note');
-  if (noteEl) noteEl.textContent = loadNote(activeStep, timedOut, msSinceMount);
+  setLoadingNoteText(loadNote(activeStep, timedOut, msSinceMount));
 
   return true;
+}
+
+/** Cross-fade the loading note line in place. Single chokepoint for every
+ *  note swap (step change, surfaced fact, long-wait ladder) so they all share
+ *  the same anti-ghost fade and can't paint over each other. */
+function setLoadingNoteText(text: string): void {
+  const noteEl = document.getElementById('revl-note');
+  if (noteEl) swapFadedText(noteEl, text, () => noteFadeTimer, (id) => { noteFadeTimer = id; });
 }
 
 /** Push a real fact from the pipeline onto the loading note line
  *  ("312 activities imported"). In-place, no re-render. */
 function setLoadingDetail(detail: string): void {
   loadingDetail = detail;
-  const noteEl = document.getElementById('revl-note');
-  if (noteEl) noteEl.textContent = detail;
+  setLoadingNoteText(detail);
 }
 
 /**
@@ -1036,8 +1076,7 @@ function startLoadingHeartbeat(getStep: () => number, isTimedOut: () => boolean)
       }
     } else {
       // Long-wait ladder: refresh the note so the 90s escalation appears.
-      const noteEl = document.getElementById('revl-note');
-      if (noteEl) noteEl.textContent = loadTimeoutNote(performance.now() - mountedAt);
+      setLoadingNoteText(loadTimeoutNote(performance.now() - mountedAt));
     }
   };
 
@@ -1053,6 +1092,8 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
   // Initial mount. Build the full glass shell. Ring starts at the active
   // step's boundary (creep 0); the heartbeat advances it from there.
   loadingDetail = null; // fresh mount → fresh narration
+  if (labelFadeTimer !== null) { window.clearTimeout(labelFadeTimer); labelFadeTimer = null; }
+  if (noteFadeTimer !== null) { window.clearTimeout(noteFadeTimer); noteFadeTimer = null; }
   const dashoffset = loadDashoffset(activeStep, 0);
   const currentLabel = loadStepLabel(activeStep);
   const note = loadNote(activeStep, timedOut);
@@ -1066,7 +1107,9 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
         50%      { opacity: 1; }
       }
       .rev-load-fill { animation: revLoadBreathe 2.6s ease-in-out infinite; }
-      .rev-load-label-fade { transition: opacity 0.45s ease; }
+      /* Duration must match LABEL_FADE_MS so the JS swap fires only once the
+         old text is fully invisible (prevents the overlapping-text ghost). */
+      .rev-load-label-fade { transition: opacity 0.24s ease; }
       /* Continuous orbit so the screen visibly works during long single
          steps (the history import is one await with no sub-progress; the
          fill ring only moves on step changes). Pure SVG transform rotation:
@@ -1146,7 +1189,8 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
           </p>
 
           <!-- Note -->
-          <p id="revl-note" style="font-size:12.5px;font-weight:300;color:rgba(0,0,0,0.50);line-height:1.5;margin:0;max-width:280px">
+          <p id="revl-note" class="rev-load-label-fade"
+             style="font-size:12.5px;font-weight:300;color:rgba(0,0,0,0.50);line-height:1.5;margin:0;max-width:280px">
             ${note}
           </p>
 
@@ -1421,7 +1465,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
           ${state.trainingMode === 'triathlon' ? renderSwimEnvironmentRow(state) : ''}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderSectionLabel('Athlete profile')}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderAthleteTierRow()}
-          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderFieldPositionRow()}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderFieldPositionRow(state)}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderRunnerTypeRow(activeRunnerType)}
           ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderTriPbsSection(state, pbs, pbSources)}
         </div>
@@ -1462,6 +1506,7 @@ function refreshContinueGate(): void {
   }
 
   const missing: string[] = [];
+  let estimatingStart = false;
   if (onb.trainingMode === 'triathlon') {
     const runnerType = onb.confirmedRunnerType ?? onb.calculatedRunnerType ?? getState().typ ?? null;
     if (!runnerType) missing.push('Race preference');
@@ -1470,13 +1515,23 @@ function refreshContinueGate(): void {
     // via in-plan test cards (FTP test / HYROX assessment). Always enabled.
   } else {
     const pbCount = Object.values(onb.pbs ?? {}).filter(v => typeof v === 'number' && v > 0).length;
-    if (pbCount === 0) missing.push('at least one personal best');
+    if (pbCount === 0) {
+      // True beginners / cross-sport hybrids may have no time. Don't wall them
+      // out — let them build on a conservative seeded estimate (see
+      // beginner-fitness.ts) that refines from their real runs. Every other
+      // level implies a known time, so it still needs a real PB.
+      if (levelAllowsEstimatedStart(onb.experienceLevel)) estimatingStart = true;
+      else missing.push('at least one personal best');
+    }
   }
 
   cta.disabled = missing.length > 0;
   if (hint) {
     if (missing.length > 0) {
       hint.textContent = `Add ${missing.join(', ')} to continue.`;
+      hint.style.display = 'block';
+    } else if (estimatingStart) {
+      hint.textContent = "No recent times? We'll start you at a careful estimate and dial it in from your first runs.";
       hint.style.display = 'block';
     } else {
       hint.style.display = 'none';
@@ -1694,7 +1749,6 @@ function renderPbRow(
             id="r-pb-input"
             class="r-edit-input"
             type="text"
-            inputmode="numeric"
             placeholder="${isLong ? 'h:mm:ss' : 'mm:ss'}"
             value="${formatted !== '--' ? formatted : ''}"
           >
@@ -1930,7 +1984,7 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
         <div class="r-row-body">
           <p class="r-row-label">Lactate threshold pace</p>
           <div class="r-edit-row">
-            <input id="r-lt-input" class="r-edit-input" type="text" inputmode="numeric" placeholder="mm:ss" value="${cur}">
+            <input id="r-lt-input" class="r-edit-input" type="text" placeholder="mm:ss" value="${cur}">
             <span class="r-edit-unit">${unitLabel}</span>
           </div>
           <div class="r-edit-actions">
@@ -2078,6 +2132,26 @@ function renderAthleteTierRow(): string {
 const WMA_DIST_LABELS = { k5: '5K', k10: '10K', half: 'half marathon', marathon: 'marathon' } as const;
 
 /**
+ * Resolve the race distance to place fitness against on the review screen.
+ * The plan isn't built until "Build my plan", so `s.rd` is still the default
+ * ('half') here — the user's actual choice lives in onboarding state. Mirror
+ * the derivation in initialization.ts:400-404 (event → raceDistance; no-event
+ * → focus-derived reference) so a marathon athlete sees marathon numbers, not
+ * the stale default. Falls back to s.rd for non-running modes / safety.
+ */
+function reviewRaceDist(state: OnboardingState): string | null {
+  if (state.trainingMode === 'running' || state.trainingMode == null) {
+    if (state.trainingForEvent === false) {
+      return state.trainingFocus === 'speed' ? '5k'
+        : state.trainingFocus === 'both' ? '10k'
+        : 'half';
+    }
+    return state.raceDistance ?? getState().rd ?? null;
+  }
+  return getState().rd ?? null;
+}
+
+/**
  * Field-position row. Places current running fitness within the runner
  * population at the user's own target distance: the same VDOT the VO2max
  * row displays → projected time via Daniels → percentile against the
@@ -2087,9 +2161,9 @@ const WMA_DIST_LABELS = { k5: '5K', k10: '10K', half: 'half marathon', marathon:
  * undersold strong runners (Tristan, 2026-06-03). Scale anchors are the
  * real table's p90 (slow) / median / p1 (fast) times; faster sits right.
  */
-function renderFieldPositionRow(): string {
+function renderFieldPositionRow(state: OnboardingState): string {
   const s = getState();
-  const wmaKey = wmaKeyForRaceDist(s.rd);
+  const wmaKey = wmaKeyForRaceDist(reviewRaceDist(state));
   if (!wmaKey) return '';
   const physio = getPhysiologicalVdot(s);
   const sex = s.biologicalSex ?? s.onboarding?.biologicalSex;
@@ -2281,7 +2355,7 @@ function renderCssRow(state: OnboardingState): string {
         <div class="r-row-body">
           <p class="r-row-label">Swim CSS</p>
           <div class="r-edit-row">
-            <input id="r-css-input" class="r-edit-input" type="text" inputmode="numeric" placeholder="mm:ss" value="${cur}">
+            <input id="r-css-input" class="r-edit-input" type="text" placeholder="mm:ss" value="${cur}">
             <span class="r-edit-unit">/ 100m</span>
           </div>
           <div class="r-edit-actions">
@@ -2744,7 +2818,7 @@ function openInfoPopup(innerHTML: string): void {
   overlay.innerHTML = `
     <div style="background:#FDFCF7;border-radius:18px;max-width:440px;width:100%;max-height:80vh;overflow-y:auto;padding:24px 22px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
       ${innerHTML}
-      <button id="r-info-close" style="margin-top:18px;width:100%;height:44px;border-radius:22px;background:#0A0A0A;color:#FDFCF7;border:none;font-size:14px;font-weight:500;cursor:pointer">Close</button>
+      <button id="r-info-close" class="m-btn-primary" style="margin-top:18px;width:100%;height:44px;font-size:14px">Close</button>
     </div>
   `;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });

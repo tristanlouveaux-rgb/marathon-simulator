@@ -49,11 +49,11 @@ import type {
   TriProjectionMarkers,
   TriRacePrediction,
   TriSkillSlider,
+  TriathlonDistance,
 } from '@/types/triathlon';
 import {
   RACE_LEG_DISTANCES,
-  RUN_FATIGUE_DISCOUNT_70_3,
-  RUN_FATIGUE_DISCOUNT_IRONMAN,
+  RUN_FATIGUE_DISCOUNT,
   BRICK_MAX_DISCOUNT_REDUCTION,
   BASE_OW_PENALTY_NON_WETSUIT,
   BASE_OW_PENALTY_WETSUIT,
@@ -71,7 +71,7 @@ import {
 } from './bike-physics';
 import { getTriathlonById } from '@/data/triathlons';
 import { getAbilityBand } from './fatigue';
-import { cv } from './vdot';
+import { cv, vt } from './vdot';
 import { blendPredictions } from './predictions';
 import { effectiveVo2max } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
@@ -86,8 +86,7 @@ import {
   yearsOfTrainingToExperienceLevel,
   SWIM_HORIZON_PARAMS,
   BIKE_HORIZON_PARAMS,
-  RUN_HORIZON_PARAMS_703,
-  RUN_HORIZON_PARAMS_IM,
+  RUN_HORIZON_PARAMS_BY_DISTANCE,
 } from '@/constants/triathlon-horizon-params';
 import {
   recentHoursByDiscipline,
@@ -272,7 +271,7 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   // races have smaller volume gaps to close (sprint = 4w, IM = 12w).
   const swimRef = SWIM_HORIZON_PARAMS.ref_sessions['intermediate'];
   const bikeRef = BIKE_HORIZON_PARAMS.ref_sessions['intermediate'];
-  const runRefParams = distance === 'ironman' ? RUN_HORIZON_PARAMS_IM : RUN_HORIZON_PARAMS_703;
+  const runRefParams = RUN_HORIZON_PARAMS_BY_DISTANCE[distance];
   const runRef = runRefParams.ref_sessions['intermediate'];
   const closureWeeks = RACE_READINESS_TARGETS[distance].closureWeeks;
 
@@ -567,7 +566,7 @@ function buildProjection(args: {
   sessions: { swim: number; bike: number; run: number };
   adherence: ReturnType<typeof computeTriAdherence>;
   experienceLevel: string;
-  distance: '70.3' | 'ironman';
+  distance: TriathlonDistance;
   adaptation: TriAdaptationRatios;
   disciplineConfidence: TriDisciplineConfidence;
 }): { markers: TriProjectionMarkers; baselines: EffectiveBaselines } {
@@ -689,7 +688,7 @@ function buildProjection(args: {
 
 interface ComputeRaceTimeArgs {
   state: SimulatorState;
-  distance: '70.3' | 'ironman';
+  distance: TriathlonDistance;
   legs: { swimM: number; bikeKm: number; runKm: number };
   rating: { swim: number; bike: number; run: number };
   css: number;
@@ -818,7 +817,7 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   // to recent brick history. Max 40% reduction. Even a veteran still fades
   // (Bentley 2007; Landers 2008). Millet & Vleck 2000: brick-specific running
   // economy adapts over 10–15 sessions.
-  const baseDiscount = args.distance === 'ironman' ? RUN_FATIGUE_DISCOUNT_IRONMAN : RUN_FATIGUE_DISCOUNT_70_3;
+  const baseDiscount = RUN_FATIGUE_DISCOUNT[args.distance];
   const fatigueDiscount = baseDiscount * (1 - args.brickAdaptation * BRICK_MAX_DISCOUNT_REDUCTION);
 
   // ISSUE-191: Marathon PB depth credit on IM run leg only.
@@ -1150,7 +1149,7 @@ function buildLegWaterfall(
 
 function computeRangeSec(
   totalSec: number,
-  distance: '70.3' | 'ironman',
+  distance: TriathlonDistance,
   weeksRemaining: number,
   yearsTraining: number | undefined,
 ): [number, number] {
@@ -1194,7 +1193,7 @@ function estimateBikeSpeed(
   state: SimulatorState,
   ftp: number | undefined,
   skill: TriSkillSlider,
-  distance: '70.3' | 'ironman',
+  distance: TriathlonDistance,
   raceBikeProfile: BikeCourseProfileExtended | undefined,
 ): number {
   const tri = state.triConfig;
@@ -1234,11 +1233,15 @@ function estimateBikeSpeed(
   return base;
 }
 
-function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: '70.3' | 'ironman'): number {
+function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {
+  // byLevel is the reference run-leg pace at Ironman (marathon) distance. Scale to
+  // the actual run-leg distance via Riegel's power law (T ∝ d^1.06, so pace ∝ d^0.06;
+  // Riegel 1981) — shorter legs are run faster. Replaces the old flat 70.3 −15s
+  // offset with a principled, distance-general law. Deepest fallback (skill only).
   const byLevel: Record<TriSkillSlider, number> = { 1: 420, 2: 360, 3: 300, 4: 260, 5: 225 };
-  let base = byLevel[skill];
-  if (distance === '70.3') base -= 15;
-  return base;
+  const runKm = RACE_LEG_DISTANCES[distance].runKm;
+  const IM_RUN_KM = RACE_LEG_DISTANCES.ironman.runKm;
+  return byLevel[skill] * Math.pow(runKm / IM_RUN_KM, 0.06);
 }
 
 /**
@@ -1258,11 +1261,11 @@ function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: '70.3' | 'iro
  */
 function blendOpenRunRaceTime(
   state: SimulatorState,
-  distance: '70.3' | 'ironman',
+  distance: TriathlonDistance,
 ): number | null {
   if (!state.pbs || !state.b) return null;
 
-  const targetDistM = distance === 'ironman' ? 42195 : 21097;
+  const targetDistM = RACE_LEG_DISTANCES[distance].runKm * 1000;
 
   // Collect runs from this plan's actuals + onboarding history.
   const runs: RunActivityInput[] = [];
@@ -1303,10 +1306,12 @@ function blendOpenRunRaceTime(
   );
 }
 
-function vdotToRacePaceSecPerKm(vdot: number, distance: '70.3' | 'ironman'): number {
-  const halfPace = 318 - (vdot - 40) * 3.0;
-  const marathonPace = halfPace + 20;
-  return distance === 'ironman' ? marathonPace : halfPace;
+function vdotToRacePaceSecPerKm(vdot: number, distance: TriathlonDistance): number {
+  // Canonical Daniels VDOT→time at the actual run-leg distance (vt), divided by
+  // distance for pace. Replaces the old hardcoded linear half/marathon approximation
+  // and generalises to all five formats. Fallback used only when no PB/benchmark exists.
+  const runKm = RACE_LEG_DISTANCES[distance].runKm;
+  return vt(runKm, vdot) / runKm;
 }
 
 function estimateSideDistance(

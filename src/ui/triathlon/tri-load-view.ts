@@ -14,6 +14,7 @@
  */
 
 import { getState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL } from './colours';
 import { readTriFitness, perDisciplineACWR } from '@/calculations/fitness-model.triathlon';
@@ -50,8 +51,8 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
   container.innerHTML = `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
       .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .tri-load-card { background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 4px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.05);margin-bottom:14px }
@@ -65,7 +66,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
           <button id="tri-load-back-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">←</button>
           <div style="text-align:center;flex:1">
             <div style="font-size:24px;font-weight:700;color:#0F172A;letter-spacing:-0.02em">Load</div>
-            <div style="font-size:13px;color:#64748B;margin-top:2px">${tri.distance === 'ironman' ? 'Ironman' : '70.3'}. Week ${s.w} of ${s.tw}</div>
+            <div style="font-size:13px;color:#64748B;margin-top:2px">${getTriDistanceLabel(tri.distance)}. Week ${s.w} of ${s.tw}</div>
           </div>
           <div style="width:36px"></div>
         </div>

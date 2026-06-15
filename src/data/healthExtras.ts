@@ -77,6 +77,8 @@ interface HealthExtrasPlugin {
     success: boolean;
   }>;
 
+  openAppSettings(): Promise<{ opened: boolean }>;
+
   readQuantitySamples(opts: {
     dataType: HealthExtrasDataType;
     startDate?: string;
@@ -153,6 +155,23 @@ export async function requestHealthExtrasPermissions(
   } catch (err) {
     console.warn('[HealthExtras] permission request failed', err);
     return { granted: [], denied: read };
+  }
+}
+
+/**
+ * Open iOS Settings to Mosaic's app page so the user can turn Apple Health
+ * access back on. Once the HealthKit permission sheet has been answered, iOS
+ * never re-presents it via requestAuthorization, so Settings is the only
+ * recovery. Returns false on web/Android or if the URL can't be opened.
+ */
+export async function openAppSettings(): Promise<boolean> {
+  if (!isHealthExtrasAvailable()) return false;
+  try {
+    const res = await HealthExtras.openAppSettings();
+    return !!res.opened;
+  } catch (err) {
+    console.warn('[HealthExtras] openAppSettings failed', err);
+    return false;
   }
 }
 

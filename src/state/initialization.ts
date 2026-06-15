@@ -9,11 +9,12 @@ import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
 } from '@/calculations';
-import { calculateForecast } from '@/calculations/predictions';
+import { calculateForecast, demonstratedPBFloor } from '@/calculations/predictions';
 import { applyLongRunCap, getLongestRunSec } from '@/calculations/run-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
+import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
 import { recomputeLT } from '@/data/ltSync';
 import { initializeWeeks } from '@/workouts';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
@@ -357,11 +358,25 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       return { success: true };
     }
 
-    const pbs = state.pbs;
+    let pbs = state.pbs;
 
-    // Validate PBs
+    // Validate PBs. A running plan needs a fitness anchor. Most experience
+    // levels imply a known time, so they still require a real PB. But true
+    // beginners (and cross-sport "hybrid" athletes) may genuinely have none —
+    // rather than wall them out, seed a conservative, DERIVED starting estimate
+    // (band-floor VDOT, see beginner-fitness.ts) and flag it so it yields to
+    // real runs. The plan starts gentle and self-corrects within a week or two.
     if (!Object.keys(pbs).length) {
-      return { success: false, error: 'No personal bests provided' };
+      const seeded = seedStartingPbs(state.experienceLevel);
+      if (seeded) {
+        pbs = seeded;
+        s.startingFitnessEstimated = true;
+        console.log(`[init] No PB for "${state.experienceLevel}" — seeded conservative starting fitness (5K ${Math.round((seeded.k5 ?? 0) / 60)}min). Will refine from real runs.`);
+      } else {
+        return { success: false, error: 'No personal bests provided' };
+      }
+    } else {
+      s.startingFitnessEstimated = false;
     }
 
     // Calculate fatigue exponent (physics - always from PBs)
@@ -423,16 +438,28 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
       : undefined;
 
+    // Do we actually have a training-volume signal, or just a stated PB?
+    // weeksCovered > 0 means the scrape found qualifying runs; a typed manual
+    // weekly-km also counts. With neither, `resolveWeeklyKmSignal` returns 0,
+    // but that 0 means "no history synced yet", NOT "the athlete runs zero km".
+    // The volume-driven penalties inside blendPredictions (marathon-specificity)
+    // and the long-run cap below both read a zero as max detraining, which would
+    // predict a brand-new user SLOWER than their own stated PB. Pass `undefined`
+    // in the no-data case so those penalties stay dormant until real history
+    // lands (the first backfill refresh re-runs this with actual volume).
+    const hasTrainingHistory =
+      blendInputs.weeksCovered > 0 || (sCurrent.detectedWeeklyKm ?? 0) > 0;
+    const weeklyKmSignal = hasTrainingHistory
+      ? resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm)
+      : undefined;
+
     // Note: blendPredictions uses runnerType.toLowerCase() internally
     const blendedTime = blendPredictions(
       targetDistMeters, pbs, ltPace, vo2max, b,
       runnerType.toLowerCase(),
       blendInputs.recentRun ?? rec ?? null,
       undefined,                             // athleteTier (set later)
-      // History-derived weekly km, falling back to the user's typed manual-
-      // entry volume (s.detectedWeeklyKm) when the scrape found nothing.
-      // 0 with no typed value stays an explicit zero. See resolveWeeklyKmSignal.
-      resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm),
+      weeklyKmSignal,
       blendInputs.avgPaceSecPerKm ?? undefined,
       {
         weeksCovered: blendInputs.weeksCovered,
@@ -460,7 +487,18 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // yet, and the first refresh applies it regardless.
     const longestRunSec = getLongestRunSec(sCurrent, 12);
     const durability = applyLongRunCap(longestRunSec, targetDistStr);
-    const cappedBlendedTime = blendedTime * durability.multiplier;
+    // The durability cap is a short-anchor-extrapolation penalty (e.g. a single
+    // 5K Riegel-projected to a half with no endurance base). It must NOT push the
+    // anchor slower than a time the athlete has actually run at the target
+    // distance, absent detraining evidence — so floor at any same-distance PB
+    // after the cap. blendPredictions already floors its own output; this catches
+    // the cap's multiplicative overshoot on top. See demonstratedPBFloor.
+    const cappedBlendedTime = demonstratedPBFloor(
+      blendedTime * durability.multiplier,
+      targetDistMeters,
+      pbs,
+      { weeklyRunKm: weeklyKmSignal, recentRun: blendInputs.recentRun ?? rec ?? null, b },
+    );
 
     // Convert to VDOT (from the capped time — mirrors the refresher pushing
     // the durability-adjusted VDOT into s.v, so paces and the anchor agree)
@@ -503,11 +541,25 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.v = curr;
     s.iv = curr;
     s.rpeAdj = 0;
+    // Capture the outgoing plan's race distance before we overwrite it, so the
+    // goal-clear below can distinguish a genuine re-onboarding to a NEW distance
+    // (clear) from an in-place rebuild at the SAME distance (keep the goal).
+    const prevPlanDist = s.rd;
     s.rd = targetDistStr;
     s.epw = Math.round(effectiveSessions);
     s.rw = runsPerWeek;
     s.gs = state.gymSessionsPerWeek || 0;
-    s.wkm = runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70;
+    const defaultWkm = runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70;
+    // Beginner/hybrid safety: the runs-per-week × ~10km fallback assumes an
+    // experienced runner (~10km/run). For a true beginner (or fit-but-not-running
+    // hybrid) with no detected history, cap the STARTING per-run to ~30min at easy
+    // pace (C25K graduation standard) so week 1 isn't 10km repeats. The plan ramps
+    // up from here. Detected-history users skip this (real volume wins, below).
+    const begWkm = cappedBeginnerStartWeeklyKm(state.experienceLevel, runsPerWeek, pac.e, defaultWkm);
+    if (begWkm != null) {
+      console.log(`[init] Beginner/hybrid starting volume capped ${defaultWkm}→${begWkm} km/wk (~30min/run at easy pace). Plan ramps up.`);
+    }
+    s.wkm = begWkm ?? defaultWkm;
     s.pbs = pbs;
     s.rec = rec;
     s.lt = ltPace;
@@ -565,12 +617,19 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.racePhaseStart = undefined;
     s.skip = [];
     s.timp = 0;
-    // Race goals are per-plan. A goal set against a previous plan's distance
-    // must not survive re-onboarding (real case, 2026-06-04: a sub-3
-    // MARATHON goal carried onto a fresh HALF plan and rendered as
-    // "TARGET TIME 3:00:00 · >95% chance" on the plan-ready hero). The
-    // plan-preview goal overlay re-sets it if the user picks a new target.
-    s.raceGoalTimeSec = undefined;
+    // Race goals are per-plan, but only the DISTANCE makes a goal stale. A goal
+    // set against a previous plan's distance must not survive re-onboarding to a
+    // different distance (real case, 2026-06-04: a sub-3 MARATHON goal carried
+    // onto a fresh HALF plan and rendered as "TARGET TIME 3:00:00 · >95% chance"
+    // on the plan-ready hero). But `initializeSimulator` also runs for in-place
+    // rebuilds that keep the same race (runner-type change, add-sessions regen,
+    // mode toggle back) — there, wiping the goal silently drops it from the
+    // forecast page ("goal didn't persist"). So clear only when the distance
+    // actually changed. The plan-preview goal overlay re-sets it if the user
+    // picks a new target.
+    if (prevPlanDist !== targetDistStr) {
+      s.raceGoalTimeSec = undefined;
+    }
 
     // Store recurring activities
     if (state.recurringActivities && state.recurringActivities.length > 0) {

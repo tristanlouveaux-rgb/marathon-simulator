@@ -13,6 +13,11 @@ export interface PlanContext {
   vdot: number;
   effortScore?: number;  // Trailing effort score from recent weeks (used for adaptive scaling)
   acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR injury risk. Reduces quality sessions when elevated
+  /** CTL adherence ratio for the just-completed week: actual chronic load ÷ plan-expected
+   *  chronic load (see fitness-model.ctlAdherenceRatio). < 1 means the athlete fell behind the
+   *  plan's load; the prescription is re-anchored DOWN in proportion (reduce-only). Omit on the
+   *  vanilla/standard plan. Suppressed by the caller on deload weeks and after multi-week detraining. */
+  ctlRatio?: number;
   forceDeload?: boolean; // Holiday week. Treated as deload regardless of cycle position
   /** Peak weekly hours target from onboarding. Easy and long sessions are scaled to fit;
    *  quality sessions (threshold / VO2 / marathon-pace) are never shortened below their
@@ -133,6 +138,23 @@ export function deloadMultiplier(ability: AbilityBand): number {
 
 export function effortMultiplier(score: number): number {
   return Math.max(0.85, Math.min(1.15, 1 - score * 0.05));
+}
+
+/**
+ * CTL-gap re-anchor multiplier — reduce-only.
+ *
+ * `ctlRatio` is actualCTL ÷ expectedCTL for the just-completed week (see
+ * fitness-model.ctlAdherenceRatio). The next week's prescribed volume scales in DIRECT
+ * proportion to the chronic load the athlete actually carries versus what the plan assumed.
+ * This is the foundational ACWR / ramp-rate principle: progress load relative to your CURRENT
+ * chronic load, not an aspirational one (Gabbett 2016). When the athlete is on or above plan
+ * (ratio ≥ 1) this is a no-op — increasing the prescription off the back of under-training is
+ * the effort multiplier's job (for the sessions actually done) and ACWR's job (when acute load
+ * spikes), never this lever's. The combined floor is applied at the application site.
+ */
+export function ctlGapMultiplier(ctlRatio: number): number {
+  if (!Number.isFinite(ctlRatio) || ctlRatio >= 1) return 1.0;
+  return Math.max(0, ctlRatio);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,7 +381,22 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
   const deload = ctx.forceDeload || isDeloadWeek(weekIndex, ability);
   const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
-  const dMult = (deload ? deloadMultiplier(ability) : 1.0) * eMult;
+  // CTL-gap re-anchor: reduce volume when the athlete fell behind the plan's load. Suppressed on
+  // deload weeks (already a planned reduction — re-anchoring a deload down would double up the same
+  // "go easy"). Effort and CTL-gap both scale duration, so THESE TWO adaptive levers have their
+  // COMBINED effect clamped to the effort band (no lower than the ability deload, no higher than
+  // +15%) — they cannot stack past what either alone may do. When ctlRatio is absent, adaptive ===
+  // eMult and dMult is byte-identical to the effort-only path.
+  const cMult = (!deload && ctx.ctlRatio != null) ? ctlGapMultiplier(ctx.ctlRatio) : 1.0;
+  const adaptive = cMult === 1.0
+    ? eMult
+    : Math.max(deloadMultiplier(ability), Math.min(1.15, eMult * cMult));
+  // deload × effort IS allowed to compound (deloadMult × eMult, e.g. 0.85 × 0.85 ≈ 0.72). This is
+  // intentional autoregulation, not the stacking the clamp above prevents: a deload week where
+  // recent sessions were rated harder than prescribed signals accumulated fatigue, and a deeper
+  // recovery week is the correct response (RPE-based autoregulation, Helms 2018). The clamp scopes
+  // only the two volume-re-anchor levers (effort + CTL-gap), which CAN measure the same shortfall.
+  const dMult = (deload ? deloadMultiplier(ability) : 1.0) * adaptive;
 
   const intents: SessionIntent[] = [];
   let maxQuality = qualityCap(ability, fitnessLevel, runsPerWeek);
@@ -384,7 +421,11 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   }
 
   // ACWR-driven quality session reduction
-  // caution: drop one quality session; high: drop two and cap long run
+  // caution: drop one quality session; high: drop two and cap long run.
+  // Orthogonal to the CTL-gap re-anchor above: ACWR trims INTENSITY (swaps hard sessions for easy)
+  // when acute load spiked HIGH, whereas CTL-gap trims DURATION when chronic load fell LOW. They
+  // act on different axes and opposite triggers, so co-firing (rare — skipping collapses ATL, which
+  // moves ACWR toward 'safe') just composes conservatively rather than double-counting.
   const acwrNote = acwrStatus === 'high'
     ? 'ACWR elevated — intensity reduced (high risk)'
     : acwrStatus === 'caution'

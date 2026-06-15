@@ -167,7 +167,7 @@ function renderTestRow(t: PendingTest): string {
         <summary style="font-size:12px;color:#0F172A;cursor:pointer;font-weight:500">How to do this test</summary>
         <div style="font-size:12px;color:var(--c-muted);margin:6px 0 0;line-height:1.55;padding-left:8px;border-left:2px solid rgba(0,0,0,0.06)">${t.protocol}</div>
       </details>
-      <button class="bench-open" data-id="${t.id}" style="margin-top:10px;width:100%;padding:9px;background:#0F172A;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer">I've done this test. Enter my time</button>
+      <button class="bench-open m-btn-primary" data-id="${t.id}" style="margin-top:10px;width:100%;padding:9px;font-size:13px">I've done this test. Enter my time</button>
     </div>
   `;
 }
@@ -210,7 +210,7 @@ function openResultModal(id: TestId, onChange: () => void): void {
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   overlay.style.background = 'rgba(0,0,0,0.45)';
   overlay.innerHTML = `
-    <div style="background:#FAF9F6;width:100%;max-width:420px;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,0.3);padding:22px 24px">
+    <div style="background:#fff;width:100%;max-width:420px;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,0.3);padding:22px 24px">
       <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:4px">${test.label}</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.55">${test.protocol}</div>
       ${test.inputs.map((inp) => `
@@ -221,8 +221,8 @@ function openResultModal(id: TestId, onChange: () => void): void {
       `).join('')}
       <div id="bench-error" style="font-size:12px;color:#c06a50;display:none;margin-bottom:8px"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button id="bench-cancel" style="flex:1;padding:11px;background:rgba(0,0,0,0.05);border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;color:var(--c-muted)">Cancel</button>
-        <button id="bench-save" style="flex:1;padding:11px;background:#0F172A;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer">Save result</button>
+        <button id="bench-cancel" class="m-btn-secondary" style="flex:1;padding:11px;font-size:13px">Cancel</button>
+        <button id="bench-save" class="m-btn-primary" style="flex:1;padding:11px;font-size:13px">Save result</button>
       </div>
     </div>
   `;

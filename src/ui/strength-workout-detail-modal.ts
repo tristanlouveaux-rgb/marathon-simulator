@@ -322,8 +322,8 @@ export function openStrengthWorkoutDetail(workout: Workout): void {
       </div>
 
       <div style="padding:8px 22px 18px;display:flex;flex-direction:column;gap:10px">
-        <button id="strength-detail-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
-        <button id="strength-detail-done" style="width:100%;padding:11px;background:transparent;color:var(--c-black);border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">${doneLabel}</button>
+        <button id="strength-detail-start" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">Start session</button>
+        <button id="strength-detail-done" class="m-btn-secondary" style="width:100%;padding:11px;font-size:13px">${doneLabel}</button>
       </div>`;
   }
 
@@ -344,7 +344,7 @@ export function openStrengthWorkoutDetail(workout: Workout): void {
       </div>
 
       <div style="padding:8px 22px 18px;display:flex;flex-direction:column;gap:10px">
-        <button id="cw-save" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Save and mark done</button>
+        <button id="cw-save" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">Save and mark done</button>
         <button id="cw-skip" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Skip, no weights</button>
       </div>`;
   }

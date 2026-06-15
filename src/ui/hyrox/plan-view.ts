@@ -16,7 +16,7 @@ import {
   wireHyroxBenchmarkCard,
   shouldShowBenchmarkCard,
 } from './benchmark-card';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import type { Workout, Week } from '@/types/state';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from '../triathlon/week-resolve.triathlon';
@@ -106,7 +106,9 @@ export function renderHyroxPlanView(): void {
   // mods being visible on those shared objects (historical behaviour).
   const workouts: Workout[] = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
 
-  const band = hx.athleteBand;
+  // Defensive ?? : athleteBand is typed required, but corrupted/partial state would
+  // crash bandLabel's .replace(). Display-only midpoint fallback (ISSUE-282).
+  const band = hx.athleteBand ?? 'intermediate';
   const format = hx.format ?? 'open_singles';
   const phase = wk?.ph ? capitalize(wk.ph) : '';
   const raceDate = hx.raceDate ?? s.onboarding?.customRaceDate;
@@ -153,17 +155,20 @@ export function renderHyroxPlanView(): void {
 
   const bandLabel = band.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
+  // Entrance plays on the first Plan visit per session only; revisits render settled.
+  const animate = shouldPlayEntrance('hyrox-plan');
+
   container.innerHTML = `
     <style>
       @keyframes hxFloatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hxf { opacity:0; animation:hxFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hxf { ${animate ? 'opacity:0; animation:hxFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('hxp', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: true })}
+        ${buildRingBackground('hxp', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 

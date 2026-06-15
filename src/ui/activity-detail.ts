@@ -14,7 +14,10 @@ import { looksLikeCssTest, looksLikeFtpTest } from '@/calculations/tri-benchmark
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore, normalizeiTrimp} from '@/calculations/fitness-model';
-import { SPORT_LABELS, IMPACT_PER_KM } from '@/constants';
+import { SPORT_LABELS, IMPACT_PER_KM, TL_PER_MIN } from '@/constants';
+import { STRAVA_ENRICH_UPLOAD_ENABLED } from '@/constants/feature-flags';
+import { isThinActivity } from '@/data/activity-enrich-merge';
+import { showSimpleToast } from '@/ui/toast';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { showSportPicker, reclassifyActivity, getEffectiveSport, resolveActivityDisplayName } from './sport-picker-modal';
@@ -167,9 +170,20 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   const showElapsedPace = elapsedPace != null && actual.avgPaceSecKm != null && Math.abs(elapsedPace - actual.avgPaceSecKm) > 5;
 
   const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
+  // Estimate TSS from the session's rated RPE (same per-RPE rate as
+  // computeWeekRawTSS), not a flat 0.92/min. The flat rate under-reported any
+  // hard session (e.g. a 2h RPE-7 match read 110 here but 214 in the week total
+  // — a "two numbers, one source" violation). Falls back to RPE 5 when unrated,
+  // matching the week-load default.
+  const _detailRatedRpe = (() => {
+    if (!workoutId) return null;
+    const wk = getState().wks?.[(getState().w ?? 1) - 1];
+    const r = wk?.rated?.[workoutId];
+    return typeof r === 'number' ? r : null;
+  })();
   const actualTSS = actual.iTrimp != null && actual.iTrimp > 0
     ? Math.round(normalizeiTrimp(actual.iTrimp))
-    : durMin > 0 ? Math.round(durMin * 0.92) : null;
+    : durMin > 0 ? Math.round(durMin * (TL_PER_MIN[Math.round(_detailRatedRpe ?? 5)] ?? 0.92)) : null;
 
   // Build grid: only include stats that have real values (no "—" filler cells)
   const gridStats: { val: string; lbl: string }[] = [];
@@ -671,11 +685,34 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     </div>
   ` : '';
 
+  // ─── Enrich from file (thin Apple-Health/Garmin activity) ────────────────────
+  // A Garmin watch syncing through Apple Health delivers avg HR + duration only.
+  // Offer to upload the original file to add HR zones, splits, route and iTRIMP.
+  // Hidden for Strava-sourced rows (already rich) and once enriched.
+  const showEnrich = STRAVA_ENRICH_UPLOAD_ENABLED && isThinActivity(actual);
+  const enrichHtml = showEnrich ? `
+    <div class="ad-fade" id="ad-enrich-block" style="animation-delay:0.46s;margin-bottom:16px">
+      <button id="ad-enrich-btn" style="
+        width:100%;text-align:left;padding:13px 16px;border-radius:12px;
+        background:transparent;border:1px solid var(--c-border);
+        color:var(--c-muted);font-size:13px;cursor:pointer;
+        display:flex;align-items:center;justify-content:space-between
+      ">
+        <span>Add detail from Strava</span>
+        <span style="font-size:11px">→</span>
+      </button>
+      <div style="font-size:11px;color:${TEXT_L};margin-top:7px;line-height:1.45;padding:0 2px">
+        This activity synced through Apple Health with heart rate and time only. To add HR zones, splits, and the route: open strava.com in your browser (the Strava app's Share and Save do not include the file), find this activity, and choose Export Original. It saves to Files as a .fit or .fit.gz. Either works. Upload it here, or share it straight to Mosaic from Files. Avoid Export GPX, which omits heart rate.
+      </div>
+      <input id="ad-enrich-input" type="file" accept=".fit,.gpx,.tcx,.gz" style="display:none" />
+    </div>
+  ` : '';
+
   return `
     <style>
       #ad-view { box-sizing:border-box; }
       #ad-view *, #ad-view *::before, #ad-view *::after { box-sizing:inherit; }
-      @keyframes adFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes adFloatUp { from { opacity:0; } to { opacity:1; } }
       .ad-fade { opacity:0; animation:adFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
@@ -699,7 +736,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           </button>
           <div style="text-align:center;min-width:0;flex:1">
             <div style="font-size:20px;font-weight:600;letter-spacing:-0.02em;color:${TEXT_M};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(actName)}</div>
-            <div style="font-size:12px;color:${TEXT_S};margin-top:3px">${dateStr ? dateStr + ' · ' : ''}${source}${stravaActivityId ? ` · <a href="https://www.strava.com/activities/${stravaActivityId}" target="_blank" rel="noopener" style="color:#FC5200;text-decoration:none;font-weight:600">View on Strava</a>` : ''}</div>
+            <div style="font-size:12px;color:${TEXT_S};margin-top:3px">${dateStr ? dateStr + ' · ' : ''}${source}${actual.enrichedFromFile ? ' · enriched' : ''}${stravaActivityId ? ` · <a href="https://www.strava.com/activities/${stravaActivityId}" target="_blank" rel="noopener" style="color:#FC5200;text-decoration:none;font-weight:600">View on Strava</a>` : ''}</div>
           </div>
           <button id="act-detail-discard" title="Discard activity" style="
             width:36px;height:36px;border-radius:50%;border:1px solid rgba(0,0,0,0.09);
@@ -728,6 +765,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           ${ftpPromptHtml}
           ${commuteTagHtml}
           ${legsTagHtml}
+          ${enrichHtml}
           ${actual.polyline ? `
             <div class="ad-fade" style="animation-delay:0.50s;margin-bottom:16px">
               <button id="ad-safety-cta" style="
@@ -809,6 +847,50 @@ export function renderActivityDetail(
     reclassifyActivity(actual, chosen);
     renderActivityDetail(actual, planWorkoutName, returnView, plannedTSS, workoutId);
   });
+
+  // "Add detail from Strava" → pick the original file → enrich this activity in place
+  const enrichBtn = document.getElementById('ad-enrich-btn');
+  const enrichInput = document.getElementById('ad-enrich-input') as HTMLInputElement | null;
+  if (enrichBtn && enrichInput) {
+    // Update only the label span so the "→" affordance survives (setting
+    // textContent on the button would drop the arrow span permanently).
+    const labelSpan = enrichBtn.querySelector('span');
+    const setBtn = (t: string) => { if (labelSpan) labelSpan.textContent = t; };
+    let enriching = false;
+    enrichBtn.addEventListener('click', () => { if (!enriching) enrichInput.click(); });
+    enrichInput.addEventListener('change', async () => {
+      const file = enrichInput.files?.[0];
+      if (!file || enriching) return;
+      enriching = true;
+      setBtn('Reading file…');
+      try {
+        const { parseActivityFileToRow, applyEnrichment } = await import('@/data/fitImport');
+        const { row, fileLabel } = await parseActivityFileToRow(file); // parse once
+        let result = applyEnrichment(actual, row);
+        if (!result.accepted && (result.reason === 'time-mismatch' || result.reason === 'duration-mismatch')) {
+          const ok = window.confirm(`This file looks like a different session (${fileLabel}). Add its detail to this activity anyway?`);
+          if (!ok) { setBtn('Add detail from Strava'); return; }
+          result = applyEnrichment(actual, row, { force: true }); // reuse parsed row
+        }
+        if (result.accepted) {
+          showSimpleToast(`Added ${result.added && result.added.length ? result.added.join(', ') : 'detail'} from your file.`);
+          renderActivityDetail(actual, planWorkoutName, returnView, plannedTSS, workoutId);
+        } else if (result.reason === 'no-new-data') {
+          showSimpleToast('This activity already has that detail.');
+          setBtn('Add detail from Strava');
+        } else {
+          setBtn('Add detail from Strava');
+        }
+      } catch (e) {
+        console.warn('[Enrich] failed:', e);
+        showSimpleToast(e instanceof Error ? e.message : 'Could not read that file.', 'error');
+        setBtn('Add detail from Strava');
+      } finally {
+        enrichInput.value = '';
+        enriching = false;
+      }
+    });
+  }
 
   // Back button
   document.getElementById('act-detail-back')?.addEventListener('click', () => {

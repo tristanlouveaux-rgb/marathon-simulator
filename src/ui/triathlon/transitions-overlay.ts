@@ -200,23 +200,23 @@ function renderShell(
             <span style="font-size:11px;color:var(--c-muted)">T1 (swim → bike)</span>
             <span id="tr-ovl-t1-readout" style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(t1Val)}</span>
           </div>
-          <input type="range" id="tr-ovl-t1" min="30" max="${maxSec}" step="1" value="${t1Val}" style="width:100%;accent-color:var(--c-black);cursor:pointer">
+          <input type="range" id="tr-ovl-t1" class="m-slider-glass" min="30" max="${maxSec}" step="1" value="${t1Val}" style="width:100%">
         </div>
         <div style="margin-bottom:6px">
           <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
             <span style="font-size:11px;color:var(--c-muted)">T2 (bike → run)</span>
             <span id="tr-ovl-t2-readout" style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(t2Val)}</span>
           </div>
-          <input type="range" id="tr-ovl-t2" min="30" max="${maxSec}" step="1" value="${t2Val}" style="width:100%;accent-color:var(--c-black);cursor:pointer">
+          <input type="range" id="tr-ovl-t2" class="m-slider-glass" min="30" max="${maxSec}" step="1" value="${t2Val}" style="width:100%">
         </div>
       </div>
 
       <!-- Footer -->
       <div style="padding:14px 20px 20px;border-top:1px solid var(--c-border);display:flex;gap:10px;margin-top:12px">
         ${isOverride
-          ? `<button id="tr-ovl-reset" style="flex:1;height:44px;border-radius:12px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-muted);cursor:pointer">Reset to default</button>`
-          : `<button id="tr-ovl-cancel" style="flex:1;height:44px;border-radius:12px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-muted);cursor:pointer">Cancel</button>`}
-        <button id="tr-ovl-save" style="flex:1;height:44px;border-radius:12px;border:none;background:#0F172A;color:#fff;font-size:14px;font-weight:600;cursor:pointer">Save</button>
+          ? `<button id="tr-ovl-reset" class="m-btn-secondary" style="flex:1;height:44px;font-size:14px">Reset to default</button>`
+          : `<button id="tr-ovl-cancel" class="m-btn-secondary" style="flex:1;height:44px;font-size:14px">Cancel</button>`}
+        <button id="tr-ovl-save" class="m-btn-primary" style="flex:1;height:44px;font-size:14px">Save</button>
       </div>
     </div>`;
 }

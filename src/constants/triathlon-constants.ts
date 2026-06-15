@@ -42,11 +42,29 @@ export const WEEKLY_VOLUME_RAMP_CAP = 0.10;
 // Race prediction (TRACKING side only. Never apply to training load)
 // ───────────────────────────────────────────────────────────────────────────
 
-/** 70.3 run-leg pace discount after 90 km bike. Bentley 2007; Landers 2008 (midpoint 4–6%). */
-export const RUN_FATIGUE_DISCOUNT_70_3 = 0.05;
+/**
+ * Run-leg pace discount applied to the open-distance run pace, by race format.
+ * Reflects accumulated bike fatigue depleting run performance (TRACKING side only).
+ *
+ * 70.3 = 5% (Bentley 2007, midpoint 4–6%), IM = 11% (Landers 2008, midpoint 10–12%).
+ * Sprint/Olympic/T100 extrapolated along the Bentley→Landers gradient — NO published
+ * intermediate-distance data exists, so these are LOW confidence. They affect
+ * prediction only, never training load. Refine against logged race outcomes.
+ * See SCIENCE_LOG §T1. t100 ≈ 70.3 (near-identical bike+run load: 80km/18km vs 90km/21km).
+ */
+export const RUN_FATIGUE_DISCOUNT: Record<TriathlonDistance, number> = {
+  sprint:  0.02,
+  olympic: 0.04,
+  t100:    0.05,
+  '70.3':  0.05,
+  ironman: 0.11,
+};
 
-/** IM run-leg pace discount after 180 km bike. Bentley 2007; Landers 2008 (midpoint 10–12%). */
-export const RUN_FATIGUE_DISCOUNT_IRONMAN = 0.11;
+/** @deprecated Use RUN_FATIGUE_DISCOUNT['70.3']. Kept for back-compat. */
+export const RUN_FATIGUE_DISCOUNT_70_3 = RUN_FATIGUE_DISCOUNT['70.3'];
+
+/** @deprecated Use RUN_FATIGUE_DISCOUNT['ironman']. Kept for back-compat. */
+export const RUN_FATIGUE_DISCOUNT_IRONMAN = RUN_FATIGUE_DISCOUNT['ironman'];
 
 /** Default transition estimates (seconds) by skill level. Beginners → experienced. Rough coaching ranges. */
 export const T1_SEC_BY_SLIDER: Record<1 | 2 | 3 | 4 | 5, number> = {
@@ -93,20 +111,32 @@ export const IM_T1_SHARE_OF_TOTAL = 0.58;
 // Periodisation
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Taper duration ranges in days. Lower bound used for "tight" taper, upper for "conservative". */
+/** Taper duration ranges in days. Lower bound used for "tight" taper, upper for "conservative".
+ *  Scales with race duration (Mujika 2002/2010 detraining onset). Short course tapers less. */
 export const TAPER_DAYS: Record<TriathlonDistance, [number, number]> = {
+  sprint:    [4, 7],
+  olympic:   [5, 8],
+  t100:      [7, 10],
   '70.3':    [7, 10],
   'ironman': [14, 21],
 };
 
-/** Default plan durations in weeks. Lower bound = aggressive, upper = typical. */
+/** Default plan durations in weeks. Lower bound = aggressive, upper = typical.
+ *  Friel Triathlete's Training Bible per-distance base/build norms. */
 export const PLAN_WEEKS_DEFAULT: Record<TriathlonDistance, number> = {
+  sprint:    12,
+  olympic:   16,
+  t100:      20,
   '70.3':    20,
   'ironman': 24,
 };
 
-/** Phase length defaults (weeks). Sum should roughly equal plan length minus taper. */
+/** Phase length defaults (weeks). Sum should roughly equal plan length minus taper.
+ *  Ratios mirror 70.3 (base 0.40 / build 0.30 / peak 0.20 / taper 0.10). */
 export const PHASE_WEEKS: Record<TriathlonDistance, { base: number; build: number; peak: number }> = {
+  sprint:    { base: 5, build: 4, peak: 2 },
+  olympic:   { base: 7, build: 5, peak: 3 },
+  t100:      { base: 8, build: 6, peak: 4 },
   '70.3':    { base: 8, build: 6, peak: 4 },
   'ironman': { base: 10, build: 7, peak: 5 },
 };
@@ -183,6 +213,58 @@ export function phasesForLen(
  * single-arc window).
  */
 const TRI_PHASE_CONFIGS: Record<TriathlonDistance, PhaseConfig> = {
+  sprint: {
+    taperCap: 2,
+    peakCap: 5,
+    buildCap: 8,
+    taperRatio: 0.083,         // 1 / 12 default
+    peakRatio: 0.167,          // 2 / 12 default
+    buildRatio: 0.333,         // 4 / 12 default
+    doublePeriodizationThreshold: 28,
+    cycle2Fraction: 0.55,
+    transitionWeeks: 2,
+    cycle1PeakCap: 3,
+    cycle1BuildCap: 6,
+    cycle1PeakRatio: 0.18,
+    cycle1BuildRatio: 0.35,
+    cycle1Min: 8,
+    cycle2Min: 12,
+  },
+  olympic: {
+    taperCap: 2,
+    peakCap: 5,
+    buildCap: 8,
+    taperRatio: 0.0625,        // 1 / 16 default
+    peakRatio: 0.1875,         // 3 / 16 default
+    buildRatio: 0.3125,        // 5 / 16 default
+    doublePeriodizationThreshold: 28,
+    cycle2Fraction: 0.55,
+    transitionWeeks: 2,
+    cycle1PeakCap: 3,
+    cycle1BuildCap: 6,
+    cycle1PeakRatio: 0.18,
+    cycle1BuildRatio: 0.35,
+    cycle1Min: 8,
+    cycle2Min: 12,
+  },
+  t100: {
+    // Identical to 70.3 (same default length and phase split).
+    taperCap: 2,
+    peakCap: 5,
+    buildCap: 8,
+    taperRatio: 0.10,
+    peakRatio: 0.20,           // 4 / 20 default
+    buildRatio: 0.30,          // 6 / 20 default
+    doublePeriodizationThreshold: 28,
+    cycle2Fraction: 0.55,
+    transitionWeeks: 2,
+    cycle1PeakCap: 3,
+    cycle1BuildCap: 6,
+    cycle1PeakRatio: 0.18,
+    cycle1BuildRatio: 0.35,
+    cycle1Min: 8,
+    cycle2Min: 12,
+  },
   '70.3': {
     taperCap: 2,
     peakCap: 5,
@@ -232,15 +314,45 @@ export function computeTriPlanPhases(distance: TriathlonDistance, totalWeeks: nu
 // Volume
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Default recommended split. User can override in the onboarding split picker. */
-export const DEFAULT_VOLUME_SPLIT: TriVolumeSplit = {
-  swim: 0.175,
-  bike: 0.475,
-  run:  0.350,
+/**
+ * Default recommended discipline split (swim/bike/run share of weekly hours),
+ * by race format. The user can override in the onboarding split picker — the
+ * distance default only seeds the picker.
+ *
+ * Scales by distance: short course is swim/intensity-weighted (swim is a larger
+ * fraction of race time, ~18% vs ~10%, and technique/economy gains dominate);
+ * long course is bike-volume-and-durability bound. Run is capped ~0.35 at all
+ * distances — run has the highest injury risk per hour (Vleck & Garbutt 1998),
+ * and cycling crossover lets run volume stay below standalone (Millet 2002).
+ * Pattern: swim ↓ with distance (0.20→0.175→0.15), bike ↑ (0.45→0.475→0.50).
+ * Sources: race-time proportional analysis + Bentley 2007 (bike as primary
+ * volume driver), Toussaint & Beek 1992 (swim economy trainability), Rüst 2012
+ * (long-ride correlation). See SCIENCE_LOG. Confidence: medium.
+ */
+export const DEFAULT_VOLUME_SPLIT_BY_DISTANCE: Record<TriathlonDistance, TriVolumeSplit> = {
+  sprint:    { swim: 0.20,  bike: 0.45,  run: 0.35 },
+  olympic:   { swim: 0.20,  bike: 0.45,  run: 0.35 },
+  t100:      { swim: 0.175, bike: 0.475, run: 0.35 },
+  '70.3':    { swim: 0.175, bike: 0.475, run: 0.35 },
+  'ironman': { swim: 0.15,  bike: 0.50,  run: 0.35 },
 };
 
-/** Typical weekly peak hours by distance × skill level. Used when no user time-available input is provided. */
+/** @deprecated Distance-agnostic default. Prefer `DEFAULT_VOLUME_SPLIT_BY_DISTANCE[distance]`.
+ *  Kept for call sites without a distance in hand; points at the 70.3 split. */
+export const DEFAULT_VOLUME_SPLIT: TriVolumeSplit = DEFAULT_VOLUME_SPLIT_BY_DISTANCE['70.3'];
+
+/** Typical weekly peak hours by distance × skill level. Used when no user time-available input is provided.
+ *  Friel Triathlete's Training Bible typical-volume tables. */
 export const DEFAULT_WEEKLY_PEAK_HOURS: Record<TriathlonDistance, Record<1 | 2 | 3 | 4 | 5, number>> = {
+  sprint: {
+    1: 4,   2: 5,   3: 6,   4: 8,   5: 10,
+  },
+  olympic: {
+    1: 5,   2: 6,   3: 8,   4: 10,  5: 13,
+  },
+  t100: {
+    1: 6,   2: 8,   3: 10,  4: 13,  5: 16,
+  },
   '70.3': {
     1: 6,   2: 8,   3: 10,  4: 13,  5: 16,
   },
@@ -256,6 +368,9 @@ export const DEFAULT_WEEKLY_PEAK_HOURS: Record<TriathlonDistance, Record<1 | 2 |
  * feedback, 2026-04-24).
  */
 export const HOURS_RANGE: Record<TriathlonDistance, { min: number; max: number }> = {
+  sprint:    { min: 3, max: 12 },
+  olympic:   { min: 3, max: 15 },
+  t100:      { min: 4, max: 20 },
   '70.3':    { min: 4, max: 20 },
   'ironman': { min: 6, max: 30 },
 };
@@ -412,9 +527,23 @@ export const MARKER_BUMP_THRESHOLD_VDOT = 1;
 // ───────────────────────────────────────────────────────────────────────────
 
 export const RACE_LEG_DISTANCES: Record<TriathlonDistance, { swimM: number; bikeKm: number; runKm: number }> = {
+  sprint:    { swimM: 750,  bikeKm: 20,    runKm: 5    },
+  olympic:   { swimM: 1500, bikeKm: 40,    runKm: 10   },
+  t100:      { swimM: 2000, bikeKm: 80,    runKm: 18   },
   '70.3':    { swimM: 1900, bikeKm: 90,    runKm: 21.1 },
   'ironman': { swimM: 3800, bikeKm: 180.2, runKm: 42.2 },
 };
+
+/** Human-readable label for a triathlon distance. Single source of truth for UI. */
+export function getTriDistanceLabel(distance: TriathlonDistance): string {
+  switch (distance) {
+    case 'sprint':  return 'Sprint';
+    case 'olympic': return 'Olympic';
+    case 't100':    return 'T100';
+    case '70.3':    return '70.3';
+    case 'ironman': return 'Ironman';
+  }
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Cycling event prediction

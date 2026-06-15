@@ -26,6 +26,7 @@ import { detectEasyDriftPattern } from '@/calculations/daily-coach';
 import { planWeekSessions, effortMultiplier } from '@/workouts/plan_engine';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts } from '@/workouts/generator';
+import { resolveCtlAdherence } from '@/ui/planned-day-tss';
 import { getHREffort } from '@/calculations/activity-matcher';
 
 // ─── Phase helpers (local. Same mapping as plan-view) ────────────────────────
@@ -344,10 +345,6 @@ export function showWeekDebrief(
         <!-- Header -->
         <div style="position:relative;text-align:center;margin-bottom:18px">
           <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} · Week ${weekNum}${isLastWeek ? ' · Final week' : ''}</span>
-          <button id="debrief-cancel"
-            style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
-                   background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
-                   display:flex;align-items:center;justify-content:center">✕</button>
         </div>
 
         <!-- Unified metrics + signals table -->
@@ -392,10 +389,9 @@ function _wireStep1Handlers(
   mode: 'complete' | 'review',
   debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
 ): void {
-  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
-    document.getElementById('week-debrief-modal')?.remove();
-  });
-
+  // ISSUE-273: the ✕ was removed (Tristan, 2026-06-05). Dismissing recorded nothing,
+  // so the week pointer stayed clamped at lastCompleteDebriefWeek+1 and the debrief
+  // re-fired every launch. Continue is the only exit; it records completion.
   document.getElementById('debrief-continue')?.addEventListener('click', () => {
     if (mode === 'complete') {
       _showAnalysisAnimation(weekNum, effortScore, mode, debugOverride);
@@ -435,10 +431,6 @@ function _showAnalysisAnimation(
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:24px">
       <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">Analysing week ${weekNum}</span>
-      <button id="debrief-cancel"
-        style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
-               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
-               display:flex;align-items:center;justify-content:center">✕</button>
     </div>
 
     <!-- Circular progress (smooth single transition) -->
@@ -655,9 +647,6 @@ function _renderPlanComplete(card: HTMLElement, weekNum: number, mode: 'complete
     <div style="position:relative;margin-bottom:18px">
       <div style="font-size:19px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">Plan complete.</div>
       <div style="font-size:13px;color:var(--c-muted);margin-top:3px">${s.tw ?? weekNum} weeks · ${_raceDistanceLabel(s.rd ?? 'marathon')}</div>
-      <button id="debrief-cancel"
-        style="position:absolute;right:0;top:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
-               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);display:flex;align-items:center;justify-content:center">✕</button>
     </div>
     ${raceHtml}
     <div style="margin-bottom:16px">
@@ -803,11 +792,18 @@ function _renderPlanPreview(
   const trailingEffort = debugOverride?.effort ?? getTrailingEffortScore(s.wks ?? [], nextWeekIdx);
   const acwrStatus = debugOverride?.acwrStatus ?? nextWk?.scheduledAcwrStatus ?? 'safe';
 
-  // Generate ADJUSTED plan (with effort + ACWR context)
+  // CTL-gap adherence for the week just finished (weekNum). Same source the engine stores at
+  // rollover (events.next() → wk.ctlRatio), computed live here so the preview matches the week the
+  // user will actually get. Reduce-only: only feed the engine when behind.
+  const ctlAdh = resolveCtlAdherence(s, weekNum);
+  const ctlRatioForPlan = ctlAdh.valid && ctlAdh.ratio < 1 ? ctlAdh.ratio : undefined;
+
+  // Generate ADJUSTED plan (with effort + ACWR + CTL-gap context)
   const adjustedIntents = planWeekSessions({
     ...baseCtx,
     effortScore: trailingEffort,
     acwrStatus,
+    ctlRatio: ctlRatioForPlan,
   });
 
   // Generate STANDARD plan (no effort adjustment, no ACWR reduction)
@@ -841,9 +837,14 @@ function _renderPlanPreview(
   // a Standard toggle the user can't tell apart.
   const visiblyDifferent = perWorkoutAnnotations.some(a => a !== '');
 
+  // Behind-plan: the CTL-gap re-anchor materially pulled this week down (ratio < 0.97 ≈ under ~80%
+  // of last week's planned load — same 3% threshold the effort-change summary uses). Computed here
+  // so the changes list can stay consistent with the headline. Reduce-only, so never fires on/ahead.
+  const behindPlan = ctlAdh.valid && ctlAdh.ratio < 0.97;
+
   // Textual adjustments list only when plans actually look different
   const changes = visiblyDifferent
-    ? _computeChanges(adjustedIntents, standardIntents, trailingEffort, acwrStatus)
+    ? _computeChanges(adjustedIntents, standardIntents, trailingEffort, acwrStatus, behindPlan)
     : [];
 
   const changesHtml = changes.length > 0 ? `
@@ -858,7 +859,17 @@ function _renderPlanPreview(
   const workoutsHtml = _renderWorkoutList(adjustedWorkouts, perWorkoutAnnotations);
   const standardWorkoutsHtml = _renderWorkoutList(standardWorkouts, []);
 
-  const noChangesNote = !visiblyDifferent ? `
+  // Behind-plan headline. Factual, no judgement (Tristan, 2026-06-09): lead with the number, state
+  // what the plan does, no nudge, no second person. Muted (not c-black) so it reads as context
+  // beneath the phase header rather than competing with it; no tinted card background (Visual
+  // Constraints). Replaces the old, misleading "tracking to plan".
+  const adherenceNote = behindPlan ? `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">${ctlAdh.pctOfPlanned}% of last week's planned training completed. Next week's volume scales to match recent load.</p>
+    </div>
+  ` : '';
+
+  const noChangesNote = (!visiblyDifferent && !behindPlan) ? `
     <div style="margin-bottom:16px">
       <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">No adjustments needed. Recent effort and training load are tracking to plan.</p>
     </div>
@@ -868,12 +879,9 @@ function _renderPlanPreview(
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:18px">
       <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase · Week ${nextWeekIdx}</span>
-      <button id="debrief-cancel"
-        style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
-               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
-               display:flex;align-items:center;justify-content:center">✕</button>
     </div>
 
+    ${adherenceNote}
     ${noChangesNote}
 
     <!-- Plan toggle (only if plans are visibly different) -->
@@ -950,15 +958,19 @@ function _computeChanges(
   standard: SessionIntent[],
   trailingEffort: number,
   acwrStatus: string,
+  ctlBehind = false,
 ): string[] {
   const changes: string[] = [];
 
-  // 1. Effort multiplier change
+  // 1. Effort multiplier change. When the CTL-gap re-anchor pulled the week DOWN (ctlBehind), the
+  // net volume drop is owned by the behind-plan headline; suppress the contradictory "scaled up"
+  // effort line so the debrief can't say "behind" and "scaled up" in the same breath. The "scaled
+  // down" branch stays — it points the same way as the re-anchor, no contradiction.
   const eMult = trailingEffort !== 0 ? effortMultiplier(trailingEffort) : 1.0;
   if (eMult < 0.97) {
     const pct = Math.round((1 - eMult) * 100);
     changes.push(`Volume scaled down ${pct}% based on recent effort feedback`);
-  } else if (eMult > 1.03) {
+  } else if (eMult > 1.03 && !ctlBehind) {
     const pct = Math.round((eMult - 1) * 100);
     changes.push(`Volume scaled up ${pct}% based on recent effort feedback`);
   }

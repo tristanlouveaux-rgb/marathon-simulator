@@ -24,6 +24,7 @@ import type { Workout } from '@/types';
 import { hasActiveCoachSubscription } from '@/coach/entitlement';
 import { computeReadinessACWR, computeLiveSameSignalTSB, normalizeiTrimp } from '@/calculations/fitness-model';
 import { computeReadiness } from '@/calculations/readiness';
+import { mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { SUPABASE_URL, supabase } from '@/data/supabaseClient';
 
 const MODAL_ID = 'coach-workout-modal';
@@ -379,8 +380,10 @@ function buildContextPayload(formState: IntentFormState): Record<string, unknown
   // Readiness composite score (mirrors the home daily-target card).
   const hrvAll = (s.physiologyHistory ?? []).map(p => p.hrvRmssd).filter((v): v is number => v != null);
   const hrvAvg = hrvAll.length >= 3 ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length) : null;
-  const lastPhys = (s.physiologyHistory ?? []).slice(-1)[0] ?? null;
   const lastHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null)?.hrvRmssd ?? null;
+  // Fold manual sleep in so a no-watch user's logged night reaches readiness here too.
+  const sleepHistoryMerged = mergeManualSleepHistory(s.physiologyHistory ?? [], s.recoveryHistory ?? []);
+  const lastSleepScore = sleepHistoryMerged.slice().reverse().find(p => p.sleepScore != null)?.sleepScore ?? null;
 
   const tsbResult = computeLiveSameSignalTSB(
     wks,
@@ -396,8 +399,8 @@ function buildContextPayload(formState: IntentFormState): Record<string, unknown
     tsb: tsbResult.tsb,
     acwr: acwrResult.ratio,
     ctlNow: s.ctlBaseline ?? 0,
-    sleepScore: lastPhys?.sleepScore ?? null,
-    sleepHistory: s.physiologyHistory ?? [],
+    sleepScore: lastSleepScore,
+    sleepHistory: sleepHistoryMerged,
     hrvRmssd: lastHrv,
     hrvPersonalAvg: hrvAvg,
     sleepBankSec: null,

@@ -21,7 +21,7 @@ import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { validateAgainstDistribution, type DistributionTable } from '@/validation/distribution';
 import splitDistJson from '@/constants/empirical-split-distributions.json';
-import { RACE_LEG_DISTANCES } from '@/constants/triathlon-constants';
+import { RACE_LEG_DISTANCES, getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { DISCIPLINE_COLOURS } from './colours';
 import { isCyclingOnlyMode, getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { gp } from '@/calculations/paces';
@@ -76,7 +76,7 @@ export function renderRaceForecastCard(state: SimulatorState): string {
     </div>
   `;
 
-  const distLabel = tri.distance === 'ironman' ? 'Ironman' : '70.3';
+  const distLabel = getTriDistanceLabel(tri.distance);
 
   const halfBandSec = Math.round((p.totalRangeSec[1] - p.totalRangeSec[0]) / 4);
   const halfBandMin = Math.max(1, Math.round(halfBandSec / 60));
@@ -329,7 +329,9 @@ function renderDisciplineBar(p: TriRacePrediction): string {
 
 const OUT_OF_BAND_Z = 2.5;
 
-function renderDistributionBanner(p: TriRacePrediction, distance: '70.3' | 'ironman'): string {
+function renderDistributionBanner(p: TriRacePrediction, distance: TriathlonDistance): string {
+  // Only 70.3/ironman have ingested split-distribution tables; sprint/olympic/t100
+  // resolve to no table and the banner is skipped.
   const table = SPLIT_DIST_TABLES[distance];
   if (!table) return '';
   const result = validateAgainstDistribution(

@@ -11,6 +11,7 @@ import { renderInitializing } from './steps/initializing';
 import { renderRaceTarget } from './steps/race-target';
 import { renderSchedule } from './steps/schedule';
 import { renderPlanPreviewV2 } from './steps/plan-preview-v2';
+import { renderCoachContract } from './steps/coach-contract';
 import { renderRunnerType } from './steps/runner-type';
 import { renderTriathlonSetup } from './steps/triathlon-setup';
 import { renderTriPastRace } from './steps/tri-past-race';
@@ -88,6 +89,10 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderPlanPreviewV2(container, state);
       break;
 
+    case 'coach-contract':
+      renderCoachContract(container, state);
+      break;
+
     case 'runner-type':
       renderRunnerType(container, state);
       break;
@@ -143,7 +148,7 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
   if (showReturn) {
     const btn = document.createElement('button');
     btn.id = 'wizard-return-btn';
-    btn.style.cssText = 'position:fixed;bottom:32px;right:32px;display:flex;align-items:center;gap:6px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50';
+    btn.style.cssText = 'position:fixed;bottom:calc(32px + env(safe-area-inset-bottom, 0px));right:32px;display:flex;align-items:center;gap:6px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50';
     btn.innerHTML = `Return to plan <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>`;
     btn.addEventListener('click', () => {
       const s = getMutableState();
@@ -220,7 +225,7 @@ export function renderBackButton(show: boolean = true): string {
     <button
       onclick="window.wizardPrev()"
       class="m-btn-glass"
-      style="position:fixed;bottom:32px;left:32px;padding:10px 16px;font-size:13px;z-index:50"
+      style="position:fixed;bottom:calc(32px + env(safe-area-inset-bottom, 0px));left:32px;padding:10px 16px;font-size:13px;z-index:50"
     >
       <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>

@@ -96,27 +96,36 @@ describe('initializeSimulator — typed volume reaches the prediction blend', ()
   beforeEach(() => resetState());
 
   /**
-   * Single 5K PB + empty scrape, marathon target. With weeklyKm=0 the
-   * marathon-specificity penalty fires at max (×1.15); with the typed
-   * volume falling back via resolveWeeklyKmSignal (25 km/wk) it softens to
-   * ×1.05. The anchor ratio between the two runs isolates exactly that
-   * term (durability cap and all other inputs are identical), pinning that
-   * the typed manual-entry volume reaches blendPredictions at finalize.
-   * Real case, 2026-06-04: typed "10 km/week" + 0 scraped activities meant
-   * the blend saw an explicit zero instead of the stated volume.
+   * Single 5K PB, marathon target. Pins that typed manual-entry volume reaches
+   * blendPredictions at finalize, AND that "no data" is no longer treated as
+   * "zero training".
+   *
+   * 2026-06-15 fix: an empty scrape with no typed volume now passes `undefined`
+   * (no signal) rather than an explicit 0. So the marathon-specificity penalty
+   * stays DORMANT for a brand-new user — the anchor is the demonstrated fitness
+   * ceiling, not a max-detraining estimate. A typed 25 km/week, by contrast, is
+   * real information showing sub-marathon-prep volume, so it correctly triggers
+   * the ×1.05 (<30 km/wk) band. The typed-volume anchor is therefore SLOWER than
+   * the no-data anchor by exactly that band: absence of data is optimistic,
+   * stated low volume is penalised. The ratio isolates that one term (durability
+   * cap and all other inputs identical). Real case, 2026-06-04: typed
+   * "10 km/week" + 0 scraped activities meant the blend saw an explicit zero
+   * instead of the stated volume — that path now resolves to 25 here.
    */
-  it('typed weekly volume softens the marathon-specificity penalty vs an empty scrape', () => {
+  it('typed weekly volume reaches the blend; no-data stays penalty-free', () => {
     const onboarding = buildRunningOnboarding({
       raceDistance: 'marathon',
       pbs: { k5: 1059 },
     });
 
-    // Run 1: empty scrape, no typed volume → explicit zero → max penalty.
+    // Run 1: empty scrape, no typed volume → no signal → specificity penalty
+    // dormant. Anchor is the fitness ceiling.
     let result = initializeSimulator(onboarding);
     expect(result.success).toBe(true);
-    const anchorZero = getState().blendedRaceTimeSec!;
+    const anchorNoData = getState().blendedRaceTimeSec!;
 
-    // Run 2: same athlete, typed 25 km/week in manual entry.
+    // Run 2: same athlete, typed 25 km/week in manual entry → real low-volume
+    // signal → ×1.05 specificity band.
     resetState();
     const s = getMutableState();
     s.detectedWeeklyKm = 25;
@@ -125,8 +134,8 @@ describe('initializeSimulator — typed volume reaches the prediction blend', ()
     expect(result.success).toBe(true);
     const anchorTyped = getState().blendedRaceTimeSec!;
 
-    // 1.15 / 1.05 ≈ 1.095 — the typed-volume anchor must be faster by
-    // exactly the penalty-band difference.
-    expect(anchorZero / anchorTyped).toBeCloseTo(1.15 / 1.05, 3);
+    // Stated low volume is penalised; absence of data is not. The typed anchor
+    // is slower by exactly the ×1.05 band.
+    expect(anchorTyped / anchorNoData).toBeCloseTo(1.05, 3);
   });
 });

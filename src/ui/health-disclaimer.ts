@@ -49,8 +49,8 @@ export function maybeShowHealthDisclaimer(): Promise<void> {
           <input id="hd-ack" type="checkbox" style="margin-top:3px;cursor:pointer" />
           <span style="font-size:13px;line-height:1.5;color:var(--c-black)">I understand and accept that Mosaic's recommendations are informational, not medical advice.</span>
         </label>
-        <button id="hd-confirm" disabled
-                style="width:100%;padding:12px;border-radius:999px;border:none;background:#1a1a1a;color:#fff;font-size:14px;font-weight:500;cursor:not-allowed;opacity:0.4">Continue</button>
+        <button id="hd-confirm" class="m-btn-primary" disabled
+                style="width:100%;padding:12px;font-size:14px;cursor:not-allowed;opacity:0.4">Continue</button>
       </div>
     `;
     document.body.appendChild(overlay);

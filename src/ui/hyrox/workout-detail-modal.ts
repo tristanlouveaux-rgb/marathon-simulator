@@ -49,11 +49,14 @@ function renderStationRow(
        <div style="font-size:11px;color:var(--c-muted)">${distStr}</div>`;
 
   if (options.context === 'breakdown') {
+    // The bold station name lives in titleBlock; a coloured uppercase label above
+    // it just duplicated the name in a rogue accent. Keep only a neutral
+    // "Substitute" tag when a swap is active, and a muted (not orange) stripe.
     return `
       <div style="display:flex;gap:14px;margin-bottom:14px;align-items:flex-start">
-        <div style="width:3px;flex-shrink:0;background:${options.accent};border-radius:2px;margin-top:2px"></div>
+        <div style="width:3px;flex-shrink:0;background:rgba(0,0,0,0.12);border-radius:2px;margin-top:2px"></div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${options.accent};margin-bottom:3px">${sub ? 'Substitute' : display.name}</div>
+          ${sub ? `<div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:3px">Substitute</div>` : ''}
           ${titleBlock}
         </div>
         <div style="flex-shrink:0">${swapBtn}</div>
@@ -145,7 +148,7 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
 
   overlay.innerHTML = `
     <div style="
-      background:#FAF9F6;
+      background:#fff;
       width:100%;max-width:520px;
       max-height:90vh;overflow-y:auto;
       border-radius:20px;
@@ -173,7 +176,10 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
            Mark as Done · Adjust · Skip action row as the running plan card.
            Station / brick / strength keep their guided Start + Mark as done flow. -->
       ${canAdjust ? `
-      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:14px">
+      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:12px">
+        ${disc === 'run'
+          ? `<button id="hx-detail-start" class="m-btn-primary" style="width:100%;padding:13px;font-size:15px"><span style="width:9px;height:9px;background:#fff;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>Start session</button>`
+          : ''}
         <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
           <button id="hx-detail-mark-done" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Mark as Done</button>
           <span style="color:var(--c-border)">·</span>
@@ -181,12 +187,11 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
           <span style="color:var(--c-border)">·</span>
           <button id="hx-detail-skip" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Skip</button>
         </div>
-        <button id="hx-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
       </div>
       ` : `
       <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
-        <button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
-        <button id="hx-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+        <button id="hx-detail-strength-start" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">Start session</button>
+        <button id="hx-detail-strength-done" class="m-btn-ok" style="width:100%;padding:11px;font-size:13px">Mark as done</button>
       </div>
       `}
 
@@ -200,6 +205,13 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#hx-detail-close')?.addEventListener('click', close);
   overlay.querySelector('#hx-detail-done')?.addEventListener('click', close);
+  // Run sessions launch the same guided/tracked-run flow the running plan uses
+  // (window.trackWorkout). Mirrors the triathlon modal's #tri-detail-start. Cross
+  // (bike / erg / swim) keeps Mark-as-done: no guided recorder for those yet.
+  overlay.querySelector('#hx-detail-start')?.addEventListener('click', () => {
+    close();
+    (window as any).trackWorkout?.(workout.n || 'Session', workout.d || '');
+  });
   overlay.querySelector('#hx-detail-mark-done')?.addEventListener('click', () => {
     setHxRated(wkIdx, workout, rpe);
     close();
@@ -345,7 +357,7 @@ function openSubstitutionPicker(station: HyroxStation, onPick: (subId: string) =
         `).join('')}
       </div>
       <div style="padding:8px 16px 16px;border-top:1px solid rgba(0,0,0,0.06)">
-        <button id="hx-sub-cancel" style="width:100%;padding:11px;border-radius:12px;border:1px solid rgba(0,0,0,0.10);background:#fff;color:var(--c-black);font-size:14px;cursor:pointer">Cancel</button>
+        <button id="hx-sub-cancel" class="m-btn-secondary" style="width:100%;padding:11px;font-size:14px">Cancel</button>
       </div>
     </div>
   `;

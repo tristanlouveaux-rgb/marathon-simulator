@@ -5,6 +5,7 @@
  */
 
 import { getState, getMutableState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderCyclingFinishCard, calibrationDatasetCaption } from './race-forecast-card';
@@ -13,7 +14,7 @@ import { renderTriConeCard, wireTriConeCard } from './race-forecast-cone-card';
 import { renderTriForecastMarquee } from './race-forecast-marquee';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { getCyclingEventById } from '@/data/cycling-events';
 import { getTriathlonById } from '@/data/triathlons';
 
@@ -85,22 +86,25 @@ export function renderTriathlonForecastView(): void {
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
-  const eventLabel = getCyclingEventLabel(s) ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
+  const eventLabel = getCyclingEventLabel(s) ?? getTriDistanceLabel(tri.distance);
   const raceCity = getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null;
   const eventWithCity = raceCity ? `${raceCity} ${eventLabel}` : eventLabel;
   const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${eventWithCity}` : `Your ${eventWithCity}`;
 
+  // Entrance plays on the first Forecast visit per session only; revisits render settled.
+  const animate = shouldPlayEntrance('tri-forecast');
+
   container.innerHTML = `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hf { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('tf', { variant: 'sweep', palette: 'sky', pulse: true })}
+        ${buildRingBackground('tf', { variant: 'sweep', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 

@@ -241,7 +241,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
             <div class="flex items-center gap-3">
               ${renderStravaButton(s.stravaConnected)}
               ${injured ? `
-                <button id="btn-recovered" class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors" style="background:var(--c-ok);color:white">
+                <button id="btn-recovered" class="m-btn-ok flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                   </svg>
@@ -315,7 +315,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               ` : ''}
 
               <div class="mt-3 space-y-2">
-                <button id="btn-complete-week" class="w-full font-medium py-2 rounded text-sm transition-colors" style="background:var(--c-ok);color:white">
+                <button id="btn-complete-week" class="m-btn-ok w-full py-2 text-sm transition-colors">
                   Complete Week
                 </button>
                 ${SUPABASE_URL ? `
@@ -1056,16 +1056,16 @@ function showRecoveryInputModal(): void {
       <h3 class="font-semibold text-lg mb-1" style="color:var(--c-black)">How did you sleep?</h3>
       <p class="text-sm mb-5" style="color:var(--c-muted)">Quick check-in to optimize today's training.</p>
       <div class="flex flex-col gap-2">
-        <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:white" data-quality="great">
+        <button class="recovery-quality-btn m-btn-ok w-full py-2.5 transition-colors text-sm" data-quality="great">
           Great. Slept well.
         </button>
         <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.07);color:var(--c-black)" data-quality="good">
           Good. Normal night.
         </button>
-        <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:white" data-quality="poor">
+        <button class="recovery-quality-btn m-btn-caution w-full py-2.5 transition-colors text-sm" data-quality="poor">
           Poor. Restless or short.
         </button>
-        <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-warn);color:white" data-quality="terrible">
+        <button class="recovery-quality-btn m-btn-danger w-full py-2.5 transition-colors text-sm" data-quality="terrible">
           Terrible. Barely slept.
         </button>
         <button id="btn-recovery-skip" class="w-full py-2 text-xs transition-colors mt-1" style="color:var(--c-faint)">
@@ -1198,7 +1198,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
       ${todayWorkout ? `
         <div class="flex flex-col gap-2">
           ${todayWorkout.t === 'easy' || todayWorkout.t === 'long' ? `
-            <button id="btn-recovery-easy-flag" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm text-left px-4" style="background:var(--c-ok);color:white">
+            <button id="btn-recovery-easy-flag" class="m-btn-ok w-full py-2.5 transition-colors text-sm text-left px-4">
               <div class="flex items-center justify-between">
                 <span>Run by feel</span>
                 ${level === 'red' || level === 'orange' ? '<span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(255,255,255,0.20)">Recommended</span>' : ''}
@@ -1210,7 +1210,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
               <p class="text-xs mt-0.5" style="color:var(--c-muted)">Cut by 20%, keep it short</p>
             </button>
           ` : `
-            <button id="btn-recovery-downgrade" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm text-left px-4" style="background:var(--c-ok);color:white">
+            <button id="btn-recovery-downgrade" class="m-btn-ok w-full py-2.5 transition-colors text-sm text-left px-4">
               <div class="flex items-center justify-between">
                 <span>Downgrade to Easy</span>
                 ${level === 'red' || level === 'orange' ? '<span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(255,255,255,0.20)">Recommended</span>' : ''}
@@ -1341,13 +1341,13 @@ function renderMorningPainCheck(s: any): string {
             Is your pain worse than yesterday morning? (Current: ${currentPain}/10)
           </p>
           <div class="flex gap-2">
-            <button id="btn-morning-pain-worse" class="px-4 py-2 text-xs font-medium rounded-lg transition-colors" style="background:var(--c-warn);color:white">
+            <button id="btn-morning-pain-worse" class="m-btn-danger px-4 py-2 text-xs transition-colors">
               Worse
             </button>
-            <button id="btn-morning-pain-same" class="px-4 py-2 text-xs font-medium rounded-lg transition-colors" style="background:var(--c-accent);color:white">
+            <button id="btn-morning-pain-same" class="m-btn-secondary px-4 py-2 text-xs transition-colors">
                Same
             </button>
-            <button id="btn-morning-pain-better" class="px-4 py-2 text-xs font-medium rounded-lg transition-colors" style="background:var(--c-ok);color:white">
+            <button id="btn-morning-pain-better" class="m-btn-ok px-4 py-2 text-xs transition-colors">
               Better
             </button>
           </div>
@@ -2632,7 +2632,7 @@ function wireEventHandlers(): void {
         viewIndicator.innerHTML = `
           <div class="flex items-center justify-between gap-2">
             <span><span style="color:var(--c-caution)">Viewing Week ${viewWeek}</span> · <span style="color:var(--c-muted)">You are on Week ${s.w}</span></span>
-            <button onclick="window.__editThisWeek()" class="px-2 py-1 rounded text-xs font-medium transition-colors" style="background:var(--c-caution);color:white">Edit this week</button>
+            <button onclick="window.__editThisWeek()" class="m-btn-caution px-2 py-1 text-xs transition-colors">Edit this week</button>
           </div>
         `;
         viewIndicator.classList.remove('hidden');
@@ -2659,13 +2659,13 @@ function wireEventHandlers(): void {
     if (completeBtn) {
       if (isViewing) {
         completeBtn.disabled = true;
-        completeBtn.className = 'w-full font-medium py-2 rounded text-sm cursor-not-allowed';
-        completeBtn.style.cssText = 'background:rgba(0,0,0,0.05);color:var(--c-faint)';
+        completeBtn.className = 'm-btn-secondary w-full py-2 text-sm cursor-not-allowed';
+        completeBtn.style.cssText = 'opacity:0.55';
         completeBtn.textContent = 'Viewing, Return to current week';
       } else {
         completeBtn.disabled = false;
-        completeBtn.className = 'w-full font-medium py-2 rounded text-sm transition-colors';
-        completeBtn.style.cssText = 'background:var(--c-ok);color:white';
+        completeBtn.className = 'm-btn-ok w-full py-2 text-sm transition-colors';
+        completeBtn.style.cssText = '';
         completeBtn.textContent = 'Complete Week';
       }
     }
@@ -2828,7 +2828,7 @@ function showStyledConfirm(title: string, message: string, confirmLabel: string,
         <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">${title}</h3>
         <p class="text-sm mb-5" style="color:var(--c-muted)">${message}</p>
         <div class="flex flex-col gap-2">
-          <button id="btn-styled-confirm" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:white">
+          <button id="btn-styled-confirm" class="m-btn-ok w-full py-2.5 transition-colors text-sm">
             ${confirmLabel}
           </button>
           <button id="btn-styled-cancel" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.05);color:var(--c-muted)">

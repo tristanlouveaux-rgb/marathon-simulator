@@ -279,23 +279,6 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
     </linearGradient>
   ` : '';
 
-  const filterDefs = `
-    <filter id="${prefix}Far"  x="-10%" y="-10%" width="120%" height="120%">
-      <feGaussianBlur stdDeviation="0.7"/>
-    </filter>
-    <filter id="${prefix}Near" x="-25%" y="-25%" width="150%" height="150%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2.5"/>
-      <feOffset dx="1.5" dy="2.5" result="shadow"/>
-      <feComponentTransfer in="shadow" result="shadowFaded">
-        <feFuncA type="linear" slope="0.45"/>
-      </feComponentTransfer>
-      <feMerge>
-        <feMergeNode in="shadowFaded"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  `;
-
   // Stagger by ascending radius (smallest r → delay 0, largest r → max delay).
   // Entrance stagger is bigger on 'large' so the bloom feels deliberate.
   // Wave stagger is fixed (innermost first → outermost last). Same map, used as
@@ -323,9 +306,11 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
   // → rings flash blank. Nesting separates concerns: outer = opacity entrance,
   // inner = scale wave. Each owns one CSS animation property without conflict.
   const renderRing = (ring: RingDef, kind: 'farMid' | 'near') => {
-    const filter = ring.depth === 'far'  ? ` filter="url(#${prefix}Far)"`
-                 : ring.depth === 'near' ? ` filter="url(#${prefix}Near)"`
-                 : '';
+    // Rings are deliberately FILTER-FREE. These groups animate their transform
+    // (entrance bloom, pulse, drift, wave). An SVG feGaussianBlur/drop-shadow on a
+    // transform-animating element forces a per-frame re-rasterization of the filtered
+    // region → ~30fps stutter on iOS (RUNBOOK → Backgrounds stuttering, Cause 1).
+    // Crisp rings hold 60fps and are visually near-identical at rest. Do not re-add.
     const delay = ringDelay.get(ring) ?? 0;
     const waveDelay = ringWaveDelay.get(ring) ?? 0;
     const entranceClass = entrance === 'none' ? '' : `${prefix}-entrance`;
@@ -338,7 +323,7 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
                   fill="none"
                   stroke="url(#${prefix}Ring_${ring.tier})"
                   stroke-width="${ring.sw}"
-                  opacity="${ring.opacity}"${filter}/>
+                  opacity="${ring.opacity}"/>
         </g>
       </g>
     `;
@@ -389,16 +374,21 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
       .${prefix}-entrance { opacity: 1; animation: none; transform: none; }
     }
   ` : entrance === 'small' ? `
+    /* OPACITY-ONLY. The 'small' entrance fires on EVERY wizard step transition.
+       Scaling stroked SVG rings forces a per-frame re-raster on WKWebView (the same
+       iOS cliff as the click-wave), so the rings fade in rather than scale. Matches
+       the team's 'entrance keyframes never transform' rule. Only the prewarmed intro
+       hero ('large') keeps its scale bloom. (Tristan, 2026-06-15) */
     @keyframes ${prefix}Entrance {
-      from { opacity: 0; transform: scale(0.85); }
-      to   { opacity: 1; transform: scale(1); }
+      from { opacity: 0; }
+      to   { opacity: 1; }
     }
     .${prefix}-entrance {
       opacity: 0;
-      animation: ${prefix}Entrance 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: ${prefix}Entrance 0.55s ease-out forwards;
     }
     @media (prefers-reduced-motion: reduce) {
-      .${prefix}-entrance { opacity: 1; animation: none; transform: none; }
+      .${prefix}-entrance { opacity: 1; animation: none; }
     }
   ` : '';
 
@@ -494,7 +484,6 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
       <defs>
         ${ringGradientDefs}
         ${accentGradientDef}
-        ${filterDefs}
       </defs>
       <style>${entranceKeyframes}${waveKeyframes}${driftKeyframes}</style>
       ${driftElement}
@@ -575,6 +564,26 @@ export function buildSunGlint(intensity: GlintIntensity = 'mid'): string {
 // ── First-launch tracking ────────────────────────────────────────────────────
 
 const FIRST_LAUNCH_KEY = 'mosaic_has_seen_ring_intro';
+
+// ── First-visit-per-session entrance gate ────────────────────────────────────
+// Tab-level views replay their full entrance (card fades, ring entrance, drift)
+// on EVERY tab switch because each switch is a full re-render. On WKWebView that
+// made tab navigation feel slow (~0.9s of staggered animation per visit) and
+// kept moving content behind backdrop-filter glass (the documented resample
+// cliff). Entrances now play once per view per session; revisits render settled.
+const playedEntrances = new Set<string>();
+
+/**
+ * True the FIRST time a view key is seen this session; false on every revisit.
+ * Call exactly once per render (it self-marks). Tab views use the result to
+ * emit animated vs settled entrance CSS and to pass `entrance:'none'` /
+ * `pulse:false` to their ring background on revisits.
+ */
+export function shouldPlayEntrance(key: string): boolean {
+  if (playedEntrances.has(key)) return false;
+  playedEntrances.add(key);
+  return true;
+}
 
 /**
  * Returns true if the user has never seen the rings before on this device.

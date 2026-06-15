@@ -10,10 +10,11 @@
  * the activities that have happened.
  */
 
-import type { SimulatorState } from '@/types/state';
+import type { SimulatorState, Week } from '@/types/state';
 import type { Discipline, PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { sportToTransferSource, transferWeight, type TransferSourceSport } from '@/constants/transfer-matrix';
+import { ctlAdherenceRatio } from '@/calculations/fitness-model';
 
 /**
  * Record of an activity contributing to fitness. Generic across all sports —
@@ -156,4 +157,74 @@ export function rebuildTriFitnessFromActivities(
     });
   }
   return computePerDisciplineFitness(contributions);
+}
+
+// ─── Per-discipline load-gap re-anchor (triathlon mirror of running's CTL-gap) ──────────────────
+
+export interface TriDisciplineAdherence {
+  valid: boolean;
+  /** Only disciplines that fell BEHIND (ratio < 1) appear, so the generator scales just those. */
+  byDiscipline: { swim?: number; bike?: number; run?: number };
+  pctByDiscipline: { swim?: number; bike?: number; run?: number };
+}
+
+/**
+ * Sum a week's prescribed per-discipline tri load (aerobic + anaerobic). `matchedOnly` restricts to
+ * completed sessions — that is the "actual": the prescribed load of the sessions the athlete
+ * actually did (a completion signal, exactly like HYROX's computeWeekActualMTL). Illness/holiday-
+ * rested sessions are excluded so legitimate rest never reads as a miss (mirror getPlannedDayTSSContext).
+ */
+function sumTriDisciplineLoad(wk: Week | undefined, d: Discipline, matchedOnly: boolean): number {
+  const ws = (wk as any)?.triWorkouts ?? [];
+  let sum = 0;
+  for (const w of ws) {
+    if ((w.discipline ?? 'run') !== d) continue;
+    if (matchedOnly && !w.matchedActivityId) continue;
+    const rested = w.illnessSeverity === 'resting' || ((w.illnessMod || w.holidayMod) && (w.rpe ?? w.r) === 0);
+    if (rested) continue;
+    sum += (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  }
+  return sum;
+}
+
+/**
+ * Triathlon mirror of `resolveCtlAdherence` — PER DISCIPLINE. After a completed week, for each of
+ * swim/bike/run, a one-step ratio of completed vs prescribed load (seeded from the prior weeks'
+ * completed load, same CTL_DECAY damping) re-anchors next week's per-discipline durations
+ * (applyTriEffortMultipliers → ctlGapMultiplier). Per-discipline because a tri athlete can keep up
+ * on the bike while skipping every swim — a combined ratio would wrongly cut the bike.
+ *
+ * No baseline-contamination temp-clear is needed (cf. running): the tri re-anchor scales DURATION,
+ * never aerobic/anaerobic, so the load summed here is always the un-reduced prescription. Converges
+ * because completing the (shorter) prescribed sessions matches them, lifting the ratio back to ~1.
+ */
+export function resolveTriDisciplineAdherence(s: SimulatorState, completedWeek: number): TriDisciplineAdherence {
+  const neutral: TriDisciplineAdherence = { valid: false, byDiscipline: {}, pctByDiscipline: {} };
+  if (s.eventType !== 'triathlon' || !s.wks) return neutral;
+  if (completedWeek < 1 || completedWeek > s.wks.length) return neutral;
+  const wk = s.wks[completedWeek - 1] as any;
+  // Excused weeks: injury / silent-advance gap / taper (don't re-anchor race prep). Mirrors running.
+  if (wk?.injuryState?.active || wk?.detrainApplied || wk?.ph === 'taper') return neutral;
+
+  const CTL_DECAY = Math.exp(-7 / 42);
+  const disciplines: Discipline[] = ['swim', 'bike', 'run'];
+  const byDiscipline: { swim?: number; bike?: number; run?: number } = {};
+  const pctByDiscipline: { swim?: number; bike?: number; run?: number } = {};
+  let valid = false;
+
+  for (const d of disciplines) {
+    const planned = sumTriDisciplineLoad(wk, d, false);
+    if (planned <= 0) continue; // discipline not prescribed this week — nothing to fall behind on
+    valid = true; // the week has a tri plan, so we have a verdict (even if on-track) — clears stale stamps
+    const actual = sumTriDisciplineLoad(wk, d, true);
+    let seed = 0;
+    for (let i = 0; i < completedWeek - 1; i++) {
+      seed = seed * CTL_DECAY + sumTriDisciplineLoad(s.wks[i], d, true) * (1 - CTL_DECAY);
+    }
+    const ratio = ctlAdherenceRatio(seed, planned, actual);
+    pctByDiscipline[d] = Math.max(0, Math.round((actual / planned) * 100));
+    if (ratio < 1) byDiscipline[d] = ratio; // reduce-only: store just the disciplines that are behind
+  }
+
+  return { valid, byDiscipline, pctByDiscipline };
 }

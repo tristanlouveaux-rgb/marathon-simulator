@@ -117,11 +117,11 @@ export function renderHyroxCriticalPaceDetail(): void {
 
   container.innerHTML = `
     <style>
-      @keyframes hxcpFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes hxcpFloatUp { from { opacity:0; } to { opacity:1; } }
       .hxcp-fade { opacity:0; animation:hxcpFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="hxcp-view" style="
+    <div id="hxcp-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">

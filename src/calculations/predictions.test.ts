@@ -279,4 +279,39 @@ describe('Predictions', () => {
       expect(predicted).not.toBeNull();
     });
   });
+
+  // 2026-06-15: "no training data" must not be read as "detrained". A brand-new
+  // user who enters only a PB has no synced history (weeklyRunKm undefined), and
+  // the volume-driven penalties must stay dormant — they exist to correct a
+  // returning athlete with REAL low-volume history, not to override a stated PB.
+  describe('no-data does not trigger detraining penalties', () => {
+    const b = 1.06;
+
+    it('floors a marathon prediction at a same-distance PB when no volume signal', () => {
+      const pbs: PBs = { m: 7200 }; // 2:00:00 marathon, nothing else
+      // weeklyRunKm omitted (undefined) = no history yet.
+      const predicted = blendPredictions(42195, pbs, null, null, b, 'balanced', null);
+      // Must not predict slower than the demonstrated time.
+      expect(predicted!).toBeCloseTo(7200, 0);
+    });
+
+    it('still penalises when a REAL low-volume signal is present (detraining evidence)', () => {
+      const pbs: PBs = { m: 7200 };
+      const meta = { weeksCovered: 8, paceConfidence: 'low' as const, isStale: false };
+      // 5 km/wk of actual history → marathon-specificity penalty fires past the PB.
+      const predicted = blendPredictions(
+        42195, pbs, null, null, b, 'balanced', null, undefined, 5, undefined, meta,
+      );
+      expect(predicted!).toBeGreaterThan(7200);
+    });
+
+    it('does not over-penalise a 5K-only marathon target with no history', () => {
+      const pbs: PBs = { k5: 1200 }; // 20:00 5K, no long-race PB, no volume
+      const predicted = blendPredictions(42195, pbs, null, null, b, 'balanced', null);
+      // Riegel ceiling (~3:29) + only the small no-long-race penalty (×1.01).
+      // Must stay well under the old ~4:03 max-penalty result.
+      expect(predicted!).toBeLessThan(3 * 3600 + 40 * 60); // < 3:40
+      expect(predicted!).toBeGreaterThan(3 * 3600 + 20 * 60); // > 3:20 (still the ceiling, not free)
+    });
+  });
 });

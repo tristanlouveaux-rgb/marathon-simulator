@@ -322,11 +322,11 @@ function getInjuryRiskHTML(s: SimulatorState): string {
     <style>
       #ir-view { box-sizing:border-box; }
       #ir-view *, #ir-view *::before, #ir-view *::after { box-sizing:inherit; }
-      @keyframes irFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes irFloatUp { from { opacity:0; } to { opacity:1; } }
       .ir-fade { opacity:0; animation:irFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="ir-view" style="
+    <div id="ir-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('amber')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -335,7 +335,7 @@ function getInjuryRiskHTML(s: SimulatorState): string {
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
-        <div style="padding:56px 20px 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50">
+        <div style="padding:56px 20px 12px;display:flex;align-items:center;justify-content:space-between;position:relative">
           <button id="ir-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
             background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);

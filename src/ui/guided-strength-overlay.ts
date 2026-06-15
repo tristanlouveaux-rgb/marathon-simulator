@@ -127,8 +127,15 @@ export function openGuidedStrength(workout: Workout, opts: { onClose?: () => voi
   // Spin up GPS before controller.start() so the tracker reference is in place
   // when the synchronous setStart cue fires for the first set.
   startGpsIfRunsPresent();
-  controller.start();
+  // 3-2-1 "get ready" countdown before the first set goes active, instead of
+  // dropping the user straight into a live set. start() emits countdownStart
+  // synchronously, so handleCue swaps mount()'s first render for renderCountdown
+  // before the browser paints (no flash of the active view).
+  controller.start(INITIAL_COUNTDOWN_SECONDS);
 }
+
+/** Pre-session "get ready" countdown before the first set. Tristan: 3-2-1. */
+const INITIAL_COUNTDOWN_SECONDS = 3;
 
 // ─── GPS bridge for HYROX run components ─────────────────────────────────────
 
@@ -517,7 +524,7 @@ export function closeOverlay(): void {
 function shellOpen(headerRight: string): string {
   return `
     <div style="
-      background:#FAF9F6;
+      background:#fff;
       width:100%;max-width:520px;
       max-height:92vh;overflow-y:auto;
       border-radius:20px;
@@ -706,10 +713,10 @@ function renderActive(): void {
         ${renderWeightBlock(cur)}
         ${renderRunReadoutBlock()}
 
-        <button id="gs-complete" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">
+        <button id="gs-complete" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px;margin-bottom:8px">
           Complete set
         </button>
-        <button id="gs-finish" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f);margin-bottom:18px">
+        <button id="gs-finish" class="m-btn-secondary" style="width:100%;padding:11px;font-size:13px;margin-bottom:18px">
           Finish session
         </button>
 
@@ -746,8 +753,8 @@ function renderResting(): void {
         ` : ''}
 
         <div style="display:flex;gap:10px">
-          <button id="gs-extend" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">+30s</button>
-          <button id="gs-skip" style="flex:1;padding:12px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Skip rest</button>
+          <button id="gs-extend" class="m-btn-secondary" style="flex:1;padding:12px;font-size:13px">+30s</button>
+          <button id="gs-skip" class="m-btn-primary" style="flex:1;padding:12px;font-size:13px">Skip rest</button>
         </div>
 
         <div id="gs-elapsed-small" style="margin-top:14px;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">Elapsed ${fmtElapsed(active.controller.elapsedSec)}</div>
@@ -798,8 +805,8 @@ function renderPaused(): void {
           <div style="text-align:center;font-size:13px;color:var(--c-muted);margin-bottom:20px">${escapeHtml(next.reps)}</div>
         ` : ''}
 
-        <button id="gs-next" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Start next station</button>
-        <button id="gs-finish" style="width:100%;padding:11px;background:transparent;color:var(--c-muted);border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Finish session</button>
+        <button id="gs-next" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px;margin-bottom:8px">Start next station</button>
+        <button id="gs-finish" class="m-btn-secondary" style="width:100%;padding:11px;font-size:13px">Finish session</button>
 
         <div id="gs-elapsed-small" style="margin-top:14px;text-align:center;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">Total elapsed ${fmtElapsed(active.controller.elapsedSec)}</div>
       </div>
@@ -811,8 +818,9 @@ function renderPaused(): void {
 }
 
 /**
- * Big 5..4..3..2..1 countdown before the next station begins. Auto-advances
- * to `renderActive` when the controller transitions out of `countdown`.
+ * Big "get ready" countdown — 3..2..1 before the first set, 5..1 between
+ * stations. Auto-advances to `renderActive` when the controller transitions out
+ * of `countdown`.
  */
 function renderCountdown(): void {
   if (!active) return;
@@ -852,12 +860,12 @@ function showFinishConfirm(onConfirm: () => void): void {
   el.id = 'gs-confirm';
   el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
   el.innerHTML = `
-    <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+    <div style="background:#fff;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
       <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Finish the session?</div>
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">Your time so far will be logged.</div>
       <div style="display:flex;gap:10px">
-        <button id="gs-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Keep going</button>
-        <button id="gs-confirm-yes" style="flex:1;padding:12px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Finish</button>
+        <button id="gs-confirm-cancel" class="m-btn-glass m-btn-glass--inset" style="flex:1;padding:12px;font-size:14px">Keep going</button>
+        <button id="gs-confirm-yes" class="m-btn-primary" style="flex:1;padding:12px;font-size:14px">Finish</button>
       </div>
     </div>`;
   host.appendChild(el);
@@ -879,12 +887,12 @@ function showDiscardConfirm(onConfirm: () => void): void {
   el.id = 'gs-confirm';
   el.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:10;padding:20px';
   el.innerHTML = `
-    <div style="background:#FAF9F6;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
+    <div style="background:#fff;border-radius:16px;max-width:340px;width:100%;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3)">
       <div style="font-size:16px;font-weight:600;color:#0F172A;margin-bottom:6px">Discard this session?</div>
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">Your sets and time will not be saved.</div>
       <div style="display:flex;gap:10px">
-        <button id="gs-confirm-cancel" style="flex:1;padding:12px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Keep it</button>
-        <button id="gs-confirm-yes" style="flex:1;padding:12px;background:#EF4444;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Discard</button>
+        <button id="gs-confirm-cancel" class="m-btn-glass m-btn-glass--inset" style="flex:1;padding:12px;font-size:14px">Keep it</button>
+        <button id="gs-confirm-yes" class="m-btn-danger" style="flex:1;padding:12px;font-size:14px">Discard</button>
       </div>
     </div>`;
   host.appendChild(el);
@@ -1026,7 +1034,7 @@ function renderFinish(): void {
           `).join('')}
         </div>
 
-        <button id="gs-save" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">
+        <button id="gs-save" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">
           Save and close
         </button>
         <button id="gs-discard" style="width:100%;padding:11px;margin-top:8px;background:transparent;color:#EF4444;border:none;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">

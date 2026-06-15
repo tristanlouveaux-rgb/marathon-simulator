@@ -10,9 +10,10 @@ const config: CapacitorConfig = {
     // ALSO inset for safe areas, producing a double inset at the top and a
     // visible content shift on the first scroll (read as "glitching at the top").
     // 'never' lets the CSS be the single source of truth.
-    // NOTE: there is NO native rubber-band bounce on device — Capacitor hardcodes
-    // scrollView.bounces = false (CAPBridgeViewController.swift). The top bounce
-    // comes from the JS spring in src/ui/web-overscroll-bounce.ts on all platforms.
+    // NOTE on the bounce: Capacitor hardcodes scrollView.bounces = false. We
+    // re-enable the real WKWebView rubber-band in BounceViewController.swift
+    // (true UIScrollView momentum + bounce on device). Web has no native bounce,
+    // so it uses the JS spring in src/ui/web-overscroll-bounce.ts instead.
     contentInset: 'never',
   },
   server: {

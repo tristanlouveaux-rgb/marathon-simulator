@@ -398,14 +398,14 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       #sleep-view { box-sizing: border-box; }
       #sleep-view *, #sleep-view *::before, #sleep-view *::after { box-sizing: inherit; }
       @keyframes sleepFloatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
       .sl-fade { opacity:0; animation:sleepFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .sleep-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
     </style>
 
-    <div id="sleep-view" style="
+    <div id="sleep-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('indigo')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -419,7 +419,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="sleep-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

@@ -92,6 +92,67 @@ describe('GpsTracker', () => {
     });
   });
 
+  describe('acquisition gate (arm / confirmStart)', () => {
+    it('arms into acquiring without starting the clock', async () => {
+      const armed = await tracker.arm();
+      expect(armed).toBe(true);
+      expect(tracker.getStatus()).toBe('acquiring');
+      expect(tracker.isArmed()).toBe(true);
+      expect(tracker.getLiveData().elapsed).toBe(0);
+    });
+
+    it('does NOT auto-start tracking on a good fix while armed', async () => {
+      await tracker.arm();
+      provider.pushPoint(makePoint(0, 0, 1000)); // accuracy 5 = good
+      // Without the confirm tap, a ready fix must not begin the run.
+      expect(tracker.getStatus()).toBe('acquiring');
+      expect(tracker.isArmed()).toBe(true);
+    });
+
+    it('reports isGpsReady once an acceptable fix arrives', async () => {
+      await tracker.arm();
+      expect(tracker.isGpsReady()).toBe(false);
+      provider.pushPoint(makePoint(0, 0, 1000, 50)); // bad accuracy
+      expect(tracker.isGpsReady()).toBe(false);
+      provider.pushPoint(makePoint(0, 0, 2000, 12)); // good accuracy
+      expect(tracker.isGpsReady()).toBe(true);
+    });
+
+    it('confirmStart begins tracking and accumulates from the next fix', async () => {
+      await tracker.arm();
+      provider.pushPoint(makePoint(0, 0, 1000)); // ready, still armed
+      tracker.confirmStart();
+      expect(tracker.isArmed()).toBe(false);
+      // First post-confirm fix seeds the route; the next accumulates distance.
+      provider.pushPoint(makePoint(0, 0, 2000));
+      provider.pushPoint(makePoint(0.001, 0, 32000));
+      expect(tracker.getStatus()).toBe('tracking');
+      expect(tracker.getLiveData().totalDistance).toBeGreaterThan(100);
+    });
+
+    it('confirmStart is a no-op when not armed', async () => {
+      tracker.confirmStart();
+      expect(tracker.getStatus()).toBe('idle');
+    });
+
+    it('arm returns false and resets to idle when permission denied', async () => {
+      provider.permissionGranted = false;
+      const armed = await tracker.arm();
+      expect(armed).toBe(false);
+      expect(tracker.getStatus()).toBe('idle');
+      expect(tracker.isArmed()).toBe(false);
+    });
+
+    it('cancelArm stops watching and returns to idle', async () => {
+      await tracker.arm();
+      expect(provider.isWatching).toBe(true);
+      tracker.cancelArm();
+      expect(tracker.getStatus()).toBe('idle');
+      expect(tracker.isArmed()).toBe(false);
+      expect(provider.isWatching).toBe(false);
+    });
+  });
+
   describe('distance accumulation', () => {
     it('accumulates distance between valid points', async () => {
       await tracker.start();

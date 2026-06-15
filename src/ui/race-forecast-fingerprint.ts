@@ -337,7 +337,7 @@ const COLOUR_WASH = `
  * factor-cluster chips beneath. Returns '' when there is no predicted time
  * (defensive. Caller already gates on race mode + initialBaseline).
  */
-export function renderForecastFingerprint(s: SimulatorState): string {
+export function renderForecastFingerprint(s: SimulatorState, animate = true): string {
   const predictedSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.blendedRaceTimeSec ?? 0;
   if (!predictedSec || predictedSec <= 0) return '';
 
@@ -411,16 +411,19 @@ export function renderForecastFingerprint(s: SimulatorState): string {
 
   return `
     <style>
-      @keyframes rfcChipFadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
-      .rfc-chip { opacity:0; animation:rfcChipFadeIn 0.45s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      .rfc-chip:nth-child(1) { animation-delay:0.20s; }
-      .rfc-chip:nth-child(2) { animation-delay:0.26s; }
-      .rfc-chip:nth-child(3) { animation-delay:0.32s; }
-      .rfc-chip:nth-child(4) { animation-delay:0.38s; }
-      .rfc-chip:nth-child(5) { animation-delay:0.44s; }
-      .rfc-chip:nth-child(6) { animation-delay:0.50s; }
-      .rfc-chip:nth-child(7) { animation-delay:0.56s; }
-      .rfc-chip:nth-child(8) { animation-delay:0.62s; }
+      @keyframes rfcChipFadeIn { from { opacity:0; } to { opacity:1; } }
+      /* Tight stagger: the old 0.20–0.62s ladder read as chips lagging in like
+         slow data loads (TestFlight dogfood 2026-06-05). Chips now land nearly
+         together, just behind their parent card's fade. */
+      .rfc-chip { ${animate ? 'opacity:0; animation:rfcChipFadeIn 0.3s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
+      .rfc-chip:nth-child(1) { animation-delay:0.04s; }
+      .rfc-chip:nth-child(2) { animation-delay:0.06s; }
+      .rfc-chip:nth-child(3) { animation-delay:0.08s; }
+      .rfc-chip:nth-child(4) { animation-delay:0.10s; }
+      .rfc-chip:nth-child(5) { animation-delay:0.12s; }
+      .rfc-chip:nth-child(6) { animation-delay:0.14s; }
+      .rfc-chip:nth-child(7) { animation-delay:0.16s; }
+      .rfc-chip:nth-child(8) { animation-delay:0.18s; }
     </style>
     <div class="rfc-fade" style="animation-delay:0.10s;padding:0 16px;margin-bottom:14px">
       <div style="position:relative;background:rgba(255,255,255,0.50);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);border-radius:24px;padding:22px 22px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 18px 48px rgba(0,0,0,0.10);border:1px solid rgba(255,255,255,0.55);overflow:hidden">

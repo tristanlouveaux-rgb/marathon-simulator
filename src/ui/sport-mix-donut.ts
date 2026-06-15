@@ -154,9 +154,9 @@ export function buildSportDonut(slices: SportSlice[], totalWeeklyTSS: number, to
     <div style="display:flex;justify-content:center;padding:8px 0 4px">
       <svg viewBox="0 0 200 200" width="200" height="200" style="display:block">
         <g>${arcs.join('')}</g>
-        <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-family="var(--f)" font-size="11" fill="${tokens.textS}" font-weight="500">Weekly load</text>
-        <text x="${cx}" y="${cy + 18}" text-anchor="middle" font-family="var(--f)" font-size="26" fill="${tokens.textM}" font-weight="600" font-variant-numeric="tabular-nums" letter-spacing="-0.02em">${Math.round(totalWeeklyTSS)}</text>
-        <text x="${cx}" y="${cy + 34}" text-anchor="middle" font-family="var(--f)" font-size="10" fill="${tokens.textL}">TSS</text>
+        <text x="${cx}" y="${cy - 16}" text-anchor="middle" font-family="var(--f)" font-size="11" fill="${tokens.textS}" font-weight="500">Weekly load</text>
+        <text x="${cx}" y="${cy + 9}" text-anchor="middle" font-family="var(--f)" font-size="26" fill="${tokens.textM}" font-weight="600" font-variant-numeric="tabular-nums" letter-spacing="-0.02em">${Math.round(totalWeeklyTSS)}</text>
+        <text x="${cx}" y="${cy + 26}" text-anchor="middle" font-family="var(--f)" font-size="10" fill="${tokens.textL}">TSS</text>
       </svg>
     </div>
   `;

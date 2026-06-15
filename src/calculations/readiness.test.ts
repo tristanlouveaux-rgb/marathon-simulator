@@ -11,14 +11,16 @@ const BASE: ReadinessInput = {
 
 describe('computeReadiness — edge cases', () => {
 
-  it('returns On Track (65) when insufficient history', () => {
+  it('returns On Track (65) when insufficient history AND no recovery data', () => {
+    // With no sleep/HRV, the load-history sub-scores neutralise to 65 and there
+    // is nothing else to move the score — preserves the old "safe default".
     const r = computeReadiness({ ...BASE, weeksOfHistory: 2 });
     expect(r.score).toBe(65);
     expect(r.label).toBe('On Track');
     expect(r.hasRecovery).toBe(false);
   });
 
-  it('returns On Track for weeksOfHistory exactly 2 (boundary)', () => {
+  it('returns On Track for weeksOfHistory exactly 2 (boundary), no recovery', () => {
     const r = computeReadiness({ ...BASE, weeksOfHistory: 2 });
     expect(r.label).toBe('On Track');
   });
@@ -27,6 +29,26 @@ describe('computeReadiness — edge cases', () => {
     const r = computeReadiness({ ...BASE, weeksOfHistory: 3 });
     // Real computation. Score should NOT be the fixed default of 65
     expect(r.score).not.toBe(65);
+  });
+
+  it('a terrible sleep score still tanks readiness in week 1 (regression)', () => {
+    // Was the bug: weeksOfHistory < 3 early-returned a flat 65/On Track and
+    // discarded the logged sleep score entirely. A 25/100 night now applies the
+    // recovery sub-score + sleep floor even with no training history.
+    const r = computeReadiness({ ...BASE, weeksOfHistory: 1, sleepScore: 25 });
+    expect(r.hasRecovery).toBe(true);
+    expect(r.score).toBeLessThan(55);            // not "On Track"
+    expect(r.label).not.toBe('On Track');
+    expect(r.drivingSignal).toBe('recovery');
+    expect(r.sentence).toMatch(/Recovery is low/);
+  });
+
+  it('insufficient history does NOT fire the ACWR floor on a noisy early ratio', () => {
+    // A near-zero/seeded baseline can push ACWR sky-high in week 1; that floor is
+    // skipped until history accrues. Good sleep keeps the score On Track.
+    const r = computeReadiness({ ...BASE, weeksOfHistory: 1, acwr: 2.5, sleepScore: 80 });
+    expect(r.hardFloor).not.toBe('acwr');
+    expect(r.label).toBe('On Track');
   });
 
 });

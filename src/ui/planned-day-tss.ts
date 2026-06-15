@@ -1,7 +1,7 @@
 import type { SimulatorState } from '@/types/state';
 import { resolveWeekWorkouts } from './week-resolve';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-resolve.triathlon';
-import { computePlannedDaySignalBTSS, estimateWorkoutDurMin } from '@/calculations/fitness-model';
+import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 
@@ -149,4 +149,80 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
     perSessionAvg,
     trainingDayCount,
   };
+}
+
+export interface CtlAdherence {
+  /** actualCTL ÷ expectedCTL for the completed week. < 1 = behind plan, ≥ 1 = on/above. */
+  ratio: number;
+  plannedTSS: number;
+  actualTSS: number;
+  /** Percent of last week's planned load actually logged (0–100+). For the debrief headline. */
+  pctOfPlanned: number;
+  /** False when there is no trustworthy signal: track-only, no plan load, no history, or an
+   *  excused (injury) week. Callers must not re-anchor or show "behind" copy when invalid. */
+  valid: boolean;
+}
+
+/**
+ * CTL adherence for a just-completed week — the SINGLE source for both the engine re-anchor
+ * (stored on the upcoming week as `wk.ctlRatio`, consumed by plan_engine.ctlGapMultiplier) and the
+ * debrief headline copy. Mirrors the `scheduledAcwrStatus` lifecycle: compute once at rollover,
+ * store on the upcoming week, read on render.
+ *
+ * Recursion-safe: getPlannedDayTSSContext(completedWeek) resolves a PAST week, whose own `ctlRatio`
+ * is already a stored scalar (read, never recomputed inside the resolver), so the planned side
+ * reflects the prescription actually issued — not an aspirational one.
+ */
+export function resolveCtlAdherence(s: SimulatorState, completedWeek: number): CtlAdherence {
+  const neutral: CtlAdherence = { ratio: 1, plannedTSS: 0, actualTSS: 0, pctOfPlanned: 100, valid: false };
+  if (s.trackOnly) return neutral;
+  // RUNNING-ONLY. next() is shared across modes, so without this guard a tri/HYROX athlete would
+  // get a ratio mixing the running combined-CTL model (computeFitnessModel below) with tri/HYROX
+  // planned load — a meaningless number stamped on their week. Tri/HYROX have their own per-
+  // discipline / MTL re-anchor. (cycling reuses eventType 'triathlon'.)
+  if (s.eventType === 'triathlon' || s.eventType === 'hyrox') return neutral;
+  if (!s.wks || completedWeek < 1 || completedWeek > s.wks.length) return neutral;
+
+  const wk = s.wks[completedWeek - 1] as any;
+  // Injury weeks detrain on their own curve and are excused from adherence (mirrors the
+  // effortScore exclusion in events.ts). Illness / holiday rest is already zeroed out of
+  // plannedTSS by getPlannedDayTSSContext, so it needs no special case here.
+  if (wk?.injuryState?.active) return neutral;
+  if (wk?.detrainApplied) return neutral; // multi-week gap already re-anchored via detraining
+  // Taper weeks are deliberately low volume before a race; re-anchoring them (or the race week
+  // that follows) down further would sabotage race prep. Skip — same spirit as deload suppression.
+  if (wk?.ph === 'taper') return neutral;
+
+  // EXPECTED side uses the UN-reduced baseline plan. getPlannedDayTSSContext → resolveWeekWorkouts
+  // → generateWeekWorkouts reads this week's stored ctlRatio and would otherwise hand back the
+  // ALREADY re-anchored plan, making "expected" a moving target (a 64%-of-original week would read
+  // as 80%-of-reduced). Temporarily clear the stamp so the ratio and the headline % always measure
+  // against the real prescription. Synchronous clear+restore, no save in between.
+  const savedRatio = wk?.ctlRatio;
+  if (wk) wk.ctlRatio = undefined;
+  const plannedTSS = getPlannedDayTSSContext(s, completedWeek).plannedWeekTSS;
+  if (wk) wk.ctlRatio = savedRatio;
+  if (plannedTSS <= 0) return neutral;
+
+  // actualTSS is Signal A (run-equivalent: cross-training discounted by runSpec — see
+  // computeWeekTSS), while plannedTSS excludes cross-training. For a running athlete the seam is
+  // second-order (the discount only bites on unplanned cross-training and sits inside the ~15%
+  // (1−CTL_DECAY) term); documented in SCIENCE_LOG §BR. priorCtl is the chronic load at the end of
+  // the week before last (metrics[length-2]); ctlBaseline seeds week 1 when there is no prior.
+  const metrics = computeFitnessModel(
+    s.wks, completedWeek, s.ctlBaseline ?? undefined, s.planStartDate,
+    undefined, undefined, (s as any).previousPlanWks,
+  );
+  if (metrics.length === 0) return neutral;
+
+  const last = metrics[metrics.length - 1];
+  const priorCtl = metrics.length >= 2 ? metrics[metrics.length - 2].ctl : (s.ctlBaseline ?? 0);
+  const actualTSS = last.actualTSS;
+
+  const ratio = ctlAdherenceRatio(priorCtl, plannedTSS, actualTSS);
+  // pct and ratio now share the same baseline plannedTSS, so they cannot disagree on direction:
+  // the headline only fires when ratio < 0.97, which (un-contaminated) implies actual < planned,
+  // i.e. pct < 100. max(0) guards a degenerate negative only.
+  const pctOfPlanned = Math.max(0, Math.round((actualTSS / plannedTSS) * 100));
+  return { ratio, plannedTSS, actualTSS, pctOfPlanned, valid: true };
 }

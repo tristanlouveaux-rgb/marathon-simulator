@@ -20,6 +20,32 @@ let errorMsg = '';
 let confirmationEmail = ''; // set after successful sign-up to show "check your email"
 let upgradeGuest = false;
 
+/**
+ * Last email that successfully signed in / signed up on this device.
+ * Prefilled into the email field so a logged-out user only retypes their
+ * password. localStorage (not state) — it must survive sign-out and
+ * state wipes.
+ */
+const LAST_EMAIL_KEY = 'mosaic_last_email';
+
+function getLastEmail(): string {
+  try { return localStorage.getItem(LAST_EMAIL_KEY) ?? ''; } catch { return ''; }
+}
+
+function rememberEmail(email: string): void {
+  try { localStorage.setItem(LAST_EMAIL_KEY, email); } catch { /* private mode */ }
+}
+
+/** Email typed in the current form session — survives toggle/error re-renders. */
+let emailDraft = '';
+
+/**
+ * Set when sign-up failed because the email already has an account and the
+ * form auto-switched to sign-in. Suppresses the guest-upgrade amber warning,
+ * whose "choose Sign up instead" advice is wrong for that email.
+ */
+let emailExistsSwitch = false;
+
 export function renderAuthView(opts: { upgradeGuest?: boolean } = {}): void {
   const container = document.getElementById('app-root');
   if (!container) return;
@@ -28,8 +54,13 @@ export function renderAuthView(opts: { upgradeGuest?: boolean } = {}): void {
   loading = false;
   errorMsg = '';
   confirmationEmail = '';
+  emailDraft = '';
+  emailExistsSwitch = false;
   upgradeGuest = !!opts.upgradeGuest;
   if (upgradeGuest) isSignUp = true; // default to sign-up; user can toggle
+  // A remembered email means this device had a real account before — default
+  // to sign-in so "type email + password" just signs the user back in.
+  else if (getLastEmail()) isSignUp = false;
 
   container.innerHTML = getAuthHTML();
   wireAuthHandlers();
@@ -133,7 +164,7 @@ function getAuthHTML(): string {
 
   // When upgrading from guest and switching to "Sign in", warn that signing
   // into a different account abandons guest data (no way to merge after the fact).
-  const guestSignInWarn = upgradeGuest && !isSignUp
+  const guestSignInWarn = upgradeGuest && !isSignUp && !emailExistsSwitch
     ? `<div style="font-size:12px;color:#92400E;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);padding:10px 14px;border-radius:14px;line-height:1.45">Signing into an existing account will leave your current guest training data behind. To keep it, choose <strong>Sign up</strong> instead.</div>`
     : '';
 
@@ -182,7 +213,7 @@ function getAuthHTML(): string {
 
     ${upgradeGuest ? '' : `<div class="a-rise" style="margin-top:32px;animation-delay:0.45s">
       <button id="auth-simulator-mode" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer;letter-spacing:0.02em">
-        Use simulator mode (no account)
+        Continue without an account
       </button>
     </div>`}
 
@@ -197,6 +228,15 @@ function getAuthHTML(): string {
 }
 
 function wireAuthHandlers(): void {
+  // Prefill the email field: the value typed before a re-render (toggle /
+  // error) wins, then the last remembered account email. Set via the DOM
+  // (not interpolated into HTML) so no escaping is needed.
+  const emailInput = document.getElementById('auth-email') as HTMLInputElement | null;
+  if (emailInput && !emailInput.value) {
+    const prefill = emailDraft || getLastEmail();
+    if (prefill) emailInput.value = prefill;
+  }
+
   document.getElementById('auth-back-to-login')?.addEventListener('click', () => {
     confirmationEmail = '';
     isSignUp = false;
@@ -209,8 +249,10 @@ function wireAuthHandlers(): void {
   });
 
   document.getElementById('auth-toggle')?.addEventListener('click', () => {
+    emailDraft = emailInput?.value.trim() || emailDraft;
     isSignUp = !isSignUp;
     errorMsg = '';
+    emailExistsSwitch = false;
     renderInPlace();
   });
 
@@ -227,6 +269,7 @@ function wireAuthHandlers(): void {
 
     const email = (document.getElementById('auth-email') as HTMLInputElement).value.trim();
     const password = (document.getElementById('auth-password') as HTMLInputElement).value;
+    emailDraft = email;
 
     if (!email || !password) {
       errorMsg = 'Please enter your email and password.';
@@ -245,6 +288,7 @@ function wireAuthHandlers(): void {
         // a fresh user and orphan everything attached to the anonymous one.
         const { error } = await supabase.auth.updateUser({ email, password });
         if (error) throw error;
+        rememberEmail(email);
         loading = false;
         upgradeGuest = false;
         confirmationEmail = email;
@@ -259,6 +303,7 @@ function wireAuthHandlers(): void {
           options: { emailRedirectTo: 'https://mosaicrunning.run/auth-success.html' },
         });
         if (error) throw error;
+        rememberEmail(email);
 
         // If email confirmation is required, the session will be null
         if (!data.session) {
@@ -271,10 +316,30 @@ function wireAuthHandlers(): void {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        rememberEmail(email);
       }
       // On success, onAuthStateChange in main.ts handles navigation
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Something went wrong';
+
+      // Sign-up with an email that already has an account: switch the form
+      // to sign-in for them instead of leaving a dead-end error. The email
+      // stays (emailDraft), the password field gets focus.
+      const code = (err as { code?: string })?.code;
+      const emailExists = isSignUp
+        && (code === 'email_exists' || code === 'user_already_exists' || /already (been )?registered/i.test(msg));
+      if (emailExists) {
+        isSignUp = false;
+        emailExistsSwitch = true;
+        errorMsg = upgradeGuest
+          ? 'This email already has an account. Enter your password to sign in. Training data from this guest session will not carry over.'
+          : 'This email already has an account. Enter your password to sign in.';
+        loading = false;
+        renderInPlace();
+        (document.getElementById('auth-password') as HTMLInputElement | null)?.focus();
+        return;
+      }
+
       errorMsg = msg;
       loading = false;
       renderInPlace();

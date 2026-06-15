@@ -154,7 +154,7 @@ function getMtlLoadHTML(): string {
     .map(w => ({
       name: (w as { discipline?: string }).discipline === 'station' ? 'Station session'
         : (w as { discipline?: string }).discipline === 'brick' ? 'Brick session'
-        : (w.t || 'Run'),
+        : (w.n || 'Run'),
       discipline: ((w as { discipline?: string }).discipline ?? 'run') as 'run' | 'station' | 'brick',
       mtl: w.musculoTendonLoad ?? 0,
       done: !!w.matchedActivityId,
@@ -274,12 +274,12 @@ function getMtlLoadHTML(): string {
     <style>
       #mtl-view { box-sizing:border-box; }
       #mtl-view *, #mtl-view *::before, #mtl-view *::after { box-sizing:inherit; }
-      @keyframes mtlFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes mtlFloatUp { from { opacity:0; } to { opacity:1; } }
       .mtl-fade { opacity:0; animation:mtlFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       /* Sky background is static under the glass cards (RUNBOOK Cause 1+2). Do not animate it. */
     </style>
 
-    <div id="mtl-view" style="
+    <div id="mtl-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -291,7 +291,7 @@ function getMtlLoadHTML(): string {
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="mtl-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

@@ -102,7 +102,7 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
 
   overlay.innerHTML = `
     <div style="
-      background:#FAF9F6;
+      background:#fff;
       width:100%;max-width:520px;
       max-height:90vh;overflow-y:auto;
       border-radius:20px;
@@ -150,21 +150,22 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
 
       ${discipline === 'strength' ? `
         <div style="padding:6px 24px 18px;display:flex;flex-direction:column;gap:10px">
-          <button id="tri-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
-          <button id="tri-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+          <button id="tri-detail-strength-start" class="m-btn-primary" style="width:100%;padding:14px;font-size:15px">Start session</button>
+          <button id="tri-detail-strength-done" class="m-btn-ok" style="width:100%;padding:11px;font-size:13px">Mark as done</button>
         </div>
       ` : `
         <div style="padding:8px 24px 24px;display:flex;flex-direction:column;gap:14px">
-          <!-- Action row. Matches the running plan card: Mark as Done · Adjust · Skip -->
+          <!-- Mirrors the running plan card: primary Start CTA on top (run only),
+               Mark as Done · Adjust · Skip text links below. No redundant Done. -->
+          ${discipline === 'run'
+            ? `<button id="tri-detail-start" class="m-btn-primary" style="width:100%;padding:13px;font-size:14px"><span style="width:9px;height:9px;background:#fff;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>Start session</button>`
+            : ''}
           <div style="display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap">
             <button id="tri-detail-mark-done" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Mark as Done</button>
             ${canAdjust ? `<span style="color:var(--c-border)">·</span><button id="tri-detail-adjust" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Adjust</button>` : ''}
             <span style="color:var(--c-border)">·</span>
             <button id="tri-detail-skip" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 2px;font-family:var(--f)">Skip</button>
           </div>
-          ${getState().trackOnly && discipline === 'run'
-            ? `<button id="tri-detail-start" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);display:flex;align-items:center;justify-content:center;gap:7px"><span style="width:9px;height:9px;background:#FAF9F6;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>Start session</button>`
-            : `<button id="tri-detail-done" style="width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>`}
         </div>
       `}
     </div>

@@ -59,6 +59,48 @@ const RULES = [
     label: 'Blue accent button (background:var(--c-accent))',
     test: (line) => /background\s*:\s*var\(--c-accent\)/i.test(line),
   },
+  {
+    // A full-screen takeover (fixed, inset:0, column layout) escapes the
+    // body's safe-area padding, so its header renders under the iOS status
+    // bar unless the overlay pads itself with env(safe-area-inset-top).
+    // Centered modals/spinners are exempt — their content can't reach the
+    // status bar. Real incident 2026-06-12: Match Activities Cancel/Save
+    // buried behind the clock.
+    id: 'takeover-no-safe-top',
+    label: 'Full-screen takeover overlay missing env(safe-area-inset-top) top padding',
+    // Content-level (not line-level): multi-line cssText template literals and
+    // ['…'].join(';') styles would evade a per-line regex.
+    testContent: (content) => {
+      const hits = [];
+      const isTakeover = (s) =>
+        /position\s*:\s*fixed/i.test(s) &&
+        /inset\s*:\s*0/i.test(s) &&
+        /flex-direction\s*:\s*column/i.test(s) &&
+        !/justify-content\s*:\s*center/i.test(s) &&
+        !/safe-area-inset-top/i.test(s);
+      const lineOf = (idx) => content.slice(0, idx).split('\n').length;
+      const blockPatterns = [
+        /style\s*=\s*"([^"]*)"/g,                   // HTML style attribute (may span lines)
+        /\.cssText\s*=\s*(['"`])([\s\S]*?)\1/g,     // el.style.cssText = '…' / `…`
+        /\.cssText\s*=\s*\[([\s\S]*?)\]\s*\.join/g, // el.style.cssText = ['…','…'].join(';')
+      ];
+      for (const re of blockPatterns) {
+        for (const m of content.matchAll(re)) {
+          const block = m[2] ?? m[1];
+          if (!isTakeover(block)) continue;
+          hits.push({ line: lineOf(m.index), text: block.replace(/\s+/g, ' ').trim().slice(0, 120) });
+        }
+      }
+      // Tailwind variant of the same takeover signature
+      for (const m of content.matchAll(/class(?:Name)?\s*=\s*(['"`])([\s\S]*?)\1/g)) {
+        const cls = m[2];
+        if (/\bfixed\b/.test(cls) && /\binset-0\b/.test(cls) && /\bflex-col\b/.test(cls) && !/\bjustify-center\b/.test(cls)) {
+          hits.push({ line: lineOf(m.index), text: cls.replace(/\s+/g, ' ').trim().slice(0, 120) });
+        }
+      }
+      return hits;
+    },
+  },
 ];
 
 function walk(dir) {
@@ -74,14 +116,19 @@ function walk(dir) {
 
 function scanFile(absPath) {
   const rel = relative(ROOT, absPath);
-  const lines = readFileSync(absPath, 'utf8').split('\n');
+  const content = readFileSync(absPath, 'utf8');
+  const lines = content.split('\n');
   const hits = []; // { rule, line, text }
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i];
     for (const r of RULES) {
-      if (r.skipIf?.(rel)) continue;
+      if (r.skipIf?.(rel) || !r.test) continue;
       if (r.test(text)) hits.push({ rule: r.id, line: i + 1, text: text.trim() });
     }
+  }
+  for (const r of RULES) {
+    if (!r.testContent || r.skipIf?.(rel)) continue;
+    for (const h of r.testContent(content)) hits.push({ rule: r.id, ...h });
   }
   return { rel, hits };
 }

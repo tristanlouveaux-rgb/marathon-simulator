@@ -1,14 +1,19 @@
+import { isNative } from '@/utils/platform';
+
 /**
- * Top overscroll spring — all platforms.
+ * Top overscroll spring — WEB ONLY.
  *
- * Neither build rubber-bands natively. On the web (desktop + mobile browsers)
- * the document scroller hits a dead wall at the top. On iOS, Capacitor
- * hardcodes `webView.scrollView.bounces = false` in
- * CAPBridgeViewController.swift (unconditional, no config flag), so WKWebView's
- * native rubber-band never fires either — an earlier version of this file
- * assumed it did and no-op'd on native, which is why the bounce existed on web
- * but not on device. This controller now runs everywhere and adds a matching
- * elastic pull at the top of every page.
+ * On device the native WKWebView rubber-band is the real thing: `BounceViewController`
+ * (ios/App/App/BounceViewController.swift) re-enables `scrollView.bounces` that
+ * Capacitor force-disables, so iOS gets true UIScrollView momentum + bounce and
+ * this controller stays a no-op there. (Briefly, 2026-06-05, this ran on native
+ * too — but it sets `overscroll-behavior: none`, which SUPPRESSES the native
+ * bounce, and a JS spring can't read back the momentum velocity iOS owns after
+ * the finger lifts, so the fling-to-top felt clunky. Native bounce replaced it.)
+ *
+ * The web build (desktop + mobile browsers) does NOT rubber-band: scrolling up
+ * at the very top hits a dead wall. This adds a matching elastic pull there so
+ * web feels like the native app.
  *
  * Mechanics
  * - The scroller is <body>. Page content and the fixed tab bar both live inside
@@ -21,7 +26,12 @@
  *   WebKit uses). The dimension `d` here is MAX_BOUNCE_PX, so the curve follows
  *   input at ~0.55x near zero and asymptotes to that small cap — the page can
  *   never sag far no matter how hard you flick.
- * - Touch (mobile web): finger drives the pull 1:1, then springs back on release.
+ * - Touch drag: finger drives the pull 1:1, then springs back on release.
+ * - Touch fling: during a native momentum glide the finger is up, so NO touch
+ *   events fire — only scroll events. A scroll listener tracks velocity; when
+ *   the glide crosses into the top with real speed, the arrival velocity is
+ *   converted into a spring impulse and run through the same decay loop the
+ *   wheel path uses, so a hard fling bounces instead of stopping dead.
  * - Wheel/trackpad: a hard flick emits a long momentum tail of events. Holding
  *   the pull for that whole tail reads as lag, so the wheel path runs a per-frame
  *   decay loop instead — fresh input adds impulse, every frame bleeds it off, so
@@ -37,15 +47,21 @@ const RUBBER = 0.55; // Apple UIScrollView rubber-band constant (WebKit)
 const MAX_BOUNCE_PX = 130; // visual cap on how far the page pulls down (UI value)
 const WHEEL_DECAY = 0.82; // per-frame pull bleed-off for trackpad/wheel momentum
 const SPRING = 'transform 0.3s cubic-bezier(0.22, 1, 0.36, 1)'; // touch release ease
+// Fling-arrival spring: a momentum glide hitting the top feeds its velocity into
+// the pull for a few frames (out phase ~100ms at 0.72/frame), then WHEEL_DECAY
+// bleeds the pull back — out fast, ease back, like UIScrollView's bounce.
+const FLING_MIN_VELOCITY = 0.3; // px/ms (~300 px/s) — slower arrivals don't bounce
+const FLING_DECAY = 0.72; // per-frame bleed of the arrival velocity
+const FRAME_MS = 16.7; // velocity → per-frame pull contribution
 
 export function installWebOverscrollBounce(): void {
+  if (isNative()) return; // native iOS uses the real WKWebView bounce (BounceViewController)
   if (typeof window === 'undefined') return;
 
   // Suppress the browser's own overscroll (white rubber-band on iOS Safari,
   // pull-to-refresh / glow on Chrome) so our spring is the only overscroll
   // affordance and a hard momentum fling to the top can never flash the bare body
   // colour. Set on both html and body since which one is the scroller varies.
-  // Harmless on the Capacitor build — native bounce is already off there.
   document.documentElement.style.overscrollBehavior = 'none';
   document.body.style.overscrollBehavior = 'none';
 
@@ -138,6 +154,7 @@ export function installWebOverscrollBounce(): void {
   // from that anchor as the overscroll pull.
   let touchInRoot = false;
   let touchActive = false;
+  let touchDown = false; // finger on screen — distinguishes drag from momentum glide
   let anchorY: number | null = null;
 
   const scheduleTouchPaint = () => {
@@ -150,6 +167,7 @@ export function installWebOverscrollBounce(): void {
       touchInRoot = appRootHas(e.target); // skip only when an overlay owns the screen
       anchorY = null;
       touchActive = false;
+      touchDown = true;
     },
     { passive: true },
   );
@@ -183,17 +201,24 @@ export function installWebOverscrollBounce(): void {
   const endTouch = () => {
     if (touchActive) springBack();
     touchActive = false;
+    touchDown = false;
     touchInRoot = false;
     anchorY = null;
   };
   window.addEventListener('touchend', endTouch, { passive: true });
   window.addEventListener('touchcancel', endTouch, { passive: true });
 
-  // ── Wheel / trackpad (desktop) — impulse + per-frame decay ──────────────────
+  // ── Wheel / trackpad (desktop) + fling arrival — impulse + per-frame decay ──
+  let flingV = 0; // px/ms still feeding the pull from a momentum-glide arrival
   const wheelTick = () => {
-    if (touchActive) { wheelTicking = false; return; } // touch owns the gesture
+    if (touchActive) { wheelTicking = false; flingV = 0; return; } // touch owns the gesture
+    if (flingV > 0) {
+      pull += flingV * FRAME_MS; // arrival velocity drives the pull out...
+      flingV *= FLING_DECAY; // ...and bleeds off over ~6 frames
+      if (flingV < 0.05) flingV = 0;
+    }
     pull *= WHEEL_DECAY;
-    if (pull < 0.5) {
+    if (pull < 0.5 && flingV === 0) {
       wheelTicking = false;
       pull = 0;
       appliedY = 0;
@@ -218,5 +243,39 @@ export function installWebOverscrollBounce(): void {
       if (!wheelTicking) { wheelTicking = true; requestAnimationFrame(wheelTick); }
     },
     { passive: false },
+  );
+
+  // ── Momentum-glide arrival (touch fling) ─────────────────────────────────────
+  // A flicked scroll decelerates natively with the finger up: no touch events,
+  // only scroll events. Track velocity between scroll events; when the glide
+  // crosses into the top still moving fast, hand the arrival velocity to the
+  // decay loop as a spring impulse. Slow, controlled arrivals (below the
+  // threshold) stop cleanly without a bounce — matching UIScrollView.
+  let lastScrollY = window.scrollY;
+  let lastScrollT = performance.now();
+  window.addEventListener(
+    'scroll',
+    () => {
+      const y = window.scrollY;
+      const t = performance.now();
+      const dt = t - lastScrollT;
+      if (
+        y <= 0 &&
+        lastScrollY > 0 && // crossed INTO the top this event
+        dt > 0 &&
+        !touchDown && // finger down = the drag path owns the gesture
+        !active // wheel path already springing — don't double-feed
+      ) {
+        const v = (lastScrollY - y) / dt; // px/ms toward the top
+        if (v >= FLING_MIN_VELOCITY) {
+          begin();
+          flingV = v;
+          if (!wheelTicking) { wheelTicking = true; requestAnimationFrame(wheelTick); }
+        }
+      }
+      lastScrollY = y;
+      lastScrollT = t;
+    },
+    { passive: true },
   );
 }

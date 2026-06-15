@@ -18,7 +18,7 @@ import { getRaceOutcomeRetro } from '@/calculations/tri-race-outcome';
 import { computeTriAdaptationRatios } from '@/calculations/tri-adaptation-ratio';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { computeWeekRawTSS } from '@/calculations/fitness-model';
-import { readTriFitness } from '@/calculations/fitness-model.triathlon';
+import { readTriFitness, resolveTriDisciplineAdherence } from '@/calculations/fitness-model.triathlon';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 
 const OVERLAY_ID = 'tri-week-debrief-modal';
@@ -439,12 +439,24 @@ function _showTriPlanPreview(weekNum: number): void {
     : null;
   if (tierUpNote) adjustNotes.push(tierUpNote);
 
+  // Behind-plan headline (per discipline). Mirror of running's CTL-gap debrief copy: factual, no
+  // judgement. A tri athlete can keep up on the bike while skipping swims, so the note is per
+  // discipline and only lists those materially behind (ratio < 0.97). Reads from the same resolver
+  // the engine stored at rollover, so the headline matches the week the user will get.
+  const triAdh = resolveTriDisciplineAdherence(state, weekNum);
+  const behindDiscs = (['swim', 'bike', 'run'] as const).filter(d => (triAdh.byDiscipline[d] ?? 1) < 0.97);
+  const adherenceNote = behindDiscs.length > 0 ? `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:#64748B;line-height:1.5;margin:0">${behindDiscs.map(d => `${DISC_LABEL[d]} ${triAdh.pctByDiscipline[d]}%`).join(', ')} of last week's planned sessions completed. Those disciplines scale to match recent load.</p>
+    </div>
+  ` : '';
+
   const changesHtml = adjustNotes.length > 0 ? `
     <div style="margin-bottom:16px">
       <div style="font-size:11px;font-weight:600;color:#64748B;margin-bottom:6px;letter-spacing:0.02em">Adjustments</div>
       ${adjustNotes.map(n => `<div style="font-size:13px;color:#0F172A;line-height:1.5;padding:1px 0">${n}</div>`).join('')}
     </div>
-  ` : `
+  ` : behindDiscs.length > 0 ? '' : `
     <div style="margin-bottom:16px">
       <p style="font-size:13px;color:#64748B;line-height:1.5;margin:0">
         No adjustments needed. Recent effort and load are tracking to plan.
@@ -489,6 +501,7 @@ function _showTriPlanPreview(weekNum: number): void {
                border-radius:50%;border:1px solid var(--c-border);background:none;cursor:pointer;
                font-size:14px;color:var(--c-muted);display:flex;align-items:center;justify-content:center">✕</button>
     </div>
+    ${adherenceNote}
     ${changesHtml}
     <div>${workoutsHtml}</div>
     <div style="margin-top:20px">

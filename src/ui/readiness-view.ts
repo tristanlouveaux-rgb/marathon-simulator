@@ -24,7 +24,7 @@ import {
   LEG_LOAD_MODERATE,
   LEG_LOAD_HEAVY,
 } from '@/calculations/readiness';
-import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
+import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
@@ -125,16 +125,13 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // ── Recovery sub-signal (computed first. Feeds into readiness composite) ──
   const noGarminSleep = !(s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
-  const physioForRecovery = (() => {
-    const h = s.physiologyHistory ?? [];
-    if (!(manualToday as any)?.sleepScore || !noGarminSleep) return h;
-    const idx = h.findIndex(p => p.date === today);
-    if (idx >= 0) return h.map((p, i) => i === idx ? { ...p, sleepScore: (manualToday as any).sleepScore } : p);
-    return [...h, { date: today, sleepScore: (manualToday as any).sleepScore }];
-  })();
+  // Canonical sleep history: fold manual recoveryHistory nights into physiology
+  // so a no-watch user's logged sleep accumulates toward the recovery composite,
+  // the sleep-cap decay, and the 14d chronic average (device sleep wins per date).
+  const sleepHistoryMerged = mergeManualSleepHistory(s.physiologyHistory ?? [], s.recoveryHistory ?? []);
   const suppressSleep = noGarminSleep && !(manualToday as any)?.sleepScore;
   const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
-  const recoveryResult = computeRecoveryScore(physioForRecovery, {
+  const recoveryResult = computeRecoveryScore(sleepHistoryMerged, {
     manualSleepScore: noGarminSleep ? ((manualToday as any)?.sleepScore ?? undefined) : undefined,
     sleepDebtSec: sleepDebtForRecovery,
   });
@@ -188,7 +185,7 @@ function getReadinessHTML(s: SimulatorState): string {
     ctlNow,
     sleepScore,
     hrvRmssd,
-    sleepHistory: s.physiologyHistory ?? [],
+    sleepHistory: sleepHistoryMerged,
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     sleepDebtExcessSec,
@@ -654,14 +651,14 @@ function getReadinessHTML(s: SimulatorState): string {
     <style>
       #rdn-view { box-sizing:border-box; }
       #rdn-view *, #rdn-view *::before, #rdn-view *::after { box-sizing:inherit; }
-      @keyframes rdnFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes rdnFloatUp { from { opacity:0; } to { opacity:1; } }
       .rdn-fade { opacity:0; animation:rdnFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       /* Halo is intentionally STATIC: the glass cards + hero ring use backdrop-filter,
          and an animating halo behind them flickers the glass (RUNBOOK Cause 2 — the
          2026-05-27 Readiness flicker). Do NOT re-add floweyHaloAnimationCSS('rdn'). */
     </style>
 
-    <div id="rdn-view" data-readiness-label="${readiness.label}" style="
+    <div id="rdn-view" class="safe-top-bleed" data-readiness-label="${readiness.label}" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -673,7 +670,7 @@ function getReadinessHTML(s: SimulatorState): string {
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="rdn-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

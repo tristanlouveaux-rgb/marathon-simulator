@@ -180,7 +180,9 @@ Only add `detailId` (and show the chevron) when > 3 history data points exist. C
 
 ### Rules
 
+- **Modal cards are white** (`var(--c-surface)` / `#fff`), never the warm page cream (`#FAF9F6` / `var(--c-bg)`). Cream is for full-page backgrounds; using it on a floating card makes the popup read as a different colour from every other modal. Inner recessed elements on the card (inputs, circular close buttons, recessed rows) may use `var(--c-bg)` — they read as a subtle recess on white. Raised stat tiles stay white and lift via their own shadow. (Swept app-wide 2026-06-15.)
 - **Never use `items-end`** — bottom-anchored sheets look broken on desktop and are hard to dismiss on iOS.
+- **Full-screen takeover overlays must pad for the status bar.** `position:fixed;inset:0` escapes the body's `padding-top: env(safe-area-inset-top)`, so any takeover with top-anchored content (a header with Cancel/Save, a column layout) renders under the iOS clock unless the overlay itself carries `padding-top:env(safe-area-inset-top, 0px)`. Centered modals are exempt (content can't reach the status bar). Atmosphere layers built with `position:absolute;inset:0` still bleed behind the status bar — absolute children span the padding box. Guarded by ui-lint rule `takeover-no-safe-top`. Real incident 2026-06-12: Match Activities header (Cancel/Save) buried behind the clock on device.
 - Max width `max-w-sm` (384px) for input pickers; `max-w-lg` for detail sheets.
 - Dismiss on backdrop click (`e.target === overlay → overlay.remove()`).
 - Cancel button always present. Confirm/save action button below it, or built into each option.
@@ -197,6 +199,25 @@ Only add `detailId` (and show the chevron) when > 3 history data points exist. C
 - **`var(--c-ok)` (green)** is for status indicators and success states, not buttons.
 - Do not colour a button just because it relates to the "current" state — neutral is correct for navigation.
 - **"Learn more", "Breakdown", secondary drill-down links**: always `var(--c-muted)`, never `var(--c-accent)`. They are navigation, not CTAs.
+
+### Depth + press-in are the default (2026-06-15)
+
+**Every action-button class carries a resting float shadow and an `:active` press-in.** Tristan's call ("remember this for all buttons"): a tap should feel physical everywhere. The full canonical set — use a class, never hardcode a fill:
+
+| Class | Use for | Fill |
+|-------|---------|------|
+| `m-btn-primary` | primary CTA (Save, Complete Workout, Start) | dark `var(--c-black)` |
+| `m-btn-secondary` | cancel / neutral / disabled-state | white `var(--c-surface)` + border |
+| `m-btn-glass` (`--inset`) | tactile taps inside cards/modals | frosted white |
+| `m-btn-ok` | positive action (Mark as done, Start Run, Accept, Add Activity) | green `var(--c-ok)` |
+| `m-btn-caution` | caution action (Pause, Skip, Drop, Edit week) | amber `var(--c-caution)` |
+| `m-btn-danger` | destructive (Stop, Discard, Delete) + anything that was `var(--c-warn)` red | red `#EF4444` |
+
+For an enabled/disabled toggle button driven by JS, **swap the class** (`m-btn-ok` ↔ `m-btn-secondary`+`opacity:0.55`), do not rewrite `style.background` — an inline background overrides the class and kills the depth/press-in. Stateful selection toggles (a ternary that flips fill on select) are the one place to keep an inline conditional fill.
+
+- `.m-btn-primary` (dark pill) and `.m-btn-secondary` (white pill) now have a resting float (`box-shadow` lift) and press in on `:active` (`translateY(0.5px) scale(0.985)`, shadow collapsing inward). `.m-btn-glass` already did. `.m-btn-secondary` is `var(--c-surface)`-backed (not transparent) so the float has something to sit on.
+- **Do not strip the float or the `:active` rule** from these classes, and **do not set an inline `box-shadow` on an instance** — it overrides the class and breaks the press-in collapse. Size/colour overrides are fine; depth comes from the class.
+- **Excluded by design**: nav text links (`.m-btn-link`, "Learn more →" etc.) and the header utility pill below stay **flat** — depth on navigation reads as a CTA, which violates the navigation-button rule.
 
 ### Standard pill button (header row)
 
@@ -773,6 +794,8 @@ Mosaic ships to both web (desktop + mobile browsers) and iOS (Capacitor / WKWebV
 - **`feGaussianBlur` / CSS `filter` + transform animation on the same element is a perf cliff (every engine).** The filtered region re-rasterizes every frame (~30fps, multi-100ms stalls — measured 2026-05-27). Ring/halo/wave backgrounds are filter-free for this reason (see Depth recipe above). The page-flair pulse is opacity-only. Never combine any filter with a transform animation.
 - **`backdrop-filter` glass must not sit over *animating* content (every engine).** The backdrop re-samples whatever moves behind it every frame, and the glass element + all its children flicker (real bug 2026-05-27 on desktop Chrome: the Readiness hero score ring + the "53" flickered because the halo breathed behind its `backdrop-filter:blur` disc; made worse once the rings were crisp). Fix: keep the background **static** wherever glass overlays it. The Readiness halo is intentionally static for this reason; do not re-add `floweyHaloAnimationCSS` there. If you need motion behind glass, either drop the `backdrop-filter` on that element (use a higher-opacity solid backing) or ensure the animation settles before the glass renders.
 - **`backdrop-filter: blur(24px)` stacking** — heavy on older iPhones *and* low-end browsers; use the quieter `blur(16px)` for nested-glass surfaces. Stacking many glassy cards on the same page is a perf risk on both engines.
+- **Card entrance animations are opacity-only — never transform.** A glass card animating `translateY`/`scale` moves its backdrop-sample region every frame, forcing a per-frame re-blur (the same cliff as glass-over-motion, self-inflicted). Real bug 2026-06-05 on device (TestFlight): every tab view floated its glass cards up over an animating ring background — Forecast cards "jumped" at ~30fps. All `*FloatUp` keyframes are now `from { opacity:0 } to { opacity:1 }` (32 sites swept). Do not re-add a transform to an entrance keyframe; if a new surface needs motion, it must not carry `backdrop-filter`.
+- **Tab-level entrances play once per session — `shouldPlayEntrance(key)`.** Every tab switch is a full re-render, so entrance animations used to replay on every visit (~0.9s of stagger per switch + ring entrance + 6.5s drift behind glass). Tab views (Home, Plan, Forecast, Stats — all modes) now gate on `shouldPlayEntrance('<view-key>')` from `page-flair.ts`: first visit per session animates; revisits emit settled CSS (`opacity:1`, no animation) and pass `entrance:'none', pulse:false` to `buildRingBackground`. A new tab-level view must follow this pattern; drill-down/detail pages and the onboarding wizard intentionally keep their per-open entrances (opacity-only, cheap).
 - **iOS-specific**: sun glint sits at viewport `top:0,left:0` — on notched iPhones use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome (skip buttons, headers) so it doesn't clash with the notch area. Haptics fire only on the very first ring entrance (gated by localStorage), never on every navigation, and silently no-op on web.
 
 ### When to use vs when not
@@ -830,6 +853,8 @@ See `src/ui/sky-background.ts` for the canonical pattern: `buildSkyBackground(pr
 2. **`buildRingBackground(prefix, opts)`** — concentric SVG rings with light-source gradient strokes (white upper-left → mid → dark lower-right) plus depth via SVG filters (atmospheric blur on far rings, drop shadow on near rings). Five variants: `centered` / `sweep` / `focused` / `asymmetric` / `whisper`. Optional `pulse` (finite cycles, default 6 then settles). Optional `palette: 'blue' | 'teal'`. Optional `entrance: 'large' | 'small' | 'none'`.
 3. **`buildSunGlint(intensity)`** — warm cream radial-gradient at upper-left of every page. **The universal brand mark** — appears on every page in the app regardless of other treatments. Intensities: `low` (data pages, detail pages) / `mid` (wizard) / `high` (hero only).
 4. **Glassy cards** — `rgba(255,255,255,0.58) + backdrop-filter:blur(24px)` is the canonical onboarding spec (locked, see memory). Quieter data variant: `rgba(255,255,255,0.78) + blur(16px)` for cards inside data-heavy contexts.
+
+**Page wrapper rule — status-bar bleed (2026-06-05)**: every full-page wrapper must carry `.mosaic-page` or `.safe-top-bleed` (styles.css). Body pads for the notch (`padding-top: env(safe-area-inset-top)`), so a bare wrapper's atmosphere gradient starts *below* the status bar and the notch strip shows the cream body colour — a visible seam on device. The class pulls the wrapper's background up behind the status bar (negative top margin + matching padding); the content box stays put and web is unaffected.
 
 **Animation system**:
 - First-ever ring appearance per device (gated by `isFirstRingExperience()`): large water-droplet entrance + a single light Capacitor haptic. Then `markRingExperienceSeen()`.

@@ -24,8 +24,7 @@ import type { AbilityBand } from '@/types';
 import {
   SWIM_HORIZON_PARAMS,
   BIKE_HORIZON_PARAMS,
-  RUN_HORIZON_PARAMS_703,
-  RUN_HORIZON_PARAMS_IM,
+  RUN_HORIZON_PARAMS_BY_DISTANCE,
   TRI_K_SESSIONS,
   TRI_TAPER_WEEKS,
   type DisciplineHorizonParams,
@@ -201,9 +200,7 @@ export function applyTriHorizonRun(input: TriHorizonRunInput): TriHorizonResult 
   // for IM) rather than marathon params (ref 5/wk). A triathlete doing 3
   // focused runs/week alongside swim + bike is training optimally. The
   // marathon model would wrongly penalise them as undertrained.
-  const params = input.triathlon_distance === 'ironman'
-    ? RUN_HORIZON_PARAMS_IM
-    : RUN_HORIZON_PARAMS_703;
+  const params = RUN_HORIZON_PARAMS_BY_DISTANCE[input.triathlon_distance];
 
   const { improvementPct, components } = computeImprovementPct(params, input);
   const projected = input.baseline + input.baseline * (improvementPct / 100);

@@ -34,7 +34,7 @@ import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { SPORTS_DB } from '@/constants/sports';
 import type { PhysiologyDayEntry } from '@/types';
-import { type WorkoutType, type Workout, type HealthSample, type SleepState } from '@capgo/capacitor-health';
+import { type WorkoutType, type Workout, type HealthSample, type SleepState, type HealthDataType } from '@capgo/capacitor-health';
 import {
   isHealthExtrasAvailable,
   requestHealthExtrasPermissions,
@@ -93,17 +93,40 @@ export function isNativeiOS(): boolean {
  * Returns `{ ok: true }` when permissions were granted and at least one
  * physiology sample landed; `{ ok: false, reason }` otherwise. Reasons:
  *   - 'not-ios'. Running on web / Android (caller should hide the button)
- *   - 'permission-denied'. User dismissed the permission dialog or denied all reads
- *   - 'sync-error'. HealthKit threw or returned no usable data
+ *   - 'no-data'. No physiology data came through. This is AMBIGUOUS by design:
+ *     HealthKit deliberately never tells an app whether a read was denied vs
+ *     simply empty (Apple's privacy model — `getRequestStatusForAuthorization`
+ *     returns `.unnecessary` for BOTH granted and denied once answered). So we
+ *     cannot claim "permission denied"; the caller surfaces a recovery path
+ *     (open Settings to check the toggle, or use Strava / upload instead).
+ *   - 'sync-error'. HealthKit threw.
  */
-export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not-ios' | 'permission-denied' | 'sync-error' }> {
+/**
+ * In-flight guard. The connect flow can be triggered from two surfaces (the
+ * Apple Watch picker tile and the Garmin "connect both" hub). If the first
+ * attempt is still awaiting its HealthKit read when the user taps the second,
+ * two concurrent reads can deadlock the capgo native bridge and neither
+ * resolves, leaving the caller's "Connecting…" spinner stuck forever. Serialise
+ * by returning the live promise so the second tap rides the first attempt.
+ */
+let _connectInFlight: Promise<{ ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' }> | null = null;
+
+export function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' }> {
+  if (_connectInFlight) return _connectInFlight;
+  _connectInFlight = connectAppleHealthInner().finally(() => { _connectInFlight = null; });
+  return _connectInFlight;
+}
+
+async function connectAppleHealthInner(): Promise<{ ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' }> {
   if (!isNativeiOS()) return { ok: false, reason: 'not-ios' };
   try {
     // 1) Capgo physiology. Populates restingHR, sleep, HRV, steps. Always run
     //    first (acts as our smoke-test that HealthKit is actually available
-    //    and the user granted *some* read access).
+    //    and the user granted *some* read access). An iPhone almost always has
+    //    step data, so a completely empty result means access is off (or this
+    //    is a bare test device) — never a granted-but-quiet user.
     const ok = await syncAppleHealthPhysiology(28);
-    if (!ok) return { ok: false, reason: 'permission-denied' };
+    if (!ok) return { ok: false, reason: 'no-data' };
 
     // 2) HealthExtras permissions. VO2max, running power, GPS routes, etc.
     //    iOS prompts a single combined dialog. iOS-version-gated types
@@ -242,11 +265,35 @@ export async function syncAppleCyclingFTP(): Promise<boolean> {
   return true;
 }
 
-/** All HealthKit data types we read. Single combined authorization request. */
-const ALL_READ_TYPES: string[] = [
-  'calories', 'distance', 'heartRate',               // workouts
+/** The EXACT set of read identifiers the @capgo/capacitor-health plugin can
+ * map natively: its `HealthDataType` union (see
+ * node_modules/@capgo/capacitor-health/dist/esm/definitions.d.ts) plus the
+ * special `'workouts'` identifier handled by `parseTypesWithWorkouts`.
+ *
+ * This is the single source of truth that makes the type system catch the
+ * 2026-06-12 bug class. The native `parseTypesWithWorkouts` THROWS
+ * `invalidDataType` on the FIRST unrecognised string, and the throw happens
+ * BEFORE `healthStore.requestAuthorization` is called — so one bad string here
+ * means iOS never presents the permission sheet and the whole connect flow
+ * fails silently for EVERY user. (`'appleExerciseTime'` was exactly that.)
+ *
+ * `capgo-read-types.test.ts` asserts this list still matches the plugin's
+ * shipped `HealthDataType` union, so a plugin upgrade that renames/drops a type
+ * fails the build instead of silently breaking the popup at runtime. */
+export const CAPGO_READ_TYPES = [
+  'steps', 'distance', 'calories', 'heartRate', 'weight', 'sleep',
+  'respiratoryRate', 'oxygenSaturation', 'restingHeartRate', 'heartRateVariability',
+  'workouts',
+] as const;
+export type CapgoReadType = typeof CAPGO_READ_TYPES[number];
+
+/** All HealthKit data types we request in the single combined authorization.
+ * Typed as `CapgoReadType[]`, so adding a string the plugin can't map (the
+ * popup-killing bug) is a COMPILE ERROR, not a silent runtime failure. */
+export const ALL_READ_TYPES: CapgoReadType[] = [
+  'workouts',                                         // HKWorkoutType (activity import)
+  'calories', 'distance', 'heartRate',               // workout streams
   'sleep', 'restingHeartRate', 'heartRateVariability', 'steps',  // physiology
-  'appleExerciseTime',                                // exercise ring (active minutes)
 ];
 
 /** Cached auth flag — avoid re-prompting on every call within the same session. */
@@ -259,7 +306,10 @@ let _authRequested = false;
 async function ensureAuthorization(): Promise<typeof import('@capgo/capacitor-health')['Health']> {
   const { Health } = await import('@capgo/capacitor-health');
   if (!_authRequested) {
-    await Health.requestAuthorization({ read: ALL_READ_TYPES as any });
+    // Cast only bridges the plugin's public type omitting the special
+    // `'workouts'` identifier; ALL_READ_TYPES is already validated as
+    // `CapgoReadType[]`, so this is not an escape hatch for bad types.
+    await Health.requestAuthorization({ read: ALL_READ_TYPES as unknown as HealthDataType[] });
     _authRequested = true;
   }
   return Health;
@@ -570,7 +620,14 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       Health.readSamples({ dataType: 'restingHeartRate', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
       Health.readSamples({ dataType: 'heartRateVariability', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
       Health.queryAggregated({ dataType: 'steps', startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }),
-      Health.queryAggregated({ dataType: 'appleExerciseTime' as any, startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }),
+      // Apple Watch exercise ring. `appleExerciseTime` is NOT in the capgo
+      // plugin's supported type union, so the native query throws
+      // `invalidDataType`. Isolate it with `.catch` so it degrades to "no
+      // active minutes from Apple" instead of rejecting the whole Promise.all
+      // and failing the entire physiology sync. Garmin still supplies
+      // activeMinutes via syncPhysiologySnapshot. If a future plugin version
+      // adds the type, this lights up automatically.
+      Health.queryAggregated({ dataType: 'appleExerciseTime' as any, startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }).catch(() => ({ samples: [] })),
     ]);
 
     // ── Group sleep samples into nights ────────────────────────────────────
@@ -734,7 +791,7 @@ function computeSleepStageDurations(samples: HealthSample[]): {
  * - Deep sleep proportion (ideal ~15-20%): 25% weight
  * - REM proportion (ideal ~20-25%): 20% weight
  */
-function computeSleepScore(entry: PhysiologyDayEntry): number {
+export function computeSleepScore(entry: PhysiologyDayEntry): number {
   const totalSleep = entry.sleepDurationSec ?? 0;
   if (totalSleep < 1800) return 0;  // < 30 min = not a real sleep session
 
@@ -742,6 +799,20 @@ function computeSleepScore(entry: PhysiologyDayEntry): number {
   const target = DEFAULT_SLEEP_TARGET_SEC;
   const durationRatio = totalSleep / target;
   const durationScore = Math.min(100, durationRatio * 100);
+
+  // Stage-less sources: many non-Apple watches (Garmin, Coros, Polar, basic
+  // trackers) write only a generic 'asleep' state to HealthKit with no
+  // deep/REM breakdown, so both architecture components read zero. Scoring the
+  // 25%-deep + 20%-REM weights as 0 would hard-cap an 8h healthy night at
+  // 55/100 and drag Readiness down for every non-Apple-Watch user. When no
+  // architecture was reported, score on the only signal we have (duration) —
+  // i.e. renormalise the 55% duration weight to 100%. Introduces no new
+  // constants. Staged nights (any deep OR REM present) keep the full formula,
+  // so a genuinely low-deep night is still penalised correctly.
+  const hasArchitecture = (entry.sleepDeepSec ?? 0) > 0 || (entry.sleepRemSec ?? 0) > 0;
+  if (!hasArchitecture) {
+    return Math.round(Math.max(0, Math.min(100, durationScore)));
+  }
 
   // Deep sleep: ideal is 15-20% of total. Score peaks at 17.5%.
   const deepPct = totalSleep > 0 ? (entry.sleepDeepSec ?? 0) / totalSleep : 0;

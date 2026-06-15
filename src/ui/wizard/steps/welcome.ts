@@ -8,7 +8,6 @@ import {
   isFirstRingExperience,
   markRingExperienceSeen,
   triggerRingEntranceHaptic,
-  triggerRingWave,
 } from '@/ui/page-flair';
 
 // ── Slide definitions. 4 USPs ────────────────────────────────────────────────
@@ -99,13 +98,27 @@ function renderCardHTML(idx: number): string {
       `).join('')}
     </div>
 
-    <button id="isl-next" class="m-btn-glass m-btn-glass--inset" style="width:100%;padding:14px;font-size:15px">
+    <button id="isl-next" class="m-btn-glass m-btn-glass--inset" style="width:100%;padding:14px;font-size:15px;background:rgba(255,255,255,0.92);backdrop-filter:none;-webkit-backdrop-filter:none">
       ${isLast ? 'Get started' : 'Next'}
     </button>
   `;
 }
 
-function renderSlides(container: HTMLElement, startIdx: number, onDone: () => void): void {
+interface SlidesHandle {
+  /** (Re)starts the ring bloom + pulse + drift and fires the first-ever haptic.
+   *  Call this at REVEAL so the wow plays live on already-warm DOM. */
+  playIntro: () => void;
+}
+
+/**
+ * Builds the slides UI into `host`. Crucially this does NOT assume it owns the
+ * whole wizard-step container, so the heavy background can be PRE-WARMED off-screen
+ * while the user types their name (see renderWelcome). The cold DOM build + first
+ * raster is the expensive part that made the intro jolt/freeze on iPhone; doing it
+ * during name entry takes it off the tap's critical path. The bloom itself is
+ * replayed at reveal via the returned playIntro() so the wow still happens live.
+ */
+function buildSlides(host: HTMLElement, startIdx: number, onDone: () => void): SlidesHandle {
   let idx = startIdx;
   // Slides ALWAYS get the large hero entrance. The slides are the wow moment of
   // every onboarding session, not just the first-ever device install. The haptic
@@ -114,7 +127,7 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
 
   // Build the page shell ONCE. Rings, atmosphere, glint, skip button, card container.
   // Subsequent slide changes only swap the card body and toggle the atmosphere palette.
-  container.innerHTML = `
+  host.innerHTML = `
     <style>
       @keyframes islRise { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:translateY(0) } }
       .isl-rise { opacity:0; animation: islRise 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
@@ -141,9 +154,8 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
       <div style="position:absolute;top:max(20px,env(safe-area-inset-top,20px));right:20px;z-index:10">
         <button id="isl-skip"
           style="font-size:13px;font-weight:600;color:rgba(0,0,0,0.62);
-                 background:rgba(255,255,255,0.72);border:1px solid rgba(0,0,0,0.12);
+                 background:rgba(255,255,255,0.9);border:1px solid rgba(0,0,0,0.12);
                  border-radius:100px;padding:9px 20px;cursor:pointer;
-                 backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
                  box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.06);
                  transition:opacity 0.15s">
           Skip intro
@@ -155,8 +167,8 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
       <div style="flex:1;display:flex;flex-direction:column;align-items:center;
                   justify-content:center;padding:64px 24px 40px;position:relative;z-index:1">
         <div class="isl-rise" style="width:100%;max-width:360px;
-             background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
-             border:1px solid rgba(255,255,255,0.82);border-radius:28px;
+             background:rgba(255,255,255,0.9);
+             border:1px solid rgba(0,0,0,0.06);border-radius:28px;
              padding:32px 28px 28px;
              box-shadow:0 16px 56px rgba(0,0,0,0.08),0 2px 8px rgba(0,0,0,0.05);
              animation-delay:0.04s">
@@ -166,15 +178,50 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
     </div>
   `;
 
-  // Fire haptic on the very first ring appearance ever, then mark seen.
-  if (isFirstEver) {
-    triggerRingEntranceHaptic();
-    markRingExperienceSeen();
-  }
+  // playIntro restarts the ring bloom/pulse/drift on demand. During pre-warm the
+  // animations fire once (off-screen, invisible) and settle; replaying them at the
+  // moment of reveal makes the wow play LIVE on warm DOM instead of cold-building
+  // under the user's tap. Restart trick = remove the animating class, force a reflow,
+  // re-add it (per-ring inline animation-delay on the <g> is preserved). Scoped to
+  // `host` so it only touches this slides instance, never the welcome whisper rings.
+  // Restart one or more CSS animations by toggling their class. ALL classes are
+  // removed first, then a SINGLE forced reflow, then all re-added — so a multi-class
+  // replay costs exactly one layout pass on the tap frame, never one-per-element (the
+  // naive version forced ~5 reflows for the bloom = a real micro-hitch). Per-ring inline
+  // animation-delay on each <g> is preserved (we toggle the class, not the style). Scoped
+  // to `host` so it never touches the welcome whisper rings.
+  const replay = (...selectors: string[]) => {
+    const groups = selectors.map(sel => ({
+      cls: sel.slice(1), // ".isl-pulse" → "isl-pulse"
+      els: Array.from(host.querySelectorAll<Element>(sel)),
+    }));
+    groups.forEach(g => g.els.forEach(el => el.classList.remove(g.cls)));
+    void host.getBoundingClientRect(); // one reflow for the whole batch
+    groups.forEach(g => g.els.forEach(el => el.classList.add(g.cls)));
+  };
+  const playIntro = () => {
+    replay(`.${BG_PREFIX}-entrance`, `.${BG_PREFIX}-pulse`, `.${BG_PREFIX}-drift`);
+    // Fire haptic on the very first ring appearance ever, then mark seen.
+    if (isFirstEver) {
+      triggerRingEntranceHaptic();
+      markRingExperienceSeen();
+    }
+  };
 
-  const contentEl = document.getElementById('isl-card-content');
-  const pageEl = document.getElementById('isl-page');
-  if (!contentEl || !pageEl) return;
+  // Replays ONLY the cheap ambient motion (opacity 'breath' + the single expanding
+  // drift ring) — NOT the entrance bloom and NOT the 5-ring wave. Called on each Next
+  // tap so every slide visibly moves while it is being read, instead of slides 2-5
+  // sitting frozen. The pulse (~9s opacity) is free on WKWebView; the drift is one thin
+  // circle (the same cost the intro already runs on arrival, not the 5-ring wave we
+  // removed). One forced reflow total via the batched replay above. Both are one-shot
+  // (no infinite loop / battery drain) and don't stack on rapid taps (same elements reset).
+  const replayAmbient = () => {
+    replay(`.${BG_PREFIX}-pulse`, `.${BG_PREFIX}-drift`);
+  };
+
+  const contentEl = host.querySelector<HTMLElement>('#isl-card-content');
+  const pageEl = host.querySelector<HTMLElement>('#isl-page');
+  if (!contentEl || !pageEl) return { playIntro };
 
   // Update card content + wire next button. Re-runs on every slide change.
   // The CARD BOX stays put. Only the inner content fades. No "white flash".
@@ -186,10 +233,14 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
       contentEl.classList.add('isl-card-anim');
     }
 
-    document.getElementById('isl-next')?.addEventListener('click', () => {
+    host.querySelector('#isl-next')?.addEventListener('click', () => {
       if (idx < SLIDES.length - 1) {
         idx++;
-        triggerRingWave(BG_PREFIX);
+        // Refresh the CHEAP ambient motion so the new slide moves gently while read.
+        // We deliberately do NOT re-fire the 5-ring wave here (scale 1.8x/2.4x on every
+        // tap janks WKWebView). replayAmbient = opacity breath + one drift ring only.
+        // (Tristan, 2026-06-15)
+        replayAmbient();
         updateSlide(true);
       } else {
         onDone();
@@ -197,8 +248,9 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
     });
   };
 
-  document.getElementById('isl-skip')?.addEventListener('click', onDone);
+  host.querySelector('#isl-skip')?.addEventListener('click', onDone);
   updateSlide(false); // Initial render. Entrance animation already covers it
+  return { playIntro };
 }
 
 // ── Name input ────────────────────────────────────────────────────────────────
@@ -281,6 +333,47 @@ export function renderWelcome(container: HTMLElement): void {
   const existingName = getOnboardingState()?.name;
   if (nameInput && existingName) nameInput.value = existingName;
 
+  // ── Pre-warm the slides while the user types their name ─────────────────────
+  // The heavy part of the intro (5 gradient-stroked rings + atmosphere + the first
+  // raster) is built NOW, off-screen, so it is fully warm by the time the user taps
+  // "Build my plan". This is what kills the old jolt/freeze: the cold DOM build no
+  // longer lands on the tap frame. The bloom is replayed live at reveal so the wow
+  // still plays. Host sits behind the name screen at opacity 0 (painted → rasterized,
+  // but invisible and non-interactive). Built next frame so it never blocks first paint.
+  let slides: SlidesHandle | null = null;
+  let prewarmHost: HTMLElement | null = null;
+  // Wait for the welcome screen's own entrance (w-rise, ~0.8s) to settle before we
+  // build + first-raster the heavy slides off-screen, so the two don't contend on the
+  // name screen's first frames. Fast-tappers fall back to a cold build in revealSlides.
+  window.setTimeout(() => {
+    // Bail if already built, or if the step changed under us (demo-fill / sign-in /
+    // submit replace the container — the name input is gone once we've navigated away).
+    if (slides || !container.isConnected || !document.getElementById('welcome-name')) return;
+    prewarmHost = document.createElement('div');
+    prewarmHost.style.cssText = 'position:fixed;inset:0;z-index:0;opacity:0;pointer-events:none';
+    container.appendChild(prewarmHost);
+    slides = buildSlides(prewarmHost, 0, () => nextStep());
+  }, 600);
+
+  const revealSlides = () => {
+    // Fast-tap fallback: pre-warm hasn't run yet → build into the container directly.
+    if (!slides || !prewarmHost) {
+      slides = buildSlides(container, 0, () => nextStep());
+      slides.playIntro();
+      return;
+    }
+    const host = prewarmHost;
+    host.style.pointerEvents = 'auto';
+    host.style.zIndex = '2';
+    host.style.transition = 'opacity 0.35s ease';
+    slides.playIntro();                       // replay the bloom on warm DOM
+    requestAnimationFrame(() => { host.style.opacity = '1'; });
+    // Once revealed, drop the welcome layer underneath so it can't be seen or tabbed to.
+    window.setTimeout(() => {
+      Array.from(container.children).forEach(c => { if (c !== host) c.remove(); });
+    }, 380);
+  };
+
   const submitName = () => {
     const name = nameInput.value.trim();
     if (!name) {
@@ -290,8 +383,8 @@ export function renderWelcome(container: HTMLElement): void {
       return;
     }
     updateOnboarding({ name });
-    // Slides come after the name. User has committed, now show what they're getting
-    renderSlides(container, 0, () => nextStep());
+    // Slides come after the name. User has committed, now show what they're getting.
+    revealSlides();
   };
 
   ctaButton?.addEventListener('click', submitName);

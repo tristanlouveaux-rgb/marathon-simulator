@@ -179,11 +179,11 @@ export function renderTriLegBreakdown(leg: LegKey): void {
 
   container.innerHTML = `
     <style>
-      @keyframes triLbdFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes triLbdFloatUp { from { opacity:0; } to { opacity:1; } }
       .tri-lbd-fade { opacity:0; animation:triLbdFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="tri-lbd-view" style="position:relative;min-height:100vh;background:${atmosphereGradient('sky')};font-family:var(--f);overflow-x:hidden">
+    <div id="tri-lbd-view" class="safe-top-bleed" style="position:relative;min-height:100vh;background:${atmosphereGradient('sky')};font-family:var(--f);overflow-x:hidden">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
         ${buildRingBackground('tri-lbd', { variant: 'whisper', palette: 'sky' })}
       </div>

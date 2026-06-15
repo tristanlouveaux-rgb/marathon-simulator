@@ -1510,6 +1510,45 @@ export function computeFitnessModel(
 }
 
 /**
+ * One-step CTL adherence ratio for a single completed week: actual chronic load ÷ the chronic
+ * load the plan expected, both advanced one CTL step from the SAME prior-week seed.
+ *
+ *   expectedCTL = priorCtl·d + plannedWeekTSS·(1−d)
+ *   actualCTL   = priorCtl·d + actualWeekTSS·(1−d)        where d = CTL_DECAY (≈ 0.847)
+ *   ratio       = actualCTL / expectedCTL
+ *
+ * Because the shared seed is weighted ~85%, a single missed week moves the ratio by only ~15% of
+ * the load shortfall — the dead-zone intuition (Mujika & Padilla 2000: one week off detrains
+ * little) falls out of the arithmetic rather than from a hand-picked constant. The effect
+ * compounds correctly across consecutive weeks because next week's seed is this week's now-lower
+ * actual CTL, and it self-limits because expectedCTL also decays toward the maintenance load.
+ *
+ * Returns 1.0 (neutral) when there is no prescribed load to fall behind on (taper / rest /
+ * no plan) or the inputs are degenerate. The consumer treats ratio < 1 as "behind".
+ *
+ * Tracking-vs-planning note: this is a PLANNING signal (it prescribes next week's volume), and it
+ * scales DURATION only. It is deliberately orthogonal to the existing adherence→VDOT-gain gate
+ * (events.ts), which withholds VDOT increments — an intensity/pace axis — when runs are missed.
+ * Two different axes, no double-count.
+ */
+export function ctlAdherenceRatio(
+  priorCtl: number,
+  plannedWeekTSS: number,
+  actualWeekTSS: number,
+): number {
+  if (!Number.isFinite(plannedWeekTSS) || plannedWeekTSS <= 0) return 1;
+  const seed = Number.isFinite(priorCtl) && priorCtl > 0 ? priorCtl : 0;
+  const expected = seed * CTL_DECAY + plannedWeekTSS * (1 - CTL_DECAY);
+  const actual = seed * CTL_DECAY + Math.max(0, actualWeekTSS) * (1 - CTL_DECAY);
+  if (expected <= 0) return 1;
+  // Zero-seed (brand-new athlete, no chronic-load history): the shared seed·d term vanishes, so the
+  // ratio collapses to actualWeekTSS / plannedWeekTSS — the un-damped completion fraction. That's
+  // the correct behaviour: with no fitness history there is no "you've banked load" cushion, so a
+  // missed first week re-anchors fully rather than gently. The damping returns as CTL accrues.
+  return actual / expected;
+}
+
+/**
  * Compute same-signal CTL and ATL using Signal B (raw physiological TSS) for BOTH.
  * Used by readiness to get a fair freshness reading for cross-trainers.
  *

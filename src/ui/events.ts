@@ -34,6 +34,9 @@ import {
   type LTEstimate,
 } from '@/calculations/lt-estimator';
 import { openActivityReReview } from '@/ui/activity-review';
+import { resolveCtlAdherence } from '@/ui/planned-day-tss';
+import { resolveMtlAdherence } from '@/calculations/mtl';
+import { resolveTriDisciplineAdherence } from '@/calculations/fitness-model.triathlon';
 import { loadGpsRecording } from '@/gps/persistence';
 import { scoreRepAdherence, repAdherenceToEffortDev } from '@/calculations/rep-adherence';
 
@@ -764,6 +767,32 @@ function skipInner(
 }
 
 /**
+ * Re-bake the current + future weeks of a STORED-plan mode (tri / HYROX) so a freshly-stored
+ * re-anchor stamp (and the trailing-effort multiplier) take effect immediately rather than waiting
+ * for an incidental regeneration. Past weeks are left untouched (they hold matched actuals); the
+ * new current week and beyond carry no completions at rollover, so rebuilding them is safe.
+ * User-added / holiday sessions (adhoc-/holiday- ids) are carried over, matching the launch regen.
+ */
+async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): Promise<void> {
+  if (!s.wks?.length) return;
+  let fresh: typeof s.wks = [];
+  if (s.eventType === 'hyrox') {
+    fresh = (await import('@/workouts/plan_engine.hyrox')).generateHyroxPlan(s);
+  } else if (s.eventType === 'triathlon') {
+    fresh = (await import('@/workouts/plan_engine.triathlon')).generateTriathlonPlan(s);
+  }
+  if (!fresh.length) return;
+  const from = (s.w ?? 1) - 1; // 0-based index of the new current week
+  for (let i = from; i < Math.min(s.wks.length, fresh.length); i++) {
+    const userAdded = (s.wks[i].triWorkouts ?? []).filter(
+      (w: any) => typeof w.id === 'string' && (w.id.startsWith('adhoc-') || w.id.startsWith('holiday-')),
+    );
+    s.wks[i].triWorkouts = [...(fresh[i].triWorkouts ?? []), ...userAdded];
+    s.wks[i].ph = fresh[i].ph;
+  }
+}
+
+/**
  * Move to next week
  *
  * INJURY PAUSE LOGIC: If injury is active, we freeze the plan pointer
@@ -1153,6 +1182,10 @@ export async function next(): Promise<void> {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
 
+  // CTL-gap adherence for the week just finished — computed before the pointer moves, while s.w
+  // still indexes the completed week. Stamped on the upcoming week below (mirror of scheduledAcwr).
+  const completedWeekForCtl = s.w;
+
   s.w++;
 
   if (s.w <= s.tw) {
@@ -1167,6 +1200,42 @@ export async function next(): Promise<void> {
       } else {
         delete nextWk.weekAdjustmentReason;
         delete nextWk.scheduledAcwrStatus;
+      }
+
+      // ─── Load-gap re-anchor → next week (mode-aware) ───────────────────────
+      // Stamp the upcoming week with last week's load adherence so its prescribed volume
+      // re-anchors to the load actually carried. Reduce-only: store only when behind (ratio < 1).
+      // Excused weeks get nothing (injury / illness / multi-week gaps, handled inside each resolver).
+      // Each mode has its own resolver and its own re-anchor field; the resolvers are mutually
+      // exclusive by eventType so exactly one fires:
+      //   running → wk.ctlRatio (running combined-CTL),  HYROX → wk.ctlRatio (MTL),
+      //   triathlon → wk.ctlRatioByDiscipline (per-discipline swim/bike/run).
+      if (!isInjured && !isIll) {
+        if (s.eventType === 'hyrox') {
+          const m = resolveMtlAdherence(s, completedWeekForCtl);
+          if (m.valid && m.ratio < 1) nextWk.ctlRatio = m.ratio; else delete nextWk.ctlRatio;
+        } else if (s.eventType === 'triathlon') {
+          const t = resolveTriDisciplineAdherence(s, completedWeekForCtl);
+          if (t.valid) (nextWk as any).ctlRatioByDiscipline = t.byDiscipline;
+          else delete (nextWk as any).ctlRatioByDiscipline;
+        } else {
+          const ctlAdh = resolveCtlAdherence(s, completedWeekForCtl);
+          if (ctlAdh.valid && ctlAdh.ratio < 1) nextWk.ctlRatio = ctlAdh.ratio; else delete nextWk.ctlRatio;
+        }
+      } else {
+        delete nextWk.ctlRatio;
+        delete (nextWk as any).ctlRatioByDiscipline;
+      }
+
+      // ─── Re-bake future weeks so tri/HYROX re-anchor (and effort multiplier) apply now ─────
+      // Running resolves its plan on-demand, so its re-anchor is live. Tri/HYROX STORE triWorkouts
+      // and otherwise re-bake only on incidental triggers, so without this the stamp just sat there.
+      // Only weeks ≥ the new current week are rebuilt — those carry no matched actuals, so no
+      // completion is clobbered — and user-added / holiday sessions are carried over. (Tristan,
+      // 2026-06-09: opted to apply instantly; this also activates the previously-dormant tri/HYROX
+      // effort multiplier on rollover, which is its intended behaviour.)
+      if (s.eventType === 'triathlon' || s.eventType === 'hyrox') {
+        await rebakeFutureWeeksInPlace(s);
       }
 
       // ─── Km floor nudge ────────────────────────────────────────────────────
@@ -1292,7 +1361,7 @@ function showResetModal(): Promise<boolean> {
           ${body}
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-confirm-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-warn);color:#fff">
+          <button id="btn-confirm-reset" class="m-btn-danger w-full py-2.5 transition-colors text-sm">
             ${ctaLabel}
           </button>
           <button id="btn-cancel-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
@@ -1332,7 +1401,7 @@ function showCompletionModal(incompleteCount: number): Promise<boolean> {
           They'll be marked as skipped and may carry forward to next week.
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-skip-continue" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:#fff">
+          <button id="btn-skip-continue" class="m-btn-ok w-full py-2.5 transition-colors text-sm">
             Skip & Continue
           </button>
           <button id="btn-go-back" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
@@ -1379,7 +1448,7 @@ function showSlotChoiceModal(
           Which slot should this fill?
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-match-sport" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:#fff">
+          <button id="btn-match-sport" class="m-btn-ok w-full py-2.5 transition-colors text-sm">
             Replace planned ${slotName}
           </button>
           <button id="btn-match-generic" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
@@ -1419,7 +1488,7 @@ function showLongRunSkipWarning(): Promise<boolean> {
           Consider shortening the run instead.
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-skip-longrun" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:#fff">
+          <button id="btn-skip-longrun" class="m-btn-caution w-full py-2.5 transition-colors text-sm">
             Skip Anyway
           </button>
           <button id="btn-keep-longrun" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
@@ -1459,7 +1528,7 @@ function showDropWorkoutConfirmation(name: string): Promise<boolean> {
           You've skipped this session twice. Drop it from your plan or carry it forward one more week?
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-drop-workout" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:#fff">
+          <button id="btn-drop-workout" class="m-btn-caution w-full py-2.5 transition-colors text-sm">
             Drop It
           </button>
           <button id="btn-keep-workout" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">

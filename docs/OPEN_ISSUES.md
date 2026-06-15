@@ -8,6 +8,94 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-285: Prediction engine read "no training data" as "detrained" — predicted a 2:00 marathoner at 2:22 *(P1, 2026-06-15)* — fix in working tree, pending Tristan confirmation + device test
+
+**Symptom (Tristan, 2026-06-15).** A user whose only data is a 2:00:00 marathon PB was predicted **2:22:50** (reproduced as 2:24:54 from the live code). A 20:00 5K runner with no other data, training 3×/week + 1 speed, was predicted **4:03** for the marathon. Both are slower than the athlete's demonstrated fitness warrants.
+
+**Root cause.** Three endurance-shortfall penalties (`marathonSpecificityPenalty` ×1.15, `applyLongRunCap` ×1.05, `noLongRacePenalty` ×1.01) all key off the *absence of synced training history*. A brand-new onboarding user always has zero history, so `resolveWeeklyKmSignal` → `0` and `getLongestRunSec` → `0`, which the penalty code reads as "runs zero km / longest run is zero" (maximal detraining) rather than "no data yet". Absence of evidence was treated as evidence of detraining; stacked multiplicatively it slowed a proven 2:00 marathon to 2:25.
+
+**Fix (in working tree).**
+1. **No-data gate** — `initialization.ts` passes `undefined` (not `0`) for weekly volume when `weeksCovered === 0` and no manual volume typed, so `marathonSpecificityPenalty` stays dormant for true no-data users (still fires for real low-volume history).
+2. **Demonstrated-PB floor** (`demonstratedPBFloor`, `predictions.ts`) — never predict slower than a same-distance PB unless positive detraining evidence exists (real `< 30 km/wk` signal, OR a recent run projecting slower than the PB). Applied in `blendPredictions` and after the durability cap in `initialization.ts`.
+
+**Result.** 2:00 marathon-only → 2:00:00; 20:00 5K-only marathon → ~3:31; returning runner (1:28 half PB + recent 24:00 5K) still ≥1:30. Full suite green (3340); SCIENCE_LOG §BV; CHANGELOG 2026-06-15. **NOT device-verified — do not mark FIXED until Tristan confirms the onboarding numbers in-app.**
+
+---
+
+### ISSUE-284: Strava/Garmin OAuth on native iOS uses a full-page redirect, no in-app browser or deep-link return *(P1 if broken on device, unverified, 2026-06-12)*
+
+`startStravaConnect` (`src/data/stravaSync.ts:78`) and `startGarminConnect` (`src/data/garminOAuth.ts:19`) do `window.location.href = data.url` to begin OAuth; the callback redirects back to the app origin with `?strava=connected` / `?garmin=connected`, handled in `connect-data.ts` + `main.ts`. There is **no `@capacitor/browser` `Browser.open` in-app Safari view and no `@capacitor/app` `appUrlOpen` deep-link listener** anywhere in `src/`. On web this is fine (normal redirect). On a Capacitor iOS build it navigates the entire WKWebView away from `capacitor://localhost` to Strava and depends on the callback redirecting cleanly back into the app — which may leave the user on a blank page or lose JS state. Since Strava is the **primary data source for shipped users** (Garmin API not yet approved), a broken iOS OAuth would block onboarding for most users.
+
+**Partially mitigated (2026-06-12)**: added a redirect-independent self-heal — tapping Connect persists `onboarding.oauthPending`; on the next `connect-data` render `recoverPendingStravaOAuth` re-checks `strava_tokens` via `isStravaConnected()` and completes the flow if the token landed, even when the `?strava=connected` bounce is lost. JS-only, web path unchanged. This means onboarding **recovers** from a flaky iOS redirect, so the remaining work is no longer a hard blocker.
+
+**Native in-app-browser OAuth — BUILT, gated off (2026-06-12)**: the full flow now exists behind `NATIVE_OAUTH_ENABLED` (`feature-flags.ts`, default false). `@capacitor/browser` + `@capacitor/app` installed; `mosaic://` scheme in `Info.plist`; `src/data/oauth-native.ts` opens the in-app browser + handles the `appUrlOpen` return (re-enters with `?strava=connected` to reuse the tested handler); `strava/garmin-auth-callback` `pickRedirectTarget` allowlists `mosaic://oauth` (exact-match, **staged not deployed**). All client checks green; web unchanged.
+
+**To ship it (native-build session, full runbook in `docs/RUNBOOK.md → Native OAuth`)**: (1) `npx cap sync ios`; (2) deploy `strava-auth-callback` + `garmin-auth-callback`; (3) flip `NATIVE_OAUTH_ENABLED` → true; (4) Xcode rebuild + device-test. Order matters — deploying the callbacks before flipping the flag avoids the in-app browser landing on the web app. The shipped self-heal covers the gap until then. **Decision (Tristan, 2026-06-12): "best app regardless of depth of build."**
+
+**`invalid_state` error page on device — root-caused + fixed in code (2026-06-15)**: `NATIVE_OAUTH_ENABLED` is now `true`, but a beta connect showed the in-app Safari sheet stuck on `{"error":"invalid_state","details":null}`. Cause: the callbacks `DELETE`d the `*_auth_requests` row on success, so the in-app browser's re-hit of the callback (it can't follow the `mosaic://` redirect) found no row. Connection had actually succeeded. **Fix**: idempotent callbacks — `consumed_at` column (migration `20260615_oauth_idempotent_callback.sql`), replay-success on duplicate hits, atomic claim to prevent double token-exchange, friendly HTML page when the row is truly gone, opportunistic purge of consumed rows >1h. **DEPLOYED 2026-06-15**: `consumed_at` column added to both tables (Management API, scoped — not `db push`) + both callback functions redeployed. Not device-verified.
+
+**Two more device failures + the real fix (2026-06-15)**: after the idempotency deploy, connect showed "Safari cannot open the page because the address is invalid", then raw HTML as source. Two walls: SFSafariViewController won't follow a 302 to a custom scheme, AND the Supabase edge gateway force-rewrites responses to `text/plain` (so a JS-redirect HTML page won't run). **Fix: dropped `@capacitor/browser`, added `@mosaic/web-auth` (ASWebAuthenticationSession) plugin** — iOS's purpose-built OAuth view that intercepts the `mosaic://` callback natively. Client rewired (`oauth-native.ts` → `runNativeOAuth`), edge callbacks reverted to plain 302→mosaic://. Typecheck + 3308 tests green; `vite build` + `cap sync ios` done. **REQUIRES a TestFlight repush** (native plugin) — Xcode rebuild + archive + upload pending. Not device-verified. This is the path that should finally close ISSUE-284.
+
+---
+
+> **2026-06-05 persona-qa sweep (all 25 personas, pre-App-Store)**: ISSUE-273…282 below came from the full `/persona-qa all` run. Each was code-verified by an audit agent with file:line cites; ISSUE-273 was additionally hand-verified in this session. None are crashes on the reviewer path — the REVIEW demo journey itself was tested clean the same day (stale race-date bug found and already fixed in `demo-data.ts`).
+
+### ISSUE-273: Week-debrief ✕ freezes week advance and re-fires every launch *(P1, 2026-06-05)* — fix in working tree, pending device verification
+
+The debrief's ✕ button (`week-debrief.ts:395-397`) just removed the modal — it never set `lastDebriefWeek`/`lastCompleteDebriefWeek` (only `_closeAndRecord` does). `welcome-back.ts:132-138` clamps `s.w` to `lastCompleteDebriefWeek + 1`, so a habitual dismisser got: week pointer frozen + the same debrief re-firing every launch until they tapped Continue once. **Tristan picked: remove the ✕ entirely (2026-06-05)** — the review is a checkpoint; Continue is the only exit and it records. Implemented same day: all four ✕ instances removed (step-1 summary, analysis animation, plan-preview step, plan-complete screen) plus their orphan handlers. Plan-complete now requires the Start-new-plan / Continue-tracking choice (both safe; new-plan stays reachable from Account if they pick tracking). Suite 3228 green. NOT device-verified — confirm the weekly flow on device before closing.
+
+### ISSUE-274: HYROX forecast run-pace drill-down shows marathon training pace zones *(P1, 2026-06-05)*
+
+`hyrox/forecast-chip-detail-view.ts:285-296` renders "Training pace zones" with Easy/Marathon/Threshold/Interval/Rep paces from `s.pac` — marathon-centric zones that contradict the HYROX coaching model (Critical Pace). Fires for any HYROX athlete with running history. Fix: gate the card on `s.eventType !== 'hyrox'` or build a Critical-Pace-based equivalent.
+
+### ISSUE-275: Running mode lacks the under-duration guard tri has — underachiever load spiral *(P1 model, mirror-rule gap, 2026-06-05)*
+
+Tri clamps effort deviations when actual < 80% of planned duration (`effort-multiplier.triathlon.ts:65-69`). Running's effort score (`events.ts:~987-1028`) blends RPE+HR only, no distance/duration adherence: a runner who completes 70% of the planned distance and rates RPE 2-3 scores "easier than planned" → `effortMultiplier` raises next week's load up to 1.15×. Chronic under-deliverers get pushed harder. Per the mirror rule, port the tri guard: clamp negative deviation to 0 when completed km < ~80% of planned. Also: week-end VDOT gain adherence is count-based not distance-based (`events.ts:895-916`).
+
+### ISSUE-276: Chronic skipping is invisible to plan adaptation *(P1 model design, 2026-06-05)*
+
+Skipped sessions produce no rating → excluded from effort scoring (2-week lookback, `effort-multiplier.triathlon.ts:51`; same shape in running). `computeTriAdherence`'s penalty (~2% at 0.80 ratio) feeds ONLY the race-forecast horizon, never the plan generator. Net: a 40%-skipper's plan never adapts downward, no coach trigger names the pattern, and the forecast stays ~2% optimistic. Needs a design decision: trailing completion-ratio input to the effort multiplier, a coach trigger at sustained <75% adherence, or both.
+
+### ISSUE-277: Manual benchmarks can never be corrected downward; absurd values uncaveated *(P1 design, 2026-06-05)*
+
+The yield-to-derived rule is improvement-only by design (CLAUDE.md): `main.ts:654-681` overrides user FTP only when derived ≥ current+3W. A wrongly-HIGH manual FTP (350W accepted by the [80,500] bounds at `review.ts:2587`) is permanent: power adherence floors the effort multiplier at 0.85 (−15% duration, can't fix a +75% watt error), no re-test prompt fires, and the race forecast renders the absurd prediction with zero sanity caveat (`race-prediction.triathlon.ts:206`, FTP→speed at :1224-1229). CSS same shape ([30,600] bounds). Needs: persistent-overshoot escalation (re-test suggestion when powerAdherence <0.75 for N weeks) and/or a forecast caveat when benchmarks sit outside plausible bands. Tristan decision — touches the manually-set-benchmarks rule.
+
+### ISSUE-278: Running injury state doesn't age without modal re-opens *(P1, 2026-06-05, related ISSUE-261)*
+
+(1) `evaluatePhaseTransition` (`injury/engine.ts:937`) only runs on modal save or workout generation — never on launch — so a reported injury stays at day-0 phase if the modal is never re-opened. (2) Running VDOT detraining during injury fires only when `wk.injuryCheckedIn` is set weekly (`events.ts:878-893`) — no check-in, no decay, fitness stalls frozen. (3) Plan view labels injury-rested runs as guilt-orange "Missed" (`plan-view.ts:903`) — illness has a suppression check (`:908`), injury doesn't. (4) The running race forecast never calls `injuryAdjustedBuildWeeks` (`race-forecast-simulation.ts:91`) — tri does (`blended-fitness.ts:561`). Tri/HYROX injury paths verified clean by the same sweep.
+
+### ISSUE-279: Ghost-user return is silent — frozen CTL, no recap, possible silent plan end *(P2, 2026-06-05)*
+
+Multi-week absence: VDOT detraining applies once, correctly capped (`welcome-back.ts:143-147` ✅), but (a) `ctlBaseline` never decays across the gap so home/stats show pre-absence fitness until the next Strava refresh, (b) no welcome-back recap exists (`showWelcomeBackModal` is never called), the week pointer just jumps, and (c) if the gap pushes past `s.wks.length` in non-continuous mode the plan silently ends with no end-state messaging.
+
+### ISSUE-280: Partial tri setup — silent skill-level fallbacks, unlabeled estimates *(P2, 2026-06-05)*
+
+With null CSS/FTP: race prediction silently substitutes skill-slider estimates (`race-prediction.triathlon.ts:206` CSS, `:845-850` bike speed) with no user-facing provenance; swim session descriptions omit the pace target entirely (`swim.ts:200`) where bike at least falls back to HR zones; the "No CSS"/"No FTP" workout chips only render when the benchmark test was *dismissed* (`triathlon/workout-card.ts:56-57`) — inverted logic, the chip should signal absence not acknowledgement. Fix: label estimates ("estimated from your skill level"), always chip missing benchmarks, add skill-pace hint to swim descriptions.
+
+### ISSUE-281: Cycling-only mode content leaks *(P2 — low urgency, mode is hidden from goals picker, 2026-06-05)*
+
+Cycling is in `HIDDEN_MODES` (`goals.ts:87`) so no new user can reach it, but for legacy/dev state: vibes "Run by Feel" nudge renders unguarded and can add a `discipline:'run'` workout to a bike-only plan (`triathlon/plan-view.ts:260,366`); tri debrief animation says "Analysing swim, bike, and run data" (`tri-week-debrief.ts:28-35` — the discipline ROWS are correctly filtered at :132, just the steps copy isn't); home today-card swim/run badge builder has no cycling guard (`home-view.ts:2879-2910`). Also if cycling is ever unhidden: it skips plan-preview-v2 entirely, and `commute.ts:89` copy says "Do you run to work?". Bundle these into the cycling-unpark session.
+
+### ISSUE-282: Persona-sweep polish bundle *(P2/P3, 2026-06-05)*
+
+- Daily coach claims recovery confidence with zero recovery data: "Freshness and load are good. Good session today" fires with `hasRecovery=false` (`daily-coach.ts:1127-1135`) — rephrase to the literal signals.
+- Naked jargon: "TSS planned" label on main-view:424 (rename "Weekly Load" or gloss); "Fitness (CTL)"/"Fatigue (ATL)" labels unglossed inline (`freshness-view.ts:205`); coach copy exposes raw ACWR ratio "Load spike (1.45×)" undefined (`daily-coach.ts:896`).
+- Stats "Recent weeks" shows literal `0 sessions / 0 load` instead of `—` for empty state (`stats-view.ts:792-803`).
+- `hx.athleteBand.replace()` without null guard — crashes on corrupted state (`hyrox/plan-view.ts:154`, `hyrox/stats-view.ts:41`).
+- ~~`coach-workout-modal.ts:377` indexes `wks[s.w-1]` unbounded~~ — FALSE POSITIVE on re-verify (2026-06-05): `wk` is guarded at every dereference (`wk ? :` at weekTssActual, `.filter` on lookWeeks) and `computeLiveSameSignalTSB` clamps internally. No fix needed.
+- Stray DIAG `console.log` block `home-view.ts:1069-1090` (already marked for removal post-dogfood).
+- `buildRaceForecastCard` (`home-view.ts:807-861`) appears to have zero callers — dead code or a missing home surface; decide which.
+
+### ISSUE-283: Random logout converts real account to anonymous guest; sign-in flow shows confusing guest warning *(P1, 2026-06-05 — fix shipped, awaiting Tristan device confirmation)*
+
+**Symptom (Tristan)**: app "logs me out sometimes"; on re-entering credentials the auth screen shows "Signing into an existing account will leave your current guest training data behind" — wrong, because the guest data IS the account's data. Email also had to be retyped every time.
+
+**Root cause**: `getValidSession()` (`supabaseClient.ts`) and the boot path (`main.ts:197`) treated ANY token-refresh failure — including transient network errors, routine on iOS resume-from-background — as a dead session: `signOut()` (revokes the still-valid refresh token server-side) then `signInAnonymously()`. The real account silently became an anonymous guest; the SIGNED_IN owner-mismatch check then ran `clearState()`, wiping local state. The guest-upgrade auth view (defaulting to Sign up + the amber abandon-data warning) is the correct screen for real guests but the wrong one here.
+
+**Fix (in code, suite 3228 green, NOT device-verified)**: (1) refresh failures classified via `isAuthRetryableFetchError` — network-shaped failures keep the session untouched (SDK auto-refresh retries; boot launches with the stale session); (2) a genuinely invalid token on a real account signs out locally (`scope:'local'`) to the honest sign-in screen instead of downgrading to guest; anonymous-fallback only for anonymous sessions; (3) last successful email stored in `localStorage` (`mosaic_last_email`), prefilled on the auth view, which now defaults to Sign in when a remembered email exists. Typed email also survives toggle/error re-renders.
+
+**Follow-up (same day, Tristan dogfood screenshot)**: hitting "Save my account" with an already-registered email showed the raw Supabase error and dead-ended. Now auto-switches the form to Sign in (email kept, password focused) with "This email already has an account. Enter your password to sign in."; the amber guest warning is suppressed in that case since its "choose Sign up instead" advice is wrong for that email. Email persistence through the switch confirmed working by Tristan on device.
+
 ### ISSUE-272: Reschedule is the missing third lever — timing-aware readiness suggestions *(P2 design, Tristan, 2026-06-04)*
 
 Found dogfooding the load-currency build. Scenario: readiness 15 driven by ACWR (safety), week projection ON target, hard session imminent (e.g. long run today/tomorrow). The system's two levers both fit badly: Reduce cuts volume the athlete doesn't need to lose (the week's budget is fine), Keep carries acute risk onto a high-impact session. The correct lever is **moving the session** — fatigue decays ~13%/day (7-day ATL constant), so a 2–3 day shift absorbs the spike at zero training cost.

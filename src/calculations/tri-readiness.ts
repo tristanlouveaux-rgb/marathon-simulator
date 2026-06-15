@@ -16,7 +16,7 @@ import type { Workout } from '@/types/state';
 import type { ReadinessLabel, ReadinessResult } from './readiness';
 import { computeReadiness } from './readiness';
 import { isImpactBlockedByInjury } from '@/injury/engine';
-import { buildDailySignalBTSS, computeSleepDebtOutlook, deriveSleepTarget } from './sleep-insights';
+import { buildDailySignalBTSS, computeSleepDebtOutlook, deriveSleepTarget, mergeManualSleepHistory } from './sleep-insights';
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const QUALITY_KEYWORDS = ['threshold', 'vo2', 'tempo', 'sweet_spot', 'sweetspot', 'speed', 'race_pace', 'intervals', 'hills', 'brick'];
@@ -73,7 +73,11 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   const fit = state.triConfig?.fitness;
   if (!fit) return null;
 
-  const physio = state.physiologyHistory ?? [];
+  // Fold manual sleep (recoveryHistory) in so a no-watch tri athlete's check-in
+  // night reaches the per-discipline readiness engine. Mirrors running mode
+  // (daily-coach / home-view). Device sleep wins per date; HRV / duration reads
+  // are unaffected (manual entries carry only a sleepScore).
+  const physio = mergeManualSleepHistory(state.physiologyHistory ?? [], state.recoveryHistory ?? []);
   const lastSleep = [...physio].reverse().find(d => d.sleepScore != null);
   const recentHrv = [...physio].reverse().find(d => d.hrvRmssd != null);
   const hrv28d = (() => {

@@ -18,6 +18,12 @@ const AUTO_PAUSE_RESUME_SPEED_MPS = 1.5;
 const AUTO_PAUSE_RESUME_DURATION_S = 3;
 /** Seconds of recent GPS samples kept for motion detection. */
 const MOTION_WINDOW_SEC = 10;
+/**
+ * GPS horizontal accuracy (m) at or below which a fix is trusted enough to
+ * begin counting distance — and to report "GPS ready" on the pre-run gate.
+ * Same threshold for both so "ready" means "the next metre will be counted".
+ */
+const ACCEPTABLE_ACCURACY_M = 30;
 
 export interface GpsTrackerOptions {
   /** Enable speed-based auto-pause/auto-resume. Default true. */
@@ -52,6 +58,7 @@ export class GpsTracker {
   private autoPauseEnabled = true;
   private autoPausedFlag = false;            // true if current pause was triggered by auto-pause
   private motionBuffer: GpsPoint[] = [];     // recent points for speed estimation
+  private armed = false;                     // acquiring GPS pre-run, waiting for confirmStart()
 
   constructor(provider: GpsProvider, splitScheme?: SplitScheme, options?: GpsTrackerOptions) {
     this.provider = provider;
@@ -141,6 +148,72 @@ export class GpsTracker {
     );
 
     return true;
+  }
+
+  /**
+   * Arm GPS acquisition WITHOUT starting the run clock. Mirrors start() but
+   * holds in 'acquiring' indefinitely: the tracker reports fix accuracy via
+   * getLiveData()/isGpsReady() so the UI can show a Garmin-style
+   * "Acquiring GPS… → GPS ready" gate, yet accumulates no time or distance
+   * until confirmStart() (the user's Start / Start anyway tap). Returns false
+   * if permission was denied — the caller should offer a timer-only fallback.
+   */
+  async arm(): Promise<boolean> {
+    if (this.status !== 'idle') return false;
+
+    this.status = 'acquiring';
+    this.armed = true;
+    this.notify();
+
+    const granted = await this.provider.requestPermissions();
+    if (!granted) {
+      this.status = 'idle';
+      this.armed = false;
+      this.notify();
+      return false;
+    }
+
+    this.provider.startWatching(
+      (point) => this.handlePoint(point),
+      (error) => console.error('GPS error:', error)
+    );
+
+    return true;
+  }
+
+  /**
+   * Confirm the user wants to begin now (GPS ready, or "Start anyway"). Starts
+   * the run clock; distance accumulation begins at the first acceptable fix
+   * (immediate when GPS is already ready). No-op unless currently armed.
+   */
+  confirmStart(): void {
+    if (!this.armed) return;
+    this.armed = false;
+    this.startTime = Date.now();
+    // Stay in 'acquiring' until the first <= ACCEPTABLE_ACCURACY_M fix seeds the
+    // route and flips us to 'tracking' (the existing gate). With a ready fix
+    // that happens on the very next sample.
+    this.notify();
+  }
+
+  /** True while armed for acquisition (pre-run GPS search). */
+  isArmed(): boolean {
+    return this.armed;
+  }
+
+  /** True once a fix of acceptable accuracy has arrived — safe to start. */
+  isGpsReady(): boolean {
+    return this.lastAccuracy != null && this.lastAccuracy <= ACCEPTABLE_ACCURACY_M;
+  }
+
+  /** Abandon acquisition before the run starts: stop watching, return to idle. */
+  cancelArm(): void {
+    if (!this.armed) return;
+    this.provider.stopWatching();
+    this.armed = false;
+    this.status = 'idle';
+    this.lastAccuracy = null;
+    this.notify();
   }
 
   /** Pause tracking (keeps GPS watching but stops accumulating) */
@@ -297,7 +370,11 @@ export class GpsTracker {
       // Notify with current accuracy even if not ready to track
       this.notify();
 
-      if (point.accuracy > 30) return; // wait for acceptable accuracy
+      // Armed for a confirm-tap gate: report accuracy but never auto-start.
+      // confirmStart() clears `armed` so the next good fix seeds tracking.
+      if (this.armed) return;
+
+      if (point.accuracy > ACCEPTABLE_ACCURACY_M) return; // wait for acceptable accuracy
 
       this.status = 'tracking';
       this.segmentStartMs = point.timestamp;

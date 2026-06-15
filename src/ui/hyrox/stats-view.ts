@@ -11,7 +11,7 @@
 
 import { getState } from '@/state/store';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
 import { computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
@@ -36,7 +36,9 @@ export function renderHyroxStatsView(): void {
   const hx = s.hyroxConfig;
   if (!hx) return;
 
-  const band = hx.athleteBand;
+  // Defensive ?? : athleteBand is typed required, but corrupted/partial state would
+  // crash bandLabel's .replace(). Display-only midpoint fallback (ISSUE-282).
+  const band = hx.athleteBand ?? 'intermediate';
   const format = hx.format ?? 'open_singles';
   const bandLabel = band.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const mtlCap = hx.mtlCap ?? HYROX_MTL_CAP[band];
@@ -88,17 +90,20 @@ export function renderHyroxStatsView(): void {
   const runPaceResult = deriveHyroxRunPace(s);
   const cpComponents = runPaceResult.components ?? null;
 
+  // Entrance plays on the first Stats visit per session only; revisits render settled.
+  const animate = shouldPlayEntrance('hyrox-stats');
+
   container.innerHTML = `
     <style>
       @keyframes hxStatsFloat {
-        from { opacity:0; transform:translateY(14px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hxsf { opacity:0; animation:hxStatsFloat 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hxsf { ${animate ? 'opacity:0; animation:hxStatsFloat 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('hxs', { variant: 'centered', palette: 'sky', pulse: true })}
+        ${buildRingBackground('hxs', { variant: 'centered', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 

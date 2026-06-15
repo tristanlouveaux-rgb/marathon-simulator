@@ -151,6 +151,16 @@ export function advanceWeekToToday(): void {
     s.wks[s.w - 1].ph = 'base';
   }
 
+  // Stamp the landing week so the CTL-gap re-anchor stands down for it. Two reasons converge here:
+  // (1) a detrained gap was already absorbed by VDOT detraining + the base downgrade above, so the
+  // CTL-gap lever would double-count the layoff; (2) ANY silent calendar advance skipped the
+  // weekly debrief, so next() never ran to compute a ctlRatio for the weeks passed over — without
+  // this flag a half-completed pre-gap week could feed a stale re-anchor. Stamp on every silent
+  // advance, not just detrained ones.
+  if (actualAdvance > 0 && s.wks?.[s.w - 1]) {
+    s.wks[s.w - 1].detrainApplied = true;
+  }
+
   // HYROX: reset weekly accumulators when the week pointer actually moves.
   // weeklyActualMTL is per-week (sums completed station/brick load); without
   // a reset it would accumulate forever across week rollover.

@@ -1,0 +1,27 @@
+{
+  "name": "@mosaic/web-auth",
+  "version": "1.0.0",
+  "description": "Native iOS OAuth via ASWebAuthenticationSession — opens the provider authorize page and returns the mosaic:// callback URL to JS. Avoids the SFSafariViewController 302-to-custom-scheme failure.",
+  "private": true,
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "ios/Sources",
+    "Package.swift",
+    "dist/"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "ios",
+    "oauth"
+  ],
+  "license": "UNLICENSED"
+}

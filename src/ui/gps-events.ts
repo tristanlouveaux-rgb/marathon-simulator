@@ -1,4 +1,4 @@
-import type { Paces, GpsRecording, GpsLiveData, SplitScheme, Workout } from '@/types';
+import type { Paces, GpsRecording, GpsLiveData, GpsPoint, SplitScheme, Workout } from '@/types';
 import { GpsTracker } from '@/gps/tracker';
 import { buildSplitScheme } from '@/gps/split-scheme';
 import { createGpsProvider } from '@/gps/providers';
@@ -19,10 +19,31 @@ let activeScheme: SplitScheme | null = null;
 let timerInterval: ReturnType<typeof setInterval> | null = null;
 let lastSplitCount = 0;
 
+// --- Pre-run acquisition (Garmin-style "Acquiring GPS… → GPS ready" gate) ---
+let armedPaces: Paces | null = null;           // paces captured at arm(), reused at confirm
+let isTimerOnlyArm = false;                     // permission denied: timer-only fallback armed
+let timerOnlyProvider: { pushPoint: (p: GpsPoint) => void } | null = null;
+
+/** Snapshot of acquisition state for the record-view gate UI. */
+export interface ArmingData {
+  /** True once GPS is locked (or timer-only mode, which is always ready). */
+  ready: boolean;
+  /** Best fix accuracy in metres, or null before the first fix. */
+  accuracy: number | null;
+  /** True when location was denied/unavailable and only a timer will run. */
+  timerOnly: boolean;
+}
+
 // Lifecycle callbacks (wired from main.ts to avoid circular imports)
 let onTrackingStartCb: (() => void) | null = null;
 let onTrackingStopCb: (() => void) | null = null;
 let onTrackingTickCb: ((data: GpsLiveData) => void) | null = null;
+let onArmingUpdateCb: ((data: ArmingData) => void) | null = null;
+
+/** Register a callback invoked while a run is armed, on each fix/accuracy change. */
+export function setOnArmingUpdate(cb: ((data: ArmingData) => void) | null): void {
+  onArmingUpdateCb = cb;
+}
 
 /** Register a callback invoked after tracking starts or state changes (pause/resume). */
 export function setOnTrackingStart(cb: () => void): void {
@@ -76,6 +97,11 @@ export function setActiveGuideVoiceRate(rate: number): void {
   activeGuide?.setVoiceRate(rate);
 }
 
+/** Toggle speed-based auto-pause on the active tracker (mid-run preference change). */
+export function setActiveTrackerAutoPause(enabled: boolean): void {
+  activeTracker?.setAutoPauseEnabled(enabled);
+}
+
 /** Extend the current guided step by `sec` seconds, mutating both engine and tracker. */
 export function guidedExtendCurrentStep(sec: number): void {
   if (!activeGuide) return;
@@ -107,34 +133,102 @@ export function isTrackingPaused(): boolean {
 }
 
 /**
- * Start GPS tracking for a workout.
+ * Arm GPS acquisition for a workout WITHOUT starting the run clock. The tracker
+ * begins searching for a fix; record-view renders the "Acquiring GPS… → GPS
+ * ready" gate from isArming()/getArmingData(). The run actually starts on
+ * confirmStartTracking() (the user's Start / Start anyway tap). If location is
+ * denied we arm a timer-only fallback so "Start anyway" still yields elapsed
+ * time (no distance/pace).
  * @param workoutName - Name of the workout being tracked
  * @param workoutDesc - Workout description string (for split scheme)
  * @param paces - Current pace zones
  */
-export async function startTracking(
+export async function armTracking(
   workoutName: string,
   workoutDesc: string,
   paces: Paces
 ): Promise<void> {
   if (activeTracker && activeTracker.getStatus() !== 'idle' && activeTracker.getStatus() !== 'stopped') {
-    return; // Already tracking
+    return; // Already armed or tracking
   }
 
   const provider = createGpsProvider();
   const scheme = buildSplitScheme(workoutDesc, paces);
+  const autoPause = getState().gpsAutoPause !== false; // default on
 
   activeScheme = scheme.segments.length > 0 ? scheme : null;
-  activeTracker = new GpsTracker(provider, activeScheme ?? undefined);
+  activeTracker = new GpsTracker(provider, activeScheme ?? undefined, { autoPause });
   activeWorkoutName = workoutName;
   activeWorkoutDesc = workoutDesc;
+  armedPaces = paces;
   lastSplitCount = 0;
+  isTimerOnlyArm = false;
+  timerOnlyProvider = null;
 
-  // Guided mode: wire voice + haptics to step-by-step cues.
+  wireTrackerCallbacks(activeTracker);
+
+  const armed = await activeTracker.arm();
+  if (!armed) {
+    // Location denied/unavailable. Arm a timer-only fallback so the user can
+    // still "Start anyway" and get elapsed time + time-based splits.
+    const { MockGpsProvider } = await import('@/gps/providers/mock-provider');
+    const timerProvider = new MockGpsProvider();
+    activeTracker = new GpsTracker(timerProvider, activeScheme ?? undefined, { autoPause });
+    wireTrackerCallbacks(activeTracker);
+    isTimerOnlyArm = true;
+    timerOnlyProvider = timerProvider;
+    await activeTracker.arm(); // MockGpsProvider always grants
+  }
+
+  if (onArmingUpdateCb) onArmingUpdateCb(getArmingData());
+}
+
+/** Shared listener wiring for a freshly-built tracker (arm + fallback paths). */
+function wireTrackerCallbacks(tracker: GpsTracker): void {
+  // Re-render the record view (toggles Pause/Resume, freezes/unfreezes stats) —
+  // shared by manual toggle and the auto-pause/resume listeners below.
+  const rerenderControls = (): void => { if (onTrackingStartCb) onTrackingStartCb(); };
+
+  tracker.onUpdate((data) => {
+    updateInlineGps(data);
+    // While armed, push fix/accuracy changes to the acquisition gate UI.
+    if (tracker.isArmed() && onArmingUpdateCb) onArmingUpdateCb(getArmingData());
+    if (activeGuide) {
+      activeGuide.update(data);
+      updateGuidedOverlay(activeGuide, data);
+    }
+  });
+
+  tracker.onSplitComplete((_split, allDone) => {
+    if (allDone) {
+      workoutCompleteAlert();
+    } else {
+      splitAlert();
+    }
+  });
+
+  // Re-render controls when speed-based auto-pause/auto-resume fires, so the
+  // button reflects the paused state and shows "Resume". Without this the
+  // tracker can sit in an auto-paused state while the button still reads
+  // "Pause" and the timer is frozen, looking like a run that won't resume.
+  tracker.onAutoPause(rerenderControls);
+  tracker.onAutoResume(rerenderControls);
+}
+
+/**
+ * Confirm the armed run should begin now (GPS ready, or "Start anyway"). Starts
+ * guided voice (if enabled), the run clock, and the 1 s tick loop. No-op unless
+ * a tracker is currently armed.
+ */
+export function confirmStartTracking(): void {
+  if (!activeTracker || !activeTracker.isArmed()) return;
+
+  // Guided mode: wire voice + haptics now (not during acquisition) so cues
+  // don't fire while the user is still standing at the start line.
   const s = getState();
-  if (s.guidedRunsEnabled && activeScheme) {
-    const workout: Workout = { n: workoutName, d: workoutDesc, r: 0, t: 'guided' };
-    activeGuide = new GuideController(workout, paces, {
+  if (s.guidedRunsEnabled && activeScheme && armedPaces && activeWorkoutName) {
+    const workout: Workout = { n: activeWorkoutName, d: activeWorkoutDesc ?? '', r: 0, t: 'guided' };
+    activeGuide = new GuideController(workout, armedPaces, {
       splitAnnouncements: s.guidedSplitAnnouncements ?? true,
       voiceRate: s.guidedVoiceRate ?? 1.0,
     });
@@ -147,49 +241,17 @@ export async function startTracking(
     }
   }
 
-  activeTracker.onUpdate((data) => {
-    updateInlineGps(data);
-    if (activeGuide) {
-      activeGuide.update(data);
-      updateGuidedOverlay(activeGuide, data);
-    }
-  });
+  activeTracker.confirmStart();
 
-  // Wire split completion alerts
-  activeTracker.onSplitComplete((_split, allDone) => {
-    if (allDone) {
-      workoutCompleteAlert();
-    } else {
-      splitAlert();
-    }
-  });
-
-  const started = await activeTracker.start();
-  if (!started) {
-    // GPS denied. Fall back to timer-only mode (no distance/pace, but
-    // elapsed time and time-based splits still work)
-    const { MockGpsProvider } = await import('@/gps/providers/mock-provider');
-    const timerProvider = new MockGpsProvider();
-    activeTracker = new GpsTracker(timerProvider, activeScheme ?? undefined);
-    activeTracker.onUpdate((data) => {
-      updateInlineGps(data);
-      if (activeGuide) {
-        activeGuide.update(data);
-        updateGuidedOverlay(activeGuide, data);
-      }
-    });
-    activeTracker.onSplitComplete((_split, allDone) => {
-      if (allDone) workoutCompleteAlert(); else splitAlert();
-    });
-    await activeTracker.start(); // MockGpsProvider always grants
-    // Push a synthetic point to transition from 'acquiring' to 'tracking'
-    // so tick() and the timer work (accuracy 0 = perfect, bypasses the >30 filter)
-    timerProvider.pushPoint({
+  // Timer-only fallback: push a synthetic point so the tracker leaves
+  // 'acquiring' and tick()/time-based splits work (accuracy 0 bypasses the gate).
+  if (isTimerOnlyArm && timerOnlyProvider) {
+    timerOnlyProvider.pushPoint({
       lat: 0, lng: 0, altitude: null, accuracy: 0, speed: 0, timestamp: Date.now(),
     });
   }
 
-  // Update elapsed time display every second; tick() also fires time-based segment advances
+  // Update elapsed time display every second; tick() also fires time-based advances.
   timerInterval = setInterval(() => {
     if (activeTracker) {
       activeTracker.tick();
@@ -198,6 +260,36 @@ export async function startTracking(
       if (onTrackingTickCb) onTrackingTickCb(data);
     }
   }, 1000);
+
+  if (onTrackingStartCb) onTrackingStartCb();
+}
+
+/** Abandon a pre-run acquisition (user backed out before starting). */
+export function cancelTracking(): void {
+  if (!activeTracker) return;
+  if (activeTracker.isArmed()) activeTracker.cancelArm();
+  activeTracker = null;
+  activeWorkoutName = null;
+  activeWorkoutDesc = null;
+  activeScheme = null;
+  armedPaces = null;
+  isTimerOnlyArm = false;
+  timerOnlyProvider = null;
+}
+
+/** True while a run is armed and acquiring GPS (pre-start gate). */
+export function isArming(): boolean {
+  return activeTracker != null && activeTracker.isArmed();
+}
+
+/** Snapshot of acquisition state for the record-view gate UI. */
+export function getArmingData(): ArmingData {
+  if (!activeTracker) return { ready: false, accuracy: null, timerOnly: false };
+  return {
+    ready: isTimerOnlyArm || activeTracker.isGpsReady(),
+    accuracy: activeTracker.getLiveData().accuracy,
+    timerOnly: isTimerOnlyArm,
+  };
 }
 
 /** Toggle pause/resume */
@@ -283,6 +375,18 @@ function gpsStop(): void {
   stopTracking();
 }
 
+/** Confirm Start from the acquisition gate (GPS ready or "Start anyway"). */
+function gpsConfirmStart(): void {
+  confirmStartTracking();
+  if (onTrackingStartCb) onTrackingStartCb(); // re-render record view into live mode
+}
+
+/** Back out of the acquisition gate before the run starts. */
+function gpsCancelStart(): void {
+  cancelTracking();
+  void import('./record-view').then(({ renderRecordView }) => renderRecordView());
+}
+
 /**
  * Manual lap capture. No-op when a structured split scheme is active (the
  * scheme owns the splits) — see `GpsTracker.captureLap`. When a lap lands,
@@ -322,6 +426,8 @@ declare global {
     gpsResume: typeof gpsResume;
     gpsStop: typeof gpsStop;
     gpsLap: typeof gpsLap;
+    gpsConfirmStart: typeof gpsConfirmStart;
+    gpsCancelStart: typeof gpsCancelStart;
     trackWorkout: (name: string, desc: string) => void;
   }
 }
@@ -331,16 +437,19 @@ if (typeof window !== 'undefined') {
   window.gpsResume = gpsResume;
   window.gpsStop = gpsStop;
   window.gpsLap = gpsLap;
+  window.gpsConfirmStart = gpsConfirmStart;
+  window.gpsCancelStart = gpsCancelStart;
 }
 
 /**
- * Called from "Track Run" button on a workout card.
- * Starts tracking then navigates to the Record tab.
+ * Called from "Track Run" / "Start session" buttons on a workout card. Arms GPS
+ * acquisition and navigates to the Record tab, where the user sees the
+ * "Acquiring GPS… → GPS ready" gate and confirms the actual start.
  */
 if (typeof window !== 'undefined') {
   window.trackWorkout = async (name: string, desc: string) => {
     const s = getState();
-    await startTracking(name, desc, s.pac || { e: 330, t: 270, i: 240, m: 285, r: 210 });
+    await armTracking(name, desc, s.pac || { e: 330, t: 270, i: 240, m: 285, r: 210 });
     const { renderRecordView } = await import('./record-view');
     renderRecordView();
   };

@@ -119,7 +119,7 @@ function getPaywallHTML(loading: boolean): string {
     <style>
       #coach-view { box-sizing:border-box; }
       #coach-view *, #coach-view *::before, #coach-view *::after { box-sizing:inherit; }
-      @keyframes paywallFadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:none} }
+      @keyframes paywallFadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1} }
       .pw-fade { opacity:0;animation:paywallFadeUp 0.5s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 

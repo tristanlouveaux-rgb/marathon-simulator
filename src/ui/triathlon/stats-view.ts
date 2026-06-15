@@ -10,6 +10,7 @@
  */
 
 import { getState } from '@/state/store';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { getMutableState, saveState } from '@/state';
 import type { SimulatorState } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
@@ -19,7 +20,7 @@ import { buildYourNumbersCard } from './fitness-detail-view';
 import { buildProgressContent, type ProgressRange } from './progress-detail-view';
 import { animateChartDrawOn } from './benchmark-charts';
 import { buildStrengthProgressCard, openStrengthProgressDetail } from '../strength-progress-view';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('../home-view').then(({ renderHomeView }) => renderHomeView());
@@ -41,23 +42,26 @@ export function renderTriathlonStatsView(): void {
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   const cyclingLabel = getCyclingEventLabel(s);
-  const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
+  const baseEventLabel = cyclingLabel ?? getTriDistanceLabel(tri.distance);
   const raceCity = cyclingLabel ? null : (getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null);
   const eventLabel = raceCity ? `${raceCity} ${baseEventLabel}` : baseEventLabel;
   const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${eventLabel}` : `Your ${eventLabel}`;
   const escapeHtml = (str: string) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  // Entrance plays on the first Stats visit per session only; revisits render settled.
+  const animate = shouldPlayEntrance('tri-stats');
+
   container.innerHTML = `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hf { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('ts', { variant: 'centered', palette: 'mint', pulse: true })}
+        ${buildRingBackground('ts', { variant: 'centered', palette: 'mint', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 

@@ -112,12 +112,14 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       /* Micro section label (mirrors goals.ts). */
       .rt-micro { display:block; font-size:11px; color:var(--c-faint); letter-spacing:0.08em; margin:0 0 10px; }
 
-      /* Week stepper — mirrors goals.ts week selector surface. */
-      .rt-stepper { display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.06); border-radius:16px; padding:8px; }
-      .rt-stepper-btn { width:38px; height:38px; font-size:18px; }
-      .rt-stepper-readout { flex:1; text-align:center; }
-      .rt-stepper-readout .v { font-size:22px; font-weight:300; color:var(--c-black); }
-      .rt-stepper-readout .u { font-size:13px; color:var(--c-muted); margin-left:4px; }
+      /* Plan-duration slider — replaces the +/- stepper (2026-06-15). Uses the
+         canonical glass slider (.m-slider-glass, styles.css) — same control as
+         the Run Complete RPE slider. Card + readout + min/max ends are local. */
+      .rt-weeks-card { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.06); border-radius:16px; padding:16px 16px 12px; }
+      .rt-weeks-readout { text-align:center; margin-bottom:12px; }
+      .rt-weeks-readout .v { font-size:28px; font-weight:300; color:var(--c-black); font-variant-numeric:tabular-nums; }
+      .rt-weeks-readout .u { font-size:13px; color:var(--c-muted); margin-left:4px; }
+      .rt-slider-ends { display:flex; justify-content:space-between; font-size:11px; color:var(--c-faint); font-variant-numeric:tabular-nums; margin-top:8px; }
 
       /* Race list — scrollable. */
       .rt-race-list { display:flex; flex-direction:column; gap:10px; max-height:260px; overflow-y:auto; padding-right:4px; }
@@ -169,6 +171,7 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       <div class="rt-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.28s">
         <div style="max-width:460px;margin:0 auto">
           <button id="rt-continue" class="rt-cta" ${canContinue(mode, state) ? '' : 'disabled'}>Continue</button>
+          ${canContinue(mode, state) ? '' : `<p style="font-size:12px;color:var(--c-faint);text-align:center;margin:10px 0 0">${continueHint(mode, state)}</p>`}
         </div>
       </div>
 
@@ -286,17 +289,32 @@ function renderDistanceGrid(state: OnboardingState): string {
 }
 
 function renderWeeksStepper(state: OnboardingState): string {
-  const weeks = state.planDurationWeeks;
-  const minWeeks = minWeeksFor(state.raceDistance);
   return `
     <div>
       <label class="rt-micro">PLAN DURATION</label>
-      <div class="shadow-ap rt-stepper">
-        <button id="rt-weeks-minus" class="m-btn-glass m-btn-glass--inset m-btn-glass--icon rt-stepper-btn" style="opacity:${weeks <= minWeeks ? '0.3' : '1'}" ${weeks <= minWeeks ? 'disabled' : ''}>−</button>
-        <div class="rt-stepper-readout">
-          <span class="v">${weeks}</span><span class="u">weeks</span>
-        </div>
-        <button id="rt-weeks-plus" class="m-btn-glass m-btn-glass--inset m-btn-glass--icon rt-stepper-btn" style="opacity:${weeks >= MAX_PLAN_WEEKS ? '0.3' : '1'}" ${weeks >= MAX_PLAN_WEEKS ? 'disabled' : ''}>+</button>
+      ${renderWeeksSlider(state, minWeeksFor(state.raceDistance))}
+    </div>
+  `;
+}
+
+/**
+ * Plan-duration slider. Replaces the old +/- stepper (2026-06-15): a range
+ * input reads more naturally for "how many weeks" and matches the app's
+ * preference for sliders over steppers. Live readout + min/max ends mirror
+ * the goal-time overlay's range pattern. `min` is the distance-dependent floor
+ * (`minWeeksFor`); both the 5K/10K and fitness Set-duration paths share this.
+ */
+function renderWeeksSlider(state: OnboardingState, minWeeks: number): string {
+  const weeks = Math.max(minWeeks, Math.min(MAX_PLAN_WEEKS, state.planDurationWeeks));
+  return `
+    <div class="shadow-ap rt-weeks-card">
+      <div class="rt-weeks-readout">
+        <span class="v" id="rt-weeks-value">${weeks}</span><span class="u">weeks</span>
+      </div>
+      <input id="rt-weeks-slider" type="range" min="${minWeeks}" max="${MAX_PLAN_WEEKS}" step="1" value="${weeks}" class="m-slider-glass" aria-label="Plan duration in weeks">
+      <div class="rt-slider-ends">
+        <span>${minWeeks}</span>
+        <span>${MAX_PLAN_WEEKS}</span>
       </div>
     </div>
   `;
@@ -426,13 +444,7 @@ function renderFitnessDurationBlock(state: OnboardingState): string {
       ${continuous ? `
         <p class="rt-date-note" style="margin-top:10px">A rolling plan that keeps rebuilding week-by-week. No end date.</p>
       ` : `
-        <div class="shadow-ap rt-stepper" style="margin-top:10px">
-          <button id="rt-weeks-minus" class="m-btn-glass m-btn-glass--inset m-btn-glass--icon rt-stepper-btn" style="opacity:${state.planDurationWeeks <= 4 ? '0.3' : '1'}" ${state.planDurationWeeks <= 4 ? 'disabled' : ''}>−</button>
-          <div class="rt-stepper-readout">
-            <span class="v">${state.planDurationWeeks}</span><span class="u">weeks</span>
-          </div>
-          <button id="rt-weeks-plus" class="m-btn-glass m-btn-glass--inset m-btn-glass--icon rt-stepper-btn" style="opacity:${state.planDurationWeeks >= MAX_PLAN_WEEKS ? '0.3' : '1'}" ${state.planDurationWeeks >= MAX_PLAN_WEEKS ? 'disabled' : ''}>+</button>
-        </div>
+        <div style="margin-top:10px">${renderWeeksSlider(state, minWeeksFor(state.raceDistance))}</div>
       `}
     </div>
   `;
@@ -453,6 +465,22 @@ function canContinue(mode: TrainingMode | null, state: OnboardingState): boolean
   }
   if (mode === 'fitness') return !!state.trainingFocus;
   return false;
+}
+
+/** Plain-language reason the Continue button is disabled, shown beneath it so a
+ *  new user is never staring at a dead button with no idea what's required. */
+function continueHint(mode: TrainingMode | null, state: OnboardingState): string {
+  if (mode === 'running') {
+    if (state.trainingForEvent === null) return 'Pick whether you have a race in mind.';
+    if (state.trainingForEvent === false) return state.trainingFocus ? '' : 'Choose a focus to continue.';
+    if (!state.raceDistance) return 'Pick a distance to continue.';
+    if ((state.raceDistance === 'half' || state.raceDistance === 'marathon') && !(state.selectedRace || state.customRaceDate)) {
+      return 'Pick a race, or set your own date, to continue.';
+    }
+    return '';
+  }
+  if (mode === 'fitness') return state.trainingFocus ? '' : 'Choose a focus to continue.';
+  return '';
 }
 
 function resolveMode(state: OnboardingState): TrainingMode | null {
@@ -561,48 +589,22 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
     });
   }
 
-  // Weeks stepper (5K / 10K / fitness Set-duration).
-  // Update the DOM in place to avoid the full-rerender flash.
-  const applyStepperDOM = (weeks: number, minW: number) => {
-    const readout = document.querySelector<HTMLElement>('.rt-stepper-readout .v');
-    if (readout) readout.textContent = String(weeks);
-    const minus = document.getElementById('rt-weeks-minus') as HTMLButtonElement | null;
-    const plus  = document.getElementById('rt-weeks-plus')  as HTMLButtonElement | null;
-    if (minus) {
-      minus.disabled = weeks <= minW;
-      minus.style.opacity = weeks <= minW ? '0.3' : '1';
-    }
-    if (plus) {
-      plus.disabled = weeks >= MAX_PLAN_WEEKS;
-      plus.style.opacity = weeks >= MAX_PLAN_WEEKS ? '0.3' : '1';
-    }
-    // Re-enable / disable Continue. It depends on weeks ≥ min for 5K/10K.
+  // Plan-duration slider (5K / 10K / fitness Set-duration).
+  // `input` updates the readout + Continue gate live (cheap DOM); `change`
+  // commits the value to state (saveState runs once per drag, not per tick).
+  const slider = document.getElementById('rt-weeks-slider') as HTMLInputElement | null;
+  if (slider) {
+    const valueEl = document.getElementById('rt-weeks-value');
     const cta = document.getElementById('rt-continue') as HTMLButtonElement | null;
-    if (cta) cta.disabled = !canContinue(mode, { ...state, planDurationWeeks: weeks });
-  };
-
-  document.getElementById('rt-weeks-minus')?.addEventListener('click', () => {
-    import('../controller').then(({ getOnboardingState }) => {
-      const cur = getOnboardingState() || state;
-      const weeks = cur.planDurationWeeks - 1;
-      const minW = minWeeksFor(cur.raceDistance);
-      if (weeks >= minW) {
-        updateOnboarding({ planDurationWeeks: weeks });
-        applyStepperDOM(weeks, minW);
-      }
+    slider.addEventListener('input', () => {
+      const weeks = Number(slider.value);
+      if (valueEl) valueEl.textContent = String(weeks);
+      if (cta) cta.disabled = !canContinue(mode, { ...state, planDurationWeeks: weeks });
     });
-  });
-  document.getElementById('rt-weeks-plus')?.addEventListener('click', () => {
-    import('../controller').then(({ getOnboardingState }) => {
-      const cur = getOnboardingState() || state;
-      const weeks = cur.planDurationWeeks + 1;
-      const minW = minWeeksFor(cur.raceDistance);
-      if (weeks <= MAX_PLAN_WEEKS) {
-        updateOnboarding({ planDurationWeeks: weeks });
-        applyStepperDOM(weeks, minW);
-      }
+    slider.addEventListener('change', () => {
+      updateOnboarding({ planDurationWeeks: Number(slider.value) });
     });
-  });
+  }
 
   // Focus picker (fitness path). The 'track' id flags Just-Track mode: activity
   // logging only, no plan. Clearing a prior target date keeps state consistent

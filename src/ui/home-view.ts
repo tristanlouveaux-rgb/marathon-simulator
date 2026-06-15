@@ -4,7 +4,8 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { AI_COACH_ENABLED } from '@/constants/feature-flags';
+import { getTriDistanceLabel } from '@/constants/triathlon-constants';
+import { AI_COACH_ENABLED, STRAVA_ENRICH_UPLOAD_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -18,7 +19,7 @@ import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
 import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
-import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
+import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { displayDescWithPace } from '@/workouts/workout-scaling';
@@ -28,6 +29,7 @@ import { isHardWorkout } from '@/workouts/scheduler';
 import { strengthCardSummary } from '@/guided/strength-model';
 import { isInjuryActive, buildInjuryCaption } from './injury/modal';
 import { isImpactBlockedByInjury } from '@/injury/engine';
+import { isThinActivity } from '@/data/activity-enrich-merge';
 import { openCheckinOverlay } from './checkin-overlay';
 import { clearIllness } from './illness-modal';
 import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
@@ -42,7 +44,7 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { collectTriSuggestions, type TriSuggestionBundle } from '@/calculations/tri-suggestion-aggregator';
 import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
-import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
+import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint, shouldPlayEntrance } from './page-flair';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -556,6 +558,51 @@ function buildGuestAccountBanner(s: SimulatorState): string {
 }
 
 /**
+ * Strava enrich-prompt banner. Garmin watches that sync through Apple Health
+ * deliver average HR + duration only: HR zones, per-km splits and the route
+ * drop at the HealthKit boundary. A direct Strava connection fills all of this
+ * automatically, but that pipe is beta-gated (Standard Tier caps at 10
+ * athletes) so most users can't connect it yet. For them, a one-shot Strava
+ * archive import backfills every run, ride and swim at once. This banner is the
+ * ongoing nudge toward that path.
+ *
+ * Guards:
+ *   - feature flag on (off once live Strava auto-enrich ships)
+ *   - user is NOT Strava-connected (a connected user already has rich data)
+ *   - enough thin activities to justify a bulk export
+ *   - user hasn't dismissed (s.enrichPromptDismissed). Account > Strava History
+ *     keeps a persistent affordance regardless.
+ */
+// Below this many thin activities, the per-activity "Add detail from Strava"
+// affordance on each activity is the lighter path; the bulk-import nudge would
+// be noise. UX threshold, not a model constant.
+const ENRICH_PROMPT_MIN_THIN = 3;
+function buildEnrichPromptBanner(s: SimulatorState): string {
+  if (!STRAVA_ENRICH_UPLOAD_ENABLED) return '';
+  if (s.stravaConnected) return '';
+  if (s.enrichPromptDismissed) return '';
+
+  const thinCount = (s.wks ?? []).reduce((n, w) =>
+    n + Object.values(w.garminActuals ?? {}).filter(a =>
+      a && (a.distanceKm ?? 0) > 0 && isThinActivity(a)).length, 0);
+  if (thinCount < ENRICH_PROMPT_MIN_THIN) return '';
+
+  return `
+    <div id="home-enrich-banner" style="padding:12px 16px;margin:4px 16px 10px;background:#fff;border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)" class="hf" data-delay="0.05">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:2px">Add heart rate and splits to your runs</div>
+          <div style="font-size:12px;color:#475569;line-height:1.45">${thinCount} activities came through Apple Health with heart rate and time only. Import your Strava archive once to add HR zones, per-km splits and routes to all of them.</div>
+        </div>
+        <button id="home-enrich-dismiss" aria-label="Dismiss" style="flex-shrink:0;width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1">×</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="home-enrich-import" class="m-btn-glass" style="flex:1">Import from Strava</button>
+      </div>
+    </div>`;
+}
+
+/**
  * Post-race banner. Fires when a planned race has passed (1+ days ago) and
  * the user hasn't dismissed the prompt. Offers the "Switch to tracking"
  * downgrade as a soft suggestion. The plan keeps running regardless.
@@ -984,15 +1031,13 @@ function buildReadinessRing(s: SimulatorState): string {
     (e: any) => e.date === todayStr0 && e.source === 'manual',
   );
   const noGarminSleep0 = !(s.physiologyHistory ?? []).find(p => p.date === todayStr0 && p.sleepScore != null);
-  const physioForRecovery0 = (() => {
-    const h = s.physiologyHistory ?? [];
-    if (!manualSleepToday0?.sleepScore || !noGarminSleep0) return h;
-    const idx = h.findIndex(p => p.date === todayStr0);
-    if (idx >= 0) return h.map((p, i) => i === idx ? { ...p, sleepScore: manualSleepToday0.sleepScore } : p);
-    return [...h, { date: todayStr0, sleepScore: manualSleepToday0.sleepScore }];
-  })();
+  // Canonical sleep history: fold manual recoveryHistory nights into physiology
+  // so manual sleep accumulates toward the recovery composite, the sleep-cap
+  // decay, and the 14d chronic average (device sleep wins per date). Must match
+  // readiness-view so both surfaces show the same readiness number.
+  const sleepHistoryMerged0 = mergeManualSleepHistory(s.physiologyHistory ?? [], s.recoveryHistory ?? []);
   const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
-  const recoveryResult = computeRecoveryScore(physioForRecovery0, { manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined, sleepDebtSec: sleepDebtForRecovery });
+  const recoveryResult = computeRecoveryScore(sleepHistoryMerged0, { manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined, sleepDebtSec: sleepDebtForRecovery });
 
   const triReadinessResult = isTri ? computeTriReadiness(s) : null;
 
@@ -1009,7 +1054,7 @@ function buildReadinessRing(s: SimulatorState): string {
     ctlNow,
     sleepScore,
     hrvRmssd,
-    sleepHistory: s.physiologyHistory ?? [],
+    sleepHistory: sleepHistoryMerged0,
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     sleepDebtExcessSec,
@@ -2301,7 +2346,7 @@ function getHomePlanName(s: SimulatorState): string {
   if (s.eventType === 'triathlon') {
     const cycling = getCyclingEventLabel(s);
     if (cycling) return cycling;
-    const distLabel = s.triConfig?.distance === 'ironman' ? 'Ironman' : '70.3';
+    const distLabel = getTriDistanceLabel(s.triConfig?.distance ?? '70.3');
     const city = getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city;
     return city ? `${city} ${distLabel}` : distLabel;
   }
@@ -2581,7 +2626,7 @@ function buildTrackOnlyLoadSpark(s: SimulatorState): string {
     </div>`;
 }
 
-function getTrackOnlyHomeHTML(s: SimulatorState): string {
+function getTrackOnlyHomeHTML(s: SimulatorState, animate: boolean): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
   const userName = s.onboarding?.name || null;
@@ -2603,10 +2648,10 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
   return `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hf { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
     <div class="mosaic-page" style="background:#FAF9F6;position:relative">
       <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
@@ -2639,7 +2684,7 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
       <!-- Primary action: generate a session. On-demand mode has no plan, so this is
            the main thing the user does here. Whole-card tap target. No accent fill
            (in-page action, not a form submit), per the colour rules. -->
-      <div style="padding:0 16px;margin-top:18px" class="hf" data-delay="0.08">
+      <div style="padding:0 16px;margin-top:18px;margin-bottom:14px" class="hf" data-delay="0.08">
         <button id="home-generate-session" style="display:block;width:100%;text-align:left;background:#fff;border:1px solid rgba(0,0,0,0.06);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px;cursor:pointer;font-family:inherit">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
             <div>
@@ -2679,11 +2724,11 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
   `;
 }
 
-function getHomeHTML(s: SimulatorState): string {
+function getHomeHTML(s: SimulatorState, animate: boolean): string {
   // Just-Track mode: activity tracking only, no plan. Short-circuit to a minimal
   // layout that hides today-workout, readiness/strain rings, race-forecast, and
   // week progress. All of which assume a generated plan.
-  if (s.trackOnly) return getTrackOnlyHomeHTML(s);
+  if (s.trackOnly) return getTrackOnlyHomeHTML(s, animate);
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -2712,13 +2757,14 @@ function getHomeHTML(s: SimulatorState): string {
   return `
     <style>
       @keyframes floatUp {
-        from { opacity:0; transform:translateY(16px) scale(0.97); }
-        to   { opacity:1; transform:translateY(0) scale(1); }
+        from { opacity:0; }
+        to   { opacity:1; }
       }
-      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .hf { ${animate ? 'opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
       @keyframes barGrow { from { width:0% } }
-      .m-prog-fill { animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      .arc-anim { animation:arcSweep 1s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .m-prog-fill { ${animate ? 'animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards;' : ''} }
+      /* 0s + forwards jumps the arc straight to its drawn end state on revisits */
+      .arc-anim { animation:arcSweep ${animate ? '1s cubic-bezier(0.2,0.8,0.2,1)' : '0s linear'} forwards; }
       @keyframes arcSweep { to { stroke-dashoffset:0 } }
     </style>
     <div class="mosaic-page" style="background:#FAF9F6;position:relative">
@@ -2759,6 +2805,7 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildHolidayBannerHome(s)}
       ${buildRaceCompleteBanner(s)}
       ${buildGuestAccountBanner(s)}
+      ${buildEnrichPromptBanner(s)}
       ${s.eventType === 'triathlon' ? buildTriCarryBanner(s) : ''}
       ${s.eventType === 'hyrox' ? buildTodayWorkoutHyrox(s) : s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s)}
       ${buildReadinessRing(s)}
@@ -3069,6 +3116,21 @@ function wireHomeHandlers(): void {
     import('@/ui/auth-view').then(({ renderAuthView }) => renderAuthView({ upgradeGuest: true }));
   });
 
+  // Enrich-prompt banner: dismiss → flag persists, Account > Strava History stays
+  document.getElementById('home-enrich-dismiss')?.addEventListener('click', async () => {
+    const { getMutableState, saveState } = await import('@/state');
+    getMutableState().enrichPromptDismissed = true;
+    saveState();
+    document.getElementById('home-enrich-banner')?.remove();
+  });
+
+  // Enrich-prompt banner: Import from Strava → guided bulk-archive import,
+  // re-render Home on completion so the freshly enriched runs reflect.
+  document.getElementById('home-enrich-import')?.addEventListener('click', () => {
+    import('@/ui/strava-history-guide').then(({ openStravaHistoryGuide }) =>
+      openStravaHistoryGuide({ onComplete: () => renderHomeView() }));
+  });
+
   // Just-Track load sparkline → Stats tab for the full card
   document.getElementById('home-load-spark')?.addEventListener('click', () => navigateTab('stats'));
 
@@ -3353,7 +3415,10 @@ export function renderHomeView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
-  container.innerHTML = getHomeHTML(s);
+  // Entrance plays on the first Home visit per session only. Revisits render
+  // settled (no card fade, no bar/arc sweep) so tab switches feel instant.
+  const animate = shouldPlayEntrance('home');
+  container.innerHTML = getHomeHTML(s, animate);
   wireHomeHandlers();
   setOnWeekAdvance(() => {
     window.location.reload();
@@ -3372,17 +3437,8 @@ function showManualSleepPicker(): void {
   const overlay = document.createElement('div');
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   overlay.style.background = 'rgba(0,0,0,0.45)';
-  // Inject scoped slider styles so the thumb matches the app accent colour
+  // Slider uses the canonical glass thumb (.m-slider-glass, styles.css).
   overlay.innerHTML = `
-    <style>
-      #sleep-score-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px;
-        border-radius:2px; background:var(--c-border); outline:none; cursor:pointer; }
-      #sleep-score-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
-        width:22px; height:22px; border-radius:50%; background:var(--c-accent);
-        box-shadow:0 1px 4px rgba(0,0,0,0.25); }
-      #sleep-score-slider::-moz-range-thumb { width:22px; height:22px; border:none;
-        border-radius:50%; background:var(--c-accent); box-shadow:0 1px 4px rgba(0,0,0,0.25); }
-    </style>
     <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
       <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:20px;text-transform:uppercase;letter-spacing:0.06em">Last night's sleep</div>
       <div style="text-align:center;margin-bottom:20px">

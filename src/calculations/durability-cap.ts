@@ -44,6 +44,9 @@ export interface DurabilityInputs {
 export const DURABILITY_THRESHOLDS: Record<TriathlonDistance, { longRideSec: number; longRunSec: number }> = {
   ironman: { longRideSec: 4.5 * 3600, longRunSec: 2.0 * 3600 },
   '70.3':  { longRideSec: 2.5 * 3600, longRunSec: 1.5 * 3600 },
+  t100:    { longRideSec: 2.5 * 3600, longRunSec: 1.5 * 3600 },  // ≈70.3 (80km/18km)
+  olympic: { longRideSec: 1.5 * 3600, longRunSec: 0.75 * 3600 },
+  sprint:  { longRideSec: 1.0 * 3600, longRunSec: 0.5 * 3600 },
 };
 
 /** Maximum penalty applied to the run leg in absolute terms. Bounded at +5%. */

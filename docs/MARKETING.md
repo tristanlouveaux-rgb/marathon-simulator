@@ -185,6 +185,7 @@ Per launch_strategy Phase 0 blockers, several of these are still gaps. Track the
 
 ## Cross-References
 
+- **Talking-head video series**: `marketing/VIDEO_PLAN.md` — full specs (hooks, beat sheets, shot lists, verify-before-filming checklists) for the 6-video founder series + the "Friends" recurring format
 - **Strategy & timeline**: `.claude/plans/claude-overnight-i-want-crystalline-pretzel.md` (full doc), `project_launch_strategy.md` (memory summary)
 - **Pre-launch security**: `docs/SECURITY_CHECKLIST.md`
 - **Pre-launch legal**: `docs/LEGAL_CHECKLIST.md`

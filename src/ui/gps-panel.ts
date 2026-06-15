@@ -38,9 +38,9 @@ export function renderInlineGpsHtml(data: GpsLiveData): string {
 
   // Controls
   h += `<div class="flex gap-1 mb-1">`;
-  h += `<button id="gps-inline-pause" onclick="window.gpsPause()" class="flex-1 py-1.5 rounded text-xs font-bold${data.status !== 'tracking' ? ' hidden' : ''}" style="background:#F59E0B;color:white">Pause</button>`;
+  h += `<button id="gps-inline-pause" onclick="window.gpsPause()" class="m-btn-caution flex-1 py-1.5 text-xs${data.status !== 'tracking' ? ' hidden' : ''}">Pause</button>`;
   h += `<button id="gps-inline-resume" onclick="window.gpsResume()" class="flex-1 m-btn-primary py-1.5 rounded text-xs font-bold${data.status !== 'paused' ? ' hidden' : ''}">Resume</button>`;
-  h += `<button onclick="window.gpsStop()" class="flex-1 py-1.5 rounded text-xs font-bold${data.status !== 'tracking' && data.status !== 'paused' && data.status !== 'acquiring' ? ' hidden' : ''}" style="background:#EF4444;color:white">Stop</button>`;
+  h += `<button onclick="window.gpsStop()" class="flex-1 m-btn-danger py-1.5 text-xs${data.status !== 'tracking' && data.status !== 'paused' && data.status !== 'acquiring' ? ' hidden' : ''}">Stop</button>`;
   h += `</div>`;
 
   // Splits

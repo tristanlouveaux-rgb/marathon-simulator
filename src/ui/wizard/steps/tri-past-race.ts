@@ -128,7 +128,7 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
             <div class="tri-card t-rise" style="animation-delay:0.18s">
               <div class="tri-label">Race distance</div>
               <div class="tri-pill-row">
-                ${([ ['sprint', 'Sprint', '0.75k / 20k / 5k'], ['olympic', 'Olympic', '1.5k / 40k / 10k'], ['70.3', '70.3', '1.9k / 90k / 21.1k'], ['ironman', 'Ironman', '3.8k / 180k / 42.2k'] ] as [PastTriathlonDistance, string, string][]).map(([d, label, sub]) => `
+                ${([ ['sprint', 'Sprint', '0.75k / 20k / 5k'], ['olympic', 'Olympic', '1.5k / 40k / 10k'], ['t100', 'T100', '2k / 80k / 18k'], ['70.3', '70.3', '1.9k / 90k / 21.1k'], ['ironman', 'Ironman', '3.8k / 180k / 42.2k'] ] as [PastTriathlonDistance, string, string][]).map(([d, label, sub]) => `
                   <button class="tri-pill ${existing?.distance === d ? 'active' : ''}" data-dist="${d}">
                     ${label}
                     <span class="tri-pill-sub">${sub}</span>
@@ -270,7 +270,7 @@ function formatDateDisplay(iso: string): string {
 }
 
 function distLabel(d: PastTriathlonDistance): string {
-  return { sprint: 'Sprint', olympic: 'Olympic', '70.3': '70.3', ironman: 'Ironman' }[d];
+  return { sprint: 'Sprint', olympic: 'Olympic', t100: 'T100', '70.3': '70.3', ironman: 'Ironman' }[d];
 }
 
 function guessDistance(swimM: number): PastTriathlonDistance {

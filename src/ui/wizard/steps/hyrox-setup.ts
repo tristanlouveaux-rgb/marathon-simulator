@@ -24,6 +24,9 @@ import {
   HYROX_WEEKLY_SESSIONS,
 } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER, STATION_DISPLAY, STATION_MIN_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+// Pure, DOM-free results parser. Re-exported below for back-compat with the
+// existing '@/ui/wizard/steps/hyrox-setup' import in log-prev-time-modal.
+import { parseHyroxResultsText } from './hyrox-results-parse';
 import type { HyroxStation } from '@/types/triathlon';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { calculateWeeksUntil } from '@/data/marathons';
@@ -108,9 +111,6 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
       .hx-pill { flex:1; min-width:78px; padding:10px 11px; border-radius:12px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); font-size:13px; color:var(--c-black); cursor:pointer; text-align:left; transition: all 0.15s ease; }
       .hx-pill.active { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
       .hx-pill .hx-pill-sub { display:block; font-size:11px; opacity:0.65; margin-top:2px; }
-      .hx-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:rgba(0,0,0,0.12); border-radius:4px; outline:none; margin:10px 0 2px; }
-      .hx-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
-      .hx-slider::-moz-range-thumb { width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; border:none; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
       .hx-row { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--c-black); }
       .hx-row .hx-value { font-size:16px; font-weight:500; font-variant-numeric: tabular-nums; }
       .hx-input { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.08); color:var(--c-black); border-radius:10px; padding:9px 12px; font-size:14px; width:100%; box-sizing:border-box; outline:none; font-family:inherit; }
@@ -233,8 +233,11 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 <span id="hx-splits-chevron" style="font-size:12px;color:var(--c-faint);transition:transform 0.2s">▼</span>
               </div>
               <div id="hx-splits-body" style="display:none;margin-top:12px">
-                <p class="hx-hint" style="margin:0 0 10px">Paste your results text from hyrox.com: go to your result page, select all (Cmd+A / Ctrl+A), copy, and paste below. We accept either format: simple "Station name + time" lines, or the cumulative "Station In / Station Out" splits from the timing-system export. Or enter times manually below.</p>
-                <textarea id="hx-paste-results" class="hx-input" rows="3" placeholder="Paste hyrox.com results here…" style="resize:vertical;font-size:12px;line-height:1.4;margin-bottom:10px"></textarea>
+                <p class="hx-hint" style="margin:0 0 4px">Open hyresult.com below, search your name, open your result, and go to the Timings tab. Copy as much of the splits as you can grab. A rough selection is fine: we pull out the station times and ignore everything else.</p>
+                <p class="hx-hint" style="margin:0 0 10px;color:var(--c-faint)">Then come back and tap "Paste from clipboard". On a phone you don't need a clean copy. Or enter times by hand below.</p>
+                <a id="hx-results-open" href="https://hyresult.com/" target="_blank" rel="noopener" style="display:block;margin:0 0 8px;padding:11px 14px;border-radius:10px;background:transparent;border:1px solid var(--c-border);color:var(--c-black);font-size:13px;font-weight:500;text-align:center;text-decoration:none">Search hyresult.com →</a>
+                <button id="hx-paste-clip-btn" style="width:100%;padding:11px 14px;border:1px solid var(--c-border);border-radius:10px;background:transparent;font-size:13px;font-weight:500;cursor:pointer;color:var(--c-black);margin-bottom:10px">Paste from clipboard</button>
+                <textarea id="hx-paste-results" class="hx-input" rows="3" placeholder="…or paste results here manually" style="resize:vertical;font-size:12px;line-height:1.4;margin-bottom:8px"></textarea>
                 <button id="hx-parse-btn" style="width:100%;padding:9px;border:1px solid rgba(0,0,0,0.12);border-radius:10px;background:rgba(0,0,0,0.04);font-size:13px;font-weight:500;cursor:pointer;color:var(--c-black);margin-bottom:14px">Parse splits from text</button>
                 <div id="hx-parse-status" style="font-size:11px;color:var(--c-faint);margin-bottom:10px;display:none"></div>
                 <div style="margin-bottom:12px;height:1px;background:rgba(0,0,0,0.06)"></div>
@@ -259,13 +262,22 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                   <input type="text" id="hx-avg-split" class="hx-input" placeholder="mm:ss" style="width:80px;text-align:center;flex-shrink:0" autocomplete="off">
                 </div>
 
-                <!-- Read-only total-time display: race total when parsed, else sum of station splits. -->
-                <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.06);display:flex;align-items:center;gap:10px">
-                  <div style="flex:1">
-                    <div style="font-size:13px;color:var(--c-black)">Total time</div>
-                    <div id="hx-total-hint" style="font-size:11px;color:var(--c-faint)">Sum of the splits above. Updates as you fill them in.</div>
+                <!-- Read-only breakdown so the user can sanity-check that the
+                     splits add up: Stations + Running & roxzone = Finish. -->
+                <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.06)">
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">
+                    <div style="font-size:13px;color:var(--c-black)">Station total</div>
+                    <div id="hx-station-total" style="font-size:14px;font-variant-numeric:tabular-nums;color:var(--c-faint)">—</div>
                   </div>
-                  <div id="hx-total-display" style="width:80px;text-align:center;flex-shrink:0;font-size:14px;font-variant-numeric:tabular-nums;color:var(--c-faint);padding:9px 12px;border:1px solid rgba(0,0,0,0.06);border-radius:10px;background:rgba(0,0,0,0.02)">—</div>
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">
+                    <div style="font-size:13px;color:var(--c-black)">Running + roxzone</div>
+                    <div id="hx-run-total" style="font-size:14px;font-variant-numeric:tabular-nums;color:var(--c-faint)">—</div>
+                  </div>
+                  <div style="display:flex;align-items:baseline;justify-content:space-between;padding-top:7px;border-top:1px solid rgba(0,0,0,0.05)">
+                    <div style="font-size:13px;color:var(--c-black);font-weight:500">Finish time</div>
+                    <div id="hx-finish-total" style="font-size:14px;font-variant-numeric:tabular-nums;color:var(--c-black);font-weight:500">—</div>
+                  </div>
+                  <div id="hx-total-hint" style="font-size:11px;color:var(--c-faint);margin-top:8px;line-height:1.5">Stations plus running and roxzone should add up to your finish time.</div>
                 </div>
               </div>
             </div>
@@ -278,7 +290,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
               <span>Peak weekly hours</span>
               <span class="hx-value" id="hx-hours-value">${hoursPerWeek}h</span>
             </div>
-            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="hx-slider" id="hx-hours">
+            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="m-slider-glass" id="hx-hours">
             <p class="hx-hint">Peak-week target. Early and recovery weeks will be lighter.</p>
           </div>
 
@@ -298,7 +310,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                   <span>Training days</span>
                   <span class="hx-value" id="hx-sessions-value">${sessionCount}</span>
                 </div>
-                <input type="range" min="2" max="7" step="1" value="${sessionCount}" class="hx-slider" id="hx-sessions">
+                <input type="range" min="2" max="7" step="1" value="${sessionCount}" class="m-slider-glass" id="hx-sessions">
                 <p class="hx-hint">Runs, station sessions, and bricks combined. Adjust to fit your schedule.</p>
               `;
             })()}
@@ -446,6 +458,8 @@ function wireEventHandlers(): void {
       if (splitsSection) splitsSection.style.display = 'none';
       if (prevFormatRow) prevFormatRow.style.display = 'none';
     }
+    // Finish anchors the "Running + roxzone" remainder; keep the breakdown live.
+    refreshTotalDisplay();
   });
 
   // On blur, normalise the previous-time input to HH:MM:SS so a typed "1:12:30"
@@ -494,52 +508,77 @@ function wireEventHandlers(): void {
   //   1. "race-total". Set when paste-parser finds a valid total (e.g. 1:00:43)
   //   2. "stations-sum". Sum of currently-filled station splits (always shown
   //                       when no race-total is set, even if partial)
-  // We track which mode we're in so a subsequent station edit doesn't clobber
-  // a parsed race-total with a partial sum.
-  let totalDisplayMode: 'race-total' | 'stations-sum' = 'stations-sum';
-
+  // Read-only breakdown: Station total + Running & roxzone = Finish. The splits
+  // section only renders once a finish time exists, so the finish anchor is
+  // always available; "Running + roxzone" is the remainder (finish − stations),
+  // which lets the user check the splits add up. It's only well-defined once all
+  // 8 stations are in — with a partial set the remainder still hides unentered
+  // stations, so we hold it until the form is complete.
   function refreshTotalDisplay(): void {
-    const display = document.getElementById('hx-total-display');
+    const stationEl = document.getElementById('hx-station-total');
+    const runEl = document.getElementById('hx-run-total');
+    const finishEl = document.getElementById('hx-finish-total');
     const hint = document.getElementById('hx-total-hint');
-    if (!display || !hint) return;
-    if (totalDisplayMode === 'race-total') return; // parsed value, leave as-is
-    const splits = (getOnboarding().hyroxPreviousStationSplits ?? {}) as Record<string, number>;
+    if (!stationEl || !runEl || !finishEl || !hint) return;
+
+    const ob = getOnboarding();
+    const finishSec = ob.previousHyroxTimeSec ?? null;
+    const splits = (ob.hyroxPreviousStationSplits ?? {}) as Record<string, number>;
     const values = Object.values(splits);
+    const stationSum = values.reduce((a, b) => a + b, 0);
+    const allStations = values.length === 8;
+
+    // Finish (session) total.
+    finishEl.textContent = finishSec != null ? fmtMmSs(finishSec) : '—';
+
+    // Station total.
     if (values.length === 0) {
-      display.textContent = '—';
-      display.style.color = 'var(--c-faint)';
-      hint.textContent = 'Sum of the splits above. Updates as you fill them in.';
+      stationEl.textContent = '—';
+      stationEl.style.color = 'var(--c-faint)';
+    } else {
+      stationEl.textContent = fmtMmSs(stationSum);
+      stationEl.style.color = 'var(--c-black)';
+    }
+
+    // Running + roxzone = finish − station total.
+    if (finishSec == null || !allStations) {
+      runEl.textContent = '—';
+      runEl.style.color = 'var(--c-faint)';
+      hint.style.color = 'var(--c-faint)';
+      hint.textContent = values.length === 0
+        ? 'Stations plus running and roxzone should add up to your finish time.'
+        : `Enter all 8 stations (${values.length} in) to see your running and roxzone time.`;
       return;
     }
-    const sum = values.reduce((a, b) => a + b, 0);
-    display.textContent = fmtMmSs(sum);
-    display.style.color = 'var(--c-black)';
-    hint.textContent = values.length < 8
-      ? `Sum of ${values.length} of 8 station splits.`
-      : 'Sum of all 8 station splits (work time only, excludes runs and roxzone).';
-  }
-
-  function setRaceTotalDisplay(sec: number): void {
-    const display = document.getElementById('hx-total-display');
-    const hint = document.getElementById('hx-total-hint');
-    if (!display || !hint) return;
-    totalDisplayMode = 'race-total';
-    display.textContent = fmtMmSs(sec);
-    display.style.color = 'var(--c-black)';
-    hint.textContent = 'Total race time, parsed from your results.';
+    const runSec = finishSec - stationSum;
+    if (runSec <= 0) {
+      // Stations sum to more than the finish: a typo somewhere in the splits.
+      runEl.textContent = fmtMmSs(0);
+      runEl.style.color = 'var(--c-caution)';
+      hint.style.color = 'var(--c-caution)';
+      hint.textContent = 'Your stations add up to more than your finish time. Check the splits above.';
+      return;
+    }
+    runEl.textContent = fmtMmSs(runSec);
+    runEl.style.color = 'var(--c-black)';
+    hint.style.color = 'var(--c-faint)';
+    hint.textContent = 'Stations plus running and roxzone add up to your finish time.';
   }
 
   document.querySelectorAll<HTMLInputElement>('.hx-split-input').forEach(input => {
+    // Focusing a flagged field counts as reviewing it: drop the amber border.
+    input.addEventListener('focus', () => {
+      if (input.dataset.lowConfidence) {
+        input.style.borderColor = '';
+        delete input.dataset.lowConfidence;
+      }
+    });
     input.addEventListener('change', () => {
       const station = input.getAttribute('data-station') as HyroxStation;
       const raw = input.value.trim();
       const sec = parseTime(raw);
       const current = (getOnboarding().hyroxPreviousStationSplits ?? {}) as Record<string, number>;
       const minSec = STATION_MIN_SEC[station] ?? 0;
-
-      // Manual edits override a parsed race-total. Switch back to sum mode so
-      // the total reflects what's actually in the form.
-      totalDisplayMode = 'stations-sum';
 
       // Empty input → clear from state silently (intentional reset).
       if (raw === '') {
@@ -574,26 +613,43 @@ function wireEventHandlers(): void {
   // Initial render: seed the total from any pre-existing splits in state.
   refreshTotalDisplay();
 
-  // Parse-from-paste button
-  document.getElementById('hx-parse-btn')?.addEventListener('click', () => {
-    const textarea = document.getElementById('hx-paste-results') as HTMLTextAreaElement | null;
+  // Parse-from-paste. Shared by the "Parse" button, the one-tap clipboard
+  // button, and auto-parse on paste — so however the text arrives, the same
+  // forgiving extraction runs. A rough or partial copy is fine: the parser
+  // picks station names out of arbitrary text and ignores everything else.
+  const applyParsedSplits = (rawText: string): void => {
     const status = document.getElementById('hx-parse-status');
-    if (!textarea || !status) return;
+    if (!status) return;
 
-    const result = parseHyroxResultsText(textarea.value);
+    const result = parseHyroxResultsText(rawText);
     const stationCount = Object.keys(result.stations).length;
 
     if (stationCount === 0 && result.runPaceSecKm == null) {
       status.style.display = 'block';
-      status.textContent = 'No times found. Make sure you selected and copied all text from the result page.';
+      status.textContent = rawText.trim()
+        ? "Couldn't find any station times in that text. A rough selection of the splits is enough, or enter them by hand below."
+        : 'Nothing to read yet. Copy your result page, then paste or tap "Paste from clipboard".';
       return;
     }
 
-    // Populate the individual split inputs
+    // Populate the individual split inputs. Fields whose value came from the
+    // looser fallback scan (not the structured In/Out pair) get an amber
+    // "check this" border, since a messy copy can mis-grab those. The flag
+    // clears the moment the user focuses the field (see the focus handler).
+    let lowConfidenceCount = 0;
     document.querySelectorAll<HTMLInputElement>('.hx-split-input').forEach(input => {
       const station = input.getAttribute('data-station') as HyroxStation;
       const sec = (result.stations as Record<string, number>)[station];
-      if (sec != null) input.value = fmtMmSs(sec);
+      if (sec == null) return;
+      input.value = fmtMmSs(sec);
+      if (result.stationSource[station] === 'fallback') {
+        input.style.borderColor = 'var(--c-caution)';
+        input.dataset.lowConfidence = '1';
+        lowConfidenceCount++;
+      } else {
+        input.style.borderColor = '';
+        delete input.dataset.lowConfidence;
+      }
     });
 
     // Auto-fill the avg-split input with the mean of the parsed stations so the
@@ -613,9 +669,7 @@ function wireEventHandlers(): void {
     };
     if (result.runPaceSecKm != null) patch.hyroxRunPaceSecKm = result.runPaceSecKm;
 
-    // Auto-fill the previous finish time field if the parser found a race
-    // disagrees. Typed-then-pasted should respect the paste.
-    // disagrees. Typed-then-pasted should respect the paste.
+    // Auto-fill the previous finish time field when the parser found a total.
     if (result.totalRaceSec != null) {
       patch.previousHyroxTimeSec = result.totalRaceSec;
       const prevTimeEl = document.getElementById('hx-prev-time') as HTMLInputElement | null;
@@ -626,10 +680,6 @@ function wireEventHandlers(): void {
         // band derivation and section visibility update.
         prevTimeEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      setRaceTotalDisplay(result.totalRaceSec);
-      // No parsed race total. Show sum of the stations we just filled in.
-      // No parsed race total. Show sum of the stations we just filled in.
-      totalDisplayMode = 'stations-sum';
     }
 
     updateOnboarding(patch);
@@ -639,7 +689,47 @@ function wireEventHandlers(): void {
     if (stationCount > 0) parts.push(`${stationCount} of 8 station times`);
     if (result.runPaceSecKm != null) parts.push(`run pace ${fmtMmSs(result.runPaceSecKm)}/km`);
     status.style.display = 'block';
-    status.textContent = `Found: ${parts.join(', ')}.`;
+    // Be explicit about partial reads so a missing station reads as "fill the
+    // rest", not "the paste failed". Always invite a review: a messy phone copy
+    // can occasionally land a plausible-but-wrong time, and every field below is
+    // editable.
+    const missing = stationCount > 0 && stationCount < 8 ? ` Add the other ${8 - stationCount} below.` : '';
+    const review = lowConfidenceCount > 0
+      ? ` ${lowConfidenceCount} ${lowConfidenceCount === 1 ? 'time is' : 'times are'} highlighted as a looser match. Check ${lowConfidenceCount === 1 ? 'it' : 'those'} and tap to edit.`
+      : ' Tap any time below to edit.';
+    status.textContent = `Found ${parts.join(', ')}.${missing}${review}`;
+  };
+
+  document.getElementById('hx-parse-btn')?.addEventListener('click', () => {
+    const textarea = document.getElementById('hx-paste-results') as HTMLTextAreaElement | null;
+    if (textarea) applyParsedSplits(textarea.value);
+  });
+
+  // Auto-parse the moment text lands in the box, so the "Parse" button is a
+  // fallback rather than a required second tap. `paste` fires before the value
+  // updates, hence the microtask defer; `input` covers typing and programmatic
+  // fills (e.g. the clipboard button).
+  const pasteArea = document.getElementById('hx-paste-results') as HTMLTextAreaElement | null;
+  pasteArea?.addEventListener('paste', () => { setTimeout(() => applyParsedSplits(pasteArea.value), 0); });
+
+  // One-tap clipboard read. On iPhone, long-pressing the tiny textarea and
+  // hunting for "Paste" is the fiddly step; this collapses it to a single tap.
+  // Uses the web Clipboard API (works in WKWebView + browsers behind a user
+  // gesture). If it's blocked or empty, fall back to manual paste.
+  document.getElementById('hx-paste-clip-btn')?.addEventListener('click', async () => {
+    const status = document.getElementById('hx-parse-status');
+    try {
+      const text = await navigator.clipboard?.readText();
+      if (!text || !text.trim()) {
+        if (status) { status.style.display = 'block'; status.textContent = 'Clipboard is empty. Copy your result page first, then tap this again.'; }
+        return;
+      }
+      if (pasteArea) pasteArea.value = text;
+      applyParsedSplits(text);
+    } catch {
+      // Permission denied or API unavailable. Steer them to the manual box.
+      if (status) { status.style.display = 'block'; status.textContent = 'Couldn\'t read the clipboard. Paste into the box below instead.'; }
+    }
   });
   // Race event picker. Also controls visibility of the manual venue fallback.
   // Race event picker. Also controls visibility of the manual venue fallback.
@@ -730,7 +820,6 @@ function wireEventHandlers(): void {
       }
     });
     updateOnboarding({ hyroxPreviousStationSplits: Object.keys(merged).length ? merged : undefined });
-    totalDisplayMode = 'stations-sum';
     refreshTotalDisplay();
   });
 
@@ -820,201 +909,3 @@ function getOnboarding(): OnboardingState {
   return getState().onboarding as OnboardingState;
 }
 
-/**
- * Parses station split times from free-form text copied from hyrox.com results.
- * Strategy: find each station name, then grab the first mm:ss within 200 chars after it.
- * Handles variations: "SkiErg" / "Ski Erg" / "Ski-Erg", "Rowing" / "Row Erg", etc.
- */
-export function parseHyroxResultsText(text: string): {
-  stations: Partial<Record<HyroxStation, number>>;
-  runPaceSecKm?: number;
-  /** "Total time" parsed from the export, in seconds. Used for sanity-check display. */
-  totalRaceSec?: number;
-} {
-  const STATION_PATTERNS: Array<{ pattern: RegExp; station: HyroxStation }> = [
-    { pattern: /ski[\s-]*erg/i,              station: 'ski_erg' },
-    { pattern: /sled\s+push/i,               station: 'sled_push' },
-    { pattern: /sled\s+pull/i,               station: 'sled_pull' },
-    { pattern: /burpee/i,                    station: 'burpee_broad_jumps' },
-    { pattern: /\brow(?:ing|\s*erg)?\b/i,     station: 'row_erg' },
-    { pattern: /farmers?[\s']*\s*carry/i,    station: 'farmer_carry' },
-    { pattern: /sandbag/i,                   station: 'sandbag_lunges' },
-    { pattern: /wall[\s-]*ball/i,            station: 'wall_balls' },
-  ];
-
-  /**
-   * Extract time in seconds from a short string window.
-   * Handles both h:mm:ss (e.g. 00:02:56 from hyrox.com) and mm:ss.
-   * h:mm:ss is tried first so "00:02:56" yields 176s not 2s.
-   */
-  function extractTimeSec(window: string): number | null {
-    // h:mm:ss (hyrox.com format: 00:mm:ss)
-    const longM = /\b(\d+):(\d{2}):(\d{2})\b/.exec(window);
-    if (longM) {
-      const h = Number(longM[1]), m = Number(longM[2]), s = Number(longM[3]);
-      if (s < 60 && m < 60) return h * 3600 + m * 60 + s;
-    }
-    // mm:ss fallback
-    const shortM = /\b(\d{1,2}):(\d{2})\b/.exec(window);
-    if (shortM) {
-      const m = Number(shortM[1]), s = Number(shortM[2]);
-      if (s < 60 && m <= 30) return m * 60 + s;
-    }
-    return null;
-  }
-
-  const stations: Partial<Record<HyroxStation, number>> = {};
-
-  // ── Strategy 1: "Station In / Station Out" timestamp-pair format ─────────
-  // Hyrox timing-system export. Each station has two lines, each with multiple
-  // columns (Time of Day, cumulative race time, diff):
-  //   "SkiErg In   10:43:16  03:08  0:14"
-  //   "SkiErg Out  10:47:03  06:56  03:48"
-  // Duration = (Out time of day) − (In time of day). The first time on each
-  // line is used; cumulative and diff columns are ignored. Any consistent
-  // HH:MM:SS or MM:SS scheme works because subtraction cancels the offset.
-  //
-  // Wall Balls has no "Out" line in the export (it's the last station); we
-  // fall back to the "Total time" timestamp for its duration.
-  //
-  // Labels can be multi-word ("Burpee Broad Jump", "Sandbag Lunges",
-  // "Wall Balls"), so we collect events independently rather than pairing
-  // them with a single regex.
-  const stationEvents = new Map<HyroxStation, { in?: number; out?: number }>();
-  const EVENT_RE = /^[ \t]*(.+?)\s+(In|Out)\b[ \t]+(\d{1,2}:\d{2}(?::\d{2})?)/gim;
-  let evMatch: RegExpExecArray | null;
-  while ((evMatch = EVENT_RE.exec(text)) !== null) {
-    const label = evMatch[1].trim();
-    const kind = evMatch[2].toLowerCase() as 'in' | 'out';
-    const sec = parseTime(evMatch[3]);
-    if (isNaN(sec)) continue;
-    const matched = STATION_PATTERNS.find(({ pattern }) => pattern.test(label));
-    if (!matched) continue; // skips Roxzone In/Out and any other non-station label
-    const ev = stationEvents.get(matched.station) ?? {};
-    if (kind === 'in' && ev.in == null) ev.in = sec;
-    else if (kind === 'out' && ev.out == null) ev.out = sec;
-    stationEvents.set(matched.station, ev);
-  }
-
-  // The "Total time" line carries up to three distinct numbers in the
-  // timing-system export:
-  //   "Total time   11:40:50   1:00:43   03:48"
-  //                 time-of-day cumulative diff
-  // We need BOTH:
-  //   - cumulative race duration → for `totalRaceSec` display (1:00:43)
-  //   - time-of-day at finish    → to compute Wall Balls duration when the
-  //                                 export omits a "Wall Balls Out" line
-  //                                 (we subtract Wall-Balls-In time-of-day
-  //                                 from finish time-of-day).
-  let totalSec: number | null = null;
-  let totalEndTimeOfDay: number | null = null;
-  const totalLineMatch = /total\s*time([^\n]+)/i.exec(text);
-  if (totalLineMatch) {
-    const candidates: number[] = [];
-    const timeRe = /\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b/g;
-    let tm: RegExpExecArray | null;
-    while ((tm = timeRe.exec(totalLineMatch[1])) !== null) {
-      const a = Number(tm[1]), b = Number(tm[2]), c = tm[3] != null ? Number(tm[3]) : null;
-      const sec = c == null ? a * 60 + b : a * 3600 + b * 60 + c;
-      if (!isNaN(sec) && sec > 0) candidates.push(sec);
-    }
-    // Cumulative race duration: realistic Hyrox window (10 min – 4 h).
-    const inWindow = candidates.filter(s => s >= 600 && s <= 14400);
-    if (inWindow.length > 0) totalSec = Math.min(...inWindow);
-    else if (candidates.length > 0) totalSec = candidates[0];
-    // Time-of-day timestamp: the largest value, only kept if it lands above
-    // any station "In" time-of-day we collected (i.e. it's plausibly later
-    // in the day on the same race clock).
-    if (candidates.length > 0) {
-      const maxIn = Math.max(0, ...Array.from(stationEvents.values()).map(e => e.in ?? 0));
-      const todCandidates = candidates.filter(s => s > maxIn);
-      if (todCandidates.length > 0) totalEndTimeOfDay = Math.max(...todCandidates);
-    }
-  }
-
-  // Hard sanity ceiling: no Hyrox station takes more than 25 min in any
-  // realistic finish. Anything above is almost certainly a time-of-day
-  // timestamp leaking through (root cause of the 11:37:02 = 41822s bug
-  // on Wall Balls when the parser fell through to Strategy 2).
-  const STATION_MAX_SEC = 1500;
-
-  for (const [station, ev] of stationEvents) {
-    if (ev.in == null) continue;
-    let outSec = ev.out;
-    // Wall-Balls fallback: use the finish time-of-day, not the cumulative
-    // race duration. Both `ev.in` and `totalEndTimeOfDay` are time-of-day,
-    // so subtraction yields the station duration directly.
-    if (outSec == null && totalEndTimeOfDay != null && totalEndTimeOfDay > ev.in) {
-      outSec = totalEndTimeOfDay;
-    }
-    if (outSec == null || outSec <= ev.in) continue;
-    const dur = outSec - ev.in;
-    const minSec = STATION_MIN_SEC[station];
-    if (dur >= minSec && dur <= STATION_MAX_SEC) stations[station] = dur;
-  }
-
-  // ── Strategy 2: "Station Name  time" single-value format ─────────────────
-  for (const { pattern, station } of STATION_PATTERNS) {
-    if (station in stations) continue; // already resolved by In/Out strategy
-    const nameMatch = pattern.exec(text);
-    if (!nameMatch) continue;
-
-    const after = text.slice(nameMatch.index + nameMatch[0].length, nameMatch.index + nameMatch[0].length + 300);
-    const sec = extractTimeSec(after);
-    if (sec == null) continue;
-
-    // Enforce physical bounds. The upper bound is critical: previously a
-    // time-of-day value (e.g. 11:37:02 → 41822s) would slip through and
-    // poison the prediction with a 12-hour station total.
-    const minSec = STATION_MIN_SEC[station];
-    if (sec < minSec || sec > STATION_MAX_SEC) continue;
-
-    stations[station] = sec;
-  }
-
-  // Parse run leg times: lines like "Running 1  00:03:22" or "Run 1  3:22"
-  // Average all found run legs to derive a 1km pace.
-  const runLegTimes: number[] = [];
-  const RUN_LINE_RE = /\brun(?:ning)?\s+\d+\b/gi;
-  let runMatch: RegExpExecArray | null;
-  while ((runMatch = RUN_LINE_RE.exec(text)) !== null) {
-    const after = text.slice(runMatch.index + runMatch[0].length, runMatch.index + runMatch[0].length + 60);
-    const sec = extractTimeSec(after);
-    if (sec != null && sec >= HYROX_RUN_PACE_MIN_SEC_KM && sec <= 720) { // 3:10–12:00/km
-      runLegTimes.push(sec);
-    }
-  }
-
-  let runPaceSecKm: number | undefined;
-  if (runLegTimes.length > 0) {
-    runPaceSecKm = Math.round(runLegTimes.reduce((s, v) => s + v, 0) / runLegTimes.length);
-  }
-
-  // Fallback 1: "Run Total" / "Running Total" → divide by 8 legs to get per-km pace
-  if (runPaceSecKm == null) {
-    const runTotalMatch = /\brun(?:ning)?\s+total\b/i.exec(text);
-    if (runTotalMatch) {
-      const after = text.slice(runTotalMatch.index + runTotalMatch[0].length, runTotalMatch.index + runTotalMatch[0].length + 80);
-      const sec = extractTimeSec(after);
-      if (sec != null) {
-        const perLeg = Math.round(sec / 8);
-        if (perLeg >= HYROX_RUN_PACE_MIN_SEC_KM && perLeg <= 720) runPaceSecKm = perLeg;
-      }
-    }
-  }
-
-  // Fallback 2: "Best Run Lap" / "Best Run" → fastest 1km lap = best pace achieved
-  if (runPaceSecKm == null) {
-    const bestMatch = /\bbest\s+run(?:\s+lap)?\b/i.exec(text);
-    if (bestMatch) {
-      const after = text.slice(bestMatch.index + bestMatch[0].length, bestMatch.index + bestMatch[0].length + 60);
-      const sec = extractTimeSec(after);
-      if (sec != null && sec >= HYROX_RUN_PACE_MIN_SEC_KM && sec <= 720) {
-        // Best lap is fastest, so average pace is ~5% slower
-        runPaceSecKm = Math.round(sec * 1.05);
-      }
-    }
-  }
-
-  return { stations, runPaceSecKm, totalRaceSec: totalSec ?? undefined };
-}

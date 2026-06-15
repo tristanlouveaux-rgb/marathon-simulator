@@ -23,6 +23,7 @@ export type OnboardingStep =
   | 'schedule'
   | 'commute'
   | 'plan-preview-v2'
+  | 'coach-contract'
   | 'initializing'
   | 'runner-type'
   | 'triathlon-setup'
@@ -35,13 +36,14 @@ export type OnboardingStep =
   | 'hyrox-workout-preview'
   | 'main-view';
 
-/** Race distances supported for past-race entry (includes sprint/olympic not in active race plans). */
-export type PastTriathlonDistance = 'sprint' | 'olympic' | '70.3' | 'ironman';
+/** Race distances supported for past-race entry. Mirrors TriathlonDistance (all five are now plannable). */
+export type PastTriathlonDistance = 'sprint' | 'olympic' | 't100' | '70.3' | 'ironman';
 
 /** Distances (m) for each past-race format — used to derive CSS and run pace from leg times. */
 export const PAST_TRI_LEG_DISTANCES: Record<PastTriathlonDistance, { swimM: number; bikeKm: number; runKm: number }> = {
   'sprint':   { swimM: 750,  bikeKm: 20,    runKm: 5    },
   'olympic':  { swimM: 1500, bikeKm: 40,    runKm: 10   },
+  't100':     { swimM: 2000, bikeKm: 80,    runKm: 18   },
   '70.3':     { swimM: 1900, bikeKm: 90,    runKm: 21.1 },
   'ironman':  { swimM: 3800, bikeKm: 180.2, runKm: 42.2 },
 };
@@ -120,7 +122,7 @@ export interface Triathlon {
   city: string;
   country: string;
   date: string;                    // ISO date string
-  distance: '70.3' | 'ironman';
+  distance: import('./triathlon').TriathlonDistance;
   weeksUntil?: number;             // Computed at runtime
   /** Per-leg course facts. Optional — populated from triathlon-course-profiles.ts. */
   profile?: CourseProfile;
@@ -237,6 +239,12 @@ export interface OnboardingState {
    *  reveals the live "Connect Strava" button. Gates the capped Strava pipe so public
    *  users don't consume the 10 Standard-Tier athlete slots. See constants/access-codes.ts. */
   stravaUnlocked?: boolean;
+  /** Set when the user taps a live OAuth connect (Strava/Garmin), cleared once the
+   *  connection is confirmed. Survives the full-page OAuth redirect so that if the
+   *  return bounce drops the `?strava=connected` signal (a known iOS-WKWebView risk),
+   *  the connect-data step can self-heal by re-checking the server on next render.
+   *  Optional — fresh installs never set it. */
+  oauthPending?: 'strava' | 'garmin';
   /** True once the save-account overlay (anonymous → email upgrade, ISSUE-270) has been
    *  offered this onboarding — shown at the post-OAuth return on connect-data. Offered
    *  once; decliners keep the Home guest banner + Account upgrade as fallbacks. */

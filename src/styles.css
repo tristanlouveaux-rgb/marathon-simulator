@@ -41,11 +41,12 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-family: var(--f);
-  /* Backstop colour behind the body. Any gap that ever exposes the html
-     backing (the JS overscroll spring in web-overscroll-bounce.ts pins page
-     gradients, but a missed edge case would land here) shows the page colour
-     instead of a jolty white flash. Note: native WKWebView rubber-band is OFF
-     (Capacitor hardcodes scrollView.bounces = false). */
+  /* Backstop colour behind the body. On device the native WKWebView rubber-band
+     (re-enabled in BounceViewController.swift) reveals the scrollView background
+     above the page during a top bounce; that is set to match --c-bg in the
+     subclass, and this keeps html in step. On web the JS spring pins the page
+     gradient so html rarely shows; this catches any missed edge case as the page
+     colour rather than a jolty white flash. */
   background-color: var(--c-bg);
   /* Lock text scale — stop iOS auto-inflating text in landscape/large-text mode,
      which silently widens layouts. Pinch-zoom itself is disabled via the
@@ -146,6 +147,20 @@ input[type="radio"] {
   padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
+/* Paint the page background (atmosphere gradient) behind the status bar.
+   Body carries padding-top: env(safe-area-inset-top), so without this the
+   notch strip shows the bare --c-bg body colour above every gradient — a
+   visible cream seam at the top of each page on device. Negative margin
+   pulls the wrapper's background up under the status bar; the matching
+   padding puts the content box back exactly where it was. No-op on web
+   (env() resolves to 0). Applied to every .mosaic-page; detail views that
+   build a bare inline-styled wrapper opt in with .safe-top-bleed. */
+.mosaic-page,
+.safe-top-bleed {
+  margin-top: calc(-1 * env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 /* ─── Cards ──────────────────────────────────────────────────────────────── */
 
 .m-card {
@@ -215,14 +230,23 @@ input[type="radio"] {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   letter-spacing: 0.01em;
-  transition: background 0.15s;
+  /* Resting float so the pill lifts off the surface — the app-wide depth default. */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16), 0 8px 22px rgba(0, 0, 0, 0.13);
+  transition: background 0.15s, transform 120ms ease, box-shadow 120ms ease;
+  -webkit-tap-highlight-color: transparent;
 }
-.m-btn-primary:active { background: #333; }
+/* Press-in feedback, mirroring the glass buttons so taps feel physical. */
+.m-btn-primary:active {
+  background: #333;
+  transform: translateY(0.5px) scale(0.985);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
 
 .m-btn-secondary {
-  background: transparent;
+  background: var(--c-surface);
   color: var(--c-black);
   border: 1px solid var(--c-border-strong);
   border-radius: var(--r-pill);
@@ -232,6 +256,93 @@ input[type="radio"] {
   font-family: var(--f);
   cursor: pointer;
   letter-spacing: 0.02em;
+  /* Lighter resting float — same depth language as the glass buttons. */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-btn-secondary:active {
+  transform: translateY(0.5px) scale(0.985);
+  background: rgba(0, 0, 0, 0.04);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Destructive CTA — Stop, Discard, Delete. Same depth + press-in as the others. */
+.m-btn-danger {
+  background: #EF4444;
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--f);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  letter-spacing: 0.01em;
+  box-shadow: 0 2px 6px rgba(239, 68, 68, 0.28), 0 8px 22px rgba(239, 68, 68, 0.18);
+  transition: background 0.15s, transform 120ms ease, box-shadow 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-btn-danger:active {
+  background: #DC2626;
+  transform: translateY(0.5px) scale(0.985);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* Positive-action CTA — Mark as done, Start Run, Accept, Add Activity. */
+.m-btn-ok {
+  background: var(--c-ok);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--f);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  letter-spacing: 0.01em;
+  box-shadow: 0 2px 6px rgba(34, 197, 94, 0.30), 0 8px 22px rgba(34, 197, 94, 0.18);
+  transition: background 0.15s, transform 120ms ease, box-shadow 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-btn-ok:active {
+  background: #16A34A;
+  transform: translateY(0.5px) scale(0.985);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* Caution CTA — Pause, Skip, Drop, Edit this week. */
+.m-btn-caution {
+  background: var(--c-caution);
+  color: #fff;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--f);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  letter-spacing: 0.01em;
+  box-shadow: 0 2px 6px rgba(245, 158, 11, 0.30), 0 8px 22px rgba(245, 158, 11, 0.18);
+  transition: background 0.15s, transform 120ms ease, box-shadow 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-btn-caution:active {
+  background: #D97706;
+  transform: translateY(0.5px) scale(0.985);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .m-btn-glass {
@@ -438,3 +549,24 @@ input[type="radio"] {
 .m-text-section { font-size: 22px; font-weight: 300; letter-spacing: -0.03em; line-height: 1.1; }
 .m-text-body    { font-size: 14px; font-weight: 400; line-height: 1.4; }
 .m-text-caption { font-size: 11px; color: var(--c-muted); line-height: 1.4; }
+
+/* ─── Touch reorder: suppress the native WKWebView drag preview ───────────── */
+/* Workout cards keep draggable="true" for desktop mouse DnD, but on touch-primary
+   devices they reorder via custom touch handlers (long-press + a clone element).
+   iOS WKWebView lifts its OWN translucent native drag preview off a draggable
+   element, doubling up with our clone (the doubled "ghost cards" bug). The actual
+   lever for that native lift is the `-webkit-user-drag` CSS property: setting
+   `el.draggable = false` in JS does NOT reliably stop it on iOS. This rule is also
+   immune to render-path / re-wiring bugs because it never needs re-applying.
+   We also kill the long-press callout + selection so the 350ms hold reads only as
+   "pick up to reorder", never "select text / show context menu". */
+@media (hover: none) and (pointer: coarse) {
+  .plan-workout-card,
+  .tri-workout-card,
+  .hyrox-workout-card {
+    -webkit-user-drag: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}

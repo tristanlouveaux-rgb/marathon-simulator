@@ -12,12 +12,16 @@ const GARMIN_TOKEN_URL = "https://diauth.garmin.com/di-oauth2-service/oauth/toke
  * Otherwise fall back to the env-default `APP_REDIRECT_URL`.
  *
  * Allowlist policy (open-redirect protection):
+ *   - Native app deep-link return schemes (exact match, NATIVE_RETURN_ALLOWLIST).
  *   - Any localhost / 127.0.0.1 origin (dev — any port allowed).
  *   - The configured production URL exactly.
  *   - Anything else → reject and use the env-default.
  */
+const NATIVE_RETURN_ALLOWLIST = ["mosaic://oauth"];
+
 function pickRedirectTarget(clientOrigin: string | null | undefined, envDefault: string): string {
   if (!clientOrigin) return envDefault;
+  if (NATIVE_RETURN_ALLOWLIST.includes(clientOrigin)) return clientOrigin;
   try {
     const u = new URL(clientOrigin);
     if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return clientOrigin;
@@ -27,6 +31,46 @@ function pickRedirectTarget(clientOrigin: string | null | undefined, envDefault:
     if (u.hostname === envUrl.hostname) return clientOrigin;
   } catch { /* fall through */ }
   return envDefault;
+}
+
+/**
+ * Issue the post-success redirect. Custom app schemes (mosaic://oauth) go via a
+ * manual Location header — Deno's Response.redirect validates the URL and can
+ * reject a non-http(s) scheme. http/https origins keep Response.redirect.
+ */
+function successRedirect(redirectTarget: string, params: URLSearchParams): Response {
+  const location = `${redirectTarget}?${params.toString()}`;
+  // Native iOS uses ASWebAuthenticationSession (the @mosaic/web-auth plugin),
+  // which intercepts the FIRST mosaic:// URL — including this 302 redirect
+  // target — and hands it back to JS. So a plain 302 to the custom scheme is
+  // correct. (Response.redirect rejects non-http(s) schemes, hence the manual
+  // Location header for mosaic://.)
+  return redirectTarget.startsWith("mosaic://")
+    ? new Response(null, { status: 302, headers: { Location: location } })
+    : Response.redirect(location, 302);
+}
+
+/**
+ * Human-facing fallback page. The callback can be re-hit by an in-app browser
+ * (SFSafariViewController re-requesting after a `mosaic://` redirect it cannot
+ * follow) or a manual reload; raw JSON in that sheet reads as a hard failure.
+ */
+function htmlNotice(title: string, body: string, status = 400): Response {
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mosaic</title>
+<style>
+  body{margin:0;font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       color:#1a1a1a;background:#fafafa;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .card{max-width:340px;padding:28px 24px;text-align:center}
+  h1{font-size:18px;font-weight:600;margin:0 0 10px}
+  p{margin:0 0 20px;color:#555}
+  a{display:inline-block;padding:11px 20px;border:1px solid #d0d0d0;border-radius:10px;
+    color:#1a1a1a;text-decoration:none;font-weight:500}
+</style></head>
+<body><div class="card"><h1>${title}</h1><p>${body}</p>
+<a href="mosaic://oauth">Return to Mosaic</a></div></body></html>`;
+  return new Response(html, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
 Deno.serve(async (req) => {
@@ -68,24 +112,48 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // --- 1. Look up the pending auth request ---
-    const { data: row, error: selErr } = await supabase
+    const { data: row } = await supabase
       .from("garmin_auth_requests")
-      .select("user_id, code_verifier, app_origin")
+      .select("user_id, app_origin, consumed_at")
       .eq("state", state)
       .maybeSingle();
 
-    if (selErr || !row) {
-      return new Response(JSON.stringify({ error: "invalid_state", details: selErr }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+    // No row at all: expired (purged after an hour) or never ours. Show a human
+    // page, not raw JSON, with a deep link back into the app.
+    if (!row) {
+      return htmlNotice(
+        "Link expired",
+        "This Garmin sign-in link is no longer valid. Return to Mosaic and tap Connect again. If it already worked, you'll see Garmin connected.",
+      );
     }
-
-    const { user_id: userId, code_verifier: codeVerifier, app_origin: clientOrigin } = row;
 
     // Pick the redirect target. If the client passed its origin (multi-port
     // dev) and it's allowed, use that — otherwise fall back to the env-default.
-    const redirectTarget = pickRedirectTarget(clientOrigin, appRedirectUrl);
+    const redirectTarget = pickRedirectTarget(row.app_origin, appRedirectUrl);
+
+    // Already consumed: a duplicate callback hit (in-app browser re-request or
+    // reload). The first run stored the token; replay the success redirect. The
+    // single-use Garmin `code` must NOT be re-exchanged — it would fail.
+    if (row.consumed_at) {
+      return successRedirect(redirectTarget, new URLSearchParams({ garmin: "connected" }));
+    }
+
+    // Atomically claim the row so two near-simultaneous hits can't both run the
+    // token exchange. Only the request that flips consumed_at from null proceeds.
+    const { data: claimed } = await supabase
+      .from("garmin_auth_requests")
+      .update({ consumed_at: new Date().toISOString() })
+      .eq("state", state)
+      .is("consumed_at", null)
+      .select("user_id, code_verifier")
+      .maybeSingle();
+
+    if (!claimed) {
+      return successRedirect(redirectTarget, new URLSearchParams({ garmin: "connected" }));
+    }
+
+    const userId = claimed.user_id;
+    const codeVerifier = claimed.code_verifier;
 
     // --- 2. Exchange authorization code for tokens ---
     const tokenBody = new URLSearchParams({
@@ -158,8 +226,15 @@ Deno.serve(async (req) => {
       });
     }
 
-    // --- 4. Clean up the pending auth request ---
-    await supabase.from("garmin_auth_requests").delete().eq("state", state);
+    // --- 4. The row stays (now marked consumed_at) so a duplicate callback hit
+    //        replays into the success redirect instead of erroring. Purge old
+    //        consumed rows opportunistically so the table doesn't grow. ---
+    const purgeBefore = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await supabase
+      .from("garmin_auth_requests")
+      .delete()
+      .lt("consumed_at", purgeBefore)
+      .then(() => {}, () => {});
 
     // --- 5. Fetch Garmin user ID + check permissions ---
     // OAuth2 PKCE: user registration for push is automatic after consent.
@@ -196,7 +271,7 @@ Deno.serve(async (req) => {
     }
 
     // --- 6. Redirect back to the app (origin-aware — see pickRedirectTarget) ---
-    return Response.redirect(`${redirectTarget}?garmin=connected`, 302);
+    return successRedirect(redirectTarget, new URLSearchParams({ garmin: "connected" }));
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,

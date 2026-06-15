@@ -85,7 +85,6 @@ const HARD_RUN_RPE = 7;
 
 // ── Design tokens (match activity-detail.ts) ─────────────────────────────────
 
-const PAGE_BG = '#FAF9F6';
 const TEXT_M  = '#0F172A';
 const TEXT_S  = '#64748B';
 const TEXT_L  = '#94A3B8';
@@ -537,14 +536,14 @@ export function showSportPicker(currentSport: SportKey): Promise<SportKey | null
 
     overlay.innerHTML = `
       <style>
-        @keyframes spModalIn { from { opacity:0; transform:translateY(8px) scale(0.98); } to { opacity:1; transform:translateY(0) scale(1); } }
+        @keyframes spModalIn { from { opacity:0; transform:translateY(8px) scale(0.98); } to { opacity:1; } }
         #sp-card { animation: spModalIn 0.22s cubic-bezier(0.2,0.8,0.2,1) forwards; }
         #sp-list::-webkit-scrollbar { width:4px }
         #sp-list::-webkit-scrollbar-thumb { background:rgba(0,0,0,0.12); border-radius:4px }
         #sp-save:disabled { opacity:0.35; cursor:not-allowed; }
       </style>
       <div id="sp-card" class="w-full max-w-sm" style="
-        background:${PAGE_BG};border-radius:20px;display:flex;flex-direction:column;max-height:78vh;
+        background:#fff;border-radius:20px;display:flex;flex-direction:column;max-height:78vh;
         box-shadow:0 4px 12px rgba(0,0,0,0.08),0 20px 48px rgba(0,0,0,0.18);overflow:hidden;
       ">
         <div style="padding:20px 22px 12px;flex-shrink:0">

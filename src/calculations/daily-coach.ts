@@ -23,7 +23,7 @@ import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
-import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
+import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
 import {
@@ -280,6 +280,17 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     && (wk.adhocWorkouts ?? []).filter((w: any) => !w.id?.startsWith('holiday-')).length === 0;
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const physio = s.physiologyHistory ?? [];
+  // Fold manually-logged sleep (recoveryHistory) into the sleep history so a
+  // no-watch user's check-in night reaches the coach sentence and its readiness
+  // call. Mirrors home-view / readiness-view. Device sleep wins per date, so a
+  // watch user is unaffected. HRV / RHR / duration reads still use raw `physio`
+  // (manual entries carry only a sleepScore).
+  const todayStr = new Date().toISOString().split('T')[0];
+  const manualSleepToday = (s.recoveryHistory ?? []).slice().reverse().find(
+    (e: any) => e.date === todayStr && e.source === 'manual',
+  );
+  const noGarminSleepToday = !physio.find(p => p.date === todayStr && p.sleepScore != null);
+  const sleepHist = mergeManualSleepHistory(physio, s.recoveryHistory ?? []);
 
   // ── Fitness metrics ───────────────────────────────────────────────────────
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
@@ -296,8 +307,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const ctlTrend: 'up' | 'flat' | 'down' = ctlDelta > 0.5 ? 'up' : ctlDelta < -0.5 ? 'down' : 'flat';
 
   // ── Recovery metrics ──────────────────────────────────────────────────────
-  const latestPhysio = physio.slice(-1)[0] ?? null;
-  const latestWithSleep = physio.slice().reverse().find(p => p.sleepScore != null) ?? null;
+  const latestWithSleep = sleepHist.slice().reverse().find(p => p.sleepScore != null) ?? null;
   const sleepScore: number | null = latestWithSleep?.sleepScore ?? null;
   const latestWithHrv = physio.slice().reverse().find(p => p.hrvRmssd != null) ?? null;
   const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
@@ -313,7 +323,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     ? Math.round(baseline28Hrvs.reduce((a, b) => a + b, 0) / baseline28Hrvs.length)
     : null;
 
-  const sleepScores7 = physio.slice(-7).map(p => p.sleepScore).filter((v): v is number => v != null);
+  const sleepScores7 = sleepHist.slice(-7).map(p => p.sleepScore).filter((v): v is number => v != null);
   const sleepAvg7d = sleepScores7.length >= 2
     ? Math.round(sleepScores7.reduce((a, b) => a + b, 0) / sleepScores7.length)
     : null;
@@ -330,14 +340,17 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   // ── Readiness ─────────────────────────────────────────────────────────────
   const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
-  const recoveryResult = computeRecoveryScore(physio, { sleepDebtSec: sleepDebtForRecovery });
+  const recoveryResult = computeRecoveryScore(sleepHist, {
+    manualSleepScore: noGarminSleepToday ? (manualSleepToday?.sleepScore ?? undefined) : undefined,
+    sleepDebtSec: sleepDebtForRecovery,
+  });
   const readiness = computeReadiness({
     tsb,
     acwr: acwr.ratio,
     ctlNow,
     sleepScore,
     hrvRmssd,
-    sleepHistory: physio,
+    sleepHistory: sleepHist,
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     weeksOfHistory: metrics.length,
@@ -392,7 +405,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   // ── Sleep insight ─────────────────────────────────────────────────────────
   const sleepInsight = getSleepInsight({
-    history: physio,
+    history: sleepHist,
     recentWeeklyTSS: (s.historicWeeklyTSS ?? []).slice(-3),
   });
 

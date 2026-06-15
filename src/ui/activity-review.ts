@@ -224,7 +224,13 @@ export function showActivityReview(
 
   const overlay = document.createElement('div');
   overlay.id = 'activity-review-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:var(--c-bg);display:flex;flex-direction:column';
+  // position:fixed escapes the body's safe-area padding, so the overlay must
+  // carry its own top inset or every header it hosts (intro, review, matching)
+  // renders under the iOS status bar.
+  // position:fixed escapes the body's safe-area padding, so the overlay carries
+  // its own top inset (app convention, lint-enforced) — every header it hosts
+  // (intro, review, matching, confirm) renders below the iOS status bar.
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:var(--c-bg);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top, 0px)';
   document.body.appendChild(overlay);
 
   // All activities default to 'integrate'; matching screen's Log Only bucket handles exceptions

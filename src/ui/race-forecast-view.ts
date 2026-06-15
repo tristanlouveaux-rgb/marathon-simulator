@@ -20,7 +20,7 @@ import { predictStandardDistances, getStandardForecastDetail, getStandardForecas
 import { hasRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
 import { formatKm, formatPace } from '@/utils/format';
-import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
 import { renderForecastFingerprint } from './race-forecast-fingerprint';
 import { renderRunConeCard, wireRunConeCard } from './race-forecast-cone-card';
@@ -261,7 +261,7 @@ function buildForecastChart(
 
 // ── HTML assembly ────────────────────────────────────────────────────────────
 
-function getRaceForecastHTML(s: SimulatorState): string {
+function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
   const distKey = s.rd ?? 'marathon';
   const distLabel = RACE_DIST_LABEL[distKey] ?? 'Race';
   const distKm = rdKm(distKey);
@@ -345,16 +345,16 @@ function getRaceForecastHTML(s: SimulatorState): string {
     <style>
       #rfc-view { box-sizing:border-box; }
       #rfc-view *, #rfc-view *::before, #rfc-view *::after { box-sizing:inherit; }
-      @keyframes rfcFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
-      .rfc-fade { opacity:0; animation:rfcFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes rfcFloatUp { from { opacity:0; } to { opacity:1; } }
+      .rfc-fade { ${animate ? 'opacity:0; animation:rfcFloatUp 0.4s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
 
-    <div id="rfc-view" style="
+    <div id="rfc-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('rfc', { variant: 'sweep', palette: 'sky', pulse: true })}
+        ${buildRingBackground('rfc', { variant: 'sweep', palette: 'sky', pulse: animate, entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 
@@ -372,7 +372,7 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
         ${buildRunRaceOutcomeRetroCard(s)}
 
-        ${renderForecastFingerprint(s)}
+        ${renderForecastFingerprint(s, animate)}
 
         ${renderMarathonPopulationCard(s)}
 
@@ -423,10 +423,11 @@ function animateChartDrawOn(): void {
   });
 }
 
-function wireRaceForecastHandlers(): void {
+function wireRaceForecastHandlers(animate: boolean): void {
   wireTabBarHandlers(navigateTab);
 
-  animateChartDrawOn();
+  // Without the entrance, paths render fully drawn — skip the 1.2s draw-on.
+  if (animate) animateChartDrawOn();
   wireRunConeCard();
   wireForecastChips();
 
@@ -459,16 +460,21 @@ export function renderRaceForecastView(): void {
   if (!container) return;
   const s = getState();
 
+  // Entrance plays on the first Forecast visit per session only. Revisits render
+  // settled: no card fade, no ring entrance, no drift — tab switches feel instant
+  // and nothing moves behind the backdrop-filter glass (WKWebView resample cost).
+  const animate = shouldPlayEntrance('run-forecast');
+
   // No target race (just-training / general fitness, or pre-baseline): show
   // live standard-distance predictions instead of the targeted goal forecast.
   if (s.continuousMode || !s.rd || !s.initialBaseline) {
-    container.innerHTML = getStandardForecastHTML(s);
+    container.innerHTML = getStandardForecastHTML(s, animate);
     wireStandardForecastHandlers();
     return;
   }
 
-  container.innerHTML = getRaceForecastHTML(s);
-  wireRaceForecastHandlers();
+  container.innerHTML = getRaceForecastHTML(s, animate);
+  wireRaceForecastHandlers(animate);
 }
 
 // ── Standard-distance forecast (no target race) ──────────────────────────────
@@ -545,7 +551,7 @@ function buildStdShoesCard(s: SimulatorState): string {
     </div>`;
 }
 
-function getStandardForecastHTML(s: SimulatorState): string {
+function getStandardForecastHTML(s: SimulatorState, animate: boolean): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
@@ -578,16 +584,16 @@ function getStandardForecastHTML(s: SimulatorState): string {
     <style>
       #std-view { box-sizing:border-box; }
       #std-view *, #std-view *::before, #std-view *::after { box-sizing:inherit; }
-      @keyframes stdFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
-      .std-fade { opacity:0; animation:stdFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes stdFloatUp { from { opacity:0; } to { opacity:1; } }
+      .std-fade { ${animate ? 'opacity:0; animation:stdFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards;' : 'opacity:1;'} }
     </style>
 
-    <div id="std-view" style="
+    <div id="std-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">
       <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
-        ${buildRingBackground('std', { variant: 'whisper', palette: 'sky' })}
+        ${buildRingBackground('std', { variant: 'whisper', palette: 'sky', entrance: animate ? 'small' : 'none' })}
       </div>
       ${buildSunGlint('low')}
 
@@ -912,11 +918,11 @@ export function renderStdDistanceDetail(dist: StdDist): void {
     <style>
       #stdd-view { box-sizing:border-box; }
       #stdd-view *, #stdd-view *::before, #stdd-view *::after { box-sizing:inherit; }
-      @keyframes stddFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes stddFloatUp { from { opacity:0; } to { opacity:1; } }
       .stdd-fade { opacity:0; animation:stddFloatUp 0.55s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="stdd-view" style="
+    <div id="stdd-view" class="safe-top-bleed" style="
       position:relative;min-height:100dvh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">

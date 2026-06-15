@@ -343,11 +343,11 @@ function getRollingLoadHTML(s: SimulatorState): string {
     <style>
       #rl-view { box-sizing:border-box; }
       #rl-view *, #rl-view *::before, #rl-view *::after { box-sizing:inherit; }
-      @keyframes rlFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      @keyframes rlFloatUp { from { opacity:0; } to { opacity:1; } }
       .rl-fade { opacity:0; animation:rlFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="rl-view" style="
+    <div id="rl-view" class="safe-top-bleed" style="
       position:relative;min-height:100vh;background:${atmosphereGradient('deepBlue')};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -359,7 +359,7 @@ function getRollingLoadHTML(s: SimulatorState): string {
         <div style="
           padding:56px 20px 12px;
           display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
+          position:relative;
         ">
           <button id="rl-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;

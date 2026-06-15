@@ -1,4 +1,5 @@
 import type { Triathlon } from '@/types/onboarding';
+import type { TriathlonDistance } from '@/types/triathlon';
 import { calculateWeeksUntil, isUpcoming } from '@/data/marathons';
 import { COURSE_PROFILES } from '@/data/triathlon-course-profiles';
 
@@ -89,6 +90,17 @@ export const WORLD_TRIATHLONS: Triathlon[] = [
   { id: '703-augusta',        name: 'IRONMAN 70.3 Augusta',                city: 'Augusta',           country: 'USA',           date: '2026-09-27', distance: '70.3' },
   { id: '703-malaga',         name: 'IRONMAN 70.3 Málaga',                 city: 'Málaga',            country: 'Spain',         date: '2026-10-18', distance: '70.3' },
   { id: '703-porec',          name: 'IRONMAN 70.3 Poreč',                  city: 'Poreč',             country: 'Croatia',       date: '2026-10-18', distance: '70.3' },
+
+  // ── PTO T100 World Tour (2km / 80km / 18km) ───────────────────────────
+  // Official 2026 T100 calendar. Refresh annually alongside the dates above.
+  { id: 't100-singapore',     name: 'T100 Singapore',                      city: 'Singapore',         country: 'Singapore',     date: '2026-04-12', distance: 't100' },
+  { id: 't100-san-francisco', name: 'T100 San Francisco',                  city: 'San Francisco',     country: 'USA',           date: '2026-05-31', distance: 't100' },
+  { id: 't100-vancouver',     name: 'T100 Vancouver',                      city: 'Vancouver',         country: 'Canada',        date: '2026-06-21', distance: 't100' },
+  { id: 't100-london',        name: 'T100 London',                         city: 'London',            country: 'United Kingdom',date: '2026-08-09', distance: 't100' },
+  { id: 't100-ibiza',         name: 'T100 Ibiza',                          city: 'Ibiza',             country: 'Spain',         date: '2026-09-27', distance: 't100' },
+  { id: 't100-las-vegas',     name: 'T100 Las Vegas',                      city: 'Las Vegas',         country: 'USA',           date: '2026-10-18', distance: 't100' },
+  { id: 't100-dubai',         name: 'T100 Dubai',                          city: 'Dubai',             country: 'UAE',           date: '2026-11-14', distance: 't100' },
+  { id: 't100-qatar',         name: 'T100 Qatar',                          city: 'Doha',              country: 'Qatar',         date: '2026-12-05', distance: 't100' },
 ];
 
 function attachProfile(t: Triathlon): Triathlon {
@@ -96,9 +108,11 @@ function attachProfile(t: Triathlon): Triathlon {
   return profile ? { ...t, profile } : t;
 }
 
-/** Filter triathlons by IRONMAN distance and minimum weeks-until cutoff. */
+/** Filter triathlons by race distance and minimum weeks-until cutoff.
+ *  Sprint/Olympic have no curated events (returns empty) — the wizard offers a
+ *  manual-date path for those. T100 returns the PTO World Tour calendar. */
 export function getTriathlonsByDistance(
-  distance: '70.3' | 'ironman',
+  distance: TriathlonDistance,
   minWeeks: number = 8,
 ): Triathlon[] {
   return WORLD_TRIATHLONS

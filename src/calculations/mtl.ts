@@ -18,8 +18,9 @@
  */
 
 import type { HyroxStation } from '@/types/triathlon';
-import type { Week } from '@/types/state';
+import type { Week, SimulatorState } from '@/types/state';
 import { STATION_MTL_FACTORS, RUN_MTL_FACTORS } from '@/constants/hyrox-constants';
+import { ctlAdherenceRatio } from '@/calculations/fitness-model';
 
 export type RunIntensity = 'run_easy' | 'run_tempo' | 'run_intervals';
 
@@ -217,4 +218,50 @@ export function computeMTLFitnessFatigue(
     mtlCTL: ctl / 7,
     mtlATL: atl / 7,
   };
+}
+
+export interface MtlAdherence {
+  /** actual MTL chronic load ÷ plan-expected, for the completed week. < 1 = behind. */
+  ratio: number;
+  pctOfPlanned: number;
+  plannedMTL: number;
+  actualMTL: number;
+  valid: boolean;
+}
+
+/**
+ * HYROX mirror of `resolveCtlAdherence` (running). One-step MTL-gap: did the completed week's
+ * actual musculo-tendon load keep up with what the plan prescribed? The ratio re-anchors next
+ * week's `effectiveHours` down when behind (plan_engine.hyrox → ctlGapMultiplier).
+ *
+ * Self-contained, weekly-unit throughout (unlike computeMTLFitnessFatigue, which returns daily ÷7):
+ * the seed is the completed-only chronic MTL EMA across all weeks BEFORE the completed week, so the
+ * shared seed weighting (~85%) gives the same gentle one-week / compounding behaviour as running.
+ * HYROX converges because `effectiveHours` drives both duration AND the generated MTL, so a reduced
+ * week lowers next week's planned MTL too. HYROX-only guard mirrors the running mode guard.
+ */
+export function resolveMtlAdherence(s: SimulatorState, completedWeek: number): MtlAdherence {
+  const neutral: MtlAdherence = { ratio: 1, pctOfPlanned: 100, plannedMTL: 0, actualMTL: 0, valid: false };
+  if (s.eventType !== 'hyrox' || !s.wks) return neutral;
+  if (completedWeek < 1 || completedWeek > s.wks.length) return neutral;
+  const wk = s.wks[completedWeek - 1] as any;
+  // Excused: injury detrains on its own curve, a silently-advanced gap is already handled, and a
+  // taper week must not be re-anchored down before a race. Mirrors the running resolver's guards.
+  if (wk?.injuryState?.active || wk?.detrainApplied || wk?.ph === 'taper') return neutral;
+
+  const plannedMTL = computeWeekMTL(wk);
+  if (plannedMTL <= 0) return neutral;
+  const actualMTL = computeWeekActualMTL(wk);
+
+  // Prior-week chronic MTL seed in weekly units (completed-only EMA, same constant as
+  // computeMTLFitnessFatigue but without the ÷7 daily normalisation).
+  const CTL_DECAY = Math.exp(-7 / 42);
+  let seed = 0;
+  for (let i = 0; i < completedWeek - 1; i++) {
+    seed = seed * CTL_DECAY + computeWeekActualMTL(s.wks[i]) * (1 - CTL_DECAY);
+  }
+
+  const ratio = ctlAdherenceRatio(seed, plannedMTL, actualMTL);
+  const pctOfPlanned = Math.max(0, Math.round((actualMTL / plannedMTL) * 100));
+  return { ratio, pctOfPlanned, plannedMTL, actualMTL, valid: true };
 }

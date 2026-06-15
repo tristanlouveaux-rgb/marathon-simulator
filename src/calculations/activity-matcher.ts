@@ -929,7 +929,13 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         }
         break;
       }
-      if (freshITrimp != null && actual.iTrimp !== freshITrimp) {
+      // Never clobber a file-enriched iTRIMP. An activity enriched in place from
+      // its original .fit ("Add detail from Strava") keeps its `apple-`/Garmin id,
+      // so the thin row re-arrives every sync; `resolveITrimp` on that thin row is
+      // a crude avg-HR estimate that would silently degrade the stream-computed
+      // value. The hrZones branch below is already guarded by `== null`; iTrimp
+      // needs the same protection. (A real Strava row still upgrades via line 770.)
+      if (freshITrimp != null && actual.iTrimp !== freshITrimp && !actual.enrichedFromFile) {
         actual.iTrimp = freshITrimp;
         enrichChanged = true;
       }
