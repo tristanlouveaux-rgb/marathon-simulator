@@ -20,12 +20,14 @@ import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind }
 import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from './week-resolve.triathlon';
 import { formatKm } from '@/utils/format';
-import { isTouchPrimary } from '@/utils/platform';
+import { isTouchPrimary, fireSelectionHaptic } from '@/utils/platform';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
+import { triWeekEmphasis } from '@/workouts/plan_engine.triathlon';
+import type { TrainingPhase } from '@/types/training';
 import type { Workout } from '@/types/state';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from '../injury/modal';
@@ -98,9 +100,12 @@ export function renderTriathlonPlanView(): void {
   // Include adhoc sessions (e.g. injury-safe strength accepted from the
   // capability nudge) so suggested sessions render on the plan, not just
   // `triWorkouts`. Mirrors the HYROX plan-view fix.
-  // clone:false — click/drag handlers re-read wk.triWorkouts directly and rely
-  // on render mods being visible on those shared objects (historical behaviour).
-  const workouts = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
+  // ISSUE-288: clone (default) so render-time illness/holiday/bridge mods apply to
+  // COPIES, never the stored `wk.triWorkouts`. clone:false mutated stored objects
+  // in place; a later saveState (rating/drag) then persisted "Rest — illness" etc.
+  // permanently. Handlers below look up stored objects by id (clean) — ratings
+  // still persist correctly; cards still show mods (from this resolved copy).
+  const workouts = resolveTriWeekWorkouts(s, viewWeek);
   const phase = wk?.ph ? capitalize(wk.ph) : '';
   const cyclingLabel = getCyclingEventLabel(s);
   const baseEventLabel = cyclingLabel ?? getTriDistanceLabel(tri.distance);
@@ -246,6 +251,10 @@ export function renderTriathlonPlanView(): void {
 
         <!-- Future-week draft banner (mirrors running plan-view) -->
         ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Estimated from last week\'s load. Sessions and distances adjust as you train.</div>` : ''}
+
+        <!-- Run-emphasis note: IM build/peak weeks that push the long run. Current
+             week only; the long ride eases the same week (alternation, §CD). -->
+        ${viewWeek === s.w && tri && triWeekEmphasis(tri.distance, (wk?.ph ?? 'base') as TrainingPhase, viewWeek) === 'run' ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">This week emphasises the run. The long run steps up to build durability for the marathon off the bike. Bike volume eases to balance the week's load.</div>` : ''}
 
         <!-- Injury banner + morning check (current week only) -->
         ${!isFutureWeek && injuryActive && injState ? `
@@ -433,6 +442,21 @@ let _touchLastHighlight: HTMLElement | null = null;
 let _touchHoldTimer: number | null = null;
 let _touchHoldMet = false;
 
+// Lift the card when the long-press hold completes so it's visibly clear the
+// card is armed and the finger can move it. Mirrors running plan-view.
+function liftTriCard(c: HTMLElement): void {
+  c.style.transition = 'transform 140ms ease, box-shadow 140ms ease';
+  c.style.transform = 'scale(1.03)';
+  c.style.boxShadow = '0 8px 24px rgba(0,0,0,0.16)';
+  c.style.zIndex = '5';
+}
+function dropTriCard(c: HTMLElement | null): void {
+  if (!c) return;
+  c.style.transform = '';
+  c.style.boxShadow = '';
+  c.style.zIndex = '';
+}
+
 /**
  * Build the 7-day plan list HTML for a given week. Self-contained (recomputes
  * workouts/byDay/injury/status from state) so both the full render and the
@@ -441,8 +465,8 @@ let _touchHoldMet = false;
 function buildTriDayList(s: any, viewWeek: number): string {
   const tri = s.triConfig;
   const wk = s.wks?.[viewWeek - 1];
-  // clone:false — see renderTriathlonPlanView; handlers depend on shared refs.
-  const workouts = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
+  // ISSUE-288: clone (default) — never mutate stored triWorkouts. See renderTriathlonPlanView.
+  const workouts = resolveTriWeekWorkouts(s, viewWeek);
   const dismissedTests = new Set<string>((tri as any)?.dismissedTests as string[] ?? []);
 
   const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
@@ -644,7 +668,11 @@ function wireTriWorkoutTouchDnd(): void {
       _touchSourceCard = card;
       _touchHoldMet = false;
       if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
-      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
+      _touchHoldTimer = window.setTimeout(() => {
+        _touchHoldMet = true;
+        liftTriCard(card);
+        fireSelectionHaptic();
+      }, TOUCH_DRAG_HOLD_MS);
     }, { passive: true });
 
     card.addEventListener('touchmove', (e) => {
@@ -666,6 +694,11 @@ function wireTriWorkoutTouchDnd(): void {
           }
           return;
         }
+        // Hold met: the card is popped out and locked in. preventDefault on this
+        // first move (even before the 8px drag threshold) so iOS does not
+        // classify the gesture as a page scroll and keep scrolling while the
+        // user tries to place the card.
+        e.preventDefault();
         if (dist < 8) return;
         _touchDragging = true;
         if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
@@ -725,6 +758,7 @@ function wireTriWorkoutTouchDnd(): void {
       if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
       _touchHoldMet = false;
       if (!_touchDragging || !_touchDragId) {
+        dropTriCard(card);
         _touchDragId = '';
         _touchDragDay = -1;
         _touchSourceCard = null;
@@ -733,6 +767,7 @@ function wireTriWorkoutTouchDnd(): void {
       }
 
       if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      dropTriCard(_touchSourceCard);
       if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
       if (_touchLastHighlight) {
         _touchLastHighlight.style.outline = '';
@@ -784,6 +819,20 @@ function wireTriWorkoutTouchDnd(): void {
           maybeOpenSuggestionsAfterDrop(targetDay);
         }
       }
+    });
+
+    // iOS fires touchcancel when a gesture is interrupted (e.g. scroll takes
+    // over). Reset so a card lifted by the hold doesn't stay popped out.
+    card.addEventListener('touchcancel', () => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
+      dropTriCard(card);
+      if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+      _touchDragId = '';
+      _touchDragDay = -1;
+      _touchSourceCard = null;
+      _touchDragging = false;
     });
   });
 }

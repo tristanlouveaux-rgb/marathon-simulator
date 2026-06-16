@@ -35,14 +35,15 @@ export interface DurabilityInputs {
 /**
  * Long-session thresholds (seconds). Anchored to Friel's "Triathlete's Training
  * Bible" build-phase guidelines: IM athletes regularly include 4.5h+ rides and
- * 2h+ long runs in the 12 weeks before race day; 70.3 athletes 2.5h+ rides and
- * 1.5h+ long runs.
+ * 2.5h long runs in the 12 weeks before race day (the durability sweet spot for
+ * the marathon off the bike — see SCIENCE_LOG §CD); 70.3 athletes 2.5h+ rides
+ * and 1.5h+ long runs.
  *
  * These are *threshold-met* values. Below them, the run leg is penalised
  * proportionally.
  */
 export const DURABILITY_THRESHOLDS: Record<TriathlonDistance, { longRideSec: number; longRunSec: number }> = {
-  ironman: { longRideSec: 4.5 * 3600, longRunSec: 2.0 * 3600 },
+  ironman: { longRideSec: 4.5 * 3600, longRunSec: 2.5 * 3600 },  // 2:30 — agrees with the plan engine's IM long-run target (SCIENCE_LOG §CD)
   '70.3':  { longRideSec: 2.5 * 3600, longRunSec: 1.5 * 3600 },
   t100:    { longRideSec: 2.5 * 3600, longRunSec: 1.5 * 3600 },  // ≈70.3 (80km/18km)
   olympic: { longRideSec: 1.5 * 3600, longRunSec: 0.75 * 3600 },

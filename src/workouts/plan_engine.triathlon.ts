@@ -74,6 +74,72 @@ export const TRI_MAX_SESSIONS_PER_DISCIPLINE = 3;
 export const TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY = 5;
 
 /**
+ * Ironman long-run build (SCIENCE_LOG §CD). The IM marathon is run on
+ * pre-fatigued, glycogen-depleted legs after ~180 km of cycling; the limiter is
+ * durability, not fresh marathon pace (Maunder 2021). Cycling builds the aerobic
+ * engine but only running loads the legs eccentrically, so run durability must
+ * come from running. The standalone long run therefore BUILDS to a 2:30 (150 min)
+ * time-on-feet ceiling — the durability sweet spot for mainstream IM coaching
+ * (Friel, Fitzgerald), below the ~30 km standalone-marathon peak because total
+ * three-sport load caps run volume. It ramps from the same 90-min week-1 anchor
+ * running mode uses (plan_engine.ts longRunMinutes), so an IM long run is no
+ * longer a leftover fraction of a bike-dominated hours budget.
+ *
+ * Kept as a local planning table (mirrors plan_engine.ts longRunCapMin) to
+ * preserve the tracking/planning separation; the matching durability *threshold*
+ * lives in durability-cap.ts and is bumped to 2.5h so the two agree.
+ *
+ * 70.3 keeps the share model for now — its half-marathon run leg needs a
+ * smaller, separate target. Flagged for Tristan before mirroring (no invented
+ * number).
+ */
+const IRONMAN_LONG_RUN_BASE_MIN = 90;
+const IRONMAN_LONG_RUN_PEAK_MIN = 150;
+
+/**
+ * On a week that emphasises one key session, the OTHER key session (the long
+ * ride on a run-emphasis week, the long run on a bike-emphasis week) holds at a
+ * maintenance floor so it doesn't detrain while its counterpart peaks. 0.75
+ * confirmed by Tristan (2026-06-17): high enough to retain the distance, low
+ * enough to free recovery for the week's priority. The peak long run and peak
+ * long ride never land in the same week (Banister supercompensation: stacking
+ * two maximal durability sessions blunts the adaptation from both); the brick
+ * still covers run-on-fatigue specificity every relevant week.
+ */
+export const TRI_KEY_SESSION_MAINTENANCE = 0.75;
+
+/**
+ * Which key session this week emphasises. Ironman build/peak only: alternate by
+ * week parity so the peak long run and peak long ride never collide. Returns
+ * null where the alternation does not apply (non-IM distance, or base/taper) —
+ * callers then fall back to the share model and full sessions.
+ */
+export function triWeekEmphasis(
+  distance: TriathlonDistance, phase: TrainingPhase, weekIndex: number
+): 'run' | 'bike' | null {
+  if (distance !== 'ironman') return null;
+  if (phase !== 'build' && phase !== 'peak') return null;
+  return weekIndex % 2 === 1 ? 'run' : 'bike';
+}
+
+/**
+ * Ramped Ironman long-run target in minutes (90 -> 150 across the build,
+ * peaking by totalWeeks * 0.75, taper cut to 0.65 to mirror running mode).
+ * Returns null for non-IM distances (share model applies). This is the FULL
+ * target; the alternation maintenance floor is applied by the caller.
+ */
+export function triLongRunTargetMin(
+  distance: TriathlonDistance, weekIndex: number, totalWeeks: number, phase: TrainingPhase
+): number | null {
+  if (distance !== 'ironman') return null;
+  const progress = Math.min(1, weekIndex / (totalWeeks * 0.75));
+  let base = IRONMAN_LONG_RUN_BASE_MIN
+    + Math.max(0, IRONMAN_LONG_RUN_PEAK_MIN - IRONMAN_LONG_RUN_BASE_MIN) * progress;
+  if (phase === 'taper') base *= 0.65;
+  return Math.round(Math.min(base, IRONMAN_LONG_RUN_PEAK_MIN));
+}
+
+/**
  * Generate a full triathlon plan for the current state.
  */
 export function generateTriathlonPlan(state: SimulatorState): Week[] {
@@ -208,7 +274,49 @@ function generateWeekForTriathlon(
   const forceDeload = !!(state.wks?.[weekIndex - 1] as any)?.forceDeload;
   const isDeload = forceDeload || isDeloadWeek(weekIndex, phase);
   const effectiveMult = isDeload ? phaseMult * 0.7 : phaseMult;
-  const weekHours = timeAvailable * effectiveMult;
+
+  // This week's TOTAL time budget: the user's peak hours scaled by the phase ramp.
+  // Everything prescribed — solo swim/bike/run, the brick, gym, and commute runs —
+  // must sum to at most this. We reserve the fixed commitments (gym, commute) and the
+  // brick's share of the budget first, then size the solo sessions from what remains,
+  // so the plan never exceeds the hours the user said they have. Decided 2026-06-16
+  // (supersedes the §AM additive-commute model — commutes now count against the cap;
+  // see SCIENCE_LOG §CD).
+  const totalCapMin = timeAvailable * effectiveMult * 60;
+
+  // Commute runs cost their REAL duration (one-way distance × easy run pace), not a
+  // flat 60min. easyPaceSecPerKm is the LT-anchored easy pace when VDOT is known;
+  // otherwise fall back to the run-skill estimate. Reused below for the run sessions.
+  const easyPaceSecPerKm = state.v ? gp(state.v, state.lt ?? null).e : undefined;
+  const commuteEasyPaceSec = easyPaceSecPerKm ?? easyPaceSecPerKmFromSkill(rating.run as TriSkillSlider);
+  const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
+    ? state.commuteConfig.commuteDaysPerWeek
+    : 0;
+  const commuteSlotsPerDay = state.commuteConfig?.isBidirectional ? 2 : 1;
+  const commuteSlotMin = commuteDays > 0 && state.commuteConfig
+    ? Math.max(1, Math.round((state.commuteConfig.distanceKm * commuteEasyPaceSec) / 60))
+    : 0;
+  const reservedCommuteMin = hasRun ? commuteDays * commuteSlotsPerDay * commuteSlotMin : 0;
+
+  // Gym: 45 min each, capped at 2 (matches the gym loop below).
+  const reservedGymMin = Math.min(gymSessions, 2) * 45;
+
+  // Brick: present only in its policy phases and only with both bike+run. Its bike+run
+  // minutes are fixed fractions of the bike/run hour split, so the brick adds `brickFrac`
+  // of the SBR budget on top of the solo sessions. Fold that into the budget solve.
+  const brickPolicy = TRI_BRICK_POLICY[tri.distance];
+  const brickActive = brickPolicy.phases.includes(phase) && hasBike && hasRun;
+  const brickFrac = brickActive
+    ? split.bike * BRICK_BIKE_SHARE + split.run * brickPolicy.runShare
+    : 0;
+
+  // Solve solo-SBR hours so that solo + brick + gym + commute == cap:
+  //   capMin = sbrMin·(1 + brickFrac) + gym + commute
+  //   ⇒ sbrMin = (capMin − gym − commute) / (1 + brickFrac)
+  // When fixed commitments alone exceed the cap (e.g. heavy commute on a deep taper
+  // week) sbrMin floors at 0 and the solo sessions drop out — the cap can't fit them.
+  const fixedMin = reservedGymMin + reservedCommuteMin;
+  const weekHours = Math.max(0, (totalCapMin - fixedMin) / (1 + brickFrac)) / 60;
 
   // Per-discipline hours
   const swimHours = weekHours * split.swim;
@@ -223,14 +331,6 @@ function generateWeekForTriathlon(
   const swimSessions = hasSwim ? countSessions(swimHours, TRI_AVG_SESSION_HOURS.swim, TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
   const bikeSessions = hasBike ? countSessions(bikeHours, TRI_AVG_SESSION_HOURS.bike, isCyclingOnly ? TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY : TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
   let   runSessions  = hasRun  ? countSessions(runHours,  TRI_AVG_SESSION_HOURS.run,  TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
-
-  // Commute runs are appended on top of the prescribed tri run sessions,
-  // not substituted for them (revised 2026-05-20. See SCIENCE_LOG §AK).
-  // We still read commuteDays so the slot generator further down can emit
-  // the commute slots themselves.
-  const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
-    ? state.commuteConfig.commuteDaysPerWeek
-    : 0;
 
   // Generate swim sessions. Intensity distribution is race-distance-aware:
   // quality slots take the distance's flavour (short = speed/threshold, long =
@@ -258,6 +358,12 @@ function generateWeekForTriathlon(
   // Generate bike sessions. Last one is the aerobic "long ride" (reserved as
   // endurance for every distance). Quality slots take the distance's flavour
   // (short = vo2/vlamax, long = sub-threshold). We might swap the long for a brick.
+  // Ironman alternates which key session peaks each build/peak week so the long
+  // run and long ride never collide (SCIENCE_LOG §CD). On a run-emphasis week
+  // the long ride drops to its maintenance floor; the minutes it frees fund the
+  // longer long run below. null for every other distance/phase (share model).
+  const triEmphasis = triWeekEmphasis(tri.distance, phase, weekIndex);
+  let bikeMinutesFreedForRun = 0;
   const bike: Workout[] = [];
   const bikeQuality = triQualitySlotIndices(tri.distance, phase, 'bike', bikeSessions, true);
   for (let i = 0; i < bikeSessions; i++) {
@@ -266,8 +372,14 @@ function generateWeekForTriathlon(
       ? substituteExcluded(selectBikeQualityKind(tri.distance, phase, i, weekIndex), excluded)
       : 'endurance';
     // Long ride gets bigger slice
-    const share = i === bikeSessions - 1 ? 0.45 : (0.55 / Math.max(1, bikeSessions - 1));
-    const minutes = Math.max(30, Math.round(bikeHours * 60 * share));
+    const isLongRide = i === bikeSessions - 1;
+    const share = isLongRide ? 0.45 : (0.55 / Math.max(1, bikeSessions - 1));
+    let minutes = Math.max(30, Math.round(bikeHours * 60 * share));
+    if (isLongRide && triEmphasis === 'run') {
+      const reduced = Math.max(30, Math.round(minutes * TRI_KEY_SESSION_MAINTENANCE));
+      bikeMinutesFreedForRun += minutes - reduced;
+      minutes = reduced;
+    }
     bike.push(generateBikeSession({
       phase,
       skill: rating.bike as TriSkillSlider,
@@ -281,11 +393,8 @@ function generateWeekForTriathlon(
     }));
   }
 
-  // Run sessions (simple: 1 quality, 1 easy, 1 long)
-  // Resolve easy pace. Mirrors running mode: gp(vdot, ltPace) so LT anchors
-  // all zones when available. Without ltPace, gp() falls back to VDOT-only
-  // which diverges from the LT-anchored paces shown elsewhere in the UI.
-  const easyPaceSecPerKm = state.v ? gp(state.v, state.lt ?? null).e : undefined;
+  // Run sessions (simple: 1 quality, 1 easy, 1 long). easyPaceSecPerKm resolved
+  // above (LT-anchored when VDOT is known) and reused here for the run pace.
   // Body-mass cross-training swap (opt-in, mirrors running): heavier triathletes
   // get gentler EASY aerobic runs. Same shared fraction as running mode; applied
   // to minutes here because tri runs are time-based (running's are km-based).
@@ -294,9 +403,36 @@ function generateWeekForTriathlon(
     ? 1
     : 1 - crossTrainingSwapFraction(state.bodyWeightKg, state.biologicalSex);
   const run: Workout[] = [];
+  // Ironman: the long run BUILDS to a ramped time-on-feet target (2:30 peak)
+  // rather than taking a fixed 0.45 share of a bike-dominated run budget, which
+  // could never reach marathon-relevant durability (SCIENCE_LOG §CD). On a
+  // bike-emphasis week it holds at the maintenance floor; on a run-emphasis week
+  // it takes its full target, drawing on the minutes the long ride freed above.
+  // The other runs split whatever run time remains, floored at 30 min each.
+  const imLongTarget = triLongRunTargetMin(tri.distance, weekIndex, totalWeeks, phase);
+  let imLongRunMin: number | null = null;
+  let imOtherRunMin = 0;
+  if (imLongTarget != null && runSessions > 0) {
+    const target = triEmphasis === 'bike'
+      ? Math.round(imLongTarget * TRI_KEY_SESSION_MAINTENANCE)
+      : imLongTarget;
+    const otherCount = Math.max(0, runSessions - 1);
+    const runBudget = runHours * 60 + bikeMinutesFreedForRun;
+    // Never starve the other runs below their 30-min floor to feed the long run.
+    const maxLong = runBudget - otherCount * 30;
+    imLongRunMin = Math.max(30, Math.min(target, Math.round(maxLong)));
+    const remaining = Math.max(0, runBudget - imLongRunMin);
+    imOtherRunMin = otherCount > 0 ? Math.max(30, Math.round(remaining / otherCount)) : 0;
+  }
   for (let i = 0; i < runSessions; i++) {
-    const share = i === runSessions - 1 ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
-    const minutes = Math.max(30, Math.round(runHours * 60 * share));
+    const isLong = i === runSessions - 1;
+    let minutes: number;
+    if (imLongRunMin != null) {
+      minutes = isLong ? imLongRunMin : imOtherRunMin;
+    } else {
+      const share = isLong ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
+      minutes = Math.max(30, Math.round(runHours * 60 * share));
+    }
     run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
   }
 
@@ -304,7 +440,6 @@ function generateWeekForTriathlon(
   // sprint gets a single peak-week rehearsal; the IM brick run is the decisive
   // race-specific session. Requires both bike and run; cycling-only skips bricks.
   let brick: Workout | null = null;
-  const brickPolicy = TRI_BRICK_POLICY[tri.distance];
   if (brickPolicy.phases.includes(phase) && bike.length > 0 && hasRun && run.length > 0) {
     const bikeMinutes = Math.round(bikeHours * 60 * BRICK_BIKE_SHARE);  // Slightly shorter than solo long ride
     const runMinutes = Math.round(runHours * 60 * brickPolicy.runShare);
@@ -320,10 +455,12 @@ function generateWeekForTriathlon(
     }
   }
 
-  // Commute runs. Appended to the run array on top of prescribed sessions
-  // (model revised 2026-05-20). Bidirectional commutes emit two slots per
-  // day (morning + evening) at the one-way distance. Tagged `commute: true`
-  // so the matcher prefers commute actuals against these slots.
+  // Commute runs. Bidirectional commutes emit two slots per day (morning + evening)
+  // at the one-way distance. Tagged `commute: true` so the matcher prefers commute
+  // actuals against these slots. Each slot carries its real estimatedDurationMin
+  // (one-way distance × easy pace, computed above as commuteSlotMin) so the scheduler
+  // counts it correctly instead of defaulting to 60min, and so commute time is
+  // accounted for in the weekly hours cap (SCIENCE_LOG §CB).
   if (commuteDays > 0 && hasRun && state.commuteConfig) {
     const oneWayKm = state.commuteConfig.distanceKm;
     const bi = state.commuteConfig.isBidirectional;
@@ -337,6 +474,7 @@ function generateWeekForTriathlon(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteSlotMin,
         });
         run.push({
           t: 'easy',
@@ -346,6 +484,7 @@ function generateWeekForTriathlon(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteSlotMin,
         });
       } else {
         run.push({
@@ -356,6 +495,7 @@ function generateWeekForTriathlon(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteSlotMin,
         });
       }
     }

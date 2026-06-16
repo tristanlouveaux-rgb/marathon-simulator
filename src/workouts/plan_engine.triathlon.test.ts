@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { generateTriathlonPlan } from './plan_engine.triathlon';
+import { generateTriathlonPlan, triWeekEmphasis, triLongRunTargetMin } from './plan_engine.triathlon';
+import type { Week } from '@/types/state';
 import { phasesForLen } from '@/constants/triathlon-constants';
 import type { SimulatorState } from '@/types/state';
 
@@ -171,6 +172,62 @@ describe('Triathlon plan engine — generation shape', () => {
   });
 });
 
+describe('Triathlon plan engine — weekly hours cap is honoured', () => {
+  // Mirrors scheduler.triathlon.ts:workoutMinutes (not exported). Every prescribed
+  // session — solo S/B/R, brick, gym, commute — must sum to at most the cap.
+  function workoutMinutes(w: any): number {
+    if (w.estimatedDurationMin && w.estimatedDurationMin > 0) return w.estimatedDurationMin;
+    if (w.brickSegments) {
+      return (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
+    }
+    const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
+    if (matches.length > 0) {
+      return matches.reduce((acc, m) => Math.max(acc, parseInt((m as RegExpMatchArray)[1], 10)), 0);
+    }
+    return 60;
+  }
+  function weekMinutes(wk: any): number {
+    return (wk.triWorkouts ?? []).reduce((sum: number, w: any) => sum + workoutMinutes(w), 0);
+  }
+
+  it('a 10h/week plan with commutes + gym never exceeds 10h in any week', () => {
+    const weeks = generateTriathlonPlan(makeTriState({
+      gs: 2,
+      commuteConfig: { enabled: true, commuteDaysPerWeek: 3, distanceKm: 4, isBidirectional: true } as any,
+    }));
+    for (const wk of weeks) {
+      // Allow a small per-session rounding tolerance (Math.round on each session).
+      expect(weekMinutes(wk)).toBeLessThanOrEqual(600 + 30);
+    }
+  });
+
+  it('the peak week fills close to the budget (cap is binding, not slack)', () => {
+    const weeks = generateTriathlonPlan(makeTriState({ gs: 2 }));
+    // The heaviest peak week (deload peak weeks run lighter) should use most of the
+    // 10h budget — at least 8h of prescribed work — without exceeding it.
+    const peakMinutes = weeks
+      .filter((w) => w.ph === 'peak')
+      .map((w) => weekMinutes(w));
+    expect(peakMinutes.length).toBeGreaterThan(0);
+    const heaviest = Math.max(...peakMinutes);
+    expect(heaviest).toBeGreaterThanOrEqual(8 * 60);
+    expect(heaviest).toBeLessThanOrEqual(600 + 30);
+  });
+
+  it('commute slots carry a real duration derived from distance, not a flat 60min', () => {
+    const weeks = generateTriathlonPlan(makeTriState({
+      commuteConfig: { enabled: true, commuteDaysPerWeek: 2, distanceKm: 4, isBidirectional: true } as any,
+    }));
+    const commute = weeks
+      .flatMap((w) => w.triWorkouts ?? [])
+      .find((w) => (w as any).commute);
+    expect(commute).toBeDefined();
+    // 4km easy ≈ 20–28min depending on pace fallback — never the 60min default.
+    expect((commute as any).estimatedDurationMin).toBeGreaterThan(0);
+    expect((commute as any).estimatedDurationMin).toBeLessThan(45);
+  });
+});
+
 describe('phasesForLen — short-plan compression', () => {
   it('returns canonical PHASE_WEEKS at default length (Ironman 24w)', () => {
     expect(phasesForLen('ironman', 24)).toEqual({ base: 10, build: 7, peak: 5, taper: 2 });
@@ -214,5 +271,101 @@ describe('phasesForLen — short-plan compression', () => {
   it('caps taper at 2 weeks even on long plans', () => {
     expect(phasesForLen('ironman', 30).taper).toBe(2);
     expect(phasesForLen('70.3', 30).taper).toBe(2);
+  });
+});
+
+describe('Ironman long-run build + key-session alternation (SCIENCE_LOG §CD)', () => {
+  const imState = () => makeTriState({
+    tw: 24,
+    triConfig: {
+      distance: 'ironman',
+      timeAvailableHoursPerWeek: 14,
+      volumeSplit: { swim: 0.15, bike: 0.50, run: 0.35 },
+      skillRating: { swim: 3, bike: 3, run: 3 },
+    },
+  });
+
+  const longRunMin = (wk: Week): number => {
+    const lr = (wk.triWorkouts ?? []).find((w) => w.discipline === 'run' && w.t === 'long');
+    return lr?.estimatedDurationMin ?? 0;
+  };
+  // The standalone endurance long ride only — bricks carry discipline 'bike' too
+  // but are the race-specificity session and stay full every week by design.
+  const longRideMin = (wk: Week): number =>
+    (wk.triWorkouts ?? [])
+      .filter((w) => w.discipline === 'bike' && w.t !== 'brick')
+      .reduce((m, w) => Math.max(m, w.estimatedDurationMin ?? 0), 0);
+
+  it('builds the IM long run toward the 2:30 ceiling on a peak run-emphasis week', () => {
+    const weeks = generateTriathlonPlan(imState());
+    const runWeeks = weeks
+      .map((w, i) => ({ w, idx: i + 1 }))
+      .filter(({ w, idx }) => (w.ph === 'build' || w.ph === 'peak') && idx % 2 === 1);
+    const last = runWeeks[runWeeks.length - 1];
+    // Approaches 150 min (2:30) — well past the old ~20 km (~113 min) share cap.
+    expect(longRunMin(last.w)).toBeGreaterThanOrEqual(140);
+    expect(longRunMin(last.w)).toBeLessThanOrEqual(155);
+  });
+
+  it('alternates: the peak long run lands on run weeks, the peak long ride on bike weeks', () => {
+    const weeks = generateTriathlonPlan(imState());
+    // Compare the MAX of each emphasis group so periodic deload weeks (×0.7)
+    // fall out of the comparison — a deloaded "full" session would otherwise be
+    // smaller than a non-deloaded maintenance one.
+    const active = weeks
+      .map((w, i) => ({ w, idx: i + 1 }))
+      .filter(({ w }) => w.ph === 'build' || w.ph === 'peak');
+    const runWeeks = active.filter(({ idx }) => idx % 2 === 1).map(({ w }) => w);
+    const bikeWeeks = active.filter(({ idx }) => idx % 2 === 0).map(({ w }) => w);
+    const max = (xs: number[]) => xs.reduce((m, x) => Math.max(m, x), 0);
+    // Longest long run comes from a run-emphasis week; longest ride from a bike week.
+    expect(max(runWeeks.map(longRunMin))).toBeGreaterThan(max(bikeWeeks.map(longRunMin)));
+    expect(max(bikeWeeks.map(longRideMin))).toBeGreaterThan(max(runWeeks.map(longRideMin)));
+  });
+
+  it('non-Ironman distances keep the share model (no alternation, no target)', () => {
+    expect(triWeekEmphasis('70.3', 'peak', 5)).toBeNull();
+    expect(triLongRunTargetMin('70.3', 5, 20, 'peak')).toBeNull();
+  });
+
+  it('triWeekEmphasis alternates only across IM build/peak weeks', () => {
+    expect(triWeekEmphasis('ironman', 'build', 5)).toBe('run');
+    expect(triWeekEmphasis('ironman', 'build', 6)).toBe('bike');
+    expect(triWeekEmphasis('ironman', 'base', 5)).toBeNull();
+    expect(triWeekEmphasis('ironman', 'taper', 5)).toBeNull();
+  });
+
+  it('triLongRunTargetMin ramps to and caps at the 150-min ceiling', () => {
+    expect(triLongRunTargetMin('ironman', 1, 24, 'base')).toBeLessThan(120);
+    expect(triLongRunTargetMin('ironman', 18, 24, 'peak')).toBe(150);
+    expect(triLongRunTargetMin('ironman', 24, 24, 'peak')).toBe(150);
+  });
+
+  it('the long-run build never pushes any IM week over its weekly hours cap', () => {
+    // The funding reallocates minutes (bike long ride -> long run); it must never
+    // add net time. Check every week of a 14h IM plan stays within the cap.
+    const sumMin = (wk: Week): number =>
+      (wk.triWorkouts ?? []).reduce((s, w) => {
+        if (w.estimatedDurationMin && w.estimatedDurationMin > 0) return s + w.estimatedDurationMin;
+        if ((w as any).brickSegments) {
+          return s + ((w as any).brickSegments[0]?.durationMin ?? 0) + ((w as any).brickSegments[1]?.durationMin ?? 0);
+        }
+        return s + 60;
+      }, 0);
+    for (const hours of [10, 12, 14, 18]) {
+      const weeks = generateTriathlonPlan(makeTriState({
+        tw: 24,
+        triConfig: {
+          distance: 'ironman',
+          timeAvailableHoursPerWeek: hours,
+          volumeSplit: { swim: 0.15, bike: 0.50, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 },
+        },
+      }));
+      for (const wk of weeks) {
+        // Per-session Math.round tolerance, matching the existing cap test.
+        expect(sumMin(wk)).toBeLessThanOrEqual(hours * 60 + 30);
+      }
+    }
   });
 });
