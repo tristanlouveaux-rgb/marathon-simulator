@@ -25,7 +25,7 @@ import {
   type ArmingData,
 } from './gps-events';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { getState } from '@/state';
 import { formatKm, type UnitPref } from '@/utils/format';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';

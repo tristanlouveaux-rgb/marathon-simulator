@@ -13,7 +13,7 @@
  */
 
 import type { SimulatorState, RaceDistance } from '@/types';
-import { blendPredictions, calculateLiveForecast, predictFromVO2 } from './predictions';
+import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor } from './predictions';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
@@ -110,6 +110,8 @@ interface StandardPredictionContext {
   quality: BlendArgs[10];
   hrVdot: BlendArgs[11];
   marathonPbAgeDays: BlendArgs[12];
+  weeklyKmIsEstimate: BlendArgs[13];
+  crossTrainingSessions: BlendArgs[14];
   calibration: ReturnType<typeof computeRunCalibration>;
   longestRunSec: number;
   shoeMul: number;
@@ -161,9 +163,26 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     typ: (s.typ ?? 'Balanced').toLowerCase(),
     recentRun: inputs.recentRun ?? s.rec ?? null,
     athleteTier: s.athleteTier ?? undefined,
-    // History-derived, with typed manual-entry volume as the no-scrape
-    // fallback (see resolveWeeklyKmSignal).
-    weeklyKm: resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm),
+    // Best-available volume signal with provenance — MUST mirror initialization.ts
+    // so the post-onboarding refresh doesn't re-break the no-data fix. MEASURED =
+    // synced history (weeksCovered>0) or a typed weekly km. Otherwise ESTIMATE from
+    // runs/week (same `freqVolumeEstimate` family the plan uses), which sizes the
+    // soft penalty but must not override a demonstrated PB (see demonstratedPBFloor).
+    ...(() => {
+      const measuredKm = inputs.weeksCovered > 0
+        ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
+        : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+      const rpw = s.rw ?? 0;
+      const freqEstimate = rpw <= 0 ? null
+        : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
+      return {
+        weeklyKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
+        weeklyKmIsEstimate: measuredKm == null && freqEstimate != null,
+      };
+    })(),
+    // Effective aerobic cross-training sessions/week, derived from persisted
+    // totals (epw = runs + cross). Softens the short-distance discount only.
+    crossTrainingSessions: Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
     avgPaceSecPerKm: inputs.avgPaceSecPerKm ?? undefined,
     quality: { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot: computeHRCalibratedVdot(runs, s.restingHR ?? null, s.maxHR ?? null),
@@ -196,6 +215,8 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
     ctx.quality,
     ctx.hrVdot,
     ctx.marathonPbAgeDays,
+    ctx.weeklyKmIsEstimate,
+    ctx.crossTrainingSessions,
   );
   // Last-resort: the weighted blend found no usable predictor (no PB, LT, recent
   // run, device VO2, or HR-calibrated signal) but the athlete still has a
@@ -210,12 +231,25 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
   if (!blended || blended <= 0 || !isFinite(blended)) return null;
   const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
   const durability = applyLongRunCap(ctx.longestRunSec, dist);
+  // Floor each distance at its demonstrated same-distance PB after cap + shoe
+  // adjustment (parity with the headline refresh and initialization).
+  const finalSec = demonstratedPBFloor(
+    calibratedSec * durability.multiplier * ctx.shoeMul,
+    DIST_M[dist],
+    ctx.pbs,
+    {
+      weeklyRunKm: ctx.weeklyKm ?? undefined,
+      weeklyRunKmIsEstimate: ctx.weeklyKmIsEstimate,
+      recentRun: ctx.recentRun,
+      b: ctx.b,
+    },
+  );
   return {
     blendedSec: blended,
     calibratedSec,
     durability,
     shoeMul: ctx.shoeMul,
-    finalSec: calibratedSec * durability.multiplier * ctx.shoeMul,
+    finalSec,
   };
 }
 
@@ -371,6 +405,12 @@ export function getStandardForecastProjection(
     runner_type: runnerType,
     ability_band: abilityBand,
     taper_weeks: 0,
+    // Bug fix (2026-06-16): the no-target standard forecast was dropping
+    // experience_level entirely, so it silently defaulted to 'intermediate'
+    // (1.0) — a returning/advanced/hybrid athlete's exp_factor never applied
+    // here, unlike the targeted forecast (race-forecast-simulation.ts:140).
+    experience_level: s.onboarding?.experienceLevel || 'intermediate',
+    cross_trained: s.onboarding?.crossTrainedBackground === true,
     weekly_volume_km: planKm,
     hm_pb_seconds: s.pbs?.h,
     lt_pace_sec_per_km: s.lt ?? undefined,
@@ -477,6 +517,17 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const marathonPbAgeDays = marathonPbDateISO
     ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
     : undefined;
+  // Volume signal with provenance — mirror initialization.ts so this refresh
+  // (which runs at the review step, even for manual users) does not re-break the
+  // no-data fix by passing a phantom 0. MEASURED = history (weeksCovered>0) or a
+  // typed weekly km; otherwise ESTIMATE from runs/week (sizes the soft penalty,
+  // never overrides a demonstrated PB). Cross-training from epw−rw.
+  const measuredKm = inputs.weeksCovered > 0
+    ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
+    : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+  const rpw = s.rw ?? 0;
+  const freqEstimate = rpw <= 0 ? null
+    : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
   const blended = blendPredictions(
     targetDistM,
     s.pbs,
@@ -486,11 +537,13 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
     s.athleteTier ?? undefined,
-    resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm),
+    (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
     inputs.avgPaceSecPerKm ?? undefined,
     { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot,
     marathonPbAgeDays,
+    measuredKm == null && freqEstimate != null,
+    Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
   );
 
   if (!blended || blended <= 0 || !isFinite(blended)) return false;
@@ -510,11 +563,26 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const longestRunSec = getLongestRunSec(s, 12);
   const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd);
   s.runDurability = durability;
-  const durabilityAdjustedBlend = calibratedBlend * durability.multiplier;
+  // Floor at any demonstrated same-distance PB after the cap (mirror of
+  // initialization.ts): the cap and calibration bias must not push the anchor
+  // slower than a proven time absent detraining evidence. Estimated volume does
+  // not count as evidence (see demonstratedPBFloor).
+  const durabilityAdjustedBlend = demonstratedPBFloor(
+    calibratedBlend * durability.multiplier,
+    targetDistM,
+    s.pbs,
+    {
+      weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
+      weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
+      recentRun: inputs.recentRun ?? s.rec ?? null,
+      b: s.b,
+    },
+  );
 
   s.blendedRaceTimeSec = durabilityAdjustedBlend;
   s.blendedEffectiveVdot = cv(targetDistM, durabilityAdjustedBlend);
   s.blendedLastRefreshedISO = new Date().toISOString();
+  s.blendedFromEstimate = measuredKm == null && freqEstimate != null;
 
   // Push the blended VDOT into s.v so plan generation and pace derivation
   // reflect reality, not the Week-1 linear projection. Exception: during taper
@@ -566,6 +634,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         sessionsPerWeek: sessionsForHorizon,
         runnerType: s.typ as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
         experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+        crossTrained: s.onboarding?.crossTrainedBackground === true,
         weeklyVolumeKm: planMeanKm ?? s.wkm,
         weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
         hmPbSeconds: s.pbs?.h || undefined,

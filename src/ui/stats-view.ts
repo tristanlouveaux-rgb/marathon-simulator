@@ -11,7 +11,7 @@
 import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
@@ -29,7 +29,7 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
@@ -676,7 +676,9 @@ function buildRunningNumbersCard(s: SimulatorState): string {
     isFemale ? [8/60, 7/60, 10/60, 10/60, 10/60, 15/60] : [15/60, 7/60, 10/60, 8/60, 10/60, 10/60],
   );
   const aerSubtitle = vo2physio.source === 'device' ? undefined : vo2physio.detail;
-  const vo2Bar = vo2bar > 0 ? buildOnePositionBar({
+  // Hide the bar (and its fitness-zone claim) when the VDOT is the bare `s.v`
+  // baseline rather than a measured source — matches the Forecast grid's gate.
+  const vo2Bar = (vo2bar > 0 && hasRealRunningFitnessSignal(s)) ? buildOnePositionBar({
     title: 'VO2 Max',
     infoId: 'aerobic',
     detailId: 'vo2',
@@ -2393,7 +2395,9 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
   // fell through to a derived source (or device is stale), name it.
   const aerSubtitle = vo2physio.source === 'device' ? undefined : vo2physio.detail;
   const vdotHasHistory = (s.vdotHistory?.length ?? 0) > 3;
-  const aerBar = buildOnePositionBar({
+  // Hide the bar when the VDOT is the bare `s.v` baseline (no measured source) —
+  // matches the Forecast grid and the Running Numbers card.
+  const aerBar = (vo2bar > 0 && hasRealRunningFitnessSignal(s)) ? buildOnePositionBar({
     title: 'VO2 Max',
     infoId: 'aerobic',
     detailId: vdotHasHistory ? 'vdot' : undefined,
@@ -2404,7 +2408,7 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     scaleMax: 80,
     zones: aerZones,
     subtitle: aerSubtitle,
-  });
+  }) : '';
 
   // Bar 3: Lactate Threshold
   const ltPace = s.lt ?? 0;

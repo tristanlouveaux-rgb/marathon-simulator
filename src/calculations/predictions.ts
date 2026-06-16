@@ -72,15 +72,18 @@ function exactDistancePB(targetDist: number, pbs: PBs): number | null {
  * for a brand-new user with no contradicting data.
  *
  * "No training data" is NOT evidence of detraining. Two things ARE:
- *   1. A real weekly-volume signal below the maintenance floor (30 km/wk — the
- *      cutoff above which the marathon-specificity penalty treats fractional-
- *      utilization decay as negligible, Coyle 1984).
+ *   1. A *measured* weekly-volume signal below the maintenance floor (30 km/wk —
+ *      the cutoff above which the marathon-specificity penalty treats fractional-
+ *      utilization decay as negligible, Coyle 1984). A volume figure ESTIMATED
+ *      from runs/week (`weeklyRunKmIsEstimate`) does NOT count: an assumption may
+ *      size a soft penalty but must never override a demonstrated PB — that is the
+ *      exact "assumption beats fact" error this floor exists to prevent.
  *   2. A recent run/race that itself projects SLOWER than the PB at the target
  *      distance — direct evidence of reduced current fitness (e.g. a returning
  *      runner whose 1:28 half PB is contradicted by a recent 24:00 5K).
  *
  * When either holds, the floor stands down and the penalised blend is trusted.
- * Limitation: a genuinely stale PB with no volume signal and no recent run is
+ * Limitation: a genuinely stale PB with no measured volume and no recent run is
  * still trusted as the floor — we prefer optimism over telling an athlete they
  * are slower than a proven time with zero supporting evidence.
  *
@@ -92,12 +95,13 @@ export function demonstratedPBFloor(
   timeSec: number,
   targetDist: number,
   pbs: PBs,
-  ctx: { weeklyRunKm?: number; recentRun?: RecentRun | null; b: number },
+  ctx: { weeklyRunKm?: number; weeklyRunKmIsEstimate?: boolean; recentRun?: RecentRun | null; b: number },
 ): number {
   const exactPb = exactDistancePB(targetDist, pbs);
   if (exactPb == null || timeSec <= exactPb) return timeSec;
 
-  const lowVolumeEvidence = ctx.weeklyRunKm != null && ctx.weeklyRunKm < 30;
+  const lowVolumeEvidence =
+    ctx.weeklyRunKm != null && ctx.weeklyRunKm < 30 && !ctx.weeklyRunKmIsEstimate;
   const tRecent = ctx.recentRun && ctx.recentRun.t > 0
     ? predictFromRecent(targetDist, ctx.recentRun, pbs, ctx.b)
     : null;
@@ -430,6 +434,7 @@ export function calculateForecast(
     ability_band: abilityBand,
     taper_weeks: targetDistStr === 'marathon' ? 3 : 2,
     experience_level: state.experienceLevel || 'intermediate',
+    cross_trained: state.crossTrainedBackground === true,
     weekly_volume_km: planMeanKm ?? undefined,
     weekly_volume_hours: state.weeklyTrainingHours,
     hm_pb_seconds: state.pbs.h,
@@ -459,6 +464,9 @@ export interface LiveForecastParams {
   sessionsPerWeek: number;
   runnerType: RunnerType;
   experienceLevel?: string;
+  /** Athlete is fit from non-running aerobic sport — applies the cross-trained
+   *  forecast premium. Sourced from `s.onboarding?.crossTrainedBackground`. */
+  crossTrained?: boolean;
   /** History-derived weekly running km. Primary dose signal for the horizon. */
   weeklyVolumeKm?: number;
   /** User-stated weekly training hours (onboarding). Fallback when km is zero. */
@@ -500,6 +508,7 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     ability_band: abilityBand,
     taper_weeks: TAPER_NOMINAL[p.targetDistance] ?? Math.max(1, Math.ceil(wr * 0.15)),
     experience_level: p.experienceLevel || 'intermediate',
+    cross_trained: p.crossTrained === true,
     weekly_volume_km: p.weeklyVolumeKm,
     weekly_volume_hours: p.weeklyVolumeHours,
     hm_pb_seconds: p.hmPbSeconds,
@@ -558,11 +567,36 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
  * fractional utilization, which is the most training-sensitive term.
  * 5K/10K are more VO2-limited and less affected.
  *
+ * Cross-training offset (2026-06-15): the discount assumes the watch markers
+ * are stale because the athlete stopped *aerobic* training. That assumption is
+ * wrong for a heavy cross-trainer — cycling/rowing/swimming maintain VO2max and
+ * LT (central cardiovascular adaptations transfer across modalities; Mujika &
+ * Padilla 2000, Bassett & Howley 2000), so the markers are genuinely current.
+ * We therefore soften the discount in proportion to aerobic cross-training, but
+ * ONLY for sub-marathon targets (see SCIENCE_LOG §BV cross-training): running
+ * economy and neuromuscular specificity do NOT transfer and still degrade, and
+ * the marathon is set by run-specific fractional utilization + durability, which
+ * cross-training cannot substitute. The caller already gates this to
+ * targetDist !== 42195, but the cap is bounded so it can never fully erase the
+ * discount even for a short race (the residual is un-maintained economy).
+ *
  * @param weeklyRunKm  4-week running-km average; undefined = no adjustment
+ * @param crossSessions  effective aerobic cross-training sessions/week
+ *   (intensity-weighted, the same `effectiveCrossSessions` the plan uses).
  * @returns multiplier in [0, 1] applied to LT + VO2 weights; complement
  *          shifts onto PB (the peak-fitness anchor).
  */
-function lowVolumeDiscount(targetDist: number, weeklyRunKm?: number): number {
+// Cross-training can offset at most 60% of the low-running discount. Running
+// economy explains ~30-40% of distance-running performance at a given VO2max
+// (Conley & Krahenbuhl 1980; Saunders 2004) and does NOT transfer from cycling/
+// rowing, so ~40% of the discount must remain.
+export const CROSS_MAINTENANCE_CAP = 0.6;
+// Full aerobic maintenance is reached at ~3 effective aerobic sessions/week —
+// the established minimum to MAINTAIN VO2max during reduced running (Hickson
+// 1985; Mujika & Padilla 2000). Linear ramp to the cap → 0.2 per session.
+export const CROSS_MAINTENANCE_PER_SESSION = CROSS_MAINTENANCE_CAP / 3;
+
+function lowVolumeDiscount(targetDist: number, weeklyRunKm?: number, crossSessions?: number): number {
   if (weeklyRunKm == null) return 1.0;
 
   // Distance sensitivity: marathon hit hardest, 5K barely touched.
@@ -579,7 +613,36 @@ function lowVolumeDiscount(targetDist: number, weeklyRunKm?: number): number {
   else if (weeklyRunKm >= 10) severity = 0.30;
   else                        severity = 0.45;
 
+  // Cross-training keeps the aerobic markers current → soften the severity.
+  if (crossSessions && crossSessions > 0 && severity > 0) {
+    const maintenance = Math.min(CROSS_MAINTENANCE_CAP, crossSessions * CROSS_MAINTENANCE_PER_SESSION);
+    severity *= (1 - maintenance);
+  }
+
   return 1 - severity * distSensitivity;
+}
+
+/**
+ * How much aerobic cross-training is currently improving a sub-marathon
+ * prediction, as a fractional speed credit (0 when none). Drives the
+ * cross-training recognition copy so the note reflects the REAL effect rather
+ * than a guess: it is exactly the difference the `crossSessions` argument makes
+ * to `lowVolumeDiscount`. Returns 0 for the marathon (the offset never applies
+ * there — running-specific endurance does not transfer; the long-run guard is
+ * held) and 0 when running volume is high enough that no discount fires.
+ */
+export function crossTrainingPredictionCredit(
+  targetDist: number,
+  weeklyRunKm?: number,
+  crossSessions?: number,
+): number {
+  if (!crossSessions || crossSessions <= 0) return 0;
+  if (targetDist >= 42195) return 0;
+  const withCross = lowVolumeDiscount(targetDist, weeklyRunKm, crossSessions);
+  const withoutCross = lowVolumeDiscount(targetDist, weeklyRunKm, 0);
+  // Both are multipliers ≤ 1 (a penalty). Cross-training raises the multiplier
+  // toward 1, so the delta is the fraction of finish time it gives back.
+  return Math.max(0, withCross - withoutCross);
 }
 
 export function blendPredictions(
@@ -603,6 +666,21 @@ export function blendPredictions(
    * be stale) is reduced. Bands: <365d → ×0.5, 365-730d → ×0.75, >730d → full.
    */
   marathonPbAgeDays?: number,
+  /**
+   * True when `weeklyRunKm` was estimated from runs/week rather than measured
+   * (synced history or a user-typed weekly km). Estimated volume still sizes the
+   * marathon-specificity penalty, but it must not let the demonstrated-PB floor
+   * stand down — an assumption may not override a proven same-distance time.
+   */
+  weeklyRunKmIsEstimate?: boolean,
+  /**
+   * Effective aerobic cross-training sessions/week (intensity-weighted; the
+   * same `effectiveCrossSessions` the plan computes). Softens the short-distance
+   * low-volume discount only — never the marathon penalty or durability cap, as
+   * running economy and run-specific endurance do not transfer. See
+   * lowVolumeDiscount.
+   */
+  crossTrainingSessions?: number,
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
@@ -695,7 +773,7 @@ export function blendPredictions(
   // volume LT/VO2 weight discount too would double-penalise. Keep the discount
   // for shorter distances (no Tanda coverage) only.
   if (targetDist !== 42195) {
-    const watchTrust = lowVolumeDiscount(targetDist, weeklyRunKm);
+    const watchTrust = lowVolumeDiscount(targetDist, weeklyRunKm, crossTrainingSessions);
     if (watchTrust < 1.0 && tPB != null) {
       const ltShed = w.lt * (1 - watchTrust);
       const vo2Shed = w.vo2 * (1 - watchTrust);
@@ -846,7 +924,7 @@ export function blendPredictions(
 
   // Never predict slower than a demonstrated same-distance PB without positive
   // detraining evidence. See demonstratedPBFloor for the full rationale.
-  const result = demonstratedPBFloor(penalised, targetDist, pbs, { weeklyRunKm, recentRun, b });
+  const result = demonstratedPBFloor(penalised, targetDist, pbs, { weeklyRunKm, weeklyRunKmIsEstimate, recentRun, b });
   if (result !== penalised) {
     console.log(`[blendPredictions] demonstrated-PB floor: penalised blend ${penalised.toFixed(0)}s slower than same-distance PB ${result.toFixed(0)}s with no detraining evidence → floored to PB`);
   }

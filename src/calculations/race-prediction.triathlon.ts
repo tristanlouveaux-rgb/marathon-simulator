@@ -1221,16 +1221,22 @@ function estimateBikeSpeed(
   }
 
   if (ftp) {
-    const racePct = distance === 'ironman' ? 0.70 : 0.78;
-    const raceWatts = ftp * racePct;
+    // No aero profile: linear FTP→speed fallback. Use the per-distance race
+    // intensity (same constant as the physics path) so sprint/olympic/t100 aren't
+    // silently treated as 70.3 here. Confirmed all five via RACE_INTENSITY_BY_DISTANCE.
+    const raceWatts = ftp * RACE_INTENSITY_BY_DISTANCE[distance];
     const kph = Math.min(48, Math.max(18, 20 + (raceWatts - 100) * 0.067));
     return kph;
   }
 
+  // Deepest fallback: skill slider only (no FTP, no aero). Scale the reference
+  // (70.3) speed by the distance's race intensity, taken to the 1/3 power because
+  // speed ∝ power^(1/3) in the aero-dominated regime (P ∝ v³; Martin 1998). This
+  // generalises the old IM-only −3 kph discount to all five formats and leaves
+  // 70.3 unchanged (factor = 1). Short course → faster, ironman → slower.
   const byLevel: Record<TriSkillSlider, number> = { 1: 24, 2: 28, 3: 32, 4: 36, 5: 40 };
-  let base = byLevel[skill];
-  if (distance === 'ironman') base -= 3;
-  return base;
+  const intensityFactor = Math.cbrt(RACE_INTENSITY_BY_DISTANCE[distance] / RACE_INTENSITY_BY_DISTANCE['70.3']);
+  return byLevel[skill] * intensityFactor;
 }
 
 function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {

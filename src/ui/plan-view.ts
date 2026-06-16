@@ -8,7 +8,7 @@ import { getState, getMutableState, saveState } from '@/state';
 import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState, Week, Workout } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod, stripPaceTokens, modDisplayDescription, retargetDescriptionPace, displayDescWithPace } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
@@ -4040,8 +4040,8 @@ function buildTrackOnlyUpcoming(s: SimulatorState): string {
         </div>
         <div style="font-size:16px;font-weight:700;color:#0F172A;letter-spacing:-0.01em">${esc(name)}</div>
         ${structure}
-        <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;padding:9px 0;background:#0F172A;border-radius:10px;color:#FAF9F6;font-size:13px;font-weight:600">
-          <span style="width:9px;height:9px;background:#FAF9F6;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;padding:9px 0;background:#0F172A;border-radius:10px;color:#fff;font-size:13px;font-weight:600">
+          <span style="width:9px;height:9px;background:#fff;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block"></span>
           Start
         </div>
       </div>`;

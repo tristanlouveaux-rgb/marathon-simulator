@@ -259,7 +259,12 @@ export function computeTriRaceReadiness(
   // Discipline weights for the overall score. Approximates each leg's share
   // of total race time at intermediate level. Bike dominates time, run
   // dominates fatigue/perception, swim is shortest. Friel 2018 averaged.
-  // Sprint/Olympic share weights with 70.3 (run share rises with distance).
+  // KNOWN APPROXIMATION (flagged 2026-06-16 persona-QA): sprint/olympic/t100
+  // currently borrow the 70.3 weights, but the swim is a larger share of total
+  // time at short course (~18% sprint vs ~10% 70.3), so a strong-swim short-course
+  // athlete is slightly under-credited on swim here. Fixing needs sourced per-
+  // distance time-share weights (pending Tristan) — not invented. Score-weighting
+  // nuance only; does not affect any displayed benchmark or the finish prediction.
   const weights = distance === 'ironman'
     ? { swim: 0.10, bike: 0.55, run: 0.35 }
     : { swim: 0.12, bike: 0.55, run: 0.33 };

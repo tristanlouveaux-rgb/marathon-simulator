@@ -438,20 +438,52 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
       : undefined;
 
-    // Do we actually have a training-volume signal, or just a stated PB?
-    // weeksCovered > 0 means the scrape found qualifying runs; a typed manual
-    // weekly-km also counts. With neither, `resolveWeeklyKmSignal` returns 0,
-    // but that 0 means "no history synced yet", NOT "the athlete runs zero km".
-    // The volume-driven penalties inside blendPredictions (marathon-specificity)
-    // and the long-run cap below both read a zero as max detraining, which would
-    // predict a brand-new user SLOWER than their own stated PB. Pass `undefined`
-    // in the no-data case so those penalties stay dormant until real history
-    // lands (the first backfill refresh re-runs this with actual volume).
-    const hasTrainingHistory =
-      blendInputs.weeksCovered > 0 || (sCurrent.detectedWeeklyKm ?? 0) > 0;
-    const weeklyKmSignal = hasTrainingHistory
+    // Effective aerobic cross-training sessions/week (intensity-weighted).
+    // Computed here (before the blend) so it can soften the short-distance
+    // low-volume discount: a heavy cross-trainer's watch LT/VO2 are current, not
+    // stale. Reused below for `effectiveSessions` so there is a single source.
+    const runsPerWeek = state.runsPerWeek;
+    const INTENSITY_FACTOR: Record<string, number> = { easy: 0.5, moderate: 0.7, hard: 0.9 };
+    let effectiveCrossSessions = 0;
+    if (state.recurringActivities && state.recurringActivities.length > 0) {
+      for (const act of state.recurringActivities) {
+        const iFactor = INTENSITY_FACTOR[act.intensity] || 0.7;
+        effectiveCrossSessions += (act.durationMin / 60) * iFactor * act.frequency;
+      }
+    } else {
+      effectiveCrossSessions = 0.5 * (state.sportsPerWeek || 0);
+    }
+    if (state.activeLifestyle) effectiveCrossSessions += 0.5;
+
+    // Auto-prefill the cross-trained marker when the user didn't explicitly set
+    // it in the experience step. Reuses the single canonical effectiveCrossSessions
+    // signal (no parallel detector). The 1.0 bar excludes incidental activity
+    // (activeLifestyle alone contributes only 0.5) and represents roughly one
+    // moderate aerobic cross-session per week. Explicit user choice (true/false)
+    // is always respected; this only fills an unset value. Tunable prefill bar.
+    if (state.crossTrainedBackground == null && effectiveCrossSessions >= 1.0) {
+      state.crossTrainedBackground = true;
+    }
+
+    // Best-available weekly-volume signal, with provenance. Ranked:
+    //   MEASURED — synced history (weeksCovered>0) OR a user-typed weekly km
+    //     (detectedWeeklyKm). A real number we can trust as detraining evidence.
+    //   ESTIMATED — when there is no measured signal, derive km from runs/week
+    //     (the SAME `freqVolumeEstimate` the plan uses for s.wkm below, so the
+    //     prediction and the plan can never disagree about assumed volume). Good
+    //     enough to size the marathon-specificity penalty, but it is an
+    //     assumption, so it must NOT override a demonstrated same-distance PB
+    //     (the demonstratedPBFloor ignores estimated volume — see below).
+    // The old "explicit zero = max detraining" overload is gone: a brand-new
+    // user is now sized from their stated frequency, not from a phantom zero.
+    const measuredKm = blendInputs.weeksCovered > 0
       ? resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm)
-      : undefined;
+      : ((sCurrent.detectedWeeklyKm ?? 0) > 0 ? sCurrent.detectedWeeklyKm! : null);
+    const freqVolumeEstimate = state.runsPerWeek <= 3 ? state.runsPerWeek * 10
+      : state.runsPerWeek === 4 ? 40 : state.runsPerWeek === 5 ? 50
+      : state.runsPerWeek === 6 ? 60 : 70;
+    const weeklyKmSignal = measuredKm != null ? measuredKm : freqVolumeEstimate;
+    const weeklyKmIsEstimate = measuredKm == null;
 
     // Note: blendPredictions uses runnerType.toLowerCase() internally
     const blendedTime = blendPredictions(
@@ -468,6 +500,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       },
       undefined,                             // hrVdot (not derived at onboarding finalize)
       marathonPbAgeDays,
+      weeklyKmIsEstimate,
+      effectiveCrossSessions,
     );
 
     if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
@@ -497,7 +531,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       blendedTime * durability.multiplier,
       targetDistMeters,
       pbs,
-      { weeklyRunKm: weeklyKmSignal, recentRun: blendInputs.recentRun ?? rec ?? null, b },
+      {
+        weeklyRunKm: weeklyKmSignal,
+        weeklyRunKmIsEstimate: weeklyKmIsEstimate,
+        recentRun: blendInputs.recentRun ?? rec ?? null,
+        b,
+      },
     );
 
     // Convert to VDOT (from the capped time — mirrors the refresher pushing
@@ -505,19 +544,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const curr = cv(targetDistMeters, cappedBlendedTime);
     const pac = gp(curr, ltPace);
 
-    // Calculate effective cross-training sessions from recurring activities
-    const runsPerWeek = state.runsPerWeek;
-    const INTENSITY_FACTOR: Record<string, number> = { easy: 0.5, moderate: 0.7, hard: 0.9 };
-    let effectiveCrossSessions = 0;
-    if (state.recurringActivities && state.recurringActivities.length > 0) {
-      for (const act of state.recurringActivities) {
-        const iFactor = INTENSITY_FACTOR[act.intensity] || 0.7;
-        effectiveCrossSessions += (act.durationMin / 60) * iFactor * act.frequency;
-      }
-    } else {
-      effectiveCrossSessions = 0.5 * (state.sportsPerWeek || 0);
-    }
-    if (state.activeLifestyle) effectiveCrossSessions += 0.5;
+    // `runsPerWeek` + `effectiveCrossSessions` were computed above (before the
+    // blend, so cross-training could soften the short-distance discount).
     const effectiveSessions = runsPerWeek + effectiveCrossSessions;
 
     // Update state
@@ -549,7 +577,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.epw = Math.round(effectiveSessions);
     s.rw = runsPerWeek;
     s.gs = state.gymSessionsPerWeek || 0;
-    const defaultWkm = runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70;
+    // Same runs/week→km estimate the prediction blend used above
+    // (`freqVolumeEstimate`), so the plan's starting volume and the race
+    // prediction can never assume a different weekly km for the same athlete.
+    const defaultWkm = freqVolumeEstimate;
     // Beginner/hybrid safety: the runs-per-week × ~10km fallback assumes an
     // experienced runner (~10km/run). For a true beginner (or fit-but-not-running
     // hybrid) with no detected history, cap the STARTING per-run to ~30min at easy
@@ -590,6 +621,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.blendedRaceTimeSec = cappedBlendedTime;
     s.blendedEffectiveVdot = curr;
     s.blendedLastRefreshedISO = new Date().toISOString();
+    s.blendedFromEstimate = weeklyKmIsEstimate;
     // Durability result stored for the Forecast durability chip (same field
     // the refresher writes), so the drill-down can explain the cap from day 1.
     s.runDurability = durability;

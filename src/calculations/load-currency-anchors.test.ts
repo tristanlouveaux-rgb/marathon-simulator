@@ -59,7 +59,7 @@ describe('Anchor 1: a 60-min easy run ≈ 55 TSS in every planned pipeline', () 
   it('triathlon engine easy run (mirror rule: tri == running mode)', () => {
     const state = {
       mode: 'triathlon',
-      triConfig: { raceType: 'olympic', weeklyHours: 7, raceDateISO: '2026-09-01' },
+      triConfig: { distance: 'olympic', weeklyHours: 7, raceDateISO: '2026-09-01' },
       w: 1, planStartDate: '2026-06-01',
     } as unknown as SimulatorState;
     const weeks = generateTriathlonPlan(state);

@@ -178,6 +178,42 @@ export function qualityCap(ability: AbilityBand, experience: string, runsPerWeek
 // Time-based session budgets
 // ---------------------------------------------------------------------------
 
+/**
+ * Peak long-run minute ceiling per ability and race distance.
+ *
+ * Non-marathon distances keep the general ability caps (half tops at 120 min,
+ * close to the half readiness target). The MARATHON ceilings are raised so the
+ * plan actually builds the long run to the marathon-readiness threshold the
+ * app's own predictor uses (`LONG_RUN_THRESHOLD_SEC.marathon` = 165 min ≈ 30 km,
+ * Daniels' minimum for time-goal marathoners). Previously every distance shared
+ * the general table, so an intermediate marathoner's long run topped out at
+ * 120 min ≈ 18-24 km — short of the 30 km the same codebase calls "ready", and
+ * well below the 32 km peak long run in mainstream marathon plans (Pfitzinger &
+ * Douglas 2009; Higdon novice peaks at 20 mi). Grading by ability:
+ *   - beginner 150 min (~25 km): Daniels' finish-focused minimum, one notch below
+ *     the time-goal threshold to protect the least-durable athletes.
+ *   - novice / intermediate 165 min (~30 km): the readiness threshold itself.
+ *   - advanced / elite 180 min (~33 km, 3 h): the Pfitzinger upper bound. Long
+ *     runs rarely exceed 3 h — beyond it injury/recovery cost outweighs the
+ *     aerobic return.
+ * The values deliberately match `LONG_RUN_THRESHOLD_SEC.marathon`; same
+ * literature (Karp 2007, Daniels 2014, Pfitzinger 2009). Kept as a local table
+ * (not imported from the prediction module) to preserve the tracking/planning
+ * separation — this is a planning decision that happens to share the anchor.
+ */
+function longRunCapMin(ability: AbilityBand, race: RaceDistance): number {
+  if (race === 'marathon') {
+    const cap: Record<AbilityBand, number> = {
+      beginner: 150, novice: 165, intermediate: 165, advanced: 180, elite: 180,
+    };
+    return cap[ability];
+  }
+  const cap: Record<AbilityBand, number> = {
+    beginner: 90, novice: 100, intermediate: 120, advanced: 150, elite: 180,
+  };
+  return cap[ability];
+}
+
 export function longRunMinutes(
   weekIndex: number, totalWeeks: number, ability: AbilityBand,
   race: RaceDistance, phase: TrainingPhase
@@ -186,21 +222,31 @@ export function longRunMinutes(
   const baseLong: Record<RaceDistance, number> = {
     '5k': 50, '10k': 60, half: 80, marathon: 90,
   };
-  let base = baseLong[race];
-
-  // Progressive: ramp from 80% to 100% over plan
+  // Progressive ramp across the plan (1.0 by totalWeeks * 0.75).
   const progress = Math.min(1, weekIndex / (totalWeeks * 0.75));
-  base = base * (0.80 + 0.20 * progress);
+
+  let base: number;
+  if (race === 'marathon') {
+    // The marathon long run BUILDS from a conservative week-1 anchor (90 min) to
+    // the ability readiness ceiling (150/165/180 — see longRunCapMin). Ramping
+    // toward that ceiling, rather than the narrow 80%->100% band the shorter
+    // distances use, is what makes the plan marathon-specific: an intermediate
+    // reaches ~30 km (165 min) by the peak, not ~24 km. Linear progression is
+    // standard periodisation; the endpoints are the sourced anchors.
+    const startMin = baseLong.marathon;             // 90 min week-1 long run (existing anchor)
+    const peakTarget = longRunCapMin(ability, race);
+    base = startMin + Math.max(0, peakTarget - startMin) * progress;
+  } else {
+    // Shorter distances: ramp from 80% to 100% of the distance base.
+    base = baseLong[race] * (0.80 + 0.20 * progress);
+  }
 
   // Phase caps
   if (phase === 'taper') base *= 0.65;
   else if (phase === 'peak') base *= 1.05;
 
-  // Ability caps
-  const cap: Record<AbilityBand, number> = {
-    beginner: 90, novice: 100, intermediate: 120, advanced: 150, elite: 180,
-  };
-  return Math.round(Math.min(base, cap[ability]));
+  // Ability + distance ceiling
+  return Math.round(Math.min(base, longRunCapMin(ability, race)));
 }
 
 export function easyRunMinutes(ability: AbilityBand, race: RaceDistance, phase: TrainingPhase): number {
@@ -354,17 +400,33 @@ const LONG_SOFT_FLOOR_MIN = 30;
  * Single source so the quality cap and `applyHoursBudget` agree.
  */
 function effectiveWeeklyBudgetMin(ctx: PlanContext): number {
-  let budget = Infinity;
+  const hoursCapMin = (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0)
+    ? ctx.weeklyHoursTarget * 60
+    : Infinity;
+
   if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
+    const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
     const peakKm = computePeakWeeklyKm(ctx);
     const weekKm = weekVolumeBudgetKm(ctx.weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
-    const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
-    budget = Math.min(budget, Math.round((weekKm * easyPaceSecPerKm) / 60));
+    const rampBudgetMin = Math.round((weekKm * easyPaceSecPerKm) / 60);
+    if (!Number.isFinite(hoursCapMin)) return rampBudgetMin;
+
+    // RC2 — periodise WITHIN the hours cap. Previously the budget was
+    // `min(rampBudgetMin, hoursCap)` per week, which pinned every week to the same
+    // flat value whenever the hours target bound, so a capped plan stopped
+    // periodising. Fix: cap the DESTINATION (the peak), then ramp toward the capped
+    // peak using the SAME geometric ramp fraction the uncapped budget uses. No new
+    // constants. When baseline >= peak (established runner) the fraction is 1 every
+    // week, so this is flat at the capped peak — which is correct: an athlete
+    // already at peak volume periodises via intensity, not a volume ramp.
+    const peakBudgetMin = Math.round((peakKm * easyPaceSecPerKm) / 60);
+    const rampFraction = peakBudgetMin > 0 ? rampBudgetMin / peakBudgetMin : 1;
+    const cappedPeakMin = Math.min(peakBudgetMin, hoursCapMin);
+    return Math.round(cappedPeakMin * rampFraction);
   }
-  if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) {
-    budget = Math.min(budget, ctx.weeklyHoursTarget * 60);
-  }
-  return budget;
+
+  // No archetype/baseline ramp info: flat hours cap (legacy) or no budget at all.
+  return hoursCapMin;
 }
 
 // ---------------------------------------------------------------------------
@@ -593,18 +655,24 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
 function computePeakWeeklyKm(ctx: PlanContext): number {
   const ability = abilityBandFromVdot(ctx.vdot, ctx.fitnessLevel);
   const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
-  // Long-run peak: ability cap (intermediate marathon = 120 min, etc.)
-  const longCap: Record<AbilityBand, number> = {
-    beginner: 90, novice: 100, intermediate: 120, advanced: 150, elite: 180,
-  };
-  const longMin = longCap[ability];
+  // Long-run peak: distance-aware ability ceiling (marathon intermediate = 165 min
+  // ≈ 30 km readiness threshold; shorter distances keep the general caps).
+  const longMin = longRunCapMin(ability, ctx.raceDistance);
   const easyMin = easyRunMinutes(ability, ctx.raceDistance, 'peak');
   // Quality minutes (rough estimate, used as a constant): threshold + vo2 + mp.
   const qualityMin = thresholdWorkMinutes(ability, 'peak', ctx.totalWeeks, ctx.totalWeeks)
     + 20 // continuous threshold has warm/cool 20m baked in
     + vo2WorkMinutes(ability, 'peak') + 15
     + mpWorkMinutes(ctx.raceDistance, ability, 'peak') + 20;
-  const easyCount = Math.max(0, ctx.runsPerWeek - 2 - (ctx.raceDistance === 'marathon' || ctx.raceDistance === 'half' ? 1 : 0));
+  // RC3: a marathon (or half) at 3 runs/wk computes 3-2-1 = 0 here, crediting zero
+  // easy aerobic volume in the peak-km estimate — undershooting the budget below
+  // what the generator actually produces (which keeps one easy run). Floor at 1
+  // for marathon when runsPerWeek >= 3 so the budget heuristic stops starving the
+  // plan. Cross-training stays scheduled alongside (adapts on logging).
+  const rawEasyCount = ctx.runsPerWeek - 2 - (ctx.raceDistance === 'marathon' || ctx.raceDistance === 'half' ? 1 : 0);
+  const easyCount = ctx.raceDistance === 'marathon' && ctx.runsPerWeek >= 3
+    ? Math.max(1, rawEasyCount)
+    : Math.max(0, rawEasyCount);
   const totalMin = longMin + qualityMin + easyMin * easyCount;
   // km at easy pace (quality reps cover less ground per minute, but the integral
   // assumption is close enough for a budget heuristic. The goal here is a

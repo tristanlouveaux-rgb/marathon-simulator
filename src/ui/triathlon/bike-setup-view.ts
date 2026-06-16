@@ -32,7 +32,7 @@ import {
 } from '@/calculations/bike-physics';
 import { BIKE_SETUP_AUTO_FILL } from '@/constants/feature-flags';
 import { getTriathlonById } from '@/data/triathlons';
-import { getTriDistanceLabel } from '@/constants/triathlon-constants';
+import { getTriDistanceLabel, RACE_LEG_DISTANCES } from '@/constants/triathlon-constants';
 import { applyCourseFactors } from '@/calculations/course-factors';
 import { lookupEmpiricalCourseFactors, pickCourseFactors } from '@/calculations/empirical-course-factors';
 import { computeTriRaceReadiness } from '@/calculations/race-readiness';
@@ -423,12 +423,14 @@ function buildProfile(form: FormState): BikeAeroProfile {
 }
 
 export function predictBikeSplit(form: FormState, distance: TriathlonDistance): { kph: number; splitSec: number } {
+  // No FTP set (partial setup): no defensible split — caller renders "—".
+  if (!form.ftp || form.ftp <= 0) return { kph: 0, splitSec: 0 };
   const profile = buildProfile(form);
   const params = paramsFromProfile(profile, form.riderKg, form.bikeKg, form.course);
   const raceWatts = form.ftp * RACE_INTENSITY_BY_DISTANCE[distance];
   const v = solveSpeed(raceWatts, params);
   const kph = msToKph(v);
-  const distKm = distance === 'ironman' ? 180.2 : 90;
+  const distKm = RACE_LEG_DISTANCES[distance].bikeKm;
   const baseSplitSec = v > 0 ? (distKm * 1000) / v : 0;
 
   // Apply the same bike-leg adjustments the headline forecast uses, so the
@@ -465,7 +467,9 @@ export function predictBikeSplit(form: FormState, distance: TriathlonDistance): 
   let readinessBikeMult: number;
   if (cached != null) {
     readinessBikeMult = cached;
-  } else if (triDist === '70.3' || triDist === 'ironman') {
+  } else if (triDist) {
+    // All five distances compute readiness (RACE_READINESS_TARGETS covers them);
+    // previously only 70.3/ironman did, leaving short course optimistic vs the card.
     readinessBikeMult = computeTriRaceReadiness(s, triDist).bike.penaltyMultiplier;
   } else {
     readinessBikeMult = 1;

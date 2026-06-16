@@ -722,6 +722,7 @@ function renderCrossTraining(sports: SportLoad[]): string {
     <p class="cc-h">${heading}</p>
     <p class="cc-p" style="margin-bottom:12px">We schedule the sport you already do alongside your runs and count it as real training load, so the week is balanced around it.</p>
     ${rows}
+    <p class="cc-p" style="margin-top:12px">It counts in your prediction too. Your aerobic base keeps your fitness current for shorter races, and your forecast climbs faster because the engine is already there. The marathon stays judged on long-run endurance, which other sports do not replace.</p>
     <p class="cc-p" style="margin-top:12px">Do an extra, unplanned session too? Log it and we trim the runs around it so the week's load stays right.</p>
   `;
 }

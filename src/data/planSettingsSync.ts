@@ -98,3 +98,38 @@ export async function restorePlanFromSupabase(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Delete the user's plan backup from Supabase.
+ *
+ * Called from the plan-reset path. softResetState() only clears localStorage;
+ * without this the stale cloud row survives and restorePlanFromSupabase()
+ * (main.ts SIGNED_IN handler / empty-localStorage launch) writes the old plan
+ * straight back, so the reset never sticks. Must be AWAITED before the reset's
+ * location.reload() or the navigation cancels the in-flight delete.
+ *
+ * Best-effort: never throws. No-op for anonymous/sim sessions (no user).
+ * Returns true if a row was deleted (or none existed), false on error.
+ */
+export async function deletePlanSettings(): Promise<boolean> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+
+    const { error } = await supabase
+      .from('user_plan_settings')
+      .delete()
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.warn('[PlanSettingsSync] delete error:', error.message);
+      return false;
+    }
+    setLocalStateOwner(null);
+    console.log('[PlanSettingsSync] Deleted plan backup from Supabase (reset)');
+    return true;
+  } catch (e) {
+    console.warn('[PlanSettingsSync] delete failed:', e);
+    return false;
+  }
+}

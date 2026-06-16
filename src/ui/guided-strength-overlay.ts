@@ -167,7 +167,7 @@ function startGpsIfRunsPresent(): void {
   if (!hasRunComponents(active.workout)) return;
   try {
     const provider = createGpsProvider();
-    const tracker = new GpsTracker(provider);
+    const tracker = new GpsTracker(provider, undefined, { autoPause: getState().gpsAutoPause !== false });
     active.gps = tracker;
     active.gpsState = 'acquiring';
     tracker.onUpdate(() => onGpsUpdate());
@@ -380,7 +380,7 @@ function renderRirRow(exIdx: number, selected: RirBucket | undefined): string {
   ];
   const btns = opts.map(([k, label]) => {
     const sel = selected === k;
-    return `<button class="gs-rir" data-rir="${k}" style="flex:1;padding:10px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#FAF9F6' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;font-family:var(--f);line-height:1.2">${label}</button>`;
+    return `<button class="gs-rir" data-rir="${k}" style="flex:1;padding:10px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#fff' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;font-family:var(--f);line-height:1.2">${label}</button>`;
   }).join('');
   return `
     <div style="margin-bottom:16px" data-ex="${exIdx}">
@@ -423,7 +423,7 @@ function wireWeightControls(cur: GuidedSet): void {
     document.querySelectorAll<HTMLButtonElement>('.gs-rir').forEach(b => {
       const isSel = b.dataset.rir === sel;
       b.style.background = isSel ? '#0F172A' : 'transparent';
-      b.style.color = isSel ? '#FAF9F6' : '#0F172A';
+      b.style.color = isSel ? '#fff' : '#0F172A';
       b.style.borderColor = isSel ? '#0F172A' : 'var(--c-border)';
     });
   };
@@ -1028,7 +1028,7 @@ function renderFinish(): void {
             <button data-rpe="${n}" class="gs-rpe" style="
               flex:1;min-width:36px;padding:10px 0;
               background:${n === initial ? '#0F172A' : 'transparent'};
-              color:${n === initial ? '#FAF9F6' : '#0F172A'};
+              color:${n === initial ? '#fff' : '#0F172A'};
               border:1px solid ${n === initial ? '#0F172A' : 'var(--c-border)'};
               border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f);font-variant-numeric:tabular-nums">${n}</button>
           `).join('')}
@@ -1057,7 +1057,7 @@ function renderFinish(): void {
       document.querySelectorAll<HTMLButtonElement>('.gs-rpe').forEach(b => {
         const isSel = parseInt(b.dataset.rpe || '0', 10) === rpe;
         b.style.background = isSel ? '#0F172A' : 'transparent';
-        b.style.color = isSel ? '#FAF9F6' : '#0F172A';
+        b.style.color = isSel ? '#fff' : '#0F172A';
         b.style.borderColor = isSel ? '#0F172A' : 'var(--c-border)';
       });
     });

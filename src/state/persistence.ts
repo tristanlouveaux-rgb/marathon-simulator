@@ -1,6 +1,6 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
 import type { GarminPendingItem } from '@/types/state';
-import { savePlanSettings } from '@/data/planSettingsSync';
+import { savePlanSettings, setLocalStateOwner } from '@/data/planSettingsSync';
 import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION, TRIATHLON_FIELDS_VERSION, VO2_DEVICE_ONLY_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities, getDefaultState } from './store';
@@ -582,6 +582,11 @@ export function softResetState(): void {
 
   localStorage.setItem(STATE_KEY, JSON.stringify(freshState));
   localStorage.removeItem(CROSS_KEY);
+  // Drop the state-owner stamp so a stale owner can't trigger a cross-user
+  // re-restore from Supabase on the next SIGNED_IN. The cloud row is deleted
+  // separately by the reset path (deletePlanSettings); this keeps the local
+  // reset self-consistent even when that delete is skipped (anon) or fails.
+  setLocalStateOwner(null);
   clearAllGpsData();
 }
 

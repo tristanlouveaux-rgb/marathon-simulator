@@ -245,8 +245,14 @@ describe('running: fitness factors flow through to the predicted time', () => {
   });
 
   it('runner type changes the prediction', () => {
-    const speed = runTime({ typ: 'Speed', calculatedRunnerType: 'Speed' });
-    const endurance = runTime({ typ: 'Endurance', calculatedRunnerType: 'Endurance' });
+    // Probe at the HALF, not the marathon: the base athlete has a marathon PB,
+    // and the demonstrated-PB floor (2026-06-15) correctly holds every runner
+    // type at the proven 3:30 for the same distance — you cannot be predicted
+    // slower than a time you have actually run, absent detraining evidence.
+    // Runner type expresses itself in cross-distance extrapolation (the LT-pace
+    // race multipliers), so we predict a distance the athlete has NOT raced.
+    const speed = runTime({ rd: 'half', typ: 'Speed', calculatedRunnerType: 'Speed' });
+    const endurance = runTime({ rd: 'half', typ: 'Endurance', calculatedRunnerType: 'Endurance' });
     expect(speed).not.toBe(endurance);
   });
 

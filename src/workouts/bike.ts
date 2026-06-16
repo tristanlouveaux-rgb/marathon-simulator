@@ -73,7 +73,7 @@ const bikeTypeMap: Record<BikeSessionKind, TriWorkoutType> = {
  * if it gets excluded along with everything else, we ignore the exclusion
  * to avoid producing an empty plan.
  */
-function substituteExcluded(kind: BikeSessionKind, excluded: Set<string>): BikeSessionKind {
+export function substituteExcluded(kind: BikeSessionKind, excluded: Set<string>): BikeSessionKind {
   if (!excluded.has(kind)) return kind;
   // Substitution chain. Same energetic system first, then step down a tier.
   const chain: Record<BikeSessionKind, BikeSessionKind[]> = {

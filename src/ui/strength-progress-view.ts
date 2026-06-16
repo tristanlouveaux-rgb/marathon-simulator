@@ -166,6 +166,7 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
     sessionsPerWeek: sessions,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    crossTrained: s.onboarding?.crossTrainedBackground === true,
     weeklyVolumeKm: planMeanKm ?? undefined,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,

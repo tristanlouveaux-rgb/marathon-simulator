@@ -373,6 +373,7 @@ export function init(): void {
     sessionsPerWeek: s.epw,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    crossTrained: s.onboarding?.crossTrainedBackground === true,
     weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,
@@ -1336,9 +1337,15 @@ function complete(): void {
  * Reset training plan
  */
 export function reset(): void {
-  showResetModal().then(proceed => {
+  showResetModal().then(async proceed => {
     if (proceed) {
       softResetState();
+      // Clear the Supabase backup too. softResetState() only wipes localStorage;
+      // the stale cloud row would otherwise be restored on the next launch
+      // (restorePlanFromSupabase), so the reset wouldn't stick. Awaited so the
+      // delete completes before location.reload() cancels the request.
+      const { deletePlanSettings } = await import('@/data/planSettingsSync');
+      await deletePlanSettings();
       location.reload();
     }
   });

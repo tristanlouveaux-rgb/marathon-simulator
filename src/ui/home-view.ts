@@ -9,7 +9,7 @@ import { AI_COACH_ENABLED, STRAVA_ENRICH_UPLOAD_ENABLED } from '@/constants/feat
 import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
 import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';

@@ -126,6 +126,17 @@ function computeEffectiveSessions(
 }
 
 /**
+ * Cross-trained forecast premium applied to `exp_factor` when an athlete is
+ * fit from non-running aerobic sport. Derived, not invented: it is exactly the
+ * premium the legacy `hybrid` experience level already carried over a baseline
+ * intermediate runner (EXP_FACTORS.hybrid 1.10 ÷ EXP_FACTORS.intermediate 1.0).
+ * Making it orthogonal lets "beginner + cross-trained" earn 0.80 × 1.10 = 0.88
+ * instead of forcing the athlete to abandon their running-experience label.
+ * See SCIENCE_LOG §BX.
+ */
+export const CROSS_TRAINED_FORECAST_PREMIUM = 1.10;
+
+/**
  * Core training horizon calculation - returns VDOT gain from non-linear model
  * @param params - Training horizon input parameters
  * @returns Training horizon result with VDOT gain and components
@@ -229,7 +240,23 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
     returning: 1.35,
     hybrid: 1.10,
   };
-  const exp_factor = EXP_FACTORS[params.experience_level || 'intermediate'] || 1.0;
+  let exp_factor = EXP_FACTORS[params.experience_level || 'intermediate'] || 1.0;
+
+  // Cross-trained adaptation-rate premium. An athlete fit from non-running
+  // aerobic sport already owns the slow-to-build central engine (cardiac
+  // output, blood volume, capillary density), so a running block converts to
+  // run performance faster than building the engine from scratch — they are
+  // "renovating, not constructing". This is a RATE effect on future gain, a
+  // different axis from the cross-training low-volume penalty offset in
+  // predictions.ts (which credits current aerobic MAINTENANCE). The two share
+  // a root cause (the aerobic base) but model distinct mechanisms — level vs
+  // rate — so applying both is defensible; see SCIENCE_LOG §BX (limitations).
+  // Magnitude reuses the premium the legacy 'hybrid' level already carried
+  // (EXP_FACTORS.hybrid 1.10 ÷ intermediate 1.0); not applied on top of a
+  // 'hybrid' level, which already encodes it.
+  if (params.cross_trained && params.experience_level !== 'hybrid') {
+    exp_factor *= CROSS_TRAINED_FORECAST_PREMIUM;
+  }
 
   // Base improvement (product of all factors)
   let improvement_pct = max_gain * type_mod * week_factor * session_factor * exp_factor;

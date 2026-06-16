@@ -1312,7 +1312,7 @@ export function openSessionGenerator(): void {
     // injury-adapted session is fixed. Changing one re-renders the preview live.
     const showTune = !!wo && !injured;
     const tile = (sel: boolean, extra = '') =>
-      `flex:1;padding:9px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#FAF9F6' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f);${extra}`;
+      `flex:1;padding:9px 4px;background:${sel ? '#0F172A' : 'transparent'};color:${sel ? '#fff' : '#0F172A'};border:1px solid ${sel ? '#0F172A' : 'var(--c-border)'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--f);${extra}`;
     // Time control: a slider. Plyo is a short, contact-dosed session (12–30 min);
     // other focuses run 20–90. Clamp the stored minutes into the active range so
     // switching focus can't leave the slider out of bounds.

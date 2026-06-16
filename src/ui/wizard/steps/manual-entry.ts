@@ -25,6 +25,11 @@ type ExperienceOption = { id: RunnerExperience; label: string; sub: string };
 // the six that are meaningful for a manual-entry cold-start flow (leaving the
 // "total_beginner" and "hybrid" edges to the more detailed legacy background
 // step, which isn't shown in this 7-step overhaul).
+// Running experience is now a single axis. "Fit from other sports" is captured
+// orthogonally by the crossTrainedBackground toggle below, so a runner can be
+// e.g. "beginner + cross-trained" rather than forced to pick the old mutually-
+// exclusive 'hybrid'. The 'hybrid' RunnerExperience value is retained in the
+// type/factor table for back-compat but is no longer offered as a radio choice.
 const EXPERIENCE_OPTIONS: ExperienceOption[] = [
   { id: 'beginner', label: 'Beginner', sub: 'Running under 6 months' },
   { id: 'novice', label: 'Novice', sub: 'Occasional 5k or 10k' },
@@ -32,7 +37,6 @@ const EXPERIENCE_OPTIONS: ExperienceOption[] = [
   { id: 'advanced', label: 'Advanced', sub: 'Dedicated, year-round' },
   { id: 'competitive', label: 'Competitive', sub: 'Club or high performance' },
   { id: 'returning', label: 'Returning', sub: 'Strong history, rebuilding' },
-  { id: 'hybrid', label: 'Hybrid athlete', sub: 'Fit from other sports, low miles' },
 ];
 
 const INPUT_STYLE = 'background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.08);color:var(--c-black);border-radius:12px;padding:10px 12px;font-size:14px;width:100%;box-sizing:border-box;outline:none;transition:border-color 0.15s ease, box-shadow 0.2s ease;box-shadow:0 1px 2px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.04)';
@@ -110,6 +114,11 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
       .m-input.invalid { border-color: rgba(239,68,68,0.55); }
       .pb-error { font-size:11px; color:#C53030; margin:6px 0 0; line-height:1.3; }
 
+      .ct-switch { position:relative; width:42px; height:24px; background:rgba(0,0,0,0.12); border-radius:12px; cursor:pointer; transition: background 0.16s ease; flex-shrink:0; }
+      .ct-switch.active { background:var(--c-black); }
+      .ct-switch::after { content:''; position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition: transform 0.16s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.18); }
+      .ct-switch.active::after { transform: translateX(18px); }
+
     </style>
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
@@ -147,6 +156,14 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
             }).join('')}
           </div>
           <div id="exp-notice-slot">${renderExperienceConsistencyNotice(state)}</div>
+
+          <div class="ct-row shadow-ap" style="display:flex;align-items:center;gap:12px;margin-top:10px;background:rgba(255,255,255,0.95);border:1px solid rgba(0,0,0,0.06);border-radius:14px;padding:12px 14px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.2">Also fit from other sports</div>
+              <div style="font-size:11px;color:var(--c-faint);margin-top:2px;line-height:1.3">Cycling, rowing, swimming, team sport. Keeps your aerobic base, so we trust your fitness more for shorter races.</div>
+            </div>
+            <div id="ct-switch" class="ct-switch ${state.crossTrainedBackground ? 'active' : ''}" role="switch" aria-checked="${state.crossTrainedBackground === true}" tabindex="0" aria-label="Fit from other sports"></div>
+          </div>
         </div>
 
         <div class="m-rise" style="width:100%;max-width:480px;margin-top:22px;animation-delay:0.18s">
@@ -267,6 +284,20 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
       if (!exp) return;
       applyExperience(exp);
     });
+  });
+
+  // Cross-trained toggle. Orthogonal to experience. Commits live; no re-render.
+  const ctSwitch = document.getElementById('ct-switch');
+  const toggleCrossTrained = () => {
+    const next = !ctSwitch!.classList.contains('active');
+    ctSwitch!.classList.toggle('active', next);
+    ctSwitch!.setAttribute('aria-checked', next ? 'true' : 'false');
+    state.crossTrainedBackground = next;
+    updateOnboarding({ crossTrainedBackground: next });
+  };
+  ctSwitch?.addEventListener('click', toggleCrossTrained);
+  ctSwitch?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCrossTrained(); }
   });
 
   const pbFields: Array<{ id: string; key: keyof PBs; long: boolean }> = [

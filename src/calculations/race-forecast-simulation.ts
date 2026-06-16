@@ -138,6 +138,7 @@ export function runMarathonForecastSim(
     runner_type: runnerType,
     ability_band: abilityBand,
     experience_level: s.onboarding?.experienceLevel || 'intermediate',
+    cross_trained: s.onboarding?.crossTrainedBackground === true,
     weekly_volume_km: planMeanKm,
     weekly_volume_hours: s.onboarding?.weeklyTrainingHours,
     hm_pb_seconds: s.pbs?.h || undefined,

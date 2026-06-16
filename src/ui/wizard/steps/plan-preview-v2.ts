@@ -424,6 +424,7 @@ function forecastForSessions(
     sessionsPerWeek: sessions,
     runnerType: getRunnerType(s.b || 1.06),
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    crossTrained: s.onboarding?.crossTrainedBackground === true,
     weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,

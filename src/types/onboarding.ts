@@ -189,6 +189,15 @@ export interface OnboardingState {
   gymSessionsPerWeek: number;  // 0-3 running-focused gym sessions
   sportsPerWeek: number;  // Legacy. Derived from recurringActivities
   experienceLevel: RunnerExperience;
+  /**
+   * Orthogonal to experienceLevel: the athlete is fit from non-running aerobic
+   * sport (cycling, rowing, swimming, field sports). Replaces the mutually-
+   * exclusive 'hybrid' experience option so a runner can be e.g. "beginner +
+   * cross-trained". Drives the forecast adaptation-rate premium and the
+   * cross-training recognition copy. Auto-prefilled from detected activity;
+   * user can override. Optional so fresh installs work without migration.
+   */
+  crossTrainedBackground?: boolean;
 
   // Step 5b: Active Lifestyle & Recurring Activities
   activeLifestyle: boolean;

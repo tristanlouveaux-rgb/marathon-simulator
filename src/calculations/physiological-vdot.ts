@@ -383,3 +383,25 @@ export function resolveRunningVdot(s: SimulatorState): number | null {
 export function hasRunningFitnessSignal(s: SimulatorState): boolean {
   return resolveRunningVdot(s) != null;
 }
+
+/**
+ * Stricter sibling of `hasRunningFitnessSignal`: true only when the resolved
+ * VDOT comes from a REAL measured source, not the bare `s.v` baseline.
+ *
+ * `hasRunningFitnessSignal` is true for ANY non-null VDOT, including the default
+ * `s.v` (50) or a stale value carried in state — so it answers "is there a
+ * number to resolve", not "have we actually measured this athlete". Surfaces
+ * that make a CLAIM off the number (a race-time projection, a population
+ * percentile, a VO2max fitness-zone bar) must gate on this instead: showing
+ * "you could run a 1:48 half" or "faster than 81%" off the baseline reads as a
+ * confident statement about a runner we know nothing about.
+ *
+ * Real iff `getPhysiologicalVdot` resolves above the `tanda-fallback` tier:
+ * `override` / `device` / `mosaic-running` / `hr-calibrated` / `lt-derived` /
+ * `pb-median`. The moment a PB / device VO2 / HR calibration / observed LT
+ * lands, the chain ranks above the fallback and this flips true.
+ */
+export function hasRealRunningFitnessSignal(s: SimulatorState): boolean {
+  const src = getPhysiologicalVdot(s).source;
+  return src !== 'tanda-fallback' && src !== 'none';
+}

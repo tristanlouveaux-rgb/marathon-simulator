@@ -17,7 +17,8 @@ import { tv, rdKm } from '@/calculations/vdot';
 import { ft } from '@/utils/format';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
-import { hasRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { crossTrainingPredictionCredit } from '@/calculations/predictions';
+import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
 import { formatKm, formatPace } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
@@ -325,6 +326,24 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
     && goalSec > 0
     && (forecastSec - goalSec) >= 1200;
 
+  // Cross-training recognition. Surface when aerobic cross-training is materially
+  // improving THIS (sub-marathon) prediction by softening the low-running-volume
+  // penalty. The credit reflects the real effect (crossTrainingPredictionCredit),
+  // never a guess. Marathon returns 0 (long-run endurance does not transfer).
+  const xtSessions = Math.max(0, (s.epw ?? 0) - (s.rw ?? 0));
+  const xtCredit = crossTrainingPredictionCredit(distKm * 1000, s.wkm, xtSessions);
+  const xtPct = Math.round(xtCredit * 1000) / 10;
+  const crossTrainingNote = xtCredit >= 0.005 ? `
+    <div class="rfc-fade" style="animation-delay:0.20s;padding:0 16px;margin-bottom:14px">
+      <div style="${CARD};padding:18px">
+        <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Your other sports are counting</div>
+        <div style="font-size:14px;color:${TEXT_M};line-height:1.45">
+          Aerobic cross-training keeps your engine sharp, so your ${distLabel} forecast trusts your current fitness rather than assuming low running mileage has cost you.${xtPct >= 1 ? ` It is worth about ${xtPct}% on this prediction.` : ''} Marathon pace still depends on long-run endurance, which cross-training does not replace.
+        </div>
+      </div>
+    </div>
+  ` : '';
+
   const ctaCard = showCTA ? `
     <div class="rfc-fade" style="animation-delay:0.20s;padding:0 16px;margin-bottom:14px">
       <div style="${CARD};padding:18px">
@@ -368,6 +387,7 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
         <div style="text-align:center;padding:20px 20px 12px">
           <div style="font-size:32px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${distLabel} forecast</div>
           <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine}. Week ${currentWeek} of ${totalWeeks}</div>
+          ${s.blendedFromEstimate ? `<div style="font-size:12px;color:${TEXT_S};margin-top:6px;font-weight:500;line-height:1.4">Estimated from your training profile. Refines as your runs sync.</div>` : ''}
         </div>
 
         ${buildRunRaceOutcomeRetroCard(s)}
@@ -377,6 +397,8 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
         ${renderMarathonPopulationCard(s)}
 
         ${renderRunConeCard(s)}
+
+        ${crossTrainingNote}
 
         ${ctaCard}
 
@@ -558,9 +580,11 @@ function getStandardForecastHTML(s: SimulatorState, animate: boolean): string {
   const preds = predictStandardDistances(s);
   // Canonical gate: identical to the Stats "VO2 Max" bar's show/hide predicate,
   // so a thin-data athlete sees both surfaces populate or both show their empty
-  // state. `predictStandardDistances` always yields times when this is true
-  // (it falls back to the resolved VDOT), so the two stay in lock-step.
-  const hasAny = hasRunningFitnessSignal(s);
+  // state. Uses the STRICT predicate: a race-time projection is a claim, so we
+  // require a real measured source, not the bare `s.v` baseline. The engine
+  // (`predictStandardDistances`) will still produce times off the fallback, but
+  // we don't show them until a PB / device VO2 / HR / observed LT lands.
+  const hasAny = hasRealRunningFitnessSignal(s);
 
   const body = hasAny
     ? `

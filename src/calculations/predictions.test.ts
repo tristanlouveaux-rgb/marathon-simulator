@@ -313,5 +313,81 @@ describe('Predictions', () => {
       expect(predicted!).toBeLessThan(3 * 3600 + 40 * 60); // < 3:40
       expect(predicted!).toBeGreaterThan(3 * 3600 + 20 * 60); // > 3:20 (still the ceiling, not free)
     });
+
+    // Volume ESTIMATED from runs/week may size the soft marathon-specificity
+    // penalty, but it must never override a demonstrated same-distance PB — an
+    // assumption beating a proven time is the original bug. Only MEASURED low
+    // volume (synced/stated) is allowed to release the floor.
+    it('estimated low volume does NOT override a same-distance marathon PB', () => {
+      const pbs: PBs = { m: 7200 }; // 2:00:00 marathon
+      const meta = { weeksCovered: 0, paceConfidence: 'none' as const, isStale: true };
+      const predicted = blendPredictions(
+        42195, pbs, null, null, b, 'balanced', null, undefined,
+        12 /* km, but ESTIMATED */, undefined, meta, undefined, undefined,
+        /* weeklyRunKmIsEstimate */ true,
+      );
+      expect(predicted!).toBeCloseTo(7200, 0); // floored to the PB
+    });
+
+    it('measured low volume DOES override the PB (estimate flag false)', () => {
+      const pbs: PBs = { m: 7200 };
+      const meta = { weeksCovered: 8, paceConfidence: 'low' as const, isStale: false };
+      const predicted = blendPredictions(
+        42195, pbs, null, null, b, 'balanced', null, undefined,
+        12 /* km, measured */, undefined, meta, undefined, undefined,
+        /* weeklyRunKmIsEstimate */ false,
+      );
+      expect(predicted!).toBeGreaterThan(7200);
+    });
+  });
+
+  // Cross-training keeps the aerobic markers (LT/VO2) current, so it softens the
+  // short-distance low-volume discount — but ONLY for sub-marathon targets, and
+  // never enough to fully erase it. Marathon endurance is run-specific and
+  // unaffected.
+  describe('cross-training softens the short-distance discount only', () => {
+    const b = 1.06;
+    // 10K PB 40:00 but LT/VO2 imply a much faster ceiling (~35:00). Low running
+    // volume (10 km/wk) makes the discount shift weight toward the slower PB.
+    const pbs: PBs = { k10: 2400 };
+
+    it('cross-training makes the 10K prediction faster (discount softened)', () => {
+      const noCross = blendPredictions(
+        10000, pbs, 210, 55, b, 'balanced', null, undefined,
+        10, undefined, undefined, undefined, undefined, false, /* cross */ 0,
+      );
+      const heavyCross = blendPredictions(
+        10000, pbs, 210, 55, b, 'balanced', null, undefined,
+        10, undefined, undefined, undefined, undefined, false, /* cross */ 5,
+      );
+      expect(heavyCross!).toBeLessThan(noCross!); // more trust in current fitness
+    });
+
+    it('cross-training does NOT change the marathon prediction', () => {
+      const mPbs: PBs = { k10: 2400 }; // no marathon PB, so no floor interference
+      const noCross = blendPredictions(
+        42195, mPbs, 210, 55, b, 'balanced', null, undefined,
+        10, undefined, undefined, undefined, undefined, false, 0,
+      );
+      const heavyCross = blendPredictions(
+        42195, mPbs, 210, 55, b, 'balanced', null, undefined,
+        10, undefined, undefined, undefined, undefined, false, 5,
+      );
+      expect(heavyCross!).toBeCloseTo(noCross!, 5); // marathon is run-specific
+    });
+
+    it('cross-training cannot fully erase the discount (capped at 60%)', () => {
+      const noDiscount = blendPredictions(
+        10000, pbs, 210, 55, b, 'balanced', null, undefined,
+        50 /* high volume → no discount at all */, undefined, undefined, undefined, undefined, false, 0,
+      );
+      const hugeCross = blendPredictions(
+        10000, pbs, 210, 55, b, 'balanced', null, undefined,
+        10, undefined, undefined, undefined, undefined, false, /* cross */ 99,
+      );
+      // Even with absurd cross-training, the low-volume prediction must not reach
+      // the no-discount prediction — the residual (un-maintained economy) remains.
+      expect(hugeCross!).toBeGreaterThan(noDiscount!);
+    });
   });
 });

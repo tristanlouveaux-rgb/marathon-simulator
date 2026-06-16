@@ -933,7 +933,7 @@ export function renderActivityDetail(
       // Activate
       btn.dataset.active = 'true';
       btn.style.background = '#0F172A';
-      btn.style.color = '#FAF9F6';
+      btn.style.color = '#fff';
       btn.style.borderColor = '#0F172A';
       btn.textContent = 'FTP test applied';
       const ms = getMutableState();

@@ -17,13 +17,21 @@
 
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
-import type { TriSkillSlider } from '@/types/triathlon';
+import type { TriSkillSlider, TriathlonDistance } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import { computeTriPlanPhases } from '@/constants/triathlon-constants';
 import { plannedTssPerMin } from '@/constants';
-import { generateSwimSession, pickSwimKind } from './swim';
-import { generateBikeSession, pickBikeKind } from './bike';
+import { generateSwimSession, type SwimSessionKind } from './swim';
+import { generateBikeSession, substituteExcluded, type BikeSessionKind } from './bike';
 import { generateBrick } from './brick';
+import {
+  triQualitySlotIndices,
+  selectSwimQualityKind,
+  selectBikeQualityKind,
+  selectRunQualityKind,
+  TRI_BRICK_POLICY,
+  BRICK_BIKE_SHARE,
+} from './tri-intensity-profile';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
@@ -224,10 +232,16 @@ function generateWeekForTriathlon(
     ? state.commuteConfig.commuteDaysPerWeek
     : 0;
 
-  // Generate swim sessions
+  // Generate swim sessions. Intensity distribution is race-distance-aware:
+  // quality slots take the distance's flavour (short = speed/threshold, long =
+  // threshold), aerobic slots stay endurance/technique. See tri-intensity-profile.
   const swim: Workout[] = [];
+  const swimQuality = triQualitySlotIndices(tri.distance, phase, 'swim', swimSessions, false);
   for (let i = 0; i < swimSessions; i++) {
-    const kind = pickSwimKind(phase, i);
+    const kind: SwimSessionKind = swimQuality.has(i)
+      ? selectSwimQualityKind(tri.distance, phase, i, weekIndex)
+      // Aerobic slot: endurance, with a technique touch on the final slot (skill maintenance every phase).
+      : (i === swimSessions - 1) ? 'technique' : 'endurance';
     const minutes = Math.max(30, Math.round((swimHours * 60) / swimSessions));
     swim.push(generateSwimSession({
       phase,
@@ -241,11 +255,16 @@ function generateWeekForTriathlon(
     }));
   }
 
-  // Generate bike sessions. Last one is the "long". We might swap for a brick.
+  // Generate bike sessions. Last one is the aerobic "long ride" (reserved as
+  // endurance for every distance). Quality slots take the distance's flavour
+  // (short = vo2/vlamax, long = sub-threshold). We might swap the long for a brick.
   const bike: Workout[] = [];
+  const bikeQuality = triQualitySlotIndices(tri.distance, phase, 'bike', bikeSessions, true);
   for (let i = 0; i < bikeSessions; i++) {
     const excluded = new Set<string>(state.onboarding?.cyclingExcludedWorkouts ?? []);
-    const kind = pickBikeKind(phase, i, weekIndex, excluded);
+    const kind: BikeSessionKind = bikeQuality.has(i)
+      ? substituteExcluded(selectBikeQualityKind(tri.distance, phase, i, weekIndex), excluded)
+      : 'endurance';
     // Long ride gets bigger slice
     const share = i === bikeSessions - 1 ? 0.45 : (0.55 / Math.max(1, bikeSessions - 1));
     const minutes = Math.max(30, Math.round(bikeHours * 60 * share));
@@ -278,15 +297,17 @@ function generateWeekForTriathlon(
   for (let i = 0; i < runSessions; i++) {
     const share = i === runSessions - 1 ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
     const minutes = Math.max(30, Math.round(runHours * 60 * share));
-    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, easyPaceSecPerKm, easyVolumeKeep));
+    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
   }
 
-  // Brick (phase: build or peak, weekly in those phases). Requires both bike
-  // and run disciplines active. Single-discipline cycling mode skips bricks.
+  // Brick. Frequency and run share scale with race distance (TRI_BRICK_POLICY):
+  // sprint gets a single peak-week rehearsal; the IM brick run is the decisive
+  // race-specific session. Requires both bike and run; cycling-only skips bricks.
   let brick: Workout | null = null;
-  if ((phase === 'build' || phase === 'peak') && bike.length > 0 && hasRun && run.length > 0) {
-    const bikeMinutes = Math.round(bikeHours * 60 * 0.40);  // Slightly shorter than solo long ride
-    const runMinutes = Math.round(runHours * 60 * 0.25);
+  const brickPolicy = TRI_BRICK_POLICY[tri.distance];
+  if (brickPolicy.phases.includes(phase) && bike.length > 0 && hasRun && run.length > 0) {
+    const bikeMinutes = Math.round(bikeHours * 60 * BRICK_BIKE_SHARE);  // Slightly shorter than solo long ride
+    const runMinutes = Math.round(runHours * 60 * brickPolicy.runShare);
     if (bikeMinutes >= 45 && runMinutes >= 15) {
       brick = generateBrick({
         phase,
@@ -626,6 +647,15 @@ const EASY_RUN_VARIANTS = [
   (dur: string, easy: string) => `${dur} @ ${easy}. Soft surface if available.`,
 ];
 
+// VO2 run intervals — short-course quality (sprint/olympic run leg raced near/above
+// threshold). vo2 pace already computed as vo2Sec (pace × 0.809).
+const VO2_RUN_VARIANTS = [
+  (vo2: string, easy: string) => `15min warm up @ ${easy}. 5×3min @ ${vo2}, 3min jog recovery. 10min cool down.`,
+  (vo2: string, easy: string) => `15min warm up @ ${easy}. 6×3min @ ${vo2}, 2min jog recovery. 10min cool down.`,
+  (vo2: string, easy: string) => `15min warm up @ ${easy}. 8×400m @ ${vo2}, 200m jog. 10min cool down.`,
+  (vo2: string, easy: string) => `15min warm up @ ${easy}. 4×4min @ ${vo2}, 3min jog recovery. 10min cool down.`,
+];
+
 function generateRunSessionForTri(
   phase: TrainingPhase,
   slotIndex: number,
@@ -633,12 +663,17 @@ function generateRunSessionForTri(
   minutes: number,
   skill: TriSkillSlider,
   weekIndex: number,
+  distance: TriathlonDistance,
   easyPaceSec?: number,
   easyVolumeKeep: number = 1,  // body-mass swap: <1 shortens EASY runs only (1 = no change)
 ): Workout {
-  void totalSlots;  // kept for signature clarity; slot position already drives isLong/isQuality
+  // Quality vs aerobic is race-distance-aware (TRI_QUALITY_SLOTS) and the last slot
+  // is always the aerobic long run. Quality flavour: short course = vo2, long = threshold.
   const isLong = slotIndex === totalSlots - 1;
-  const isQuality = slotIndex === 0 && (phase === 'build' || phase === 'peak');
+  const runQuality = triQualitySlotIndices(distance, phase, 'run', totalSlots, true);
+  const qualityKind = !isLong && runQuality.has(slotIndex)
+    ? selectRunQualityKind(distance, phase, slotIndex, weekIndex)
+    : null;
 
   // Derive pace labels. Mirrors intent_to_workout.ts logic exactly.
   const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
@@ -679,7 +714,17 @@ function generateRunSessionForTri(
     const total = r * plannedTssPerMin('long');
     aerobic = Math.round(total * 0.88);
     anaerobic = Math.round(total * 0.12);
-  } else if (isQuality) {
+  } else if (qualityKind === 'vo2') {
+    // Short-course quality. Anaerobic share from canonical LOAD_PROFILES.vo2 (0.50/0.50).
+    const idx = rotKey % VO2_RUN_VARIANTS.length;
+    name = 'VO2 run';
+    desc = VO2_RUN_VARIANTS[idx](vo2Label, easyLabel);
+    t = 'vo2';
+    rpe = 9;
+    const total = minutes * plannedTssPerMin('vo2');
+    aerobic = Math.round(total * 0.50);
+    anaerobic = Math.round(total * 0.50);
+  } else if (qualityKind === 'threshold') {
     const idx = rotKey % THRESHOLD_RUN_VARIANTS.length;
     name = 'Threshold run';
     desc = THRESHOLD_RUN_VARIANTS[idx](thresholdLabel, vo2Label, easyLabel);

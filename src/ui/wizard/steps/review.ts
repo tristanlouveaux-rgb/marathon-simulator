@@ -30,11 +30,11 @@ import { deriveVdotFromLT } from '@/calculations/lt-derivation';
 import { levelAllowsEstimatedStart } from '@/calculations/beginner-fitness';
 import { cv } from '@/calculations/vdot';
 import { recomputeLT, diagnoseLTForState } from '@/data/ltSync';
-import { awaitStartupSyncs } from '@/main';
-import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
-import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, ageGradeForFitness, wmaKeyForRaceDist, runnerFieldPlacement, runnerFieldPlacementForFitness } from '@/calculations/fitness-placement';
+import { awaitStartupSyncs } from '@/app/runtime';
+import { getPhysiologicalVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
+import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, wmaKeyForRaceDist, runnerFieldPlacement } from '@/calculations/fitness-placement';
 import { vo2BandAnchors } from '@/data/vo2max-norms';
-import { openStandardSec } from '@/data/wma-age-grading';
+import { openStandardSec, type WmaDistanceKey } from '@/data/wma-age-grading';
 import { HYROX_FORMAT_FINISHER_COUNTS } from '@/data/hyrox-population-distributions';
 import { poweredByStrava } from '@/ui/strava-brand';
 
@@ -1929,13 +1929,18 @@ function renderVdotRow(_vdot: number | undefined): string {
   // Age/sex placement against the FRIEND treadmill norms. Same value the row
   // displays (two-numbers rule). Hidden when age or sex is unknown — no
   // percentile claims against a guessed reference group. The scale's anchors
-  // are the band's published 5th/50th/95th percentile values.
+  // are the band's published 5th/50th/95th percentile values. Also hidden when
+  // the VDOT is the bare `s.v` fallback (`tanda-fallback`/`none`): a percentile
+  // claim off a number we caption as a "rough estimate" is the same overreach
+  // as the field-position projection. The value still shows with its honest
+  // "add a PB or sync HR to refine" caption; only the population bar is gated.
   const age = s.onboarding?.age;
   const sex = s.biologicalSex ?? s.onboarding?.biologicalSex;
+  const hasRealSignal = physio.source !== 'tanda-fallback' && physio.source !== 'none';
   const vo2Place = vo2maxPlacement(physio.vdot, age, sex);
   const anchors = vo2BandAnchors(age, sex);
   let placeLine = '';
-  if (vo2Place && anchors && physio.vdot != null) {
+  if (vo2Place && anchors && physio.vdot != null && hasRealSignal) {
     const span = anchors.p95 - anchors.p5;
     placeLine = `
       <p class="r-row-sub">Higher than ${vo2Place.percentile}% of ${vo2Place.sexLabel} aged ${vo2Place.bandLabel}.</p>
@@ -2151,37 +2156,59 @@ function reviewRaceDist(state: OnboardingState): string | null {
   return getState().rd ?? null;
 }
 
+/** PB keys → the population/WMA distance key and the official distance in metres. */
+const PB_KEY_TO_WMA: Record<'k5' | 'k10' | 'h' | 'm', WmaDistanceKey> = { k5: 'k5', k10: 'k10', h: 'half', m: 'marathon' };
+const PB_KEY_TO_METERS: Record<'k5' | 'k10' | 'h' | 'm', number> = { k5: 5000, k10: 10000, h: 21097.5, m: 42195 };
+
 /**
- * Field-position row. Places current running fitness within the runner
- * population at the user's own target distance: the same VDOT the VO2max
- * row displays → projected time via Daniels → percentile against the
- * 35M-result population tables (sex-specific when sex is known). The age
- * grade appears only as a bracket inside the projection sentence —
- * "Age grade 73%" as a headline read like a population percentile and
- * undersold strong runners (Tristan, 2026-06-03). Scale anchors are the
- * real table's p90 (slow) / median / p1 (fast) times; faster sits right.
+ * Pick the race result to place the athlete with. Prefer a PB at the goal
+ * distance (a marathoner with a marathon PB is placed against the marathon
+ * field), otherwise fall back to their strongest PB by VDOT so we always show
+ * their best real result. Returns null when no PB exists.
+ */
+function pickPlacementPb(pbs: PBs, goalWma: WmaDistanceKey | null): { wmaKey: WmaDistanceKey; timeSec: number } | null {
+  const present = (['k5', 'k10', 'h', 'm'] as const).filter(k => { const v = pbs[k]; return typeof v === 'number' && v > 0; });
+  if (present.length === 0) return null;
+  const goalPbKey = present.find(k => PB_KEY_TO_WMA[k] === goalWma);
+  const chosen = goalPbKey ?? present
+    .map(k => ({ k, vdot: cv(PB_KEY_TO_METERS[k], pbs[k]!) }))
+    .sort((a, b) => b.vdot - a.vdot)[0].k;
+  return { wmaKey: PB_KEY_TO_WMA[chosen], timeSec: pbs[chosen]! };
+}
+
+/**
+ * Field-position row. Places the athlete within the runner population using a
+ * REAL race result, not a projection: their PB at the goal distance when they
+ * have one, else their strongest PB. We deliberately do not project current
+ * VDOT to a finish time here — the durability-capped prediction lands on the
+ * next screen, and a raw VDOT→marathon projection would both pre-empt it and
+ * read optimistically (the durability gap is widest at the marathon). The age
+ * grade sits below the bar, not in the caption as a bracket — as a headline it
+ * read like a population percentile and undersold strong runners (Tristan,
+ * 2026-06-03). Scale anchors are the real table's p90/median/p1 times.
  */
 function renderFieldPositionRow(state: OnboardingState): string {
   const s = getState();
-  const wmaKey = wmaKeyForRaceDist(reviewRaceDist(state));
-  if (!wmaKey) return '';
-  const physio = getPhysiologicalVdot(s);
+  const goalWma = wmaKeyForRaceDist(reviewRaceDist(state));
+  const pick = pickPlacementPb(effectivePhysiologyPbs(s), goalWma);
+  if (!pick) return '';
+  const { wmaKey, timeSec } = pick;
   const sex = s.biologicalSex ?? s.onboarding?.biologicalSex;
-  const place = runnerFieldPlacementForFitness(wmaKey, physio.vdot, sex);
+  const place = runnerFieldPlacement(wmaKey, timeSec, sex);
   if (!place) return '';
   const sexNoun = place.sexUsed === 'male' ? 'male runners' : place.sexUsed === 'female' ? 'female runners' : 'runners';
   // Age grade lives below the bar where there's whitespace, not crammed
   // into the caption as a bracket.
-  const g = ageGradeForFitness(wmaKey, physio.vdot, s.onboarding?.age, sex);
+  const g = ageGradeForTime(wmaKey, timeSec, s.onboarding?.age, sex);
   return `
     <div class="r-row shadow-ap readonly">
       <div class="r-row-icon">${ICON_VOLUME}</div>
       <div class="r-row-body">
         <p class="r-row-label">Field position</p>
         <p class="r-row-value">Faster than ${place.fasterThanPct}% of ${sexNoun}</p>
-        <p class="r-row-sub">Current fitness projects to a ${formatTime(Math.round(place.timeSec))} ${WMA_DIST_LABELS[wmaKey]}.</p>
+        <p class="r-row-sub">Based on your ${formatTime(Math.round(timeSec))} ${WMA_DIST_LABELS[wmaKey]}.</p>
         ${renderRunnerScaleBar(
-          place.timeSec,
+          timeSec,
           place.scale,
           openStandardSec(wmaKey, sex),
           `${g ? `${g.gradePct.toFixed(0)}% of world-record speed for your age${g.bandLabel ? `, ${g.bandLabel.toLowerCase()}` : ''}. ` : ''}35 million race results, 28,000 races.`,

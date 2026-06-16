@@ -212,6 +212,7 @@ export function render(): void {
       sessionsPerWeek: sessionsForHorizon,
       runnerType: getRunnerType(s.b),
       experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+      crossTrained: s.onboarding?.crossTrainedBackground === true,
       weeklyVolumeKm: planMeanKm ?? s.wkm,
       hmPbSeconds: s.pbs?.h || undefined,
       ltPaceSecPerKm: s.lt || undefined,

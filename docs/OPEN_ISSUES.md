@@ -8,6 +8,37 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-287: Short plans (≤12 weeks) front-load the LOAD-chart peak to ~week 5 *(P2, 2026-06-16)* — diagnosis corrected, fix NOT started
+
+**Symptom (scenario sweep, not device-confirmed).** Rebuilding real plans across lengths: the load (TSS) peak lands late for 16-24 wk plans (77-87%) but **early for short plans** — an 8/10/12-wk plan peaks at **week 5** (62% / 50% / 41%).
+
+**Not caused by ISSUE-286's fix.** Appears identically for the half; RC2 can only move a peak later.
+
+**Corrected root cause (2026-06-16, after building + reverting a trial fix).** The first hypothesis — "the geometric volume ramp saturates early, fix it with a tri-style phase envelope" — was **built and tested, then reverted**, because it was wrong on two counts:
+1. **The early peak is an INTENSITY-placement artifact, not a volume one.** In a 12-wk plan, wk5 carries *less* km than wk7 (55 vs 67) but *more* load (TSS 565 vs 500). The load peak tracks where the hard quality sessions + the post-deload bounce land (first big week after the wk4 deload), not where volume peaks. A volume envelope therefore can't move it — confirmed: with the envelope active the TSS peak stayed at wk5.
+2. **A blanket volume envelope regresses established runners.** Mirroring tri's `phaseMultiplier` (base 0.55→0.85 of peak) cut a 50 km/wk runner's week-1 volume to ~37 km — detraining someone already at volume. For an athlete whose baseline ≈ peak, a flat volume profile is *correct*; they periodise via intensity, not a volume ramp. Flooring the envelope at baseline (to protect them) cancels its effect for exactly the fit-runner case it was meant to fix.
+
+Also discovered while testing: the whole volume-budget subsystem (geometric ramp, RC2, any envelope) only runs when **both `state.detectedWeeklyKm > 0` and `state.athleteArchetype` are set** (read live in `generateWeekWorkouts`; archetype is set at launch by `detectArchetype` and after Strava/Apple sync). Real launched/synced users have them; a bare `initializeSimulator` test does not — so budget-path changes MUST be tested with both set or they silently no-op.
+
+**Fix direction (needs Tristan's call).** The real lever is **intensity placement** — concentrate the hardest quality sessions in the peak phase and damp the post-deload load spike in early build — so the load peak lands late for short plans too. Distinct subsystem from ISSUE-286 (quality-cap / session-type distribution by phase, `workoutPriority` + `qualityCap`). Alternative: accept it — short plans are inherently compressed, and the reported 18-wk case already peaks correctly (wk14). Deferred for a dedicated decision.
+
+### ISSUE-286: Marathon plans are under-built — short long run, flat/front-loaded ramp, low volume *(P1, 2026-06-15)* — fix in working tree, pending Tristan confirmation + device test
+
+**Symptom (Tristan, device, real 18-wk Amsterdam plan).** Weekly-load chart peaks at **week 2** (should be ~wk 14-16), reads as a jagged no-arc sawtooth, ~34 km peak week / ~452 km total. For a 3-runs/wk marathon the **long run tops out at ~18 km / 89 min**.
+
+**Verified NOT the chart.** coach-contract's chart faithfully sums the prescribed sessions; the km-undercount was already fixed (`plannedWorkoutKm`). The plan itself is under-built.
+
+**Root causes (engine):** (1) long run time-capped too low for marathon (`longRunMinutes` / `computePeakWeeklyKm` longCap, intermediate=120min⇒~18-24km); (2) volume ramp goes **flat** under a tight cap so the plan stops periodizing — peak lands on noise (`weekVolumeBudgetKm` athlete-archetype.ts:347 + `effectiveWeeklyBudgetMin` plan_engine.ts:356); (3) low run frequency starves volume + zeroes easy runs for marathon (`computePeakWeeklyKm` easyCount = rw-2-1).
+
+**Fix (in working tree, 2026-06-15) — SCIENCE_LOG §BW, all three RCs:**
+1. **RC1**: marathon long run now ramps linearly from the 90-min week-1 anchor up to a distance-aware readiness ceiling (`longRunCapMin`: beginner 150 / novice-intermediate 165 / advanced-elite 180 min — matches the predictor's `LONG_RUN_THRESHOLD_SEC.marathon = 165 min ≈ 30 km`). Same cap reused in `computePeakWeeklyKm`. (Old code maxed at ~95 min because the base ramp, not the cap, was binding.)
+2. **RC2**: `effectiveWeeklyBudgetMin` caps the *peak* destination then ramps toward it with the existing geometric fraction (was `min(ramp, hoursCap)` per week, which flattened under any tight cap). New budget always ≤ old; no-hours-target plans byte-identical.
+3. **RC3**: marathon `easyCount` floored at 1 when `runsPerWeek ≥ 3`. Cross-training stays alongside (Tristan's call: no planning-time km cut).
+
+**Effect (rw=3 marathon probe):** peak wk 11→**14**, peak km 37→**51**, total 452→**588**, peak long run 18 km/89 min → **32 km/159 min**. Tight-hours-cap front-loaded peak (wk 5) → wk 14. `tsc` clean, plan/workout suite (326) green. **Not device-verified** — do not mark FIXED until Tristan regenerates a real marathon plan and confirms the arc + long-run distance.
+
+**Full diagnostic + repro:** see **`docs/MARATHON_PLAN_DIAGNOSTIC.md`**.
+
 ### ISSUE-285: Prediction engine read "no training data" as "detrained" — predicted a 2:00 marathoner at 2:22 *(P1, 2026-06-15)* — fix in working tree, pending Tristan confirmation + device test
 
 **Symptom (Tristan, 2026-06-15).** A user whose only data is a 2:00:00 marathon PB was predicted **2:22:50** (reproduced as 2:24:54 from the live code). A 20:00 5K runner with no other data, training 3×/week + 1 speed, was predicted **4:03** for the marathon. Both are slower than the athlete's demonstrated fitness warrants.

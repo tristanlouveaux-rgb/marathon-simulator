@@ -30,7 +30,7 @@ import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-moda
 import { gp } from '@/calculations/paces';
 import type { WorkoutMod } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { getSyncLabel, hasPhysiologySource } from '@/data/sources';
 
 /** Persists the viewed week across renderMainView() re-renders. Null = use current week. */

@@ -138,4 +138,13 @@ export interface TrainingHorizonInput {
    * Omitted/0 → no contribution (non-lifters see no change). See SCIENCE_LOG §BC.
    */
   strength_sessions_per_week?: number;
+  /**
+   * True when the athlete is fit from non-running aerobic sport (cycling,
+   * rowing, swimming, field sports). Applies the cross-trained adaptation-rate
+   * premium to `exp_factor`: an existing aerobic engine converts to running
+   * performance faster than building it from scratch. Same magnitude the legacy
+   * `hybrid` experience level carried (CROSS_TRAINED_FORECAST_PREMIUM, derived
+   * from EXP_FACTORS.hybrid ÷ intermediate). See SCIENCE_LOG §BX.
+   */
+  cross_trained?: boolean;
 }

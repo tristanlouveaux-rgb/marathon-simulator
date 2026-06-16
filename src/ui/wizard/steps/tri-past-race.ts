@@ -108,7 +108,7 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
               <input type="checkbox" id="tpr-has-race" ${hasRace ? 'checked' : ''}>
               I've completed a triathlon in the past year
             </label>
-            <p class="tri-hint" style="margin-top:10px">Sprint, Olympic, 70.3, or Ironman. Swim and run legs calibrate your CSS and running benchmarks directly.</p>
+            <p class="tri-hint" style="margin-top:10px">Sprint, Olympic, T100, 70.3, or Ironman. Swim and run legs calibrate your CSS and running benchmarks directly.</p>
           </div>
 
           <!-- All fields shown when toggled -->

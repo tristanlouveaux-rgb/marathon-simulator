@@ -9,7 +9,7 @@
  */
 
 import { getState, getMutableState } from '@/state/store';
-import { getTriDistanceLabel } from '@/constants/triathlon-constants';
+import { getTriDistanceLabel, RUN_FATIGUE_DISCOUNT } from '@/constants/triathlon-constants';
 import { saveState } from '@/state/persistence';
 import type { SimulatorState } from '@/types/state';
 import type { TriRacePrediction, CourseFactorEntry } from '@/types/triathlon';
@@ -733,7 +733,8 @@ function pageBricks(s: SimulatorState): PageContent {
 
   // Engine: fatigue discount baseline by distance, modified by adaptation 0-1.
   const distance = s.triConfig?.distance ?? '70.3';
-  const baseFatigueDiscountPct = distance === 'ironman' ? 11 : 5;
+  // Per-distance fatigue discount (canonical table) — sprint 2% / olympic 4% / t100 5% / 70.3 5% / IM 11%.
+  const baseFatigueDiscountPct = RUN_FATIGUE_DISCOUNT[distance] * 100;
   // Crude proxy: 12 bricks = fully adapted (matches engine half-saturation feel).
   const adaptScore = Math.min(1, count / 12);
   const reducedPct = baseFatigueDiscountPct * (1 - adaptScore * 0.4);

@@ -14,7 +14,7 @@ import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
-import { isSimulatorMode } from '@/main';
+import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource, hasPhysiologySource } from '@/data/sources';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { getState, getMutableState, updateState } from '@/state/store';

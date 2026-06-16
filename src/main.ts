@@ -6,6 +6,7 @@
 import './styles.css';
 import { loadState, getState, getMutableState, saveState, clearState } from '@/state';
 import { restorePlanFromSupabase, getLocalStateOwner, setLocalStateOwner } from '@/data/planSettingsSync';
+import { isSimulatorMode, trackStartupTask, signalLaunchAppComplete } from '@/app/runtime';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
@@ -51,56 +52,17 @@ if (import.meta.env.DEV) {
   };
 }
 
-/** True when running in local simulator mode (no auth required) */
-export function isSimulatorMode(): boolean {
-  return localStorage.getItem('mosaic_simulator_mode') === '1';
-}
+// `isSimulatorMode`, `trackStartupTask`, `signalLaunchAppComplete` and
+// `awaitStartupSyncs` now live in the leaf module `@/app/runtime` (imported
+// above). They were moved out of this entry module so that the views and the
+// onboarding `review` step that need them no longer import `main.ts` — which
+// auto-runs `bootstrap()` at module load and previously created a circular
+// import that crashed the wizard with a `STEP_ORDER` temporal-dead-zone error.
+// See src/app/runtime.ts for the full rationale.
 
 // Tracks the userId active when launchApp() last ran.
 // Suppresses the duplicate SIGNED_IN that Supabase fires for an already-valid session on page load.
 let launchedUserId: string | null = null;
-
-/**
- * Startup-sync coordination. `launchApp` fires several fire-and-forget
- * background tasks (Strava backfill, history restore, DB cleanup, etc.) that
- * write to the activity DB. Some surfaces. Most importantly the onboarding
- * review screen's `loadActivitiesFromDB` query. Read that DB and need to
- * see settled data, otherwise their derived values (FTP, CSS, weekly volume)
- * come and go between reloads as the syncs race the read.
- *
- * Pattern:
- *   1. `launchApp` calls `trackStartupTask(asyncFn())` for each fire-and-forget.
- *   2. After `launchApp` completes, callers can `await awaitStartupSyncs()` to
- *      block until those tasks have all settled (or a timeout fires).
- *   3. The review pipeline awaits this before its own `loadActivitiesFromDB`.
- *
- * Bootstrap completion is signalled separately so a caller awaiting before
- * launchApp finishes doesn't snapshot an empty task array.
- */
-const _startupSyncTasks: Promise<unknown>[] = [];
-let _launchAppResolve: (() => void) | null = null;
-const _launchAppPromise = new Promise<void>((resolve) => { _launchAppResolve = resolve; });
-
-function trackStartupTask<T>(p: Promise<T>): Promise<T> {
-  _startupSyncTasks.push(p);
-  return p;
-}
-
-/**
- * Wait until all background startup tasks (registered via `trackStartupTask`
- * in `launchApp`) have settled, or until `timeoutMs` elapses. Whichever
- * comes first. Resolves regardless; never rejects.
- *
- * Defaults to 20 s. Plenty of time for a typical first-run Strava backfill,
- * but capped so a stuck task can't lock the wizard indefinitely.
- */
-export async function awaitStartupSyncs(timeoutMs: number = 20000): Promise<void> {
-  await _launchAppPromise;
-  await Promise.race([
-    Promise.allSettled(_startupSyncTasks).then(() => undefined),
-    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-  ]);
-}
 
 /**
  * Debounced home-view refresh. Multiple async syncs land on startup (Strava
@@ -1755,7 +1717,7 @@ async function launchApp(): Promise<void> {
   // Signal that launchApp's task-collection phase is complete. Any caller
   // awaiting `awaitStartupSyncs()` was blocked on this. Now they can
   // proceed to wait for the tracked tasks themselves to settle.
-  _launchAppResolve?.();
+  signalLaunchAppComplete();
 }
 
 /**

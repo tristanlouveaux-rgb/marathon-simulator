@@ -960,6 +960,11 @@ export interface SimulatorState {
   blendedRaceTimeSec?: number;              // Predicted time for s.rd at current fitness
   blendedEffectiveVdot?: number;            // VDOT back-solved from blended prediction, for pace derivation
   blendedLastRefreshedISO?: string;         // When the cache was last recomputed
+  // True when the blend had NO measured run data and was sized from the
+  // runs/week volume estimate (no synced history, no typed weekly km). The UI
+  // shows an honest "estimate, sharpens once your runs sync" caption. Cleared
+  // the moment real run data lands and the refresh re-runs.
+  blendedFromEstimate?: boolean;
   // HR-calibrated VDOT. Swain regression of pace on %VO2R across recent runs.
   // Cached so the onboarding review screen can describe the method + confidence
   // without re-running the regression. See effort-calibrated-vdot.ts.
