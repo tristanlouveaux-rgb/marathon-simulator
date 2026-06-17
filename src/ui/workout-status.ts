@@ -113,6 +113,36 @@ export function firstTrackedDow(
   return 7;
 }
 
+/**
+ * Reduced partial first week: drop sessions scheduled before the plan existed.
+ *
+ * When a user onboards mid-week, week 1 is anchored to this Monday so
+ * periodization stays calendar-aligned, but the days before they onboarded were
+ * never schedulable. Rather than show empty/uncompletable cards or cram a full
+ * week into the remaining days, we drop the pre-onboard days entirely: week 1
+ * becomes a naturally-lighter block that starts today, full load resumes the
+ * next Monday. A late-week (Sat/Sun) onboard simply leaves a chill 1–2 session
+ * week 1 — the lead-in — with the first full week landing next Monday. Activities
+ * the user already logged this week still credit to load (they flow in via the
+ * activity matcher, independent of this list).
+ *
+ * No-op for established plans, Monday onboards, and any week other than the
+ * current one. Keyed off `firstTrackedDow`, the single source for "first
+ * schedulable weekday". Pass the resolved workout list for the current view week.
+ */
+export function dropPreOnboardSessions<T extends { dayOfWeek?: number }>(
+  workouts: T[],
+  planStartDate: string | undefined,
+  viewWeek: number,
+  currentWeek: number,
+  planCreatedAt: string | undefined,
+): T[] {
+  if (viewWeek !== currentWeek) return workouts;
+  const ftd = firstTrackedDow(planStartDate, viewWeek, planCreatedAt);
+  if (ftd <= 0) return workouts;
+  return workouts.filter(w => (w.dayOfWeek ?? 0) >= ftd);
+}
+
 export interface WeekStatusContext {
   viewWeek: number;
   currentWeek: number;

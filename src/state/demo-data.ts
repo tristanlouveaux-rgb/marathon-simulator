@@ -25,11 +25,16 @@ import { initializeSimulator } from '@/state/initialization';
  * today, matching planDurationWeeks. Computed at seed time so the demo never goes
  * stale — a hardcoded date (originally '2026-04-26') eventually fell into the past
  * and the seeded account booted with a "race is done" banner over a Week-1 plan.
+ *
+ * Roll to Sunday in UTC, because we serialise with toISOString() (UTC). Rolling in
+ * local time then slicing the UTC ISO dropped the date back to Saturday for anyone
+ * in a UTC-ahead timezone during the late-night window (the day-of-week and the
+ * serialised calendar day disagreed across the midnight boundary).
  */
 function demoRaceDate(): string {
   const d = new Date();
-  d.setDate(d.getDate() + 112);
-  d.setDate(d.getDate() + ((7 - d.getDay()) % 7)); // roll forward to Sunday
+  d.setUTCDate(d.getUTCDate() + 112);
+  d.setUTCDate(d.getUTCDate() + ((7 - d.getUTCDay()) % 7)); // roll forward to Sunday (UTC)
   return d.toISOString().slice(0, 10);
 }
 

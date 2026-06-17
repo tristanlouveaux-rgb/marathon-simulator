@@ -35,6 +35,9 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "checkAvailability", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readQuantitySamples", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readLatestQuantity", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readSleepSamples", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readCharacteristics", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "queryWorkouts", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "readWorkoutRouteLocations", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startWorkoutObserver", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopWorkoutObserver", returnType: CAPPluginReturnPromise),
@@ -109,6 +112,20 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         for id in identifiers {
             if id == "workoutRoute" {
                 readTypes.insert(HKSeriesType.workoutRoute())
+                // HealthKit REQUIRES the parent workout type be requested
+                // alongside the route series. Requesting the route alone makes
+                // requestAuthorization throw `_throwIfParentTypeNotRequestedForSharing`
+                // (EXC_CRASH/SIGABRT, hard crash on iOS 26.4.1 — confirmed in the
+                // build-16 crash log). Co-request the parent so it never throws.
+                readTypes.insert(HKObjectType.workoutType())
+            } else if id == "workouts" || id == "workoutType" {
+                readTypes.insert(HKObjectType.workoutType())
+            } else if id == "sleepAnalysis" {
+                if let t = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { readTypes.insert(t) }
+            } else if id == "dateOfBirth" {
+                if let t = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) { readTypes.insert(t) }
+            } else if id == "biologicalSex" {
+                if let t = HKObjectType.characteristicType(forIdentifier: .biologicalSex) { readTypes.insert(t) }
             } else if let qt = quantityType(for: id) {
                 readTypes.insert(qt)
             }
@@ -119,7 +136,15 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         healthStore.requestAuthorization(toShare: nil, read: readTypes) { [weak self] success, error in
-            guard let self = self else { return }
+            // If the plugin instance was deallocated mid-flight, we must STILL
+            // settle the JS promise — silently returning would leave the
+            // caller's `await` hanging forever, pinning the connect flow's
+            // in-flight guard so every later "Connect" tap re-rides a dead
+            // promise. Best-effort resolve with the raw success flag.
+            guard let self = self else {
+                call.resolve(["granted": [], "denied": [], "success": success])
+                return
+            }
             if let error = error {
                 call.reject("HealthKit auth error: \(error.localizedDescription)")
                 return
@@ -189,6 +214,12 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
             var out: [[String: Any]] = []
             for s in (samples ?? []) {
                 guard let qs = s as? HKQuantitySample else { continue }
+                // Guard the unit conversion: doubleValue(for:) throws an
+                // UNCATCHABLE Obj-C exception (hard crash) if the sample's unit
+                // is dimensionally incompatible with `unit`. Skip such samples
+                // instead. This is the crash that hit on iOS 26.5 the first time
+                // a post-connect read (e.g. VO2max) actually executed.
+                guard qs.quantity.`is`(compatibleWith: unit) else { continue }
                 let value = qs.quantity.doubleValue(for: unit)
                 out.append([
                     "value": value,
@@ -234,7 +265,8 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("Query error: \(error.localizedDescription)")
                 return
             }
-            guard let qs = samples?.first as? HKQuantitySample else {
+            guard let qs = samples?.first as? HKQuantitySample,
+                  qs.quantity.`is`(compatibleWith: unit) else {
                 call.resolve(["value": NSNull(), "asOf": NSNull()])
                 return
             }
@@ -246,6 +278,136 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
             ])
         }
         healthStore.execute(query)
+    }
+
+    /// Read sleep analysis category samples in [startDate, endDate]. Each sample
+    /// is one stage segment; `value` is the raw HKCategoryValueSleepAnalysis:
+    /// 0=inBed, 1=asleepUnspecified, 2=awake, 3=asleepCore(light), 4=asleepDeep,
+    /// 5=asleepREM. The TS layer maps these to our stage buckets and computes
+    /// durations. Read-only, never throws (resolves [] on any failure).
+    @objc public func readSleepSamples(_ call: CAPPluginCall) {
+        guard HKHealthStore.isHealthDataAvailable(),
+              let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            call.resolve(["samples": []])
+            return
+        }
+        let endDate = parseISO(call.getString("endDate")) ?? Date()
+        let startDate = parseISO(call.getString("startDate")) ?? Calendar.current.date(byAdding: .day, value: -28, to: endDate)!
+        let limit = call.getInt("limit") ?? 2000
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: [])
+        let query = HKSampleQuery(sampleType: sleepType, predicate: predicate, limit: limit, sortDescriptors: [sortDesc]) { [weak self] _, samples, error in
+            guard let self = self else { call.resolve(["samples": []]); return }
+            if error != nil { call.resolve(["samples": []]); return }
+            var out: [[String: Any]] = []
+            for s in (samples ?? []) {
+                guard let cs = s as? HKCategorySample else { continue }
+                out.append([
+                    "value": cs.value,
+                    "startDate": self.isoFormatter.string(from: cs.startDate),
+                    "endDate": self.isoFormatter.string(from: cs.endDate),
+                    "sourceName": cs.sourceRevision.source.name
+                ])
+            }
+            call.resolve(["samples": out])
+        }
+        healthStore.execute(query)
+    }
+
+    /// Read immutable HealthKit characteristics: date of birth + biological sex.
+    /// These are synchronous reads (no query), guarded so a missing/denied value
+    /// resolves null rather than throwing. Used to pre-fill onboarding (age, sex)
+    /// and seed maxHR / HR-zone defaults.
+    @objc public func readCharacteristics(_ call: CAPPluginCall) {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            call.resolve(["dateOfBirth": NSNull(), "biologicalSex": NSNull()])
+            return
+        }
+        var dob: Any = NSNull()
+        var sex: Any = NSNull()
+        do {
+            let comps = try healthStore.dateOfBirthComponents()
+            if let date = Calendar(identifier: .gregorian).date(from: comps) {
+                dob = isoFormatter.string(from: date)
+            }
+        } catch { /* not set or denied — leave null */ }
+        do {
+            switch try healthStore.biologicalSex().biologicalSex {
+            case .female: sex = "female"
+            case .male:   sex = "male"
+            case .other:  sex = "other"
+            default:      sex = NSNull()
+            }
+        } catch { /* not set or denied — leave null */ }
+        call.resolve(["dateOfBirth": dob, "biologicalSex": sex])
+    }
+
+    /// Query HKWorkout samples in [startDate, endDate]. Returns the same field
+    /// shape capgo's queryWorkouts produced (workoutType string, dates, duration
+    /// seconds, totalDistance metres, totalEnergyBurned kcal, sourceName,
+    /// sourceId) so the TS converter is reused unchanged. Read-only; resolves []
+    /// on any failure. Replaces capgo (which crashes its auth on iOS 26.x).
+    @objc public func queryWorkouts(_ call: CAPPluginCall) {
+        guard HKHealthStore.isHealthDataAvailable() else { call.resolve(["workouts": []]); return }
+        let workoutType = HKObjectType.workoutType()
+        let endDate = parseISO(call.getString("endDate")) ?? Date()
+        let startDate = parseISO(call.getString("startDate")) ?? Calendar.current.date(byAdding: .day, value: -364, to: endDate)!
+        let limit = call.getInt("limit") ?? HKObjectQueryNoLimit
+        let ascending = call.getBool("ascending") ?? false
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: [])
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: ascending)
+        let query = HKSampleQuery(sampleType: workoutType, predicate: predicate, limit: limit, sortDescriptors: [sortDesc]) { [weak self] _, samples, error in
+            guard let self = self else { call.resolve(["workouts": []]); return }
+            if error != nil { call.resolve(["workouts": []]); return }
+            let kcal = HKUnit.kilocalorie()
+            let meter = HKUnit.meter()
+            var out: [[String: Any]] = []
+            for s in (samples ?? []) {
+                guard let w = s as? HKWorkout else { continue }
+                var dist: Any = NSNull()
+                if let d = w.totalDistance, d.`is`(compatibleWith: meter) { dist = d.doubleValue(for: meter) }
+                var energy: Any = NSNull()
+                if let e = w.totalEnergyBurned, e.`is`(compatibleWith: kcal) { energy = e.doubleValue(for: kcal) }
+                out.append([
+                    "workoutType": self.workoutActivityTypeName(w.workoutActivityType),
+                    "startDate": self.isoFormatter.string(from: w.startDate),
+                    "endDate": self.isoFormatter.string(from: w.endDate),
+                    "duration": w.duration,
+                    "totalDistance": dist,
+                    "totalEnergyBurned": energy,
+                    "sourceName": w.sourceRevision.source.name,
+                    "sourceId": w.uuid.uuidString
+                ])
+            }
+            call.resolve(["workouts": out])
+        }
+        healthStore.execute(query)
+    }
+
+    /// Map HKWorkoutActivityType → the string keys capgo emitted (so the TS
+    /// `mapWorkoutType` switch is reused unchanged). Unknown types → "other".
+    private func workoutActivityTypeName(_ type: HKWorkoutActivityType) -> String {
+        switch type {
+        case .running:                     return "running"
+        case .cycling:                     return "cycling"
+        case .swimming:                    return "swimming"
+        case .walking:                     return "walking"
+        case .hiking:                      return "hiking"
+        case .rowing:                      return "rowing"
+        case .elliptical:                  return "elliptical"
+        case .stairClimbing, .stairs:      return "stairClimbing"
+        case .traditionalStrengthTraining: return "traditionalStrengthTraining"
+        case .functionalStrengthTraining:  return "strengthTraining"
+        case .crossTraining:               return "crossTraining"
+        case .yoga:                        return "yoga"
+        case .tennis:                      return "tennis"
+        case .basketball:                  return "basketball"
+        case .soccer:                      return "soccer"
+        case .americanFootball:            return "americanFootball"
+        case .baseball:                    return "baseball"
+        case .wrestling:                   return "wrestling"
+        default:                           return "other"
+        }
     }
 
     /// Read all GPS locations recorded for workouts that overlap [startDate,
@@ -502,6 +664,28 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         switch identifier {
         case "vo2Max":
             return HKQuantityType.quantityType(forIdentifier: .vo2Max)
+        // Physiology types — read here (not via capgo) because the capgo plugin
+        // hangs at authorization on iOS 26.5. HealthKit auth is app-level, so
+        // these read fine once the user has granted (toggles on).
+        case "restingHeartRate":
+            return HKQuantityType.quantityType(forIdentifier: .restingHeartRate)
+        case "heartRateVariabilitySDNN":
+            return HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN)
+        case "stepCount":
+            return HKQuantityType.quantityType(forIdentifier: .stepCount)
+        case "heartRate":
+            return HKQuantityType.quantityType(forIdentifier: .heartRate)
+        // Anthropometrics + extra recovery signals (all iOS 8–11, no gating).
+        case "bodyMass":
+            return HKQuantityType.quantityType(forIdentifier: .bodyMass)
+        case "height":
+            return HKQuantityType.quantityType(forIdentifier: .height)
+        case "bodyFatPercentage":
+            return HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage)
+        case "respiratoryRate":
+            return HKQuantityType.quantityType(forIdentifier: .respiratoryRate)
+        case "oxygenSaturation":
+            return HKQuantityType.quantityType(forIdentifier: .oxygenSaturation)
         case "walkingHeartRateAverage":
             return HKQuantityType.quantityType(forIdentifier: .walkingHeartRateAverage)
         case "appleSleepingWristTemperature":
@@ -565,8 +749,20 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         case "vo2Max":
             // mL/(kg·min) — Apple's standard VO2max unit. Constructed from mL/kg/min.
             return HKUnit(from: "ml/kg*min")
-        case "walkingHeartRateAverage":
+        case "restingHeartRate", "walkingHeartRateAverage", "heartRate", "respiratoryRate":
             return HKUnit.count().unitDivided(by: HKUnit.minute())
+        case "heartRateVariabilitySDNN":
+            // HRV SDNN — return in milliseconds (matches what the JS model expects
+            // before its SDNN→RMSSD ×1.28 conversion).
+            return HKUnit.secondUnit(with: .milli)
+        case "stepCount":
+            return HKUnit.count()
+        case "bodyMass":
+            return HKUnit.gramUnit(with: .kilo)        // kg
+        case "height":
+            return HKUnit.meter()                       // m
+        case "bodyFatPercentage", "oxygenSaturation":
+            return HKUnit.percent()                     // 0.0–1.0
         case "appleSleepingWristTemperature":
             return HKUnit.degreeCelsius()
         case "runningPower", "cyclingPower", "cyclingFunctionalThresholdPower":
@@ -594,7 +790,14 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
     private func unitIdentifier(for identifier: String) -> String {
         switch identifier {
         case "vo2Max":                                      return "ml/kg/min"
-        case "walkingHeartRateAverage":                     return "bpm"
+        case "restingHeartRate", "walkingHeartRateAverage",
+             "heartRate":                                   return "bpm"
+        case "respiratoryRate":                             return "brpm"
+        case "heartRateVariabilitySDNN":                    return "ms"
+        case "stepCount":                                   return "count"
+        case "bodyMass":                                    return "kg"
+        case "height":                                      return "m"
+        case "bodyFatPercentage", "oxygenSaturation":       return "fraction"
         case "appleSleepingWristTemperature":               return "celsius"
         case "runningPower", "cyclingPower",
              "cyclingFunctionalThresholdPower":              return "watt"

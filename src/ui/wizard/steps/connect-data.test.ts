@@ -52,6 +52,7 @@ vi.mock('@/ui/page-flair', () => ({
 }));
 vi.mock('@/data/appleHealthSync', () => ({
   isNativeiOS: h.isNativeiOS, connectAppleHealth: h.connectAppleHealth,
+  getLastApplePhysiologyDiag: () => '',
 }));
 vi.mock('@/data/healthExtras', () => ({ openAppSettings: vi.fn() }));
 vi.mock('@/data/sources', () => ({ hasPhysiologySource: h.hasPhysiologySource }));

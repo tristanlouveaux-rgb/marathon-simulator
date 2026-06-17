@@ -9,7 +9,9 @@ import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
 } from '@/calculations';
-import { calculateForecast, demonstratedPBFloor } from '@/calculations/predictions';
+import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
+import { pbMedianVdot } from '@/calculations/physiological-vdot';
+import { computePeakWeeklyKm } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec } from '@/calculations/run-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
@@ -539,10 +541,74 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       },
     );
 
-    // Convert to VDOT (from the capped time — mirrors the refresher pushing
-    // the durability-adjusted VDOT into s.v, so paces and the anchor agree)
-    const curr = cv(targetDistMeters, cappedBlendedTime);
+    // ── Engine vs race-readiness separation (ISSUE-297, RC1) ────────────────
+    // Mirror of refreshBlendedFitness. `cappedBlendedTime` is a race-readiness
+    // time carrying the low-volume / marathon-specificity penalties; back-
+    // deriving the GLOBAL engine VDOT from it buries demonstrated capacity (a
+    // 20:00 5K → VDOT ~50 collapses to ~40 off 8 km/wk), then feeds paces, plan
+    // generation and the forecast. The engine is floored at PB-median capacity
+    // (`pbMedianVdot`) unless a recent run demonstrates real slowness. Low
+    // training volume is deliberately NOT engine-decay evidence: it limits
+    // readiness (modelled on the prediction + forecast), not aerobic capacity.
+    const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
+    const capacityVdot = pbMedianVdot(pbs);
+    let engineVdot = penalisedVdot;
+    if (capacityVdot != null && capacityVdot > penalisedVdot) {
+      const recentForEngine = blendInputs.recentRun ?? rec ?? null;
+      const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
+        ? predictFromRecent(targetDistMeters, recentForEngine, pbs, b)
+        : null;
+      const recentVdot = tRecentAtTarget != null && tRecentAtTarget > 0
+        ? cv(targetDistMeters, tRecentAtTarget)
+        : null;
+      const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
+      if (!recentDemonstratesSlowness) {
+        engineVdot = capacityVdot;
+        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at capacity (low volume is readiness, not engine; ISSUE-297)`);
+      }
+    }
+    // `curr` is now the ENGINE (capacity), so paces, s.v and the anchor agree on
+    // capacity rather than the penalised readiness number.
+    const curr = engineVdot;
     const pac = gp(curr, ltPace);
+
+    // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ───
+    // The forecast must credit the volume the plan builds the athlete up to, not
+    // today's pre-plan volume. `computePeakWeeklyKm` is the exact destination the
+    // plan engine ramps toward; re-blending at that volume lifts the low-volume /
+    // specificity penalties in proportion to the mileage the plan actually
+    // delivers (full relief once it reaches ≥30 km/wk, partial in the 20-30 band
+    // so a thin-data beginner is never over-credited to bare capacity).
+    const peakKm = runsPerWeek > 0
+      ? computePeakWeeklyKm({
+          runsPerWeek,
+          raceDistance: targetDistStr,
+          fitnessLevel: state.experienceLevel || 'intermediate',
+          totalWeeks: state.planDurationWeeks ?? 16,
+          vdot: engineVdot,
+          easyPaceSecPerKm: pac.e,
+        })
+      : null;
+    const peakBlend = (peakKm != null && peakKm > 0)
+      ? blendPredictions(
+          targetDistMeters, pbs, ltPace, vo2max, b,
+          runnerType.toLowerCase(),
+          blendInputs.recentRun ?? rec ?? null,
+          undefined,
+          peakKm,
+          blendInputs.avgPaceSecPerKm ?? undefined,
+          { weeksCovered: blendInputs.weeksCovered, paceConfidence: blendInputs.paceConfidence, isStale: blendInputs.isStale },
+          undefined,
+          marathonPbAgeDays,
+          false,
+          effectiveCrossSessions,
+        )
+      : null;
+    const forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
+    // Publish the peak-volume anchor for the live-recomputing forecast surfaces
+    // (renderer, plan-preview) so they credit the ramp instead of anchoring on
+    // the penalised today-time (ISSUE-297 forecast-display facet).
+    s.forecastBlendAnchorSec = forecastAnchorSec;
 
     // `runsPerWeek` + `effectiveCrossSessions` were computed above (before the
     // blend, so cross-training could soften the short-distance discount).
@@ -710,7 +776,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
       : 0;
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, cappedBlendedTime,
+      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, forecastAnchorSec,
       { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;
@@ -723,7 +789,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     }
     refreshForecastCourseFactors(s);
 
-    // Anchor all week date ranges to the Monday of the week the plan was created
+    // Anchor week date ranges to this Monday. A mid-week onboard yields a reduced
+    // partial week 1 (pre-onboard days dropped, starts today — dropPreOnboardSessions);
+    // a Sat/Sun onboard naturally gets a chill 1–2 session week 1 (lead-in), with the
+    // first full week landing the following Monday. We never anchor to a future Monday:
+    // weekIndexForDate can't file pre-start activities and reconcilePlanAnchorToEarliestActivity
+    // would pull the anchor back the moment a lead-in run is logged.
     s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
     s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
 

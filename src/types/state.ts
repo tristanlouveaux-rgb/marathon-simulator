@@ -324,6 +324,8 @@ export interface PhysiologyDayEntry {
   highlyActiveMinutes?: number; // minutes in HIGHLY_ACTIVE intensity only
   ltPace?: number;        // sec/km. From physiology_snapshots
   ltHR?: number;          // bpm at lactate threshold. From physiology_snapshots
+  respiratoryRate?: number; // breaths/min (sleeping/resting). Apple Health / Garmin-via-Apple-Health.
+  spo2?: number;            // blood oxygen saturation, percent (0–100). Recovery / altitude / illness signal.
 }
 
 /**
@@ -763,6 +765,13 @@ export interface SimulatorState {
 
   // Personal records
   pbs: PBs;               // All-time PBs
+  /** Tombstones for PBs the user explicitly deleted (per-distance, the deleted
+   *  time in seconds). Suppresses passive resurrection: the cross-store
+   *  `effectivePhysiologyPbs` merge and the Strava/Apple auto-fill must not
+   *  re-introduce a deleted PB unless a genuinely faster time is observed.
+   *  Cleared when the user explicitly re-enters a PB for that distance. See
+   *  ISSUE-297 RC3. Optional so fresh installs need no migration. */
+  deletedPbs?: Partial<Record<keyof PBs, number>>;
   startingFitnessEstimated?: boolean; // pbs is a conservative no-PB beginner/hybrid seed (see beginner-fitness.ts), not a real time — yields to real runs; label honestly in UI
   rec: RecentRun | null;  // Recent race/time trial
 
@@ -796,6 +805,20 @@ export interface SimulatorState {
    *  Used by getPhysiologicalVdot's freshness gate so Garmin users whose
    *  daily_metrics.vo2max updates from cycling don't mask a stale running VO2. */
   vo2UpdatedAt?: string;
+  /** Run VDOT derived from a real race run leg (triathlon 70.3/IM/etc.), already
+   *  fatigue-discounted to a "fresh-run equivalent" via the published bike-to-run
+   *  discounts. A real race is the strongest race-validated running signal, so
+   *  `getPhysiologicalVdot` ranks this ABOVE the device (watch VO2max) tier when
+   *  recent, and `refreshBlendedFitness` anchors `s.v` to it. The watch VO2max is
+   *  inflated for triathletes (cycling/swimming build it too) and must yield to a
+   *  recent race it contradicts. Seeded at onboarding (past race) and on race-outcome
+   *  logging. `dateISO` may be YYYY-MM or YYYY-MM-DD. Optional (fresh-install safe). */
+  raceRunVdot?: {
+    vdot: number;
+    dateISO: string;
+    distance: string;
+    source: 'onboarding-past-race' | 'logged-race';
+  };
   initialLT: number | null;   // Initial LT at week 0
   initialVO2: number | null;  // Initial VO2 at week 0
   maxHR?: number;             // Maximum Heart Rate
@@ -959,6 +982,13 @@ export interface SimulatorState {
   // Consumers (stats view, plan engine) read this instead of re-blending on every render.
   blendedRaceTimeSec?: number;              // Predicted time for s.rd at current fitness
   blendedEffectiveVdot?: number;            // VDOT back-solved from blended prediction, for pace derivation
+  /** Peak-volume race-time anchor for the FORECAST (ISSUE-297): a blendPredictions
+   *  at the plan's `computePeakWeeklyKm`, so the race-day projection credits the
+   *  volume the plan builds toward rather than today's penalised volume. Surfaces
+   *  that recompute the live forecast (renderer, plan-preview) pass this as
+   *  `blendedAnchorSec` instead of `blendedRaceTimeSec`. Written by
+   *  refreshBlendedFitness + initializeSimulator. */
+  forecastBlendAnchorSec?: number;
   blendedLastRefreshedISO?: string;         // When the cache was last recomputed
   // True when the blend had NO measured run data and was sized from the
   // runs/week volume estimate (no synced history, no typed weekly km). The UI
@@ -1066,6 +1096,13 @@ export interface SimulatorState {
    * Subsequent launches use a 14-day incremental window. Same role as
    * `stravaHistoryFetched` for the Apple-only path. */
   appleHistoryFetched?: boolean;
+  /** One-time migration flag (build 24+). Pre-build-23, the Apple workout sync
+   *  was gated on an activity source the connect never set, so many users never
+   *  got their history (or only a partial 14-day window after a manual sync,
+   *  with `appleHistoryFetched` stuck true). On first launch after the fix we
+   *  force ONE full re-backfill for every Apple-connected user, then set this so
+   *  it never re-runs. Heals already-set-up users without any manual action. */
+  appleHistoryResyncDone?: boolean;
   /** ISO timestamp of the most recent successful Apple-history aggregation.
    * Mirrors `historicLastRefreshedAt` for the Apple path; used to decide
    * whether to refresh weekly baselines on launch. */

@@ -174,6 +174,23 @@ describe('Workout Parser', () => {
     });
   });
 
+  describe('warm up / cool down structured format', () => {
+    // Regression: the recovery "convert to easy" downgrade read the FIRST "Nkm"
+    // token of a structured session, collapsing a ~7km threshold tempo to its
+    // 2km warm-up. The parser must sum warm-up + work + cool-down so the
+    // downgrade keeps the full session distance at easy pace.
+    it('sums warm up, work, and cool down for a threshold tempo', () => {
+      const desc = '2km warm up (5:03/km+)\n13min @ 4:12/km (~3.1km)\n2km cool down (5:03/km+)';
+      const result = parseWorkoutDescription(desc, paces);
+
+      // 2km WU + ~2.4–3.1km work + 2km CD. The exact work distance depends on
+      // pace resolution, but it must be far above the 2km warm-up the old
+      // first-token regex returned (the bug). Anchor on the WU+CD floor.
+      expect(result.totalDistance).toBeGreaterThan(6000);
+      expect(result.totalDistance).toBeLessThan(8000);
+    });
+  });
+
   describe('mixed paces format', () => {
     it('should parse "10@MP, 4@10K, 5@HM"', () => {
       const result = parseWorkoutDescription('10@MP, 4@10K, 5@HM', paces);

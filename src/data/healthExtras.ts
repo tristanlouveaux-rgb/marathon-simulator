@@ -17,6 +17,17 @@ export type HealthExtrasDataType =
   // iOS 11+
   | 'vo2Max'
   | 'walkingHeartRateAverage'
+  // Physiology — read via HealthExtras (not capgo, which crashes on iOS 26.x).
+  | 'restingHeartRate'
+  | 'heartRateVariabilitySDNN'
+  | 'stepCount'
+  | 'heartRate'
+  // Anthropometrics + extra recovery signals
+  | 'bodyMass'
+  | 'height'
+  | 'bodyFatPercentage'
+  | 'respiratoryRate'
+  | 'oxygenSaturation'
   // iOS 16+
   | 'appleSleepingWristTemperature'
   | 'runningPower'
@@ -30,8 +41,45 @@ export type HealthExtrasDataType =
   | 'cyclingSpeed'
   | 'cyclingFunctionalThresholdPower';
 
-/** Permission identifiers — superset of HealthExtrasDataType plus the route series type. */
-export type HealthExtrasPermission = HealthExtrasDataType | 'workoutRoute';
+/** Permission identifiers — superset of HealthExtrasDataType plus the route
+ *  series type, sleep category, and workout type. */
+export type HealthExtrasPermission =
+  | HealthExtrasDataType
+  | 'workoutRoute'
+  | 'sleepAnalysis'
+  | 'workouts'
+  | 'dateOfBirth'
+  | 'biologicalSex';
+
+/** One sleep stage segment from HealthKit. `value` is the raw
+ *  HKCategoryValueSleepAnalysis (0 inBed, 1 asleepUnspecified, 2 awake,
+ *  3 asleepCore/light, 4 asleepDeep, 5 asleepREM). */
+export interface SleepSample {
+  value: number;
+  startDate: string;
+  endDate: string;
+  sourceName?: string;
+}
+
+/** Immutable HealthKit characteristics. Either field is null when not set in
+ *  Health or read access wasn't granted. */
+export interface HealthCharacteristics {
+  dateOfBirth: string | null;   // ISO 8601
+  biologicalSex: 'male' | 'female' | 'other' | null;
+}
+
+/** One HKWorkout. Field shape matches capgo's old `Workout` so the TS
+ *  converter in appleHealthSync is reused unchanged. */
+export interface ExtrasWorkout {
+  workoutType: string;          // capgo-style key (running/cycling/…)
+  startDate: string;            // ISO 8601
+  endDate: string;
+  duration: number;             // seconds
+  totalDistance: number | null; // metres
+  totalEnergyBurned: number | null; // kcal
+  sourceName?: string;
+  sourceId?: string;
+}
 
 export interface QuantitySample {
   value: number;
@@ -92,6 +140,21 @@ interface HealthExtrasPlugin {
     startDate?: string;
     endDate?: string;
   }): Promise<LatestQuantity>;
+
+  readSleepSamples(opts: {
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+  }): Promise<{ samples: SleepSample[] }>;
+
+  readCharacteristics(): Promise<HealthCharacteristics>;
+
+  queryWorkouts(opts: {
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+    ascending?: boolean;
+  }): Promise<{ workouts: ExtrasWorkout[] }>;
 
   readWorkoutRouteLocations(opts: {
     startDate?: string;
@@ -225,6 +288,53 @@ export async function readLatestQuantity(opts: {
   } catch (err) {
     console.warn(`[HealthExtras] readLatestQuantity ${opts.dataType} failed`, err);
     return { value: null, asOf: null };
+  }
+}
+
+/** Sleep stage segments in the window. Empty array on web/Android, denial, or
+ *  error. Caller maps `value` to stages and computes durations. */
+export async function readSleepSamples(opts: {
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+}): Promise<SleepSample[]> {
+  if (!isHealthExtrasAvailable()) return [];
+  try {
+    const res = await HealthExtras.readSleepSamples(opts);
+    return res.samples ?? [];
+  } catch (err) {
+    console.warn('[HealthExtras] readSleepSamples failed', err);
+    return [];
+  }
+}
+
+/** Immutable HealthKit characteristics (DOB + biological sex). Returns nulls on
+ *  web/Android, when unset in Health, or on denial. */
+export async function readCharacteristics(): Promise<HealthCharacteristics> {
+  if (!isHealthExtrasAvailable()) return { dateOfBirth: null, biologicalSex: null };
+  try {
+    return await HealthExtras.readCharacteristics();
+  } catch (err) {
+    console.warn('[HealthExtras] readCharacteristics failed', err);
+    return { dateOfBirth: null, biologicalSex: null };
+  }
+}
+
+/** Query HKWorkout samples in the window. Empty array on web/Android, denial,
+ *  or error. Replaces capgo's queryWorkouts (which crashes auth on iOS 26.x). */
+export async function queryWorkouts(opts: {
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
+  ascending?: boolean;
+}): Promise<ExtrasWorkout[]> {
+  if (!isHealthExtrasAvailable()) return [];
+  try {
+    const res = await HealthExtras.queryWorkouts(opts);
+    return res.workouts ?? [];
+  } catch (err) {
+    console.warn('[HealthExtras] queryWorkouts failed', err);
+    return [];
   }
 }
 

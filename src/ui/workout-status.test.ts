@@ -5,6 +5,7 @@ import {
   computeWeekStatusContext,
   deriveWorkoutStatus,
   firstTrackedDow,
+  dropPreOnboardSessions,
   TODAY_ACCENT,
   type WorkoutStatusFlags,
 } from './workout-status';
@@ -254,5 +255,50 @@ describe('pre-creation days are not Missed (onboard mid-week)', () => {
   it("today's session still reads Today", () => {
     const w = { id: 'th', n: 'Thu run', dayOfWeek: 3 };
     expect(deriveWorkoutStatus(w, emptyWk, ctx).label).toBe('Today');
+  });
+});
+
+describe('dropPreOnboardSessions — reduced partial first week', () => {
+  // Mon..Sun, one session per day, dayOfWeek 0..6.
+  const fullWeek = Array.from({ length: 7 }, (_, d) => ({ id: `d${d}`, dayOfWeek: d }));
+
+  it('drops pre-onboard days when onboarded mid-week (Wed onboard → keep Wed..Sun)', () => {
+    // planStart Mon 06-01, created Wed 06-03 → firstTrackedDow 2.
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, '2026-06-03');
+    expect(kept.map(w => w.dayOfWeek)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it('Sat onboard leaves a chill 2-session week (Sat + Sun)', () => {
+    // created Sat 06-06 → firstTrackedDow 5.
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, '2026-06-06');
+    expect(kept.map(w => w.dayOfWeek)).toEqual([5, 6]);
+  });
+
+  it('Sun onboard leaves a single-session lead-in week', () => {
+    // created Sun 06-07 → firstTrackedDow 6.
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, '2026-06-07');
+    expect(kept.map(w => w.dayOfWeek)).toEqual([6]);
+  });
+
+  it('Monday onboard keeps the whole week (no-op)', () => {
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, '2026-06-01');
+    expect(kept).toHaveLength(7);
+  });
+
+  it('no-op for an established plan (creation predates week start)', () => {
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, '2026-05-20');
+    expect(kept).toHaveLength(7);
+  });
+
+  it('no-op for any week other than the current one', () => {
+    // Viewing week 1 while current week is 2: pre-onboard filtering only applies
+    // to the live week, so past weeks render exactly as they happened.
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 2, '2026-06-03');
+    expect(kept).toHaveLength(7);
+  });
+
+  it('no-op when planCreatedAt is absent (legacy)', () => {
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 1, undefined);
+    expect(kept).toHaveLength(7);
   });
 });

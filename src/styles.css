@@ -418,6 +418,15 @@ input[type="radio"] {
 }
 
 /* Glassy range slider — frosted thumb, soft inset track. Pair with `m-card` surfaces. */
+/* Hand horizontal gestures to every range slider's thumb; let vertical swipes
+   still scroll the surrounding modal. Without this the browser treats a
+   horizontal thumb-drag inside a scroll container as an ambiguous gesture and
+   resolves it as a vertical scroll, making sliders near-impossible to drag on
+   iOS. Applies to all range inputs (glass slider, RPE pickers, injury/safety
+   sliders, wizard schedule) so no slider can reintroduce the bug. */
+input[type="range"] {
+  touch-action: pan-y;
+}
 .m-slider-glass {
   -webkit-appearance: none;
   appearance: none;

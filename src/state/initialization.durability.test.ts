@@ -91,14 +91,23 @@ describe('initializeSimulator — durability cap on the onboarding anchor', () =
     expect(s.currentFitness).toBeCloseTo(rawBlend * maxMult, 0);
   });
 
-  it('derived VDOT and effective VDOT both come from the capped time (paces/anchor agree)', () => {
+  it('engine holds at PB capacity while the race anchor keeps the durability penalty (ISSUE-297 separation)', () => {
     const result = initializeSimulator(buildThinHalfOnboarding());
     expect(result.success).toBe(true);
 
     const s = getState();
-    const expectedVdot = cv(rd('half'), s.blendedRaceTimeSec!);
-    expect(s.v).toBeCloseTo(expectedVdot, 5);
-    expect(s.blendedEffectiveVdot).toBeCloseTo(expectedVdot, 5);
+    // The RACE anchor keeps the durability/readiness penalty (a single 5K
+    // Riegel-projected to a half with no endurance base is correctly slow):
+    const cappedVdot = cv(rd('half'), s.blendedRaceTimeSec!);
+    // ...but the global ENGINE is floored at demonstrated PB capacity (the 17:39
+    // 5K, VDOT ~57.6), not buried by that readiness penalty. Engine ≠ readiness:
+    // low volume / thin endurance slows the prediction, never the capacity number.
+    // (Pre-ISSUE-297 both s.v and blendedEffectiveVdot were the penalised
+    // capped-time VDOT — that conflation is exactly what this fix removes.)
+    const capacityVdot = cv(5000, 1059);
+    expect(s.v).toBeCloseTo(capacityVdot, 1);
+    expect(s.blendedEffectiveVdot).toBeCloseTo(capacityVdot, 1);
+    expect(s.v!).toBeGreaterThan(cappedVdot + 1);
   });
 
   it('athlete with a threshold-meeting long run gets no penalty (multiplier 1)', () => {

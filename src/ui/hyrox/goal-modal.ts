@@ -17,7 +17,7 @@ import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
-import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
 
 function fmtMmSs(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -32,14 +32,39 @@ function fmtHhMmSs(sec: number): string {
   return `${h}:${m.toString().padStart(2, '0')}:${s}`;
 }
 
-function parseHhMmSs(input: string): number | null {
+/** "56 min" / "1 min 20 sec" / "40 sec" — readable duration, never raw seconds. */
+function fmtApproxDuration(sec: number): string {
+  const total = Math.round(sec);
+  if (total < 60) return `${total} sec`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return s === 0 ? `${m} min` : `${m} min ${s} sec`;
+}
+
+/**
+ * Parse a target finish. Accepts mm:ss or h:mm:ss.
+ *
+ * A bare 2-part value is ambiguous: "1:00" reads literally as 1 min 0 sec, but
+ * a user typing it almost always means 1 hour. Since no HYROX finishes below
+ * the competitive population floor, we reinterpret a 2-part value as h:mm when
+ * the mm:ss reading is impossibly fast AND the h:mm reading lands in a plausible
+ * finish window (floor to 4 h). "1:00" → 1:00:00; "75:00" → 75 min (unchanged).
+ * The live echo under the input always shows the resolved interpretation, so
+ * even an unexpected guess is visible and correctable.
+ */
+export function parseHhMmSs(input: string, minPlausibleSec: number): number | null {
   const clean = input.trim().replace(/[^0-9:]/g, '');
   const parts = clean.split(':');
   if (parts.length === 2) {
-    const m = parseInt(parts[0], 10);
-    const s = parseInt(parts[1], 10);
-    if (Number.isNaN(m) || Number.isNaN(s) || s >= 60) return null;
-    return m * 60 + s;
+    const a = parseInt(parts[0], 10);
+    const b = parseInt(parts[1], 10);
+    if (Number.isNaN(a) || Number.isNaN(b) || b >= 60) return null;
+    const asMmSs = a * 60 + b;        // minutes:seconds
+    const asHhMm = a * 3600 + b * 60; // hours:minutes
+    if (asMmSs < minPlausibleSec && asHhMm >= minPlausibleSec && asHhMm <= 4 * 3600) {
+      return asHhMm;
+    }
+    return asMmSs;
   }
   if (parts.length === 3) {
     const h = parseInt(parts[0], 10);
@@ -49,6 +74,19 @@ function parseHhMmSs(input: string): number | null {
     return h * 3600 + m * 60 + s;
   }
   return null;
+}
+
+/**
+ * Competitive population floor for this prediction's format: the fastest a
+ * HYROX could realistically be from the band-elite seeds. Used both as the
+ * parse-disambiguation threshold and (implicitly) the back-calc floor.
+ */
+function populationFloorSec(prediction: HyroxPrediction): number {
+  const stationFloor = prediction.stations.reduce(
+    (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0),
+    0,
+  );
+  return HYROX_RUN_PACE_MIN_SEC_KM * 8 + stationFloor + prediction.roxzoneSec;
 }
 
 function renderResultBody(result: GoalBackCalcResult): string {
@@ -61,7 +99,7 @@ function renderResultBody(result: GoalBackCalcResult): string {
   }
 
   const headerCopy = result.feasibility === 'unrealistic'
-    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">Target needs ~${result.shortfallSec}s more than the population floor.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
+    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
     : result.feasibility === 'stretch'
     ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">Stretch target.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
     : `<div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">Distributed proportional to each component's headroom against the band's competitive floor.</div>`;
@@ -123,8 +161,9 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
         id="hx-goal-input"
         type="text"
         value="${fmtHhMmSs(initialTarget)}"
-        style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:16px"
+        style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:6px"
       />
+      <div id="hx-goal-echo" style="font-size:12px;color:var(--c-muted);min-height:16px;margin-bottom:14px"></div>
       <div id="hx-goal-result"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
         <button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear target</button>
@@ -134,15 +173,22 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
   `;
   document.body.appendChild(overlay);
 
+  const floorSec = populationFloorSec(prediction);
+
   const computeAndRender = () => {
     const inputEl = document.getElementById('hx-goal-input') as HTMLInputElement | null;
     const resultEl = document.getElementById('hx-goal-result');
+    const echoEl = document.getElementById('hx-goal-echo');
     if (!inputEl || !resultEl) return;
-    const sec = parseHhMmSs(inputEl.value);
+    const sec = parseHhMmSs(inputEl.value, floorSec);
     if (sec == null) {
+      if (echoEl) echoEl.textContent = '';
       resultEl.innerHTML = `<div style="font-size:12px;color:#ef4444;padding:8px 0">Enter time as mm:ss (e.g. 75:00) or h:mm:ss (e.g. 1:15:00).</div>`;
       return;
     }
+    // Always echo the resolved interpretation so an ambiguous entry like "1:00"
+    // (read as 1 hour) is visible and correctable.
+    if (echoEl) echoEl.textContent = `Target: ${fmtHhMmSs(sec)}`;
     const result = computeGoalBackCalc(prediction, sec);
     resultEl.innerHTML = renderResultBody(result);
   };
@@ -164,7 +210,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
 
   document.getElementById('hx-goal-save')?.addEventListener('click', () => {
     const inputEl = document.getElementById('hx-goal-input') as HTMLInputElement | null;
-    const sec = inputEl ? parseHhMmSs(inputEl.value) : null;
+    const sec = inputEl ? parseHhMmSs(inputEl.value, floorSec) : null;
     if (sec == null) return;
     const ms2 = getMutableState();
     if (ms2.hyroxConfig) ms2.hyroxConfig.targetFinishTimeSec = sec;

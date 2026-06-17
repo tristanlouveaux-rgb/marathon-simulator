@@ -81,12 +81,6 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
       .tri-split-seg-run  { background:rgba(0,0,0,0.05); border-radius:0 6px 6px 0; }
       .tri-split-handle { position:absolute; top:50%; transform:translate(-50%, -50%); width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.7); backdrop-filter:blur(12px) saturate(1.4); -webkit-backdrop-filter:blur(12px) saturate(1.4); border:1px solid rgba(255,255,255,0.8); box-shadow: 0 1px 2px rgba(0,0,0,0.1), 0 4px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.06); cursor:ew-resize; z-index:2; touch-action:none; transition: transform 120ms ease, box-shadow 120ms ease; }
       .tri-split-handle:active { transform:translate(-50%, -50%) scale(1.08); box-shadow: 0 2px 4px rgba(0,0,0,0.12), 0 6px 18px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.9); }
-      .tri-race-list { display:flex; flex-direction:column; gap:8px; max-height:340px; overflow-y:auto; padding-right:4px; }
-      .tri-race-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 13px; border-radius:10px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); text-align:left; cursor:pointer; transition:all 0.15s ease; width:100%; }
-      .tri-race-row.selected { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
-      .tri-race-row .tri-race-name { font-size:14px; font-weight:500; line-height:1.25; }
-      .tri-race-row .tri-race-sub { font-size:12px; opacity:0.7; margin-top:2px; }
-      .tri-race-row .tri-race-weeks { font-size:12px; font-weight:600; flex-shrink:0; opacity:0.85; font-variant-numeric: tabular-nums; }
       .tri-toggle-link { background:transparent; border:none; color:var(--c-muted); font-size:13px; cursor:pointer; padding:6px 4px; }
       .tri-toggle-link:hover { color:var(--c-black); }
     </style>
@@ -244,26 +238,18 @@ function renderRacePicker(state: OnboardingState, distance: TriathlonDistance): 
     `;
   }
 
+  const selectedRace = selectedId ? getTriathlonById(selectedId) : null;
   return `
     <div class="tri-label">${headingLabel}</div>
-    <div class="tri-race-list">
+    <select id="tri-race-select" class="tri-input" aria-label="${headingLabel}" style="cursor:pointer">
+      <option value="" ${selectedId ? '' : 'selected'}>Select a race…</option>
       ${races.map((race) => {
         const selected = selectedId === race.id;
-        return `
-          <button class="tri-race-row ${selected ? 'selected' : ''}" data-race-id="${race.id}">
-            <div style="min-width:0">
-              <div class="tri-race-name">${race.name}</div>
-              <div class="tri-race-sub">${formatRaceDate(race.date)} · ${race.city}, ${race.country}</div>
-              ${race.profile?.notes ? `<div class="tri-race-sub" style="margin-top:4px">${race.profile.notes}</div>` : ''}
-            </div>
-            <span class="tri-race-weeks">${formatTimeUntil(race.date) ?? '--'}</span>
-          </button>
-        `;
+        return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}, ${race.city}</option>`;
       }).join('')}
-    </div>
-    <div style="text-align:center;margin-top:10px">
-      <button id="tri-toggle-picker" class="tri-toggle-link">Enter a custom date instead</button>
-    </div>
+      <option value="__custom">Other / enter date manually</option>
+    </select>
+    ${selectedRace ? `<p class="tri-hint" style="margin-top:8px">${[formatTimeUntil(selectedRace.date), `${selectedRace.city}, ${selectedRace.country}`].filter(Boolean).join(' · ')}</p>` : ''}
   `;
 }
 
@@ -437,27 +423,26 @@ function getCurrentOnboarding(): OnboardingState {
 }
 
 function wireRaceCardHandlers(): void {
-  // Race row → select race + auto-fill customRaceDate. Selection updates the
-  // .selected class in place (rather than re-rendering the card) so the list
-  // doesn't flicker or jump scroll position when the user picks a race.
-  document.querySelectorAll<HTMLButtonElement>('[data-race-id]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-race-id') ?? '';
-      const race: Triathlon | undefined = getTriathlonById(id);
-      if (!race) return;
-      const current = getCurrentOnboarding();
-      const sameRace = current.selectedTriathlonId === race.id;
-      if (sameRace) {
-        updateOnboarding({ selectedTriathlonId: null, customRaceDate: null });
-        btn.classList.remove('selected');
-      } else {
-        updateOnboarding({ selectedTriathlonId: race.id, customRaceDate: race.date });
-        document.querySelectorAll<HTMLButtonElement>('[data-race-id]').forEach((b) => {
-          b.classList.toggle('selected', b === btn);
-        });
-      }
-      refreshContinueGate();
-    });
+  // Race picker → native <select>; iOS renders the frosted glass popup. Re-render
+  // the card on change so the helper line (weeks-until · location) updates.
+  const raceSelect = document.getElementById('tri-race-select') as HTMLSelectElement | null;
+  raceSelect?.addEventListener('change', () => {
+    const id = raceSelect.value;
+    // "Other / enter date manually" → switch to the custom-date input.
+    if (id === '__custom') {
+      updateOnboarding({ selectedTriathlonId: null, customRaceDate: null });
+      rerenderRaceCardForceMode('custom');
+      return;
+    }
+    if (!id) {
+      updateOnboarding({ selectedTriathlonId: null, customRaceDate: null });
+      rerenderRaceCard();
+      return;
+    }
+    const race: Triathlon | undefined = getTriathlonById(id);
+    if (!race) return;
+    updateOnboarding({ selectedTriathlonId: race.id, customRaceDate: race.date });
+    rerenderRaceCard();
   });
 
   // Toggle between race list and custom date input

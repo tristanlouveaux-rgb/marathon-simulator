@@ -20,6 +20,7 @@
  */
 
 import { showSimpleToast } from '@/ui/toast';
+import { setRasterSafeText } from '@/ui/raster-safe-text';
 
 const OVERLAY_ID = 'import-activity-modal';
 
@@ -92,10 +93,16 @@ async function onFile(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
-  const statusEl = document.getElementById('import-modal-status');
+  // Re-query by id each call: the status line sits inside a backdrop-filter
+  // glass dialog, so setRasterSafeText replaces the node to dodge the WKWebView
+  // glyph-raster ghost — that detaches any cached reference.
+  const setStatus = (text: string) => {
+    const el = document.getElementById('import-modal-status');
+    if (el) setRasterSafeText(el, text);
+  };
   const label = document.getElementById('import-choose-label') as HTMLLabelElement | null;
   const isZip = file.name.toLowerCase().endsWith('.zip');
-  if (statusEl) statusEl.textContent = isZip ? 'Reading archive…' : 'Reading file…';
+  setStatus(isZip ? 'Reading archive…' : 'Reading file…');
   if (label) label.style.pointerEvents = 'none';
   try {
     let msg: string;
@@ -103,7 +110,7 @@ async function onFile(e: Event): Promise<void> {
       // Full Strava / Garmin export. Many activities in one .zip.
       const { importActivityArchive } = await import('@/data/fitImport');
       const result = await importActivityArchive(file, (done, total) => {
-        if (statusEl) statusEl.textContent = `Reading archive… ${done}/${total}`;
+        setStatus(`Reading archive… ${done}/${total}`);
       });
       msg = result.summary;
     } else {
@@ -112,13 +119,13 @@ async function onFile(e: Event): Promise<void> {
       const { ingestActivityFile } = await import('@/data/fitImport');
       msg = (await ingestActivityFile(file)).message;
     }
-    if (statusEl) statusEl.textContent = msg;
+    setStatus(msg);
     showSimpleToast(msg, 'info');
     input.value = '';
     onCompleteCb?.();
   } catch (err) {
     const detail = err instanceof Error ? err.message : '';
-    if (statusEl) statusEl.textContent = `Could not read that file. ${detail}`.trim();
+    setStatus(`Could not read that file. ${detail}`.trim());
     showSimpleToast('Could not read that file', 'error');
     input.value = '';
   } finally {

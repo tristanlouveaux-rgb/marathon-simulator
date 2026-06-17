@@ -5,6 +5,7 @@ import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-sca
 import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayMods, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
 import { isTimingMod } from '@/cross-training/timing-check';
+import { dropPreOnboardSessions } from './workout-status';
 
 /**
  * Canonical resolver for a running-mode week's workout list.
@@ -100,5 +101,8 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
 
   if (wk) applyBridgeMods_renderTime(workouts, wk);
 
-  return workouts;
+  // Reduced partial first week: drop sessions on days before the user onboarded
+  // (mid-week start), so week 1 begins today instead of showing uncompletable
+  // earlier-day cards. No-op for established plans and Sat/Sun onboards.
+  return dropPreOnboardSessions(workouts, s.planStartDate, viewWeek, s.w, s.planCreatedAt);
 }

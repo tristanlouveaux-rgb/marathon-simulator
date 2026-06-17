@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPhysiologicalVdot, pbDerivedVdot, resolveRunningVdot, hasRunningFitnessSignal, effectivePhysiologyPbs } from './physiological-vdot';
+import { getPhysiologicalVdot, pbDerivedVdot, resolveRunningVdot, hasRunningFitnessSignal, effectivePhysiologyPbs, isPbTombstoned, recordPbDeletion, clearPbTombstone, effectiveVo2max } from './physiological-vdot';
 import { cv } from './vdot';
 import type { SimulatorState } from '@/types';
 
@@ -181,6 +181,68 @@ describe('getPhysiologicalVdot — priority chain', () => {
   });
 });
 
+describe('getPhysiologicalVdot — race-validated anchor (recent race run leg)', () => {
+  it('recent race anchor outranks a fresh watch VO2max', () => {
+    // The triathlete bug: watch reads 56 (inflated by cycling/swimming), but a
+    // recent 70.3 run leg implies ~43. The race must win.
+    const s = mkState({
+      vo2: 56,
+      physiologyHistory: [{ date: '2026-04-15', vo2max: 56 }] as SimulatorState['physiologyHistory'],
+      raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' },
+    });
+    const r = getPhysiologicalVdot(s, { now: NOW });
+    expect(r.source).toBe('race-validated');
+    expect(r.vdot).toBe(43);
+    expect(r.confidence).toBe('high');
+  });
+
+  it('race anchor older than 365 days stands down → fresh watch wins', () => {
+    const s = mkState({
+      vo2: 56,
+      physiologyHistory: [{ date: '2026-04-15', vo2max: 56 }] as SimulatorState['physiologyHistory'],
+      raceRunVdot: { vdot: 43, dateISO: '2024-01-01', distance: '70.3', source: 'onboarding-past-race' },
+    });
+    const r = getPhysiologicalVdot(s, { now: NOW });
+    expect(r.source).toBe('device');
+    expect(r.vdot).toBe(56);
+  });
+
+  it('a better standalone signal (mosaic-running, high conf) still beats the race', () => {
+    const s = mkState({
+      vo2: 56,
+      vo2Source: 'mosaic',
+      vo2Estimates: { running: { value: 49, confidence: 'high', n: 6 } } as SimulatorState['vo2Estimates'],
+      raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' },
+    });
+    const r = getPhysiologicalVdot(s, { now: NOW });
+    expect(r.source).toBe('mosaic-running');
+    expect(r.vdot).toBe(49);
+  });
+});
+
+describe('effectiveVo2max — race-validated cap on the blend VO2 predictor', () => {
+  it('caps a watch VO2max that overstates a recent race run leg (no PBs)', () => {
+    const s = mkState({ vo2: 56, raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+    expect(effectiveVo2max(s, NOW)).toBe(43);
+  });
+
+  it('does NOT cap when standalone running PBs corroborate the higher value', () => {
+    // PBs imply VDOT well above 43, so the watch lift is corroborated → keep it.
+    const s = mkState({ vo2: 56, pbs: { k5: 1058, k10: 2200 }, raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+    expect(effectiveVo2max(s, NOW)).toBe(56);
+  });
+
+  it('does NOT cap when the race is stale (>365 days)', () => {
+    const s = mkState({ vo2: 56, raceRunVdot: { vdot: 43, dateISO: '2024-01-01', distance: '70.3', source: 'onboarding-past-race' } });
+    expect(effectiveVo2max(s, NOW)).toBe(56);
+  });
+
+  it('manual override is never capped', () => {
+    const s = mkState({ vo2: 56, vo2Override: { value: 60 } as SimulatorState['vo2Override'], raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+    expect(effectiveVo2max(s, NOW)).toBe(60);
+  });
+});
+
 describe('getPhysiologicalVdot — staleness edge cases', () => {
   it('within freshness window (89 days) → treated as fresh', () => {
     const date = new Date(NOW.getTime() - 89 * 24 * 60 * 60 * 1000)
@@ -267,5 +329,52 @@ describe('effectivePhysiologyPbs — wizard PBs visible to the physiology chain'
   it('no wizard state → identical to s.pbs', () => {
     const s = mkState({ pbs: { k10: 2360 } });
     expect(effectivePhysiologyPbs(s)).toEqual({ k10: 2360 });
+  });
+});
+
+describe('PB deletion tombstones (ISSUE-297 RC3)', () => {
+  it('isPbTombstoned suppresses equal/slower candidates, allows genuinely faster', () => {
+    const tomb = { k5: 1200 }; // deleted a 20:00 5K
+    expect(isPbTombstoned(tomb, 'k5', 1200)).toBe(true);  // re-detecting the same time
+    expect(isPbTombstoned(tomb, 'k5', 1260)).toBe(true);  // a slower time
+    expect(isPbTombstoned(tomb, 'k5', 1170)).toBe(false); // a genuine improvement (19:30)
+    expect(isPbTombstoned(tomb, 'k10', 2400)).toBe(false);// different distance untouched
+    expect(isPbTombstoned(undefined, 'k5', 1200)).toBe(false);
+  });
+
+  it('effectivePhysiologyPbs drops a tombstoned value resurrecting from the other store', () => {
+    // The reported bug: enter a 2:00:00 marathon, it lands in onboarding.pbs,
+    // delete it from s.pbs — without the tombstone the fastest-wins merge
+    // resurrects it from onboarding.pbs.
+    const s = mkState({
+      pbs: {},
+      onboarding: { pbs: { m: 7200 } } as SimulatorState['onboarding'],
+      deletedPbs: { m: 7200 },
+    });
+    expect(effectivePhysiologyPbs(s).m).toBeUndefined();
+    expect(pbDerivedVdot(s)).toBeNull(); // no PBs survive → no PB-median capacity
+  });
+
+  it('recordPbDeletion sets the tombstone and clears BOTH stores', () => {
+    const s = mkState({
+      pbs: { k5: 1200, k10: 2500 },
+      onboarding: { pbs: { k5: 1200 } } as SimulatorState['onboarding'],
+    });
+    recordPbDeletion(s, 'k5');
+    expect(s.deletedPbs?.k5).toBe(1200);
+    expect(s.pbs.k5).toBeUndefined();
+    expect(s.onboarding!.pbs!.k5).toBeUndefined();
+    expect(s.pbs.k10).toBe(2500); // other distance untouched
+    expect(effectivePhysiologyPbs(s).k5).toBeUndefined();
+  });
+
+  it('clearPbTombstone lets an explicit re-entry of a deleted time stand', () => {
+    const s = mkState({ pbs: { k5: 1200 }, deletedPbs: { k5: 1200 } });
+    // While tombstoned, the value is suppressed.
+    expect(effectivePhysiologyPbs(s).k5).toBeUndefined();
+    // Explicit re-entry clears the tombstone, so it is honoured again.
+    clearPbTombstone(s, 'k5');
+    expect(s.deletedPbs?.k5).toBeUndefined();
+    expect(effectivePhysiologyPbs(s).k5).toBe(1200);
   });
 });

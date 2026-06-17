@@ -10,8 +10,11 @@
  * and the rebalance copy says "sessions" (not "runs") in tri/HYROX.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setState, getDefaultState } from '@/state/store';
+import { setState, getDefaultState, getState } from '@/state/store';
+import { initializeSimulator } from '@/state/initialization';
+import { defaultOnboardingState } from '@/types/onboarding';
 import { renderCoachContract } from './coach-contract';
+import { initializeWeeks } from '@/workouts';
 import type { OnboardingState } from '@/types/onboarding';
 
 /** A few plan weeks carrying per-discipline triWorkouts with canonical-TSS load
@@ -104,5 +107,62 @@ describe('coach-contract — all modes render', () => {
     const tri = render({ trainingMode: 'triathlon', name: 'S' }, { tw: 12, wks: triWeeks() });
     expect(run).toMatch(/trim the runs around it/);
     expect(tri).toMatch(/trim the sessions around it/);
+  });
+
+  // ISSUE-287: a short (≤12 wk) EVENT plan shows the compressed-plan caption; a
+  // long event plan does not, and a continuous plan never does ("taper" N/A).
+  it('short event plan shows the compressed-plan note; long + continuous do not', () => {
+    const eventPlan = (tw: number) => ({
+      tw, wks: initializeWeeks(tw), rw: 4, rd: '10k', typ: 'Balanced',
+      v: 45, pac: { e: 360 }, continuousMode: false,
+    });
+    const short = render({ trainingMode: 'running', name: 'S' }, eventPlan(9));
+    const long = render({ trainingMode: 'running', name: 'S' }, eventPlan(18));
+    expect(short).toContain('compressed plan');
+    expect(long).not.toContain('compressed plan');
+
+    const onboarding: any = {
+      ...defaultOnboardingState,
+      name: 'S', trainingMode: 'running', trainingForEvent: false,
+      raceDistance: 'marathon', planDurationWeeks: 9,
+      age: 34, biologicalSex: 'male', runsPerWeek: 5, experienceLevel: 'returning',
+      pbs: { k5: 1155, k10: 2400, h: 5250 }, recentRace: { d: 10, t: 2400, weeksAgo: 3 },
+      hasSmartwatch: true, ltPace: 245, vo2max: 53,
+    };
+    initializeSimulator(onboarding);
+    const el = document.createElement('div');
+    renderCoachContract(el, onboarding);
+    expect(el.innerHTML).not.toContain('compressed plan'); // continuous: loops, no taper
+  });
+
+  // Regression: continuous (no-event) plans cycle base→build→peak→taper EVERY
+  // week, so the phase ribbon used to render ~16 overlapping one-week labels +
+  // ~15 dividers ("BaseBuildPeakTaper…" smear). The repeating case must collapse
+  // to a single cycle legend + block-boundary dividers only.
+  it('continuous plan collapses the phase ribbon instead of overlapping per-week labels', () => {
+    const onboarding: any = {
+      ...defaultOnboardingState,
+      name: 'Sample', trainingMode: 'running', trainingForEvent: false,
+      raceDistance: 'marathon', planDurationWeeks: 16,
+      age: 34, biologicalSex: 'male', runsPerWeek: 5, experienceLevel: 'returning',
+      pbs: { k5: 1155, k10: 2400, h: 5250 }, recentRace: { d: 10, t: 2400, weeksAgo: 3 },
+      hasSmartwatch: true, ltPace: 245, vo2max: 53,
+    };
+    const res = initializeSimulator(onboarding);
+    expect(res.success).toBe(true);
+    const s = getState();
+    expect(s.continuousMode).toBe(true);
+    expect((s.wks?.length ?? 0)).toBeGreaterThan(8);   // a full multi-block plan
+
+    const el = document.createElement('div');
+    renderCoachContract(el, onboarding);
+    const html = el.innerHTML;
+
+    // The collapsed cycle legend is present...
+    expect(html).toMatch(/Each block, repeating every \d+ weeks: Base, Build, Peak, Taper\./);
+    // ...and the cramped per-week ribbon is gone (no <div class="cc-axis"> spans).
+    const axisBlock = html.match(/class="cc-axis"[^>]*>([\s\S]*?)<\/div>/);
+    const perWeekLabels = axisBlock ? (axisBlock[1].match(/<span/g) || []).length : 0;
+    expect(perWeekLabels).toBe(0);
   });
 });

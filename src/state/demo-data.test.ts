@@ -47,7 +47,9 @@ describe('seedReviewerDemo', () => {
     const daysOut = (raceDate.getTime() - Date.now()) / 86400000;
     expect(daysOut).toBeGreaterThan(105); // ~15 weeks minimum
     expect(daysOut).toBeLessThan(126);    // and not absurdly far (≤18 weeks)
-    expect(raceDate.getDay()).toBe(0);    // race day lands on a Sunday
+    // Date is stored as a UTC-anchored YYYY-MM-DD; read its weekday in UTC so the
+    // assertion is timezone-independent (getDay() would read Saturday in the Americas).
+    expect(raceDate.getUTCDay()).toBe(0);    // race day lands on a Sunday
   });
 
   it('generates a real multi-week phased training block (not an empty shell)', () => {

@@ -504,7 +504,6 @@ export function openStrengthProgressDetail(s: SimulatorState, opts: StrengthDeta
   const back = document.getElementById('strength-detail-back');
   if (back) {
     back.addEventListener('click', opts.back);
-    back.addEventListener('touchend', (e) => { e.preventDefault(); opts.back(); }, { passive: false });
   }
   container.querySelectorAll<HTMLElement>('.strength-lift-row').forEach(row => {
     const key = row.getAttribute('data-lift-key');
@@ -512,12 +511,10 @@ export function openStrengthProgressDetail(s: SimulatorState, opts: StrengthDeta
     if (!key || !name) return;
     const go = () => openStrengthLiftDetail(key, name);
     row.addEventListener('click', go);
-    row.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
   });
   const addLift = document.getElementById('strength-add-lift');
   if (addLift) {
     const open = () => openManualLiftModal(getMutableState(), { onSaved: () => openStrengthProgressDetail(getMutableState(), opts) });
     addLift.addEventListener('click', open);
-    addLift.addEventListener('touchend', (e) => { e.preventDefault(); open(); }, { passive: false });
   }
 }

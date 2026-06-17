@@ -18,6 +18,7 @@ import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '../page-flair';
 import { legSplitLine, legCommentary } from './race-forecast-card';
+import type { TriDetailNavOpts } from './forecast-chip-detail-view';
 import { COURSE_PROFILES } from '@/data/triathlon-course-profiles';
 
 type LegKey = 'swim' | 'bike' | 'run';
@@ -163,12 +164,14 @@ function renderLegBody(leg: LegKey, p: TriRacePrediction, s: SimulatorState): st
   `;
 }
 
-export function renderTriLegBreakdown(leg: LegKey): void {
+export function renderTriLegBreakdown(leg: LegKey, opts?: TriDetailNavOpts): void {
   const container = document.getElementById('app-root');
   if (!container) return;
+  const showTabBar = opts?.showTabBar !== false;
   const s = getState();
   const p = s.triConfig?.prediction ?? predictTriathlonRace(s);
   if (!p) {
+    if (opts?.onBack) { opts.onBack(); return; }
     import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
     return;
   }
@@ -193,7 +196,7 @@ export function renderTriLegBreakdown(leg: LegKey): void {
 
         <div class="tri-lbd-fade" style="animation-delay:0.02s;padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between">
           <button id="tri-lbd-back-btn" style="background:transparent;border:none;font-size:14px;color:${TEXT_S};cursor:pointer;padding:0;font-family:var(--f)">← Back</button>
-          <button id="tri-lbd-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
+          ${showTabBar ? `<button id="tri-lbd-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>` : ''}
         </div>
 
         <div class="tri-lbd-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 16px">
@@ -208,23 +211,25 @@ export function renderTriLegBreakdown(leg: LegKey): void {
 
       </div>
 
-      ${renderTabBar('forecast')}
+      ${showTabBar ? renderTabBar('forecast') : ''}
     </div>
   `;
 
   document.getElementById('tri-lbd-back-btn')?.addEventListener('click', () => {
+    if (opts?.onBack) { opts.onBack(); return; }
     import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   });
   document.getElementById('tri-lbd-account-btn')?.addEventListener('click', () => {
     import('../account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
-  // Factor rows drill into the matching forecast chip detail page.
+  // Factor rows drill into the matching forecast chip detail page. Carry the nav
+  // context so the chip page returns to the same host (onboarding vs live tab).
   document.querySelectorAll<HTMLElement>('[data-leg-chip]').forEach(el => {
     const open = () => {
       const key = el.dataset.legChip;
       if (!key) return;
-      import('./forecast-chip-detail-view').then(m => m.renderTriForecastChipDetail(key as Parameters<typeof m.renderTriForecastChipDetail>[0]));
+      import('./forecast-chip-detail-view').then(m => m.renderTriForecastChipDetail(key as Parameters<typeof m.renderTriForecastChipDetail>[0], opts));
     };
     el.addEventListener('click', open);
     el.addEventListener('keydown', (e) => {
@@ -232,7 +237,7 @@ export function renderTriLegBreakdown(leg: LegKey): void {
     });
   });
 
-  wireTabBarHandlers(navigateTab);
+  if (showTabBar) wireTabBarHandlers(navigateTab);
 }
 
 /**

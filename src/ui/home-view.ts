@@ -21,7 +21,7 @@ import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coac
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
-import { generateWeekWorkouts } from '@/workouts';
+import { generateWeekWorkouts, parseWorkoutDescription } from '@/workouts';
 import { displayDescWithPace } from '@/workouts/workout-scaling';
 import { resolveWeekWorkouts } from './week-resolve';
 import { getPlannedDayTSSContext } from './planned-day-tss';
@@ -2486,6 +2486,7 @@ export function renderTrackOnlyWeekDetail(): void {
         <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px;margin-top:14px">
           <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:4px">Training Stress Score</div>
           <div style="font-size:12px;color:#475569;line-height:1.5;margin-bottom:12px">TSS combines duration and intensity into a single weekly number. A 45-min easy run scores around 40. A 90-min long run at marathon pace is closer to 120.</div>
+          <div style="font-size:11px;font-weight:600;color:#94A3B8;margin-bottom:4px">Weekly total</div>
           <div style="font-size:12px;color:#475569;line-height:1.9">
             <div style="display:flex;justify-content:space-between"><span>Under 150</span><span style="color:#94A3B8">Recovery or base maintenance</span></div>
             <div style="display:flex;justify-content:space-between"><span>150–350</span><span style="color:#94A3B8">Productive training for most runners</span></div>
@@ -3553,8 +3554,13 @@ function showRecoveryAdviceSheet(): boolean {
 
   // ── Build HTML ─────────────────────────────────────────────────────────────
   const escName = todayWorkout ? todayWorkout.n.replace(/&/g, '&amp;').replace(/</g, '&lt;') : '';
-  const kmMatch = todayWorkout?.d?.match(/(\d+\.?\d*)km/);
-  const distStr = kmMatch ? `${kmMatch[1]}km` : '';
+  // Full session distance (warm up + work + cool down), so the "convert to easy"
+  // subtitle matches what the conversion actually produces. The first-"Nkm"-token
+  // shortcut read only a structured session's warm-up (e.g. "2km" of a 7km tempo).
+  const parsedConvKm = (todayWorkout?.d && s.pac)
+    ? Math.round(parseWorkoutDescription(todayWorkout.d, s.pac).totalDistance / 1000 * 10) / 10
+    : 0;
+  const distStr = parsedConvKm > 0 ? `${parsedConvKm}km` : '';
 
   const todaySection = todayWorkout ? `
     <div style="background:rgba(0,0,0,0.04);border-radius:12px;overflow:hidden">

@@ -15,7 +15,9 @@ import { TL_PER_MIN } from '@/constants/sports';
 import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
-import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
+import { getActiveTab } from './tab-bar';
+import { dropPreOnboardSessions } from './workout-status';
 import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
@@ -809,12 +811,16 @@ export async function next(): Promise<void> {
 
   // Generate this week's actual workouts once (shared by gating check and auto-skip)
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-  const weekWorkouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-    injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-    undefined, undefined, s.w, s.tw, undefined, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
+  const weekWorkouts = dropPreOnboardSessions(
+    generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
+      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+      undefined, undefined, s.w, s.tw, undefined, s.gs,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
+    ),
+    // Mid-week onboard: don't gate/penalize pre-onboard-day sessions that never existed.
+    s.planStartDate, s.w, s.w, s.planCreatedAt,
   );
 
   // Completion gating: count only unrated RUN workouts (exclude gym/cross/rest)
@@ -1337,7 +1343,8 @@ function complete(): void {
  * Reset training plan
  */
 export function reset(): void {
-  showResetModal().then(async proceed => {
+  // Full wipe: clears the plan AND every logged activity, then restarts setup.
+  showResetModal('wipe').then(async proceed => {
     if (proceed) {
       softResetState();
       // Clear the Supabase backup too. softResetState() only wipes localStorage;
@@ -1351,13 +1358,43 @@ export function reset(): void {
   });
 }
 
-function showResetModal(): Promise<boolean> {
+/**
+ * Reset plan, keeping activities. Archives the current plan's weekly history
+ * into `previousPlanWks` before clearing, so when the wizard regenerates the
+ * plan, `redistributeArchivedActivitiesToNewPlan()` re-attaches this week's
+ * activities to the new plan window. This is the non-destructive counterpart to
+ * `reset()` (full wipe). Not offered in track-only mode (no plan to rebuild).
+ */
+export function resetPlan(): void {
+  showResetModal('reset').then(async proceed => {
+    if (proceed) {
+      archiveCurrentWksIfPopulated();
+      softResetState({ preserveArchive: true });
+      const { deletePlanSettings } = await import('@/data/planSettingsSync');
+      await deletePlanSettings();
+      location.reload();
+    }
+  });
+}
+
+function showResetModal(mode: 'reset' | 'wipe'): Promise<boolean> {
   const trackOnly = !!(getState() as any).trackOnly;
-  const title = trackOnly ? 'Reset tracking history?' : 'Reset Training Plan?';
-  const body = trackOnly
-    ? 'This will clear your tracked weeks and activity history. Your name, PBs, and synced Strava/Garmin data will be kept.'
-    : 'This will clear your training plan and weekly history. Your name, PBs, and fitness data will be kept.';
-  const ctaLabel = trackOnly ? 'Reset history' : 'Reset Plan';
+  let title: string;
+  let body: string;
+  let ctaLabel: string;
+  if (mode === 'reset') {
+    title = 'Reset plan?';
+    body = 'Your plan is rebuilt from setup. Logged activities and weekly history are kept and re-attached to the new plan.';
+    ctaLabel = 'Reset plan';
+  } else if (trackOnly) {
+    title = 'Reset tracking history?';
+    body = 'This clears your tracked weeks and activity history. Your name, PBs, and synced Strava/Garmin data are kept.';
+    ctaLabel = 'Reset history';
+  } else {
+    title = 'Wipe everything?';
+    body = 'This clears your plan and every logged activity, including this week. Your name, PBs, and synced Strava/Garmin data are kept. Setup starts over.';
+    ctaLabel = 'Wipe everything';
+  }
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
@@ -1368,7 +1405,7 @@ function showResetModal(): Promise<boolean> {
           ${body}
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-confirm-reset" class="m-btn-danger w-full py-2.5 transition-colors text-sm">
+          <button id="btn-confirm-reset" class="${mode === 'reset' ? 'm-btn-primary' : 'm-btn-danger'} w-full py-2.5 transition-colors text-sm">
             ${ctaLabel}
           </button>
           <button id="btn-cancel-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
@@ -2480,6 +2517,20 @@ export function skipBenchmark(): void {
  * @param dayOfWeek - Our day index (0=Mon, 6=Sun)
  * @param workoutName - Optional workout name for reliable matching
  */
+/**
+ * Re-render the surface the user is actually on after a recovery adjustment.
+ * `render()` only patches the Plan dashboard's stat elements by id, so the
+ * reduced session never repainted the Home today-card or Plan card until a
+ * manual tab switch. The recovery sheet opens from both Home and Plan.
+ */
+function rerenderAfterRecoveryAdjustment(): void {
+  if (getActiveTab() === 'home') {
+    void import('./home-view').then(m => m.renderHomeView());
+  } else {
+    void import('./main-view').then(m => m.renderMainView());
+  }
+}
+
 export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag', dayOfWeek: number, workoutName?: string): void {
   const s = getMutableState();
   const wk = s.wks[s.w - 1];
@@ -2525,13 +2576,21 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
     log('Recovery: No run workout found for today');
     s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
     saveState();
-    render();
+    rerenderAfterRecoveryAdjustment();
     return;
   }
 
-  // Parse current distance
+  // Full session distance (warm up + work + cool down), not just the first
+  // "Nkm" token. A structured threshold tempo leads with its warm-up km
+  // ("2km warm up · 13min @ threshold · 2km cool down"), so the old first-match
+  // regex collapsed a ~7km session down to its 2km warm-up when converting to
+  // easy. The parser sums all three legs; we keep the regex as a last-resort
+  // fallback for the (rare) case where paces aren't loaded.
   const kmMatch = todayRun.d.match(/(\d+\.?\d*)km/);
-  const currentKm = kmMatch ? parseFloat(kmMatch[1]) : 0;
+  const parsedKm = s.pac ? parseWorkoutDescription(todayRun.d, s.pac).totalDistance / 1000 : 0;
+  const currentKm = parsedKm > 0
+    ? Math.round(parsedKm * 10) / 10
+    : (kmMatch ? parseFloat(kmMatch[1]) : 0);
 
   if (!wk.workoutMods) wk.workoutMods = [];
 
@@ -2581,7 +2640,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
 
   s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
   saveState();
-  render();
+  rerenderAfterRecoveryAdjustment();
 }
 
 /**

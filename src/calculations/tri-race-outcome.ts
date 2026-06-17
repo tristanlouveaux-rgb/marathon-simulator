@@ -19,7 +19,12 @@
 import type { SimulatorState } from '@/types/state';
 import type { TriRaceLogEntry } from '@/types/triathlon';
 import { classifyActivity } from './tri-benchmarks-from-history';
-import { TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC } from '@/constants/triathlon-constants';
+import {
+  TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC,
+  RACE_LEG_DISTANCES,
+  RUN_FATIGUE_DISCOUNT,
+} from '@/constants/triathlon-constants';
+import { raceRunLegToVdot } from './physiological-vdot';
 
 export interface RetroDisplay {
   display: boolean;
@@ -143,5 +148,32 @@ export function detectAndLogRaceOutcome(state: SimulatorState): TriRaceLogEntry 
   };
 
   if (!appendRaceOutcome(state, entry)) return null;
+
+  // Anchor running fitness to this race's run leg. A real race is the strongest
+  // race-validated running signal — it must outrank the watch VO2max (inflated
+  // for triathletes by cycling/swimming). raceRunLegToVdot fatigue-discounts the
+  // split to a fresh-run equivalent; getPhysiologicalVdot + refreshBlendedFitness
+  // then rank it above the device tier while recent. Only overwrite when this
+  // race is at least as recent as any stored anchor (don't let a back-logged old
+  // race clobber a newer one).
+  const legDist = RACE_LEG_DISTANCES[tri.distance];
+  if (actualPerLeg.run > 0 && legDist) {
+    const runVdot = raceRunLegToVdot(
+      actualPerLeg.run,
+      legDist.runKm * 1000,
+      RUN_FATIGUE_DISCOUNT[tri.distance],
+    );
+    const prev = state.raceRunVdot;
+    if (runVdot != null && (!prev || raceDate >= prev.dateISO)) {
+      state.raceRunVdot = {
+        vdot: runVdot,
+        dateISO: raceDate,
+        distance: tri.distance,
+        source: 'logged-race',
+      };
+      console.log(`[RaceOutcome] race-validated run VDOT anchor set: ${runVdot.toFixed(1)} (${tri.distance} ${raceDate})`);
+    }
+  }
+
   return entry;
 }

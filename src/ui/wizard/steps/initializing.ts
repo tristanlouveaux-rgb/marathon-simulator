@@ -7,6 +7,7 @@ import { nextStep, previousStep, updateOnboarding } from '../controller';
 import { getState } from '@/state/store';
 import { renderProgressIndicator } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
+import { swapFadedText } from '@/ui/raster-safe-text';
 
 // Re-export for backwards compatibility
 export { initializeSimulator as initializeSimulatorFromOnboarding } from '@/state/initialization';
@@ -43,14 +44,23 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
       <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
         ${renderProgressIndicator(8, 8)}
 
-        <!-- Glass card -->
-        <div class="init-rise" style="width:100%;max-width:380px;
-             background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
-             border:1px solid rgba(255,255,255,0.82);border-radius:28px;
-             padding:36px 28px 30px;
+        <!-- Glass card. The blur lives on a dedicated EMPTY background layer so
+             the text content below has NO backdrop-filter ancestor. WKWebView
+             caches a backdrop-filter element's rasterized text and composites
+             new glyphs over the stale bitmap (the "LcReading your physiologyry"
+             ghost); text in a sibling layer above the blur re-rasters normally.
+             Keep the changing labels OUT of any backdrop-filter subtree. -->
+        <div class="init-rise" style="position:relative;width:100%;max-width:380px;
+             border-radius:28px;
              box-shadow:0 16px 56px rgba(0,0,0,0.08),0 2px 8px rgba(0,0,0,0.05);
-             animation-delay:0.06s;
-             display:flex;flex-direction:column;align-items:center;text-align:center">
+             animation-delay:0.06s">
+
+          <div aria-hidden="true" style="position:absolute;inset:0;border-radius:28px;
+               background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+               border:1px solid rgba(255,255,255,0.82)"></div>
+
+          <div style="position:relative;z-index:1;padding:36px 28px 30px;
+               display:flex;flex-direction:column;align-items:center;text-align:center">
 
           <!-- Chip -->
           <span style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
@@ -94,6 +104,7 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
              style="font-size:13px;font-weight:300;color:rgba(0,0,0,0.50);line-height:1.55;margin:0;max-width:280px">
             Building a plan tailored to your training history.
           </p>
+          </div>
         </div>
       </div>
     </div>
@@ -110,17 +121,26 @@ function setInitProgress(pct: number): void {
   fill.style.strokeDashoffset = (INIT_CIRCUMFERENCE * (1 - clamped)).toFixed(1);
 }
 
+// Matches `.init-label-fade { transition: opacity 0.45s }` below. The fade-out
+// MUST complete before the node is swapped — the old code swapped at 220ms into
+// a 450ms fade, so the text changed while still ~half-visible (overlap even off
+// WKWebView). swapFadedText replaces the node (not textContent) once invisible,
+// which also clears the backdrop-filter glyph-raster ghost on WKWebView.
+const INIT_FADE_MS = 450;
+let initTitleFadeTimer: number | null = null;
+let initStatusFadeTimer: number | null = null;
+
 /** Fade-swap the headline label so changes feel calm, not jumpy. */
 function setInitLabel(title: string, status?: string): void {
   const titleEl = document.getElementById('init-title');
   const statusEl = document.getElementById('init-status');
-  if (titleEl && titleEl.textContent !== title) {
-    titleEl.style.opacity = '0';
-    setTimeout(() => { titleEl.textContent = title; titleEl.style.opacity = '1'; }, 220);
+  if (titleEl) {
+    swapFadedText(titleEl, title,
+      () => initTitleFadeTimer, (id) => { initTitleFadeTimer = id; }, INIT_FADE_MS);
   }
-  if (statusEl && status !== undefined && statusEl.textContent !== status) {
-    statusEl.style.opacity = '0';
-    setTimeout(() => { statusEl.textContent = status; statusEl.style.opacity = '1'; }, 220);
+  if (statusEl && status !== undefined) {
+    swapFadedText(statusEl, status,
+      () => initStatusFadeTimer, (id) => { initStatusFadeTimer = id; }, INIT_FADE_MS);
   }
 }
 

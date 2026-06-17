@@ -118,18 +118,24 @@ export const TRI_BRICK_POLICY: Record<TriathlonDistance, { phases: TrainingPhase
 /** Bike brick share of weekly bike hours — distance-independent (slightly shorter than the solo long ride). */
 export const BRICK_BIKE_SHARE = 0.40;
 
-// Base-phase allowed quality kinds (defer top-end intensity to build/peak; Daniels/Bompa).
-const BASE_ALLOWED_SWIM: readonly SwimSessionKind[] = ['threshold'];
-const BASE_ALLOWED_BIKE: readonly BikeSessionKind[] = ['sweet_spot', 'tempo'];
-const BASE_ALLOWED_RUN: readonly TriRunQualityKind[] = ['threshold'];
+// Low-intensity allowed quality kinds for the two phases that suppress the top end:
+//   - base: defer top-end VO2/anaerobic to build/peak (Daniels/Bompa).
+//   - taper: race week sharpens, it does not train. The remaining taper quality slot
+//     (the bike, and the sprint/olympic swim — taper zeroes the run slot entirely)
+//     stays a short sub-threshold primer, never a VO2/over-under/anaerobic block.
+//     Mirrors running's race-week primer and HYROX's intervals→tempo taper downgrade.
+//     The session DURATION is already cut by the phase multiplier; this caps INTENSITY.
+const LOW_INTENSITY_SWIM: readonly SwimSessionKind[] = ['threshold'];
+const LOW_INTENSITY_BIKE: readonly BikeSessionKind[] = ['sweet_spot', 'tempo'];
+const LOW_INTENSITY_RUN: readonly TriRunQualityKind[] = ['threshold'];
 
-/** Fallback quality kind when a distance's flavour list has nothing base-eligible. */
-const BASE_FALLBACK_SWIM: SwimSessionKind = 'threshold';
-const BASE_FALLBACK_BIKE: BikeSessionKind = 'sweet_spot';
-const BASE_FALLBACK_RUN: TriRunQualityKind = 'threshold';
+/** Fallback quality kind when a distance's flavour list has nothing low-intensity-eligible. */
+const LOW_INTENSITY_FALLBACK_SWIM: SwimSessionKind = 'threshold';
+const LOW_INTENSITY_FALLBACK_BIKE: BikeSessionKind = 'sweet_spot';
+const LOW_INTENSITY_FALLBACK_RUN: TriRunQualityKind = 'threshold';
 
-function gateForBase<T>(list: readonly T[], allowed: readonly T[], phase: TrainingPhase, fallback: T): T[] {
-  if (phase !== 'base') return [...list];
+function gateLowIntensity<T>(list: readonly T[], allowed: readonly T[], phase: TrainingPhase, fallback: T): T[] {
+  if (phase !== 'base' && phase !== 'taper') return [...list];
   const filtered = list.filter((k) => allowed.includes(k));
   return filtered.length ? filtered : [fallback];
 }
@@ -165,7 +171,7 @@ export function selectBikeQualityKind(
   slotIndex: number,
   weekIndex: number,
 ): BikeSessionKind {
-  const flavour = gateForBase(TRI_QUALITY_FLAVOUR[distance].bike, BASE_ALLOWED_BIKE, phase, BASE_FALLBACK_BIKE);
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].bike, LOW_INTENSITY_BIKE, phase, LOW_INTENSITY_FALLBACK_BIKE);
   // Rotate within the flavour list across weeks/slots so variety is preserved.
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
@@ -177,7 +183,7 @@ export function selectSwimQualityKind(
   slotIndex: number,
   weekIndex: number,
 ): SwimSessionKind {
-  const flavour = gateForBase(TRI_QUALITY_FLAVOUR[distance].swim, BASE_ALLOWED_SWIM, phase, BASE_FALLBACK_SWIM);
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].swim, LOW_INTENSITY_SWIM, phase, LOW_INTENSITY_FALLBACK_SWIM);
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
 
@@ -188,6 +194,6 @@ export function selectRunQualityKind(
   slotIndex: number,
   weekIndex: number,
 ): TriRunQualityKind {
-  const flavour = gateForBase(TRI_QUALITY_FLAVOUR[distance].run, BASE_ALLOWED_RUN, phase, BASE_FALLBACK_RUN);
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].run, LOW_INTENSITY_RUN, phase, LOW_INTENSITY_FALLBACK_RUN);
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }

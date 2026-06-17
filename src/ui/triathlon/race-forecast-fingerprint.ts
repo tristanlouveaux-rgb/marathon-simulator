@@ -491,8 +491,8 @@ export function renderTriForecastFingerprint(
     ">
       <div style="position:absolute;top:8px;right:8px;pointer-events:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       <div style="font-size:9px;color:var(--c-muted);font-weight:500;line-height:1;margin-bottom:6px">${escapeText(c.label)}</div>
-      <div style="font-size:12px;color:${c.present ? (c.tone ? TONE_COLOR[c.tone] : 'var(--c-black)') : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${escapeText(c.headline)}</div>
-      ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px">${escapeText(c.detail)}</div>` : ''}
+      <div style="font-size:12px;color:${c.present ? (c.tone ? TONE_COLOR[c.tone] : 'var(--c-black)') : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em;min-width:0;overflow-wrap:break-word;word-break:break-word;hyphens:auto">${escapeText(c.headline)}</div>
+      ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px;min-width:0;overflow-wrap:break-word;word-break:break-word">${escapeText(c.detail)}</div>` : ''}
       ${!c.present && c.addCta ? `<div style="font-size:8px;color:var(--c-faint);margin-top:5px;line-height:1.15;font-style:italic">${escapeText(c.addCta)}</div>` : ''}
     </div>
   `).join('');

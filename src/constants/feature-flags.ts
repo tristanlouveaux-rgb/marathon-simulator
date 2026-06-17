@@ -97,6 +97,21 @@ export const GARMIN_CONNECT_ENABLED: boolean = false;
 export const AI_COACH_ENABLED: boolean = false;
 
 /**
+ * Onboarding intro slides (the 5-card marketing carousel shown after the name
+ * screen: "Adaptive intelligence", "Every sport counts", "Starts where you are",
+ * "Real life, handled", "Learns how you recover").
+ *
+ * HIDDEN 2026-06-16 (Tristan) for v9 testing. The deck reads as filler before the
+ * user has any data in the app, so for now name submission goes straight to the
+ * goals step. The heavy ring pre-warm is skipped while this is off.
+ *
+ * `true` restores the full carousel + the "Skip intro" affordance. The slide
+ * definitions and `buildSlides` renderer in welcome.ts are kept intact so this is
+ * a one-line re-enable.
+ */
+export const ONBOARDING_INTRO_SLIDES_ENABLED: boolean = false;
+
+/**
  * Native OAuth (iOS). When ON, Strava/Garmin connect on native iOS opens the
  * authorize page in ASWebAuthenticationSession (the `@mosaic/web-auth` plugin),
  * which intercepts the `mosaic://oauth?...` callback and returns it to JS,

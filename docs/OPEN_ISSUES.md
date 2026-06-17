@@ -8,7 +8,113 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
-### ISSUE-287: Short plans (≤12 weeks) front-load the LOAD-chart peak to ~week 5 *(P2, 2026-06-16)* — diagnosis corrected, fix NOT started
+> **2026-06-16 — Persona-QA sweep batch (ISSUE-288 → 296).** Surfaced by `/persona-qa` (all groups) after the triathlon distance/intensity build, then confirmed by a dedicated triage pass. All are **pre-existing and unrelated to the triathlon work** (that work was verified clean). Triage also **debunked these as false positives** (do NOT re-investigate): Tier-3 overload modal "never fires" (it fires from `activity-review.ts`, a separate path); "no home overload badge" (the readiness "Manage Load" label + daily-coach `stance: 'reduce'` cover it); "notify-once modals re-fire" (debrief is mitigated by ISSUE-273's forced-Continue; suggestion/coach intros are gated); HYROX holiday bridge-field loss (bridge mods are runtime-only, re-applied at render); "debrief Accept gates adaptation" (CTL re-anchor applies on rollover regardless); "VDOT not updated from race result" (intentional asymmetry, documented in `run-race-outcome.ts`).
+
+### ISSUE-298: Race week prescribed a full-size quality block (3×8 threshold 3 days out) *(P1, 2026-06-17)* — FIX IN WORKING TREE, pending Tristan confirmation + device test
+
+**Symptom (dogfood, Tristan).** A 14-week half-marathon plan put a full **Threshold 3×8** (24 min of threshold work) on the Thursday of week 14 — three days before a Sunday race. That is a build-phase session inside race week; the taper is meant to shed fatigue, not add it.
+
+**Root cause.** Running engine (`plan_engine.ts`): `pickPhaseVariant` rotated `taper` like `build`, so the blind `(weekIndex−1) % n` rotation could land the heaviest variant (`thr_3x8`) in race week; and although the `×0.60` taper multiplier cut the *target* minutes, a rep-based variant renders `reps × repMin` straight off the variant, so the displayed structure stayed 3×8 while `workMinutes` said 12. Tri/cycling (`tri-intensity-profile.ts`) had a partial version: the taper quality-slot *count* was right but the *flavour* wasn't gated, so the remaining taper bike/swim slot could still draw VO2/over-under. HYROX was already correct.
+
+**Fix (act-as-coach, all modes).** Running: `pickPhaseVariant` now treats taper like base (lightest variants); the final taper week seats a fixed primer (`TAPER_PRIMER_THRESHOLD` 3×2 min, or `TAPER_PRIMER_VO2` 4×1 min for 5K). Tri/cycling: `gateForBase`→`gateLowIntensity` now gates base **and** taper to sub-threshold kinds. Day placement left unchanged (a short primer 3–5 days out mid-week is standard). Science: taper holds intensity, cuts volume (Mujika & Padilla 2003; Bosquet 2007). SCIENCE_LOG §CE; CHANGELOG 2026-06-17. Guards: `plan_engine.taper-primer.test.ts` (4). tsc + full workouts suite green.
+
+**Next: Tristan confirms the rendered race week shows the short primer (running + tri + cycling), then device-verify, then mark FIXED.** Open question for Tristan: are 3×2 (threshold) and 4×1 (VO2) the rep schemes you want, or different?
+
+### ISSUE-297: Race predictions bury a strong engine + aren't reproducible *(P1, 2026-06-16)* — RC1 + forecast + RC3 all FIXED in code (NOT device-verified)
+
+**⏳ STATUS UPDATE (2026-06-16).** All three root causes are **fixed in code, not yet device-verified** (device-verify before marking FIXED).
+- **RC1 (engine/readiness conflation):** the engine VDOT (`s.v`) is floored at demonstrated PB capacity (`pbMedianVdot`) in both `refreshBlendedFitness` and `initializeSimulator`, standing down only on demonstrated recent slowness — low volume no longer buries the engine, so refreshes are deterministic.
+- **Forecast:** anchors on a `blendPredictions` at `computePeakWeeklyKm` (the plan's own peak), crediting the volume ramp in proportion to what the plan delivers. No new constants.
+- **RC3 (deleted PBs resurrecting):** new per-distance deletion tombstone `s.deletedPbs`. `effectivePhysiologyPbs` drops any value not genuinely faster than a deleted time (kills the cross-store fastest-wins resurrection); the Strava (`review.ts`) and Apple (`appleHealthSync.ts`) auto-fills honour the tombstone (no silent re-add); `recordPbDeletion` clears BOTH stores + sets the tombstone + refreshes; explicit re-entry clears it (`clearPbTombstone`). Wired into the review-step PB editor (the actual delete site; the other audit files only display PBs). Validated empirically across PB/volume/distance matrices incl. slower runners + 0km-recently.
+
+Guards: `physiological-vdot.test.ts` (tombstones), `blended-fitness.test.ts` + `initialization.durability.test.ts` (engine/forecast). SCIENCE_LOG §BZ; CHANGELOG 2026-06-16. **Next: Tristan device-verifies the full bundle (onboard 20:00-5K / 25:00-5K / 40:00-10K; enter-then-delete a PB), then mark FIXED.**
+
+**⏳ TRI ANALOGUE (2026-06-17) — race-validated run VDOT anchors over the watch VO2max. Fixed in code, NOT device-verified.**
+- **Symptom (dogfood)**: a triathlete with a real 70.3 (run 1:55 half) + Apple Watch VO2max 56 saw running paces far too fast (easy 4:45/km, threshold 3:58/km, marathon 3:33) and a too-fast Ironman run leg. His 1:55 half implies VDOT ~42–45; 56 is sub-19-5K shape.
+- **Root cause**: the watch VO2max (inflated for triathletes by cycling/swimming) won `getPhysiologicalVdot`'s device tier AND was fed raw into `blendPredictions`; with no running PBs the RC1 PB-floor was null, so `s.v` collapsed to ~56 and every pace/forecast/tri-run-leg inherited it.
+- **Fix**: new `s.raceRunVdot` anchor (fatigue-discounted fresh-run equivalent via `raceRunLegToVdot`, recency-gated 365d; seeded at onboarding + race-outcome logging). Ranks above device in `getPhysiologicalVdot` (below standalone-run mosaic), caps the blend's VO2 predictor in `effectiveVo2max` (covers the `blendOpenRunRaceTime` surface that recomputes off the watch directly — the Lesson-2 trap), and floors/caps the engine in `refreshBlendedFitness`. SCIENCE_LOG §CC; CHANGELOG 2026-06-17. Guards: race tier + `effectiveVo2max` cap in `physiological-vdot.test.ts`, s.v anchor in `blended-fitness.test.ts`, seeding in `tri-race-outcome.test.ts`.
+- **Still open (separate, NOT this fix)**: (a) tri bike target renders as "6:34" — a run-pace `targetPaceSecPerKm` leaking onto a bike `DisciplineTarget` (`workout-detail-modal.ts:351`); (b) swim projects faster than the actual split; (c) Lesson-1 forecast-volume facet — the tri specific-endurance penalty evaluates on CURRENT per-discipline volume, so the forecast should but may not credit planned PEAK volume (opposite-direction, not exercised by this too-fast symptom). See `docs/TRIATHLON_PREDICTION_LESSONS.md`.
+- **Next**: Tristan device-verifies the dogfood inputs render corrected numbers (easy ~6:00, threshold ~5:00, marathon ~4:15+, tri run leg slower than the open 1:55 half), then mark FIXED.
+
+**🚩 NEW P1 (2026-06-17) — uncorroborated watch VO2max overstates run fitness for triathletes WITHOUT a race. Verified, NOT fixed (needs Tristan's modelling call).**
+- **Finding (measured via temp test)**: Alex *without* his 70.3 — only a synced watch VO2max of 56, no running PBs, no recent runs — resolves to `device` VDOT 56 and is predicted **easy 4:31/km, threshold 3:45/km, open half 1:23:00, open marathon 2:53:13**. He is a 1:55-half athlete (VDOT ~43). The watch VO2max is built by cycling/swimming and is treated 1:1 as running VDOT.
+- **Scope**: hits EVERY triathlete with a watch VO2max but no running race/PB/HR-calibrated run — i.e. most of them. The race-anchor fix above only rescues the WITH-race path; this is the WITHOUT-race path and is unfixed. Pre-existing (not caused by the anchor work). `hasRealRunningFitnessSignal` is true for the `device` tier, so the "no claims off bare baseline" gate (`project_no_claims_off_baseline_vdot`) does NOT catch it.
+- **Why the TestFlight push was HELD (2026-06-17)**: shipping this would show obviously-wrong run predictions to triathlete testers who haven't entered a past race. Flagged for Tristan before upload.
+- **Fix options (need Tristan's call — no invented constants)**: (a) cap the uncorroborated watch VDOT at the run skill-slider self-assessment (reuses `estimateRunPaceFromSkill` constants; risk: skill→VDOT map becomes load-bearing + coarse); (b) a Tristan-approved watch-VO2max→running-VDOT down-weight factor for triathletes; (c) mark the run prediction provisional when run fitness is watch-only (honest, but the number stays 2:53). Recommend (a) with his sign-off on the skill→cap mapping.
+
+
+
+**Symptom (Tristan dogfooding).** A 20:00 5K (no other data, low/blank weekly volume, marathon target) is shown a ~3:50–4:00 marathon, a *different* time on each recompute (3:33 vs 4:00), and "Faster than 95% of male runners / VO2max 49.8" on the SAME review screen as the slow marathon. Also: enter a 2:00:00 marathon, delete it, plan stays sub-2.
+
+**Root cause (3 linked, one theme — prediction isn't a pure function of inputs).** (1) The volume-penalized *marathon* time is written back into the global engine `s.v` via `cv(targetDist, penalizedBlend)` (`blended-fitness.ts:583,603`), collapsing VDOT 50→40 — capacity/readiness conflation. (2) That writeback + `recomputeLT` (`:486`) feed the next refresh → path-dependent / non-reproducible (the §BO "degraded VDOT loop"). (3) `effectivePhysiologyPbs` merges `Math.min(s.pbs, onboarding.pbs)` (fastest-wins), so a deleted PB resurrects from the other store. The review screen reads `getPhysiologicalVdot` (PB-median ≈ correct) while the plan/forecast read the buried `s.v` → visible contradiction.
+
+**Why existing fixes miss it.** `demonstratedPBFloor` (ISSUE-285) is *same-distance only*, so a 5K PB → marathon target gets no floor.
+
+**Fix direction.** Separate engine from readiness: don't let volume/durability penalties write below PB-derived capacity (`pbDerivedVdot`) absent real detraining evidence (VDOT-level sibling of `demonstratedPBFloor`); keep the race prediction honest but build the forecast from true capacity; deletion must clear both PB stores (+ tombstone for fastest-wins). **Full diagnostic + repro + file:line + test plan: `docs/PREDICTION_FEEDBACK_LOOP_DIAGNOSTIC.md`.** Hot files (parallel agent's domain) — coordinate.
+
+### ISSUE-288: Render-time illness/holiday mods persist to stored plan (tri/cycling/HYROX) *(P0, 2026-06-16)* — FIX IN WORKING TREE, pending Tristan confirmation + device test
+
+**Fix (2026-06-16).** The tri + HYROX plan-views (and cycling, which reuses the tri view) now call `resolveTriWeekWorkouts` with the default `clone:true`, so render-time illness/holiday/bridge mods apply to copies and never mutate the stored `wk.triWorkouts`. Handlers look up stored objects by id (clean), so ratings/drag still persist correctly; cards still show mods (from the cloned resolve). Resolver doc now forbids `clone:false` from any view that can `saveState`; `week-resolve.triathlon.test.ts` documents the hazard. tsc + lint clean; resolver tests 11/11. Files: `src/ui/triathlon/plan-view.ts`, `src/ui/hyrox/plan-view.ts`, `src/ui/triathlon/week-resolve.triathlon.ts`. **Device test:** report illness on a tri/HYROX plan, rate/drag a session, mark recovered → confirm workouts return to normal (no lingering "Rest — illness").
+
+
+
+**Symptom.** After a triathlon/cycling/HYROX user recovers from illness (or a holiday ends), workouts can stay marked "Rest — illness" / holiday-modified until the plan regenerates.
+
+**Root cause (triage-confirmed).** `resolveTriWeekWorkouts(s, viewWeek, { clone: false })` (tri plan-view `src/ui/triathlon/plan-view.ts:103,445`; HYROX `src/ui/hyrox/plan-view.ts:107`) returns direct references to stored `wk.triWorkouts`. The render-time mod appliers (`applyIllnessMods`, `applyHolidayModsAllDisciplines`, `applyBridgeModsAllDisciplines`) mutate those shared objects **in place** (`src/ui/triathlon/week-resolve.triathlon.ts:41`). Any subsequent `saveState()` (rating, drag, adjust) persists the temporary mods; on recovery the mods are no longer re-applied but the persisted ones remain. RUNNING mode is immune — it regenerates the week fresh each render and stores mods separately (`wk.workoutMods`).
+
+**Fix direction.** Either clone on render for tri (match running) and have handlers re-read from a clean source, OR strip render-mod fields (`illnessMod`/`holidayMod`/`modReason`/`original*`) in `saveState()` before persisting. Needs care — the `clone:false` exists so click/drag handlers re-read shared objects.
+
+### ISSUE-289: Leftover dead `buildRaceForecastCard` on Home *(P3 — downgraded from P1, 2026-06-16)* — NOT a missing feature
+
+**Correction (2026-06-16).** Originally logged as "race forecast missing from Home (P1)". **Wrong** — verified with Tristan: the race forecast was deliberately moved to its own **Forecast tab** (`tab-bar.ts:35`; running → `renderRaceForecastView` via `navigateToForecastTab`). The tab-bar doc says so explicitly ("the forecast is now a full standalone view ... and belongs in the tab bar"). The feature is fully present and reachable; there is **no user impact**.
+
+**Remaining (cosmetic).** `buildRaceForecastCard(s)` (`src/ui/home-view.ts:854`) and its click handler (`:3209`, listens for `#home-race-forecast-card` which is never in the DOM) are leftover dead code from the old inline-on-Home version. Optional cleanup: delete both. No behaviour change.
+
+**Fix direction.** Restore the `${buildRaceForecastCard(s)}` call in `getHomeHTML()` (with its existing visibility guards), or remove the dead function + handler. **Verify on a clean tree first** — home-view was under parallel edits this session.
+
+### ISSUE-290: `effortMultiplier` offline with zero ratings *(CLOSED — overstated, 2026-06-16)* — not a real bug
+
+**Correction (2026-06-16, caught by Tristan).** Originally logged P1 "adaptation silently off for non-raters." **Largely false.** You can't really "not rate" a run: when an activity syncs and matches, `deriveItemRPE` → `deriveRPE(avgHR/maxHR/aerobic-effect/…)` auto-derives an RPE from heart-rate data and stores it in `wk.rated` (`activity-review.ts:177,1130`), shown pre-filled as `autoRpe`. So `effortScore` IS computed for anyone who syncs. And adaptation already blends HR + pace: RPE 60% / objective 40%, the objective half being HR effort or per-rep **pace** adherence on intervals (`events.ts:1045,1052`).
+
+**Residue (no action).** The only zero-signal case is a user who syncs nothing AND never manually logs — who also has no HR or pace data, so there is nothing to adapt from and no fallback to add. The persona/triage pass traced `getTrailingEffortScore → 0` for the literal zero-ratings case and missed the auto-rate-on-sync behaviour. Closed.
+
+### ISSUE-291: HYROX plan-view lacks the injury button/banner (parity gap) *(P3 — downgraded from P1, 2026-06-16)*
+
+**Correction (2026-06-16, verified).** Originally logged P1 "HYROX has no injury entry point." **Wrong** — HYROX uses the shared home-view, whose "Check-in" button (`home-view.ts:2799`, every non-track-only mode) opens the check-in overlay → "Injured" → `openInjuryModal()` (`checkin-overlay.ts:80`), which handles HYROX disciplines and regenerates HYROX weeks. So a HYROX athlete **can** report an injury (Home → Check-in) and the plan adapts.
+
+**Real residue (cosmetic parity).** HYROX's *plan view* lacks the dedicated injury button + persistent "In Recovery" banner that running/tri plan-views show, so an injured HYROX user gets no on-plan status indicator. Optional: port the tri injury header button + banner into `hyrox/plan-view.ts`. No capability is missing.
+
+### ISSUE-292: Switch-to-tracking doesn't clear `eventType` / `triConfig` / `hyroxConfig` *(P2, 2026-06-16)* — confirmed, fix actionable
+
+**Root cause (triage-confirmed).** `downgradeToTrackOnly()` (`src/ui/wizard/controller.ts:620-639`) shallow-spreads `onboarding` and sets `trackOnly: true` but never clears the top-level `eventType`/`triConfig`/`hyroxConfig`. Most views check `trackOnly` first, so it's currently latent, but mode-specific routing (`week-debrief.ts`, `home-view.ts`) keys on `eventType` and could fire. **Fix:** clear those fields explicitly on downgrade (or in `initializeSimulator` when `trackOnly && eventType !== 'running'`).
+
+### ISSUE-293: Post-race plan shows "Week N of M" with N>M and a blank week *(P2, 2026-06-16)* — confirmed, fix actionable
+
+**Root cause (triage-confirmed).** When `s.w > s.tw` (race past, week advanced beyond plan), `viewWeek` clamps to `s.w`; `s.wks?.[viewWeek-1]` is undefined → `resolveWeekWorkouts` returns [] → 7 blank rest rows, header reads e.g. "Week 13 of 12" (`src/ui/plan-view.ts:2499,3373`). **Fix:** clamp `viewWeek` to `min(s.w, s.tw)` post-plan, or render a "plan complete" end-state.
+
+### ISSUE-294: Post-race `previousPlanWks` not archived until "Complete Week" tapped *(P3, 2026-06-16)* — confirmed (by-design gap)
+
+**Root cause.** `archiveCurrentWksIfPopulated()` only runs on explicit week-complete (`src/ui/events.ts:1292`). Post-race auto-advance can take `s.w > s.tw` without the user tapping Complete, leaving history unarchived. **Fix (optional):** auto-archive when a race outcome is detected.
+
+### ISSUE-295: ACWR response policy — VDOT bump + plan volume not gated by ACWR *(P2, PRODUCT DECISION, 2026-06-16)*
+
+**Two linked behaviours, both confirmed as shipped (design questions for Tristan, not bugs):**
+1. **VDOT auto-bump ignores ACWR** (`src/calculations/blended-fitness.ts:602`) — `s.v` is written from demonstrated fitness even when ACWR > 1.3, so an over-distance week can inflate the anchor and escalate next week. Plan reduces *intensity* on high ACWR but the fitness anchor still rises.
+2. **Plan doesn't volume-deload on high ACWR** (`src/workouts/plan_engine.ts:486-523`) — only quality sessions are dropped and the long run frozen; easy/long *volume* is untouched.
+
+**DECISION NEEDED (answer here):** Should high ACWR (a) hold/decay VDOT, and (b) apply a global volume damper (e.g. −15% caution / −25% high)? Or is the current intensity-cap + long-run-freeze + self-regulation sufficient? — _Answer: [pending Tristan]_
+
+### ISSUE-296: Coach has no trigger for chronic low adherence *(P3, PRODUCT DECISION, 2026-06-16)*
+
+`src/coach/coach-triggers.ts:28-103` triggers on HRV / race-week / marker-bumps but never on multi-week adherence <80% or persistent under-delivery. Adherence is computed (scales `wkGain`) but the coach never proactively flags the pattern. **DECISION NEEDED (answer here):** Do we want the coach to call out a sustained skip/under-deliver pattern, and with what threshold + copy? — _Answer: [pending Tristan]_
+
+### ISSUE-287: Short plans (≤12 weeks) front-load the LOAD-chart peak to ~week 5 *(P2, 2026-06-16)* — FIX IMPLEMENTED in working tree, pending Tristan confirmation + device test
+
+**Fix (2026-06-16, SCIENCE_LOG §CA).** The corrected diagnosis below was right that it is an intensity-placement artifact, but the lever was finer than "concentrate quality in the peak phase": the apex was being thrown by **workout-variant rotation**, not the phase multipliers (which move weekly load only ~5%). The blind `(weekIndex - 1) % len` rotation scattered the high-load variants — chiefly the `fast_finish` progressive long run (~30 TSS over steady) — so the heaviest week often landed in build. New `pickPhaseVariant` (plan_engine.ts) biases variant selection by phase (peak → heaviest, base/deload → lightest, build/taper → full rotation); deload weeks drawing the lightest variants also kills the post-deload bounce. No invented constants. Verified: TSS apex now lands in the peak phase for every length/distance probed (9/12/16/18 wk × 10k/half/marathon); guard `plan_engine.apex.test.ts` (12 cases). The short-plan "compressed plan" warning is now an inline muted caption under the coach-contract load chart, shown for event plans of ≤12 weeks (continuous plans excluded — they loop, no taper). Do not mark FIXED until Tristan regenerates a short plan in-app and confirms the load chart crests under the Peak label.
+
+---
+
+#### Original diagnosis (retained for context)
 
 **Symptom (scenario sweep, not device-confirmed).** Rebuilding real plans across lengths: the load (TSS) peak lands late for 16-24 wk plans (77-87%) but **early for short plans** — an 8/10/12-wk plan peaks at **week 5** (62% / 50% / 41%).
 

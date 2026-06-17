@@ -32,14 +32,18 @@ import { getPhysiologySource } from '@/data/sources';
 import { calculateZones, type HRZones } from '@/calculations/heart-rate';
 import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
+import { isPbTombstoned } from '@/calculations/physiological-vdot';
 import { SPORTS_DB } from '@/constants/sports';
 import type { PhysiologyDayEntry } from '@/types';
-import { type WorkoutType, type Workout, type HealthSample, type SleepState, type HealthDataType } from '@capgo/capacitor-health';
+import { type WorkoutType, type Workout, type HealthSample, type SleepState } from '@capgo/capacitor-health';
 import {
   isHealthExtrasAvailable,
   requestHealthExtrasPermissions,
   readQuantitySamples,
   readLatestQuantity,
+  readSleepSamples,
+  readCharacteristics,
+  queryWorkouts,
   readWorkoutRouteLocations,
   startWorkoutObserver,
   addWorkoutObserverListener,
@@ -120,47 +124,97 @@ export function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not-ios' 
 async function connectAppleHealthInner(): Promise<{ ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' }> {
   if (!isNativeiOS()) return { ok: false, reason: 'not-ios' };
   try {
-    // 1) Capgo physiology. Populates restingHR, sleep, HRV, steps. Always run
-    //    first (acts as our smoke-test that HealthKit is actually available
-    //    and the user granted *some* read access). An iPhone almost always has
-    //    step data, so a completely empty result means access is off (or this
-    //    is a bare test device) — never a granted-but-quiet user.
-    const ok = await syncAppleHealthPhysiology(28);
+    // HARDENED CONNECT (build 18). The ONLY native work the connect does is the
+    // physiology read via HealthExtras — restingHeartRate + heartRateVariabilitySDNN
+    // + stepCount — which is the EXACT path that succeeded on device (build 16
+    // connected and persisted through it). Every other native HealthKit call has
+    // been moved OFF the onboarding moment because each one we added surfaced a
+    // separate hard crash the first time the connect reached it (capgo's
+    // requestAuthorization SIGABRT; our workoutRoute-without-parent SIGABRT). So
+    // the connect now touches the minimum proven-safe surface and nothing else.
+    //
+    // Internally timeout-bounded so it always resolves (never pins the in-flight
+    // guard) even if a native read hangs.
+    const ok = await withTimeout(syncAppleHealthPhysiology(28), CONNECT_PHYSIOLOGY_TIMEOUT_MS, false);
     if (!ok) return { ok: false, reason: 'no-data' };
 
-    // 2) HealthExtras permissions. VO2max, running power, GPS routes, etc.
-    //    iOS prompts a single combined dialog. iOS-version-gated types
-    //    (running power = iOS 16+, cycling power = iOS 17+) are silently
-    //    dropped on older OS by the Swift plugin's quantityType(for:) switch.
-    await requestHealthExtrasPermissions(EXTRAS_READ_TYPES).catch(() => null);
-
-    // 3) Read the device VO2max immediately so the wizard's review step shows
-    //    the real number instead of "(est.)" right out of the box. Falls back
-    //    silently if unavailable / denied.
-    await syncAppleVO2().catch(() => null);
-    await syncAppleCyclingFTP().catch(() => null);
-
+    // Success. Mark Apple Health authorized on THIS device. Supplementary source:
+    // launch additively merges Apple physiology with the primary, preferring
+    // existing (Garmin) values. Only claim the labelled primary physiology source
+    // if nothing else already holds it, so connecting Apple never demotes Garmin.
     const s = getMutableState();
-    // Mark Apple Health as authorized on THIS device. It runs as a supplementary
-    // source. Launch additively merges Apple physiology with the primary, and
-    // the merge prefers existing (Garmin) values. Only claim the labelled primary
-    // physiology source if nothing else already holds it (legacy `wearable` or
-    // `connectedSources.physiology`), so connecting Apple never demotes Garmin.
     s.appleHealthConnected = true;
     if (!getPhysiologySource(s)) {
       s.connectedSources = { ...(s.connectedSources ?? {}), physiology: 'apple' };
     }
+    // Claim the ACTIVITY source too, so the launch-time workout sync (gated on
+    // getActivitySource()==='apple' in main.ts) runs AUTOMATICALLY — not just
+    // when the user taps Sync. Without this, a tri/Garmin setup whose activity
+    // source resolves to something else never auto-pulls Apple Watch /
+    // Garmin-via-Apple-Health workouts (the "had everything only after pressing
+    // Sync" symptom). Skip when Strava owns activities or an explicit non-Apple
+    // activity source is already set — never clobber a deliberate choice.
+    if (!s.stravaConnected && !s.connectedSources?.activity) {
+      s.connectedSources = { ...(s.connectedSources ?? {}), activity: 'apple' };
+    }
     if (!s.wearable) s.wearable = 'apple';
     saveState();
 
-    // The 16-week activity backfill is still deferred to the review step —
-    // it needs `onboarding.age` to resolve a maxHR fallback for iTRIMP, and
-    // age is collected in the about-you step *after* connect-data.
+    // Secondary enrichment — VO2max, running/cycling power, GPS routes. Restored
+    // (build 17 proved it's crash-safe now that HealthExtras co-requests
+    // workoutType alongside workoutRoute). Fire-and-forget so it never gates or
+    // delays the success signal that advances onboarding; all reads are
+    // unit-guarded in the plugin, so an incompatible type degrades to empty.
+    void (async () => {
+      await requestHealthExtrasPermissions(EXTRAS_READ_TYPES).catch(() => null);
+      await syncAppleVO2().catch(() => null);
+      await syncAppleCyclingFTP().catch(() => null);
+      await syncAppleAthleteProfile().catch(() => null);
+    })();
+
     return { ok: true };
   } catch (err) {
     console.warn('[AppleHealthSync] connect failed', err);
     return { ok: false, reason: 'sync-error' };
   }
+}
+
+/** Outer backstop on the gating physiology read. Each individual native query
+ *  is bounded by `PHYS_READ_TIMEOUT_MS`, so the whole read normally resolves in
+ *  well under this; the only time the user spends here beyond a few seconds is
+ *  the iOS permission sheet itself. 25s gives a slow approver room while still
+ *  surfacing the recovery card quickly when a read genuinely fails. (Was 90s —
+ *  that produced the "approve, then nothing for ages" report when a native read
+ *  hung; the per-read timeouts make a long outer wait unnecessary.) */
+const CONNECT_PHYSIOLOGY_TIMEOUT_MS = 45_000;
+
+/** Per-query timeout for an individual HealthKit native read. capgo's bridge can
+ *  (rarely) accept a query and never call back; bounding each call means one
+ *  stuck read degrades to empty instead of freezing the whole physiology sync. */
+const PHYS_READ_TIMEOUT_MS = 8_000;
+
+/** Resolve `promise`, or `fallback` if it hasn't settled within `ms`. The
+ *  underlying promise keeps running (its state writes still land if it
+ *  eventually resolves); we just stop awaiting it so the caller can recover. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
+/** Bumped every time we ship a new diagnostic-bearing build. Prefixed onto the
+ *  on-device diagnostic so we can confirm WHICH build is actually running when
+ *  a TestFlight install lags and two builds look identical on screen. */
+const DIAG_BUILD_TAG = 'b24';
+
+/** Last physiology-read outcome, captured for on-device debugging. TestFlight
+ *  has no console, so the connect recovery card surfaces this to tell apart
+ *  permission-off (all zero), a hung native read (timed out → still zero, but
+ *  fast), and a genuinely empty device. Read via `getLastApplePhysiologyDiag`. */
+let _lastPhysiologyDiag = '';
+export function getLastApplePhysiologyDiag(): string {
+  return _lastPhysiologyDiag;
 }
 
 /** Permissions to request from the HealthExtras plugin on Apple Health connect.
@@ -180,6 +234,12 @@ const EXTRAS_READ_TYPES: HealthExtrasPermission[] = [
   'cyclingSpeed',
   'cyclingFunctionalThresholdPower',
   'workoutRoute',
+  // Athlete profile (build 21): seeded clobber-safe by syncAppleAthleteProfile.
+  'bodyMass',
+  'height',
+  'bodyFatPercentage',
+  'dateOfBirth',
+  'biologicalSex',
 ];
 
 /**
@@ -265,6 +325,62 @@ export async function syncAppleCyclingFTP(): Promise<boolean> {
   return true;
 }
 
+/** Compute whole-years age from an ISO date-of-birth string. Null on parse fail. */
+function ageFromISODob(iso: string): number | null {
+  const dob = new Date(iso);
+  if (isNaN(dob.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  const m = now.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < dob.getDate())) age--;
+  return age;
+}
+
+/**
+ * Seed athlete-profile fields from HealthKit — body mass, height, and the
+ * immutable characteristics (date of birth → age, biological sex). CLOBBER-SAFE:
+ * only fills a field that is currently unset; never overwrites a user-entered
+ * value. These are profile facts (not benchmarks that improve), so "fill if
+ * empty" is the correct rule. No-op on web/Android; failures degrade silently.
+ */
+export async function syncAppleAthleteProfile(): Promise<void> {
+  if (!isHealthExtrasAvailable()) return;
+  const s = getMutableState();
+  let changed = false;
+
+  // Body mass (kg) → s.bodyWeightKg + onboarding.bodyWeightKg if unset.
+  const mass = await readLatestQuantity({ dataType: 'bodyMass' }).catch(() => ({ value: null, asOf: null }));
+  if (mass.value != null && mass.value >= 30 && mass.value <= 300) {
+    const kg = Math.round(mass.value * 10) / 10;
+    if (s.bodyWeightKg == null) { s.bodyWeightKg = kg; changed = true; }
+    if (s.onboarding && s.onboarding.bodyWeightKg == null) { s.onboarding.bodyWeightKg = kg; changed = true; }
+  }
+
+  // Height (m → cm) → s.heightCm if unset.
+  const height = await readLatestQuantity({ dataType: 'height' }).catch(() => ({ value: null, asOf: null }));
+  if (height.value != null && height.value >= 1.0 && height.value <= 2.5 && s.heightCm == null) {
+    s.heightCm = Math.round(height.value * 100);
+    changed = true;
+  }
+
+  // DOB → age, biological sex → state + onboarding, if unset.
+  const chars = await readCharacteristics().catch(() => ({ dateOfBirth: null, biologicalSex: null as 'male' | 'female' | 'other' | null }));
+  if (chars.dateOfBirth && s.onboarding && s.onboarding.age == null) {
+    const age = ageFromISODob(chars.dateOfBirth);
+    if (age != null && age >= 10 && age <= 100) { s.onboarding.age = age; changed = true; }
+  }
+  if (chars.biologicalSex) {
+    const sex: 'male' | 'female' | 'prefer_not_to_say' = chars.biologicalSex === 'other' ? 'prefer_not_to_say' : chars.biologicalSex;
+    if (s.biologicalSex == null) { s.biologicalSex = sex; changed = true; }
+    if (s.onboarding && s.onboarding.biologicalSex == null) { s.onboarding.biologicalSex = sex; changed = true; }
+  }
+
+  if (changed) {
+    saveState();
+    console.log('[AppleHealthSync] Athlete profile seeded from HealthKit (clobber-safe)');
+  }
+}
+
 /** The EXACT set of read identifiers the @capgo/capacitor-health plugin can
  * map natively: its `HealthDataType` union (see
  * node_modules/@capgo/capacitor-health/dist/esm/definitions.d.ts) plus the
@@ -296,24 +412,19 @@ export const ALL_READ_TYPES: CapgoReadType[] = [
   'sleep', 'restingHeartRate', 'heartRateVariability', 'steps',  // physiology
 ];
 
-/** Cached auth flag — avoid re-prompting on every call within the same session. */
-let _authRequested = false;
+// capgo `@capgo/capacitor-health` is no longer used at runtime AT ALL — its
+// requestAuthorization hard-crashes on iOS 26.x (EXC_CRASH/SIGABRT in HKHealthStore
+// share-type validation; see crash logs). Every HealthKit read — physiology,
+// sleep, workouts, routes, power — now goes through our own HealthExtras plugin
+// (read-only, toShare:nil, which does not crash). The only remaining capgo
+// references are TYPE imports (Workout/WorkoutType/HealthSample/SleepState),
+// which carry no runtime code.
 
-/**
- * Request HealthKit authorization for all data types we need.
- * Only prompts once per app session (iOS remembers the grant across launches).
- */
-async function ensureAuthorization(): Promise<typeof import('@capgo/capacitor-health')['Health']> {
-  const { Health } = await import('@capgo/capacitor-health');
-  if (!_authRequested) {
-    // Cast only bridges the plugin's public type omitting the special
-    // `'workouts'` identifier; ALL_READ_TYPES is already validated as
-    // `CapgoReadType[]`, so this is not an escape hatch for bad types.
-    await Health.requestAuthorization({ read: ALL_READ_TYPES as unknown as HealthDataType[] });
-    _authRequested = true;
-  }
-  return Health;
-}
+/** Upper bound on the HealthExtras permission request. Must exceed a real user's
+ *  time reading the iOS permission sheet (so a working request resolves first
+ *  and this never trips), yet bound a hung native call. On a hang the grant is
+ *  already app-level, so proceeding to the reads still works. */
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 
 // ---------------------------------------------------------------------------
 // Workout type mapping
@@ -405,9 +516,24 @@ const HR_SAMPLE_LIMIT = 6000;
  */
 export async function syncAppleHealth(): Promise<void> {
   if (!isNativeiOS()) return;
-
+  // Workouts now read through our HealthExtras plugin (HKWorkoutType query),
+  // NOT capgo — capgo's auth crashes on iOS 26.x. This is the Garmin-via-Apple-
+  // Health activity pipe (Garmin Connect → Apple Health → here), so Apple-only /
+  // Garmin users get their runs without Strava. Recovery physiology flows
+  // separately via syncAppleHealthPhysiology.
   try {
     const s = getMutableState();
+    // One-time re-backfill for users affected by the pre-build-23 activity-source
+    // gating bug (workouts never auto-synced, or only a partial 14-day window
+    // after a manual sync left `appleHistoryFetched` stuck true). Force ONE full
+    // history re-pull for any Apple-connected user, then flag it so it never
+    // re-runs. Dedup (garminMatched key) makes re-pulling existing workouts a
+    // no-op, so this is safe even for users who already have their history.
+    if (s.appleHealthConnected && !s.appleHistoryResyncDone) {
+      s.appleHistoryFetched = false;
+      s.appleHistoryResyncDone = true;
+      saveState();
+    }
     const isFirstBackfill = !s.appleHistoryFetched;
     const daysBack = isFirstBackfill ? FIRST_BACKFILL_DAYS : INCREMENTAL_DAYS;
 
@@ -478,12 +604,14 @@ export async function syncAppleHealth(): Promise<void> {
  * Fetch workouts from HealthKit within the last `daysBack` days.
  */
 async function fetchRecentWorkouts(daysBack: number): Promise<Workout[]> {
-  const Health = await ensureAuthorization();
-
   const since = new Date();
   since.setDate(since.getDate() - daysBack);
 
-  const { workouts } = await Health.queryWorkouts({
+  // Read via HealthExtras (our plugin), NOT capgo — capgo's auth crashes on
+  // iOS 26.x. ExtrasWorkout has the same runtime field shape as capgo's Workout
+  // (workoutType string, dates, duration s, totalDistance m, totalEnergyBurned
+  // kcal, sourceId/Name), so downstream convert/enrich/key code is reused via cast.
+  const workouts = await queryWorkouts({
     startDate: since.toISOString(),
     endDate: new Date().toISOString(),
     // Hard upper bound. 16 weeks of typical hobbyist activity stays well
@@ -493,7 +621,7 @@ async function fetchRecentWorkouts(daysBack: number): Promise<Workout[]> {
     ascending: false,
   });
 
-  return workouts;
+  return workouts as unknown as Workout[];
 }
 
 /** Deep-history maximum reach (years). Anything older than this is unlikely
@@ -526,7 +654,6 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
   if (s.appleDeepHistoryFetched) return;
 
   try {
-    const Health = await ensureAuthorization();
     let totalProcessed = 0;
     let endDate = new Date();
     endDate.setDate(endDate.getDate() - FIRST_BACKFILL_DAYS);
@@ -535,12 +662,14 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
       const startDate = new Date(endDate);
       startDate.setDate(startDate.getDate() - DEEP_HISTORY_CHUNK_DAYS);
 
-      const { workouts } = await Health.queryWorkouts({
+      // HealthExtras query (capgo dead on iOS 26.x). Cast: ExtrasWorkout shares
+      // capgo Workout's runtime shape; convertToActivityRow consumes it unchanged.
+      const workouts = (await queryWorkouts({
         startDate: startDate.toISOString(),
         endDate: endDate.toISOString(),
         limit: 2000,
         ascending: false,
-      });
+      })) as unknown as Workout[];
 
       if (workouts.length === 0) {
         // No older data. Stop walking. User's HealthKit store ends here.
@@ -587,6 +716,20 @@ const DEFAULT_SLEEP_TARGET_SEC = 7 * 3600;
  */
 const SDNN_TO_RMSSD = 1.28;
 
+/** HealthKit HKCategoryValueSleepAnalysis raw value → our SleepState. capgo
+ *  exposed string states; HealthExtras returns the raw enum, so we map here.
+ *  0 inBed, 1 asleepUnspecified, 2 awake, 3 asleepCore, 4 asleepDeep, 5 asleepREM.
+ *  Core maps to light (same bucket capgo used). inBed is excluded from sleep
+ *  duration by computeSleepStageDurations. */
+const SLEEP_VALUE_TO_STATE: Record<number, SleepState> = {
+  0: 'inBed' as SleepState,
+  1: 'asleep' as SleepState,
+  2: 'awake' as SleepState,
+  3: 'light' as SleepState,
+  4: 'deep' as SleepState,
+  5: 'rem' as SleepState,
+};
+
 /**
  * Sync physiology data (sleep, HRV, resting HR) from HealthKit.
  * Populates `s.physiologyHistory` with up to 28 days of PhysiologyDayEntry[],
@@ -598,89 +741,126 @@ const SDNN_TO_RMSSD = 1.28;
 export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
   if (!isNativeiOS()) return false;
 
+  // Stage + per-read error capture. Declared OUTSIDE the try so the catch can
+  // surface exactly where capgo failed on this OS (TestFlight has no console).
+  // `_lastPhysiologyDiag` is updated as a BREADCRUMB before each await that can
+  // hang, so if the outer connect timeout fires while we're still stuck, the
+  // recovery card shows the last stage reached (e.g. "hung@authorizing"). The
+  // `DIAG_BUILD_TAG` prefix lets us confirm on-device which build is actually
+  // running — invaluable when TestFlight installs lag and two builds look identical.
+  const TAG = DIAG_BUILD_TAG;
+  let stage = 'init';
+  const readErrs: string[] = [];
+  _lastPhysiologyDiag = `${TAG} hung@start`;
   try {
-    const Health = await ensureAuthorization();
-
-    // Check if sleep permission was actually granted (HealthKit silently
-    // returns empty results when denied. This is the only way to detect it).
-    const authStatus = await Health.checkAuthorization({ read: ['sleep', 'restingHeartRate', 'heartRateVariability'] });
-    if (authStatus.readDenied.length > 0) {
-      console.warn('[AppleHealthSync] HealthKit permissions denied for:', authStatus.readDenied);
-      // Continue anyway. We'll get data for whatever types ARE authorized.
-    }
+    // capgo hangs at authorization/import on iOS 26.5 (build 13 confirmed
+    // "hung@authorizing" — it never returns, never throws, even with an internal
+    // timeout). So physiology is read through our OWN HealthExtras plugin
+    // instead. HealthKit authorization is app-level, not per-plugin: the user
+    // has already granted (all Health toggles ON), so HealthExtras reads the
+    // exact same store capgo can't reach. This pulls resting HR, HRV, steps, AND
+    // sleep (sleepAnalysis category) — the full recovery picture.
+    // Bounded: if our own plugin's auth also hangs on this OS, proceed anyway —
+    // the grant is already in HealthKit (app-level), so the reads still work.
+    // Request core read types in the PRIMARY sheet, including `workouts` —
+    // workouts are core data and must be prompted up front with HR/sleep, not
+    // deferred to the fire-and-forget extras sheet.
+    _lastPhysiologyDiag = `${TAG} hung@requestPerms`;
+    await withTimeout(
+      requestHealthExtrasPermissions(['restingHeartRate', 'heartRateVariabilitySDNN', 'stepCount', 'sleepAnalysis', 'respiratoryRate', 'oxygenSaturation', 'workouts'])
+        .catch((e: any) => { readErrs.push(`perms:${String(e?.message ?? e).slice(0, 40)}`); return null; }),
+      AUTH_REQUEST_TIMEOUT_MS,
+      null,
+    );
+    stage = 'perms-done';
 
     const since = new Date();
     since.setDate(since.getDate() - days);
     const sinceISO = since.toISOString();
     const nowISO = new Date().toISOString();
 
-    // Fetch all data types in parallel (all local HealthKit queries, no network)
-    const [sleepResult, rhrResult, hrvResult, stepsResult, exerciseResult] = await Promise.all([
-      Health.readSamples({ dataType: 'sleep', startDate: sinceISO, endDate: nowISO, limit: 2000, ascending: true }),
-      Health.readSamples({ dataType: 'restingHeartRate', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
-      Health.readSamples({ dataType: 'heartRateVariability', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
-      Health.queryAggregated({ dataType: 'steps', startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }),
-      // Apple Watch exercise ring. `appleExerciseTime` is NOT in the capgo
-      // plugin's supported type union, so the native query throws
-      // `invalidDataType`. Isolate it with `.catch` so it degrades to "no
-      // active minutes from Apple" instead of rejecting the whole Promise.all
-      // and failing the entire physiology sync. Garmin still supplies
-      // activeMinutes via syncPhysiologySnapshot. If a future plugin version
-      // adds the type, this lights up automatically.
-      Health.queryAggregated({ dataType: 'appleExerciseTime' as any, startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }).catch(() => ({ samples: [] })),
+    // Each read via HealthExtras (already internally try/caught → [] on error),
+    // wrapped in our own timeout so a stuck native read can't freeze the flow.
+    _lastPhysiologyDiag = `${TAG} hung@reads`;
+    const readQ = (dataType: 'restingHeartRate' | 'heartRateVariabilitySDNN' | 'stepCount' | 'respiratoryRate' | 'oxygenSaturation', label: string) =>
+      withTimeout(
+        readQuantitySamples({ dataType, startDate: sinceISO, endDate: nowISO, limit: 1000, ascending: true })
+          .catch((e: any) => { readErrs.push(`${label}:${String(e?.message ?? e).slice(0, 40)}`); return []; }),
+        PHYS_READ_TIMEOUT_MS,
+        [],
+      );
+    const [rhrSamples, hrvSamples, stepSamples, respSamples, spo2Samples, sleepSamples] = await Promise.all([
+      readQ('restingHeartRate', 'rhr'),
+      readQ('heartRateVariabilitySDNN', 'hrv'),
+      readQ('stepCount', 'steps'),
+      readQ('respiratoryRate', 'resp'),
+      readQ('oxygenSaturation', 'spo2'),
+      withTimeout(
+        readSleepSamples({ startDate: sinceISO, endDate: nowISO, limit: 4000 })
+          .catch((e: any) => { readErrs.push(`sleep:${String(e?.message ?? e).slice(0, 40)}`); return []; }),
+        PHYS_READ_TIMEOUT_MS,
+        [],
+      ),
     ]);
+    stage = 'read';
+
+    // On-device diagnostic. `via=extras` marks the HealthExtras path so a
+    // screenshot confirms we're off capgo. Counts tell us if data flowed.
+    _lastPhysiologyDiag =
+      `${TAG} via=extras rhr=${rhrSamples.length} hrv=${hrvSamples.length} steps=${stepSamples.length} sleep=${sleepSamples.length}` +
+      (readErrs.length ? ` errs=[${readErrs.join(' | ')}]` : '');
+    console.log('[AppleHealthSync] physiology diag:', _lastPhysiologyDiag);
 
     // ── Group sleep samples into nights ────────────────────────────────────
-    // A sleep "night" is keyed by the calendar date the user woke up on.
-    // HealthKit sleep samples have startDate/endDate per stage segment.
-    // Filter: only count samples ending before noon (excludes daytime naps
-    // that would inflate sleep totals for that day's entry).
+    // Map HealthKit's raw HKCategoryValueSleepAnalysis to our SleepState, then
+    // key each night by the calendar date the user woke up on. Only count
+    // segments ending before noon (excludes daytime naps inflating the night).
     const nightMap = new Map<string, HealthSample[]>();
-    for (const sample of sleepResult.samples) {
-      const endDate = new Date(sample.endDate);
-      const endHour = endDate.getHours();
-      // Main sleep ends between midnight and noon. Naps (ending after noon)
-      // are excluded to avoid inflating the night's sleep total.
-      if (endHour >= 12) continue;
-
-      const wakeDate = sample.endDate.split('T')[0];
+    for (const seg of sleepSamples) {
+      const state = SLEEP_VALUE_TO_STATE[seg.value];
+      if (!state) continue;                       // unknown value → skip
+      const endHour = new Date(seg.endDate).getHours();
+      if (endHour >= 12) continue;                // daytime nap
+      const wakeDate = seg.endDate.split('T')[0];
       if (!nightMap.has(wakeDate)) nightMap.set(wakeDate, []);
-      nightMap.get(wakeDate)!.push(sample);
+      // computeSleepStageDurations only reads .sleepState/.startDate/.endDate.
+      nightMap.get(wakeDate)!.push({ sleepState: state, startDate: seg.startDate, endDate: seg.endDate } as HealthSample);
     }
 
     // ── Index resting HR and HRV by date ───────────────────────────────────
     const rhrByDate = new Map<string, number>();
-    for (const sample of rhrResult.samples) {
+    for (const sample of rhrSamples) {
       const date = sample.startDate.split('T')[0];
       rhrByDate.set(date, sample.value); // last value wins (most recent reading)
     }
 
     const hrvByDate = new Map<string, number>();
-    for (const sample of hrvResult.samples) {
+    for (const sample of hrvSamples) {
       const date = sample.startDate.split('T')[0];
-      // HealthKit reports HRV as SDNN (ms). Our model uses RMSSD (ms).
-      // Convert using published ratio: RMSSD ≈ SDNN * 1.28 during sleep.
-      // Source: Shaffer & Ginsberg 2017, validated across multiple
-      // populations for nocturnal short-term recordings (5-min epochs).
-      // This ensures Apple Watch values land in the same absolute range
-      // as Garmin RMSSD, so rmssdToHrvStatus() thresholds work correctly.
+      // HealthExtras returns HRV SDNN in ms (its defaultUnit). Our model uses
+      // RMSSD (ms): RMSSD ≈ SDNN * 1.28 (Shaffer & Ginsberg 2017, nocturnal
+      // short-term recordings) so Apple values land in the same range as Garmin.
       hrvByDate.set(date, sample.value * SDNN_TO_RMSSD);
     }
 
     // ── Index steps by date ────────────────────────────────────────────────
+    // HealthExtras returns individual step samples (not daily aggregates), so
+    // sum per calendar day to match the daily total capgo's queryAggregated gave.
     const stepsByDate = new Map<string, number>();
-    for (const sample of stepsResult.samples) {
+    for (const sample of stepSamples) {
       const date = sample.startDate.split('T')[0];
-      stepsByDate.set(date, sample.value);
+      stepsByDate.set(date, (stepsByDate.get(date) ?? 0) + sample.value);
     }
 
-    // ── Index exercise minutes by date ────────────────────────────────────
-    // Apple Watch Exercise ring = periods where HR was in exercise zone.
-    // Maps directly to our activeMinutes field (same as Garmin epoch active minutes).
-    const exerciseByDate = new Map<string, number>();
-    for (const sample of exerciseResult.samples) {
-      const date = sample.startDate.split('T')[0];
-      exerciseByDate.set(date, Math.round(sample.value));
+    // ── Index respiratory rate + SpO2 by date (last reading wins) ───────────
+    const respByDate = new Map<string, number>();
+    for (const sample of respSamples) {
+      respByDate.set(sample.startDate.split('T')[0], sample.value); // breaths/min
+    }
+    const spo2ByDate = new Map<string, number>();
+    for (const sample of spo2Samples) {
+      // HealthExtras returns oxygenSaturation as a fraction (0–1); store percent.
+      spo2ByDate.set(sample.startDate.split('T')[0], sample.value * 100);
     }
 
     // ── Build PhysiologyDayEntry per date ──────────────────────────────────
@@ -690,7 +870,8 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     for (const d of rhrByDate.keys()) allDates.add(d);
     for (const d of hrvByDate.keys()) allDates.add(d);
     for (const d of stepsByDate.keys()) allDates.add(d);
-    for (const d of exerciseByDate.keys()) allDates.add(d);
+    for (const d of respByDate.keys()) allDates.add(d);
+    for (const d of spo2ByDate.keys()) allDates.add(d);
 
     if (allDates.size === 0) return false;
 
@@ -722,9 +903,11 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       const steps = stepsByDate.get(date);
       if (steps != null && steps > 0) entry.steps = Math.round(steps);
 
-      // Exercise minutes (Apple Watch exercise ring → activeMinutes)
-      const exerciseMin = exerciseByDate.get(date);
-      if (exerciseMin != null && exerciseMin > 0) entry.activeMinutes = exerciseMin;
+      // Respiratory rate + blood oxygen (recovery / illness / altitude signals)
+      const resp = respByDate.get(date);
+      if (resp != null && resp > 0) entry.respiratoryRate = Math.round(resp * 10) / 10;
+      const spo2 = spo2ByDate.get(date);
+      if (spo2 != null && spo2 > 0) entry.spo2 = Math.round(spo2 * 10) / 10;
 
       entries.push(entry);
     }
@@ -757,6 +940,10 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     return true;
   } catch (err) {
     console.warn('[AppleHealthSync] Physiology sync failed:', err);
+    // Surface where it died so the on-device card shows the real cause, not a
+    // silent "no data". Always overwrite (the breadcrumb only holds "hung@X").
+    _lastPhysiologyDiag = `${DIAG_BUILD_TAG} threw@${stage}: ${String((err as any)?.message ?? err).slice(0, 90)}` +
+      (readErrs.length ? ` errs=[${readErrs.join(' | ')}]` : '');
     return false;
   }
 }
@@ -835,6 +1022,7 @@ function pickDefined(apple: PhysiologyDayEntry, existing: PhysiologyDayEntry): P
   const keys: (keyof PhysiologyDayEntry)[] = [
     'sleepScore', 'sleepDurationSec', 'sleepDeepSec', 'sleepRemSec',
     'sleepLightSec', 'sleepAwakeSec', 'restingHR', 'hrvRmssd', 'steps', 'activeMinutes',
+    'respiratoryRate', 'spo2',
   ];
   for (const k of keys) {
     if (existing[k] == null && apple[k] != null) {
@@ -979,7 +1167,6 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
   );
   const routes = await readWorkoutRouteLocations({ startDate: oldestStart, endDate: newestEnd });
 
-  const Health = await ensureAuthorization();
   const s = getMutableState();
   const sex = s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
   const restingHR = (s.restingHR && s.restingHR > 0) ? s.restingHR : null;
@@ -1017,13 +1204,17 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
         const isRide = sport === 'CYCLING';
 
         const [hrRes, powerSamples, speedSamples] = await Promise.all([
-          Health.readSamples({
+          // HR stream via HealthExtras (capgo's readSamples path is dead on
+          // iOS 26.x). readQuantitySamples returns QuantitySample[] (value +
+          // startDate/endDate) — structurally what computeHREnrichment reads, so
+          // wrap as { samples } and cast to keep the downstream code unchanged.
+          readQuantitySamples({
             dataType: 'heartRate',
             startDate: w.startDate,
             endDate: w.endDate,
             limit: HR_SAMPLE_LIMIT,
             ascending: true,
-          }),
+          }).then((samples) => ({ samples: samples as unknown as HealthSample[] })),
           isRun
             ? readQuantitySamples({
                 dataType: 'runningPower',
@@ -1631,21 +1822,26 @@ export function applyPBsFromRows(rows: GarminActivityRow[]): void {
   if (fastest.k5 == null && fastest.k10 == null && fastest.h == null && fastest.m == null) return;
 
   const s = getMutableState();
+  // Honour user PB-deletion tombstones (ISSUE-297 RC3): a detected effort that
+  // is not genuinely faster than a deleted time must not silently re-add it.
+  const tomb = s.deletedPbs;
+  const allow = (k: keyof typeof fastest, cur?: number) =>
+    fastest[k] != null && !isPbTombstoned(tomb, k, fastest[k]!) && (cur == null || fastest[k]! < cur);
   // Top-level PBs. Fastest-wins merge.
   const next = { ...(s.pbs ?? {}) } as Record<string, number>;
-  if (fastest.k5 != null && (next.k5 == null || fastest.k5 < next.k5)) next.k5 = fastest.k5;
-  if (fastest.k10 != null && (next.k10 == null || fastest.k10 < next.k10)) next.k10 = fastest.k10;
-  if (fastest.h != null && (next.h == null || fastest.h < next.h)) next.h = fastest.h;
-  if (fastest.m != null && (next.m == null || fastest.m < next.m)) next.m = fastest.m;
+  if (allow('k5', next.k5)) next.k5 = fastest.k5!;
+  if (allow('k10', next.k10)) next.k10 = fastest.k10!;
+  if (allow('h', next.h)) next.h = fastest.h!;
+  if (allow('m', next.m)) next.m = fastest.m!;
   s.pbs = next as any;
 
   // Mirror into onboarding.pbs so the review-step Continue gate sees them.
   if (s.onboarding) {
     const nextOnb = { ...(s.onboarding.pbs ?? {}) } as Record<string, number>;
-    if (fastest.k5 != null && (nextOnb.k5 == null || fastest.k5 < nextOnb.k5)) nextOnb.k5 = fastest.k5;
-    if (fastest.k10 != null && (nextOnb.k10 == null || fastest.k10 < nextOnb.k10)) nextOnb.k10 = fastest.k10;
-    if (fastest.h != null && (nextOnb.h == null || fastest.h < nextOnb.h)) nextOnb.h = fastest.h;
-    if (fastest.m != null && (nextOnb.m == null || fastest.m < nextOnb.m)) nextOnb.m = fastest.m;
+    if (allow('k5', nextOnb.k5)) nextOnb.k5 = fastest.k5!;
+    if (allow('k10', nextOnb.k10)) nextOnb.k10 = fastest.k10!;
+    if (allow('h', nextOnb.h)) nextOnb.h = fastest.h!;
+    if (allow('m', nextOnb.m)) nextOnb.m = fastest.m!;
     s.onboarding.pbs = nextOnb as any;
   }
 

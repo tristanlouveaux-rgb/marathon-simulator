@@ -113,6 +113,37 @@ describe('computePlanAdherence', () => {
     expect(result.pct).toBe(100);
   });
 
+  it('does not penalize the onboarding week for pre-onboard days (mid-week start)', () => {
+    // Onboard Wed (planStart Mon 06-01, created Wed 06-03 → firstTrackedDow 2).
+    // rw=4, so round(4 × 2/7) = 1 run fell on dropped pre-onboard days. The
+    // onboarding week's denominator must drop to 3, not stay at 4.
+    const wk1 = makeWeek(1, {
+      garminActuals: {
+        'a': makeRunActual(10, 10),
+        'b': makeRunActual(10, 10),
+        'c': makeRunActual(10, 10),
+      },
+    });
+    const s = makeState({
+      rw: 4, w: 2, wks: [wk1, makeWeek(2)],
+      planStartDate: '2026-06-01', planCreatedAt: '2026-06-03',
+    });
+    const result = computePlanAdherence(s);
+    expect(result.totalPlanned).toBe(3); // 4 − 1 pre-onboard run
+    expect(result.totalCompleted).toBe(3);
+    expect(result.pct).toBe(100);
+  });
+
+  it('established plans (creation predates week start) keep the full denominator', () => {
+    const wk1 = makeWeek(1, { garminActuals: { 'a': makeRunActual(10, 10) } });
+    const s = makeState({
+      rw: 4, w: 2, wks: [wk1, makeWeek(2)],
+      planStartDate: '2026-06-01', planCreatedAt: '2026-05-20',
+    });
+    const result = computePlanAdherence(s);
+    expect(result.totalPlanned).toBe(4); // no pre-onboard reduction
+  });
+
   it('excludes current in-progress week from scoring', () => {
     const wk1 = makeWeek(1, {
       garminActuals: { 'a': makeRunActual(10, 10) },

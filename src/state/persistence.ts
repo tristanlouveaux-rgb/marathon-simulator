@@ -544,8 +544,15 @@ export function clearState(): void {
 /**
  * Soft reset: clear training plan but preserve profile data (name, PBs, fitness, runner type).
  * After soft reset the wizard restarts at 'goals' (skipping welcome) if name exists.
+ *
+ * @param opts.preserveArchive when true, carry `previousPlanWks` (the archived
+ *   weekly history) into the fresh state and skip the GPS wipe. The caller is
+ *   expected to have run `archiveCurrentWksIfPopulated()` first so the current
+ *   plan's activities are in the archive. The wizard's plan regeneration then
+ *   redistributes them into the new plan window. This powers "Reset plan"
+ *   (rebuild, keep activities) vs the default full "Wipe everything".
  */
-export function softResetState(): void {
+export function softResetState(opts?: { preserveArchive?: boolean }): void {
   const current = getState();
   const ob = current.onboarding;
 
@@ -580,6 +587,14 @@ export function softResetState(): void {
     hasCompletedOnboarding: false,
   };
 
+  // Reset-plan path: carry the archived weekly history forward so the rebuilt
+  // plan can re-attach this week's activities (redistributeArchivedActivities-
+  // ToNewPlan reads `previousPlanWks` on the next initializeSimulator).
+  if (opts?.preserveArchive) {
+    const archived = (current as any).previousPlanWks;
+    if (archived?.length) (freshState as any).previousPlanWks = archived;
+  }
+
   localStorage.setItem(STATE_KEY, JSON.stringify(freshState));
   localStorage.removeItem(CROSS_KEY);
   // Drop the state-owner stamp so a stale owner can't trigger a cross-user
@@ -587,7 +602,9 @@ export function softResetState(): void {
   // separately by the reset path (deletePlanSettings); this keeps the local
   // reset self-consistent even when that delete is skipped (anon) or fails.
   setLocalStateOwner(null);
-  clearAllGpsData();
+  // Full wipe clears local GPS recordings too; the preserve path keeps them so
+  // unmatched recordings survive the rebuild.
+  if (!opts?.preserveArchive) clearAllGpsData();
 }
 
 /**

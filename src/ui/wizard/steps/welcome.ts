@@ -1,5 +1,6 @@
 import { nextStep, goToStep, updateOnboarding, getOnboardingState } from '../controller';
 import { initializeSimulatorFromOnboarding } from './initializing';
+import { ONBOARDING_INTRO_SLIDES_ENABLED } from '@/constants/feature-flags';
 import {
   buildRingBackground,
   ringAnimationCSS,
@@ -345,7 +346,8 @@ export function renderWelcome(container: HTMLElement): void {
   // Wait for the welcome screen's own entrance (w-rise, ~0.8s) to settle before we
   // build + first-raster the heavy slides off-screen, so the two don't contend on the
   // name screen's first frames. Fast-tappers fall back to a cold build in revealSlides.
-  window.setTimeout(() => {
+  // Skipped entirely while the intro deck is gated off (no need to warm DOM we won't show).
+  if (ONBOARDING_INTRO_SLIDES_ENABLED) window.setTimeout(() => {
     // Bail if already built, or if the step changed under us (demo-fill / sign-in /
     // submit replace the container — the name input is gone once we've navigated away).
     if (slides || !container.isConnected || !document.getElementById('welcome-name')) return;
@@ -384,7 +386,13 @@ export function renderWelcome(container: HTMLElement): void {
     }
     updateOnboarding({ name });
     // Slides come after the name. User has committed, now show what they're getting.
-    revealSlides();
+    // While the intro deck is gated off (ONBOARDING_INTRO_SLIDES_ENABLED), skip the
+    // carousel and go straight to the goals step.
+    if (ONBOARDING_INTRO_SLIDES_ENABLED) {
+      revealSlides();
+    } else {
+      nextStep();
+    }
   };
 
   ctaButton?.addEventListener('click', submitName);

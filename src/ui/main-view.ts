@@ -29,7 +29,7 @@ import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAd
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
 import { gp } from '@/calculations/paces';
 import type { WorkoutMod } from '@/types';
-import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
+import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, getActiveTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getSyncLabel, hasPhysiologySource } from '@/data/sources';
 
@@ -2415,7 +2415,15 @@ export function triggerACWRReduction(): void {
     }
 
     saveState();
-    render();
+    // The Reduce modal opens from both Home (today-card) and Plan (ACWR card).
+    // render() only patches the Plan dashboard stat elements by id, so the
+    // reduced session wouldn't repaint the card the user is looking at until a
+    // manual tab switch. Re-render the active tab so the change shows instantly.
+    if (getActiveTab() === 'home') {
+      void import('./home-view').then(m => m.renderHomeView());
+    } else {
+      renderMainView();
+    }
   }, acwrCtx);
 }
 

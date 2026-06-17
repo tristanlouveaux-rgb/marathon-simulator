@@ -151,7 +151,6 @@ function mount(html: string, back: () => void): void {
   const btn = document.getElementById('mthd-back');
   if (!btn) return;
   btn.addEventListener('click', back);
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); back(); }, { passive: false });
 }
 
 // ─── Public entry points (one per surface) ──────────────────────────────────

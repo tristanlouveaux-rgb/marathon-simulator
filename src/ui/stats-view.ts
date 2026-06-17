@@ -17,6 +17,7 @@ import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { plannedWeekKm } from '@/calculations/plan-shape';
+import { renderPlanShapeCard } from './plan-shape-chart';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { blendPredictions } from '@/calculations/predictions';
@@ -785,7 +786,11 @@ function buildProgressSection(s: SimulatorState): string {
       ${buildCTLLineChart(s, 'all')}
     </div>`;
 
-  return `${recentWeeksCard}${ctlCard}`;
+  // Plan-shape ramp (same arc as onboarding's coach-contract, plus a you-are-here
+  // marker). Renders '' when there's no phased plan, e.g. just-track mode.
+  const planShapeCard = renderPlanShapeCard(s);
+
+  return `${recentWeeksCard}${planShapeCard}${ctlCard}`;
 }
 
 function buildStatsSummary(s: SimulatorState): string {
@@ -2176,7 +2181,6 @@ function renderPastPlanDetail(s: SimulatorState, completionDate: string): void {
   if (backBtn) {
     const back = () => renderProgressDetail(s);
     backBtn.addEventListener('click', back);
-    backBtn.addEventListener('touchend', (e) => { e.preventDefault(); back(); }, { passive: false });
   }
 }
 
@@ -2327,7 +2331,6 @@ function renderCTLLearnMore(s: SimulatorState): void {
   if (!btn) return;
   const go = () => renderProgressDetail(s);
   btn.addEventListener('click', go);
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -4285,7 +4288,6 @@ export function wireInfoButtons(): void {
       if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
     };
     btn.addEventListener('click', handler);
-    btn.addEventListener('touchstart', (e) => { e.preventDefault(); handler(e); }, { passive: false });
   });
 }
 
@@ -4359,7 +4361,6 @@ function wireReadinessAccordion(s: SimulatorState): void {
       if (chevron) chevron.textContent = open ? '▸' : '▾';
     };
     hdr.addEventListener('click', toggle);
-    hdr.addEventListener('touchend', (e) => { e.preventDefault(); toggle(e); }, { passive: false });
   });
 
   // Sleep card. Header taps open latest night; per-day bar taps open that specific night
@@ -4373,7 +4374,6 @@ function wireReadinessAccordion(s: SimulatorState): void {
     if (hdr) {
       const openLatest = () => renderSleepView(undefined, physioHistory, wks, () => renderStatsView());
       hdr.addEventListener('click', openLatest);
-      hdr.addEventListener('touchend', (e) => { e.preventDefault(); openLatest(); }, { passive: false });
     }
 
     // Per-day bars
@@ -4384,7 +4384,6 @@ function wireReadinessAccordion(s: SimulatorState): void {
       if (!entry) return;
       const open = () => renderSleepView(entry.date, physioHistory, wks, () => renderStatsView());
       bar.addEventListener('click', (e) => { e.stopPropagation(); open(); });
-      bar.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); open(); }, { passive: false });
     });
   }
 }
@@ -4394,7 +4393,6 @@ function wireDetailBack(s: SimulatorState): void {
   if (!btn) return;
   const go = () => renderStatsView();
   btn.addEventListener('click', go);
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
 }
 
 
@@ -4437,7 +4435,6 @@ function renderProgressDetail(s: SimulatorState): void {
     if (!completionDate) return;
     const open = () => renderPastPlanDetail(s, completionDate);
     el.addEventListener('click', open);
-    el.addEventListener('touchend', (e) => { e.preventDefault(); open(); }, { passive: false });
   });
 
   // Total Load row → plan load breakdown sheet
@@ -4445,7 +4442,6 @@ function renderProgressDetail(s: SimulatorState): void {
   if (loadRow) {
     const showSheet = () => import('./home-view').then(({ showPlanLoadBreakdownSheet }) => showPlanLoadBreakdownSheet(s));
     loadRow.addEventListener('click', showSheet);
-    loadRow.addEventListener('touchend', (e) => { e.preventDefault(); showSheet(); }, { passive: false });
   }
 
   // CTL "Learn more" button
@@ -4453,7 +4449,6 @@ function renderProgressDetail(s: SimulatorState): void {
   if (ctlLmBtn) {
     const go = () => renderCTLLearnMore(s);
     ctlLmBtn.addEventListener('click', go);
-    ctlLmBtn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
   }
 }
 
@@ -4495,7 +4490,6 @@ function wireMetricDetailButtons(s: SimulatorState): void {
       }
     };
     el.addEventListener('click', handler);
-    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
   });
 }
 
@@ -4506,7 +4500,6 @@ function wireMetricBack(_s: SimulatorState): void {
   // card, so Back returns there.
   const go = () => renderStatsView();
   btn.addEventListener('click', go);
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
 }
 
 /** Wire override sliders + conflict-resolution buttons on the LT metric page. */
@@ -4652,7 +4645,6 @@ export function renderStatsView(): void {
     if (!el) return;
     const go = () => renderer();
     el.addEventListener('click', go);
-    el.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
   };
 
   // Progress section → full Progress detail page.
@@ -4674,7 +4666,6 @@ export function renderStatsView(): void {
     const back = document.getElementById('stats-metric-back');
     const go = () => renderStatsView();
     back?.addEventListener('click', go);
-    back?.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
   };
   document.querySelectorAll<HTMLElement>('[data-metric-detail]').forEach(el => {
     const handler = async () => {
@@ -4706,6 +4697,5 @@ export function renderStatsView(): void {
       }
     };
     el.addEventListener('click', handler);
-    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
   });
 }

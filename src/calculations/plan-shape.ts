@@ -107,6 +107,12 @@ export interface SessionBucket {
   key: string;
   label: string;
   count: number;
+  /** Total prescribed training load (canonical TSS) for this bucket within its
+   *  scope. The honest weight for an aerobic-vs-quality split: a count-based
+   *  split collapses to 50/50 for low-frequency plans (1 easy + 1 quality every
+   *  phase), where the real phase shift lives in the intensity/load of those
+   *  sessions, not their number. */
+  load: number;
 }
 
 /** Session-type composition for one training phase. */
@@ -140,37 +146,44 @@ export function derivePlanShape(s: SimulatorState): PlanShape {
   const weeklyTss: number[] = [];
   const phasePerWeek: TrainingPhase[] = [];
   const counts: Record<string, number> = {};
-  // Per-phase bucket counts, keyed by phase, in order of first appearance.
+  const loads: Record<string, number> = {};
+  // Per-phase bucket counts + loads, keyed by phase, in order of first appearance.
   const phaseCounts = new Map<TrainingPhase, Record<string, number>>();
+  const phaseLoads = new Map<TrainingPhase, Record<string, number>>();
   const phaseOrder: TrainingPhase[] = [];
 
   for (let i = 0; i < n; i++) {
     const ph = s.wks![i].ph;
-    if (!phaseCounts.has(ph)) { phaseCounts.set(ph, {}); phaseOrder.push(ph); }
+    if (!phaseCounts.has(ph)) { phaseCounts.set(ph, {}); phaseLoads.set(ph, {}); phaseOrder.push(ph); }
     const pc = phaseCounts.get(ph)!;
+    const pl = phaseLoads.get(ph)!;
     let km = 0;
     let tss = 0;
     for (const w of generatePlanWeek(s, i)) {
       // Training load (TSS) is the honest weekly currency: it counts minute-
       // prescribed quality work that km-parsing misses. Sum every session.
-      tss += calculateWorkoutLoad(w.t, w.d, (w.r ?? 5) * 10, s.pac?.e).total;
+      const wl = calculateWorkoutLoad(w.t, w.d, (w.r ?? 5) * 10, s.pac?.e).total;
+      tss += wl;
       if (NON_RUN_TYPES.has(w.t)) continue;
       km += plannedWorkoutKm(w, s.pac?.e);
       const b = BUCKET_OF[w.t] ?? 'tempo';
       counts[b] = (counts[b] ?? 0) + 1;
+      loads[b] = (loads[b] ?? 0) + wl;
       pc[b] = (pc[b] ?? 0) + 1;
+      pl[b] = (pl[b] ?? 0) + wl;
     }
     weeklyKm.push(Math.round(km));
     weeklyTss.push(Math.round(tss));
     phasePerWeek.push(ph);
   }
 
-  const toBuckets = (c: Record<string, number>): SessionBucket[] =>
-    BUCKET_ORDER.filter((b) => (c[b] ?? 0) > 0).map((b) => ({ key: b, label: BUCKET_LABEL[b], count: c[b] }));
+  const toBuckets = (c: Record<string, number>, l: Record<string, number>): SessionBucket[] =>
+    BUCKET_ORDER.filter((b) => (c[b] ?? 0) > 0)
+      .map((b) => ({ key: b, label: BUCKET_LABEL[b], count: c[b], load: Math.round(l[b] ?? 0) }));
 
-  const mix = toBuckets(counts);
+  const mix = toBuckets(counts, loads);
   const mixByPhase: PhaseMix[] = phaseOrder.map((ph) => {
-    const buckets = toBuckets(phaseCounts.get(ph)!);
+    const buckets = toBuckets(phaseCounts.get(ph)!, phaseLoads.get(ph)!);
     return { ph, buckets, total: buckets.reduce((a, b) => a + b.count, 0) };
   });
 
@@ -186,4 +199,49 @@ export function derivePlanShape(s: SimulatorState): PlanShape {
     mix,
     mixByPhase,
   };
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Discipline-stacked load (triathlon / HYROX). Per-week load is split by
+ *  discipline so a stacked-area ramp can show swim/bike/run (or run/stations)
+ *  balance over the plan. Reads the stored `triWorkouts` directly — the same
+ *  generated plan the Stats and onboarding charts draw, so the two never
+ *  diverge. Load is canonical TSS (`aerobic + anaerobic` per workout).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+export interface DiscShape {
+  weeks: number;
+  /** Per-week load by discipline group, plus the week's planned minutes. */
+  perWeek: Array<{ ph: PhaseSegment['ph']; loads: Record<string, number>; mins: number }>;
+  /** Largest single-week total load across the plan (the stack's peak height). */
+  peak: number;
+  phases: PhaseSegment[];
+}
+
+/**
+ * Split each week's planned triathlon/HYROX load by discipline group.
+ *
+ * @param mapDisc  maps a raw `triWorkouts[].discipline` to a group key (or null to drop it)
+ * @param groups   the group keys to track (defines zeroed buckets / stacking keys)
+ */
+export function deriveDisciplineLoad(
+  s: SimulatorState,
+  mapDisc: (d: string | undefined) => string | null,
+  groups: string[],
+): DiscShape {
+  const wks = s.wks ?? [];
+  const perWeek = wks.map((wk) => {
+    const loads: Record<string, number> = {};
+    for (const g of groups) loads[g] = 0;
+    let mins = 0;
+    for (const w of wk.triWorkouts ?? []) {
+      const g = mapDisc(w.discipline);
+      if (!g) continue;
+      loads[g] += (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+      mins += w.estimatedDurationMin ?? 0;
+    }
+    return { ph: wk.ph, loads, mins };
+  });
+  const peak = perWeek.reduce((m, d) => Math.max(m, Object.values(d.loads).reduce((a, b) => a + b, 0)), 0);
+  return { weeks: wks.length, perWeek, peak, phases: planPhaseSegments(s) };
 }

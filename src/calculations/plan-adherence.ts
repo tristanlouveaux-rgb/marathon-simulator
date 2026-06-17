@@ -1,5 +1,6 @@
 import type { SimulatorState, Week, GarminActual } from '@/types';
 import { wasIllnessRestDay } from './illness-rules';
+import { firstTrackedDow } from '@/ui/workout-status';
 
 /** ISO 'YYYY-MM-DD' date `days` after `iso` (noon-UTC to dodge DST/timezone). */
 function addDaysISO(iso: string, days: number): string {
@@ -20,6 +21,22 @@ function illnessRestDaysInWeek(s: SimulatorState, weekIdx: number): number {
     if (wasIllnessRestDay(illness, addDaysISO(weekStart, d))) count++;
   }
   return count;
+}
+
+/** Runs that were never scheduled because the user onboarded mid-week.
+ *
+ *  Week 1 is anchored to this Monday but the days before onboarding are dropped
+ *  (reduced partial first week — see dropPreOnboardSessions). Those days' runs
+ *  never existed, so they must not count as "missed" once week 1 is scored.
+ *  Pro-rata the weekly run target by the fraction of the week that fell before
+ *  onboarding: `s.rw × firstTrackedDow / 7`. Arithmetic on real quantities (the
+ *  user's own runs-per-week and the actual onboarding weekday), not an invented
+ *  constant. Returns 0 for every week except the onboarding week (firstTrackedDow
+ *  is 0 once creation predates the week's start). */
+function preOnboardDroppedRunsInWeek(s: SimulatorState, weekIdx: number): number {
+  const ftd = firstTrackedDow(s.planStartDate, weekIdx + 1, s.planCreatedAt);
+  if (ftd <= 0 || !s.rw) return 0;
+  return Math.round(s.rw * ftd / 7);
 }
 
 /** Distance-completion threshold: a planned run counts as completed
@@ -124,10 +141,12 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
     // runs that were pushed to the following week via week-debrief.
     const nextWk: Week | undefined = s.wks[idx + 1];
     const pushedCount = (nextWk?.skip ?? []).length;
+    // Mid-week onboarding: runs on the dropped pre-onboard days never existed.
+    const preOnboardDropped = preOnboardDroppedRunsInWeek(s, idx);
     // Illness-rested days don't count as missed runs (the illness banner
     // promises adherence is unaffected). Subtract them like pushed sessions.
-    const illnessRest = Math.min(illnessRestDaysInWeek(s, idx), Math.max(0, s.rw - pushedCount));
-    const weekPlanned = Math.max(0, s.rw - pushedCount - illnessRest);
+    const illnessRest = Math.min(illnessRestDaysInWeek(s, idx), Math.max(0, s.rw - pushedCount - preOnboardDropped));
+    const weekPlanned = Math.max(0, s.rw - pushedCount - illnessRest - preOnboardDropped);
 
     if (weekPlanned <= 0) continue;
 

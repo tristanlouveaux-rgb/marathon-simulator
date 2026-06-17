@@ -17,7 +17,7 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
-import { saveState } from '@/state/persistence';
+import { saveState, getMondayOf } from '@/state/persistence';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import {
@@ -30,7 +30,7 @@ import {
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
 import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import type { GarminActual } from '@/types/state';
-import { cv } from '@/calculations/vdot';
+import { raceRunLegToVdot } from '@/calculations/physiological-vdot';
 
 /**
  * Initialize the store for triathlon mode.
@@ -178,9 +178,9 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // both have a reliable reference point. Without this, persistence migration
     // derives planStartDate from s.w (which is reset to 1), producing a moving
     // anchor that shifts every time the wizard is re-entered.
-    const _planMonday = new Date();
-    const _dow = _planMonday.getDay();
-    _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
+    // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
+    // (dropPreOnboardSessions), a Sat/Sun onboard a chill 1–2 session lead-in week.
+    const _planMonday = getMondayOf(new Date());
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
     s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
     // Triathlon doesn't use the running debrief gate. Seed lastCompleteDebriefWeek
@@ -216,6 +216,21 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     if (!s.v && pastRaceBench.vdot) {
       s.v = pastRaceBench.vdot;
       console.log(`[TriInit] VDOT seeded from past race run leg: ${s.v.toFixed(1)}`);
+    }
+
+    // Persist the race-validated run-VDOT anchor. Unlike the s.v seed above (a
+    // last-resort fallback the watch-driven blend overwrites every launch), this
+    // anchor is ranked ABOVE the watch VO2max in getPhysiologicalVdot and pins
+    // s.v in refreshBlendedFitness while recent. A triathlete's watch VO2max is
+    // inflated by cycling/swimming, so a real race run leg must win.
+    if (pastRaceBench.vdot && state.triPastRace?.dateISO) {
+      s.raceRunVdot = {
+        vdot: pastRaceBench.vdot,
+        dateISO: state.triPastRace.dateISO,
+        distance: String(state.triPastRace.distance),
+        source: 'onboarding-past-race',
+      };
+      console.log(`[TriInit] race-validated run VDOT anchor set: ${pastRaceBench.vdot.toFixed(1)} (${state.triPastRace.distance} ${state.triPastRace.dateISO})`);
     }
 
     // Seed prediction caches. Phase 4 computes real values.
@@ -309,13 +324,12 @@ function derivePastRaceBenchmarks(state: OnboardingState): {
     result.cssConfidence = (past.distance === '70.3' || past.distance === 'ironman') ? 'high' : 'medium';
   }
 
-  // VDOT from run leg (back-calculate fresh-run equivalent)
+  // VDOT from run leg (back-calculate fresh-run equivalent). Shared helper so the
+  // post-race outcome logger derives run VDOT identically.
   if (legs.run > 0 && legDist.runKm > 0) {
     const discount = past.distance === 'ironman' ? RUN_FATIGUE_DISCOUNT_IRONMAN : RUN_FATIGUE_DISCOUNT_70_3;
-    const freshRunSec = legs.run * (1 - discount);  // fewer seconds = faster = remove fatigue penalty
-    const runDistM = legDist.runKm * 1000;
-    const vdot = cv(runDistM, freshRunSec);
-    if (vdot > 20 && vdot < 90) result.vdot = vdot;  // sanity guard
+    const vdot = raceRunLegToVdot(legs.run, legDist.runKm * 1000, discount);
+    if (vdot != null) result.vdot = vdot;
   }
 
   return result;

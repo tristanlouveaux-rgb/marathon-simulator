@@ -11,6 +11,9 @@ import { startGarminConnect } from '@/data/garminOAuth';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { vt } from '@/calculations/vdot';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { fp } from '@/utils/format';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
@@ -297,10 +300,28 @@ function getAccountHTML(): string {
             </button>
             ${rowDivider()}
           `}
+          ${getState().trackOnly ? `
           <button id="btn-reset-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
-            <span style="font-size:15px;color:#dc2626">${getState().trackOnly ? 'Reset tracking history' : 'Reset Plan'}</span>
+            <span style="font-size:15px;color:#dc2626">Reset tracking history</span>
             ${chevron()}
           </button>
+          ` : `
+          <button id="btn-reset-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+            <div>
+              <div style="font-size:15px;color:var(--c-black);text-align:left">Reset plan</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Rebuild your plan from setup. Logged activities and history are kept.</div>
+            </div>
+            ${chevron()}
+          </button>
+          ${rowDivider()}
+          <button id="btn-wipe-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+            <div>
+              <div style="font-size:15px;color:#dc2626;text-align:left">Wipe everything</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Clear your plan and all logged activities, including this week. Setup starts over.</div>
+            </div>
+            ${chevron()}
+          </button>
+          `}
         `)}
 
         <div id="garmin-error" style="font-size:12px;color:var(--c-warn);margin-top:8px;display:none;padding:0 4px"></div>
@@ -562,6 +583,7 @@ function renderProfileGroup(): string {
     : 'Not set';
 
   const isTriathlon = s.eventType === 'triathlon';
+  const isHyrox = s.eventType === 'hyrox';
   const isCycling = isCyclingOnlyMode(s);
 
   let benchmarkSection = '';
@@ -657,6 +679,57 @@ function renderProfileGroup(): string {
           ${ftpRefreshHtml}
         </div>`;
     }
+  } else if (isHyrox) {
+    // HYROX benchmarks. Running PBs (5K/10K/etc.) are not the relevant
+    // numbers here. Surface the three metrics the HYROX engine actually
+    // tracks: the 1km run pace (canonical `deriveHyroxRunPace` chain — same
+    // value the Stats Critical Pace card shows), the race finish time
+    // (last race, with target as a sub-caption), and station calibration
+    // progress.
+    const hx = s.hyroxConfig;
+    const pref = s.unitPref ?? 'km';
+
+    const runPace = deriveHyroxRunPace(s);
+    const runPaceHint = runPace.source === 'seed' ? 'estimate · log a run' : undefined;
+
+    // Station calibration. Mirror the stats-view access filter so the
+    // denominator counts only stations the athlete can actually train.
+    const isDoublesFormat = hx?.format === 'open_doubles' || hx?.format === 'pro_doubles';
+    const benchmarks = (isDoublesFormat ? hx?.stationBenchmarksDoubles : hx?.stationBenchmarksSingles)
+      ?? hx?.stationBenchmarks ?? {};
+    const access = hx?.stationAccess;
+    const calibratable = HYROX_STATION_ORDER.filter(st => {
+      if (!access) return true;
+      if (st === 'ski_erg' && !access.skiErg) return false;
+      if (st === 'row_erg' && !access.rowErg) return false;
+      if ((st === 'sled_push' || st === 'sled_pull') && access.sled === 'never') return false;
+      return true;
+    });
+    const calibratedCount = calibratable.filter(st => benchmarks[st] != null).length;
+
+    const prevSec = hx?.previousHyroxTimeSec;
+    const targetSec = hx?.targetFinishTimeSec;
+    const finishLabel = prevSec ? 'Last race' : 'Target';
+    const finishValue = prevSec ? fmtTime(prevSec) : (targetSec ? fmtTime(targetSec) : '—');
+    const finishHint = prevSec && targetSec ? `target ${fmtTime(targetSec)}` : undefined;
+
+    const card = (label: string, value: string, sub?: string) => `
+      <div style="border:1px solid var(--c-border);border-radius:10px;padding:10px 6px;text-align:center">
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:3px">${label}</div>
+        <div style="font-size:15px;font-weight:700;color:var(--c-black)">${value}</div>
+        ${sub ? `<div style="font-size:10px;color:var(--c-faint);margin-top:3px">${sub}</div>` : ''}
+      </div>`;
+
+    benchmarkSection = `
+      ${rowDivider()}
+      <div style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          ${card('Run pace', fp(runPace.paceSecKm, pref), runPaceHint)}
+          ${card(finishLabel, finishValue, finishHint)}
+          ${card('Stations', `${calibratedCount}/${calibratable.length}`, 'calibrated')}
+        </div>
+      </div>`;
   } else {
     const pbItems = [
       { label: '5K', val: pbs.k5 },
@@ -2040,6 +2113,14 @@ function wireAccountHandlers(): void {
   });
 
   document.getElementById('btn-reset-plan')?.addEventListener('click', () => {
+    // Track-only has no plan to rebuild, so its single button is a full wipe.
+    // With a plan, this is the non-destructive "Reset plan" (keeps activities).
+    import('./events').then(({ reset, resetPlan }) => {
+      (getState() as any).trackOnly ? reset() : resetPlan();
+    });
+  });
+
+  document.getElementById('btn-wipe-plan')?.addEventListener('click', () => {
     import('./events').then(({ reset }) => reset());
   });
 

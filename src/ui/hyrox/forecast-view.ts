@@ -11,7 +11,7 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntra
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
-import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
+import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-projection.hyrox';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
@@ -604,6 +604,18 @@ function buildHyroxHero(
   const rawForPct = Math.max(prediction.rawSec, 1);
   const courseFactorPct = ((prediction.totalSec - prediction.rawSec) / rawForPct) * 100;
 
+  // Likely range — the factor-based confidence band centred on the displayed
+  // forecast number. Same band-width helper feeds the projection's
+  // confidenceRangeSec, so the two surfaces never disagree. Communicates "how
+  // sure are we about this number" without a Monte Carlo sim.
+  const bandPct = hyroxForecastBandPct(prediction.confidence, proj.weeksRemaining);
+  const bandHalf = prediction.totalSec * bandPct;
+  const rangeLow = Math.round(prediction.totalSec - bandHalf);
+  const rangeHigh = Math.round(prediction.totalSec + bandHalf);
+  const rangeLine = prediction.totalSec > 0
+    ? `<div style="font-size:12px;color:var(--c-muted);margin-top:8px;font-variant-numeric:tabular-nums">Likely ${fmtMmSs(rangeLow)}–${fmtMmSs(rangeHigh)}</div>`
+    : '';
+
   // Target delta line: "On pace vs target" / "+X min vs target" / "−X min vs target".
   // Falls back to race-day projection delta when no target is set, so the slot
   // always carries useful information.
@@ -661,8 +673,8 @@ function buildHyroxHero(
       border-radius:14px;padding:12px 8px;text-align:center;min-height:86px;
       display:flex;flex-direction:column;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <div style="font-size:9px;color:var(--c-muted);font-weight:500;line-height:1;margin-bottom:6px">${c.label}</div>
-      <div style="font-size:12px;color:${c.present ? 'var(--c-black)' : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${c.headline}</div>
-      ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px">${c.detail}</div>` : ''}
+      <div style="font-size:12px;color:${c.present ? 'var(--c-black)' : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em;min-width:0;overflow-wrap:break-word;word-break:break-word;hyphens:auto">${c.headline}</div>
+      ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px;min-width:0;overflow-wrap:break-word;word-break:break-word">${c.detail}</div>` : ''}
       ${!c.present && c.addCta ? `<div style="font-size:8px;color:var(--c-faint);margin-top:5px;line-height:1.15;font-style:italic">${c.addCta}</div>` : ''}
     </div>
   `).join('');
@@ -686,6 +698,42 @@ function buildHyroxHero(
     ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
     : prediction.crossFormatConversion === 'singles_to_doubles'
     ? `Forecast based on seed times. Your benchmarks are from a singles race. Add doubles splits to calibrate.`
+    : '';
+
+  // Provisional banner — surfaced prominently (not behind the confidence badge)
+  // whenever the forecast rests mostly on population seed data. A user who has
+  // raced but never calibrated stations, or whose only benchmarks are in the
+  // other format, needs to know the number is an estimate and what to do about
+  // it. Two causes, two bodies:
+  //   - cross-format: their splits exist but in the wrong format (4 vs 8
+  //     stations / different rest), so we use band averages for the target.
+  //   - seed-dominated: few or no stations calibrated.
+  // Every non-high-confidence forecast tells the user, in plain terms, that a
+  // proper station assessment makes the prediction more accurate, and names the
+  // protocol so they do it right (half distance, race effort). Two tiers:
+  //   - low  → "Provisional forecast" (strong): cross-format or seed-dominated.
+  //   - medium → "Sharpen your forecast" (soft): partially calibrated.
+  const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
+  const calibrationProtocol = 'each station at half distance, race effort';
+  const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
+    ? `Your station times are from a doubles race, so this forecast uses population averages for singles. A singles station assessment (${calibrationProtocol}) replaces the estimates and makes the forecast accurate to you.`
+    : prediction.crossFormatConversion === 'singles_to_doubles'
+    ? `Your station times are from a singles race, so this forecast uses population averages for doubles. A doubles station assessment (${calibrationProtocol}) replaces the estimates and makes the forecast accurate to you.`
+    : prediction.confidence === 'low'
+    ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
+    : `${calibrated} of ${totalStations} stations calibrated. Test the rest (${calibrationProtocol}) and the forecast gets more accurate with each one.`;
+  // Fire for low (provisional) and medium (partially calibrated). High = silent.
+  const showCalibrationBanner = prediction.confidence !== 'high';
+  const bannerTitle = prediction.confidence === 'low' ? 'Provisional forecast' : 'Sharpen your forecast';
+  const bannerCtaLabel = prediction.confidence === 'low' ? 'Test your stations' : 'Calibrate the rest';
+  const provisionalBanner = showCalibrationBanner
+    ? `
+      <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:rgba(248,250,252,0.85);border:1px solid var(--c-border)">
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">${bannerTitle}</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${provisionalBody}</div>
+        <button id="hx-calibrate-banner-cta" style="margin-top:10px;padding:8px 14px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:600;color:var(--c-black);cursor:pointer">${bannerCtaLabel}</button>
+      </div>
+    `
     : '';
   const stale = prediction.staleness;
   const stalenessNote = (() => {
@@ -739,9 +787,11 @@ function buildHyroxHero(
           <div style="text-align:center;padding:10px 6px 14px">
             <div style="font-size:11px;font-weight:500;color:var(--c-muted)">Forecast</div>
             <div style="font-size:54px;font-weight:300;color:var(--c-black);letter-spacing:-0.03em;line-height:1;margin-top:10px;font-variant-numeric:tabular-nums">${fmtMmSs(prediction.totalSec)}</div>
+            ${rangeLine}
             ${deltaTxt ? `<div style="font-size:13px;color:${deltaColor};margin-top:8px;font-weight:500">${deltaTxt}</div>` : ''}
             <button id="hx-set-target-cta" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
           </div>
+          ${provisionalBanner}
           ${renderHyroxInjuryNote(s)}
           <div style="display:flex;gap:8px;margin-top:4px">${chipHtml}</div>
           ${missingLine}
@@ -925,6 +975,13 @@ export function renderHyroxForecastView(): void {
   document.getElementById('hx-conf-badge')?.addEventListener('click', () => {
     const detail = document.getElementById('hx-conf-detail');
     if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+  });
+
+  // Provisional-banner CTA → stations factor page (carries the "Test stations"
+  // calibration entry point). Same destination as the Stations hero chip.
+  document.getElementById('hx-calibrate-banner-cta')?.addEventListener('click', () => {
+    import('./forecast-chip-detail-view').then(({ renderHyroxChipDetail }) =>
+      renderHyroxChipDetail('stations'));
   });
 
   // "Set a target finish" CTA → goal-back-calc modal (ISSUE-196).

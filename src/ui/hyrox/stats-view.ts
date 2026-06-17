@@ -20,6 +20,7 @@ import { getFinishTimePercentile, percentileLabel, percentileHeadline } from '@/
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { renderPlanShapeCard } from '../plan-shape-chart';
 import type { SimulatorState } from '@/types/state';
 
 function navigateTab(tab: TabId): void {
@@ -204,6 +205,9 @@ export function renderHyroxStatsView(): void {
             ` : ''}
           </div>
         </div>
+
+        <!-- Training load across the plan (run vs stations ramp + you-are-here) -->
+        ${(() => { const h = renderPlanShapeCard(s); return h ? `<div class="hxsf" style="padding:12px 20px 0;animation-delay:0.15s">${h}</div>` : ''; })()}
 
         <!-- Critical Pace derivation card -->
         ${cpComponents ? (() => {

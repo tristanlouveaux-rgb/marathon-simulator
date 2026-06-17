@@ -30,6 +30,7 @@ import { getEffectiveVdot } from './effective-vdot';
 
 export type PhysiologicalVdotSource =
   | 'override'        // s.vo2Override, user-set lab/test value. Top priority
+  | 'race-validated'  // s.raceRunVdot, recent real race run leg (above device)
   | 'device'          // s.vo2, fresh
   | 'mosaic-running'  // s.vo2Estimates.running (cross-modal lift), medium+ confidence
   | 'hr-calibrated'   // s.hrCalibratedVdot, medium+ confidence
@@ -65,6 +66,15 @@ export interface PhysiologicalVdotResult {
  *  sources rather than pin a stale device value. */
 const DEVICE_FRESHNESS_DAYS = 90;
 
+/** Recency window for the race-validated run-VDOT anchor. A real race run leg
+ *  demonstrates running capability directly, so it outranks the watch VO2max
+ *  while recent. We reuse the "strong" PB-recency band (365 days) already used
+ *  by the marathon-specificity penalty to credit recent full-distance capability
+ *  (see RUN_PB_RECENCY_BANDS / SCIENCE_LOG "PB-recency scaling"). Beyond a year,
+ *  the race is no longer fresher evidence than a current watch reading, so the
+ *  anchor stands down and the normal chain (device → derived) resumes. */
+const RACE_VDOT_ANCHOR_MAX_AGE_DAYS = 365;
+
 /** LT-derived VDOT only fires when LT itself came from observation, not from
  *  Daniels. Otherwise we'd back-derive a number we just forward-derived
  *  (perfectly circular) or partially circular (the `'blended'` case includes
@@ -93,6 +103,26 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * can never regress a fresher post-plan PB (post-finalize, `s.onboarding`
  * is the stored reference and Strava auto-PB refreshes write to `s.pbs`).
  */
+/**
+ * Is a candidate PB time suppressed by a user deletion tombstone? (ISSUE-297 RC3)
+ *
+ * A tombstone records the time the user explicitly deleted for a distance. The
+ * candidate is suppressed unless it is genuinely FASTER than the deleted time
+ * (a real improvement), so a deleted PB cannot passively resurrect — neither
+ * from the other store via `effectivePhysiologyPbs`'s fastest-wins merge, nor
+ * from a Strava/Apple auto-fill re-detecting the same effort. An explicit user
+ * re-entry clears the tombstone (see `clearPbTombstone`), so re-adding a PB
+ * after deleting it always works.
+ */
+export function isPbTombstoned(
+  deletedPbs: Partial<Record<keyof NonNullable<SimulatorState['pbs']>, number>> | undefined,
+  key: keyof NonNullable<SimulatorState['pbs']>,
+  candidateSec: number,
+): boolean {
+  const t = deletedPbs?.[key];
+  return t != null && candidateSec >= t;
+}
+
 export function effectivePhysiologyPbs(s: SimulatorState): NonNullable<SimulatorState['pbs']> {
   const base = s.pbs ?? {};
   const wizard = s.onboarding?.pbs ?? {};
@@ -104,9 +134,42 @@ export function effectivePhysiologyPbs(s: SimulatorState): NonNullable<Simulator
     const best = a != null && a > 0
       ? (b != null && b > 0 ? Math.min(a, b) : a)
       : (b != null && b > 0 ? b : undefined);
-    if (best != null) out[k] = best;
+    // Honour a deletion tombstone: a value that is not a genuine improvement
+    // over the deleted time is a resurrection from the surviving store — drop it.
+    if (best != null && !isPbTombstoned(s.deletedPbs, k, best)) out[k] = best;
   }
   return out;
+}
+
+/**
+ * Record an explicit user deletion of a PB (ISSUE-297 RC3). Sets the tombstone
+ * to the deleted time, then clears the key from BOTH stores (`s.pbs` and
+ * `s.onboarding.pbs`) plus their PB dates, so nothing survives to resurrect via
+ * fastest-wins. Callers must trigger `refreshBlendedFitness` afterwards so the
+ * engine/prediction recompute without the deleted time.
+ */
+export function recordPbDeletion(s: SimulatorState, key: keyof NonNullable<SimulatorState['pbs']>): void {
+  const prev = (s.pbs as Record<string, number | undefined> | undefined)?.[key]
+    ?? (s.onboarding?.pbs as Record<string, number | undefined> | undefined)?.[key];
+  if (prev != null && prev > 0) {
+    s.deletedPbs = { ...(s.deletedPbs ?? {}), [key]: prev };
+  }
+  if (s.pbs) delete (s.pbs as Record<string, number | undefined>)[key];
+  if (s.onboarding?.pbs) delete (s.onboarding.pbs as Record<string, number | undefined>)[key];
+  if (s.onboarding?.pbDates) delete (s.onboarding.pbDates as Record<string, unknown>)[key];
+}
+
+/**
+ * Clear a PB tombstone (ISSUE-297 RC3). Called when the user explicitly enters
+ * a PB for a distance, so an intentional re-entry of a previously-deleted time
+ * is honoured rather than suppressed.
+ */
+export function clearPbTombstone(s: SimulatorState, key: keyof NonNullable<SimulatorState['pbs']>): void {
+  if (s.deletedPbs && s.deletedPbs[key] != null) {
+    const next = { ...s.deletedPbs };
+    delete next[key];
+    s.deletedPbs = next;
+  }
 }
 
 /**
@@ -118,7 +181,19 @@ export function effectivePhysiologyPbs(s: SimulatorState): NonNullable<Simulator
  * The median collapses both biases.
  */
 export function pbDerivedVdot(s: SimulatorState): number | null {
-  const pbs = effectivePhysiologyPbs(s);
+  return pbMedianVdot(effectivePhysiologyPbs(s));
+}
+
+/**
+ * Median VDOT from a raw PBs object. Split out from `pbDerivedVdot` so callers
+ * that hold a PBs object directly — e.g. `initializeSimulator`, where `s.pbs`
+ * is not committed to state yet — can compute the same demonstrated-capacity
+ * number without going through `SimulatorState`. Single source for the median.
+ */
+export function pbMedianVdot(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+): number | null {
+  if (!pbs) return null;
   const candidates: number[] = [];
   if (pbs.k5 && pbs.k5 > 0) candidates.push(cv(5000, pbs.k5));
   if (pbs.k10 && pbs.k10 > 0) candidates.push(cv(10000, pbs.k10));
@@ -130,6 +205,54 @@ export function pbDerivedVdot(s: SimulatorState): number | null {
   return candidates.length % 2 === 0
     ? (candidates[mid - 1] + candidates[mid]) / 2
     : candidates[mid];
+}
+
+/**
+ * Convert a real race run-leg time into a "fresh-run-equivalent" VDOT.
+ *
+ * Race run legs are run on fatigued legs (after the swim + bike), so the raw
+ * split understates fresh running capability. We remove the population-average
+ * bike-to-run fatigue penalty (the same discount used in tri race-time
+ * prediction: 5% for 70.3, 11% for IM) to recover the fresh equivalent, then
+ * back-derive VDOT via `cv()`. Pure: callers pass the run-leg distance and the
+ * discount for their event, keeping this free of any distance-enum coupling.
+ *
+ * Single source for "race run leg → run VDOT" — both the onboarding past-race
+ * seed (`derivePastRaceBenchmarks`) and the post-race outcome logger
+ * (`detectAndLogRaceOutcome`) call this so the two never diverge.
+ */
+export function raceRunLegToVdot(
+  runSec: number,
+  runDistM: number,
+  fatigueDiscount: number,
+): number | null {
+  if (!(runSec > 0) || !(runDistM > 0)) return null;
+  const freshRunSec = runSec * (1 - fatigueDiscount);  // fewer seconds = faster
+  const vdot = cv(runDistM, freshRunSec);
+  return vdot > 20 && vdot < 90 ? vdot : null;  // sanity guard, mirrors derivePastRaceBenchmarks
+}
+
+/**
+ * The recency-gated race-validated run VDOT anchor, or null when none is usable.
+ *
+ * Reads the persisted `s.raceRunVdot` (seeded from a real race run leg, already
+ * fatigue-discounted by `raceRunLegToVdot`). Returns the value only while the
+ * race is within `RACE_VDOT_ANCHOR_MAX_AGE_DAYS`; beyond that, fitness drift
+ * means the race is no longer fresher evidence than a current watch reading and
+ * the anchor stands down. `dateISO` may be `YYYY-MM` (onboarding month) or a
+ * full `YYYY-MM-DD`.
+ */
+export function raceAnchorVdot(
+  s: SimulatorState,
+  now: Date = new Date(),
+): { vdot: number; ageDays: number } | null {
+  const anchor = s.raceRunVdot;
+  if (!anchor || !(anchor.vdot > 0) || !anchor.dateISO) return null;
+  const ts = Date.parse(anchor.dateISO.length === 7 ? anchor.dateISO + '-01' : anchor.dateISO);
+  if (!Number.isFinite(ts)) return null;
+  const ageDays = (now.getTime() - ts) / DAY_MS;
+  if (ageDays < 0 || ageDays > RACE_VDOT_ANCHOR_MAX_AGE_DAYS) return null;
+  return { vdot: anchor.vdot, ageDays };
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -179,8 +302,15 @@ function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
  *      override when a derived estimate clearly beats it (≥ 3 ml/kg/min,
  *      medium+ confidence) per the "Manually-set Benchmarks Yield to
  *      Improvements" rule in CLAUDE.md.
+ *   0b. Mosaic-running estimate (`s.vo2Estimates.running`) at medium+ confidence,
+ *      when the source toggle is 'mosaic'. Derived from actual standalone runs,
+ *      so it supersedes both the race anchor and the watch.
+ *   0c. Race-validated run VDOT (`s.raceRunVdot`), when within
+ *      {RACE_VDOT_ANCHOR_MAX_AGE_DAYS}. A real race run leg outranks the watch
+ *      VO2max, which is inflated for triathletes by cycling/swimming.
  *   1. `s.vo2` (device-direct), when within {DEVICE_FRESHNESS_DAYS} of the
- *      most recent `physiologyHistory` reading. Watch is ground truth.
+ *      most recent `physiologyHistory` reading. Watch is a strong estimate, but
+ *      it yields to a recent race or a standalone-run-derived estimate above.
  *   2. `s.hrCalibratedVdot.vdot`, when confidence is 'high' or 'medium'.
  *      Pace-vs-%HRR regression of recent qualifying runs.
  *   3. `deriveVdotFromLT(s.lt)`, when `s.ltSource` is one of the trusted
@@ -208,10 +338,30 @@ function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
  * those are separate signals in the blend (the HR slot, and the overall VDOT),
  * so feeding them into the VO2 slot would double-count. Freshness is not gated
  * here either, to preserve the prior `s.vo2`-direct behaviour for device values.
+ *
+ * Race-validated cap: the watch VO2max overstates RUNNING fitness for triathletes
+ * (cycling and swimming build it too). When a recent race run leg demonstrates a
+ * lower run VDOT, the blend's VO2 predictor is capped to it — UNLESS the athlete's
+ * standalone running PBs corroborate the higher watch value. Because every blend
+ * call path reads this helper (training-pace refresh, the tri run-leg race time in
+ * `blendOpenRunRaceTime`, the standard-distance forecast, session generation), the
+ * cap can't be bypassed by a surface that recomputes the blend off `s.vo2` directly.
+ * This is the predictor-input twin of the `race-validated` tier in
+ * `getPhysiologicalVdot` (which governs the resolved/display VDOT). The VO2max
+ * stats card still shows the true device number — only the run PREDICTIONS yield.
  */
-export function effectiveVo2max(s: SimulatorState): number | null {
+export function effectiveVo2max(s: SimulatorState, now: Date = new Date()): number | null {
   if (s.vo2Override && s.vo2Override.value > 0) return s.vo2Override.value;
-  return s.vo2 != null && s.vo2 > 0 ? s.vo2 : null;
+  const device = s.vo2 != null && s.vo2 > 0 ? s.vo2 : null;
+  if (device == null) return null;
+  const race = raceAnchorVdot(s, now);
+  if (race != null && device > race.vdot) {
+    const pbCapacity = pbDerivedVdot(s);
+    if (pbCapacity == null || pbCapacity < race.vdot) {
+      return race.vdot;  // un-corroborated watch lift → cap to race-validated VDOT
+    }
+  }
+  return device;
 }
 
 export function getPhysiologicalVdot(
@@ -267,6 +417,28 @@ export function getPhysiologicalVdot(
       source: 'mosaic-running',
       confidence: mosaicRunning!.confidence,
       detail,
+      isDeviceFresh: false,
+      deviceAgeDays,
+    };
+  }
+
+  // 1a-bis. Race-validated run VDOT. A real race run leg (fatigue-discounted to
+  // a fresh equivalent by raceRunLegToVdot) is the strongest race-validated
+  // running signal — it outranks the watch VO2max, which for triathletes is
+  // inflated by cycling and swimming and routinely overstates running-specific
+  // fitness. Ranks ABOVE device while recent. A higher-confidence standalone
+  // signal still wins: mosaic-running (tier 1a, derived from actual standalone
+  // runs) sits above this, so a "better event" supersedes the race. Deliberately
+  // NOT gated by skipDevice/skipMosaic — the race is watch-independent, so it
+  // belongs in the orchestrator's own watch-free fallback estimate too, and is
+  // freshly recomputed from persisted race data (no stale-estimate feedback loop).
+  const race = raceAnchorVdot(s, now);
+  if (race != null) {
+    return {
+      vdot: race.vdot,
+      source: 'race-validated',
+      confidence: 'high',
+      detail: 'From your recent race',
       isDeviceFresh: false,
       deviceAgeDays,
     };
@@ -397,9 +569,10 @@ export function hasRunningFitnessSignal(s: SimulatorState): boolean {
  * confident statement about a runner we know nothing about.
  *
  * Real iff `getPhysiologicalVdot` resolves above the `tanda-fallback` tier:
- * `override` / `device` / `mosaic-running` / `hr-calibrated` / `lt-derived` /
- * `pb-median`. The moment a PB / device VO2 / HR calibration / observed LT
- * lands, the chain ranks above the fallback and this flips true.
+ * `override` / `race-validated` / `device` / `mosaic-running` / `hr-calibrated` /
+ * `lt-derived` / `pb-median`. The moment a race result / PB / device VO2 / HR
+ * calibration / observed LT lands, the chain ranks above the fallback and this
+ * flips true.
  */
 export function hasRealRunningFitnessSignal(s: SimulatorState): boolean {
   const src = getPhysiologicalVdot(s).source;

@@ -200,7 +200,7 @@ export function computeGoalBackCalc(
   let caveat: string | null = null;
   if (shortfallSec > 0) {
     feasibility = 'unrealistic';
-    caveat = `This target requires ~${shortfallSec}s of gain beyond what's realistic from the population floor across all stations and run pace. Pick a more achievable goal or extend training time.`;
+    caveat = `No realistic combination of station and run-pace gains reaches this time. The estimate uses the competitive population floor across all stations and run pace. Pick a more achievable goal or extend training time.`;
   } else if (gainNeeded > totalHeadroom * 0.7) {
     feasibility = 'stretch';
     caveat = 'Most athletes would need 6+ months of focused training to hit a goal this aggressive.';

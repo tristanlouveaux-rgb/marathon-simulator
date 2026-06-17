@@ -110,6 +110,52 @@ describe('refreshBlendedFitness — pre-guard HR-calibrated cache', () => {
   });
 });
 
+describe('refreshBlendedFitness — race-validated anchor (triathlete bug)', () => {
+  // A 1:55-half triathlete: watch VO2max 56 (inflated by cycling/swimming), no
+  // running PBs, no recent standalone runs. A recent 70.3 implies run VDOT ~43.
+  // Without the anchor, the watch-driven blend collapses s.v to ~56 and every
+  // training pace / the marathon forecast comes out far too fast.
+  const recentMonth = new Date().toISOString().slice(0, 7);  // YYYY-MM (recent)
+  const today = new Date().toISOString().slice(0, 10);
+
+  function triNoRunHistory(overrides: Partial<SimulatorState> = {}): SimulatorState {
+    return baseState({
+      rd: 'marathon',  // tri mode forces the placeholder distance
+      pbs: {},
+      vo2: 56,
+      vo2UpdatedAt: today,
+      physiologyHistory: [{ date: today, vo2max: 56 }] as SimulatorState['physiologyHistory'],
+      onboardingRunHistory: undefined,
+      ...overrides,
+    });
+  }
+
+  it('caps s.v to the race VDOT when the watch overstates and nothing corroborates it', () => {
+    const s = triNoRunHistory({
+      raceRunVdot: { vdot: 43, dateISO: recentMonth, distance: '70.3', source: 'onboarding-past-race' },
+    });
+    const ok = refreshBlendedFitness(s);
+    expect(ok).toBe(true);
+    expect(s.v).toBeCloseTo(43, 1);
+    expect(s.blendedEffectiveVdot).toBeCloseTo(43, 1);
+  });
+
+  it('without the anchor, the same watch-driven state does NOT land at the race value', () => {
+    const s = triNoRunHistory();  // no raceRunVdot
+    refreshBlendedFitness(s);
+    // The watch (56) is not pulled down to 43 absent a race anchor.
+    expect(s.v).toBeGreaterThan(45);
+  });
+
+  it('a stale race (>365 days) stands down — anchor does not pin s.v', () => {
+    const s = triNoRunHistory({
+      raceRunVdot: { vdot: 43, dateISO: '2020-01', distance: '70.3', source: 'onboarding-past-race' },
+    });
+    refreshBlendedFitness(s);
+    expect(s.v).toBeGreaterThan(45);
+  });
+});
+
 describe('predictStandardDistances — no-target-race forecast', () => {
   const now = new Date();
 
@@ -310,5 +356,69 @@ describe('refreshBlendedFitness — records VDOT history for no-race users', () 
 
     expect((s.vdotHistory ?? []).length).toBeGreaterThanOrEqual(1);
     expect(s.vdotHistory![0].vdot).toBeGreaterThan(0);
+  });
+});
+
+describe('refreshBlendedFitness — engine/readiness separation + peak-volume forecast (ISSUE-297)', () => {
+  // 20:00 5K (VDOT ~49.8) and nothing else, 8 km/wk typed, marathon target.
+  // The classic ISSUE-297 case: a strong engine off thin running volume.
+  const lowVolume5kOnly = (): SimulatorState => baseState({
+    rd: 'marathon', tw: 20, w: 1,
+    rw: 2, epw: 2, wkm: 8, detectedWeeklyKm: 8,
+    pbs: { k5: 1200 }, rec: null, lt: null, vo2: null,
+    typ: 'Balanced', v: 49.8, iv: 49.8,
+    pac: { e: 300, t: 250, i: 225, m: 270, r: 215 },
+  });
+
+  it('holds the engine at demonstrated PB capacity instead of burying it with the volume penalty', () => {
+    const s = lowVolume5kOnly();
+    const ok = refreshBlendedFitness(s);
+    expect(ok).toBe(true);
+    // Capacity from a 20:00 5K is VDOT ~49.8. The low-volume marathon penalty
+    // must not collapse the engine to ~40 (the pre-fix behaviour).
+    expect(s.v).toBeGreaterThanOrEqual(48);
+    expect(s.blendedEffectiveVdot).toBeGreaterThanOrEqual(48);
+  });
+
+  it('keeps today’s race estimate honestly slow off 8 km/wk (readiness penalty stays on the prediction)', () => {
+    const s = lowVolume5kOnly();
+    refreshBlendedFitness(s);
+    // tv(49.8, marathon) ≈ 3:09; the low-volume penalty correctly slows TODAY.
+    expect(s.blendedRaceTimeSec!).toBeGreaterThan(3 * 3600 + 20 * 60); // slower than 3:20
+  });
+
+  it('forecast credits the plan’s volume ramp — projects materially faster than today', () => {
+    const s = lowVolume5kOnly();
+    refreshBlendedFitness(s);
+    // The forecast assumes the plan builds the athlete to its peak volume, so the
+    // penalty lifts and the race-day projection beats the thin-volume "today".
+    expect(s.forecastTime!).toBeLessThan(s.blendedRaceTimeSec! - 15 * 60); // ≥15 min faster
+  });
+
+  it('is deterministic: repeated refreshes do not drift (no feedback loop)', () => {
+    const s = lowVolume5kOnly();
+    refreshBlendedFitness(s);
+    const v1 = s.v, today1 = s.blendedRaceTimeSec, fc1 = s.forecastTime, lt1 = s.lt;
+    for (let i = 0; i < 4; i++) refreshBlendedFitness(s);
+    expect(s.v).toBeCloseTo(v1!, 3);
+    expect(s.blendedRaceTimeSec).toBeCloseTo(today1!, 3);
+    expect(s.forecastTime).toBeCloseTo(fc1!, 3);
+    expect(s.lt).toBeCloseTo(lt1!, 3);
+  });
+
+  it('no regression: a recent run proving real slowness DOES lower the engine below PB capacity', () => {
+    // Same 20:00 5K PB, but a recent ~30:00 5K-equivalent run + low real volume:
+    // genuine detraining evidence, so the engine is allowed below capacity.
+    const s = baseState({
+      rd: 'marathon', tw: 20, w: 1,
+      rw: 2, epw: 2, wkm: 8, detectedWeeklyKm: 8,
+      pbs: { k5: 1200 },
+      rec: { d: 5, t: 1800, weeksAgo: 1 }, // 30:00 5K, fresh — demonstrates slowness
+      lt: null, vo2: null, typ: 'Balanced', v: 49.8, iv: 49.8,
+      pac: { e: 300, t: 250, i: 225, m: 270, r: 215 },
+    });
+    refreshBlendedFitness(s);
+    // Recent demonstrated slowness overrides the capacity floor.
+    expect(s.v!).toBeLessThan(48);
   });
 });

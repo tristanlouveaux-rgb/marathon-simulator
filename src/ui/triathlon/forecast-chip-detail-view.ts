@@ -1193,9 +1193,22 @@ function pageFor(key: TriChipKey, s: SimulatorState, p: TriRacePrediction | null
 
 // ── Public render ────────────────────────────────────────────────────────────
 
-export function renderTriForecastChipDetail(key: TriChipKey): void {
+/**
+ * Optional navigation context. When the detail page is opened from a host that
+ * is NOT the live Forecast tab (e.g. the onboarding tri-plan-forecast step),
+ * pass `onBack` to override the "← Back" target and `showTabBar:false` to drop
+ * the bottom tab bar (the wizard has no tabs). Defaults preserve the live-app
+ * behaviour (back → Forecast tab, tab bar shown).
+ */
+export interface TriDetailNavOpts {
+  onBack?: () => void;
+  showTabBar?: boolean;
+}
+
+export function renderTriForecastChipDetail(key: TriChipKey, opts?: TriDetailNavOpts): void {
   const container = document.getElementById('app-root');
   if (!container) return;
+  const showTabBar = opts?.showTabBar !== false;
   const s = getState();
   const p = s.triConfig?.prediction ?? predictTriathlonRace(s);
   const page = pageFor(key, s, p);
@@ -1222,7 +1235,7 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
 
         <div class="tri-fcd-fade" style="animation-delay:0.02s;padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between">
           <button id="tri-fcd-back-btn" style="background:transparent;border:none;font-size:14px;color:${TEXT_S};cursor:pointer;padding:0;font-family:var(--f)">← Back</button>
-          <button id="tri-fcd-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
+          ${showTabBar ? `<button id="tri-fcd-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>` : ''}
         </div>
 
         <div class="tri-fcd-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 16px">
@@ -1237,7 +1250,7 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
 
       </div>
 
-      ${renderTabBar('forecast')}
+      ${showTabBar ? renderTabBar('forecast') : ''}
     </div>
   `;
 
@@ -1245,6 +1258,7 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
   if (fcdView) mountInfoPopovers(fcdView);
 
   document.getElementById('tri-fcd-back-btn')?.addEventListener('click', () => {
+    if (opts?.onBack) { opts.onBack(); return; }
     import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   });
   document.getElementById('tri-fcd-account-btn')?.addEventListener('click', () => {
@@ -1259,10 +1273,10 @@ export function renderTriForecastChipDetail(key: TriChipKey): void {
     ]);
     const sv = getState();
     const live = sv.triConfig?.prediction ?? predictTriathlonRace(sv);
-    if (live) openTransitionsOverlay(live, () => renderTriForecastChipDetail('transitions'));
+    if (live) openTransitionsOverlay(live, () => renderTriForecastChipDetail('transitions', opts));
   });
 
-  wireTabBarHandlers(navigateTab);
+  if (showTabBar) wireTabBarHandlers(navigateTab);
 
   // Silence unused-import warnings for utilities only used by some pages.
   void ft; void fp; void getMutableState; void saveState;

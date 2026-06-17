@@ -327,6 +327,8 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     s.w = 1;
     s.tw = weeks;
 
+    // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
+    // (dropPreOnboardSessions), a Sat/Sun onboard a chill 1–2 session lead-in week.
     const planMonday = getMondayOf(new Date());
     s.planStartDate = planMonday.toISOString().slice(0, 10);
     s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"

@@ -24,9 +24,6 @@ import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'fitness';
 
-/** How many races to show in the scrollable event list. 16 gives enough tiles to
- * cover the world-majors + second tier without overwhelming the scroll region. */
-const RACE_LIST_SHOWN = 16;
 /** Minimum plan weeks by distance. Marathons need 8 weeks minimum for a meaningful
  * progression (shorter than that is a sharpening block, not a marathon build).
  * Shorter distances allow 4-week minimums. Locked 2026-04-22. */
@@ -88,13 +85,6 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       .rt-row:active { transform: translateY(0.5px) scale(0.997); }
       .rt-row.selected { background:#0A0A0A; color:#FDFCF7; border-color: rgba(0,0,0,0.9); box-shadow: 0 0 0 1px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.10); }
 
-      /* Race-card left thumbnail: square art tile, city gradient fallback, grayscale photo when imageUrl present. */
-      .rt-race-thumb { flex:0 0 56px; width:56px; height:56px; border-radius:12px; overflow:hidden; position:relative; box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 2px rgba(0,0,0,0.08); }
-      .rt-race-thumb .rt-thumb-img { position:absolute; inset:0; background-size:cover; background-position:center; filter: grayscale(1) contrast(1.05); }
-      .rt-race-thumb .rt-thumb-vignette { position:absolute; inset:0; background: linear-gradient(180deg, rgba(0,0,0,0) 35%, rgba(0,0,0,0.32) 100%); }
-      .rt-race-thumb .rt-thumb-mono { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:rgba(253,252,247,0.92); font-size:17px; font-weight:500; letter-spacing:-0.01em; }
-      .rt-row.selected .rt-race-thumb { box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 1px 2px rgba(0,0,0,0.4); }
-
       .rt-row-body { flex:1; min-width:0; }
       .rt-row-label { font-size:15px; font-weight:500; line-height:1.2; margin:0; letter-spacing:-0.005em; }
       .rt-row-sub { font-size:12px; color:var(--c-faint); margin:3px 0 0; line-height:1.35; }
@@ -121,8 +111,8 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       .rt-weeks-readout .u { font-size:13px; color:var(--c-muted); margin-left:4px; }
       .rt-slider-ends { display:flex; justify-content:space-between; font-size:11px; color:var(--c-faint); font-variant-numeric:tabular-nums; margin-top:8px; }
 
-      /* Race list — scrollable. */
-      .rt-race-list { display:flex; flex-direction:column; gap:10px; max-height:260px; overflow-y:auto; padding-right:4px; }
+      /* Race picker — native <select> (iOS renders the frosted glass popup). Mirrors hyrox-setup.ts. */
+      .rt-select { width:100%; box-sizing:border-box; padding:13px 14px; border-radius:14px; border:1px solid rgba(0,0,0,0.06); background:rgba(255,255,255,0.95); color:var(--c-black); font-size:15px; font-family:var(--f); outline:none; cursor:pointer; }
 
       /* Custom date surface. */
       .rt-date-card { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.06); border-radius:16px; padding:14px 16px; }
@@ -320,37 +310,6 @@ function renderWeeksSlider(state: OnboardingState, minWeeks: number): string {
   `;
 }
 
-/**
- * Left-side thumb for a race row. Uses `race.imageUrl` when present (greyscale
- * treated), otherwise renders a deterministic charcoal gradient with the
- * city's two-letter monogram. Real photos can be dropped into
- * `src/assets/races/<id>.jpg` and wired via `imageUrl`.
- */
-function renderRaceThumb(race: { id: string; name: string; city?: string; imageUrl?: string }): string {
-  if (race.imageUrl) {
-    return `
-      <div class="rt-race-thumb">
-        <div class="rt-thumb-img" style="background-image:url('${race.imageUrl}')"></div>
-        <div class="rt-thumb-vignette"></div>
-      </div>
-    `;
-  }
-  const seed = race.id;
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  const base = 14 + (h % 18);
-  const peak = 30 + (h % 18);
-  const bg = `linear-gradient(135deg, #${base.toString(16).padStart(2,'0')}${base.toString(16).padStart(2,'0')}${base.toString(16).padStart(2,'0')} 0%, #${peak.toString(16).padStart(2,'0')}${peak.toString(16).padStart(2,'0')}${peak.toString(16).padStart(2,'0')} 55%, #141414 100%)`;
-  const source = race.city || race.name;
-  const monogram = source.replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase();
-  return `
-    <div class="rt-race-thumb" style="background:${bg}">
-      <div class="rt-thumb-mono">${monogram}</div>
-      <div class="rt-thumb-vignette"></div>
-    </div>
-  `;
-}
-
 function renderEventPicker(state: OnboardingState): string {
   const distance = state.raceDistance === 'marathon' ? 'marathon' : 'half';
   const races = getMarathonsByDistance(distance, minWeeksFor(state.raceDistance));
@@ -371,27 +330,19 @@ function renderEventPicker(state: OnboardingState): string {
     `;
   }
 
+  const sel = state.selectedRace ?? null;
   return `
     <div>
       <label class="rt-micro">SELECT YOUR EVENT</label>
-      <div class="rt-race-list">
-        ${races.slice(0, RACE_LIST_SHOWN).map(race => {
-          const selected = state.selectedRace?.id === race.id;
-          return `
-            <button data-race-id="${race.id}" class="rt-row shadow-ap ${selected ? 'selected' : ''}">
-              ${renderRaceThumb(race)}
-              <div class="rt-row-body">
-                <p class="rt-row-label">${race.name}</p>
-                <p class="rt-row-sub">${formatRaceDate(race.date)}${race.city ? ' · ' + race.city : ''}</p>
-              </div>
-              <span style="font-size:12px;font-weight:600;opacity:${selected ? '0.9' : '0.7'};flex-shrink:0">${formatTimeUntil(race.date) ?? '--'}</span>
-            </button>
-          `;
+      <select id="rt-race-select" class="rt-select shadow-ap" aria-label="Select your race">
+        <option value="" ${sel ? '' : 'selected'}>Select a race…</option>
+        ${races.map(race => {
+          const selected = sel?.id === race.id;
+          return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}</option>`;
         }).join('')}
-      </div>
-      <div style="text-align:center;margin-top:10px">
-        <button id="rt-toggle-date" class="rt-toggle">Enter a custom date instead</button>
-      </div>
+        <option value="__custom">Other / enter date manually</option>
+      </select>
+      ${sel ? `<p class="rt-date-note" style="margin-top:8px">${[formatTimeUntil(sel.date), sel.city].filter(Boolean).join(' · ')}</p>` : ''}
     </div>
   `;
 }
@@ -535,19 +486,23 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
     });
   });
 
-  // Race selection (half/marathon).
-  document.querySelectorAll<HTMLElement>('[data-race-id]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.getAttribute('data-race-id');
-      const race = races.find((r: Marathon) => r.id === id);
-      if (!race) return;
-      updateOnboarding({
-        selectedRace: race,
-        planDurationWeeks: race.weeksUntil ?? state.planDurationWeeks,
-        customRaceDate: null,
-      });
+  // Race selection (half/marathon) — native <select>; iOS renders the glass popup.
+  const raceSelect = document.getElementById('rt-race-select') as HTMLSelectElement | null;
+  raceSelect?.addEventListener('change', () => {
+    const id = raceSelect.value;
+    // "Other / enter date manually" → drop into the custom-date card.
+    if (id === '__custom') {
+      updateOnboarding({ customRaceDate: '', selectedRace: null });
       rerender();
+      return;
+    }
+    const race = races.find((r: Marathon) => r.id === id);
+    updateOnboarding({
+      selectedRace: race ?? null,
+      planDurationWeeks: race?.weeksUntil ?? state.planDurationWeeks,
+      customRaceDate: null,
     });
+    rerender();
   });
 
   // Toggle between race list and custom date (running half/marathon).

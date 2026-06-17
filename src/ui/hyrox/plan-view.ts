@@ -22,6 +22,7 @@ import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from '../triathlon/week-resolve.triathlon';
 import { formatKm } from '@/utils/format';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
+import { fireSelectionHaptic } from '@/utils/platform';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -102,9 +103,10 @@ export function renderHyroxPlanView(): void {
   // Include adhoc sessions (e.g. injury-substitute bike / safe strength accepted
   // from the capability nudge) so suggested sessions actually show on the plan.
   // Render-time illness + holiday + bridge mods applied by the shared resolver.
-  // clone:false — handlers re-read wk.triWorkouts directly and rely on render
-  // mods being visible on those shared objects (historical behaviour).
-  const workouts: Workout[] = resolveTriWeekWorkouts(s, viewWeek, { clone: false });
+  // ISSUE-288: clone (default) so mods apply to COPIES, never the stored
+  // wk.triWorkouts — clone:false persisted "Rest — illness" on the next saveState.
+  // Handlers look up stored objects by id (clean); ratings still persist.
+  const workouts: Workout[] = resolveTriWeekWorkouts(s, viewWeek);
 
   // Defensive ?? : athleteBand is typed required, but corrupted/partial state would
   // crash bandLabel's .replace(). Display-only midpoint fallback (ISSUE-282).
@@ -339,6 +341,21 @@ let _touchLastHighlight: HTMLElement | null = null;
 let _touchHoldTimer: number | null = null;
 let _touchHoldMet = false;
 
+// Lift the card when the long-press hold completes so it's visibly clear the
+// card is armed and the finger can move it. Mirrors running + triathlon.
+function liftHxCard(c: HTMLElement): void {
+  c.style.transition = 'transform 140ms ease, box-shadow 140ms ease';
+  c.style.transform = 'scale(1.03)';
+  c.style.boxShadow = '0 8px 24px rgba(0,0,0,0.16)';
+  c.style.zIndex = '5';
+}
+function dropHxCard(c: HTMLElement | null): void {
+  if (!c) return;
+  c.style.transform = '';
+  c.style.boxShadow = '';
+  c.style.zIndex = '';
+}
+
 function wireHyroxWorkoutTouchDnd(): void {
   document.querySelectorAll<HTMLElement>('.hyrox-workout-card').forEach((card) => {
     card.addEventListener('touchstart', (e) => {
@@ -351,7 +368,11 @@ function wireHyroxWorkoutTouchDnd(): void {
       _touchSourceCard = card;
       _touchHoldMet = false;
       if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
-      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
+      _touchHoldTimer = window.setTimeout(() => {
+        _touchHoldMet = true;
+        liftHxCard(card);
+        fireSelectionHaptic();
+      }, TOUCH_DRAG_HOLD_MS);
     }, { passive: true });
 
     card.addEventListener('touchmove', (e) => {
@@ -372,6 +393,11 @@ function wireHyroxWorkoutTouchDnd(): void {
           }
           return;
         }
+        // Hold met: the card is popped out and locked in. preventDefault on this
+        // first move (even before the 8px drag threshold) so iOS does not
+        // classify the gesture as a page scroll and keep scrolling while the
+        // user tries to place the card.
+        e.preventDefault();
         if (dist < 8) return;
         _touchDragging = true;
         if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
@@ -417,6 +443,7 @@ function wireHyroxWorkoutTouchDnd(): void {
       if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
       _touchHoldMet = false;
       if (!_touchDragging || !_touchDragId) {
+        dropHxCard(card);
         _touchDragId = '';
         _touchDragDay = -1;
         _touchSourceCard = null;
@@ -425,6 +452,7 @@ function wireHyroxWorkoutTouchDnd(): void {
       }
 
       if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      dropHxCard(_touchSourceCard);
       if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
       if (_touchLastHighlight) {
         _touchLastHighlight.style.outline = '';
@@ -462,6 +490,20 @@ function wireHyroxWorkoutTouchDnd(): void {
           renderHyroxPlanView();
         }
       }
+    });
+
+    // iOS fires touchcancel when a gesture is interrupted (e.g. scroll takes
+    // over). Reset so a card lifted by the hold doesn't stay popped out.
+    card.addEventListener('touchcancel', () => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
+      dropHxCard(card);
+      if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+      _touchDragId = '';
+      _touchDragDay = -1;
+      _touchSourceCard = null;
+      _touchDragging = false;
     });
   });
 }

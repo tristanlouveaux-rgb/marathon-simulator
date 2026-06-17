@@ -6,7 +6,7 @@ import { buildSunGlint, buildAtmosphereBase, buildRingBackground, ringAnimationC
 import { SPORT_LABELS, SPORT_ALIASES } from '@/constants/sports';
 import type { SportKey } from '@/types';
 import { getRunnerType } from '@/calculations';
-import { derivePlanShape, planPhaseSegments, type PlanShape, type PhaseSegment } from '@/calculations/plan-shape';
+import { derivePlanShape, deriveDisciplineLoad, type PlanShape, type PhaseSegment, type DiscShape } from '@/calculations/plan-shape';
 import { computeUniversalLoad } from '@/cross-training/universalLoad';
 import { fp } from '@/utils/format';
 import { readinessColorStops, type ReadinessLabel } from '@/calculations/readiness';
@@ -74,8 +74,17 @@ export function renderCoachContract(container: HTMLElement, state: OnboardingSta
 
       /* Load charts — area (running) and stacked-by-discipline (tri/HYROX). */
       .cc-arc { width:100%; height:128px; display:block; }
+      /* Glassy plot well: clips the bands to rounded corners, adds a soft inset
+         highlight + lift shadow so the chart reads as a polished glass surface. */
+      .cc-plot { position:relative; height:128px; border-radius:14px; overflow:hidden;
+        background:linear-gradient(180deg, rgba(255,255,255,0.40) 0%, rgba(255,255,255,0.10) 100%);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), inset 0 0 0 1px rgba(0,0,0,0.05), 0 6px 18px -11px rgba(0,0,0,0.30); }
+      .cc-sheen { position:absolute; inset:0; border-radius:14px; pointer-events:none;
+        background:linear-gradient(180deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0) 42%);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.30); }
       .cc-axis { position:relative; height:15px; margin-top:7px; }
       .cc-axis > span { position:absolute; transform:translateX(-50%); font-size:10.5px; color:var(--c-faint); white-space:nowrap; }
+      .cc-cycle { margin-top:8px; font-size:11px; color:var(--c-faint); line-height:1.4; text-align:center; }
 
       /* Two-snapshot / per-phase session shift. */
       .cc-shift-lbl { font-size:12px; color:var(--c-muted); margin-bottom:5px; }
@@ -275,19 +284,28 @@ function renderPhaseLoad(shape: PlanShape, race: string, noEvent: boolean): stri
   const taperPct = peak > 0 ? Math.max(0, Math.round((1 - lastTss / peak) * 100)) : 0;
   const peakLabelX = Math.min(80, Math.max(16, peakX));
 
-  const axis = phaseAxisHtml(shape.phases);
+  // Continuous (no-event) plans cycle base→build→peak→taper every block, so
+  // `shape.phases` is a long run of one-week segments. Labelling each one
+  // overlaps into an unreadable smear ("BaseBuildPeakTaper…" ×4) and the
+  // per-phase dividers read as noisy gridlines. Collapse to block-boundary
+  // dividers plus one legend line naming the cycle. Event plans keep the
+  // per-segment ribbon (few wide, contiguous phases — it reads cleanly).
+  const repeating = noEvent && shape.phases.length > 5;
+  const axis = repeating ? repeatingPhaseAxis(shape.phases) : phaseAxisHtml(shape.phases);
 
   const chart = `
     <div style="position:relative">
-      <div style="position:relative;height:128px">
+      <div class="cc-plot">
         <svg class="cc-arc" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <polygon points="${areaPts}" fill="${LOAD_FILL}" />
           <polyline points="${linePts}" fill="none" stroke="${LOAD_LINE}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
         </svg>
+        <div class="cc-sheen"></div>
         ${axis.dividers}
-        <div style="position:absolute;left:${peakLabelX.toFixed(1)}%;top:0;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--c-black);background:#fff;border:1px solid var(--c-border);padding:1px 7px;border-radius:100px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,0.06)">Peak · wk ${peakWk}</div>
+        <div style="position:absolute;z-index:1;left:${peakLabelX.toFixed(1)}%;top:0;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--c-black);background:#fff;border:1px solid var(--c-border);padding:1px 7px;border-radius:100px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,0.06)">Peak · wk ${peakWk}</div>
       </div>
-      <div class="cc-axis">${axis.labels}</div>
+      ${axis.labels ? `<div class="cc-axis">${axis.labels}</div>` : ''}
+      ${repeating ? `<div class="cc-cycle">${repeatingCycleLegend(shape.phases)}</div>` : ''}
     </div>`;
 
   const heading = noEvent ? 'Built in repeating phases.' : `${shape.weeks} weeks, built in phases.`;
@@ -295,10 +313,21 @@ function renderPhaseLoad(shape: PlanShape, race: string, noEvent: boolean): stri
     ? `This line is your weekly training load. It cycles up and down on purpose, with a lighter recovery week built into every block. About <strong>${shape.totalKm} km</strong> of running in all, peaking near <strong>${shape.peakKm} km</strong> in your biggest week.`
     : `This line is your weekly training load. It builds through to a peak around week ${peakWk}, with a lighter recovery week in every block, then sheds about <strong>${taperPct}%</strong> in the taper before your ${race}. About <strong>${shape.totalKm} km</strong> across ${shape.weeks} weeks, peaking near <strong>${shape.peakKm} km</strong> in your biggest week.`;
 
+  // Compressed-plan note (ISSUE-287). An event plan of 12 weeks or fewer has short
+  // phases and a taper that follows the peak quickly, so the load arc is steeper
+  // and the peak lands lower than a longer runway would reach. Surface it honestly
+  // as an inline caption (feature-reveal preference: caption over popup). Continuous
+  // plans loop, so "compressed" / "taper" does not apply — skip them.
+  const COMPRESSED_PLAN_WEEKS = 12;
+  const compressedNote = !noEvent && shape.weeks <= COMPRESSED_PLAN_WEEKS
+    ? `<p class="cc-p" style="margin-top:8px;color:var(--c-faint);font-size:12.5px">At ${shape.weeks} weeks this is a compressed plan. The phases are short and the taper follows the peak quickly. A longer runway would spread the build and reach a higher peak.</p>`
+    : '';
+
   return `
     <p class="cc-h">${heading}</p>
     ${chart}
     <p class="cc-p" style="margin-top:14px">${caption}</p>
+    ${compressedNote}
     ${whyVariesNote()}
   `;
 }
@@ -307,12 +336,18 @@ function renderPhaseLoad(shape: PlanShape, race: string, noEvent: boolean): stri
  *  Peak → Taper), so the progression is explicit. Two colours, the trend read
  *  at a glance. */
 function renderSessionShift(shape: PlanShape, s: ReturnType<typeof getState>): string {
+  // Weight the aerobic-vs-quality split by LOAD (TSS), not session COUNT. A
+  // count-based split collapses to 50/50 for low-frequency plans (1 easy + 1
+  // quality every phase, e.g. continuous mode at 2-3 runs/wk), where the real
+  // phase shift lives in the intensity of those sessions, not their number.
+  // Load makes the shift visible: base's easy volume outweighs its single
+  // gentle quality session; the peak phase's hard sessions outweigh its easy km.
   const split = (pm: PlanShape['mixByPhase'][number]) => {
     let aer = 0;
     let qual = 0;
     for (const b of pm.buckets) {
-      if (b.key === 'easy' || b.key === 'long') aer += b.count;
-      else qual += b.count;
+      if (b.key === 'easy' || b.key === 'long') aer += b.load;
+      else qual += b.load;
     }
     const t = aer + qual || 1;
     return { qpct: Math.round((qual / t) * 100) };
@@ -504,41 +539,10 @@ function renderHyroxWeakest(s: ReturnType<typeof getState>): string {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  Plan-shape helpers — stacked-by-discipline load + the shared phase axis.
+ *  Plan-shape helpers — the stacked-by-discipline ramp + shared phase axis.
+ *  (`deriveDisciplineLoad`/`DiscShape` now live in `@/calculations/plan-shape`
+ *  so the Stats plan-shape card draws from the identical derivation.)
  * ════════════════════════════════════════════════════════════════════════════ */
-
-interface DiscShape {
-  weeks: number;
-  perWeek: Array<{ ph: PhaseSegment['ph']; loads: Record<string, number>; mins: number }>;
-  peak: number;
-  phases: PhaseSegment[];
-}
-
-/** Per-week canonical-TSS load grouped by discipline, read from the REAL stored
- *  `triWorkouts` on each plan week (aerobic + anaerobic). Also sums each week's
- *  planned minutes (for the weekly-hours marker). `mapDisc` buckets a workout's
- *  discipline into a render group (or null to ignore). */
-function deriveDisciplineLoad(
-  s: ReturnType<typeof getState>,
-  mapDisc: (d: string | undefined) => string | null,
-  groups: string[],
-): DiscShape {
-  const wks = s.wks ?? [];
-  const perWeek = wks.map((wk) => {
-    const loads: Record<string, number> = {};
-    for (const g of groups) loads[g] = 0;
-    let mins = 0;
-    for (const w of wk.triWorkouts ?? []) {
-      const g = mapDisc(w.discipline);
-      if (!g) continue;
-      loads[g] += (w.aerobic ?? 0) + (w.anaerobic ?? 0);
-      mins += w.estimatedDurationMin ?? 0;
-    }
-    return { ph: wk.ph, loads, mins };
-  });
-  const peak = perWeek.reduce((m, d) => Math.max(m, Object.values(d.loads).reduce((a, b) => a + b, 0)), 0);
-  return { weeks: wks.length, perWeek, peak, phases: planPhaseSegments(s) };
-}
 
 /** Stacked-area load ramp by discipline. Returns '' when there is no plan to
  *  draw (so tri/HYROX views degrade to text + showcase). */
@@ -581,15 +585,20 @@ function renderDisciplineRamp(
   const axis = phaseAxisHtml(shape.phases);
   const chart = `
     <div style="position:relative">
-      <div style="position:relative;height:128px">
+      <div class="cc-plot">
         <svg class="cc-arc" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${bands.join('')}${seps.join('')}</svg>
+        <div class="cc-sheen"></div>
         ${axis.dividers}
       </div>
       <div class="cc-axis">${axis.labels}</div>
     </div>`;
 
-  const legend = opts.legend
-    .map((l) => `<span class="k"><span class="sw" style="background:${DISC_SOLID[l.key] ?? '#888'}"></span>${l.label}</span>`)
+  // Legend follows the visual stack, read top-to-bottom (reverse of the bottom-up
+  // paint order) so the key matches the bands as drawn: e.g. Swim, Run, Bike.
+  const legLabel = new Map(opts.legend.map((l) => [l.key, l.label]));
+  const legend = [...opts.order].reverse()
+    .filter((key) => legLabel.has(key))
+    .map((key) => `<span class="k"><span class="sw" style="background:${DISC_SOLID[key] ?? '#888'}"></span>${legLabel.get(key)}</span>`)
     .join('');
 
   // Weekly-hours peak figure lives in the caption (a floating pill collides with
@@ -657,6 +666,49 @@ function phaseAxisHtml(phases: PhaseSegment[]): { dividers: string; labels: stri
     }
   }
   return { dividers: dividers.join(''), labels: labels.join('') };
+}
+
+/** Length (in weeks) of one repeating block: the run of phases up to — but not
+ *  including — the second 'base'. Falls back to 4 (the canonical mesocycle). */
+function blockLengthWeeks(phases: PhaseSegment[]): number {
+  let weeks = 0;
+  for (let k = 0; k < phases.length; k++) {
+    if (k > 0 && phases[k].ph === 'base') return weeks;
+    weeks += phases[k].weeks;
+  }
+  return weeks || 4;
+}
+
+/** Axis for the repeating-block (continuous) case: a faint divider at each block
+ *  boundary only (where a new 'base' begins), and no per-segment labels — the
+ *  cycle is named once by `repeatingCycleLegend` instead. */
+function repeatingPhaseAxis(phases: PhaseSegment[]): { dividers: string; labels: string } {
+  const totalW = phases.reduce((a, p) => a + p.weeks, 0) || 1;
+  let cum = 0;
+  const dividers: string[] = [];
+  for (let k = 0; k < phases.length; k++) {
+    cum += phases[k].weeks;
+    const next = phases[k + 1];
+    if (next && next.ph === 'base') {
+      const frac = cum / totalW;
+      dividers.push(`<div style="position:absolute;left:${(frac * 100).toFixed(1)}%;top:0;bottom:0;width:1px;background:var(--c-border)"></div>`);
+    }
+  }
+  return { dividers: dividers.join(''), labels: '' };
+}
+
+/** One-line legend naming the repeating cycle, e.g. "Each block, repeating every
+ *  4 weeks: Base, Build, Peak, Taper". Replaces the cramped per-week ribbon. */
+function repeatingCycleLegend(phases: PhaseSegment[]): string {
+  const blockLen = blockLengthWeeks(phases);
+  const seq: string[] = [];
+  for (const p of phases) {
+    const label = PHASE_LABEL[p.ph] ?? p.ph;
+    if (seq[seq.length - 1] === label) continue;
+    if (seq.length && label === (PHASE_LABEL.base)) break; // stop at the second cycle
+    seq.push(label);
+  }
+  return `Each block, repeating every ${blockLen} weeks: ${seq.join(', ')}.`;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

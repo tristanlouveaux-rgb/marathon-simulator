@@ -17,6 +17,7 @@
  */
 
 import { showSimpleToast } from '@/ui/toast';
+import { setRasterSafeText } from '@/ui/raster-safe-text';
 
 const OVERLAY_ID = 'strava-history-guide';
 
@@ -91,27 +92,33 @@ async function onFile(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
-  const statusEl = document.getElementById('strava-guide-status');
+  // Re-query by id each call: the status line sits inside a backdrop-filter
+  // glass card, so setRasterSafeText replaces the node to dodge the WKWebView
+  // glyph-raster ghost — that detaches any cached reference.
+  const setStatus = (text: string) => {
+    const el = document.getElementById('strava-guide-status');
+    if (el) setRasterSafeText(el, text);
+  };
   const label = document.getElementById('strava-guide-label') as HTMLLabelElement | null;
   if (!file.name.toLowerCase().endsWith('.zip')) {
-    if (statusEl) statusEl.textContent = 'That is not a .zip. Choose the export archive Strava emailed you.';
+    setStatus('That is not a .zip. Choose the export archive Strava emailed you.');
     input.value = '';
     return;
   }
-  if (statusEl) statusEl.textContent = 'Reading archive…';
+  setStatus('Reading archive…');
   if (label) label.style.pointerEvents = 'none';
   try {
     const { importActivityArchive } = await import('@/data/fitImport');
     const result = await importActivityArchive(file, (done, total) => {
-      if (statusEl) statusEl.textContent = `Reading archive… ${done}/${total}`;
+      setStatus(`Reading archive… ${done}/${total}`);
     });
-    if (statusEl) statusEl.textContent = result.summary;
+    setStatus(result.summary);
     showSimpleToast(result.summary, 'info');
     input.value = '';
     onCompleteCb?.();
   } catch (err) {
     const detail = err instanceof Error ? err.message : '';
-    if (statusEl) statusEl.textContent = `Could not read that archive. ${detail}`.trim();
+    setStatus(`Could not read that archive. ${detail}`.trim());
     showSimpleToast('Could not read that archive', 'error');
     input.value = '';
   } finally {

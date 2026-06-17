@@ -30,7 +30,7 @@ import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
 import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
-import { isTouchPrimary } from '@/utils/platform';
+import { isTouchPrimary, fireSelectionHaptic } from '@/utils/platform';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
@@ -264,7 +264,7 @@ function buildPlanWeekSummaryCard(args: {
 
   return `
     <div style="padding:16px 20px 0">
-      <button id="plan-week-summary-card" style="all:unset;display:block;width:100%;cursor:pointer;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+      <button id="plan-week-summary-card" style="all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
         <div style="display:flex;gap:16px;justify-content:space-between">
           <div style="flex:1;text-align:center">
             ${cellLabel('Sessions')}
@@ -3418,6 +3418,22 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
   let _touchHoldMet = false;
   const _touchPrimary = isTouchPrimary();
 
+  // Lift the card when the long-press hold completes so it's visibly clear the
+  // card is now armed and the finger can move it. Without this the 350ms hold
+  // gives no feedback and users don't realise dragging is enabled.
+  const liftCard = (c: HTMLElement): void => {
+    c.style.transition = 'transform 140ms ease, box-shadow 140ms ease';
+    c.style.transform = 'scale(1.03)';
+    c.style.boxShadow = '0 8px 24px rgba(0,0,0,0.16)';
+    c.style.zIndex = '5';
+  };
+  const dropCard = (c: HTMLElement | null): void => {
+    if (!c) return;
+    c.style.transform = '';
+    c.style.boxShadow = '';
+    c.style.zIndex = '';
+  };
+
   root.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
     // On touch devices the native HTML5 `draggable` makes WKWebView lift its
     // own drag preview, doubling up with the custom clone below. Disable it so
@@ -3433,7 +3449,11 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
       _touchSourceCard = card;
       _touchHoldMet = false;
       if (_touchHoldTimer !== null) clearTimeout(_touchHoldTimer);
-      _touchHoldTimer = window.setTimeout(() => { _touchHoldMet = true; }, TOUCH_DRAG_HOLD_MS);
+      _touchHoldTimer = window.setTimeout(() => {
+        _touchHoldMet = true;
+        liftCard(card);
+        fireSelectionHaptic();
+      }, TOUCH_DRAG_HOLD_MS);
     }, { passive: true });
 
     card.addEventListener('touchmove', (e) => {
@@ -3454,6 +3474,12 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
           }
           return;
         }
+        // Hold met: the card is popped out and locked in. preventDefault on this
+        // first move (even before the 8px drag threshold) so iOS does not
+        // classify the gesture as a page scroll. Without this, a slow initial
+        // move lets the page scroll and iOS then ignores later preventDefaults,
+        // so the page keeps scrolling while you try to place the card.
+        e.preventDefault();
         if (dist < 8) return;
         _touchDragging = true;
         if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
@@ -3504,6 +3530,7 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
       if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
       _touchHoldMet = false;
       if (!_touchDragging || !_touchDragId) {
+        dropCard(card);
         _touchDragId = '';
         _touchDragDay = -1;
         _touchSourceCard = null;
@@ -3512,6 +3539,7 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
       }
 
       if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      dropCard(_touchSourceCard);
       if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
       if (_touchLastHighlight) {
         _touchLastHighlight.style.outline = '';
@@ -3567,6 +3595,21 @@ function wirePlanCardTouchDnd(root: ParentNode, viewWeek: number): void {
       if (targetZone && !el?.closest('.plan-workout-card')) {
         applyMoveToDay(parseInt(targetZone.dataset.dayOfWeek || '-1', 10));
       }
+    });
+
+    // iOS fires touchcancel when a gesture is interrupted (e.g. scroll takes
+    // over). Without resetting here, a card lifted by the hold would stay
+    // popped out.
+    card.addEventListener('touchcancel', () => {
+      if (_touchHoldTimer !== null) { clearTimeout(_touchHoldTimer); _touchHoldTimer = null; }
+      _touchHoldMet = false;
+      dropCard(card);
+      if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+      _touchDragId = '';
+      _touchDragDay = -1;
+      _touchSourceCard = null;
+      _touchDragging = false;
     });
   });
 }

@@ -13,7 +13,8 @@
  */
 
 import type { SimulatorState, RaceDistance } from '@/types';
-import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor } from './predictions';
+import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
+import { computePeakWeeklyKm } from '@/workouts/plan_engine';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
@@ -23,7 +24,7 @@ import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal } from './physiological-vdot';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -580,7 +581,85 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   );
 
   s.blendedRaceTimeSec = durabilityAdjustedBlend;
-  s.blendedEffectiveVdot = cv(targetDistM, durabilityAdjustedBlend);
+
+  // ── Engine vs race-readiness separation (ISSUE-297, RC1) ──────────────────
+  // `durabilityAdjustedBlend` is a *race-readiness* time: it carries the
+  // marathon-specificity / low-volume penalties that correctly slow a marathon
+  // run off thin running volume. Back-deriving a VDOT from it and writing that
+  // into the global engine (`s.v`) conflates "engine capacity" (VO2/VDOT, proven
+  // by the athlete's PBs) with "marathon readiness" (capacity x volume/durability).
+  // That buries a strong engine — a 20:00 5K (VDOT ~50) collapses to ~40 off
+  // 8 km/wk — and the buried value then feeds training paces, plan generation and
+  // the race-day forecast. It is the root of the non-reproducible, too-slow
+  // predictions in ISSUE-297.
+  //
+  // The engine is therefore floored at demonstrated cross-distance capacity
+  // (`pbDerivedVdot`, a PB-median that is immune to the refresh feedback loop).
+  // The floor stands down ONLY on demonstrated recent slowness — a recent run
+  // that projects below capacity. Low TRAINING VOLUME is deliberately NOT
+  // engine-decay evidence here: it limits race readiness (already modelled on the
+  // prediction and the forecast), not aerobic capacity. This is the intended
+  // difference from `demonstratedPBFloor`, whose low-volume branch governs the
+  // same-distance race prediction. Volume thus moves the prediction and the
+  // forecast, never the capacity number — keeping the engine a pure function of
+  // demonstrated fitness (deterministic across refreshes).
+  const penalisedVdot = cv(targetDistM, durabilityAdjustedBlend);
+  const capacityVdot = pbDerivedVdot(s);
+  let engineVdot = penalisedVdot;
+  if (capacityVdot != null && capacityVdot > penalisedVdot) {
+    const recentForEngine = inputs.recentRun ?? s.rec ?? null;
+    const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
+      ? predictFromRecent(targetDistM, recentForEngine, s.pbs, s.b)
+      : null;
+    const recentVdot = tRecentAtTarget != null && tRecentAtTarget > 0
+      ? cv(targetDistM, tRecentAtTarget)
+      : null;
+    const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
+    if (!recentDemonstratesSlowness) {
+      engineVdot = capacityVdot;
+      console.log(`[refreshBlendedFitness] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence of slowness → engine held at capacity (readiness penalty stays on blendedRaceTimeSec/forecast only)`);
+    }
+  }
+
+  // ── Race-validated anchor (recent real race run leg) ──────────────────────
+  // A real race run leg — fatigue-discounted to a fresh-run equivalent — is the
+  // strongest race-validated running signal. For triathletes the watch VO2max
+  // (effectiveVo2max, fed into the blend above) is inflated by cycling/swimming
+  // and overstates running fitness. Symptom: a 1:55-half triathlete with a watch
+  // VO2max of 56 has no running PBs (capacityVdot null), so the floor above can't
+  // pull the watch-driven blend down, and s.v collapses to ~56 → easy/threshold/
+  // marathon paces all far too fast. The race must win while recent.
+  //
+  // The race both FLOORS the engine (demonstrated capacity) and CAPS a watch-
+  // inflated engine DOWN to the race — UNLESS standalone running evidence (a PB
+  // median, or a recent run that projects at/above the race) corroborates the
+  // higher value. Capacity floor at a standalone PB stays the "better event"
+  // override the user asked for; an un-corroborated watch reading yields.
+  const raceAnchor = raceAnchorVdot(s, new Date());
+  if (raceAnchor != null) {
+    const raceVdot = raceAnchor.vdot;
+    if (raceVdot > engineVdot) {
+      engineVdot = raceVdot;  // floor: never below demonstrated race capacity
+    } else if (engineVdot > raceVdot) {
+      // Engine sits above the race. Keep the lift only if standalone running
+      // evidence supports it; otherwise it is an un-corroborated watch reading.
+      const recentForCap = inputs.recentRun ?? s.rec ?? null;
+      const tRecentAtTarget = recentForCap && recentForCap.t > 0
+        ? predictFromRecent(targetDistM, recentForCap, s.pbs, s.b)
+        : null;
+      const recentCapVdot = tRecentAtTarget != null && tRecentAtTarget > 0
+        ? cv(targetDistM, tRecentAtTarget)
+        : null;
+      const standaloneAbove = (capacityVdot != null && capacityVdot >= raceVdot)
+        || (recentCapVdot != null && recentCapVdot >= raceVdot);
+      if (!standaloneAbove) {
+        console.log(`[refreshBlendedFitness] engine capped at race-validated VDOT ${raceVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}; watch/blend uncorroborated by running PBs or recent runs)`);
+        engineVdot = raceVdot;
+      }
+    }
+  }
+
+  s.blendedEffectiveVdot = engineVdot;
   s.blendedLastRefreshedISO = new Date().toISOString();
   s.blendedFromEstimate = measuredKm == null && freqEstimate != null;
 
@@ -627,6 +706,65 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // restriction debits its recovery weeks so the forecast doesn't credit
       // build during weeks the athlete cannot run. Mirrors the tri predictor.
       const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
+
+      // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ──
+      // The forecast answers "what can you run when the plan has built you up?",
+      // so the volume-dependent penalties must be evaluated at the volume the
+      // plan actually delivers, not today's pre-plan maintenance volume. Anchoring
+      // on the today-blend (`blended`) only subtracted the small engine-gain delta,
+      // leaving the ~40-min low-volume penalty in place forever — the plan ramped
+      // the athlete but the forecast never knew.
+      //
+      // Two-term model: cumulative training dose drives the ENGINE gain (the
+      // build-phase mean `planMeanKm`, fed to the horizon below); race-approach
+      // sustained volume drives marathon-specific endurance (the PEAK the plan
+      // holds, fed to the penalty here). `computePeakWeeklyKm` is the exact
+      // destination the plan engine ramps toward, read with the same capacity VDOT
+      // and easy pace the plan uses, so the forecast credits precisely the mileage
+      // the plan builds — no more (a thin beginner whose plan only reaches the
+      // 20-30 km band keeps the residual penalty), no less.
+      const peakKm = (s.rw ?? 0) > 0
+        ? computePeakWeeklyKm({
+            runsPerWeek: s.rw!,
+            raceDistance: s.rd,
+            fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
+            totalWeeks: s.tw ?? 16,
+            vdot: s.v ?? engineVdot,
+            easyPaceSecPerKm: s.pac?.e,
+          })
+        : null;
+      // Re-run the SAME prediction pipeline at peak volume. Raw blend only:
+      // calibration is applied to forecastTime below, and the durability cap is
+      // intentionally omitted from the forecast (it assumes the plan delivers the
+      // long runs). `false` for the estimate flag: the planned peak is a
+      // projection target, not an estimate of current training.
+      const peakBlend = (peakKm != null && peakKm > 0)
+        ? blendPredictions(
+            targetDistM,
+            s.pbs,
+            s.lt ?? null,
+            effectiveVo2max(s),
+            s.b,
+            (s.typ ?? 'Balanced').toLowerCase(),
+            inputs.recentRun ?? s.rec ?? null,
+            s.athleteTier ?? undefined,
+            peakKm,
+            inputs.avgPaceSecPerKm ?? undefined,
+            { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
+            hrVdot,
+            marathonPbAgeDays,
+            false,
+            Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
+          )
+        : null;
+      const forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : blended;
+      // Publish the peak-volume anchor so OTHER forecast surfaces that recompute
+      // live (renderer.ts, plan-preview) credit the volume ramp too, instead of
+      // anchoring on the penalised today-time `blendedRaceTimeSec` (ISSUE-297 —
+      // the forecast-display facet). Without this, the engine reads correct but
+      // the displayed forecast stays buried near today.
+      s.forecastBlendAnchorSec = forecastAnchorSec;
+
       const { forecastVdot, forecastTime } = calculateLiveForecast({
         currentVdot: s.v,
         targetDistance: s.rd,
@@ -641,7 +779,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         ltPaceSecPerKm: s.lt || undefined,
         strengthSessionsPerWeek: s.gs,
         adaptationRatio: s.adaptationRatio,
-        blendedAnchorSec: blended,
+        blendedAnchorSec: forecastAnchorSec,
       });
       s.expectedFinal = forecastVdot;
       // Calibration bias applies to the projection (systematic prediction

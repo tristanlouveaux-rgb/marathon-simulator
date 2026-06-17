@@ -6,6 +6,7 @@ import {
   isWeekInHoliday,
   getHolidayDaysForWeek,
 } from '../holiday-modal';
+import { dropPreOnboardSessions } from '../workout-status';
 
 /**
  * Canonical resolver for a triathlon / cycling / HYROX week's workout list.
@@ -27,9 +28,14 @@ import {
  * `opts.clone` (default true) deep-clones every workout before mutation so the
  * resolver is idempotent and never touches stored state — required for any
  * read-only consumer (the planned-day TSS helper) that may run several times
- * per render. The plan views pass `clone: false` to keep their historical
- * shared-ref behaviour: their click/drag handlers re-read `wk.triWorkouts`
- * directly and rely on the render mods being visible on those same objects.
+ * per render.
+ *
+ * DO NOT pass `clone: false` from any view that can trigger `saveState()`
+ * (rating, drag, adjust). The mod appliers mutate in place; with `clone:false`
+ * they mutate the stored `wk.triWorkouts`, and a later save then PERSISTS the
+ * render-only mods (e.g. "Rest — illness") so workouts stay modified after the
+ * illness/holiday ends. This was ISSUE-288 — the plan views now always clone.
+ * Handlers look up stored objects by id, so clean stored objects are correct.
  */
 export function resolveTriWeekWorkouts(
   s: SimulatorState,
@@ -58,7 +64,10 @@ export function resolveTriWeekWorkouts(
   // Post-holiday comeback ramp. No-ops unless buildBridgeWeekMods set a scale on this week.
   if (wk) applyBridgeModsAllDisciplines(workouts, wk);
 
-  return workouts;
+  // Reduced partial first week (mid-week onboard): drop pre-onboard-day sessions
+  // so week 1 starts today. No-op for established plans and Sat/Sun onboards.
+  // Mirrors running's resolveWeekWorkouts (week-resolve.ts).
+  return dropPreOnboardSessions(workouts, s.planStartDate, viewWeek, s.w, s.planCreatedAt);
 }
 
 /**

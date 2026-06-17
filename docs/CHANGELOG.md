@@ -4,6 +4,24 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-06-17 — Mid-week onboarding: reduced partial first week, starts today (all modes)
+
+- **Problem (raised by Tristan)**: a user onboarding any day other than Monday still got a Monday-anchored week 1 that showed the days before they joined as blank/uncompletable cards, and silently penalized them for sessions on days they never had. The plan should start the day they onboard, credit anything they already trained this week, and give a naturally-lighter first week.
+- **What already worked**: pre-onboard activities this week already flow into week 1 and count toward load — `weekIndexForDate` maps a Mon/Tue run to week 1 and `computeWeekTSS` credits every actual (`activity-matcher.ts`, `fitness-model.ts`). No change needed for crediting.
+- **Fix**:
+  - New canonical filter `dropPreOnboardSessions` (`ui/workout-status.ts`), keyed off the existing `firstTrackedDow`: for the current week it removes sessions scheduled on days before the onboarding weekday. Applied in the three render resolvers — running `resolveWeekWorkouts`, the shared tri/cycling/HYROX `resolveTriWeekWorkouts`, and the running plan/Home paths that read them. Week 1 now begins today; full load resumes the next Monday.
+  - Adherence (`plan-adherence.ts`): the onboarding week's run denominator is pro-rated by the schedulable fraction of the week (`s.rw × firstTrackedDow / 7`, real quantities, no invented constant) so the dropped days don't read as "missed" once week 1 is scored. This also fixes a latent bug — the flat `s.rw` denominator already penalized mid-week onboarders.
+  - Week-advance auto-skip (`events.ts`): the unrated-session gate now filters pre-onboard days, so advancing out of week 1 never prompts or feeds phantom RPE-5 load for sessions that never existed.
+- **Late-week (Sat/Sun) onboards**: explored anchoring week 1 to *next* Monday for a clean full first week, but rejected it — a future `planStartDate` breaks two launch invariants: `weekIndexForDate` drops pre-start activities (`daysDiff < 0 → null`, so a lead-in run wouldn't credit) and `reconcilePlanAnchorToEarliestActivity` pulls the anchor back the moment a lead-in run is logged (causing `s.w` drift). Instead the anchor stays this Monday and the natural partial-week mechanism leaves a chill 1–2 session week 1 (the lead-in), with the first full week landing next Monday. Same experience, no invariant risk.
+- **Out of scope (deliberate, "first week doesn't need to be perfect")**: type-aware dedupe (a long run already done this week does not auto-drop the planned one). The already-done run still credits to load as an unplanned activity.
+- **Tests**: `workout-status.test.ts` +7 (filter behaviour across onboarding weekdays, no-op cases); `plan-adherence.test.ts` +2 (onboarding-week denominator). Full suite green (one unrelated timeout under parallel load, passes standalone). tsc + ui-lint clean.
+- **Not device-verified.**
+
+## 2026-06-17 — Reviewer-demo race date landed on Saturday in UTC-ahead timezones
+
+- `demoRaceDate()` rolled the race forward to Sunday using **local** date accessors, then serialised with `toISOString()` (UTC). In any UTC-ahead timezone during the late-night window the serialised calendar day fell back one day, so the seeded `selectedRace.date` was stored as a **Saturday**, not the intended Sunday. Fixed by rolling to Sunday with UTC accessors (`setUTCDate`/`getUTCDay`) so the rolled day survives UTC serialisation. `src/state/demo-data.ts`.
+- The regression test (`demo-data.test.ts`) asserted `getDay()` on a UTC-anchored date-only string, which itself reads Saturday in the Americas. Switched to `getUTCDay()` so the assertion is timezone-independent. The failure was a real defect, not date staleness.
+
 ## 2026-06-17 — Ironman long run builds to a 2:30 ceiling + key-session alternation
 
 - **Problem (raised by Tristan)**: an Ironman plan only ever prescribed a ~20 km long run, despite the IM run leg being a full marathon. Root cause: the long run was a fixed 45% share of a bike-dominated run budget (35% of weekly hours), so it could never reach marathon-relevant durability without ~16 h/week.

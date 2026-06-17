@@ -30,6 +30,13 @@ export function getActivitySource(s: SimulatorState): ActivitySource {
   if (s.wearable === 'garmin') return 'garmin';
   if (s.wearable === 'strava') return 'strava';
 
+  // Apple Health connected but no explicit activity source / wearable set
+  // (supplementary-Apple, e.g. a tri user who connected Apple Health after
+  // setup). Treat Apple as the activity source so the launch workout sync runs
+  // automatically. Covers EXISTING installs without needing a reconnect — the
+  // connect-side explicit set only fires on a fresh connect.
+  if (s.appleHealthConnected) return 'apple';
+
   return 'phone';  // no wearable, no Strava
 }
 

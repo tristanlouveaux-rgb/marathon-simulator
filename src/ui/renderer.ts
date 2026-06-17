@@ -218,7 +218,7 @@ export function render(): void {
       ltPaceSecPerKm: s.lt || undefined,
       strengthSessionsPerWeek: s.gs,
       adaptationRatio: s.adaptationRatio,
-      blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+      blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
     });
     forecast = rawForecast;
     if (s.timp > 0) forecast += s.timp;

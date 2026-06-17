@@ -59,10 +59,27 @@ export const THRESH_VARIANTS = [
   { id: 'thr_cruise_5x5', reps: 5, repMin: 5, recMin: 1 },
 ];
 
+// Race-week primers (final taper week only). Short reps at session intensity keep
+// the neuromuscular system primed while adding negligible residual fatigue — the
+// taper preserves fitness and sheds fatigue rather than building (Mujika & Padilla
+// 2003; Bosquet et al. 2007 meta-analysis: maintain intensity, cut volume). A full
+// build-phase block (3×8 = 24 min of threshold) 3 days out is training, not
+// sharpening; these replace it with ~4–6 min of quality. See SCIENCE_LOG §race-week.
+export const TAPER_PRIMER_THRESHOLD = { id: 'thr_primer', reps: 3, repMin: 2, recMin: 2 } as const;
+export const TAPER_PRIMER_VO2 = { id: 'vo2_primer', reps: 4, repMin: 1, recMin: 2 } as const;
+
+// `load` ranks the long-run variant by its ACTUAL rendered intensity (not its
+// intended one), so phase-aware selection concentrates the genuinely-heavy long
+// run in the peak phase (ISSUE-287). Important caveat: only `long_fast_finish`
+// currently renders as a high-load `progressive` session (intent_to_workout.ts:91
+// — ~30 TSS over steady, scored RPE 5). `long_with_blocks` was never wired to a
+// distinct format and falls through to the plain steady `long` case, so it scores
+// identically to `long_steady` today — hence load 0, not the higher rank its name
+// implies. (Latent: if the blocks long run is ever implemented, bump its load.)
 export const LONG_VARIANTS = [
-  { id: 'long_steady' },
-  { id: 'long_fast_finish' },
-  { id: 'long_with_blocks' },
+  { id: 'long_steady', load: 0 },
+  { id: 'long_fast_finish', load: 2 },
+  { id: 'long_with_blocks', load: 0 },
 ];
 
 // Float fartlek variants. Hard reps at 10K/HM effort, "float" recovery at ~MP
@@ -75,6 +92,57 @@ export const FLOAT_VARIANTS = [
   { id: 'float_8x2_2', reps: 8, repMin: 2, floatMin: 2 },   // shorter/sharper, more transitions
   { id: 'float_4x5_3', reps: 4, repMin: 5, floatMin: 3 },   // Canova-style longer blocks
 ];
+
+/**
+ * Phase-aware variant selection (ISSUE-287).
+ *
+ * The quality-session variants above carry materially different work loads
+ * (e.g. THRESH_VARIANTS' continuous 20 min vs cruise 5×5 = 25 min). The legacy
+ * `(weekIndex - 1) % len` rotation scatters those loads across the plan
+ * independently of phase, so the heaviest variant can land on a build week and
+ * push the LOAD apex into the build phase — ahead of the peak phase, which by
+ * periodisation definition should carry the highest load (Bompa & Buzzichelli
+ * 2018). This is the variant-noise half of the apex-misplacement bug.
+ *
+ * Fix: bias variant selection by phase rather than scattering it.
+ *   - peak  → rotate among the HIGHEST-work variants (hardest sessions land here)
+ *   - base/taper → rotate among the LOWEST-work variants (aerobic emphasis,
+ *                  gentler; a taper week wants the steady long run and the
+ *                  lightest interval shape, never a fast-finish or 3×8 block)
+ *   - build → unchanged `weekIndex` rotation (full variety)
+ * Rotation within the biased subset preserves week-to-week variety in multi-week
+ * peak/base/taper phases. No load constant is introduced — the variants and their
+ * work minutes already exist; this only changes WHICH existing variant a phase draws.
+ *
+ * `workOf` returns the variant's hard-effort minutes (reps × repMin, or the
+ * continuous `workMin`) — the load proxy. Variants are ranked by it.
+ */
+function pickPhaseVariant<T>(
+  variants: readonly T[],
+  weekIndex: number,
+  phase: TrainingPhase,
+  workOf: (v: T) => number,
+): T {
+  const n = variants.length;
+  if (n <= 1 || phase === 'build') {
+    return variants[Math.max(0, weekIndex - 1) % n];
+  }
+  // Stable sort by work load. Peak draws from the top; base and taper from the bottom.
+  const ranked = variants
+    .map((v, i) => ({ v, i, w: workOf(v) }))
+    .sort((a, b) => (a.w - b.w) || (a.i - b.i));
+  // Subset size: top/bottom half (≥1) keeps variety without crossing into the
+  // middle band, so peak stays strictly heavier than base/taper on average.
+  const subsetSize = Math.max(1, Math.floor(n / 2));
+  const subset = phase === 'peak'
+    ? ranked.slice(n - subsetSize)     // heaviest
+    : ranked.slice(0, subsetSize);      // lightest (base, taper)
+  return subset[Math.max(0, weekIndex - 1) % subset.length].v;
+}
+
+/** Hard-effort minutes for an interval variant (the load proxy used to rank). */
+const variantWork = (v: { reps?: number; repMin?: number; workMin?: number }): number =>
+  v.reps != null && v.repMin != null ? v.reps * v.repMin : (v.workMin ?? 0);
 
 // ---------------------------------------------------------------------------
 // Ability band
@@ -442,6 +510,19 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
 
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
   const deload = ctx.forceDeload || isDeloadWeek(weekIndex, ability);
+  // Variant selection phase. A deload week is a recovery week, so it draws the
+  // LIGHTEST variants (same subset as a base week) — a steady long run, gentler
+  // intervals — rather than a `fast_finish` long run or the hardest interval
+  // session that the blind `weekIndex` rotation could otherwise land on it. This
+  // both honours the "lighter recovery week in every block" contract and removes
+  // the contrast that drove the post-deload load bounce (ISSUE-287): with the
+  // deload genuinely light, the following week resumes the ramp instead of
+  // spiking above the peak phase. dMult still scales the volume on top.
+  const variantPhase: TrainingPhase = deload ? 'base' : phase;
+  // Race week = the final taper week. Its single quality session is a short primer
+  // (a few minutes at intensity), not a build-phase block, regardless of which
+  // slot the priority list seats here (threshold for most distances, vo2 for 5K).
+  const raceWeek = phase === 'taper' && weekIndex >= totalWeeks;
   const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
   // CTL-gap re-anchor: reduce volume when the athlete fell behind the plan's load. Suppressed on
   // deload weeks (already a planned reduction — re-anchoring a deload down would double up the same
@@ -521,7 +602,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
       const prevLongMins = Math.round(longRunMinutes(weekIndex - 1, totalWeeks, ability, raceDistance, phase) * dMult);
       longMins = Math.min(longMins, prevLongMins);
     }
-    const longVar = LONG_VARIANTS[Math.max(0, (weekIndex - 1)) % LONG_VARIANTS.length];
+    const longVar = pickPhaseVariant(LONG_VARIANTS, weekIndex, variantPhase, v => v.load);
     const longNote = acwrNote || (deload ? 'Deload week' : '');
     intents.push({
       dayIndex: runsPerWeek - 1, // last day
@@ -552,36 +633,46 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     const qualityNote = acwrNote || (deload ? 'Deload week' : '');
 
     if (slot === 'threshold') {
-      const workMins = Math.round(thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) * dMult);
-      const variant = THRESH_VARIANTS[Math.max(0, (weekIndex - 1)) % THRESH_VARIANTS.length];
+      // Race week: fixed short primer (not dMult-scaled — it is already minimal).
+      const variant = raceWeek
+        ? TAPER_PRIMER_THRESHOLD
+        : pickPhaseVariant(THRESH_VARIANTS, weekIndex, variantPhase, variantWork);
+      const workMins = raceWeek
+        ? variant.reps! * variant.repMin!
+        : Math.round(thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) * dMult);
       const totalMins = variant.reps
         ? Math.round(variant.reps * (variant.repMin! + variant.recMin!) + 15) // warmup/cooldown
         : workMins + 20; // continuous: warmup + cooldown
       intents.push({
         dayIndex: dayIdx++,
         slot: 'threshold',
-        totalMinutes: Math.round(totalMins * dMult),
+        totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
         workMinutes: workMins,
         reps: variant.reps,
         repMinutes: variant.repMin,
         recoveryMinutes: variant.recMin,
         variantId: variant.id,
-        notes: qualityNote,
+        notes: raceWeek ? 'Race-week primer' : qualityNote,
       });
     } else if (slot === 'vo2') {
-      const workMins = Math.round(vo2WorkMinutes(ability, phase) * dMult);
-      const variant = VO2_VARIANTS[Math.max(0, (weekIndex - 1)) % VO2_VARIANTS.length];
+      // Race week: short sharp primer (5K taper seats vo2 here, not threshold).
+      const variant = raceWeek
+        ? TAPER_PRIMER_VO2
+        : pickPhaseVariant(VO2_VARIANTS, weekIndex, variantPhase, variantWork);
+      const workMins = raceWeek
+        ? variant.reps * variant.repMin
+        : Math.round(vo2WorkMinutes(ability, phase) * dMult);
       const totalMins = Math.round(variant.reps * (variant.repMin + variant.recMin) + 15);
       intents.push({
         dayIndex: dayIdx++,
         slot: 'vo2',
-        totalMinutes: Math.round(totalMins * dMult),
+        totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
         workMinutes: workMins,
         reps: variant.reps,
         repMinutes: variant.repMin,
         recoveryMinutes: variant.recMin,
         variantId: variant.id,
-        notes: qualityNote,
+        notes: raceWeek ? 'Race-week primer' : qualityNote,
       });
     } else if (slot === 'marathon_pace') {
       const workMins = Math.round(mpWorkMinutes(raceDistance, ability, phase) * dMult);
@@ -597,7 +688,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     } else if (slot === 'float') {
       const workMins = Math.round(floatWorkMinutes(raceDistance, ability, phase) * dMult);
       if (workMins <= 0) continue; // skip if not eligible (beginner/novice, base/taper, 5K/10K)
-      const variant = FLOAT_VARIANTS[Math.max(0, (weekIndex - 1)) % FLOAT_VARIANTS.length];
+      const variant = pickPhaseVariant(FLOAT_VARIANTS, weekIndex, variantPhase, variantWork);
       const totalMins = Math.round(variant.reps * (variant.repMin + variant.floatMin) + 15);
       intents.push({
         dayIndex: dayIdx++,
@@ -652,7 +743,22 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
  * Mirrors the shape of `getPlanPrescribedMeanWeeklyKm` but at the peak point
  * of the plan rather than the build-phase mean.
  */
-function computePeakWeeklyKm(ctx: PlanContext): number {
+/**
+ * Peak weekly running km the plan ramps toward. This is the single source of
+ * the plan's volume destination: `effectiveWeeklyBudgetMin` ramps every week
+ * toward it (see line ~409). It is therefore also the correct volume to feed
+ * the race-day FORECAST — by race day the athlete has been holding this peak
+ * for weeks, so the marathon-specificity / low-volume penalties must be
+ * evaluated here, not at the athlete's pre-plan maintenance volume. Exported
+ * (with a narrowed input type) so `blended-fitness.refreshBlendedFitness` can
+ * read the same number the plan builds toward instead of recomputing it.
+ */
+export type PeakWeeklyKmInputs = Pick<
+  PlanContext,
+  'runsPerWeek' | 'raceDistance' | 'fitnessLevel' | 'totalWeeks' | 'vdot' | 'easyPaceSecPerKm'
+>;
+
+export function computePeakWeeklyKm(ctx: PeakWeeklyKmInputs): number {
   const ability = abilityBandFromVdot(ctx.vdot, ctx.fitnessLevel);
   const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
   // Long-run peak: distance-aware ability ceiling (marathon intermediate = 165 min

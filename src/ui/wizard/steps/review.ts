@@ -31,12 +31,13 @@ import { levelAllowsEstimatedStart } from '@/calculations/beginner-fitness';
 import { cv } from '@/calculations/vdot';
 import { recomputeLT, diagnoseLTForState } from '@/data/ltSync';
 import { awaitStartupSyncs } from '@/app/runtime';
-import { getPhysiologicalVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectivePhysiologyPbs, isPbTombstoned, recordPbDeletion, clearPbTombstone } from '@/calculations/physiological-vdot';
 import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, wmaKeyForRaceDist, runnerFieldPlacement } from '@/calculations/fitness-placement';
 import { vo2BandAnchors } from '@/data/vo2max-norms';
 import { openStandardSec, type WmaDistanceKey } from '@/data/wma-age-grading';
 import { HYROX_FORMAT_FINISHER_COUNTS } from '@/data/hyrox-population-distributions';
 import { poweredByStrava } from '@/ui/strava-brand';
+import { swapFadedText } from '@/ui/raster-safe-text';
 
 /**
  * Page 4. "Here's what we found" magic-moment review.
@@ -261,7 +262,12 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     // a pure manual-entry user (no source connected) skips both and renders
     // immediately, same as the original behaviour.
     const sNow = getState();
-    const hasApple = hasPhysiologySource(sNow as any, 'apple');
+    // Combined check (source OR device-local flag) — same idiom every other
+    // Apple site uses. A Garmin/tri user where Apple is a SUPPLEMENTARY source
+    // sets `appleHealthConnected` but never claims the labelled physiology
+    // source, so a source-only check skipped the activity backfill entirely
+    // (→ 0 sessions in Stats). The flag catches that case.
+    const hasApple = hasPhysiologySource(sNow as any, 'apple') || !!(sNow as any).appleHealthConnected;
     const finish = () => renderContent(container, state);
     if (hasApple) {
       // Show the existing loading state while the backfill runs (5–15s on
@@ -465,6 +471,9 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         const takeFastest = (k: 'k5' | 'k10' | 'h' | 'm') => {
           const stravaSec = cachedPbSources![k]?.timeSec;
           if (stravaSec == null) return;
+          // Honour a user deletion tombstone (ISSUE-297 RC3): don't re-add a
+          // deleted PB from auto-detected history unless it's genuinely faster.
+          if (isPbTombstoned(sm.deletedPbs, k, stravaSec)) return;
           const saved = next[k];
           if (saved == null || stravaSec < saved) next[k] = stravaSec;
         };
@@ -495,6 +504,8 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         const takeFastestOnb = (k: 'k5' | 'k10' | 'h' | 'm') => {
           const src = cachedPbSources![k];
           if (src?.timeSec == null) return;
+          // Honour a user deletion tombstone (ISSUE-297 RC3).
+          if (isPbTombstoned(sm.deletedPbs, k, src.timeSec)) return;
           const saved = nextOnb[k];
           // Update time when src is faster (or no saved value), AND attempt to
           // backfill the date even when time matches. Earlier wizard runs may
@@ -904,11 +915,8 @@ const LOADING_STEP_DETAIL = [
 // in-place updates until the next milestone overwrites it. Reset on mount.
 let loadingDetail: string | null = null;
 
-// Label cross-fade duration. The text swap MUST wait for the full fade so the
-// old glyphs reach opacity 0 before being replaced — otherwise WKWebView leaves
-// the half-faded old text un-rastered and the new text paints on top of it
-// (the "LcReading your physiologyry" ghost). Keep this in lockstep with the
-// `.rev-load-label-fade` CSS transition below.
+// Label cross-fade duration. Kept in lockstep with the `.rev-load-label-fade`
+// CSS transition below so the fade-out completes before the node is swapped.
 const LABEL_FADE_MS = 240;
 
 // Pending fade-swap timers. A new change cancels any in-flight swap so
@@ -916,32 +924,6 @@ const LABEL_FADE_MS = 240;
 // timer because facts (`setLoadingDetail`) and step changes can both swap it.
 let labelFadeTimer: number | null = null;
 let noteFadeTimer: number | null = null;
-
-/**
- * Cross-fade an element's text. Fades to opacity 0, swaps `textContent` only
- * once the old glyphs are fully invisible, then fades back in. Swapping
- * mid-fade is what produces the overlapping-text ghost on WKWebView (the old
- * half-faded glyphs stay un-rastered and the new text paints on top). The
- * caller owns the pending-timer slot so a fresh swap can cancel an in-flight
- * one. No-op when the text is unchanged (prevents needless re-fades on the
- * 1.5s heartbeat). Requires the element to carry `.rev-load-label-fade`.
- */
-function swapFadedText(
-  el: HTMLElement,
-  newText: string,
-  getTimer: () => number | null,
-  setTimer: (id: number | null) => void,
-): void {
-  if ((el.textContent ?? '').trim() === newText.trim()) return;
-  const pending = getTimer();
-  if (pending !== null) window.clearTimeout(pending);
-  el.style.opacity = '0';
-  setTimer(window.setTimeout(() => {
-    setTimer(null);
-    el.textContent = newText;
-    el.style.opacity = '1';
-  }, LABEL_FADE_MS));
-}
 
 const LOAD_RADIUS = 44;
 const LOAD_CIRCUMFERENCE = 2 * Math.PI * LOAD_RADIUS; // ~276.5
@@ -997,7 +979,7 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean, msSinceMou
   const labelEl = document.getElementById('revl-step-label');
   if (labelEl) {
     swapFadedText(labelEl, loadStepLabel(activeStep),
-      () => labelFadeTimer, (id) => { labelFadeTimer = id; });
+      () => labelFadeTimer, (id) => { labelFadeTimer = id; }, LABEL_FADE_MS);
   }
 
   setLoadingNoteText(loadNote(activeStep, timedOut, msSinceMount));
@@ -1010,7 +992,7 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean, msSinceMou
  *  the same anti-ghost fade and can't paint over each other. */
 function setLoadingNoteText(text: string): void {
   const noteEl = document.getElementById('revl-note');
-  if (noteEl) swapFadedText(noteEl, text, () => noteFadeTimer, (id) => { noteFadeTimer = id; });
+  if (noteEl) swapFadedText(noteEl, text, () => noteFadeTimer, (id) => { noteFadeTimer = id; }, LABEL_FADE_MS);
 }
 
 /** Push a real fact from the pipeline onto the loading note line
@@ -1133,14 +1115,23 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
       <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
         ${renderProgressIndicator(7, 8)}
 
-        <!-- Glass card -->
-        <div class="rev-load-rise" style="width:100%;max-width:380px;
-             background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
-             border:1px solid rgba(255,255,255,0.82);border-radius:28px;
-             padding:36px 28px 30px;
+        <!-- Glass card. The blur lives on a dedicated EMPTY background layer so
+             the text content below has NO backdrop-filter ancestor. WKWebView
+             caches a backdrop-filter element's rasterized text and composites
+             new glyphs over the stale bitmap (the "LcReading your physiologyry"
+             ghost); text in a sibling layer above the blur re-rasters normally.
+             Keep the changing labels OUT of any backdrop-filter subtree. -->
+        <div class="rev-load-rise" style="position:relative;width:100%;max-width:380px;
+             border-radius:28px;
              box-shadow:0 16px 56px rgba(0,0,0,0.08),0 2px 8px rgba(0,0,0,0.05);
-             animation-delay:0.06s;
-             display:flex;flex-direction:column;align-items:center;text-align:center">
+             animation-delay:0.06s">
+
+          <div aria-hidden="true" style="position:absolute;inset:0;border-radius:28px;
+               background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+               border:1px solid rgba(255,255,255,0.82)"></div>
+
+          <div style="position:relative;z-index:1;padding:36px 28px 30px;
+               display:flex;flex-direction:column;align-items:center;text-align:center">
 
           <!-- Chip -->
           <span style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
@@ -1195,6 +1186,7 @@ function renderLoading(container: HTMLElement, activeStep: number, timedOut: boo
           </p>
 
           <div style="margin-top:20px">${poweredByStrava(14, 0.45)}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1294,6 +1286,15 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
   const weeklyKm = detectedKm > 0
     ? detectedKm
     : (cachedActivities ? weeklyKmFromActivities(cachedActivities) : 0);
+  // No-data plan-safety mandate: when a running plan has NO volume signal at all
+  // (no synced history, nothing typed), the volume-budget ACWR ramp can't engage
+  // and week 1 can land too hard. Force a rough weekly-volume entry via a slider
+  // before Build. Running mode only (tri/cycling/HYROX have their own flows;
+  // track-only has no plan). Suppressed the moment any real signal exists.
+  const volumeMandatory =
+    !['triathlon', 'cycling', 'hyrox'].includes(state.trainingMode ?? '')
+    && !state.trackOnly
+    && hasNoRunningVolumeSignal();
   const pbs = state.pbs ?? {};
   const pbSources: PBsWithSource = cachedPbSources ?? {};
 
@@ -1452,7 +1453,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
             }
             return `
               ${renderSectionLabel('Recent training')}
-              ${showRunVolume ? renderVolumeRow(weeklyKm, unitPref, activityCount) : ''}
+              ${showRunVolume ? renderVolumeRow(weeklyKm, unitPref, activityCount, volumeMandatory) : ''}
               ${showBikeVolume ? renderDisciplineVolumeRow('bike', cachedWeeklyBikeKm!, unitPref) : ''}
               ${showSwimVolume ? renderDisciplineVolumeRow('swim', cachedWeeklySwimKm!, unitPref) : ''}
             `;
@@ -1493,6 +1494,21 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
  * FTP and CSS are optional. The plan engine falls back to skill-rating
  * estimates and HR/RPE-only zones until a real number lands.
  */
+/**
+ * True when a running plan has NO weekly-volume signal at all: nothing typed
+ * (`detectedWeeklyKm`), not confirmed, no accepted Strava history, AND no runs
+ * in the cached activity window. Single source so the mandatory-slider render
+ * (`volumeMandatory`) and the Continue gate agree exactly — otherwise the gate
+ * could block with no slider on screen to satisfy it (a stuck state).
+ */
+function hasNoRunningVolumeSignal(): boolean {
+  const s = getState();
+  if ((s.detectedWeeklyKm ?? 0) > 0) return false;
+  if (s.weeklyVolumeConfirmed || s.stravaHistoryAccepted) return false;
+  const activityKm = cachedActivities ? weeklyKmFromActivities(cachedActivities) : 0;
+  return activityKm <= 0;
+}
+
 function refreshContinueGate(): void {
   const cta = document.getElementById('r-continue') as HTMLButtonElement | null;
   const hint = document.getElementById('r-continue-hint') as HTMLElement | null;
@@ -1523,6 +1539,11 @@ function refreshContinueGate(): void {
       if (levelAllowsEstimatedStart(onb.experienceLevel)) estimatingStart = true;
       else missing.push('at least one personal best');
     }
+    // No-data volume mandate: a running plan with no volume signal at all must
+    // have a rough weekly volume set (via the slider) before Build, so the
+    // volume-budget ramp engages and week 1 isn't too hard. Same helper as the
+    // `volumeMandatory` render condition so the gate and the slider never disagree.
+    if (hasNoRunningVolumeSignal()) missing.push('your typical weekly running volume');
   }
 
   cta.disabled = missing.length > 0;
@@ -1683,7 +1704,28 @@ function renderDisciplineVolumeRow(
   `;
 }
 
-function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount: number): string {
+function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount: number, mandatory = false): string {
+  // No-data plan-safety mandate: a glass slider the user MUST move before Build.
+  // No pre-filled number (the readout stays "Drag to set" until first touch) so
+  // we never anchor the estimate. On input it commits to detectedWeeklyKm +
+  // weeklyVolumeConfirmed, which both clears this branch and opens the Continue
+  // gate. Slider value is in km; the readout converts to the user's unit.
+  if (mandatory) {
+    const unitLabel = unitPref === 'mi' ? 'mi' : 'km';
+    return `
+      <div class="r-row shadow-ap" data-row="volume-mandatory" style="cursor:default">
+        <div class="r-row-icon">${ICON_VOLUME}</div>
+        <div class="r-row-body">
+          <p class="r-row-label">Weekly running volume</p>
+          <p class="r-row-value" id="r-volume-readout">Drag to set</p>
+          <div style="padding:8px 0 4px">
+            <input id="r-volume-slider" class="m-slider-glass" type="range" min="0" max="80" step="1" value="0" aria-label="Typical weekly running ${unitLabel}">
+          </div>
+          <p class="r-row-sub">We found no recent running. Set your typical weekly volume so the plan starts at the right load. A rough estimate is fine.</p>
+        </div>
+      </div>
+    `;
+  }
   if (editing === 'volume') {
     const raw = unitPref === 'mi' ? (weeklyKm / 1.609).toFixed(1) : String(Math.round(weeklyKm));
     const unitLabel = unitPref === 'mi' ? 'mi / week' : 'km / week';
@@ -1870,6 +1912,9 @@ function renderVdotRow(_vdot: number | undefined): string {
 
   let sub = 'Aerobic fitness estimate from your recent harder runs.';
   switch (physio.source) {
+    case 'race-validated':
+      sub = 'From your recent race. A real race result reads your running fitness more accurately than a watch estimate.';
+      break;
     case 'device':
       sub = 'From your watch.';
       break;
@@ -2521,6 +2566,26 @@ function renderRunnerTypePickerInline(active: RunnerType | null): string {
 /** ---------- Handlers ---------- */
 
 function wireHandlers(container: HTMLElement, state: OnboardingState): void {
+  // No-data weekly-volume slider (mandatory before Build). Split input vs change
+  // per the slider convention: `input` gives the live readout + opens the gate;
+  // `change` commits to disk. First touch sets weeklyVolumeConfirmed, which both
+  // satisfies the Continue gate and stops this row re-rendering as mandatory.
+  const volSlider = container.querySelector<HTMLInputElement>('#r-volume-slider');
+  if (volSlider) {
+    const readout = container.querySelector<HTMLElement>('#r-volume-readout');
+    const apply = () => {
+      const km = parseFloat(volSlider.value);
+      if (!isFinite(km)) return;
+      const s = getMutableState();
+      s.detectedWeeklyKm = km;
+      s.weeklyVolumeConfirmed = true;
+      if (readout) readout.textContent = `${formatKm(km, getState().unitPref ?? 'km', 0)} / week`;
+      refreshContinueGate();
+    };
+    volSlider.addEventListener('input', apply);
+    volSlider.addEventListener('change', () => { apply(); saveState(); });
+  }
+
   // Row tap → enter edit mode for that row
   container.querySelectorAll<HTMLElement>('[data-row]').forEach(el => {
     const row = el.getAttribute('data-row');
@@ -2790,9 +2855,20 @@ function commitEditing(state: OnboardingState): void {
       // corresponds to this time. Drop it. Without a known date, the marathon
       // -specificity penalty falls back to full strength (safe default).
       delete nextPbDates[key];
+      // Explicit user entry clears any deletion tombstone so an intentional
+      // re-entry of a previously-deleted time is honoured (ISSUE-297 RC3).
+      clearPbTombstone(getMutableState(), key);
     } else if (input.value.trim() === '') {
       delete nextPbs[key];
       delete nextPbDates[key];
+      // Record the deletion on the committed state: set a tombstone and clear
+      // the value from BOTH stores so it can't resurrect via the fastest-wins
+      // merge or a later Strava/Apple auto-fill (ISSUE-297 RC3). Refresh so the
+      // engine/prediction recompute without it.
+      recordPbDeletion(getMutableState(), key);
+      import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
+        try { refreshBlendedFitness(getMutableState()); } catch (e) { void e; }
+      });
     } else {
       // Bad input. Do not close the editor so the user can fix it.
       input.style.borderColor = 'rgba(185,28,28,0.6)';

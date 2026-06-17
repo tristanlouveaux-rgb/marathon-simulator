@@ -240,6 +240,7 @@ function buildTssExplainer(): string {
         TSS combines duration and intensity into a single weekly number.
         A 45-min easy run scores around 40. A 90-min long run at marathon pace is closer to 120.
       </p>
+      <div style="font-size:11px;font-weight:600;color:${TEXT_S};margin-bottom:2px">Weekly total</div>
       <div>${rows}</div>
     </div>`;
 }

@@ -1,5 +1,24 @@
 import { Capacitor } from '@capacitor/core';
 
+/**
+ * Fire a short medium-impact haptic to confirm a UI element has become
+ * interactive (e.g. a drag-reorder card has armed after its long-press hold).
+ * Native only via the Taptic Engine; iOS WKWebView ignores `navigator.vibrate`,
+ * so there is no web fallback. Never throws.
+ */
+export function fireSelectionHaptic(): void {
+  try {
+    if (!Capacitor.isNativePlatform()) return;
+    // Lazy import so the bundle doesn't pull @capacitor/haptics into web paths
+    // that never call this.
+    void import('@capacitor/haptics').then(({ Haptics, ImpactStyle }) => {
+      void Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {});
+    }).catch(() => {});
+  } catch {
+    // Capacitor unavailable (SSR / web). No-op.
+  }
+}
+
 /** Check if running inside a native Capacitor shell */
 export function isNative(): boolean {
   try {

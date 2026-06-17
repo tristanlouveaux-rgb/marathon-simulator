@@ -48,10 +48,14 @@ describe('resolveTriWeekWorkouts', () => {
     expect((s.wks![0].triWorkouts![0] as any).d).toBe('60min Z2');
   });
 
-  it('clone:false returns the stored references (plan-view legacy contract)', () => {
-    const s = triState();
+  it('clone:false shares stored references and mods mutate the stored plan — the ISSUE-288 hazard views must avoid', () => {
+    // Documents WHY the plan views always clone: with clone:false the render-time
+    // illness mods mutate the stored objects in place, and a later saveState would
+    // persist "Rest — illness" permanently. No view may pass clone:false.
+    const s = triState({ illnessState: { active: true, severity: 'resting', startDate: '2026-06-01' } } as any);
     const out = resolveTriWeekWorkouts(s, 1, { clone: false });
     expect(out[0]).toBe(s.wks![0].triWorkouts![0]);
+    expect((s.wks![0].triWorkouts![0] as any).illnessMod).toBe(true); // stored plan corrupted — never do this from a view
   });
 
   it('illness mods apply to the clones, never the stored plan (idempotent)', () => {
@@ -66,6 +70,39 @@ describe('resolveTriWeekWorkouts', () => {
     // …and the stored plan is untouched.
     expect((s.wks![0].triWorkouts![0] as any).illnessMod).toBeUndefined();
     expect((s.wks![0].triWorkouts![0] as any).r).toBe(4);
+  });
+
+  it('ISSUE-288 reproduction: the OLD clone:false path leaves a workout stuck on Rest after recovery', () => {
+    const s = triState({ illnessState: { active: true, severity: 'resting', startDate: '2026-06-01' } } as any);
+
+    // 1. OLD plan-view behaviour: render during illness with clone:false.
+    resolveTriWeekWorkouts(s, 1, { clone: false });
+    // saveState() would JSON.stringify(state) here — the mutation is already on the
+    // stored object, so it gets persisted. We assert the stored object is corrupted:
+    expect((s.wks![0].triWorkouts![0] as any).d).toBe('Rest — illness');
+
+    // 2. User recovers — illness no longer active.
+    (s as any).illnessState = { active: false, severity: 'resting', startDate: '2026-06-01' };
+
+    // 3. Re-render. Mods are NOT re-applied (illness inactive), but the persisted
+    //    corruption from step 1 remains → the workout is STILL "Rest". This is the bug.
+    const afterRecovery = resolveTriWeekWorkouts(s, 1, { clone: false });
+    expect((afterRecovery[0] as any).d).toBe('Rest — illness'); // stuck — the reported symptom
+  });
+
+  it('ISSUE-288 fix: the cloned path never corrupts the stored plan, so recovery is clean', () => {
+    const s = triState({ illnessState: { active: true, severity: 'resting', startDate: '2026-06-01' } } as any);
+
+    // 1. Fixed plan-view behaviour: render during illness with the default clone.
+    const duringIllness = resolveTriWeekWorkouts(s, 1);
+    expect((duringIllness[0] as any).d).toBe('Rest — illness');          // card still shows the mod
+    expect((s.wks![0].triWorkouts![0] as any).d).toBe('60min Z2');        // stored plan untouched
+
+    // 2. Recover. 3. Re-render → workout is back to normal (no lingering Rest).
+    (s as any).illnessState = { active: false };
+    const afterRecovery = resolveTriWeekWorkouts(s, 1);
+    expect((afterRecovery[0] as any).d).toBe('60min Z2');
+    expect((afterRecovery[0] as any).illnessMod).toBeUndefined();
   });
 
   it('illness mods only fire for the current week', () => {

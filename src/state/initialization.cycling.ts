@@ -15,7 +15,7 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
-import { saveState } from '@/state/persistence';
+import { saveState, getMondayOf } from '@/state/persistence';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
@@ -120,9 +120,9 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     s.continuousMode = false;
     s.w = 1;
     s.tw = weeks;
-    const _planMonday = new Date();
-    const _dow = _planMonday.getDay();
-    _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
+    // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
+    // (dropPreOnboardSessions), a Sat/Sun onboard a chill 1–2 session lead-in week.
+    const _planMonday = getMondayOf(new Date());
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
     s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
     (s as any).lastCompleteDebriefWeek = 0;

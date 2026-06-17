@@ -29,7 +29,7 @@ vi.stubGlobal('localStorage', localStorageMock);
 vi.stubGlobal('alert', vi.fn());
 
 // Import after mocking
-import { loadState, saveState, clearState } from './persistence';
+import { loadState, saveState, clearState, softResetState } from './persistence';
 import { getState, setState, resetState } from './store';
 
 // Helper to create empty weeks array (validation requires wks.length === tw)
@@ -379,6 +379,36 @@ describe('State Persistence', () => {
 
       const loaded = loadState();
       expect(loaded).toBe(false);
+    });
+  });
+
+  // "Reset plan" (preserve) vs "Wipe everything" (full): the only state-level
+  // difference is whether the archived weekly history (previousPlanWks) survives
+  // so the rebuilt plan can re-attach this week's activities.
+  describe('softResetState — preserve vs wipe archive', () => {
+    const archive = [{ planStartDate: '2026-06-01', weeks: [], archivedAt: '2026-06-10T00:00:00Z' }];
+
+    function seedWithArchive() {
+      setState({
+        ...getState(),
+        onboarding: { ...(getState().onboarding as any), name: 'Tristan' },
+        previousPlanWks: archive,
+      } as any);
+    }
+
+    it('preserveArchive carries previousPlanWks into the fresh state', () => {
+      seedWithArchive();
+      softResetState({ preserveArchive: true });
+      const saved = JSON.parse(localStorageMock.getItem('marathonSimulatorState')!);
+      expect(saved.previousPlanWks).toEqual(archive);
+      expect(saved.hasCompletedOnboarding).toBe(false);
+    });
+
+    it('full wipe (no opts) drops previousPlanWks', () => {
+      seedWithArchive();
+      softResetState();
+      const saved = JSON.parse(localStorageMock.getItem('marathonSimulatorState')!);
+      expect(saved.previousPlanWks ?? []).toEqual([]);
     });
   });
 });

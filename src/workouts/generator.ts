@@ -77,8 +77,23 @@ export function generateWeekWorkouts(
     // jumping straight to the ability-driven peak. Falls back to legacy
     // behaviour when state is empty (no Strava history yet).
     const sNow = getState();
-    const baselineKm = sNow.detectedWeeklyKm;
-    const archetype = sNow.athleteArchetype?.archetype;
+    // Continuous (endless) mode has no race date, so the legacy `weekIndex`
+    // long-run/threshold ramps — which key off `totalWeeks` — give only a shallow
+    // climb that the 4-week phase cycle swamps. The result is "ramps in circles":
+    // each Base→Build→Peak→Taper block peaks at the same low level (ISSUE: parked
+    // continuous-mode bug). To get genuine progressive overload across cycles we
+    // engage the geometric volume-budget ramp (`weekVolumeBudgetKm`, slope from the
+    // archetype `weeklyRampPct` — Reilly's 10% guideline / Gabbett ACWR safe zone),
+    // which climbs toward the readiness-capped peak and then plateaus there. That
+    // ramp needs a baseline + archetype; a continuous user who hasn't synced has
+    // neither, so fall back to the plan's own starting volume (`s.wkm`, the same
+    // freq-derived estimate the prediction uses — not an invented number) and the
+    // neutral `'unknown'` archetype (7% ramp). Event plans are unaffected: they
+    // keep reading detected values only.
+    const baselineKm = sNow.detectedWeeklyKm
+      ?? (sNow.continuousMode && sNow.wkm && sNow.wkm > 0 ? sNow.wkm : undefined);
+    const archetype = sNow.athleteArchetype?.archetype
+      ?? (sNow.continuousMode ? 'unknown' : undefined);
     // CTL-gap re-anchor for this week. Stamped on the week at rollover (events.next()); read live
     // here — exactly like baselineKm/archetype — so every resolver call applies the same reduction
     // the debrief previewed. A stored scalar, so reading it here never re-enters the adherence

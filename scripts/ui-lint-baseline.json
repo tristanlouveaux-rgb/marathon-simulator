@@ -1,7 +1,7 @@
 {
   "src/ui/account-view.ts": {
-    "uppercase": 4,
-    "letter-spacing": 4,
+    "uppercase": 5,
+    "letter-spacing": 5,
     "tinted-bg": 1
   },
   "src/ui/activity-detail.ts": {
@@ -39,17 +39,17 @@
   },
   "src/ui/home-view.ts": {
     "tinted-bg": 15,
-    "accent-button": 5,
-    "uppercase": 25,
-    "letter-spacing": 24
+    "accent-button": 3,
+    "uppercase": 22,
+    "letter-spacing": 20
   },
   "src/ui/hyrox/add-session-modal.ts": {
     "uppercase": 1,
     "letter-spacing": 1
   },
   "src/ui/hyrox/forecast-view.ts": {
-    "uppercase": 13,
-    "letter-spacing": 13
+    "uppercase": 8,
+    "letter-spacing": 8
   },
   "src/ui/hyrox/goal-modal.ts": {
     "tinted-bg": 2,
@@ -72,7 +72,7 @@
   "src/ui/hyrox/stats-view.ts": {
     "uppercase": 10,
     "letter-spacing": 10,
-    "tinted-bg": 4
+    "tinted-bg": 3
   },
   "src/ui/hyrox/workout-card.ts": {
     "uppercase": 1,
@@ -84,7 +84,6 @@
     "tinted-bg": 2
   },
   "src/ui/injury/modal.ts": {
-    "tinted-bg": 1,
     "accent-button": 1
   },
   "src/ui/injury-risk-view.ts": {
@@ -97,8 +96,8 @@
     "letter-spacing": 1
   },
   "src/ui/main-view.ts": {
-    "tinted-bg": 29,
-    "accent-button": 6
+    "tinted-bg": 28,
+    "accent-button": 5
   },
   "src/ui/matching-screen.ts": {
     "tinted-bg": 2,
@@ -111,10 +110,9 @@
     "tinted-bg": 1
   },
   "src/ui/plan-view.ts": {
-    "accent-button": 1,
     "uppercase": 20,
     "letter-spacing": 19,
-    "tinted-bg": 15
+    "tinted-bg": 11
   },
   "src/ui/readiness-view.ts": {
     "tinted-bg": 3
@@ -144,16 +142,13 @@
   },
   "src/ui/stats-view.ts": {
     "tinted-bg": 11,
-    "uppercase": 32,
-    "letter-spacing": 32,
+    "uppercase": 25,
+    "letter-spacing": 25,
     "accent-button": 1
   },
   "src/ui/strain-view.ts": {
     "tinted-bg": 4,
     "letter-spacing": 2
-  },
-  "src/ui/suggestion-modal.ts": {
-    "tinted-bg": 2
   },
   "src/ui/toast.ts": {
     "uppercase": 1,
@@ -164,14 +159,12 @@
   },
   "src/ui/triathlon/benchmark-tests-card.ts": {
     "uppercase": 2,
-    "letter-spacing": 2,
-    "tinted-bg": 1
+    "letter-spacing": 2
   },
   "src/ui/triathlon/bike-setup-view.ts": {
     "uppercase": 5,
     "letter-spacing": 5,
-    "tinted-bg": 7,
-    "accent-button": 1
+    "tinted-bg": 7
   },
   "src/ui/triathlon/fitness-detail-view.ts": {
     "tinted-bg": 1,
@@ -183,9 +176,9 @@
     "letter-spacing": 1
   },
   "src/ui/triathlon/plan-view.ts": {
-    "uppercase": 13,
-    "letter-spacing": 12,
-    "tinted-bg": 7
+    "uppercase": 12,
+    "letter-spacing": 11,
+    "tinted-bg": 6
   },
   "src/ui/triathlon/progress-detail-view.ts": {
     "tinted-bg": 1,
@@ -237,10 +230,6 @@
     "uppercase": 1,
     "letter-spacing": 1
   },
-  "src/ui/wizard/steps/connect-strava.ts": {
-    "tinted-bg": 1,
-    "uppercase": 1
-  },
   "src/ui/wizard/steps/cycling-setup.ts": {
     "uppercase": 1
   },
@@ -250,7 +239,7 @@
   },
   "src/ui/wizard/steps/hyrox-setup.ts": {
     "uppercase": 1,
-    "tinted-bg": 4
+    "tinted-bg": 3
   },
   "src/ui/wizard/steps/hyrox-workout-preview.ts": {
     "uppercase": 1,

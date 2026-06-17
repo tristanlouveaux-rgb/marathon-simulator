@@ -21,6 +21,7 @@
  */
 
 import { showSimpleToast } from '@/ui/toast';
+import { setRasterSafeText } from '@/ui/raster-safe-text';
 import { getState } from '@/state/store';
 import { ft, formatKm, fp } from '@/utils/format';
 import { recognizeScreenshotText, isScreenshotOcrAvailable } from '@/data/screenshotOcr';
@@ -133,9 +134,15 @@ async function onFile(e: Event): Promise<void> {
   // might have collected for a previous (now-abandoned) run.
   activeHrSeries = null;
 
-  const statusEl = document.getElementById('ss-modal-status');
+  // Re-query by id: the status line sits inside a backdrop-filter glass card,
+  // so setRasterSafeText replaces the node to dodge the WKWebView glyph-raster
+  // ghost — that detaches any cached reference.
+  const setStatus = (text: string) => {
+    const el = document.getElementById('ss-modal-status');
+    if (el) setRasterSafeText(el, text);
+  };
   const label = document.getElementById('ss-choose-label') as HTMLLabelElement | null;
-  if (statusEl) statusEl.textContent = 'Reading the screenshot…';
+  setStatus('Reading the screenshot…');
   if (label) label.style.pointerEvents = 'none';
 
   try {
@@ -158,7 +165,7 @@ async function onFile(e: Event): Promise<void> {
     renderConfirmStep(result.parsed, { usedAI: result.usedAI, source: result.source });
   } catch (err) {
     const detail = err instanceof Error ? err.message : '';
-    if (statusEl) statusEl.textContent = `Could not read that screenshot. ${detail}`.trim();
+    setStatus(`Could not read that screenshot. ${detail}`.trim());
     if (label) label.style.pointerEvents = '';
     showSimpleToast('Could not read that screenshot', 'error');
     input.value = '';

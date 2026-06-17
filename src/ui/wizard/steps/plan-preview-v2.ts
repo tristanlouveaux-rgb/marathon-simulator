@@ -431,7 +431,7 @@ function forecastForSessions(
     // Default to the plan's planned strength count; callers can override (e.g.
     // pass 0 to compute the no-strength baseline for the benefit callout).
     strengthSessionsPerWeek: strengthSessions ?? s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0,
-    blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
   }).forecastTime;
 }
 

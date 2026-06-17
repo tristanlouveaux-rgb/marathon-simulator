@@ -4,7 +4,7 @@ import { maybeOfferAccountSave } from '../save-account-overlay';
 import { saveState } from '@/state/persistence';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
-import { isNativeiOS, connectAppleHealth } from '@/data/appleHealthSync';
+import { isNativeiOS, connectAppleHealth, getLastApplePhysiologyDiag } from '@/data/appleHealthSync';
 import { openAppSettings } from '@/data/healthExtras';
 import { getState, updateState } from '@/state/store';
 import { hasPhysiologySource } from '@/data/sources';
@@ -41,11 +41,6 @@ import { GARMIN_CONNECT_ENABLED } from '@/constants/feature-flags';
  * step (PBs are derived and stay editable on the post-plan reveal); only no-data users
  * are routed to manual PB entry.
  */
-
-/** Upper bound on how long the Apple Health connect can show "Connecting…" before
- *  it falls back to the recovery card. A 28-day HealthKit read resolves in 1-2s;
- *  20s is generous headroom that still guarantees the spinner can never stick. */
-const APPLE_CONNECT_TIMEOUT_MS = 20_000;
 
 /** Module flag: did the user complete a file import this visit? Feeds the Continue routing. */
 let didUpload = false;
@@ -736,18 +731,16 @@ async function triggerAppleHealth(): Promise<void> {
 
   setAppleConnecting(onHistory, true);
 
-  // connectAppleHealth catches its own errors and resolves to { ok:false }, but a
-  // hung native HealthKit read would never resolve OR throw, sticking the button on
-  // "Connecting…" forever. Race it against a timeout so the connecting state can
-  // always recover. connectAppleHealth is in-flight-guarded, so a late real result
-  // still completes its state writes in the background even if we showed recovery.
+  // connectAppleHealth catches its own errors and resolves to { ok:false }, and
+  // is internally timeout-bounded (CONNECT_PHYSIOLOGY_TIMEOUT_MS) so it ALWAYS
+  // resolves — even if the native HealthKit bridge hangs. We must NOT add a
+  // separate, shorter UI timeout here: the connect includes the time the user
+  // spends on the iOS permission sheet, and a 20s race counting that human time
+  // is exactly what produced the false "Apple Health could not be reached"
+  // error on device. Await the real result directly.
   let result: { ok: boolean; reason?: 'not-ios' | 'no-data' | 'sync-error' };
   try {
-    result = await Promise.race([
-      connectAppleHealth(),
-      new Promise<{ ok: boolean; reason: 'sync-error' }>(resolve =>
-        setTimeout(() => resolve({ ok: false, reason: 'sync-error' }), APPLE_CONNECT_TIMEOUT_MS)),
-    ]);
+    result = await connectAppleHealth();
   } catch (err) {
     console.warn('[connect-data] Apple Health connect threw unexpectedly', err);
     result = { ok: false, reason: 'sync-error' };
@@ -788,23 +781,33 @@ function hideAppleRecovery(): void {
  * re-tapping Connect can't help — the Settings deep-link is the real recovery.
  */
 function showAppleHealthRecovery(onHistory: boolean, reason?: 'not-ios' | 'no-data' | 'sync-error'): void {
-  const settingsHint = 'In Settings, open Privacy & Security, then Health, then Mosaic, and turn the data on.';
+  // The Health toggles are NOT on Mosaic's own Settings page (that page only
+  // shows Siri, Search, and Mobile Data). They live under a different branch,
+  // and iOS has no API to deep-link there — so the copy must give the full
+  // manual path. Most reliable route is the Health app itself.
+  const settingsHint = 'Open the Health app, tap your profile photo, then Privacy, then Apps, then Mosaic, and turn the categories on. Settings, then Privacy & Security, then Health, then Mosaic works too.';
+  // On-device debug line. TestFlight has no console, so append the raw read
+  // outcome (auth status + per-type sample counts) so we can tell apart
+  // permission-off, a hung native read, and a genuinely empty device. Plain
+  // muted text; remove once the connect path is confirmed working on a phone.
+  const diag = getLastApplePhysiologyDiag();
+  const diagLine = diag ? `\n\nDiagnostic: ${diag}` : '';
   if (onHistory) {
     const card = document.getElementById('cd-apple-recovery-hub');
     const sub = document.getElementById('cd-apple-recovery-hub-sub');
     if (sub) {
-      sub.textContent = reason === 'sync-error'
+      sub.textContent = (reason === 'sync-error'
         ? `Apple Health could not be reached. ${settingsHint} Or use Strava or an upload below.`
-        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap Connect again. ${settingsHint} Or use Strava or an upload below.`;
+        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap Connect again. ${settingsHint} Or use Strava or an upload below.`) + diagLine;
     }
     if (card) card.style.display = 'block';
   } else {
     const card = document.getElementById('cd-apple-recovery');
     const sub = document.getElementById('cd-apple-recovery-sub');
     if (sub) {
-      sub.textContent = reason === 'sync-error'
+      sub.textContent = (reason === 'sync-error'
         ? `Apple Health could not be reached. ${settingsHint} You can also use Strava or upload an export.`
-        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap the Apple Watch tile again. ${settingsHint} No Apple Watch data yet? Use Strava or an upload instead.`;
+        : `No data came through. If Apple Health is off for Mosaic, turn it on, then tap the Apple Watch tile again. ${settingsHint} No Apple Watch data yet? Use Strava or an upload instead.`) + diagLine;
     }
     if (card) card.style.display = 'block';
   }

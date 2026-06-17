@@ -18,6 +18,7 @@ import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { buildYourNumbersCard } from './fitness-detail-view';
 import { buildProgressContent, type ProgressRange } from './progress-detail-view';
+import { renderPlanShapeCard } from '../plan-shape-chart';
 import { animateChartDrawOn } from './benchmark-charts';
 import { buildStrengthProgressCard, openStrengthProgressDetail } from '../strength-progress-view';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
@@ -92,6 +93,9 @@ export function renderTriathlonStatsView(): void {
 
           <!-- Progress section -->
           <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px" class="hf" data-delay="0.17">Progress</div>
+          <div class="hf" data-delay="0.175">
+            ${renderPlanShapeCard(s)}
+          </div>
           <div id="tri-progress-section" class="hf" data-delay="0.18">
             ${buildProgressContent(s, _activeRange)}
           </div>
@@ -166,7 +170,6 @@ export function renderTriathlonStatsView(): void {
       tabBar: renderTabBar('stats'),
     });
     strengthCard.addEventListener('click', openStrength);
-    strengthCard.addEventListener('touchend', (e) => { e.preventDefault(); openStrength(); }, { passive: false });
   }
 
   // Drill-through from the "Your Numbers" bars. Each bar id (css/ftp/lt/vo2)
@@ -239,7 +242,6 @@ export function renderTriathlonStatsView(): void {
     };
 
     el.addEventListener('click', handler);
-    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
   });
 }
 

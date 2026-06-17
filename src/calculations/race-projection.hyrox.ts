@@ -70,6 +70,28 @@ export interface HyroxProjection {
   };
 }
 
+/**
+ * Half-width (as a fraction of the finish time) of the forecast confidence
+ * band. Single source of truth for both the projection's `confidenceRangeSec`
+ * and the hero's "likely range" caption, so the two never diverge.
+ *
+ * Base ±4% reflects the irreducible day-to-day and pacing variance of a HYROX
+ * finish. It widens with weeks-out (more time for fitness to drift from the
+ * model) and with low calibration (seed-based estimates are less certain than
+ * the athlete's measured station times).
+ */
+export function hyroxForecastBandPct(
+  confidence: 'high' | 'medium' | 'low',
+  weeksRemaining: number,
+): number {
+  let pct = 0.04;
+  if (weeksRemaining > 4)  pct += 0.01;
+  if (weeksRemaining > 12) pct += 0.01;
+  if (confidence === 'low')    pct += 0.02;
+  if (confidence === 'medium') pct += 0.01;
+  return pct;
+}
+
 /** Days between two ISO dates. Negative if `to` is before `from`. */
 function daysBetween(fromISO: string, toISO: string): number {
   const a = new Date(fromISO).getTime();
@@ -380,13 +402,9 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   };
 
   // ── Confidence range ───────────────────────────────────────────────────
-  // Base ±4% range. Widens with weeksRemaining (uncertainty grows farther out)
-  // and tightens with calibration (high-confidence prediction → tighter band).
-  let basePct = 0.04;
-  if (weeksRemaining > 4)  basePct += 0.01;
-  if (weeksRemaining > 12) basePct += 0.01;
-  if (prediction.confidence === 'low')    basePct += 0.02;
-  if (prediction.confidence === 'medium') basePct += 0.01;
+  // Band half-width comes from the shared `hyroxForecastBandPct` helper so the
+  // hero's "likely range" caption and this projection band stay identical.
+  const basePct = hyroxForecastBandPct(prediction.confidence, weeksRemaining);
   const halfRange = projectedTotalSec * basePct;
   const confidenceRangeSec: [number, number] = [
     Math.round(projectedTotalSec - halfRange),

@@ -170,4 +170,28 @@ describe('detectAndLogRaceOutcome', () => {
     expect(detectAndLogRaceOutcome(s)).not.toBeNull();
     expect(detectAndLogRaceOutcome(s)).toBeNull();  // already logged
   });
+
+  it('seeds the race-validated run-VDOT anchor from the run leg', () => {
+    const s = baseState();
+    const raceDate = isoDaysAgo(1);
+    const start = new Date(raceDate + 'T08:00:00Z').toISOString();
+    const runStart = new Date(raceDate + 'T13:30:00Z').toISOString();
+    s.wks = [
+      {
+        garminActuals: {
+          a1: { garminId: 'a1', startTime: start, durationSec: 3500, distanceKm: 3.8, activityType: 'SWIMMING' } as any,
+          a2: { garminId: 'a2', startTime: start, durationSec: 21500, distanceKm: 180, activityType: 'CYCLING' } as any,
+          a3: { garminId: 'a3', startTime: runStart, durationSec: 17880, distanceKm: 42.2, activityType: 'RUNNING' } as any,
+        },
+      },
+    ] as any;
+    expect(s.raceRunVdot).toBeUndefined();
+    detectAndLogRaceOutcome(s);
+    expect(s.raceRunVdot).toBeDefined();
+    expect(s.raceRunVdot!.source).toBe('logged-race');
+    expect(s.raceRunVdot!.distance).toBe('ironman');
+    expect(s.raceRunVdot!.dateISO).toBe(raceDate);
+    expect(s.raceRunVdot!.vdot).toBeGreaterThan(20);
+    expect(s.raceRunVdot!.vdot).toBeLessThan(90);
+  });
 });
