@@ -1239,7 +1239,7 @@ function estimateBikeSpeed(
   return byLevel[skill] * intensityFactor;
 }
 
-function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {
+export function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {
   // byLevel is the reference run-leg pace at Ironman (marathon) distance. Scale to
   // the actual run-leg distance via Riegel's power law (T ∝ d^1.06, so pace ∝ d^0.06;
   // Riegel 1981) — shorter legs are run faster. Replaces the old flat 70.3 −15s

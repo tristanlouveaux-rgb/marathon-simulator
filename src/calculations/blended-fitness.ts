@@ -25,6 +25,7 @@ import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
 import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
+import { estimateRunPaceFromSkill } from './race-prediction.triathlon';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -656,6 +657,34 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         console.log(`[refreshBlendedFitness] engine capped at race-validated VDOT ${raceVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}; watch/blend uncorroborated by running PBs or recent runs)`);
         engineVdot = raceVdot;
       }
+    }
+  }
+
+  // ── Cold-start skill-slider cap (triathlon, no running-specific signal) ────
+  // With no PB capacity, no race anchor, no recent run, and no medium+ HR-vs-pace
+  // calibration, the engine is driven purely by an uncorroborated watch VO2max —
+  // which overstates RUNNING fitness for triathletes (cycling/swimming build it,
+  // so the watch number isn't run-specific). Symptom: a watch VO2max of 56 with
+  // no running data predicts a sub-3:00 marathon for a self-described mid-pack
+  // runner. Cap the engine at the athlete's own run skill-slider self-assessment
+  // (a running-specific self-report) so it can't run away. The watch VO2max stays
+  // the displayed number and re-enters the blend the instant any real running
+  // signal lands (PB pulled from Strava/Apple, a logged run, a race). No new
+  // constants — reuses estimateRunPaceFromSkill's existing per-level pace table.
+  // The cap only bites when the watch exceeds the self-rating, so a genuinely fast
+  // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
+  // (no triConfig.skillRating).
+  const triRunSkill = s.triConfig?.skillRating?.run;
+  const hasRunSpecificSignal = capacityVdot != null
+    || raceAnchor != null
+    || (inputs.recentRun != null && inputs.recentRun.t > 0)
+    || (hrVdot?.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium'));
+  if (triRunSkill && !hasRunSpecificSignal) {
+    const skillMarathonPace = estimateRunPaceFromSkill(triRunSkill as 1 | 2 | 3 | 4 | 5, 'ironman');
+    const skillVdot = cv(42195, skillMarathonPace * 42.195);
+    if (skillVdot > 0 && engineVdot > skillVdot) {
+      console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
+      engineVdot = skillVdot;
     }
   }
 
