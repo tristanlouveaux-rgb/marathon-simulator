@@ -206,7 +206,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 /** Bumped every time we ship a new diagnostic-bearing build. Prefixed onto the
  *  on-device diagnostic so we can confirm WHICH build is actually running when
  *  a TestFlight install lags and two builds look identical on screen. */
-const DIAG_BUILD_TAG = 'b24';
+const DIAG_BUILD_TAG = 'b25';
 
 /** Last physiology-read outcome, captured for on-device debugging. TestFlight
  *  has no console, so the connect recovery card surfaces this to tell apart

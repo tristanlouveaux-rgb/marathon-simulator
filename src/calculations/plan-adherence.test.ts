@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { computePlanAdherence, ADHERENCE_THRESHOLD } from './plan-adherence';
+import {
+  computePlanAdherence,
+  ADHERENCE_THRESHOLD,
+  detectChronicLowAdherence,
+  suggestedRunsPerWeek,
+  CHRONIC_ADHERENCE_WINDOW_WEEKS,
+  CHRONIC_ADHERENCE_THRESHOLD_PCT,
+} from './plan-adherence';
+import type { PlanAdherenceResult } from './plan-adherence';
 import type { SimulatorState, Week, GarminActual } from '@/types';
 
 /** Minimal state factory — only fields needed for adherence calc */
@@ -274,5 +282,121 @@ describe('computePlanAdherence', () => {
 
   it('ADHERENCE_THRESHOLD is 0.95', () => {
     expect(ADHERENCE_THRESHOLD).toBe(0.95);
+  });
+});
+
+describe('computePlanAdherence — trailing window (nWeeks)', () => {
+  // Build a 5-completed-week history: weeks 1-3 perfect (100%), weeks 4-5 missed
+  // (0%). Current week 6, so weeks 1-5 are scoreable.
+  function fiveWeekHistory(): SimulatorState {
+    const good = (w: number) => makeWeek(w, {
+      garminActuals: {
+        a: makeRunActual(10, 10), b: makeRunActual(10, 10),
+        c: makeRunActual(10, 10), d: makeRunActual(10, 10),
+      },
+    });
+    const bad = (w: number) => makeWeek(w, {}); // 0 completed
+    return makeState({
+      rw: 4, w: 6,
+      wks: [good(1), good(2), good(3), bad(4), bad(5), makeWeek(6)],
+    });
+  }
+
+  it('without nWeeks, scores every completed week (cumulative)', () => {
+    const s = fiveWeekHistory();
+    const r = computePlanAdherence(s);
+    expect(r.weeksIncluded).toBe(5);
+    // 12 completed / 20 planned = 60%
+    expect(r.totalCompleted).toBe(12);
+    expect(r.totalPlanned).toBe(20);
+    expect(r.pct).toBe(60);
+  });
+
+  it('with nWeeks=3, only the last 3 completed weeks contribute', () => {
+    const s = fiveWeekHistory();
+    const r = computePlanAdherence(s, 3);
+    // Weeks 3 (good), 4 (bad), 5 (bad): 4 completed / 12 planned = 33%
+    expect(r.weeksIncluded).toBe(3);
+    expect(r.totalCompleted).toBe(4);
+    expect(r.totalPlanned).toBe(12);
+    expect(r.pct).toBe(33);
+  });
+});
+
+describe('detectChronicLowAdherence', () => {
+  it('constants reflect Tristan\'s decision (70% over 3 weeks)', () => {
+    expect(CHRONIC_ADHERENCE_WINDOW_WEEKS).toBe(3);
+    expect(CHRONIC_ADHERENCE_THRESHOLD_PCT).toBe(70);
+  });
+
+  it('returns null when pct is null (not enough data)', () => {
+    expect(detectChronicLowAdherence({ pct: null, weeksIncluded: 0 })).toBeNull();
+  });
+
+  it('returns null with fewer than 3 weeks of data, even if pct is low', () => {
+    expect(detectChronicLowAdherence({ pct: 40, weeksIncluded: 2 })).toBeNull();
+  });
+
+  it('returns null when adherence is at or above 70%', () => {
+    expect(detectChronicLowAdherence({ pct: 70, weeksIncluded: 3 })).toBeNull();
+    expect(detectChronicLowAdherence({ pct: 85, weeksIncluded: 4 })).toBeNull();
+  });
+
+  it('fires when adherence is below 70% across 3+ weeks', () => {
+    expect(detectChronicLowAdherence({ pct: 69, weeksIncluded: 3 })).toEqual({ pct: 69, weeks: 3 });
+    expect(detectChronicLowAdherence({ pct: 50, weeksIncluded: 4 })).toEqual({ pct: 50, weeks: 4 });
+  });
+
+  it('end-to-end: a sustained-miss history trips the detector', () => {
+    const good = (w: number) => makeWeek(w, {
+      garminActuals: {
+        a: makeRunActual(10, 10), b: makeRunActual(10, 10),
+        c: makeRunActual(10, 10), d: makeRunActual(10, 10),
+      },
+    });
+    const oneOfFour = (w: number) => makeWeek(w, { garminActuals: { a: makeRunActual(10, 10) } });
+    // Last 3 completed weeks (idx 2,3,4) each at 1/4 = 25% combined.
+    const s = makeState({
+      rw: 4, w: 6,
+      wks: [good(1), good(2), oneOfFour(3), oneOfFour(4), oneOfFour(5), makeWeek(6)],
+    });
+    const signal = detectChronicLowAdherence(computePlanAdherence(s, CHRONIC_ADHERENCE_WINDOW_WEEKS));
+    expect(signal).not.toBeNull();
+    expect(signal!.weeks).toBe(3);
+    expect(signal!.pct).toBe(25);
+  });
+});
+
+describe('suggestedRunsPerWeek', () => {
+  const result = (over: Partial<PlanAdherenceResult>): PlanAdherenceResult => ({
+    pct: 50, totalPlanned: 12, totalCompleted: 6, weeksIncluded: 3, ...over,
+  });
+
+  it('returns the rounded demonstrated frequency when below current', () => {
+    // 6 completed over 3 weeks = 2.0/week, current 4 → suggest 2.
+    expect(suggestedRunsPerWeek(result({ totalCompleted: 6, weeksIncluded: 3 }), 4)).toBe(2);
+  });
+
+  it('rounds to nearest whole session', () => {
+    // 8 completed over 3 weeks = 2.67 → rounds to 3.
+    expect(suggestedRunsPerWeek(result({ totalCompleted: 8, weeksIncluded: 3 }), 5)).toBe(3);
+  });
+
+  it('floors at 1 run even when almost nothing was completed', () => {
+    expect(suggestedRunsPerWeek(result({ totalCompleted: 1, weeksIncluded: 3 }), 4)).toBe(1);
+  });
+
+  it('returns null when demonstrated frequency is not below current (nothing to do)', () => {
+    // 11 completed over 3 weeks ≈ 3.67 → rounds to 4, equal to current 4.
+    expect(suggestedRunsPerWeek(result({ totalCompleted: 11, weeksIncluded: 3 }), 4)).toBeNull();
+  });
+
+  it('returns null without a full window of data', () => {
+    expect(suggestedRunsPerWeek(result({ weeksIncluded: 2 }), 4)).toBeNull();
+  });
+
+  it('never suggests raising frequency', () => {
+    // 9 completed over 3 weeks = 3/week, current 2 → 3 is not < 2 → null.
+    expect(suggestedRunsPerWeek(result({ totalCompleted: 9, weeksIncluded: 3 }), 2)).toBeNull();
   });
 });

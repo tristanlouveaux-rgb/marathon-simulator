@@ -205,6 +205,140 @@ export function plannedHoursPerWeekByDiscipline(
 }
 
 /**
+ * Planned per-discipline dose (sessions/wk AND hours/wk) averaged across every
+ * remaining BUILD week of the plan — each upcoming week whose phase is not
+ * `'taper'`. This is the dose the race-day projection should gain fitness at:
+ * the true mean training commitment the plan delivers between now and race day,
+ * not just the next few (often base-phase) weeks.
+ *
+ * Why not the next-4-week window (`plannedSessions/HoursPerWeekByDiscipline`)?
+ * The horizon adjuster gains fitness at a constant `sessions_per_week` over the
+ * weeks remaining. Early in a plan the 4-week look-ahead sits entirely in the
+ * low-volume base phase, so the horizon under-credits the build AND the
+ * durability execution factor stays low — which drags the projected bike/run
+ * via the durability cap (a demonstrated 36 km/h cyclist projected ~34). The
+ * full plan ramp is already encoded in `state.wks[w].triWorkouts`; averaging the
+ * remaining build captures the dose the plan actually prescribes.
+ *
+ * Taper weeks are excluded from the *dose average only*. They represent
+ * freshness, not build dose (Mujika 2002), so a low-volume taper week must not
+ * drag the build dose down. This does NOT shed projected fitness: the horizon
+ * model consolidates taper separately (its own `taper_weeks` term) and the
+ * predictor's `executionFactor → 0` inside the taper window already pins
+ * projected == current. Intra-cycle recovery weeks are also labelled `'taper'`
+ * (block-cycle deloads) and are likewise excluded — a deload isn't the build
+ * commitment either. A week with no `ph` set is treated as build (counted).
+ *
+ * `startOffset` skips that many weeks ahead before sampling (injury-recovery
+ * dose sampling), matching `plannedSessions/HoursPerWeekByDiscipline`.
+ *
+ * Falls back to the 4-week look-ahead when no build weeks remain (deep in the
+ * final taper) so the dose is never zero. Near taper the `executionFactor → 0`
+ * collapses projected onto current regardless, so the fallback value is inert.
+ */
+export function plannedBuildDoseByDiscipline(
+  state: SimulatorState,
+  startOffset: number = 0,
+): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
+  const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const hours: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const wks = state.wks ?? [];
+  const startWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  let buildWeeks = 0;
+  for (let w = startWeek; w < wks.length; w++) {
+    const wk = wks[w];
+    if (!wk?.triWorkouts) continue;
+    if (wk.ph === 'taper') continue; // freshness, not build dose (Mujika 2002)
+    buildWeeks += 1;
+    for (const workout of wk.triWorkouts) {
+      const d = workout.discipline;
+      if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
+      counts[d] += 1;
+      hours[d] += (workout.estimatedDurationMin ?? 0) / 60;
+    }
+  }
+  if (buildWeeks === 0) {
+    // Deep in the final taper — no build weeks left to sample. Fall back to the
+    // immediate look-ahead so the dose is never zero.
+    return {
+      sessions: plannedSessionsPerWeekByDiscipline(state, 4, startOffset),
+      hours: plannedHoursPerWeekByDiscipline(state, 4, startOffset),
+    };
+  }
+  return {
+    sessions: { swim: counts.swim / buildWeeks, bike: counts.bike / buildWeeks, run: counts.run / buildWeeks },
+    hours:    { swim: hours.swim / buildWeeks,  bike: hours.bike / buildWeeks,  run: hours.run / buildWeeks },
+  };
+}
+
+/**
+ * Planned per-discipline PEAK dose (sessions/wk AND hours/wk) — the sustained
+ * volume the plan holds the athlete at approaching the race. This is the dose
+ * the specific-endurance / race-readiness penalty CLOSURE should see, distinct
+ * from the build-phase mean that drives the fitness-gain horizon.
+ *
+ * Two-term decomposition (mirrors the running forecast fix, per discipline):
+ *   - cumulative training dose → engine/fitness gain → `plannedBuildDoseByDiscipline`
+ *     (the dose integral over the block — the mean).
+ *   - race-approach sustained volume → specific-endurance readiness → THIS helper
+ *     (the peak the plan holds). Race-distance readiness is a function of the
+ *     highest sustained volume reached, not the block average.
+ *
+ * Peak is read directly from the planned weeks (no invented constant):
+ *   1. The mean dose over `ph === 'peak'` weeks, when the plan labels a peak
+ *      phase (robust to a single outlier week).
+ *   2. Else the max single non-taper week (short plans with no labelled peak).
+ *   3. Else the build-dose fallback (deep in the final taper — inert, since the
+ *      predictor's executionFactor → 0 pins projected to current there anyway).
+ *
+ * `startOffset` matches the other planned-dose helpers (injury-recovery sampling).
+ */
+export function plannedPeakDoseByDiscipline(
+  state: SimulatorState,
+  startOffset: number = 0,
+): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
+  const wks = state.wks ?? [];
+  const startWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  const disciplines = ['swim', 'bike', 'run'] as const;
+  const peakSess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const peakHrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  let peakWeeks = 0;
+  const maxSess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const maxHrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  let sawBuildWeek = false;
+  for (let w = startWeek; w < wks.length; w++) {
+    const wk = wks[w];
+    if (!wk?.triWorkouts) continue;
+    if (wk.ph === 'taper') continue; // freshness, not build dose (Mujika 2002)
+    sawBuildWeek = true;
+    const sess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+    const hrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+    for (const workout of wk.triWorkouts) {
+      const d = workout.discipline;
+      if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
+      sess[d] += 1;
+      hrs[d] += (workout.estimatedDurationMin ?? 0) / 60;
+    }
+    for (const d of disciplines) {
+      if (sess[d] > maxSess[d]) maxSess[d] = sess[d];
+      if (hrs[d] > maxHrs[d]) maxHrs[d] = hrs[d];
+    }
+    if (wk.ph === 'peak') {
+      peakWeeks += 1;
+      for (const d of disciplines) { peakSess[d] += sess[d]; peakHrs[d] += hrs[d]; }
+    }
+  }
+  if (!sawBuildWeek) return plannedBuildDoseByDiscipline(state, startOffset);
+  if (peakWeeks > 0) {
+    return {
+      sessions: { swim: peakSess.swim / peakWeeks, bike: peakSess.bike / peakWeeks, run: peakSess.run / peakWeeks },
+      hours:    { swim: peakHrs.swim / peakWeeks,  bike: peakHrs.bike / peakWeeks,  run: peakHrs.run / peakWeeks },
+    };
+  }
+  return { sessions: maxSess, hours: maxHrs };
+}
+
+/**
  * Longest single-session duration (seconds) per discipline in the last
  * `weeks` weeks. Drives the run-leg durability cap.
  */

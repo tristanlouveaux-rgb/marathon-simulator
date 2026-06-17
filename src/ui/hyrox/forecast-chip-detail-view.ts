@@ -17,6 +17,7 @@ import type { SimulatorState } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
 import { predictHyroxRace, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent, getFutureHyroxEvents, HYROX_WORLD_SERIES } from '@/data/hyrox-events';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
@@ -282,7 +283,18 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
 
   // ISSUE-274: the Daniels training-zone card (Easy/Marathon/Threshold/Interval/Rep
   // from s.pac) was running-mode content leaking into the HYROX run-pace detail.
-  // HYROX coaching is built on Critical Pace, not marathon zones — card removed.
+  // HYROX coaching is built on Critical Pace, not marathon zones. The card was
+  // removed; in its place the HYROX-native anchor (critical pace) is surfaced
+  // here from the same canonical call the dedicated CP detail page uses, so the
+  // numbers agree by construction.
+  const cpComponents = deriveHyroxRunPace(s).components ?? null;
+  const cpSecKm = cpComponents?.criticalPaceSecKm ?? null;
+  const cpRow = cpSecKm != null
+    ? statRow('Critical pace', fmtPace(Math.round(cpSecKm)))
+    : '';
+  const cpLink = cpSecKm != null
+    ? `<button id="hx-cd-critical-pace" style="background:transparent;border:none;padding:10px 0 0;font-size:13px;color:${TEXT_S};cursor:pointer;font-family:var(--f)">View critical pace →</button>`
+    : '';
 
   const body = `
     <div style="${CARD};margin-bottom:14px">
@@ -295,11 +307,13 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       </div>
       ${vdotChart}
       ${statRow('Total run time', fmtMmSs(prediction.runSec))}
+      ${cpRow}
       ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Population avg' : 'Set manually')}
+      ${cpLink}
     </div>
 
 
-    ${captionCard(sourceCopy + ' Run pace is the largest single contributor to the predicted finish, so a recent run sharpens the headline number more than any single station test.')}
+    ${captionCard(sourceCopy + ' Critical pace is the sustainable anchor behind this number: the speed you can hold across all eight 1km legs. Run pace is the largest single contributor to the predicted finish, so a recent run sharpens the headline number more than any single station test.')}
   `;
 
   return { title: 'Run pace', subhead: '1km loop pace under fatigue', body };
@@ -797,6 +811,10 @@ export function renderHyroxChipDetail(key: HyroxChipKey): void {
   });
   document.getElementById('hx-cd-pick-race')?.addEventListener('click', () => {
     openHyroxRacePickerModal();
+  });
+  document.getElementById('hx-cd-critical-pace')?.addEventListener('click', () => {
+    import('./critical-pace-detail-view').then(({ renderHyroxCriticalPaceDetail }) =>
+      renderHyroxCriticalPaceDetail({ onBack: () => renderHyroxChipDetail('runpace') }));
   });
 
   wireTabBarHandlers(navigateTab);

@@ -457,9 +457,9 @@ function applyRunnerTypeBias(priority: SlotType[], runnerType: RunnerType): Slot
 // volume-aware quality cap). An easy run below EASY_FLOOR_MIN is not worth
 // prescribing; the long run keeps a two-tier floor.
 // ---------------------------------------------------------------------------
-const EASY_FLOOR_MIN = 25;
+export const EASY_FLOOR_MIN = 25;
 const LONG_STD_FLOOR_MIN = 40;
-const LONG_SOFT_FLOOR_MIN = 30;
+export const LONG_SOFT_FLOOR_MIN = 30;
 
 /**
  * The effective weekly minute budget = the tighter of the archetype ramp
@@ -563,19 +563,17 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     maxQuality = Math.max(1, Math.min(maxQuality, affordable));
   }
 
-  // ACWR-driven quality session reduction
-  // caution: drop one quality session; high: drop two and cap long run.
-  // Orthogonal to the CTL-gap re-anchor above: ACWR trims INTENSITY (swaps hard sessions for easy)
-  // when acute load spiked HIGH, whereas CTL-gap trims DURATION when chronic load fell LOW. They
-  // act on different axes and opposite triggers, so co-firing (rare — skipping collapses ATL, which
-  // moves ACWR toward 'safe') just composes conservatively rather than double-counting.
-  const acwrNote = acwrStatus === 'high'
-    ? 'ACWR elevated — intensity reduced (high risk)'
-    : acwrStatus === 'caution'
+  // ACWR-driven quality session reduction — CAUTION only (ISSUE-295).
+  // HIGH-ACWR weeks are no longer reduced here by dropping quality slots + freezing the long run.
+  // Instead the full standard week is built, then shed by the intensity-first ease-back ladder
+  // (computeAcwrEaseBack) as a post-pass — in generator.ts for the committed plan and in the
+  // week-debrief preview — so the athlete can choose to keep ramping or ease back, and the cut is
+  // sized to exactly the overshoot. Caution keeps the gentle one-quality-session swap (orthogonal
+  // to the CTL-gap re-anchor above, which trims DURATION when chronic load fell LOW).
+  const acwrNote = acwrStatus === 'caution'
     ? 'ACWR caution — one quality session replaced with easy'
     : '';
   if (acwrStatus === 'caution') maxQuality = Math.max(0, maxQuality - 1);
-  if (acwrStatus === 'high')    maxQuality = Math.max(0, maxQuality - 2);
 
   // For 1 run/week: single combined session
   if (runsPerWeek <= 1) {
@@ -596,12 +594,9 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   let slotsRemaining = runsPerWeek;
 
   if (needsLong) {
-    let longMins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
-    // ACWR high: cap long run at previous week's equivalent (≈ no progression this week)
-    if (acwrStatus === 'high' && weekIndex > 1) {
-      const prevLongMins = Math.round(longRunMinutes(weekIndex - 1, totalWeeks, ability, raceDistance, phase) * dMult);
-      longMins = Math.min(longMins, prevLongMins);
-    }
+    const longMins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
+    // (ACWR-high long-run freeze removed — the ease-back ladder protects the long run distance
+    //  until last resort, then trims it by the computed overshoot. ISSUE-295.)
     const longVar = pickPhaseVariant(LONG_VARIANTS, weekIndex, variantPhase, v => v.load);
     const longNote = acwrNote || (deload ? 'Deload week' : '');
     intents.push({

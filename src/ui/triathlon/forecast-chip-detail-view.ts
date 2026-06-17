@@ -20,8 +20,7 @@ import { buildBenchmarkTrendChart } from './benchmark-charts';
 import { getTriathlonById } from '@/data/triathlons';
 import {
   recentHoursByDiscipline,
-  plannedSessionsPerWeekByDiscipline,
-  plannedHoursPerWeekByDiscipline,
+  plannedBuildDoseByDiscipline,
   longestSessionByDiscipline,
 } from '@/calculations/tri-volume-by-discipline';
 import { computeTriDisciplineConfidence } from '@/calculations/tri-discipline-confidence';
@@ -490,9 +489,12 @@ function pageTraining(s: SimulatorState, p: TriRacePrediction | null): PageConte
   const totalWeeks = s.tw ?? (s.wks?.length ?? 0);
 
   // Engine inputs the projection actually reads (sessions/wk → horizon model;
-  // sessions + hours → readiness closure rate via geometric mean).
-  const planned = plannedSessionsPerWeekByDiscipline(s, 4);
-  const plannedHrs = plannedHoursPerWeekByDiscipline(s, 4);
+  // sessions + hours → readiness closure rate via geometric mean). These are
+  // the build-dose average across remaining non-taper weeks — the same dose the
+  // projection gains fitness at, not just the next 4 weeks.
+  const buildDose = plannedBuildDoseByDiscipline(s);
+  const planned = buildDose.sessions;
+  const plannedHrs = buildDose.hours;
 
   // Recent actuals. Last 4 weeks of synced activity.
   const recentHrs = recentHoursByDiscipline(s, 4);
@@ -557,7 +559,7 @@ function pageTraining(s: SimulatorState, p: TriRacePrediction | null): PageConte
       <div style="${CARD};margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:baseline">
           <div>
-            <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Planned next 4 weeks</div>
+            <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Average build week</div>
             <div style="font-size:28px;font-weight:600;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums">
               ${totalSessions > 0 ? `${totalSessions.toFixed(1).replace(/\.0$/, '')} <span style="font-size:14px;color:${TEXT_S};font-weight:500">sess/wk · ${Math.round(totalPlannedKm)} km bike+run</span>` : '—'}
             </div>
@@ -570,7 +572,7 @@ function pageTraining(s: SimulatorState, p: TriRacePrediction | null): PageConte
       ${disciplineCard('Bike', COL_BIKE, planned.bike, plannedDist.bike, recentDist.bike, /*isSwim*/ false, confidence.bike.weeksActive, null)}
       ${disciplineCard('Run',  COL_RUN,  planned.run,  plannedDist.run,  recentDist.run,  /*isSwim*/ false, confidence.run.weeksActive, readinessRunKm)}
 
-      ${captionCard('The horizon model projects fitness using <strong>planned sessions/wk per discipline</strong>. The readiness closure rate combines sessions and hours (geometric mean). Distances above are derived from planned hours times your recent pace per discipline (or a typical training pace when no recent activity exists), so the display reads in distance even though the engine works in sessions and hours. The Run card adds a fourth row showing the km/wk the readiness penalty reads directly from your last four weeks of synced runs.')}
+      ${captionCard('The horizon model projects fitness using your <strong>average build week</strong> per discipline (the dose drives the fitness gain). The race-readiness penalty closes at the rate of the plan\'s <strong>peak weeks</strong> (the sustained volume you reach approaching the race). Distances above are derived from planned hours times your recent pace per discipline (or a typical training pace when no recent activity exists), so the display reads in distance even though the engine works in sessions and hours. The Run card adds a fourth row showing the km/wk the readiness penalty reads directly from your last four weeks of synced runs.')}
     `,
   };
 }

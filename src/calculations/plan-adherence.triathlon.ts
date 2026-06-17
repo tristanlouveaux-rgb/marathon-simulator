@@ -12,8 +12,23 @@
  * reads as ~67% rather than 100%.
  */
 
-import type { SimulatorState, GarminActual } from '@/types';
+import type { SimulatorState, GarminActual, Workout } from '@/types';
 import { sportToTransferSource } from '@/constants/transfer-matrix';
+
+/**
+ * Whether a planned tri session counts toward adherence. Only swim/bike/run
+ * (and bricks, which produce bike+run actuals) have a creditable actual in the
+ * swim/bike/run numerator. Gym/strength and any cross-training (rugby, etc.)
+ * are excluded from BOTH sides — counting them as "planned" would drag the
+ * number down for sessions the numerator can never credit. (Tristan, 2026-06-17)
+ */
+function isScorableTriSession(w: Workout): boolean {
+  const d = w.discipline;
+  if (d === 'swim' || d === 'bike' || d === 'run' || d === 'brick') return true;
+  if (d != null) return false; // 'station' or other non-SBR discipline
+  // No discipline tag (older stored sessions): fall back to the type field.
+  return w.t !== 'gym' && w.t !== 'strength';
+}
 
 export interface TriPlanAdherenceResult {
   /** Adherence percentage (0-100), or null when there isn't enough data yet. */
@@ -53,7 +68,9 @@ export function computeTriPlanAdherence(s: SimulatorState, nWeeks?: number): Tri
     const wk = s.wks[idx];
     if (!wk) continue;
 
-    const weekPlanned = (wk.triWorkouts ?? []).length;
+    // Only swim/bike/run/brick count; gym + cross-training are excluded so a
+    // strength or rugby session never reads as a missed tri session.
+    const weekPlanned = (wk.triWorkouts ?? []).filter(isScorableTriSession).length;
     if (weekPlanned <= 0) continue;
 
     let weekCompleted = 0;

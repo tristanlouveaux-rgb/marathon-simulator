@@ -17,13 +17,14 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
+import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { formatKm, ft } from '@/utils/format';
 import { next } from '@/ui/events';
-import { computePlanAdherence } from '@/calculations/plan-adherence';
+import { computePlanAdherence, detectChronicLowAdherence, suggestedRunsPerWeek, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
-import { planWeekSessions, effortMultiplier } from '@/workouts/plan_engine';
+import { planWeekSessions, effortMultiplier, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts } from '@/workouts/generator';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
@@ -812,15 +813,43 @@ function _renderPlanPreview(
     // No effortScore, no acwrStatus. Vanilla plan
   });
 
+  // ACWR ease-back preview (ISSUE-295). Inputs PREFER the rollover-stamped chronic/safeUpper (the
+  // exact values the generator will read) and fall back to a live computeACWR only when the stamp
+  // isn't present yet, so preview and commit agree. On a high-ACWR week the RECOMMENDED pane is the
+  // eased plan, the ALTERNATIVE is "keep ramping" (the un-eased adjusted plan); the toggle persists
+  // to wk.acwrChoice and the generator honours it. The final taper (race) week is exempt — it
+  // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298).
+  const _raceWeek = nextPhase === 'taper' && nextWeekIdx >= (s.tw ?? nextWeekIdx);
+  const _tier = s.athleteTierOverride ?? s.athleteTier;
+  const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _acwr = (acwrStatus === 'high' && !_raceWeek)
+    ? computeACWR(s.wks, weekNum, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, s.previousPlanWks, s.adaptiveRecovery)
+    : null;
+  const _chronicTSS = nextWk?.scheduledChronicTSS ?? _acwr?.ctl ?? 0;
+  const _safeUpper = nextWk?.scheduledSafeUpper ?? _acwr?.safeUpper ?? 0;
+  const _ratio = nextWk?.scheduledAcwrRatio ?? _acwr?.ratio ?? 0;
+  const easeResult = (acwrStatus === 'high' && !_raceWeek && _chronicTSS >= 1 && _safeUpper > 0)
+    ? computeAcwrEaseBack(adjustedIntents, { chronicWeeklyTSS: _chronicTSS, safeUpper: _safeUpper, easyFloorMin: EASY_FLOOR_MIN, longFloorMin: LONG_SOFT_FLOOR_MIN })
+    : null;
+  const acwrEaseActive = easeResult != null && easeResult.shedTSS > 0;
+  const veryHigh = _ratio >= 1.6;
+  // Whether the ladder actually reached the safe ceiling (it can fall short when every session is at
+  // its floor) — drives honest copy below.
+  const reachedRange = easeResult != null && easeResult.adjustedTSS <= easeResult.lMax + 0.5;
+
+  // The two toggle panes: recommended (default) and alternative.
+  const recommendedIntents = acwrEaseActive ? easeResult!.intents : adjustedIntents;
+  const alternativeIntents = acwrEaseActive ? adjustedIntents : standardIntents;
+
   // Convert intents to workouts for display
   const easyPace = s.pac?.e;
-  const adjustedWorkouts = adjustedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
-  const standardWorkouts = standardIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+  const adjustedWorkouts = recommendedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+  const standardWorkouts = alternativeIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
 
   // Build per-workout annotations first. They define what "visibly different" means
   const easyPaceSec = easyPace ?? 360; // fallback 6:00/km
-  const perWorkoutAnnotations: string[] = adjustedIntents.map((adj, i) => {
-    const std = standardIntents[i];
+  const perWorkoutAnnotations: string[] = recommendedIntents.map((adj, i) => {
+    const std = alternativeIntents[i];
     if (!std) return '';
     // Different workout type = always annotate
     if (adj.slot !== std.slot) return `Was ${_sessionTypeLabel(std.slot as string).toLowerCase()} in standard plan`;
@@ -842,10 +871,14 @@ function _renderPlanPreview(
   // so the changes list can stay consistent with the headline. Reduce-only, so never fires on/ahead.
   const behindPlan = ctlAdh.valid && ctlAdh.ratio < 0.97;
 
-  // Textual adjustments list only when plans actually look different
-  const changes = visiblyDifferent
-    ? _computeChanges(adjustedIntents, standardIntents, trailingEffort, acwrStatus, behindPlan)
-    : [];
+  // Textual adjustments list only when plans actually look different. On a high-ACWR ease-back the
+  // ladder reports exactly what it changed (quality→easy, volume trim, long-run held), so use its
+  // steps; otherwise fall back to the effort/CTL change detector.
+  const changes = !visiblyDifferent
+    ? []
+    : acwrEaseActive
+    ? easeResult!.steps
+    : _computeChanges(adjustedIntents, standardIntents, trailingEffort, acwrStatus, behindPlan);
 
   const changesHtml = changes.length > 0 ? `
     <div style="margin-bottom:16px">
@@ -875,6 +908,44 @@ function _renderPlanPreview(
     </div>
   ` : '';
 
+  // Chronic low adherence: a sustained pattern across the trailing window (not
+  // just last week's CTL gap above). Surfaced here per CLAUDE.md's adaptation-
+  // transparency rule (a multi-week pattern is a "big change" → end-of-week
+  // summary). Factual lead with the number, then a recalibration pointer to the
+  // existing volume controls. No second person where the data speaks, no nudge.
+  const chronicWindow = computePlanAdherence(s, CHRONIC_ADHERENCE_WINDOW_WEEKS);
+  const chronic = detectChronicLowAdherence(chronicWindow);
+  // One-tap recalibration target: the runs/week actually being completed. Only
+  // offered when it's below the current setting (reduce-only). Tapping rebuilds
+  // the plan in place at the lower frequency (keeps fitness + current week,
+  // shifts the forecast) — same machinery as the Settings runner-type/gym edits.
+  const recalRw = chronic ? suggestedRunsPerWeek(chronicWindow, s.rw ?? 0) : null;
+  const chronicNote = chronic ? `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0 0 ${recalRw != null ? '10px' : '0'}">${chronic.pct}% of planned runs completed over the last ${chronic.weeks} weeks. The plan may be set above current availability.${recalRw == null ? ' Lowering runs per week or weekly volume in Settings brings the targets in line.' : ''}</p>
+      ${recalRw != null ? `
+      <button id="debrief-recalibrate" data-recal-rw="${recalRw}"
+        style="display:inline-block;padding:8px 14px;border-radius:10px;border:1px solid var(--c-border);
+               background:transparent;color:var(--c-black);font-size:13px;font-weight:600;
+               cursor:pointer;font-family:var(--f)">Rebuild plan at ${recalRw} run${recalRw === 1 ? '' : 's'} per week</button>
+      ` : ''}
+    </div>
+  ` : '';
+
+  // ACWR ease-back framing (ISSUE-295). Factual lead with the ratio, then the choice. Firmer at
+  // very high (ratio ≥ 1.6). No second person where the data speaks; no nudge; no em dash.
+  const acwrChoiceNote = acwrEaseActive ? `
+    <div style="margin-bottom:14px">
+      <p style="font-size:13px;color:var(--c-black);line-height:1.5;margin:0 0 4px">Training load reached ${_ratio.toFixed(2)}× the recent 28-day average, ${veryHigh ? 'well above' : 'above'} the ${_safeUpper.toFixed(2)} safe range.</p>
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">${veryHigh
+        ? `The long run distance is kept; intensity and some volume are reduced${reachedRange ? ' to bring load into range' : ''}. Easing back is advised. Keeping the ramp raises injury risk.`
+        : `Ease back keeps the long run distance and reduces intensity${reachedRange ? ' to bring load into range' : ' as far as the plan structure allows'}. Keep ramping leaves the week as planned.`}</p>
+    </div>
+  ` : '';
+  // Toggle labels are contextual: the ACWR choice reads as keep/ease, the effort/CTL view as adjusted/standard.
+  const recLabel = acwrEaseActive ? 'Ease back' : 'Adjusted plan';
+  const altLabel = acwrEaseActive ? 'Keep ramping' : 'Standard plan';
+
   card.innerHTML = `
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:18px">
@@ -882,15 +953,17 @@ function _renderPlanPreview(
     </div>
 
     ${adherenceNote}
+    ${chronicNote}
     ${noChangesNote}
+    ${acwrChoiceNote}
 
     <!-- Plan toggle (only if plans are visibly different) -->
     ${visiblyDifferent ? `
     <div style="display:flex;gap:0;margin-bottom:16px;border-radius:10px;overflow:hidden;border:1px solid var(--c-border)">
       <button id="plan-toggle-adjusted" style="flex:1;padding:9px 0;font-size:13px;font-weight:600;border:none;cursor:pointer;
-              background:var(--c-black);color:#fff;font-family:var(--f);transition:all 0.2s ease">Adjusted plan</button>
+              background:var(--c-black);color:#fff;font-family:var(--f);transition:all 0.2s ease">${recLabel}</button>
       <button id="plan-toggle-standard" style="flex:1;padding:9px 0;font-size:13px;font-weight:600;border:none;cursor:pointer;
-              background:transparent;color:var(--c-muted);font-family:var(--f);transition:all 0.2s ease">Standard plan</button>
+              background:transparent;color:var(--c-muted);font-family:var(--f);transition:all 0.2s ease">${altLabel}</button>
     </div>
     ` : ''}
 
@@ -907,7 +980,7 @@ function _renderPlanPreview(
     </div>
   `;
 
-  _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent);
+  _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent, acwrEaseActive ? nextWeekIdx : null);
 }
 
 function _renderWorkoutList(workouts: any[], annotations: string[]): string {
@@ -1022,16 +1095,18 @@ function _wireStep3Handlers(
   effortScore: number | null,
   mode: 'complete' | 'review',
   visiblyDifferent: boolean,
+  acwrWeekIdx: number | null, // 1-based week to stamp acwrChoice on (ISSUE-295), or null if no ACWR choice
 ): void {
   // Cancel
   document.getElementById('debrief-cancel')?.addEventListener('click', () => {
     document.getElementById('week-debrief-modal')?.remove();
   });
 
+  // Which pane is selected — lifted to function scope so Accept can persist the ACWR choice.
+  let showingAdjusted = true;
+
   // Plan toggle
   if (visiblyDifferent) {
-    let showingAdjusted = true;
-
     const btnAdj = document.getElementById('plan-toggle-adjusted');
     const btnStd = document.getElementById('plan-toggle-standard');
     const planAdj = document.getElementById('plan-adjusted');
@@ -1061,11 +1136,74 @@ function _wireStep3Handlers(
     if (effortScore != null && (effortScore > 1.0 || effortScore < -1.0)) {
       _applyPacingAdj(effortScore);
     }
+    // Persist the ACWR ease-back choice so the generator commits the plan the user is looking at
+    // (ISSUE-295). 'ease' = recommended pane, 'keep' = keep ramping. Default-shown pane is eased.
+    if (acwrWeekIdx != null) {
+      const ms = getMutableState() as any;
+      const wk = ms.wks?.[acwrWeekIdx - 1];
+      if (wk) {
+        wk.acwrChoice = showingAdjusted ? 'ease' : 'keep';
+        saveState();
+      }
+    }
     _closeAndRecord(weekNum, mode);
+  });
+
+  // Chronic low-adherence recalibration (ISSUE-296). Rebuilds the running plan
+  // at the demonstrated runs-per-week, keeping fitness, logged activities, and
+  // the current week position. Distinct from Accept (which commits next week as
+  // previewed) — this changes the plan's frequency going forward.
+  const recalBtn = document.getElementById('debrief-recalibrate') as HTMLButtonElement | null;
+  recalBtn?.addEventListener('click', () => {
+    const newRw = parseInt(recalBtn.dataset.recalRw ?? '', 10);
+    if (!Number.isFinite(newRw) || newRw < 1) return;
+    _applyRunsPerWeekRecalibration(newRw);
   });
 }
 
 // ─── Shared helpers (unchanged from original) ────────────────────────────────
+
+/**
+ * Rebuild the running plan at a new runs-per-week, in place. Mirrors the
+ * Settings runner-type / gym-count rebuild (`applyGymSessionsChange` in
+ * account-view.ts): write the onboarding field, then `initializeSimulator`,
+ * which archives the current weeks, redistributes logged activities into the
+ * fresh plan, and reconciles the plan anchor so the user keeps their position.
+ * The forecast recomputes off the new structure. Reloads on success.
+ */
+function _applyRunsPerWeekRecalibration(newRw: number): void {
+  const s = getMutableState() as any;
+  if (!s.onboarding) {
+    void import('./toast').then(({ showSimpleToast }) => showSimpleToast('Plan data not found. Cannot rebuild.', 'error'));
+    return;
+  }
+
+  const spinner = document.createElement('div');
+  spinner.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;';
+  spinner.innerHTML = `
+    <div style="width:40px;height:40px;border:3px solid var(--c-border);border-top-color:var(--c-black);border-radius:50%;animation:spin 0.7s linear infinite;margin-bottom:16px"></div>
+    <div style="font-size:15px;font-weight:600;color:var(--c-black)">Rebuilding plan…</div>
+    <div style="font-size:12px;color:var(--c-muted);margin-top:4px">Recalculating your workouts</div>
+    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+  `;
+  document.body.appendChild(spinner);
+
+  s.onboarding.runsPerWeek = newRw;
+  saveState();
+
+  setTimeout(() => {
+    void import('@/state/initialization').then(({ initializeSimulator }) => {
+      const result = initializeSimulator(s.onboarding);
+      if (result.success) {
+        window.location.reload();
+      } else {
+        spinner.remove();
+        void import('./toast').then(({ showSimpleToast }) =>
+          showSimpleToast('Rebuild failed: ' + (result.error || 'unknown error'), 'error'));
+      }
+    });
+  }, 600);
+}
 
 function _applyPacingAdj(effortScore: number): void {
   const s = getMutableState() as any;

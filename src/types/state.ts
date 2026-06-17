@@ -621,6 +621,17 @@ export interface Week {
   hrEffort?: number;                             // Average hrEffortScore from Strava HR data (1.0 = on target)
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
   scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time. Passed to generator
+  /** ACWR ratio (acute÷chronic) at week-advance time. Drives the very-high (≥1.6) escalation
+   *  that re-raises the ease-back choice even after a prior 'keep'. Stamped with scheduledAcwrStatus. */
+  scheduledAcwrRatio?: number;
+  /** Chronic weekly TSS (acwr.ctl) at week-advance time — the L_max denominator for the ease-back
+   *  ladder (ISSUE-295). Stamped with scheduledAcwrStatus, read by the generator + debrief preview. */
+  scheduledChronicTSS?: number;
+  /** Effective ACWR ceiling (tier safeUpper + recovery shift) at week-advance time. L_max = this × chronic. */
+  scheduledSafeUpper?: number;
+  /** The athlete's ease-back choice for a high-ACWR week (ISSUE-295). 'keep' = ramp on (plan intact);
+   *  'ease'/unset = apply the intensity-first reduction ladder. Set from the week-debrief toggle. */
+  acwrChoice?: 'ease' | 'keep';
   /** Load-gap re-anchor ratio (actual ÷ plan-expected load) of the PREVIOUS week, stamped on this
    *  week at rollover. < 1 re-anchors this week's prescribed volume down in proportion
    *  (plan_engine.ctlGapMultiplier). Single-scalar modes: RUNNING (combined CTL) and HYROX (MTL).

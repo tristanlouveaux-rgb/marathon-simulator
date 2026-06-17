@@ -20,6 +20,8 @@ import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { computeWeekRawTSS } from '@/calculations/fitness-model';
 import { readTriFitness, resolveTriDisciplineAdherence } from '@/calculations/fitness-model.triathlon';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { computeTriPlanAdherence } from '@/calculations/plan-adherence.triathlon';
+import { detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 
 const OVERLAY_ID = 'tri-week-debrief-modal';
 
@@ -451,6 +453,17 @@ function _showTriPlanPreview(weekNum: number): void {
     </div>
   ` : '';
 
+  // Chronic low adherence across the trailing window (mirror of running's
+  // week-debrief, ISSUE-296). Distinct from the per-discipline last-week note
+  // above: this flags a sustained multi-week pattern and points at the volume
+  // controls. Same detector and thresholds as running (mode-agnostic).
+  const chronic = detectChronicLowAdherence(computeTriPlanAdherence(state, CHRONIC_ADHERENCE_WINDOW_WEEKS));
+  const chronicNote = chronic ? `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:#64748B;line-height:1.5;margin:0">${chronic.pct}% of planned sessions completed over the last ${chronic.weeks} weeks. The plan may be set above current availability. Lowering weekly hours or sessions in Settings brings the targets in line.</p>
+    </div>
+  ` : '';
+
   const changesHtml = adjustNotes.length > 0 ? `
     <div style="margin-bottom:16px">
       <div style="font-size:11px;font-weight:600;color:#64748B;margin-bottom:6px;letter-spacing:0.02em">Adjustments</div>
@@ -502,6 +515,7 @@ function _showTriPlanPreview(weekNum: number): void {
                font-size:14px;color:var(--c-muted);display:flex;align-items:center;justify-content:center">✕</button>
     </div>
     ${adherenceNote}
+    ${chronicNote}
     ${changesHtml}
     <div>${workoutsHtml}</div>
     <div style="margin-top:20px">

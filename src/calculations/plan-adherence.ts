@@ -89,7 +89,7 @@ export interface PlanAdherenceResult {
  *  - Runs pushed to the following week (via week-debrief) are subtracted
  *    from the source week's denominator.
  */
-export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
+export function computePlanAdherence(s: SimulatorState, nWeeks?: number): PlanAdherenceResult {
   const empty: PlanAdherenceResult = {
     pct: null,
     totalPlanned: 0,
@@ -104,7 +104,13 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
   let totalCompleted = 0;
   let weeksIncluded = 0;
 
-  for (let idx = 0; idx < currentWeek - 1; idx++) {
+  // Trailing-window scope: when `nWeeks` is given, only the last `nWeeks`
+  // completed weeks contribute (mirrors computeTriPlanAdherence). Without it,
+  // every completed week since onboarding contributes (the cumulative number).
+  const lastCompletedIdx = currentWeek - 2; // inclusive, 0-based
+  const firstIdx = nWeeks !== undefined ? Math.max(0, lastCompletedIdx - nWeeks + 1) : 0;
+
+  for (let idx = firstIdx; idx < currentWeek - 1; idx++) {
     const wk = s.wks[idx];
     if (!wk) continue;
 
@@ -163,4 +169,61 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
     totalCompleted,
     weeksIncluded,
   };
+}
+
+// ─── Chronic low-adherence detector (ISSUE-296) ──────────────────────────────
+// The plan already self-regulates per-week via wkGain scaling, but it never
+// flags a *sustained* under-delivery pattern back to the user. These thresholds
+// (Tristan, 2026-06-17): fire only when the trailing window of completed weeks
+// shows < 70% adherence across at least 3 weeks of real planned training. The
+// 70% floor is deliberately conservative so a single rough week, or a runner
+// deliberately running a little less, doesn't trip it.
+export const CHRONIC_ADHERENCE_WINDOW_WEEKS = 3;
+export const CHRONIC_ADHERENCE_THRESHOLD_PCT = 70;
+
+export interface ChronicAdherenceSignal {
+  /** Trailing-window adherence percentage that tripped the threshold. */
+  pct: number;
+  /** Weeks of real planned training in the window (≥ CHRONIC_ADHERENCE_WINDOW_WEEKS). */
+  weeks: number;
+}
+
+/**
+ * Given a trailing-window adherence result (running `PlanAdherenceResult` or
+ * triathlon `TriPlanAdherenceResult` — both share `{ pct, weeksIncluded }`),
+ * return the chronic-low-adherence signal when the pattern is sustained, else
+ * null. Mode-agnostic so running and triathlon debriefs read from one source.
+ *
+ * Caller must pass a result computed over a trailing window of
+ * `CHRONIC_ADHERENCE_WINDOW_WEEKS` (i.e. `computePlanAdherence(s, 3)` /
+ * `computeTriPlanAdherence(s, 3)`), so `weeksIncluded` reflects the window.
+ */
+export function detectChronicLowAdherence(
+  windowResult: { pct: number | null; weeksIncluded: number },
+): ChronicAdherenceSignal | null {
+  if (windowResult.pct == null) return null;
+  if (windowResult.weeksIncluded < CHRONIC_ADHERENCE_WINDOW_WEEKS) return null;
+  if (windowResult.pct >= CHRONIC_ADHERENCE_THRESHOLD_PCT) return null;
+  return { pct: windowResult.pct, weeks: windowResult.weeksIncluded };
+}
+
+/**
+ * Data-driven recalibration target for the running plan: the runs-per-week the
+ * athlete has actually been completing over the trailing window, rounded to a
+ * whole session. This is a *demonstrated* frequency, not an invented number —
+ * `totalCompleted / weeksIncluded` over the same window the chronic detector
+ * uses. Floored at 1 (a running plan has at least one run).
+ *
+ * Returns null when there isn't a full window of data, or when the demonstrated
+ * frequency isn't actually below the current setting (nothing to recalibrate).
+ * Reduce-only by construction — never suggests raising frequency.
+ */
+export function suggestedRunsPerWeek(
+  windowResult: PlanAdherenceResult,
+  currentRunsPerWeek: number,
+): number | null {
+  if (windowResult.weeksIncluded < CHRONIC_ADHERENCE_WINDOW_WEEKS) return null;
+  const avgCompleted = windowResult.totalCompleted / windowResult.weeksIncluded;
+  const target = Math.max(1, Math.round(avgCompleted));
+  return target < currentRunsPerWeek ? target : null;
 }

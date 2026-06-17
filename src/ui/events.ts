@@ -19,6 +19,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } f
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
 import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
@@ -1201,12 +1202,31 @@ export async function next(): Promise<void> {
       if (acwr.status === 'high') {
         nextWk.weekAdjustmentReason = `Load spike detected (${acwr.ratio.toFixed(2)}× baseline): intensity reduced for safety`;
         nextWk.scheduledAcwrStatus = 'high';
+        // ISSUE-295: stamp the inputs the ease-back ladder needs (L_max = safeUpper × chronic)
+        // and the ratio that drives the very-high escalation.
+        nextWk.scheduledAcwrRatio = acwr.ratio;
+        nextWk.scheduledChronicTSS = acwr.ctl;
+        nextWk.scheduledSafeUpper = acwr.safeUpper;
+        // Episode memory + escalation (pure, tested in acwr-ease-back.test.ts). Carry a prior choice
+        // forward across consecutive high weeks so we don't re-nag, unless very high / sustained.
+        const priorStatuses = s.wks.slice(0, s.w - 1).map((w: any) => w?.scheduledAcwrStatus);
+        const decision = resolveAcwrEpisodeChoice(priorStatuses, acwr.ratio, s.wks[s.w - 2]?.acwrChoice);
+        if (decision.acwrChoice) nextWk.acwrChoice = decision.acwrChoice;
+        else delete nextWk.acwrChoice;
       } else if (acwr.status === 'caution') {
         nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline): one quality session replaced`;
         nextWk.scheduledAcwrStatus = 'caution';
+        delete nextWk.scheduledAcwrRatio;
+        delete nextWk.scheduledChronicTSS;
+        delete nextWk.scheduledSafeUpper;
+        delete nextWk.acwrChoice;
       } else {
         delete nextWk.weekAdjustmentReason;
         delete nextWk.scheduledAcwrStatus;
+        delete nextWk.scheduledAcwrRatio;
+        delete nextWk.scheduledChronicTSS;
+        delete nextWk.scheduledSafeUpper;
+        delete nextWk.acwrChoice;
       }
 
       // ─── Load-gap re-anchor → next week (mode-aware) ───────────────────────

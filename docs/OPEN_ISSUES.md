@@ -99,17 +99,39 @@ Guards: `physiological-vdot.test.ts` (tombstones), `blended-fitness.test.ts` + `
 
 **Root cause.** `archiveCurrentWksIfPopulated()` only runs on explicit week-complete (`src/ui/events.ts:1292`). Post-race auto-advance can take `s.w > s.tw` without the user tapping Complete, leaving history unarchived. **Fix (optional):** auto-archive when a race outcome is detected.
 
-### ISSUE-295: ACWR response policy — VDOT bump + plan volume not gated by ACWR *(P2, PRODUCT DECISION, 2026-06-16)*
+### ISSUE-295: ACWR response policy — VDOT bump + plan volume not gated by ACWR *(P2, 2026-06-16)* — DECIDED + IMPLEMENTED in working tree (2026-06-17), pending Tristan confirmation + device test
 
-**Two linked behaviours, both confirmed as shipped (design questions for Tristan, not bugs):**
-1. **VDOT auto-bump ignores ACWR** (`src/calculations/blended-fitness.ts:602`) — `s.v` is written from demonstrated fitness even when ACWR > 1.3, so an over-distance week can inflate the anchor and escalate next week. Plan reduces *intensity* on high ACWR but the fitness anchor still rises.
-2. **Plan doesn't volume-deload on high ACWR** (`src/workouts/plan_engine.ts:486-523`) — only quality sessions are dropped and the long run frozen; easy/long *volume* is untouched.
+**Original two linked behaviours:**
+1. **VDOT auto-bump ignores ACWR** — `s.v` written from demonstrated fitness even at high ACWR, so an over-distance week could inflate the anchor and escalate next week.
+2. **Plan doesn't volume-deload on high ACWR** — only quality sessions dropped + long run frozen; the toggle to opt out was cosmetic (Accept ignored the selection).
 
-**DECISION NEEDED (answer here):** Should high ACWR (a) hold/decay VDOT, and (b) apply a global volume damper (e.g. −15% caution / −25% high)? Or is the current intensity-cap + long-run-freeze + self-regulation sufficient? — _Answer: [pending Tristan]_
+**DECISIONS (Tristan, 2026-06-17):**
+- **(a) Do NOT gate VDOT on ACWR.** VDOT describes demonstrated fitness (tracking); ACWR is forward-looking risk (planning). A hot week doesn't mean less fit — fix the escalation at the plan layer, leave the number honest. **VDOT writeback unchanged.**
+- **(b) Offer, don't impose.** Agency: the athlete chooses **Keep ramping** (plan intact) or **Ease back** (intelligent reduction). Default-until-chosen is eased.
+- **No flat volume damper** (the `−15%/−25%` was invented). Instead `L_max = safeUpper × chronic` and the week sheds exactly its overshoot.
 
-### ISSUE-296: Coach has no trigger for chronic low adherence *(P3, PRODUCT DECISION, 2026-06-16)*
+**IMPLEMENTED (2026-06-17, SCIENCE_LOG §CF, all green 3468):**
+- `computeAcwrEaseBack` (`src/calculations/acwr-ease-back.ts`) — intensity-first ladder: (1) quality→easy + fast-finish long→steady, distances kept; (2) trim easy volume; (3) shorten long run last resort. Guard `acwr-ease-back.test.ts`.
+- Coarse "drop 2 quality + freeze long" removed from `plan_engine.ts` (caution unchanged); generator (`generator.ts`) applies the ladder as a post-pass unless `acwrChoice==='keep'`.
+- Week-debrief toggle now persists `wk.acwrChoice` and commits the selected plan (was cosmetic). New Week fields in `state.ts` (`acwrChoice`, `scheduledAcwrRatio/ChronicTSS/SafeUpper`).
+- Escalation: carry a keep choice across the episode (no re-nag); clear it (re-raise, firmer copy) at very high (ratio ≥ 1.6) or 3 consecutive high weeks. Stamped in `events.ts` at rollover.
 
-`src/coach/coach-triggers.ts:28-103` triggers on HRV / race-week / marker-bumps but never on multi-week adherence <80% or persistent under-delivery. Adherence is computed (scales `wkGain`) but the coach never proactively flags the pattern. **DECISION NEEDED (answer here):** Do we want the coach to call out a sustained skip/under-deliver pattern, and with what threshold + copy? — _Answer: [pending Tristan]_
+**Next: Tristan device-verifies** — generate/regenerate a plan that goes high, confirm (1) both toggle choices commit the matching week, (2) ease-back keeps the long run distance and strips intensity first, (3) a ratio ≥ 1.6 week re-raises after a prior keep. Then mark FIXED.
+
+### ISSUE-296: No trigger for chronic low adherence *(P3, 2026-06-16)* — FIX IN WORKING TREE, pending Tristan confirmation + device test
+
+**Decision (Tristan, 2026-06-17):** surface a sustained-under-delivery callout when adherence is **< 70% over the last 3+ weeks** (conservative threshold so a single rough week, or a runner deliberately running less, doesn't trip it). Surface in the **week-debrief** (not the coach) — per CLAUDE.md's adaptation-transparency rule, a multi-week pattern is a "big change → end-of-week summary."
+
+**Key finding while investigating.** The issue's premise (`coach-triggers.ts` should gain an adherence trigger) was moot: the LLM coach is hard-gated off (`AI_COACH_ENABLED = false`, `renderCoachView` routes straight back), and **nothing in the UI renders `coachInsightQueue`** — `topUnseenInsight`/`markInsightSeen` are only referenced in tests. So the entire `coach-triggers.ts` pipeline is dead end-to-end (queue is populated on launch but displayed nowhere, and its only consumer is the disabled brief stream). Adding a trigger there would write into a void.
+
+**Fix (in working tree, 2026-06-17).**
+1. New canonical detector `detectChronicLowAdherence()` + constants `CHRONIC_ADHERENCE_WINDOW_WEEKS = 3` / `CHRONIC_ADHERENCE_THRESHOLD_PCT = 70` (`plan-adherence.ts`). Mode-agnostic — operates on the shared `{ pct, weeksIncluded }` shape so running and tri read from one source.
+2. `computePlanAdherence` gained an optional `nWeeks` trailing-window arg (mirrors `computeTriPlanAdherence`'s existing `nWeeks`).
+3. Surfaced as a factual note in both debriefs: running `week-debrief.ts` (`_renderPlanPreview`) and tri `tri-week-debrief.ts` (`_showTriPlanPreview`), alongside the existing last-week CTL-gap note. Copy leads with the number.
+4. **One-tap recalibrate (built same session at Tristan's request).** The running note carries a "Rebuild plan at N runs/week" button when demonstrated frequency < current. Target = `suggestedRunsPerWeek` (round(completed÷weeks), floored 1, reduce-only). Rebuilds in place via `initializeSimulator` after writing `onboarding.runsPerWeek` (the Settings runner-type/gym-edit path, `_applyRunsPerWeekRecalibration`) — preserves activities + ratings, reconciles the anchor so the user keeps their week, recomputes the forecast. Tri keeps the Settings pointer (per-discipline frequency is a bigger rebuild, conscious mirror decision).
+5. **Bug fixed in same pass:** gym + cross-training (rugby) were dragging down *triathlon* adherence (`computeTriPlanAdherence` counted gym sessions in the denominator but never credited them — a done strength session read as a missed tri session). New `isScorableTriSession` filter (swim/bike/run/brick only). Running was already clean (denominator = `s.rw` runs). Also corrects the tri Progress-detail adherence number.
+
+**Guard:** `plan-adherence.test.ts` (+14: trailing window, detector, `suggestedRunsPerWeek`), `plan-adherence.triathlon.test.ts` (new, 3: gym/cross exclusion). tsc + lint:ui clean, suite 3484 green. **Not device-verified** — do not mark FIXED until Tristan completes a <70%/3wk week in-app and confirms the note + the recalibrate rebuild (lands at the right week, forecast updates).
 
 ### ISSUE-287: Short plans (≤12 weeks) front-load the LOAD-chart peak to ~week 5 *(P2, 2026-06-16)* — FIX IMPLEMENTED in working tree, pending Tristan confirmation + device test
 
@@ -184,9 +206,11 @@ Also discovered while testing: the whole volume-budget subsystem (geometric ramp
 
 The debrief's ✕ button (`week-debrief.ts:395-397`) just removed the modal — it never set `lastDebriefWeek`/`lastCompleteDebriefWeek` (only `_closeAndRecord` does). `welcome-back.ts:132-138` clamps `s.w` to `lastCompleteDebriefWeek + 1`, so a habitual dismisser got: week pointer frozen + the same debrief re-firing every launch until they tapped Continue once. **Tristan picked: remove the ✕ entirely (2026-06-05)** — the review is a checkpoint; Continue is the only exit and it records. Implemented same day: all four ✕ instances removed (step-1 summary, analysis animation, plan-preview step, plan-complete screen) plus their orphan handlers. Plan-complete now requires the Start-new-plan / Continue-tracking choice (both safe; new-plan stays reachable from Account if they pick tracking). Suite 3228 green. NOT device-verified — confirm the weekly flow on device before closing.
 
-### ISSUE-274: HYROX forecast run-pace drill-down shows marathon training pace zones *(P1, 2026-06-05)*
+### ISSUE-274: HYROX forecast run-pace drill-down shows marathon training pace zones *(P1, 2026-06-05)* — FIX IN CODE, pending device verification
 
-`hyrox/forecast-chip-detail-view.ts:285-296` renders "Training pace zones" with Easy/Marathon/Threshold/Interval/Rep paces from `s.pac` — marathon-centric zones that contradict the HYROX coaching model (Critical Pace). Fires for any HYROX athlete with running history. Fix: gate the card on `s.eventType !== 'hyrox'` or build a Critical-Pace-based equivalent.
+`hyrox/forecast-chip-detail-view.ts` previously rendered a "Training pace zones" card with Easy/Marathon/Threshold/Interval/Rep paces from `s.pac` — marathon-centric zones that contradict the HYROX coaching model (Critical Pace), firing for any HYROX athlete with running history.
+
+**Fix (2026-06-17).** The leaking Daniels-zone card was already removed in commit `5c4dea6` (the issue was just never closed). This session took the issue's "build a Critical-Pace-based equivalent" path: the run-pace forecast page now surfaces the athlete's **Critical pace** (a stat row) plus a muted "View critical pace →" link to the existing `critical-pace-detail-view.ts`. The CP value reads from the same canonical `deriveHyroxRunPace(s).components.criticalPaceSecKm` call the detail page uses, so the two surfaces agree by construction. The CP detail view gained an optional `onBack` handler so Back returns to the run-pace page (not Stats) when opened from the forecast. tsc + lint clean; `hyrox-run-pace.test.ts` 28/28 green. **Not device-verified** — confirm on a HYROX plan that the run-pace forecast page shows Critical pace + the link, and Back round-trips correctly, then mark FIXED.
 
 ### ISSUE-275: Running mode lacks the under-duration guard tri has — underachiever load spiral *(P1 model, mirror-rule gap, 2026-06-05)*
 

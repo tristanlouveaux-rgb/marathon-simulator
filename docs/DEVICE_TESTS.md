@@ -50,6 +50,7 @@ Have test coverage, but real-data confirmation is worth it.
 - [ ] **Wizard STEP_ORDER**: onboarding does not crash on the review-step path (TDZ fix).
 - [ ] **Button depth**: press-in feedback on all CTAs; RPE glass slider works.
 - [ ] **Coach-contract step**: after plan reveal, graphics reflect the real plan (phase ribbon, volume ramp, session mix).
+- [ ] **Mid-week onboarding** (all modes): onboard on a **Wednesday** → Plan + Home week 1 start today (no blank Mon/Tue cards, none marked Missed); a run logged earlier this week still credits to load. Onboard on a **Saturday** → week 1 is a chill 1–2 session lead-in, first full week is the following Monday. After advancing to week 2, the onboarding week's adherence does not show a false penalty. `dropPreOnboardSessions`, `plan-adherence.ts`, `events.ts`
 
 ---
 

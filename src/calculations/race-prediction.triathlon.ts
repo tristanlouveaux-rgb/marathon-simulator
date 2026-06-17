@@ -91,8 +91,8 @@ import {
 } from '@/constants/triathlon-horizon-params';
 import {
   recentHoursByDiscipline,
-  plannedSessionsPerWeekByDiscipline,
-  plannedHoursPerWeekByDiscipline,
+  plannedBuildDoseByDiscipline,
+  plannedPeakDoseByDiscipline,
   longestSessionByDiscipline,
 } from './tri-volume-by-discipline';
 import { computeTriAdherence } from './tri-adherence';
@@ -189,12 +189,26 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     run:  Math.max(0, weeksRemaining - recoveryDebitWeeks(recoveryWeeks.run)),
   };
 
-  // Use PLANNED upcoming sessions, not historical actuals. The projection
-  // answers "if you stick with the plan, here's race day". For week 1 of a
-  // fresh plan with no logged sessions yet, historical would read 0/wk and
-  // hit the undertraining penalty, making the projection slower than current.
-  const sessions = plannedSessionsPerWeekByDiscipline(state, 4, doseOffset);
-  const plannedHours = plannedHoursPerWeekByDiscipline(state, 4, doseOffset);
+  // Use the PLANNED dose, not historical actuals. The projection answers "if
+  // you stick with the plan, here's race day". Two-term decomposition (per
+  // discipline), so each penalty sees the volume it is actually a function of:
+  //   - `buildDose` (build-phase MEAN, non-taper weeks) → the horizon's
+  //     fitness-gain term. Cumulative training dose drives marker adaptation,
+  //     so the block average is the right input.
+  //   - `peakDose` (the PEAK the plan holds) → the specific-endurance /
+  //     race-readiness penalty CLOSURE. Race-distance readiness is a function
+  //     of the highest sustained volume reached approaching the race, not the
+  //     block mean.
+  // Both beat the old next-4-week window, which sat in the low-volume base
+  // phase early in a plan and under-credited the build (dragging the projected
+  // bike/run via the durability cap). Taper weeks are excluded from both
+  // (freshness, not build — Mujika 2002); near taper the executionFactor → 0
+  // pins projected to current regardless. See `plannedBuildDoseByDiscipline`
+  // and `plannedPeakDoseByDiscipline`.
+  const buildDose = plannedBuildDoseByDiscipline(state, doseOffset);
+  const peakDose = plannedPeakDoseByDiscipline(state, doseOffset);
+  const sessions = buildDose.sessions;
+  const plannedHours = buildDose.hours;
   const adherence = computeTriAdherence(state, 4);
   const longestSession = longestSessionByDiscipline(state, 12);
   const yearsTraining = computeYearsOfTraining(state);
@@ -310,20 +324,25 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   // Per-discipline effective build weeks feed the closure math too: a
   // discipline lost to injury for part of the horizon has less time to close
   // its endurance gap, so its residual race-day penalty is larger.
+  //
+  // The closure rate reads `peakDose` (the sustained volume the plan holds, not
+  // the build mean): race-distance readiness is a function of the highest
+  // sustained volume reached approaching the race. The horizon's fitness gain
+  // above still reads the build mean (`sessions`).
   const swimPenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining: effectiveWeeks.swim, plannedSessions: sessions.swim, refSessions: swimRef,
+    weeksRemaining: effectiveWeeks.swim, plannedSessions: peakDose.sessions.swim, refSessions: swimRef,
     closureWeeks, taperWeeks: swimTaper,
-    plannedHours: plannedHours.swim, refHours: swimRefHours,
+    plannedHours: peakDose.hours.swim, refHours: swimRefHours,
     currentScore: raceReadiness.swim.score,
   });
   const bikePenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining: effectiveWeeks.bike, plannedSessions: sessions.bike, refSessions: bikeRef,
+    weeksRemaining: effectiveWeeks.bike, plannedSessions: peakDose.sessions.bike, refSessions: bikeRef,
     closureWeeks, taperWeeks: bikeTaper,
-    plannedHours: plannedHours.bike, refHours: bikeRefHours,
+    plannedHours: peakDose.hours.bike, refHours: bikeRefHours,
     currentScore: raceReadiness.bike.score,
   });
   const runPenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining: effectiveWeeks.run, plannedSessions: sessions.run, refSessions: runRef,
+    weeksRemaining: effectiveWeeks.run, plannedSessions: peakDose.sessions.run, refSessions: runRef,
     closureWeeks, taperWeeks: runTaper,
     currentScore: raceReadiness.run.score,
     // Run target is km/wk not hours; pass undefined to fall back to

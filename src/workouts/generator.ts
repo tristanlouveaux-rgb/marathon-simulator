@@ -8,8 +8,9 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions } from './plan_engine';
+import { planWeekSessions, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
+import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
 import { swapFractionForState } from '@/calculations/body-mass-adaptations';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
@@ -120,7 +121,29 @@ export function generateWeekWorkouts(
       easyPaceSecPerKm,
       ctlRatio,
     });
-    for (const intent of intents) {
+    // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
+    // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
+    // long-run distance last). Default-until-chosen is eased — 'keep' is the only opt-out. Caution
+    // is handled inside planWeekSessions; safe/unknown weeks skip this entirely. The final taper
+    // (race) week is exempt: its single quality session is already a minimal primer (ISSUE-298) and
+    // its volume is already cut, so easing it would neuter the primer for no load benefit.
+    const wkNow = sNow.wks?.[weekIndex - 1] as Week | undefined;
+    const isRaceWeek = phase === 'taper' && totalWeeks != null && weekIndex >= totalWeeks;
+    const easedIntents = (
+      acwrStatus === 'high' &&
+      !isRaceWeek &&
+      (wkNow as any)?.acwrChoice !== 'keep' &&
+      ((wkNow as any)?.scheduledChronicTSS ?? 0) >= 1 &&
+      ((wkNow as any)?.scheduledSafeUpper ?? 0) > 0
+    )
+      ? computeAcwrEaseBack(intents, {
+          chronicWeeklyTSS: (wkNow as any).scheduledChronicTSS,
+          safeUpper: (wkNow as any).scheduledSafeUpper,
+          easyFloorMin: EASY_FLOOR_MIN,
+          longFloorMin: LONG_SOFT_FLOOR_MIN,
+        }).intents
+      : intents;
+    for (const intent of easedIntents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
     }
   } else {

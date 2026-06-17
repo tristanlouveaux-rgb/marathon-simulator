@@ -85,8 +85,12 @@ export async function restorePlanFromSupabase(): Promise<boolean> {
       .from('user_plan_settings')
       .select('state_snapshot, updated_at')
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
 
+    // maybeSingle() returns data:null with no error when no row exists yet —
+    // every new user's first launch, before their first save. .single() instead
+    // returned a 406 (PostgREST can't coerce zero rows to a single object), which
+    // was handled here but logged a noisy error on every new account.
     if (error || !data?.state_snapshot) return false;
 
     localStorage.setItem(STATE_KEY, JSON.stringify(data.state_snapshot));

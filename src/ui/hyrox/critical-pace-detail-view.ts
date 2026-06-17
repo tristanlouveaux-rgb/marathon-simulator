@@ -64,7 +64,7 @@ function buildCpSamples(s: SimulatorState, currentCpSecKm: number | null): Bench
   return samples;
 }
 
-export function renderHyroxCriticalPaceDetail(): void {
+export function renderHyroxCriticalPaceDetail(opts?: { onBack?: () => void }): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
@@ -156,6 +156,7 @@ export function renderHyroxCriticalPaceDetail(): void {
   `;
 
   document.getElementById('hxcp-back-btn')?.addEventListener('click', () => {
+    if (opts?.onBack) { opts.onBack(); return; }
     import('./stats-view').then(({ renderHyroxStatsView }) => renderHyroxStatsView());
   });
   document.getElementById('hxcp-account-btn')?.addEventListener('click', () => {
