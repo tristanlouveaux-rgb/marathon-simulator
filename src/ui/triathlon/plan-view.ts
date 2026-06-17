@@ -485,6 +485,11 @@ function buildTriDayList(s: any, viewWeek: number): string {
   const workouts = resolveTriWeekWorkouts(s, viewWeek);
   const dismissedTests = new Set<string>((tri as any)?.dismissedTests as string[] ?? []);
 
+  // IM weeks that run a brick put the long run the day after, so it lands on
+  // pre-fatigued legs by design (§CD). renderDay applies a tired-legs caption to
+  // the long-run card so a user doesn't read the fatigue as a fitness problem.
+  const imBrickWeek = tri?.distance === 'ironman' && workouts.some((w: Workout) => w.t === 'brick');
+
   const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
   for (const w of workouts) {
     // Synced cross-training adhocs may carry no dayOfWeek. Derive it from the
@@ -501,7 +506,7 @@ function buildTriDayList(s: any, viewWeek: number): string {
 
   const statusCtx = { wk, ctx: computeWeekStatusContext(s.planStartDate, viewWeek, s.w, s.planCreatedAt) };
   return Array.from({ length: 7 }, (_, d) =>
-    renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri?.swim?.cssSecPer100m ?? null, ftp: tri?.bike?.ftp ?? null, dismissedTests }, injStatus, statusCtx),
+    renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri?.swim?.cssSecPer100m ?? null, ftp: tri?.bike?.ftp ?? null, dismissedTests }, injStatus, statusCtx, imBrickWeek),
   ).join('');
 }
 
@@ -1272,7 +1277,15 @@ function openCompletedEffortDetail(workoutId: string, wk: any, s: any): void {
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: number | null; ftp: number | null; dismissedTests?: Set<string> }, injStatus: Record<'swim' | 'bike' | 'run', DisciplineStatus> | null = null, statusCtx: { wk: any; ctx: WeekStatusContext } | null = null): string {
+function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: number | null; ftp: number | null; dismissedTests?: Set<string> }, injStatus: Record<'swim' | 'bike' | 'run', DisciplineStatus> | null = null, statusCtx: { wk: any; ctx: WeekStatusContext } | null = null, imBrickWeek: boolean = false): string {
+  // Tired-legs caption for the IM long run on a brick week (it sits the day after
+  // the brick, on pre-fatigued legs by design — §CD). Active cards only.
+  const coachNoteFor = (w: any): string | undefined => {
+    const active = w.status !== 'completed' && w.status !== 'skipped' && w.status !== 'replaced';
+    return imBrickWeek && active && w.t === 'long' && w.discipline === 'run'
+      ? 'Run this on tired legs from the brick. Training the marathon on a fatigued system is the point.'
+      : undefined;
+  };
   const dayLabel = DAY_NAMES[d];
   // Done / Logged / Missed / Today flag, mirroring the running plan-view card.
   const chipFor = (w: any): string =>
@@ -1320,7 +1333,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
       const legLoadNudge = isStrength && isActiveCard
         ? (gymLegLoadNudgeForWorkout(w, getState().recentLegLoads ?? [], w.rpe ?? w.r ?? 7, Date.now()) ?? undefined)
         : undefined;
-      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w), legLoadNudge, completedSummary: completedSummaryFor(w) });
+      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, statusChip: chipFor(w), legLoadNudge, coachNote: coachNoteFor(w), completedSummary: completedSummaryFor(w) });
     }
     // For bricks: use the more restrictive of bike/run status
     let disc: 'swim' | 'bike' | 'run' = rawDisc;
@@ -1330,7 +1343,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     }
     const status = injStatus[disc];
     if (status === 'stop') return renderInjuryRestCard(w, rawDisc);
-    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy', statusChip: chipFor(w), completedSummary: completedSummaryFor(w) });
+    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy', statusChip: chipFor(w), coachNote: coachNoteFor(w), completedSummary: completedSummaryFor(w) });
   }).join('');
 
   return `
