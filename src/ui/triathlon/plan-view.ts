@@ -107,6 +107,22 @@ export function renderTriathlonPlanView(): void {
   // still persist correctly; cards still show mods (from this resolved copy).
   const workouts = resolveTriWeekWorkouts(s, viewWeek);
   const phase = wk?.ph ? capitalize(wk.ph) : '';
+
+  // IM big-weekend note (current week only). On every IM build/peak week the brick
+  // (long ride + transition run) and the long run sit back to back, so the long run
+  // lands on tired legs by design. Set the expectation and explain the intent so a
+  // user doesn't read the fatigue as a problem. The lead clause names which key
+  // session leads this week (the alternation, §CD). Returns '' off these weeks.
+  const imEmphasis = tri && viewWeek === s.w
+    ? triWeekEmphasis(tri.distance, (wk?.ph ?? 'base') as TrainingPhase, viewWeek)
+    : null;
+  const imBigWeekNote = imEmphasis
+    ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">${
+        imEmphasis === 'run'
+          ? 'This week leans into the run. '
+          : 'This week leans into the ride. '
+      }The brick and the long run sit back to back, so the long run lands on tired legs. That is deliberate. The Ironman marathon is run on a depleted system, and training that pairing builds the durability race day demands.</div>`
+    : '';
   const cyclingLabel = getCyclingEventLabel(s);
   const baseEventLabel = cyclingLabel ?? getTriDistanceLabel(tri.distance);
   const raceCity = cyclingLabel ? null : (getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null);
@@ -252,9 +268,9 @@ export function renderTriathlonPlanView(): void {
         <!-- Future-week draft banner (mirrors running plan-view) -->
         ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Estimated from last week\'s load. Sessions and distances adjust as you train.</div>` : ''}
 
-        <!-- Run-emphasis note: IM build/peak weeks that push the long run. Current
-             week only; the long ride eases the same week (alternation, §CD). -->
-        ${viewWeek === s.w && tri && triWeekEmphasis(tri.distance, (wk?.ph ?? 'base') as TrainingPhase, viewWeek) === 'run' ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">This week emphasises the run. The long run steps up to build durability for the marathon off the bike. Bike volume eases to balance the week's load.</div>` : ''}
+        <!-- IM big-weekend note: brick + long run back to back, tired legs by
+             design. Current week, IM build/peak only. Copy computed above (§CD). -->
+        ${imBigWeekNote}
 
         <!-- Injury banner + morning check (current week only) -->
         ${!isFutureWeek && injuryActive && injState ? `
