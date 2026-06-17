@@ -354,11 +354,29 @@ export function effectiveVo2max(s: SimulatorState, now: Date = new Date()): numb
   if (s.vo2Override && s.vo2Override.value > 0) return s.vo2Override.value;
   const device = s.vo2 != null && s.vo2 > 0 ? s.vo2 : null;
   if (device == null) return null;
-  const race = raceAnchorVdot(s, now);
-  if (race != null && device > race.vdot) {
-    const pbCapacity = pbDerivedVdot(s);
-    if (pbCapacity == null || pbCapacity < race.vdot) {
-      return race.vdot;  // un-corroborated watch lift → cap to race-validated VDOT
+
+  // Running-specific evidence ceiling (TRIATHLETES ONLY). A watch VO2max is built
+  // by cycling and swimming too, so for a triathlete it overstates RUNNING fitness:
+  // two athletes with the SAME watch VO2max of 56 can be a 3:10 and a 4:00
+  // marathoner — only running evidence tells them apart. The watch must therefore
+  // not pull the blend's VO2 predictor ABOVE what running-specific evidence
+  // supports: a recent race run leg, the athlete's race PBs, or an HR-vs-pace
+  // calibration from real runs. A recent fast run / fresh PB / HR calibration
+  // RAISES this ceiling (it's the max of the evidence), so a genuinely improving
+  // runner is never trapped — PBs aren't a ceiling, only an uncorroborated
+  // cross-trained watch is capped. Running mode (no triConfig) is untouched: there
+  // the watch is run-specific and trusted as-is.
+  if (s.triConfig != null) {
+    const ceilings: number[] = [];
+    const race = raceAnchorVdot(s, now);
+    if (race != null) ceilings.push(race.vdot);
+    const pb = pbDerivedVdot(s);
+    if (pb != null) ceilings.push(pb);
+    const hr = s.hrCalibratedVdot;
+    if (hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium')) ceilings.push(hr.vdot);
+    if (ceilings.length > 0) {
+      const ceiling = Math.max(...ceilings);
+      if (device > ceiling) return ceiling;  // watch exceeds running evidence → cap to it
     }
   }
   return device;

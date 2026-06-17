@@ -220,25 +220,41 @@ describe('getPhysiologicalVdot — race-validated anchor (recent race run leg)',
   });
 });
 
-describe('effectiveVo2max — race-validated cap on the blend VO2 predictor', () => {
+describe('effectiveVo2max — running-evidence ceiling on the blend VO2 predictor (triathletes)', () => {
+  const tri = { distance: 'ironman' } as SimulatorState['triConfig'];
+
   it('caps a watch VO2max that overstates a recent race run leg (no PBs)', () => {
-    const s = mkState({ vo2: 56, raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+    const s = mkState({ vo2: 56, triConfig: tri, raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
     expect(effectiveVo2max(s, NOW)).toBe(43);
   });
 
-  it('does NOT cap when standalone running PBs corroborate the higher value', () => {
-    // PBs imply VDOT well above 43, so the watch lift is corroborated → keep it.
-    const s = mkState({ vo2: 56, pbs: { k5: 1058, k10: 2200 }, raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+  it('caps the watch at the PB-derived VDOT when the watch exceeds it', () => {
+    // Same watch (56), but a 1:55-half athlete: PBs imply ~43, so the watch is
+    // pulled DOWN to the running evidence (two 56s, one fast runner one not).
+    const s = mkState({ vo2: 56, triConfig: tri, pbs: { h: 115 * 60 } });
+    const evo = effectiveVo2max(s, NOW)!;
+    expect(evo).toBe(pbDerivedVdot(s));
+    expect(evo).toBeLessThan(56);
+  });
+
+  it('does NOT cap when running evidence EXCEEDS the watch (PBs aren\'t a ceiling)', () => {
+    // Fast PBs imply VDOT above the watch → the watch is not the limiter, keep it.
+    const s = mkState({ vo2: 50, triConfig: tri, pbs: { k5: 960, k10: 2000 } });
+    expect(effectiveVo2max(s, NOW)).toBe(50);
+  });
+
+  it('does NOT cap when the race is stale and there is no other running evidence', () => {
+    const s = mkState({ vo2: 56, triConfig: tri, raceRunVdot: { vdot: 43, dateISO: '2024-01-01', distance: '70.3', source: 'onboarding-past-race' } });
     expect(effectiveVo2max(s, NOW)).toBe(56);
   });
 
-  it('does NOT cap when the race is stale (>365 days)', () => {
-    const s = mkState({ vo2: 56, raceRunVdot: { vdot: 43, dateISO: '2024-01-01', distance: '70.3', source: 'onboarding-past-race' } });
+  it('running mode (no triConfig) is untouched — watch trusted even above PBs', () => {
+    const s = mkState({ vo2: 56, pbs: { h: 115 * 60 } });
     expect(effectiveVo2max(s, NOW)).toBe(56);
   });
 
   it('manual override is never capped', () => {
-    const s = mkState({ vo2: 56, vo2Override: { value: 60 } as SimulatorState['vo2Override'], raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
+    const s = mkState({ vo2: 56, triConfig: tri, vo2Override: { value: 60 } as SimulatorState['vo2Override'], raceRunVdot: { vdot: 43, dateISO: '2026-03', distance: '70.3', source: 'onboarding-past-race' } });
     expect(effectiveVo2max(s, NOW)).toBe(60);
   });
 });
