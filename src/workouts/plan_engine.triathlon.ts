@@ -30,7 +30,6 @@ import {
   selectBikeQualityKind,
   selectRunQualityKind,
   TRI_BRICK_POLICY,
-  BRICK_BIKE_SHARE,
 } from './tri-intensity-profile';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
@@ -301,14 +300,16 @@ function generateWeekForTriathlon(
   // Gym: 45 min each, capped at 2 (matches the gym loop below).
   const reservedGymMin = Math.min(gymSessions, 2) * 45;
 
-  // Brick: present only in its policy phases and only with both bike+run. Its bike+run
-  // minutes are fixed fractions of the bike/run hour split, so the brick adds `brickFrac`
-  // of the SBR budget on top of the solo sessions. Fold that into the budget solve.
+  // Brick: present only in its policy phases and only with both bike+run. Coaching
+  // model (SCIENCE_LOG §CD): the brick IS the long ride with a transition run off
+  // it (the canonical IM weekend), NOT a separate medium ride alongside a standalone
+  // long ride. So the brick's BIKE is the long-ride slot already inside `bikeHours`;
+  // the only time the brick adds on top is the transition RUN. brickFrac is therefore
+  // just the run share — dropping the old bike term folds the redundant second ride's
+  // hours into a longer single long ride.
   const brickPolicy = TRI_BRICK_POLICY[tri.distance];
   const brickActive = brickPolicy.phases.includes(phase) && hasBike && hasRun;
-  const brickFrac = brickActive
-    ? split.bike * BRICK_BIKE_SHARE + split.run * brickPolicy.runShare
-    : 0;
+  const brickFrac = brickActive ? split.run * brickPolicy.runShare : 0;
 
   // Solve solo-SBR hours so that solo + brick + gym + commute == cap:
   //   capMin = sbrMin·(1 + brickFrac) + gym + commute
@@ -436,12 +437,16 @@ function generateWeekForTriathlon(
     run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
   }
 
-  // Brick. Frequency and run share scale with race distance (TRI_BRICK_POLICY):
-  // sprint gets a single peak-week rehearsal; the IM brick run is the decisive
-  // race-specific session. Requires both bike and run; cycling-only skips bricks.
+  // Brick = the long ride + a transition run off it (SCIENCE_LOG §CD). Pop the
+  // long ride (last bike slot, with any emphasis maintenance already applied) out
+  // of the solo bike set and wrap it as a brick, so the week carries ONE long-bike
+  // day (with the race-specific transition run) instead of a separate medium brick
+  // plus a standalone long ride. The transition run is separate from the solo long
+  // run. Frequency + run share scale with race distance (TRI_BRICK_POLICY).
   let brick: Workout | null = null;
-  if (brickPolicy.phases.includes(phase) && bike.length > 0 && hasRun && run.length > 0) {
-    const bikeMinutes = Math.round(bikeHours * 60 * BRICK_BIKE_SHARE);  // Slightly shorter than solo long ride
+  if (brickActive && bike.length > 0 && run.length > 0) {
+    const longRide = bike.pop()!;
+    const bikeMinutes = longRide.estimatedDurationMin ?? Math.round(bikeHours * 60 * 0.45);
     const runMinutes = Math.round(runHours * 60 * brickPolicy.runShare);
     if (bikeMinutes >= 45 && runMinutes >= 15) {
       brick = generateBrick({
@@ -452,6 +457,8 @@ function generateWeekForTriathlon(
         ftp: tri.bike?.ftp,
         hasPowerMeter: tri.bike?.hasPowerMeter,
       });
+    } else {
+      bike.push(longRide);  // too short to brick (deep taper / tiny budget): keep it solo
     }
   }
 

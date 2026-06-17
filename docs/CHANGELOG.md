@@ -32,8 +32,8 @@ Session-by-session record of significant changes. Most recent first.
   - Funding reallocates minutes (reduced long ride → longer long run) and is **time-budget-conserving** — a new test confirms no IM week (10/12/14/18 h) exceeds its weekly hours cap.
   - `DURABILITY_THRESHOLDS.ironman.longRunSec` raised 2.0 h → 2.5 h so the tracking durability bar agrees with the plan target (`MAX_DURABILITY_PENALTY` unchanged at +5%).
   - Plan view shows a current-week consultant-tone note on run-emphasis weeks ("This week emphasises the run...").
-- **Tests**: `plan_engine.triathlon.test.ts` +7 (now 26). tsc + ui-lint clean.
-- **Observed (not fixed, pre-existing)**: the scheduler comment says "Brick replaces the long bike," but it only pops the long bike when no brick is present — so IM build/peak weeks schedule the brick *and* a standalone long ride. Flagged for a separate decision.
+- **Brick = the long ride + a transition run** (coaching call, Option A): build/peak weeks were stacking a standalone long ride *and* a separate medium brick (the engine generated both; the "brick replaces the long bike" scheduler comment was never honoured). With the coach hat on, the canonical IM weekend is one long-bike day with a transition run off it, paired with the next-day long run. The engine now **pops the long ride and wraps it as the brick**; `brickFrac` drops its bike term so the redundant second ride's hours fold into a longer single ride (no extra time, verified within the weekly cap). The alternation now eases the *brick's ride* on run weeks. Applies to all brick distances; off brick weeks (base/taper) the long ride stays solo.
+- **Tests**: `plan_engine.triathlon.test.ts` 26 passing (incl. weekly-cap conservation across 10–18h IM); full suite green (3446 passing). tsc + ui-lint clean.
 - **Not device-verified.**
 
 ## 2026-06-17 — Race week is sharpening, not training: final-week primer (all modes)

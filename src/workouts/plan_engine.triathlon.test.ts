@@ -289,12 +289,19 @@ describe('Ironman long-run build + key-session alternation (SCIENCE_LOG §CD)', 
     const lr = (wk.triWorkouts ?? []).find((w) => w.discipline === 'run' && w.t === 'long');
     return lr?.estimatedDurationMin ?? 0;
   };
-  // The standalone endurance long ride only — bricks carry discipline 'bike' too
-  // but are the race-specificity session and stay full every week by design.
-  const longRideMin = (wk: Week): number =>
-    (wk.triWorkouts ?? [])
+  // The long ride. On build/peak weeks it is the brick's bike segment (the brick
+  // IS the long ride + transition run, §CD); off brick weeks it is the longest
+  // standalone bike session. Take whichever is larger.
+  const longRideMin = (wk: Week): number => {
+    const wos = wk.triWorkouts ?? [];
+    const brickBike = wos
+      .filter((w) => w.t === 'brick')
+      .map((w) => (w as any).brickSegments?.[0]?.durationMin ?? 0);
+    const soloBike = wos
       .filter((w) => w.discipline === 'bike' && w.t !== 'brick')
-      .reduce((m, w) => Math.max(m, w.estimatedDurationMin ?? 0), 0);
+      .map((w) => w.estimatedDurationMin ?? 0);
+    return Math.max(0, ...brickBike, ...soloBike);
+  };
 
   it('builds the IM long run toward the 2:30 ceiling on a peak run-emphasis week', () => {
     const weeks = generateTriathlonPlan(imState());

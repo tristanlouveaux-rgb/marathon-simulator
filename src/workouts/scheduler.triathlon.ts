@@ -66,7 +66,10 @@ export function scheduleTriathlonWeek(
     return minutesOnDay[day] + workoutMinutes(w) <= cap + 15;  // 15 min tolerance
   };
 
-  // 1. Long session Saturday. Brick replaces the long bike if present.
+  // 1. Long session Saturday. On brick weeks the brick IS the long ride (the long
+  //    ride was popped into the brick in the engine, SCIENCE_LOG §CD), so placing
+  //    the brick here places the long-bike day. Off brick weeks, the long ride is
+  //    still a solo session and goes here.
   if (brick) {
     place(5, brick);
   } else {
