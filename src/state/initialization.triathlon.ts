@@ -233,6 +233,18 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       console.log(`[TriInit] race-validated run VDOT anchor set: ${pastRaceBench.vdot.toFixed(1)} (${state.triPastRace.distance} ${state.triPastRace.dateISO})`);
     }
 
+    // Persist the demonstrated bike speed so the bike leg projects from the real
+    // race ride (CdA / speed-scaling) rather than a generic FTP→speed model.
+    if (pastRaceBench.bikeKph && state.triPastRace?.dateISO) {
+      s.raceBikeKph = {
+        kph: pastRaceBench.bikeKph,
+        raceDistance: state.triPastRace.distance as TriConfig['distance'],
+        dateISO: state.triPastRace.dateISO,
+        source: 'onboarding-past-race',
+      };
+      console.log(`[TriInit] race bike-speed anchor set: ${pastRaceBench.bikeKph.toFixed(1)} km/h (${state.triPastRace.distance} ${state.triPastRace.dateISO})`);
+    }
+
     // Seed prediction caches. Phase 4 computes real values.
     s.initialBaseline = null;
     s.currentFitness = null;
@@ -310,13 +322,21 @@ function derivePastRaceBenchmarks(state: OnboardingState): {
   cssSecPer100m?: number;
   cssConfidence?: 'high' | 'medium' | 'low';
   vdot?: number;
+  bikeKph?: number;
 } {
   const past = state.triPastRace;
   if (!past?.perLeg) return {};
 
   const legs = past.perLeg;
   const legDist = PAST_TRI_LEG_DISTANCES[past.distance];
-  const result: { cssSecPer100m?: number; cssConfidence?: 'high' | 'medium' | 'low'; vdot?: number } = {};
+  const result: { cssSecPer100m?: number; cssConfidence?: 'high' | 'medium' | 'low'; vdot?: number; bikeKph?: number } = {};
+
+  // Demonstrated bike speed from the bike leg (anchors the bike projection — bakes
+  // in the rider's real CdA/weight/position, unlike a generic FTP→speed model).
+  if (legs.bike > 0 && legDist.bikeKm > 0) {
+    const kph = legDist.bikeKm / (legs.bike / 3600);
+    if (kph > 5 && kph < 60) result.bikeKph = kph;  // sanity guard
+  }
 
   // CSS from swim leg
   if (legs.swim > 0 && legDist.swimM > 0) {

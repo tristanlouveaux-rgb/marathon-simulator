@@ -64,6 +64,7 @@ import {
 import { detectBricks, computeBrickAdaptation, type DetectionActivity } from './brick-detector';
 import {
   solveSpeed,
+  solveCdA,
   paramsFromProfile,
   msToKph,
   RACE_INTENSITY_BY_DISTANCE,
@@ -218,6 +219,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     currentFtp,
     currentVdot,
     cssSource: tri.swim?.cssSource,
+    // A recent race means the athlete swam recently across disciplines, so a
+    // race-derived CSS must not be treated as detrained (mirrors the run anchor's
+    // "race-validated, not detrained" rule). Proxy: a recent bike anchor exists.
+    cssFromRecentRace: raceBikeAnchorKph(state) != null,
     weeksRemaining,
     // Per-discipline build weeks after the injury debit. Each discipline gains
     // fitness only over the weeks it can actually train; bike (unrestricted)
@@ -559,6 +564,9 @@ function buildProjection(args: {
    * manually and we should treat it as a fresh ground-truth snapshot, even if
    * recent swim activity is sparse. Skips the detraining inflation below. */
   cssSource: 'user' | 'derived' | undefined;
+  /** True when the CSS came from a recent race (raced recently → swam recently),
+   * so the detraining inflation is skipped like a user-set value. */
+  cssFromRecentRace?: boolean;
   weeksRemaining: number;
   /** Per-discipline build weeks after any injury debit. Falls back to the
    *  scalar `weeksRemaining` per discipline when absent (no injury). */
@@ -612,8 +620,10 @@ function buildProjection(args: {
     // inflation even if recent swim activity is sparse. The user has just told
     // the system what their CSS is; we should not project it backwards on the
     // strength of "no swims logged this month".
-    const userSetCss = args.cssSource === 'user';
-    const swimDetrain4wkPeriods = userSetCss ? 0
+    // Skip the detraining inflation for a user-set CSS (fresh ground truth) OR a
+    // race-derived CSS from a recent race (they swam recently — it's not stale).
+    const cssIsFresh = args.cssSource === 'user' || args.cssFromRecentRace === true;
+    const swimDetrain4wkPeriods = cssIsFresh ? 0
       : swimWeeksActive === 0 ? 3
       : swimWeeksActive <= 2 ? 2
       : 0;
@@ -1189,6 +1199,25 @@ function estimateCSSFromSkill(slider: TriSkillSlider): number {
   return map[slider];
 }
 
+/**
+ * The recency-gated demonstrated bike speed from a real race, or null. Reuses the
+ * 365-day "strong" band (RUN_PB_RECENCY_BANDS) the run anchor uses — beyond a year
+ * the split is no longer fresher evidence than current fitness. Returns the speed
+ * plus the intensity factor it was ridden at, so the caller can scale to a target
+ * leg. `dateISO` may be 'YYYY-MM' (onboarding) or 'YYYY-MM-DD'.
+ */
+function raceBikeAnchorKph(state: SimulatorState): { kph: number; raceIF: number; raceDistance: TriathlonDistance } | null {
+  const a = state.raceBikeKph;
+  if (!a || !(a.kph > 0) || !a.dateISO) return null;
+  const ts = Date.parse(a.dateISO.length === 7 ? a.dateISO + '-01' : a.dateISO);
+  if (!Number.isFinite(ts)) return null;
+  const ageDays = (Date.now() - ts) / (24 * 60 * 60 * 1000);
+  if (ageDays < 0 || ageDays > 365) return null;
+  const raceIF = RACE_INTENSITY_BY_DISTANCE[a.raceDistance];
+  if (!raceIF) return null;
+  return { kph: a.kph, raceIF, raceDistance: a.raceDistance };
+}
+
 function estimateBikeSpeed(
   state: SimulatorState,
   ftp: number | undefined,
@@ -1204,6 +1233,33 @@ function estimateBikeSpeed(
   // 'mountainous' which the bike-physics constants now support.
   const course: BikeCourseProfileExtended =
     tri?.bike?.courseProfile ?? raceBikeProfile ?? 'flat';
+
+  // Race-validated anchor (TOP PRIORITY). A real race bike split bakes in the
+  // athlete's true CdA, weight, position and fitness — far better than a generic
+  // FTP→speed model, which left a 36 km/h 70.3 rider projected at 27 km/h for the
+  // Ironman. Two paths (Tristan: "both"):
+  //   • CdA: reverse-solve the personal CdA from the demonstrated ride (power =
+  //     FTP × the anchor race's intensity factor), then re-solve speed at the
+  //     target leg's intensity — captures course/mass when weights are known.
+  //   • Speed-scaling: speed ∝ power^⅓ (aero-dominated; Martin 1998), power ∝ IF.
+  //     Robust fallback needing only the split + the existing IF table.
+  const bikeAnchor = raceBikeAnchorKph(state);
+  if (bikeAnchor) {
+    const targetIF = RACE_INTENSITY_BY_DISTANCE[distance];
+    if (ftp && aero && state.bodyWeightKg && tri?.bike?.bikeWeightKg) {
+      const params = paramsFromProfile(aero, state.bodyWeightKg, tri.bike.bikeWeightKg, course);
+      const anchorBikeKm = RACE_LEG_DISTANCES[bikeAnchor.raceDistance].bikeKm;
+      const cdaRes = solveCdA(
+        { distanceKm: anchorBikeKm, durationSec: (anchorBikeKm / bikeAnchor.kph) * 3600, avgPowerW: ftp * bikeAnchor.raceIF },
+        params,
+      );
+      if (cdaRes.confidence !== 'low') {
+        const v = solveSpeed(ftp * targetIF, { ...params, cda: cdaRes.cda });
+        if (v > 0) return msToKph(v);
+      }
+    }
+    return bikeAnchor.kph * Math.cbrt(targetIF / bikeAnchor.raceIF);
+  }
 
   // Full power-balance physics whenever FTP + aero profile + masses exist.
   // Gated on data presence, NOT on `hasPowerMeter` — this mirrors the cycling

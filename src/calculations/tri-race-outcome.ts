@@ -175,5 +175,21 @@ export function detectAndLogRaceOutcome(state: SimulatorState): TriRaceLogEntry 
     }
   }
 
+  // Anchor the bike leg to this race's demonstrated speed (bakes in real
+  // CdA/weight/position). Same most-recent-wins guard as the run anchor.
+  if (actualPerLeg.bike > 0 && legDist?.bikeKm) {
+    const kph = legDist.bikeKm / (actualPerLeg.bike / 3600);
+    const prevB = state.raceBikeKph;
+    if (kph > 5 && kph < 60 && (!prevB || raceDate >= prevB.dateISO)) {
+      state.raceBikeKph = {
+        kph,
+        raceDistance: tri.distance,
+        dateISO: raceDate,
+        source: 'logged-race',
+      };
+      console.log(`[RaceOutcome] race bike-speed anchor set: ${kph.toFixed(1)} km/h (${tri.distance} ${raceDate})`);
+    }
+  }
+
   return entry;
 }

@@ -4,6 +4,12 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-06-17 — Triathlon bike + swim legs now anchor on the real race split
+
+- **Bike (the "6:34 Ironman bike" bug)**: `estimateBikeSpeed` ignored the athlete's demonstrated 70.3 bike split (36 km/h) and used a generic FTP→speed model, projecting the IM bike at ~27 km/h (6:34). It now anchors on the real race speed (new `s.raceBikeKph`, recency-gated 365d, seeded at onboarding + race-outcome logging): a personal CdA reverse-solved via `solveCdA` when body+bike weight are set, otherwise speed ∝ power^⅓ scaling to the target leg's intensity. Alex's IM bike leg moves from 7:30 (generic, no-volume) toward ~5:10 base (the residual is the no-bike-volume readiness penalty — separate Lesson-1 forecast-volume facet).
+- **Swim (the "1:41 faster than his real 1:54" bug)**: a race-derived CSS was being inflated by the swim detraining penalty (`×1.125` on a fresh onboard), then the horizon improved off that inflated baseline and could land faster than his actual swim. A recent race now skips the detraining inflation (`cssFromRecentRace`) — they swam recently, so it's not stale. Mirrors the run anchor's "race-validated, not detrained" rule.
+- No new constants (reuses `RACE_INTENSITY_BY_DISTANCE`, `solveCdA`/`solveSpeed`, the 365d band). Guards in `race-prediction.triathlon.test.ts`. SCIENCE_LOG §CC. tsc + full suite green. NOT device-verified; TestFlight still held.
+
 ## 2026-06-17 — Mid-week onboarding: reduced partial first week, starts today (all modes)
 
 - **Problem (raised by Tristan)**: a user onboarding any day other than Monday still got a Monday-anchored week 1 that showed the days before they joined as blank/uncompletable cards, and silently penalized them for sessions on days they never had. The plan should start the day they onboard, credit anything they already trained this week, and give a naturally-lighter first week.

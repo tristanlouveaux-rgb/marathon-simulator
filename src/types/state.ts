@@ -819,6 +819,20 @@ export interface SimulatorState {
     distance: string;
     source: 'onboarding-past-race' | 'logged-race';
   };
+  /** Demonstrated bike speed (km/h) from a real race bike leg. A race split bakes
+   *  in the athlete's true CdA, weight, position and fitness, so it anchors the
+   *  bike-leg projection far better than a generic FTP→speed model (which left a
+   *  36 km/h 70.3 rider projected at 27 km/h for the Ironman). `raceDistance` gives
+   *  the intensity factor the leg was ridden at, so the projection scales to the
+   *  target leg's intensity (speed ∝ power^⅓) or reverse-solves a personal CdA when
+   *  weights are known. Seeded at onboarding (past race) and on race-outcome
+   *  logging; recency-gated at read. Optional (fresh-install safe). */
+  raceBikeKph?: {
+    kph: number;
+    raceDistance: import('./triathlon').TriathlonDistance;
+    dateISO: string;
+    source: 'onboarding-past-race' | 'logged-race';
+  };
   initialLT: number | null;   // Initial LT at week 0
   initialVO2: number | null;  // Initial VO2 at week 0
   maxHR?: number;             // Maximum Heart Rate

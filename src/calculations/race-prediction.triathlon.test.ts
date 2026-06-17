@@ -570,3 +570,32 @@ describe('predictTriathlonRace — end to end', () => {
     expect(reduced.totalSec).toBeLessThan(blocked.totalSec);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// Race-validated bike + swim anchors (2026-06-17). A real race split anchors the
+// bike-leg speed and stops a recent race-derived CSS being treated as detrained.
+// ───────────────────────────────────────────────────────────────────────────
+describe('race-validated bike + swim anchors', () => {
+  const recentMonth = new Date().toISOString().slice(0, 7);
+  const bikeAnchor = { kph: 36.2, raceDistance: '70.3' as const, dateISO: recentMonth, source: 'onboarding-past-race' as const };
+
+  it('bike leg: a demonstrated race speed projects faster than the generic FTP model', () => {
+    const noAnchor = predictTriathlonRace(baseState())!;
+    const withAnchor = predictTriathlonRace(baseState({ raceBikeKph: bikeAnchor }))!;
+    expect(withAnchor.bikeSec).toBeLessThan(noAnchor.bikeSec);
+  });
+
+  it('bike anchor stands down when stale (>365 days)', () => {
+    const stale = { ...bikeAnchor, dateISO: '2020-01' };
+    const withStale = predictTriathlonRace(baseState({ raceBikeKph: stale }))!;
+    const noAnchor = predictTriathlonRace(baseState())!;
+    expect(withStale.bikeSec).toBeCloseTo(noAnchor.bikeSec, -1);
+  });
+
+  it('swim leg: a recent race makes a derived CSS not detrained (faster than without)', () => {
+    const derivedCss = { distance: 'ironman' as const, raceDate: futureISO(60), skillRating: { swim: 3, bike: 3, run: 3 }, swim: { cssSecPer100m: 113.7, cssSource: 'derived' as const }, bike: { ftp: 300, hasPowerMeter: true, bikeWeightKg: 9 } };
+    const noRace = predictTriathlonRace(baseState({ triConfig: derivedCss as any }))!;
+    const recentRace = predictTriathlonRace(baseState({ triConfig: derivedCss as any, raceBikeKph: bikeAnchor }))!;
+    expect(recentRace.swimSec).toBeLessThan(noRace.swimSec);
+  });
+});
