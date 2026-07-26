@@ -730,6 +730,9 @@ function skipInner(
       const basePenalty = TIM[s.rd]?.[workoutType as keyof typeof TIM[typeof s.rd]] || 20;
       const penalty = Math.round(basePenalty * 1.5);
       s.timp += penalty;
+      // Bookkeep the exact charge so an un-skip can refund precisely this much.
+      wk.skipPenalty = wk.skipPenalty || {};
+      wk.skipPenalty[workoutId] = (wk.skipPenalty[workoutId] || 0) + penalty;
       log(`${name} skipped AGAIN: +${penalty}s penalty`);
     } else {
       log(`${name} dropped from plan`);
@@ -804,7 +807,9 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
  */
 export async function next(): Promise<void> {
   const s = getMutableState();
-  if (s.w < 1 || s.w > s.wks.length) return;
+  // s.wks defaults to [] but a legacy/corrupt persisted state can lack it
+  // entirely — guard so a track-only or damaged state can't crash on .length.
+  if (!s.wks?.length || s.w < 1 || s.w > s.wks.length) return;
   const wk = s.wks[s.w - 1];
 
   const injuryState = (s as any).injuryState;
@@ -891,6 +896,9 @@ export async function next(): Promise<void> {
       wk.rated[wId] = 'skip';
       const basePenalty = TIM[s.rd]?.[w.t as keyof typeof TIM[typeof s.rd]] || 20;
       s.timp += basePenalty;
+      // Bookkeep the exact charge so an un-skip can refund precisely this much.
+      wk.skipPenalty = wk.skipPenalty || {};
+      wk.skipPenalty[wId] = (wk.skipPenalty[wId] || 0) + basePenalty;
       log(`${w.n} dropped (too many skips) → +${basePenalty}s penalty`);
     }
   }

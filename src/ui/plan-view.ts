@@ -647,7 +647,9 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         html += `<button class="plan-action-skip m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;opacity:0.6">Skip</button>`;
       }
     } else if (isDone) {
-      html += `<button class="plan-action-unrate m-btn-glass m-btn-glass--inset" data-workout-id="${escapeHtml(id)}" style="width:100%;opacity:0.7">Unmark as Done</button>`;
+      html += `<button class="plan-action-unrate m-btn-glass m-btn-glass--inset" data-workout-id="${escapeHtml(id)}" data-week-num="${viewWeek}" style="width:100%;opacity:0.7">Unmark as Done</button>`;
+    } else if (isSkipped) {
+      html += `<button class="plan-action-unrate m-btn-glass m-btn-glass--inset" data-workout-id="${escapeHtml(id)}" data-week-num="${viewWeek}" style="width:100%;opacity:0.7">Unskip</button>`;
     }
   } // end synced guard
 
@@ -2475,7 +2477,9 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             ${(() => {
-              const _raceDays = daysUntilRace(s.onboarding?.customRaceDate ?? null);
+              // Mode-aware race date: HYROX stores it on hyroxConfig, not
+              // onboarding — same fallback chain home-view uses (persona-QA P04).
+              const _raceDays = daysUntilRace((s as any).hyroxConfig?.raceDate ?? s.onboarding?.customRaceDate ?? null);
               if (_raceDays <= 0) return '';
               const _disp = _raceDays > 14 ? `${Math.floor(_raceDays / 7)}` : `${_raceDays}`;
               const _unit = _raceDays > 14 ? 'weeks' : 'days';
@@ -2840,9 +2844,15 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       if (!id) return;
 
       // Strength/gym cards open the clean detail modal instead of expanding.
+      // Exception: a SKIPPED gym session has no skip/unskip control in that
+      // modal, so fall through to the inline expanded card where the Unskip
+      // button lives. Otherwise the user can never un-skip a gym workout.
       if (card?.hasAttribute('data-gym-detail')) {
-        openGymCardDetail(id, viewWeek);
-        return;
+        const gymRating = getState().wks?.[viewWeek - 1]?.rated?.[id];
+        if (gymRating !== 'skip') {
+          openGymCardDetail(id, viewWeek);
+          return;
+        }
       }
 
       const detail = document.getElementById(safeDetailId(id));
@@ -2932,9 +2942,22 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const el = btn as HTMLElement;
       const wId = el.dataset.workoutId || '';
       const ms = getMutableState();
-      const wk = ms.wks?.[ms.w - 1];
+      // Operate on the week the card belongs to, not just the current week — a
+      // skipped/done session on a past week must un-rate that week's record.
+      const weekNum = parseInt(el.dataset.weekNum || '', 10) || ms.w;
+      const wk = ms.wks?.[weekNum - 1];
       if (!wk) return;
       delete wk.rated[wId];
+      // Un-skip: drop the carry-forward entry so it isn't pushed to next week.
+      if (wk.skip?.length) wk.skip = wk.skip.filter(x => x.workout.id !== wId);
+      // Refund any race-time penalty charged for this skip (exact bookkeeping,
+      // clamped so s.timp can never go negative).
+      const refund = wk.skipPenalty?.[wId];
+      if (refund && wk.skipPenalty) {
+        ms.timp = Math.max(0, (ms.timp || 0) - refund);
+        delete wk.skipPenalty[wId];
+        console.log(`[unskip] refunded ${refund}s race penalty for ${wId} (timp now ${ms.timp})`);
+      }
       if (wk.garminActuals?.[wId]) {
         const gId = wk.garminActuals[wId].garminId;
         delete wk.garminActuals[wId];
@@ -3665,9 +3688,15 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       const id = card?.getAttribute('data-workout-id');
       if (!id) return;
       // Strength/gym cards open the clean detail modal instead of expanding.
+      // Exception: a SKIPPED gym session has no skip/unskip control in that
+      // modal, so fall through to the inline expanded card where the Unskip
+      // button lives. Otherwise the user can never un-skip a gym workout.
       if (card?.hasAttribute('data-gym-detail')) {
-        openGymCardDetail(id, viewWeek);
-        return;
+        const gymRating = getState().wks?.[viewWeek - 1]?.rated?.[id];
+        if (gymRating !== 'skip') {
+          openGymCardDetail(id, viewWeek);
+          return;
+        }
       }
       const detail = document.getElementById(safeDetailId(id));
       if (!detail) return;
@@ -3752,9 +3781,22 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       const el = btn as HTMLElement;
       const wId = el.dataset.workoutId || '';
       const ms = getMutableState();
-      const wk = ms.wks?.[ms.w - 1];
+      // Operate on the week the card belongs to, not just the current week — a
+      // skipped/done session on a past week must un-rate that week's record.
+      const weekNum = parseInt(el.dataset.weekNum || '', 10) || ms.w;
+      const wk = ms.wks?.[weekNum - 1];
       if (!wk) return;
       delete wk.rated[wId];
+      // Un-skip: drop the carry-forward entry so it isn't pushed to next week.
+      if (wk.skip?.length) wk.skip = wk.skip.filter(x => x.workout.id !== wId);
+      // Refund any race-time penalty charged for this skip (exact bookkeeping,
+      // clamped so s.timp can never go negative).
+      const refund = wk.skipPenalty?.[wId];
+      if (refund && wk.skipPenalty) {
+        ms.timp = Math.max(0, (ms.timp || 0) - refund);
+        delete wk.skipPenalty[wId];
+        console.log(`[unskip] refunded ${refund}s race penalty for ${wId} (timp now ${ms.timp})`);
+      }
       if (wk.garminActuals?.[wId]) {
         const gId = wk.garminActuals[wId].garminId;
         delete wk.garminActuals[wId];

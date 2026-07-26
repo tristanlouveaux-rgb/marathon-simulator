@@ -4,6 +4,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
+import { resolveTriWeekWorkouts } from './triathlon/week-resolve.triathlon';
 import { getTriDistanceLabel } from '@/constants/triathlon-constants';
 import { AI_COACH_ENABLED, STRAVA_ENRICH_UPLOAD_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState } from '@/types';
@@ -2914,8 +2915,10 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
-  // Include adhoc sessions (injury-safe substitutes) so today's suggestions
-  // show on the home card, not just `triWorkouts`. Mirrors the plan-view fix.
+  // Canonical resolver — the SAME list the tri Plan tab renders, so illness,
+  // holiday and bridge mods reach the Home card too (persona-QA P09: reading
+  // wk.triWorkouts raw showed the full plan during an active illness while the
+  // Plan tab correctly showed rested sessions). Same-source rule, CLAUDE.md.
   //
   // Exclusions mirror the running card (buildTodayWorkout) and planned-day-tss:
   //  - synced actuals (garmin-/strava- adhocs, garminTimestamp) are HISTORY —
@@ -2925,13 +2928,18 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   //  - completed slots: the tri matcher day-shifts a completed slot onto the
   //    day its activity actually happened (reconcile step 4), so without this
   //    filter completed sessions pile onto today next to their adhoc twins
+  //  - illness/holiday-rested sessions: markRest/restAway set rpe 0 + a marker
+  //    (same rested guard planned-day-tss applies)
   const gActuals = wk.garminActuals ?? {};
-  const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w) => {
+  const todayList = resolveTriWeekWorkouts(s, s.w).filter((w: any) => {
     if (w.dayOfWeek !== ourDay) return false;
-    const id: string = (w as any).id ?? w.n ?? '';
-    if ((w as any).garminTimestamp || id.startsWith('garmin-') || id.startsWith('strava-')) return false;
+    const id: string = w.id ?? w.n ?? '';
+    if (w.garminTimestamp || id.startsWith('garmin-') || id.startsWith('strava-')) return false;
     if (w.status === 'completed' || w.status === 'skipped' || w.status === 'replaced') return false;
     if ((gActuals as any)[id]) return false;
+    const rested = w.illnessSeverity === 'resting'
+      || ((w.illnessMod || w.holidayMod) && (w.rpe ?? w.r) === 0);
+    if (rested) return false;
     return true;
   });
   if (todayList.length === 0) {

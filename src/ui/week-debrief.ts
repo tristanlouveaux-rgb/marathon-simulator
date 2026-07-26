@@ -21,7 +21,7 @@ import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedW
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { formatKm, ft } from '@/utils/format';
 import { next } from '@/ui/events';
-import { computePlanAdherence, detectChronicLowAdherence, suggestedRunsPerWeek, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
+import { computePlanAdherence, detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
 import { planWeekSessions, effortMultiplier, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
@@ -453,10 +453,9 @@ function _showAnalysisAnimation(
     </div>
   `;
 
-  // Re-wire cancel
-  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
-    document.getElementById('week-debrief-modal')?.remove();
-  });
+  // No cancel wiring: ISSUE-273 removed the debrief ✕ (Continue is the only
+  // exit; it records lastDebriefWeek). A dismiss-without-record handler here
+  // would let the debrief re-fire on every launch if a ✕ ever crept back in.
 
   // Start animation
   _runAnalysisAnimation(weekNum, effortScore, mode, debugOverride);
@@ -744,9 +743,6 @@ function _wirePlanCompleteHandlers(
     ms.lastDebriefShownDate = new Date().toISOString().split('T')[0];
     saveState();
   };
-  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
-    document.getElementById('week-debrief-modal')?.remove();
-  });
   document.getElementById('plan-complete-continue')?.addEventListener('click', () => {
     // Switch to track-only mode: no active plan, just activity tracking + stats
     const ms2 = getMutableState() as any;
@@ -911,24 +907,16 @@ function _renderPlanPreview(
   // Chronic low adherence: a sustained pattern across the trailing window (not
   // just last week's CTL gap above). Surfaced here per CLAUDE.md's adaptation-
   // transparency rule (a multi-week pattern is a "big change" → end-of-week
-  // summary). Factual lead with the number, then a recalibration pointer to the
-  // existing volume controls. No second person where the data speaks, no nudge.
-  const chronicWindow = computePlanAdherence(s, CHRONIC_ADHERENCE_WINDOW_WEEKS);
-  const chronic = detectChronicLowAdherence(chronicWindow);
-  // One-tap recalibration target: the runs/week actually being completed. Only
-  // offered when it's below the current setting (reduce-only). Tapping rebuilds
-  // the plan in place at the lower frequency (keeps fitness + current week,
-  // shifts the forecast) — same machinery as the Settings runner-type/gym edits.
-  const recalRw = chronic ? suggestedRunsPerWeek(chronicWindow, s.rw ?? 0) : null;
+  // summary). Factual lead with the number. No second person where the data
+  // speaks, no nudge. (A one-tap rebuild was prototyped and pulled: it routed
+  // through initializeSimulator, which resets the plan to week 1 and only heals
+  // the position when reconcilePlanAnchorToEarliestActivity finds a logged
+  // activity — unsafe for exactly the sparse-activity users this targets. A
+  // safe in-place recalibrate is tracked in OPEN_ISSUES under ISSUE-296.)
+  const chronic = detectChronicLowAdherence(computePlanAdherence(s, CHRONIC_ADHERENCE_WINDOW_WEEKS));
   const chronicNote = chronic ? `
     <div style="margin-bottom:16px">
-      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0 0 ${recalRw != null ? '10px' : '0'}">${chronic.pct}% of planned runs completed over the last ${chronic.weeks} weeks. The plan may be set above current availability.${recalRw == null ? ' Lowering runs per week or weekly volume in Settings brings the targets in line.' : ''}</p>
-      ${recalRw != null ? `
-      <button id="debrief-recalibrate" data-recal-rw="${recalRw}"
-        style="display:inline-block;padding:8px 14px;border-radius:10px;border:1px solid var(--c-border);
-               background:transparent;color:var(--c-black);font-size:13px;font-weight:600;
-               cursor:pointer;font-family:var(--f)">Rebuild plan at ${recalRw} run${recalRw === 1 ? '' : 's'} per week</button>
-      ` : ''}
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">${chronic.pct}% of planned runs completed over the last ${chronic.weeks} weeks. The plan may be set above current availability.</p>
     </div>
   ` : '';
 
@@ -1097,10 +1085,7 @@ function _wireStep3Handlers(
   visiblyDifferent: boolean,
   acwrWeekIdx: number | null, // 1-based week to stamp acwrChoice on (ISSUE-295), or null if no ACWR choice
 ): void {
-  // Cancel
-  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
-    document.getElementById('week-debrief-modal')?.remove();
-  });
+  // No cancel wiring (ISSUE-273: the debrief has no ✕; Continue records).
 
   // Which pane is selected — lifted to function scope so Accept can persist the ACWR choice.
   let showingAdjusted = true;
@@ -1148,62 +1133,9 @@ function _wireStep3Handlers(
     }
     _closeAndRecord(weekNum, mode);
   });
-
-  // Chronic low-adherence recalibration (ISSUE-296). Rebuilds the running plan
-  // at the demonstrated runs-per-week, keeping fitness, logged activities, and
-  // the current week position. Distinct from Accept (which commits next week as
-  // previewed) — this changes the plan's frequency going forward.
-  const recalBtn = document.getElementById('debrief-recalibrate') as HTMLButtonElement | null;
-  recalBtn?.addEventListener('click', () => {
-    const newRw = parseInt(recalBtn.dataset.recalRw ?? '', 10);
-    if (!Number.isFinite(newRw) || newRw < 1) return;
-    _applyRunsPerWeekRecalibration(newRw);
-  });
 }
 
 // ─── Shared helpers (unchanged from original) ────────────────────────────────
-
-/**
- * Rebuild the running plan at a new runs-per-week, in place. Mirrors the
- * Settings runner-type / gym-count rebuild (`applyGymSessionsChange` in
- * account-view.ts): write the onboarding field, then `initializeSimulator`,
- * which archives the current weeks, redistributes logged activities into the
- * fresh plan, and reconciles the plan anchor so the user keeps their position.
- * The forecast recomputes off the new structure. Reloads on success.
- */
-function _applyRunsPerWeekRecalibration(newRw: number): void {
-  const s = getMutableState() as any;
-  if (!s.onboarding) {
-    void import('./toast').then(({ showSimpleToast }) => showSimpleToast('Plan data not found. Cannot rebuild.', 'error'));
-    return;
-  }
-
-  const spinner = document.createElement('div');
-  spinner.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;';
-  spinner.innerHTML = `
-    <div style="width:40px;height:40px;border:3px solid var(--c-border);border-top-color:var(--c-black);border-radius:50%;animation:spin 0.7s linear infinite;margin-bottom:16px"></div>
-    <div style="font-size:15px;font-weight:600;color:var(--c-black)">Rebuilding plan…</div>
-    <div style="font-size:12px;color:var(--c-muted);margin-top:4px">Recalculating your workouts</div>
-    <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
-  `;
-  document.body.appendChild(spinner);
-
-  s.onboarding.runsPerWeek = newRw;
-  saveState();
-
-  setTimeout(() => {
-    void import('@/state/initialization').then(({ initializeSimulator }) => {
-      const result = initializeSimulator(s.onboarding);
-      if (result.success) {
-        window.location.reload();
-      } else {
-        spinner.remove();
-        void import('./toast').then(({ showSimpleToast }) =>
-          showSimpleToast('Rebuild failed: ' + (result.error || 'unknown error'), 'error'));
-      }
-    });
-  }, 600);
-}
 
 function _applyPacingAdj(effortScore: number): void {
   const s = getMutableState() as any;

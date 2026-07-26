@@ -1039,9 +1039,15 @@ async function launchApp(): Promise<void> {
         _ms._debriefGateV3 = true;
         saveState();
       }
-      // Triathlon users are exempt from the debrief gate. No plan-preview debrief exists.
+      // Triathlon, HYROX and track-only users are exempt from the debrief gate —
+      // none of them fire the running plan-preview debrief, so nothing ever
+      // advances lastCompleteDebriefWeek for them. Without the exemption the
+      // clamp below (which runs EVERY launch, not just in the one-time reseed)
+      // dragged a HYROX athlete's week pointer back to lastComplete+1 = 1 on
+      // every launch: the plan froze at week 1 forever (persona-QA P08, ISSUE-304).
       const lastComplete = _ms.lastCompleteDebriefWeek ?? 0;
-      if (_ms.eventType !== 'triathlon' && _ms.w > lastComplete + 1) {
+      if (_ms.eventType !== 'triathlon' && _ms.eventType !== 'hyrox' && !_ms.trackOnly
+          && _ms.w > lastComplete + 1) {
         _ms.w = lastComplete + 1;
         saveState();
       }

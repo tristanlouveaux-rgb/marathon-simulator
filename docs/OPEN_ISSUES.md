@@ -10,6 +10,52 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 > **2026-06-16 — Persona-QA sweep batch (ISSUE-288 → 296).** Surfaced by `/persona-qa` (all groups) after the triathlon distance/intensity build, then confirmed by a dedicated triage pass. All are **pre-existing and unrelated to the triathlon work** (that work was verified clean). Triage also **debunked these as false positives** (do NOT re-investigate): Tier-3 overload modal "never fires" (it fires from `activity-review.ts`, a separate path); "no home overload badge" (the readiness "Manage Load" label + daily-coach `stance: 'reduce'` cover it); "notify-once modals re-fire" (debrief is mitigated by ISSUE-273's forced-Continue; suggestion/coach intros are gated); HYROX holiday bridge-field loss (bridge mods are runtime-only, re-applied at render); "debrief Accept gates adaptation" (CTL re-anchor applies on rollover regardless); "VDOT not updated from race result" (intentional asymmetry, documented in `run-race-outcome.ts`).
 
+> **2026-07-26 — Full persona-QA sweep (all 25 personas), ISSUE-304 → 314.** Run after the injury/Today-card fixes. Every P0/P1 claim was re-verified against code before filing; several agent claims were **debunked** (do NOT re-investigate): "debrief ✕ re-fires every launch" (no `debrief-cancel` button exists in any HTML — orphaned handlers, now deleted); "trackOnly Complete-Week crash" (wks defaults to `[]` in getDefaultState → safe early-return; defensive guard added anyway); P02 full-triathlete, P07 hyrox-injury, P23 post-race, P24 general-fitness traced **clean**. Fixed same-day: ISSUE-304 (HYROX week-pointer deadlock), P04 hyrox countdown in plan-view header, P09 tri Home Today card now routes through `resolveTriWeekWorkouts` (illness/holiday mods reach Home).
+
+### ISSUE-304: HYROX (and track-only) week pointer clamped to week 1 forever *(P1, 2026-07-26, persona P08)* — ✅ fixed in code, pending device verification
+
+The launch-time debrief gate (`main.ts` ~1044) clamps `s.w` back to `lastCompleteDebriefWeek + 1` on EVERY launch (only the v3 reseed is one-time) and exempted only `triathlon`. HYROX never fires the running plan-preview debrief (`week-debrief.ts:75,115` bar hyrox) and nothing else advances `lastCompleteDebriefWeek` (initialization seeds 0), so a HYROX athlete's week rolled forward via `advanceWeekToToday` and was immediately dragged back to week 1 — the plan froze at week 1 permanently. **Fix**: exempt `hyrox` and `trackOnly` alongside `triathlon`.
+
+### ISSUE-305: No downward benchmark revision — a wrong-high FTP/CSS never self-corrects *(P1, 2026-07-26, persona P21, needs Tristan's design call)* — OPEN
+
+The benchmark pipeline is upward-only by design (`tri-benchmarks-from-history.ts`; SCIENCE_LOG notes the deliberate no-downward rule for max-HR). A user who enters FTP 350W / CSS 1:00 gets: every session at unexecutable targets; the effort multiplier can only trim duration ±15% (`effort-multiplier.triathlon.ts:142`), never the watt target; the 3-week high-RPE prompt (`triathlon/plan-view.ts:1449-1497`) is advisory-once with no persistent badge; the race forecast shows a sub-3h 70.3 as fact with no plausibility caveat. Candidate fix respects the existing provenance system: chronic (powerAdherence < X over N weeks + RPE ≥ 8) → propose a derived-downward FTP as a suggestion modal (never silent). Constants need Tristan.
+
+### ISSUE-306: Tri injury — past-week excused runs counted against adherence; dropped runs unexplained *(P1/P2, 2026-07-26, personas P22/P10)* — OPEN
+
+(a) `computeTriPlanAdherence` counts planned runs from weeks generated before the injury (past weeks keep original runs — `plan_engine.triathlon.ts` isPastWeek skips gates) with zero actuals → adherence drags despite medical excuse; `resolveTriDisciplineAdherence` (`fitness-model.triathlon.ts:207`) checks only the *current* week's injury, not the injury state at the scored week's time. (b) When run capacity = 0 the runs are silently absent from the plan — no "Run. Paused" card (the `renderInjuryRestCard` path at `triathlon/plan-view.ts:1062-1076` is unreachable because dropped runs never appear in the list), no session-count explanation, brick silently vanishes (`plan_engine.triathlon.ts:676`).
+
+### ISSUE-307: Ghost user — debrief-gate clamp corrupts detraining accounting *(P2, 2026-07-26, persona P12, running mode)* — OPEN
+
+`advanceWeekToToday` applies VDOT detraining proportional to `actualAdvance = s.w - oldW` (`welcome-back.ts:140-147`), but the every-launch debrief clamp (`main.ts` ~1044) can pull `s.w` back before/after, making detraining timing-dependent (a 4-week absence can detrain 0 weeks); `detrainApplied` (`welcome-back.ts:154-162`) then suppresses the CTL-gap re-anchor even when the clamp only allowed a 1-week advance. ISSUE-304's fix removes this interaction for HYROX/track-only but running-mode ghosts still hit it. Needs a decision on ordering (clamp before detraining, or detrain on calendar gap not pointer delta).
+
+### ISSUE-308: Debrief "changes" list understates/misattributes volume reductions *(P2, 2026-07-26, personas P16/P15)* — OPEN
+
+`week-debrief.ts:1034-1040` computes the "Volume scaled down N%" annotation from the effort multiplier alone; when the CTL re-anchor is also active the real clamped reduction is larger (e.g. eMult 0.88 + ctlRatio 0.70 → annotation "12%", actual floor 0.85 = 15%) and the CTL driver goes unmentioned. Related copy nit (P15): "Keep ramping leaves the week as planned" (`week-debrief.ts:934`) — the keep pane already carries the effort adjustment. Fix: compute the annotation from the actual adaptive multiplier and name both drivers.
+
+### ISSUE-309: Chronic-skipper pattern invisible outside the debrief *(P2, 2026-07-26, personas P13/P19)* — OPEN
+
+TIM skip penalties accumulate silently (`events.ts:894-901`) and surface only in the final race forecast; carried-forward workouts carry no "carried from week N / drops on second skip" badge in plan-view; the ctlRatio load reduction applies with no explanatory banner; the ISSUE-296 chronic callout lives only in the debrief modal. Adjacent (P19): manual-only users who train off-app but never rate get the same carry/penalty machinery — the completion modal is the mitigation but nothing explains that rating IS the logging mechanism for them.
+
+### ISSUE-310: Holiday machinery edge cases *(P2, 2026-07-26, persona P06)* — OPEN
+
+(a) `computePreHolidayShifts` HYROX path mutates stored `wk.triWorkouts[].dayOfWeek` in place (`holiday-modal.ts:499-502`) — double-application risk on re-run; clone first. (b) `getHolidayDaysForWeek` (`holiday-modal.ts:765-785`) assumes Monday-anchored weeks; verify against mid-week onboarding day indices. (c) A future HYROX/tri holiday sets `forceDeload` but stored `triWorkouts` don't regenerate until some other trigger fires — the promised deload is inert until then; consider regenerating affected weeks on holiday confirm.
+
+### ISSUE-311: Cycling-only leaks in coach context + adaptation fingerprint *(P2/P3, 2026-07-26, persona P03)* — OPEN
+
+`coach-context-builder.ts:350-373` sends swim/run readiness+benchmarks for cycling-only athletes (latent while AI_COACH_ENABLED=false, but will produce "your run is fresh" advice the day it ships); `race-forecast-fingerprint.ts:145` averages `(swim + bike + run) / 3` so a cycling-only athlete's strong bike adaptation (1.2) reads as a diluted 1.067 "On track". Weight by active disciplines.
+
+### ISSUE-312: Jargon + empty-state polish bundle *(P3, 2026-07-26, personas P17/P20/P19/P05/P18)* — OPEN
+
+TSS shown unexplained on the Home progress row and strain ring (info sheet exists only in Stats); bike Z-zone terms have no help modal (`explanations.ts` covers RPE/MP only); swim threshold/endurance descriptions render without any pace hint when CSS is null (`swim.ts:144-162` — technique/speed variants have fallbacks, these don't); no "estimated benchmarks" disclosure when the tri plan was generated from skill-level fallbacks; stats VO2 bar hides silently for no-signal users (correct gate, missing one-line explanation); readiness copy says "Connect a watch" though manual sleep entry works (`readiness-view.ts:76-81`); trackOnly strain ring max degenerates to 1 when ctlBaseline=0 (`home-view.ts:1168`); debrief animation says "Factoring in RPE feedback" for users with zero RPE data (`week-debrief.ts:56-62`).
+
+### ISSUE-313: Cycling wizard preview shows running metrics *(P3 — latent, mode hidden from picker, 2026-07-26, persona P25)* — OPEN
+
+`plan-preview-v2.ts:257-272` unconditionally renders "Runs per week / Starting VO2max / Threshold pace" — meaningless for the cycling path (review.ts already gates its equivalents). Cycling is in HIDDEN_MODES (`goals.ts:87`) so no user reaches it today; fix before re-enabling cycling onboarding.
+
+### ISSUE-314: Home forecast card fallback can show a stale number vs the forecast view *(P3, low confidence — needs repro, 2026-07-26, persona P01)* — OPEN
+
+`home-view.ts` (~860) falls back `forecastTimeAdjusted → forecastTime → blendedRaceTimeSec`; if the first two are unset a stale cached blend could disagree with the freshly-computed forecast view. Also: CTL momentum shows "Stable" with <5 weeks of history instead of a no-data state (`home-view.ts:928-935`). Verify with a real state before building.
+
 > **2026-07-26 — "3 runs today while injured" investigation (ISSUE-300 → 303).** Tristan's device (real plan, active injury, Home Today card) showed 3 runs on one day. Probe tests reproduced the defect family; 300/301 are fixed in code, 302 needs a product decision, 303 is a nit. The exact on-device combination is unconfirmed until Tristan's state is inspected, but 300+301 each independently produce the reported symptoms.
 
 ### ISSUE-300: Tri Home Today card renders synced actuals as planned sessions, badged "Run" *(P1, 2026-07-26)* — ✅ fixed in code, pending device verification

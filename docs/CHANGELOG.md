@@ -4,6 +4,21 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-07-26 — Full persona-QA sweep (25 personas) → ISSUE-304-314; 5 fixes shipped
+
+Ran `/persona-qa all` (25 parallel read-only agents). Every P0/P1 claim re-verified against code before filing; 4 personas traced clean, 2 headline claims debunked (details in OPEN_ISSUES sweep note).
+
+**Fixed same-day:**
+- **ISSUE-304** — HYROX (and track-only) plans froze at week 1 forever: the every-launch debrief-gate clamp (`main.ts`) exempted only triathlon, and nothing ever advances `lastCompleteDebriefWeek` for HYROX (no debrief exists). Now exempts hyrox + trackOnly.
+- **Tri Home Today card routed through `resolveTriWeekWorkouts`** (`home-view.ts`) — illness/holiday/bridge mods now reach the Home card (it previously read `wk.triWorkouts` raw, so an ill triathlete's Home showed the full plan while the Plan tab showed rested sessions). Rested sessions filtered with the same guard planned-day-tss uses. Same-source rule.
+- **HYROX race countdown in the plan-view header** — read only `onboarding.customRaceDate`; now uses the same `hyroxConfig.raceDate` fallback chain as home-view.
+- **`next()` hardened** against a missing `wks` array (legacy/corrupt states; default-state `[]` was already safe).
+- **Deleted 3 orphaned `debrief-cancel` handlers** (`week-debrief.ts`) — relics of the ISSUE-273 ✕ removal; no button references them, and any future ✕ wired to them would have re-fired the debrief every launch (dismiss never recorded `lastDebriefWeek`).
+
+**Filed (OPEN)**: ISSUE-305 no downward FTP/CSS revision (needs design call) · 306 tri injury adherence counts past-week excused runs + silent run-drop UX · 307 ghost detraining vs debrief-clamp ordering · 308 debrief reduction % understated when CTL clamp active · 309 chronic-skipper visibility bundle · 310 holiday mutation leak + Monday-anchor assumption + inert forceDeload · 311 cycling-only coach-context/fingerprint leaks · 312 jargon/empty-state polish bundle · 313 cycling wizard preview shows running metrics (latent) · 314 home forecast fallback staleness (needs repro).
+
+tsc + lint:ui clean; suite green except the 10 pre-existing adaptive-recovery WIP failures. Fixes NOT device-verified.
+
 ## 2026-07-26 — "3 runs today while injured" defect family (ISSUE-300/301 fixed, 302/303 filed)
 
 Tristan's device showed 3 "Run" sessions on the Home Today card during an active injury. Probe tests reproduced the family:
@@ -39,7 +54,9 @@ A tester's confirmation email arrived as the stock Supabase template from `norep
 - Custom SMTP via **Resend**, sending as `Mosaic <noreply@mosaicrunning.run>`. `npm run push:auth-emails -- --smtp` sets `smtp_host/port/user/pass/sender_name/admin_email` (`smtp.resend.com:587`, username the literal `resend`, password the API key, per Resend's SMTP docs). Opt-in and separate from the template push because rotating credentials should be deliberate, and because pushing SMTP before the domain is verified in Resend makes every auth email fail silently. The key is read from `RESEND_API_KEY` and never checked in.
 - **Applied in the Supabase dashboard**: Site URL `http://localhost:3000` → `https://mosaicrunning.run`, and `https://mosaicrunning.run/**` + `http://localhost:5173/**` added to the Redirect URLs allowlist. Note the allowlist already contained a bare `https://mosaicrunning.run` entry, which matches only that exact URL and therefore never matched the `/auth-success.html` path. The wildcard is what fixes it.
 - **DNS (Namecheap, `dns1/dns2.registrar-servers.com`)**: Resend had been sitting in `Failed` for 2 months because only 1 of its 3 records was ever published. A malformed leftover record (`send._domainkey.onboarding` holding an SPF *value*, i.e. DKIM host crossed with SPF value) was rewritten into the real DKIM record: TXT `resend._domainkey` = the 216-char `p=MIGf…IDAQAB` key, verified as a well-formed 1024-bit RSA key via `openssl pkey` before publishing and confirmed live via `dig`. The SPF TXT on `send` was already correct.
-- Still outstanding: the MX record `send` → `feedback-smtp.eu-west-1.amazonses.com` (priority 10) is still missing — Namecheap's add-record modal renders its Type dropdown off-viewport and would not accept a programmatic change. Resend cannot verify until it exists. Deliberately NOT adding Resend's third record (MX on `@` → `inbound-smtp…`): that is for *receiving* mail, it is toggled off in Resend, and the root domain already runs Namecheap Private Email. `public/auth-success.html` is static and will still render a green "Email confirmed" tick when it receives an `#error=` hash.
+- **The MX gap was not a UI bug**: Namecheap removes MX/MXE from the Advanced DNS type dropdown entirely while Mail Settings is "Private Email" (option values skip 8/9). Creating any MX requires switching Mail Settings to "Custom MX", which drops `mx1/mx2.privateemail.com` unless re-added. The switch happened with the inbox records carried over as editable rows, the `send` → `feedback-smtp.eu-west-1.amazonses.com` (prio 10) MX added, and `dig` confirms both root MX (inbox intact) and send MX resolve. **Resend domain status: Verified** ("ready to send emails") after 2 months of Failed.
+- Resend API key `supabase-auth-smtp` created (Sending access, scoped to mosaicrunning.run, eu-west-1). The key was NOT read by the agent (classifier-blocked, correctly); Tristan holds it. Remaining one command: `RESEND_API_KEY=… SUPABASE_ACCESS_TOKEN=… npm run push:auth-emails -- --smtp`.
+- `public/auth-success.html` now reads the URL hash: on `#error=…` (e.g. `otp_expired` from a second click on a single-use link) it swaps the green tick for a neutral state explaining the link was already used and the account is most likely confirmed. Previously it showed "Email confirmed" unconditionally, including to users whose click had just failed.
 
 ## 2026-06-22 — Pre-onboard sessions resurfaced as "Missed" once week 1 rolled into the past
 
