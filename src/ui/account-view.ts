@@ -14,7 +14,7 @@ import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { fp } from '@/utils/format';
-import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
+import { syncAppleHealth, syncAppleHealthPhysiology, getLastAppleWorkoutDiag } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
 import { isSimulatorMode } from '@/app/runtime';
@@ -428,7 +428,20 @@ function renderAppleRow(): string {
       </div>
     </div>
     ${syncResultMsg ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
+    ${appleWorkoutDiagLine()}
   `;
+}
+
+/** On-device workout-sync diagnostic. TestFlight has no console, so surface the
+ *  last `syncAppleHealth` outcome (workouts pulled + rows uploaded to the DB the
+ *  tri pipeline reads) as a muted line. Tells apart "HealthKit returned no
+ *  workouts" from "pulled fine but didn't reach the DB". Empty until the first
+ *  sync of the session runs; hidden when there's nothing to show. Temporary —
+ *  remove once Apple Watch tri history is confirmed working on a phone. */
+function appleWorkoutDiagLine(): string {
+  const diag = getLastAppleWorkoutDiag();
+  if (!diag) return '';
+  return `<div style="padding:0 16px 10px 60px;font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">Workout sync: ${diag}</div>`;
 }
 
 function renderStravaStandaloneRow(): string {
@@ -1726,8 +1739,16 @@ function wireAccountHandlers(): void {
   });
 
   document.getElementById('btn-sign-out')?.addEventListener('click', async () => {
-    await supabase.auth.signOut();
-    renderAuthView();
+    // A network hiccup must still log the user out on this device: fall back to
+    // a local-scope sign-out. Either way SIGNED_OUT fires, and the listener in
+    // main.ts clears the per-device cache (state + connection caches) and
+    // renders the auth wall — so we don't clear or navigate here.
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('[auth] Sign-out request failed, clearing local session', err);
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    }
   });
 
   // Legal & data. App Store compliance flows.
@@ -2329,11 +2350,15 @@ function wireAccountHandlers(): void {
     rerender();
 
     try {
+      // Manual tap pulls the FULL history (not the 14-day incremental the
+      // background syncs use), so a user whose rides/swims/runs never backfilled
+      // can recover them here instead of resetting their plan. Takes longer
+      // (full-window query + HR enrichment), hence the wait copy below.
       await Promise.all([
-        syncAppleHealth(),
+        syncAppleHealth({ forceFullHistory: true }),
         syncAppleHealthPhysiology(28),
       ]);
-      syncResultMsg = 'Sync complete. Activities, sleep, and recovery updated.';
+      syncResultMsg = 'Full history synced from Apple Health. Activities, sleep, and recovery updated.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;

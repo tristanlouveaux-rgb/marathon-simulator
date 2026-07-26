@@ -211,12 +211,6 @@ function getAuthHTML(): string {
 
     ${cancelButton}
 
-    ${upgradeGuest ? '' : `<div class="a-rise" style="margin-top:32px;animation-delay:0.45s">
-      <button id="auth-simulator-mode" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer;letter-spacing:0.02em">
-        Continue without an account
-      </button>
-    </div>`}
-
     <div class="a-rise" style="margin-top:28px;display:flex;align-items:center;justify-content:center;gap:10px;white-space:nowrap;animation-delay:0.55s">
       ${['Proven principles', 'Recovery-informed', 'Built from your existing training'].map((label, i, arr) => `
         <span style="font-size:10px;color:var(--c-faint)">${label}</span>
@@ -241,11 +235,6 @@ function wireAuthHandlers(): void {
     confirmationEmail = '';
     isSignUp = false;
     renderInPlace();
-  });
-
-  document.getElementById('auth-simulator-mode')?.addEventListener('click', () => {
-    localStorage.setItem('mosaic_simulator_mode', '1');
-    window.location.reload();
   });
 
   document.getElementById('auth-toggle')?.addEventListener('click', () => {

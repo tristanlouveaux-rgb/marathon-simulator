@@ -50,6 +50,11 @@ if (import.meta.env.DEV) {
     printVO2Diagnostic(d);
     return d;
   };
+  // Dev preview: force the post-first-run Check-in coachmark on the Home tab,
+  // ignoring the once-only + first-activity guards. Re-runnable.
+  (window as any).__previewCheckinHint = (): void => {
+    import('@/ui/checkin-hint').then(({ forceShowCheckinHint }) => forceShowCheckinHint());
+  };
 }
 
 // `isSimulatorMode`, `trackStartupTask`, `signalLaunchAppComplete` and
@@ -192,7 +197,9 @@ async function bootstrap(): Promise<void> {
         setupAuthListener();
         return;
       } else {
-        console.warn('[auth] Stale anonymous session could not refresh, clearing and signing in anonymously');
+        // Leftover anonymous session (from before account-required) whose token
+        // is dead: clear it and fall through to the auth wall below.
+        console.warn('[auth] Stale anonymous session could not refresh, clearing and showing sign-in');
         await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         session = null;
       }
@@ -200,22 +207,16 @@ async function bootstrap(): Promise<void> {
   }
 
   if (!session) {
-    // No session. Silently create an anonymous user. No auth UI during onboarding.
-    // Users can upgrade to a real account later from Account settings.
-    const { data, error } = await supabase.auth.signInAnonymously();
-    if (error || !data.session) {
-      // ISSUE-228: do NOT dump the user to an auth screen on auth failure.
-      // Apple's review network is famously flaky; a reviewer on poor Wi-Fi
-      // would see a blank/unrecoverable auth view. Instead, launch the app
-      // in offline-bootstrap mode: localStorage drives the wizard + UI; sync
-      // is deferred until the network returns and the retry below succeeds.
-      console.warn('[auth] Anonymous sign-in failed — launching in offline mode, will retry on reconnect', error);
-      await launchApp();
-      scheduleOfflineAuthRetry();
-      setupAuthListener();
-      return;
-    }
-    session = data.session;
+    // Account-required: no anonymous fallback. Show the sign-in / sign-up wall.
+    // Returning users never reach here — getSession() reads a cached session
+    // from localStorage and works offline, so they launch straight in. Only a
+    // brand-new (or deliberately signed-out) user with no session lands on the
+    // auth wall. Offline resilience (ISSUE-228) is handled at the wall itself:
+    // the auth form catches network errors and shows a retryable message rather
+    // than a dead screen, and it never silently mints a throwaway user.
+    renderAuthView();
+    setupAuthListener();
+    return;
   }
 
   // Authenticated (anon or real). Proceed with app
@@ -229,58 +230,19 @@ async function bootstrap(): Promise<void> {
 }
 
 /**
- * Retry anonymous sign-in when network connectivity is restored after the
- * initial bootstrap failed. Wired by ISSUE-228. The offline fallback path.
- * Idempotent and self-cleaning: once sign-in succeeds the listener is removed
- * and the auth-state-change subscription takes over.
- */
-function scheduleOfflineAuthRetry(): void {
-  let retryInFlight = false;
-  const attempt = async (): Promise<void> => {
-    if (retryInFlight) return;
-    retryInFlight = true;
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        window.removeEventListener('online', onOnline);
-        return;
-      }
-      const { data, error } = await supabase.auth.signInAnonymously();
-      if (!error && data.session) {
-        console.log('[auth] Offline retry succeeded — anonymous session created');
-        window.removeEventListener('online', onOnline);
-      } else {
-        console.warn('[auth] Offline retry failed, will try again on next online event', error);
-      }
-    } catch (err) {
-      console.warn('[auth] Offline retry threw', err);
-    } finally {
-      retryInFlight = false;
-    }
-  };
-  const onOnline = (): void => { void attempt(); };
-  window.addEventListener('online', onOnline);
-  // Also attempt once after a short delay in case the original failure was
-  // transient (DNS hiccup) rather than a hard offline state.
-  setTimeout(() => { void attempt(); }, 5000);
-}
-
-/**
  * Listen for auth state changes (login/logout)
  *
- * SIGNED_IN here only fires on explicit sign-in via the auth form (the
- * anonymous bootstrap sign-in happens before this listener is attached, so
- * its event is missed by design). On explicit sign-in, the user expects
- * their account's plan to load. But launchApp's default path checks
- * localStorage first and skips restore-from-Supabase if anything is there.
- * That left users seeing the previous (anon / signed-out) session's state.
+ * SIGNED_IN fires on explicit sign-in via the auth form, and also once for an
+ * already-valid session on page load (suppressed below by the launchedUserId
+ * check). On explicit sign-in, the user expects their account's plan to load.
+ * But launchApp's default path checks localStorage first and skips
+ * restore-from-Supabase if anything is there. That left users seeing the
+ * previous (signed-out) session's state.
  *
  * On SIGNED_IN: try restorePlanFromSupabase first; only overwrite local
  * state if the cloud backup actually exists. If no backup, keep whatever
- * was in localStorage so we don't strand a user mid-wizard.
- *
- * Upgrade-guest flow uses updateUser → USER_UPDATED, not SIGNED_IN, so
- * guest data is preserved on that path.
+ * was in localStorage so we don't strand a user mid-wizard. (Sign-out now
+ * clears local state, so a fresh sign-in on a shared device starts clean.)
  */
 function setupAuthListener(): void {
   supabase.auth.onAuthStateChange((event) => {
@@ -312,6 +274,16 @@ function setupAuthListener(): void {
     } else if (event === 'SIGNED_OUT') {
       launchedUserId = null;
       void identifyRevenueCatUser(null);
+      // Any sign-out (button, forced invalid-token logout, account deletion)
+      // must clear the per-device cache so the next account on this device
+      // never inherits the previous account's plan. The server
+      // (user_plan_settings, keyed by user_id) stays the per-person source of
+      // truth and restores on the next sign-in. Connection status is per-user,
+      // so drop those caches too.
+      clearState();
+      setLocalStateOwner(null);
+      resetGarminCache();
+      resetStravaCache();
       renderAuthView();
     }
   });
@@ -333,10 +305,10 @@ async function launchApp(): Promise<void> {
   }
   const state = getState();
 
-  // Refresh isGuestAccount from the live session. is_anonymous is true for users
-  // auto-created via signInAnonymously above. Long-term anonymous users are at
-  // risk of data loss on app reinstall / device change. The home banner and
-  // Account view surface a "Save your account" prompt off this flag.
+  // Refresh isGuestAccount from the live session. Under account-required this is
+  // always false (no anonymous sessions are created), so the guest banner /
+  // "Save your account" prompt stay dormant. Kept for any leftover anonymous
+  // session created before account-required, and harmless otherwise.
   if (!isSimulatorMode()) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -496,8 +468,23 @@ async function launchApp(): Promise<void> {
           } catch (err) {
             console.warn('[tri] Backfill failed', err);
           }
+        } else if (state.appleHealthConnected) {
+          // Apple-Watch-only triathlete: workouts live in the on-device
+          // HealthKit store, never the DB, so this pipeline sees nothing and
+          // shows swim/bike/run = 0. Run the Apple backfill now — it upserts
+          // into `garmin_activities` (uploadAppleActivitiesToDB) — then reload,
+          // so per-discipline fitness derives on THIS launch instead of staying
+          // empty until the next one. No-op on web (syncAppleHealth gates on iOS).
+          console.log('[tri] DB empty + Apple Health connected — running Apple backfill');
+          try {
+            await syncAppleHealth();
+            activityLog = await loadActivitiesFromDB(500);
+            console.log(`[tri] Post-Apple-backfill: ${activityLog.length} activities loaded`);
+          } catch (err) {
+            console.warn('[tri] Apple backfill failed', err);
+          }
         } else {
-          console.log('[tri] DB empty and Strava not connected — benchmarks will stay skill-slider based');
+          console.log('[tri] DB empty and no Strava/Apple source — benchmarks will stay skill-slider based');
         }
       }
 

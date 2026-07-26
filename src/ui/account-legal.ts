@@ -14,6 +14,8 @@
 import { supabase, getAccessToken, SUPABASE_FUNCTIONS_BASE } from '@/data/supabaseClient';
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
+import { clearState } from '@/state';
+import { setLocalStateOwner } from '@/data/planSettingsSync';
 
 /**
  * Show the destructive-confirmation modal for account deletion.
@@ -95,8 +97,13 @@ export function openDeleteAccountModal(): void {
       const purgeDate = body?.purge_date ? new Date(body.purge_date).toLocaleDateString() : 'in 30 days';
 
       // Sign out, clear local state, return to auth view with a status message.
+      // signOut() fires SIGNED_OUT (main.ts clears the cache + renders auth);
+      // clear here too as defense-in-depth so a deleted account leaves nothing
+      // on the device even if the listener is slow. Use clearState() (not a
+      // hardcoded key) and drop the owner stamp so a future sign-in can't
+      // mistake orphaned state as its own.
       try { await supabase.auth.signOut(); } catch { /* ignore */ }
-      try { localStorage.removeItem('marathonSimulatorState'); } catch { /* ignore */ }
+      try { clearState(); setLocalStateOwner(null); } catch { /* ignore */ }
       overlay.remove();
       showDeletionScheduledToast(purgeDate);
       renderAuthView();

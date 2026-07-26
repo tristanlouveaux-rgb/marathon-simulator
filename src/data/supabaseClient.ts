@@ -52,16 +52,14 @@ export async function getValidSession() {
     throw new Error('SESSION_EXPIRED');
   }
 
-  // Anonymous (or no) session with an invalid token: nothing recoverable.
-  // Fall back to a fresh anonymous user so the user isn't stranded.
-  console.warn('[auth] Session refresh failed, attempting anonymous sign-in', error);
+  // No recoverable session under the account-required model. Do NOT mint an
+  // anonymous user here — a background sync firing right after sign-out would
+  // create a throwaway account and yank the just-signed-out user back into the
+  // app (re-breaking logout). Report the session as expired; every caller
+  // already catches this and defers work until the user re-authenticates.
+  console.warn('[auth] Session refresh failed and no valid session (account-required)', error);
   await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
-  const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
-  if (anonError || !anon.session) {
-    console.error('[auth] Anonymous sign-in also failed', anonError);
-    throw new Error('SESSION_EXPIRED');
-  }
-  return anon.session;
+  throw new Error('SESSION_EXPIRED');
 }
 
 /**
