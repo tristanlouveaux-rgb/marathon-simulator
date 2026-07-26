@@ -329,6 +329,14 @@ async function launchApp(): Promise<void> {
     void import('@/ui/pending-deletion-banner').then(({ checkAndShowPendingDeletion }) => {
       void checkAndShowPendingDeletion();
     });
+
+    // Account-required migration nudge. Existing anonymous (guest) users get a
+    // one-time modal to save their history before the anonymous session dies
+    // (after which the data can't be upgraded in place). Guarded to guests with
+    // real data; new users never see it. Fires after isGuestAccount is set above.
+    void import('@/ui/account-required-notice').then(({ maybeShowAccountRequiredNotice }) => {
+      maybeShowAccountRequiredNotice();
+    });
   }
 
   // One-time cleanup: the weekly-hours onboarding slider was removed (2026-06-01).

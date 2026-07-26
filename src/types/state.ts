@@ -591,6 +591,11 @@ export interface Week {
   rated: Record<string, number | 'skip'>; // Workout ratings
   ratedChanges?: Record<string, number>;  // VDOT changes from ratings
   skip: SkippedWorkout[];               // Skipped workouts to carry forward
+  /** Race-time penalty (seconds) charged into `s.timp` per workout id when a
+   *  session is skipped a second time, or auto-dropped at week advance. Recorded
+   *  so an un-skip can refund EXACTLY what was charged (s.timp is otherwise a
+   *  one-way accumulator). Optional: absent on weeks with no penalised skips. */
+  skipPenalty?: Record<string, number>;
   cross: SimpleCross[];                 // Cross-training activities (old format)
   wkGain: number;                       // Week VDOT gain
   workoutMods: WorkoutMod[];            // Stored workout modifications
@@ -926,6 +931,11 @@ export interface SimulatorState {
   isGuestAccount?: boolean;
   // User dismissed the one-time Home banner. The Account view section stays.
   guestBannerDismissed?: boolean;
+  // Existing anonymous (guest) users are shown a one-time launch modal after the
+  // account-required migration (2026-07-26): "accounts are now required, save
+  // your history". Set when that modal is created so it never re-pops. New users
+  // never see it (they create an account up front). See account-required-notice.ts.
+  accountRequiredNoticeSeen?: boolean;
   // User dismissed the "add HR + splits from Strava" enrich-prompt Home banner.
   // Shown to non-Strava-connected users whose activities synced thin through
   // Apple Health. The Account > Strava History affordance stays regardless.
@@ -1380,6 +1390,10 @@ export interface SimulatorState {
 
   // Route safety map
   safetyRatingIntroSeen?: boolean;  // one-time first-look popup on activity detail dismissed
+
+  // Post-first-run coachmark pointing at the Check-in button (log soreness/niggles).
+  // Shown once, after the user's first completed run, then never again.
+  checkinHintSeen?: boolean;
 }
 
 /** Summary of a completed training plan, stored permanently for plan-history view in Stats. */
