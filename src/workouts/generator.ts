@@ -410,6 +410,25 @@ export function generateWeekWorkouts(
       w.aerobic = loads.aerobic;
       w.anaerobic = loads.anaerobic;
     }
+
+    // The phase generators (acute/rehab/test/return) REPLACE the scheduled week
+    // with workouts that carry no dayOfWeek. Every day-keyed surface then drops
+    // them: the Plan tab showed all-Rest, the strain target read 0, and Home
+    // showed "Rest Day" while rehab sessions existed but rendered nowhere.
+    // Assign the scheduler's spaced training days (Tue/Thu/Sat first — the
+    // existing hard-day convention — then Mon/Wed/Fri/Sun) to any workout the
+    // injury engine emitted without a day. Adapted-in-place workouts
+    // (graduated_return) keep their original days and are untouched.
+    const INJURY_DAY_ORDER = [1, 3, 5, 0, 2, 4, 6];
+    const usedDays = new Set(scheduledWorkouts.map(w => w.dayOfWeek).filter((d): d is number => d != null));
+    let dayCursor = 0;
+    for (const w of scheduledWorkouts) {
+      if (w.dayOfWeek != null) continue;
+      while (dayCursor < INJURY_DAY_ORDER.length && usedDays.has(INJURY_DAY_ORDER[dayCursor])) dayCursor++;
+      const day = INJURY_DAY_ORDER[Math.min(dayCursor, INJURY_DAY_ORDER.length - 1)];
+      w.dayOfWeek = day;
+      usedDays.add(day);
+    }
   }
 
   // Generate stable IDs for each workout (W{week}-{type}-{index})

@@ -31,6 +31,7 @@ import { isInjuryActive, buildInjuryCaption } from './injury/modal';
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { isThinActivity } from '@/data/activity-enrich-merge';
 import { openCheckinOverlay } from './checkin-overlay';
+import { maybeShowCheckinHint } from './checkin-hint';
 import { clearIllness } from './illness-modal';
 import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
 import { formatKm, fmtDateUK, fmtDesc, formatPace, ft } from '@/utils/format';
@@ -2915,7 +2916,24 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
 
   // Include adhoc sessions (injury-safe substitutes) so today's suggestions
   // show on the home card, not just `triWorkouts`. Mirrors the plan-view fix.
-  const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w) => w.dayOfWeek === ourDay);
+  //
+  // Exclusions mirror the running card (buildTodayWorkout) and planned-day-tss:
+  //  - synced actuals (garmin-/strava- adhocs, garminTimestamp) are HISTORY —
+  //    without this filter an injured user's logged walk/ride/gym activities
+  //    rendered as planned sessions (and, lacking `discipline`, badged "Run":
+  //    the 2026-07-26 "3 runs today while injured" report)
+  //  - completed slots: the tri matcher day-shifts a completed slot onto the
+  //    day its activity actually happened (reconcile step 4), so without this
+  //    filter completed sessions pile onto today next to their adhoc twins
+  const gActuals = wk.garminActuals ?? {};
+  const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w) => {
+    if (w.dayOfWeek !== ourDay) return false;
+    const id: string = (w as any).id ?? w.n ?? '';
+    if ((w as any).garminTimestamp || id.startsWith('garmin-') || id.startsWith('strava-')) return false;
+    if (w.status === 'completed' || w.status === 'skipped' || w.status === 'replaced') return false;
+    if ((gActuals as any)[id]) return false;
+    return true;
+  });
   if (todayList.length === 0) {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
@@ -2923,14 +2941,29 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   return todayList.map((w, i) => buildTriathlonSessionBlock(w, i === 0, ourDay)).join('');
 }
 
+/**
+ * Session kind for the Today-card badge. `discipline` wins when present;
+ * otherwise the type string is sniffed (swim_/bike_/run tokens, gym/strength,
+ * cross). Unknown types fall back to 'cross', NOT 'run' — synced actuals and
+ * injury substitutes carry no discipline, and defaulting them to "Run" showed
+ * an injured athlete three "Run" badges for non-run activities.
+ */
+export function triSessionKind(w: any): 'swim' | 'bike' | 'run' | 'strength' | 'cross' {
+  if (w.discipline === 'swim' || w.discipline === 'bike' || w.discipline === 'run') return w.discipline;
+  if (w.discipline === 'strength') return 'strength';
+  const t: string = (w.t ?? '').toLowerCase();
+  if (t === 'gym' || t === 'strength' || /strength|gym/i.test(w.n || '')) return 'strength';
+  if (t.startsWith('swim')) return 'swim';
+  if (t.startsWith('bike') || t === 'brick') return 'bike';
+  if (t.startsWith('run') || t === 'easy' || t === 'long' || t === 'threshold' || t === 'vo2' || t === 'return_run') return 'run';
+  return 'cross';
+}
+
 function buildTriathlonSessionBlock(w: any, isFirst: boolean, ourDay: number): string {
-  const kind: 'swim' | 'bike' | 'run' | 'strength' =
-    w.discipline ? w.discipline
-    : (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n || '')) ? 'strength'
-    : 'run';
+  const kind = triSessionKind(w);
   const badgeBg = kind === 'swim' ? 'rgba(91,138,138,0.14)' : kind === 'bike' ? 'rgba(192,132,96,0.14)' : kind === 'run' ? 'rgba(122,132,92,0.14)' : 'rgba(100,100,110,0.14)';
   const badgeText = kind === 'swim' ? '#3d6666' : kind === 'bike' ? '#9c6245' : kind === 'run' ? '#4f5a3b' : '#4a4a55';
-  const label = kind === 'swim' ? 'Swim' : kind === 'bike' ? 'Bike' : kind === 'run' ? 'Run' : 'Strength';
+  const label = kind === 'swim' ? 'Swim' : kind === 'bike' ? 'Bike' : kind === 'run' ? 'Run' : kind === 'cross' ? 'Cross' : 'Strength';
   const rpe = w.rpe ?? w.r ?? 5;
   const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
   // Strength sessions show a "N exercises · tap to view" summary, not the raw
@@ -3425,6 +3458,9 @@ export function renderHomeView(): void {
     window.location.reload();
   });
 
+  // Post-first-run coachmark: pulse Check-in and reframe it around logging
+  // soreness/niggles. No-op after the first time (persisted + session guards).
+  maybeShowCheckinHint(s);
 }
 // ─── Manual sleep picker. Centred overlay, 0–100 slider ─────────────────────
 // ─── Manual sleep picker: centred overlay, 0–100 slider ─────────────────────
