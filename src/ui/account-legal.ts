@@ -96,14 +96,18 @@ export function openDeleteAccountModal(): void {
       const body = await res.json().catch(() => ({}));
       const purgeDate = body?.purge_date ? new Date(body.purge_date).toLocaleDateString() : 'in 30 days';
 
-      // Sign out, clear local state, return to auth view with a status message.
-      // signOut() fires SIGNED_OUT (main.ts clears the cache + renders auth);
-      // clear here too as defense-in-depth so a deleted account leaves nothing
-      // on the device even if the listener is slow. Use clearState() (not a
-      // hardcoded key) and drop the owner stamp so a future sign-in can't
-      // mistake orphaned state as its own.
-      try { await supabase.auth.signOut(); } catch { /* ignore */ }
+      // Sign out and clear local state. signOut() fires SIGNED_OUT, whose
+      // handler (main.ts) clears the per-device cache and HARD RELOADS the
+      // page (the reload is what guarantees the old account's in-memory state
+      // and sync timers die). Because the reload wipes this execution context,
+      // the "deletion scheduled" confirmation is stashed as a one-shot flag
+      // that the auth wall shows after the reload. Clear here too as
+      // defense-in-depth in case the listener is slow.
+      try { localStorage.setItem('mosaic_deletion_toast', purgeDate); } catch { /* ignore */ }
       try { clearState(); setLocalStateOwner(null); } catch { /* ignore */ }
+      try { await supabase.auth.signOut(); } catch { /* ignore */ }
+      // Normally unreachable (the SIGNED_OUT reload fires first) — fallback
+      // for the pathological case where signOut threw before the event.
       overlay.remove();
       showDeletionScheduledToast(purgeDate);
       renderAuthView();

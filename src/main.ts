@@ -254,22 +254,25 @@ function setupAuthListener(): void {
         // not only for explicit user sign-ins. Suppress the duplicate to avoid
         // running launchApp() twice on every page load.
         if (newUserId && newUserId === launchedUserId) return;
-        // On explicit sign-in, the user expects their account's plan. The
-        // localStorage state may belong to a previous (anonymous or
-        // signed-out) session. Owner_id stamped by save/restore tells us
-        // whose data is on disk. If owner mismatches the new user, wipe it
-        // before restore so we never show one user another's plan.
-        // If restore returns false (no cloud backup), launchApp falls
-        // through to the wizard. The right outcome for a fresh account.
+        // Explicit sign-in (from the auth wall, or an account switch). The
+        // localStorage state may belong to a previous session — if the owner
+        // stamp mismatches the new user, wipe it so we never show one user
+        // another's plan.
         const owner = getLocalStateOwner();
         if (newUserId && owner && owner !== newUserId) {
           clearState();
           setLocalStateOwner(null);
         }
-        await restorePlanFromSupabase();
-        await launchApp();
-        launchedUserId = newUserId ?? null;
-        void identifyRevenueCatUser(newUserId ?? null);
+        // HARD RELOAD instead of restore+launch in place: the old session's
+        // in-memory state and sync timers are still alive here, and any
+        // saveState() they fire would persist (and upload) the PREVIOUS
+        // account's data under the new user — the 2026-08-04 cross-account
+        // leak. After the reload, bootstrap launches clean: empty local state
+        // → restorePlanFromSupabase for the new user → wizard if no backup.
+        // No loop: on the post-reload launch the listener is attached only
+        // after launchedUserId is set, and the same-user duplicate SIGNED_IN
+        // is suppressed above.
+        window.location.reload();
       })();
     } else if (event === 'SIGNED_OUT') {
       launchedUserId = null;
@@ -284,7 +287,16 @@ function setupAuthListener(): void {
       setLocalStateOwner(null);
       resetGarminCache();
       resetStravaCache();
-      renderAuthView();
+      // HARD RELOAD — clearing disk is not enough. The in-memory store
+      // (state/store.ts) and every background sync timer survive a sign-out,
+      // and savePlanSettings() reads getState() and upserts it under whoever
+      // is signed in. Real incident (2026-08-04, Tristan's device): sign out
+      // of account 1 → sign up account 2 → a background saveState() fired →
+      // account 1's in-memory state was re-persisted AND uploaded as account
+      // 2's cloud backup, re-stamping the owner and defeating the mismatch
+      // check. The reload kills memory, timers, and in-flight syncs; bootstrap
+      // finds no session and lands on the auth wall.
+      window.location.reload();
     }
   });
 }

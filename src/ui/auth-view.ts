@@ -50,6 +50,18 @@ export function renderAuthView(opts: { upgradeGuest?: boolean } = {}): void {
   const container = document.getElementById('app-root');
   if (!container) return;
 
+  // One-shot: account deletion signs out, and SIGNED_OUT hard-reloads the page
+  // (account-isolation guarantee), so the confirmation toast is stashed in
+  // localStorage by account-legal.ts and surfaced here after the reload.
+  try {
+    const purgeDate = localStorage.getItem('mosaic_deletion_toast');
+    if (purgeDate) {
+      localStorage.removeItem('mosaic_deletion_toast');
+      void import('./toast').then(({ showSimpleToast }) =>
+        showSimpleToast(`Account deletion scheduled. Your data will be removed ${purgeDate}. Sign in before then to cancel.`));
+    }
+  } catch { /* private mode */ }
+
   // Reset state when rendering fresh (e.g. after sign-out)
   loading = false;
   errorMsg = '';
