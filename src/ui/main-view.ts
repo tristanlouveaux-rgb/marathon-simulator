@@ -2552,7 +2552,7 @@ function wireEventHandlers(): void {
   });
 
   // Complete week button
-  document.getElementById('btn-complete-week')?.addEventListener('click', next);
+  document.getElementById('btn-complete-week')?.addEventListener('click', () => { void next(); });
 
   // When next() completes successfully, reload to show the new week
   setOnWeekAdvance(() => {

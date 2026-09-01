@@ -16,6 +16,36 @@ This log documents **formulas and implementation**. The research docs document *
 
 ---
 
+## Multi-Week Gap Detraining Applied in One Segment (2026-09-01)
+
+**Problem.** The existing gap detraining curve (`computeVdotLoss` in `src/ui/welcome-back.ts`) was in practice never applied to a missed-week gap. `advanceWeekToToday()` applies the loss only for `actualAdvance = s.w_after - s.w_before` weeks, but `s.w` is clamped to `lastCompleteDebriefWeek + 1`. While the debrief gate is engaged that clamp holds `actualAdvance` at 0 on every launch, so an athlete returning after 3 weeks off had **no** VDOT adjustment applied. The bulk catch-up (`src/ui/catch-up.ts`) advances the pointer across the whole gap, so it applies the loss the existing rule already intends.
+
+**Formula (unchanged).**
+
+```
+loss = 0
+for i in 0 .. weeksGap-1:
+    rate = 0.012 if i < 2 else 0.008
+    loss += (currentVdot - loss) * rate
+v_new = max(round((v - loss) * 10) / 10, 20)
+```
+
+`rate` is fractional VO2max loss per week: ~1.2%/week for the first 2 weeks, ~0.8%/week thereafter. Compounding on `(currentVdot - loss)` gives diminishing absolute loss as detraining deepens, which matches the observed shape (fast initial drop in plasma volume and stroke volume, slower subsequent decline in oxidative enzyme activity and capillary density). The 20-point floor prevents the model producing a physiologically meaningless VDOT.
+
+**What changed.** Only the point of application, not the curve. `runCatchUp` calls `computeVdotLoss(v, gap.weeks)` once for the whole gap, before advancing. It is not applied per week: summing `computeVdotLoss(v, 1)` n times would restart the 1.2% phase every week and overstate the loss for gaps beyond 2 weeks.
+
+**Known limitations.**
+- **Segmented application.** If `advanceWeekToToday` does advance some weeks (possible when the debrief gate is not engaged) and the catch-up covers the rest, the curve restarts its 1.2% phase for the second segment, slightly overstating loss versus one continuous application. This is inherent to the existing launch-time design, not new; the effect is bounded at roughly 0.4% of VDOT.
+- **Gap is treated as complete rest.** Weeks with logged Strava/Garmin activity get the same penalty as fully idle weeks. Real detraining is attenuated by any maintained stimulus; the holiday flow (`showHolidayWelcomeBack`) models this properly via `classifyHolidayActivity`, the missed-week path does not.
+- **The 1.2%/0.8% split and the 2-week breakpoint are the pre-existing calibration in `welcome-back.ts`.** They were not re-derived for this change.
+- `wk.wkGain` is separately set to 0 for a missed week (adherence 0), so fitness also stops accruing. The VDOT loss is on top of that stall, not instead of it.
+
+**References.**
+- Mujika I, Padilla S (2000). *Sports Medicine* — "Detraining: loss of training-induced physiological and performance adaptations." Reports ~4-14% VO2max decline over 4 weeks of inactivity in trained subjects, front-loaded in the first 2 weeks.
+- Coyle EF et al. (1984). *JAP* — VO2max fell 7% in the first 12 days of detraining, then plateaued; stroke volume accounted for most of the early loss.
+
+---
+
 ## Recovery Run Workout Tier (2026-04-15, provisional)
 
 **Context**: Added `'recovery'` as a new `WorkoutType` to extend the suggester's downgrade ladder. Previous bottom rung was `'easy'`; when the running floor blocked distance reduction on an all-easy week, the suggester had no lever and silently declined to offer Reduce.

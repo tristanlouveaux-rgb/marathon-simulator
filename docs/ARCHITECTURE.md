@@ -34,7 +34,7 @@
 | `cross-training/` | Universal load model, workout matching, suggestions | `universalLoad.ts`, `matcher.ts`, `load-matching.ts`, `suggester.ts` | `computeUniversalLoad()`, `applyCrossTrainingToWorkouts()`, `buildCrossTrainingPopup()`, `applyAdjustments()` |
 | `gps/` | GPS tracking, split detection, recording persistence | `tracker.ts`, `geo-math.ts`, `split-scheme.ts`, `persistence.ts` | `GpsTracker` (class), `haversineDistance()`, `filterJitter()`, `buildSplitScheme()` |
 | `recovery/` | Morning check-in, sleep/readiness scoring | `engine.ts` | `computeRecoveryStatus()`, `sleepQualityToScore()`, `RecoveryEntry`, `RecoveryLevel` |
-| `ui/` | Dashboard, renderer, events, wizard, modals | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `activity-review.ts`, `welcome-back.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()` |
+| `ui/` | Dashboard, renderer, events, wizard, modals | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `activity-review.ts`, `welcome-back.ts`, `catch-up.ts` | `renderMainView()`, `render()`, `next(opts?)`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showCatchUpModal()` |
 | `constants/` | Static config, protocols, sport DB, training params | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS` |
 | `types/` | All TypeScript interfaces and type unions | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase` |
 | `data/` | Static data, Supabase client, wearable sync, source routing | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts`, `sources.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncAppleHealthPhysiology()`, `syncPhysiologySnapshot()`, `getActivitySource()`, `getPhysiologySource()` |
@@ -91,6 +91,15 @@ user clicks "Complete Week"
     → saveState()
     → renderMainView() (triggers full re-render)
 ```
+
+`next(opts?)` returns a `WeekAdvanceResult` (`advanced`, `fromWeek`, `carriedForward`, `dropped`, `penaltySec`) and takes two options:
+
+| Option | Effect |
+|--------|--------|
+| `autoResolveIncomplete` | Skip the "Incomplete Workouts" confirmation and auto-resolve unrated runs directly. Refuses to run while injured (rehab needs the per-week check-in modal). |
+| `suppressRender` | Skip the week-advance callback / re-render and the end-of-plan screen. |
+
+Both exist for the bulk catch-up, which calls `next()` once per missed week with the prompts off, then renders once at the end. Defaults reproduce the interactive single-week advance exactly.
 
 ---
 
@@ -403,11 +412,29 @@ else
 
 `detectMissedWeeks()`: compares today's date against `planStartDate + (w-1)*7 + 7` to find full weeks elapsed since the current plan week ended.
 
-`showWelcomeBackModal(weeksGap, onComplete)`:
-- Guards with `localStorage` key (one show per calendar day)
-- Applies VDOT detraining: compound `~1.2%/week` for weeks 1–2, `~0.8%/week` thereafter
-- 3+ week gaps → sets `wk.ph = 'base'`
-- Fires before `renderMainView()` in `launchApp()`
+`advanceWeekToToday()`: runs on every launch. Advances `s.w` toward today's calendar week, clamped by `lastCompleteDebriefWeek + 1` so the pointer never passes a week that has not had a full debrief. Applies `computeVdotLoss` for the weeks it actually advanced (usually 0 while the debrief gate is engaged). Marks a 3+ week landing week as `base`, but only when `s.w` actually reached the calendar week.
+
+`computeVdotLoss(vdot, weeksGap)`: compound `~1.2%/week` for weeks 1–2, `~0.8%/week` thereafter. Also used by the holiday return flow and the bulk catch-up.
+
+`showWelcomeBackModal(weeksGap, onComplete)`: retained but never called (ISSUE-81 removed the trigger).
+
+---
+
+### Bulk Catch-Up (`src/ui/catch-up.ts`, `src/ui/catch-up-gap.ts`)
+
+Closes a multi-week absence in one pass rather than one debrief per missed week.
+
+`computeCatchUpGap(input)` (pure, in the dependency-free leaf `catch-up-gap.ts` so it is unit testable): returns `{ fromWeek, toWeek, weeks }` when the calendar is `CATCH_UP_MIN_WEEKS` (2) or more weeks ahead of `s.w`, else `null`. `toWeek` is capped at `min(s.tw, s.wks.length)` so the loop can never trip the end-of-plan branch in `next()`. Returns `null` while injured.
+
+`runCatchUp(gap)`:
+1. `computeVdotLoss(s.v, gap.weeks)` applied once for the whole gap
+2. `next({ autoResolveIncomplete: true, suppressRender: true })` per missed week, accumulating `carriedForward + dropped` and `penaltySec`
+3. 3+ weeks → landing week `ph = 'base'`
+4. Sets `lastCompleteDebriefWeek` / `lastDebriefWeek` / `lastDebriefShownDate` to what a completed debrief would have written
+
+Step 4 is load-bearing: `main.ts` rolls `s.w` back to `lastCompleteDebriefWeek + 1` on every launch, so without it the next open would undo the catch-up.
+
+`showCatchUpModal(gap, onComplete)` runs the pass then shows one summary (weeks missed, sessions missed, fitness before/after, race-target penalty, generated landing week). Wired in `main.ts` after `renderHomeView()`, ahead of the auto-debrief. Not wired into the holiday-end branch: `showHolidayWelcomeBack` applies its own detraining and bridge weeks and owns that scenario.
 
 ---
 
@@ -487,6 +514,7 @@ Complete navigation graph. Every full-page view, its entry points, and where its
 | Illness | `ui/illness-modal.ts` | `openIllnessModal()` | Check-in, Plan |
 | Injury | `ui/injury/modal.ts` | `openInjuryModal()` | Check-in, Plan |
 | Week Debrief | `ui/week-debrief.ts` | `showWeekDebrief(week?, mode)` | Home (auto), Plan |
+| Bulk Catch-Up | `ui/catch-up.ts` | `showCatchUpModal(gap, onComplete)` | Launch (auto, 2+ weeks behind) |
 | Activity Review | `ui/activity-review.ts` | `showActivityReview(pending, onDone?)` | Plan, Home, Events |
 | Matching Screen | `ui/matching-screen.ts` | `showMatchingScreen(pairings, onConfirm)` | Activity Review |
 | Suggestion | `ui/suggestion-modal.ts` | `showSuggestionModal(popup, ...)` | Events, Activity Review, Excess Load Card |

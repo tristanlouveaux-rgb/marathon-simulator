@@ -558,7 +558,17 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 ---
 
 ### 26. Missed Week Detection + Week-End Debrief (3-Step Flow)
-**What it does**: On app open after a missed week, `detectMissedWeeks()` silently applies VDOT detraining and advances the plan pointer (no modal). At week end, a 3-step debrief flow fires (once per week, guarded by `lastDebriefWeek`):
+**What it does**: On app open after a missed week, `detectMissedWeeks()` silently applies VDOT detraining and advances the plan pointer (no modal). At week end, a 3-step debrief flow fires (once per week, guarded by `lastDebriefWeek`).
+
+**Bulk catch-up (2+ weeks missed)**: the debrief gate (`lastCompleteDebriefWeek`) only lets the plan pointer move one week per completed debrief, and `advanceWeekToToday()` only runs at launch. An athlete 3 weeks behind therefore had to open the app 3 times and clear 3 completion prompts, 3 analysis animations and 3 plan generations. When the calendar is `CATCH_UP_MIN_WEEKS` (2) or more weeks ahead of `s.w`, `showCatchUpModal()` now closes the whole gap in one pass instead:
+
+- Detraining for the full gap applied once (`computeVdotLoss(v, weeks)`), not per week
+- `next({ autoResolveIncomplete: true, suppressRender: true })` runs per missed week with the prompts suppressed, so auto-skip, carry-forward and race-time penalties are arithmetically identical to walking the cascade by hand
+- 3+ weeks away sets the landing week to Base phase (previously applied to the debrief-capped week, which was the wrong one)
+- Records `lastCompleteDebriefWeek` / `lastDebriefWeek` so the launch-time rollback in `main.ts` does not drag the athlete back to the start of the gap
+- One summary modal: weeks missed, sessions missed, fitness before/after, race-target penalty, then the generated landing week. "Continue →" lands on Plan
+
+Not used when an injury is active (rehab needs a per-week check-in) or when the holiday return flow fires on the same launch (that path applies its own detraining and bridge weeks).
 
 **Step 1 — Week Summary**:
 - Phase badge + "Week N complete"
@@ -579,8 +589,8 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on Sunday, or auto-trigger on app open after week advance.
 
-**Key files**: `src/ui/week-debrief.ts`, `src/ui/welcome-back.ts` (state logic only), `src/main.ts`, `src/workouts/plan_engine.ts` (plan generation + effortMultiplier)
-**Tests**: ⚠️ No automated tests
+**Key files**: `src/ui/week-debrief.ts`, `src/ui/catch-up.ts` (bulk pass + summary modal), `src/ui/catch-up-gap.ts` (pure gap detection), `src/ui/welcome-back.ts` (state logic only), `src/ui/events.ts` (`next(opts)`), `src/main.ts`, `src/workouts/plan_engine.ts` (plan generation + effortMultiplier)
+**Tests**: ⚠️ Partial — bulk catch-up is covered: `src/ui/catch-up.test.ts` (13 tests, gap detection, pure) and `src/ui/catch-up-integration.test.ts` (8 tests, incl. a state-equivalence check that the bulk pass matches the per-week cascade exactly). ✅ Both passing. The 3-step debrief flow itself has no automated tests (needs a DOM). The integration suite needs a `.env.local` with the `VITE_SUPABASE_*` keys, like every suite that imports `@/state`.
 
 ---
 

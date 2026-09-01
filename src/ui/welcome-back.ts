@@ -118,12 +118,21 @@ export function advanceWeekToToday(): void {
     if (loss > 0) s.v = Math.max(Math.round((s.v - loss) * 10) / 10, 20);
   }
 
-  // 3+ week gap: mark landing week as base (reduced volume)
-  if (gap >= 3 && s.wks?.[s.w - 1]) {
+  // 3+ week gap: mark landing week as base (reduced volume).
+  // Only when s.w actually reached the calendar week. When the debrief cap held
+  // s.w back, the athlete is still mid-gap and this would mark the wrong week;
+  // the bulk catch-up applies it to the real landing week instead.
+  if (gap >= 3 && s.w === targetWeek && s.wks?.[s.w - 1]) {
     s.wks[s.w - 1].ph = 'base';
   }
 
   saveState();
+}
+
+/** The training week today's date falls in, relative to planStartDate. */
+export function currentCalendarWeek(): number {
+  const s = getState() as any;
+  return computeCurrentCalendarWeek(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +158,7 @@ export function computeVdotLoss(currentVdot: number, weeksGap: number): number {
 // ---------------------------------------------------------------------------
 
 /** Compute the week number that today's date falls in, relative to planStartDate. */
-function computeCurrentCalendarWeek(s: ReturnType<typeof getMutableState>): number {
+function computeCurrentCalendarWeek(s: { planStartDate?: string | null; w: number }): number {
   if (!s.planStartDate) return s.w;
   const today = new Date();
   today.setHours(0, 0, 0, 0);

@@ -743,19 +743,63 @@ function skipInner(
   render();
 }
 
+/** Options for {@link next}. Defaults reproduce the interactive single-week advance. */
+export interface WeekAdvanceOptions {
+  /**
+   * Skip the "Incomplete Workouts" confirmation and auto-resolve unrated runs
+   * directly. Used by the bulk catch-up, which confirms once for the whole gap
+   * instead of once per missed week.
+   */
+  autoResolveIncomplete?: boolean;
+  /**
+   * Suppress the week-advance callback / re-render and the end-of-plan screen.
+   * The bulk catch-up renders once after the whole gap is processed.
+   */
+  suppressRender?: boolean;
+}
+
+/** What a single week advance did, so a bulk caller can summarise the whole gap. */
+export interface WeekAdvanceResult {
+  /** True when s.w moved forward. False means the advance was blocked or gated. */
+  advanced: boolean;
+  /** The week number that was completed (s.w before the advance). */
+  fromWeek: number;
+  /** Unrated runs moved into the following week. */
+  carriedForward: number;
+  /** Unrated runs dropped with a race-time penalty. */
+  dropped: number;
+  /** Race-time penalty added to s.timp by this week, in seconds. */
+  penaltySec: number;
+}
+
+function blockedAdvance(fromWeek: number): WeekAdvanceResult {
+  return { advanced: false, fromWeek, carriedForward: 0, dropped: 0, penaltySec: 0 };
+}
+
 /**
  * Move to next week
  *
  * INJURY PAUSE LOGIC: If injury is active, we freeze the plan pointer
  * and increment rehabWeeksDone instead of advancing the training week.
  */
-export async function next(): Promise<void> {
+export async function next(opts: WeekAdvanceOptions = {}): Promise<WeekAdvanceResult> {
+  const autoResolveIncomplete = opts.autoResolveIncomplete === true;
+  const suppressRender = opts.suppressRender === true;
   const s = getMutableState();
-  if (s.w < 1 || s.w > s.wks.length) return;
+  if (s.w < 1 || s.w > s.wks.length) return blockedAdvance(s.w);
   const wk = s.wks[s.w - 1];
 
   const injuryState = (s as any).injuryState;
   const isInjured = injuryState && injuryState.active;
+
+  // Injury requires a per-week check-in modal, so it can never be batched.
+  // The caller falls back to the interactive one-week-at-a-time flow.
+  if (isInjured && autoResolveIncomplete) return blockedAdvance(s.w);
+
+  const fromWeek = s.w;
+  let carriedForward = 0;
+  let dropped = 0;
+  let penaltySec = 0;
 
   // Generate this week's actual workouts once (shared by gating check and auto-skip)
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
@@ -774,8 +818,10 @@ export async function next(): Promise<void> {
   });
 
   if (unrated.length > 0 && !isInjured) {
-    const proceed = await showCompletionModal(unrated.length);
-    if (!proceed) return;
+    if (!autoResolveIncomplete) {
+      const proceed = await showCompletionModal(unrated.length);
+      if (!proceed) return blockedAdvance(s.w);
+    }
 
     // Auto-skip unrated run workouts (already computed above)
     const MAX_CARRY_FORWARD = 2;
@@ -825,6 +871,7 @@ export async function next(): Promise<void> {
         workout: carryWorkout,
         skipCount: 1,
       });
+      carriedForward++;
     }
 
     for (const w of toPenalize) {
@@ -832,6 +879,8 @@ export async function next(): Promise<void> {
       wk.rated[wId] = 'skip';
       const basePenalty = TIM[s.rd]?.[w.t as keyof typeof TIM[typeof s.rd]] || 20;
       s.timp += basePenalty;
+      penaltySec += basePenalty;
+      dropped++;
       log(`${w.n} dropped (too many skips) → +${basePenalty}s penalty`);
     }
   }
@@ -851,7 +900,7 @@ export async function next(): Promise<void> {
         // the week advance this gate just paused (return early below).
         openInjuryModal({ advanceWeekAfterSave: true });
       }
-      return;
+      return blockedAdvance(s.w);
     }
     s.rehabWeeksDone = (s.rehabWeeksDone || 0) + 1;
     // Detraining: fitness decays during injury, but rehab activities offset some loss
@@ -1162,8 +1211,8 @@ export async function next(): Promise<void> {
     } else {
       recordVdotHistory(s);
       saveState();
-      complete();
-      return;
+      if (!suppressRender) complete();
+      return { advanced: true, fromWeek, carriedForward, dropped, penaltySec };
     }
   }
 
@@ -1171,7 +1220,10 @@ export async function next(): Promise<void> {
   recordVdotHistory(s);
 
   saveState();
-  if (onWeekAdvanceCb) onWeekAdvanceCb(); else render();
+  if (!suppressRender) {
+    if (onWeekAdvanceCb) onWeekAdvanceCb(); else render();
+  }
+  return { advanced: true, fromWeek, carriedForward, dropped, penaltySec };
 }
 
 /**

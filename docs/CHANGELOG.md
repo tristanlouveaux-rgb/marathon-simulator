@@ -4,6 +4,19 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-01 — Bulk catch-up for multi-week absences
+
+- **`src/ui/catch-up.ts` + `src/ui/catch-up-gap.ts` (new)** — An athlete 2+ weeks behind the calendar now closes the whole gap in one pass instead of one debrief per missed week. Previously the debrief gate (`lastCompleteDebriefWeek`) let `advanceWeekToToday()` move the pointer only one week per completed debrief, and that function only runs at launch, so catching up 3 weeks meant 3 app opens, 3 completion prompts, 3 analysis animations and 3 plan generations.
+- **`src/ui/events.ts`** — `next()` takes `WeekAdvanceOptions` (`autoResolveIncomplete`, `suppressRender`) and returns a `WeekAdvanceResult` (`advanced`, `fromWeek`, `carriedForward`, `dropped`, `penaltySec`). Defaults reproduce the interactive single-week advance exactly. `autoResolveIncomplete` refuses to run while injured, since rehab weeks need the per-week check-in modal.
+- **Per-week arithmetic is unchanged.** The bulk pass calls `next()` once per missed week with the prompts suppressed, so auto-skip, `MAX_CARRY_FORWARD`, hard-session capping and race-time penalties produce the same state as walking the cascade by hand. Only the number of prompts changes.
+- **Detraining now actually applies to a missed-week gap.** `computeVdotLoss` was effectively dead in this path: `advanceWeekToToday` applies it for weeks *actually advanced*, and the debrief clamp held that at 0 on every launch. `runCatchUp` applies it once for the whole gap. Curve unchanged; see `docs/SCIENCE_LOG.md`.
+- **Bug fix — landing week phase.** `advanceWeekToToday()` marked `s.wks[s.w - 1].ph = 'base'` for 3+ week gaps, but `s.w` was the debrief-capped week, so it reset the phase of a week at the *start* of the gap. Now guarded on `s.w === targetWeek`, with the catch-up applying it to the week the athlete actually lands on.
+- **Debrief gate is recorded after the pass.** `runCatchUp` writes `lastCompleteDebriefWeek` / `lastDebriefWeek` / `lastDebriefShownDate`. Without this the launch-time rollback in `main.ts` (`s.w > lastCompleteDebriefWeek + 1`) would drag the athlete back to the start of the gap on the next open.
+- **One summary modal** replaces the cascade: weeks missed, sessions missed, fitness before/after, race-target penalty (race mode only), then the generated landing week. "Continue →" lands on Plan.
+- **Not wired into the holiday-end branch.** `showHolidayWelcomeBack` applies its own detraining and builds bridge weeks; running the bulk pass on top would double-count both. A long holiday still walks the old cascade.
+- **`src/ui/main-view.ts`** — `btn-complete-week` was passing `next` directly as a listener, which would have handed the click event in as options. Now wrapped.
+- **Tests (new)** — `src/ui/catch-up.test.ts`: 13 tests over `computeCatchUpGap` (threshold boundaries, plan-length and generated-array capping, injury and onboarding guards). `src/ui/catch-up-integration.test.ts`: 8 tests over `runCatchUp`, including a state-equivalence check that the bulk pass leaves the same `s.w`, `s.timp`, `wkGain`, `rated` and `completedKm` as three sequential `next()` calls. Full suite: 917 passing, same 3 pre-existing failures as before the change.
+
 ## 2026-04-16 — Race forecast surface: Home card + full-page chart, modal removed
 
 - **`src/ui/prediction-breakdown.ts` deleted.** The "Why this prediction?" modal launched from `cv-tile`, `fc-tile`, the Stats race-estimate row, and the wizard plan-preview "Why this time ›" link is gone. It rendered "—" for users without enough run history (most onboarding states) and duplicated the Stats forecast table in a less informative format.

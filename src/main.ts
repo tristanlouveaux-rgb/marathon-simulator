@@ -303,32 +303,44 @@ async function launchApp(): Promise<void> {
     }
     recordAppOpen();
 
+    // After home renders: auto-fire the week-end debrief if a week just completed
+    // (once per week). If the calendar is ahead of s.w (advance was held pending
+    // debrief), show it in 'complete' mode so the user gets the full flow:
+    // summary → animation → plan preview → advance.
+    const autoDebrief = async () => {
+      const pendingDebrief = isWeekPendingDebrief();
+      const { shouldAutoDebrief, showWeekDebrief } = await import('@/ui/week-debrief');
+      if (pendingDebrief) {
+        showWeekDebrief((getState() as any).w, 'complete');
+      } else if (shouldAutoDebrief()) {
+        showWeekDebrief();
+      }
+    };
+
     // Check if holiday ended while the app was closed — show welcome-back before home
     if (checkHolidayEnd()) {
+      // The holiday return path owns this scenario: it applies its own detraining
+      // and builds bridge weeks, so the bulk catch-up must not run on top of it.
       showHolidayWelcomeBack(() => {
         renderHomeView();
-        const pendingDebrief2 = isWeekPendingDebrief();
-        import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
-          if (pendingDebrief2) {
-            showWeekDebrief((getState() as any).w, 'complete');
-          } else if (shouldAutoDebrief()) {
-            showWeekDebrief();
-          }
-        });
+        void autoDebrief();
       });
     } else {
       renderHomeView();
-      // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
-      // If calendar is ahead of s.w (advance was held pending debrief), show in 'complete' mode
-      // so the user gets the full flow: summary → animation → plan preview → advance.
-      const pendingDebrief = isWeekPendingDebrief();
-      import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
-        if (pendingDebrief) {
-          showWeekDebrief((getState() as any).w, 'complete');
-        } else if (shouldAutoDebrief()) {
-          showWeekDebrief();
+      // 2+ weeks behind the calendar: close the whole gap in one pass instead of
+      // one debrief per missed week. Skipped while injured (rehab needs a
+      // per-week check-in), and falls through to the debrief when it doesn't apply.
+      void (async () => {
+        const { detectCatchUpGap, showCatchUpModal } = await import('@/ui/catch-up');
+        const gap = detectCatchUpGap();
+        if (gap) {
+          await showCatchUpModal(gap, () => {
+            import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
+          });
+          return;
         }
-      });
+        await autoDebrief();
+      })();
     }
   } else {
     // Show onboarding wizard
