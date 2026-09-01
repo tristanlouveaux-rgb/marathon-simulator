@@ -61,11 +61,17 @@
       <li>No data is used for advertising or profiling.</li>
     </ul>
 
+    <!-- AI COACH copy, retained verbatim for a one-line restore.
+     The feature is gated off in the shipped app: AI_COACH_ENABLED = false
+     in src/constants/feature-flags.ts. If that flag is ever flipped back on,
+     uncomment this block AND the Anthropic sub-processor entry below, and
+     revert the "Artificial intelligence" section that replaced it.
+
     <h2>AI Coach (private beta in this release)</h2>
     <p>Mosaic includes code for an optional AI Coach feature. In this release the AI Coach is available only to a limited set of users on an internal access list while the subscription path is being built. If you are not on the access list, no AI Coach data flows to any third party from your device.</p>
     <p>When the AI Coach is enabled for your account, the following is sent each session to <a href="https://www.anthropic.com/" target="_blank" rel="noopener">Anthropic</a>'s Claude API (the Haiku model) for the sole purpose of generating coaching responses:</p>
     <ul>
-      <li>A summary of your last four weeks of training activity (type, distance, duration, heart rate aggregates, pace, power) — no raw GPS routes are sent.</li>
+      <li>A summary of your last four weeks of training activity (type, distance, duration, heart rate aggregates, pace, power). Activities synced from Strava are excluded from this summary, and no raw GPS routes are sent.</li>
       <li>Your current readiness signals (recent HRV, resting heart rate, sleep, training stress balance).</li>
       <li>This week's planned workouts.</li>
       <li>Your current fitness benchmarks (VDOT, FTP, CSS).</li>
@@ -75,6 +81,10 @@
     <p>The following is <strong>never</strong> sent to Anthropic: your name, email, GPS coordinates, raw routes, Strava or Garmin credentials, payment information.</p>
     <p>Anthropic retains messages for up to 30 days under their <a href="https://www.anthropic.com/legal/commercial-terms" target="_blank" rel="noopener">Commercial Terms</a>, after which they are deleted. Anthropic does not use these messages to train their models. See the <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic Privacy Policy</a> for full detail.</p>
     <p>When the AI Coach becomes generally available you will be asked to consent to this data flow the first time you open the feature. You can decline at any time, and you can use the rest of Mosaic without the AI Coach enabled.</p>
+    -->
+
+    <h2>Artificial intelligence</h2>
+    <p>Mosaic ships with no AI or machine learning feature. No part of your training data, from Strava or from any other source, is sent to a language model or any third-party AI service. Every number Mosaic shows you is produced by a deterministic physiological model, documented in full on our <a href="/methodology.html">methodology page</a>.</p>
 
     <h2>Data storage and security</h2>
     <p>Your activity data is stored in a secured Supabase database hosted on AWS infrastructure in the EU. Data is encrypted in transit (HTTPS) and at rest. Row-level security policies enforce that you can only read and write your own data. Apple Health data is processed on-device and is not transmitted to our servers unless you also have the same metric synced via Strava or Garmin.</p>
@@ -86,11 +96,13 @@
       <li><strong>Strava</strong> — source of your activity history, where you authorise it. <a href="https://www.strava.com/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
       <li><strong>Garmin</strong> — source of activity, sleep, and physiology data, where you authorise it. <a href="https://www.garmin.com/en-GB/privacy/connect/" target="_blank" rel="noopener">Privacy policy</a>.</li>
       <li><strong>Apple</strong> — operates the App Store and Apple Health framework. Data read from Apple Health stays on-device. <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      <!-- restore with the AI Coach section above:
       <li><strong>Anthropic</strong> — provider of the Claude AI model used by the optional AI Coach. Data sent is limited to the fields listed above. <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      -->
     </ul>
 
     <h2>Data retention</h2>
-    <p>We retain your data for as long as your account is active. If you revoke Strava access, all Strava-sourced data is deleted within 48 hours. If you delete your account from inside the app, your data is marked for deletion immediately and permanently purged within 30 days. The 30-day window lets you sign back in and cancel the deletion if you change your mind.</p>
+    <p>We retain your data for as long as your account is active. If you disconnect Strava, syncing stops and Mosaic's access is removed immediately, and Strava-sourced data already stored is deleted within 30 days; we confirm by email once deletion is complete. If you delete your account from inside the app, your data is marked for deletion immediately and permanently purged within 30 days. The 30-day window lets you sign back in and cancel the deletion if you change your mind.</p>
 
     <h2>Your rights</h2>
     <p>Under the UK GDPR, the EU GDPR, and applicable data protection law, you have the right to:</p>

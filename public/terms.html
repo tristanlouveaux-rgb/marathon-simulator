@@ -62,7 +62,7 @@
     <p>Mosaic does not diagnose, treat, cure, or prevent any disease or medical condition.</p>
 
     <h2>4. Use of third-party services</h2>
-    <p>Mosaic integrates with Strava, Garmin Connect, Apple Health, Supabase, and Anthropic. Your use of those services is subject to their own terms. Mosaic is not responsible for the availability, accuracy, or behaviour of third-party services. If a third-party service changes its terms, withdraws an API, or has an outage, parts of Mosaic may stop working.</p>
+    <p>Mosaic integrates with Strava, Garmin Connect, Apple Health, and Supabase. Your use of those services is subject to their own terms. Mosaic is not responsible for the availability, accuracy, or behaviour of third-party services. If a third-party service changes its terms, withdraws an API, or has an outage, parts of Mosaic may stop working.</p>
 
     <h2>5. Acceptable use</h2>
     <p>You agree not to:</p>
@@ -72,13 +72,22 @@
       <li>Resell, redistribute, or sublicense the App or its data.</li>
       <li>Use the App to harass, abuse, or impersonate any person.</li>
       <li>Use automated scripts, bots, or scrapers against Mosaic's servers, or attempt to circumvent rate limits, authentication, or security controls.</li>
-      <li>Upload or submit content (including AI Coach messages) that is illegal, defamatory, or violates another person's rights.</li>
+      <li>Upload or submit content that is illegal, defamatory, or violates another person's rights.</li>
       <li>Interfere with or disrupt the App or its underlying infrastructure.</li>
     </ul>
+
+    <!-- AI Coach clause, retained for a one-line restore. The feature is gated off in the
+         shipped app: AI_COACH_ENABLED = false in src/constants/feature-flags.ts. If that flag
+         is flipped back on, restore this clause, the Anthropic entries in section 4 and in the
+         Privacy Policy sub-processor list, and the AI Coach section of the Privacy Policy.
 
     <h2>6. AI Coach</h2>
     <p>The AI Coach is an optional feature. It uses Anthropic's Claude language model to generate responses based on a structured summary of your recent training. AI-generated output is informational and may be inaccurate, incomplete, or out of date. You should not rely on AI Coach output as a substitute for medical, coaching, or professional advice.</p>
     <p>The AI Coach has rate limits and usage caps; access may be paused or revoked at any time without notice.</p>
+    -->
+
+    <h2>6. Artificial intelligence</h2>
+    <p>Mosaic ships with no AI or machine learning feature. Your training data is not sent to a language model or any third-party AI service. Every figure the App produces comes from a deterministic physiological model. If that ever changes, these Terms and the Privacy Policy will be updated first, and you will be asked to consent before any data leaves the App.</p>
 
     <h2>7. Intellectual property</h2>
     <p>Mosaic, including its name, logo, design, source code, training models, and content, is owned by Tristan Louveaux and protected by copyright and trademark law. You are granted a personal, non-exclusive, non-transferable, revocable licence to use the App for personal, non-commercial purposes.</p>
