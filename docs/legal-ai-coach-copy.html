@@ -1,0 +1,58 @@
+<!--
+AI COACH LEGAL COPY, ARCHIVED
+Removed from the live legal pages on 2026-09-01. The AI Coach is gated off in the
+shipped app: AI_COACH_ENABLED = false (src/constants/feature-flags.ts:97), and the
+Strava API application submitted alongside this states that Mosaic ships with no AI
+feature. The copy was kept out of the pages entirely, rather than commented out, so
+the deployed page source carries no AI reference at all.
+
+TO RESTORE when the flag is flipped back on: paste each block back into BOTH
+marathon-simulator/public/ and mosaic-landing/, and delete the replacement
+"Artificial intelligence" / "No AI" sections that took their place.
+-->
+
+
+<!-- ================= privacy.html ================= -->
+AI COACH copy, retained verbatim for a one-line restore.
+     The feature is gated off in the shipped app: AI_COACH_ENABLED = false
+     in src/constants/feature-flags.ts. If that flag is ever flipped back on,
+     uncomment this block AND the Anthropic sub-processor entry below, and
+     revert the "Artificial intelligence" section that replaced it.
+
+    <h2>AI Coach (private beta in this release)</h2>
+    <p>Mosaic includes code for an optional AI Coach feature. In this release the AI Coach is available only to a limited set of users on an internal access list while the subscription path is being built. If you are not on the access list, no AI Coach data flows to any third party from your device.</p>
+    <p>When the AI Coach is enabled for your account, the following is sent each session to <a href="https://www.anthropic.com/" target="_blank" rel="noopener">Anthropic</a>'s Claude API (the Haiku model) for the sole purpose of generating coaching responses:</p>
+    <ul>
+      <li>A summary of your last four weeks of training activity (type, distance, duration, heart rate aggregates, pace, power). Activities synced from Strava are excluded from this summary, and no raw GPS routes are sent.</li>
+      <li>Your current readiness signals (recent HRV, resting heart rate, sleep, training stress balance).</li>
+      <li>This week's planned workouts.</li>
+      <li>Your current fitness benchmarks (VDOT, FTP, CSS).</li>
+      <li>Optional injury/illness flags you have entered.</li>
+      <li>Your message to the coach.</li>
+    </ul>
+    <p>The following is <strong>never</strong> sent to Anthropic: your name, email, GPS coordinates, raw routes, Strava or Garmin credentials, payment information.</p>
+    <p>Anthropic retains messages for up to 30 days under their <a href="https://www.anthropic.com/legal/commercial-terms" target="_blank" rel="noopener">Commercial Terms</a>, after which they are deleted. Anthropic does not use these messages to train their models. See the <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic Privacy Policy</a> for full detail.</p>
+    <p>When the AI Coach becomes generally available you will be asked to consent to this data flow the first time you open the feature. You can decline at any time, and you can use the rest of Mosaic without the AI Coach enabled.</p>
+
+restore with the AI Coach section above:
+      <li><strong>Anthropic</strong> — provider of the Claude AI model used by the optional AI Coach. Data sent is limited to the fields listed above. <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
+
+
+<!-- ================= terms.html ================= -->
+AI Coach clause, retained for a one-line restore. The feature is gated off in the
+         shipped app: AI_COACH_ENABLED = false in src/constants/feature-flags.ts. If that flag
+         is flipped back on, restore this clause, the Anthropic entries in section 4 and in the
+         Privacy Policy sub-processor list, and the AI Coach section of the Privacy Policy.
+
+    <h2>6. AI Coach</h2>
+    <p>The AI Coach is an optional feature. It uses Anthropic's Claude language model to generate responses based on a structured summary of your recent training. AI-generated output is informational and may be inaccurate, incomplete, or out of date. You should not rely on AI Coach output as a substitute for medical, coaching, or professional advice.</p>
+    <p>The AI Coach has rate limits and usage caps; access may be paused or revoked at any time without notice.</p>
+
+
+<!-- ================= support.html ================= -->
+AI Coach copy, retained for a one-line restore. The feature is gated off in the shipped
+         app: AI_COACH_ENABLED = false in src/constants/feature-flags.ts.
+
+    <h2>AI Coach (optional)</h2>
+    <p>Mosaic includes an optional AI Coach. It is off unless you turn it on, and you are asked to consent before any data is sent. When enabled, a summary of your recent training (type, distance, duration, heart rate aggregates, pace, power), your readiness signals, and this week's plan are sent to Anthropic's Claude API to generate coaching responses. Activities synced from Strava are excluded from this summary. The coach reads sessions from Garmin and Apple Health only. Your name, email, raw GPS routes, and Strava credentials are never sent. Anthropic does not use this data to train its models. You can decline and use the rest of Mosaic without it. Full detail is in the <a href="/privacy.html">Privacy Policy</a>.</p>
+
