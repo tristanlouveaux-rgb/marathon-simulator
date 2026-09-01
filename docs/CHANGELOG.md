@@ -4,6 +4,22 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-01 — HYROX race simulation sessions
+
+Added two session types to HYROX mode that rehearse the race itself, plus the split-capture path that turns them into calibration events.
+
+- **New generator** (`src/workouts/hyrox-generators.ts`): `generateHyroxSimulation` produces a full simulation (8 x 1km run + all 8 stations in fixed race order + RoxZone) or a half simulation (the same complete sequence at half volume). Emits 16 interleaved components so the detail view can show the race sequence round by round.
+- **Derived target time, not a slider.** Simulation length comes from the athlete's own calibrated station benchmarks and run pace, falling back to band seeds. It is the same component sum the race forecast uses, minus venue course factors. The add-session modal hides the duration slider for simulations and shows the derived target instead.
+- **Half volumes reuse the existing half-test protocol.** `STATION_HALF_VOLUME` in `hyrox-benchmarks.ts` is exactly half of the new `STATION_RACE_VOLUME` and matches what the station benchmark card already prescribes. `benchmark-card.ts` now imports the shared `HALF_STATION_PROTOCOL` rather than keeping its own copy.
+- **Split capture** (`src/calculations/hyrox-simulation-splits.ts` + `src/ui/hyrox/simulation-splits-modal.ts`): a "Record splits" action on the simulation detail modal takes the 8 station times and the total run time, then writes them to `stationBenchmarksSingles`/`Doubles`, appends `stationBenchmarkHistory` (new sources `simulation` / `half_simulation`), and sets `hyroxRunPaceSecKm` with `hyroxRunPaceSource = 'user'`. Half-simulation times are doubled, matching the half-test convention. Implausible entries are rejected against `STATION_MIN_SEC` and `HYROX_RUN_PACE_MIN_SEC_KM`; blank fields are skipped.
+- **Not PB-only.** Unlike `applyParsedBenchmarks`, which only improves a benchmark because it fires automatically off imported activities, a simulation is a deliberate test and replaces the previous benchmark even when slower.
+- **Scheduling** (`scheduler.hyrox.ts`): simulations count as high intensity and claim their day before every other session. Full simulation prefers Saturday.
+- **Cards and detail view**: simulations show a "Simulation" badge (reusing the brick slate-blue, no new colour) and a one-line sequence summary instead of 16 bullets. The detail modal renders the round-by-round race sequence with per-round target times. Station rows now honour the component's own prescribed volume, so half-volume stations render correctly.
+- **Tests**: 42 new tests across `src/workouts/hyrox-simulation.test.ts` and `src/calculations/hyrox-simulation-splits.test.ts`.
+- Rationale, constants and limitations logged in `docs/SCIENCE_LOG.md` §S.
+
+---
+
 ## 2026-05-12 — Benchmark detail pages: visual-constraint cleanup
 
 `src/ui/triathlon/benchmark-detail-pages.ts`, `src/ui/stats-view.ts` — VO2max / FTP / CSS detail pages violated three Visual Constraints:

@@ -16,7 +16,7 @@ import type { HyroxStation } from '@/types/triathlon';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.44;
 
-export type StationTestSource = 'half_test' | 'full_test' | 'race' | 'manual';
+export type StationTestSource = 'half_test' | 'full_test' | 'simulation' | 'half_simulation' | 'race' | 'manual';
 export type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
 export interface StationTestEntry {

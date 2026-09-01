@@ -222,7 +222,7 @@ export function renderHyroxPlanView(): void {
       const wkRow = st.wks?.[viewWeek - 1];
       const found = (wkRow?.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
       if (found) {
-        import('./workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(found));
+        import('./workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(found, () => renderHyroxPlanView()));
       }
     });
   });

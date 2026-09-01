@@ -3,6 +3,7 @@
  *
  * Three discipline flavours: run (green), station (amber), brick (slate-blue).
  * Station and brick cards show the component list (stations + distances / run distance).
+ * Simulations carry 16 components, so they collapse to a one-line sequence summary.
  * MTL chip surfaces on station and brick cards where it's meaningful.
  */
 
@@ -26,6 +27,25 @@ function discColours(disc: HyroxDisc): { accent: string; badgeBg: string; badgeT
   }
 }
 
+/** True for the two race-simulation session types. */
+function isSimulation(w: Workout): boolean {
+  return w.t === 'hyrox_simulation' || w.t === 'hyrox_half_simulation';
+}
+
+/** One-line summary standing in for a simulation's 16-component list. */
+function renderSimulationSummary(components: HyroxComponent[]): string {
+  const runs = components.filter(c => c.type === 'run');
+  const stations = components.filter(c => c.type !== 'run');
+  if (!runs.length || !stations.length) return '';
+  const legM = runs[0].distanceM ?? 0;
+  const totalKm = (legM * runs.length) / 1000;
+  return `
+    <div style="margin-top:8px;font-size:12px;color:var(--c-muted);line-height:1.5">
+      ${runs.length} × ${legM}m run · ${stations.length} stations in race order · ${totalKm} km running
+    </div>
+  `;
+}
+
 function workoutDisc(w: Workout): HyroxDisc {
   if (w.discipline === 'station') return 'station';
   if (w.discipline === 'brick') return 'brick';
@@ -43,7 +63,7 @@ function renderComponents(components: HyroxComponent[]): string {
     }
     const display = STATION_DISPLAY[c.type as HyroxStation];
     if (!display) return '';
-    const dist = c.reps ? `${c.reps} reps` : display.distance;
+    const dist = c.reps ? `${c.reps} reps` : c.distanceM ? `${c.distanceM}m` : display.distance;
     return `<li style="margin-bottom:2px">${display.name} — ${dist}</li>`;
   });
 
@@ -68,7 +88,8 @@ export function renderHyroxWorkoutCard(
 ): string {
   const { interactive = true, daysToRace = null } = opts;
   const disc = workoutDisc(w);
-  const { accent, badgeBg, badgeText, label } = discColours(disc);
+  const { accent, badgeBg, badgeText, label: discLabel } = discColours(disc);
+  const label = isSimulation(w) ? 'Simulation' : discLabel;
 
   const dur = w.estimatedDurationMin;
   const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
@@ -110,7 +131,7 @@ export function renderHyroxWorkoutCard(
       <!-- Description -->
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escAttr(w.d || '')}</div>
       <!-- Component list for station/brick -->
-      ${showComponents ? renderComponents(components!) : ''}
+      ${showComponents ? (isSimulation(w) ? renderSimulationSummary(components!) : renderComponents(components!)) : ''}
       <!-- Taper eccentric warning -->
       ${showTaperWarning ? `
         <div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:rgba(184,116,44,0.07);border:1px solid rgba(184,116,44,0.2);font-size:11px;color:#8a5820;line-height:1.4">

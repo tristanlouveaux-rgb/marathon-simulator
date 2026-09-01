@@ -9,6 +9,7 @@ import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getSubstitutionsFor, findSubstitution } from '@/constants/hyrox-substitutions';
+import { openSimulationSplitsModal } from './simulation-splits-modal';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 
@@ -25,7 +26,7 @@ function renderStationRow(
   if (!display) return '';
   const subId = workout.hyroxStationSubs?.[station];
   const sub = subId ? findSubstitution(station, subId) : undefined;
-  const distStr = c.reps ? `${c.reps} reps` : display.distance;
+  const distStr = c.reps ? `${c.reps} reps` : c.distanceM ? `${c.distanceM}m` : display.distance;
   const targetStr = c.durationSec ? fmtSec(c.durationSec) : '—';
   const targetLabel = options.context === 'technique' ? 'per round'
                      : options.context === 'density' ? 'target' : '';
@@ -78,7 +79,7 @@ function discColour(disc: HyroxDisc) {
   }
 }
 
-export function openHyroxWorkoutDetail(workout: Workout): void {
+export function openHyroxWorkoutDetail(workout: Workout, onSplitsSaved?: () => void): void {
   const existing = document.getElementById('hx-workout-detail-overlay');
   if (existing) existing.remove();
 
@@ -141,6 +142,15 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#hx-detail-close')?.addEventListener('click', close);
 
+  // Simulation only: record splits, then re-open so updated targets show.
+  overlay.querySelector('#hx-sim-record-splits')?.addEventListener('click', () => {
+    const isHalf = workout.t === 'hyrox_half_simulation';
+    openSimulationSplitsModal(isHalf, () => {
+      close();
+      onSplitsSaved?.();
+    });
+  });
+
   // Per-station "I don't have this" / "Swap back" buttons
   overlay.querySelectorAll<HTMLButtonElement>('.hx-station-swap').forEach(btn => {
     btn.addEventListener('click', e => {
@@ -153,12 +163,12 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
         applyStationSwap(workout, station, null);
         // Re-open modal to refresh
         close();
-        openHyroxWorkoutDetail(workout);
+        openHyroxWorkoutDetail(workout, onSplitsSaved);
       } else {
         openSubstitutionPicker(station, (chosenId) => {
           applyStationSwap(workout, station, chosenId);
           close();
-          openHyroxWorkoutDetail(workout);
+          openHyroxWorkoutDetail(workout, onSplitsSaved);
         });
       }
     });
@@ -306,6 +316,11 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
       ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
   }
 
+  // Simulation: the race sequence itself, round by round.
+  if (t === 'hyrox_simulation' || t === 'hyrox_half_simulation') {
+    return renderSimulationBody(workout, components, disc);
+  }
+
   // Default: description text + component breakdown
   return `
     <div style="padding:18px 24px 0">
@@ -339,8 +354,10 @@ function renderComponentBreakdown(components: HyroxComponent[], accent: string, 
     </div>`;
 }
 
-function renderMtlNote(mtl: number, disc: HyroxDisc): string {
-  const note = disc === 'brick'
+function renderMtlNote(mtl: number, disc: HyroxDisc, isSimulation = false): string {
+  const note = isSimulation
+    ? 'A simulation carries race-day load. Treat the days after it as recovery and let soreness clear before the next high-MTL session.'
+    : disc === 'brick'
     ? 'Brick sessions accumulate both aerobic and musculotendon load. Allow 48h before another high-MTL session.'
     : disc === 'station'
     ? 'Station work creates eccentric load that takes longer to recover from than aerobic load. Monitor soreness.'
@@ -354,4 +371,70 @@ function renderMtlNote(mtl: number, disc: HyroxDisc): string {
 
 function esc(s: string): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Simulation body — eight rounds of run leg into station, in race order, with
+ * the target time for each. Ends with the split-recording action, which is the
+ * point of the session: the splits recalibrate benchmarks and the forecast.
+ */
+function renderSimulationBody(
+  workout: Workout,
+  components: HyroxComponent[] | undefined,
+  disc: HyroxDisc,
+): string {
+  const isHalf = workout.t === 'hyrox_half_simulation';
+  const mtl = workout.musculoTendonLoad;
+  const all = components ?? [];
+
+  // Components are stored interleaved: run, station, run, station, ...
+  const rounds: string[] = [];
+  for (let i = 0; i < all.length; i += 2) {
+    const runC = all[i];
+    const stationC = all[i + 1];
+    if (!runC || !stationC) break;
+    const roundNo = rounds.length + 1;
+    const runKm = runC.distanceM ? `${runC.distanceM}m` : 'Run';
+    const runTarget = runC.durationSec ? fmtSec(runC.durationSec) : '—';
+    const station = stationC.type as HyroxStation;
+    const display = STATION_DISPLAY[station];
+    const subId = workout.hyroxStationSubs?.[station];
+    const sub = subId ? findSubstitution(station, subId) : undefined;
+    const stationName = sub ? esc(sub.name) : display?.name ?? station;
+    const stationVol = stationC.reps ? `${stationC.reps} reps` : stationC.distanceM ? `${stationC.distanceM}m` : '';
+    const stationTarget = stationC.durationSec ? fmtSec(stationC.durationSec) : '—';
+
+    rounds.push(`
+      <div style="display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:baseline;padding:9px 0;border-top:1px solid rgba(0,0,0,0.05)">
+        <div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${roundNo}</div>
+        <div style="min-width:0">
+          <div style="font-size:13px;color:#0F172A">${runKm} run</div>
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-top:2px">${stationName}${stationVol ? `<span style="font-weight:400;color:var(--c-muted)"> · ${stationVol}</span>` : ''}${sub ? '<span style="font-size:11px;color:var(--c-muted)"> (swapped)</span>' : ''}</div>
+        </div>
+        <div style="text-align:right;font-variant-numeric:tabular-nums">
+          <div style="font-size:12px;color:var(--c-muted)">${runTarget}</div>
+          <div style="font-size:12px;color:#0F172A;margin-top:2px">${stationTarget}</div>
+        </div>
+      </div>`);
+  }
+
+  const totalTarget = workout.estimatedDurationMin;
+
+  return `
+    <div style="padding:18px 24px 0">
+      ${workout.d ? `<p style="font-size:14px;color:#0F172A;line-height:1.6;margin:0 0 14px">${esc(workout.d)}</p>` : ''}
+      <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:14px">
+        <div style="font-size:12px;font-weight:600;color:#3d4f80">${isHalf ? 'Half distance' : 'Full race distance'}${totalTarget ? ` · target ${totalTarget} min` : ''}</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Continuous. No rest between rounds beyond the transition itself.</div>
+      </div>
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:2px">Race sequence</div>
+      ${rounds.join('')}
+      <div style="margin-top:16px">
+        <button id="hx-sim-record-splits" class="m-btn-glass m-btn-glass--inset" style="width:100%">Record splits</button>
+        <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-top:8px">
+          Entering your splits updates your station benchmarks and run pace, so the race forecast reflects this session.
+        </div>
+      </div>
+    </div>
+    ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc, true) : ''}`;
 }

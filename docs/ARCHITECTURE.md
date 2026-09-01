@@ -618,6 +618,36 @@ AI mode:
 
 ---
 
+### HYROX Race Simulation (`src/workouts/hyrox-generators.ts`, `src/calculations/hyrox-simulation-splits.ts`)
+
+Two session kinds rehearse the race rather than a slice of it: `hyrox_simulation`
+(8 x 1km run + all 8 stations in fixed `HYROX_STATION_ORDER` + RoxZone) and
+`hyrox_half_simulation` (same complete sequence, half volume). Both emit 16
+interleaved run/station `HyroxComponent`s.
+
+Data flow:
+
+```
+add-session-modal  →  generateHyroxSimulation()  →  scheduleHyroxWeek()  →  wk.triWorkouts
+                          ↑                                                       │
+             calibrated benchmarks + run pace                                     ↓
+                          │                                              workout-detail-modal
+                          │                                                       │
+                          │                                            "Record splits" action
+                          │                                                       ↓
+                          └──────────────  applySplitsToConfig()  ←  simulation-splits-modal
+```
+
+The loop is the point: a simulation's target time is derived from the athlete's
+own `stationBenchmarks` + `hyroxRunPaceSecKm`, and its recorded splits write back
+to those same fields, so each simulation re-anchors both the next simulation's
+target and the race forecast (`race-prediction.hyrox.ts`) that reads them.
+
+Calibration logic is deliberately in `calculations/`, free of store and DOM
+access, with `ui/hyrox/simulation-splits-modal.ts` as the thin DOM layer.
+
+Rationale and limitations: `docs/SCIENCE_LOG.md` §S.
+
 ## Page Map
 
 Complete navigation graph. Every full-page view, its entry points, and where its back button goes.

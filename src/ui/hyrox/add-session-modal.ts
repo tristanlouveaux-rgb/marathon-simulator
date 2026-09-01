@@ -6,7 +6,11 @@
  * generators but constrained to HYROX session kinds.
  *
  * Session kinds offered: easy run / tempo run / interval run / station technique /
- *                        station density / brick / mini-brick.
+ *                        station density / brick / mini-brick /
+ *                        half simulation / race simulation.
+ *
+ * Simulations are fixed-structure: their duration comes from the athlete's own
+ * benchmarks and run pace, so the duration slider is hidden for them.
  *
  * On confirm: generate via hyrox-generators, append to current week's triWorkouts,
  * reschedule via scheduleHyroxWeek, persist, re-render plan view.
@@ -18,6 +22,7 @@ import {
   generateHyroxRun,
   generateHyroxStation,
   generateHyroxBrick,
+  generateHyroxSimulation,
 } from '@/workouts/hyrox-generators';
 import { scheduleHyroxWeek } from '@/workouts/scheduler.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
@@ -30,7 +35,9 @@ type SessionKind =
   | 'station_technique'
   | 'station_density'
   | 'brick'
-  | 'mini_brick';
+  | 'mini_brick'
+  | 'half_simulation'
+  | 'simulation';
 
 interface SessionOption {
   kind: SessionKind;
@@ -51,33 +58,45 @@ const OPTIONS: SessionOption[] = [
   { kind: 'station_density',  label: 'Station density',   caption: 'AMRAP-style higher-volume work.',        defaultMin: 45, minMin: 30, maxMin: 65 },
   { kind: 'brick',            label: 'Brick',             caption: 'Run + station rounds, race-specific.',   defaultMin: 60, minMin: 45, maxMin: 100 },
   { kind: 'mini_brick',       label: 'Mini brick',        caption: 'Shorter brick — 500m + erg, beginner.',  defaultMin: 35, minMin: 25, maxMin: 50 },
+  { kind: 'half_simulation',  label: 'Half simulation',   caption: 'All 8 stations in race order, half volume.', defaultMin: 0, minMin: 0, maxMin: 0 },
+  { kind: 'simulation',       label: 'Race simulation',   caption: 'Full race distance, start to finish.',    defaultMin: 0, minMin: 0, maxMin: 0 },
 ];
 
-/** Generate a draft workout for a session kind to read its real MTL.
- *  Used to compute cap-headroom warnings without hardcoded estimates.
+/** Simulations have a fixed structure, so no duration is chosen for them. */
+function isSimulation(kind: SessionKind): boolean {
+  return kind === 'simulation' || kind === 'half_simulation';
+}
+
+/** Generate a draft workout for a session kind, to read its real MTL and
+ *  duration. Used for cap-headroom warnings without hardcoded estimates, and
+ *  for simulations, whose duration is derived rather than chosen.
  *  When `durationMin` is omitted, falls back to the option's default duration. */
-function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefined, slotIndex: number, phase: 'base' | 'build' | 'peak' | 'taper', durationMin?: number): number {
+function draftFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefined, slotIndex: number, phase: 'base' | 'build' | 'peak' | 'taper', durationMin?: number): Workout {
   const targetMin = durationMin ?? OPTIONS.find(o => o.kind === kind)?.defaultMin ?? 45;
   const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
   const benchmarks = (isDoubles ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks;
-  let draft;
   if (kind === 'run_easy' || kind === 'run_tempo' || kind === 'run_intervals') {
-    draft = generateHyroxRun({
+    return generateHyroxRun({
       kind, targetMinutes: targetMin, band: hx.athleteBand, phase, slotIndex,
       bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm,
     });
-  } else if (kind === 'station_technique' || kind === 'station_density') {
-    draft = generateHyroxStation({
-      kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
-      phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
-    });
-  } else {
-    draft = generateHyroxBrick({
+  }
+  if (kind === 'station_technique' || kind === 'station_density') {
+    return generateHyroxStation({
       kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
     });
   }
-  return draft.musculoTendonLoad ?? 0;
+  if (isSimulation(kind)) {
+    return generateHyroxSimulation({
+      kind: kind as 'simulation' | 'half_simulation', band: hx.athleteBand,
+      bodyWeightKg, stationBenchmarks: benchmarks, runPaceSecKm: hx.hyroxRunPaceSecKm,
+    });
+  }
+  return generateHyroxBrick({
+    kind: kind as 'brick' | 'mini_brick', targetMinutes: targetMin, band: hx.athleteBand,
+    stationAccess: hx.stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
+  });
 }
 
 /** Suggest the kind that fills the largest gap in the current week's plan. */
@@ -91,6 +110,8 @@ function suggestKind(weekWorkouts: Workout[]): SessionKind {
   if (!hasDensity)  return 'station_density';
   if (!hasInterval) return 'run_intervals';
   if (!hasBrick)    return 'brick';
+  // Simulations are never auto-suggested: they are a deliberate test, and the
+  // plan engine's phase logic decides when one belongs in the week.
   return 'run_easy';
 }
 
@@ -122,8 +143,15 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
 
   const slotIndex = (weekWorkouts.length ?? 0) + (s.w ?? 1);
 
+  function draft(kind: SessionKind): Workout {
+    return draftFor(kind, hx, s.bodyWeightKg, slotIndex, phase, chosenMin[kind]);
+  }
   function mtlFor(kind: SessionKind): number {
-    return draftMtlFor(kind, hx, s.bodyWeightKg, slotIndex, phase, chosenMin[kind]);
+    return draft(kind).musculoTendonLoad ?? 0;
+  }
+  /** Displayed duration: chosen on the slider, or derived for simulations. */
+  function durationFor(kind: SessionKind): number {
+    return isSimulation(kind) ? (draft(kind).estimatedDurationMin ?? 0) : chosenMin[kind];
   }
 
   const overlay = document.createElement('div');
@@ -148,7 +176,7 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
             const isSuggested = opt.kind === suggestKind(weekWorkouts);
             const mtl = mtlFor(opt.kind);
             const exceedsCap = (plannedMtl + mtl) > overCapThreshold;
-            const dur = chosenMin[opt.kind];
+            const dur = durationFor(opt.kind);
             return `
               <button class="hx-add-opt" data-kind="${opt.kind}" style="display:block;width:100%;text-align:left;padding:12px 14px;margin:4px 0;border-radius:12px;border:1px solid ${isSel ? 'var(--c-black)' : 'rgba(0,0,0,0.08)'};background:${isSel ? 'var(--c-black)' : '#fff'};color:${isSel ? '#FDFCF7' : 'var(--c-black)'};cursor:pointer;transition:all 0.15s">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
@@ -164,13 +192,15 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
           }).join('')}
         </div>
 
-        <!-- Duration slider for the currently-selected option -->
+        <!-- Duration: slider for chosen-length sessions, derived read-out for simulations -->
         <div style="padding:0 22px 14px">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-            <span style="font-size:12px;color:var(--c-muted)">Duration</span>
-            <span style="font-size:14px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums" id="hx-dur-display">${chosenMin[selected]} min</span>
+            <span style="font-size:12px;color:var(--c-muted)">${isSimulation(selected) ? 'Target time' : 'Duration'}</span>
+            <span style="font-size:14px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums" id="hx-dur-display">${durationFor(selected)} min</span>
           </div>
-          <input type="range" id="hx-dur-slider" class="m-slider-glass" min="${selectedOpt.minMin}" max="${selectedOpt.maxMin}" step="5" value="${chosenMin[selected]}">
+          ${isSimulation(selected)
+            ? `<div style="font-size:11px;color:var(--c-muted);line-height:1.5">Fixed structure. The target comes from your own station benchmarks and run pace, so it is the time to beat.</div>`
+            : `<input type="range" id="hx-dur-slider" class="m-slider-glass" min="${selectedOpt.minMin}" max="${selectedOpt.maxMin}" step="5" value="${chosenMin[selected]}">`}
         </div>
 
         ${overCap ? `<div style="padding:0 16px 6px;font-size:11px;color:var(--c-muted)">This session would push you over your weekly MTL cap. Proceed only if you have headroom from prior recovery.</div>` : ''}
@@ -251,9 +281,18 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       bodyWeightKg: ms.bodyWeightKg,
       stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
     });
+  } else if (kind === 'simulation' || kind === 'half_simulation') {
+    // Simulations take no target duration: the race structure sets the length.
+    workout = generateHyroxSimulation({
+      kind,
+      band: hx.athleteBand,
+      bodyWeightKg: ms.bodyWeightKg,
+      stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
+      runPaceSecKm: hx.hyroxRunPaceSecKm,
+    });
   } else {
     workout = generateHyroxBrick({
-      kind,
+      kind: kind as 'brick' | 'mini_brick',
       targetMinutes: targetMin,
       band: hx.athleteBand,
       stationAccess: hx.stationAccess,

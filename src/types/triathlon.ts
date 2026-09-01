@@ -120,6 +120,11 @@ export interface HyroxConfig {
    *  Sources:
    *   - `'half_test'`: standard half-distance protocol (system doubled the time).
    *   - `'full_test'`: athlete completed the full race-distance station fresh.
+   *   - `'simulation'`: split from a full race simulation session — race
+   *     distance, recorded under accumulated race fatigue rather than fresh.
+   *   - `'half_simulation'`: split from a half simulation session — half
+   *     distance under race fatigue (system doubled the time, same as
+   *     `'half_test'`).
    *   - `'race'`: extracted from a race result split.
    *   - `'manual'`: direct entry of a known time.
    *
@@ -127,7 +132,7 @@ export interface HyroxConfig {
   stationBenchmarkHistory?: Partial<Record<HyroxStation, Array<{
     dateISO: string;
     sec: number;
-    source: 'half_test' | 'full_test' | 'race' | 'manual';
+    source: 'half_test' | 'full_test' | 'simulation' | 'half_simulation' | 'race' | 'manual';
     format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
     /** True if recorded at Pro weights. Mirrors `benchmarksAtProWeights`. */
     proWeights?: boolean;

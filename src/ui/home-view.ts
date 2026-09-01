@@ -3207,7 +3207,7 @@ function wireHomeHandlers(): void {
       if (!wk) return;
       const id = el.getAttribute('data-hx-hero-workout-id');
       const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
-      if (w) import('./hyrox/workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(w));
+      if (w) import('./hyrox/workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(w, () => renderHomeView()));
     });
   });
 

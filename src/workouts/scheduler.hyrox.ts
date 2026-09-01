@@ -7,11 +7,13 @@
  * Constraints (hard):
  *   1. No two high-intensity sessions on the same day or on adjacent days
  *      (quality run and density/brick count as high-intensity).
- *   2. Brick → Saturday (day 5) when only one brick per week; second brick
+ *   2. Race simulation → Saturday (day 5). Claims its day before any other
+ *      session, since it is the least movable thing in the week.
+ *   3. Brick → Saturday (day 5) when only one brick per week; second brick
  *      if present → Thursday (day 3).
- *   3. Station technique sessions land mid-week (Tue/Wed/Thu).
- *   4. Easy runs bookend the week (Mon/Sun or fill available low-stress days).
- *   5. At least 1 full rest day per week.
+ *   4. Station technique sessions land mid-week (Tue/Wed/Thu).
+ *   5. Easy runs bookend the week (Mon/Sun or fill available low-stress days).
+ *   6. At least 1 full rest day per week.
  *
  * No concurrent sessions (≤ 1 session per day).
  */
@@ -23,7 +25,9 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /** Returns true for sessions that count as "high intensity". */
 function isHighIntensity(w: Workout): boolean {
-  return w.t === 'hyrox_brick' ||
+  return w.t === 'hyrox_simulation' ||
+    w.t === 'hyrox_half_simulation' ||
+    w.t === 'hyrox_brick' ||
     w.t === 'hyrox_mini_brick' ||
     w.t === 'hyrox_run_intervals' ||
     w.t === 'hyrox_run_tempo' ||
@@ -36,6 +40,8 @@ function isHighIntensity(w: Workout): boolean {
  */
 function preferredDays(w: Workout): number[] {
   if (w.t === 'hyrox_assessment') return [0, 1, 2];      // Assessment: Mon first (needs to be early in week)
+  if (w.t === 'hyrox_simulation') return [5, 6, 3];     // Race sim: Sat primary — race day is a Saturday
+  if (w.t === 'hyrox_half_simulation') return [5, 3, 6, 4];
   if (w.t === 'hyrox_brick') return [5, 3, 6, 4];       // Sat primary, Thu secondary
   if (w.t === 'hyrox_mini_brick') return [4, 5, 2, 3];  // Fri primary
   if (w.t === 'hyrox_station_density') return [1, 3, 2, 4];   // Tue/Thu
@@ -60,6 +66,10 @@ export function scheduleHyroxWeek(sessions: Workout[], _band: AbilityBand): Work
   // then quality sessions, then technique, then easy runs.
   const priority = (w: Workout): number => {
     if (w.t === 'hyrox_assessment') return -1; // always scheduled first → gets Monday
+    // Simulations are the most day-constrained session in the week and the one
+    // everything else must spacing-yield to, so they claim their day first.
+    if (w.t === 'hyrox_simulation') return -0.5;
+    if (w.t === 'hyrox_half_simulation') return -0.25;
     if (w.t === 'hyrox_brick') return 0;
     if (w.t === 'hyrox_mini_brick') return 1;
     if (w.t === 'hyrox_run_intervals') return 2;

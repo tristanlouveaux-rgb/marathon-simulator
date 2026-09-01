@@ -29,15 +29,24 @@ HYROX is a fully-separate mode for the hybrid run+functional-station racing form
 
 **Plan engine** (`plan_engine.hyrox.ts`): Phase-based periodisation (base=0–40%, build=40–75%, peak=75–90%, taper=90–100% of plan). Volume ramping via phase multiplier (same pattern as triathlon engine: 0.55–0.85 base, 0.92 build, 1.0 peak, stepped taper). Deload every 4th week (×0.70). Weekly hours from `hyroxConfig.weeklyHoursAvailable` × multiplier, split 40/35/25 across runs/stations/bricks. Session mix progresses by phase: base=all easy+technique; build=adds tempo+density; peak=intervals+density dominant. MTL cap enforced by proportional scaling if weekly MTL exceeds band cap.
 
-**Generators** (`hyrox-generators.ts`): 7 session kinds → `Workout` with `hyroxComponents[]`. Station technique picks 3 stations at 65% seed pace (3 rounds). Station density picks 1 high-MTL + 1 erg station, 2 rounds at race pace. Full brick: N rounds × (1km run + 1 key station), round count from targetMinutes ÷ seed times. Mini brick: beginner variant (500m + erg). All sessions have `musculoTendonLoad` computed via `computeComponentMTL`.
+**Generators** (`hyrox-generators.ts`): 9 session kinds → `Workout` with `hyroxComponents[]`. Station technique picks 3 stations at 65% seed pace (3 rounds). Station density picks 1 high-MTL + 1 erg station, 2 rounds at race pace. Full brick: N rounds × (1km run + 1 key station), round count from targetMinutes ÷ seed times. Mini brick: beginner variant (500m + erg). All sessions have `musculoTendonLoad` computed via `computeComponentMTL`.
 
 **Week 1 Station Calibration Test** (`generateHyroxAssessment` in `hyrox-generators.ts:481`): Every HYROX user gets the assessment session in Week 1, replacing the first station slot (`plan_engine.hyrox.ts:255-260`). One easy pass through all accessible stations at RPE 4, low MTL by design. Times entered after the session calibrate `stationBenchmarks` for plan personalisation. Users with prior race-derived benchmarks still receive it as an optional re-test — they skip/replace it like any other workout if they don't want it.
 
-**Scheduler** (`scheduler.hyrox.ts`): Constraint-based day assignment (not rigid template). Priority order: bricks first → intervals → density → tempo → technique → easy runs. Bricks → Saturday; high-intensity sessions spaced ≥2 days apart.
+**Race Simulation sessions** (`generateHyroxSimulation` in `hyrox-generators.ts`): Two session types that rehearse the race itself, available from the "Add session" modal on the plan view.
 
-**Key files**: `src/workouts/plan_engine.hyrox.ts`, `src/workouts/hyrox-generators.ts`, `src/workouts/scheduler.hyrox.ts`, `src/constants/hyrox-benchmarks.ts`
+- **Race simulation** (`hyrox_simulation`): 8 × 1km run + all 8 stations in fixed `HYROX_STATION_ORDER` + RoxZone. Full race distance, RPE 9.
+- **Half simulation** (`hyrox_half_simulation`): the same complete sequence at half volume (500m legs, `STATION_HALF_VOLUME` stations), RPE 8. Volume is halved rather than stations dropped, so wall balls, the documented late-race limiter, is still reached under accumulated fatigue.
 
-**Test status**: ❌ No unit tests yet.
+Both emit 16 interleaved run/station components. Duration is **derived, not chosen**: the target time is the sum of the athlete's own calibrated run pace and station benchmarks plus band RoxZone, falling back to band seeds. The add-session modal hides its duration slider for these and shows the derived target instead. Cards show a "Simulation" badge and a one-line sequence summary; the detail modal shows the round-by-round sequence with per-round targets.
+
+**Simulation split capture** (`src/calculations/hyrox-simulation-splits.ts` + `src/ui/hyrox/simulation-splits-modal.ts`): A "Record splits" action on the simulation detail modal collects the 8 station times and the total run time. Writes to `stationBenchmarksSingles`/`stationBenchmarksDoubles`, appends `stationBenchmarkHistory` with sources `simulation` / `half_simulation`, and sets `hyroxRunPaceSecKm` with `hyroxRunPaceSource = 'user'` so the race forecast recalibrates. Half-simulation times are doubled, matching the existing half-test convention. Unlike `applyParsedBenchmarks` (PB-only, auto-fired off imports), a simulation is a deliberate test and replaces the previous benchmark even when slower. Entries below `STATION_MIN_SEC` or `HYROX_RUN_PACE_MIN_SEC_KM` are rejected; blank fields are skipped.
+
+**Scheduler** (`scheduler.hyrox.ts`): Constraint-based day assignment (not rigid template). Priority order: assessment → simulations → bricks → intervals → density → tempo → technique → easy runs. Simulations and bricks → Saturday, simulations claiming the day first; high-intensity sessions spaced ≥2 days apart.
+
+**Key files**: `src/workouts/plan_engine.hyrox.ts`, `src/workouts/hyrox-generators.ts`, `src/workouts/scheduler.hyrox.ts`, `src/constants/hyrox-benchmarks.ts`, `src/calculations/hyrox-simulation-splits.ts`, `src/ui/hyrox/simulation-splits-modal.ts`
+
+**Test status**: ⚠️ Simulation generator, simulation scheduling and split calibration covered (`src/workouts/hyrox-simulation.test.ts`, `src/calculations/hyrox-simulation-splits.test.ts`, 42 tests). Plan engine, other generators and the rest of the scheduler still untested.
 
 ### H3. HYROX MTL Load Model (Phase 3)
 

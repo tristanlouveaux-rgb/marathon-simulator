@@ -21,6 +21,7 @@ import {
   STATION_SEED_TIMES_SEC,
   STATION_DISPLAY,
   HYROX_STATION_ORDER,
+  HALF_STATION_PROTOCOL,
 } from '@/constants/hyrox-benchmarks';
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
 
@@ -30,17 +31,10 @@ const CALIBRATABLE: HyroxStation[] = [
   'burpee_broad_jumps', 'sled_push', 'sled_pull',
 ];
 
-/** Half-distance protocol description per station. */
-const HALF_PROTOCOL: Record<HyroxStation, string> = {
-  ski_erg:            '500m',
-  sled_push:          '25m',
-  sled_pull:          '25m',
-  burpee_broad_jumps: '40m (10 reps)',
-  row_erg:            '500m',
-  farmer_carry:       '100m',
-  sandbag_lunges:     '50m',
-  wall_balls:         '50 reps',
-};
+/** Half-distance protocol description per station.
+ *  Single source of truth lives in hyrox-benchmarks so the half-simulation
+ *  session prescribes exactly the volumes this card asks the athlete to test. */
+const HALF_PROTOCOL = HALF_STATION_PROTOCOL;
 
 /** Read benchmarks from the format-specific slot, falling back to legacy pooled field. */
 function readBenchmarks(hx: NonNullable<SimulatorState['hyroxConfig']>): Partial<Record<HyroxStation, number>> {

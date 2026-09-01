@@ -7,6 +7,8 @@
  *   - station_density                       — 2-station AMRAP, RPE 7
  *   - brick                                 — N rounds: 1km run + station
  *   - mini_brick                            — N rounds: 500m run + erg (beginners)
+ *   - simulation                            — full race: 8 x (1km run + station), race order
+ *   - half_simulation                       — same sequence at half volume
  *
  * All generators return a Workout with:
  *   - `estimatedDurationMin` set from targetMinutes
@@ -18,7 +20,17 @@
 import type { Workout } from '@/types/state';
 import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, STATION_EXTERNAL_LOAD_KG } from '@/constants/hyrox-benchmarks';
+import {
+  STATION_DISPLAY,
+  STATION_SEED_TIMES_SEC,
+  SEED_RUN_PACE_SEC_KM,
+  SEED_ROXZONE_SEC,
+  HYROX_STATION_ORDER,
+  STATION_EXTERNAL_LOAD_KG,
+  STATION_RACE_VOLUME,
+  STATION_HALF_VOLUME,
+  HYROX_RUN_LEG_M,
+} from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -511,6 +523,98 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
     r: 4,
     rpe: 4,
     estimatedDurationMin: totalDurMin,
+    musculoTendonLoad: totalMTL,
+    hyroxComponents: components,
+  };
+}
+
+// ─── Race simulation sessions ────────────────────────────────────────────────
+
+export interface SimulationParams {
+  kind: 'simulation' | 'half_simulation';
+  band: AbilityBand;
+  bodyWeightKg?: number;
+  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  /** Calibrated fatigued HYROX run pace (sec/km). Falls back to the band seed. */
+  runPaceSecKm?: number;
+}
+
+/**
+ * Per-component session-RPE used to compute simulation MTL.
+ *
+ * Both simulations are run at race effort, so the same values apply to each —
+ * the half simulation's lower MTL comes from halved duration, not a softer
+ * effort rating. Stations rate higher than runs because a full simulated HYROX
+ * shows higher blood lactate and higher RPE at stations than at run segments
+ * (Brandt et al., 2025). See docs/SCIENCE_LOG.md.
+ */
+const SIM_RUN_SRPE = 8;
+const SIM_STATION_SRPE = 9;
+
+/**
+ * Full or half HYROX race simulation.
+ *
+ * Structure is the race itself, not a chosen duration: 8 rounds of
+ * (run leg → station), stations in the fixed `HYROX_STATION_ORDER`, plus
+ * RoxZone transition time. The half simulation runs the same complete
+ * sequence at half volume per the repo's established half-test protocol
+ * (`STATION_HALF_VOLUME`), so the athlete still reaches wall balls under
+ * accumulated fatigue — the documented late-race limiter.
+ *
+ * Duration is derived from the athlete's own calibrated station benchmarks and
+ * run pace (falling back to band seeds), so it is a genuine target time rather
+ * than a slider value.
+ */
+export function generateHyroxSimulation(params: SimulationParams): Workout {
+  const { kind, band, bodyWeightKg, stationBenchmarks, runPaceSecKm } = params;
+  const isHalf = kind === 'half_simulation';
+  const scale = isHalf ? 0.5 : 1;
+
+  const legDistanceM = Math.round(HYROX_RUN_LEG_M * scale);
+  const runPace = runPaceSecKm ?? SEED_RUN_PACE_SEC_KM[band];
+  const legSec = Math.round(runPace * (legDistanceM / 1000));
+  const roxzoneSec = Math.round(SEED_ROXZONE_SEC[band] * scale);
+
+  const volumes = isHalf ? STATION_HALF_VOLUME : STATION_RACE_VOLUME;
+
+  // Interleave run leg → station, eight times, in fixed race order.
+  const components: HyroxComponent[] = [];
+  let stationSec = 0;
+
+  for (const station of HYROX_STATION_ORDER) {
+    const runMTL = computeComponentMTL(legSec / 60, SIM_RUN_SRPE, 'run_tempo', undefined, bodyWeightKg);
+    components.push({ type: 'run', distanceM: legDistanceM, durationSec: legSec, mtl: runMTL });
+
+    const targetSec = Math.round(stationSeedSec(station, band, stationBenchmarks) * scale);
+    stationSec += targetSec;
+    const externalKg = STATION_EXTERNAL_LOAD_KG[station];
+    const stationMTL = computeComponentMTL(targetSec / 60, SIM_STATION_SRPE, station, externalKg, bodyWeightKg);
+    components.push({
+      type: station,
+      distanceM: volumes[station].distanceM,
+      reps: volumes[station].reps,
+      durationSec: targetSec,
+      mtl: stationMTL,
+    });
+  }
+
+  const totalSec = legSec * HYROX_STATION_ORDER.length + stationSec + roxzoneSec;
+  const totalMTL = components.reduce((sum, c) => sum + c.mtl, 0);
+  const runKm = (legDistanceM * HYROX_STATION_ORDER.length) / 1000;
+
+  const name = isHalf ? 'Half Simulation' : 'Race Simulation';
+  const description = isHalf
+    ? `Half-distance run through the full race: 8 rounds of ${legDistanceM}m run into the next station, stations in race order. ${runKm} km of running total. Target ${fmtSec(totalSec)}. Record every split afterwards to recalibrate your benchmarks and forecast.`
+    : `Full race distance: 8 rounds of 1km run into the next station, stations in race order. ${runKm} km of running total. Target ${fmtSec(totalSec)} including transitions. Record every split afterwards to recalibrate your benchmarks and forecast.`;
+
+  return {
+    n: name,
+    d: description,
+    t: isHalf ? 'hyrox_half_simulation' : 'hyrox_simulation',
+    discipline: 'brick',
+    r: isHalf ? 8 : 9,
+    rpe: isHalf ? 8 : 9,
+    estimatedDurationMin: Math.round(totalSec / 60),
     musculoTendonLoad: totalMTL,
     hyroxComponents: components,
   };

@@ -171,3 +171,57 @@ export const STATION_EXTERNAL_LOAD_KG: Partial<Record<HyroxStation, number>> = {
   sandbag_lunges: 20,
   wall_balls:      9,
 };
+
+/**
+ * Race-standard volume per station, as structured data.
+ *
+ * Same numbers as the `distance` strings in `STATION_DISPLAY` above, expressed
+ * as machine-readable fields so generators can build `HyroxComponent`s without
+ * `parseInt`-ing a display string. Wall balls are rep-counted (100 reps, Open
+ * division); every other station is distance-counted.
+ */
+export const STATION_RACE_VOLUME: Record<HyroxStation, { distanceM?: number; reps?: number }> = {
+  ski_erg:            { distanceM: 1000 },
+  sled_push:          { distanceM: 50 },
+  sled_pull:          { distanceM: 50 },
+  burpee_broad_jumps: { distanceM: 80 },
+  row_erg:            { distanceM: 1000 },
+  farmer_carry:       { distanceM: 200 },
+  sandbag_lunges:     { distanceM: 100 },
+  wall_balls:         { reps: 100 },
+};
+
+/**
+ * Half-distance volume per station — exactly half of `STATION_RACE_VOLUME`.
+ *
+ * This is the repo's established half-test protocol (see the station benchmark
+ * calibration card): the athlete completes half the race volume at race effort
+ * and the recorded time is doubled to estimate full-distance performance. The
+ * half-simulation session reuses the same volumes so its splits feed the same
+ * calibration path.
+ */
+export const STATION_HALF_VOLUME: Record<HyroxStation, { distanceM?: number; reps?: number }> = {
+  ski_erg:            { distanceM: 500 },
+  sled_push:          { distanceM: 25 },
+  sled_pull:          { distanceM: 25 },
+  burpee_broad_jumps: { distanceM: 40 },
+  row_erg:            { distanceM: 500 },
+  farmer_carry:       { distanceM: 100 },
+  sandbag_lunges:     { distanceM: 50 },
+  wall_balls:         { reps: 50 },
+};
+
+/** Human-readable half-test protocol per station. Derived from `STATION_HALF_VOLUME`. */
+export const HALF_STATION_PROTOCOL: Record<HyroxStation, string> = {
+  ski_erg:            '500m',
+  sled_push:          '25m',
+  sled_pull:          '25m',
+  burpee_broad_jumps: '40m (10 reps)',
+  row_erg:            '500m',
+  farmer_carry:       '100m',
+  sandbag_lunges:     '50m',
+  wall_balls:         '50 reps',
+};
+
+/** Race run-leg distance in metres. Eight legs of this distance make a HYROX. */
+export const HYROX_RUN_LEG_M = 1000;

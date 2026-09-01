@@ -31,6 +31,8 @@ import {
 const SOURCE_LABEL: Record<StationTestEntry['source'], string> = {
   half_test: 'Half test',
   full_test: 'Full test',
+  simulation: 'Race simulation',
+  half_simulation: 'Half simulation',
   race: 'Race split',
   manual: 'Manual entry',
 };
