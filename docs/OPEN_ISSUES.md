@@ -16,6 +16,20 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-146: RPE prompt cannot be dismissed when several activities are rated *(P1, fix pending confirmation — 2026-09-01)*
+
+**Problem**: After a Garmin sync matches four or more activities, the "How hard did these feel?" prompt fills the whole screen. The Skip / Save row sits below the fold and the backdrop is fully covered, so there is no way out of the prompt. The assignment toast is also drawn over the bottom of the card.
+**Root cause**: `showRpePrompt` (`src/ui/activity-review.ts`) built a card with no `max-height` and no scroll container, so the card height grew linearly with the number of rated activities. Separately, every call site fired `showAssignmentToast` (z-200) immediately before `showRpePrompt` (z-50), so the toast painted over the modal's action row even when it was on screen.
+**Fix applied**:
+- Card is `max-height:85vh` / `85dvh`, laid out as a flex column: fixed header, `overflow-y:auto` rating list, action row pinned below a divider. Skip / Save is always reachable.
+- Swipe down on the card header to dismiss (pointer events, 100px threshold, backdrop fades with the drag). Escape also closes.
+- Dismissal is non-destructive: the auto-derived RPEs are already in `wk.rated` before the prompt opens, so Skip / backdrop / Escape / swipe all keep them. Only Save applies the slider values.
+- Assignment toast lines are passed into `showRpePrompt` (and threaded through `applyReview`) and shown after the prompt closes. Bypass paths flush via `flushAssignmentToast` so no summary is lost.
+**Verified**: Typecheck clean, `npx vitest run` matches the pre-change baseline (819 pass, 1 pre-existing failure in `forecast-profiles.test.ts`), production build succeeds. Layout and swipe checked in a headless browser at 390×844 and 390×560 — card capped, list scrolls, Save fully on screen and static while scrolling, swipe past threshold dismisses.
+**Status**: Awaiting Tristan to confirm on device with a multi-activity sync.
+
+---
+
 ### ISSUE-137: Excess-load modal hides Reduce option when a tempo remains *(P1, fix pending confirmation — 2026-04-15)*
 
 **Problem**: When extra cross-training load pushes the week over target, the modal only shows Push / Keep — even when a tempo or other quality workout is still on the plan. "Recommended" green appears on Keep with no explanation.

@@ -4,6 +4,15 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-01 — RPE prompt could not be dismissed with several activities
+
+- **`src/ui/activity-review.ts` — `showRpePrompt` card is now height-capped and scrolls.** The card had no `max-height` and no scroll container, so with four or more rated activities it grew past the viewport and pushed the Skip / Save row off-screen. With the backdrop also covered by the card there was no dismissal affordance left and the user was stuck. The card is now `max-height:85vh` (`85dvh` where supported) as a flex column: header fixed, rating rows in an `overflow-y:auto` region, action row pinned below a divider so Skip / Save is always reachable.
+- **Swipe down to dismiss.** Dragging the card header downward moves the card and fades the backdrop; past 100px it slides off the bottom and closes. Pointer events, so it works with touch and mouse. The gesture is bound to the header only, so it never competes with the rating list's scrolling or with the range sliders. A neutral grab handle sits at the top of the card. Escape now closes it too.
+- **Dismissal is non-destructive.** Auto-derived RPEs are already written to `wk.rated` before the prompt opens, so Skip, backdrop tap, Escape and swipe-down all keep those values. Save overwrites them with the slider positions. `applyAndClose` is guarded against double-invocation (swipe animation plus a trailing click).
+- **Assignment toast no longer covers the prompt's buttons.** `showAssignmentToast` (z-200) was called immediately before `showRpePrompt` (z-50) at every call site, so the toast drew over the modal's action row. The lines are now passed into `showRpePrompt` / `applyReview` as an optional `toastLines` argument and shown once the prompt closes. Bypass paths that never reach the prompt (missing week object, suggestion-modal dismiss with items still pending) flush the toast via `flushAssignmentToast` so no summary is lost.
+
+---
+
 ## 2026-04-16 — Race forecast surface: Home card + full-page chart, modal removed
 
 - **`src/ui/prediction-breakdown.ts` deleted.** The "Why this prediction?" modal launched from `cv-tile`, `fc-tile`, the Stats race-estimate row, and the wizard plan-preview "Why this time ›" link is gone. It rendered "—" for users without enough run history (most onboarding states) and duplicated the Stats forecast table in a less informative format.

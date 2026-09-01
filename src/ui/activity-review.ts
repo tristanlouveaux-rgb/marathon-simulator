@@ -358,8 +358,7 @@ function showMatchingEntryScreen(
       const toastLines = buildAssignmentLines(pending, choices, updatedChoices, confirmedMatchings, allWorkouts);
       overlay.remove();
       saveState();
-      showAssignmentToast(toastLines);
-      applyReview(pending, updatedChoices, buildMatchCache(pending, allWorkouts, wk), onComplete, confirmedMatchings);
+      applyReview(pending, updatedChoices, buildMatchCache(pending, allWorkouts, wk), onComplete, confirmedMatchings, toastLines);
     },
     () => {
       // Clean up transient saved slot assignments on cancel too
@@ -589,8 +588,7 @@ function showReviewScreen(
           overlay.remove();
           saveState();
 
-          showAssignmentToast(toastLines);
-          applyReview(pending, updatedChoices, matchCache, onComplete, confirmedMatchings);
+          applyReview(pending, updatedChoices, matchCache, onComplete, confirmedMatchings, toastLines);
         },
         () => showReviewScreen(overlay, pending, onComplete, choices),
         weekStartDate,
@@ -780,15 +778,25 @@ interface MatchedRunInfo {
   durationMin: number;
 }
 
+/** Show the deferred assignment summary toast, if there is one to show. */
+function flushAssignmentToast(lines?: string[]): void {
+  if (lines && lines.length > 0) showAssignmentToast(lines);
+}
+
 function showRpePrompt(
   matchedRuns: MatchedRunInfo[],
   onDone: () => void,
+  toastLines?: string[],
 ): void {
-  if (matchedRuns.length === 0) { onDone(); return; }
+  // The assignment toast is deferred until this prompt closes. Shown together the
+  // toast (z-200) covers the prompt's action buttons.
+  const flushToast = () => flushAssignmentToast(toastLines);
+
+  if (matchedRuns.length === 0) { flushToast(); onDone(); return; }
 
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
-  if (!wk) { onDone(); return; }
+  if (!wk) { flushToast(); onDone(); return; }
 
   const RPE_LABELS: Record<number, string> = {
     1: 'Very easy', 2: 'Easy', 3: 'Easy', 4: 'Moderate',
@@ -801,6 +809,7 @@ function showRpePrompt(
   const overlay = document.createElement('div');
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   overlay.style.background = 'rgba(0,0,0,0.45)';
+  overlay.style.transition = 'background 200ms ease-out';
 
   const rows = matchedRuns.map((run, i) => {
     const unitPref = getState().unitPref ?? 'km';
@@ -825,12 +834,22 @@ function showRpePrompt(
       </div>`;
   }).join('');
 
+  // Card is height-capped with a scrolling rating list so the action row stays on
+  // screen no matter how many activities are being rated.
   overlay.innerHTML = `
-    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
-      <div style="font-size:15px;font-weight:600;color:var(--c-black);margin-bottom:4px">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px">Rate perceived effort (1 = very easy, 10 = maximum)</div>
-      ${rows}
-      <div style="display:flex;gap:8px;margin-top:16px">
+    <div id="rpe-card" class="w-full max-w-sm rounded-2xl"
+         style="background:var(--c-surface);display:flex;flex-direction:column;
+                max-height:85vh;max-height:85dvh;overflow:hidden;will-change:transform">
+      <div id="rpe-head" style="padding:10px 20px 0;touch-action:none;cursor:grab;flex:0 0 auto;
+                                user-select:none;-webkit-user-select:none">
+        <div style="width:36px;height:4px;border-radius:2px;background:var(--c-border);margin:0 auto 12px"></div>
+        <div style="font-size:15px;font-weight:600;color:var(--c-black);margin-bottom:4px">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</div>
+        <div style="font-size:12px;color:var(--c-muted)">Rate perceived effort (1 = very easy, 10 = maximum)</div>
+      </div>
+      <div id="rpe-body" style="flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 20px 4px">
+        ${rows}
+      </div>
+      <div style="flex:0 0 auto;display:flex;gap:8px;padding:12px 20px 20px;border-top:1px solid var(--c-border)">
         <button id="rpe-skip" style="flex:1;height:40px;border-radius:12px;border:1px solid var(--c-border);
                 background:transparent;font-size:13px;font-weight:600;color:var(--c-muted);cursor:pointer">Skip</button>
         <button id="rpe-save" style="flex:1;height:40px;border-radius:12px;border:none;
@@ -854,7 +873,10 @@ function showRpePrompt(
     });
   });
 
+  let closed = false;
   const applyAndClose = (save: boolean) => {
+    if (closed) return;
+    closed = true;
     if (save && wk) {
       overlay.querySelectorAll<HTMLInputElement>('.rpe-slider').forEach(slider => {
         const wid = slider.dataset.wid!;
@@ -863,15 +885,69 @@ function showRpePrompt(
       });
       saveState();
     }
+    document.removeEventListener('keydown', onKey);
     overlay.remove();
+    flushToast();
     onDone();
   };
+
+  // Dismissing keeps the auto-derived RPEs already written to wk.rated, so Skip,
+  // backdrop tap, Escape and swipe-down are all non-destructive.
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') applyAndClose(false); };
+  document.addEventListener('keydown', onKey);
 
   overlay.querySelector('#rpe-save')!.addEventListener('click', () => applyAndClose(true));
   overlay.querySelector('#rpe-skip')!.addEventListener('click', () => applyAndClose(false));
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) applyAndClose(false);
   });
+
+  // ── Swipe down to dismiss ──────────────────────────────────────────────────
+  // Drag handled on the header only, so it never competes with the rating list's
+  // own scrolling or with the range sliders.
+  const card = overlay.querySelector<HTMLElement>('#rpe-card')!;
+  const head = overlay.querySelector<HTMLElement>('#rpe-head')!;
+  const DISMISS_PX = 100;
+  const FADE_PX = 320;
+  let dragStartY = 0;
+  let dragging = false;
+
+  const dragTo = (dy: number) => {
+    card.style.transform = `translateY(${dy}px)`;
+    overlay.style.background = `rgba(0,0,0,${(0.45 * (1 - Math.min(dy / FADE_PX, 1))).toFixed(3)})`;
+  };
+
+  head.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (closed) return;
+    dragging = true;
+    dragStartY = e.clientY;
+    card.style.transition = 'none';
+    head.style.cursor = 'grabbing';
+    try { head.setPointerCapture(e.pointerId); } catch { /* capture unsupported */ }
+  });
+
+  head.addEventListener('pointermove', (e: PointerEvent) => {
+    if (!dragging) return;
+    dragTo(Math.max(0, e.clientY - dragStartY));
+  });
+
+  const endDrag = (e: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    head.style.cursor = 'grab';
+    const dy = Math.max(0, e.clientY - dragStartY);
+    card.style.transition = 'transform 200ms ease-out';
+    if (dy > DISMISS_PX) {
+      card.style.transform = `translateY(${window.innerHeight}px)`;
+      overlay.style.background = 'rgba(0,0,0,0)';
+      window.setTimeout(() => applyAndClose(false), 200);
+    } else {
+      dragTo(0);
+    }
+  };
+
+  head.addEventListener('pointerup', endDrag);
+  head.addEventListener('pointercancel', endDrag);
 }
 
 // ---------------------------------------------------------------------------
@@ -884,10 +960,16 @@ function applyReview(
   onComplete: () => void,
   /** When provided (from Matching Confirmation screen), overrides matchCache for all items. */
   confirmedMatchings?: Map<string, string | null>,
+  /** Assignment summary shown after the RPE prompt closes, not on top of it. */
+  toastLines?: string[],
 ): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
-  if (!wk) { onComplete(); return; }
+  if (!wk) {
+    flushAssignmentToast(toastLines);
+    onComplete();
+    return;
+  }
 
   if (!wk.garminMatched) wk.garminMatched = {};
   const usedWorkoutIds = new Set<string>();
@@ -1188,7 +1270,7 @@ function applyReview(
   if (remainingCross.length === 0) {
     saveState();
     render();
-    showRpePrompt(matchedRunsForRpe, onComplete);
+    showRpePrompt(matchedRunsForRpe, onComplete, toastLines);
     return;
   }
 
@@ -1197,7 +1279,7 @@ function applyReview(
 
   const s2  = getMutableState();
   const wk2 = s2.wks?.[s2.w - 1];
-  if (!wk2) { onComplete(); return; }
+  if (!wk2) { flushAssignmentToast(toastLines); onComplete(); return; }
 
   const combinedActivity = buildCombinedActivity(remainingCross, s2);
 
@@ -1234,6 +1316,7 @@ function applyReview(
       const stillPending = (wkD?.garminPending || []).filter(
         i => wkD?.garminMatched?.[i.garminId] === '__pending__',
       );
+      flushAssignmentToast(toastLines);
       if (stillPending.length > 0) {
         showActivityReview(stillPending, onComplete, /* skipIntro */ true);
       } else {
@@ -1244,7 +1327,7 @@ function applyReview(
 
     const s3  = getMutableState();
     const wk3 = s3.wks?.[s3.w - 1];
-    if (!wk3) { onComplete(); return; }
+    if (!wk3) { flushAssignmentToast(toastLines); onComplete(); return; }
 
     const affectedNames: string[] = [];
 
@@ -1303,7 +1386,7 @@ function applyReview(
 
     saveState();
     render();
-    showRpePrompt(matchedRunsForRpe, onComplete);
+    showRpePrompt(matchedRunsForRpe, onComplete, toastLines);
   });
 }
 
@@ -1742,9 +1825,8 @@ export function autoProcessActivities(
 
   if (overflow.length === 0) {
     saveState();
-    showAssignmentToast(autoAssignLines);
     render();
-    showRpePrompt(autoMatchedRuns, onComplete);
+    showRpePrompt(autoMatchedRuns, onComplete, autoAssignLines);
     return;
   }
 
@@ -1805,9 +1887,8 @@ export function autoProcessActivities(
               autoReduceNote: `Easy run reduced by ${formatKm(reductionKm, s.unitPref ?? 'km')} · ${Math.round(_excess)} TSS absorbed`,
             } as WorkoutMod);
             saveState();
-            showAssignmentToast(autoAssignLines);
             render();
-            showRpePrompt(autoMatchedRuns, onComplete);
+            showRpePrompt(autoMatchedRuns, onComplete, autoAssignLines);
             return;
           }
         }
@@ -1824,16 +1905,15 @@ export function autoProcessActivities(
     const _atlSeed = (_s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (_s.gs ?? 0), 0.3));
     const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined);
     if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
-      showAssignmentToast(autoAssignLines);
       render();
-      showRpePrompt(autoMatchedRuns, onComplete);
+      showRpePrompt(autoMatchedRuns, onComplete, autoAssignLines);
       return;
     }
   }
 
   const s2  = getMutableState();
   const wk2 = s2.wks?.[s2.w - 1];
-  if (!wk2) { onComplete(); return; }
+  if (!wk2) { flushAssignmentToast(autoAssignLines); onComplete(); return; }
 
   const combinedActivity = buildCombinedActivity(overflow, s2);
   const freshWorkouts    = getWeekWorkoutsForReview().filter(w => wk2.rated[w.id || w.n] === undefined);
@@ -1851,15 +1931,14 @@ export function autoProcessActivities(
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {
       // User dismissed modal — keep unspentLoadItems (excess load card shows on training tab)
-      showAssignmentToast(autoAssignLines);
       render();
-      showRpePrompt(autoMatchedRuns, onComplete);
+      showRpePrompt(autoMatchedRuns, onComplete, autoAssignLines);
       return;
     }
 
     const s3  = getMutableState();
     const wk3 = s3.wks?.[s3.w - 1];
-    if (!wk3) { onComplete(); return; }
+    if (!wk3) { flushAssignmentToast(autoAssignLines); onComplete(); return; }
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
       const freshW   = getWeekWorkoutsForReview();
@@ -1906,10 +1985,9 @@ export function autoProcessActivities(
       recordLegLoad(sport, combinedActivity.duration_min, Date.now());
     }
 
-    showAssignmentToast(autoAssignLines);
     saveState();
     render();
-    showRpePrompt(autoMatchedRuns, onComplete);
+    showRpePrompt(autoMatchedRuns, onComplete, autoAssignLines);
   });
 }
 

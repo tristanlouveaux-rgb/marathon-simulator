@@ -186,6 +186,40 @@ Only add `detailId` (and show the chevron) when > 3 history data points exist. C
 - Cancel button always present. Confirm/save action button below it, or built into each option.
 - Padding: `p-5` on the card, `p-4` on the viewport wrapper (prevents edge-to-edge on small screens).
 
+### Long modals — cap the height, scroll the body, pin the actions
+
+Any modal whose content grows with the data (one row per activity, per workout, per day) **must** cap its own height and scroll internally. A card that grows past the viewport pushes its action row off-screen and covers the backdrop, leaving no way out. `showRpePrompt` in `activity-review.ts` is the reference implementation.
+
+```html
+<div class="w-full max-w-sm rounded-2xl"
+     style="background:var(--c-surface);display:flex;flex-direction:column;
+            max-height:85vh;max-height:85dvh;overflow:hidden">
+  <div style="padding:10px 20px 0;flex:0 0 auto"><!-- handle + title --></div>
+  <div style="flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 20px 4px">
+    <!-- the growing list -->
+  </div>
+  <div style="flex:0 0 auto;display:flex;gap:8px;padding:12px 20px 20px;
+              border-top:1px solid var(--c-border)"><!-- Cancel / Confirm --></div>
+</div>
+```
+
+The duplicated `max-height` is deliberate: `85dvh` tracks the iOS URL bar, and browsers that do not understand `dvh` fall back to the `85vh` declaration above it.
+
+### Swipe down to dismiss
+
+A height-capped modal gets a drag-to-dismiss gesture alongside its buttons. Rules:
+
+- **Bind the gesture to the header only**, never the whole card. Binding the card makes the gesture fight the scrolling body and any sliders inside it.
+- Header carries `touch-action:none` (so the browser does not claim the gesture as a scroll) and `user-select:none` (so a mouse drag does not select the title text).
+- Grab handle: 36 × 4px, `border-radius:2px`, `background:var(--c-border)`, centered above the title. Neutral, never accent-coloured.
+- Use pointer events (`pointerdown` / `pointermove` / `pointerup` / `pointercancel`) with `setPointerCapture` so touch and mouse share one code path.
+- Track the card with `transform:translateY(dy)` and fade the backdrop proportionally. Past 100px of travel, animate the card off the bottom and close; below it, spring back to `translateY(0)`.
+- Swipe-dismiss must mean the same thing as the modal's cancel button. Guard the close handler with a `closed` flag so the swipe animation and a trailing click cannot both fire it.
+
+### One overlay at a time
+
+Never raise a toast while a modal is open. Toasts sit at `z-[200]`, modals at `z-50`, so the toast lands on top of the modal's action row. Defer the toast until the modal closes by passing its lines into the modal function rather than calling `showAssignmentToast` beside it.
+
 ---
 
 ## Buttons

@@ -363,6 +363,8 @@ Two entry paths from `activitySync.ts`:
 
 **Auto-process** (≤2 activities, all same-day): silently slot-matches each; shows assignment toast. Overflow → `wk.unspentLoadItems` + suggestion modal.
 
+**RPE prompt** (`showRpePrompt`): terminal step of every path that matched runs. Height-capped scrolling card with a pinned action row; dismissable by Skip, backdrop tap, Escape, or a downward swipe on its header. Dismissing keeps the auto-derived RPEs already written to `wk.rated`; only Save overwrites them. Takes an optional `toastLines` argument (threaded through `applyReview`) and emits the assignment toast after it closes, so the toast never covers its buttons.
+
 **Manual review** (≥3 activities or any >24h old): `showActivityReview` renders a review screen grouped by date, with "Week N of T · Mon DD – Sun DD" header. On Apply:
 
 ```

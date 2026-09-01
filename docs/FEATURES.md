@@ -493,6 +493,8 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **Auto-process (≤2 activities, all same-day)**: Silently slot-matches each activity; shows an assignment toast at the bottom summarising what went where. Overflow items are added to `wk.unspentLoadItems` and the suggestion modal fires. On modal dismiss, the Excess Load Card lets the user adjust the plan later.
 
+**RPE prompt** ⚠️ *(fixed 2026-09-01, awaiting on-device confirmation)*: After matching, a prompt asks how hard the matched sessions felt, one slider per session, pre-filled with the auto-derived RPE. The card is capped at 85% of viewport height with the rating list scrolling inside it, so Skip / Save stay on screen no matter how many sessions are listed. Dismiss by Skip, tapping the backdrop, pressing Escape, or swiping the card header downward. Any dismissal keeps the auto-derived ratings; only Save applies the slider values. The assignment toast is held back until the prompt closes so it cannot cover the buttons. Key file: `src/ui/activity-review.ts` (`showRpePrompt`).
+
 **Review flow (≥3 activities or any >24h old)**: Activities listed by date in the Review Screen with "Week N of T · Mon DD – Sun DD" header. Each item has Integrate / Log Only toggle. On Apply with ≥2 integrate choices, the **Matching Screen** appears.
 
 **Matching Screen** (`src/ui/matching-screen.ts`): tap-to-assign full-screen UI.
