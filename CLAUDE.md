@@ -15,6 +15,7 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/FTP.md` | Bike FTP troubleshooting runbook — recurring problem classes, diagnostic procedure, standard fixes, regression history. Read this before debugging any FTP issue. |
 | `docs/AI_STRATEGY.md` | AI Coach monetisation strategy — tier model (Free / BYOK / subscription / full app), economics, pending decisions for Tier 2 paywall build, Stripe/IAP notes. Read before any AI Coach or payment work. |
 | `docs/RUNBOOK.md` | Diagnostic runbooks — background snapshots / recovery, console snippet patterns, multi-tab state divergence, Supabase dashboard AI workflow. Read on-demand when the situation matches. |
+| `docs/APP_REVIEW_PLAYBOOK.md` | What to do if Apple rejects a submission. Ranked risks specific to Mosaic, pre-drafted Resolution Center replies, and the mechanics of replying vs shipping a new binary. Read on rejection. |
 | `docs/DEVICE_TESTS.md` | On-device test checklist — native plugin / iOS rendering / WKWebView perf paths that tests and browsers can't cover, plus real-data dogfood paths. Work Tier 1 before each TestFlight build; tick items only after confirming on a phone. |
 
 ## Issue Tracking Workflow
