@@ -1,5 +1,10 @@
 # App Store Assets — Mosaic v1
 
+> **STATUS 2026-09-10** — most of this is now entered in App Store Connect (app `6776750342`).
+> Live values are recorded inline below marked **[LIVE]**. Four items remain and are
+> Tristan-only: Developer Program License Agreement acceptance, DSA trader status,
+> Regulated Medical Device declaration, and the final Add for Review.
+
 What needs to be produced before the first App Store submission. Most items are content/design, not code — Tristan owns these.
 
 Related docs:
@@ -14,29 +19,41 @@ Related docs:
 
 **App name**: `Mosaic`
 
-**Subtitle** (30 chars max): something like *Adaptive marathon coaching* or *Train smarter, race faster*. Test 2–3 in App Store Connect's A/B feature once live.
+**Subtitle** (30 chars max): **[LIVE]** `Your training plan adapts` (25 chars). Chosen 2026-09-10 over the marathon-specific drafts because it covers running, triathlon and HYROX. Test alternatives via A/B once live.
 
 **Promotional text** (170 chars, can be updated without resubmit): one sentence highlighting whatever Tristan is pushing right now (e.g. "New: AI Coach reads your training and answers your questions.").
 
 **Description** (drafted opening — refine in `marketing/`):
 
-> Mosaic builds an adaptive marathon, triathlon, or HYROX training plan around your real fitness — not a one-size template.
+> **[LIVE, revised 2026-09-10 — Strava and Garmin connect claims removed, see below]**
 >
-> Connect Strava or Apple Health, set a race goal, and Mosaic models your trajectory: fitness, fatigue, freshness, and predicted race time. Every session you log refines the next session. Skip a workout, get sick, change your race date — the plan adapts.
+> Mosaic builds an adaptive marathon, triathlon, or HYROX training plan around your real fitness, not a one-size template.
+>
+> Connect Apple Health, set a race goal, and Mosaic models your trajectory: fitness, fatigue, freshness, and predicted race time. Every session you log refines the next session. Skip a workout, get sick, change your race date, and the plan adapts.
 >
 > What's inside:
 > • Race time prediction from your VDOT, FTP, CSS, and recent runs
 > • Daily readiness from HRV, sleep, training stress balance, and ACWR
 > • Guided audio runs with voice cues that play while your screen is locked
-> • An AI Coach (optional) that reads your week and answers your questions
 > • Adaptive training load with weekly progression caps tuned to your tier
-> • Apple Health, Strava, and Garmin integration
+> • Apple Health sync, plus .fit, .gpx, and .tcx import from Garmin and other devices
+>
+> (AI Coach bullet removed 2026-08-04: AI_COACH_ENABLED=false in the v1 binary — describing it would be a 2.3.1 metadata-accuracy risk. Restore the bullet when the feature ships.)
 >
 > Built on published exercise-physiology models (Banister impulse-response, Daniels VDOT, Coggan TSS).
 >
 > HYROX is a registered trademark of HYROX GmbH. Mosaic is not affiliated with or endorsed by HYROX.
 >
 > Mosaic is not a medical device. Always consult a physician before starting any training programme.
+
+**Integration claims — do not re-add Strava or Garmin without checking the flags.**
+For a public v1 user neither is reachable: `GARMIN_CONNECT_ENABLED = false` in
+`src/constants/feature-flags.ts` (the Garmin webhook is approved for a single developer
+account), and the Strava connect button is gated behind the `BENJAMIN` code in
+`src/constants/access-codes.ts` with a 10-athlete Standard Tier cap. Naming either in the
+description is a 2.3.1 metadata-accuracy rejection risk. The honest claim is Apple Health
+sync plus manual `.fit`/`.gpx`/`.tcx` import (`src/ui/import-activity-modal.ts`, ungated).
+Restore the live-connect wording only when the flag flips and Extended Access lands.
 
 Tristan to refine the bullet voice (consultant tone per CLAUDE.md). The
 guided-audio bullet (ISSUE-235), the methodology line (ISSUE-233), and the
@@ -47,10 +64,10 @@ should be kept on the live listing.
 
 ## 2. Keywords (100 chars, comma-separated, no spaces)
 
-Draft pool:
-`marathon,triathlon,running,training plan,coach,VDOT,FTP,strava,garmin,hyrox,VO2max,race,half marathon`
+**[LIVE]** `marathon,triathlon,running,training,plan,coach,vdot,ftp,hyrox,race,half,fitness,pace` (84/100).
 
-Pick 10–13 that fit under 100 chars. Avoid stuffing.
+`strava` and `garmin` were removed 2026-09-10: third-party trademarks for features a public
+user cannot reach. Do not re-add them while the flags above are off.
 
 ---
 
@@ -95,7 +112,15 @@ Marketing URL: top-level `https://mosaicrunning.run` (build the landing page fro
 - **Primary**: Health & Fitness
 - **Secondary**: Sports
 
-Age rating: 4+ (no objectionable content). The wizard asks for age (16+ per Terms of Use) but that's a Terms thing, not a content rating.
+**[LIVE]** Both categories set 2026-09-10.
+
+Age rating: **9+**, not 4+. The questionnaire was completed 2026-09-10 with every answer
+None/No except **Health or Wellness Topics = Yes**, which is what produces 9+. That answer is
+accurate (the app makes self-care and lifestyle recommendations) and should not be changed to
+reach 4+. Regional outcomes: 9+ in 172 countries, 12+ Vietnam, A10 Brazil, ALL Korea. On OS
+versions earlier than 26 it still resolves to a global 4+. Content Rights declared as no
+third-party content. The wizard asks for age (16+ per Terms of Use) but that's a Terms thing,
+not a content rating.
 
 ---
 
@@ -109,9 +134,12 @@ Tracking: **No** — confirm. ATT framework not used.
 
 ## 8. Pricing & availability
 
-- **Price tier**: Free for v1.
+- **Price tier**: **[LIVE]** Free, set 2026-09-10 across all 175 regions. Confirmed by Tristan against the
+  contradicting `AI_COACH_ENABLED` comment in feature-flags.ts which described v1 as a paid base app.
+  Free means no Paid Applications agreement (banking + tax) is needed to submit.
 - **In-app purchases**: None for v1. The AI Coach is allowlist-gated in v1 (see ISSUE-231). Tier 2 ships in v1.1 as auto-renewing subscriptions via RevenueCat: AI Coach Monthly at £4.99 and AI Coach Annual at £49.99, both with a 7-day free trial. Setup runbook in `docs/REVENUECAT_SETUP.md`. Paywall surface in `src/ui/coach-paywall.ts` (Apple 3.1.3 compliant).
-- **Availability**: All countries (worldwide). EU/UK GDPR rights are covered by `privacy.html`.
+- **Availability**: **[LIVE]** All 175 countries, available on app release, set 2026-09-10. EU/UK GDPR rights
+  are covered by `privacy.html`. NOTE: EU availability still depends on DSA trader status being provided.
 
 ---
 
@@ -127,12 +155,15 @@ Tracking: **No** — confirm. ATT framework not used.
 
 When submitting, include these notes for the reviewer:
 
-> Mosaic is an adaptive training planner for runners and triathletes.
+> Mosaic is an adaptive training planner for runners, triathletes, and hybrid athletes.
 >
-> Test account: <email> / <password>
-> (This account has Strava pre-connected with at least 16 weeks of activities. Allow about 30 seconds after sign-in for the history sync to complete before the home screen populates.)
+> Test account: review@mosaicrunning.run / (password set 2026-08-04 — Tristan pastes it here; also in the ASC notes field)
 >
-> The AI Coach is currently behind an internal allowlist while we finalise the subscription path. Reviewer accounts will see the rules-based Coach screen (brief, recovery readout, today's workout, feeling prompt, export-snapshot button) instead of the AI surface. Email tristan@mosaicrunning.run if you'd like to evaluate the AI surface — we can allowlist your reviewer Apple ID.
+> The account is pre-loaded with a sample athlete: a 16-week marathon plan with a populated Home, Plan, Forecast, and Stats. Sign in and the app restores it automatically within a few seconds. No other setup is needed. If the account is ever blank, it can be re-seeded: sign in, enter any name, choose Running, choose Garmin on the data step, and enter access code REVIEW in the "Connect through Strava" card. The app reloads with the sample athlete.
+>
+> Strava: optional. The Strava connect button is behind a beta access code while our Strava API capacity application is in review, so it is not open to the public in this build. The reviewer account does not need Strava.
+>
+> AI features: none in this build. Coaching text is generated by deterministic rules from the athlete's own data. There is no AI chat surface, no subscription, and no purchase.
 >
 > Apple Health: read-only. Mosaic does not write to Apple Health.
 >
@@ -140,7 +171,9 @@ When submitting, include these notes for the reviewer:
 >
 > Audio background mode: used by the guided-audio runs feature to play voice training cues while the screen is locked or the app is in the background.
 >
-> Account deletion: in-app under Account → Delete account. 30-day grace window. Strava OAuth token is revoked synchronously on deletion. See public/privacy.html.
+> Account deletion: in-app under Account → Delete account. 30-day grace window. Strava OAuth token is revoked synchronously on deletion. See https://mosaicrunning.run/privacy.html.
+
+Updated 2026-08-04: real reviewer account (pre-seeded via REVIEW code, backup-restored on sign-in — see ISSUE-230), Strava gate stated honestly, AI Coach paragraph replaced (AI_COACH_ENABLED=false — no AI surface exists in the binary, so the old allowlist wording described something reviewers could never find).
 
 ---
 

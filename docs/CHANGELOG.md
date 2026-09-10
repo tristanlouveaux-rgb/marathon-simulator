@@ -4,6 +4,56 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-10 — Fixed wall-clock rot in adaptive-recovery tests (15 failures)
+
+Found while gating a fresh App Store build: `src/calculations/adaptive-recovery.test.ts` had 15 failing tests. **Not a product regression** — `adaptive-recovery.ts` was unmodified.
+
+- **Root cause**: `pruneImpactLog` (adaptive-recovery.ts:348) and `backfillHistoricalImpacts` (:659) both cut against `todayIso()` with a 90-day window (`IMPACT_LOG_MAX_DAYS`), and neither accepts an injectable clock. The test file anchored its fixtures to a hardcoded `2026-05-01` / `2026-04-01`, which by 2026-09-10 are 132 and 162 days old, so every fixture entry was pruned on insert and the assertions saw an empty log. These tests were a time bomb that fired 90 days after they were written.
+- **Fix**: re-anchored `isoOffset`'s default and the 11 per-test `today` constants to `new Date()`, changed the one date assertion to `isoOffset(0)`, and moved the two `backfillHistoricalImpacts` fixtures to `isoOffset(-30)`.
+- **Latent false pass fixed too**: "skips sessions with no usable post-session physiology" asserted `skipped: 1` and passed, but was being skipped on the *age* check, never reaching the physiology check it claims to test. It now exercises the intended path.
+- A prior session had already patched exactly one of these tests with the same `new Date()` fix and left a comment naming the cause, but did not sweep the other 15.
+- Suite now 3,515 passed / 0 failed / 28 skipped; typecheck and `lint:ui` clean.
+
+## 2026-09-10 — App Store Connect metadata completed (Strava/Garmin claims removed)
+
+Drove App Store Connect via Claude-in-Chrome to finish the v1 listing for app `6776750342`.
+
+- **Metadata accuracy fix (2.3.1 risk)**: the public description claimed "Connect Strava or Apple Health" and "Apple Health, Strava, and Garmin integration". Neither is reachable for a public v1 user: `GARMIN_CONNECT_ENABLED=false` (Garmin webhook is approved for a single developer account only) and the Strava connect button is gated behind the `BENJAMIN` beta access code with a 10-athlete Standard Tier cap. Rewrote to "Connect Apple Health" and "Apple Health sync, plus .fit, .gpx, and .tcx import from Garmin and other devices" — the manual import path (`import-activity-modal.ts`) is ungated and genuinely serves Garmin users. Description now 1,050 chars.
+- **Keywords**: dropped `strava` and `garmin` (third-party trademarks for non-functioning features), added `fitness,pace`. Now 84/100.
+- **Subtitle** set to "Your training plan adapts" (25 chars) — chosen over the doc's draft options because it covers all three modes rather than narrowing to marathon.
+- **Categories**: Health & Fitness (primary) + Sports (secondary).
+- **Content Rights**: declared no third-party content.
+- **Pricing**: Free in all 175 regions; availability set to all countries, available on app release.
+- **Age rating questionnaire completed → 9+**, not the 4+ this doc previously assumed. Every answer is None/No except "Health or Wellness Topics = Yes", which is what drives 9+. Answering it No would have been inaccurate. Regional: 12+ Vietnam, A10 Brazil, ALL Korea; OS versions earlier than 26 still resolve to a global 4+.
+- **Verified guided-audio bullet is truthful**: `src/guided/` is real and ungated, `Info.plist` declares both `audio` and `location` background modes.
+- **Account-level items cleared same day**: Apple Developer Program License Agreement accepted (Free Apps Agreement now Active, Sep 10 2026 - Jun 3 2027); DSA trader status submitted as a trader and now **In Review** with Apple (27 countries); Regulated Medical Device declared as not a regulated device; App Privacy responses published (5 data types, all App Functionality, all linked to identity).
+- **Paid Apps Agreement deliberately NOT signed.** It surfaced after the licence acceptance but is only needed to offer paid apps or IAP. v1 is Free with no IAP. Sign it before the v1.1 RevenueCat subscriptions ship, not now — it requires banking and tax details.
+- **Paywall reachability audited for build 27**: all four Coach buttons are behind `AI_COACH_ENABLED` ternaries, `coach-view.ts:1148` hard-gates before the `coach-paywall` import at line 1218, and `openCoachWorkoutModal` is exported but never called (dead code). No reachable paywall, so Free-with-no-IAP is consistent with the binary.
+- **Build swapped 27 -> 28 at submission time.** ASC warned "Newer Build Available". Build 28 (uploaded Aug 5 2026, Validated, 11.3 MB, min iOS 15.0, `App Uses Non-Exempt Encryption: No`) is build 27 plus commit `fbf2948` "fix(auth): hard reload at account boundaries - cross-account leak (ISSUE-315)". Removed 27, attached 28, saved. No TestFlight upload was required — 28 was already there.
+- **The two commits since build 28 are web-only** (`public/privacy.html`, `terms.html`, `support.html` — AI Coach copy removal). The app links these as external URLs to mosaicrunning.run rather than bundling them, so they needed a web deploy, not a rebuild. Verified live: privacy.html already states "Mosaic ships with no AI or machine learning feature." No blocker.
+- **Known gap, accepted**: ~41 uncommitted working-tree files (run-durability, plan-adherence, blended-fitness, daily-coach, appleHealthSync, new appleActivityUpload.ts, workout-status, injury-risk-view, brick, new checkin-hint.ts) are in NO build. Deliberately not cut into a fresh build for v1 — a dirty-tree build would be unreviewed and would need a full DEVICE_TESTS Tier 1 pass. Land in 1.0.1.
+- **Remaining**: Tristan presses Add for Review. DSA verification is asynchronous and does not block submission.
+
+## 2026-08-04 — Submission build uploaded to TestFlight
+
+Build ~1.0(12) archived and uploaded via `scripts/testflight-upload.sh` (clean: ARCHIVE + EXPORT + Upload succeeded). Carries the Strava coach-context exclusion, the daily-coach copy fix, and the full branch tree with `AI_COACH_ENABLED=false`. This is the intended App Store review build. Review notes + description drafted into ASC via the parallel Claude-in-Chrome session (source: `docs/APP_STORE_ASSETS.md` §1/§10, updated this session). Remaining before Add for Review: build appears after Apple processing (pick newest), Tristan device-checks reviewer sign-in restore via TestFlight, age rating + privacy labels + DSA status in ASC.
+
+## 2026-08-04 — App Store reviewer path verified end-to-end + daily-coach copy fix
+
+Prep for public App Store submission (reviewer flow is the ISSUE-230 blocker).
+
+- **Reviewer account created and verified**: `review@mosaicrunning.run` (user `9cbf8bb2`, password with Tristan / in review notes). Created via signup API; email confirmed via dashboard SQL (MCP connection is read-only). Verified on the local tree with Playwright: sign in → wizard (name → Running → Garmin) → REVIEW code at the access-code field → seeded "Sample Athlete's Marathon Plan" (16wk, London Marathon) with health disclaimer shown. Then wiped storage (fresh-device simulation), signed in again → **backup restore returned the seeded app directly, no wizard**. Reviewer flow for the notes: just sign in; REVIEW code only needed to re-seed from scratch.
+- **Finding: deployed web app (mosaic-theta-lac.vercel.app) is a stale build** — its connect step ("We read your recent runs…", Cycling/Just-track modes) doesn't exist in the current tree; `feat/revenue-cat-iap` has never been deployed to web. Web is a first-class target; needs a redeploy decision before/at launch.
+- **Daily-coach fragment fix** (`daily-coach.ts`): sentence-start `${wn}` with the `'the session'` fallback rendered "…recovery. the session as planned." on the seeded Home. Added `wnCap` and used it at the 6 sentence-start sites. 35 daily-coach tests green.
+
+## 2026-08-04 — Strava API compliance: coach context exclusion + support page fixes
+
+Prep for the Strava developer application. The 2026 API Agreement (§5.3) forbids sending Strava data, or anything derived from it, to any AI service, even with user consent; §7.4 requires deleting a user's Strava data within 30 days of revocation.
+
+- **Coach context now excludes Strava-sourced activities**: `collectRecentActivities` (`coach-context-builder.ts`) filters `garminId.startsWith('strava-')`. Anchor test `coach-context-strava-exclusion.test.ts` guards it. Consent modal copy updated to say so.
+- **support.html (both repos)**: AI Coach section states the Strava exclusion; "never share with third parties" reworded (processors are third parties, and the page named Anthropic two sections later); disconnect section now promises deletion of stored Strava data within 30 days of revocation with email confirmation (was: only on account deletion / manual email; app copy claimed an unimplemented 48h purge).
+- **OPEN follow-up**: the 30-day purge on disconnect is a stated commitment, not yet automated — disconnect (`account-view.ts:2511`) only deletes the token row. Needs a purge of `strava-` rows (server + state) triggered by disconnect and by Strava's deauth webhook, plus the confirmation email. Until then, fulfil manually.
+
 ## 2026-08-04 — ISSUE-315: cross-account leak on the same device (sign-out cleared disk, not memory)
 
 Tristan signed up a fresh test account on a phone holding his real account; the new account inherited the old plan. The 2026-07-26 sign-out fix cleared localStorage but the page never reloads, so the in-memory store and all background sync timers survive the account boundary — `savePlanSettings()` reads `getState()` and upserts under whoever is signed in, so the first post-sign-in `saveState()` (425 call sites) re-persisted and *uploaded* account 1's state as account 2's backup, re-stamping the owner.

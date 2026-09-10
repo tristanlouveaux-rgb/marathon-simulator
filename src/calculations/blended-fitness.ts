@@ -23,7 +23,7 @@ import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
-import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
+import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, type RunDurabilityResult } from './run-durability';
 import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
 import { estimateRunPaceFromSkill } from './race-prediction.triathlon';
 import { getDisciplineCapacity } from '@/injury/engine';
@@ -116,6 +116,8 @@ interface StandardPredictionContext {
   crossTrainingSessions: BlendArgs[14];
   calibration: ReturnType<typeof computeRunCalibration>;
   longestRunSec: number;
+  /** All run durations in the window — qualifying long-run count is per-distance. */
+  longRunDurationsSec: number[];
   shoeMul: number;
   /**
    * Resolved running-fitness VDOT (`resolveRunningVdot`). Used as a last-resort
@@ -196,6 +198,7 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
       : undefined,
     calibration: computeRunCalibration(s.runRaceLog),
     longestRunSec: getLongestRunSec(s, 12),
+    longRunDurationsSec: getRunDurationsSec(s, 12),
     fallbackVdot: resolveRunningVdot(s),
   };
 }
@@ -232,7 +235,11 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
   }
   if (!blended || blended <= 0 || !isFinite(blended)) return null;
   const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
-  const durability = applyLongRunCap(ctx.longestRunSec, dist);
+  const durability = applyLongRunCap(
+    ctx.longestRunSec,
+    dist,
+    countQualifyingLongRuns(ctx.longRunDurationsSec, dist),
+  );
   // Floor each distance at its demonstrated same-distance PB after cap + shoe
   // adjustment (parity with the headline refresh and initialization).
   const finalSec = demonstratedPBFloor(
@@ -327,7 +334,7 @@ export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance)
   // Durability comes from the staged result when available (same longest-run
   // read), otherwise compute directly for the no-blend case so the UI still
   // has threshold context.
-  const durability = stages ? stages.durability : applyLongRunCap(getLongestRunSec(s, 12), dist);
+  const durability = stages ? stages.durability : applyLongRunCap(getLongestRunSec(s, 12), dist, getQualifyingLongRunCount(s, dist, 12));
 
   const calibration = ctx ? ctx.calibration : computeRunCalibration(s.runRaceLog);
   const bias = calibration.perDistanceBiasSec?.[dist];
@@ -563,7 +570,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // to the volume-based marathon-specificity penalty inside blendPredictions
   //. Both can fire). Stored on state for the Durability chip drill-down.
   const longestRunSec = getLongestRunSec(s, 12);
-  const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd);
+  const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd, getQualifyingLongRunCount(s, s.rd, 12));
   s.runDurability = durability;
   // Floor at any demonstrated same-distance PB after the cap (mirror of
   // initialization.ts): the cap and calibration bias must not push the anchor

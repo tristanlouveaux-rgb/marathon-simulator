@@ -206,24 +206,3 @@ export function detectChronicLowAdherence(
   if (windowResult.pct >= CHRONIC_ADHERENCE_THRESHOLD_PCT) return null;
   return { pct: windowResult.pct, weeks: windowResult.weeksIncluded };
 }
-
-/**
- * Data-driven recalibration target for the running plan: the runs-per-week the
- * athlete has actually been completing over the trailing window, rounded to a
- * whole session. This is a *demonstrated* frequency, not an invented number —
- * `totalCompleted / weeksIncluded` over the same window the chronic detector
- * uses. Floored at 1 (a running plan has at least one run).
- *
- * Returns null when there isn't a full window of data, or when the demonstrated
- * frequency isn't actually below the current setting (nothing to recalibrate).
- * Reduce-only by construction — never suggests raising frequency.
- */
-export function suggestedRunsPerWeek(
-  windowResult: PlanAdherenceResult,
-  currentRunsPerWeek: number,
-): number | null {
-  if (windowResult.weeksIncluded < CHRONIC_ADHERENCE_WINDOW_WEEKS) return null;
-  const avgCompleted = windowResult.totalCompleted / windowResult.weeksIncluded;
-  const target = Math.max(1, Math.round(avgCompleted));
-  return target < currentRunsPerWeek ? target : null;
-}

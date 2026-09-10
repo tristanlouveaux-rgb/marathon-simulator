@@ -47,3 +47,12 @@ ios-plugins/*/.build/
 
 # Per-user Xcode scheme state — managed by SwiftPM, not source.
 ios-plugins/*/.swiftpm/
+
+# Xcode archive + export output from scripts/testflight-upload.sh. Regenerable,
+# ~57 MB per build — must never enter git history.
+build/
+
+# Scratch: temp profiling scripts and Playwright accessibility-tree dumps.
+.tmp-*.mjs
+grp*.yml
+addbuild.yml

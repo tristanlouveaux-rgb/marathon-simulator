@@ -847,6 +847,9 @@ function derivePrimaryMessage(
   stance: CoachStance,
 ): string {
   const wn = sig.todayWorkoutName || 'the session';
+  // Sentence-start variant: real workout names are already capitalized; this
+  // only fixes the fallback ("the session as planned." → "The session ...").
+  const wnCap = wn.charAt(0).toUpperCase() + wn.slice(1);
   const hard = strain?.todayIsHard ?? (sig.todayWorkoutType ? isHardType(sig.todayWorkoutType) : false);
   const restDay = strain?.isRestDay ?? false;
   const sp = strain?.strainPct ?? 0;
@@ -956,7 +959,7 @@ function derivePrimaryMessage(
     if (trained && sessionHeavy)
       return `${debtStr} sleep debt. Hard session won't produce full adaptation until sleep recovers.`;
     return hard
-      ? `${debtStr} sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
+      ? `${debtStr} sleep debt this week. ${wnCap} won't produce full adaptation until sleep recovers.`
       : `${debtStr} sleep debt this week. Prioritise sleep tonight.`;
   }
 
@@ -1043,7 +1046,7 @@ function derivePrimaryMessage(
         ? 'Recovery below baseline. Heavy session on incomplete recovery. Rest tomorrow.'
         : 'Recovery below baseline. Light session was appropriate.';
     return hard
-      ? `Recovery below baseline. ${wn} as planned, but back off if RPE feels high.`
+      ? `Recovery below baseline. ${wnCap} as planned, but back off if RPE feels high.`
       : 'Recovery below baseline. Keep today easy.';
   }
 
@@ -1141,7 +1144,7 @@ function derivePrimaryMessage(
     if (trained)
       return 'Freshness and load are good. Good session today.';
     if (hard)
-      return `Freshness and load are good. ${wn} as planned.`;
+      return `Freshness and load are good. ${wnCap} as planned.`;
     if (restDay)
       return 'Freshness is high. Rest day.';
     return 'Freshness and load are good. Session as planned.';
@@ -1152,7 +1155,7 @@ function derivePrimaryMessage(
     if (trained)
       return 'Rested with safe training load. Good session today.';
     if (hard)
-      return `Rested with safe training load. ${wn} as planned.`;
+      return `Rested with safe training load. ${wnCap} as planned.`;
     return 'Rested with safe training load. Session as planned.';
   }
 
@@ -1169,13 +1172,13 @@ function derivePrimaryMessage(
       if (trained)
         return 'Fitness has dipped recently. Good to stay consistent.';
       return hard
-        ? `Fitness has dipped over recent weeks. ${wn} helps reverse that. Consistency is the priority.`
+        ? `Fitness has dipped over recent weeks. ${wnCap} helps reverse that. Consistency is the priority.`
         : 'Fitness has dipped recently. Consistency is the priority.';
     }
     if (trained)
       return 'Good balance of load and recovery. Good session today.';
     return hard
-      ? `Good balance of load and recovery. ${wn} as planned.`
+      ? `Good balance of load and recovery. ${wnCap} as planned.`
       : 'Good balance of load and recovery. Session as planned.';
   }
 

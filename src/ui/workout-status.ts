@@ -126,18 +126,24 @@ export function firstTrackedDow(
  * the user already logged this week still credit to load (they flow in via the
  * activity matcher, independent of this list).
  *
- * No-op for established plans, Monday onboards, and any week other than the
- * current one. Keyed off `firstTrackedDow`, the single source for "first
- * schedulable weekday". Pass the resolved workout list for the current view week.
+ * No-op for established plans and Monday onboards. Applies to the onboarding
+ * week whether it is the current week or has since rolled into the past: a
+ * pre-onboard day was never schedulable, so it must never resurface as "Missed"
+ * once week 1 is no longer current. `firstTrackedDow` is week-agnostic — it
+ * returns 0 for every week except the one that contains `planCreatedAt` — so the
+ * drop self-restricts to the onboarding week. The `currentWeek` parameter is
+ * retained for signature compatibility with the status helpers.
+ *
+ * Keyed off `firstTrackedDow`, the single source for "first schedulable
+ * weekday". Pass the resolved workout list for the given view week.
  */
 export function dropPreOnboardSessions<T extends { dayOfWeek?: number }>(
   workouts: T[],
   planStartDate: string | undefined,
   viewWeek: number,
-  currentWeek: number,
+  _currentWeek: number,
   planCreatedAt: string | undefined,
 ): T[] {
-  if (viewWeek !== currentWeek) return workouts;
   const ftd = firstTrackedDow(planStartDate, viewWeek, planCreatedAt);
   if (ftd <= 0) return workouts;
   return workouts.filter(w => (w.dayOfWeek ?? 0) >= ftd);

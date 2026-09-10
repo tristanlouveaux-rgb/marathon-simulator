@@ -55,7 +55,7 @@ export function generateBrick(input: BrickInput): Workout {
   const totalMin = bikeMinutes + runMinutes;
   const { aerobic, anaerobic } = loadForBrick(phase, bikeMinutes, runMinutes);
 
-  const desc = `BIKE ${bikeMinutes}min @ ${bikePower}, straight into RUN ${runMinutes}min @ ${runTarget}. Practice transition: rack, shoes, out the door in under 2 min.`;
+  const desc = `BIKE ${fmtDur(bikeMinutes)} @ ${bikePower}, straight into RUN ${fmtDur(runMinutes)} @ ${runTarget}. Practice transition: rack, shoes, out the door in under 2 min.`;
 
   return {
     n: 'Brick — bike + run',
@@ -69,6 +69,21 @@ export function generateBrick(input: BrickInput): Workout {
     brickSegments: [bikeSeg, runSeg],
     estimatedDurationMin: totalMin,
   };
+}
+
+/**
+ * Format a minute count as "Xh Ymin" / "Xh" / "Ymin", matching the format used
+ * by every other tri workout description (the non-exported `fmtMin` in
+ * plan_engine.triathlon.ts). Local copy to avoid a circular import — that module
+ * imports `generateBrick` from here.
+ */
+function fmtDur(mins: number): string {
+  const r = Math.round(mins);
+  const h = Math.floor(r / 60);
+  const m = r % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}min`;
+  if (h > 0) return `${h}h`;
+  return `${m}min`;
 }
 
 function loadForBrick(

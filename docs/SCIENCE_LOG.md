@@ -449,22 +449,29 @@ Running's prediction engine was missing four real factors that the tri engine al
 - Applied to `blendedRaceTimeSec` (today). NOT applied to `forecastTime` (race-day projection) — projection assumes the plan delivers long runs by race day. Mirrors tri's `executionFactor` treatment.
 - **2026-06-04 (§BN)**: also applied at onboarding finalize (`initializeSimulator`), which previously seeded the anchor uncapped — a thin-data user's first "current race estimate" was the raw capacity extrapolation until the first backfill refresh silently slowed it.
 
+**Accumulated time-on-feet softening (2026-06-17)**: the cap originally read only the single *peak* long run. A user idea ("time on feet matters like TSS") prompted adding repeated long-run exposure as a softener. The metabolic side of time-on-feet is already in canonical TSS (duration × rate), and an accumulating *load* would double-count it and break the Load Currency Law; the genuinely missing piece is that regular long runs build connective-tissue durability the single peak run does not. So the model now reads a second number and softens (never raises) the peak penalty:
+- `qualifyingLongRunCount` = runs ≥ `LONG_RUN_QUALIFYING_FRACTION` (0.70) of `thresholdSec`, over the same 12-week window (same traversal as `getLongestRunSec` via `getRunDurationsSec`, so peak and exposure never disagree on scope).
+- `consistencyCredit = min(1, qualifyingLongRunCount / LONG_RUN_CONSISTENCY_TARGET)` with target 8 (≈ one qualifying long run every 10 days).
+- `penalty = MAX_PENALTY × peakShortfall × (1 − consistencyCredit)`.
+- **Self-consistency**: because the peak IS the longest run, no run can qualify unless the peak itself is ≥ 70% of threshold. So a short-peak, sparse athlete earns zero credit and keeps the full penalty; softening only reaches runners whose peak is already decent (where the residual penalty is small, ≤ 30% of max). Full credit (8 qualifying runs, each ≥ ~1h55 for a marathon) zeroes the penalty and flips `limitingFactor` to null.
+
 **Constants**:
 - `LONG_RUN_THRESHOLD_SEC` marathon = 165 min ≈ 30 km easy. Calibrated to Daniels' "minimum 25 km for finish-focused, 30+ km for time-goal" guidance.
 - `LONG_RUN_MAX_PENALTY` marathon = 5%. Pfitzinger & Douglas report 2–6% gap for volume-shortened marathoners vs matched-volume controls who did long runs.
+- `LONG_RUN_QUALIFYING_FRACTION` = 0.70, `LONG_RUN_CONSISTENCY_TARGET` = 8 in 12 weeks ≈ Pfitzinger's "long run every 7–10 days through a build".
 
 **Source**: Karp JR (2007) "Training characteristics of qualifiers for the U.S. Olympic Marathon Trials" Int J Sports Physiol Perform 2:72–92. Daniels J (2014) "Daniels' Running Formula" 3rd ed. Pfitzinger P & Douglas S (2009) "Advanced Marathoning" 2nd ed.
 
-**Confidence**: medium. Thresholds calibrated to standard race-prep literature; linear shortfall ramp is a pragmatic shape.
+**Confidence**: medium. Thresholds calibrated to standard race-prep literature; linear shortfall ramp and the linear consistency credit are pragmatic shapes.
 
-**Limitations**: Orthogonal to the volume-based `marathonSpecificityPenalty` — both can fire. That's intentional (different deficits) but a low-volume + no-long-run athlete gets double-penalised. Doesn't model long-run pace; future tier could weight by pace stratification.
+**Limitations**: Orthogonal to the volume-based `marathonSpecificityPenalty` — both can fire. That's intentional (different deficits) but a low-volume + no-long-run athlete gets double-penalised. Doesn't model long-run pace; future tier could weight by pace stratification. The 0.70 qualifying bar is a single threshold (a 69%-of-threshold run earns nothing) rather than a graded contribution — chosen for legibility over a continuous credit curve. **Triathlon is not mirrored**: tri durability uses a structurally different model (`durability-cap.ts`, late-third pace-decay + longest-session shortfall per discipline), so accumulated-exposure softening was scoped to running only; mirror it there if the tri cap is later reworked.
 
 ### Key files
 
 - `src/calculations/course-factors-running.ts` — heat acclim + wind in `applyRunningCourseFactors`; `computeRunTrainingTempC` helper.
 - `src/constants/triathlon-course-factors.ts` — `WIND_EXPOSURE_RUN_MULTIPLIER`, `RUN_HEAT_ACCLIM_MAX_DISCOUNT`, `RUN_HEAT_ACCLIM_RAMP_GAP_C`, expanded `RUNNING_FACTOR_SOURCES`.
 - `src/calculations/run-calibration.ts` — `computeRunCalibration`, `applyRunCalibrationBias`.
-- `src/calculations/run-durability.ts` — `LONG_RUN_THRESHOLD_SEC`, `LONG_RUN_MAX_PENALTY`, `applyLongRunCap`, `getLongestRunSec`.
+- `src/calculations/run-durability.ts` — `LONG_RUN_THRESHOLD_SEC`, `LONG_RUN_MAX_PENALTY`, `LONG_RUN_QUALIFYING_FRACTION`, `LONG_RUN_CONSISTENCY_TARGET`, `applyLongRunCap`, `getLongestRunSec`, `getRunDurationsSec`, `countQualifyingLongRuns`, `getQualifyingLongRunCount`. Tests: `run-durability.test.ts`.
 - `src/calculations/blended-fitness.ts` — applies calibration + durability inside `refreshBlendedFitness` after the blend.
 - `src/types/state.ts` — `runCalibration`, `runDurability` state fields; `forecastCourseFactors.kind` widened to include 'wind' | 'heat-acclim'.
 - `src/ui/race-forecast-fingerprint.ts` — Durability (always-on) + Heat (conditional) + Calibration (conditional) chip builders.

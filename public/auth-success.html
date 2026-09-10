@@ -59,14 +59,36 @@
 </head>
 <body>
   <div class="card">
-    <div class="icon">
+    <div class="icon" id="icon">
       <svg width="24" height="24" fill="none" stroke="#16a34a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
         <path d="M20 6L9 17l-5-5"/>
       </svg>
     </div>
-    <h1>Email confirmed</h1>
-    <p>Your account is ready. Open the Mosaic app on your iPhone to sign in and pick up your training.</p>
+    <h1 id="title">Email confirmed</h1>
+    <p id="message">Your account is ready. Open the Mosaic app on your iPhone to sign in and pick up your training.</p>
     <p class="wordmark">MOSAIC</p>
   </div>
+  <script>
+    // Supabase appends error details to the hash when a link fails to verify:
+    //   #error=access_denied&error_code=otp_expired&error_description=...
+    // Confirmation links are single-use, so the most common failure is a
+    // second click on a link that already worked. Without this branch the
+    // page shows the green tick to users whose click just failed.
+    (function () {
+      var params = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (!params.get('error')) return;
+      var expired = params.get('error_code') === 'otp_expired';
+      document.getElementById('icon').style.background = '#f5f5f4';
+      document.getElementById('icon').innerHTML =
+        '<svg width="24" height="24" fill="none" stroke="#78716c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
+        '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+      document.getElementById('title').textContent = expired
+        ? 'This link has expired or was already used'
+        : 'Something went wrong';
+      document.getElementById('message').textContent = expired
+        ? 'Confirmation links work once. If you clicked the link a second time, your email is most likely already confirmed. Open the Mosaic app and sign in. If signing in fails, request a new link from the sign-up screen.'
+        : 'The link could not be verified. Open the Mosaic app and try signing in, or request a new link from the sign-up screen.';
+    })();
+  </script>
 </body>
 </html>

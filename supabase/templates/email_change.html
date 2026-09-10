@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirm your Mosaic email address</title>
+</head>
+<body style="margin:0; padding:0; background:#f9f9f7;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; font-size:1px; line-height:1px; color:#f9f9f7;">
+    Confirm this address to link it to your Mosaic account.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f9f9f7; padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px; background:#ffffff; border-radius:20px; padding:40px 36px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+          <tr>
+            <td align="center" style="padding-bottom:12px;">
+              <h1 style="margin:0; font-size:20px; line-height:1.3; font-weight:600; letter-spacing:0.01em; color:#1a1a1a;">
+                Confirm your email
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding-bottom:28px;">
+              <!--
+                Deliberately generic. This template covers two cases: a guest
+                account being upgraded to email/password (no previous address
+                exists) and a real address change. Copy that names an "old"
+                address reads as nonsense in the first case, which is the
+                common one via save-account-overlay.ts.
+              -->
+              <p style="margin:0; font-size:15px; line-height:1.6; color:#555555;">
+                Follow the link below to confirm this address for your Mosaic account. Your training history stays attached. The link works once and expires in 24 hours.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding-bottom:28px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" bgcolor="#1a1a1a" style="border-radius:12px;">
+                    <a href="{{ .ConfirmationURL }}"
+                       style="display:inline-block; padding:14px 32px; font-size:15px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:12px;">
+                      Confirm email address
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding-bottom:8px;">
+              <p style="margin:0; font-size:13px; line-height:1.6; color:#888888;">
+                If the button does not work, paste this into your browser:
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center">
+              <p style="margin:0; font-size:12px; line-height:1.5; word-break:break-all;">
+                <a href="{{ .ConfirmationURL }}" style="color:#888888; text-decoration:underline;">{{ .ConfirmationURL }}</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding-top:32px; border-top:1px solid #eeeeee;">
+              <p style="margin:32px 0 0; font-size:12px; line-height:1.6; color:#999999;">
+                This address was entered on a Mosaic account. If that was not you, ignore this email and nothing will change.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding-top:32px;">
+              <p style="margin:0; font-size:11px; font-weight:500; letter-spacing:0.22em; text-transform:uppercase; color:#aaaaaa;">
+                Mosaic
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

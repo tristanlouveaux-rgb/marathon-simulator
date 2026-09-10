@@ -43,8 +43,9 @@ function roundTo(n: number | null | undefined, decimals: number): number | null 
   return Math.round(n * factor) / factor;
 }
 
-/** Collect recent activities across the last N weeks, newest first */
-function collectRecentActivities(
+/** Collect recent activities across the last N weeks, newest first.
+ *  Exported for the Strava-exclusion anchor test. */
+export function collectRecentActivities(
   wks: SimulatorState['wks'],
   currentWeekIdx: number,
   weeksBack: number,
@@ -55,7 +56,11 @@ function collectRecentActivities(
   for (let i = currentWeekIdx; i >= start; i--) {
     const wk = wks[i];
     if (!wk?.garminActuals) continue;
+    // Strava API Agreement §5.3 forbids sending Strava-sourced data to any AI
+    // service, even with user consent. Only Garmin/Apple-sourced actuals may
+    // reach the coach context. support.html states this publicly.
     const acts = Object.values(wk.garminActuals)
+      .filter(a => !a.garminId?.startsWith('strava-'))
       .sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''))
       .slice(0, maxPerWeek);
     for (const act of acts) {

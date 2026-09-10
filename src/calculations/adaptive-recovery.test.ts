@@ -32,7 +32,11 @@ import type {
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
-function isoOffset(daysFromToday: number, today = new Date('2026-05-01T12:00:00')): string {
+// Anchored to the real clock, not a fixed date. `pruneImpactLog` and
+// `backfillHistoricalImpacts` both cut against `todayIso()` with a 90-day window
+// (IMPACT_LOG_MAX_DAYS) and neither takes an injectable clock, so a hardcoded
+// anchor silently ages past the cutoff and every fixture is pruned on insert.
+function isoOffset(daysFromToday: number, today = new Date()): string {
   const d = new Date(today);
   d.setDate(d.getDate() + daysFromToday);
   return d.toISOString().split('T')[0];
@@ -282,7 +286,7 @@ describe('fitKUser', () => {
   });
 
   it('typical recoverer (observed == expected for the intensity) sits at k≈8', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     // observed 24h, easy band (expected 24h) → index 1.0. observed=24 is always a
     // clean reading (no intervening days), so consecutive dates are fine.
@@ -299,7 +303,7 @@ describe('fitKUser', () => {
   });
 
   it('fast recoverer (recovers quicker than the intensity expectation) settles below 8', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     // moderate band (expected 36h) but back in 24h → index 0.667 → k ≈ 5.33.
     for (let i = 1; i <= 20; i++) {
@@ -315,7 +319,7 @@ describe('fitKUser', () => {
   });
 
   it('slow recoverer (slower than the intensity expectation) settles above 8', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     // easy band (expected 24h) but took 48h → index 2. Space 2 days so the 48h
     // window (windowDays=2, checks gap<2 i.e. gap=1) sees no intervening session.
@@ -330,7 +334,7 @@ describe('fitKUser', () => {
   });
 
   it('clamps the result to [K_USER_MIN, K_USER_MAX]', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     // hard band (expected 54h) but back in 24h → index 0.44 → 8×0.44 = 3.5 → floor 5.
     for (let i = 1; i <= 30; i++) {
@@ -346,7 +350,10 @@ describe('fitKUser', () => {
   it('log-space aggregation is robust to right-skew (a few very slow sessions do not pin k)', () => {
     // 18 typical (index 1) + 2 extreme-slow outliers (index 4). A linear mean would
     // be dragged up; the log-space mean keeps k well below the ceiling.
-    const today = new Date('2026-05-01T12:00:00');
+    // Anchor to the real clock: logSessionImpact prunes against the system date
+    // (IMPACT_LOG_MAX_DAYS, no injectable override), so a fixed past anchor would
+    // age the -40/-46d outliers past the 90-day cutoff and drop the entire signal.
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 18; i++) {
       logSessionImpact(s, makeEntry({
@@ -363,7 +370,7 @@ describe('fitKUser', () => {
   });
 
   it('historical evidence is weighted at 0.7 — pure historical pulls less than pure live', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const sLive: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     const sHist: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 20; i++) {
@@ -378,7 +385,7 @@ describe('fitKUser', () => {
   });
 
   it('confidence reaches high at 30 clean readings', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 30; i++) {
       logSessionImpact(s, makeEntry({
@@ -392,7 +399,7 @@ describe('fitKUser', () => {
   });
 
   it('excludes sessions with no intensity band (cannot place them on the recovery scale)', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 20; i++) {
       logSessionImpact(s, makeEntry({
@@ -408,7 +415,7 @@ describe('fitKUser', () => {
   it('a 24h recovery is always a clean reading, even on consecutive training days', () => {
     // Morning measurement: the next day's session happens after that morning's
     // reading, so it cannot contaminate a same-day-resolved (24h) recovery.
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 16; i++) {
       logSessionImpact(s, makeEntry({
@@ -424,7 +431,7 @@ describe('fitKUser', () => {
     // Daily training, each session "recovered" only at 48h because the next day's
     // session kept markers down. The 48h window (gap<2 → gap=1) catches the next
     // day's session → confounded. Only the most recent has no later session.
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 30; i++) {
       logSessionImpact(s, makeEntry({
@@ -439,7 +446,7 @@ describe('fitKUser', () => {
   });
 
   it('keeps a clean-window slow recovery as genuine evidence', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     // 72h recovery (windowDays=3, checks gap<3) with nothing within 2 days.
     logSessionImpact(s, makeEntry({
@@ -452,7 +459,7 @@ describe('fitKUser', () => {
   });
 
   it('records a history entry with date / k / n on update', () => {
-    const today = new Date('2026-05-01T12:00:00');
+    const today = new Date();
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'adaptiveRecovery'> = {};
     for (let i = 1; i <= 16; i++) {
       logSessionImpact(s, makeEntry({
@@ -463,7 +470,7 @@ describe('fitKUser', () => {
     const ar = fitKUser(s, { now: today });
     expect(ar.history).toBeDefined();
     expect(ar.history![ar.history!.length - 1].n).toBe(16);
-    expect(ar.history![ar.history!.length - 1].date).toBe('2026-05-01');
+    expect(ar.history![ar.history!.length - 1].date).toBe(isoOffset(0));
   });
 });
 
@@ -540,7 +547,7 @@ describe('defaultAdaptiveRecovery', () => {
 
 describe('backfillHistoricalImpacts', () => {
   it('skips sessions with no usable post-session physiology', () => {
-    const sessionDate = '2026-04-01';
+    const sessionDate = isoOffset(-30);
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'physiologyHistory' | 'adaptiveRecovery'> = {
       physiologyHistory: [],  // no data at all
     };
@@ -554,7 +561,7 @@ describe('backfillHistoricalImpacts', () => {
   });
 
   it('adds a closed-out historical entry with the right weight and predicted', () => {
-    const sessionDate = '2026-04-01';
+    const sessionDate = isoOffset(-30);
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'physiologyHistory' | 'adaptiveRecovery'> = {
       physiologyHistory: buildPhysiology(sessionDate, [
         { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 },

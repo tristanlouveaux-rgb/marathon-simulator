@@ -301,7 +301,17 @@ function getInjuryRiskHTML(s: SimulatorState): string {
     }
     if (sentences.length > 0) triContext = ' ' + sentences.join(' ');
   }
-  const body = rawBody + triContext;
+  // Accumulated time-on-feet: sparse long-run exposure raises connective-tissue
+  // injury risk independent of the ACWR ratio. Running mode only, and only once
+  // there is enough data to compute a load ratio at all.
+  const dur = s.runDurability;
+  const consistencyNote = (s.eventType !== 'triathlon'
+    && acwr.ratio > 0
+    && dur != null
+    && (dur.qualifyingLongRunCount ?? 0) < (dur.consistencyTarget ?? 8) / 2)
+    ? ` Long-run consistency is low: ${dur.qualifyingLongRunCount} of ${dur.consistencyTarget} in the last 12 weeks. Connective-tissue loading sits below build norms, so raise long-run duration gradually.`
+    : '';
+  const body = rawBody + triContext + consistencyNote;
   const durabilityColor = durability?.level === 'high' ? '#EF4444' : '#F59E0B';
   const durabilityCard = durability ? `
     <div class="ir-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">

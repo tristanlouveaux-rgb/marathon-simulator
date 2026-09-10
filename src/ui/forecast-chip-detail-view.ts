@@ -1207,6 +1207,20 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
   const tone = capped ? '#C48A3A' : '#16A34A';
   const penalty = Math.max(0, (d.multiplier - 1) * 100);
 
+  // Accumulated time-on-feet: repeated long-run exposure, not just the single
+  // peak. A long run qualifies at 70% of the threshold; regular ones soften the
+  // peak-shortfall penalty (Pfitzinger: a long run every 7-10 days through a build).
+  const cnt = d.qualifyingLongRunCount ?? 0;
+  const tgt = d.consistencyTarget ?? 8;
+  const creditPct = Math.round((d.consistencyCredit ?? 0) * 100);
+  const qualMin = Math.round((d.thresholdSec * 0.70) / 60);
+  const consistencyPct = Math.min(100, (cnt / Math.max(1, tgt)) * 100);
+  const consistencyLine = capped
+    ? creditPct > 0
+      ? `Regular long runs are offsetting the shortfall. ${cnt} of ${tgt} logged in the window, reducing today's penalty by ${creditPct}%.`
+      : `No long runs over ${qualMin} min in the window. One every 10 days builds durability a single peak run cannot.`
+    : `${cnt} of ${tgt} long runs logged. Consistent time on feet maintains durability between peak efforts.`;
+
   const banner = capped ? `
     <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(196,138,58,0.10);font-size:13px;color:#6B5B2E;line-height:1.5">
       Today's prediction has the run capped by recent durability. The projection assumes the plan delivers longer runs by race day, so the race-day forecast does not carry this penalty.
@@ -1233,13 +1247,24 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
           <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${tone};border-radius:3px"></div>
         </div>
         <div style="font-size:11px;color:${TEXT_L}">${capped ? `${(100 - pct).toFixed(0)}% shortfall from threshold` : 'Threshold met. No penalty'}</div>
+        <div style="border-top:1px solid rgba(15,23,42,0.07);margin-top:12px;padding-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+            <div style="font-size:12px;color:${TEXT_S};font-weight:500">Long runs (time on feet)</div>
+            <div style="font-size:13px;font-weight:600;color:${TEXT_M};font-variant-numeric:tabular-nums">${cnt} of ${tgt}</div>
+          </div>
+          <div style="position:relative;height:6px;border-radius:3px;background:rgba(15,23,42,0.07);overflow:hidden;margin-bottom:8px">
+            <div style="position:absolute;left:0;top:0;height:100%;width:${consistencyPct.toFixed(1)}%;background:${tone};border-radius:3px"></div>
+          </div>
+          <div style="font-size:11px;color:${TEXT_L};line-height:1.5">${consistencyLine}</div>
+        </div>
       </div>
       <div style="${CARD};margin-bottom:14px">
         ${statRow('Penalty applied today', penalty > 0 ? `+${penalty.toFixed(2)}%` : 'None')}
+        ${statRow('Long runs logged (12 wks)', `${cnt} of ${tgt}`)}
         ${statRow('Applied to race-day forecast', 'No. projection assumes plan delivers long runs')}
         ${statRow('Look-back window', '12 weeks')}
       </div>
-      ${captionCard('Durability is an asymmetric cap: it can only slow you down, never speed you up. Once your longest recent run reaches the distance-specific threshold, the multiplier is 1.0 and durability contributes nothing further to today\'s prediction. Beyond threshold, additional long-session volume shows up in <strong>Capacity</strong> (VDOT) and <strong>Training</strong> (weekly km), not here. Calibrated against Karp 2007, Daniels 2014, Pfitzinger 2009. see SCIENCE_LOG §H-run.')}
+      ${captionCard('Durability is an asymmetric cap: it can only slow you down, never speed you up. Two things lift it: a single long run reaching the distance threshold, or regular time on feet (a long run over ' + qualMin + ' min roughly every 10 days). Repeated long runs build the same connective-tissue durability a peak run does, so they buy down the shortfall penalty. Beyond threshold, additional long-session volume shows up in <strong>Capacity</strong> (VDOT) and <strong>Training</strong> (weekly km), not here. Calibrated against Karp 2007, Daniels 2014, Pfitzinger 2009. see SCIENCE_LOG §H-run.')}
     `,
   };
 }

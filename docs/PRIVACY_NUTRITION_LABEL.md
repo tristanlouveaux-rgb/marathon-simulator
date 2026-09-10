@@ -21,7 +21,7 @@ For every data category Apple lists, we answer four questions:
 
 | Type | Collected? | Linked to user? | Used for tracking? | Purpose |
 |---|---|---|---|---|
-| Name | **No** | — | — | — |
+| Name | **Yes** (onboarding asks for first name; stored in the state snapshot server-side) | Yes | No | App Functionality (personalises plan headers) |
 | Email Address | **Yes** (only if user creates an email account; anonymous accounts skip this) | Yes | No | App Functionality (authentication) |
 | Phone Number | No | — | — | — |
 | Physical Address | No | — | — | — |
@@ -77,7 +77,7 @@ For every data category Apple lists, we answer four questions:
 
 | Type | Collected? | Linked to user? | Used for tracking? | Purpose |
 |---|---|---|---|---|
-| Emails or Text Messages | **Yes** (AI Coach chat messages — sent to Anthropic to generate responses) | Yes | No | App Functionality |
+| Emails or Text Messages | **No for v1** (AI Coach is disabled — `AI_COACH_ENABLED=false`, no chat surface exists in the binary; flip to Yes → Linked → App Functionality when the coach ships) | — | — | — |
 | Photos or Videos | No | — | — | — |
 | Audio Data | No | — | — | — |
 | Gameplay Content | No | — | — | — |
@@ -159,16 +159,18 @@ If App Store Connect asks for sub-processor disclosure (not currently a labelled
 
 When entering the label in App Store Connect:
 
-1. **Email Address** → Yes → Linked → No tracking → App Functionality.
-2. **Health & Fitness — Health** → Yes → Linked → No tracking → App Functionality.
-3. **Health & Fitness — Fitness** → Yes → Linked → No tracking → App Functionality.
-4. **Location — Precise Location** → Yes → Linked → No tracking → App Functionality.
-5. **User Content — Emails or Text Messages** → Yes → Linked → No tracking → App Functionality (AI Coach messages).
+1. **Contact Info — Name** → Yes → Linked → No tracking → App Functionality (first name from onboarding).
+2. **Contact Info — Email Address** → Yes → Linked → No tracking → App Functionality.
+3. **Health & Fitness — Health** → Yes → Linked → No tracking → App Functionality.
+4. **Health & Fitness — Fitness** → Yes → Linked → No tracking → App Functionality.
+5. **Location — Precise Location** → Yes → Linked → No tracking → App Functionality.
 6. **User Content — Customer Support** → Yes → Linked → No tracking → App Functionality.
 7. **User Content — Other User Content** → Yes → Linked → No tracking → App Functionality (notes, RPE, check-ins).
 8. **Identifiers — User ID** → Yes → Linked → No tracking → App Functionality.
 9. **Diagnostics — Crash Data** → Yes → Not Linked → No tracking → App Functionality.
 10. **Diagnostics — Performance Data** → Yes → Not Linked → No tracking → App Functionality.
+
+(Emails or Text Messages stays **No** while `AI_COACH_ENABLED=false` — updated 2026-08-04.)
 
 Every other category: No.
 

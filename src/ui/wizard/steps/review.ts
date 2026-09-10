@@ -1453,7 +1453,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
             }
             return `
               ${renderSectionLabel('Recent training')}
-              ${showRunVolume ? renderVolumeRow(weeklyKm, unitPref, activityCount, volumeMandatory) : ''}
+              ${showRunVolume ? renderVolumeRow(weeklyKm, unitPref, activityCount, volumeMandatory, state.trainingMode === 'triathlon') : ''}
               ${showBikeVolume ? renderDisciplineVolumeRow('bike', cachedWeeklyBikeKm!, unitPref) : ''}
               ${showSwimVolume ? renderDisciplineVolumeRow('swim', cachedWeeklySwimKm!, unitPref) : ''}
             `;
@@ -1704,7 +1704,12 @@ function renderDisciplineVolumeRow(
   `;
 }
 
-function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount: number, mandatory = false): string {
+function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount: number, mandatory = false, isTriathlon = false): string {
+  // In triathlon mode this row sits next to "Bike FTP" / "Swim CSS", so a bare
+  // "Weekly volume" reads as ambiguous (total? running?). Disambiguate to
+  // "Weekly running volume" there, matching the bike/swim discipline rows and
+  // the mandatory slider below. Running mode keeps the shorter label.
+  const volLabel = isTriathlon ? 'Weekly running volume' : 'Weekly volume';
   // No-data plan-safety mandate: a glass slider the user MUST move before Build.
   // No pre-filled number (the readout stays "Drag to set" until first touch) so
   // we never anchor the estimate. On input it commits to detectedWeeklyKm +
@@ -1733,7 +1738,7 @@ function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount:
       <div class="r-row shadow-ap editing" data-row="volume">
         <div class="r-row-icon">${ICON_VOLUME}</div>
         <div class="r-row-body">
-          <p class="r-row-label">Weekly volume</p>
+          <p class="r-row-label">${volLabel}</p>
           <div class="r-edit-row">
             <input id="r-volume-input" class="r-edit-input" type="number" inputmode="decimal" min="0" step="1" value="${raw}">
             <span class="r-edit-unit">${unitLabel}</span>
@@ -1756,7 +1761,7 @@ function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount:
     <button class="r-row shadow-ap" data-row="volume">
       <div class="r-row-icon">${ICON_VOLUME}</div>
       <div class="r-row-body">
-        <p class="r-row-label">Weekly volume</p>
+        <p class="r-row-label">${volLabel}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${runsNote}</p>
       </div>

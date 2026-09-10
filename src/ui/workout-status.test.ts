@@ -290,10 +290,17 @@ describe('dropPreOnboardSessions — reduced partial first week', () => {
     expect(kept).toHaveLength(7);
   });
 
-  it('no-op for any week other than the current one', () => {
-    // Viewing week 1 while current week is 2: pre-onboard filtering only applies
-    // to the live week, so past weeks render exactly as they happened.
+  it('still drops pre-onboard days when the onboarding week has rolled into the past', () => {
+    // Viewing week 1 (Wed onboard) while current week is 2: a pre-onboard day was
+    // never schedulable, so it must not resurface as "Missed" once week 1 is past.
     const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 1, 2, '2026-06-03');
+    expect(kept.map(w => w.dayOfWeek)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it('no-op for a non-onboarding week regardless of current week', () => {
+    // Week 2 (start 06-08) with a Wed-of-week-1 onboard: created predates week 2,
+    // so firstTrackedDow is 0 and the whole week is kept.
+    const kept = dropPreOnboardSessions(fullWeek, '2026-06-01', 2, 3, '2026-06-03');
     expect(kept).toHaveLength(7);
   });
 

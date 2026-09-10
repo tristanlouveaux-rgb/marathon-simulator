@@ -1,3 +1,29 @@
+# ---------------------------------------------------------------------------
+# Auth email templates.
+#
+# WARNING: these blocks apply to LOCAL development only. The hosted project
+# does NOT pick them up from here. Push the same files to production with
+# `npm run push:auth-emails` (Management API), which touches only the mailer
+# fields. Do not run `supabase config push` to sync these — this file does not
+# mirror every remote auth setting, so a push can reset the ones it omits.
+#
+# Templates live in supabase/templates/ and are the checked-in source of truth.
+# ---------------------------------------------------------------------------
+
+[auth.email.template.confirmation]
+subject = "Confirm your Mosaic account"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Reset your Mosaic password"
+content_path = "./supabase/templates/recovery.html"
+
+# Fired by supabase.auth.updateUser({ email }) — the guest-to-account upgrade
+# in save-account-overlay.ts and auth-view.ts, not just a true address change.
+[auth.email.template.email_change]
+subject = "Confirm your Mosaic email address"
+content_path = "./supabase/templates/email_change.html"
+
 [functions.garmin-auth-start]
 verify_jwt = false
 

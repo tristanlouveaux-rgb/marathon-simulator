@@ -16,6 +16,7 @@ Last reviewed against changelog: 2026-06-16 (covers work through the 2026-06-15 
 - [ ] **Apple "Connecting…" deadlock**: tap Apple tile, switch to Garmin hub, re-tap "Connect Apple Health" quickly → no permanent spinner (20s timeout + in-flight guard). `appleHealthSync.ts:112`
 - [ ] **HealthKit permission sheet appears at all** (an invalid type previously suppressed it for everyone).
 - [ ] **Multi-watch sleep**: Garmin/Coros/Polar via Apple Health get real sleep stages, not hard-capped at 55/100.
+- [ ] **Manual "Sync" pulls full history** (Account → Apple Watch → Sync): on a device with months of HealthKit workouts but sparse/empty ingested activity, one tap backfills the full window — rides, swims, runs — and bike/swim/run benchmarks re-derive from real activity (not the manual past-race anchor / watch VO2max). Diag line should read `pulled=N` with N > 0 and `first=true`. The fix for "had to reset to recover my training". `appleHealthSync.ts forceFullHistory`, `account-view.ts btn-sync-apple`.
 
 ### Native OAuth (needs a fresh archive — plugin change)
 - [ ] **Strava connect** via `ASWebAuthenticationSession` returns cleanly, app stays alive, no `invalid_state` JSON page. `oauth-native.ts`

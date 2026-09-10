@@ -47,6 +47,20 @@ export interface RunDurabilityResult {
   limitingFactor: 'long_run_shortfall' | null;
   /** Fraction of the threshold the user has met (0–1+). UI progress bar reads this. */
   metFraction: number;
+  /**
+   * Count of qualifying long runs (≥ `LONG_RUN_QUALIFYING_FRACTION` of the
+   * distance threshold) in the look-back window. Accumulated time-on-feet:
+   * repeated long-run exposure, not just the single peak.
+   */
+  qualifyingLongRunCount: number;
+  /** Target count for full consistency credit (`LONG_RUN_CONSISTENCY_TARGET`). */
+  consistencyTarget: number;
+  /**
+   * Consistency credit (0–1) = `min(1, qualifyingLongRunCount / target)`. Softens
+   * the peak-shortfall penalty: regular long runs build the same connective-tissue
+   * durability a single peak run does, so they buy down the shortfall.
+   */
+  consistencyCredit: number;
 }
 
 /**
@@ -74,24 +88,62 @@ export const LONG_RUN_MAX_PENALTY: Record<RaceDistance, number> = {
 };
 
 /**
+ * A run counts toward accumulated time-on-feet ("a long run") when its duration
+ * reaches this fraction of the distance threshold. 0.70 keeps the bar high enough
+ * that only genuine long efforts qualify — and, because the longest run IS the
+ * peak, no run can qualify unless the peak itself is already ≥ 70% of threshold.
+ * That is what makes the softening self-consistent: a runner whose peak is short
+ * earns zero consistency credit, so a sparse short-peak athlete keeps the full
+ * penalty (see `applyLongRunCap`).
+ */
+export const LONG_RUN_QUALIFYING_FRACTION = 0.70;
+
+/**
+ * Qualifying long runs needed for full consistency credit, over the 12-week
+ * window. ~8 ≈ one every 10 days — Pfitzinger & Douglas (2009) "Advanced
+ * Marathoning" prescribe a long run every 7–10 days through a build. This is the
+ * accumulated-exposure analogue of the single-peak threshold above.
+ */
+export const LONG_RUN_CONSISTENCY_TARGET = 8;
+
+/**
  * Compute the durability penalty given the longest recent run and race
  * distance. Linear shortfall ramp capped at the per-distance maximum.
+ *
+ * `qualifyingLongRunCount` is accumulated time-on-feet: the number of long runs
+ * (≥ `LONG_RUN_QUALIFYING_FRACTION` of threshold) in the window. It SOFTENS the
+ * peak-shortfall penalty without ever increasing it:
+ *
+ *   penalty = peakShortfall × maxPenalty × (1 − consistencyCredit)
+ *
+ * Three regimes (these are the guarantees the model promises):
+ *   - peak run ≥ threshold      → no penalty (unchanged; softening is moot).
+ *   - peak short BUT many longs → penalty reduced toward zero as credit → 1.
+ *   - peak short AND sparse     → full penalty (count is 0 because no run can
+ *                                 qualify when the peak itself is below the bar).
  */
 export function applyLongRunCap(
   longestRunSec: number,
   distance: RaceDistance,
+  qualifyingLongRunCount: number = 0,
 ): RunDurabilityResult {
   const thresholdSec = LONG_RUN_THRESHOLD_SEC[distance];
   const maxPenalty = LONG_RUN_MAX_PENALTY[distance];
+  const consistencyTarget = LONG_RUN_CONSISTENCY_TARGET;
+  const consistencyCredit = Math.min(1, Math.max(0, qualifyingLongRunCount) / consistencyTarget);
 
   if (longestRunSec <= 0) {
     // No long runs found. Apply maximum penalty (matches the volume-zero case).
+    // No run can qualify, so consistency credit is structurally zero here.
     return {
       longestRunSec: 0,
       thresholdSec,
       multiplier: 1 + maxPenalty,
       limitingFactor: 'long_run_shortfall',
       metFraction: 0,
+      qualifyingLongRunCount: 0,
+      consistencyTarget,
+      consistencyCredit: 0,
     };
   }
 
@@ -103,17 +155,25 @@ export function applyLongRunCap(
       multiplier: 1,
       limitingFactor: null,
       metFraction,
+      qualifyingLongRunCount,
+      consistencyTarget,
+      consistencyCredit,
     };
   }
 
   const shortfallRatio = 1 - metFraction; // 0 = met, 1 = no long runs at all
-  const penalty = maxPenalty * shortfallRatio;
+  const penalty = maxPenalty * shortfallRatio * (1 - consistencyCredit);
   return {
     longestRunSec,
     thresholdSec,
     multiplier: 1 + penalty,
-    limitingFactor: 'long_run_shortfall',
+    // Only flag as limiting while the softened penalty still bites. Full
+    // consistency credit zeroes the penalty → durability no longer the limiter.
+    limitingFactor: penalty > 0 ? 'long_run_shortfall' : null,
     metFraction,
+    qualifyingLongRunCount,
+    consistencyTarget,
+    consistencyCredit,
   };
 }
 
@@ -128,16 +188,21 @@ interface RunActual {
   durationSec?: number | null;
 }
 
-export function getLongestRunSec(
-  state: {
-    wks?: ReadonlyArray<{ garminActuals?: Record<string, RunActual> }> | null;
-    onboardingRunHistory?: ReadonlyArray<{ startTime?: string; durSec?: number }> | null;
-  },
-  weeks: number = 12,
-): number {
+type DurabilityState = {
+  wks?: ReadonlyArray<{ garminActuals?: Record<string, RunActual> }> | null;
+  onboardingRunHistory?: ReadonlyArray<{ startTime?: string; durSec?: number }> | null;
+};
+
+/**
+ * All run durations (seconds) in the look-back window — the single traversal
+ * that both `getLongestRunSec` (peak) and `getQualifyingLongRunCount`
+ * (accumulated exposure) derive from, so the two numbers can never disagree
+ * about which runs are in scope.
+ */
+export function getRunDurationsSec(state: DurabilityState, weeks: number = 12): number[] {
   const nowMs = Date.now();
   const lookbackMs = weeks * 7 * 24 * 3600 * 1000;
-  let max = 0;
+  const out: number[] = [];
 
   for (const wk of state.wks ?? []) {
     if (!wk?.garminActuals) continue;
@@ -146,7 +211,7 @@ export function getLongestRunSec(
       const t = a.activityType.toUpperCase();
       if (t !== 'RUNNING' && !t.includes('RUN')) continue;
       if (nowMs - Date.parse(a.startTime) > lookbackMs) continue;
-      if (a.durationSec > max) max = a.durationSec;
+      out.push(a.durationSec);
     }
   }
 
@@ -154,8 +219,47 @@ export function getLongestRunSec(
   for (const r of state.onboardingRunHistory ?? []) {
     if (!r?.durSec || !r.startTime) continue;
     if (nowMs - Date.parse(r.startTime) > lookbackMs) continue;
-    if (r.durSec > max) max = r.durSec;
+    out.push(r.durSec);
   }
 
+  return out;
+}
+
+/** Longest single run in the window (seconds). 0 when no runs found. */
+export function getLongestRunSec(state: DurabilityState, weeks: number = 12): number {
+  let max = 0;
+  for (const sec of getRunDurationsSec(state, weeks)) {
+    if (sec > max) max = sec;
+  }
   return max;
+}
+
+/**
+ * Count of qualifying long runs in a list of run durations — pure, for callers
+ * that already hold the durations array (e.g. the per-distance forecast loop,
+ * which collects once and counts per distance).
+ */
+export function countQualifyingLongRuns(
+  durationsSec: readonly number[],
+  distance: RaceDistance,
+): number {
+  const bar = LONG_RUN_QUALIFYING_FRACTION * LONG_RUN_THRESHOLD_SEC[distance];
+  let n = 0;
+  for (const sec of durationsSec) {
+    if (sec >= bar) n++;
+  }
+  return n;
+}
+
+/**
+ * Accumulated time-on-feet: how many long runs (≥ 70% of the distance threshold)
+ * the athlete has logged in the window. Reads from the same traversal as
+ * `getLongestRunSec` so peak and exposure stay in lock-step.
+ */
+export function getQualifyingLongRunCount(
+  state: DurabilityState,
+  distance: RaceDistance,
+  weeks: number = 12,
+): number {
+  return countQualifyingLongRuns(getRunDurationsSec(state, weeks), distance);
 }

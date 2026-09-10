@@ -3,11 +3,9 @@ import {
   computePlanAdherence,
   ADHERENCE_THRESHOLD,
   detectChronicLowAdherence,
-  suggestedRunsPerWeek,
   CHRONIC_ADHERENCE_WINDOW_WEEKS,
   CHRONIC_ADHERENCE_THRESHOLD_PCT,
 } from './plan-adherence';
-import type { PlanAdherenceResult } from './plan-adherence';
 import type { SimulatorState, Week, GarminActual } from '@/types';
 
 /** Minimal state factory — only fields needed for adherence calc */
@@ -364,39 +362,5 @@ describe('detectChronicLowAdherence', () => {
     expect(signal).not.toBeNull();
     expect(signal!.weeks).toBe(3);
     expect(signal!.pct).toBe(25);
-  });
-});
-
-describe('suggestedRunsPerWeek', () => {
-  const result = (over: Partial<PlanAdherenceResult>): PlanAdherenceResult => ({
-    pct: 50, totalPlanned: 12, totalCompleted: 6, weeksIncluded: 3, ...over,
-  });
-
-  it('returns the rounded demonstrated frequency when below current', () => {
-    // 6 completed over 3 weeks = 2.0/week, current 4 → suggest 2.
-    expect(suggestedRunsPerWeek(result({ totalCompleted: 6, weeksIncluded: 3 }), 4)).toBe(2);
-  });
-
-  it('rounds to nearest whole session', () => {
-    // 8 completed over 3 weeks = 2.67 → rounds to 3.
-    expect(suggestedRunsPerWeek(result({ totalCompleted: 8, weeksIncluded: 3 }), 5)).toBe(3);
-  });
-
-  it('floors at 1 run even when almost nothing was completed', () => {
-    expect(suggestedRunsPerWeek(result({ totalCompleted: 1, weeksIncluded: 3 }), 4)).toBe(1);
-  });
-
-  it('returns null when demonstrated frequency is not below current (nothing to do)', () => {
-    // 11 completed over 3 weeks ≈ 3.67 → rounds to 4, equal to current 4.
-    expect(suggestedRunsPerWeek(result({ totalCompleted: 11, weeksIncluded: 3 }), 4)).toBeNull();
-  });
-
-  it('returns null without a full window of data', () => {
-    expect(suggestedRunsPerWeek(result({ weeksIncluded: 2 }), 4)).toBeNull();
-  });
-
-  it('never suggests raising frequency', () => {
-    // 9 completed over 3 weeks = 3/week, current 2 → 3 is not < 2 → null.
-    expect(suggestedRunsPerWeek(result({ totalCompleted: 9, weeksIncluded: 3 }), 2)).toBeNull();
   });
 });

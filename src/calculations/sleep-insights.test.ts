@@ -3,6 +3,15 @@ import { mergeManualSleepHistory } from './sleep-insights';
 import { computeRecoveryScore } from './readiness';
 import type { PhysiologyDayEntry } from '@/types/state';
 
+/** ISO date `n` days before the real system clock. computeRecoveryScore gates on
+ * a >3-day staleness window (real Date.now(), no injectable override), so these
+ * fixtures must be date-relative or they age out and return hasData:false. */
+function isoDaysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
 describe('mergeManualSleepHistory', () => {
   it('folds manual recovery nights into physiology history, date-sorted', () => {
     const physio: PhysiologyDayEntry[] = [
@@ -52,9 +61,9 @@ describe('manual sleep reaches the recovery score for a no-watch user', () => {
   // so a manual-only user never cleared the 3-night floor for a real score.
   it('three manual bad nights produce a low recovery score', () => {
     const recovery = [
-      { date: '2026-06-13', sleepScore: 30, source: 'manual' },
-      { date: '2026-06-14', sleepScore: 28, source: 'manual' },
-      { date: '2026-06-15', sleepScore: 25, source: 'manual' },
+      { date: isoDaysAgo(2), sleepScore: 30, source: 'manual' },
+      { date: isoDaysAgo(1), sleepScore: 28, source: 'manual' },
+      { date: isoDaysAgo(0), sleepScore: 25, source: 'manual' },
     ];
     const merged = mergeManualSleepHistory([], recovery);
     const result = computeRecoveryScore(merged, { manualSleepScore: 25 });
@@ -66,17 +75,17 @@ describe('manual sleep reaches the recovery score for a no-watch user', () => {
   it('a good manual night scores higher than a bad one', () => {
     const bad = computeRecoveryScore(
       mergeManualSleepHistory([], [
-        { date: '2026-06-13', sleepScore: 30, source: 'manual' },
-        { date: '2026-06-14', sleepScore: 28, source: 'manual' },
-        { date: '2026-06-15', sleepScore: 25, source: 'manual' },
+        { date: isoDaysAgo(2), sleepScore: 30, source: 'manual' },
+        { date: isoDaysAgo(1), sleepScore: 28, source: 'manual' },
+        { date: isoDaysAgo(0), sleepScore: 25, source: 'manual' },
       ]),
       { manualSleepScore: 25 },
     );
     const good = computeRecoveryScore(
       mergeManualSleepHistory([], [
-        { date: '2026-06-13', sleepScore: 85, source: 'manual' },
-        { date: '2026-06-14', sleepScore: 88, source: 'manual' },
-        { date: '2026-06-15', sleepScore: 90, source: 'manual' },
+        { date: isoDaysAgo(2), sleepScore: 85, source: 'manual' },
+        { date: isoDaysAgo(1), sleepScore: 88, source: 'manual' },
+        { date: isoDaysAgo(0), sleepScore: 90, source: 'manual' },
       ]),
       { manualSleepScore: 90 },
     );

@@ -12,7 +12,7 @@ import {
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
 import { pbMedianVdot } from '@/calculations/physiological-vdot';
 import { computePeakWeeklyKm } from '@/workouts/plan_engine';
-import { applyLongRunCap, getLongestRunSec } from '@/calculations/run-durability';
+import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount } from '@/calculations/run-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
@@ -522,7 +522,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // mirrored: onboarding users have no logged races against THIS plan
     // yet, and the first refresh applies it regardless.
     const longestRunSec = getLongestRunSec(sCurrent, 12);
-    const durability = applyLongRunCap(longestRunSec, targetDistStr);
+    const durability = applyLongRunCap(longestRunSec, targetDistStr, getQualifyingLongRunCount(sCurrent, targetDistStr, 12));
     // The durability cap is a short-anchor-extrapolation penalty (e.g. a single
     // 5K Riegel-projected to a half with no endurance base). It must NOT push the
     // anchor slower than a time the athlete has actually run at the target

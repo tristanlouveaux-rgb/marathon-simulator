@@ -10,6 +10,10 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 > **2026-06-16 — Persona-QA sweep batch (ISSUE-288 → 296).** Surfaced by `/persona-qa` (all groups) after the triathlon distance/intensity build, then confirmed by a dedicated triage pass. All are **pre-existing and unrelated to the triathlon work** (that work was verified clean). Triage also **debunked these as false positives** (do NOT re-investigate): Tier-3 overload modal "never fires" (it fires from `activity-review.ts`, a separate path); "no home overload badge" (the readiness "Manage Load" label + daily-coach `stance: 'reduce'` cover it); "notify-once modals re-fire" (debrief is mitigated by ISSUE-273's forced-Continue; suggestion/coach intros are gated); HYROX holiday bridge-field loss (bridge mods are runtime-only, re-applied at render); "debrief Accept gates adaptation" (CTL re-anchor applies on rollover regardless); "VDOT not updated from race result" (intentional asymmetry, documented in `run-race-outcome.ts`).
 
+### ISSUE-316: Strava disconnect must purge stored Strava data within 30 days *(P1 — compliance, 2026-08-04, Strava application prep)* — OPEN
+
+The Strava API Policy §7.4 requires deleting a user's Strava data within 30 days of revocation, with written confirmation (§2.5). Both support pages now promise exactly that. But disconnect (`account-view.ts:2511`) only deletes the `strava_tokens` row; `strava-` prefixed rows in `garmin_activities` and in state survive. **Needed**: (1) purge of `strava-` rows (server + local state) on in-app disconnect, (2) handle Strava's deauthorization webhook for revocations made on strava.com, (3) confirmation email once the purge completes. Until built, fulfil manually when a disconnect happens. Related open question (flagged 2026-08-04, unresolved): §6.2's 7-day cache limit vs long-term storage of Strava activities — raise with developers@strava.com if pursuing Extended Access.
+
 ### ISSUE-315: New account on a used phone inherited the old account's plan *(P1, 2026-08-04, Tristan on device)* — ✅ fixed in code, pending device verification
 
 **Symptom.** Signed out of account 1, signed up account 2 on the same phone → account 2 showed all of account 1's data instead of the wizard.
@@ -661,11 +665,9 @@ The most prominent orange CTA on Home (`src/ui/main-view.ts:567`) fires `src/ui/
 
 **Fix**: Changed `TARGETED_DEVICE_FAMILY = "1,2";` → `TARGETED_DEVICE_FAMILY = "1";` in both Debug and Release configs (`project.pbxproj` lines 313 + 335). iPhone-only. Needs Xcode re-open to confirm the change loads cleanly in the project settings UI before archiving.
 
-### ISSUE-230: Reviewer demo account is placeholder text *(P0, 2026-05-18)*
+### ISSUE-230: Reviewer demo account is placeholder text *(P0, 2026-05-18)* — ✅ account live + web-verified 2026-08-04, pending device check
 
-`docs/APP_STORE_ASSETS.md:124` has literal `<email> / <password>` placeholders for App Store Connect sign-in info. The app is empty without 16w of Strava history, so reviewers without working credentials + pre-seeded data cannot evaluate any meaningful surface.
-
-**Fix decision (Tristan, 2026-05-18)**: Tristan creates `reviewer@mosaicrunning.run` account → logs in → connects a Strava account with ≥16 weeks of activities (his own or a dedicated reviewer Strava) → lets the data sync. Then pastes email + password + the note "This account has Strava pre-connected — allow 30 seconds after sign-in for activities to load" into App Store Connect review notes. Manual task for Tristan, not a code change.
+**Superseded plan**: no Strava connection needed. `review@mosaicrunning.run` exists on prod (user `9cbf8bb2`), email confirmed, and was seeded via the REVIEW code with the Sample Athlete marathon plan; the snapshot backs up to `user_plan_settings`, so a fresh-device sign-in restores the populated app directly (verified with Playwright on the current tree: storage wipe → sign-in → seeded Home, no wizard). Remaining: (1) confirm once on a physical device via TestFlight, (2) paste credentials + "account is pre-loaded; enter code REVIEW at the connect step only to re-seed" into App Store Connect review notes, replacing the stale simulator-mode wording. Password is with Tristan (set 2026-08-04).
 
 ### ISSUE-231: `AI_STRATEGY.md` Stripe path is 3.1.1-fatal if shipped to iOS *(P1, 2026-05-18)* ✅ DECIDED 2026-05-19 — Option A in flight via parallel paywall agent; v1 ships with allowlist as de facto gate
 

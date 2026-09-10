@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint:ui": "node scripts/ui-lint.mjs",
+    "push:auth-emails": "node scripts/push-auth-emails.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

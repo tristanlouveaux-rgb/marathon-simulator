@@ -26,6 +26,7 @@
  */
 
 import { matchAndAutoComplete, healMissingITrimp, type GarminActivityRow } from '@/calculations/activity-matcher';
+import { uploadAppleActivitiesToDB } from '@/data/appleActivityUpload';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { getPhysiologySource } from '@/data/sources';
@@ -215,6 +216,17 @@ const DIAG_BUILD_TAG = 'b25';
 let _lastPhysiologyDiag = '';
 export function getLastApplePhysiologyDiag(): string {
   return _lastPhysiologyDiag;
+}
+
+/** Last WORKOUT-sync outcome, captured for on-device debugging. TestFlight has
+ *  no console, so the Account → Apple Watch row surfaces this to tell apart the
+ *  two failure modes that both render as "0 sessions" on the tri Stats screen:
+ *  (1) HealthKit returned no workouts (permission off, or a genuinely empty
+ *  store) vs (2) workouts pulled fine but failed to reach the DB the tri
+ *  pipeline reads. Read via `getLastAppleWorkoutDiag`. */
+let _lastWorkoutSyncDiag = '';
+export function getLastAppleWorkoutDiag(): string {
+  return _lastWorkoutSyncDiag;
 }
 
 /** Permissions to request from the HealthExtras plugin on Apple Health connect.
@@ -514,8 +526,8 @@ const HR_SAMPLE_LIMIT = 6000;
  * mirroring `fetchStravaHistory` for the Apple-only path. Subsequent launches
  * use a 14-day incremental window to pick up new workouts cheaply.
  */
-export async function syncAppleHealth(): Promise<void> {
-  if (!isNativeiOS()) return;
+export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Promise<void> {
+  if (!isNativeiOS()) { _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} not-ios (web/Android — no HealthKit)`; return; }
   // Workouts now read through our HealthExtras plugin (HKWorkoutType query),
   // NOT capgo — capgo's auth crashes on iOS 26.x. This is the Garmin-via-Apple-
   // Health activity pipe (Garmin Connect → Apple Health → here), so Apple-only /
@@ -534,11 +546,28 @@ export async function syncAppleHealth(): Promise<void> {
       s.appleHistoryResyncDone = true;
       saveState();
     }
+    // Explicit full-history pull (user taps "Sync" in Account). The
+    // non-destructive equivalent of a reset: re-run the full backfill window
+    // plus the deep (>52w) pull so an existing user can recover months of
+    // training — rides, swims, runs — without wiping their plan or onboarding
+    // again. This is what makes the bike/swim/run benchmarks derive from real
+    // activity instead of falling back to the manual past-race anchor and the
+    // (cycling-inflated) watch VO2max. Dedup (the garminMatched "apple-<id>"
+    // key) makes re-pulling existing workouts a no-op, and aggregateAppleHistory
+    // recomputes weekly history from scratch, so forcing this is idempotent.
+    // Only the manual button passes it; automatic launch / foreground / observer
+    // syncs stay on the cheap 14-day incremental path.
+    if (opts?.forceFullHistory && s.appleHealthConnected) {
+      s.appleHistoryFetched = false;
+      s.appleDeepHistoryFetched = false;
+      saveState();
+    }
     const isFirstBackfill = !s.appleHistoryFetched;
     const daysBack = isFirstBackfill ? FIRST_BACKFILL_DAYS : INCREMENTAL_DAYS;
 
     const workouts = await fetchRecentWorkouts(daysBack);
     if (workouts.length === 0) {
+      _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=0 window=${daysBack}d first=${isFirstBackfill} — HealthKit returned no workouts (check Workouts permission, or no recorded activities)`;
       if (isFirstBackfill) {
         // Mark backfill complete even when empty so we don't re-run a 16w
         // query on every launch. User who installs without any historic
@@ -561,6 +590,15 @@ export async function syncAppleHealth(): Promise<void> {
 
     const rows = workouts.map(w => convertToActivityRow(w, enrichment.get(workoutKey(w))));
     const changed = matchAndAutoComplete(rows);
+
+    // Mirror Strava/Garmin: persist Apple workouts to the Supabase
+    // `garmin_activities` table. This is the ONLY path that feeds the triathlon
+    // fitness pipeline (`loadActivitiesFromDB` → per-discipline CTL /
+    // fitnessHistory / CSS / FTP / PBs), which never reads local garminActuals.
+    // Awaited so the tri-init DB-empty fallback (main.ts) sees the rows on the
+    // SAME launch when it calls this synchronously. Idempotent + dedup-safe.
+    const uploaded = await uploadAppleActivitiesToDB(rows);
+    _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=${rows.length} hrEnriched=${enrichment.size} uploaded=${uploaded} window=${daysBack}d first=${isFirstBackfill}`;
 
     // First-time backfill: aggregate weekly history so the plan engine has
     // CTL / weekly km / athlete tier seeds, matching the Strava backfill flow.
@@ -596,6 +634,7 @@ export async function syncAppleHealth(): Promise<void> {
     }
   } catch (err) {
     // Non-fatal. App continues without Apple Health sync
+    _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} threw: ${String((err as { message?: string })?.message ?? err).slice(0, 90)}`;
     console.warn('[AppleHealthSync] Sync failed:', err);
   }
 }
@@ -681,6 +720,9 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
       // (distance, duration, type) for PB surfacing and history rendering.
       const rows = workouts.map((w) => convertToActivityRow(w, undefined));
       matchAndAutoComplete(rows);
+      // Persist older history too, so the tri pipeline's "all" range and PB
+      // surfacing see races from beyond the 52-week backfill window.
+      await uploadAppleActivitiesToDB(rows);
       totalProcessed += rows.length;
 
       endDate = startDate;

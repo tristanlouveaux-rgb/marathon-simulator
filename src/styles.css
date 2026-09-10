@@ -403,6 +403,24 @@ input[type="radio"] {
     0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
+/* One-time attention pulse for the post-first-run Check-in coachmark.
+   Animates `outline` only (never box-shadow) so the .m-btn-glass float depth
+   is preserved. Opacity-of-outline, no transform — avoids iOS re-raster cost.
+   Finite (4 cycles, ~6s) then settles. */
+@keyframes m-checkin-pulse {
+  0%, 100% { outline-color: rgba(15, 23, 42, 0); }
+  50%      { outline-color: rgba(15, 23, 42, 0.22); }
+}
+.m-checkin-pulse {
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+  border-radius: 9999px;
+  animation: m-checkin-pulse 1.5s ease-in-out 4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-checkin-pulse { animation: none; }
+}
+
 .m-btn-link {
   background: none;
   border: none;

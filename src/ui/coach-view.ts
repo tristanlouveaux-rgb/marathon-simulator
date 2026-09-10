@@ -581,7 +581,7 @@ function showConsentModal(): void {
     <div style="background:white;border-radius:20px;padding:28px 24px;max-width:360px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,0.18)">
       <div style="font-size:17px;font-weight:700;color:${TEXT_M};margin-bottom:12px">Before we start</div>
       <div style="font-size:14px;color:${TEXT_S};line-height:1.6;margin-bottom:10px">Your recent training data (pacing, heart rate, readiness, this week's plan) is sent to <strong>Anthropic Claude (Haiku model)</strong> each session to generate coaching responses.</div>
-      <div style="font-size:14px;color:${TEXT_S};line-height:1.6;margin-bottom:10px">No name, email, GPS routes, or credentials are sent. Under our commercial agreement, Anthropic does not train on this data and does not retain it beyond the response.</div>
+      <div style="font-size:14px;color:${TEXT_S};line-height:1.6;margin-bottom:10px">Activities synced from Strava are excluded. No name, email, GPS routes, or credentials are sent. Under our commercial agreement, Anthropic does not train on this data and does not retain it beyond the response.</div>
       <div style="font-size:12px;color:${TEXT_S};line-height:1.55;margin-bottom:20px;opacity:0.8">Full details in the <a href="https://mosaicrunning.run/privacy.html" target="_blank" rel="noopener" style="color:${TEXT_M};text-decoration:underline">privacy policy</a>.</div>
       <button id="coach-consent-btn" style="width:100%;padding:13px;border-radius:12px;border:none;cursor:pointer;background:${TEXT_M};color:#fff;font-size:15px;font-weight:600">Got it, start coaching</button>
     </div>
