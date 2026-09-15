@@ -4,6 +4,17 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-15 — HYROX race projection silently dropped its adherence factor
+
+Found by a multi-agent audit and verified by hand before fixing.
+
+- **Defect**: `computeAdherence` in `race-projection.hyrox.ts` read `(wk.garminActuals ?? []).length`, but `garminActuals` is `Record<string, GarminActual>` (state.ts:616), not an array. `.length` was `undefined`, `Math.min(undefined, planned)` produced `NaN`, and the consumer's `adherence < 0.95` is `false` for `NaN`, so the up-to-4% adherence debit never applied. A `const wk: any` cast on the line above is what hid it from `tsc`.
+- **User-visible effect**: a HYROX athlete from week 4 on saw a race-day projection that never moved however many sessions they skipped. The factor multiplies every discipline and feeds the "Projected -X min by race day" line in `hyrox/forecast-view.ts`.
+- **Fix**: `Object.keys(wk.garminActuals ?? {}).length`, dropped the `any` cast (typecheck still clean without it), and guarded the consumer on `Number.isFinite` so a non-finite adherence can never silently skip the debit again.
+- **Tests**: added 4 cases to `race-projection.hyrox.test.ts`; there was previously no coverage of this factor at all. Confirmed 2 of the 4 genuinely fail when the bug is reintroduced. The other 2 pass either way (a NaN adherence also omits the factor) and are documentation, not guards.
+- Suite 3519 passed / 0 failed; typecheck and `lint:ui` clean.
+- **Build 29 is unaffected** and remains in review. This ships in build 30.
+
 ## 2026-09-10 — Fixed wall-clock rot in adaptive-recovery tests (15 failures)
 
 Found while gating a fresh App Store build: `src/calculations/adaptive-recovery.test.ts` had 15 failing tests. **Not a product regression** — `adaptive-recovery.ts` was unmodified.

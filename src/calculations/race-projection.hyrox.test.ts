@@ -176,3 +176,64 @@ describe('buildHyroxProjection', () => {
     expect(halfRange).toBeGreaterThan(p.totalSec * 0.06);
   });
 });
+
+// ─── Plan adherence factor ──────────────────────────────────────────────────
+// Regression cover for the Record-vs-array defect: `wk.garminActuals` is
+// Record<workoutId, GarminActual>, so the old `(wk.garminActuals ?? []).length`
+// read undefined, Math.min(undefined, planned) produced NaN, and the consumer's
+// `adherence < 0.95` was false for NaN — silently dropping the entire factor.
+// A `const wk: any` cast hid it from tsc. These tests assert the factor actually
+// fires, so a regression cannot pass by doing nothing.
+describe('buildHyroxProjection — plan adherence', () => {
+  /** N planned sessions, M of them matched to a synced actual. */
+  function week(planned: number, completed: number) {
+    const garminActuals: Record<string, any> = {};
+    for (let i = 0; i < completed; i++) {
+      garminActuals[`w${i}`] = { garminId: `strava-${i}`, durationSec: 1800 };
+    }
+    return {
+      triWorkouts: Array.from({ length: planned }, (_, i) => ({ id: `w${i}`, t: 'station' })),
+      garminActuals,
+    };
+  }
+
+  // currentIdx = w - 1 = 4; startIdx = max(0, 4 - 3) = 1 → weeks at index 1,2,3.
+  const atWeek5 = (wks: any[]) => ({ w: 5, wks });
+
+  it('fires a slowdown when half the planned sessions were completed', () => {
+    const s = buildState({}, atWeek5([week(4, 4), week(4, 2), week(4, 2), week(4, 2), week(4, 0)]));
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    const f = proj.factors.find(x => x.name === 'Plan adherence');
+    expect(f).toBeDefined();                    // NaN adherence would omit it entirely
+    expect(Number.isFinite(f!.deltaSec)).toBe(true);
+    expect(f!.deltaSec).toBeGreaterThan(0);     // missed sessions slow you down
+    expect(f!.explanation).toContain('50%');    // 6 of 12 across the lookback
+  });
+
+  it('adds no adherence factor when every planned session was completed', () => {
+    const s = buildState({}, atWeek5([week(3, 3), week(3, 3), week(3, 3), week(3, 3), week(3, 0)]));
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    expect(proj.factors.find(x => x.name === 'Plan adherence')).toBeUndefined();
+  });
+
+  it('applies the full penalty when nothing was completed', () => {
+    const s = buildState({}, atWeek5([week(3, 0), week(3, 0), week(3, 0), week(3, 0), week(3, 0)]));
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    const f = proj.factors.find(x => x.name === 'Plan adherence');
+    expect(f).toBeDefined();
+    expect(f!.explanation).toContain('0%');
+    // 4% of the predicted total, the documented ceiling for this factor.
+    expect(f!.deltaSec).toBeCloseTo(p.totalSec * 0.04, 0);
+  });
+
+  it('never yields a non-finite projected time', () => {
+    const s = buildState({}, atWeek5([week(4, 2), week(0, 0), week(4, 4), week(2, 1), week(4, 0)]));
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    expect(Number.isFinite(proj.projectedTotalSec)).toBe(true);
+    expect(Number.isFinite(proj.improvementSec)).toBe(true);
+  });
+});

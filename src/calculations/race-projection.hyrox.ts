@@ -180,10 +180,15 @@ function computeAdherence(state: SimulatorState, lookbackWeeks: number = 3): num
   let plannedCount = 0;
   let completedCount = 0;
   for (let i = startIdx; i < currentIdx; i++) {
-    const wk: any = wks[i];
+    const wk = wks[i];
     if (!wk) continue;
     const planned = (wk.triWorkouts ?? []).length;
-    const completed = (wk.garminActuals ?? []).length;
+    // garminActuals is Record<workoutId, GarminActual>, NOT an array. Reading
+    // `.length` off it yields undefined, which turns completedCount into NaN and
+    // silently disables the adherence factor downstream (NaN < 0.95 is false).
+    // The `const wk: any` cast that used to be on the line above is what hid
+    // this from tsc; keep it typed.
+    const completed = Object.keys(wk.garminActuals ?? {}).length;
     plannedCount += planned;
     completedCount += Math.min(completed, planned);
   }
@@ -352,7 +357,9 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
 
   // Factor: plan adherence.
   const adherence = computeAdherence(state);
-  if (adherence < 0.95) {
+  // Guard the factor on a finite value. A non-finite adherence must not silently
+  // skip the debit the way the Record-vs-array bug did.
+  if (Number.isFinite(adherence) && adherence < 0.95) {
     const adherencePct = (1 - adherence) * 0.04;  // 0..4% slowdown
     factorPct += adherencePct;
     factors.push({
