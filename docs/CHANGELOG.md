@@ -4,6 +4,18 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-24 — App Store approval: landing page switched from waitlist to download
+
+`Mosaic Training` is live on the App Store (app `6776750342`, v1.0, free, iOS 15.0+, released 2026-09-17). Listing: `https://apps.apple.com/app/id6776750342`
+
+Work was in the **`mosaic-landing`** repo (`~/Documents/mosaic-landing`), not this one. No app code changed.
+
+- The landing page had still been in pre-launch mode: "iOS — coming soon" in the hero and meta description, "Private beta in progress" in the closing CTA, and a waitlist email form in both places.
+- Replaced both waitlist forms with a `Download on the App Store` button (site-native black pill, `.btn-store`, an anchor variant of `.btn`), captioned "Free. Requires iOS 15 or later." Added an `App Store` link to the footer.
+- Removed the waitlist end-to-end: both forms, `api/waitlist.js` (the Supabase insert + Resend welcome email), the front-end `submitEmail`/`successHTML`/`wireForm` block, and the CSS that only it used.
+- Universal Links were explicitly **not** done — deliberate, since they need an associated-domains entitlement, an `apple-app-site-association` file, Capacitor deep-link handling, a provisioning-profile update and a new binary through review. Deferred, not forgotten.
+- **Outstanding**: the Supabase `waitlist` table still holds every pre-launch signup, and the welcome email promised them "one invite when your slot opens". They have not been told the app is live. Detail in `mosaic-landing/website.md`.
+
 ## 2026-09-15 — HYROX race projection silently dropped its adherence factor
 
 Found by a multi-agent audit and verified by hand before fixing.
