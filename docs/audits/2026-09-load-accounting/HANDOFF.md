@@ -28,8 +28,13 @@ All line numbers in those two reports refer to `main` at `c3bb015` unless stated
 
 Evidence that the laptop has newer work than GitHub:
 - The `c3bb015` commit message says the ISSUE-248 fix "was absent from both main and feat/revenue-cat-iap". No `feat/revenue-cat-iap` branch exists on GitHub.
-- The CHANGELOG on `main` describes functions that are not in `main`: `computeReadinessACWR`, `computeLiveSameSignalTSB`, `computeRenderedWorkouts`, `computeTodayStrainTSS`, `deriveAthleteTier`. Several of them are in `triathlon-mvp`.
-- `npx tsc --noEmit` fails on `main` because `@capacitor/haptics` and `@capacitor-community/keep-awake` are missing. `triathlon-mvp`'s `package.json` adds them.
+- The CHANGELOG on `main` describes functions that are not in `main`: `computeReadinessACWR`, `computeLiveSameSignalTSB`, `computeRenderedWorkouts`, `computeTodayStrainTSS`, `deriveAthleteTier`. All five are in `triathlon-mvp`.
+- `npx tsc --noEmit` fails on `main` with 3 errors:
+  - `@capacitor/haptics` is missing;
+  - `@capacitor-community/keep-awake` is missing;
+  - `GuidedCueLogEntry` is not exported from `@/types`.
+
+  `triathlon-mvp` adds both packages to `package.json` and defines the type at `src/types/gps.ts:64`.
 
 **Steps**
 1. Run these:
@@ -45,24 +50,29 @@ Evidence that the laptop has newer work than GitHub:
 
 **Already known about `triathlon-mvp`, checked 30 September:**
 - **iTRIMP unit bug, partly fixed.** Commit `4e6c5d4` (1 May) converts iTRIMP to TSS in `computeTierAPlus` using the fixed 15000 normaliser. It does not use the athlete's personal normaliser.
-- **Standalone cache select now includes `hr_drift`.** The heal writes are still `void supabase.from(...).update(...)`, and those never execute.
-- **Still present:** the 40/25/50/30 caps in `suggester.ts`, p95 max HR, the Apple `window.Capacitor.platform` check and `appleExerciseTime`, planned easy/long runs at `rpe: 3`, fast-finish long runs typed `progressive` while the scheduler finds the long run via `t === 'long'`, review candidates built without `workoutMods`, `resting_hr ?? 55` on the server, and 73 `toISOString().split('T')[0]` date keys.
+- **Standalone cache select now includes `hr_drift`.** The standalone heal writes (`index.ts:2489`, `:2517`) are still `void supabase.from(...).update(...)`, and those never execute. The backfill drift heal (`:1934`) is awaited.
+- **Still present:** the 40/25/50/30 caps in `suggester.ts` (:579, :659, :796, :824), p95 max HR, the Apple `window.Capacitor.platform` check and `appleExerciseTime`, planned easy/long runs at `rpe: 3`, fast-finish long runs typed `progressive` while the scheduler finds the long run via `t === 'long'`, review candidates built without `workoutMods`, and `resting_hr ?? 55` on the server.
+- **UTC date keys in non-test `src`:** 73 × `toISOString().split('T')[0]` plus 43 × `toISOString().slice(0, 10)`. There are 4 more in `supabase/functions`.
 - **ACWR 14-day guard gained an `archivedPlans` clause.** Re-check the zero-seed behaviour.
-- **Cut sizes still do not scale with work.** Probe on `triathlon-mvp`, cycling at 60 TSS/h against an 8 km easy, 10 km threshold, 8 km easy and 20 km long run:
+- **Cut sizes still do not scale with work.** Probe on `triathlon-mvp`:
+  - Setup: cycling at RPE 5 and 60 TSS/h (iTRIMP = TSS × 150); a Balanced marathon runner with easy pace 330 s/km, ACWR caution, no km floor.
+  - Week: 8 km easy, a plain 10 km threshold, 8 km easy, 20 km long. Easy and long runs at load intensity 30, threshold at 80 (`calculateWorkoutLoad`).
 
   | Ride | With HR, Reduce | No HR, Reduce |
   |---|---|---|
   | 20 min | −2.3 km | −3.2 km |
   | 60 min | −3.2 km | −3.2 km |
-  | 120 min | −3.2 km | −5.0 km |
-  | 240 min | −5.0 km | −3.2 km |
+  | 120 min | −3.2 km | −5.0 km + threshold stepped down |
+  | 240 min | −5.0 km + threshold stepped down | −3.2 km + threshold stepped down |
+
+  An independent re-run with slightly different assumptions reproduced the pattern, with some cells different; at 5:30/km, 240 min without HR gave −6.4 km. The conclusion holds either way: cuts stay at about 2–6 km whatever the ride length.
 
 ---
 
 ## 1. Decisions Tristan has made
 
 - **Max HR:** fix it now.
-- **HR histogram:** store a per-activity heart-rate histogram (seconds per bpm, under 1 KB). Approved in principle, "provided no foreseen issues". The foreseen issues, none blocking, are:
+- **HR histogram:** store a per-activity heart-rate histogram (seconds per bpm, about 0.3–1.3 KB as JSON; the largest probe histogram had 142 bins and was 1,249 bytes). Approved in principle, "provided no foreseen issues". The foreseen issues, none blocking, are:
   - time order is lost (drift and splits must be computed at ingest);
   - existing rows need one re-download each against Strava's app-wide rate limit;
   - Strava API terms on storing derived data should be checked.
@@ -92,7 +102,7 @@ Tristan was asked to reply "go with recommendations" and had not answered when t
 | # | Decision | Recommendation | Source of any number |
 |---|---|---|---|
 | a | Max HR estimator | p95 once there are 21 or more **deduplicated** sessions; median of the top 5 below that. A user-entered value always wins and is never overwritten | p95 and top-5 are both already in code or CHANGELOG. 21 is where `floor(0.95n)` stops returning the maximum |
-| b | Price of planned easy and long runs | RPE 4 (`TL_PER_MIN[4]` = 0.92/min) instead of RPE 3 (0.65) | Already used by the timing check, the Tier-1 trim and `main-view` `TYPE_RPE` |
+| b | Price of planned easy and long runs | RPE 4 (`TL_PER_MIN[4]` = 0.92/min) instead of RPE 3 (0.65) | Easy runs at RPE 4 already appear in the Tier-1 trim (`activity-review.ts:1787`) and `main-view` `TYPE_RPE`. Long runs at 4 appear only in `TYPE_RPE` (`main-view.ts:2283`); `timing-check.ts` `RPE_BY_TYPE` has long at 6. So RPE 4 for long runs is Tristan's call |
 | c | Floors after a cut | Easy: 30 minutes at easy pace. Long: 85% of the original while ACWR is safe or low, 60% while caution or high | `docs/specs/Load-Reduction-Methodology.md` :186, :250; 85% is in current code |
 | d | Weekly cap on running displaced by cross-training | 30% of the week's planned running TSS, counted cumulatively | Tanaka 20–30% (`docs/research/running.md` §7.2); 0.30 exists unused in `sports.ts` `LOAD_BUDGET_CONFIG` |
 | e | Quality sessions | Last rung only. Step one quality session down only when the TSS delta fits within the remaining budget | PRINCIPLES.md :67-76, :201 |
@@ -107,10 +117,17 @@ Tristan was asked to reply "go with recommendations" and had not answered when t
 Full detail is in `load-accounting-audit.md` and `load-fix-designs.md`. Line numbers are from `main`.
 
 1. **Cut sizing is not proportional.**
-   - Before 1 May, raw iTRIMP was used as load: `universalLoad.ts:106`, `baseLoad = iTrimp * sportMult`. That made it about 150× too large. On `triathlon-mvp` this is fixed via a fixed 15000.
-   - The size of each cut is then set by caps at `suggester.ts` :579 (easy 0.40), :639 (long 0.25), :776 (easy replace 0.5) and :804 (long replace 0.3). The caps have been in the code since the root commit with no documented source.
-   - In the Python reference design (`docs/research/cross-training-replacement-code.md:530-536`), 40% was the *midpoint* of a proportional curve, not a ceiling.
-   - The proportional algorithm in `Load-Reduction-Methodology.md` §6 was never built.
+   - **Raw iTRIMP used as load.** On `main`, `universalLoad.ts:106` still has `baseLoad = iTrimp * sportMult`, about 150× too large. Only `triathlon-mvp` has the fix (`4e6c5d4`, 1 May), which uses a fixed 15000.
+   - **The caps set the cut size.** In `suggester.ts` they are at :579 (easy 0.40), :639 (long 0.25), :776 (easy replace 0.5) and :804 (long replace 0.3) on `main`.
+   - **History (verified on the full, unshallowed history).**
+     - The root commit `9af43b4` (3 Feb) was proportional:
+       - easy: `reducePct = clamp(ratio * 0.3, 0.15, 0.40)`, with `ratio = remainingCredit / runLoad`;
+       - replace when `ratio >= 0.8`;
+       - long: a fixed 10% (≤25%);
+       - long in Replace: 15% (≤30%).
+     - Commit `e4488e7` (6 Feb, "Cross-training preview works without auto-apply") replaced this with `Math.min(budgetKm, runKm * cap)` and introduced the 0.5 cap. No doc records why.
+     - (The designs doc says the caps were in the root commit. That came from a shallow clone and is wrong.)
+   - **The unbuilt designs.** In the Python reference design (`docs/research/cross-training-replacement-code.md:530-536`), 40% was the *midpoint* of a proportional curve, not a ceiling. The proportional algorithm in `Load-Reduction-Methodology.md` §6 was never built.
    - Other scale errors:
      - The saturation curve (TAU 800, CREDIT_MAX 1500) amplifies normal sessions by up to 1.875×.
      - `EASY_LOAD_PER_KM = 12`, but planned easy runs are about 7.4 load/km.
@@ -188,11 +205,11 @@ Full detail is in `load-accounting-audit.md` and `load-fix-designs.md`. Line num
 
 9. **Fast-finish long run.** It is typed `'progressive'`, so `assignDefaultDays` (`scheduler.ts`, `t === 'long'`) puts it in the quality pool. Every third week it lands on Tuesday with Sunday empty, and it loses all long-run protections. Fix: the generator marks the long-run slot, and the scheduler and protections use that mark.
 
-10. **Deload and taper targets.** Nothing sets `ph = 'deload'`, so the deload multipliers (0.65–0.70) are unused. Every taper week targets 0.85 because callers never pass `weekInPhase`. Following the plan exactly reads 10–40% under plan. `computeDecayedCarry` judges past weeks against the current week's target.
+10. **Deload and taper targets.** Nothing sets `ph = 'deload'`, so the deload multipliers (0.65–0.70) are unused. Every taper week targets 0.85 because every caller except Stats (`stats-view.ts:988`) leaves `weekInPhase` undefined. Following the plan exactly reads 10–40% under plan. `computeDecayedCarry` judges past weeks against the current week's target.
 
 11. **Resting HR.** The edge function uses `daily_metrics.resting_hr ?? 55` (`index.ts:734, :1002`). The client never sends `s.restingHR`, so Strava-only and Apple users are always scored at 55: about ±10% on easy sessions.
 
-12. **UTC vs local dates.** 73 `toISOString().split('T')[0]` sites on `triathlon-mvp`. The plan week comes from UTC while the weekday comes from local time. In the US, evening runs land on the next day; in Australia, Monday morning runs land in the previous week. Add one shared local-date helper and fix all sites in one pass (CLAUDE.md cross-cutting rule).
+12. **UTC vs local dates.** On `triathlon-mvp`, non-test `src` has 73 `toISOString().split('T')[0]` sites plus 43 `toISOString().slice(0, 10)` sites; there are 4 more in `supabase/functions`. Grep for both forms. The plan week comes from UTC while the weekday comes from local time. In the US, evening runs land on the next day; in Australia, Monday morning runs land in the previous week. Add one shared local-date helper and fix all sites in one pass (CLAUDE.md cross-cutting rule).
 
 Other concerns, ranked, are in `load-fix-designs.md` §9: Home ring vs coach TSB mismatch, tier baseline under-read, female normaliser β, edge pagination `per_page=50`, and duplicate uploads.
 
