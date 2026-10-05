@@ -1146,8 +1146,8 @@ export interface SimulatorState {
    * flag lets `detectedWeeklyKm` seed the plan's starting `s.wkm`. We only seed
    * plan volume from a number the user gave or accepted, never a silent derive. */
   weeklyVolumeConfirmed?: boolean;
-  /** True once the 16-week Apple Health backfill has run at least once.
-   * Subsequent launches use a 14-day incremental window. Same role as
+  /** True once the 364-day Apple Health backfill has run at least once.
+   * Subsequent launches use the 28-day incremental window. Same role as
    * `stravaHistoryFetched` for the Apple-only path. */
   appleHistoryFetched?: boolean;
   /** One-time migration flag (build 24+). Pre-build-23, the Apple workout sync

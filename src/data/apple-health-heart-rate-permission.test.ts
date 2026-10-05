@@ -77,7 +77,7 @@ vi.mock('@/calculations/activity-matcher', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/calculations/activity-matcher')>();
   return {
     ...actual,
-    matchAndAutoComplete: vi.fn((rows: Array<Record<string, unknown>>) => { matchSpy.rows = rows; return false; }),
+    matchAndAutoComplete: vi.fn((rows: Array<Record<string, unknown>>) => { matchSpy.rows = rows; return { changed: false, pending: [] }; }),
   };
 });
 

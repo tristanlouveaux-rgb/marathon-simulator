@@ -30,6 +30,8 @@ import { uploadAppleActivitiesToDB } from '@/data/appleActivityUpload';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { getPhysiologySource, appleWorkoutsEnabled } from '@/data/sources';
+import { processPendingAfterAppleSync } from '@/data/activitySync';
+import { ACTIVITY_SYNC_LOOKBACK_DAYS } from '@/data/activity-sync-window';
 import { calculateZones, type HRZones } from '@/calculations/heart-rate';
 import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
@@ -576,9 +578,11 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
  *  summer). HealthKit reads are local and fast, so the extra range adds only
  *  ~1-2s on first launch. */
 const FIRST_BACKFILL_DAYS = 364;
-/** Incremental window for every subsequent launch — last 14 days, dedup keeps
- *  the older workouts intact. */
-const INCREMENTAL_DAYS = 14;
+/** Incremental window for every sync after the first backfill. Same 28-day
+ *  lookback as the Strava and Garmin syncs (audit D5: it was 14, so a 15 to 28
+ *  day gap with no sync lost those sessions). Dedup keeps re-read workouts
+ *  intact. */
+const INCREMENTAL_DAYS = ACTIVITY_SYNC_LOOKBACK_DAYS;
 /** Concurrency cap for per-workout HR-stream queries. HealthKit reads are
  *  local and fast, but stacking 100+ promises at once burns memory on older
  *  devices. 4 keeps total wall-time under ~2s for 16w of typical data. */
@@ -594,11 +598,19 @@ const HR_SAMPLE_LIMIT = 6000;
  * Safe to call on every launch. Already-processed workouts are skipped
  * by the garminMatched dedup key (keyed as "apple-<stableId>").
  *
- * On first invocation (no `appleHistoryFetched` flag), runs a 16-week backfill
+ * On first invocation (no `appleHistoryFetched` flag), runs a 364-day backfill
  * with per-workout HR-stream enrichment and aggregates weekly history into
  * `historicWeeklyTSS`, `ctlBaseline`, `detectedWeeklyKm`, `athleteTier` —
  * mirroring `fetchStravaHistory` for the Apple-only path. Subsequent launches
- * use a 14-day incremental window to pick up new workouts cheaply.
+ * use the 28-day incremental window (ACTIVITY_SYNC_LOOKBACK_DAYS) to pick up
+ * new workouts cheaply.
+ *
+ * Every sync that reads workouts ends with the post-sync pending step
+ * (processPendingAfterAppleSync), including one that returns no workouts, so
+ * this week's cross-training and unmatched runs never sit at '__pending__' with
+ * zero load until the user taps Review (audit D1). Every caller gets it: launch,
+ * HealthKit observer, foreground resume, Account Sync, onboarding review and the
+ * tri DB-empty backfill.
  */
 export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Promise<void> {
   if (!isNativeiOS()) { _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} not-ios (web/Android — no HealthKit)`; return; }
@@ -643,7 +655,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // key) makes re-pulling existing workouts a no-op, and aggregateAppleHistory
     // recomputes weekly history from scratch, so forcing this is idempotent.
     // Only the manual button passes it; automatic launch / foreground / observer
-    // syncs stay on the cheap 14-day incremental path.
+    // syncs stay on the cheap 28-day incremental path.
     if (opts?.forceFullHistory && s.appleHealthConnected) {
       s.appleHistoryFetched = false;
       s.appleDeepHistoryFetched = false;
@@ -656,14 +668,17 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     if (workouts.length === 0) {
       _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=0 window=${daysBack}d first=${isFirstBackfill} — HealthKit returned no workouts (check Workouts permission, or no recorded activities)`;
       if (isFirstBackfill) {
-        // Mark backfill complete even when empty so we don't re-run a 16w
+        // Mark backfill complete even when empty so we don't re-run a 364-day
         // query on every launch. User who installs without any historic
         // workouts is just a fresh starter; subsequent syncs will pick up
-        // new workouts via the 14d incremental path.
+        // new workouts via the 28-day incremental path.
         s.appleHistoryFetched = true;
         s.appleHistoryLastRefreshedAt = new Date().toISOString();
         saveState();
       }
+      // Items queued by an earlier sync still need processing when nothing new
+      // came back (the Strava and Garmin syncs do the same on zero rows).
+      processPendingAfterAppleSync();
       return;
     }
 
@@ -682,7 +697,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     const enrichment = await enrichWorkoutsWithHR(workouts);
 
     const rows = workouts.map(w => convertToActivityRow(w, enrichment.get(workoutKey(w))));
-    const changed = matchAndAutoComplete(rows);
+    const result = matchAndAutoComplete(rows);
     // A discarded or superseded Apple copy must not go back into garmin_activities
     // either (the matcher already drops it locally).
     const tombstoned = new Set([...(s.ignoredGarminIds ?? []), ...(s.supersededGarminIds ?? [])]);
@@ -711,8 +726,8 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
       saveState();
     }
 
-    if (changed || isFirstBackfill) render();
-    console.log(`[AppleHealthSync] Processed ${rows.length} workouts (window=${daysBack}d, firstBackfill=${isFirstBackfill}, hrEnriched=${enrichment.size})`);
+    if (result.changed || isFirstBackfill) render();
+    console.log(`[AppleHealthSync] Processed ${rows.length} workouts (window=${daysBack}d, firstBackfill=${isFirstBackfill}, hrEnriched=${enrichment.size}, queued=${result.pending.length})`);
 
     // Refresh VO2max + cycling FTP every sync. Both are no-ops on web/Android,
     // when the user denied the HealthExtras permission, or when they don't
@@ -728,6 +743,11 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
         console.warn('[AppleHealthSync] Deep history pull failed', err);
       });
     }
+
+    // Post-sync pending step, last as in the Strava sync: this week's non-runs
+    // and unmatched runs go to '__pending__' in the matcher and carry no load
+    // until processed. Timing mods (mergeTimingMods) are not recomputed here yet.
+    processPendingAfterAppleSync();
   } catch (err) {
     // Non-fatal. App continues without Apple Health sync
     _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} threw: ${String((err as { message?: string })?.message ?? err).slice(0, 90)}`;
@@ -1958,7 +1978,7 @@ function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number)
  * sport-level breakdown is left empty (used only for cross-training session
  * baselines, which the plan engine treats as optional Phase 2 calibration).
  *
- * Run only on first connection; subsequent launches use the 14-day incremental
+ * Run only on first connection; subsequent launches use the 28-day incremental
  * sync path which doesn't re-aggregate. A future weekly-refresh pass can call
  * this again from main.ts when `appleHistoryLastRefreshedAt` is older than 7
  * days, mirroring the Strava refresh logic.
@@ -2231,7 +2251,7 @@ function mondayOfISO(d: Date): string {
 
 /** Debounce window. Apple Watch sometimes fires the observer 2 to 3 times in
  *  rapid succession as workout samples land in batches. Coalescing avoids
- *  redundant 14-day re-queries. */
+ *  redundant 28-day re-queries. */
 const OBSERVER_DEBOUNCE_MS = 5_000;
 
 let observerListenerHandle: PluginListenerHandle | null = null;
@@ -2300,7 +2320,7 @@ let foregroundListenerRegistered = false;
  * suspended, this catches the missed workout the instant the user reopens the
  * app, without waiting for a cold launch. The 5-minute throttle (read against
  * `appleHistoryLastRefreshedAt`, now stamped on every sync) keeps a brief
- * app-switch from triggering a redundant 14-day re-query.
+ * app-switch from triggering a redundant 28-day re-query.
  *
  * Uses the WebView `visibilitychange` event rather than @capacitor/app, so no
  * new native plugin is required. Idempotent; no-op on web/Android.

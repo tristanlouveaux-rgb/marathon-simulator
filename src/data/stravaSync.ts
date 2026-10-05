@@ -14,6 +14,7 @@ import { matchAndAutoComplete, formatActivityType, type GarminActivityRow } from
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { processPendingCrossTraining, resetPendingModalGuard } from './activitySync';
+import { ACTIVITY_SYNC_LOOKBACK_DAYS } from './activity-sync-window';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
@@ -109,7 +110,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     const s = getMutableState();
 
     const since = new Date();
-    since.setDate(since.getDate() - 28);
+    since.setDate(since.getDate() - ACTIVITY_SYNC_LOOKBACK_DAYS);
     const afterTimestamp = Math.floor(since.getTime() / 1000);
 
     const rows = await callEdgeFunction<GarminActivityRow[]>(

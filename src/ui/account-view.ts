@@ -2352,7 +2352,7 @@ function wireAccountHandlers(): void {
     rerender();
 
     try {
-      // Manual tap pulls the FULL history (not the 14-day incremental the
+      // Manual tap pulls the FULL history (not the 28-day incremental the
       // background syncs use), so a user whose rides/swims/runs never backfilled
       // can recover them here instead of resetting their plan. Takes longer
       // (full-window query + HR enrichment), hence the wait copy below.

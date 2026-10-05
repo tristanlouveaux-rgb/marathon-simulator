@@ -131,7 +131,7 @@ export async function uploadAppleActivitiesToDB(rows: GarminActivityRow[]): Prom
 
     // Only consider existing rows that could plausibly collide: scope the lookup
     // to the time span we're about to write (minus the dup window). For a 52w
-    // backfill this is wide; for a 14d incremental it's tiny.
+    // backfill this is wide; for a 28d incremental it's tiny.
     const starts = rows.map(r => Date.parse(r.start_time)).filter(t => !Number.isNaN(t));
     if (starts.length === 0) return 0;
     const minStartISO = new Date(Math.min(...starts) - NEAR_DUP_WINDOW_MS).toISOString();
