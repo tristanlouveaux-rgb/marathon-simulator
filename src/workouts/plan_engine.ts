@@ -200,6 +200,19 @@ export function deloadMultiplier(ability: AbilityBand): number {
   }
 }
 
+/**
+ * Deload rule shared by the triathlon and HYROX engines (plan_engine.triathlon.ts,
+ * plan_engine.hyrox.ts): every 4th plan week in base/build/peak. A taper week is
+ * never a deload, because the taper is already its own volume reduction. Running
+ * uses the ability-banded `isDeloadWeek` above instead. Lives here (a light module)
+ * so the weekly load target (`planned-week-target.ts`) can read the same rule the
+ * engines generate with, without importing the engines.
+ */
+export function isFourWeekCycleDeloadWeek(weekIndex: number, phase: TrainingPhase): boolean {
+  if (phase === 'taper') return false;
+  return weekIndex % 4 === 0;
+}
+
 // ---------------------------------------------------------------------------
 // Effort multiplier (within-band adaptive scaling)
 // ---------------------------------------------------------------------------

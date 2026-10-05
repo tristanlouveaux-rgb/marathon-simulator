@@ -14,12 +14,12 @@ import {
   computeLiveSameSignalTSB,
   computeFitnessModel,
   computeWeekTSS,
-  computePlannedWeekTSS,
   getTrailingEffortScore,
   computeTodaySignalBTSS,
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
@@ -368,13 +368,9 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const weekTSS = (wk && !isEmptyTrackOnlyWeek)
     ? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)
     : null;
-  const plannedTSS = computePlannedWeekTSS(
-    s.historicWeeklyTSS,
-    s.ctlBaseline ?? undefined,
-    wk?.ph ?? 'base',
-    s.athleteTier,
-    s.rw,
-  );
+  // Signal A target (weekTSS above is Signal A), resolved through the canonical
+  // per-week phase: deload weeks and the race-taper position included.
+  const plannedTSS = computePlannedWeekTarget(s, s.w, 'A');
   const tssPct = (plannedTSS > 0 && weekTSS != null && weekTSS > 0)
     ? Math.round((weekTSS / plannedTSS) * 100)
     : null;

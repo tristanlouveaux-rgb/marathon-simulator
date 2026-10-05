@@ -6,7 +6,8 @@ import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities, getDefaultState } from './store';
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
-import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
+import { getWeeklyExcess } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { computePlanPhases } from '@/workouts/phases';
 
 const STATE_KEY = 'marathonSimulatorState';
@@ -420,11 +421,8 @@ export function loadState(): boolean {
         const prevWk = migrated.wks?.[currW - 2];
         const currWk = migrated.wks?.[currW - 1];
         // Helper: compute excess for a given week vs its planned Signal B
-        const prevPlannedB = prevWk ? computePlannedSignalB(
-          migrated.historicWeeklyTSS ?? [], migrated.ctlBaseline ?? 0,
-          prevWk.ph ?? 'base', migrated.athleteTierOverride ?? migrated.athleteTier ?? 'recreational',
-          migrated.rw ?? 4, undefined, undefined, migrated.sportBaselineByType,
-        ) : 0;
+        // Canonical per-week target for the previous week (deload / taper aware).
+        const prevPlannedB = prevWk ? computePlannedWeekTarget(migrated, currW - 1) : 0;
         const prevExcess = prevWk ? getWeeklyExcess(prevWk, prevPlannedB, migrated.planStartDate) : 0;
 
         // Retroactive cleanup: if currWk already has hasCarriedLoad but prev week

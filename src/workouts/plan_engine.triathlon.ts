@@ -37,6 +37,7 @@ import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations'
 import { gp } from '@/calculations/paces';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
+import { isFourWeekCycleDeloadWeek } from './plan_engine';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -271,7 +272,7 @@ function generateWeekForTriathlon(
   // wk.forceDeload on weeks overlapping the holiday; without this the tri engine
   // ignored it and regenerated those weeks at full load.
   const forceDeload = !!(state.wks?.[weekIndex - 1] as any)?.forceDeload;
-  const isDeload = forceDeload || isDeloadWeek(weekIndex, phase);
+  const isDeload = forceDeload || isFourWeekCycleDeloadWeek(weekIndex, phase);
   const effectiveMult = isDeload ? phaseMult * 0.7 : phaseMult;
 
   // This week's TOTAL time budget: the user's peak hours scaled by the phase ramp.
@@ -740,12 +741,6 @@ function phaseMultiplier(phase: TrainingPhase, weekIndex: number, totalWeeks: nu
       return 0.30;  // race week
     }
   }
-}
-
-function isDeloadWeek(weekIndex: number, phase: TrainingPhase): boolean {
-  if (phase === 'taper') return false;   // Taper is already its own reduction
-  // Every 4th week in base + build
-  return weekIndex % 4 === 0;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

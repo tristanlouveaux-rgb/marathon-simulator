@@ -815,16 +815,26 @@ export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: numb
  * Recomputes each week's excess from scratch using getWeeklyExcess (Signal B
  * vs planned) rather than reading wk.carriedTSS.
  *
- * Looks back up to 3 weeks. Uses the current planned baseline as a stable
- * approximation for all lookback weeks (baseline changes slowly via CTL EMA).
+ * Looks back up to 3 weeks. `plannedBaseline` is either:
+ *   - a function of the 1-indexed plan week, returning THAT week's own target
+ *     (the plan path: `computeCurrentWeekCarry` in planned-week-target.ts passes
+ *     `computePlannedWeekTarget`). Each past week is judged against what it was
+ *     planned to be. Judging a peak week against the following taper week's
+ *     lower target invented "excess" that was never trained (audit A10).
+ *   - a single number, used for every lookback week. Only correct when the
+ *     target does not vary by week (activity-review's phase-independent
+ *     `signalBBaseline`).
  */
 export function computeDecayedCarry(
   wks: Week[],
   currentWeek: number,
-  plannedBaseline: number,
+  plannedBaseline: number | ((weekNum: number) => number),
   planStartDate?: string,
 ): number {
   if (!plannedBaseline || !planStartDate) return 0;
+  const targetFor = typeof plannedBaseline === 'function'
+    ? plannedBaseline
+    : () => plannedBaseline;
 
   const nowMs = new Date().setHours(12, 0, 0, 0); // noon today
   const planStartMs = new Date(planStartDate).getTime();
@@ -836,8 +846,10 @@ export function computeDecayedCarry(
     const idx = currentWeek - 1 - age; // 0-indexed
     const wk = wks[idx];
     if (!wk) continue;
-    // Raw excess for that week (no carry. Avoids circularity)
-    const weekExcess = getWeeklyExcess(wk, plannedBaseline, planStartDate);
+    // Raw excess for that week against its own target (no carry. Avoids circularity)
+    const weekTarget = targetFor(idx + 1);
+    if (!weekTarget) continue;
+    const weekExcess = getWeeklyExcess(wk, weekTarget, planStartDate);
     if (weekExcess <= 0) continue;
     // Days from midpoint of that week to now
     const weekMidMs = planStartMs + (currentWeek - 1 - age) * 7 * 86400000 + 3.5 * 86400000;
@@ -919,6 +931,10 @@ export function computeCrossTrainTSSPerMin(wks: Week[] | undefined | null, sport
  * Higher-tier athletes tolerate bigger week-to-week ramps.
  * Base = maintain, Build = progressive overload, Peak = max sustainable,
  * Deload = recovery, Taper = linear ramp down.
+ *
+ * Week.ph never holds 'deload': callers resolve a week's effective phase
+ * (deload status, race-taper position) through `computePlannedWeekTarget`
+ * in planned-week-target.ts, which reads the same plan data the generator does.
  */
 const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
   beginner:    { base: 0.95, build: 1.05, peak: 1.08, deload: 0.70 },
@@ -930,6 +946,9 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
 
 /**
  * Compute taper multiplier: linear ramp from 0.85 → 0.55 over taper weeks.
+ * `weekInTaper` is 0-indexed (the contract the JSDoc of computePlannedWeekTSS
+ * states): a 3-week taper gives 0.85 / 0.75 / 0.65, a 2-week taper 0.85 / 0.70,
+ * and a 1-week taper 0.70.
  */
 function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
   if (totalTaperWeeks <= 1) return 0.70;

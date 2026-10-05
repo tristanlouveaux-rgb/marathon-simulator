@@ -18,7 +18,8 @@ import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup,
 import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
@@ -1179,11 +1180,9 @@ export async function next(): Promise<void> {
   // tagged mid-week as "excess" were already absorbed by the overall load. Clear them.
   // This prevents false carry-over into next week for weeks that ended under target.
   {
-    const plannedB = computePlannedSignalB(
-      s.historicWeeklyTSS ?? [], s.ctlBaseline ?? 0,
-      wk.ph ?? 'base', s.athleteTierOverride ?? s.athleteTier ?? 'recreational',
-      s.rw ?? 4, undefined, undefined, s.sportBaselineByType,
-    );
+    // Canonical per-week target: a deload or taper week is judged against its
+    // reduced target, not its phase label's full target.
+    const plannedB = computePlannedWeekTarget(s, s.w);
     const weekExcess = getWeeklyExcess(wk, plannedB, s.planStartDate);
     if (weekExcess <= 0 && wk.unspentLoadItems?.length) {
       wk.unspentLoadItems = [];

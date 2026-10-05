@@ -12,7 +12,8 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
@@ -750,13 +751,9 @@ export function buildProgressBars(s: SimulatorState): string {
 
   // TSS this week vs plan. Signal B (full physiological load, all sports), matching the plan header.
   const _tssRaw = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const tssPlan = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw,
-    undefined, undefined, s.sportBaselineByType,
-  );
+  const tssPlan = computePlannedWeekTarget(s, s.w);
   // Include decayed carry from previous weeks in the effective total
-  const _tssCarry = computeDecayedCarry(s.wks ?? [], s.w, tssPlan, s.planStartDate);
+  const _tssCarry = computeCurrentWeekCarry(s, s.w);
   const tssActual = _tssRaw + _tssCarry;
 
   function fillBar(actual: number, plan: number): string {

@@ -24,7 +24,8 @@ import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
@@ -2184,11 +2185,8 @@ function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
   const isCurrentWeek = wk?.w === s.w;
   if (!isCurrentWeek) return '';
 
-  const _plannedB = wk ? computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-  ) : 0;
-  const _carriedForStrip = computeDecayedCarry(s.wks ?? [], s.w, _plannedB, s.planStartDate);
+  const _plannedB = wk ? computePlannedWeekTarget(s, s.w) : 0;
+  const _carriedForStrip = computeCurrentWeekCarry(s, s.w);
   const _excessThisWeek = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate) : 0;
   const _excess = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate, _carriedForStrip) : 0;
   const _hasPendingExcess = _excess > 15;
@@ -2307,18 +2305,10 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   // Week load. Signal B (full physiological, all sports) for all weeks
   // Using Signal B everywhere so the bar always matches what the breakdown sheet shows.
   const _weekRawTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
-  const _plannedTSS = computePlannedSignalB(
-    s.historicWeeklyTSS,
-    s.ctlBaseline,
-    wk?.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier,
-    s.rw,
-    undefined,
-    undefined,
-    s.sportBaselineByType,
-  );
-  // Include decayed carry from previous weeks in the effective total
-  const _weekCarry = isCurrentWeek ? computeDecayedCarry(s.wks ?? [], s.w, _plannedTSS, s.planStartDate) : 0;
+  // Canonical per-week target: deload weeks and the race-taper position included.
+  const _plannedTSS = computePlannedWeekTarget(s, viewWeek);
+  // Include decayed carry from previous weeks in the effective total (current week only)
+  const _weekCarry = computeCurrentWeekCarry(s, viewWeek);
   const _weekTotalTSS = _weekRawTSS + _weekCarry;
   // Bar shown for all weeks when planned is known; over-target fills fully (no cap)
   const _loadBarPct = _plannedTSS > 0 && _weekTotalTSS > 0

@@ -17,7 +17,8 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
+import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { formatKm, ft } from '@/utils/format';
 import { next } from '@/ui/events';
@@ -174,7 +175,6 @@ export function showWeekDebrief(
 
   // ── Compute metrics ──────────────────────────────────────────────────────
 
-  const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeedMultiplier = 1 + Math.min(0.1 * (s.gs ?? 0), 0.3);
   const atlSeed = (s.ctlBaseline ?? 0) * atlSeedMultiplier;
   const metrics = computeFitnessModel(
@@ -187,9 +187,9 @@ export function showWeekDebrief(
   const ctlDisplay = ctlNow != null ? Math.round((ctlNow / 7) * 10) / 10 : null;
 
   const weekRawTSS = Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate));
-  const plannedTSS = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph, tier, s.rw, undefined, undefined, s.sportBaselineByType,
-  );
+  // Canonical per-week target (deload weeks and race-taper position included),
+  // the same number the Plan week-summary card showed for this week.
+  const plannedTSS = computePlannedWeekTarget(s, weekNum);
   const tssPct = plannedTSS > 0 ? Math.round((weekRawTSS / plannedTSS) * 100) - 100 : null;
 
   const rawKm = wk.completedKm
