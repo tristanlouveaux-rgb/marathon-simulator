@@ -17,6 +17,7 @@ import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-ca
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
+import { dropAppleRowsWithStravaTwin } from './cross-source-twins';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -635,6 +636,17 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       console.log(`[matchAndAutoComplete] Skipped ${before - rows.length} ignored activities`);
     }
   }
+  // Apple copies removed because their Strava twin won (cross-source-twins.ts)
+  // stay out, so a later sync cannot bring them back.
+  const supersededIds = s.supersededGarminIds;
+  if (supersededIds && supersededIds.length > 0) {
+    const superseded = new Set(supersededIds);
+    rows = rows.filter(r => !superseded.has(r.garmin_id));
+  }
+  // Strava wins: an incoming Apple row whose session Strava already holds (in
+  // state or in this batch) never enters state. Covers Apple rows read back from
+  // garmin_activities and the Apple sync after Strava is disconnected.
+  rows = dropAppleRowsWithStravaTwin(rows, s.wks);
 
   // Strava > Apple Health > Garmin-webhook dedup. Same logic now also runs on app
   // load via reconcileCrossSourceDuplicates (network-independent), so a dev-account

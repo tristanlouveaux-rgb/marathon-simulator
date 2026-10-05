@@ -29,7 +29,7 @@ import { matchAndAutoComplete, healMissingITrimp, type GarminActivityRow } from 
 import { uploadAppleActivitiesToDB } from '@/data/appleActivityUpload';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
-import { getPhysiologySource } from '@/data/sources';
+import { getPhysiologySource, appleWorkoutsEnabled } from '@/data/sources';
 import { calculateZones, type HRZones } from '@/calculations/heart-rate';
 import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
@@ -401,6 +401,16 @@ export async function syncAppleCyclingFTP(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Refresh the HealthKit device readings that are not workouts: VO2max and cycling
+ * FTP. Runs with every workout sync, and on its own while Strava is connected
+ * (Apple workouts off, see `appleWorkoutsEnabled`). No-op off iOS.
+ */
+export async function syncAppleDeviceMetrics(): Promise<void> {
+  await syncAppleVO2().catch(() => null);
+  await syncAppleCyclingFTP().catch(() => null);
+}
+
 /** Compute whole-years age from an ISO date-of-birth string. Null on parse fail. */
 function ageFromISODob(iso: string): number | null {
   const dob = new Date(iso);
@@ -592,6 +602,19 @@ const HR_SAMPLE_LIMIT = 6000;
  */
 export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Promise<void> {
   if (!isNativeiOS()) { _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} not-ios (web/Android — no HealthKit)`; return; }
+  // Strava connected: Apple workouts are not ingested at all (no HealthKit
+  // workout read, no matchAndAutoComplete, no garmin_activities upload, no
+  // history aggregate over the Strava-derived baselines). Strava is canonical and
+  // an Apple copy of the same session double counts. Every caller (launch,
+  // HealthKit observer, foreground resume, Account Sync, onboarding review, tri
+  // DB-empty backfill) passes through here. The device readings (VO2max, cycling
+  // FTP) are not workouts and keep refreshing; sleep / HRV / resting HR come
+  // from syncAppleHealthPhysiology, which this gate does not touch.
+  if (!appleWorkoutsEnabled(getMutableState())) {
+    _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} off: Strava is the activity source, Apple workouts not imported`;
+    await syncAppleDeviceMetrics();
+    return;
+  }
   // Workouts now read through our HealthExtras plugin (HKWorkoutType query),
   // NOT capgo — capgo's auth crashes on iOS 26.x. This is the Garmin-via-Apple-
   // Health activity pipe (Garmin Connect → Apple Health → here), so Apple-only /
@@ -660,6 +683,10 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
 
     const rows = workouts.map(w => convertToActivityRow(w, enrichment.get(workoutKey(w))));
     const changed = matchAndAutoComplete(rows);
+    // A discarded or superseded Apple copy must not go back into garmin_activities
+    // either (the matcher already drops it locally).
+    const tombstoned = new Set([...(s.ignoredGarminIds ?? []), ...(s.supersededGarminIds ?? [])]);
+    const uploadRows = tombstoned.size > 0 ? rows.filter(r => !tombstoned.has(r.garmin_id)) : rows;
 
     // Mirror Strava/Garmin: persist Apple workouts to the Supabase
     // `garmin_activities` table. This is the ONLY path that feeds the triathlon
@@ -667,7 +694,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // fitnessHistory / CSS / FTP / PBs), which never reads local garminActuals.
     // Awaited so the tri-init DB-empty fallback (main.ts) sees the rows on the
     // SAME launch when it calls this synchronously. Idempotent + dedup-safe.
-    const uploaded = await uploadAppleActivitiesToDB(rows);
+    const uploaded = await uploadAppleActivitiesToDB(uploadRows);
     _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=${rows.length} hrEnriched=${enrichment.size} uploaded=${uploaded} window=${daysBack}d first=${isFirstBackfill}`;
 
     // First-time backfill: aggregate weekly history so the plan engine has
@@ -691,8 +718,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // when the user denied the HealthExtras permission, or when they don't
     // exist in HealthKit (cycling FTP is rare without an external power
     // meter; VO2 needs outdoor GPS runs to update).
-    syncAppleVO2().catch(() => null);
-    syncAppleCyclingFTP().catch(() => null);
+    syncAppleDeviceMetrics().catch(() => null);
 
     // After the standard backfill completes, kick off a one-shot deep history
     // pull for users whose HealthKit goes back further than 52 weeks. Surfaces
@@ -761,6 +787,8 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
   if (!isNativeiOS()) return;
   const s = getMutableState();
   if (s.appleDeepHistoryFetched) return;
+  // Same gate as syncAppleHealth: no Apple workouts while Strava is connected.
+  if (!appleWorkoutsEnabled(s)) return;
 
   try {
     let totalProcessed = 0;

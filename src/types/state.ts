@@ -1326,6 +1326,18 @@ export interface SimulatorState {
   // (numeric for Garmin, "strava-{id}" for Strava).
   ignoredGarminIds?: string[];
 
+  /** Apple Health activity ids removed because a Strava record of the same session
+   *  won (see `collapseAppleStravaTwins` in calculations/cross-source-twins.ts).
+   *  Read next to `ignoredGarminIds` in matchAndAutoComplete and the Apple upload,
+   *  so the superseded copy never re-imports. Kept apart from `ignoredGarminIds`,
+   *  which records the user's own discards. */
+  supersededGarminIds?: string[];
+  /** One-time Apple/Strava twin cleanup for Strava-connected users has completed:
+   *  set after the first Strava sync that follows the 2026-10-05 change (Apple
+   *  workouts off while Strava is connected). Until then the local collapse also
+   *  runs at launch. */
+  appleStravaTwinCleanupDone?: boolean;
+
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
 

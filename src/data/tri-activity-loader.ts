@@ -25,6 +25,7 @@
  */
 import { SUPABASE_URL, SUPABASE_ANON_KEY, getAccessToken, getUserId } from './supabaseClient';
 import type { GarminActual } from '@/types/state';
+import { isSameSession } from '@/calculations/cross-source-twins';
 
 /** Row shape returned by the REST query — snake_case, distance in metres. */
 interface GarminActivityRow {
@@ -313,6 +314,45 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
 
   if (dupCount > 0) {
     console.log(`[tri-activity-loader] Deduped ${dupCount} same-sport activities within ±10min (merged fields from each duplicate, kept the higher-quality copy)`);
+  }
+
+  // Cross-source residual. An Apple Health copy of a session Strava also holds
+  // that the class pass above leaves alone: class 'other' (strength, HIIT vs
+  // Apple CARDIO), or two labels for one session. Without this both rows count
+  // in crossTrainingAtl, which feeds tri readiness (2026-09 duplicate stress
+  // test). Same-session rule as the DB cleanup and the in-state collapse
+  // (cross-source-twins.ts). Strava's row survives, missing fields are
+  // backfilled from the Apple row as above, and Apple-only sessions stay.
+  const stravaIdx: number[] = [];
+  kept.forEach((k, i) => { if (k.garminId?.startsWith('strava-') && k.startTime) stravaIdx.push(i); });
+  if (stravaIdx.length > 0) {
+    const refOf = (x: GarminActual) => ({
+      startMs: x.startTime ? new Date(x.startTime).getTime() : NaN,
+      durationSec: x.durationSec ?? null,
+      activityType: x.activityType ?? null,
+    });
+    const dropped = new Set<number>();
+    kept.forEach((k, i) => {
+      if (!k.garminId?.startsWith('apple-') || !k.startTime) return;
+      const ref = refOf(k);
+      let best = -1;
+      let bestGap = Infinity;
+      for (const j of stravaIdx) {
+        const sRef = refOf(kept[j]);
+        if (!isSameSession(ref, sRef)) continue;
+        const gap = Math.abs(sRef.startMs - ref.startMs);
+        if (gap < bestGap) { best = j; bestGap = gap; }
+      }
+      if (best === -1) return;
+      kept[best] = mergeKeepingFields(kept[best], k);
+      dropped.add(i);
+    });
+    if (dropped.size > 0) {
+      console.log(`[tri-activity-loader] Dropped ${dropped.size} Apple Health row(s) whose session Strava also holds`);
+      const remaining = kept.filter((_, i) => !dropped.has(i));
+      kept.length = 0;
+      kept.push(...remaining);
+    }
   }
 
   // Bike-power inventory log so missing FTP can be diagnosed in one glance.

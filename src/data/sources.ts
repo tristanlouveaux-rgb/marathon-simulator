@@ -40,6 +40,24 @@ export function getActivitySource(s: SimulatorState): ActivitySource {
   return 'phone';  // no wearable, no Strava
 }
 
+/**
+ * Whether Apple Health WORKOUTS are ingested: the HealthKit workout reads, the
+ * `garmin_activities` upload and the Apple history aggregate. Off while Strava
+ * is the connected activity source. Strava is canonical, and an Apple copy of a
+ * session Strava already holds counts twice (Tristan, 2026-10-05, after the
+ * duplicate stress test in docs/audits/2026-09-load-accounting/
+ * duplicate-test-synthesis.json). Apple physiology (sleep, HRV, resting HR,
+ * steps, respiratory rate, SpO2, VO2max) is not affected. Disconnecting Strava
+ * turns Apple workouts back on.
+ *
+ * Every Apple workout path gates on this helper. The live connection flag is
+ * read alongside the source so a legacy explicit 'strava' source with Strava
+ * disconnected never leaves the user with no activity source at all.
+ */
+export function appleWorkoutsEnabled(s: SimulatorState): boolean {
+  return !(getActivitySource(s) === 'strava' && !!s.stravaConnected);
+}
+
 // ── Physiology source ────────────────────────────────────────────────────────
 
 /**
