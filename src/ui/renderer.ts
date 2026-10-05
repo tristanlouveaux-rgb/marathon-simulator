@@ -30,6 +30,7 @@ import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
+import { dropInAppActual } from '@/calculations/in-app-activity';
 
 // Expose explanation modals globally for onclick handlers
 declare global {
@@ -124,6 +125,7 @@ if (typeof window !== 'undefined') {
     if (!wk) return;
     delete wk.rated[wId];
     if (wk.gpsRecordings?.[wId]) delete wk.gpsRecordings[wId];
+    dropInAppActual(wk, wId); // the run's load record goes with it (audit B9)
     if (wk.adhocWorkouts) {
       wk.adhocWorkouts = wk.adhocWorkouts.filter(w => (w.id || w.n) !== wId);
     }

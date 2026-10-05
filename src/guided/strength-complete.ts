@@ -20,7 +20,9 @@
  * - the quick "Mark as done" action on any strength card / modal, and
  * - the guided-session finish (passes the user's 1-tap RPE + measured duration).
  *
- * HYROX sessions keep their dedicated benchmark-learning + recap path.
+ * HYROX sessions keep their dedicated benchmark-learning + recap path. A HYROX
+ * quick "Mark as done" (no guided records) logs a `guided-` actual at the
+ * prescribed duration so it carries load too (logQuickHyroxActivity).
  */
 
 import type { Workout } from '@/types';
@@ -37,6 +39,7 @@ import { persistBodyweightProgress } from '@/calculations/bodyweight-progression
 import type { TrainingPhase } from '@/types/training';
 import { snapshotNotifiedStrengthPrs } from '@/calculations/strength-marker-bumps';
 import { deriveStrengthLegLoad, buildStrengthLegLoadEntry, dropSupersededStrengthEntries } from '@/calculations/strength-leg-load';
+import { manualCompletionStartIso } from '@/calculations/in-app-activity';
 
 export interface CompleteStrengthOpts {
   /** RPE the user actually rated; defaults to the workout's prescribed RPE so
@@ -104,6 +107,11 @@ export function completeStrengthSession(workout: Workout, opts: CompleteStrength
         }
       }
       if (logGuidedHyroxActivity(workout, opts.records, durationSec, opts.targetWeek, state)) dirty = true;
+    } else if (durationSec > 0) {
+      // Quick "Mark as done" (no guided records): log the session at its
+      // prescribed duration (estimatedDurationMin, the duration source every
+      // HYROX session carries) and rated RPE so it carries load (audit B9).
+      if (logQuickHyroxActivity(workout, durationSec, chosen, opts.targetWeek, state)) dirty = true;
     }
     if (dirty) saveState();
     const wk = state.wks?.[weekIdx];
@@ -294,6 +302,47 @@ function findCompletionHRMatch(wk: Week) {
     p => p.appType === 'gym' && p.avgHR != null && p.avgHR > 0,
   );
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * Quick "Mark as done" on a HYROX station / brick session: no guided records, so
+ * no per-station recap, but the session still happened. Writes a `guided-`
+ * actual at the prescribed duration and rated RPE, stamped on the planned day
+ * (never later than now), so it counts in every load signal once. The matcher's
+ * HYROX station path already treats a `guided-` actual as an upgrade candidate,
+ * so a later watch recording replaces it in place. A synced actual already at
+ * the slot wins. Returns true if it wrote.
+ */
+function logQuickHyroxActivity(
+  workout: Workout,
+  durationSec: number,
+  rpe: number,
+  targetWeek: number | undefined,
+  state: SimulatorState,
+): boolean {
+  const weekNum = targetWeek ?? state.w;
+  const wk = state.wks?.[weekNum - 1];
+  if (!wk) return false;
+  const workoutId = (workout as any).id ?? workout.n;
+  if (!wk.garminActuals) wk.garminActuals = {};
+  const existing = wk.garminActuals[workoutId];
+  if (existing && !String(existing.garminId).startsWith('guided-')) return false;
+  wk.garminActuals[workoutId] = {
+    garminId: `guided-${Date.now()}`,
+    startTime: manualCompletionStartIso(state.planStartDate, weekNum, workout.dayOfWeek),
+    distanceKm: 0,
+    durationSec: Math.max(0, Math.round(durationSec)),
+    avgPaceSecKm: null,
+    avgHR: null,
+    maxHR: null,
+    calories: null,
+    activityType: 'hyrox',
+    plannedType: workout.t ?? null,
+    rpe,
+    workoutName: workout.n,
+    displayName: workout.n,
+  };
+  return true;
 }
 
 /**

@@ -1,5 +1,7 @@
 import type { Week } from '@/types';
 import { formatActivityType } from '@/calculations/activity-matcher';
+import { isInAppActual } from '@/calculations/in-app-activity';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
  * Canonical "what the user actually did this week" list.
@@ -83,6 +85,11 @@ export function collectWeekActivities(wk: Week | undefined): WeekActivityEntry[]
   const garminMatched = wk.garminMatched || {};
   const pendingItems = (wk.garminPending || []).filter(p => garminMatched[p.garminId] === '__pending__');
   const excessGarminIds = new Set((wk.unspentLoadItems || []).map((u: any) => u.garminId));
+  // Done-activity adhoc ids (an impromptu in-app GPS run stores its record under
+  // its own adhoc id). Planned sessions in adhocWorkouts are plan slots.
+  const doneAdhocIds = new Set((wk.adhocWorkouts || [])
+    .map((w: any) => (w.id || w.n) as string)
+    .filter(id => !isPlannedAdhocId(id)));
 
   const entries: WeekActivityEntry[] = [];
 
@@ -92,7 +99,9 @@ export function collectWeekActivities(wk: Week | undefined): WeekActivityEntry[]
   for (const [workoutId, raw] of Object.entries(actuals)) {
     if (workoutId.startsWith('garmin-') && adhocGarminIds.has(workoutId)) continue;
     const a = raw as any;
-    const isOrphan = workoutId.startsWith('garmin-');
+    // No plan slot behind it: a standalone synced activity, or an in-app GPS run
+    // recorded outside the plan (its record is keyed by its own adhoc id).
+    const isOrphan = workoutId.startsWith('garmin-') || (isInAppActual(a) && doneAdhocIds.has(workoutId));
     const name = a.displayName || a.workoutName || workoutId;
     const slotName = !isOrphan && a.workoutName && a.workoutName !== a.displayName ? a.workoutName : null;
     const isExcess = isOrphan && excessGarminIds.has(workoutId.slice('garmin-'.length));
