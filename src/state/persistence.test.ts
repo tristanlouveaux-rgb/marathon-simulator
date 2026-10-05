@@ -30,7 +30,7 @@ vi.stubGlobal('alert', vi.fn());
 
 // Import after mocking
 import { loadState, saveState, clearState, softResetState } from './persistence';
-import { getState, setState, resetState } from './store';
+import { getState, setState, resetState, getDefaultState } from './store';
 
 // Helper to create empty weeks array (validation requires wks.length === tw)
 function createEmptyWeeks(count: number) {
@@ -379,6 +379,72 @@ describe('State Persistence', () => {
 
       const loaded = loadState();
       expect(loaded).toBe(false);
+    });
+  });
+
+  // s.v is owned by refreshBlendedFitness (blended-fitness.ts) and by the
+  // detraining in advanceWeekToToday (welcome-back.ts). loadState must hand it
+  // through untouched. A leftover 2026-04-13 "one-time" repair reset s.v toward
+  // s.iv on every load whenever s.v < 0.9 x s.iv. Only the running init writes
+  // s.iv, so triathlon / HYROX / cycling users carried the store default
+  // iv = 50 and any run VDOT under 45 was inflated on every launch. In taper,
+  // deload and run-blocking-injury weeks refreshBlendedFitness skips its s.v
+  // write-back, so the inflated value stuck and fed the tri race forecast.
+  describe('loadState leaves s.v untouched (refreshBlendedFitness owns it)', () => {
+    function seedSaved(overrides: Partial<SimulatorState> & Record<string, unknown>) {
+      // saveState serialises the whole store, so a blob written by a real app
+      // carries the store default iv = 50 unless an init overwrote it.
+      const blob = {
+        ...getDefaultState(),
+        planStartDate: '2026-06-01',
+        initialBaseline: 6000,
+        currentFitness: 6000,
+        forecastTime: 5800,
+        ...overrides,
+      };
+      localStorageMock.setItem('marathonSimulatorState', JSON.stringify(blob));
+    }
+
+    function weeks(count: number, ph: 'base' | 'taper' = 'base', wkGain: number[] = []) {
+      return createEmptyWeeks(count).map((wk, i) => ({ ...wk, ph, wkGain: wkGain[i] ?? 0 }));
+    }
+
+    it('triathlon user with run VDOT below 45 keeps it (iv is only the store default)', () => {
+      const tw = 12;
+      const wks = weeks(tw);
+      wks[10].ph = 'taper';
+      wks[11].ph = 'taper';
+      seedSaved({ eventType: 'triathlon', w: 11, tw, v: 40, wks } as any);
+      expect(getDefaultState().iv).toBe(50); // the default the repair compared against
+
+      expect(loadState()).toBe(true);
+      expect(getState().v).toBe(40);
+      expect(JSON.parse(localStorageMock.getItem('marathonSimulatorState')!).v).toBe(40);
+    });
+
+    it('HYROX user in week 1 keeps a run VDOT below 45 instead of being reset to 50', () => {
+      seedSaved({ eventType: 'hyrox', w: 1, tw: 16, v: 38, wks: weeks(16) } as any);
+
+      expect(loadState()).toBe(true);
+      expect(getState().v).toBe(38);
+    });
+
+    it('running user more than 10% below onboarding VDOT keeps the live value', () => {
+      // A runner whose blended VDOT has genuinely fallen (long layoff, injury
+      // decay, onboarding seeded from an old PB). The repair used to rebuild
+      // 52 minus its own detraining for weeks with wkGain <= 0, giving 51.4.
+      seedSaved({ eventType: 'running', w: 3, tw: 16, iv: 52, v: 46, wks: weeks(16, 'taper', [0, 0.05]) } as any);
+
+      expect(loadState()).toBe(true);
+      expect(getState().v).toBe(46);
+    });
+
+    it('running user within 10% of onboarding VDOT is unchanged (behaviour lock)', () => {
+      seedSaved({ eventType: 'running', w: 3, tw: 16, iv: 52, v: 47, wks: weeks(16) } as any);
+
+      expect(loadState()).toBe(true);
+      expect(getState().v).toBe(47);
+      expect(getState().iv).toBe(52);
     });
   });
 

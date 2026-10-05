@@ -457,27 +457,15 @@ export function loadState(): boolean {
       }
     }
 
-    // Repair s.v if it was corrupted by repeated detraining on a clamped plan.
-    // Bug: advanceWeekToToday applied detraining using the full calendar gap even
-    // when s.w was clamped to plan length, so every launch compounded the loss.
-    // Repair: reset to s.iv, then apply one correct round of detraining for
-    // inactive weeks (those with wkGain ≈ 0).
-    if (migrated.iv && migrated.v && migrated.v < migrated.iv * 0.9) {
-      const inactiveWeeks = (migrated.wks || [])
-        .slice(0, (migrated.w || 1) - 1)
-        .filter((wk: { wkGain: number }) => !wk.wkGain || wk.wkGain <= 0).length;
-      // Inline computeVdotLoss: 1.2%/wk for first 2, 0.8%/wk after
-      let loss = 0;
-      for (let i = 0; i < inactiveWeeks; i++) {
-        const rate = i < 2 ? 0.012 : 0.008;
-        loss += (migrated.iv - loss) * rate;
-      }
-      loss = Math.round(loss * 10) / 10;
-      const repaired = Math.max(Math.round((migrated.iv - loss) * 10) / 10, 20);
-      console.log(`  Repairing corrupted s.v: ${migrated.v} → ${repaired} (s.iv=${migrated.iv}, ${inactiveWeeks} inactive weeks, loss=${loss})`);
-      migrated.v = repaired;
-      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
-    }
+    // No s.v repair here. loadState hands s.v through untouched: it is owned by
+    // refreshBlendedFitness (blended-fitness.ts) and the detraining in
+    // advanceWeekToToday (welcome-back.ts). The 2026-04-13 one-time repair that
+    // reset s.v toward s.iv whenever s.v < 0.9 x s.iv was removed 2026-10: its
+    // root cause (compounding detraining on a clamped plan) was fixed in the same
+    // commit, and it never had a run-once guard, so it fired on every launch for
+    // every non-running user (s.iv is only written by the running init, so it
+    // sat at the store default 50) and for any runner genuinely >10% below
+    // onboarding. Do not reintroduce a launch-time s.v rewrite.
 
     setState(migrated);
     console.log('Loaded saved state from localStorage');
