@@ -83,6 +83,8 @@ export interface Marathon {
   date: string;                    // ISO date string
   distance: 'half' | 'marathon';
   weeksUntil?: number;             // Computed at runtime
+  /** True when `date` is projected to next year's edition (curated date passed). See race-calendar.ts. */
+  estimated?: boolean;
   imageUrl?: string;               // Optional city/race tile image
   /** Per-race course facts. Optional — populated from marathon-course-profiles.ts.
    * Only `runElevationM`, `climate`, `altitudeM`, `runProfile` are used for running. */
@@ -124,6 +126,8 @@ export interface Triathlon {
   date: string;                    // ISO date string
   distance: import('./triathlon').TriathlonDistance;
   weeksUntil?: number;             // Computed at runtime
+  /** True when `date` is projected to next year's edition (curated date passed). See race-calendar.ts. */
+  estimated?: boolean;
   /** Per-leg course facts. Optional — populated from triathlon-course-profiles.ts. */
   profile?: CourseProfile;
 }

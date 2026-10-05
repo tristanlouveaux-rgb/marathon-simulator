@@ -4,6 +4,13 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-09-28 — Race pickers roll passed events forward to next year
+
+- **Bug**: the marathon picker showed only a handful of races. Every race list (marathons, halves, triathlons) was hardcoded with 2026 dates, so by late September most had passed and were filtered out. The 8-week minimum lead time removed more.
+- **Fix**: new `src/data/race-calendar.ts`. When a curated date has passed, the getters (`getMarathonsByDistance`, `getAllUpcomingRaces`, `getMarathonById`, `getTriathlonsByDistance`, `getTriathlonById`) project the next edition on the same weekday-of-month slot and flag it `estimated`. The pickers label these "(est.)" and add a confirm-on-race-website caption. Race ids are unchanged, so course profiles and stored selections still resolve. Marathon list today: 18 races (was a handful), halves 16, IRONMAN 43, 70.3 36.
+- **HYROX deliberately excluded** (Tristan's call): dates move too much between seasons. It keeps confirmed dates only and needs a manual refresh from hyrox.com. The current list runs to 18 Dec 2026.
+- New optional `estimated?: boolean` on `Marathon` and `Triathlon` (`src/types/onboarding.ts`). Tests: `src/data/race-calendar.test.ts` (9).
+
 ## 2026-09-24 — App Store approval: landing page switched from waitlist to download
 
 `Mosaic Training` is live on the App Store (app `6776750342`, v1.0, free, iOS 15.0+, released 2026-09-17). Listing: `https://apps.apple.com/app/id6776750342`

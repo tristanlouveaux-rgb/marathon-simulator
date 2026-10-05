@@ -1,11 +1,13 @@
 import type { Triathlon } from '@/types/onboarding';
 import type { TriathlonDistance } from '@/types/triathlon';
-import { calculateWeeksUntil, isUpcoming } from '@/data/marathons';
+import { calculateWeeksUntil } from '@/data/marathons';
+import { withNextEdition } from '@/data/race-calendar';
 import { COURSE_PROFILES } from '@/data/triathlon-course-profiles';
 
 /**
  * IRONMAN-branded race calendar (full 140.6 and 70.3).
- * Dates sourced from official 2026 schedules. Refresh annually.
+ * Dates sourced from official 2026 schedules. Once a date passes, the getters
+ * project the next edition (race-calendar.ts); refresh here to confirm it.
  */
 export const WORLD_TRIATHLONS: Triathlon[] = [
   // ── IRONMAN (full distance, 140.6) ────────────────────────────────────
@@ -116,13 +118,15 @@ export function getTriathlonsByDistance(
   minWeeks: number = 8,
 ): Triathlon[] {
   return WORLD_TRIATHLONS
-    .filter(t => t.distance === distance && isUpcoming(t.date))
+    .filter(t => t.distance === distance)
+    .map(t => withNextEdition(t))
     .map(t => attachProfile({ ...t, weeksUntil: calculateWeeksUntil(t.date) }))
     .filter(t => t.weeksUntil !== undefined && t.weeksUntil >= minWeeks)
     .sort((a, b) => (a.weeksUntil ?? 0) - (b.weeksUntil ?? 0));
 }
 
 export function getTriathlonById(id: string): Triathlon | undefined {
-  const t = WORLD_TRIATHLONS.find(r => r.id === id);
+  const found = WORLD_TRIATHLONS.find(r => r.id === id);
+  const t = found ? withNextEdition(found) : undefined;
   return t ? attachProfile({ ...t, weeksUntil: calculateWeeksUntil(t.date) }) : undefined;
 }

@@ -13,6 +13,7 @@ import {
 } from '@/constants/triathlon-constants';
 import { getTriathlonsByDistance, getTriathlonById } from '@/data/triathlons';
 import { formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
+import { ESTIMATED_DATE_NOTE } from '@/data/race-calendar';
 import type { Triathlon } from '@/types/onboarding';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
@@ -245,11 +246,12 @@ function renderRacePicker(state: OnboardingState, distance: TriathlonDistance): 
       <option value="" ${selectedId ? '' : 'selected'}>Select a race…</option>
       ${races.map((race) => {
         const selected = selectedId === race.id;
-        return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}, ${race.city}</option>`;
+        return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}${race.estimated ? ' (est.)' : ''}, ${race.city}</option>`;
       }).join('')}
       <option value="__custom">Other / enter date manually</option>
     </select>
     ${selectedRace ? `<p class="tri-hint" style="margin-top:8px">${[formatTimeUntil(selectedRace.date), `${selectedRace.city}, ${selectedRace.country}`].filter(Boolean).join(' · ')}</p>` : ''}
+    ${selectedRace?.estimated ? `<p class="tri-hint">${ESTIMATED_DATE_NOTE}</p>` : ''}
   `;
 }
 

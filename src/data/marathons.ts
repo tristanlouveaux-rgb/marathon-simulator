@@ -1,5 +1,6 @@
 import type { Marathon } from '@/types/onboarding';
 import { MARATHON_COURSE_PROFILES } from './marathon-course-profiles';
+import { withNextEdition } from './race-calendar';
 
 /** Attach the static course profile (if any) to a marathon entry. */
 function attachProfile(m: Marathon): Marathon {
@@ -8,8 +9,10 @@ function attachProfile(m: Marathon): Marathon {
 }
 
 /**
- * World marathon and half marathon database
- * Dates are approximate and should be updated annually
+ * World marathon and half marathon database.
+ * Curated dates; once a date passes, the getters below project the next
+ * edition (race-calendar.ts) so the picker never runs dry. Refreshing a date
+ * here replaces the estimate with the confirmed one.
  */
 export const WORLD_MARATHONS: Marathon[] = [
   // World Marathon Majors
@@ -406,7 +409,8 @@ export function getMarathonsByDistance(
   minWeeks: number = 8
 ): Marathon[] {
   return WORLD_MARATHONS
-    .filter(m => m.distance === distance && isUpcoming(m.date))
+    .filter(m => m.distance === distance)
+    .map(m => withNextEdition(m))
     .map(m => attachProfile({
       ...m,
       weeksUntil: calculateWeeksUntil(m.date),
@@ -420,7 +424,7 @@ export function getMarathonsByDistance(
  */
 export function getAllUpcomingRaces(minWeeks: number = 8): Marathon[] {
   return WORLD_MARATHONS
-    .filter(m => isUpcoming(m.date))
+    .map(m => withNextEdition(m))
     .map(m => attachProfile({
       ...m,
       weeksUntil: calculateWeeksUntil(m.date),
@@ -433,7 +437,8 @@ export function getAllUpcomingRaces(minWeeks: number = 8): Marathon[] {
  * Find a marathon by ID
  */
 export function getMarathonById(id: string): Marathon | undefined {
-  const marathon = WORLD_MARATHONS.find(m => m.id === id);
+  const found = WORLD_MARATHONS.find(m => m.id === id);
+  const marathon = found ? withNextEdition(found) : undefined;
   if (marathon) {
     return attachProfile({
       ...marathon,

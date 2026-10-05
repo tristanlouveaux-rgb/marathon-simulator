@@ -1,6 +1,7 @@
 import type { OnboardingState, Marathon, TrainingFocus } from '@/types/onboarding';
 import type { RaceDistance } from '@/types/training';
 import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
+import { ESTIMATED_DATE_NOTE } from '@/data/race-calendar';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
@@ -338,11 +339,12 @@ function renderEventPicker(state: OnboardingState): string {
         <option value="" ${sel ? '' : 'selected'}>Select a race…</option>
         ${races.map(race => {
           const selected = sel?.id === race.id;
-          return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}</option>`;
+          return `<option value="${race.id}" ${selected ? 'selected' : ''}>${race.name} · ${formatRaceDate(race.date)}${race.estimated ? ' (est.)' : ''}</option>`;
         }).join('')}
         <option value="__custom">Other / enter date manually</option>
       </select>
       ${sel ? `<p class="rt-date-note" style="margin-top:8px">${[formatTimeUntil(sel.date), sel.city].filter(Boolean).join(' · ')}</p>` : ''}
+      ${sel?.estimated ? `<p class="rt-date-note" style="margin-top:4px">${ESTIMATED_DATE_NOTE}</p>` : ''}
     </div>
   `;
 }

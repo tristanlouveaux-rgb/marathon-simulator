@@ -534,6 +534,14 @@ Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTra
 **Key files**: `src/ui/wizard/steps/schedule.ts`, `src/ui/wizard/steps/workout-preview.ts`, `src/ui/wizard/controller.ts`, `src/workouts/plan_engine.ts` (`applyHoursBudget`), `src/workouts/intent_to_workout.ts` (populates `estimatedDurationMin`), `src/ui/plan-view.ts` (`buildBudgetBanner`), `src/workouts/generator.ts`, `src/types/onboarding.ts`
 **Tests**: ✅ All 1375 passing — 7 new soft-floor tests in `src/workouts/plan_engine.budget.test.ts`
 
+### 7d-ii. Race calendars roll forward (event pickers)
+
+**What it does**: The marathon, half-marathon and triathlon pickers never run dry. Each curated race carries one confirmed date. Once that date passes, the race reappears as its next edition on the same weekday-of-month slot (Berlin = last Sunday of September, Chicago = 2nd Sunday of October, Boston = 3rd Monday of April). Projected dates show "(est.)" in the dropdown and, once picked, a caption: "Estimated from last year's date. Confirm on the race website before relying on it." Refreshing a date in the data file replaces the estimate with the confirmed date. A picked race's date is frozen onto state at pick time, so refreshing the list never moves an existing plan. **HYROX is not rolled forward** (venues and months move each season, decided 2026-09-28): it lists confirmed dates only and needs a manual refresh from hyrox.com each season. Cycling events use month hints, so they are unaffected.
+
+**Key files**: `src/data/race-calendar.ts` (`nextEditionDate`, `withNextEdition`, `ESTIMATED_DATE_NOTE`), `src/data/marathons.ts`, `src/data/triathlons.ts`, `src/ui/wizard/steps/race-target.ts`, `src/ui/wizard/steps/triathlon-setup.ts`
+
+**Tests**: ✅ `src/data/race-calendar.test.ts` (9: weekday-slot projection for last-Sunday / nth-weekday races, weekday preserved for every curated race, no curated race left in the past, ids preserved)
+
 ### 7e. Onboarding Review — "Here's what we found" (confirm & edit)
 
 **What it does**: The last wizard step before "Build my plan". Shows recent training volume, measured benchmarks (VO2max, LT pace; FTP/CSS in tri/cycling), athlete profile, and personal bests — every row editable inline so the user corrects anything before the plan generates.
