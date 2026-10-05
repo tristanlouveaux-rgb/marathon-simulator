@@ -60,6 +60,7 @@ import {
   type SyntheticBestEffort,
 } from '@/data/appleHealthRoute';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { resolveTrimpSex } from '@/calculations/trimp';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import {
   detectRunRepsFromStream,
@@ -1210,7 +1211,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
   const routes = await readWorkoutRouteLocations({ startDate: oldestStart, endDate: newestEnd });
 
   const s = getMutableState();
-  const sex = s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const sex = resolveTrimpSex(s); // same sex resolution as the normaliser (trimp.ts)
   const restingHR = (s.restingHR && s.restingHR > 0) ? s.restingHR : null;
   const userMaxHR = (s.maxHR && s.maxHR > 0) ? s.maxHR : null;
   // Resolve a maxHR for the iTRIMP integration: explicit s.maxHR wins, else

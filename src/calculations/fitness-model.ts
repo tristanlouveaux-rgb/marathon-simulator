@@ -23,7 +23,7 @@ import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
 import { plausibleLtHR } from '@/calculations/lt-derivation';
-import { getBeta, type BiologicalSex } from '@/calculations/trimp';
+import { getBeta, resolveBiologicalSex, type BiologicalSex, type BiologicalSexSource } from '@/calculations/trimp';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
@@ -277,7 +277,8 @@ export const ATL_DECAY = Math.exp(-7 / 7);   // ≈ 0.368
  * implausible profile must never reach the formula.
  * The 15000 fallback is sex-neutral: it has no stated HR profile behind it
  * (back-solved later as ≈ an 84%-HRR male-β profile), so there is no
- * documented derivation to compute a female equivalent from.
+ * documented derivation to compute a female equivalent from. Women on the
+ * fallback therefore still read ≈ 0.81× at LTHR (open decision).
  */
 export function computeAthleteNormalizer(
   ltHR?: number,
@@ -297,24 +298,29 @@ export function computeAthleteNormalizer(
   return 3600 * hrr * Math.exp(beta * hrr);
 }
 
-/** The state fields the normalizer reads. A SimulatorState satisfies it. */
-export interface AthleteHRProfile {
+/**
+ * The state fields the normalizer reads. A SimulatorState satisfies it. The
+ * sex fields (biologicalSex, onboarding.biologicalSex, hasCompletedOnboarding)
+ * are read through trimp.ts resolveBiologicalSex, the same resolver every
+ * iTRIMP producer uses, so producer and normalizer β always agree.
+ */
+export interface AthleteHRProfile extends BiologicalSexSource {
   ltHR?: number;
   restingHR?: number;
   maxHR?: number;
-  biologicalSex?: BiologicalSex | 'prefer_not_to_say' | null;
 }
 
 /** Convenience: compute normalizer from a state-like object (sex included). */
 export function getNormalizerFromState(s: AthleteHRProfile): number {
-  return computeAthleteNormalizer(s.ltHR, s.restingHR, s.maxHR, s.biologicalSex);
+  return computeAthleteNormalizer(s.ltHR, s.restingHR, s.maxHR, resolveBiologicalSex(s));
 }
 
 // Module-level normalizer used by every normalizeiTrimp() call without an
 // explicit normalizer. In the app it is BOUND to live state
 // (bindAthleteNormalizerToState, called once by launchApp), so any write to
-// ltHR / restingHR / maxHR / biologicalSex (Account HR edit, physiology sync,
-// LT recompute, HealthKit sex seeding, onboarding) is picked up on the next
+// ltHR / restingHR / maxHR / sex (Account HR edit, physiology sync, LT
+// recompute, HealthKit sex seeding, the wizard's sex answer and its copy to
+// s.biologicalSex at plan initialisation) is picked up on the next
 // conversion. Before the binding, a cached value set at launch went stale
 // after an in-session edit until the next cold launch. Unbound (tests, and
 // any entry point that never binds) it is whatever setAthleteNormalizer()
@@ -341,8 +347,9 @@ export function setAthleteNormalizer(
 
 /**
  * Bind the module normalizer to a live state getter (pass null to unbind).
- * The normalizer is recomputed whenever ltHR / restingHR / maxHR /
- * biologicalSex differ from the last read, so it cannot go stale.
+ * The normalizer is recomputed whenever ltHR / restingHR / maxHR or the
+ * resolved sex (resolveBiologicalSex) differ from the last read, so it cannot
+ * go stale.
  */
 export function bindAthleteNormalizerToState(source: (() => AthleteHRProfile | null | undefined) | null): void {
   _normSource = source;
@@ -353,7 +360,7 @@ function currentAthleteNorm(): number {
   if (_normSource) {
     const p = _normSource();
     if (p) {
-      const key = `${p.ltHR}|${p.restingHR}|${p.maxHR}|${p.biologicalSex}`;
+      const key = `${p.ltHR}|${p.restingHR}|${p.maxHR}|${resolveBiologicalSex(p)}`;
       if (key !== _normSourceKey) {
         _normSourceKey = key;
         _athleteNorm = getNormalizerFromState(p);

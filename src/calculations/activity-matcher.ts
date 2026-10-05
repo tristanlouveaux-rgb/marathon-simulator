@@ -7,7 +7,7 @@ import { getMutableState, saveState } from '@/state';
 import { gp } from '@/calculations/paces';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
-import { calculateITrimpFromSummary } from './trimp';
+import { calculateITrimpFromSummary, resolveTrimpSex, type BiologicalSex } from './trimp';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
@@ -436,11 +436,10 @@ function resolveITrimp(
   row: GarminActivityRow,
   restingHR: number | null | undefined,
   maxHR: number | null | undefined,
-  biologicalSex: string | null | undefined,
+  sex: BiologicalSex | undefined, // resolveTrimpSex(s): the normaliser's sex resolution
 ): number | null {
   if (row.iTrimp != null) return row.iTrimp;
   if (row.avg_hr != null && restingHR && maxHR) {
-    const sex = biologicalSex === 'male' || biologicalSex === 'female' ? biologicalSex : undefined;
     return calculateITrimpFromSummary(row.avg_hr, row.duration_sec, restingHR, maxHR, sex);
   }
   return null;
@@ -799,7 +798,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           avgHR: row.avg_hr ?? actual.avgHR,
           maxHR: row.max_hr ?? actual.maxHR,
           calories: row.calories ?? actual.calories,
-          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? actual.iTrimp,
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)) ?? actual.iTrimp,
           hrZones: row.hrZones ?? actual.hrZones,
           polyline: row.polyline ?? actual.polyline,
           kmSplits: row.kmSplits ?? actual.kmSplits,
@@ -846,7 +845,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           item.startTime = row.start_time;
           if (row.distance_m != null) item.distanceM = row.distance_m;
           if (row.duration_sec) item.durationSec = row.duration_sec;
-          item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+          item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)) ?? item.iTrimp;
           item.hrZones = row.hrZones ?? item.hrZones;
           item.polyline = row.polyline ?? item.polyline;
           item.kmSplits = row.kmSplits ?? item.kmSplits;
@@ -869,7 +868,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         item.avgHR = row.avg_hr ?? item.avgHR;
         item.maxHR = row.max_hr ?? item.maxHR;
         item.calories = row.calories ?? item.calories;
-        item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+        item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)) ?? item.iTrimp;
         item.hrZones = row.hrZones ?? item.hrZones;
         item.polyline = row.polyline ?? item.polyline;
         item.kmSplits = row.kmSplits ?? item.kmSplits;
@@ -888,12 +887,12 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     // Prefer the DB / stream-computed iTrimp (most accurate).
     // But if the stored value is physically impossible (> 3 TSS/min implies
     // HR fraction exceeded 1 due to wrong maxHR), recompute from avg_hr.
-    const storedForCheck = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+    const storedForCheck = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
     const durationMin = row.duration_sec / 60;
     const storedTSS = storedForCheck != null ? normalizeiTrimp(storedForCheck) : 0;
     const freshITrimp = (storedForCheck != null && durationMin > 0 && storedTSS > durationMin * 3
       && row.avg_hr != null && rhrBaseline != null && s.maxHR != null)
-      ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, rhrBaseline, s.maxHR, s.biologicalSex as 'male' | 'female' | undefined)
+      ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, rhrBaseline, s.maxHR, resolveTrimpSex(s))
       : storedForCheck;
     const freshZones = row.hrZones ?? null;
     if (freshITrimp == null && freshZones == null) continue;
@@ -1117,7 +1116,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             avgHR: row.avg_hr ?? null,
             maxHR: row.max_hr ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
             hrZones: row.hrZones ?? null,
             activityType: row.activity_type,
             plannedType: stationMatch.t ?? null,
@@ -1151,7 +1150,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           }
 
           // Signal B TSS (no runSpec discount. Station work is primary load in HYROX)
-          const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+          const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
           const rawTSS = (rawITrimp != null && rawITrimp > 0)
             ? normalizeiTrimp(rawITrimp)
             : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1204,7 +1203,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               avgHR: row.avg_hr ?? null,
               maxHR: row.max_hr ?? null,
               calories: row.calories ?? null,
-              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
               hrZones: row.hrZones ?? null,
               displayName: formatActivityType(row.activity_type),
               activityType: row.activity_type,
@@ -1236,7 +1235,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             anaerobicEffect: row.anaerobic_effect ?? null,
             garminRpe: row.garmin_rpe ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
             hrZones: row.hrZones ?? null,
             polyline: null,
             kmSplits: null,
@@ -1304,7 +1303,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             aerobicEffect: row.aerobic_effect ?? null,
             anaerobicEffect: row.anaerobic_effect ?? null,
             workoutName: hyroxRunMatch.n,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
             hrZones: row.hrZones ?? null,
             activityType: row.activity_type,
             plannedType: hyroxRunMatch.t ?? null,
@@ -1316,7 +1315,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             elevationGainM: row.elevationGainM ?? null,
           };
 
-          const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+          const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
           const runTSS = (runITrimp != null && runITrimp > 0)
             ? normalizeiTrimp(runITrimp)
             : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1390,7 +1389,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               avgHR: row.avg_hr ?? null,
               maxHR: row.max_hr ?? null,
               calories: row.calories ?? null,
-              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
               hrZones: row.hrZones ?? null,
               activityType: row.activity_type,
               rpe,
@@ -1426,7 +1425,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               avgHR: row.avg_hr,
               maxHR: row.max_hr,
               calories: row.calories,
-              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
               hrZones: row.hrZones ?? null,
               displayName: formatActivityType(row.activity_type),
               activityType: row.activity_type,
@@ -1458,7 +1457,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             anaerobicEffect: row.anaerobic_effect ?? null,
             garminRpe: row.garmin_rpe ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
             hrZones: row.hrZones ?? null,
             polyline: row.polyline ?? null,
             kmSplits: row.kmSplits ?? null,
@@ -1510,7 +1509,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           aerobicEffect: row.aerobic_effect ?? null,
           anaerobicEffect: row.anaerobic_effect ?? null,
           workoutName: match.workoutName || match.matchedWorkout?.n || undefined,
-          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
           hrZones: row.hrZones ?? null,
           activityType: row.activity_type ?? (appType === 'run' ? 'RUNNING' : appType === 'gym' ? 'STRENGTH_TRAINING' : null),
           plannedType: match.matchedWorkout?.t ?? null,
@@ -1534,7 +1533,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         wk.garminActuals[match.workoutId] = actual;
 
         // Compute TSS-calibrated Training Load for this matched run
-        const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+        const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
         const runTL = (runITrimp != null && runITrimp > 0)
           ? normalizeiTrimp(runITrimp)
           : (actual.durationSec / 60) * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1603,7 +1602,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           anaerobicEffect: row.anaerobic_effect ?? null,
           garminRpe: row.garmin_rpe ?? null,
           calories: row.calories ?? null,
-          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
           hrZones: row.hrZones ?? null,
           polyline: row.polyline ?? null,
           kmSplits: row.kmSplits ?? null,
@@ -1642,7 +1641,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             anaerobicEffect: row.anaerobic_effect ?? null,
             garminRpe: row.garmin_rpe ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
             hrZones: row.hrZones ?? null,
             polyline: row.polyline ?? null,
             kmSplits: row.kmSplits ?? null,
@@ -1823,7 +1822,7 @@ export function healMissingITrimp(): boolean {
   const s = getMutableState();
   const rhrBaseline = computeRollingRestingHR(s.physiologyHistory, s.restingHR);
   if (!rhrBaseline || !s.maxHR) return false;
-  const sex = s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const sex = resolveTrimpSex(s);
   let changed = false;
   for (const wk of s.wks ?? []) {
     // Heal garminActuals (auto-matched or user-reviewed matched activities)

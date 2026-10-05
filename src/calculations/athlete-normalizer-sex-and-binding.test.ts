@@ -14,6 +14,13 @@
  * getNormalizerFromState(s) were already fresh, so the same activity showed two
  * TSS values. It is now bound to live state.
  *
+ * (3) Producer and normalizer must resolve the athlete's sex the same way.
+ * During the onboarding wizard the answer lives only on
+ * s.onboarding.biologicalSex (plan init copies it to s.biologicalSex), so a
+ * normalizer reading s.biologicalSex alone decodes wizard-stamped iTRIMP with
+ * a different β than it was produced with. Both sides now go through
+ * trimp.ts resolveBiologicalSex.
+ *
  * Fixture profile (LTHR 168, rest 50, max 190 = 88% of max, inside the
  * plausible LTHR band) is the B12 audit probe profile.
  */
@@ -30,7 +37,10 @@ import {
   computeWeekRawTSS,
   type AthleteHRProfile,
 } from './fitness-model';
-import { calculateITrimp, calculateITrimpFromLaps, calculateITrimpFromSummary, getBeta } from './trimp';
+import {
+  calculateITrimp, calculateITrimpFromLaps, calculateITrimpFromSummary, getBeta,
+  resolveBiologicalSex, resolveTrimpSex,
+} from './trimp';
 import type { Week, GarminActual } from '@/types';
 
 const LT = 168;
@@ -162,6 +172,91 @@ describe('module normalizer is bound to live state and cannot go stale', () => {
     setAthleteNormalizer();
     s.maxHR = 200;
     expect(getAthleteNormalizer()).toBe(15000);
+  });
+});
+
+describe('producers and the normalizer resolve sex the same way, including mid-wizard', () => {
+  type WizardState = AthleteHRProfile & { hasCompletedOnboarding?: boolean };
+  const wizard = (onboardingSex?: 'male' | 'female' | 'prefer_not_to_say', topLevel?: 'male' | 'female'): WizardState => ({
+    ltHR: LT, restingHR: REST, maxHR: MAX,
+    hasCompletedOnboarding: false,
+    biologicalSex: topLevel,
+    onboarding: { biologicalSex: onboardingSex },
+  });
+  /** What initialization*.ts does with the wizard answer: copy it over when set, then finish onboarding. */
+  const initialisePlan = (s: WizardState) => {
+    if (s.onboarding?.biologicalSex) s.biologicalSex = s.onboarding.biologicalSex;
+    s.hasCompletedOnboarding = true;
+  };
+
+  it('mid-wizard, the answer on s.onboarding is the resolved sex', () => {
+    expect(resolveBiologicalSex(wizard('female'))).toBe('female');
+    expect(resolveTrimpSex(wizard('female'))).toBe('female');
+    // HealthKit seeded s.biologicalSex, then the user answered differently in about-you.
+    expect(resolveBiologicalSex(wizard('female', 'male'))).toBe('female');
+  });
+
+  it('after onboarding, s.biologicalSex wins and the wizard answer is only a fallback', () => {
+    expect(resolveBiologicalSex({ hasCompletedOnboarding: true, biologicalSex: 'female', onboarding: { biologicalSex: 'male' } })).toBe('female');
+    expect(resolveBiologicalSex({ hasCompletedOnboarding: true, onboarding: { biologicalSex: 'female' } })).toBe('female');
+    expect(resolveBiologicalSex({ biologicalSex: 'female' })).toBe('female'); // state with no onboarding object
+    expect(resolveBiologicalSex({})).toBeUndefined();
+  });
+
+  it('prefer_not_to_say resolves to the producers\' default β (no sex argument)', () => {
+    expect(resolveTrimpSex(wizard('prefer_not_to_say'))).toBeUndefined();
+    expect(getNormalizerFromState(wizard('prefer_not_to_say'))).toBe(computeAthleteNormalizer(LT, REST, MAX, 'male'));
+  });
+
+  it('the normalizer reads the wizard answer when s.biologicalSex is not yet set', () => {
+    expect(getNormalizerFromState(wizard('female'))).toBe(computeAthleteNormalizer(LT, REST, MAX, 'female'));
+  });
+
+  it('an hour at LTHR stamped during the wizard decodes to 100 TSS once the plan is initialised', () => {
+    for (const s of [wizard('female'), wizard('female', 'male'), wizard('male')]) {
+      bindAthleteNormalizerToState(() => s);
+      const { hrs, ts } = hourAt(LT);
+      const stamped = calculateITrimp(hrs, ts, REST, MAX, resolveTrimpSex(s)); // e.g. review-step backfill
+      expect(normalizeiTrimp(stamped)).toBeCloseTo(100, 6);                  // decoded mid-wizard
+      initialisePlan(s);
+      expect(normalizeiTrimp(stamped)).toBeCloseTo(100, 6);                  // decoded after plan init
+    }
+  });
+
+  it('the bound normalizer follows the plan-init copy of the wizard answer', () => {
+    const s = wizard('female', 'male');
+    bindAthleteNormalizerToState(() => s);
+    const female = computeAthleteNormalizer(LT, REST, MAX, 'female');
+    expect(getAthleteNormalizer()).toBe(female);
+    initialisePlan(s);
+    expect(getAthleteNormalizer()).toBe(female);
+    expect(getAthleteNormalizer()).toBe(getNormalizerFromState(s));
+  });
+});
+
+describe('guard: every client iTRIMP producer takes sex from resolveBiologicalSex', () => {
+  it('no producer reads s.biologicalSex directly for β', () => {
+    const srcRoot = path.join(__dirname, '..');
+    const patterns = [
+      /biological_sex:\s*\w+\.biologicalSex\b/,                                   // edge-function payload
+      /\.biologicalSex === 'male' \|\| \w+\.biologicalSex === 'female'/,              // inline narrowing for a producer
+      /(calculateITrimp\w*|resolveITrimp|computeHREnrichment\w*|streamsToActivityRow)\([^)]*\.biologicalSex/,
+    ];
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue;
+        const lines = fs.readFileSync(full, 'utf8').split('\n');
+        for (const [i, line] of lines.entries()) {
+          const code = line.split('//')[0];
+          if (patterns.some(re => re.test(code))) offenders.push(`${full}:${i + 1}`);
+        }
+      }
+    };
+    walk(srcRoot);
+    expect(offenders).toEqual([]);
   });
 });
 
