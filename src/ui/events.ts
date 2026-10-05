@@ -40,7 +40,8 @@ import {
 } from '@/calculations/lt-estimator';
 import { openActivityReReview } from '@/ui/activity-review';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
-import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { resolveWeekForPlanChanges } from '@/ui/week-resolve';
+import { isStoodDownByLayer } from '@/workouts/render-layer';
 import { upsertWorkoutMod, removeWorkoutMods } from '@/workouts/workout-mods';
 import { collectActivityAliases, scrubExcessRecords } from '@/calculations/excess-records';
 import { resolveMtlAdherence } from '@/calculations/mtl';
@@ -1233,6 +1234,9 @@ export async function next(): Promise<void> {
         // A choice the athlete made in this week's debrief wins: the debrief previews this week
         // with the live ACWR status and its Accept stamps the pane they picked on this week just
         // before next() runs, so it is the explicit answer to this week's prompt (ISSUE-295).
+        // The debrief opens on the pane this same episode decision picks
+        // (week-debrief.ts debriefAcwrInitialChoice), so an Accept without a tap stamps the
+        // carried choice and never reverts it.
         const debriefChoice = nextWk.acwrChoice;
         const priorStatuses = s.wks.slice(0, s.w - 1).map((w: any) => w?.scheduledAcwrStatus);
         const decision = resolveAcwrEpisodeChoice(priorStatuses, acwr.ratio, s.wks[s.w - 2]?.acwrChoice);
@@ -2582,17 +2586,21 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   const wk = s.wks[s.w - 1];
   if (!wk) return;
 
-  // This week as the Plan tab shows it (canonical resolver): accepted changes,
-  // moves and illness/holiday adjustments applied, pending timing suggestions left
-  // as labels. The adjustment is sized from the session the user actually sees.
-  const workouts = resolveWeekWorkouts(s, s.w) as Workout[];
+  // This week's plan layers (canonical resolver, resolveWeekForPlanChanges):
+  // accepted changes and moves applied, pending timing suggestions left as labels.
+  // The illness, holiday and bridge layers are left out: they are re-applied on top
+  // of this mod at render, so the change is sized from the plan's session and the
+  // layer scales the result once. Illness and bridge never rename a session, so the
+  // name the sheet passed still finds it.
+  const workouts = resolveWeekForPlanChanges(s, s.w) as Workout[];
 
   // Find target run workout. Match by name on the given day first (two sessions can
   // share a name, e.g. two "Easy Run"s), then by name, then by dayOfWeek, then first
-  // available.
+  // available. A session a holiday or an illness rest day stands down is not run,
+  // so it is never the target.
   const runWorkouts = workouts.filter(w =>
     w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
-    w.status !== 'replaced'
+    w.status !== 'replaced' && !isStoodDownByLayer(w)
   );
 
   let todayRun = workoutName

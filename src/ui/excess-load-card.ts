@@ -27,7 +27,7 @@ import {
   createActivity,
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
-import { resolveWeekWorkouts } from './week-resolve';
+import { resolveWeekForPlanChanges } from './week-resolve';
 import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import type { WorkoutMod } from '@/types';
 import { formatKm } from '@/utils/format';
@@ -36,17 +36,19 @@ import { formatKm } from '@/utils/format';
 // Helpers
 
 /**
- * The current week (offset=0) or next week (offset=1) as the Plan tab shows it:
- * the canonical resolver (week-resolve.ts), so generator arguments, workout ids and
- * every accepted change match plan-view and the wk.rated keys. Replaced sessions
- * are dropped (nothing left to cut). Suggestions sized from this list never undo
- * an earlier, deeper cut (audit A2).
+ * The current week (offset=0) or next week (offset=1) a change is sized from and
+ * written against: the canonical resolver with the plan layers only
+ * (week-resolve.ts resolveWeekForPlanChanges), so generator arguments, workout ids
+ * and every accepted change match plan-view and the wk.rated keys, while the
+ * illness, holiday and bridge layers (re-applied on top of every mod at render) are
+ * never baked into a mod. Replaced sessions are dropped (nothing left to cut).
+ * Suggestions sized from this list never undo an earlier, deeper cut (audit A2).
  */
 function getWeekWorkouts(offset: 0 | 1 = 0) {
   const s = getMutableState();
   const viewWeek = s.w + offset;
   if (!s.wks?.[viewWeek - 1]) return [];
-  return resolveWeekWorkouts(s, viewWeek).filter((w: any) => w.status !== 'replaced');
+  return resolveWeekForPlanChanges(s, viewWeek).filter((w: any) => w.status !== 'replaced');
 }
 
 /**

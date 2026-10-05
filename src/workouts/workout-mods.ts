@@ -8,7 +8,10 @@
  * change against the resolved week (mods already applied) and write it with
  * upsertWorkoutMod, which REPLACES the workout's current mod and keeps the
  * replaced one on `previousMod`. removeWorkoutMods restores what a removed mod
- * replaced, so undo and re-review keep their old meaning.
+ * replaced, so undo and re-review keep their old meaning. The week they size from
+ * is the plan layers only (ui/week-resolve.ts resolveWeekForPlanChanges): the
+ * illness, holiday and bridge layers are re-applied on top of every mod at render,
+ * so their output must never be written into one.
  *
  * Planning side: these helpers change prescriptions only. Tracking (actuals,
  * load, prediction) never reads them.
@@ -24,6 +27,7 @@
 import type { Week, WorkoutMod, Workout } from '@/types';
 import { isTimingMod } from '@/cross-training/timing-mod-reason';
 import { parseDistanceKm, isSimpleDistanceDesc } from './workout-scaling';
+import { isStoodDownByLayer } from './render-layer';
 
 type ModKey = Pick<WorkoutMod, 'name' | 'dayOfWeek' | 'workoutId'>;
 
@@ -41,10 +45,14 @@ export function isUserAdjusted(w: object | null | undefined): boolean {
   return !!(w as { userScaledAt?: string } | null | undefined)?.userScaledAt;
 }
 
-/** Drop user-adjusted sessions from a candidate list before it is handed to the
- *  cross-training suggester, so no suggestion targets them. */
+/** Drop sessions no suggestion may cut from a candidate list before it is handed
+ *  to the cross-training suggester: user-adjusted sessions (their Adjust stands)
+ *  and sessions a holiday or an illness rest day stands down this week (they are
+ *  not run, so cutting them absorbs no load). An illness- or bridge-scaled session
+ *  stays a candidate; the plan-layers week it comes from carries its plan values,
+ *  and the layer scales the cut session once at render. */
 export function adjustableWorkouts<T extends object>(workouts: T[]): T[] {
-  return workouts.filter(w => !isUserAdjusted(w));
+  return workouts.filter(w => !isUserAdjusted(w) && !isStoodDownByLayer(w));
 }
 
 export interface UpsertOptions {
@@ -75,8 +83,12 @@ export function upsertWorkoutMod(wk: Week, mod: WorkoutMod, opts: UpsertOptions 
 
   const next: WorkoutMod = { ...mod };
   // The effective mod is the last one in array order (the resolver applies mods
-  // in order). Earlier stacked mods from before this rule were already invisible.
-  const prev = matches[matches.length - 1];
+  // in order). Earlier matches are mods appended on top of one another (from before
+  // this rule, or by a writer that still appends, such as the Adjust overlay); they
+  // are folded into the chain under the last one, oldest deepest, so removing a
+  // later mod still gives each earlier one back instead of dropping it.
+  let prev: WorkoutMod | undefined;
+  for (const m of matches) prev = prev && !m.previousMod ? { ...m, previousMod: prev } : m;
   if (prev) {
     if (prev.originalDistance != null) {
       next.originalDistance = prev.originalDistance;

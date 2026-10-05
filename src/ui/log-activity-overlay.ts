@@ -22,7 +22,7 @@ import {
   applyAdjustments,
 } from '@/cross-training';
 import { showSuggestionModal } from './suggestion-modal';
-import { resolveWeekWorkouts } from './week-resolve';
+import { resolveWeekForPlanChanges } from './week-resolve';
 import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import { showSimpleToast } from './toast';
 import { addAdhocWorkoutFromPending } from '@/calculations/activity-matcher';
@@ -116,8 +116,11 @@ function submitManualActivity(sport: string, durationMin: number, rpe: number): 
   const jsDay = new Date().getDay();
   activity.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
 
-  const workouts = resolveWeekWorkouts(s, s.w);
-  // Sessions the user scaled by hand keep their Adjust: never offered for a cut.
+  // Plan layers only: the change is written as a mod, and the illness, holiday and
+  // bridge layers are re-applied on top of every mod at render.
+  const workouts = resolveWeekForPlanChanges(s, s.w);
+  // Sessions the user scaled by hand keep their Adjust, and sessions a holiday or
+  // an illness rest day stands down are not run: neither is offered for a cut.
   const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(workouts.filter((w: any) => w.t !== 'cross' && w.t !== 'gym')), s.pac);
   const popup = buildCrossTrainingPopup(
     {

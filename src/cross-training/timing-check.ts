@@ -36,7 +36,8 @@ import { TL_PER_MIN } from '@/constants';
 import { isLongRun } from '@/workouts/long-run';
 import { scaleDescriptionProportional } from '@/workouts/workout-scaling';
 import { upsertWorkoutMod, modsTargetSameWorkout } from '@/workouts/workout-mods';
-import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { resolveWeekForPlanChanges } from '@/ui/week-resolve';
+import { renderLayerOf } from '@/workouts/render-layer';
 import {
   TIMING_MOD_PREFIX,
   TIMING_ACCEPTED_PREFIX,
@@ -291,11 +292,13 @@ function weekStartISO(planStartDate: string, weekNum: number): string {
 }
 
 /**
- * Sessions a timing suggestion may target, from the resolved week. Excluded:
+ * Sessions a timing suggestion may target, from the plan-layers week. Excluded:
  *   - replaced or skipped sessions (nothing left to downgrade);
  *   - a session whose suggestion was already accepted (so it does not come back);
  *   - a session the user scaled by hand (their explicit choice);
- *   - sessions an illness or holiday adjustment is already managing.
+ *   - sessions an illness, holiday or post-holiday bridge layer already adjusts
+ *     (renderLayer). The bridge already eases the session, and a suggestion built
+ *     from its plan values would not read like the card the Plan shows.
  */
 function timingCandidates(workouts: any[]): any[] {
   return workouts.filter(w =>
@@ -303,8 +306,7 @@ function timingCandidates(workouts: any[]): any[] {
     && w.status !== 'skipped'
     && !isTimingAcceptedMod(w.modReason)
     && !w.userScaledAt
-    && !w.illnessMod
-    && !w.holidayMod,
+    && !renderLayerOf(w),
   );
 }
 
@@ -313,17 +315,18 @@ function timingCandidates(workouts: any[]): any[] {
  * replacing any previous Timing: mods. Does NOT save state. Caller must save.
  * Returns true if anything changed.
  *
- * The suggestions are computed from the canonical resolved week
- * (resolveWeekWorkouts): the same generator arguments as the Plan tab, every
- * accepted change, move, illness and holiday adjustment applied. A suggestion is
- * therefore built from what the Plan tab shows, and accepting it never reverses an
- * earlier cut. Planning side only.
+ * The suggestions are computed from the canonical resolver with the plan layers
+ * only (resolveWeekForPlanChanges): the same generator arguments as the Plan tab,
+ * every accepted change and move applied, so accepting a suggestion never reverses
+ * an earlier cut. The illness, holiday and bridge layers are left out because an
+ * accepted suggestion becomes a mod and those layers are re-applied on top of it at
+ * render; the sessions they adjust get no suggestion. Planning side only.
  */
 export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
   if (!s.planStartDate) return false;
 
   const ws = weekStartISO(s.planStartDate, wk.w);
-  const workouts = timingCandidates(resolveWeekWorkouts(s, wk.w));
+  const workouts = timingCandidates(resolveWeekForPlanChanges(s, wk.w));
 
   const prevWk = s.wks?.find((w: Week) => w.w === wk.w - 1);
   const prevWs = prevWk ? weekStartISO(s.planStartDate, prevWk.w) : undefined;

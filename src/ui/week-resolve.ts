@@ -8,6 +8,19 @@ import { isTimingMod } from '@/cross-training/timing-mod-reason';
 import { calculateWorkoutLoad } from '@/workouts/load';
 import { dropPreOnboardSessions } from './workout-status';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { renderLayerOf } from '@/workouts/render-layer';
+
+export interface ResolveWeekOptions {
+  /**
+   * Apply the render-time layers (illness, holiday, post-holiday bridge). Default
+   * true: the week exactly as the Plan tab shows it. With false the week stops after
+   * the plan layers (generation, planned adhoc sessions, accepted changes, moves,
+   * pre-onboarding drop); each session a render layer would adjust is tagged with
+   * that layer as `renderLayer` but keeps the values the plan prescribes. See
+   * resolveWeekForPlanChanges.
+   */
+  renderLayers?: boolean;
+}
 
 /**
  * Canonical resolver for a running-mode week's workout list.
@@ -22,6 +35,9 @@ import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
  *   6. holiday suppression (weeks inside the holiday window)
  *   7. comeback-bridge scaling
  *
+ * Steps 5 to 7 are display only (pass `renderLayers: false`, or use
+ * resolveWeekForPlanChanges, for a week a mod is written against).
+ *
  * This is the single source of truth for "what is this week's plan?". Both the
  * Plan tab (plan-view.computeRenderedWorkouts) and the Home Today card read from
  * it so the two surfaces can never disagree about what the next workout is.
@@ -30,7 +46,7 @@ import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
  * re-implemented only a fraction of this (moves only), skipping intermediate
  * sessions that mods/adhoc/illness/holiday had added or reshaped.
  */
-export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] {
+export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number, opts: ResolveWeekOptions = {}): any[] {
   const wk = s.wks?.[viewWeek - 1];
   const isCurrentWeek = viewWeek === s.w;
   // injuryState is threaded so an active running injury renders its adapted
@@ -104,6 +120,31 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
     }
   }
 
+  if (opts.renderLayers === false) {
+    // Plan layers only. The render layers run on a copy so each session records
+    // which layer would adjust it, without taking that layer's values.
+    const shadow = workouts.map((w: any) => ({ ...w }));
+    applyRenderLayers(s, viewWeek, isCurrentWeek, wk, shadow);
+    workouts.forEach((w: any, i: number) => {
+      const layer = renderLayerOf(shadow[i]);
+      if (layer) w.renderLayer = layer;
+    });
+  } else {
+    applyRenderLayers(s, viewWeek, isCurrentWeek, wk, workouts);
+  }
+
+  // Reduced partial first week: drop sessions on days before the user onboarded
+  // (mid-week start), so week 1 begins today instead of showing uncompletable
+  // earlier-day cards. No-op for established plans and Sat/Sun onboards.
+  return dropPreOnboardSessions(workouts, s.planStartDate, viewWeek, s.w, s.planCreatedAt);
+}
+
+/**
+ * Steps 5 to 7: illness (current week only), holiday (weeks inside the holiday
+ * window) and comeback-bridge scaling. These are recomputed from live state on
+ * every render, so their output is display only and never persisted into a mod.
+ */
+function applyRenderLayers(s: SimulatorState, viewWeek: number, isCurrentWeek: boolean, wk: any, workouts: any[]): void {
   const _illness = (s as any).illnessState;
   if (_illness?.active && isCurrentWeek) {
     applyIllnessMods(workouts, _illness);
@@ -118,9 +159,21 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
   }
 
   if (wk) applyBridgeMods_renderTime(workouts, wk);
+}
 
-  // Reduced partial first week: drop sessions on days before the user onboarded
-  // (mid-week start), so week 1 begins today instead of showing uncompletable
-  // earlier-day cards. No-op for established plans and Sat/Sun onboards.
-  return dropPreOnboardSessions(workouts, s.planStartDate, viewWeek, s.w, s.planCreatedAt);
+/**
+ * The week a plan change is sized from and written against: the canonical resolver
+ * with the plan layers only (resolveWeekWorkouts with renderLayers false).
+ *
+ * Every flow that WRITES a mod reads this (cross-training review and auto-process,
+ * the silent Tier-1 trim, ACWR Reduce, the excess-load card, the GPS extra-run
+ * suggester, manual log, timing suggestions, the readiness recovery change). The
+ * illness, holiday and bridge layers are re-applied at render on top of every mod,
+ * so a mod sized from their output was applied twice and kept the illness- or
+ * bridge-scaled distance after the illness or holiday ended. A session such a
+ * layer adjusts carries `renderLayer` (workouts/render-layer.ts) so a flow can
+ * leave it alone. Matching and display keep the full resolver.
+ */
+export function resolveWeekForPlanChanges(s: SimulatorState, viewWeek: number): any[] {
+  return resolveWeekWorkouts(s, viewWeek, { renderLayers: false });
 }

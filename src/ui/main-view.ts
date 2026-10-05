@@ -18,7 +18,7 @@ import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { writeAdjustmentMods, removeWorkoutMods, adjustableWorkouts } from '@/workouts/workout-mods';
-import { resolveWeekWorkouts } from './week-resolve';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges } from './week-resolve';
 import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SPORTS_DB } from '@/constants';
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
@@ -2112,15 +2112,16 @@ function updateLightenedWeekBanner(s: SimulatorState): void {
 // ---------------------------------------------------------------------------
 
 /**
- * The current week as the Plan tab shows it (canonical resolver, week-resolve.ts):
- * the Plan's generator arguments and every accepted change applied. The ACWR
- * reduction is sized from this, so a replaced run is not offered again and a cut
- * run is priced at its cut distance (audit A2). It is also what the Home button's
- * visibility check projects from, so the two agree.
+ * The current week an ACWR cut is sized from and written against: the canonical
+ * resolver with the plan layers only (week-resolve.ts resolveWeekForPlanChanges).
+ * The Plan's generator arguments and every accepted change apply, so a replaced
+ * run is not offered again and a cut run is priced at its cut distance (audit A2).
+ * The illness, holiday and bridge layers are re-applied at render on top of every
+ * mod, so a cut is never sized from their output.
  */
 function getWeekWorkoutsForACWR(s: ReturnType<typeof getMutableState>) {
   if (!s.wks?.[s.w - 1]) return [];
-  return resolveWeekWorkouts(s, s.w);
+  return resolveWeekForPlanChanges(s, s.w);
 }
 
 export function triggerACWRReduction(): void {
@@ -2204,8 +2205,15 @@ export function triggerACWRReduction(): void {
   }
 
   const freshWorkouts = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
-  // Sessions the user scaled by hand keep their Adjust: never offered for a cut.
+  // Sessions the user scaled by hand keep their Adjust, and sessions a holiday or
+  // an illness rest day stands down are not run: neither is offered for a cut.
   const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(freshWorkouts), s.pac);
+  // The week as the Plan tab shows it (every layer applied). The projection, the
+  // intensity header and the km-spike rule describe this week, and the projection
+  // input is exactly the Home button's (home-view clickPlan), so the button and
+  // this handler reach the same verdict.
+  const shownWeek = resolveWeekWorkouts(s, s.w);
+  const shownFresh = shownWeek.filter((w: any) => !(wk.rated ?? {})[w.id || w.n]);
 
   // Compute overshoot: only reduce enough to bring projected week back to target.
   // Canonical projection shared with the Home nudge's button-visibility logic
@@ -2215,7 +2223,7 @@ export function triggerACWRReduction(): void {
   let overshootTSS: number | undefined;
   let targetTSS: number | undefined;
   if (wk.unspentLoadItems?.length) {
-    const projection = computeAcwrReductionProjection(s, weekRuns);
+    const projection = computeAcwrReductionProjection(s, workoutsToPlannedRuns(shownFresh as any, s.pac));
     if (projection) {
       targetTSS = projection.target;
       if (!projection.over) {
@@ -2265,16 +2273,16 @@ export function triggerACWRReduction(): void {
   }
 
   // Compute intensity % for ACWR context header
-  const plannedThreshold = freshWorkouts.filter(w => w.t === 'threshold' || w.t === 'marathon_pace' || w.t === 'float').length;
-  const plannedIntensity = freshWorkouts.filter(w => w.t === 'vo2' || w.t === 'intervals').length;
-  const intensityPct = freshWorkouts.length > 0
-    ? Math.round(((plannedThreshold + plannedIntensity) / freshWorkouts.length) * 100)
+  const plannedThreshold = shownFresh.filter((w: any) => w.t === 'threshold' || w.t === 'marathon_pace' || w.t === 'float').length;
+  const plannedIntensity = shownFresh.filter((w: any) => w.t === 'vo2' || w.t === 'intervals').length;
+  const intensityPct = shownFresh.length > 0
+    ? Math.round(((plannedThreshold + plannedIntensity) / shownFresh.length) * 100)
     : 0;
 
   // Compute rule-driving fields for the 5-rule plain language advice
   // Rule 2. Km spike
   let actualRunKmForRule = 0;
-  const planWeekForRule = getWeekWorkoutsForACWR(s) as any[];
+  const planWeekForRule = shownWeek as any[];
   const plannedRunKmForRule = planWeekForRule
     .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes(w.t))
     .reduce((sum: number, w: any) => { const m = (w.d ?? '').match(/(\d+\.?\d*)\s*km/); return sum + (m ? parseFloat(m[1]) : 0); }, 0);

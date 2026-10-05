@@ -39,6 +39,7 @@ import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, ty
 import { isTimingMod, mergeTimingMods, acceptTimingSuggestion } from '@/cross-training/timing-check';
 import { removeWorkoutMods } from '@/workouts/workout-mods';
 import { resolveWeekWorkouts } from './week-resolve';
+import { isStoodDownByLayer } from '@/workouts/render-layer';
 import { parseStrengthSession, strengthCardSummary } from '@/guided/strength-model';
 import { gymLegLoadNudgeForWorkout } from '@/calculations/strength-leg-load';
 import type { MorningPainResponse } from '@/types/injury';
@@ -1857,8 +1858,9 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   const wk = s.wks[s.w - 1];
   if (!wk) return;
 
-  // The week as the Plan tab shows it (canonical resolver), so the session offered
-  // here is the one applyRecoveryAdjustment will change.
+  // The week as the Plan tab shows it (canonical resolver). A session a holiday or
+  // an illness rest day stands down is not offered, matching applyRecoveryAdjustment,
+  // which sizes the change from the same session's plan values.
   const workouts = resolveWeekWorkouts(s, s.w);
 
   const jsDay = new Date().getDay();
@@ -1866,6 +1868,7 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
 
   const runWorkouts = workouts.filter((w: any) =>
     w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.status !== 'replaced'
+    && !isStoodDownByLayer(w)
   );
 
   let todayWorkout = runWorkouts.find((w: any) => w.dayOfWeek === todayIdx);

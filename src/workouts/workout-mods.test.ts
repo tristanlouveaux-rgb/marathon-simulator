@@ -79,6 +79,24 @@ describe('removeWorkoutMods', () => {
     expect(wk.workoutMods![0].modReason).toBe('Garmin: Cycling');
   });
 
+  it('a change written over two stacked changes keeps both underneath, so each comes back in turn', () => {
+    // The Adjust overlay still appends: a user Adjust stacked on a cross-training cut.
+    const cut: WorkoutMod = { ...replaced, status: 'reduced', newDistance: '5km (was 8km)' };
+    const userMod: WorkoutMod = {
+      name: 'Easy Run', dayOfWeek: 2, workoutId: 'W3-easy-1', status: 'reduced',
+      modReason: 'UserScaled: adjusted for this session', userScaledAt: '2026-10-01T08:00:00Z',
+      originalDistance: '5km (was 8km)', newDistance: '4km',
+    };
+    const wk = week([cut, userMod]);
+    upsertWorkoutMod(wk, { ...replaced, status: 'reduced', modReason: 'Recovery: downgraded to easy', newDistance: '4km @ easy' }, { replaceUserAdjust: true });
+    expect(wk.workoutMods).toHaveLength(1);
+
+    removeWorkoutMods(wk, m => m.modReason.startsWith('Recovery:'));
+    expect(wk.workoutMods!.map(m => m.modReason)).toEqual(['UserScaled: adjusted for this session']);
+    removeWorkoutMods(wk, m => !!m.userScaledAt);
+    expect(wk.workoutMods!.map(m => m.newDistance)).toEqual(['5km (was 8km)']);
+  });
+
   it('a removed change buried under a later one is pruned from the chain', () => {
     const wk = week([replaced]);
     upsertWorkoutMod(wk, { ...replaced, status: 'reduced', modReason: 'ACWR: Training load', newDistance: '3km' });
@@ -102,5 +120,18 @@ describe('writeAdjustmentMods', () => {
   it('suggestion candidates exclude sessions the user scaled by hand', () => {
     const ws = [{ n: 'A' }, { n: 'B', userScaledAt: '2026-10-01' }] as any[];
     expect(adjustableWorkouts(ws).map(w => w.n)).toEqual(['A']);
+  });
+
+  it('suggestion candidates exclude holiday days and illness rest days, and keep illness- or bridge-scaled sessions', () => {
+    const ws = [
+      { n: 'Plain' },
+      { n: 'Holiday', renderLayer: 'holiday' },
+      { n: 'Ill rest', renderLayer: 'illness-rest' },
+      { n: 'Ill light', renderLayer: 'illness' },
+      { n: 'Bridge', renderLayer: 'bridge' },
+      { n: 'Shown holiday', holidayMod: true },
+      { n: 'Shown rest', illnessMod: true, illnessSeverity: 'resting' },
+    ] as any[];
+    expect(adjustableWorkouts(ws).map(w => w.n)).toEqual(['Plain', 'Ill light', 'Bridge']);
   });
 });

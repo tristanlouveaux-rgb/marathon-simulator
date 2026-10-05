@@ -26,6 +26,7 @@ import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts, parseWorkoutDescription } from '@/workouts';
 import { displayDescWithPace } from '@/workouts/workout-scaling';
 import { resolveWeekWorkouts } from './week-resolve';
+import { isStoodDownByLayer } from '@/workouts/render-layer';
 import { getPlannedDayTSSContext } from './planned-day-tss';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { strengthCardSummary } from '@/guided/strength-model';
@@ -3521,20 +3522,23 @@ function showRecoveryAdviceSheet(): boolean {
 
   if (wk) {
     // The week as the Plan tab shows it (canonical resolver: accepted changes,
-    // moves, illness/holiday adjustments). The session offered here is then the
-    // one applyRecoveryAdjustment changes, and a replaced run is never offered.
+    // moves, illness/holiday adjustments), so the distance shown is the card's. The
+    // session offered here is then the one applyRecoveryAdjustment changes (sized
+    // from its plan values). A replaced run, a holiday day and an illness rest day
+    // are never offered.
     const workouts = resolveWeekWorkouts(s, s.w) as any[];
 
     const rated = wk.rated ?? {};
 
     // Today's unrated quality workout
     todayWorkout = workouts.find((w: any) =>
-      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' && isHardWorkout(w.t)
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' && !isStoodDownByLayer(w)
+      && isHardWorkout(w.t)
     ) ?? null;
 
     // Any unrated running workout today (for reduce-intensity when no hard session)
     todayAnyWorkout = todayWorkout ?? workouts.find((w: any) =>
-      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' &&
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' && !isStoodDownByLayer(w) &&
       w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym'
     ) ?? null;
 

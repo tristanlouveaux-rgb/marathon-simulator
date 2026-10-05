@@ -33,7 +33,10 @@ function isNonRun(w: any): boolean {
 }
 
 export function parseKmFromDesc(d: string): number {
-  const matches = (d || '').matchAll(/(\d+\.?\d*)km/g);
+  // A "(was 8km)" note records the distance a change replaced. It is not part of the
+  // prescription, so it never counts: summing it made the bridge scale a cut run
+  // "6km (was 8km)" from 14 km, longer than before the cut.
+  const matches = (d || '').replace(/\(was [^)]*\)/g, '').matchAll(/(\d+\.?\d*)km/g);
   let total = 0;
   let count = 0;
   for (const m of matches) {

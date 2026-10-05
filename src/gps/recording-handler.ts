@@ -12,7 +12,7 @@ import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion
 import { deleteGpsRecording } from '@/gps/persistence';
 import { isLongRun } from '@/workouts/long-run';
 import { computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
-import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges } from '@/ui/week-resolve';
 import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
@@ -43,7 +43,7 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
   if (!s.trackOnly && s.w >= 1 && s.w <= s.wks.length) {
     // The week as the Plan tab shows it (canonical resolver): the cards the run
     // was started from, with every accepted change applied, so a cut or replaced
-    // session is seen as cut or replaced by the matcher and the suggester below.
+    // session is seen as cut or replaced by the matcher below.
     weekWorkouts = resolveWeekWorkouts(s, s.w) as Workout[];
     const matched = weekWorkouts.find(w => w.n === workoutName);
     if (matched) {
@@ -150,9 +150,12 @@ function handleImpromptuRun(
     // how much extra load this adds and offer plan adjustments
     const activity = createActivity('extra_run', durationMin, rpe, undefined, undefined, ms.w);
 
-    // weekWorkouts is the resolved week: existing changes (and their re-priced
-    // loads) are already applied. Sessions the user scaled by hand keep their Adjust.
-    const plannedRuns = workoutsToPlannedRuns(adjustableWorkouts(weekWorkouts), ms.pac);
+    // The change is sized from and written against the plan-layers week: existing
+    // changes (and their re-priced loads) applied, the illness/holiday/bridge render
+    // layers left out so their output is never baked into a mod. Sessions the user
+    // scaled by hand, or that a holiday or illness rest day stands down, are not offered.
+    const planWeek = resolveWeekForPlanChanges(ms, ms.w) as Workout[];
+    const plannedRuns = workoutsToPlannedRuns(adjustableWorkouts(planWeek), ms.pac);
     const _tier = ms.athleteTierOverride ?? ms.athleteTier;
     const _atlSeed = (ms.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (ms.gs ?? 0), 0.3));
     const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined, undefined, (ms as any).previousPlanWks, ms.adaptiveRecovery);
@@ -178,7 +181,7 @@ function handleImpromptuRun(
     if (hasAdjustments) {
       showSuggestionModal(popup, 'run', (decision) => {
         if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
-          const modifiedWorkouts = applyAdjustments(weekWorkouts, decision.adjustments, 'run', ms.pac);
+          const modifiedWorkouts = applyAdjustments(planWeek, decision.adjustments, 'run', ms.pac);
           writeAdjustmentMods(week, modifiedWorkouts, decision.adjustments, `GPS: ${workoutName}`);
         }
         saveState();
