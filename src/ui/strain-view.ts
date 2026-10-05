@@ -86,7 +86,8 @@ function fmtDurMin(durationSec: number): string {
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 
-function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
+/** Every logged activity on `date`, once each. Exported for tests. */
+export function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
   const out: GarminActual[] = [];
   const seenGarminIds = new Set<string>();
 
@@ -102,6 +103,9 @@ function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
     }
     // Garmin-prefixed adhoc workouts (unmatched / log-only activities)
     for (const w of wk.adhocWorkouts ?? []) {
+      // Twin of a garminActuals entry (id is its key): already listed above.
+      // After a Strava upgrade its garminId no longer matches the id suffix.
+      if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
       const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
       if (!rawId) continue;
       const ts = (w as any).garminTimestamp as string | undefined;

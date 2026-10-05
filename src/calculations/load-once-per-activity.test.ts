@@ -13,11 +13,13 @@
  *
  * Expected values are derived from SPORTS_DB and TL_PER_MIN, never hardcoded.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   computeWeekTSS,
   computeWeekRawTSS,
   computeTodaySignalBTSS,
+  computeTodayStrainTSS,
+  getDailyLoadHistory,
   computeFitnessModel,
   listWeekSignalAEntries,
   computeSameSignalCtlHistory,
@@ -30,6 +32,7 @@ import { buildDailySignalBTSS } from './sleep-insights';
 import { resolveActualSport, resolveAdhocSport, signalARunSpec } from '@/cross-training/activities';
 import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import type { Week, GarminActual, UnspentLoadItem, Workout } from '@/types';
+import type { PhysiologyDayEntry } from '@/types/state';
 
 const PLAN_START = '2026-03-02'; // a Monday
 const DAY = (offset: number, hh = '08') => {
@@ -116,6 +119,22 @@ function weekWithOverflow(o: ReturnType<typeof overflow>, w = 1): Week {
     adhocWorkouts: [o.adhoc],
     unspentLoadItems: [o.unspent],
   });
+}
+
+/**
+ * The same week after the Strava upgrade loop (activity-matcher.ts, "Strava
+ * upgrade") has run: the twin keeps its key `garmin-<id>` but its garminId
+ * becomes strava-<id> and its duration and iTRIMP come from the Strava row; the
+ * adhoc entry keeps its id and only takes the Strava name and type.
+ */
+function stravaUpgraded(o: ReturnType<typeof overflow>, stravaId: string, durationMin?: number): Week {
+  const wk = weekWithOverflow(o);
+  wk.garminActuals![o.key] = {
+    ...o.actual,
+    garminId: stravaId,
+    durationSec: (durationMin ?? o.actual.durationSec / 60) * 60,
+  };
+  return wk;
 }
 
 beforeEach(() => setAthleteNormalizer()); // population normaliser
@@ -350,6 +369,14 @@ describe('Signal A never exceeds Signal B', () => {
     expect(B(withoutUnspent(wk))).toBe(B(wk));
   });
 
+  it('a legacy adhoc run carrying only its planned RPE reads the same in A and B', () => {
+    const wk = week(1, {
+      adhocWorkouts: [{ id: 'garmin-1', t: 'easy', n: 'Easy Run', d: '60min · 4 Mar 08:00', r: 3 } as unknown as Workout],
+    });
+    expect(A(wk)).toBe(Math.round(60 * TL_PER_MIN[3]));
+    expect(A(wk)).toBe(B(wk));
+  });
+
   it('the per-activity entries sum to the weekly Signal A total', () => {
     const ride = overflow('strava-911', { activityType: 'CYCLING', label: 'Cycling', sport: 'cycling', durationMin: 60, tss: 60, startTime: DAY(1) });
     const wk = weekWithOverflow(ride);
@@ -423,6 +450,52 @@ describe('Daily Signal B (sleep load) counts an adhoc activity with a twin once'
     const swim = overflow('apple-922', { activityType: 'SWIMMING', label: 'Swim', sport: 'swimming', durationMin: 45, startTime: DAY(3) });
     const byDate = buildDailySignalBTSS([weekWithOverflow(swim)]);
     expect(byDate[DAY(3).slice(0, 10)]).toBeCloseTo(45 * TL_PER_MIN[5], 6);
+  });
+});
+
+describe('A Strava-upgraded twin still pairs with its adhoc entry', () => {
+  // An Apple (or Garmin) activity logged as adhoc, later re-synced from Strava.
+  const ride = overflow('apple-777', { activityType: 'CYCLING', label: 'Cycling', sport: 'cycling', durationMin: 60, tss: 60, startTime: DAY(2) });
+  const date = DAY(2).slice(0, 10);
+  afterEach(() => vi.useRealTimers());
+
+  it('weekly A and B are unchanged by the upgrade', () => {
+    const wk = stravaUpgraded(ride, 'strava-999');
+    expect(A(wk)).toBe(Math.round(60 * SPORTS_DB.cycling.runSpec));
+    expect(B(wk)).toBe(60);
+  });
+
+  it('daily Signal B (sleep load) counts it once, matching today\'s Signal B', () => {
+    const wk = stravaUpgraded(ride, 'strava-999');
+    const byDate = buildDailySignalBTSS([wk]);
+    expect(byDate[date]).toBeCloseTo(60, 6);
+    expect(Math.round(byDate[date])).toBe(computeTodaySignalBTSS(wk, date));
+  });
+
+  it('an upgraded twin with no HR still leaves the adhoc RPE estimate to count, once', () => {
+    const swim = overflow('apple-778', { activityType: 'SWIMMING', label: 'Swim', sport: 'swimming', durationMin: 45, startTime: DAY(3) });
+    const byDate = buildDailySignalBTSS([stravaUpgraded(swim, 'strava-998')]);
+    expect(byDate[DAY(3).slice(0, 10)]).toBeCloseTo(45 * TL_PER_MIN[5], 6);
+  });
+
+  it("the day's strain is unchanged by the upgrade (logged minutes are subtracted once)", () => {
+    // 100 active minutes and 12,000 steps: the passive term depends on how many
+    // logged minutes are subtracted, so a double-listed ride moves the strain.
+    const physio: PhysiologyDayEntry = { date, steps: 12000, activeMinutes: 100 } as PhysiologyDayEntry;
+    const before = computeTodayStrainTSS(weekWithOverflow(ride), date, physio);
+    const after = computeTodayStrainTSS(stravaUpgraded(ride, 'strava-999'), date, physio);
+    expect(after).toBe(before);
+  });
+
+  it("the rolling-load day lists it once, and its activities sum to the day's load", () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(`${date}T12:00:00`));
+    // Strava's duration differs by 5 min (inside the upgrade's 15% window), so
+    // the list's name+duration fallback cannot hide the duplicate.
+    const entries = getDailyLoadHistory([stravaUpgraded(ride, 'strava-999', 65)], PLAN_START);
+    const day = entries.find(e => e.date === date)!;
+    expect(day.activities).toHaveLength(1);
+    expect(day.activities.reduce((sum, a) => sum + a.tss, 0)).toBe(day.tss);
   });
 });
 

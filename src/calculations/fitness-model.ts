@@ -377,19 +377,25 @@ export interface SignalAEntry {
 }
 
 /**
- * Every completed activity in the week, once, with its Signal A contribution.
+ * Every synced activity in the week, at most once, with its Signal A contribution.
  *
  * Invariants (audit B3/X7, SCIENCE_LOG "Signal A vs Signal B"):
- *   - Each activity counts once. garminActuals win over their adhoc twin; the
- *     dedup key is garminId.
+ *   - Each activity counts at most once. garminActuals win over their adhoc
+ *     twin; the dedup keys are garminId and the twin's garminActuals key.
+ *   - Scope: garminActuals and `garmin-` adhoc entries only. In-app GPS runs and
+ *     manual logs (non-`garmin-` adhoc ids) are outside Signal A (audit B9);
+ *     Signal B counts them.
  *   - `unspentLoadItems` are never load. Each one points at an activity (or the
  *     surplus slice of a run) that garminActuals / adhocWorkouts already hold.
  *   - Signal A = TSS × runSpec of the activity's OWN sport, never the slot's.
  *     The strength RPE override already applies the strength runSpec, so it is
- *     not discounted again.
+ *     not discounted again. It runs before sport resolution, so a rated
+ *     strength session takes it even when manualSport names another sport
+ *     (computeWeekRawTSS does the same).
  *
- * Per-entry TSS formulas are unchanged from the previous computeWeekTSS:
- * rated RPE (default 5) for the no-HR fallback, normalizeiTrimp for HR data.
+ * Per-entry TSS formulas match computeWeekRawTSS: rated RPE (default 5) for a
+ * garminActuals no-HR fallback, rated then planned RPE (default 5) for an adhoc
+ * one, normalizeiTrimp for HR data.
  */
 export function listWeekSignalAEntries(
   wk: Week,
@@ -444,7 +450,9 @@ export function listWeekSignalAEntries(
     if (w.iTrimp != null && w.iTrimp > 0) {
       raw = normalizeiTrimp(w.iTrimp, norm);
     } else {
-      const rpe = w.rpe ?? 5;
+      // Same RPE fallback as computeWeekRawTSS (rated, then planned, then 5), so
+      // a legacy row carrying only the planned `r` cannot make A exceed B.
+      const rpe = w.rpe ?? w.r ?? 5;
       raw = parseDurMinFromDesc(w.d) * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
     }
     out.push({ key: w.id, garminId: rawId || null, source: 'adhoc', sport, isRun: isRunSport(sport), tss: raw * signalARunSpec(sport) });
@@ -687,6 +695,10 @@ export function computeTodayStrainTSS(
     loggedActivities.push({ durationSec: a.durationSec, activityType: a.activityType });
   }
   for (const w of wk.adhocWorkouts ?? []) {
+    // An adhoc whose id is a garminActuals key is that actual's twin, already
+    // collected above (computeTodaySignalBTSS skips it the same way). After a
+    // Strava upgrade the twin's garminId no longer matches the id suffix.
+    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (!rawId) continue;
     const ts = (w as any).garminTimestamp as string | undefined;
@@ -1229,6 +1241,10 @@ export function getDailyLoadHistory(
     const ourDay = (d.getDay() + 6) % 7;
     for (const w of wk.adhocWorkouts ?? []) {
       if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+      // Twin of a garminActuals entry: listed above, and skipped by
+      // computeTodaySignalBTSS (the day's tss), even after a Strava upgrade
+      // has changed the twin's garminId.
+      if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
       const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
       if (rawId) {
         if (seenIds.has(rawId)) continue;

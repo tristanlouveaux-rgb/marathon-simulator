@@ -449,8 +449,12 @@ export function buildDailySignalBTSS(
     // (addAdhocWorkoutFromPending), so without the seed each one counted twice.
     // An id is marked only once it has added load, so a twin without HR data
     // still leaves the adhoc entry's RPE estimate to count.
+    // The twin's KEY is marked too: the Strava upgrade (activity-matcher.ts)
+    // rewrites the twin's garminId to strava-<id> but keeps its key and the
+    // adhoc id as garmin-<old id>, so after an upgrade only the key still pairs
+    // them (computeWeekRawTSS and computeTodaySignalBTSS skip on the key too).
     const seenGarminIds = new Set<string>();
-    for (const actual of Object.values(wk.garminActuals ?? {})) {
+    for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
       const a = actual as any;
       if (!a.startTime) continue;
       if (a.garminId && seenGarminIds.has(a.garminId)) continue;
@@ -461,6 +465,7 @@ export function buildDailySignalBTSS(
       if (tss > 0) {
         byDate[date] = (byDate[date] ?? 0) + tss;
         if (a.garminId) seenGarminIds.add(a.garminId);
+        if (key.startsWith('garmin-')) seenGarminIds.add(key.slice('garmin-'.length));
       }
     }
     for (const w of (wk.adhocWorkouts ?? [])) {
