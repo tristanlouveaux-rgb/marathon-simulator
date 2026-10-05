@@ -18,7 +18,7 @@ import { refreshVO2Estimates } from '@/data/vo2Sync';
 import { backfillIntensityBands, closeOutObservedRecovery, fitKUser, ingestNewActualsAsImpacts } from '@/calculations/adaptive-recovery';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp, reconcileCrossSourceDuplicates } from '@/calculations/activity-matcher';
-import { setAthleteNormalizer, calibrateTssPerActiveMinute, normalizeiTrimp } from '@/calculations/fitness-model';
+import { bindAthleteNormalizerToState, calibrateTssPerActiveMinute, normalizeiTrimp } from '@/calculations/fitness-model';
 import { plannedTssPerMin } from '@/constants';
 import { calculateWorkoutLoad } from '@/workouts';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
@@ -415,8 +415,13 @@ async function launchApp(): Promise<void> {
     } catch { /* swallow — sleep reloads next launch */ }
   }
 
-  // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
-  setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
+  // Per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard), bound
+  // to live state: it re-derives from ltHR / restingHR / maxHR / biologicalSex
+  // whenever any of them changes (Account HR edit, physiology sync, LT
+  // recompute, HealthKit sex seeding), so no writer has to remember to refresh
+  // it. getState() is read on every lookup because updateState replaces the
+  // state object.
+  bindAthleteNormalizerToState(() => getState());
 
   // Cross-modal VO2max. Refresh per-discipline estimates + cardiac ceiling
   // from the last 8 weeks of activity. Cheap (~2ms), pure local computation.
@@ -1552,8 +1557,6 @@ async function launchApp(): Promise<void> {
           // Fetch today's steps immediately (fast. Single epoch window).
           syncTodaySteps().then(() => scheduleHomeRefresh()).catch(() => {});
           await syncPhysiologySnapshot(90).catch(() => {});
-          const ps = getState();
-          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
           refreshVO2Estimates();
           // Close out + refit k_user against the freshly-synced physiology.
           refreshAdaptiveRecovery();
@@ -1576,8 +1579,6 @@ async function launchApp(): Promise<void> {
       if (appleConnected) {
         const updated = await syncAppleHealthPhysiology(90).catch(() => false);
         if (updated) {
-          const ps = getState();
-          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
           scheduleHomeRefresh();
         }
       }
@@ -2222,8 +2223,6 @@ document.addEventListener('visibilitychange', () => {
     // syncPhysiologySnapshot merges by date, so the 7-day window cannot
     // truncate the 28-day baseline.
     syncPhysiologySnapshot(7).then(() => {
-      const ps = getState();
-      setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
       scheduleHomeRefresh();
       // If today's sleep is still missing from the DB, ask Garmin directly
       // (cooldown-guarded) and restart the poller — its setInterval was

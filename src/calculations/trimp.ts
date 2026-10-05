@@ -17,9 +17,15 @@
  */
 
 /** Sex for β coefficient selection */
-type BiologicalSex = 'male' | 'female';
+export type BiologicalSex = 'male' | 'female';
 
-function getBeta(sex?: BiologicalSex): number {
+/**
+ * Banister β for the athlete's sex: 1.67 female, 1.92 for male, unknown or
+ * 'prefer_not_to_say'. The single source for β. Every iTRIMP producer uses it,
+ * and so does the iTRIMP→TSS normaliser (fitness-model.ts
+ * computeAthleteNormalizer), so 1 hour at LTHR decodes to 100 TSS for either sex.
+ */
+export function getBeta(sex?: BiologicalSex | 'prefer_not_to_say' | null): number {
   return sex === 'female' ? 1.67 : 1.92;
 }
 

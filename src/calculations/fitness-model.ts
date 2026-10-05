@@ -23,6 +23,7 @@ import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
 import { plausibleLtHR } from '@/calculations/lt-derivation';
+import { getBeta, type BiologicalSex } from '@/calculations/trimp';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
@@ -265,14 +266,25 @@ export const ATL_DECAY = Math.exp(-7 / 7);   // ≈ 0.368
 /**
  * Compute the per-athlete iTRIMP normalizer from lactate threshold HR.
  * Based on Coggan hrTSS: 1 hour at LTHR = 100 TSS.
- * normalizer = 3600 × LTHR_HRR × e^(β × LTHR_HRR) where β = 1.92 (male default).
+ * normalizer = 3600 × LTHR_HRR × e^(β × LTHR_HRR), with β from trimp.ts getBeta
+ * (1.67 female, 1.92 otherwise). The β MUST match the one the iTRIMP producers
+ * used for this athlete, otherwise 1 hour at LTHR does not decode to 100: a
+ * female-β iTRIMP over a male-β normalizer reads e^(−0.25·hrr) ≈ 0.81× low.
  * Falls back to 15000 when LTHR data is unavailable OR implausible —
  * ltHR outside the LTHR plausibility band (80–95% of maxHR, canonical
  * constants + rationale in lt-derivation.ts). A wrong personal normalizer
  * silently rescales every iTRIMP→TSS conversion feeding CTL/ATL, so an
  * implausible profile must never reach the formula.
+ * The 15000 fallback is sex-neutral: it has no stated HR profile behind it
+ * (back-solved later as ≈ an 84%-HRR male-β profile), so there is no
+ * documented derivation to compute a female equivalent from.
  */
-export function computeAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: number): number {
+export function computeAthleteNormalizer(
+  ltHR?: number,
+  restingHR?: number,
+  maxHR?: number,
+  sex?: BiologicalSex | 'prefer_not_to_say' | null,
+): number {
   if (!ltHR || !restingHR || !maxHR || maxHR <= restingHR || ltHR <= restingHR || ltHR >= maxHR) {
     return 15000; // fallback
   }
@@ -281,27 +293,79 @@ export function computeAthleteNormalizer(ltHR?: number, restingHR?: number, maxH
     return 15000; // implausible profile → population fallback
   }
   const hrr = (ltHR - restingHR) / (maxHR - restingHR);
-  const beta = 1.92; // Banister male coefficient (standard)
+  const beta = getBeta(sex); // same β as the iTRIMP producers (trimp.ts)
   return 3600 * hrr * Math.exp(beta * hrr);
 }
 
-/** Convenience: compute normalizer from a state-like object. */
-export function getNormalizerFromState(s: { ltHR?: number; restingHR?: number; maxHR?: number }): number {
-  return computeAthleteNormalizer(s.ltHR, s.restingHR, s.maxHR);
+/** The state fields the normalizer reads. A SimulatorState satisfies it. */
+export interface AthleteHRProfile {
+  ltHR?: number;
+  restingHR?: number;
+  maxHR?: number;
+  biologicalSex?: BiologicalSex | 'prefer_not_to_say' | null;
 }
 
-// Module-level normalizer. Set once on startup via setAthleteNormalizer(),
-// then used by all iTRIMP→TSS conversions. Falls back to 15000 if never set.
-let _athleteNorm = 15000;
+/** Convenience: compute normalizer from a state-like object (sex included). */
+export function getNormalizerFromState(s: AthleteHRProfile): number {
+  return computeAthleteNormalizer(s.ltHR, s.restingHR, s.maxHR, s.biologicalSex);
+}
 
-/** Call once on startup (and when HR profile changes) to set the per-athlete normalizer. */
-export function setAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: number): void {
-  _athleteNorm = computeAthleteNormalizer(ltHR, restingHR, maxHR);
+// Module-level normalizer used by every normalizeiTrimp() call without an
+// explicit normalizer. In the app it is BOUND to live state
+// (bindAthleteNormalizerToState, called once by launchApp), so any write to
+// ltHR / restingHR / maxHR / biologicalSex (Account HR edit, physiology sync,
+// LT recompute, HealthKit sex seeding, onboarding) is picked up on the next
+// conversion. Before the binding, a cached value set at launch went stale
+// after an in-session edit until the next cold launch. Unbound (tests, and
+// any entry point that never binds) it is whatever setAthleteNormalizer()
+// last set, defaulting to the 15000 population fallback.
+let _athleteNorm = 15000;
+let _normSource: (() => AthleteHRProfile | null | undefined) | null = null;
+let _normSourceKey: string | null = null;
+
+/**
+ * Set an explicit per-athlete normalizer. Clears any state binding, so the
+ * explicit value wins until the next set or bind. Production code binds to
+ * state instead; this is for tests and one-off callers.
+ */
+export function setAthleteNormalizer(
+  ltHR?: number,
+  restingHR?: number,
+  maxHR?: number,
+  sex?: BiologicalSex | 'prefer_not_to_say' | null,
+): void {
+  _normSource = null;
+  _normSourceKey = null;
+  _athleteNorm = computeAthleteNormalizer(ltHR, restingHR, maxHR, sex);
+}
+
+/**
+ * Bind the module normalizer to a live state getter (pass null to unbind).
+ * The normalizer is recomputed whenever ltHR / restingHR / maxHR /
+ * biologicalSex differ from the last read, so it cannot go stale.
+ */
+export function bindAthleteNormalizerToState(source: (() => AthleteHRProfile | null | undefined) | null): void {
+  _normSource = source;
+  _normSourceKey = null;
+}
+
+function currentAthleteNorm(): number {
+  if (_normSource) {
+    const p = _normSource();
+    if (p) {
+      const key = `${p.ltHR}|${p.restingHR}|${p.maxHR}|${p.biologicalSex}`;
+      if (key !== _normSourceKey) {
+        _normSourceKey = key;
+        _athleteNorm = getNormalizerFromState(p);
+      }
+    }
+  }
+  return _athleteNorm;
 }
 
 /** Normalise iTRIMP to a TSS-equivalent TL value. 1 hour at LTHR = 100 TSS. */
 export function normalizeiTrimp(itrimp: number, normalizer?: number): number {
-  return (itrimp * 100) / (normalizer ?? _athleteNorm);
+  return (itrimp * 100) / (normalizer ?? currentAthleteNorm());
 }
 
 /**
@@ -311,7 +375,7 @@ export function normalizeiTrimp(itrimp: number, normalizer?: number): number {
  * round-trips inflate/deflate (ISSUE-263, excess-card lesson).
  */
 export function getAthleteNormalizer(): number {
-  return _athleteNorm;
+  return currentAthleteNorm();
 }
 
 /** Parse duration in minutes from an adhoc workout description (e.g. "45min · 12 Feb") */
