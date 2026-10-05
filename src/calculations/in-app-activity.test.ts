@@ -292,6 +292,26 @@ describe('a watch copy supersedes the in-app record instead of double counting (
     expect(wk.garminPending?.some(p => p.garminId === 'strava-5' && wk.garminMatched?.[p.garminId] === '__pending__')).toBeFalsy();
   });
 
+  it('a Strava run copy in a week the matcher has visited supersedes the GPS record through the same path as every source', () => {
+    const s = baseState(1, 1);
+    s.wks[0].garminMatched = {}; // the Strava upgrade loop scans this week
+    s.wks[0].rated['W1-easy-0'] = 6;
+    writeInAppActual(s.wks[0], 'W1-easy-0', buildGpsRunActual(gpsRecording(), { rpe: 6, name: 'Easy Run', slot: EASY_SLOT }));
+    setState(s);
+
+    matchAndAutoComplete([runRow({ garmin_id: 'strava-6' })]);
+
+    const wk = getMutableState().wks[0];
+    expect(Object.keys(wk.garminActuals ?? {})).toEqual(['W1-easy-0']);
+    expect(wk.garminActuals!['W1-easy-0'].garminId).toBe('strava-6');
+    expect(wk.garminActuals!['W1-easy-0'].activityType).toBe('RUNNING');
+    expect(wk.garminMatched!['strava-6']).toBe('W1-easy-0');
+    expect(wk.rated['W1-easy-0']).toBe(6);
+    // supersedeInAppRun's re-review record, as for an Apple or Garmin copy.
+    expect(wk.garminPending!.some(p => p.garminId === 'strava-6')).toBe(true);
+    expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(46 * TL_PER_MIN[6]));
+  });
+
   it('an impromptu GPS run is superseded under its own adhoc id, so Signal B still counts one run', () => {
     const s = baseState(1, 1);
     const rec = gpsRecording();
@@ -528,5 +548,177 @@ describe('activity log badge survives a watch supersede', () => {
     matchAndAutoComplete([runRow()]);
 
     expect(collectWeekActivities(getMutableState().wks[0]).map(e => e.badge)).toEqual(['matched']);
+  });
+});
+
+describe('a synced activity of another sport never supersedes or drops an in-app record (audit B9)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  const easy = { id: 'W1-easy-0', n: 'Easy Run', t: 'easy', d: '8km', r: 3, rpe: 3, dayOfWeek: 2 } as Workout;
+  /** Local wall-clock time on Wednesday 30 Sep, the easy run's planned day. */
+  const wedAt = (h: number, m = 0) => new Date(2026, 8, 30, h, m, 0).toISOString();
+
+  // A run marked done: 46 planned minutes, stamped Wednesday at local noon. The
+  // week has been through the matcher before (garminMatched exists), as any
+  // live week has; the Strava upgrade loop only scans such weeks.
+  function markedDoneState() {
+    const s = baseState(1, 1);
+    s.wks[0].garminMatched = {};
+    s.wks[0].rated['W1-easy-0'] = 3;
+    writeInAppActual(s.wks[0], 'W1-easy-0', buildPlannedRunActual(easy, {
+      rpe: 3, startTime: manualCompletionStartIso(PLAN_START, 1, 2, Date.parse('2026-10-04T20:00:00Z')), durationMin: 46,
+    }));
+    return s;
+  }
+
+  function syncedEntry(garminId: string, startTime: string, durationSec: number, activityType: string, displayName: string): GarminActual {
+    return {
+      garminId, startTime, durationSec, distanceKm: 10, avgPaceSecKm: null, avgHR: null, maxHR: null,
+      calories: null, iTrimp: null, activityType, displayName,
+    };
+  }
+
+  function impromptuGpsState() {
+    const s = baseState(1, 1);
+    const rec = gpsRecording(); // 07:00Z, 45 min
+    s.wks[0].adhocWorkouts = [{ n: 'Quick Run', d: '8.0km', r: 5, t: 'easy', id: rec.id } as Workout];
+    s.wks[0].rated[rec.id] = 7;
+    writeInAppActual(s.wks[0], rec.id, buildGpsRunActual(rec, { rpe: 7, name: 'Quick Run' }));
+    return { s, rec };
+  }
+
+  it.each(['CYCLING', 'Ride'])(
+    'a same-day Strava ride (%s) of similar length leaves the run marked done and its tick in place, and the ride goes to review',
+    (activityType) => {
+      setState(markedDoneState());
+
+      // Two hours after the noon stamp, 45 against 46 minutes: inside the Strava
+      // upgrade loop's timing window (start 4 h, duration 15 %).
+      matchAndAutoComplete([runRow({
+        garmin_id: 'strava-RIDE', activity_type: activityType, start_time: wedAt(14), duration_sec: 45 * 60, distance_m: 20000,
+      })]);
+
+      const wk = getMutableState().wks[0];
+      expect(wk.garminActuals!['W1-easy-0'].garminId.startsWith('guided-manual-')).toBe(true);
+      expect(wk.garminActuals!['W1-easy-0'].activityType).toBeNull();
+      expect(wk.rated['W1-easy-0']).toBe(3);
+      expect(wk.garminMatched!['strava-RIDE']).toBe('__pending__');
+      expect(computeWeekTSS(wk, wk.rated)).toBe(Math.round(46 * TL_PER_MIN[3])); // the run, at full running weight
+    },
+  );
+
+  it('reconcile keeps a run marked done and its tick when an Apple walk of similar length starts 90 minutes after the stamp', () => {
+    const s = markedDoneState();
+    s.wks[0].garminActuals!['garmin-apple-WALK'] = syncedEntry('apple-WALK', wedAt(13, 30), 47 * 60, 'WALKING', 'Walking');
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(false);
+    expect(s.wks[0].garminActuals!['W1-easy-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(s.wks[0].rated['W1-easy-0']).toBe(3);
+    expect(Object.keys(s.wks[0].garminActuals!)).toHaveLength(2);
+  });
+
+  it.each(['CYCLING', 'Ride'])(
+    'reconcile keeps an impromptu GPS run, its adhoc and its tick when a Strava ride (%s) of similar length is stored in the window',
+    (activityType) => {
+      const { s, rec } = impromptuGpsState();
+      s.wks[0].garminActuals!['garmin-strava-RIDE'] = syncedEntry('strava-RIDE', '2026-09-30T09:30:00Z', 46 * 60, activityType, 'Ride');
+
+      expect(reconcileCrossSourceDuplicates(s)).toBe(false);
+      expect(s.wks[0].garminActuals![rec.id].garminId).toBe(`guided-${rec.id}`);
+      expect(s.wks[0].adhocWorkouts!.map(w => w.id)).toEqual([rec.id]);
+      expect(s.wks[0].rated[rec.id]).toBe(7);
+    },
+  );
+
+  it.each([
+    ['Strava', 'strava-RUN'],
+    ['Apple Health', 'apple-RUN'],
+  ])('reconcile still collapses a GPS run and its %s copy logged as an extra (same sport, one session)', (_label, gid) => {
+    const { s, rec } = impromptuGpsState();
+    s.wks[0].garminActuals![`garmin-${gid}`] = syncedEntry(gid, '2026-09-30T07:03:00Z', 2750, 'RUNNING', 'Run');
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(true);
+    expect(Object.keys(s.wks[0].garminActuals!)).toEqual([`garmin-${gid}`]);
+    expect(s.wks[0].rated[rec.id]).toBeUndefined();
+  });
+
+  it('reconcile drops a guided strength record only for a strength copy, never for a run', () => {
+    const strength = (): GarminActual => ({
+      garminId: 'guided-1', startTime: '2026-09-30T17:00:00Z', durationSec: 45 * 60, distanceKm: 0,
+      avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, activityType: 'STRENGTH_TRAINING',
+      workoutName: 'Gym A', displayName: 'Gym A',
+    });
+
+    const withRun = baseState(1, 1);
+    withRun.wks[0].rated['W1-gym-0'] = 6;
+    withRun.wks[0].garminActuals = {
+      'W1-gym-0': strength(),
+      'garmin-strava-RUN': syncedEntry('strava-RUN', '2026-09-30T18:00:00Z', 46 * 60, 'RUNNING', 'Run'),
+    };
+    expect(reconcileCrossSourceDuplicates(withRun)).toBe(false);
+    expect(withRun.wks[0].garminActuals!['W1-gym-0'].garminId).toBe('guided-1');
+
+    const withLift = baseState(1, 1);
+    withLift.wks[0].rated['W1-gym-0'] = 6;
+    withLift.wks[0].garminActuals = {
+      'W1-gym-0': strength(),
+      'garmin-strava-LIFT': syncedEntry('strava-LIFT', '2026-09-30T17:02:00Z', 46 * 60, 'STRENGTH_TRAINING', 'Weight Training'),
+    };
+    expect(reconcileCrossSourceDuplicates(withLift)).toBe(true);
+    expect(Object.keys(withLift.wks[0].garminActuals!)).toEqual(['garmin-strava-LIFT']);
+  });
+});
+
+describe('a cross-day watch run in the current week goes to review instead of replacing a run marked done (audit B9)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('a Thursday run after a Wednesday Mark as Done is queued for review and both sessions stay separate', () => {
+    const s = baseState(1, 1); // trackOnly: no planned slot claims the Thursday run
+    const easy = { id: 'W1-easy-0', n: 'Easy Run', t: 'easy', d: '8km', r: 3, rpe: 3, dayOfWeek: 2 } as Workout;
+    s.wks[0].rated['W1-easy-0'] = 3;
+    writeInAppActual(s.wks[0], 'W1-easy-0', buildPlannedRunActual(easy, {
+      rpe: 3, startTime: manualCompletionStartIso(PLAN_START, 1, 2, Date.parse('2026-10-04T20:00:00Z')), durationMin: 46,
+    }));
+    setState(s);
+
+    // Thursday 17:00 local, 50 min: inside the completion window (36 h, 0.5 to 2.0x).
+    matchAndAutoComplete([runRow({
+      garmin_id: 'apple-THU', start_time: new Date(2026, 9, 1, 17, 0, 0).toISOString(), duration_sec: 3000, distance_m: 8500,
+    })]);
+
+    const wk = getMutableState().wks[0];
+    expect(wk.garminActuals!['W1-easy-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(wk.garminActuals!['W1-easy-0'].startTime).toBe(new Date(2026, 8, 30, 12, 0, 0).toISOString());
+    expect(wk.garminMatched!['apple-THU']).toBe('__pending__');
+    expect(wk.garminPending!.some(p => p.garminId === 'apple-THU')).toBe(true);
+  });
+
+  it('HYROX: a Tuesday extra run after a Monday Mark as Done is queued for review, not moved onto the Monday slot', () => {
+    const s = baseState(1, 1);
+    s.trackOnly = false;
+    s.eventType = 'hyrox';
+    const monday = {
+      id: 'hx-w1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 0,
+      d: '40 min easy at 6:30/km (~6.2 km). Fully conversational.', r: 4, rpe: 4, estimatedDurationMin: 40,
+    } as unknown as Workout;
+    s.wks[0].triWorkouts = [monday]; // no run slot on Tuesday
+    s.wks[0].rated['hx-w1-run-0'] = 4;
+    writeInAppActual(s.wks[0], 'hx-w1-run-0', buildPlannedRunActual(monday, {
+      rpe: 4, startTime: manualCompletionStartIso(PLAN_START, 1, 0, Date.parse('2026-10-04T20:00:00Z')), durationMin: 40,
+    }));
+    setState(s);
+
+    matchAndAutoComplete([runRow({
+      garmin_id: 'apple-TUE', start_time: new Date(2026, 8, 29, 18, 0, 0).toISOString(), duration_sec: 35 * 60, distance_m: 5500,
+    })]);
+
+    const wk = getMutableState().wks[0];
+    expect(wk.garminActuals!['hx-w1-run-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(wk.garminMatched!['apple-TUE']).toBe('__pending__');
+    expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(40 * TL_PER_MIN[4])); // the review decides the Tuesday run
   });
 });

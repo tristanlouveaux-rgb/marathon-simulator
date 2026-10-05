@@ -19,6 +19,7 @@ import { isStrengthActual } from '@/cross-training/activities';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import {
   isSameRecordedSession, isSameCompletedSession, findInAppRunToSupersede, isInAppActual,
+  isInAppRunActual, isSameSportAsInApp,
 } from './in-app-activity';
 
 /** Row shape returned by the sync-activities Edge Function */
@@ -497,6 +498,16 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
   const collidesWith = (actual: GarminActual, other: GarminActual): boolean =>
     isSameRecordedSession(actual, other);
 
+  // The passes below drop the lower-priority copy. An in-app record (GPS run,
+  // Mark as Done, guided or quick-done strength/HYROX: a `guided-` id) is not a
+  // Garmin-webhook copy, so it is dropped only when the colliding synced entry
+  // is the same sport family (audit B9). Without the sport check an Apple walk
+  // or a Strava ride near a run's noon stamp deleted the run record and the
+  // user's tick on its slot. A run logged as an extra still drops its in-app
+  // run twin.
+  const supersedes = (actual: GarminActual, otherKey: string, other: GarminActual): boolean =>
+    collidesWith(actual, other) && (!isInAppActual(actual) || isSameSportAsInApp(actual, otherKey, other));
+
   const dropActual = (week: Week, wid: string, gid: string): void => {
     delete week.garminActuals![wid];
     if (week.garminMatched?.[gid] === wid) delete week.garminMatched[gid];
@@ -517,11 +528,11 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
   // Strava-over-Garmin: drop a Garmin-webhook actual when a Strava actual exists.
   for (const week of s.wks) {
     if (!week.garminActuals) continue;
-    const stravaEntries = Object.values(week.garminActuals).filter(a => a.garminId.startsWith('strava-') && a.startTime);
+    const stravaEntries = Object.entries(week.garminActuals).filter(([, a]) => a.garminId.startsWith('strava-') && a.startTime);
     if (stravaEntries.length === 0) continue;
     for (const [wid, actual] of Object.entries(week.garminActuals)) {
       if (actual.garminId.startsWith('strava-')) continue;
-      if (stravaEntries.some(sa => collidesWith(actual, sa))) {
+      if (stravaEntries.some(([sk, sa]) => supersedes(actual, sk, sa))) {
         console.log(`[dedup] Removed Garmin actual ${wid} (${actual.garminId}) — Strava entry exists`);
         dropActual(week, wid, actual.garminId);
       }
@@ -533,12 +544,12 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
   // already cleared any Garmin row colliding with Strava.
   for (const week of s.wks) {
     if (!week.garminActuals) continue;
-    const appleEntries = Object.values(week.garminActuals).filter(a => a.garminId.startsWith('apple-') && a.startTime);
+    const appleEntries = Object.entries(week.garminActuals).filter(([, a]) => a.garminId.startsWith('apple-') && a.startTime);
     if (appleEntries.length === 0) continue;
     for (const [wid, actual] of Object.entries(week.garminActuals)) {
       const gid = actual.garminId;
       if (gid.startsWith('strava-') || gid.startsWith('apple-')) continue;
-      if (appleEntries.some(ae => collidesWith(actual, ae))) {
+      if (appleEntries.some(([ak, ae]) => supersedes(actual, ak, ae))) {
         console.log(`[dedup] Removed Garmin summary ${wid} (${gid}) — richer Apple Health entry exists`);
         dropActual(week, wid, gid);
       }
@@ -866,6 +877,19 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       for (const [workoutId, actual] of Object.entries(week.garminActuals)) {
         if (actual.garminId.startsWith('strava-')) continue; // already Strava
         if (!actual.startTime) continue;
+        // In-app records (audit B9) are superseded by sport, never by this
+        // timing-only check. A run (GPS or Mark as Done) is left to
+        // findInAppRunToSupersede in the main loop, which every source goes
+        // through. A guided strength or HYROX session is upgraded here only by a
+        // row of the same sport family. Without this a same-day ride replaced a
+        // run marked done (stamped at planned-day noon) and a same-day run
+        // replaced a HYROX quick done, misfiling both sessions.
+        if (isInAppActual(actual)) {
+          if (isInAppRunActual(actual)) continue;
+          if (!isSameSportAsInApp(actual, `garmin-${row.garmin_id}`, {
+            activityType: row.activity_type, displayName: row.activity_name ?? undefined,
+          })) continue;
+        }
         const timeDiff = Math.abs(rowStartMs - new Date(actual.startTime).getTime());
         if (timeDiff > 4 * 60 * 60 * 1000) continue; // > 4h apart. Different activity
         // Within 4h: also require duration within 15% to avoid false matches
@@ -1359,7 +1383,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // window; the HYROX run branch below would then hand the watch copy to an
       // unrated run slot on the neighbouring day (day ±1, Mon/Sun wrapping) and
       // the session would count twice. Cross-day completions keep the
-      // post-matching check in the run else-branch.
+      // post-matching check in the run else-branch (past weeks only).
+      // Only run rows reach this point, and both checks match in-app RUN records
+      // only, so a synced activity of another sport never supersedes one here.
       if (appType === 'run' && !isInAppRow) {
         const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
         const inAppKey = findInAppRunToSupersede(wk, syncedStamp, 'recorded')
@@ -1731,11 +1757,16 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         log(`Garmin run: ${distKm}km, RPE ${rpe} → matched "${match.workoutName}" (week ${weekIdx})`);
         console.log(`[ActivityMatcher] Auto-completed "${match.workoutName}" week ${weekIdx} (RPE ${rpe}, ${match.reason})`);
       } else {
-        // No planned slot claims this run. Before it becomes a second activity,
-        // check for a run the user marked done with no recording: its start is
-        // the planned day, not a recorded start, so it gets the in-app completion
-        // window the guided-strength upgrade uses (start ±36h, duration 0.5–2.0×).
-        const completionKey = isInAppRow ? null : findInAppRunToSupersede(
+        // No planned slot claims this run. In a past week, before it becomes a
+        // second activity, check for a run the user marked done with no
+        // recording: its start is the planned day, not a recorded start, so it
+        // gets the in-app completion window the guided-strength upgrade uses
+        // (start ±36h, duration 0.5–2.0×). Past weeks only: that window also
+        // covers a separate run on the next day, and in the current week the
+        // row goes to Activity Review, which offers the in-app slot (a done slot
+        // with a `guided-` actual) and supersedes it there if the user says it
+        // is the same session. A past week has no review step.
+        const completionKey = (isInAppRow || !isPastWeek) ? null : findInAppRunToSupersede(
           wk, { startTime: row.start_time, durationSec: row.duration_sec }, 'completion',
         );
         if (completionKey) {

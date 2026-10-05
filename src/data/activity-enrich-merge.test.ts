@@ -70,6 +70,17 @@ describe('isThinActivity', () => {
   it('is not thin once already enriched from a file', () => {
     expect(isThinActivity(thinActual({ enrichedFromFile: true }))).toBe(false);
   });
+
+  // In-app records (audit B9) never synced through Apple Health. Counting them
+  // put Mark as Done runs in the Home banner's "came through Apple Health"
+  // count and let a dropped file attach to them on timing alone.
+  it.each([
+    ['an in-app GPS run', 'guided-gps_1790000000000'],
+    ['a run marked done', 'guided-manual-1790000000000'],
+    ['a guided or quick-done strength/HYROX session', 'guided-1790000000000'],
+  ])('is not thin for %s', (_label, garminId) => {
+    expect(isThinActivity(thinActual({ garminId, avgHR: null }))).toBe(false);
+  });
 });
 
 describe('fileMatchesActual', () => {

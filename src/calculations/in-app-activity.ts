@@ -47,12 +47,22 @@
  * already said that session happened that day, so an unrated slot on a
  * neighbouring day (the HYROX run branch accepts day ±1) must not take the
  * watch copy and count the session twice. Cross-day completions are checked
- * only after slot matching ('completion').
+ * only after slot matching ('completion'), and only for a past week: in the
+ * current week the synced run goes to Activity Review, which offers the
+ * in-app slot, so the user decides whether it is the same session.
+ *
+ * Sport: a synced activity of a different sport never supersedes, overwrites
+ * or drops an in-app record. The windows above are timing rules only, so every
+ * check that applies them to an in-app record also requires the same sport
+ * family (isSameSportAsInApp): the matcher's run-only supersede, the Strava
+ * upgrade loop and the cross-source reconcile passes.
  */
 
 import type { GarminActual, GpsRecording, Week, Workout } from '@/types';
 import { parseDistanceKm } from '@/calculations/matching';
-import { isStrengthActual } from '@/cross-training/activities';
+import {
+  isStrengthActual, isGymSessionActual, resolveActualSport, isRunSport,
+} from '@/cross-training/activities';
 import { localDateKey } from '@/utils/local-date';
 
 /** garminId prefix of every in-app record (strength-complete.ts convention). */
@@ -145,6 +155,53 @@ export function isInAppRunActual(a: GarminActual | null | undefined): boolean {
   if (isStrengthActual(a)) return false;
   const t = (a.activityType ?? '').toUpperCase();
   return t === '' || t.includes('RUN');
+}
+
+type SportFamily = 'run' | 'gym' | 'other';
+
+/**
+ * Sport family of an in-app record. A GPS run or a run marked done is 'run'.
+ * A guided or quick-done strength session (STRENGTH_TRAINING) or HYROX session
+ * ('hyrox') is 'gym': the matcher's gym bucket (mapGarminType sends
+ * STRENGTH_TRAINING and HIIT there), where the guided-strength upgrade and the
+ * HYROX station upgrade (HIIT rows) look for the watch copy.
+ */
+function inAppSportFamily(a: GarminActual): SportFamily {
+  if (isInAppRunActual(a)) return 'run';
+  if (isGymSessionActual(a) || (a.activityType ?? '').toLowerCase() === 'hyrox') return 'gym';
+  return 'other';
+}
+
+/**
+ * Sport family of a synced activity, from resolveActualSport (the resolver
+ * Signal A uses to answer "what sport was this?"). Strength and HIIT both
+ * resolve to strength there, matching the matcher's gym bucket.
+ */
+function syncedSportFamily(
+  key: string,
+  a: { activityType?: string | null; manualSport?: string; workoutName?: string; displayName?: string },
+): SportFamily {
+  const sport = resolveActualSport(key, a);
+  if (isRunSport(sport)) return 'run';
+  if (sport === 'strength') return 'gym';
+  return 'other';
+}
+
+/**
+ * True when a synced activity (stored at `syncedKey`, or a row keyed as the
+ * adhoc it would become) is the same sport family as an in-app record, so a
+ * timing match between them can mean the same session. The same-session
+ * windows are timing rules only: without this check a same-day ride or walk
+ * of similar length replaced or deleted a run marked done, and a same-day run
+ * replaced a HYROX quick done.
+ */
+export function isSameSportAsInApp(
+  inApp: GarminActual,
+  syncedKey: string,
+  synced: { activityType?: string | null; manualSport?: string; workoutName?: string; displayName?: string },
+): boolean {
+  const family = inAppSportFamily(inApp);
+  return family !== 'other' && family === syncedSportFamily(syncedKey, synced);
 }
 
 // ── Builders ─────────────────────────────────────────────────────────────────
@@ -342,7 +399,8 @@ export function dropInAppActual(wk: Week | undefined, key: string): boolean {
  *     local calendar day, inside the completion window. The matcher checks
  *     this before any planned slot may claim the run.
  *   - 'completion': manual completions inside the completion window, any day.
- *     The matcher checks this only when no planned slot claimed the run.
+ *     The matcher checks this only when no planned slot claimed the run, and
+ *     only in a past week (the current week goes to Activity Review).
  *
  * GPS records never match the completion modes: their start is a real
  * recorded start, so a synced run outside the recorded window is a different

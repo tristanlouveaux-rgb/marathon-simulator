@@ -14,6 +14,7 @@ vi.mock('@/ui/events', async () => {
     },
   };
 });
+vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 vi.mock('@/state/persistence', async (orig) => ({
   ...(await orig<typeof import('@/state/persistence')>()),
   saveState: vi.fn(),
@@ -23,6 +24,7 @@ import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { completeStrengthSession } from './strength-complete';
 import { generateHyroxStation } from '@/workouts/hyrox-generators';
 import { computeWeekRawTSS, computeTodaySignalBTSS } from '@/calculations/fitness-model';
+import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { TL_PER_MIN } from '@/constants';
 import type { Week, Workout } from '@/types';
 
@@ -84,3 +86,69 @@ describe('HYROX quick Mark as done carries load (audit B9)', () => {
   });
 });
 
+
+describe('a HYROX quick done is superseded by sport, never by a same-day activity of another sport (audit B9)', () => {
+  // Wednesday 30 Sep: a station session marked done (stamped local noon) and an
+  // easy run slot on the same day.
+  function stationAndRunWeek() {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const s = getDefaultState();
+    s.planStartDate = '2026-09-28';
+    s.eventType = 'hyrox';
+    s.w = 1;
+    s.wks = [{ ...week(), garminMatched: {} } as Week]; // a week the matcher has visited
+    const station = generateHyroxStation({
+      kind: 'station_density', targetMinutes: 55, band: 'intermediate',
+      stationAccess: ACCESS, phase: 'build', slotIndex: 0,
+    }) as Workout;
+    const workout = { ...station, id: 'hx-w1-station-0', dayOfWeek: 2 } as Workout;
+    const run = {
+      id: 'hx-w1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 2,
+      d: '55 min easy at 6:30/km (~8.5 km). Fully conversational.', r: 4, rpe: 4, estimatedDurationMin: 55,
+    } as unknown as Workout;
+    s.wks[0].triWorkouts = [workout, run];
+    setState(s);
+    completeStrengthSession(workout);
+    return workout;
+  }
+
+  function stravaRow(over: Partial<GarminActivityRow>): GarminActivityRow {
+    return {
+      garmin_id: 'strava-X', activity_type: 'RUNNING', start_time: new Date(2026, 8, 30, 14, 0, 0).toISOString(),
+      duration_sec: 3000, distance_m: 0, avg_pace_sec_km: null, avg_hr: null, max_hr: null, calories: null,
+      aerobic_effect: null, anaerobic_effect: null, iTrimp: null, hrZones: null, ...over,
+    };
+  }
+
+  it('a same-day Strava run of similar length leaves the station record in place and fills the run slot', () => {
+    const workout = stationAndRunWeek();
+    const stationSec = workout.estimatedDurationMin! * 60;
+
+    // Two hours after the noon stamp, 4 minutes shorter than the station
+    // session: inside the Strava upgrade loop's timing window.
+    matchAndAutoComplete([stravaRow({ garmin_id: 'strava-RUN', duration_sec: stationSec - 240, distance_m: 8600 })]);
+
+    const wk = getMutableState().wks[0];
+    expect(wk.garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-')).toBe(true);
+    expect(wk.garminActuals!['hx-w1-station-0'].activityType).toBe('hyrox');
+    expect(wk.garminActuals!['hx-w1-run-0'].garminId).toBe('strava-RUN');
+    expect(wk.garminMatched!['strava-RUN']).toBe('hx-w1-run-0');
+    expect(typeof wk.rated['hx-w1-run-0']).toBe('number');
+  });
+
+  it('a same-day Strava strength copy of the session still replaces the quick-done record in place', () => {
+    const workout = stationAndRunWeek();
+    const stationSec = workout.estimatedDurationMin! * 60;
+
+    // Recorded as strength training rather than HIIT, so the HYROX station path
+    // does not see it: the same-sport upgrade is what keeps it one session.
+    matchAndAutoComplete([stravaRow({
+      garmin_id: 'strava-LIFT', activity_type: 'STRENGTH_TRAINING', duration_sec: stationSec - 240,
+    })]);
+
+    const wk = getMutableState().wks[0];
+    expect(wk.garminActuals!['hx-w1-station-0'].garminId).toBe('strava-LIFT');
+    expect(wk.garminActuals!['hx-w1-station-0'].workoutName).toBe(workout.n);
+    expect(Object.keys(wk.garminActuals!)).toEqual(['hx-w1-station-0']);
+  });
+});
