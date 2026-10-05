@@ -15,6 +15,8 @@
  *   - No caller knew the taper position, so every taper week (race week
  *     included) targeted 0.85 x baseline. Stats alone passed a 1-indexed
  *     position and disagreed with every other surface.
+ *   - Batch 1 then passed a 0-indexed position (0.85 / 0.75 / 0.65), so race
+ *     week never reached the ramp's 0.55 endpoint (audit follow-up ISSUE-317a).
  *   - `computeDecayedCarry` judged earlier weeks against the viewed week's
  *     target, so weeks done exactly to plan left phantom carry in the taper.
  *
@@ -26,7 +28,10 @@
  *     `forceDeload || isFourWeekCycleDeloadWeek(weekNum, ph)`, the rule those
  *     engines generate with.
  *   - Race taper: the last contiguous run of 'taper' weeks in the plan. Its
- *     0-indexed position feeds the existing taperMultiplier ramp (0.85 to 0.55).
+ *     1-indexed position (1 = first taper week, taperWeeks = race week) feeds
+ *     the existing taperMultiplier ramp: 0.75 / 0.65 / 0.55 over 3 weeks and
+ *     0.70 / 0.55 over 2 (Tristan, 2026-10-05). A 1-week taper keeps
+ *     taperMultiplier's own 0.70 special case.
  *   - Any other 'taper'-labelled week is a recovery week, not a race taper:
  *     continuous mode labels each block's 4th (deload) week 'taper'
  *     (initialization.ts, events.ts block append) and double-periodization plans
@@ -54,7 +59,7 @@ export type PlannedTargetState = Pick<
 export interface PlannedWeekPhase {
   /** Phase key for computePlannedWeekTSS's multiplier lookup. */
   phase: TrainingPhase | 'deload';
-  /** Race-taper weeks only: 0-indexed position inside the race taper. */
+  /** Race-taper weeks only: 1-indexed position inside the race taper (taperWeeks = race week). */
   weekInTaper?: number;
   /** Race-taper weeks only: length of the race taper. */
   taperWeeks?: number;
@@ -104,7 +109,7 @@ export function resolvePlannedWeekPhase(s: PlannedTargetState, weekNum: number):
 
   return {
     phase: 'taper',
-    weekInTaper: idx - start,
+    weekInTaper: idx - start + 1,
     taperWeeks: end - start + 1,
     alsoDeload: deload,
   };

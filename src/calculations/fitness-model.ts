@@ -1097,9 +1097,12 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
 
 /**
  * Compute taper multiplier: linear ramp from 0.85 → 0.55 over taper weeks.
- * `weekInTaper` is 0-indexed (the contract the JSDoc of computePlannedWeekTSS
- * states): a 3-week taper gives 0.85 / 0.75 / 0.65, a 2-week taper 0.85 / 0.70,
- * and a 1-week taper 0.70.
+ * `weekInTaper` is 1-indexed (1 = first taper week, totalTaperWeeks = race
+ * week), so race week lands on the 0.55 endpoint: a 3-week taper gives
+ * 0.75 / 0.65 / 0.55 and a 2-week taper 0.70 / 0.55 (Tristan, 2026-10-05).
+ * A 1-week taper keeps its 0.70 special case. Position 0 (no position known)
+ * reads as the ramp's 0.85 start; the canonical caller
+ * (`computePlannedWeekTarget`, planned-week-target.ts) always passes one.
  */
 function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
   if (totalTaperWeeks <= 1) return 0.70;
@@ -1120,7 +1123,7 @@ function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
  * @param phase - Training phase: base/build/peak/deload/taper
  * @param athleteTier - Athlete tier for multiplier selection
  * @param runsPerWeek - Fallback when no history at all
- * @param weekInPhase - For taper: which week within taper (0-indexed)
+ * @param weekInPhase - For taper: which week within taper (1-indexed; totalPhaseWeeks = race week)
  * @param totalPhaseWeeks - For taper: total taper weeks
  */
 export function computePlannedWeekTSS(

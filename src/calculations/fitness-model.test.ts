@@ -112,10 +112,18 @@ describe('computePlannedWeekTSS', () => {
 
   it('taper decreases over time', () => {
     const hist = [200, 200, 200, 200, 200];
-    // args: hist, ctl, phase, tier, runsPerWeek, weekInPhase, totalPhaseWeeks
-    const early = computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, 0, 3);
-    const late = computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, 2, 3);
+    // args: hist, ctl, phase, tier, runsPerWeek, weekInPhase (1-indexed), totalPhaseWeeks
+    const early = computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, 1, 3);
+    const late = computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, 3, 3);
     expect(early).toBeGreaterThan(late);
+  });
+
+  it('taper position is 1-indexed: the last taper week reaches the 0.55 endpoint', () => {
+    const hist = [200, 200, 200, 200, 200]; // median 200
+    const at = (week: number, of: number) => computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, week, of);
+    expect([1, 2, 3].map(w => at(w, 3))).toEqual([150, 130, 110]); // 0.75 / 0.65 / 0.55
+    expect([1, 2].map(w => at(w, 2))).toEqual([140, 110]);         // 0.70 / 0.55
+    expect(at(1, 1)).toBe(140);                                     // 1-week taper: 0.70 special case
   });
 
   it('falls back to ctlBaseline when history is thin', () => {
