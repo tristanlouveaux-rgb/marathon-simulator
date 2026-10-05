@@ -306,7 +306,8 @@ export interface TwinCollapseResult {
  * slot keeps its completion and now carries the Strava copy; the Strava copy's
  * own adhoc card and excess record go, so the session counts once. When both
  * copies completed slots, the Apple slot's completion was a phantom and is
- * cleared.
+ * cleared: running slots lose the actual and rating, triathlon / HYROX slots
+ * (wk.triWorkouts) lose the match link and return to planned.
  *
  * Never touches `wk.actualTSS`. Idempotent: a second pass finds nothing.
  */
@@ -318,12 +319,18 @@ export function collapseAppleStravaTwins(s: SimulatorState): TwinCollapseResult 
   const apple = collectAppleSessions(wks);
   if (apple.size === 0) return result;
 
+  // Collected once, re-read only after a removal: a rebind or detach moves Strava
+  // records. Apple-only sessions (the common case once twins are gone) then cost
+  // one numeric scan each, which matters because matchAndAutoComplete runs this
+  // after every batch that carries Strava rows.
+  let strava = collectStravaSessions(wks);
+  if (strava.length === 0) return result;
   for (const [appleId, ref] of apple) {
-    const strava = collectStravaSessions(wks); // re-read: an earlier rebind moves records
     const twin = findTwin(ref, strava);
     if (!twin) continue;
     if (removeAppleCopy(wks, appleId, twin)) result.rebound++;
     result.removed.push(appleId);
+    strava = collectStravaSessions(wks);
   }
 
   if (result.removed.length > 0) {
@@ -422,14 +429,37 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
     wk.unspentLoadItems = next;
   }
 
-  // 5. Triathlon match links that pointed at a removed Apple key follow the
-  // Strava copy in the same week; reconcileTriCompletions settles the rest.
+  // 5. Triathlon and HYROX slots (wk.triWorkouts) whose completion rested on a
+  // removed Apple key: a match link to it, or a direct bind under the slot's own
+  // key. The link follows the Strava copy only when that copy is a free recording
+  // in the same week: a `garmin-…` key that is neither another slot's own key nor
+  // already linked by another slot, and the Strava copy completes no plan slot
+  // anywhere (stravaHoldsSlot). Otherwise the Strava copy completes some
+  // other slot (or sits in another week), so this slot's completion was the
+  // phantom: clear the link and return the slot to planned, as
+  // reconcileTriCompletions step 3 does for a stale link. One session then
+  // completes one slot, the same outcome as running's phantom clear in step 1.
   for (const [wi, keys] of removedKeys) {
     const wk = wks[wi];
     if (!wk.triWorkouts?.length) continue;
+    const slotIds = new Set(wk.triWorkouts.map(w => w.id ?? w.n));
     const stravaKey = Object.entries(wk.garminActuals ?? {}).find(([, a]) => a.garminId === stravaId)?.[0];
     for (const w of wk.triWorkouts) {
-      if (w.matchedActivityId && keys.has(w.matchedActivityId) && stravaKey) w.matchedActivityId = stravaKey;
+      const id = w.id ?? w.n;
+      const linkRemoved = !!w.matchedActivityId && keys.has(w.matchedActivityId);
+      const directBindRemoved = keys.has(id) && !wk.garminActuals?.[id];
+      if (!linkRemoved && !directBindRemoved) continue;
+      const stravaFree = !!stravaKey
+        && !stravaHoldsSlot
+        && stravaKey.startsWith('garmin-')
+        && !slotIds.has(stravaKey)
+        && !wk.triWorkouts.some(o => o !== w && o.matchedActivityId === stravaKey);
+      if (stravaFree) {
+        w.matchedActivityId = stravaKey;
+      } else {
+        delete w.matchedActivityId;
+        if (w.status === 'completed') w.status = 'planned';
+      }
     }
   }
   return rebound;

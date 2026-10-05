@@ -17,7 +17,7 @@ import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-ca
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
-import { dropAppleRowsWithStravaTwin } from './cross-source-twins';
+import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-source-twins';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -978,9 +978,34 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
   }
 
+  // Strava wins, state side (the mirror of dropAppleRowsWithStravaTwin above,
+  // which keeps incoming Apple rows out): an Apple copy already in state whose
+  // Strava twin is in this batch goes. The upgrade loop above only rewrites
+  // copies within 15% duration, so a paused session (HealthKit excludes the
+  // pause, Strava's duration is elapsed time) would otherwise count twice until
+  // the next launch. Runs after ingest on every path that carries Strava rows.
+  // Returns true when it removed anything; `pending` loses any Strava item the
+  // collapse moved onto an Apple copy's plan slot (no longer awaiting review).
+  const batchHasStrava = rows.some(r => r.garmin_id.startsWith('strava-'));
+  const collapseTwinsOfStravaBatch = (pending: GarminPendingItem[]): boolean => {
+    if (!batchHasStrava) return false;
+    const pointerOf = (id: string): string | undefined => {
+      for (const w of s.wks) { const p = w.garminMatched?.[id]; if (p !== undefined) return p; }
+      return undefined;
+    };
+    const before = new Map(pending.map(p => [p.garminId, pointerOf(p.garminId)]));
+    if (collapseAppleStravaTwins(s).removed.length === 0) return false;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const id = pending[i].garminId;
+      if (pointerOf(id) !== before.get(id)) pending.splice(i, 1);
+    }
+    return true;
+  };
+
   // Filter out already-processed activities (across all weeks)
   const newRows = rows.filter(r => !globalProcessed.has(r.garmin_id));
   if (newRows.length === 0) {
+    if (collapseTwinsOfStravaBatch([])) enrichChanged = true;
     if (enrichChanged) saveState();
     return { changed: enrichChanged, pending: [] };
   }
@@ -1001,7 +1026,10 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   if (outOfRangeCount > 0) {
     console.log(`[ActivityMatcher] ${outOfRangeCount} activities outside plan range — skipped`);
   }
-  if (rowsByWeek.size === 0) return { changed: false, pending: [] };
+  if (rowsByWeek.size === 0) {
+    if (collapseTwinsOfStravaBatch([])) { saveState(); return { changed: true, pending: [] }; }
+    return { changed: false, pending: [] };
+  }
 
   const allPending: GarminPendingItem[] = [];
   let changed = false;
@@ -1671,6 +1699,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       }
     }
   }
+
+  if (collapseTwinsOfStravaBatch(allPending)) changed = true;
 
   if (changed) {
     saveState();

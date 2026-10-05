@@ -21,6 +21,7 @@ import {
   TWIN_START_WINDOW_MS,
 } from './cross-source-twins';
 import { computeWeekRawTSS } from './fitness-model';
+import { reconcileTriCompletions } from './activity-matcher.triathlon';
 import type { GarminActivityRow } from './activity-matcher';
 
 type Wk = any;
@@ -333,6 +334,54 @@ describe('collapseAppleStravaTwins', () => {
     collapseAppleStravaTwins(s);
 
     expect(wk.triWorkouts[0].matchedActivityId).toBe('garmin-strava-131');
+  });
+
+  it('when Apple and Strava copies completed two triathlon slots, the Apple slot returns to planned and the ride completes one slot', () => {
+    const apple = appleId(plus(RIDE_START, 400));
+    const wk = week();
+    const bike = (garminId: string, start: string, durationSec: number) => ({
+      garminId, startTime: start, durationSec, distanceKm: 30, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, activityType: 'CYCLING',
+    });
+    wk.garminActuals['W1-bike-A'] = bike(apple, plus(RIDE_START, 400), 3500);
+    wk.garminActuals['W1-bike-B'] = bike('strava-161', RIDE_START, 3600);
+    wk.rated['W1-bike-A'] = 5;
+    wk.rated['W1-bike-B'] = 5;
+    wk.garminMatched[apple] = 'W1-bike-A';
+    wk.garminMatched['strava-161'] = 'W1-bike-B';
+    wk.triWorkouts = [
+      { id: 'W1-bike-A', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: 'W1-bike-A', dayOfWeek: 1 },
+      { id: 'W1-bike-B', t: 'bike', n: 'Tempo ride', discipline: 'bike', status: 'completed', matchedActivityId: 'W1-bike-B', dayOfWeek: 1 },
+    ];
+    const s = state(wk);
+
+    collapseAppleStravaTwins(s);
+    reconcileTriCompletions(wk);
+
+    const [a, b] = wk.triWorkouts;
+    expect(a.status).toBe('planned');
+    expect(a.matchedActivityId).toBeUndefined();
+    expect(b.status).toBe('completed');
+    expect(b.matchedActivityId).toBe('W1-bike-B');
+    expect(wk.triWorkouts.filter((w: any) => w.status === 'completed')).toHaveLength(1);
+  });
+
+  it('a triathlon link on an Apple copy does not follow a Strava copy another slot already links to', () => {
+    const apple = appleId(plus(RIDE_START, 400));
+    const wk = week();
+    addAdhoc(wk, 'strava-171', { start: RIDE_START, durationSec: 3600, type: 'CYCLING' });
+    addAdhoc(wk, apple, { start: plus(RIDE_START, 400), durationSec: 3500, type: 'CYCLING' });
+    wk.triWorkouts = [
+      { id: 'W1-bike-0', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: `garmin-${apple}` },
+      { id: 'W1-bike-1', t: 'bike', n: 'Tempo ride', discipline: 'bike', status: 'completed', matchedActivityId: 'garmin-strava-171' },
+    ];
+    const s = state(wk);
+
+    collapseAppleStravaTwins(s);
+
+    expect(wk.triWorkouts[0].matchedActivityId).toBeUndefined();
+    expect(wk.triWorkouts[0].status).toBe('planned');
+    expect(wk.triWorkouts[1].matchedActivityId).toBe('garmin-strava-171');
+    expect(wk.triWorkouts[1].status).toBe('completed');
   });
 
   it('drops the Apple copy from the leg-load ledger and the recovery impact log', () => {

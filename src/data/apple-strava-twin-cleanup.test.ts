@@ -72,6 +72,36 @@ describe('one-time Apple/Strava twin cleanup', () => {
     expect(db.calls).toEqual([90]);
   });
 
+  it('after the cleanup is marked done, a late paused Strava twin still collapses at launch and after sync, without forcing the DB cleanup again', async () => {
+    expect(await finishAppleStravaTwinCleanup()).toBe(true);
+    expect(db.calls).toEqual([90]);
+
+    // A later Strava sync lands a paused ride (Strava elapsed 5400 s) whose Apple
+    // copy (HealthKit 4000 s, pause excluded) was already in state.
+    const T = '2026-09-30T16:00:00.000Z';
+    const apple2 = `apple-com.apple.health.watch-${T}`;
+    const wk = mockState.wks[0] as any;
+    wk.adhocWorkouts.push({ id: `garmin-${apple2}`, t: 'cross', n: 'Cycling', d: '67min' });
+    wk.garminActuals[`garmin-${apple2}`] = actual(apple2, T, 4000);
+    wk.garminMatched[apple2] = `garmin-${apple2}`;
+    wk.adhocWorkouts.push({ id: 'garmin-strava-88', t: 'cross', n: 'Ride', d: '90min' });
+    wk.garminActuals['garmin-strava-88'] = actual('strava-88', '2026-09-30T16:02:00.000Z', 5400);
+    wk.garminMatched['strava-88'] = 'garmin-strava-88';
+
+    expect(collapseAppleStravaTwinsOnLaunch()).toBe(true);
+    expect(Object.keys(wk.garminActuals).sort()).toEqual(['garmin-strava-1', 'garmin-strava-88']);
+    expect(mockState.supersededGarminIds).toEqual([APPLE, apple2]);
+
+    // Same again via the post-sync pass.
+    const T3 = '2026-10-01T16:00:00.000Z';
+    const apple3 = `apple-com.apple.health.watch-${T3}`;
+    wk.garminActuals[`garmin-${apple3}`] = actual(apple3, T3, 4000);
+    wk.garminActuals['garmin-strava-90'] = actual('strava-90', '2026-10-01T16:02:00.000Z', 5400);
+    expect(await finishAppleStravaTwinCleanup()).toBe(true);
+    expect(wk.garminActuals[`garmin-${apple3}`]).toBeUndefined();
+    expect(db.calls).toEqual([90]);
+  });
+
   it('does nothing for a user without Strava (Apple workouts still on)', async () => {
     mockState.stravaConnected = false;
     expect(collapseAppleStravaTwinsOnLaunch()).toBe(false);

@@ -85,4 +85,50 @@ describe('matchAndAutoComplete keeps Strava canonical', () => {
     expect(res.pending).toEqual([]);
     expect(appleIdsInState()).toEqual([]);
   });
+
+  it('an Apple copy already in state goes when its paused Strava twin arrives later (26% longer, outside the upgrade tolerance)', () => {
+    const t = '2026-09-30T16:00:00.000Z';
+    const apple = appleAt(t);
+    const wk = getMutableState().wks[0];
+    const key = `garmin-${apple}`;
+    wk.adhocWorkouts!.push({ id: key, t: 'cross', n: 'Cycling', d: '67min', r: 5, rpe: 5, garminTimestamp: t, garminDurationMin: 67 } as any);
+    wk.garminActuals![key] = {
+      garminId: apple, startTime: t, durationSec: 4000, distanceKm: 30, avgPaceSecKm: null,
+      avgHR: null, maxHR: null, calories: null, activityType: 'CYCLING',
+    };
+    wk.garminMatched![apple] = key;
+
+    matchAndAutoComplete([row('strava-88', plus(t, 120), 5400, 'CYCLING')]);
+
+    const s = getMutableState();
+    expect(appleIdsInState()).toEqual([]);
+    expect(s.wks[0].adhocWorkouts!.some(w => w.id === key)).toBe(false);
+    expect(s.supersededGarminIds).toEqual([apple]);
+    const stravaRecords = [
+      ...Object.values(s.wks[0].garminActuals ?? {}).filter(a => a.garminId === 'strava-88'),
+      ...(s.wks[0].garminPending ?? []).filter(p => p.garminId === 'strava-88'),
+    ];
+    expect(stravaRecords.length).toBeGreaterThan(0);
+  });
+
+  it('a late paused Strava twin of an Apple copy that completed a plan slot takes the slot and is not queued for review', () => {
+    const t = '2026-09-30T16:00:00.000Z';
+    const apple = appleAt(t);
+    const wk = getMutableState().wks[0];
+    wk.garminActuals!['W1-bike-0'] = {
+      garminId: apple, startTime: t, durationSec: 4000, distanceKm: 30, avgPaceSecKm: null,
+      avgHR: null, maxHR: null, calories: null, activityType: 'CYCLING', displayName: 'Endurance ride',
+    };
+    wk.rated['W1-bike-0'] = 5;
+    wk.garminMatched![apple] = 'W1-bike-0';
+
+    const res = matchAndAutoComplete([row('strava-89', plus(t, 120), 5400, 'CYCLING')]);
+
+    const s = getMutableState();
+    expect(s.wks[0].garminActuals!['W1-bike-0'].garminId).toBe('strava-89');
+    expect(s.wks[0].rated['W1-bike-0']).toBe(5);
+    expect(s.wks[0].garminMatched!['strava-89']).toBe('W1-bike-0');
+    expect(res.pending.map(p => p.garminId)).not.toContain('strava-89');
+    expect(appleIdsInState()).toEqual([]);
+  });
 });

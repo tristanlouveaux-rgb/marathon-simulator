@@ -1511,8 +1511,9 @@ async function launchApp(): Promise<void> {
       isStravaConnected().then((stravaOk) => {
         if (!stravaOk) return;
         syncStravaActivities().then(() => {
-          // One-time Apple/Strava twin cleanup completes once this sync has landed
-          // the latest Strava copies (then forces the garmin_activities twin cleanup).
+          // Apple/Strava twin collapse again now that this sync has landed the
+          // latest Strava copies; the first time, also forces the
+          // garmin_activities twin cleanup.
           finishAppleStravaTwinCleanup()
             .then((changed) => { if (changed) scheduleHomeRefresh(); })
             .catch(() => {});

@@ -1332,10 +1332,11 @@ export interface SimulatorState {
    *  so the superseded copy never re-imports. Kept apart from `ignoredGarminIds`,
    *  which records the user's own discards. */
   supersededGarminIds?: string[];
-  /** One-time Apple/Strava twin cleanup for Strava-connected users has completed:
-   *  set after the first Strava sync that follows the 2026-10-05 change (Apple
-   *  workouts off while Strava is connected). Until then the local collapse also
-   *  runs at launch. */
+  /** The one-time forced garmin_activities twin cleanup (cleanupDbDuplicates,
+   *  regardless of its 30-day cadence) for Strava-connected users has run: set by
+   *  the first Strava sync after the 2026-10-05 change (Apple workouts off while
+   *  Strava is connected). Gates only that DB pass; the local Apple/Strava twin
+   *  collapse keeps running at launch and after each Strava sync. */
   appleStravaTwinCleanupDone?: boolean;
 
   // LT auto-estimation state
