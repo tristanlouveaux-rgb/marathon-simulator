@@ -465,12 +465,16 @@ function wireRaceCardHandlers(): void {
     rerenderRaceCardForceMode(usingCustom ? 'list' : 'custom');
   });
 
-  // Custom date input
+  // Custom date input. 'input' as well as 'change': desktop Safari and Firefox
+  // fire 'change' only on blur, which left Continue disabled while a typed date
+  // sat in the field.
   const dateInput = document.getElementById('tri-race-date') as HTMLInputElement | null;
-  dateInput?.addEventListener('change', () => {
-    updateOnboarding({ customRaceDate: dateInput.value || null, selectedTriathlonId: null });
+  const onDate = () => {
+    updateOnboarding({ customRaceDate: dateInput!.value || null, selectedTriathlonId: null });
     refreshContinueGate();
-  });
+  };
+  dateInput?.addEventListener('input', onDate);
+  dateInput?.addEventListener('change', onDate);
 }
 
 /**

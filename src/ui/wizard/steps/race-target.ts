@@ -1,8 +1,8 @@
 import type { OnboardingState, Marathon, TrainingFocus } from '@/types/onboarding';
 import type { RaceDistance } from '@/types/training';
-import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
+import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil, calculateDaysUntil, formatTimeUntil } from '@/data/marathons';
 import { ESTIMATED_DATE_NOTE } from '@/data/race-calendar';
-import { nextStep, updateOnboarding } from '../controller';
+import { nextStep, updateOnboarding, getOnboardingState } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
@@ -39,6 +39,70 @@ const MAX_PLAN_WEEKS = 52;
 
 function minWeeksFor(distance: RaceDistance | null): number {
   return distance ? MIN_PLAN_WEEKS_BY_DISTANCE[distance] : 4;
+}
+
+/** Local YYYY-MM-DD `days` from today. Built from local date parts so a DST
+ *  change between now and the target date can't shift it by a day. */
+function isoInDays(days: number): string {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Earliest and latest custom race dates the date handler accepts, for the
+ * picker's min / max. Found by walking `calculateWeeksUntil`, the same function
+ * the handler and the race list use, so the picker never offers a date the
+ * handler then refuses. A naive `today + N*7 days` lands a day off in some
+ * timezones because `calculateWeeksUntil` ceils a UTC-parsed date.
+ */
+function customDateBounds(distance: RaceDistance | null): { min: string; max: string } {
+  const minWeeks = minWeeksFor(distance);
+  let minDays = Math.max(0, (minWeeks - 1) * 7 - 1);
+  while (minDays < MAX_PLAN_WEEKS * 7 && calculateWeeksUntil(isoInDays(minDays)) < minWeeks) minDays++;
+  let maxDays = (MAX_PLAN_WEEKS + 1) * 7;
+  while (maxDays > minDays && calculateWeeksUntil(isoInDays(maxDays)) > MAX_PLAN_WEEKS) maxDays--;
+  return { min: isoInDays(minDays), max: isoInDays(maxDays) };
+}
+
+type CustomDateCheck =
+  | { ok: true; weeks: number }
+  /** `reason` sits under the date field; `hint` sits under Continue. */
+  | { ok: false; reason: string; hint: string };
+
+/**
+ * Validate a custom race date against the distance floor and the 52-week
+ * horizon. Same rule the handler always applied; this version returns copy
+ * for the page instead of a native validation bubble, which fades on desktop
+ * and may never show in WKWebView.
+ */
+function checkCustomDate(value: string, distance: RaceDistance | null): CustomDateCheck {
+  if (!value) return { ok: false, reason: '', hint: 'Set your race date to continue.' };
+  const minWeeks = minWeeksFor(distance);
+  const weeks = calculateWeeksUntil(value);
+  const days = calculateDaysUntil(value);
+  if (!Number.isFinite(weeks) || !Number.isFinite(days)) {
+    return { ok: false, reason: 'Enter a full date: day, month and year.', hint: 'Set your race date to continue.' };
+  }
+  const tooSoonHint = `Pick a date at least ${minWeeks} weeks away to continue.`;
+  if (days < 0) return { ok: false, reason: 'That date has passed.', hint: tooSoonHint };
+  if (weeks < minWeeks) {
+    const label = distance === 'marathon' ? 'Marathon' : distance === 'half' ? 'Half marathon' : 'Race';
+    const away = days === 0
+      ? 'This date is today.'
+      : days < 7
+        ? `This date is ${days} day${days === 1 ? '' : 's'} away.`
+        : `This date is ${weeks} week${weeks === 1 ? '' : 's'} away.`;
+    return { ok: false, reason: `${label} plans need at least ${minWeeks} weeks. ${away}`, hint: tooSoonHint };
+  }
+  if (weeks > MAX_PLAN_WEEKS) {
+    return {
+      ok: false,
+      reason: `Plans run up to ${MAX_PLAN_WEEKS} weeks. This date is ${weeks} weeks away.`,
+      hint: `Pick a date within ${MAX_PLAN_WEEKS} weeks to continue.`,
+    };
+  }
+  return { ok: true, weeks };
 }
 
 /**
@@ -162,7 +226,7 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       <div class="rt-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.28s">
         <div style="max-width:460px;margin:0 auto">
           <button id="rt-continue" class="rt-cta" ${canContinue(mode, state) ? '' : 'disabled'}>Continue</button>
-          ${canContinue(mode, state) ? '' : `<p style="font-size:12px;color:var(--c-faint);text-align:center;margin:10px 0 0">${continueHint(mode, state)}</p>`}
+          <p id="rt-continue-hint" aria-live="polite" style="font-size:12px;color:var(--c-faint);text-align:center;margin:10px 0 0;display:${canContinue(mode, state) || !continueHint(mode, state) ? 'none' : 'block'}">${canContinue(mode, state) ? '' : continueHint(mode, state)}</p>
         </div>
       </div>
 
@@ -322,7 +386,8 @@ function renderEventPicker(state: OnboardingState): string {
         <label class="rt-micro">RACE DATE</label>
         <div class="shadow-ap rt-date-card">
           <input type="date" id="rt-custom-date" class="rt-date-input" value="${state.customRaceDate || ''}">
-          ${state.customRaceDate ? `<p class="rt-date-note" id="rt-weeks-note">${calculateWeeksUntil(state.customRaceDate)} weeks of training</p>` : ''}
+          <p class="rt-date-note" id="rt-date-error" aria-live="polite" style="display:none"></p>
+          <p class="rt-date-note" id="rt-weeks-note" style="display:${state.customRaceDate ? 'block' : 'none'}">${state.customRaceDate ? `${calculateWeeksUntil(state.customRaceDate)} weeks of training` : ''}</p>
         </div>
         <div style="text-align:center;margin-top:8px">
           <button id="rt-toggle-date" class="rt-toggle">Browse races instead</button>
@@ -428,6 +493,9 @@ function continueHint(mode: TrainingMode | null, state: OnboardingState): string
     if (state.trainingForEvent === false) return state.trainingFocus ? '' : 'Choose a focus to continue.';
     if (!state.raceDistance) return 'Pick a distance to continue.';
     if ((state.raceDistance === 'half' || state.raceDistance === 'marathon') && !(state.selectedRace || state.customRaceDate)) {
+      // Custom-date mode (customRaceDate === '') with an empty field: the race
+      // list is hidden, so ask for the date itself.
+      if (state.customRaceDate === '') return 'Set your race date to continue.';
       return 'Pick a race, or set your own date, to continue.';
     }
     return '';
@@ -518,32 +586,46 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
   });
 
   // Custom-date input (running half/marathon).
+  // Listens to BOTH 'input' and 'change': the iOS picker and Chrome fire both,
+  // desktop Safari and Firefox fire 'change' only on blur, so 'change' alone
+  // left Continue disabled while a valid date sat in the field.
+  // Everything updates in place. A re-render here would replace the input and
+  // tear down the iOS wheel picker mid-spin.
   const dateInput = document.getElementById('rt-custom-date') as HTMLInputElement | null;
   if (dateInput) {
-    const maxDate = new Date();
-    maxDate.setFullYear(maxDate.getFullYear() + 1);
-    dateInput.max = maxDate.toISOString().split('T')[0];
-    dateInput.addEventListener('change', () => {
+    const bounds = customDateBounds(state.raceDistance);
+    dateInput.min = bounds.min;
+    dateInput.max = bounds.max;
+    const errorEl = document.getElementById('rt-date-error');
+    const noteEl = document.getElementById('rt-weeks-note');
+    const onDateValue = () => {
       const v = dateInput.value;
-      if (!v) return;
-      const weeks = calculateWeeksUntil(v);
-      const min = minWeeksFor(state.raceDistance);
-      if (weeks < min) {
-        dateInput.setCustomValidity(`Race must be at least ${min} weeks away`);
-        dateInput.reportValidity();
+      const check = checkCustomDate(v, state.raceDistance);
+      const cur = getOnboardingState() ?? state;
+      if (!check.ok) {
+        // Never leave a date in state that the field no longer shows. '' keeps
+        // the custom-date card open with no date (Continue stays gated).
+        if (cur.customRaceDate) updateOnboarding({ customRaceDate: '' });
+        if (errorEl) {
+          errorEl.textContent = check.reason;
+          errorEl.style.display = check.reason ? 'block' : 'none';
+        }
+        if (noteEl) noteEl.style.display = 'none';
+        syncContinueGate(mode, check.hint);
         return;
       }
-      if (weeks > MAX_PLAN_WEEKS) {
-        dateInput.setCustomValidity('Race must be within 1 year');
-        dateInput.reportValidity();
-        return;
+      if (cur.customRaceDate !== v || cur.planDurationWeeks !== check.weeks || cur.selectedRace) {
+        updateOnboarding({ customRaceDate: v, planDurationWeeks: check.weeks, selectedRace: null });
       }
-      dateInput.setCustomValidity('');
-      updateOnboarding({ customRaceDate: v, planDurationWeeks: weeks, selectedRace: null });
-      const note = document.getElementById('rt-weeks-note');
-      if (note) note.textContent = `${weeks} weeks of training`;
-      else rerender();
-    });
+      if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
+      if (noteEl) {
+        noteEl.textContent = `${check.weeks} weeks of training`;
+        noteEl.style.display = 'block';
+      }
+      syncContinueGate(mode);
+    };
+    dateInput.addEventListener('input', onDateValue);
+    dateInput.addEventListener('change', onDateValue);
   }
 
   // Plan-duration slider (5K / 10K / fitness Set-duration).
@@ -612,6 +694,25 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
       nextStep();
     });
   });
+}
+
+/**
+ * Update the Continue button and the hint beneath it in place, from live
+ * state. `hintOverride` carries a reason the state alone can't express (a
+ * refused date that was never written to state).
+ */
+function syncContinueGate(mode: TrainingMode | null, hintOverride?: string): void {
+  const cur = getOnboardingState();
+  if (!cur) return;
+  const ok = canContinue(mode, cur);
+  const cta = document.getElementById('rt-continue') as HTMLButtonElement | null;
+  if (cta) cta.disabled = !ok;
+  const hint = document.getElementById('rt-continue-hint');
+  if (hint) {
+    const text = ok ? '' : (hintOverride ?? continueHint(mode, cur));
+    hint.textContent = text;
+    hint.style.display = text ? 'block' : 'none';
+  }
 }
 
 function rerender(): void {

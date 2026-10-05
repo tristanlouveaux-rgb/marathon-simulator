@@ -43,6 +43,10 @@ interface RaceCandidate {
   distance: PastTriathlonDistance;
 }
 
+/** Upper bound on a triathlon finish, in hours: the Ironman cut-off. Also the
+ *  Hours box's max attribute, so the two can't drift apart. */
+const MAX_FINISH_HOURS = 17;
+
 // ──────────────────────────────────────────────────────────────────────────
 // Render
 // ──────────────────────────────────────────────────────────────────────────
@@ -140,7 +144,7 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
             <!-- Date -->
             <div class="tri-card t-rise" style="animation-delay:0.22s">
               <div class="tri-label">When was it?</div>
-              <input type="month" id="tpr-date" class="tri-input"
+              <input type="month" id="tpr-date" class="tri-input" placeholder="YYYY-MM"
                 value="${existing?.dateISO?.slice(0, 7) ?? ''}"
                 min="${monthBefore(12)}" max="${currentMonth()}">
               <p class="tri-hint">Month and year is enough.</p>
@@ -152,17 +156,17 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
               <div class="tri-time-row">
                 <div class="tri-time-cell">
                   <label>Hours</label>
-                  <input type="number" id="tpr-h" class="tri-input" min="0" max="17" placeholder="h"
+                  <input type="number" id="tpr-h" class="tri-input" inputmode="numeric" pattern="[0-9]*" min="0" max="${MAX_FINISH_HOURS}" placeholder="h"
                     value="${existing ? Math.floor(existing.totalSec / 3600) : ''}">
                 </div>
                 <div class="tri-time-cell">
                   <label>Minutes</label>
-                  <input type="number" id="tpr-m" class="tri-input" min="0" max="59" placeholder="mm"
+                  <input type="number" id="tpr-m" class="tri-input" inputmode="numeric" pattern="[0-9]*" min="0" max="59" placeholder="mm"
                     value="${existing ? Math.floor((existing.totalSec % 3600) / 60) : ''}">
                 </div>
                 <div class="tri-time-cell">
                   <label>Seconds</label>
-                  <input type="number" id="tpr-s" class="tri-input" min="0" max="59" placeholder="ss"
+                  <input type="number" id="tpr-s" class="tri-input" inputmode="numeric" pattern="[0-9]*" min="0" max="59" placeholder="ss"
                     value="${existing ? existing.totalSec % 60 : ''}">
                 </div>
               </div>
@@ -210,6 +214,7 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
 
           <!-- CTA -->
           <div class="t-rise" style="animation-delay:0.34s;margin-top:6px">
+            <p id="tpr-continue-hint" class="tri-hint" aria-live="polite" style="text-align:center;margin:0 0 8px;display:none"></p>
             <button id="tpr-continue" class="tri-cta">Continue</button>
           </div>
 
@@ -247,14 +252,61 @@ function fmtLegTime(sec: number, long: boolean): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function parseLegTime(str: string, long: boolean): number | null {
-  if (!str.trim()) return null;
-  const parts = str.trim().split(':').map(Number);
-  if (parts.some(isNaN)) return null;
-  if (long && parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (long && parts.length === 2) return parts[0] * 3600 + parts[1] * 60;
-  if (!long && parts.length === 2) return parts[0] * 60 + parts[1];
+/**
+ * Parse a leg split. h:mm:ss is accepted for every leg (a swim typed
+ * "0:32:00" used to drop all three splits). A 2-part swim is mm:ss. Bike and
+ * run are labelled h:mm:ss, so a 2-part value reads as h:mm, unless that would
+ * exceed `capSec` (the race's own finish time): a sprint run typed "24:50" can
+ * only be 24 min 50 s, not 24 h 50 min. Spaces and leading zeros are fine.
+ */
+function parseLegTime(str: string, long: boolean, capSec: number = MAX_FINISH_HOURS * 3600): number | null {
+  const trimmed = str.trim();
+  if (!trimmed) return null;
+  const raw = trimmed.split(':').map(p => p.trim());
+  if (raw.some(p => p === '')) return null;
+  const parts = raw.map(Number);
+  if (parts.some(n => !Number.isFinite(n) || n < 0)) return null;
+  if (parts.length === 3) {
+    const [hh, mm, ss] = parts;
+    if (mm >= 60 || ss >= 60) return null;
+    return hh * 3600 + mm * 60 + ss;
+  }
+  if (parts.length === 2) {
+    const [a, b] = parts;
+    if (b >= 60) return null;
+    const asMmSs = a * 60 + b;
+    if (!long) return asMmSs;
+    const asHMm = a * 3600 + b * 60;
+    return asHMm <= capSec ? asHMm : asMmSs;
+  }
   return null;
+}
+
+const LEG_FORMATS = {
+  swim: { label: 'swim', format: 'mm:ss', example: '25:30', long: false },
+  bike: { label: 'bike', format: 'h:mm:ss', example: '2:35:00', long: true },
+  run:  { label: 'run',  format: 'h:mm:ss', example: '1:45:00', long: true },
+} as const;
+
+type LegKey = keyof typeof LEG_FORMATS;
+
+/** Read the three split boxes. `unreadable` names the first box whose text
+ *  can't be parsed (empty boxes are not unreadable: splits are optional). */
+function readLegs(): { swim: number | null; bike: number | null; run: number | null; unreadable: LegKey | null } {
+  const cap = readTotalSec() ?? MAX_FINISH_HOURS * 3600;
+  const out = { swim: null as number | null, bike: null as number | null, run: null as number | null, unreadable: null as LegKey | null };
+  (Object.keys(LEG_FORMATS) as LegKey[]).forEach(leg => {
+    const raw = (document.getElementById(`tpr-${leg}`) as HTMLInputElement | null)?.value ?? '';
+    const sec = parseLegTime(raw, LEG_FORMATS[leg].long, cap);
+    out[leg] = sec;
+    if (sec == null && raw.trim() !== '' && !out.unreadable) out.unreadable = leg;
+  });
+  return out;
+}
+
+function unreadableLegMessage(leg: LegKey): string {
+  const f = LEG_FORMATS[leg];
+  return `Couldn't read the ${f.label} split. Use ${f.format}, e.g. ${f.example}.`;
 }
 
 function fmtLongTime(sec: number): string {
@@ -403,22 +455,74 @@ function readTotalSec(): number | null {
   return total > 0 ? total : null;
 }
 
-function buildEntry(): TriPastRaceEntry | null {
+/**
+ * Build the entry from the form, or say what is missing. The reason is shown
+ * above Continue and `card` is scrolled into view. The old flow only flashed a
+ * 1px card border for 1.5 s, which read as a dead button.
+ */
+function buildEntry(): { entry: TriPastRaceEntry } | { reason: string; card: HTMLElement | null } {
+  const cardOf = (id: string) => (document.getElementById(id)?.closest('.tri-card') as HTMLElement | null) ?? null;
+
   const distance = getSelectedDistance();
-  const dateISO  = (document.getElementById('tpr-date') as HTMLInputElement)?.value;
+  if (!distance) {
+    return { reason: 'Pick the race distance to continue.', card: document.querySelector<HTMLElement>('[data-dist]')?.closest('.tri-card') as HTMLElement | null };
+  }
+
+  const dateISO = ((document.getElementById('tpr-date') as HTMLInputElement)?.value ?? '').trim();
+  if (!dateISO) return { reason: 'Add the month of the race to continue.', card: cardOf('tpr-date') };
+  // Where type="month" falls back to a text box (desktop Firefox and Safari),
+  // free text like "June 2026" would otherwise be stored as the date.
+  if (!/^\d{4}-\d{2}$/.test(dateISO)) return { reason: 'Enter the month as YYYY-MM, e.g. 2026-06.', card: cardOf('tpr-date') };
+
+  // A number box holding text it can't parse (e.g. "5:32:10" typed into Hours)
+  // reports an empty value, which used to read as "no time".
+  const badBox = ['tpr-h', 'tpr-m', 'tpr-s'].some(id => (document.getElementById(id) as HTMLInputElement | null)?.validity?.badInput);
+  if (badBox) return { reason: 'Use whole numbers in the hours, minutes and seconds boxes.', card: cardOf('tpr-h') };
   const totalSec = readTotalSec();
-  if (!distance || !dateISO || !totalSec) return null;
+  if (!totalSec) return { reason: 'Add your finish time to continue.', card: cardOf('tpr-h') };
 
   const hasLegs = (document.getElementById('tpr-has-legs') as HTMLInputElement)?.checked;
   let perLeg: TriPastRaceEntry['perLeg'];
   if (hasLegs) {
-    const swim = parseLegTime((document.getElementById('tpr-swim') as HTMLInputElement)?.value ?? '', false);
-    const bike = parseLegTime((document.getElementById('tpr-bike') as HTMLInputElement)?.value ?? '', true);
-    const run  = parseLegTime((document.getElementById('tpr-run')  as HTMLInputElement)?.value ?? '', true);
-    if (swim && bike && run) perLeg = { swim, bike, run };
+    const legs = readLegs();
+    if (legs.unreadable) return { reason: unreadableLegMessage(legs.unreadable), card: cardOf('tpr-has-legs') };
+    if (legs.swim && legs.bike && legs.run) perLeg = { swim: legs.swim, bike: legs.bike, run: legs.run };
   }
 
-  return { distance, dateISO, totalSec, perLeg, source: 'manual' };
+  return { entry: { distance, dateISO, totalSec, perLeg, source: 'manual' } };
+}
+
+/**
+ * Show why Continue can't save: above the button (where the user tapped) and
+ * inside the card that needs attention (where the page scrolls to; on a phone
+ * the button is then off-screen). The legs card already carries its own split
+ * message, so it gets no second copy.
+ */
+function setContinueReason(text: string, card: HTMLElement | null = null): void {
+  const hint = document.getElementById('tpr-continue-hint');
+  if (hint) {
+    hint.textContent = text;
+    hint.style.display = text ? 'block' : 'none';
+  }
+  document.querySelectorAll('.tpr-card-reason').forEach(el => el.remove());
+  if (!text || !card || card.querySelector('#tpr-legs-hint')) return;
+  const p = document.createElement('p');
+  p.className = 'tri-hint tpr-card-reason';
+  p.setAttribute('aria-live', 'polite');
+  p.textContent = text;
+  card.appendChild(p);
+}
+
+/** After a blocked tap, keep the reason in step with the form: update it as
+ *  fields change and clear it once the form would save. */
+function refreshContinueHint(): void {
+  const hint = document.getElementById('tpr-continue-hint');
+  if (!hint || hint.style.display === 'none') return;
+  const hasRace = (document.getElementById('tpr-has-race') as HTMLInputElement | null)?.checked;
+  if (!hasRace) { setContinueReason(''); return; }
+  const res = buildEntry();
+  if ('reason' in res) setContinueReason(res.reason, res.card);
+  else setContinueReason('');
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -467,12 +571,13 @@ function updateTotalHint(): void {
 }
 
 function updateLegsHint(): void {
-  const swim = parseLegTime((document.getElementById('tpr-swim') as HTMLInputElement)?.value ?? '', false);
-  const bike = parseLegTime((document.getElementById('tpr-bike') as HTMLInputElement)?.value ?? '', true);
-  const run  = parseLegTime((document.getElementById('tpr-run')  as HTMLInputElement)?.value ?? '', true);
+  const { swim, bike, run, unreadable } = readLegs();
   const hint = document.getElementById('tpr-legs-hint') as HTMLElement;
   if (!hint) return;
-  if (swim && bike && run) {
+  if (unreadable) {
+    hint.textContent = unreadableLegMessage(unreadable);
+    hint.style.display = 'block';
+  } else if (swim && bike && run) {
     hint.textContent = `Swim ${fmtLegTime(swim, false)} · Bike ${fmtLegTime(bike, true)} · Run ${fmtLegTime(run, true)}`;
     hint.style.display = 'block';
   } else {
@@ -582,7 +687,13 @@ function wireHandlers(): void {
   hasRaceToggle?.addEventListener('change', () => {
     form.style.display = hasRaceToggle.checked ? 'block' : 'none';
     if (!hasRaceToggle.checked) updateOnboarding({ triPastRace: null });
+    refreshContinueHint();
   });
+
+  // Any edit inside the form re-checks a reason left by a blocked Continue
+  // ('input' and 'change' both, so month pickers and typed text count; 'click'
+  // for the distance pills, whose own handler runs first).
+  ['input', 'change', 'click'].forEach(type => form?.addEventListener(type, refreshContinueHint));
 
   // Distance pills
   document.querySelectorAll<HTMLButtonElement>('[data-dist]').forEach((btn) => {
@@ -592,9 +703,10 @@ function wireHandlers(): void {
     });
   });
 
-  // Total time → live hint
+  // Total time → live hint. The split cap is the finish time, so a split read
+  // can change with it.
   ['tpr-h', 'tpr-m', 'tpr-s'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', updateTotalHint);
+    document.getElementById(id)?.addEventListener('input', () => { updateTotalHint(); updateLegsHint(); });
   });
 
   // Per-leg toggle
@@ -644,21 +756,21 @@ function wireHandlers(): void {
       nextStep();
       return;
     }
-    const entry = buildEntry();
-    if (!entry) {
-      // Flash the missing section
-      const missing = !getSelectedDistance()
-        ? document.querySelector<HTMLElement>('[data-dist]')?.closest('.tri-card') as HTMLElement
-        : !(document.getElementById('tpr-date') as HTMLInputElement)?.value
-        ? document.getElementById('tpr-date')?.closest('.tri-card') as HTMLElement
-        : document.getElementById('tpr-h')?.closest('.tri-card') as HTMLElement;
-      if (missing) {
-        missing.style.borderColor = 'rgba(0,0,0,0.3)';
-        setTimeout(() => { missing.style.borderColor = ''; }, 1500);
+    const res = buildEntry();
+    if ('reason' in res) {
+      // Say why next to the button and in the card that needs attention, bring
+      // that card into view, and keep the short border flash as a pointer to it.
+      setContinueReason(res.reason, res.card);
+      const card = res.card;
+      if (card) {
+        card.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+        card.style.borderColor = 'rgba(0,0,0,0.3)';
+        setTimeout(() => { card.style.borderColor = ''; }, 1500);
       }
       return;
     }
-    updateOnboarding({ triPastRace: entry });
+    setContinueReason('');
+    updateOnboarding({ triPastRace: res.entry });
     nextStep();
   });
 }

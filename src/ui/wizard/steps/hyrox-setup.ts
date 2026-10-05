@@ -67,14 +67,47 @@ function fmtMmSs(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** Parse a mm:ss or h:mm:ss string to seconds. Returns NaN on failure. */
+/** Parse a mm:ss or h:mm:ss string to seconds. Returns NaN on failure.
+ *  Spaces around each part and leading zeros are fine. An empty part ("1:",
+ *  "1:12:") is a half-typed value, not zero, so it returns NaN: reading it as
+ *  zero stored a stale 60 s while the user was still typing. */
 function parseTime(raw: string): number {
-  const parts = raw.trim().split(':').map(Number);
-  if (parts.some(isNaN)) return NaN;
+  const rawParts = raw.trim().split(':').map(p => p.trim());
+  if (rawParts.some(p => p === '')) return NaN;
+  const parts = rawParts.map(Number);
+  if (parts.some(n => isNaN(n) || n < 0)) return NaN;
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   return NaN;
 }
+
+/**
+ * Fastest physically possible HYROX finish: the 8 × 1 km run legs at the
+ * minimum plausible HYROX run pace, before any station time. Every format runs
+ * all 8 legs (doubles partners each run every leg), so this holds for singles
+ * and doubles alike. Derived from existing constants, not a new threshold.
+ * A previous finish that parses below it was typed in the wrong format: "1:12"
+ * meant as 1 h 12 min reads as 1 min 12 s under mm:ss.
+ */
+const HYROX_FINISH_FLOOR_SEC = HYROX_STATION_ORDER.length * HYROX_RUN_PACE_MIN_SEC_KM;
+
+/**
+ * Read the previous-finish field. `null` = empty (the time is optional).
+ * Otherwise either a usable finish in seconds or the reason it can't be used.
+ */
+function readPrevFinish(raw: string): null | { sec: number } | { error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const sec = parseTime(trimmed);
+  if (isNaN(sec) || sec <= 0) return { error: 'Use h:mm:ss or mm:ss, e.g. 1:12:30.' };
+  if (sec < HYROX_FINISH_FLOOR_SEC) {
+    return { error: `That reads as ${fmtMmSs(sec)} (mm:ss), faster than any HYROX finish. For times over an hour use h:mm:ss, e.g. 1:12:30.` };
+  }
+  return { sec };
+}
+
+const PREV_FORMAT_PROMPT_TODO = 'Pick the format your time was set in. Doubles times scale differently to singles. Getting this right matters.';
+const PREV_FORMAT_PROMPT_DONE = 'Which format was that time in?';
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
@@ -196,9 +229,10 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
           <div class="hx-card hx-rise" style="animation-delay:0.14s">
             <div class="hx-label">Previous Hyrox time</div>
             <input type="text" id="hx-prev-time" class="hx-input" placeholder="e.g. 1:12:30" value="${prevTimeStr}" autocomplete="off">
+            <p id="hx-prev-time-error" class="hx-hint" aria-live="polite" style="color:#b45309;display:none"></p>
             <p class="hx-hint" style="margin-bottom:12px">Enter as h:mm:ss or mm:ss. Used to calibrate your training load and pace targets.</p>
             <div id="hx-prev-time-format-row" style="display:${prevTimeSec != null ? 'block' : 'none'}">
-              <div style="font-size:12px;color:${prevTimeFormat ? 'var(--c-muted)' : '#b45309'};margin-bottom:6px">${prevTimeFormat ? 'Which format was that time in?' : 'Pick the format your time was set in. Doubles times scale differently to singles. Getting this right matters.'}</div>
+              <div id="hx-prev-format-prompt" style="font-size:12px;color:${prevTimeFormat ? 'var(--c-muted)' : '#b45309'};margin-bottom:6px">${prevTimeFormat ? PREV_FORMAT_PROMPT_DONE : PREV_FORMAT_PROMPT_TODO}</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
                 <button class="hx-toggle ${prevTimeFormat === 'open_singles' ? 'active' : ''}" data-prev-format="open_singles" style="font-size:12px;padding:7px 8px">Open Singles</button>
                 <button class="hx-toggle ${prevTimeFormat === 'open_doubles' ? 'active' : ''}" data-prev-format="open_doubles" style="font-size:12px;padding:7px 8px">Open Doubles</button>
@@ -345,8 +379,10 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
             </div>
           </div>
 
-          <!-- CTA -->
+          <!-- CTA. The hint names whatever is blocking Continue, right where
+               the user taps (the amber prompt can sit several cards above). -->
           <div class="hx-rise" style="margin-top:6px;animation-delay:0.30s">
+            <p id="hx-continue-hint" class="hx-hint" aria-live="polite" style="text-align:center;margin:0 0 8px;display:none"></p>
             <button id="hx-continue" class="hx-cta">Continue</button>
           </div>
         </div>
@@ -388,6 +424,13 @@ function wireEventHandlers(): void {
       document.querySelectorAll<HTMLButtonElement>('[data-prev-format]').forEach(b => {
         b.classList.toggle('active', b.getAttribute('data-prev-format') === value);
       });
+      // The amber "pick the format" prompt was fixed at render time, so it
+      // kept asking after the user had answered. Settle it in place.
+      const prompt = document.getElementById('hx-prev-format-prompt');
+      if (prompt) {
+        prompt.textContent = PREV_FORMAT_PROMPT_DONE;
+        prompt.style.color = 'var(--c-muted)';
+      }
     });
   });
 
@@ -426,12 +469,19 @@ function wireEventHandlers(): void {
 
   // Previous time input → live band derivation + show format row
   const timeInput = document.getElementById('hx-prev-time') as HTMLInputElement | null;
+  const timeError = document.getElementById('hx-prev-time-error');
+  const setTimeError = (message: string): void => {
+    if (!timeError) return;
+    timeError.textContent = message;
+    timeError.style.display = message ? 'block' : 'none';
+  };
   timeInput?.addEventListener('input', () => {
-    const sec = parseTime(timeInput.value);
-    const hasTime = !isNaN(sec) && sec > 0;
+    const read = readPrevFinish(timeInput.value);
     const splitsSection = document.getElementById('hx-splits-section');
     const prevFormatRow = document.getElementById('hx-prev-time-format-row');
-    if (hasTime) {
+    if (read != null && 'sec' in read) {
+      const sec = read.sec;
+      setTimeError('');
       const band = bandFromTime(sec);
       updateOnboarding({ previousHyroxTimeSec: sec });
       if (splitsSection) splitsSection.style.display = 'block';
@@ -453,20 +503,31 @@ function wireEventHandlers(): void {
         if (hoursVal) hoursVal.textContent = `${clamped}h`;
         updateOnboarding({ triTimeAvailableHoursPerWeek: clamped });
       }
-    } else if (timeInput.value.trim() === '') {
-      updateOnboarding({ previousHyroxTimeSec: undefined });
+    } else {
+      // Empty, half-typed, or not a usable finish. Never keep the last good
+      // value: backspacing "1:12:30" used to leave 60 s (from "1:") in state,
+      // keeping the format requirement armed for a field that no longer parsed.
+      if (getOnboarding().previousHyroxTimeSec != null) updateOnboarding({ previousHyroxTimeSec: undefined });
       if (splitsSection) splitsSection.style.display = 'none';
       if (prevFormatRow) prevFormatRow.style.display = 'none';
+      // The message itself waits for 'change' (mid-typing values are expected
+      // to be incomplete); once shown it tracks the field live.
+      if (read == null) setTimeError('');
+      else if (timeError && timeError.style.display !== 'none') setTimeError(read.error);
     }
     // Finish anchors the "Running + roxzone" remainder; keep the breakdown live.
     refreshTotalDisplay();
   });
 
-  // On blur, normalise the previous-time input to HH:MM:SS so a typed "1:12:30"
-  // becomes "01:12:30", consistent with every other duration field on the page.
+  // On commit (blur / Return), normalise a usable time to h:mm:ss so a typed
+  // "01:12:30" reads "1:12:30", consistent with every other duration field on
+  // the page. Anything unusable gets a visible message instead of being ignored.
   timeInput?.addEventListener('change', () => {
-    const sec = parseTime(timeInput.value);
-    if (!isNaN(sec) && sec > 0) timeInput.value = fmtMmSs(sec);
+    const read = readPrevFinish(timeInput.value);
+    if (read == null) setTimeError('');
+    else if ('sec' in read) { timeInput.value = fmtMmSs(read.sec); setTimeError(''); }
+    else setTimeError(read.error);
+    syncContinueGate();
   });
 
   // Station splits accordion toggle
@@ -758,11 +819,15 @@ function wireEventHandlers(): void {
     syncContinueGate();
   });
 
-  // Race date (custom)
-  raceDateInput?.addEventListener('change', () => {
-    updateOnboarding({ customRaceDate: raceDateInput.value || null });
+  // Race date (custom). 'input' as well as 'change': desktop Safari and
+  // Firefox fire 'change' only on blur, which left Continue gated while a
+  // typed date sat in the field.
+  const onRaceDate = () => {
+    updateOnboarding({ customRaceDate: raceDateInput!.value || null });
     syncContinueGate();
-  });
+  };
+  raceDateInput?.addEventListener('input', onRaceDate);
+  raceDateInput?.addEventListener('change', onRaceDate);
 
   // Manual venue fallback (only used when "Other / enter date manually" is selected).
   const manualVenueSelect = document.getElementById('hx-manual-venue') as HTMLSelectElement | null;
@@ -774,22 +839,43 @@ function wireEventHandlers(): void {
   // the format must also be picked. Silently defaulting it to the target
   // the format must also be picked. Silently defaulting it to the target
   // format mis-classifies doubles times as singles (and vice versa).
+  //
+  // The reason is written next to the button (#hx-continue-hint), because the
+  // amber format prompt can sit four cards above it, off-screen on a phone, and
+  // `title` tooltips never appear on touch. The button uses aria-disabled, not
+  // native `disabled`, so a tap still arrives and can scroll to the field.
+  function continueBlocker(): { reason: string; targetId: string } | null {
+    const o = getOnboarding();
+    if (!o.hyroxRaceEventId && !o.customRaceDate) {
+      const custom = (document.getElementById('hx-race-event') as HTMLSelectElement | null)?.value === 'custom';
+      return { reason: 'Pick a race or set a custom date to continue.', targetId: custom ? 'hx-race-date' : 'hx-race-event' };
+    }
+    const timeEl = document.getElementById('hx-prev-time') as HTMLInputElement | null;
+    const read = timeEl ? readPrevFinish(timeEl.value) : null;
+    if (read != null && 'error' in read) {
+      return { reason: 'Check the previous time, or clear it, to continue.', targetId: 'hx-prev-time' };
+    }
+    if (o.previousHyroxTimeSec != null && !o.hyroxPreviousTimeFormat) {
+      return { reason: 'Pick the format your previous time was set in to continue.', targetId: 'hx-prev-time-format-row' };
+    }
+    return null;
+  }
+
   function syncContinueGate(): void {
     const cta = document.getElementById('hx-continue') as HTMLButtonElement | null;
     if (!cta) return;
-    const o = getOnboarding();
-    const hasDate = !!o.hyroxRaceEventId || !!o.customRaceDate;
-    const prevTimeSetWithoutFormat =
-      o.previousHyroxTimeSec != null && !o.hyroxPreviousTimeFormat;
-    const ok = hasDate && !prevTimeSetWithoutFormat;
-    cta.disabled = !ok;
+    const blocker = continueBlocker();
+    const ok = blocker == null;
+    cta.disabled = false;
+    cta.setAttribute('aria-disabled', ok ? 'false' : 'true');
     cta.style.opacity = ok ? '1' : '0.45';
     cta.style.cursor = ok ? 'pointer' : 'not-allowed';
-    cta.title = !hasDate
-      ? 'Pick a race or set a custom date to continue.'
-      : prevTimeSetWithoutFormat
-      ? 'Pick the format your previous time was set in.'
-      : '';
+    cta.title = blocker?.reason ?? '';
+    const hint = document.getElementById('hx-continue-hint');
+    if (hint) {
+      hint.textContent = blocker?.reason ?? '';
+      hint.style.display = ok ? 'none' : 'block';
+    }
   }
   syncContinueGate();
   // edits the previous-time input. Both can flip the gate state.
@@ -874,8 +960,22 @@ function wireEventHandlers(): void {
 
   // Continue
   document.getElementById('hx-continue')?.addEventListener('click', () => {
+    // Same rule as syncContinueGate (date, readable time, time format). A
+    // gated tap scrolls to the field that needs attention; the reason is
+    // already written above the button. Unlike manual-entry, mousedown is NOT
+    // cancelled here: station splits commit on 'change', which needs the blur
+    // that the press causes.
+    syncContinueGate();
+    const blocker = continueBlocker();
+    if (blocker) {
+      if (blocker.targetId === 'hx-prev-time' && timeInput) {
+        const read = readPrevFinish(timeInput.value);
+        if (read != null && 'error' in read) setTimeError(read.error);
+      }
+      document.getElementById(blocker.targetId)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      return;
+    }
     const current = getOnboarding();
-    if (!current.hyroxRaceEventId && !current.customRaceDate) return; // gated by syncContinueGate
     const patch: Partial<OnboardingState> = {};
     if (!current.hyroxFormat) patch.hyroxFormat = 'open_singles';
     if (current.triTimeAvailableHoursPerWeek === undefined) {

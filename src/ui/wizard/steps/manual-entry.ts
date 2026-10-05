@@ -207,6 +207,7 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
       <div class="m-rise" style="position:relative;z-index:1;padding:12px 20px 28px;animation-delay:0.32s">
         <div style="max-width:480px;margin:0 auto">
           <button id="manual-continue" class="m-btn-glass" style="width:100%;padding:15px 20px;font-size:15px">Continue</button>
+          <p id="manual-continue-hint" aria-live="polite" style="font-size:11px;color:var(--c-faint);text-align:center;margin:10px 0 0;display:none">Fix the highlighted time, or clear it, to continue.</p>
         </div>
       </div>
 
@@ -320,7 +321,8 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
       const input = document.getElementById(id) as HTMLInputElement | null;
       if (!input) return;
       const parsed = parseTime(input.value, long);
-      if (parsed !== null) {
+      // A 0-second time ("0:00") is not a PB.
+      if (parsed !== null && parsed > 0) {
         (current as any)[key] = parsed;
         delete (currentDates as any)[key];
       } else {
@@ -330,6 +332,10 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
     });
     updateOnboarding({ pbs: current, pbDates: currentDates });
   };
+
+  const continueBtn = document.getElementById('manual-continue') as HTMLButtonElement | null;
+  const continueHint = document.getElementById('manual-continue-hint');
+  const validators: Array<{ input: HTMLInputElement; validate: () => boolean }> = [];
 
   pbFields.forEach(({ id, long }) => {
     const input = document.getElementById(id) as HTMLInputElement | null;
@@ -342,23 +348,31 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
         if (err) err.style.display = 'none';
         return true;
       }
-      const ok = parseTime(raw, long) !== null;
+      const parsed = parseTime(raw, long);
+      const ok = parsed !== null && parsed > 0;
       input.classList.toggle('invalid', !ok);
       if (err) err.style.display = ok ? 'none' : 'block';
       return ok;
     };
+    validators.push({ input, validate });
     // On blur: validate first. An invalid value keeps its inline error visible
     // and is NOT committed or refreshed, so the user's typed text and the error
     // both survive (a full re-render used to wipe both, which read as the page
     // reloading). On a valid value, commit and refresh ONLY the consistency
     // notice in place so it can fire when the PBs contradict the chosen level.
-    input.addEventListener('blur', () => {
+    // Skip the notice when focus is heading to Continue: inserting it above the
+    // button moves the button mid-tap (the click handler commits anyway).
+    input.addEventListener('blur', (e) => {
       if (!validate()) return;
       commitPbs();
+      if ((e as FocusEvent).relatedTarget === continueBtn) return;
       refreshNotice();
     });
     input.addEventListener('input', () => {
       if (input.classList.contains('invalid')) validate();
+      if (continueHint && continueHint.style.display !== 'none' && !validators.some(v => v.input.classList.contains('invalid'))) {
+        continueHint.style.display = 'none';
+      }
     });
   });
 
@@ -391,8 +405,26 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
   };
   volumeInput?.addEventListener('blur', commitVolume);
 
-  // Continue. Commit everything, then advance.
-  document.getElementById('manual-continue')?.addEventListener('click', () => {
+  // Keep focus in the PB field while Continue is pressed. Otherwise the press
+  // blurs the field, the blur handler inserts the experience notice ABOVE the
+  // button, the button moves down about 125px mid-tap, and the click lands on
+  // whatever is now under the finger, so nextStep never runs (reproduced in
+  // Chrome with touch and mouse). The click handler reads every field from its
+  // current value, so skipping the blur loses nothing. Cancelling mousedown is
+  // also what keeps focus on iOS, where the tap's mousedown is synthetic.
+  continueBtn?.addEventListener('mousedown', (e) => e.preventDefault());
+
+  // Continue. Flag unreadable PB text instead of silently dropping it, then
+  // commit everything and advance.
+  continueBtn?.addEventListener('click', () => {
+    const results = validators.map(v => ({ input: v.input, ok: v.validate() }));
+    const firstBad = results.find(r => !r.ok);
+    if (firstBad) {
+      if (continueHint) continueHint.style.display = 'block';
+      firstBad.input.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    if (continueHint) continueHint.style.display = 'none';
     commitPbs();
     commitVolume();
     nextStep();

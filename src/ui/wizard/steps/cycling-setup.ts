@@ -213,10 +213,14 @@ function wireEventHandlers(): void {
   });
 
   // Date input
+  // 'input' as well as 'change', so a date is kept even when the engine only
+  // fires 'change' on blur (desktop Safari, Firefox) and Continue is tapped first.
   const dateInput = document.getElementById('cyc-race-date') as HTMLInputElement | null;
-  dateInput?.addEventListener('change', () => {
-    updateOnboarding({ customRaceDate: dateInput.value || null, selectedRace: null });
-  });
+  const onDate = () => {
+    updateOnboarding({ customRaceDate: dateInput!.value || null, selectedRace: null });
+  };
+  dateInput?.addEventListener('input', onDate);
+  dateInput?.addEventListener('change', onDate);
 
   // Hours slider
   const hoursInput = document.getElementById('cyc-hours') as HTMLInputElement | null;

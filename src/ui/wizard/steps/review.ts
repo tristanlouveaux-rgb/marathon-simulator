@@ -1342,6 +1342,8 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
       .r-edit-input:focus { border-color: rgba(0,0,0,0.45); box-shadow: 0 0 0 3px rgba(0,0,0,0.04); }
       .r-edit-row { display:flex; gap:10px; align-items:center; }
       .r-edit-unit { font-size:13px; color:var(--c-faint); flex:0 0 auto; }
+      /* Why a draft can't be saved. Same type as the Continue hint. */
+      .r-edit-err { font-size:12px; color:var(--c-faint); line-height:1.5; margin:6px 0 0; }
       .r-edit-actions { display:flex; gap:12px; margin-top:8px; }
       .r-edit-btn { background:none; border:none; font-size:12.5px; cursor:pointer; padding:4px 0; color:var(--c-muted); }
       .r-edit-btn.save { color:var(--c-black); font-weight:500; }
@@ -1509,7 +1511,12 @@ function hasNoRunningVolumeSignal(): boolean {
   return activityKm <= 0;
 }
 
-function refreshContinueGate(): void {
+/**
+ * `draftPbValid`: a PB editor is open with a readable time that hasn't been
+ * saved yet. It counts toward the gate, because Build saves it before
+ * advancing; otherwise Build sat dimmed under the PB the user had just typed.
+ */
+function refreshContinueGate(draftPbValid: boolean = false): void {
   const cta = document.getElementById('r-continue') as HTMLButtonElement | null;
   const hint = document.getElementById('r-continue-hint') as HTMLElement | null;
   if (!cta) return;
@@ -1530,7 +1537,8 @@ function refreshContinueGate(): void {
     // Cycling and HYROX have no required benchmarks at review time. They refine
     // via in-plan test cards (FTP test / HYROX assessment). Always enabled.
   } else {
-    const pbCount = Object.values(onb.pbs ?? {}).filter(v => typeof v === 'number' && v > 0).length;
+    const pbCount = Object.values(onb.pbs ?? {}).filter(v => typeof v === 'number' && v > 0).length
+      + (draftPbValid ? 1 : 0);
     if (pbCount === 0) {
       // True beginners / cross-sport hybrids may have no time. Don't wall them
       // out — let them build on a conservative seeded estimate (see
@@ -1796,6 +1804,7 @@ function renderPbRow(
             id="r-pb-input"
             class="r-edit-input"
             type="text"
+            enterkeyhint="done"
             placeholder="${isLong ? 'h:mm:ss' : 'mm:ss'}"
             value="${formatted !== '--' ? formatted : ''}"
           >
@@ -2680,10 +2689,49 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
     });
   });
 
+  // Inline editors: Return commits, like Save. On iOS the keyboard's Return
+  // key was the natural "done" and did nothing, and Save was the only way in.
+  container.querySelectorAll<HTMLInputElement>('.r-row.editing .r-edit-input').forEach(input => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      commitEditing(state);
+    });
+  });
+
+  // PB editor: re-run the gate as the user types, so a readable time lights up
+  // Build (which saves it) without a detour through Save. A message left by a
+  // failed Save clears once the draft reads.
+  const pbInput = container.querySelector<HTMLInputElement>('#r-pb-input');
+  if (pbInput) {
+    const long = editing === 'pb-h' || editing === 'pb-m';
+    pbInput.addEventListener('input', () => {
+      const parsed = parseTime(pbInput.value, long);
+      const valid = parsed !== null && parsed > 0;
+      if (valid) clearEditError(pbInput);
+      refreshContinueGate(valid);
+    });
+  }
+
   // Continue
   container.querySelector<HTMLButtonElement>('#r-continue')?.addEventListener('click', (e) => {
     const btn = e.currentTarget as HTMLButtonElement;
     if (btn.disabled) return;
+    // An open editor whose text the user changed is saved first, the same as
+    // Save. An unreadable draft blocks with its message on screen rather than
+    // being thrown away. An untouched editor is just closed, so a PB's stored
+    // date isn't dropped by a no-op re-save.
+    if (editing) {
+      const draft = container.querySelector<HTMLInputElement>('.r-row.editing .r-edit-input');
+      if (draft && draft.value.trim() !== draft.defaultValue.trim()) {
+        if (!applyEditingDraft(state)) {
+          draft.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+          return;
+        }
+        refreshContinueGate();
+        if (btn.disabled) return;
+      }
+    }
     editing = null;
     // Persist auto-filled PBs to state.pbs. Fastest wins. If Strava found a
     // faster time than what's already saved, overwrite it. A stale slower
@@ -2733,10 +2781,17 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
   });
 }
 
-function commitEditing(state: OnboardingState): void {
+/**
+ * Write the open editor's draft to state. Returns false (editor stays open,
+ * reason shown under the input) when the draft can't be used, true otherwise.
+ * Does not close the editor or re-render: Save / Return do that through
+ * `commitEditing`, and Build saves a changed draft through this directly
+ * before advancing (a re-render there would paint review over the next step).
+ */
+function applyEditingDraft(state: OnboardingState): boolean {
   if (editing === 'volume') {
     const input = document.getElementById('r-volume-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const raw = parseFloat(input.value);
     if (isFinite(raw) && raw >= 0) {
       const unitPref = getState().unitPref ?? 'km';
@@ -2745,14 +2800,12 @@ function commitEditing(state: OnboardingState): void {
       s.detectedWeeklyKm = km;
       saveState();
     }
-    editing = null;
-    rerender(state);
-    return;
+    return true;
   }
 
   if (editing === 'ftp') {
     const input = document.getElementById('r-ftp-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const raw = parseInt(input.value, 10);
     const onb = (getState().onboarding ?? {}) as OnboardingState;
     if (Number.isFinite(raw) && raw >= 80 && raw <= 500) {
@@ -2760,17 +2813,15 @@ function commitEditing(state: OnboardingState): void {
     } else if (input.value.trim() === '') {
       updateOnboarding({ triBike: { ...(onb.triBike ?? {}), ftp: undefined } });
     } else {
-      input.style.borderColor = 'rgba(185,28,28,0.6)';
-      return;
+      showEditError(input, 'Enter watts between 80 and 500.');
+      return false;
     }
-    editing = null;
-    rerender(state);
-    return;
+    return true;
   }
 
   if (editing === 'css') {
     const input = document.getElementById('r-css-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const onb = (getState().onboarding ?? {}) as OnboardingState;
     const parsed = parseCss(input.value);
     if (parsed !== null && parsed > 30 && parsed < 600) {
@@ -2778,26 +2829,22 @@ function commitEditing(state: OnboardingState): void {
     } else if (input.value.trim() === '') {
       updateOnboarding({ triSwim: { ...(onb.triSwim ?? {}), cssSecPer100m: undefined } });
     } else {
-      input.style.borderColor = 'rgba(185,28,28,0.6)';
-      return;
+      showEditError(input, 'Use mm:ss, e.g. 1:50.');
+      return false;
     }
-    editing = null;
-    rerender(state);
-    return;
+    return true;
   }
 
   if (editing === 'vdot') {
     const input = document.getElementById('r-vdot-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const m = getMutableState();
     if (input.value.trim() === '') {
       // Clear the manual override and fall back to the derived chain.
       delete m.vo2Override;
       recomputeLT(m);
       saveState();
-      editing = null;
-      rerender(state);
-      return;
+      return true;
     }
     const raw = parseFloat(input.value);
     if (Number.isFinite(raw) && raw >= 20 && raw <= 85) {
@@ -2807,26 +2854,22 @@ function commitEditing(state: OnboardingState): void {
       recomputeLT(m);
       saveState();
     } else {
-      input.style.borderColor = 'rgba(185,28,28,0.6)';
-      return;
+      showEditError(input, 'Enter a value between 20 and 85.');
+      return false;
     }
-    editing = null;
-    rerender(state);
-    return;
+    return true;
   }
 
   if (editing === 'lt') {
     const input = document.getElementById('r-lt-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const m = getMutableState();
     const unitPref = getState().unitPref ?? 'km';
     if (input.value.trim() === '') {
       delete m.ltOverride;
       recomputeLT(m);
       saveState();
-      editing = null;
-      rerender(state);
-      return;
+      return true;
     }
     const parsed = parseCss(input.value); // mm:ss → seconds, unit-agnostic parse
     // Convert the entered pace (in the user's unit) back to sec/km for storage.
@@ -2838,17 +2881,15 @@ function commitEditing(state: OnboardingState): void {
       recomputeLT(m);
       saveState();
     } else {
-      input.style.borderColor = 'rgba(185,28,28,0.6)';
-      return;
+      showEditError(input, 'Use mm:ss, e.g. 4:30.');
+      return false;
     }
-    editing = null;
-    rerender(state);
-    return;
+    return true;
   }
 
   if (editing === 'pb-k5' || editing === 'pb-k10' || editing === 'pb-h' || editing === 'pb-m') {
     const input = document.getElementById('r-pb-input') as HTMLInputElement | null;
-    if (!input) return;
+    if (!input) return false;
     const key: keyof PBs = editing === 'pb-k5' ? 'k5' : editing === 'pb-k10' ? 'k10' : editing === 'pb-h' ? 'h' : 'm';
     const long = key === 'h' || key === 'm';
     const parsed = parseTime(input.value, long);
@@ -2876,13 +2917,44 @@ function commitEditing(state: OnboardingState): void {
       });
     } else {
       // Bad input. Do not close the editor so the user can fix it.
-      input.style.borderColor = 'rgba(185,28,28,0.6)';
-      return;
+      showEditError(input, long ? 'Use h:mm:ss, e.g. 1:45:00.' : 'Use mm:ss, e.g. 22:30.');
+      return false;
     }
     updateOnboarding({ pbs: nextPbs, pbDates: nextPbDates });
-    editing = null;
-    rerender(state);
+    return true;
   }
+  // No editor open (or its input is missing): nothing to write, nothing to close.
+  return false;
+}
+
+/** Save / Return: write the draft, then close the editor and re-render. */
+function commitEditing(state: OnboardingState): void {
+  if (!applyEditingDraft(state)) return;
+  editing = null;
+  rerender(state);
+}
+
+/** Red border plus a line saying what the editor accepts. A border alone
+ *  gave no clue which format to use. */
+function showEditError(input: HTMLInputElement, message: string): void {
+  input.style.borderColor = 'rgba(185,28,28,0.6)';
+  const anchor = (input.closest('.r-edit-row') as HTMLElement | null) ?? input;
+  let err = anchor.parentElement?.querySelector<HTMLElement>(':scope > .r-edit-err') ?? null;
+  if (!err) {
+    err = document.createElement('p');
+    err.className = 'r-edit-err';
+    err.setAttribute('aria-live', 'polite');
+    anchor.insertAdjacentElement('afterend', err);
+  }
+  err.textContent = message;
+  err.style.display = 'block';
+}
+
+function clearEditError(input: HTMLInputElement): void {
+  input.style.borderColor = '';
+  const anchor = (input.closest('.r-edit-row') as HTMLElement | null) ?? input;
+  const err = anchor.parentElement?.querySelector<HTMLElement>(':scope > .r-edit-err');
+  if (err) err.style.display = 'none';
 }
 
 /**
