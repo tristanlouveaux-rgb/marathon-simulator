@@ -48,7 +48,7 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 - **Mode exclusivity.** `events.next()` branches on `eventType` so exactly one resolver fires; the running resolver bails for tri/HYROX and vice-versa. Reduce-only and excused-week guards (injury / silent-advance `detrainApplied` / taper) are identical across all three.
 - **Application timing — instant on rollover (Tristan, 2026-06-09).** Running re-bakes on every render (`resolveWeekWorkouts` is on-demand), so its re-anchor is live. Tri/HYROX *store* `triWorkouts` and otherwise re-bake only on incidental triggers (generator-version bump, CSS/FTP refresh, injury modal, session lever) — **not** on the plain weekly rollover, which means both the re-anchor and the pre-existing per-discipline effort multiplier would have sat dormant until one of those fired. So `events.next()` now calls `rebakeFutureWeeksInPlace` for tri/HYROX after stamping the ratio: it regenerates only the current + future weeks (which carry no matched actuals at rollover, so completions are never clobbered; user-added / holiday sessions are carried over exactly like the launch regen) so the stamp — and the effort multiplier — take effect immediately. A required wiring fix went with it: `applyTriEffortMultipliersToFutureWeeks` reads the per-discipline stamp from the *stored* `state.wks[w-1]`, not the freshly-generated week object (which never carries it). Net effect: tri/HYROX adaptive volume now responds the week after a shortfall, matching running.
 
-**Limitations.** (1) The actual side (running) is built from Signal-A TSS (run-equivalent: cross-training discounted by runSpec) while `plannedWeekTSS` excludes cross-training; for running-only athletes the seam is second-order — it only bites when the athlete logs *unplanned* cross-training, and it sits inside the ~15% (1−CTL_DECAY) term. Kept as a documented limitation rather than refactoring the signal basis in v1. (2) The ratio re-anchors *volume*; it does not by itself shift paces — intensity re-anchoring remains the VDOT/effort path, and the existing adherence→VDOT-gain gate (withholds VDOT increments when runs are missed) is the orthogonal intensity-axis counterpart. (3) HYROX re-anchors silently (no debrief surface yet). (4) Not device-verified — behaviour confirmed by unit tests (`ctl-gap.test.ts` 15 + `ctl-gap-mirror.test.ts` 8), not yet against a live under-training week in any mode.
+**Limitations.** (1) *(Rewritten 2026-10-05.)* The actual side (running) is Signal A TSS: each activity × the runSpec of its own sport (see "Signal A vs Signal B"). On the planned side, `resolveCtlAdherence` values planned gym and strength sessions at `SPORTS_DB.strength.runSpec` (0.35), the weight the session that fills the slot carries in Signal A (a rated strength session through the strength RPE override, an unrated one or a HIIT fill through the strength sport). Before 2026-10-05 planned gym counted at full TSS while its fill counted at 0.35, so a fully completed week with strength read as behind (ratio 0.954 in `ctl-adherence-gym-valuation.test.ts`) and cut next week's volume. Planned cross sessions stay out of the planned side, so unplanned or cross-slot cross-training can only raise the ratio, never cause a false cut. The remaining seam sits inside the ~15% (1−CTL_DECAY) term. Kept as a documented limitation rather than refactoring the signal basis in v1. (2) The ratio re-anchors *volume*; it does not by itself shift paces — intensity re-anchoring remains the VDOT/effort path, and the existing adherence→VDOT-gain gate (withholds VDOT increments when runs are missed) is the orthogonal intensity-axis counterpart. (3) HYROX re-anchors silently (no debrief surface yet). (4) Not device-verified — behaviour confirmed by unit tests (`ctl-gap.test.ts` 15 + `ctl-gap-mirror.test.ts` 8), not yet against a live under-training week in any mode.
 
 ## §BQ — Max HR: corroborated-max estimator, one algorithm for all three pipes (2026-06-04)
 
@@ -74,7 +74,7 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 
 **Saturation fixed: slope-1 form.** The old credit curve `CREDIT_MAX(1−e^(−x/TAU))` with CREDIT_MAX=1500, TAU=800 had slope 1.875 at the origin — it AMPLIFIED every realistic session's credit ~1.6–1.9×, accidentally compensating the B1 scale mismatch (a curve tuned to convert TSS-ish budgets toward Garmin-scale cuts). Replaced with the one-parameter saturating exponential `TAU(1−e^(−x/TAU))`, TAU = 491 TSS (old 800 re-denominated by the easy-anchor ratio): slope exactly 1 at zero, so **credit ≤ raw load always** — saturation is a cap, as specified.
 
-**iTRIMP normalizer: personal, plausibility-gated, everywhere.** `computeAthleteNormalizer` = `3600·hrr·e^(1.92·hrr)` (Coggan hrTSS anchor, Banister β=1.92) now rejects ltHR outside 80–95% of maxHR (HR at the individual anaerobic threshold ≈ 86–92% HRmax in trained athletes — Faude, Kindermann & Meyer 2009, *Sports Med* 39:469–490; floor at 80% leaves margin for less-trained users) → population 15000 fallback (itself ≈ an 84%-HRR profile, so the gate never makes things more extreme). The gate also fires at the watch-intake source (`resolveLT`/`deriveLT`: implausible Garmin LTHR falls to the 0.88×maxHR derivation). Real case: a Garmin snapshot of ltHR 144 @ maxHR 192 (75%) had silently inflated all running CTL/ATL +66% via a ~9,033 normalizer. The tri fitness model (tri-benchmarks CTL, tri overload, recovery countdown) migrated from hardcoded population `/150` to the same gated personal normalizer — cross-mode CTL coherence; encode/decode pairs (`getAthleteNormalizer`/`normalizeiTrimp`) are exact inverses so synthetic round-trips are identity.
+**iTRIMP normalizer: personal, plausibility-gated, everywhere.** `computeAthleteNormalizer` = `3600·hrr·e^(β·hrr)` (Coggan hrTSS anchor; Banister β = 1.92 until 2026-10-05, now the β of the athlete's sex, §CI) now rejects ltHR outside 80–95% of maxHR (HR at the individual anaerobic threshold ≈ 86–92% HRmax in trained athletes — Faude, Kindermann & Meyer 2009, *Sports Med* 39:469–490; floor at 80% leaves margin for less-trained users) → population 15000 fallback (itself ≈ an 84%-HRR profile, so the gate never makes things more extreme; note added 2026-10-05: the 84% figure is a back-solve of 3600·h·e^(1.92h) = 15000, and the constant's original comment states no HR profile, see §CI). The gate also fires at the watch-intake source (`resolveLT`/`deriveLT`: implausible Garmin LTHR falls to the 0.88×maxHR derivation). Real case: a Garmin snapshot of ltHR 144 @ maxHR 192 (75%) had silently inflated all running CTL/ATL +66% via a ~9,033 normalizer. The tri fitness model (tri-benchmarks CTL, tri overload, recovery countdown) migrated from hardcoded population `/150` to the same gated personal normalizer — cross-mode CTL coherence; encode/decode pairs (`getAthleteNormalizer`/`normalizeiTrimp`) are exact inverses so synthetic round-trips are identity.
 
 **Rescaled together (the saturation-constant trap):** LOAD_SMOOTHING 30→18.4, minLoadThreshold 5→3, minLoadToTrigger 30→18, EASY_LOAD_PER_KM 12→5.52 (= 6:00/km × TL_PER_MIN[4]; retires the disagreeing 35/km and "15 load/TSS" orphans), recovery-extra cap 20×15→20 TSS, suggester capFraction now a direct `maxReductionTSS / effectiveRRC` ratio (the equivalentEasyKm round-trip is gone). All re-denominations divide by the easy-anchor ratio 1.63 — behaviour-preserving re-denomination, not retuning.
 
@@ -85,6 +85,12 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 **Durable guard**: `src/calculations/load-currency-anchors.test.ts` — 17 anchors: 60-min easy ≈ 55 in every planned pipeline (incl. tri↔running parity on a real generated plan), 1h@LT=100 exact, tier agreement bands, credit ≤ load, round-trip identity, per-RPE conversion law, and a filesystem grep that fails on any new hardcoded `/15000`-style decode.
 
 **Key files**: `sports.ts` (TL_PER_MIN canonical header, TSS_RPE_BY_TYPE, plannedTssPerMin, garminToTssRatio), `load.ts`, `universalLoad.ts` + `universal-load-constants.ts`, `suggester.ts`/`planSuggester.ts`, `fitness-model.ts` (gate, getter, /150), `lt-derivation.ts` (plausibleLtHR), `plan_engine.triathlon.ts`/`bike.ts`/`swim.ts`, `activity-matcher.ts` (SEV-1 + actualTSS cache), `tri-benchmarks-from-history.ts`, `main.ts` (one-time `loadCurrencyV2` restamp migration), ~20 display sites.
+
+**Addendum (2026-10-05, audit B8, B11, B2 remainder): planned pricing.** Planning side. No new constants.
+- **Unscheduled sessions price at 0.** A planned session whose status removes it from the week (running: 'replaced' or 'skipped'; tri/HYROX: 'skipped') carries 0 planned TSS (`computePlannedWorkoutSignalBTSS`, `isUnscheduledPlannedWorkout`). The planned-day target answers "what does the plan prescribe today", and a fully replaced run prescribes nothing. Its description '0km (replaced)' priced at 1 TSS only through `estimateWorkoutDurMin`'s 1-minute floor, an artefact rather than a dose. This matches `calculateWorkoutLoad`, which already returns 0 for replaced descriptions. A tri/HYROX 'replaced' session is swapped for an easier one still to be done, so it stays priced.
+- **One pricer per running session.** The Plan-tab card (`planCardPlannedTSS`) and activity detail's "Load vs plan" use `plannedTssPerMin(type)` like the day target: easy and long at the RPE-4 row (0.92 TSS/min), not `TL_PER_MIN[w.rpe]` (0.65 for an RPE-3 easy run). On-plan easy runs had read about 140% of plan.
+- **Planned injected sessions are prescriptions, never load.** `adhoc-`, `holiday-` and `benchmark-` entries in `adhocWorkouts` (`isPlannedAdhocId`) are skipped by every load reader. Only the synced activity's iTRIMP or RPE fallback counts.
+- **Limitation.** A running skip stored only as `wk.rated[id] = 'skip'` stays priced, because `resolveCtlAdherence` must see skipped sessions as planned to detect under-adherence (§BR). The day's strain target therefore still includes that session.
 
 ---
 
@@ -3298,7 +3304,7 @@ CSS is the swim equivalent of running threshold pace; bands above are pragmatic 
 
 **Purpose.** The triathlon About-you card collects age, bodyweight, and sex but lets users skip every field. Downstream models still need values — max-HR estimates need age, FTP→W/kg tier needs weight, iTRIMP β needs sex. This entry records the fallbacks and why they're defensible.
 
-**Sex → iTRIMP β coefficient.** The Banister iTRIMP integral uses a sex-specific exponential weighting: β = 1.92 (male), β = 1.67 (female). Source: Banister 1991, Morton et al. 1990. The weighting reflects the steeper rise in lactate-vs-HR curve seen in trained males relative to trained females, which makes a high-HR minute count for more in male iTRIMP. The picker offers Male / Female / Other; selecting Other internally maps to the male coefficient. Rationale: the male β yields a more aggressive load count, so it's the conservative choice when sex is undeclared (over-counting load is safer than under-counting it for injury and overtraining detection).
+**Sex → iTRIMP β coefficient.** The Banister iTRIMP integral uses a sex-specific exponential weighting: β = 1.92 (male), β = 1.67 (female). Source: Banister 1991, Morton et al. 1990. The weighting reflects the steeper rise in lactate-vs-HR curve seen in trained males relative to trained females, which makes a high-HR minute count for more in male iTRIMP. The picker offers Male / Female / Other; selecting Other internally maps to the male coefficient. Rationale: the male β yields a more aggressive load count, so it's the conservative choice when sex is undeclared (over-counting load is safer than under-counting it for injury and overtraining detection). *(2026-10-05)* The iTRIMP-to-TSS normaliser now uses the same β, and producers and normaliser resolve sex through one function, `trimp.ts:resolveBiologicalSex` (§CI).
 
 **Bodyweight skipped → sex-based default.** When bodyweight is unset:
 - Male / Other → **75 kg**
@@ -4359,20 +4365,23 @@ drift% = ((avgHR_second_half - avgHR_first_half) / avgHR_first_half) * 100
 
 **File**: `src/calculations/fitness-model.ts`
 
-**Formula**:
+**Formula** (β updated 2026-10-05, §CI):
 ```
-normalizer = 3600 * HRR_at_LT * exp(1.92 * HRR_at_LT)
+normalizer = 3600 * HRR_at_LT * exp(beta_sex * HRR_at_LT)
+beta_sex = getBeta(resolveBiologicalSex(s))   // trimp.ts: 1.67 female, 1.92 male / unset / prefer_not_to_say
 HRR_at_LT = (LTHR - restingHR) / (maxHR - restingHR)
 normalizedTSS = (iTrimp * 100) / normalizer
 ```
 
-**Fallback**: normalizer = 15000 when LTHR, restingHR, or maxHR unavailable.
+**Fallback**: normalizer = 15000 when LTHR, restingHR, or maxHR unavailable, or LTHR is outside 80–95% of maxHR (§BP).
+
+**Live binding (2026-10-05)**: the module normaliser behind `normalizeiTrimp()` / `getAthleteNormalizer()` is bound to live state (`bindAthleteNormalizerToState` in `launchApp`) and re-derived whenever LTHR, resting HR, max HR or the resolved sex change (§CI).
 
 **Scientific basis**: Coggan's hrTSS standard defines 1 hour at lactate threshold HR = 100 TSS. The normalizer computes what iTRIMP value corresponds to that reference session for the individual athlete. This personalises the iTRIMP-to-TSS conversion by ~10-20% compared to the fixed 15000 default.
 
 **Known limitations**:
 - Falls back to population average (15000) when HR profile is incomplete
-- Beta = 1.92 (male) is hardcoded; no sex-specific normalizer
+- Population fallback 15000 is sex-neutral (no documented female derivation), and Strava rows cached before the athlete's sex was known keep β 1.92; see §CI (2026-10-05). (Replaces "Beta = 1.92 (male) is hardcoded; no sex-specific normalizer", fixed 2026-10-05.)
 - Accuracy depends on correct LTHR, which may be estimated rather than lab-tested
 
 ---
@@ -4385,9 +4394,9 @@ normalizedTSS = (iTrimp * 100) / normalizer
 
 **Two computation modes**:
 
-1. **Rolling 7d/28d** (preferred): acute = sum of last 7 days Signal B TSS; chronic = sum of last 28 days / 4 (weekly average). Pre-plan days filled with `signalBSeed / 7`.
+1. **Rolling 7d/28d** (preferred): acute = sum of last 7 days Signal B TSS; chronic = sum of last 28 days / 4 (weekly average). Pre-plan days filled with `signalBSeed / 7`. Without a seed, days no plan week covers are missing, not rest, and the ratio is 'unknown' until 14 observed days (2026-10-05; see "Rolling 7d/28d Load Computation").
 
-2. **Weekly EMA fallback**: uses same-signal (Signal B for both CTL and ATL) or mixed-signal (legacy: Signal A for CTL, Signal B for ATL).
+2. **Weekly EMA fallback**: uses same-signal (Signal B for both CTL and ATL) or mixed-signal (legacy: Signal A for CTL, Signal B for ATL). Reached only when `planStartDate` is missing or there are no weeks. Since 2026-10-05 a `null` rolling ratio reports 'unknown' instead of falling through to this EMA, which starts from zero for an unseeded athlete and read a false spike.
 
 **Plan-reset continuity (2026-04-29)** _(see `docs/ARCHITECTURE.md → "Load Model & Plan Continuity"` for the call-site rule and `docs/CHANGELOG.md` 2026-04-29 entries for implementation history)_: both modes now walk `s.previousPlanWks` chronologically before consuming current `wks`. Without this, a new plan generation collapsed CTL to whatever `signalBBaseline` happened to be — the historic Strava median — discarding all training the user did during the previous plan and producing phantom "Overloaded" freshness states for several weeks until the new plan accumulated enough of its own data. The same fix applies to `computeSameSignalTSB`, `computeFitnessModel`, and `computeLiveSameSignalTSB` so every readiness surface (freshness ring, ACWR, injury risk, fitness trend, week-debrief) sees a continuous chronic-load history across plan boundaries. Double-counting is prevented by `_truncateArchivesAtPlanBoundary`, which drops archive weeks whose start date is on or after the new plan's start.
 
@@ -4413,7 +4422,7 @@ Previous range was 1.2-1.6. Compressed because:
 - Recovery debt orange: 1.10x
 - Recovery debt red: 1.20x
 
-**Scientific basis**: Gabbett (2016) acute:chronic workload ratio. Hulin et al. (2016) showed high chronic load is protective, justifying higher thresholds for fitter athletes. Malone et al. (2017) found elite soccer players with high chronic loads tolerated spikes without elevated injury risk. The rolling 7d/28d method (uncoupled ACWR) is preferred over coupled EWMA per Gabbett's more recent recommendations.
+**Scientific basis**: Gabbett (2016) acute:chronic workload ratio. Hulin et al. (2016) showed high chronic load is protective, justifying higher thresholds for fitter athletes. Malone et al. (2017) found elite soccer players with high chronic loads tolerated spikes without elevated injury risk. The rolling 7d/28d method is preferred over the EWMA because it is transparent and has no weekly-bucket artefacts. *Correction (2026-10-05):* this entry used to call the rolling method "uncoupled". Its 28-day ÷ 4 chronic includes the acute week, so it is the **coupled** ratio, and the Lolli et al. (2019) coupling caveat below applies to it.
 
 **Known limitations**:
 - Lolli et al. (2019): ACWR contains mathematical coupling (acute is part of chronic), producing spurious correlations. Absolute thresholds should be treated as heuristics, not validated boundaries
@@ -4436,7 +4445,24 @@ chronic = SUM(dailyTSS[-28:]) / 4
 
 Pre-plan fill: `signalBSeed / 7` per day (distributes historical weekly average evenly).
 
-**Scientific basis**: Simple rolling average is the most transparent ACWR method. Dividing 28-day sum by 4 converts to a weekly average for direct comparison with the 7-day acute window. This "uncoupled" approach avoids the mathematical artifact in exponentially weighted ACWR where acute load is double-counted in the chronic component.
+**Scientific basis**: Simple rolling average is the most transparent ACWR method. Dividing 28-day sum by 4 converts to a weekly average for direct comparison with the 7-day acute window. *Correction (2026-10-05):* this paragraph used to call the method "uncoupled" and say it avoids double-counting acute load. The 28-day window contains the acute 7 days, so this is the coupled ratio. Coupled and uncoupled ratios map onto each other deterministically for fixed windows (Windt & Gabbett 2019), so the choice changes the threshold scale, not the information.
+
+**Unrecorded days (2026-10-05, audit B1/B17).** Tracking side. A day is *observed* when the live plan or an archived plan has a week covering it; activities are only stored on plan weeks.
+- **With a Signal B seed** (`s.signalBBaseline`): unobserved days are filled with `signalBSeed / 7`. Unchanged.
+- **Without one** they are missing, not rest. Filling them with 0 made steady training read 1.87 'high' on plan day 14, cut week-3 quality at the week advance and undersized the ease-back L_max (§CF). `computeRollingLoadRatio` returns `null` until 14 observed completed days (`ROLLING_ACWR_MIN_OBSERVED_DAYS`). This is the old 14-day guard, which counted plan days and was switched off by any archive entry (4.00 'high' from day 0 for no-history Strava users and plans rebuilt after 5 days).
+- **Formula after the guard.** Missing days are valued at the athlete's own mean daily load, `B / 7`, where `B` is the weekly load of the most recent whole weeks (multiples of 7 observed days) in the 21 days before the acute week:
+
+  ```
+  chronic = (acute + 3B) / 4
+  ratio   = acute / chronic = 4U / (U + 3),   U = acute / B
+  ```
+
+  It equals the plain 28-day sum ÷ 4 once all 28 days are observed, and equals a correctly seeded athlete when the seed matches `B`. Steady training reads 1.00 from day 14 (was 1.87). A week at twice the baseline reads 1.60 'high', the same as with a correct seed.
+- **No constants added.** 14 days is the existing guard; the 7-day / 28-day windows and the ÷ 4 are unchanged.
+- **`computeACWR`** reports 'unknown' when the rolling ratio is `null`, instead of the zero-started weekly EMA.
+- **Limitations.** (1) Assumes pre-plan load matched the observed baseline, so a true beginner ramping from zero no longer flags. (2) In-plan days before a data source covered the athlete (Apple's 14-day lookback, a mid-plan connection, mid-week onboarding without a backfill) still count as observed zeros (ISSUE-329). (3) The whole-week baseline drops older observed days when the 21-day span is only partly observed. (4) Day keys come from `toISOString()` of local noon, part of the open UTC-vs-local date defect class (audit C5).
+
+**Load Ratio weekly trend (`computeWeeklyAcwrHistory`, 2026-10-05).** Display only. Seeded EMAs start at the seed (unchanged). Unseeded EMAs are divided by `(1 − decay^t)` after `t` weeks, the standard correction for a zero-initialised EMA (Kingma & Ba 2015), so each is the decay-weighted mean of observed weeks only. Steady training reads 1.0 from week 1 (was 4.1, 3.1, 2.4, 2.0 in weeks 1 to 4). Limitation: with few weeks the chronic mean leans on the latest week, so an early spike reads lower than for a seeded athlete, never higher.
 
 ---
 
@@ -5610,6 +5636,22 @@ CTL = CTL * exp(-1/42) + dayTSS * 7 * (1 - exp(-1/42))
 **Signal B** (raw physiological load): no runSpec discount; counts full metabolic cost. Used for ATL, ACWR, freshness/TSB, total load display.
 
 **Rationale**: A padel session that produces 80 iTRIMP has only ~36 TSS of running-equivalent fitness benefit (runSpec 0.45), but it creates 80 TSS worth of physiological fatigue. Signal A captures the training effect; Signal B captures the recovery cost.
+
+**Once-per-signal invariant (2026-10-05, audit B3/X7/X9/B20).** Tracking side. Every completed activity contributes at most once to each load signal: weekly A, weekly B, daily B, the per-sport breakdown, sleep daily load and strain. Each activity is weighted once, at its own sport's runSpec in A and at full TSS in B.
+- **Pairing.** Synced cross-training can be stored up to three times: a `garminActuals['garmin-<id>']` twin, an adhoc entry and, for overflow, an `unspentLoadItem`. An adhoc entry pairs with its twin by two keys: its `garminId`, and the twin's `garminActuals` key (`garmin-<id>`). The key matters because the Strava upgrade rewrites the twin's `garminId` to `strava-<id>` but keeps the key and the adhoc id. `garminActuals` win over their adhoc twin.
+- **`unspentLoadItems` are decision records, never load.** Overflow, `surplus_run` and unmatched items feed the excess-load flow (excess card, Adjust week). Each points at an activity, or the surplus slice of a run, that `garminActuals` or `adhocWorkouts` already holds, so emptying `unspentLoadItems` changes neither signal. Before the fix, Signal A counted a synced ride at full weight through its twin and then added the overflow item again (min × 1.15 × runSpec): a 60-min ride read A 98 vs B 60.
+- **Scope.** Signal A counts `garminActuals` and `garmin-` adhoc entries only. In-app GPS runs and manual logs (non-`garmin-` adhoc ids) contribute 0 to A while B counts them (audit B9, open, ISSUE-322).
+- **Same formulas.** Both signals use the same per-activity TSS formulas and RPE fallbacks (`garminActuals`: rated RPE, else 5; adhoc: `rpe`, then `r`, then 5). Since no runSpec exceeds 1.0, Signal A never exceeds Signal B for a week (locked by `load-once-per-activity.test.ts`).
+
+**Signal A uses the activity's own sport (2026-10-05).** Signal A = TSS × `SPORTS_DB[sport].runSpec`, where `sport` is what the device recorded, never the plan slot it filled. Resolution order (`resolveActualSport`, `cross-training/activities.ts`): `manualSport`, then `isStrengthActual`, then `activityType` (`deriveSportFromActivityType`), then the slot-fill `displayName` label; a run-slot row with no `activityType` stays a run. One exception comes first in both signals: a rated strength session takes the strength RPE override (`computeStrengthRpeTSS`; strength runSpec in A, full in B), even when `manualSport` names another sport (ISSUE-320). HIIT and ambiguous gym-slot fills map to strength, the matcher's gym bucket. A walk logged against a run slot counts at the walking runSpec. The strength override already applies the strength runSpec and is not discounted again. Before the fix, synced cross-training entered live Signal A at runSpec 1.0 through its `garminActuals` twin, while the history seeds that set the CTL baseline already applied a runSpec, so running CTL stepped up at plan start for cross-trainers. Live A and the seeds now weight cross-training the same way for most sports. **Exceptions where the seed tables disagree with `SPORTS_DB`** (ISSUE-321):
+- *Strava history, edge `getRunSpec`* (`supabase/functions/sync-strava-activities/index.ts`): CARDIO 0.55 vs generic 0.40, walking 0.40 vs 0.30, hiking 0.40 vs 0.45, strength 0.30 vs 0.35, tennis 0.45 vs 0.50, HIIT 0.30 vs 0.35 (strength), boxing 0.30 vs 0.25, skiing 0.55 to 0.75 vs 0.50, snowboard 0.55 vs 0.45. Running, cycling, swimming, rowing, yoga, soccer and rugby match.
+- *Apple and FIT history, `mapActivityTypeToSportKey`* (`appleHealthSync.ts`, used by `aggregateHistoryFromRows` for Apple and file imports): only RUNNING, CYCLING, SWIMMING, WALKING, HIKING, STRENGTH_TRAINING, ELLIPTICAL, ROWING and STAIR_CLIMBING map to their `SPORTS_DB` row; everything else seeds at generic 0.40. FIT trail and treadmill runs therefore seed at 0.40 (and are left out of running km) but count 1.0 live; indoor cycling 0.40 vs 0.55; open-water swimming 0.40 vs 0.20; Apple yoga 0.40 vs 0.10, tennis 0.40 vs 0.50, basketball 0.40 vs 0.45, martial arts 0.40 vs 0.30, paddleboarding 0.40 vs 0.25.
+
+So a per-sport step in running CTL remains at plan start for athletes whose history holds those sports.
+
+**Comparisons stay on one signal (2026-10-05).** The coach `ctlTrend` compares live Signal B CTL with Signal B CTL four weeks back (`computeSameSignalCtlHistory`, same seed and walk as `computeSameSignalTSB`); comparing live B with the Signal A history read every steady cross-trainer as "building" (ISSUE-320 asks Tristan to confirm B). The running CTL-gap re-anchor values planned gym sessions at the strength runSpec, the currency of the Signal A actual side (§BR limitation 1).
+
+**Limitations.** (1) The seed-table exceptions above. (2) Label and slot fallbacks only apply where the writer dropped `activityType`; a run-slot actual with a generic `activityType` ('Workout', 'CARDIO') counts at generic 0.40 until the user reclassifies it. (3) Signal A excludes GPS and manual adhocs (B9). (4) The per-day Signal B builders still disagree on a no-HR twin: `buildDailySignalBTSS` gives the twin 0 and counts the adhoc RPE estimate, `computeTodaySignalBTSS` gives the twin duration × `TL_PER_MIN[5]` and skips the adhoc (ISSUE-324). (5) Running CTL history shifts down once for cross-trainers, because past weeks are recomputed with the discount.
 
 ## HR Drift (Cardiovascular Decoupling) (2026-04-15)
 
@@ -7384,3 +7426,106 @@ Per-session TSS = `workMinutes × plannedTssPerMin(slot) + (totalMinutes − wor
 **Guards:** `tri-volume-by-discipline.test.ts` +10 (build-mean > next-4 on a ramp, taper excluded, hours from `estimatedDurationMin`, missing-phase counted as build, taper-only fallback, startOffset; peak = peak-phase mean > build-mean, peak hours, max-non-taper fallback, taper-only fallback). `race-prediction.triathlon.test.ts` unchanged and green (incl. the taper invariant and "projected faster than current"). Full suite green (3478).
 
 **Confidence: high** for the mechanism and the no-invented-constants claim (probe-verified propagation, guard-tested doses). **NOT device-verified** — the in-app bar is the tri Forecast marquee + the "Average build week" training chip reading the same doses, on a real early-plan athlete with a demonstrated race split.
+
+## §CH — Weekly load target follows deload and taper weeks; carry judged per week (2026-10-05, audit A10/A11)
+
+**Side.** Planning: the prescribed weekly load. Tracking surfaces (Plan card, Load & Taper, debrief, excess card) compare actual load against it.
+
+**Problem.** Each surface built its own target with `computePlannedSignalB(..., wk.ph, ...)` and no taper position. `Week.ph` never holds 'deload', so the deload row of `PHASE_MULTIPLIERS` was dead: plan-engine deload weeks kept their base/build/peak target and following the plan exactly read "under plan". Every taper week, race week included, targeted 0.85×, and Stats alone passed a 1-indexed position. `computeDecayedCarry` judged earlier weeks against the viewed week's target, so peak weeks done exactly to plan counted as excess once a lower taper target was in view (83 TSS of phantom carry on the first taper Monday in the regression test).
+
+**Formula** (`computePlannedWeekTarget`, `src/calculations/planned-week-target.ts`):
+
+```
+target(week) = baseline × m(week) + crossTrainingBudget        (signal B; signal A omits the budget)
+baseline     = median(historicWeeklyTSS)  → ctlBaseline → runs/week × 50     (unchanged)
+```
+
+`m(week)` comes from the existing tables, now selected per week by `resolvePlannedWeekPhase`:
+- **Plan-engine deload week** → the tier deload row of `PHASE_MULTIPLIERS` (0.70 beginner/recreational, 0.68 trained, 0.65 performance/high-volume). Deload status uses the generator's own rule: running `isDeloadWeek(week, ability)` (every 3rd, 4th, 5th or 6th week by ability band, ability from `abilityBandFromVdot(s.v || 45, experienceLevel || 'intermediate')`, the inputs `resolveWeekWorkouts` hands the generator); triathlon (cycling) and HYROX every 4th non-taper week (`isFourWeekCycleDeloadWeek`); any mode with a holiday `forceDeload`.
+- **Race taper** (the last contiguous 'taper' run of a non-continuous plan) → `taperMultiplier(weekInTaper, taperLength)`, 0-indexed: 0.85 / 0.75 / 0.65 over 3 weeks, 0.85 / 0.70 over 2, 0.70 for 1. A progressive volume reduction with intensity held (Mujika & Padilla 2003; Bosquet et al. 2007).
+- **'taper'-labelled weeks that are not the race taper** (continuous-mode block deload, double-periodisation inter-cycle recovery) are recovery weeks → the deload row.
+- **A race-taper week the engine also deloads** → min(taper, deload). The generator cuts that week twice (taper session scaling and `dMult`); taking the lower existing target follows that without inventing a compounded constant.
+- **Just-Track** generates no plan, so no week is a deload.
+
+**Carry.** `computeCurrentWeekCarry` scores each of the last 3 weeks' excess against that week's own target, then decays it from the week's midpoint with the 7-day ATL time constant (unchanged). It returns 0 for every week except the current one, so a future week no longer shows the current week's residual.
+
+**Status of the taper ramp: superseded, implementation in progress.** Under 0-indexing the ramp never reaches the 0.55 endpoint that the `taperMultiplier` docstring and PRINCIPLES.md "Planned Load Model" document; race week of a 3-week taper sits at 0.65. Tristan decided on 2026-10-05 that race week reaches 0.55, and batch 2 is implementing it (ISSUE-317). Update this entry when it lands.
+
+**Why defensible.** No new constants. Every multiplier is an existing table row, selected from the same plan data the generator reads, so the target a surface shows and the week the engine builds share one definition of "deload" and "taper". The deload rows (a 30 to 35% cut) sit inside the usual recovery-week range; note that PRINCIPLES.md specifies 0.70 to 0.75, and the code rows, which predate this change, were not altered.
+
+**Limitations.** (1) The target is history median × multiplier, not the sum of the generated sessions. In taper it sits roughly 30 to 45% above the prescribed run TSS (audit probes), because the generator's taper session scalars (0.50 to 0.70, `plan_engine.ts`) cut deeper than the ramp (ISSUE-317). (2) The race-week endpoint above. (3) Just-Track treats no week as a deload. (4) The min() rule is pragmatic, not literature-derived.
+
+**Guards.** `planned-week-target.test.ts` (17), including an anchor that fails if any file other than `fitness-model.ts` or `planned-week-target.ts` calls `computePlannedSignalB` or `computePlannedWeekTSS`, or calls `computeDecayedCarry` (activity-review's phase-independent baseline excepted).
+
+**Confidence.** High that the phase selection matches the generator (unit-tested). Not device-verified.
+
+---
+
+## §CI — iTRIMP normaliser: sex-matched β, one sex resolver, live binding (2026-10-05, audit B12)
+
+**Side.** Tracking (load measurement). It feeds planning through ACWR, the CTL-gap re-anchor and cross-training cuts.
+
+**Problem.** Every iTRIMP producer (`trimp.ts`, the Strava edge function, Apple Health, FIT import) weights HR with the Banister sex coefficient: β = 1.67 for women, 1.92 otherwise (Banister 1991; Morton, Fitz-Clarke & Banister 1990; see "Sex → iTRIMP β coefficient"). The normaliser hard-coded β = 1.92. For a woman, an hour at LTHR produced iTRIMP = 3600·hrr·e^(1.67·hrr) but was divided by 3600·hrr·e^(1.92·hrr), so it read 100·e^(−0.25·hrr): about 81 TSS (LTHR 168, rest 50, max 190) instead of the Coggan hrTSS definition of 100.
+
+**Formula.**
+
+```
+normalizer = 3600 · hrr_LT · e^(β_sex · hrr_LT)
+hrr_LT     = (LTHR − restingHR) / (maxHR − restingHR)
+β_sex      = getBeta(resolveBiologicalSex(s))     // 1.67 female; 1.92 male, unset, prefer_not_to_say
+TSS        = 100 · iTRIMP / normalizer
+```
+
+A producer integrates Σ dt·hrr·e^(β·hrr), so an hour held at LTHR yields exactly the normaliser and decodes to 100, provided both sides use the same β. Any mismatch is a uniform e^(Δβ·hrr) rescale: 0.81× for a female-β iTRIMP over a male-β normaliser, 1.23× the other way round.
+
+**Sex resolution must be shared.** The same formula is not enough: both sides must resolve sex the same way at the moment each runs. During the wizard the answer lives only on `s.onboarding.biologicalSex`; plan initialisation copies it to `s.biologicalSex`. The onboarding Strava producers (post-connect 28-day sync, review-step backfill) sent `s.biologicalSex`, still undefined, so a woman's onboarding history was stamped with β 1.92. The edge function caches each row and never recomputes it, so a normaliser reading `'female'` after initialisation decoded that history at 1.23× (123.5 TSS per hour at LTHR at the audit profile). Fix: `trimp.ts:resolveBiologicalSex(s)` is the only sex source for β on both sides. While onboarding is in progress the wizard answer wins (initialisation will copy it over `s.biologicalSex`, even over a HealthKit-seeded value); after onboarding `s.biologicalSex` is canonical, with the wizard answer as the fallback.
+
+**Effect.** For women with a personal normaliser whose iTRIMP was produced with their recorded sex, an hour at LTHR now decodes to 100, and TSS rises by e^(0.25·hrr): ×1.21 at hrr 0.75, ×1.23 at 0.84, ×1.25 at 0.90. Male and unset profiles are unchanged. The iTRIMP intensity cutoffs (70 and 95 TSS/h, `universalLoad.ts`) move sessions that read 57 to 70 TSS/h before above the easy cutoff.
+
+**Where the 100-TSS anchor does not yet hold (open).**
+- *Strava rows cached with the male β.* Rows the server stamped with β 1.92 before the athlete's sex was known keep it: the edge function never recomputes a cached `itrimp` and stores no per-row β. This covers every existing Strava-onboarded woman's onboarding backfill (up to 52 weeks) and connect-step sync rows where Strava supplied no sex. Those rows now read about 1.21× to 1.25× high (they read correctly before this change) and feed plan-week actuals synced during onboarding, triathlon per-discipline CTL from history and intensity calibration. Apple rows self-heal when re-read, because the upload upserts `itrimp`. The re-stamp approach is an open decision (ISSUE-318).
+- *Onboarding connect-step sync.* The connect-data step runs before about-you, so for a new user whose Strava profile and HealthKit carry no sex, the 28-day connect sync still sends none. Batch 2 is fixing this.
+- *Population fallback (15000), unchanged.* Used when LTHR, resting HR or max HR is missing, or LTHR is outside 80–95% of max HR. No stated HR profile backs it: it was introduced as "typical LTHR_HRR for average athlete" (`8b07156`), and the "≈ 84%-HRR profile" reading in §BP is a later back-solve (3600·h·e^(1.92h) = 15000 gives h = 0.836). A female fallback therefore has no documented derivation and none was introduced; women on the fallback still read about 0.81×. If the fallback is taken to mean the same HRR at LT for both sexes, the female value would be 3600·0.836·e^(1.67·0.836) ≈ 12,170 (decision, ISSUE-319).
+- *Server history scale.* The edge function's history mode divides by a fixed 15000 for every user, so the server-computed `historicWeeklyTSS` that seeds the CTL baseline sits on a different scale from client-recomputed weeks. For women the gap widened by up to 1.25× (ISSUE-319).
+- *Persisted totals.* `wk.actualTSS` running totals written before this change keep their old values (ISSUE-319).
+
+**Live binding.** The module normaliser behind `normalizeiTrimp()` and `getAthleteNormalizer()` was copied at launch, so an Account HR edit or an in-session physiology or LT sync left it stale until the next cold launch, while surfaces calling `getNormalizerFromState(s)` were fresh. One activity could show two TSS values, and encode/decode round-trips (excess card) were off by the ratio. It is now bound to live state (`bindAthleteNormalizerToState` in `launchApp`) and re-derived whenever LTHR, resting HR, max HR or the resolved sex change.
+
+**Other limitations.** Producers use the rolling resting HR (`computeRollingRestingHR`) while the normaliser uses `s.restingHR`, a small existing mismatch. β is a population sex coefficient, not an individual fit.
+
+**Guards.** `load-currency-anchors.test.ts` Anchor 2 asserts 1 h at LTHR = 100 for both sexes. `athlete-normalizer-sex-and-binding.test.ts` (19) covers the stream, lap and summary tiers, `computeWeekRawTSS`, the staleness case, wizard-time stamping decoded after plan initialisation, a guard that `main.ts` binds and no production file calls `setAthleteNormalizer`, and a guard that no producer reads `s.biologicalSex` directly for β. `stravaSync-biological-sex.test.ts` (5) asserts the edge payload carries the resolved sex.
+
+**Confidence.** High on the algebra (anchor-tested). Not device-verified.
+
+---
+
+## §CJ — Apple Health physiology: local-date day keys, night attribution, one source per night (2026-10-05, audit X4)
+
+**Side.** Tracking (what the athlete's recovery data says). Feeds readiness, sleep score and sleep debt.
+
+- **Day key**: the device-local calendar date of each sample (`localDateKey`, `src/utils/local-date.ts`), matching Garmin's `calendarDate`. It was the UTC date of the plugin's GMT string, a day off for UTC+ mornings and UTC− evenings.
+- **Night attribution**: a sleep segment ending before 12:00 local belongs to that date's night; a segment ending at 12:00 or later belongs to the next date's night. This is the same noon boundary the old nap filter used, so no new constant. The pre-midnight part of a night, previously dropped, now lands on the wake date. Limitations: naps between 12:00 and 23:59 fold into the following night, and the tail of a lie-in past noon moves to the next night (decision D3 in `docs/audits/2026-09-load-accounting/load-fix-designs.md`, open, ISSUE-327).
+- **One source per night**: summing iPhone, Watch and third-party sources double-counts. A source that reports stages (core, deep, REM) beats an unstaged one, because `computeSleepScore` weights deep at 0.25 and REM at 0.20. Ties go to the source with more asleep seconds.
+- **Steps across sources**: each sample's steps are spread evenly over its interval. Where sources overlap, only the highest step rate counts; samples from one source are summed, and samples spanning midnight are split. This approximates HealthKit's statistics merge, which picks one source per overlapping stretch by the user's source priority. The plugin returns only `sourceName`, so the higher-rate source stands in for priority. The result is at least the largest single source and at most the plain sum. Limitations: even spread within a sample, and the priority proxy can disagree with the Health app.
+- **Merge**: newest-wins for every date the sync read in full. The read window starts at local midnight (sleep at the noon before), so a boundary day is never overwritten with partial values, and reads pass `limit: 0` so the newest days are no longer cut off. A supplementary Apple source never overwrites a primary (Garmin) value: field ownership is tracked in `PhysiologyDayEntry.appleValues` and released when Garmin writes the field.
+- **HRV**: unchanged. The day's last SDNN reading × 1.28 (decision D4 in the same design doc, open, ISSUE-327).
+
+**Also (audit D4).** `heartRate` is now part of the HealthKit request, so Apple workouts carry an HR stream and are scored by iTRIMP instead of duration × a flat rate. No model change; the existing iTRIMP pipeline now receives data.
+
+**Guards.** `apple-health-physiology.test.ts` (19), `apple-health-heart-rate-permission.test.ts` (4), `local-date.test.ts` (9), `physiologySync.test.ts` (7). **Not device-verified**: time zones, the HealthKit sheet and the 90-day `limit: 0` boot read need a phone (`docs/DEVICE_TESTS.md`).
+
+---
+
+## §CK — Fast-finish long run is placed and protected as the long run (2026-10-05, audit X5)
+
+**Side.** Planning only. No formula changed.
+
+The fast-finish long run (about 80% easy, the last ~20% at marathon pace) is the week's long-run stimulus plus a quality finish. It is generated as `t: 'progressive'`, so rules keyed on `t === 'long'` treated it as an ordinary quality session: the scheduler put it on Tuesday with Sunday empty in every peak week. It is now identified by the generator's `longRun` stamp (`isLongRun`, `src/workouts/long-run.ts`) and placed and protected as the long run: long-run day, long-run skip charge (`TIM.long`), long-run cross-training rules, injury long-run bans. Its load, pace and HR target still come from its progressive format (Load Currency Law untouched).
+
+**Deliberately unchanged.** Tracking-side samples stay `plannedType === 'long'` only (HR drift, durability flag, LT efficiency, MP pace drift): the MP finish inflates drift and HR, so the run is not a steady-state sample. The coach-contract aerobic-vs-quality load split (`plan-shape` `BUCKET_OF`) keeps it under quality, because its MP finish is quality work.
+
+**Limitation.** The timing-check long sub-ladder (one step: long → 'marathon') predates this change and reads as an upgrade for an easy-paced long run; the fast-finish run now inherits it (ISSUE-328).
+
+**Guards.** `long-run-placement.test.ts` (8), `cross-training/fast-finish-long-run.test.ts` (5), `injury/fast-finish-long-run.test.ts` (3), `skip-long-run.test.ts` (3). Not device-verified.
+
+---
