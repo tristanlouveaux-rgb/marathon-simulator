@@ -150,6 +150,28 @@ describe('review: a typed PB counts without tapping Save', () => {
     expect(ob().pbs.k5).toBeUndefined();
   }, 20000);
 
+  it('an unreadable typed time names the format under Build and on leaving the field, without tapping Save', async () => {
+    await mount();
+    const input = await openPbEditor('pb-k5');
+    typeKeys(input, '22.30');
+
+    const hint = document.getElementById('r-continue-hint') as HTMLElement;
+    expect(cta().disabled).toBe(true);
+    expect(hint.textContent).toBe('Use mm:ss, e.g. 22:30, to continue.');
+    expect(hint.textContent).not.toMatch(/Add at least one personal best/);
+
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const err = document.querySelector('.r-edit-err') as HTMLElement | null;
+    expect(err?.style.display).toBe('block');
+    expect(err?.textContent).toBe('Use mm:ss, e.g. 22:30.');
+
+    // Correcting the time clears both and lights Build.
+    typeKeys(input, '22:30');
+    expect(cta().disabled).toBe(false);
+    expect(err?.style.display).toBe('none');
+    expect(hint.style.display).toBe('none');
+  }, 20000);
+
   it('opening a PB editor and leaving it unchanged does not rewrite the PB or its date', async () => {
     await mount({ pbs: { k5: 1300 }, pbDates: { k5: '2026-05-01T08:00:00Z' } });
     await openPbEditor('pb-k5');

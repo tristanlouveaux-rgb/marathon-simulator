@@ -1516,7 +1516,13 @@ function hasNoRunningVolumeSignal(): boolean {
  * saved yet. It counts toward the gate, because Build saves it before
  * advancing; otherwise Build sat dimmed under the PB the user had just typed.
  */
-function refreshContinueGate(draftPbValid: boolean = false): void {
+/**
+ * `draftPbFormatHint` is the format line for a PB draft the user has typed but
+ * that doesn't parse (e.g. '22.30'). With no committed PB it replaces the
+ * generic "Add at least one personal best" hint, which contradicted the time
+ * sitting in the field directly above it.
+ */
+function refreshContinueGate(draftPbValid: boolean = false, draftPbFormatHint: string | null = null): void {
   const cta = document.getElementById('r-continue') as HTMLButtonElement | null;
   const hint = document.getElementById('r-continue-hint') as HTMLElement | null;
   if (!cta) return;
@@ -1530,6 +1536,7 @@ function refreshContinueGate(draftPbValid: boolean = false): void {
 
   const missing: string[] = [];
   let estimatingStart = false;
+  let unreadablePbDraft = false;
   if (onb.trainingMode === 'triathlon') {
     const runnerType = onb.confirmedRunnerType ?? onb.calculatedRunnerType ?? getState().typ ?? null;
     if (!runnerType) missing.push('Race preference');
@@ -1545,6 +1552,7 @@ function refreshContinueGate(draftPbValid: boolean = false): void {
       // beginner-fitness.ts) that refines from their real runs. Every other
       // level implies a known time, so it still needs a real PB.
       if (levelAllowsEstimatedStart(onb.experienceLevel)) estimatingStart = true;
+      else if (draftPbFormatHint) { missing.push('a readable personal best'); unreadablePbDraft = true; }
       else missing.push('at least one personal best');
     }
     // No-data volume mandate: a running plan with no volume signal at all must
@@ -1556,7 +1564,11 @@ function refreshContinueGate(draftPbValid: boolean = false): void {
 
   cta.disabled = missing.length > 0;
   if (hint) {
-    if (missing.length > 0) {
+    if (unreadablePbDraft && missing.length === 1 && draftPbFormatHint) {
+      // 'Use mm:ss, e.g. 22:30.' -> 'Use mm:ss, e.g. 22:30, to continue.'
+      hint.textContent = `${draftPbFormatHint.replace(/\.$/, '')}, to continue.`;
+      hint.style.display = 'block';
+    } else if (missing.length > 0) {
       hint.textContent = `Add ${missing.join(', ')} to continue.`;
       hint.style.display = 'block';
     } else if (estimatingStart) {
@@ -2705,11 +2717,25 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
   const pbInput = container.querySelector<HTMLInputElement>('#r-pb-input');
   if (pbInput) {
     const long = editing === 'pb-h' || editing === 'pb-m';
-    pbInput.addEventListener('input', () => {
-      const parsed = parseTime(pbInput.value, long);
+    const formatHint = long ? 'Use h:mm:ss, e.g. 1:45:00.' : 'Use mm:ss, e.g. 22:30.';
+    const draftState = () => {
+      const raw = pbInput.value.trim();
+      const parsed = parseTime(raw, long);
       const valid = parsed !== null && parsed > 0;
+      return { raw, valid };
+    };
+    pbInput.addEventListener('input', () => {
+      const { raw, valid } = draftState();
       if (valid) clearEditError(pbInput);
-      refreshContinueGate(valid);
+      // While typing, only the hint under Build changes (a half-typed '22'
+      // is not an error yet). The red field error waits for change/blur.
+      refreshContinueGate(valid, raw && !valid ? formatHint : null);
+    });
+    // Leaving the field with an unreadable time shows the format line at once,
+    // instead of only after Save or Return.
+    pbInput.addEventListener('change', () => {
+      const { raw, valid } = draftState();
+      if (raw && !valid) showEditError(pbInput, formatHint);
     });
   }
 
