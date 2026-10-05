@@ -29,6 +29,7 @@ import type {
 } from './universal-load-types';
 import { computeUniversalLoad, isExtremeSession } from './universalLoad';
 import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
+import { isLongRun } from '@/workouts/long-run';
 import {
   ANAEROBIC_WEIGHT,
   REPLACE_THRESHOLD,
@@ -79,10 +80,6 @@ function isQualityWorkout(wt: string): boolean {
     'progressive',
     'float',
   ].includes(wt);
-}
-
-function isLongRunType(wt: string): boolean {
-  return wt === 'long';
 }
 
 /** Downgrade a workout type to an easier version */
@@ -173,8 +170,10 @@ export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): Plann
       plannedAerobic: w.aerobic || 0,
       plannedAnaerobic: w.anaerobic || 0,
       status: (w.status || 'planned') as PlannedRun['status'],
-      isLongRun: w.t === 'long',
-      isQuality: isQualityWorkout(w.t),
+      // Long-run slot via the shared helper: the fast-finish long run is
+      // t:'progressive' and must not be classed as a quality session (audit X5).
+      isLongRun: isLongRun(w),
+      isQuality: !isLongRun(w) && isQualityWorkout(w.t),
     }));
 }
 
@@ -254,13 +253,14 @@ function buildCandidates(
     if (run.isLongRun) sim -= LONG_PENALTY;
 
     // Race-goal protection (lower priority = harder to touch)
-    const protectionPenalty = getWorkoutProtection(ctx.raceGoal, run.workoutType);
+    const protectionPenalty = getWorkoutProtection(ctx.raceGoal, run.isLongRun ? 'long' : run.workoutType);
     sim -= 0.02 * protectionPenalty;
 
     // Determine if this run can be replaced
     let canReplace = true;
     if (run.isLongRun && !ctx.injuryMode) canReplace = false;
     if (noReplace.includes(run.workoutType)) canReplace = false;
+    if (run.isLongRun && noReplace.includes('long')) canReplace = false;
 
     candidates.push({
       run,

@@ -174,6 +174,7 @@ export function generateWeekWorkouts(
           d: `${Math.round(longDist * adj)}km${easySuffix}`,
           rpe: 3,
           r: 3,
+          longRun: true,
         });
       } else if (slot === 'easy') {
         const distance = 6 + easyIdx * 2;

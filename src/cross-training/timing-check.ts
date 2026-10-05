@@ -15,7 +15,9 @@
  * Floor: max(3 km, reduced distance). Approx. 20 min minimum.
  *
  * Intensity ladder (ascending): easy → marathon → threshold → vo2
- * Long run: long → marathon (1 step), long → easy (2 steps)
+ * Long run: long → marathon (1 step), long → easy (2 steps). "Long run" is the
+ * long-run slot in any format (isLongRun), so the fast-finish long run uses this
+ * sub-ladder too; stepped to easy, it drops its marathon-pace finish.
  *
  * Mods are suggestions only. Workout unchanged until user accepts.
  * Recomputed fresh each sync, so they clear on reschedule.
@@ -26,6 +28,7 @@ import type { SimulatorState } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore, normalizeiTrimp } from '@/calculations/fitness-model';
 import { TL_PER_MIN } from '@/constants';
+import { isLongRun } from '@/workouts/long-run';
 
 const QUALITY_TYPES = new Set(['threshold', 'vo2', 'long']);
 const SIGNAL_B_TRIGGER = 50;       // TSS: minimum to show any suggestion
@@ -77,6 +80,12 @@ function applyDistReduction(originalDesc: string, reduction: number): string {
   const original = parseFloat(match[1]);
   const reduced  = Math.max(MIN_DISTANCE_KM, Math.round(original * (1 - reduction) * 10) / 10);
   return originalDesc.replace(match[0], `${reduced} km`);
+}
+
+/** The leading total distance of a description ("24km: last 5 @ MP" → "24km"). */
+function leadingDistance(desc: string): string {
+  const match = desc.match(/(\d+\.?\d*)\s*km/i);
+  return match ? `${match[1]}km` : desc;
 }
 
 // ─── Signal B helpers ─────────────────────────────────────────────────────────
@@ -140,7 +149,7 @@ function buildDayTSSMap(wk: Week, weekStartISO: string): Map<number, number> {
  */
 export function applyTimingDowngradesFromWorkouts(
   wk: Week,
-  workouts: Array<{ id?: string; n: string; t: string; d?: string; dayOfWeek?: number; r?: number; rpe?: number }>,
+  workouts: Array<{ id?: string; n: string; t: string; d?: string; dayOfWeek?: number; r?: number; rpe?: number; longRun?: boolean }>,
   weekStartISO: string,
   prevWeek?: Week,
   prevWeekStartISO?: string,
@@ -161,8 +170,11 @@ export function applyTimingDowngradesFromWorkouts(
   for (const workout of workouts) {
     const id    = workout.id || workout.n;
     const wType = workout.t?.toLowerCase() ?? '';
+    // The fast-finish long run is t:'progressive'. isLongRun puts it on the
+    // long-run sub-ladder with the steady long run (audit X5).
+    const longRun = isLongRun(workout);
 
-    if (!QUALITY_TYPES.has(wType)) continue;
+    if (!QUALITY_TYPES.has(wType) && !longRun) continue;
 
     // Skip already-completed sessions
     const isRated = typeof rated[id] === 'number' && (rated[id] as number) > 0;
@@ -178,10 +190,16 @@ export function applyTimingDowngradesFromWorkouts(
     const { steps, distReduction } = getTier(tssYesterday);
 
     // Compute new type
-    const newType = wType === 'long' ? stepDownLong(steps) : stepDown(wType, steps);
+    const newType = longRun ? stepDownLong(steps) : stepDown(wType, steps);
 
-    // Compute new distance (stored for when user accepts)
-    const newDistance = applyDistReduction(workout.d ?? '', distReduction);
+    // Compute new distance (stored for when user accepts). The fast-finish long
+    // run stepped down to easy loses its marathon-pace finish: only its total
+    // distance carries over, so the accepted session is a plain easy run rather
+    // than an easy-typed run that still reads "last 5 @ MP".
+    const baseDesc = longRun && wType !== 'long' && newType === 'easy'
+      ? leadingDistance(workout.d ?? '')
+      : (workout.d ?? '');
+    const newDistance = applyDistReduction(baseDesc, distReduction);
 
     const newRpe = RPE_BY_TYPE[newType] ?? 5;
 

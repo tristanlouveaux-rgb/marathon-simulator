@@ -27,6 +27,7 @@ import { EASY_LOAD_PER_KM } from './universal-load-constants';
 import type { DataTier, HRZoneData } from './universal-load-types';
 import type { WorkoutClassification, IntensityThresholds } from './universalLoad';
 import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
+import { isLongRun } from '@/workouts/long-run';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,6 +52,15 @@ export interface PlannedRun {
   plannedAnaerobic: number;
   status: string;
   alreadyDowngraded: boolean;
+  /** Carries the workout's long-run-slot stamp (Workout.longRun). Read it via
+   *  runIsLong(), never directly: the fast-finish long run is
+   *  workoutType 'progressive' and must still get every long-run rule. */
+  longRun?: boolean;
+}
+
+/** Long-run identity for a planned run. Single read side: isLongRun (audit X5). */
+function runIsLong(run: PlannedRun): boolean {
+  return isLongRun({ t: run.workoutType, longRun: run.longRun });
 }
 
 export interface AthleteContext {
@@ -263,9 +273,13 @@ function vibeSimilarity(a1: number, an1: number, a2: number, an2: number): numbe
   return RATIO_WEIGHT * ratioScore + LOAD_WEIGHT * loadScore;
 }
 
-function canReplaceWorkout(sport: SportProfile, wt: WorkoutType, ctx: AthleteContext): boolean {
-  if (wt === 'long' && !ctx.injuryMode) return false;
-  if (sport.cannotReplace.includes(wt)) return false;
+function canReplaceWorkout(sport: SportProfile, run: PlannedRun, ctx: AthleteContext): boolean {
+  const long = runIsLong(run);
+  if (long && !ctx.injuryMode) return false;
+  if (sport.cannotReplace.includes(run.workoutType)) return false;
+  // A sport that cannot replace a long run (noReplace: ['long']) cannot replace
+  // the fast-finish long run either.
+  if (long && sport.cannotReplace.includes('long')) return false;
   return true;
 }
 
@@ -369,10 +383,12 @@ function buildCandidates(
     if (run.dayIndex === activityDayIndex) sim += SAME_DAY_BONUS;
 
     // Long run penalty (harder to touch)
-    if (run.workoutType === 'long') sim -= LONG_PENALTY;
+    const long = runIsLong(run);
+    if (long) sim -= LONG_PENALTY;
 
-    // Race-goal protection penalty
-    const protect = workoutPriorityForRace(ctx, run.workoutType);
+    // Race-goal protection penalty. The long-run slot gets the long-run rank
+    // whatever its format (fast finish is workoutType 'progressive').
+    const protect = workoutPriorityForRace(ctx, long ? 'long' : run.workoutType);
     sim -= 0.02 * protect;
 
     // Already-downgraded penalty. Push to bottom of candidate list
@@ -478,7 +494,9 @@ function buildReduceAdjustments(
 
       // Quality workout downgrade (keeps distance, reduces intensity)
       // Downgrades don't remove km. They're always allowed regardless of floor.
-      if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
+      // The long-run slot is never a quality downgrade target: the fast-finish
+      // long run follows the long-run reduce rule below.
+      if (!runIsLong(run) && isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
                   : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
@@ -592,7 +610,7 @@ function buildReduceAdjustments(
       }
 
       // Long run reduction (only heavy/extreme)
-      if (run.workoutType === 'long' && severity !== 'light') {
+      if (runIsLong(run) && severity !== 'light') {
         const runKm = run.plannedDistanceKm;
         const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
         if (loadPerKm <= 0) continue;
@@ -690,10 +708,10 @@ function buildReplaceAdjustments(
   // Sort replaceable candidates by cost (cheapest first. Easy runs before quality)
   // Fresh workouts first, then downgraded
   const freshReplacePool = freshCandidates
-    .filter(c => canReplaceWorkout(sport, c.run.workoutType, ctx) && c.run.workoutType !== 'long')
+    .filter(c => canReplaceWorkout(sport, c.run, ctx) && !runIsLong(c.run))
     .sort((a, b) => a.runLoad - b.runLoad);
   const downgradedReplacePool = downgradedCandidates
-    .filter(c => canReplaceWorkout(sport, c.run.workoutType, ctx) && c.run.workoutType !== 'long')
+    .filter(c => canReplaceWorkout(sport, c.run, ctx) && !runIsLong(c.run))
     .sort((a, b) => a.runLoad - b.runLoad);
   const replacePool = [...freshReplacePool, ...downgradedReplacePool];
 
@@ -708,8 +726,9 @@ function buildReplaceAdjustments(
 
       const runKm = run.plannedDistanceKm;
 
-      // Quality downgrade (keeps km. No floor impact)
-      if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
+      // Quality downgrade (keeps km. No floor impact). Long-run slot excluded,
+      // as in buildReduceAdjustments.
+      if (!runIsLong(run) && isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
                   : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
@@ -759,7 +778,7 @@ function buildReplaceAdjustments(
       }
 
       // Long run reduction (floor-aware)
-      if (run.workoutType === 'long' && severity !== 'light') {
+      if (runIsLong(run) && severity !== 'light') {
         const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
         if (loadPerKm <= 0) continue;
         const budgetKm = remainingLoad / loadPerKm;
@@ -1196,6 +1215,7 @@ export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): Plann
         plannedAnaerobic: w.anaerobic || 0,
         status: w.status || 'planned',
         alreadyDowngraded: w.status === 'reduced',
+        ...(w.longRun ? { longRun: true } : {}),
       };
     });
 }

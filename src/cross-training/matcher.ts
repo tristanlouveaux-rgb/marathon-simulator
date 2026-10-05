@@ -16,6 +16,7 @@ import {
   calculateLoadBudget
 } from './load-matching';
 import { calculateWorkoutLoad } from '@/workouts';
+import { isLongRun } from '@/workouts/long-run';
 
 /**
  * Apply cross-training modifications to this week's workouts
@@ -121,7 +122,9 @@ export function applyCrossTrainingToWorkouts(
       if (bestMatch.idx === -1) break;
 
       const w = modifiedWorkouts[bestMatch.idx];
-      const wt = w.t.toLowerCase();
+      // Branch key only (never written back): the long-run slot follows the
+      // long-run rules whatever its format (fast finish is t:'progressive').
+      const wt = isLongRun(w) ? 'long' : w.t.toLowerCase();
       const wLoad = weightedLoad(w.aerobic || 0, w.anaerobic || 0);
 
       if (wLoad <= 0) {
@@ -267,7 +270,9 @@ function findBestWorkoutMatch(
     if (w.status && w.status !== 'planned') continue;
     if (wk.rated && wk.rated[w.n]) continue;
 
-    const wt = w.t.toLowerCase();
+    // Branch key only: the long-run slot (incl. the t:'progressive' fast
+    // finish) is matched under the long-run rules.
+    const wt = isLongRun(w) ? 'long' : w.t.toLowerCase();
 
     // CRITICAL: Only target running workouts for replacement.
     // Never replace cycling, cross-training, strength, rest, or other non-running activities.

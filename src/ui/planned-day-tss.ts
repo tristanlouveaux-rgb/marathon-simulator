@@ -4,6 +4,7 @@ import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-
 import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
+import { isLongRun } from '@/workouts/long-run';
 
 /**
  * Canonical planned-day TSS context — the single source for "what does the
@@ -38,6 +39,9 @@ export interface PlannedDayWorkout {
   plannedDurationMin: number;
   isHard: boolean;
   status?: string;
+  /** Running only: the workout fills the week's long-run slot (isLongRun), so a
+   *  fast-finish long run (type 'progressive') still reads as the long run. */
+  longRun?: boolean;
 }
 
 export interface PlannedDayTSSContext {
@@ -132,6 +136,7 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           plannedDurationMin: Math.round(estimateWorkoutDurMin(w, baseMinPerKm)),
           isHard: isHardPlannedType(w.t ?? ''),
           status: w.status,
+          ...(isLongRun(w) ? { longRun: true } : {}),
         });
       }
     }

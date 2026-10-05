@@ -13,6 +13,7 @@
 import type { GarminPendingItem } from '@/types/state';
 import type { Workout } from '@/types/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
+import { isLongRun } from '@/workouts/long-run';
 import { getState } from '@/state';
 import { formatKm, fmtDesc } from '@/utils/format';
 import { buildAtmosphereBase, buildSunGlint } from '@/ui/page-flair';
@@ -66,7 +67,9 @@ function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   const type = item.appType;
   const wt   = workout.t;
   // Runs match run-type slots, general sport (cross) slots, and the run leg of a brick
-  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross' || wt === 'brick';
+  // isLongRun covers the fast-finish long run (t:'progressive'), which otherwise
+  // could not take a run in this screen (audit X5).
+  if (type === 'run') return wt === 'run' || wt === 'easy' || isLongRun(workout) || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross' || wt === 'brick';
   // Gym/strength matches gym slots
   if (type === 'gym') return wt === 'gym';
   // Cycling matches any tri bike slot, brick (bike+run combo), or generic cross slot

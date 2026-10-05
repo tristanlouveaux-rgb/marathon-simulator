@@ -1,5 +1,6 @@
 import type { Workout } from '@/types';
 import { DAY_NAMES } from '@/utils';
+import { isLongRun } from './long-run';
 
 /**
  * Hard workout types for scheduling conflict detection
@@ -50,8 +51,12 @@ export function assignDefaultDays(
   weekendBudgetMin?: number,
 ): Workout[] {
   // ---- Categorise workouts ----
-  const long = workouts.find(w => w.t === 'long');
+  // The long run is found by the long-run-slot stamp, not by t === 'long': the
+  // fast-finish variant is t:'progressive' and used to fall into the quality pool,
+  // landing on Tuesday with Sunday left empty (audit X5).
+  const long = workouts.find(isLongRun);
   const quality = workouts.filter(w =>
+    !isLongRun(w) &&
     ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive', 'float'].includes(w.t)
   );
   const commute = workouts.filter(w => w.commute === true);
@@ -59,6 +64,7 @@ export function assignDefaultDays(
   const easy = workouts.filter(w =>
     !w.commute &&
     !CROSS_TYPES.includes(w.t) &&
+    !isLongRun(w) &&
     (w.t === 'easy' ||
     !['long', 'threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive', 'float'].includes(w.t))
   );
