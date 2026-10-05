@@ -22,7 +22,7 @@ import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
-import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp, listWeekSignalAEntries } from '@/calculations/fitness-model';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
@@ -1598,46 +1598,36 @@ function updateLoadChart(s: SimulatorState): void {
     plannedIntensity += (fcl.intensity ?? 0) * sportRunSpec;
   }
 
-  // Sum actual loads from matched Garmin runs (TSS units. Same scale as individual card display)
+  // Actual side: the canonical Signal A entries, so the run/cross split and the
+  // zone bars sum to computeWeekTSS. Each activity counts once at its own
+  // sport's runSpec (the planned side above applies runSpec to cross sessions
+  // too). This used to add every garminActuals twin at full weight, every
+  // unspentLoadItem × 0.35 on top, and the adhoc entry again (audit B3).
+  const signalAEntries = wk ? listWeekSignalAEntries(wk, wk.rated ?? {}) : [];
   let actualAero = 0, actualAnaero = 0;
   let actualBase = 0, actualThreshold = 0, actualIntensity = 0;
-  if (wk?.garminActuals) {
-    for (const [workoutId, actual] of Object.entries(wk.garminActuals)) {
-      const plannedW = plannedWorkouts.find(w => (w.id || w.n) === workoutId);
-      const type = plannedW?.t || 'easy';
-      const ratedRpe = wk.rated?.[workoutId];
-      const rpe = typeof ratedRpe === 'number' ? ratedRpe : 5;
-      let tl: number;
-      if (actual.iTrimp != null && actual.iTrimp > 0) {
-        tl = normalizeiTrimp(actual.iTrimp);
-      } else {
-        const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-        tl = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-      }
-      const profile = LOAD_PROFILES[type] ?? { aerobic: 0.80, anaerobic: 0.20, base: 0.70, threshold: 0.20, intensity: 0.10 };
-      // If hrZones available, split by actual zone time; otherwise use workout-type profile
-      if (actual.hrZones && (actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5) > 0) {
-        const totalSec = actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5;
-        actualBase += tl * (actual.hrZones.z1 + actual.hrZones.z2) / totalSec;
-        actualThreshold += tl * actual.hrZones.z3 / totalSec;
-        actualIntensity += tl * (actual.hrZones.z4 + actual.hrZones.z5) / totalSec;
-      } else {
-        actualBase += tl * (profile.base ?? profile.aerobic * 0.80);
-        actualThreshold += tl * (profile.threshold ?? profile.aerobic * 0.20);
-        actualIntensity += tl * (profile.intensity ?? profile.anaerobic);
-      }
-      actualAero += tl * profile.aerobic;
-      actualAnaero += tl * profile.anaerobic;
+  let actualRunTSS = 0, actualCrossTSS = 0;
+  for (const entry of signalAEntries) {
+    const tl = entry.tss;
+    if (entry.isRun) actualRunTSS += tl; else actualCrossTSS += tl;
+    const actual = entry.source === 'actual' ? wk?.garminActuals?.[entry.key] : undefined;
+    const plannedW = plannedWorkouts.find(w => (w.id || w.n) === entry.key);
+    const type = plannedW?.t || 'easy';
+    const profile = LOAD_PROFILES[type] ?? { aerobic: 0.80, anaerobic: 0.20, base: 0.70, threshold: 0.20, intensity: 0.10 };
+    // If hrZones available, split by actual zone time; otherwise use workout-type profile
+    const z = actual?.hrZones;
+    const zTotal = z ? z.z1 + z.z2 + z.z3 + z.z4 + z.z5 : 0;
+    if (z && zTotal > 0) {
+      actualBase += tl * (z.z1 + z.z2) / zTotal;
+      actualThreshold += tl * z.z3 / zTotal;
+      actualIntensity += tl * (z.z4 + z.z5) / zTotal;
+    } else {
+      actualBase += tl * (profile.base ?? profile.aerobic * 0.80);
+      actualThreshold += tl * (profile.threshold ?? profile.aerobic * 0.20);
+      actualIntensity += tl * (profile.intensity ?? profile.anaerobic);
     }
-  }
-
-  // Add cross-training unspent load items (all aerobic; runSpec 0.35 = generic cross-training default)
-  if (wk?.unspentLoadItems) {
-    for (const item of wk.unspentLoadItems) {
-      const crossTl = item.durationMin * (TL_PER_MIN[5] ?? 1.15) * 0.35;
-      actualAero += crossTl;
-      actualBase += crossTl; // Cross-training treated as base-zone for display
-    }
+    actualAero += tl * profile.aerobic;
+    actualAnaero += tl * profile.anaerobic;
   }
 
   const plannedTotal = plannedAero + plannedAnaero;
@@ -1657,49 +1647,6 @@ function updateLoadChart(s: SimulatorState): void {
   if (loadExpected) loadExpected.textContent = Math.round(plannedTotal).toString();
   const loadActual = document.getElementById('load-actual');
   if (loadActual) loadActual.textContent = Math.round(actualTotal).toString();
-
-  // ── Separate running vs cross-training TSS ───────────────────────────
-  // Running TSS = garminActuals for run-type workouts (easy, long, threshold, vo2, marathon_pace, etc.)
-  // Cross-training TSS = garminActuals for non-run adhoc + unspent items
-  const RUN_TYPES = new Set(['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'hill_repeats', 'progressive', 'mixed', 'race_pace', 'float']);
-  let actualRunTSS = 0, actualCrossTSS = 0;
-  if (wk?.garminActuals) {
-    for (const [workoutId, actual] of Object.entries(wk.garminActuals)) {
-      const plannedW = plannedWorkouts.find(w => (w.id || w.n) === workoutId);
-      const type = plannedW?.t || 'easy';
-      const ratedRpe = wk.rated?.[workoutId];
-      const rpe = typeof ratedRpe === 'number' ? ratedRpe : 5;
-      let tl: number;
-      if (actual.iTrimp != null && actual.iTrimp > 0) {
-        tl = normalizeiTrimp(actual.iTrimp);
-      } else {
-        const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-        tl = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-      }
-      if (RUN_TYPES.has(type)) { actualRunTSS += tl; } else { actualCrossTSS += tl; }
-    }
-  }
-  // Add unspent cross-training to cross bucket
-  if (wk?.unspentLoadItems) {
-    for (const item of wk.unspentLoadItems) {
-      actualCrossTSS += item.durationMin * (TL_PER_MIN[5] ?? 1.15) * 0.35;
-    }
-  }
-  // Adhoc Garmin cross-training (not matched to plan slot)
-  for (const wo of wk?.adhocWorkouts ?? []) {
-    if (!wo.id?.startsWith('garmin-')) continue;
-    const sport = normalizeSport(wo.n.replace(' (Garmin)', '').toLowerCase());
-    const cfg = (SPORTS_DB as any)[sport];
-    const runSpec = cfg?.runSpec ?? 0.35;
-    if (wo.iTrimp != null && wo.iTrimp > 0) {
-      actualCrossTSS += normalizeiTrimp(wo.iTrimp) * runSpec;
-    } else {
-      const rpe = wo.rpe ?? 5;
-      const durMatch = wo.d?.match(/(\d+)min/);
-      const durMin = durMatch ? parseInt(durMatch[1]) : 30;
-      actualCrossTSS += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15) * runSpec;
-    }
-  }
 
   // ── TSS split bar ─────────────────────────────────────────────────────
   const tssTotalActual = actualRunTSS + actualCrossTSS;
@@ -1775,6 +1722,7 @@ function updateLoadChart(s: SimulatorState): void {
 
   // ── Volume (km) bar ───────────────────────────────────────────────────
   // Running km from garminActuals for run-type workouts
+  const RUN_TYPES = new Set(['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'hill_repeats', 'progressive', 'mixed', 'race_pace', 'float']);
   let actualRunKm = 0, actualGpsKm = 0;
   if (wk?.garminActuals) {
     for (const [workoutId, actual] of Object.entries(wk.garminActuals)) {

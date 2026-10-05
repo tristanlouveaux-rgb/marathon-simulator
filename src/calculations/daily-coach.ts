@@ -12,6 +12,7 @@ import type { SimulatorState } from '@/types';
 import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
+  computeSameSignalCtlHistory,
   computeFitnessModel,
   computeWeekTSS,
   getTrailingEffortScore,
@@ -302,7 +303,15 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const ctlNow = liveTSB.ctl;
 
   const metrics = computeFitnessModel(wks, s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
-  const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
+  // The trend compares like with like. ctlNow is Signal B (same-signal, live
+  // through today), so the value four weeks back comes from the Signal B CTL
+  // series with the same seed. The Signal A CTL in `metrics` discounts
+  // cross-training by runSpec, so comparing it with ctlNow read every steady
+  // cross-trainer as "building".
+  const ctlHistoryB = computeSameSignalCtlHistory(
+    wks, Math.max(0, s.w - 1), s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate, undefined, archivedPlans,
+  );
+  const ctlFourWeeksAgo = ctlHistoryB[ctlHistoryB.length - 4] ?? ctlNow;
   const ctlDelta = ctlNow - ctlFourWeeksAgo;
   const ctlTrend: 'up' | 'flat' | 'down' = ctlDelta > 0.5 ? 'up' : ctlDelta < -0.5 ? 'down' : 'flat';
 

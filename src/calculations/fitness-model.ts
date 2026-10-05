@@ -13,10 +13,12 @@
  * Safe upper bound varies by athlete tier (see TIER_ACWR_CONFIG).
  */
 
-import type { Week, Workout, PhysiologyDayEntry } from '@/types';
+import type { Week, Workout, PhysiologyDayEntry, SportKey } from '@/types';
 import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB, plannedTssPerMin } from '@/constants';
-import { normalizeSport, isStrengthActual } from '@/cross-training/activities';
+import {
+  normalizeSport, isStrengthActual, resolveActualSport, resolveAdhocSport, isRunSport, signalARunSpec,
+} from '@/cross-training/activities';
 import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
@@ -358,13 +360,109 @@ export function computeStrengthRpeTSS(
 }
 
 /**
- * Compute the Training Stress Score (TSS) for a single week.
- * Uses wk.actualTSS when already stored (fastest path).
- * Falls back to computing from garminActuals, adhocWorkouts, and unspentLoadItems.
+ * One activity's contribution to Signal A (running-specific load), as counted by
+ * computeWeekTSS. Exported so a surface that splits Signal A (run vs cross, zone
+ * bars) reads the same per-activity numbers that sum to the weekly total.
+ */
+export interface SignalAEntry {
+  /** garminActuals key (plan slot id or `garmin-<id>`) or adhoc workout id. */
+  key: string;
+  garminId: string | null;
+  source: 'actual' | 'adhoc';
+  /** The activity's own sport (resolveActualSport / resolveAdhocSport). */
+  sport: SportKey;
+  isRun: boolean;
+  /** Signal A TSS for this activity: full TSS × runSpec of its own sport. */
+  tss: number;
+}
+
+/**
+ * Every completed activity in the week, once, with its Signal A contribution.
  *
- * @param planStartDate - ISO date string of plan start. When provided, unspentLoadItems
- *   are filtered to only those whose date falls within this week's 7-day window, preventing
- *   carry-over items from previous weeks inflating this week's TSS.
+ * Invariants (audit B3/X7, SCIENCE_LOG "Signal A vs Signal B"):
+ *   - Each activity counts once. garminActuals win over their adhoc twin; the
+ *     dedup key is garminId.
+ *   - `unspentLoadItems` are never load. Each one points at an activity (or the
+ *     surplus slice of a run) that garminActuals / adhocWorkouts already hold.
+ *   - Signal A = TSS × runSpec of the activity's OWN sport, never the slot's.
+ *     The strength RPE override already applies the strength runSpec, so it is
+ *     not discounted again.
+ *
+ * Per-entry TSS formulas are unchanged from the previous computeWeekTSS:
+ * rated RPE (default 5) for the no-HR fallback, normalizeiTrimp for HR data.
+ */
+export function listWeekSignalAEntries(
+  wk: Week,
+  ratedMap: Record<string, number | 'skip'>,
+  norm?: number,
+): SignalAEntry[] {
+  const out: SignalAEntry[] = [];
+  const seenGarminIds = new Set<string>();
+
+  for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
+    if (actual.garminId) {
+      if (seenGarminIds.has(actual.garminId)) continue;
+      seenGarminIds.add(actual.garminId);
+    }
+    const garminId = actual.garminId ?? null;
+    const ratedVal = ratedMap[workoutId];
+    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
+    // Strength override: when the user has tagged RPE on a strength session
+    // (per-activity OR via the legacy wk.rated chip), HR-based TSS is wrong
+    // (low cardiovascular load ≠ low neuromuscular load). The override applies
+    // the strength runSpec itself.
+    const strengthOverride = computeStrengthRpeTSS(actual, true, ratedRpe);
+    if (strengthOverride != null) {
+      out.push({ key: workoutId, garminId, source: 'actual', sport: 'strength', isRun: false, tss: strengthOverride });
+      continue;
+    }
+    const sport = resolveActualSport(workoutId, actual);
+    const rpe = ratedRpe ?? 5;
+    let raw: number;
+    if (actual.iTrimp != null && actual.iTrimp > 0) {
+      raw = normalizeiTrimp(actual.iTrimp);
+    } else {
+      // Duration-based fallback when no HR data (TL_PER_MIN is per minute, not per km)
+      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+      raw = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+    }
+    out.push({ key: workoutId, garminId, source: 'actual', sport, isRun: isRunSport(sport), tss: raw * signalARunSpec(sport) });
+  }
+
+  // Adhoc synced workouts with no garminActuals twin (legacy entries; every
+  // current writer also creates the twin, which the loop above has counted).
+  for (const w of wk.adhocWorkouts ?? []) {
+    if (!w.id?.startsWith('garmin-')) continue;
+    if ((wk.garminActuals as any)?.[w.id]) continue;
+    const rawId = w.id.slice('garmin-'.length);
+    if (rawId) {
+      if (seenGarminIds.has(rawId)) continue;
+      seenGarminIds.add(rawId);
+    }
+    const sport = resolveAdhocSport(w);
+    let raw: number;
+    if (w.iTrimp != null && w.iTrimp > 0) {
+      raw = normalizeiTrimp(w.iTrimp, norm);
+    } else {
+      const rpe = w.rpe ?? 5;
+      raw = parseDurMinFromDesc(w.d) * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+    }
+    out.push({ key: w.id, garminId: rawId || null, source: 'adhoc', sport, isRun: isRunSport(sport), tss: raw * signalARunSpec(sport) });
+  }
+
+  return out;
+}
+
+/**
+ * Signal A (running-specific) Training Stress Score for a single week: the sum
+ * of listWeekSignalAEntries. Always recomputed from raw data (wk.actualTSS may be
+ * stale, ISSUE-85).
+ *
+ * Tracking side: it describes running-specific load. It also feeds planning
+ * through the running CTL-gap re-anchor (resolveCtlAdherence → wk.ctlRatio).
+ *
+ * @param planStartDate - unused since unspentLoadItems stopped counting as load
+ *   (their date window was its only use). Kept so existing call sites compile.
  */
 export function computeWeekTSS(
   wk: Week,
@@ -372,97 +470,8 @@ export function computeWeekTSS(
   planStartDate?: string,
   norm?: number,
 ): number {
-  // Always recompute from raw data. Wk.actualTSS may be stale/corrupted
-  // (ISSUE-85: cross-training was accumulated without runSpec discount).
-
   let tl = 0;
-
-  // Dedup set: prevents double-counting when the same activity appears in both
-  // garminActuals and adhocWorkouts (e.g. a Strava-matched run that also has an adhoc entry).
-  const seenGarminIds = new Set<string>();
-
-  // Matched runs via garminActuals
-  for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
-    if (actual.garminId) {
-      if (seenGarminIds.has(actual.garminId)) continue;
-      seenGarminIds.add(actual.garminId);
-    }
-    const ratedVal = ratedMap[workoutId];
-    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
-    // Strength override: when the user has tagged RPE on a strength session
-    // (per-activity OR via the legacy wk.rated chip), HR-based TSS is wrong
-    // (low cardiovascular load ≠ low neuromuscular load).
-    const strengthOverride = computeStrengthRpeTSS(actual, true, ratedRpe);
-    if (strengthOverride != null) {
-      tl += strengthOverride;
-      continue;
-    }
-    const rpe = ratedRpe ?? 5;
-    if (actual.iTrimp != null && actual.iTrimp > 0) {
-      tl += normalizeiTrimp(actual.iTrimp);
-    } else {
-      // Duration-based fallback when no HR data (TL_PER_MIN is per minute, not per km)
-      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-    }
-  }
-
-  // Adhoc Garmin cross-training workouts
-  for (const w of wk.adhocWorkouts ?? []) {
-    if (!w.id?.startsWith('garmin-')) continue;
-    // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
-    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
-    const rawId = w.id.slice('garmin-'.length);
-    if (rawId) {
-      if (seenGarminIds.has(rawId)) continue;
-      seenGarminIds.add(rawId);
-    }
-    // If the workout type indicates a run, always use runSpec=1.0 regardless of name.
-    // This handles activities logged with a non-run name (e.g. "General Sport 1") that
-    // were originally classified as runs (appType='run' → t='easy').
-    const NON_RUN_TYPES = new Set(['cross', 'gym', 'strength', 'rest']);
-    const isRunType = !NON_RUN_TYPES.has(w.t ?? 'cross');
-    let runSpec: number;
-    if (isRunType) {
-      runSpec = 1.0;
-    } else {
-      const sport = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
-      const cfg = (SPORTS_DB as any)[sport];
-      runSpec = cfg?.runSpec ?? 0.35;
-    }
-    if (w.iTrimp != null && w.iTrimp > 0) {
-      // Strava HR stream iTrimp available. More accurate than RPE estimate
-      tl += normalizeiTrimp(w.iTrimp, norm) * runSpec;
-    } else {
-      const rpe = w.rpe ?? 5;
-      const durMin = parseDurMinFromDesc(w.d);
-      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15) * runSpec;
-    }
-  }
-
-  // Unspent load items (cross-training overflow not matched to a plan slot).
-  // Filter to this week's date range when planStartDate is known. Carry-over items
-  // from previous weeks retain their original dates and must not inflate this week's TSS.
-  // Skip 'surplus_run' items. The full activity is already counted in garminActuals above;
-  // adding the surplus portion again would double-count that load.
-  let weekStartMs: number | null = null;
-  let weekEndMs: number | null = null;
-  if (planStartDate && wk.w != null) {
-    weekStartMs = new Date(planStartDate).getTime() + (wk.w - 1) * 7 * 86400000;
-    weekEndMs = weekStartMs + 7 * 86400000;
-  }
-  for (const item of wk.unspentLoadItems ?? []) {
-    if (item.reason === 'surplus_run') continue;
-    if (weekStartMs !== null && weekEndMs !== null && item.date) {
-      const itemMs = new Date(item.date).getTime();
-      if (itemMs < weekStartMs || itemMs >= weekEndMs) continue;
-    }
-    const sport = normalizeSport(item.sport);
-    const cfg = (SPORTS_DB as any)[sport];
-    const runSpec = cfg?.runSpec ?? 0.35;
-    tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15) * runSpec;
-  }
-
+  for (const e of listWeekSignalAEntries(wk, ratedMap, norm)) tl += e.tss;
   return Math.round(tl);
 }
 
@@ -471,8 +480,9 @@ export const computeWeekTL = computeWeekTSS;
 
 /**
  * Compute raw physiological TSS for a single week (Signal B).
- * Identical to computeWeekTSS except all cross-training runSpec discounts are removed:
- * cycling, strength, HIIT, etc. all count at full iTRIMP weight.
+ * Counts the same activities as computeWeekTSS, once each, with no runSpec discount:
+ * cycling, strength, HIIT, etc. all count at full iTRIMP weight. Its adhoc scope is
+ * wider (GPS-recorded and manual entries count too). unspentLoadItems never count.
  *
  * Use this for ACWR/injury risk and weekly load charts. The body doesn't care
  * what sport caused the fatigue.
@@ -486,10 +496,10 @@ export function computeWeekRawTSS(
   let tl = 0;
 
   // Dedup set: tracks garminIds already counted so that the same activity cannot
-  // appear in two sources (e.g. both adhocWorkouts AND unspentLoadItems).
+  // count twice (a garminActuals twin and its adhoc entry).
   const seenGarminIds = new Set<string>();
 
-  // Matched runs via garminActuals. Same as computeWeekTSS (no runSpec for runs)
+  // garminActuals. Same activities as computeWeekTSS, no runSpec discount
   for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (actual.garminId) {
       if (seenGarminIds.has(actual.garminId)) continue;
@@ -535,27 +545,9 @@ export function computeWeekRawTSS(
     }
   }
 
-  // Unspent load items. RunSpec = 1.0
-  // Skip 'surplus_run' items. The full activity is already counted in garminActuals above;
-  // the surplus portion is part of that activity and must not be added again.
-  let weekStartMs: number | null = null;
-  let weekEndMs: number | null = null;
-  if (planStartDate && wk.w != null) {
-    weekStartMs = new Date(planStartDate).getTime() + (wk.w - 1) * 7 * 86400000;
-    weekEndMs = weekStartMs + 7 * 86400000;
-  }
-  for (const item of wk.unspentLoadItems ?? []) {
-    if (item.reason === 'surplus_run') continue;
-    if (weekStartMs !== null && weekEndMs !== null && item.date) {
-      const itemMs = new Date(item.date).getTime();
-      if (itemMs < weekStartMs || itemMs >= weekEndMs) continue;
-    }
-    if (item.garminId) {
-      if (seenGarminIds.has(item.garminId)) continue;
-      seenGarminIds.add(item.garminId);
-    }
-    tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15); // no runSpec discount
-  }
+  // unspentLoadItems are decision records, never load: each one points at an
+  // activity (or the surplus slice of a run) already counted above. Counting
+  // them only ever added orphans left behind after the activity was removed.
 
   // Double-day compounding bonus: ≥2 same-day sessions (≥20 min each, planned
   // bricks excluded) carry more physiological cost than pure additive TSS.
@@ -647,15 +639,7 @@ export function computeTodaySignalBTSS(
     }
   }
 
-  // unspentLoadItems. Filter by exact date match
-  for (const item of wk.unspentLoadItems ?? []) {
-    if (item.date !== today) continue;
-    if (item.garminId) {
-      if (seenGarminIds.has(item.garminId)) continue;
-      seenGarminIds.add(item.garminId);
-    }
-    tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15);
-  }
+  // unspentLoadItems are decision records, never load (see computeWeekRawTSS).
 
   // Passive strain: non-workout active minutes contribute background TSS.
   // Subtract workout duration from total active minutes to avoid double-counting
@@ -1445,7 +1429,7 @@ export function computeRunningFloorKm(
  * Returns one entry per week up to (but not including) currentWeek.
  *
  * @param ctlSeed - Optional CTL starting value from Strava history (seeds Signal A chronic baseline)
- * @param planStartDate - ISO date string used to filter unspentLoadItems to their correct week
+ * @param planStartDate - ISO date of plan week 1 (Signal B's double-day bonus maps workout days to dates)
  * @param atlSeed - Optional Signal B ATL seed. When omitted, derived from ctlSeed × 1.0.
  *   Callers who know the user's cross-training history should pass a higher value (e.g. ctlSeed × 1.2
  *   for gym-heavy athletes) so ACWR reflects real fatigue from day one.
@@ -1453,9 +1437,9 @@ export function computeRunningFloorKm(
 /**
  * Walk archived plans + current `wks` chronologically. Yields every completed
  * week tagged with the planStartDate it belongs to (matters for
- * computeWeekRawTSS's unspentLoadItems date filter, which keys off the plan's
- * own start date. Passing the current plan's date when iterating an archived
- * week would silently drop that week's unspent load).
+ * computeWeekRawTSS's double-day bonus, which maps each workout's dayOfWeek to
+ * a date from the plan's own start date. Passing the current plan's date when
+ * iterating an archived week would put its sessions on the wrong dates).
  *
  * Why this exists: when the user generates a new plan, every chronic-load
  * walker (computeSameSignalTSB, computeFitnessModel) needs to keep seeing the
@@ -1613,6 +1597,34 @@ export function computeSameSignalTSB(
   }
 
   return { ctl, atl, tsb: ctl - atl };
+}
+
+/**
+ * Same-signal (Signal B) CTL at the end of each walked week, oldest first.
+ * Same seed and same walk as computeSameSignalTSB, so the last entry equals
+ * computeSameSignalTSB(...).ctl for the same arguments.
+ *
+ * Use it wherever "CTL now" (computeLiveSameSignalTSB, Signal B) is compared
+ * with CTL some weeks ago: both ends of a trend must be on one signal. Mixing
+ * a Signal B "now" with a Signal A history reads the runSpec discount on
+ * cross-training as a fitness gain.
+ */
+export function computeSameSignalCtlHistory(
+  wks: Week[],
+  currentWeek: number,
+  ctlSeed?: number,
+  planStartDate?: string,
+  norm?: number,
+  archivedPlans?: ArchivedPlan[],
+): number[] {
+  const out: number[] = [];
+  let ctl = ctlSeed ?? 0;
+  for (const { wk, planStartDate: wkPlanStart } of _walkChronologicalWeeks(wks, currentWeek, planStartDate, archivedPlans)) {
+    const weekRawTSS = computeWeekRawTSS(wk, wk.rated ?? {}, wkPlanStart, norm);
+    ctl = ctl * CTL_DECAY + weekRawTSS * (1 - CTL_DECAY);
+    out.push(ctl);
+  }
+  return out;
 }
 
 /**

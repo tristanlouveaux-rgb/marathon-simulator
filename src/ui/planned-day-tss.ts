@@ -4,6 +4,10 @@ import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-
 import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
+import { signalARunSpec } from '@/cross-training/activities';
+
+/** Running-plan workout types that are strength sessions (generator.ts gym templates, injury rehab). */
+const GYM_PLANNED_TYPES = new Set(['gym', 'strength']);
 
 /**
  * Canonical planned-day TSS context — the single source for "what does the
@@ -200,15 +204,26 @@ export function resolveCtlAdherence(s: SimulatorState, completedWeek: number): C
   // against the real prescription. Synchronous clear+restore, no save in between.
   const savedRatio = wk?.ctlRatio;
   if (wk) wk.ctlRatio = undefined;
-  const plannedTSS = getPlannedDayTSSContext(s, completedWeek).plannedWeekTSS;
+  const plannedCtx = getPlannedDayTSSContext(s, completedWeek);
   if (wk) wk.ctlRatio = savedRatio;
+  // Value the prescription in the same currency as actualTSS (Signal A). A planned gym session
+  // counts at the strength runSpec, because computeWeekTSS counts the session that fills it at
+  // that runSpec (strength RPE override, or the activity's own sport for HIIT and plan-named gym
+  // fills). Valued at full TSS, a fully completed gym session read as a running-load deficit and
+  // cut next week's volume. Cross sessions stay out of the planned side (getPlannedDayTSSContext).
+  let plannedTSS = 0;
+  for (let day = 0; day < 7; day++) {
+    for (const w of plannedCtx.workoutsForDay(day)) {
+      plannedTSS += GYM_PLANNED_TYPES.has(w.type) ? w.plannedTSS * signalARunSpec('strength') : w.plannedTSS;
+    }
+  }
   if (plannedTSS <= 0) return neutral;
 
-  // actualTSS is Signal A (run-equivalent: cross-training discounted by runSpec — see
-  // computeWeekTSS), while plannedTSS excludes cross-training. For a running athlete the seam is
-  // second-order (the discount only bites on unplanned cross-training and sits inside the ~15%
-  // (1−CTL_DECAY) term); documented in SCIENCE_LOG §BR. priorCtl is the chronic load at the end of
-  // the week before last (metrics[length-2]); ctlBaseline seeds week 1 when there is no prior.
+  // actualTSS is Signal A (run-equivalent: every activity at its own sport's runSpec — see
+  // computeWeekTSS), while plannedTSS excludes cross sessions. The remaining seam is unplanned or
+  // cross-slot cross-training, which can only lift actualTSS (never a false cut) and sits inside
+  // the ~15% (1−CTL_DECAY) term; documented in SCIENCE_LOG §BR. priorCtl is the chronic load at the
+  // end of the week before last (metrics[length-2]); ctlBaseline seeds week 1 when there is no prior.
   const metrics = computeFitnessModel(
     s.wks, completedWeek, s.ctlBaseline ?? undefined, s.planStartDate,
     undefined, undefined, (s as any).previousPlanWks,

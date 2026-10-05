@@ -2757,6 +2757,20 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     break; // garminId can only exist in one week's garminMatched
   }
 
+  // The activity's excess-load records go with it: an overflow item keyed by its
+  // garminId and a surplus slice keyed `${garminId}_surplus`. Load totals never
+  // read these records, but the excess card and the "Adjust week" button do, so
+  // an orphan kept offering to cut the plan for a session that no longer exists.
+  // Items can be carried into the next week, so every week is scrubbed.
+  if (found || opts?.permanent) {
+    const unspentIds = new Set([garminId, `${garminId}_surplus`]);
+    for (const wk of s.wks || []) {
+      if (wk.unspentLoadItems?.some(u => unspentIds.has(u.garminId))) {
+        wk.unspentLoadItems = wk.unspentLoadItems.filter(u => !unspentIds.has(u.garminId));
+      }
+    }
+  }
+
   // Permanent discard: still scrub the activity from pending/adhoc lists across weeks
   // even if it wasn't matched, so the ignore list is the only source of truth going forward.
   if (opts?.permanent) {

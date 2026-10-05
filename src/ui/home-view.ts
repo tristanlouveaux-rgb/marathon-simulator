@@ -163,7 +163,10 @@ function parseDurMinLocal(d: string): number {
 
 /**
  * Compute a per-sport breakdown of Signal B TSS for the current week.
- * Mirrors computeWeekRawTSS exactly (same dedup, same formulas) but groups by label.
+ * Same activities and dedup as computeWeekRawTSS, grouped by label.
+ * Known differences from that total: no strength RPE override and no double-day bonus.
+ *
+ * @param planStartDate - unused since unspentLoadItems stopped counting as load.
  */
 export function computeLoadBreakdown(
   wk: Week,
@@ -247,33 +250,10 @@ export function computeLoadBreakdown(
     add(label, tss, durationMin, sportColor(sport));
   }
 
-  // Unspent load items. No runSpec discount
-  let weekStartMs: number | null = null;
-  let weekEndMs: number | null = null;
-  if (planStartDate && wk.w != null) {
-    weekStartMs = new Date(planStartDate).getTime() + (wk.w - 1) * 7 * 86400000;
-    weekEndMs = weekStartMs + 7 * 86400000;
-  }
-  console.log(`[LoadBreakdown] unspentLoadItems count=${(wk.unspentLoadItems ?? []).length}`);
-  for (const item of wk.unspentLoadItems ?? []) {
-    if (weekStartMs !== null && weekEndMs !== null && item.date) {
-      const itemMs = new Date(item.date).getTime();
-      if (itemMs < weekStartMs || itemMs >= weekEndMs) {
-        console.log(`[LoadBreakdown] unspent SKIPPED (out of week range) gid=${item.garminId} dn="${item.displayName}" date=${item.date}`);
-        continue;
-      }
-    }
-    if (item.garminId) {
-      if (seenGarminIds.has(item.garminId)) {
-        console.log(`[LoadBreakdown] unspent DEDUP gid=${item.garminId} dn="${item.displayName}"`);
-        continue;
-      }
-      seenGarminIds.add(item.garminId);
-    }
-    const tss = item.durationMin * (TL_PER_MIN[5] ?? 1.15);
-    console.log(`[LoadBreakdown] unspent gid=${item.garminId} dn="${item.displayName}" sport=${item.sport} tss=${tss.toFixed(0)} dur=${item.durationMin.toFixed(0)}m reason=${(item as any).reason ?? '-'} date=${item.date ?? '-'}`);
-    add(normalizeRunLabel(item.displayName), tss, item.durationMin, sportColor(item.sport));
-  }
+  // unspentLoadItems are decision records, never load (computeWeekRawTSS). A
+  // surplus_run item is a slice of a run already counted in full above, and an
+  // overflow item's activity is already counted as its twin or adhoc entry.
+  // Adding them put the surplus on top of the matched run (audit B20).
 
   return Array.from(segments.values())
     .filter(s => s.tss > 0.5)
