@@ -303,8 +303,11 @@ export interface TwinCollapseResult {
  * sessions (no Strava twin) stay.
  *
  * When the Apple copy completed a plan slot that the Strava copy did not, the
- * slot keeps its completion and now carries the Strava copy; the Strava copy's
- * own adhoc card and excess record go, so the session counts once. When both
+ * slot keeps its completion and now carries the Strava copy under the slot's own
+ * key (running slots, and triathlon / HYROX slots whether the Apple copy was
+ * bound directly or through a match link); the Strava copy's own adhoc card and
+ * excess record go, and its pointer and pending record move to the slot's week,
+ * so the session counts once and is not queued for review again. When both
  * copies completed slots, the Apple slot's completion was a phantom and is
  * cleared: running slots lose the actual and rating, triathlon / HYROX slots
  * (wk.triWorkouts) lose the match link and return to planned.
@@ -354,11 +357,13 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
   let rebound = false;
   const stravaId = twin.garminId;
   let stravaHoldsSlot = twin.actualKeys.some(k => !k.key.startsWith('garmin-'));
-  /** Actual keys removed per week (for triathlon match links). */
-  const removedKeys = new Map<number, Set<string>>();
-  const noteRemoved = (wi: number, key: string) => {
-    if (!removedKeys.has(wi)) removedKeys.set(wi, new Set());
-    removedKeys.get(wi)!.add(key);
+  /** Actual keys removed per week (for triathlon match links), with the removed
+   *  actual when there was one. */
+  const removedKeys = new Map<number, Map<string, GarminActual | undefined>>();
+  const noteRemoved = (wi: number, key: string, actual?: GarminActual) => {
+    if (!removedKeys.has(wi)) removedKeys.set(wi, new Map());
+    const keys = removedKeys.get(wi)!;
+    if (!keys.get(key)) keys.set(key, actual);
   };
 
   wks.forEach((wk, wi) => {
@@ -369,11 +374,7 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
       if (isSlot && !stravaHoldsSlot) {
         const d = stravaData(wks, stravaId);
         if (d) {
-          wk.garminActuals![key] = reboundActual(a, stravaId, d);
-          detachStravaFromNonSlotPlaces(wks, stravaId);
-          for (const w2 of wks) if (w2.garminMatched?.[stravaId] !== undefined) delete w2.garminMatched[stravaId];
-          if (!wk.garminMatched) wk.garminMatched = {};
-          wk.garminMatched[stravaId] = key;
+          bindStravaToSlot(wks, wi, key, a, stravaId, d);
           stravaHoldsSlot = true;
           rebound = true;
           console.log(`[cross-source] Slot ${key}: completion moved from ${appleId} to ${stravaId}`);
@@ -387,7 +388,7 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
         wk.workoutMods = wk.workoutMods.filter(m => !(m.name === key && m.modReason?.startsWith('Garmin:')));
       }
       if (wk.adhocWorkouts) wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== key);
-      noteRemoved(wi, key);
+      noteRemoved(wi, key, a);
     }
 
     // 2. The Apple adhoc card, unless the Strava upgrade rewrote it in place.
@@ -398,7 +399,7 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
         wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== adhocKey);
         if (held) delete wk.garminActuals![adhocKey];
         if (wk.rated?.[adhocKey] !== undefined) delete wk.rated[adhocKey];
-        noteRemoved(wi, adhocKey);
+        noteRemoved(wi, adhocKey, held);
       }
     }
 
@@ -431,31 +432,47 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
 
   // 5. Triathlon and HYROX slots (wk.triWorkouts) whose completion rested on a
   // removed Apple key: a match link to it, or a direct bind under the slot's own
-  // key. The link follows the Strava copy only when that copy is a free recording
-  // in the same week: a `garmin-…` key that is neither another slot's own key nor
-  // already linked by another slot, and the Strava copy completes no plan slot
-  // anywhere (stravaHoldsSlot). Otherwise the Strava copy completes some
-  // other slot (or sits in another week), so this slot's completion was the
-  // phantom: clear the link and return the slot to planned, as
-  // reconcileTriCompletions step 3 does for a stale link. One session then
-  // completes one slot, the same outcome as running's phantom clear in step 1.
+  // key. When the Strava copy is free (it completes no plan slot anywhere, as a
+  // slot-keyed actual or through another slot's match link), the slot is bound
+  // to it directly, the way step 1 binds a running slot: the Strava copy goes
+  // under the slot's own key and its pointer names the slot. A direct bind is
+  // what reconcileTriCompletions step 2 and the launch tri matcher treat as the
+  // slot's completion. Re-pointing the link at the Strava copy's `garmin-…`
+  // adhoc key instead would not survive reconcile step 3, which reads a link to
+  // a key the pointer names as a user-decided extra session and un-completes the
+  // slot. When the Strava copy completes some other slot, this slot's completion
+  // was the phantom: clear the link and return the slot to planned, as
+  // reconcileTriCompletions step 3 does for a stale link. Either way one session
+  // completes one slot, the same outcome as running in step 1.
   for (const [wi, keys] of removedKeys) {
     const wk = wks[wi];
     if (!wk.triWorkouts?.length) continue;
-    const slotIds = new Set(wk.triWorkouts.map(w => w.id ?? w.n));
-    const stravaKey = Object.entries(wk.garminActuals ?? {}).find(([, a]) => a.garminId === stravaId)?.[0];
     for (const w of wk.triWorkouts) {
       const id = w.id ?? w.n;
       const linkRemoved = !!w.matchedActivityId && keys.has(w.matchedActivityId);
       const directBindRemoved = keys.has(id) && !wk.garminActuals?.[id];
       if (!linkRemoved && !directBindRemoved) continue;
-      const stravaFree = !!stravaKey
-        && !stravaHoldsSlot
-        && stravaKey.startsWith('garmin-')
-        && !slotIds.has(stravaKey)
-        && !wk.triWorkouts.some(o => o !== w && o.matchedActivityId === stravaKey);
-      if (stravaFree) {
-        w.matchedActivityId = stravaKey;
+      if (wk.garminActuals?.[id]?.garminId) {
+        // The slot's own key holds a live actual, which is its completion
+        // (reconcileTriCompletions step 2). Only the dead link goes.
+        w.matchedActivityId = id;
+        continue;
+      }
+      const stravaFree = !stravaHoldsSlot && !stravaLinkedByOtherTriSlot(wks, stravaId, w);
+      // Base for the slot actual: the Strava copy's own actual when it has one
+      // (Strava is canonical), else the removed Apple actual the slot rested on.
+      // A Strava copy still awaiting review has no actual; stravaData then reads
+      // its pending record.
+      const stravaActual = findActual(wks, stravaId);
+      const base = stravaActual ?? keys.get(w.matchedActivityId ?? id) ?? keys.get(id);
+      const d = stravaFree && base ? stravaData(wks, stravaId) : null;
+      if (stravaFree && base && d) {
+        bindStravaToSlot(wks, wi, id, base, stravaId, d);
+        w.matchedActivityId = id;
+        w.status = 'completed';
+        stravaHoldsSlot = true;
+        rebound = true;
+        console.log(`[cross-source] Slot ${id}: completion moved from ${appleId} to ${stravaId}`);
       } else {
         delete w.matchedActivityId;
         if (w.status === 'completed') w.status = 'planned';
@@ -465,8 +482,61 @@ function removeAppleCopy(wks: Week[], appleId: string, twin: StravaSession): boo
   return rebound;
 }
 
+/** The first actual carrying `garminId`, in any week. */
+function findActual(wks: Week[], garminId: string): GarminActual | undefined {
+  for (const wk of wks) {
+    for (const a of Object.values(wk.garminActuals ?? {})) if (a.garminId === garminId) return a;
+  }
+  return undefined;
+}
+
+/** True when a triathlon / HYROX slot other than `except` completes through a
+ *  match link to the Strava copy (its adhoc key, or any key whose actual carries it). */
+function stravaLinkedByOtherTriSlot(wks: Week[], stravaId: string, except: { matchedActivityId?: string }): boolean {
+  return wks.some(wk => (wk.triWorkouts ?? []).some(o => {
+    if (o === except || !o.matchedActivityId) return false;
+    const link = o.matchedActivityId;
+    return link === `garmin-${stravaId}` || wk.garminActuals?.[link]?.garminId === stravaId;
+  }));
+}
+
+/**
+ * Binds the Strava copy to plan slot `slotKey` in week `wi`. The slot actual is
+ * rebuilt from `base` with Strava's activity data (`reboundActual`). The Strava
+ * copy's adhoc card and excess record go (`detachStravaFromNonSlotPlaces`), so
+ * the session counts once, through the slot. Its pointer is cleared in every
+ * week and set to the slot in the slot's week, and its raw pending record moves
+ * into the slot's week. The matcher and the review queue
+ * (processPendingCrossTraining, week-debrief) read a pending record and its
+ * pointer from the same week, so a record left in a neighbouring week with no
+ * pointer would be queued for review again while also completing the slot.
+ */
+function bindStravaToSlot(
+  wks: Week[], wi: number, slotKey: string, base: GarminActual, stravaId: string, d: Partial<GarminActual>,
+): void {
+  const wk = wks[wi];
+  const slotActual = reboundActual(base, stravaId, d);
+  detachStravaFromNonSlotPlaces(wks, stravaId);
+  if (!wk.garminActuals) wk.garminActuals = {};
+  wk.garminActuals[slotKey] = slotActual;
+  for (const w2 of wks) if (w2.garminMatched?.[stravaId] !== undefined) delete w2.garminMatched[stravaId];
+  if (!wk.garminMatched) wk.garminMatched = {};
+  wk.garminMatched[stravaId] = slotKey;
+  let moved: GarminPendingItem | undefined;
+  wks.forEach((w2, wj) => {
+    if (wj === wi || !w2.garminPending?.some(p => p.garminId === stravaId)) return;
+    moved ??= w2.garminPending.find(p => p.garminId === stravaId);
+    w2.garminPending = w2.garminPending.filter(p => p.garminId !== stravaId);
+  });
+  if (moved && !(wk.garminPending ?? []).some(p => p.garminId === stravaId)) {
+    if (!wk.garminPending) wk.garminPending = [];
+    wk.garminPending.push(moved);
+  }
+}
+
 /** On a slot rebind the Strava copy's adhoc card and excess record go: the
- *  session now counts through the slot. Its pending record stays (re-review). */
+ *  session now counts through the slot. Its pending record stays (the caller
+ *  moves it into the slot's week, where its pointer now lives). */
 function detachStravaFromNonSlotPlaces(wks: Week[], stravaId: string): void {
   for (const wk of wks) {
     for (const [key, a] of Object.entries(wk.garminActuals ?? {})) {

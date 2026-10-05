@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { matchAndAutoComplete, type GarminActivityRow } from './activity-matcher';
+import { reconcileTriCompletions } from './activity-matcher.triathlon';
 
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
@@ -129,6 +130,31 @@ describe('matchAndAutoComplete keeps Strava canonical', () => {
     expect(s.wks[0].rated['W1-bike-0']).toBe(5);
     expect(s.wks[0].garminMatched!['strava-89']).toBe('W1-bike-0');
     expect(res.pending.map(p => p.garminId)).not.toContain('strava-89');
+    expect(appleIdsInState()).toEqual([]);
+  });
+
+  it('a late paused Strava twin of an Apple copy linked to a triathlon slot keeps the slot completed through reconcile', () => {
+    const t = '2026-09-30T16:00:00.000Z';
+    const apple = appleAt(t);
+    const wk = getMutableState().wks[0];
+    const key = `garmin-${apple}`;
+    wk.adhocWorkouts!.push({ id: key, t: 'cross', n: 'Cycling', d: '67min', r: 5, rpe: 5, garminTimestamp: t, garminDurationMin: 67 } as any);
+    wk.garminActuals![key] = {
+      garminId: apple, startTime: t, durationSec: 4000, distanceKm: 30, avgPaceSecKm: null,
+      avgHR: null, maxHR: null, calories: null, activityType: 'CYCLING',
+    };
+    // Fuzzy link from the launch tri matcher: no decided pointer on the Apple copy.
+    wk.triWorkouts = [{ id: 'W1-bike-0', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: key } as any];
+
+    const res = matchAndAutoComplete([row('strava-90', plus(t, 120), 5400, 'CYCLING')]);
+    const s = getMutableState();
+    reconcileTriCompletions(s.wks[0]);
+
+    const slot = s.wks[0].triWorkouts![0];
+    expect(slot.status).toBe('completed');
+    expect(s.wks[0].garminActuals![slot.matchedActivityId!].garminId).toBe('strava-90');
+    expect(Object.values(s.wks[0].garminActuals!).filter(a => a.garminId === 'strava-90')).toHaveLength(1);
+    expect(res.pending.map(p => p.garminId)).not.toContain('strava-90');
     expect(appleIdsInState()).toEqual([]);
   });
 });

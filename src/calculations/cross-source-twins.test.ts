@@ -323,17 +323,116 @@ describe('collapseAppleStravaTwins', () => {
     expect(Object.keys(w1.garminActuals)).toEqual(['garmin-strava-121']);
   });
 
-  it('a triathlon match link on the Apple copy follows the Strava copy', () => {
+  it('a slot rebind across weeks moves the Strava pending record into the slot week, so it is not queued for review again', () => {
+    const sun = '2026-09-27T23:59:50.000Z';
+    const mon = '2026-09-28T00:00:20.000Z';
+    const apple = appleId(sun);
+    const w1 = week();
+    const w2 = week();
+    w2.w = 2;
+    w1.rated['W1-long-0'] = 5;
+    w1.garminActuals['W1-long-0'] = {
+      garminId: apple, startTime: sun, durationSec: 5400, distanceKm: 18, avgPaceSecKm: 300,
+      avgHR: 150, maxHR: 170, calories: 1200, iTrimp: 12000, activityType: 'RUNNING', workoutName: 'Long Run', plannedType: 'long',
+    };
+    w1.garminMatched[apple] = 'W1-long-0';
+    addPending(w2, 'strava-77', { start: mon, durationSec: 5460, type: 'RUNNING', iTrimp: 11000 });
+    const s = state(w1, w2);
+
+    const res = collapseAppleStravaTwins(s);
+
+    expect(res).toEqual({ removed: [apple], rebound: 1 });
+    expect(w1.garminActuals['W1-long-0'].garminId).toBe('strava-77');
+    expect(w1.rated['W1-long-0']).toBe(5);
+    expect(w1.garminMatched['strava-77']).toBe('W1-long-0');
+    // The raw record and its pointer share a week: no week holds a strava-77
+    // pending record that the review queue would read as unreviewed.
+    for (const wk of s.wks) {
+      if (!wk.garminPending.some((p: any) => p.garminId === 'strava-77')) continue;
+      expect(wk.garminMatched['strava-77']).toBeDefined();
+      expect(wk.garminMatched['strava-77']).not.toBe('__pending__');
+    }
+    expect(w1.garminPending.map((p: any) => p.garminId)).toEqual(['strava-77']);
+    expect(w2.garminPending).toEqual([]);
+    expect(w2.garminMatched['strava-77']).toBeUndefined();
+  });
+
+  it('a triathlon slot the Apple copy completed moves to the logged Strava copy and stays completed after reconcile', () => {
     const apple = appleId(plus(RIDE_START, 400));
     const wk = week();
-    addAdhoc(wk, 'strava-131', { start: RIDE_START, durationSec: 3600, type: 'CYCLING' });
-    addAdhoc(wk, apple, { start: plus(RIDE_START, 400), durationSec: 3500, type: 'CYCLING' });
+    addAdhoc(wk, 'strava-131', { start: RIDE_START, durationSec: 3600, type: 'CYCLING', iTrimp: 6000 });
+    addAdhoc(wk, apple, { start: plus(RIDE_START, 400), durationSec: 3500, type: 'CYCLING', iTrimp: 8000 });
+    // Fuzzy-linked Apple copy: no decided pointer, so reconcile keeps the link.
+    delete wk.garminMatched[apple];
+    wk.triWorkouts = [{ id: 'W1-bike-0', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: `garmin-${apple}` }];
+    const pre = structuredClone(wk);
+    reconcileTriCompletions(pre);
+    expect(pre.triWorkouts[0].status).toBe('completed');
+    const s = state(wk);
+
+    const res = collapseAppleStravaTwins(s);
+    reconcileTriCompletions(wk);
+
+    expect(res).toEqual({ removed: [apple], rebound: 1 });
+    const slot = wk.triWorkouts[0];
+    expect(slot.status).toBe('completed');
+    expect(slot.matchedActivityId).toBe('W1-bike-0');
+    expect(wk.garminActuals['W1-bike-0'].garminId).toBe('strava-131');
+    expect(wk.garminActuals['W1-bike-0'].iTrimp).toBe(6000);
+    expect(wk.garminMatched['strava-131']).toBe('W1-bike-0');
+    // The ride counts once, through the slot.
+    expect(wk.garminActuals['garmin-strava-131']).toBeUndefined();
+    expect(wk.adhocWorkouts.map((w: any) => w.id)).toEqual([]);
+    expect(appleIdsIn(wk)).toEqual([]);
+    const control = week();
+    control.garminActuals['W1-bike-0'] = { ...wk.garminActuals['W1-bike-0'] };
+    expect(computeWeekRawTSS(wk, wk.rated)).toBe(computeWeekRawTSS(control, control.rated));
+  });
+
+  it('a triathlon slot the Apple copy completed moves to a Strava copy logged in the neighbouring week', () => {
+    const sun = '2026-09-27T23:58:00.000Z';
+    const mon = '2026-09-28T00:02:00.000Z';
+    const apple = appleId(mon);
+    const w1 = week();
+    const w2 = week();
+    w2.w = 2;
+    addAdhoc(w1, 'strava-181', { start: sun, durationSec: 3600, type: 'CYCLING' });
+    addAdhoc(w2, apple, { start: mon, durationSec: 3300, type: 'CYCLING' });
+    delete w2.garminMatched[apple];
+    w2.triWorkouts = [{ id: 'W2-bike-0', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: `garmin-${apple}` }];
+    const s = state(w1, w2);
+
+    collapseAppleStravaTwins(s);
+    reconcileTriCompletions(w2);
+
+    expect(w2.triWorkouts[0].status).toBe('completed');
+    expect(w2.garminActuals['W2-bike-0'].garminId).toBe('strava-181');
+    expect(w2.garminMatched['strava-181']).toBe('W2-bike-0');
+    expect(w1.garminActuals).toEqual({});
+    expect(w1.adhocWorkouts).toEqual([]);
+    expect(w1.garminMatched['strava-181']).toBeUndefined();
+  });
+
+  it('a triathlon slot the Apple copy completed moves to a Strava copy still awaiting review', () => {
+    const apple = appleId(plus(RIDE_START, 400));
+    const wk = week();
+    addAdhoc(wk, apple, { start: plus(RIDE_START, 400), durationSec: 4000, type: 'CYCLING' });
+    delete wk.garminMatched[apple];
+    addPending(wk, 'strava-191', { start: RIDE_START, durationSec: 5400, type: 'CYCLING', iTrimp: 9000 });
     wk.triWorkouts = [{ id: 'W1-bike-0', t: 'bike', n: 'Endurance ride', discipline: 'bike', status: 'completed', matchedActivityId: `garmin-${apple}` }];
     const s = state(wk);
 
-    collapseAppleStravaTwins(s);
+    const res = collapseAppleStravaTwins(s);
+    reconcileTriCompletions(wk);
 
-    expect(wk.triWorkouts[0].matchedActivityId).toBe('garmin-strava-131');
+    expect(res.rebound).toBe(1);
+    expect(wk.triWorkouts[0].status).toBe('completed');
+    expect(wk.garminActuals['W1-bike-0'].garminId).toBe('strava-191');
+    expect(wk.garminActuals['W1-bike-0'].durationSec).toBe(5400);
+    expect(wk.garminActuals['W1-bike-0'].iTrimp).toBe(9000);
+    expect(wk.garminMatched['strava-191']).toBe('W1-bike-0');
+    expect(wk.garminPending.map((p: any) => p.garminId)).toEqual(['strava-191']);
+    expect(appleIdsIn(wk)).toEqual([]);
   });
 
   it('when Apple and Strava copies completed two triathlon slots, the Apple slot returns to planned and the ride completes one slot', () => {
