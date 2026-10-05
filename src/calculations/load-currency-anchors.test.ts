@@ -30,6 +30,7 @@ import {
   getAthleteNormalizer,
   setAthleteNormalizer,
 } from '@/calculations/fitness-model';
+import { calculateITrimpFromSummary } from '@/calculations/trimp';
 import { computeUniversalLoad } from '@/cross-training/universalLoad';
 import { EASY_LOAD_PER_KM, TAU, HR_ZONE_TSS_PER_MIN } from '@/cross-training/universal-load-constants';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
@@ -90,6 +91,14 @@ describe('Anchor 2: 1 hour at LT = 100 TSS (the definition)', () => {
     const norm = computeAthleteNormalizer(172, 42, 192);
     expect(normalizeiTrimp(norm, norm)).toBeCloseTo(100, 10);
     expect(normalizeiTrimp(15000, 15000)).toBeCloseTo(100, 10);
+  });
+
+  it('holds for either sex: producer and normalizer share the β of the athlete\'s sex', () => {
+    // A female iTRIMP (β 1.67) over a male-β normalizer read ~0.81× (audit B12).
+    for (const sex of ['female', 'male'] as const) {
+      const itrimp = calculateITrimpFromSummary(172, 3600, 42, 192, sex);
+      expect(normalizeiTrimp(itrimp, computeAthleteNormalizer(172, 42, 192, sex)), sex).toBeCloseTo(100, 6);
+    }
   });
 
   it('Tier B zone weights anchor Z4 (threshold zone) at exactly 100 TSS/h', () => {

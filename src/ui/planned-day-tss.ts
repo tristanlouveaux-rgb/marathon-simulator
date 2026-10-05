@@ -1,10 +1,14 @@
 import type { SimulatorState } from '@/types/state';
 import { resolveWeekWorkouts } from './week-resolve';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-resolve.triathlon';
-import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio } from '@/calculations/fitness-model';
+import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio, isUnscheduledPlannedWorkout } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isLongRun } from '@/workouts/long-run';
+import { signalARunSpec } from '@/cross-training/activities';
+
+/** Running-plan workout types that are strength sessions (generator.ts gym templates, injury rehab). */
+const GYM_PLANNED_TYPES = new Set(['gym', 'strength']);
 
 /**
  * Canonical planned-day TSS context — the single source for "what does the
@@ -21,7 +25,7 @@ import { isLongRun } from '@/workouts/long-run';
  *                     week-resolve.ts) → computePlannedDaySignalBTSS
  *   - tri / cycling:  resolveTriWeekWorkouts → (w.aerobic + w.anaerobic),
  *                     the same per-workout TSS the plan card badge shows
- *   - HYROX:          resolveTriWeekWorkouts → duration × TL_PER_MIN[rpe]
+ *   - HYROX:          resolveTriWeekWorkouts → duration × plannedTssPerMin(type, rpe)
  *                     (HYROX workouts carry musculoTendonLoad, not TSS; the
  *                     fallback is the exact formula computePlannedDaySignalBTSS
  *                     already uses for duration-based sessions)
@@ -94,6 +98,12 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
         const rested = w.illnessSeverity === 'resting'
           || ((w.illnessMod || w.holidayMod) && (w.rpe ?? w.r) === 0);
         if (rested) continue;
+        // Pushed or dropped sessions (tri-skip-handler sets 'skipped'; a pushed
+        // session's clone lives in next week) are off this week's plan. Mirror
+        // of the running replaced/skipped guard (computePlannedWorkoutSignalBTSS).
+        // 'replaced' is NOT excluded here: in these modes it marks a session
+        // swapped to an easier one that is still to be done.
+        if (w.status === 'skipped') continue;
         const day = w.dayOfWeek;
         if (day == null || day < 0 || day > 6) continue;
         const durMin = estimateTriWorkoutMin(w);
@@ -122,6 +132,9 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
       // Running: the canonical Plan-tab resolver (generation + adhoc + mods +
       // moves + illness + holiday + bridge). Cross-training sessions are
       // excluded from planned TSS, matching the historical strain computation.
+      // Replaced and skipped runs price at 0 (computePlannedWorkoutSignalBTSS),
+      // so a day whose only run was replaced is a rest day, not a 1-TSS
+      // training day (audit B11). They stay listed with their status.
       const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
       const workouts = resolveWeekWorkouts(s, viewWeek).filter((w: any) => w.t !== 'cross');
       for (const w of workouts as any[]) {
@@ -133,7 +146,7 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           type: w.t ?? '',
           description: w.d ?? null,
           plannedTSS: tss,
-          plannedDurationMin: Math.round(estimateWorkoutDurMin(w, baseMinPerKm)),
+          plannedDurationMin: isUnscheduledPlannedWorkout(w) ? 0 : Math.round(estimateWorkoutDurMin(w, baseMinPerKm)),
           isHard: isHardPlannedType(w.t ?? ''),
           status: w.status,
           ...(isLongRun(w) ? { longRun: true } : {}),
@@ -205,15 +218,26 @@ export function resolveCtlAdherence(s: SimulatorState, completedWeek: number): C
   // against the real prescription. Synchronous clear+restore, no save in between.
   const savedRatio = wk?.ctlRatio;
   if (wk) wk.ctlRatio = undefined;
-  const plannedTSS = getPlannedDayTSSContext(s, completedWeek).plannedWeekTSS;
+  const plannedCtx = getPlannedDayTSSContext(s, completedWeek);
   if (wk) wk.ctlRatio = savedRatio;
+  // Value the prescription in the same currency as actualTSS (Signal A). A planned gym session
+  // counts at the strength runSpec, because computeWeekTSS counts the session that fills it at
+  // that runSpec (strength RPE override, or the activity's own sport for HIIT and plan-named gym
+  // fills). Valued at full TSS, a fully completed gym session read as a running-load deficit and
+  // cut next week's volume. Cross sessions stay out of the planned side (getPlannedDayTSSContext).
+  let plannedTSS = 0;
+  for (let day = 0; day < 7; day++) {
+    for (const w of plannedCtx.workoutsForDay(day)) {
+      plannedTSS += GYM_PLANNED_TYPES.has(w.type) ? w.plannedTSS * signalARunSpec('strength') : w.plannedTSS;
+    }
+  }
   if (plannedTSS <= 0) return neutral;
 
-  // actualTSS is Signal A (run-equivalent: cross-training discounted by runSpec — see
-  // computeWeekTSS), while plannedTSS excludes cross-training. For a running athlete the seam is
-  // second-order (the discount only bites on unplanned cross-training and sits inside the ~15%
-  // (1−CTL_DECAY) term); documented in SCIENCE_LOG §BR. priorCtl is the chronic load at the end of
-  // the week before last (metrics[length-2]); ctlBaseline seeds week 1 when there is no prior.
+  // actualTSS is Signal A (run-equivalent: every activity at its own sport's runSpec — see
+  // computeWeekTSS), while plannedTSS excludes cross sessions. The remaining seam is unplanned or
+  // cross-slot cross-training, which can only lift actualTSS (never a false cut) and sits inside
+  // the ~15% (1−CTL_DECAY) term; documented in SCIENCE_LOG §BR. priorCtl is the chronic load at the
+  // end of the week before last (metrics[length-2]); ctlBaseline seeds week 1 when there is no prior.
   const metrics = computeFitnessModel(
     s.wks, completedWeek, s.ctlBaseline ?? undefined, s.planStartDate,
     undefined, undefined, (s as any).previousPlanWks,

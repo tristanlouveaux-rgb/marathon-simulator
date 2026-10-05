@@ -12,7 +12,8 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
@@ -47,6 +48,7 @@ import { collectTriSuggestions, type TriSuggestionBundle } from '@/calculations/
 import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint, shouldPlayEntrance } from './page-flair';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -162,7 +164,10 @@ function parseDurMinLocal(d: string): number {
 
 /**
  * Compute a per-sport breakdown of Signal B TSS for the current week.
- * Mirrors computeWeekRawTSS exactly (same dedup, same formulas) but groups by label.
+ * Same activities and dedup as computeWeekRawTSS, grouped by label.
+ * Known differences from that total: no strength RPE override and no double-day bonus.
+ *
+ * @param planStartDate - unused since unspentLoadItems stopped counting as load.
  */
 export function computeLoadBreakdown(
   wk: Week,
@@ -214,9 +219,9 @@ export function computeLoadBreakdown(
   }
 
   // Adhoc workouts. All types, no runSpec discount for Signal B
-  // Skip user-generated sessions (not real activity. Just suggestions)
+  // Skip planned sessions (adhoc-/holiday-/benchmark-): not real activity, just prescriptions
   for (const w of wk.adhocWorkouts ?? []) {
-    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    if (isPlannedAdhocId(w.id)) continue;
     // Skip if garminActuals already covers this entry (garminActuals wins. May have been Strava-upgraded)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     // Dedup by garminId. Check both id prefix and direct garminId property
@@ -246,33 +251,10 @@ export function computeLoadBreakdown(
     add(label, tss, durationMin, sportColor(sport));
   }
 
-  // Unspent load items. No runSpec discount
-  let weekStartMs: number | null = null;
-  let weekEndMs: number | null = null;
-  if (planStartDate && wk.w != null) {
-    weekStartMs = new Date(planStartDate).getTime() + (wk.w - 1) * 7 * 86400000;
-    weekEndMs = weekStartMs + 7 * 86400000;
-  }
-  console.log(`[LoadBreakdown] unspentLoadItems count=${(wk.unspentLoadItems ?? []).length}`);
-  for (const item of wk.unspentLoadItems ?? []) {
-    if (weekStartMs !== null && weekEndMs !== null && item.date) {
-      const itemMs = new Date(item.date).getTime();
-      if (itemMs < weekStartMs || itemMs >= weekEndMs) {
-        console.log(`[LoadBreakdown] unspent SKIPPED (out of week range) gid=${item.garminId} dn="${item.displayName}" date=${item.date}`);
-        continue;
-      }
-    }
-    if (item.garminId) {
-      if (seenGarminIds.has(item.garminId)) {
-        console.log(`[LoadBreakdown] unspent DEDUP gid=${item.garminId} dn="${item.displayName}"`);
-        continue;
-      }
-      seenGarminIds.add(item.garminId);
-    }
-    const tss = item.durationMin * (TL_PER_MIN[5] ?? 1.15);
-    console.log(`[LoadBreakdown] unspent gid=${item.garminId} dn="${item.displayName}" sport=${item.sport} tss=${tss.toFixed(0)} dur=${item.durationMin.toFixed(0)}m reason=${(item as any).reason ?? '-'} date=${item.date ?? '-'}`);
-    add(normalizeRunLabel(item.displayName), tss, item.durationMin, sportColor(item.sport));
-  }
+  // unspentLoadItems are decision records, never load (computeWeekRawTSS). A
+  // surplus_run item is a slice of a run already counted in full above, and an
+  // overflow item's activity is already counted as its twin or adhoc entry.
+  // Adding them put the surplus on top of the matched run (audit B20).
 
   return Array.from(segments.values())
     .filter(s => s.tss > 0.5)
@@ -750,13 +732,9 @@ export function buildProgressBars(s: SimulatorState): string {
 
   // TSS this week vs plan. Signal B (full physiological load, all sports), matching the plan header.
   const _tssRaw = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const tssPlan = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw,
-    undefined, undefined, s.sportBaselineByType,
-  );
+  const tssPlan = computePlannedWeekTarget(s, s.w);
   // Include decayed carry from previous weeks in the effective total
-  const _tssCarry = computeDecayedCarry(s.wks ?? [], s.w, tssPlan, s.planStartDate);
+  const _tssCarry = computeCurrentWeekCarry(s, s.w);
   const tssActual = _tssRaw + _tssCarry;
 
   function fillBar(actual: number, plan: number): string {
@@ -2199,7 +2177,7 @@ function buildRecentActivity(s: SimulatorState): string {
       // (Was track-only-gated; running plan mode leaked them as undated
       // "This week" rows — 2026-06-04 dogfood.)
       const wid = w.id || '';
-      const isPlannedInjected = wid.startsWith('adhoc-') || wid.startsWith('holiday-') || wid.startsWith('benchmark-');
+      const isPlannedInjected = isPlannedAdhocId(wid);
       if (isPlannedInjected && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';

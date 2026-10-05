@@ -8,10 +8,9 @@ import { getState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import {
   computeReadinessACWR,
-  computeWeekRawTSS,
+  computeWeeklyAcwrHistory,
   TIER_ACWR_CONFIG,
-  CTL_DECAY,
-  ATL_DECAY,
+  type WeeklyAcwrEntry,
 } from '@/calculations/fitness-model';
 import { detectDurabilityFlag } from '@/calculations/daily-coach';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -91,28 +90,17 @@ function skyBackground(): string { return buildFloweyBackground('ir', 'amber') +
 
 // ── Weekly ACWR trend ─────────────────────────────────────────────────────────
 
-interface WeekAcwrEntry { week: number; ratio: number; rawTSS: number; }
+type WeekAcwrEntry = WeeklyAcwrEntry;
 
 function getWeeklyAcwrHistory(s: SimulatorState): WeekAcwrEntry[] {
-  const wks = s.wks ?? [];
-  const completedWeek = Math.max(0, (s.w ?? 1) - 1);
-  const seed = s.signalBBaseline ?? s.ctlBaseline ?? 0;
-  const results: WeekAcwrEntry[] = [];
-
-  let ctl = seed;
-  let atl = seed;
-
-  const limit = Math.min(completedWeek, wks.length);
-  for (let i = 0; i < limit; i++) {
-    const wk = wks[i];
-    const weekRawTSS = computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
-    ctl = ctl * CTL_DECAY + weekRawTSS * (1 - CTL_DECAY);
-    atl = atl * ATL_DECAY + weekRawTSS * (1 - ATL_DECAY);
-    const ratio = ctl > 1 ? atl / ctl : 0;
-    results.push({ week: wk.w, ratio, rawTSS: weekRawTSS });
-  }
-
-  return results;
+  // Unseeded athletes get the bias-corrected EMA (no record before week 1 is
+  // missing, not rest). See computeWeeklyAcwrHistory.
+  return computeWeeklyAcwrHistory(
+    s.wks ?? [],
+    Math.max(0, (s.w ?? 1) - 1),
+    s.signalBBaseline ?? s.ctlBaseline ?? undefined,
+    s.planStartDate,
+  );
 }
 
 function acwrBarChart(entries: WeekAcwrEntry[], safeUpper: number): string {

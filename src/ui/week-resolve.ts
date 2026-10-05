@@ -6,6 +6,7 @@ import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayMods, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
 import { isTimingMod } from '@/cross-training/timing-check';
 import { dropPreOnboardSessions } from './workout-status';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
  * Canonical resolver for a running-mode week's workout list.
@@ -48,8 +49,10 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
     : [];
 
   if (wk?.adhocWorkouts) {
+    // Planned sessions injected into the plan (user-added, holiday, benchmark
+    // check-in) render as cards. Synced activities stay out: they are actuals.
     for (const aw of wk.adhocWorkouts) {
-      if ((aw.id || '').startsWith('holiday-') || (aw.id || '').startsWith('adhoc-')) {
+      if (isPlannedAdhocId(aw.id)) {
         workouts.push(aw);
       }
     }

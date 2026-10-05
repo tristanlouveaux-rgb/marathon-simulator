@@ -15,7 +15,8 @@
 import type { Week, SimulatorState } from '@/types/state';
 import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import { getMutableState, saveState } from '@/state';
-import { getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeDecayedCarry, computeACWR, computeRunningFloorKm, getNormalizerFromState, normalizeiTrimp} from '@/calculations/fitness-model';
+import { getWeeklyExcess, getTrailingEffortScore, computeACWR, computeRunningFloorKm, getNormalizerFromState, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeRecoveryTrend } from '@/calculations/readiness';
 import { render } from '@/ui/renderer';
 import {
@@ -108,12 +109,10 @@ export function hasRemainingWeekWorkouts(): boolean {
  * Returns 0 when no plan data is available.
  */
 function computeTotalWeekExcess(wk: Week, s: ReturnType<typeof getMutableState>): number {
-  const plannedB = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-  );
+  // Both callers pass the current week (s.wks[s.w - 1]).
+  const plannedB = computePlannedWeekTarget(s, s.w);
   if (!plannedB) return 0;
-  const carried = computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate);
+  const carried = computeCurrentWeekCarry(s, s.w);
   return getWeeklyExcess(wk, plannedB, s.planStartDate, carried);
 }
 
@@ -375,10 +374,7 @@ export function triggerExcessLoadAdjustment(): void {
   };
   // Pass overshoot TSS so the suggester caps the reduction budget to only what's needed.
   // `excess` is already the week-level overshoot (computeWeekRawTSS - plannedSignalB).
-  const plannedB = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-  );
+  const plannedB = computePlannedWeekTarget(s, s.w);
   const targetTSS = plannedB ?? 0;
   const activityTSS = combinedActivity.iTrimp
     ? normalizeiTrimp(combinedActivity.iTrimp)

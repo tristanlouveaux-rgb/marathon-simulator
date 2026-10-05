@@ -15,7 +15,8 @@
  * one computation.
  */
 import type { SimulatorState } from '@/types/state';
-import { computeWeekRawTSS, computeDecayedCarry, computePlannedSignalB } from './fitness-model';
+import { computeWeekRawTSS } from './fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from './planned-week-target';
 import { plannedTssPerMin } from '@/constants';
 
 export interface AcwrReductionProjection {
@@ -45,14 +46,11 @@ export function computeAcwrReductionProjection(
   const wk = s.wks?.[s.w - 1];
   if (!wk) return null;
 
-  const plannedB = computePlannedSignalB(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
-    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
-  );
+  const plannedB = computePlannedWeekTarget(s, s.w);
   if (!plannedB) return null;
 
   const currentTSS = computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
-  const carried = computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate);
+  const carried = computeCurrentWeekCarry(s, s.w);
   const paceMinPerKm = (s.pac?.e ?? 360) / 60;
   // Quality sessions run faster than easy pace; same 0.85 duration factor the
   // original inline computation used for RPE≥7 types.

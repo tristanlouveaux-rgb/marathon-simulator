@@ -24,6 +24,7 @@ import { getMutableState, saveState } from '@/state';
 import { render } from '@/ui/renderer';
 import { computeHREnrichment } from '@/data/activityEnrichment';
 import { calculateZones, type HRZones } from '@/calculations/heart-rate';
+import { resolveTrimpSex } from '@/calculations/trimp';
 
 export interface ParsedScreenshotSplit {
   /** Split index in km (1, 2, ... ; a trailing partial may be < 1). */
@@ -330,7 +331,7 @@ export function commitScreenshotActivity(p: ParsedScreenshotActivity, startTimeI
     ? {
         restingHR: computeRollingRestingHR(s.physiologyHistory, s.restingHR) ?? null,
         userMaxHR: s.maxHR ?? null,
-        sex: s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined,
+        sex: resolveTrimpSex(s),
         zones: calculateZones({
           maxHR: s.maxHR ?? undefined,
           restingHR: s.restingHR ?? undefined,

@@ -17,7 +17,7 @@
 
 import type { SimulatorState } from '@/types';
 import { computeReadiness, type ReadinessResult } from './readiness';
-import { computeLiveSameSignalTSB, computeReadinessACWR } from './fitness-model';
+import { computeFitnessModel, computeLiveSameSignalTSB, computeReadinessACWR } from './fitness-model';
 import { buildInjuryCaption } from '@/ui/injury/modal';
 
 export interface SessionRecommendation {
@@ -61,6 +61,15 @@ export function buildSessionRecommendation(s: SimulatorState): SessionRecommenda
       s.previousPlanWks as Parameters<typeof computeLiveSameSignalTSB>[5],
     );
     const acwrResult = computeReadinessACWR(s);
+    // History depth and ACWR ceiling exactly as the Home readiness ring reads
+    // them (home-view buildReadinessRing): completed live weeks plus archived
+    // weeks, and the tier's safeUpper. `Math.min(wks.length, 4)` was always >= 3
+    // on a real plan, so the ACWR hard floor applied here weeks before the ring.
+    const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+    const historyWeeks = computeFitnessModel(
+      wks, Math.max(0, s.w - 1), s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined,
+      s.previousPlanWks as Parameters<typeof computeFitnessModel>[6],
+    ).length;
     readiness = computeReadiness({
       tsb: tsbResult.tsb,
       acwr: acwrResult.ratio,
@@ -70,7 +79,8 @@ export function buildSessionRecommendation(s: SimulatorState): SessionRecommenda
       hrvRmssd: lastHrv?.hrvRmssd ?? null,
       hrvPersonalAvg: hrvAvg,
       sleepBankSec: null,
-      weeksOfHistory: Math.min(wks.length, 4),
+      weeksOfHistory: historyWeeks,
+      acwrSafeUpper: acwrResult.safeUpper,
     });
   } catch {
     // computeReadiness errors fall through to a caption that's only the

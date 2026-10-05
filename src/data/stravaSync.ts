@@ -17,6 +17,7 @@ import { processPendingCrossTraining, resetPendingModalGuard } from './activityS
 import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { resolveBiologicalSex } from '@/calculations/trimp';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import { NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { isNativeiOS } from './appleHealthSync';
@@ -114,7 +115,10 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
       'sync-strava-activities',
       {
         after_timestamp: afterTimestamp,
-        biological_sex: s.biologicalSex,
+        // Resolved, not s.biologicalSex: mid-wizard the answer is only on
+        // s.onboarding, and these rows are cached server-side with their β
+        // forever, so they must carry the β the normaliser will decode with.
+        biological_sex: resolveBiologicalSex(s),
         max_hr_override: s.maxHR ?? undefined,
       },
     );
@@ -772,7 +776,10 @@ export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult>
     const s = getMutableState();
     const result = await callEdgeFunction<BackfillResult>(
       'sync-strava-activities',
-      { mode: 'backfill', weeks, biological_sex: s.biologicalSex, max_hr_override: s.maxHR ?? undefined },
+      // biological_sex resolved like the normaliser's (trimp.ts resolveBiologicalSex):
+      // this runs from the wizard's review step, before plan init copies the
+      // wizard's sex answer to s.biologicalSex.
+      { mode: 'backfill', weeks, biological_sex: resolveBiologicalSex(s), max_hr_override: s.maxHR ?? undefined },
     );
     console.log(`[StravaBackfill] Done — ${result?.processed ?? 0} new activities (${result?.withHRStream ?? 0} HR stream + ${result?.withAvgHR ?? 0} avg HR), hasHRMonitor=${result?.hasHRMonitor}, totalStrava=${result?.totalStravaActivities ?? '?'}`);
     if (result?.bestEffortsPool != null || result?.bestEffortsHealed != null) {

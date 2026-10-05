@@ -31,6 +31,7 @@ import {
   type PowerSample,
 } from '@/data/activityEnrichment';
 import { calculateZones } from '@/calculations/heart-rate';
+import { resolveTrimpSex } from '@/calculations/trimp';
 import {
   buildPolylineFromLocations,
   extractKmSplits,
@@ -695,8 +696,7 @@ export async function importActivityFile(file: File): Promise<string> {
   const restingHR = s.restingHR && s.restingHR > 0 ? s.restingHR : null;
   const userMaxHR = s.maxHR && s.maxHR > 0 ? s.maxHR : null;
   const age = s.onboarding?.age ?? null;
-  const sex: 'male' | 'female' | undefined =
-    s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const sex: 'male' | 'female' | undefined = resolveTrimpSex(s);
 
   const row = streamsToActivityRow(summary, records, restingHR, userMaxHR, age, sex);
   const changed = matchAndAutoComplete([row]);
@@ -749,8 +749,7 @@ export async function parseActivityFileToRow(file: File): Promise<ParsedEnrichFi
   const restingHR = s.restingHR && s.restingHR > 0 ? s.restingHR : null;
   const userMaxHR = s.maxHR && s.maxHR > 0 ? s.maxHR : null;
   const age = s.onboarding?.age ?? null;
-  const sex: 'male' | 'female' | undefined =
-    s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const sex: 'male' | 'female' | undefined = resolveTrimpSex(s);
   const row = streamsToActivityRow(summary, records, restingHR, userMaxHR, age, sex);
 
   const distKm = summary.distanceM ? (summary.distanceM / 1000).toFixed(1) + ' km ' : '';
@@ -904,8 +903,7 @@ export async function importActivityArchive(
   const restingHR = s.restingHR && s.restingHR > 0 ? s.restingHR : null;
   const userMaxHR = s.maxHR && s.maxHR > 0 ? s.maxHR : null;
   const age = s.onboarding?.age ?? null;
-  const sex: 'male' | 'female' | undefined =
-    s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  const sex: 'male' | 'female' | undefined = resolveTrimpSex(s);
 
   const rows: GarminActivityRow[] = [];
   let failed = 0;

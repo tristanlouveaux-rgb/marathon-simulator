@@ -32,7 +32,7 @@ import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyr
 import { scheduleHyroxWeek } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
-import { ctlGapMultiplier } from './plan_engine';
+import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
@@ -61,11 +61,6 @@ function phaseMultiplier(
       return 0.30; // race week
     }
   }
-}
-
-function isDeloadWeek(weekIndex: number, phase: 'base' | 'build' | 'peak' | 'taper'): boolean {
-  if (phase === 'taper') return false; // taper is its own volume reduction
-  return weekIndex % 4 === 0;
 }
 
 // ─── Session kind selection ───────────────────────────────────────────────────
@@ -214,7 +209,7 @@ function generateWeekSessions(
   // wk.forceDeload on weeks that overlap the holiday; without this the HYROX
   // engine ignored it and regenerated those weeks at full load.
   const forceDeload = !!(state.wks?.[weekIndex - 1] as any)?.forceDeload;
-  const deload = forceDeload || isDeloadWeek(weekIndex, phase);
+  const deload = forceDeload || isFourWeekCycleDeloadWeek(weekIndex, phase);
   // Execution → next-week load. Trailing RPE across all HYROX sessions scales the weekly
   // budget, mirroring running's `effortMultiplier` (applied multiplicatively on top of
   // phase + deload, per plan_engine.ts dMult). Only weeks ≥ current are scaled — past

@@ -17,10 +17,57 @@
  */
 
 /** Sex for β coefficient selection */
-type BiologicalSex = 'male' | 'female';
+export type BiologicalSex = 'male' | 'female';
 
-function getBeta(sex?: BiologicalSex): number {
+/**
+ * Banister β for the athlete's sex: 1.67 female, 1.92 for male, unknown or
+ * 'prefer_not_to_say'. The single source for β. Every iTRIMP producer uses it,
+ * and so does the iTRIMP→TSS normaliser (fitness-model.ts
+ * computeAthleteNormalizer). With a personal normaliser, and sex resolved the
+ * same way on both sides (resolveBiologicalSex below), 1 hour at LTHR decodes
+ * to 100 TSS for either sex. Two exceptions: the 15000 population fallback is
+ * sex-neutral, and server rows cached before the athlete's sex was known keep
+ * the β 1.92 they were stamped with.
+ */
+export function getBeta(sex?: BiologicalSex | 'prefer_not_to_say' | null): number {
   return sex === 'female' ? 1.67 : 1.92;
+}
+
+/** The state fields the sex resolver reads. A SimulatorState satisfies it. */
+export interface BiologicalSexSource {
+  biologicalSex?: BiologicalSex | 'prefer_not_to_say' | null;
+  hasCompletedOnboarding?: boolean;
+  onboarding?: { biologicalSex?: BiologicalSex | 'prefer_not_to_say' | null } | null;
+}
+
+/**
+ * The athlete's sex for β, resolved ONE way for both sides of the iTRIMP→TSS
+ * conversion: every iTRIMP producer (the Strava edge-function payload, Apple
+ * Health, FIT and screenshot import, the activity matcher) and the normaliser
+ * (fitness-model.ts getNormalizerFromState) call this. If they resolve sex
+ * differently, an iTRIMP stamped with one β is decoded with the other and
+ * reads e^(±0.25·hrr), about 0.81× or 1.23×.
+ *
+ * During the onboarding wizard the user's answer lives only on
+ * s.onboarding.biologicalSex (about-you and the Strava prefill write it there).
+ * Plan initialisation copies it to s.biologicalSex, and it wins there whenever
+ * it is set (initialization*.ts). So while the wizard is in progress the
+ * wizard answer is the value s.biologicalSex is about to take, and it is used
+ * first. That keeps onboarding-stamped iTRIMP (the review-step Strava backfill,
+ * the post-connect sync) on the same β the normaliser uses after the plan is
+ * built. Once onboarding is complete s.biologicalSex is canonical, with the
+ * wizard answer as a fallback when it is unset.
+ */
+export function resolveBiologicalSex(s: BiologicalSexSource): BiologicalSex | 'prefer_not_to_say' | undefined {
+  const wizardAnswer = s.onboarding?.biologicalSex ?? undefined;
+  if (s.hasCompletedOnboarding !== true && wizardAnswer) return wizardAnswer;
+  return s.biologicalSex ?? wizardAnswer;
+}
+
+/** resolveBiologicalSex narrowed to the producers' β argument ('prefer_not_to_say' → undefined → 1.92). */
+export function resolveTrimpSex(s: BiologicalSexSource): BiologicalSex | undefined {
+  const sex = resolveBiologicalSex(s);
+  return sex === 'male' || sex === 'female' ? sex : undefined;
 }
 
 /**

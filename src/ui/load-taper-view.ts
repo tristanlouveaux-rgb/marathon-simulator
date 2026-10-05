@@ -6,7 +6,8 @@
  */
 
 import { getState } from '@/state';
-import { computeWeekRawTSS, computePlannedSignalB, computeDecayedCarry } from '@/calculations/fitness-model';
+import { computeWeekRawTSS } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeLoadBreakdown, breakdownShade, type LoadSegment } from './home-view';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
@@ -354,18 +355,12 @@ export function renderLoadTaperView(
   const _isArchive = archiveIdx != null && archiveIdx >= 0;
 
   const tssRaw = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
-  const tssPlan = Math.round(computePlannedSignalB(
-    s.historicWeeklyTSS,
-    s.ctlBaseline,
-    ph,
-    s.athleteTierOverride ?? s.athleteTier,
-    s.rw,
-    undefined,
-    undefined,
-    s.sportBaselineByType,
-  ));
+  // Same canonical target and carry as the Plan week-summary card. Carry only
+  // applies to the week containing today (decay runs to now), so a future or
+  // past week shows its own load, not the current week's residual.
+  const tssPlan = Math.round(computePlannedWeekTarget(s, weekNum));
 
-  const tssCarry = computeDecayedCarry(s.wks ?? [], weekNum, tssPlan, s.planStartDate);
+  const tssCarry = computeCurrentWeekCarry(s, weekNum);
   const tssActual = tssRaw + tssCarry;
 
   const barPct = tssPlan > 0 ? Math.round((tssActual / tssPlan) * 100) : 0;

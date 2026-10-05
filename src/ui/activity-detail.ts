@@ -174,10 +174,13 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   // computeWeekRawTSS), not a flat 0.92/min. The flat rate under-reported any
   // hard session (e.g. a 2h RPE-7 match read 110 here but 214 in the week total
   // — a "two numbers, one source" violation). Falls back to RPE 5 when unrated,
-  // matching the week-load default.
+  // matching the week-load default. The rating is read from the week that holds
+  // this actual (computeWeekRawTSS reads that week's rated map), not always the
+  // current week: a past-week no-HR run used to fall to RPE 5 here.
   const _detailRatedRpe = (() => {
     if (!workoutId) return null;
-    const wk = getState().wks?.[(getState().w ?? 1) - 1];
+    const wks = getState().wks;
+    const wk = wks?.find(w => w.garminActuals?.[workoutId] === actual) ?? wks?.[(getState().w ?? 1) - 1];
     const r = wk?.rated?.[workoutId];
     return typeof r === 'number' ? r : null;
   })();

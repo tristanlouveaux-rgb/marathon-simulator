@@ -19,7 +19,8 @@ import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } f
 import { isLongRun } from '@/workouts/long-run';
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
@@ -1190,11 +1191,9 @@ export async function next(): Promise<void> {
   // tagged mid-week as "excess" were already absorbed by the overall load. Clear them.
   // This prevents false carry-over into next week for weeks that ended under target.
   {
-    const plannedB = computePlannedSignalB(
-      s.historicWeeklyTSS ?? [], s.ctlBaseline ?? 0,
-      wk.ph ?? 'base', s.athleteTierOverride ?? s.athleteTier ?? 'recreational',
-      s.rw ?? 4, undefined, undefined, s.sportBaselineByType,
-    );
+    // Canonical per-week target: a deload or taper week is judged against its
+    // reduced target, not its phase label's full target.
+    const plannedB = computePlannedWeekTarget(s, s.w);
     const weekExcess = getWeeklyExcess(wk, plannedB, s.planStartDate);
     if (weekExcess <= 0 && wk.unspentLoadItems?.length) {
       wk.unspentLoadItems = [];
@@ -2725,6 +2724,13 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     if (!s.ignoredGarminIds.includes(garminId)) s.ignoredGarminIds.push(garminId);
   }
 
+  // Every id that names the removed activity, for the excess-record scrub below.
+  // The Strava upgrade rewrites an actual's garminId to strava-<id> but keeps its
+  // key garmin-<oldId> and the old garminMatched entry, while unspentLoadItems keep
+  // the id the activity had when the item was written. Collected before any
+  // garminMatched entry is deleted.
+  const activityIds = new Set<string>([garminId]);
+
   // Search across ALL weeks. The × button may be on any week's card
   let found = false;
   for (const wk of s.wks || []) {
@@ -2733,6 +2739,14 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     if (!workoutId) continue;
 
     found = true;
+    // '__pending__' is shared by every unassigned activity, so it names none of them.
+    if (workoutId !== '__pending__') {
+      if (workoutId.startsWith('garmin-')) activityIds.add(workoutId.slice('garmin-'.length));
+      for (const [gid, wid] of Object.entries(wk.garminMatched)) {
+        if (wid === workoutId) activityIds.add(gid);
+      }
+    }
+
     const adhocId = `garmin-${garminId}`;
     const wasSlotMatched = !workoutId.startsWith('garmin-');
 
@@ -2767,6 +2781,25 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     }
 
     break; // garminId can only exist in one week's garminMatched
+  }
+
+  // The activity's excess-load records go with it: an overflow item keyed by its
+  // garminId and a surplus slice keyed `${garminId}_surplus`, under any id the
+  // activity has carried (see activityIds). Load totals never read these records,
+  // but the excess card and the "Adjust week" button do, so an orphan kept
+  // offering to cut the plan for a session that no longer exists.
+  // Items can be carried into the next week, so every week is scrubbed.
+  if (found || opts?.permanent) {
+    const unspentIds = new Set<string>();
+    for (const id of activityIds) {
+      unspentIds.add(id);
+      unspentIds.add(`${id}_surplus`);
+    }
+    for (const wk of s.wks || []) {
+      if (wk.unspentLoadItems?.some(u => unspentIds.has(u.garminId))) {
+        wk.unspentLoadItems = wk.unspentLoadItems.filter(u => !unspentIds.has(u.garminId));
+      }
+    }
   }
 
   // Permanent discard: still scrub the activity from pending/adhoc lists across weeks

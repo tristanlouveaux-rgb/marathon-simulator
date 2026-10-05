@@ -355,7 +355,10 @@ describe('buildPlanSkeleton — HYROX uses the structured per-week shape (P0 reg
     expect((currentWeek.sessions as any).run).toBe(1);
     expect((currentWeek.sessions as any).bike).toBe(0);
     expect(currentWeek.planned_hours).toBeCloseTo(112 / 60, 1);
-  });
+    // 20 s budget: the dynamic import of coach-context-builder pulls a large module
+    // graph and takes ~1 s alone but can exceed the 5 s default when the full suite
+    // transforms in parallel. Same budget the repo's other heavy integration tests use.
+  }, 20000);
 });
 
 describe('undoPendingChange — round trip restores pre-mod fields', () => {

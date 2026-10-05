@@ -13,6 +13,7 @@ import { detrainingLossFraction } from './welcome-back';
 import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import { generateWeekWorkouts } from '@/workouts';
 import { classifyWorkoutKind } from '@/calculations/illness-rules';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 
 const MODAL_ID = 'holiday-modal';
@@ -1215,8 +1216,9 @@ export function applyBridgeMods_renderTime(workouts: any[], wk: Week): void {
   for (const w of workouts) {
     if (isNonRun(w)) continue;
     if ((w as any).holidayMod) continue; // already modified by holiday mods
-    // Skip user-generated sessions. The user explicitly chose the distance/structure
-    if ((w.id || '').startsWith('adhoc-') || (w.id || '').startsWith('holiday-')) continue;
+    // Skip user-generated sessions (and benchmark check-ins, a fixed test
+    // protocol). The user explicitly chose the distance/structure
+    if (isPlannedAdhocId(w.id)) continue;
 
     const isQuality = QUALITY_TYPES.some(t => (w.t || '').toLowerCase().includes(t));
 
@@ -1268,7 +1270,7 @@ export function applyBridgeModsAllDisciplines(workouts: any[], wk: Week): void {
     if ((w as any).holidayMod) continue;       // already rested by holiday mods
     if ((w as any).userScaledAt) continue;     // respect an explicit user Adjust
     const id = (w.id || '') as string;
-    if (id.startsWith('adhoc-') || id.startsWith('holiday-')) continue;
+    if (isPlannedAdhocId(id)) continue;
 
     const kind = classifyWorkoutKind(w);
     if (kind === 'rest_like' || kind === 'other') continue;

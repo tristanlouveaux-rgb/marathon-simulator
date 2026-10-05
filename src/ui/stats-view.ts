@@ -14,7 +14,8 @@ import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } f
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
-import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { plannedWeekKm } from '@/calculations/plan-shape';
 import { renderPlanShapeCard } from './plan-shape-chart';
@@ -986,42 +987,14 @@ function buildForecastLoadChart(s: SimulatorState): string {
 
   if (futureWks.length === 0) return chartEmptyState(75);
 
-  // Build phase groups for weekInPhase context
-  const phaseGroups: { phase: string; start: number; end: number }[] = [];
-  for (let i = 0; i < wks.length; i++) {
-    const ph = wks[i].ph || 'base';
-    if (!phaseGroups.length || phaseGroups[phaseGroups.length - 1].phase !== ph) {
-      phaseGroups.push({ phase: ph, start: i, end: i });
-    } else {
-      phaseGroups[phaseGroups.length - 1].end = i;
-    }
-  }
-  function getPhaseContext(idx: number) {
-    for (const g of phaseGroups) {
-      if (idx >= g.start && idx <= g.end)
-        return { weekInPhase: idx - g.start + 1, totalPhaseWeeks: g.end - g.start + 1 };
-    }
-    return { weekInPhase: 1, totalPhaseWeeks: 1 };
-  }
-
   // Historical portion (last 8 actual weeks including current)
   const histData = getChartData(s, '8w');
   const histTSS = histData.tss;
   const histN = histTSS.length;
 
-  // Future TSS: use computePlannedWeekTSS (Signal B scale, history-based)
-  const futureTSS = futureWks.map((wk, fi) => {
-    const { weekInPhase, totalPhaseWeeks } = getPhaseContext(currentWeekIdx + fi);
-    return computePlannedWeekTSS(
-      s.historicWeeklyTSS,
-      s.ctlBaseline ?? undefined,
-      wk.ph || 'base',
-      s.athleteTier ?? undefined,
-      s.rw ?? undefined,
-      weekInPhase,
-      totalPhaseWeeks,
-    );
-  });
+  // Future TSS: the canonical Signal B week target (the history series above is
+  // Signal B), the same number the Plan week-summary card shows for each week.
+  const futureTSS = futureWks.map((_wk, fi) => computePlannedWeekTarget(s, currentWeekIdx + fi + 1));
   const futurePhases = futureWks.map(wk => wk.ph || 'base');
 
   // Combined

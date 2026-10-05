@@ -428,7 +428,9 @@ const SURPLUS_CREDIT_CAP_SEC = 60 * 60;
 /**
  * Build a Record<YYYY-MM-DD, Signal B TSS> from plan weeks.
  * Signal B = raw physiological load (no runSpec discount).
- * Two sources: garminActuals (matched runs) and adhocWorkouts (cross-training).
+ * Two sources: garminActuals (matched runs and synced-activity twins) and
+ * adhocWorkouts (cross-training). Each activity counts once: an adhoc entry is
+ * skipped when its garminActuals twin already added load for it.
  */
 export function buildDailySignalBTSS(
   wks: any[],
@@ -442,16 +444,30 @@ export function buildDailySignalBTSS(
     ...(archivedPlans ?? []).flatMap(p => p.weeks ?? []),
   ];
   for (const wk of allWeeks) {
-    for (const actual of Object.values(wk.garminActuals ?? {})) {
+    // One set per week, seeded by the garminActuals loop: every synced activity
+    // logged as adhoc also has a garminActuals twin with the same garminId
+    // (addAdhocWorkoutFromPending), so without the seed each one counted twice.
+    // An id is marked only once it has added load, so a twin without HR data
+    // still leaves the adhoc entry's RPE estimate to count.
+    // The twin's KEY is marked too: the Strava upgrade (activity-matcher.ts)
+    // rewrites the twin's garminId to strava-<id> but keeps its key and the
+    // adhoc id as garmin-<old id>, so after an upgrade only the key still pairs
+    // them (computeWeekRawTSS and computeTodaySignalBTSS skip on the key too).
+    const seenGarminIds = new Set<string>();
+    for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
       const a = actual as any;
       if (!a.startTime) continue;
+      if (a.garminId && seenGarminIds.has(a.garminId)) continue;
       const date = (a.startTime as string).split('T')[0];
       const tss = (a.iTrimp != null && a.iTrimp > 0)
         ? normalizeiTrimp(a.iTrimp as number)
         : 0;
-      if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
+      if (tss > 0) {
+        byDate[date] = (byDate[date] ?? 0) + tss;
+        if (a.garminId) seenGarminIds.add(a.garminId);
+        if (key.startsWith('garmin-')) seenGarminIds.add(key.slice('garmin-'.length));
+      }
     }
-    const seenGarminIds = new Set<string>();
     for (const w of (wk.adhocWorkouts ?? [])) {
       const wo = w as any;
       if (!wo.id?.startsWith('garmin-')) continue;

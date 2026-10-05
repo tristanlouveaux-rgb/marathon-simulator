@@ -100,6 +100,105 @@ export function isGymSessionActual(actual: {
   return raw.includes('hiit') || raw.includes('high_intensity_interval');
 }
 
+// ─── The activity's own sport, for load weighting ────────────────────────────
+//
+// Signal A (running-specific load) weights every activity by the runSpec of the
+// sport that was actually done. These resolvers answer "what sport was this?"
+// from the stored record, never from the plan slot it filled. Tracking side:
+// they describe what happened.
+
+/**
+ * SportKey from a recorded activity LABEL instead of a raw type code: the
+ * `formatActivityType` output that slot fills store as `displayName`
+ * ("Stair Climbing", "Lap Swim", "HIIT"), or an adhoc workout's `n`. Spaces and
+ * hyphens become underscores so the label reads like the code it came from,
+ * then the canonical `deriveSportFromActivityType` rules apply.
+ */
+export function deriveSportFromLabel(label: string | null | undefined): SportKey {
+  if (!label) return 'generic_sport';
+  const clean = label.replace(/\s*\((Garmin|Strava)\)\s*$/i, '').trim().replace(/[\s-]+/g, '_');
+  return deriveSportFromActivityType(clean);
+}
+
+/** Plan slot ids are `W${week}-${type}-${idx}` (generator.ts, plan_engine.triathlon.ts). */
+const PLAN_SLOT_TYPE_RE = /^W\d+-([a-z_]+)-\d+$/;
+/** Plan workout types the matcher fills with gym-bucket activities (strength or HIIT). */
+const GYM_WORKOUT_TYPES = new Set(['gym', 'strength']);
+/** Adhoc workout types that are not runs (same set computeWeekTSS has always used). */
+const NON_RUN_WORKOUT_TYPES = new Set(['cross', 'gym', 'strength', 'rest']);
+
+function isGymSlotKey(key: string): boolean {
+  const t = key.match(PLAN_SLOT_TYPE_RE)?.[1];
+  return t != null && GYM_WORKOUT_TYPES.has(t);
+}
+
+/**
+ * The sport of a `garminActuals` entry (keyed by plan slot id or `garmin-<id>`).
+ *
+ * Precedence:
+ *   1. `manualSport`: the user's reclassification (same rule as getEffectiveSport).
+ *   2. `isStrengthActual`: the detector computeStrengthRpeTSS uses, so the RPE
+ *      path and the HR path agree on what a strength session is.
+ *   3. `activityType`: what the device or source recorded.
+ *   4. `displayName` on a slot fill (no `workoutName`): every cross/gym slot
+ *      writer in activity-review.ts stores `formatActivityType(activityType)`
+ *      there without the type itself.
+ *   5. Otherwise a run. Run-slot matches carry `workoutName` (the planned run's
+ *      name). Rows from before `activityType` was stored keep their full weight.
+ *
+ * An ambiguous result (`generic_sport`) for a gym-bucket activity (HIIT, see
+ * isGymSessionActual) or a gym plan slot resolves to strength, the same mapping
+ * the matcher applies to its 'gym' bucket (mapAppTypeToSport('gym') = 'gym',
+ * SPORT_ALIASES.gym = 'strength').
+ */
+export function resolveActualSport(
+  key: string,
+  actual: {
+    activityType?: string | null;
+    manualSport?: string;
+    workoutName?: string;
+    displayName?: string;
+  },
+): SportKey {
+  if (actual.manualSport && actual.manualSport in SPORTS_DB) return actual.manualSport as SportKey;
+  if (isStrengthActual(actual)) return 'strength';
+  let sport: SportKey;
+  if (actual.activityType) sport = deriveSportFromActivityType(actual.activityType);
+  else if (actual.displayName && !actual.workoutName) sport = deriveSportFromLabel(actual.displayName);
+  else sport = isGymSlotKey(key) ? 'strength' : 'running';
+  if (sport === 'generic_sport' && (isGymSessionActual(actual) || isGymSlotKey(key))) return 'strength';
+  return sport;
+}
+
+/**
+ * The sport of an adhoc workout (synced activity logged outside the plan, or a
+ * legacy entry with no `garminActuals` twin). A run-typed adhoc is a run whatever
+ * its name (an activity first classified as a run keeps `t: 'easy'`); otherwise
+ * the name is the recorded label. A gym-typed adhoc with an ambiguous name
+ * resolves to strength, as in resolveActualSport.
+ */
+export function resolveAdhocSport(w: { t?: string; n?: string }): SportKey {
+  const t = w.t ?? 'cross';
+  if (!NON_RUN_WORKOUT_TYPES.has(t)) return 'running';
+  const sport = deriveSportFromLabel(w.n);
+  if (sport === 'generic_sport' && GYM_WORKOUT_TYPES.has(t)) return 'strength';
+  return sport;
+}
+
+/** True when the sport is running (planned or extra). */
+export function isRunSport(sport: SportKey): boolean {
+  return sport === 'running' || sport === 'extra_run';
+}
+
+/**
+ * Signal A weight of a sport: its SPORTS_DB `runSpec` (running 1.0). The
+ * resolvers above only return SPORTS_DB keys; the generic_sport row is the
+ * defensive fallback.
+ */
+export function signalARunSpec(sport: SportKey): number {
+  return SPORTS_DB[sport]?.runSpec ?? SPORTS_DB.generic_sport.runSpec;
+}
+
 /**
  * Get RPE multiplier for load calculation
  * @param rpe - RPE value (1-10)

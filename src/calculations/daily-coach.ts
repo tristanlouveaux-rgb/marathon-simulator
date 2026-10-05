@@ -12,14 +12,15 @@ import type { SimulatorState } from '@/types';
 import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
+  computeSameSignalCtlHistory,
   computeFitnessModel,
   computeWeekTSS,
-  computePlannedWeekTSS,
   getTrailingEffortScore,
   computeTodaySignalBTSS,
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
@@ -306,7 +307,15 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const ctlNow = liveTSB.ctl;
 
   const metrics = computeFitnessModel(wks, s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
-  const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
+  // The trend compares like with like. ctlNow is Signal B (same-signal, live
+  // through today), so the value four weeks back comes from the Signal B CTL
+  // series with the same seed. The Signal A CTL in `metrics` discounts
+  // cross-training by runSpec, so comparing it with ctlNow read every steady
+  // cross-trainer as "building".
+  const ctlHistoryB = computeSameSignalCtlHistory(
+    wks, Math.max(0, s.w - 1), s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate, undefined, archivedPlans,
+  );
+  const ctlFourWeeksAgo = ctlHistoryB[ctlHistoryB.length - 4] ?? ctlNow;
   const ctlDelta = ctlNow - ctlFourWeeksAgo;
   const ctlTrend: 'up' | 'flat' | 'down' = ctlDelta > 0.5 ? 'up' : ctlDelta < -0.5 ? 'down' : 'flat';
 
@@ -372,13 +381,9 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const weekTSS = (wk && !isEmptyTrackOnlyWeek)
     ? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)
     : null;
-  const plannedTSS = computePlannedWeekTSS(
-    s.historicWeeklyTSS,
-    s.ctlBaseline ?? undefined,
-    wk?.ph ?? 'base',
-    s.athleteTier,
-    s.rw,
-  );
+  // Signal A target (weekTSS above is Signal A), resolved through the canonical
+  // per-week phase: deload weeks and the race-taper position included.
+  const plannedTSS = computePlannedWeekTarget(s, s.w, 'A');
   const tssPct = (plannedTSS > 0 && weekTSS != null && weekTSS > 0)
     ? Math.round((weekTSS / plannedTSS) * 100)
     : null;
