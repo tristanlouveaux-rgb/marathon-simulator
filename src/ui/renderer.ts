@@ -24,6 +24,7 @@ import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
 import { loadGpsRecording } from '@/gps/persistence';
 import { openGpsRecordingDetail } from './gps-completion-modal';
 import { findMatchingWorkout, type ExternalActivity } from '@/calculations/matching';
+import { isLongRun } from '@/workouts/long-run';
 import { showMatchProposal } from './sync-modal';
 import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
@@ -897,7 +898,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       // Skip button. Only for unrated (planned) gym sessions
       if (!viewOnly && !rtd) {
         const skipId = w.id || w.n;
-        h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',false,0,'${w.d.replace(/'/g, "\\'").replace(/\n/g, ' ')}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Skip</button>`;
+        h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',false,0,'${w.d.replace(/'/g, "\\'").replace(/\n/g, ' ')}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}',undefined,${isLongRun(w)})" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Skip</button>`;
       }
 
       h += `</div>`;
@@ -924,8 +925,9 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     h += `<div class="border-2 p-2 rounded" style="border-color:${cardDetailBorderColor};background:${cardDetailBgStyle}">`;
 
-    // Garmin-matched slot banner (cross/run slots matched via garminActuals)
-    if (garminActualsData?.displayName && !isModified && (w.t === 'cross' || w.t === 'run' || w.t === 'easy' || w.t === 'long' || w.t === 'threshold' || w.t === 'vo2' || w.t === 'marathon_pace' || w.t === 'float')) {
+    // Garmin-matched slot banner (cross/run slots matched via garminActuals).
+    // isLongRun also covers the fast-finish long run (t:'progressive').
+    if (garminActualsData?.displayName && !isModified && (w.t === 'cross' || w.t === 'run' || w.t === 'easy' || isLongRun(w) || w.t === 'threshold' || w.t === 'vo2' || w.t === 'marathon_pace' || w.t === 'float')) {
       const actName = garminActualsData.displayName;
       const dur = Math.round(garminActualsData.durationSec / 60);
       let statLine = `${dur} min`;
@@ -1274,7 +1276,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         : isReplaced
           ? 'background:rgba(6,182,212,0.08);color:var(--c-accent);cursor:not-allowed'
           : 'background:rgba(0,0,0,0.06);color:var(--c-muted)';
-      h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs py-0.5 rounded" style="${skipBtnStyle}" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
+      h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}',undefined,${isLongRun(w)})" class="w-full mt-1 text-xs py-0.5 rounded" style="${skipBtnStyle}" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
     }
 
     h += `</div>`;

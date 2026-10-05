@@ -28,6 +28,7 @@ import type {
   MorningPainResponse,
 } from '@/types/injury';
 import type { Workout } from '@/types';
+import { isLongRun } from '@/workouts/long-run';
 import {
   INJURY_PROTOCOLS,
   INJURY_THRESHOLDS,
@@ -355,9 +356,12 @@ export function adaptWorkoutForInjury(workout: Workout, state: InjuryState): Inj
     };
   }
 
-  // Check if workout type is banned for this injury
-  if (!isWorkoutTypeAllowed(state.type, workout.t)) {
+  // Check if workout type is banned for this injury. A ban on 'long' covers the
+  // whole long-run slot, including the fast-finish long run (t:'progressive').
+  const bannedAsLongRun = isLongRun(workout) && !isWorkoutTypeAllowed(state.type, 'long');
+  if (!isWorkoutTypeAllowed(state.type, workout.t) || bannedAsLongRun) {
     const replacement = getReplacementActivity(state.type);
+    const bannedLabel = bannedAsLongRun ? 'long' : workout.t;
 
     if (replacement) {
       // Replace with priority cross-training activity
@@ -367,7 +371,7 @@ export function adaptWorkoutForInjury(workout: Workout, state: InjuryState): Inj
         n: `Cross-Train: ${replacement}`,
         d: `${estimateWorkoutDurationMin(workout.d)} min`,
         status: 'replaced',
-        modReason: `${protocol.displayName}: ${workout.t} not allowed`,
+        modReason: `${protocol.displayName}: ${bannedLabel} not allowed`,
         completedBySport: replacement,
       };
 
@@ -376,14 +380,14 @@ export function adaptWorkoutForInjury(workout: Workout, state: InjuryState): Inj
         adaptedWorkout,
         adaptationType: 'replaced',
         replacementActivity: replacement,
-        reason: `${workout.t} banned for ${protocol.displayName}. Replaced with ${replacement}.`,
+        reason: `${bannedLabel} banned for ${protocol.displayName}. Replaced with ${replacement}.`,
       };
     } else {
       return {
         originalWorkout: workout,
         adaptedWorkout: null,
         adaptationType: 'removed',
-        reason: `${workout.t} banned for ${protocol.displayName}. No safe replacement available.`,
+        reason: `${bannedLabel} banned for ${protocol.displayName}. No safe replacement available.`,
       };
     }
   }
@@ -1650,7 +1654,10 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
           return adapted;
         }
 
-        if (workout.t === 'long') {
+        // The long-run slot, including the fast-finish long run (t:'progressive'),
+        // takes the long-run rule: 20% shorter at steady pace. The fast finish is
+        // dropped, so its title becomes the plain long run's.
+        if (isLongRun(workout)) {
           const adapted = { ...workout };
           adapted.rpe = Math.min(workout.rpe || 5, 4);
           adapted.r = Math.min(workout.r || 5, 4);
@@ -1660,6 +1667,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
           if (!isNaN(dist)) {
             adapted.d = `${Math.round(dist * 0.8)}km @ steady (${steadyStr})`;
           }
+          if (workout.t !== 'long') adapted.n = 'Long Run';
           adapted.modReason = `Graduated return — distance reduced 20%`;
           return adapted;
         }
@@ -1682,7 +1690,8 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
             }
           }
           adapted.modReason = `Graduated return — downgraded to steady pace`;
-          // progressive = Long Run (Fast Finish) → just "Steady Run" (no fast finish)
+          // progressive (a non-long-run progression; the fast-finish long run takes
+          // the long-run branch above) → "Steady Run"
           // marathon_pace → "Steady Pace" (not "Steady Marathon Pace")
           adapted.n = workout.t === 'progressive' ? 'Steady Run' : 'Steady Pace';
           return adapted;

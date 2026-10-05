@@ -12,6 +12,7 @@ import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion
 import { deleteGpsRecording } from '@/gps/persistence';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
+import { isLongRun } from '@/workouts/long-run';
 import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
@@ -274,7 +275,9 @@ function findRunByDistance(
     // Pace plausibility tiebreak: penalise mismatches slightly
     let pacePenalty = 0;
     if (easyPace > 0 && avgPaceSecPerKm > 0) {
-      const isQuality = QUALITY_RUN_TYPES.has(w.t);
+      // The fast-finish long run is t:'progressive' but averages near easy pace
+      // (80% easy, 20% MP), so it scores as the long run, not a quality slot.
+      const isQuality = QUALITY_RUN_TYPES.has(w.t) && !isLongRun(w);
       const ranAtEasyOrSlower = avgPaceSecPerKm >= easyPace * 0.97;
       const ranAtQualityPace  = avgPaceSecPerKm <= easyPace * 0.85;
       if (isQuality && ranAtEasyOrSlower) pacePenalty = 0.10;  // slow run, not a quality slot

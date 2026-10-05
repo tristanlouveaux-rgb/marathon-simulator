@@ -123,6 +123,11 @@ export interface Workout extends WorkoutDefinition {
     label: string;
   };
   commute?: boolean;             // This is a commute run
+  /** Set by the generator on the workout that fills the week's long-run slot,
+   *  for every long-run variant (steady `t:'long'` and the fast-finish
+   *  `t:'progressive'`). Read it only through `isLongRun()` (workouts/long-run.ts),
+   *  which also honours a plain `t:'long'`. Undefined = not the long-run slot. */
+  longRun?: boolean;
   testType?: string; // For physio capacity tests
   /** Canonical session duration in minutes. Set by the plan engine at
    * generation time so downstream code (scheduler capacity, card chips,

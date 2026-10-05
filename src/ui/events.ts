@@ -16,6 +16,7 @@ import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
+import { isLongRun } from '@/workouts/long-run';
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
 import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
@@ -672,6 +673,8 @@ export function rateCapacityTest(testType: string, passed: boolean): void {
  * Skip a workout
  * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
  * @param name - Display name for logging
+ * @param longRun - The workout's long-run-slot stamp (Workout.longRun). Lets the
+ *   fast-finish long run (type 'progressive') get the long-run skip warning.
  */
 export function skip(
   workoutId: string,
@@ -683,7 +686,8 @@ export function skip(
   rpe: number,
   dayOfWeek: number,
   dayName: string,
-  targetWeek?: number
+  targetWeek?: number,
+  longRun?: boolean,
 ): void {
   const s = getMutableState();
 
@@ -696,10 +700,10 @@ export function skip(
     return;
   }
 
-  // Warn before skipping a long run
-  if (workoutType === 'long' && !isAlreadySkipped) {
+  // Warn before skipping a long run (any long-run format, incl. the fast finish)
+  if (isLongRun({ t: workoutType, longRun }) && !isAlreadySkipped) {
     showLongRunSkipWarning().then(proceed => {
-      if (proceed) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+      if (proceed) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName, longRun);
     });
     return;
   }
@@ -708,26 +712,30 @@ export function skip(
   // There is no race penalty here. The user explicitly chooses to remove the session.
   if (isAlreadySkipped && s.continuousMode) {
     showDropWorkoutConfirmation(name).then(drop => {
-      if (drop) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+      if (drop) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName, longRun);
     });
     return;
   }
 
-  skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+  skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName, longRun);
 }
 
 function skipInner(
   workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean,
   currentSkipCount: number, desc: string, rpe: number,
-  dayOfWeek: number, dayName: string
+  dayOfWeek: number, dayName: string, longRun?: boolean,
 ): void {
   const s = getMutableState();
   const wk = s.wks[s.w - 1];
+  // The long-run slot in any format (incl. the fast-finish run, type
+  // 'progressive') is charged and carried as the long run.
+  const isLong = isLongRun({ t: workoutType, longRun });
 
   if (isAlreadySkipped) {
     // Second skip - apply race-time penalty only in race mode (not continuous/general fitness)
     if (!s.continuousMode) {
-      const basePenalty = TIM[s.rd]?.[workoutType as keyof typeof TIM[typeof s.rd]] || 20;
+      const penaltyKey = isLong ? 'long' : workoutType;
+      const basePenalty = TIM[s.rd]?.[penaltyKey as keyof typeof TIM[typeof s.rd]] || 20;
       const penalty = Math.round(basePenalty * 1.5);
       s.timp += penalty;
       // Bookkeep the exact charge so an un-skip can refund precisely this much.
@@ -761,7 +769,8 @@ function skipInner(
         rpe: rpe || 5,
         r: rpe || 5,
         dayOfWeek: dayOfWeek !== undefined ? dayOfWeek : undefined,
-        dayName: dayName || undefined
+        dayName: dayName || undefined,
+        ...(isLong ? { longRun: true } : {}),
       },
       skipCount: 1
     });
@@ -870,7 +879,7 @@ export async function next(): Promise<void> {
 
       // If carrying this hard workout would exceed the cap, downgrade to easy
       const isHard = HARD_TYPES.includes(w.t);
-      let carryWorkout = { id: wId, n: w.n, t: w.t, d: w.d || '', rpe: w.rpe || 5, r: w.rpe || 5 };
+      let carryWorkout: Workout = { id: wId, n: w.n, t: w.t, d: w.d || '', rpe: w.rpe || 5, r: w.rpe || 5, ...(isLongRun(w) ? { longRun: true } : {}) };
 
       if (isHard && (nextWeekHardCount + carriedHardCount) >= MAX_HARD_PER_WEEK) {
         // Estimate a sensible easy distance from the original workout duration
@@ -894,7 +903,9 @@ export async function next(): Promise<void> {
     for (const w of toPenalize) {
       const wId = w.id || w.n;
       wk.rated[wId] = 'skip';
-      const basePenalty = TIM[s.rd]?.[w.t as keyof typeof TIM[typeof s.rd]] || 20;
+      // The long-run slot (incl. the fast-finish run) is charged as the long run.
+      const penaltyKey = isLongRun(w) ? 'long' : w.t;
+      const basePenalty = TIM[s.rd]?.[penaltyKey as keyof typeof TIM[typeof s.rd]] || 20;
       s.timp += basePenalty;
       // Bookkeep the exact charge so an un-skip can refund precisely this much.
       wk.skipPenalty = wk.skipPenalty || {};
@@ -2280,7 +2291,7 @@ export function justRun(): void {
 declare global {
   interface Window {
     rate: (workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean, avgHR?: number) => void;
-    skip: (workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean, currentSkipCount: number, desc: string, rpe: number, dayOfWeek: number, dayName: string) => void;
+    skip: (workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean, currentSkipCount: number, desc: string, rpe: number, dayOfWeek: number, dayName: string, targetWeek?: number, longRun?: boolean) => void;
     moveWorkout: typeof moveWorkout;
     logActivity: typeof logActivity;
     removeGarminActivity: typeof removeGarminActivity;

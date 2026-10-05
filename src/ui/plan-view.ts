@@ -12,6 +12,7 @@ import { isSimulatorMode } from '@/app/runtime';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod, stripPaceTokens, modDisplayDescription, retargetDescriptionPace, displayDescWithPace } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
+import { isLongRun } from '@/workouts/long-run';
 import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
@@ -637,7 +638,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         html += `<span style="color:var(--c-border)">·</span>`;
         html += `<button class="plan-action-adjust" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" data-d="${safeDesc}" data-orig="${escapeHtml((w as any).originalDistance || '')}" data-type="${w.t}" data-rpe="${rpe}" data-dur="${(w as any).estimatedDurationMin ?? ''}" data-orig-dur="${(w as any).originalDurationMin ?? ''}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Adjust</button>`;
         html += `<span style="color:var(--c-border)">·</span>`;
-        html += `<button class="plan-action-skip" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Skip</button>`;
+        html += `<button class="plan-action-skip" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-long-run="${isLongRun(w) ? '1' : ''}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Skip</button>`;
         html += `</div>`;
       } else if (w.t === 'gym') {
         html += `<button class="plan-action-mark-done m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px">Mark Done</button>`;
@@ -2924,7 +2925,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const desc = el.dataset.desc || '';
       const day = parseInt(el.dataset.day || '0', 10);
       const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
-      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum);
+      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum, el.dataset.longRun === '1');
       renderPlanView();
     });
   });
@@ -3763,7 +3764,7 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       const desc = el.dataset.desc || '';
       const day = parseInt(el.dataset.day || '0', 10);
       const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
-      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum);
+      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum, el.dataset.longRun === '1');
       renderPlanView();
     });
   });

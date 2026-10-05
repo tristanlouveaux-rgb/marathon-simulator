@@ -87,7 +87,10 @@ export function intentToWorkout(
 
     case 'long': {
       const km = minutesToKm(totalMinutes, easyPaceSecPerKm);
-      // Fast-finish long run → progressive format
+      // Fast-finish long run → progressive format. It keeps t:'progressive' (its
+      // parse, load and pace format) but carries the long-run-slot stamp so the
+      // scheduler and every long-run rule treat it as the week's long run
+      // (isLongRun, workouts/long-run.ts). Audit X5.
       if (variantId === 'long_fast_finish') {
         const fastKm = Math.max(2, Math.round(km * 0.2));
         return {
@@ -97,6 +100,7 @@ export function intentToWorkout(
           r: 5,
           rpe: 5,
           estimatedDurationMin: totalMinutes,
+          longRun: true,
         };
       }
       return {
@@ -106,6 +110,7 @@ export function intentToWorkout(
         r: 3,
         rpe: 3,
         estimatedDurationMin: totalMinutes,
+        longRun: true,
       };
     }
 

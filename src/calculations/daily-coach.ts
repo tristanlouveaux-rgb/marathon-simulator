@@ -25,6 +25,7 @@ import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
 import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
+import { isLongRun } from '@/workouts/long-run';
 import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
 import {
   computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
@@ -130,6 +131,8 @@ export interface StrainContext {
     description: string | null;
     plannedTSS: number | null;
     plannedDurationMin: number | null;
+    /** Running: today's workout fills the long-run slot (PlannedDayWorkout.longRun). */
+    longRun?: boolean;
   } | null;
 }
 
@@ -227,6 +230,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
       description: todayPlanned.description,
       plannedTSS: todayPlanned.plannedTSS > 0 ? todayPlanned.plannedTSS : null,
       plannedDurationMin: todayPlanned.plannedDurationMin > 0 ? todayPlanned.plannedDurationMin : null,
+      ...(todayPlanned.longRun ? { longRun: true } : {}),
     };
   }
 
@@ -436,8 +440,8 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   // Previous `_cachedWorkouts` path never populated, so today's workout was missing
   // from signals sent to the LLM. Restored here via StrainContext.todayPlannedWorkout.
   const todayPlannedW = strain?.todayPlannedWorkout ?? null;
-  const todayWorkouts: Array<{ n: string; t: string }> = todayPlannedW
-    ? [{ n: todayPlannedW.name, t: todayPlannedW.type }]
+  const todayWorkouts: Array<{ n: string; t: string; longRun?: boolean }> = todayPlannedW
+    ? [{ n: todayPlannedW.name, t: todayPlannedW.type, ...(todayPlannedW.longRun ? { longRun: true } : {}) }]
     : [];
 
   // ── Derive stance ─────────────────────────────────────────────────────────
@@ -589,7 +593,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   };
 
   const primaryMessage = derivePrimaryMessage(signals, readiness, blockers, strain ?? null, stance);
-  const sessionNote = computeLongRunDriftNote(s, todayWorkouts[0]?.t ?? null);
+  const sessionNote = computeLongRunDriftNote(s, todayWorkouts[0] ?? null);
 
   const postSessionLabel = derivePostSessionLabel(readiness, strain ?? null, signals.ctlNow);
   const ringLabel = postSessionLabel ?? readiness.label;
@@ -637,8 +641,11 @@ export function derivePostSessionLabel(
  * persistent high drift usually means fuelling/hydration or pace control broke down
  * in the back half. The nudge lets the athlete pre-empt a repeat.
  */
-function computeLongRunDriftNote(s: SimulatorState, todayType: string | null): string | null {
-  if (todayType !== 'long') return null;
+function computeLongRunDriftNote(s: SimulatorState, today: { t: string; longRun?: boolean } | null): string | null {
+  // Trigger on the long-run slot in any format (fast finish is t:'progressive').
+  // The drift samples below stay plannedType === 'long' only: a fast finish's
+  // marathon-pace segment inflates drift, so it is not a steady-state sample.
+  if (!isLongRun(today)) return null;
 
   const weeksToScan = 6;
   const currentIdx = Math.max(0, (s.w ?? 1) - 1);
