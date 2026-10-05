@@ -40,6 +40,9 @@ import {
 } from '@/calculations/lt-estimator';
 import { openActivityReReview } from '@/ui/activity-review';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
+import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { upsertWorkoutMod, removeWorkoutMods } from '@/workouts/workout-mods';
+import { collectActivityAliases, scrubExcessRecords } from '@/calculations/excess-records';
 import { resolveMtlAdherence } from '@/calculations/mtl';
 import { resolveTriDisciplineAdherence } from '@/calculations/fitness-model.triathlon';
 import { loadGpsRecording } from '@/gps/persistence';
@@ -1227,9 +1230,14 @@ export async function next(): Promise<void> {
         nextWk.scheduledSafeUpper = acwr.safeUpper;
         // Episode memory + escalation (pure, tested in acwr-ease-back.test.ts). Carry a prior choice
         // forward across consecutive high weeks so we don't re-nag, unless very high / sustained.
+        // A choice the athlete made in this week's debrief wins: the debrief previews this week
+        // with the live ACWR status and its Accept stamps the pane they picked on this week just
+        // before next() runs, so it is the explicit answer to this week's prompt (ISSUE-295).
+        const debriefChoice = nextWk.acwrChoice;
         const priorStatuses = s.wks.slice(0, s.w - 1).map((w: any) => w?.scheduledAcwrStatus);
         const decision = resolveAcwrEpisodeChoice(priorStatuses, acwr.ratio, s.wks[s.w - 2]?.acwrChoice);
-        if (decision.acwrChoice) nextWk.acwrChoice = decision.acwrChoice;
+        const choice = debriefChoice ?? decision.acwrChoice;
+        if (choice) nextWk.acwrChoice = choice;
         else delete nextWk.acwrChoice;
       } else if (acwr.status === 'caution') {
         nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline): one quality session replaced`;
@@ -2574,36 +2582,22 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   const wk = s.wks[s.w - 1];
   if (!wk) return;
 
-  // Generate this week's workouts
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
+  // This week as the Plan tab shows it (canonical resolver): accepted changes,
+  // moves and illness/holiday adjustments applied, pending timing suggestions left
+  // as labels. The adjustment is sized from the session the user actually sees.
+  const workouts = resolveWeekWorkouts(s, s.w) as Workout[];
 
-  // Re-apply existing workoutMods so we don't double-modify
-  if (wk.workoutMods && wk.workoutMods.length > 0) {
-    for (const mod of wk.workoutMods) {
-      const w = workouts.find(wo => wo.n === mod.name && wo.dayOfWeek === mod.dayOfWeek);
-      if (w) {
-        w.status = mod.status as any;
-        w.d = mod.newDistance;
-        if (mod.newType) w.t = mod.newType;
-        w.modReason = mod.modReason || '';
-        w.confidence = mod.confidence as any;
-      }
-    }
-  }
-
-  // Find target run workout. Match by name first, then by dayOfWeek, then first available
+  // Find target run workout. Match by name on the given day first (two sessions can
+  // share a name, e.g. two "Easy Run"s), then by name, then by dayOfWeek, then first
+  // available.
   const runWorkouts = workouts.filter(w =>
     w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
     w.status !== 'replaced'
   );
 
   let todayRun = workoutName
-    ? runWorkouts.find(w => w.n === workoutName)
+    ? (runWorkouts.find(w => w.n === workoutName && w.dayOfWeek === dayOfWeek)
+      ?? runWorkouts.find(w => w.n === workoutName))
     : runWorkouts.find(w => w.dayOfWeek === dayOfWeek);
 
   if (!todayRun && runWorkouts.length > 0) {
@@ -2630,10 +2624,14 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
     ? Math.round(parsedKm * 10) / 10
     : (kmMatch ? parseFloat(kmMatch[1]) : 0);
 
-  if (!wk.workoutMods) wk.workoutMods = [];
+  // One mod per session (upsertWorkoutMod): the recovery change replaces the
+  // session's current mod rather than stacking. A user-tapped action, so it may
+  // replace the user's own Adjust.
+  const writeMod = (mod: Parameters<typeof upsertWorkoutMod>[1]) =>
+    upsertWorkoutMod(wk, { workoutId: todayRun!.id, ...mod }, { replaceUserAdjust: true });
 
   if (type === 'downgrade') {
-    wk.workoutMods.push({
+    writeMod({
       name: todayRun.n,
       dayOfWeek: todayRun.dayOfWeek,
       status: 'reduced',
@@ -2647,7 +2645,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
     log(`Recovery: ${todayRun.n} downgraded to easy`);
   } else if (type === 'easyflag') {
     // Already an easy/long run. Just flag to ignore pace targets
-    wk.workoutMods.push({
+    writeMod({
       name: todayRun.n,
       dayOfWeek: todayRun.dayOfWeek,
       status: 'reduced',
@@ -2662,7 +2660,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   } else {
     // Reduce by 20%, min 3km
     const newKm = Math.max(3, Math.round(currentKm * 0.8 * 10) / 10);
-    wk.workoutMods.push({
+    writeMod({
       name: todayRun.n,
       dayOfWeek: todayRun.dayOfWeek,
       status: 'reduced',
@@ -2706,6 +2704,39 @@ export function dismissLTUpdate(): void {
 }
 
 /**
+ * Un-rate a plan slot (the plan card's "Unmark" action): clear its rating, its skip
+ * carry-forward and race-time penalty, and send a synced recording back to
+ * pending. The recording's excess records (overflow item, surplus slice, under
+ * every id it has carried) go with the assignment: once the run is unassigned they
+ * describe load against a slot it no longer fills (audit B19). Items can be carried
+ * into the next week, so every week is scrubbed, as removeGarminActivity does.
+ * Does not save. Returns false when the week does not exist.
+ */
+export function unratePlanSlot(weekNum: number, wId: string): boolean {
+  const ms = getMutableState();
+  const wk = ms.wks?.[weekNum - 1];
+  if (!wk) return false;
+  delete wk.rated[wId];
+  // Un-skip: drop the carry-forward entry so it isn't pushed to next week.
+  if (wk.skip?.length) wk.skip = wk.skip.filter(x => x.workout.id !== wId);
+  // Refund any race-time penalty charged for this skip (exact bookkeeping,
+  // clamped so s.timp can never go negative).
+  const refund = wk.skipPenalty?.[wId];
+  if (refund && wk.skipPenalty) {
+    ms.timp = Math.max(0, (ms.timp || 0) - refund);
+    delete wk.skipPenalty[wId];
+    console.log(`[unskip] refunded ${refund}s race penalty for ${wId} (timp now ${ms.timp})`);
+  }
+  if (wk.garminActuals?.[wId]) {
+    const gId = wk.garminActuals[wId].garminId;
+    if (gId) scrubExcessRecords(ms.wks, collectActivityAliases(wk, gId, wId));
+    delete wk.garminActuals[wId];
+    if (gId && wk.garminMatched?.[gId]) wk.garminMatched[gId] = '__pending__';
+  }
+  return true;
+}
+
+/**
  * Remove a Garmin-synced activity from the current week.
  * Works for both ad-hoc activities and those that filled a cross-training slot.
  * @param garminId - The raw Garmin activity ID (key in wk.garminMatched)
@@ -2724,12 +2755,10 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     if (!s.ignoredGarminIds.includes(garminId)) s.ignoredGarminIds.push(garminId);
   }
 
-  // Every id that names the removed activity, for the excess-record scrub below.
-  // The Strava upgrade rewrites an actual's garminId to strava-<id> but keeps its
-  // key garmin-<oldId> and the old garminMatched entry, while unspentLoadItems keep
-  // the id the activity had when the item was written. Collected before any
-  // garminMatched entry is deleted.
-  const activityIds = new Set<string>([garminId]);
+  // Every id that names the removed activity, for the excess-record scrub below
+  // (collectActivityAliases: the Strava upgrade keeps the pre-upgrade id on the
+  // excess records). Collected before any garminMatched entry is deleted.
+  let activityIds = new Set<string>([garminId]);
 
   // Search across ALL weeks. The × button may be on any week's card
   let found = false;
@@ -2739,13 +2768,7 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     if (!workoutId) continue;
 
     found = true;
-    // '__pending__' is shared by every unassigned activity, so it names none of them.
-    if (workoutId !== '__pending__') {
-      if (workoutId.startsWith('garmin-')) activityIds.add(workoutId.slice('garmin-'.length));
-      for (const [gid, wid] of Object.entries(wk.garminMatched)) {
-        if (wid === workoutId) activityIds.add(gid);
-      }
-    }
+    activityIds = collectActivityAliases(wk, garminId, workoutId);
 
     const adhocId = `garmin-${garminId}`;
     const wasSlotMatched = !workoutId.startsWith('garmin-');
@@ -2756,11 +2779,7 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     }
 
     // Remove from workoutMods (if it filled a cross-training slot or applied adjustments)
-    if (wk.workoutMods) {
-      wk.workoutMods = wk.workoutMods.filter(
-        m => !(m.name === workoutId && m.modReason?.startsWith('Garmin:'))
-      );
-    }
+    removeWorkoutMods(wk, m => m.name === workoutId && !!m.modReason?.startsWith('Garmin:'));
 
     // Un-rate the plan slot
     if (wk.rated) delete wk.rated[workoutId];
@@ -2790,16 +2809,7 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
   // offering to cut the plan for a session that no longer exists.
   // Items can be carried into the next week, so every week is scrubbed.
   if (found || opts?.permanent) {
-    const unspentIds = new Set<string>();
-    for (const id of activityIds) {
-      unspentIds.add(id);
-      unspentIds.add(`${id}_surplus`);
-    }
-    for (const wk of s.wks || []) {
-      if (wk.unspentLoadItems?.some(u => unspentIds.has(u.garminId))) {
-        wk.unspentLoadItems = wk.unspentLoadItems.filter(u => !unspentIds.has(u.garminId));
-      }
-    }
+    scrubExcessRecords(s.wks || [], activityIds);
   }
 
   // Permanent discard: still scrub the activity from pending/adhoc lists across weeks

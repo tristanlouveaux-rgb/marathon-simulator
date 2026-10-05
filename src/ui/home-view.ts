@@ -3520,31 +3520,21 @@ function showRecoveryAdviceSheet(): boolean {
   let backToBack = false;
 
   if (wk) {
-    const workouts = generateWeekWorkouts(
-      wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-      s.onboarding?.experienceLevel, undefined, undefined, s.w, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-    ) as any[];
-
-    // Apply existing day moves so we see the current layout
-    if (wk.workoutMoves) {
-      for (const [wid, newDay] of Object.entries(wk.workoutMoves)) {
-        const w = workouts.find((wo: any) => (wo.id || wo.n) === wid);
-        if (w) w.dayOfWeek = newDay;
-      }
-    }
+    // The week as the Plan tab shows it (canonical resolver: accepted changes,
+    // moves, illness/holiday adjustments). The session offered here is then the
+    // one applyRecoveryAdjustment changes, and a replaced run is never offered.
+    const workouts = resolveWeekWorkouts(s, s.w) as any[];
 
     const rated = wk.rated ?? {};
 
     // Today's unrated quality workout
     todayWorkout = workouts.find((w: any) =>
-      w.dayOfWeek === internalDow && !rated[w.id || w.n] && isHardWorkout(w.t)
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' && isHardWorkout(w.t)
     ) ?? null;
 
     // Any unrated running workout today (for reduce-intensity when no hard session)
     todayAnyWorkout = todayWorkout ?? workouts.find((w: any) =>
-      w.dayOfWeek === internalDow && !rated[w.id || w.n] &&
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] && w.status !== 'replaced' &&
       w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym'
     ) ?? null;
 

@@ -13,7 +13,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isSimpleDistanceDesc, parseDistanceKm, findWorkoutForMod, stripPaceTokens, modDisplayDescription, retargetDescriptionPace, displayDescWithPace } from '@/workouts/workout-scaling';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { isLongRun } from '@/workouts/long-run';
-import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
+import { rate, skip, removeGarminActivity, unratePlanSlot, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { firstTrackedDow } from './workout-status';
@@ -36,7 +36,8 @@ import { isTouchPrimary, fireSelectionHaptic } from '@/utils/platform';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
-import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
+import { isTimingMod, mergeTimingMods, acceptTimingSuggestion } from '@/cross-training/timing-check';
+import { removeWorkoutMods } from '@/workouts/workout-mods';
 import { resolveWeekWorkouts } from './week-resolve';
 import { parseStrengthSession, strengthCardSummary } from '@/guided/strength-model';
 import { gymLegLoadNudgeForWorkout } from '@/calculations/strength-leg-load';
@@ -93,14 +94,31 @@ document.addEventListener('click', (e) => {
     if (!wk2) return;
     // Match by name only. DayOfWeek is optional on WorkoutMod and may differ
     // from the rendered workout (e.g. after drag-reorder). Remove all non-auto
-    // mods for this workout name so double-applications are also cleared.
-    wk2.workoutMods = (wk2.workoutMods ?? []).filter(
-      m => !(m.name === workoutName && !m.modReason?.startsWith('Auto:'))
-    );
+    // mods for this workout name, including ones a later change replaced
+    // (removeWorkoutMods walks the replaced-mod chain), so the session returns
+    // to the plan.
+    removeWorkoutMods(wk2, m => m.name === workoutName && !m.modReason?.startsWith('Auto:'));
     saveState();
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
 }, true); // capture phase. Fires before card-header bubble handler
+
+// ─── Shared card actions (both render paths wire the same buttons) ───────────
+
+/** Timing suggestion "Apply": replace the pending suggestion with the accepted
+ *  change (acceptTimingSuggestion: stable-id match, new RPE, one mod per session).
+ *  Returns true when state changed. */
+function onTimingAccept(btn: HTMLElement): boolean {
+  const workoutName = btn.dataset.workoutName || '';
+  if (!workoutName) return false;
+  const dayOfWeek = btn.dataset.day ? parseInt(btn.dataset.day, 10) : undefined;
+  const ms = getMutableState();
+  const wk = ms.wks?.[ms.w - 1];
+  if (!wk) return false;
+  if (!acceptTimingSuggestion(wk, { workoutId: btn.dataset.workoutId || undefined, name: workoutName, dayOfWeek })) return false;
+  saveState();
+  return true;
+}
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
@@ -409,17 +427,17 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
 
   // ── Timing downgrade suggestion ───────────────────────────────────────────
   if (isTimingMod(w.modReason) && !isDone) {
-    const timingMod = (wk?.workoutMods ?? []).find(m => isTimingMod(m.modReason) && m.name === w.n) as any;
+    const timingMod = (wk?.workoutMods ?? []).find(m => isTimingMod(m.modReason)
+      && (m.workoutId && w.id ? m.workoutId === w.id : m.name === w.n)) as any;
     const suggestedType = timingMod?.newType as string | undefined;
     const suggestionLabel = timingMod?.suggestionLabel as string | undefined;
     const tssYesterday = timingMod?.tssYesterday as number | undefined;
-    const newDistance = timingMod?.newDistance ?? w.d ?? '';
     const tssNote = tssYesterday ? ` (${tssYesterday} TSS yesterday)` : '';
     html += `<div style="padding:9px 12px;background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.25);border-radius:var(--r-card);margin-bottom:10px">`;
     html += `<div style="font-size:11px;font-weight:600;color:#F97316;margin-bottom:3px">Suggestion: hard session yesterday${tssNote}</div>`;
     html += `<div style="font-size:12px;color:var(--c-muted);margin-bottom:8px">You trained hard yesterday. Consider ${suggestionLabel ?? 'an easier effort'} today, or move this session to a different day for full intensity.</div>`;
     if (suggestedType) {
-      html += `<button class="plan-timing-accept" data-workout-name="${escapeHtml(w.n)}" data-day="${w.dayOfWeek ?? ''}" data-new-type="${escapeHtml(suggestedType)}" data-new-distance="${escapeHtml(newDistance)}" style="font-size:12px;font-weight:600;color:#F97316;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:6px 12px;cursor:pointer">Apply: ${suggestionLabel ?? suggestedType} ↓</button>`;
+      html += `<button class="plan-timing-accept" data-workout-id="${escapeHtml(timingMod?.workoutId ?? '')}" data-workout-name="${escapeHtml(timingMod?.name ?? w.n)}" data-day="${timingMod?.dayOfWeek ?? w.dayOfWeek ?? ''}" style="font-size:12px;font-weight:600;color:#F97316;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:6px 12px;cursor:pointer">Apply: ${suggestionLabel ?? suggestedType} ↓</button>`;
     }
     html += `</div>`;
   }
@@ -1839,30 +1857,9 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   const wk = s.wks[s.w - 1];
   if (!wk) return;
 
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
-
-  if (wk.workoutMods && wk.workoutMods.length > 0) {
-    for (const mod of wk.workoutMods) {
-      // Match by stable slot id first (see findWorkoutForMod), name+day fallback.
-      const w = findWorkoutForMod(workouts as any[], mod);
-      if (w) {
-        if (!isTimingMod(mod.modReason)) {
-          if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
-          (w as any).status = mod.status;
-          (w as any).d = modDisplayDescription(mod, s.pac?.e);
-          if (mod.newType) (w as any).t = mod.newType;
-          if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
-          if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
-        }
-      }
-    }
-  }
+  // The week as the Plan tab shows it (canonical resolver), so the session offered
+  // here is the one applyRecoveryAdjustment will change.
+  const workouts = resolveWeekWorkouts(s, s.w);
 
   const jsDay = new Date().getDay();
   const todayIdx = jsDay === 0 ? 6 : jsDay - 1;
@@ -2945,29 +2942,11 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const el = btn as HTMLElement;
-      const wId = el.dataset.workoutId || '';
       const ms = getMutableState();
       // Operate on the week the card belongs to, not just the current week — a
       // skipped/done session on a past week must un-rate that week's record.
       const weekNum = parseInt(el.dataset.weekNum || '', 10) || ms.w;
-      const wk = ms.wks?.[weekNum - 1];
-      if (!wk) return;
-      delete wk.rated[wId];
-      // Un-skip: drop the carry-forward entry so it isn't pushed to next week.
-      if (wk.skip?.length) wk.skip = wk.skip.filter(x => x.workout.id !== wId);
-      // Refund any race-time penalty charged for this skip (exact bookkeeping,
-      // clamped so s.timp can never go negative).
-      const refund = wk.skipPenalty?.[wId];
-      if (refund && wk.skipPenalty) {
-        ms.timp = Math.max(0, (ms.timp || 0) - refund);
-        delete wk.skipPenalty[wId];
-        console.log(`[unskip] refunded ${refund}s race penalty for ${wId} (timp now ${ms.timp})`);
-      }
-      if (wk.garminActuals?.[wId]) {
-        const gId = wk.garminActuals[wId].garminId;
-        delete wk.garminActuals[wId];
-        if (gId && wk.garminMatched?.[gId]) wk.garminMatched[gId] = '__pending__';
-      }
+      if (!unratePlanSlot(weekNum, el.dataset.workoutId || '')) return;
       saveState();
       renderPlanView();
     });
@@ -3126,7 +3105,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const wk2 = s2.wks?.[s2.w - 1];
       if (!wk2) return;
       // Remove all Auto: mods. Restores the easy run; unspentLoadItems already in state → card reappears
-      wk2.workoutMods = (wk2.workoutMods ?? []).filter(m => !m.modReason?.startsWith('Auto:'));
+      removeWorkoutMods(wk2, m => !!m.modReason?.startsWith('Auto:'));
       saveState();
       // Must use render() (full re-render) not renderPlanView(). The excess load card
       // lives in the Training tab (main-view.ts) and won't reappear on Plan-only re-render
@@ -3138,32 +3117,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   document.querySelectorAll<HTMLElement>('.plan-timing-accept').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const workoutName = btn.dataset.workoutName || '';
-      const dayOfWeek = btn.dataset.day !== '' ? parseInt(btn.dataset.day!, 10) : undefined;
-      const newType = btn.dataset.newType || '';
-      const newDistance = btn.dataset.newDistance || '';
-      if (!workoutName || !newType) return;
-
-      const ms = getMutableState();
-      const wk = ms.wks?.[ms.w - 1];
-      if (!wk) return;
-
-      // Replace the Timing: suggestion mod with a real applied mod
-      wk.workoutMods = (wk.workoutMods ?? []).filter(
-        m => !(isTimingMod(m.modReason) && m.name === workoutName && (dayOfWeek == null || m.dayOfWeek === dayOfWeek))
-      );
-      wk.workoutMods.push({
-        name: workoutName,
-        dayOfWeek,
-        status: 'reduced',
-        modReason: 'Timing accepted: hard session day before',
-        confidence: 'medium',
-        originalDistance: newDistance,
-        newDistance,
-        newType,
-      });
-      saveState();
-      renderPlanView();
+      if (onTimingAccept(btn)) renderPlanView();
     });
   });
 
@@ -3784,29 +3738,11 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const el = btn as HTMLElement;
-      const wId = el.dataset.workoutId || '';
       const ms = getMutableState();
       // Operate on the week the card belongs to, not just the current week — a
       // skipped/done session on a past week must un-rate that week's record.
       const weekNum = parseInt(el.dataset.weekNum || '', 10) || ms.w;
-      const wk = ms.wks?.[weekNum - 1];
-      if (!wk) return;
-      delete wk.rated[wId];
-      // Un-skip: drop the carry-forward entry so it isn't pushed to next week.
-      if (wk.skip?.length) wk.skip = wk.skip.filter(x => x.workout.id !== wId);
-      // Refund any race-time penalty charged for this skip (exact bookkeeping,
-      // clamped so s.timp can never go negative).
-      const refund = wk.skipPenalty?.[wId];
-      if (refund && wk.skipPenalty) {
-        ms.timp = Math.max(0, (ms.timp || 0) - refund);
-        delete wk.skipPenalty[wId];
-        console.log(`[unskip] refunded ${refund}s race penalty for ${wId} (timp now ${ms.timp})`);
-      }
-      if (wk.garminActuals?.[wId]) {
-        const gId = wk.garminActuals[wId].garminId;
-        delete wk.garminActuals[wId];
-        if (gId && wk.garminMatched?.[gId]) wk.garminMatched[gId] = '__pending__';
-      }
+      if (!unratePlanSlot(weekNum, el.dataset.workoutId || '')) return;
       saveState();
       renderPlanView();
     });
@@ -3828,7 +3764,7 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       const s2 = getMutableState();
       const wk2 = s2.wks?.[s2.w - 1];
       if (!wk2) return;
-      wk2.workoutMods = (wk2.workoutMods ?? []).filter(m => !m.modReason?.startsWith('Auto:'));
+      removeWorkoutMods(wk2, m => !!m.modReason?.startsWith('Auto:'));
       saveState();
       import('@/ui/renderer').then(({ render }) => render());
     });
@@ -3838,29 +3774,7 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
   root.querySelectorAll<HTMLElement>('.plan-timing-accept').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const workoutName = btn.dataset.workoutName || '';
-      const dayOfWeek = btn.dataset.day !== '' ? parseInt(btn.dataset.day!, 10) : undefined;
-      const newType = btn.dataset.newType || '';
-      const newDistance = btn.dataset.newDistance || '';
-      if (!workoutName || !newType) return;
-      const ms = getMutableState();
-      const wk = ms.wks?.[ms.w - 1];
-      if (!wk) return;
-      wk.workoutMods = (wk.workoutMods ?? []).filter(
-        m => !(isTimingMod(m.modReason) && m.name === workoutName && (dayOfWeek == null || m.dayOfWeek === dayOfWeek))
-      );
-      wk.workoutMods.push({
-        name: workoutName,
-        dayOfWeek,
-        status: 'reduced',
-        modReason: 'Timing accepted: hard session day before',
-        confidence: 'medium',
-        originalDistance: newDistance,
-        newDistance,
-        newType,
-      });
-      saveState();
-      renderPlanView();
+      if (onTimingAccept(btn)) renderPlanView();
     });
   });
 

@@ -43,7 +43,9 @@ describe('timing check: fast-finish long run uses the long-run sub-ladder', () =
     const [ff] = applyTimingDowngradesFromWorkouts(wk, [FF], weekStart);
     const [steady] = applyTimingDowngradesFromWorkouts(wk, [STEADY], weekStart);
     expect(ff.newType).toBe('easy');
-    expect(ff.newDistance).toBe('20.4 km');
+    // Written in the generator's "<n>km" form (no space) so the planned-TSS and
+    // distance parsers read it (audit A14: "20.4 km" parsed as no distance).
+    expect(ff.newDistance).toBe('20.4km');
     expect(ff.newDistance).not.toMatch(/MP|last/);
     // Same accepted session as the steady long run of the same distance.
     expect(ff.newDistance).toBe(steady.newDistance);

@@ -4,7 +4,8 @@ import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayMods, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
-import { isTimingMod } from '@/cross-training/timing-check';
+import { isTimingMod } from '@/cross-training/timing-mod-reason';
+import { calculateWorkoutLoad } from '@/workouts/load';
 import { dropPreOnboardSessions } from './workout-status';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
@@ -53,14 +54,18 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
     // check-in) render as cards. Synced activities stay out: they are actuals.
     for (const aw of wk.adhocWorkouts) {
       if (isPlannedAdhocId(aw.id)) {
-        workouts.push(aw);
+        // A copy: the mod, move and illness passes below write onto these objects,
+        // and the stored adhoc session must stay the unmodified plan.
+        workouts.push({ ...aw });
       }
     }
   }
 
   if (wk?.workoutMods) {
     for (const mod of wk.workoutMods) {
-      const w = isTimingMod(mod.modReason)
+      // Timing suggestions carry the session's stable id (so a drag-moved session
+      // still matches, mods being applied before moves); legacy ones match by name.
+      const w = isTimingMod(mod.modReason) && !mod.workoutId
         ? workouts.find((wo: any) => wo.n === mod.name)
         : findWorkoutForMod(workouts as any[], mod);
       if (w) {
@@ -77,6 +82,16 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number): any[] 
           if (mod.userScaledAt) (w as any).userScaledAt = mod.userScaledAt;
           if (mod.newDurationMin != null) (w as any).estimatedDurationMin = mod.newDurationMin;
           if (mod.originalDurationMin != null) (w as any).originalDurationMin = mod.originalDurationMin;
+          // A reduced or replaced session's aerobic/anaerobic load follows its new
+          // prescription, priced exactly as the generator priced the original
+          // (generator.ts, calculateWorkoutLoad(t, d, rpe × 10, easy pace)). The
+          // cross-training suggester sizes cuts from these loads, so a cut session
+          // must not keep its full pre-cut load.
+          if (mod.status === 'reduced' || mod.status === 'replaced') {
+            const loads = calculateWorkoutLoad((w as any).t, (w as any).d, ((w as any).rpe || (w as any).r || 5) * 10, s.pac?.e);
+            (w as any).aerobic = loads.aerobic;
+            (w as any).anaerobic = loads.anaerobic;
+          }
         }
       }
     }

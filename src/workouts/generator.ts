@@ -1,5 +1,7 @@
 import type { Workout, Week, TrainingPhase, RaceDistance, RunnerType, CommuteConfig, InjuryState, SportKey } from '@/types';
 import type { RecurringActivity } from '@/types/onboarding';
+import type { SimulatorState } from '@/types/state';
+import type { Archetype } from '@/calculations/athlete-archetype';
 import { WO, LONG_RUN_DISTANCES } from '@/constants';
 import { SPORT_LABELS } from '@/constants/sports';
 import { calculateWorkoutLoad } from './load';
@@ -78,6 +80,7 @@ export function generateWeekWorkouts(
     // jumping straight to the ability-driven peak. Falls back to legacy
     // behaviour when state is empty (no Strava history yet).
     const sNow = getState();
+    const { baselineKm, archetype } = planEngineStateInputs(sNow);
     // Continuous (endless) mode has no race date, so the legacy `weekIndex`
     // long-run/threshold ramps — which key off `totalWeeks` — give only a shallow
     // climb that the 4-week phase cycle swamps. The result is "ramps in circles":
@@ -90,11 +93,7 @@ export function generateWeekWorkouts(
     // neither, so fall back to the plan's own starting volume (`s.wkm`, the same
     // freq-derived estimate the prediction uses — not an invented number) and the
     // neutral `'unknown'` archetype (7% ramp). Event plans are unaffected: they
-    // keep reading detected values only.
-    const baselineKm = sNow.detectedWeeklyKm
-      ?? (sNow.continuousMode && sNow.wkm && sNow.wkm > 0 ? sNow.wkm : undefined);
-    const archetype = sNow.athleteArchetype?.archetype
-      ?? (sNow.continuousMode ? 'unknown' : undefined);
+    // keep reading detected values only. (planEngineStateInputs)
     // CTL-gap re-anchor for this week. Stamped on the week at rollover (events.next()); read live
     // here — exactly like baselineKm/archetype — so every resolver call applies the same reduction
     // the debrief previewed. A stored scalar, so reading it here never re-enters the adherence
@@ -444,6 +443,23 @@ export function generateWeekWorkouts(
   }
 
   return scheduledWorkouts;
+}
+
+/**
+ * The plan-engine inputs generateWeekWorkouts reads from state rather than from
+ * its arguments: the ramp baseline (detected weekly km; in continuous mode the
+ * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode
+ * the neutral 'unknown'). Exported so a caller that runs planWeekSessions directly
+ * (the week-debrief preview) feeds the engine exactly what the committed plan gets.
+ */
+export function planEngineStateInputs(
+  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>,
+): { baselineKm: number | undefined; archetype: Archetype | undefined } {
+  const baselineKm = s.detectedWeeklyKm
+    ?? (s.continuousMode && s.wkm && s.wkm > 0 ? s.wkm : undefined);
+  const archetype = s.athleteArchetype?.archetype
+    ?? (s.continuousMode ? 'unknown' as const : undefined);
+  return { baselineKm, archetype };
 }
 
 /**

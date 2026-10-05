@@ -27,9 +27,8 @@ import {
   createActivity,
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
-import { generateWeekWorkouts } from '@/workouts';
-import { modDisplayDescription } from '@/workouts/workout-scaling';
-import { isTimingMod } from '@/cross-training/timing-check';
+import { resolveWeekWorkouts } from './week-resolve';
+import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import type { WorkoutMod } from '@/types';
 import { formatKm } from '@/utils/format';
 
@@ -37,34 +36,17 @@ import { formatKm } from '@/utils/format';
 // Helpers
 
 /**
- * Generates workouts for the current week (offset=0) or next week (offset=1).
- * Must match getPlanHTML call exactly so workout names/IDs align with plan-view and wk.rated keys.
+ * The current week (offset=0) or next week (offset=1) as the Plan tab shows it:
+ * the canonical resolver (week-resolve.ts), so generator arguments, workout ids and
+ * every accepted change match plan-view and the wk.rated keys. Replaced sessions
+ * are dropped (nothing left to cut). Suggestions sized from this list never undo
+ * an earlier, deeper cut (audit A2).
  */
 function getWeekWorkouts(offset: 0 | 1 = 0) {
   const s = getMutableState();
-  const weekIdx = s.w - 1 + offset; // 0-indexed
-  const wk = s.wks?.[weekIdx];
-  if (!wk) return [];
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w + offset, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w + offset), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
-
-  // Apply stored workoutMods so the modal reflects the actual plan state (matching plan-view.ts).
-  for (const mod of wk.workoutMods ?? []) {
-    if (isTimingMod(mod.modReason)) continue;
-    const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
-    if (!w) continue;
-    if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
-    (w as any).status = mod.status;
-    if (mod.newDistance != null) (w as any).d = modDisplayDescription(mod, s.pac?.e);
-    if (mod.newType) (w as any).t = mod.newType;
-  }
-
-  return workouts.filter((w: any) => w.status !== 'replaced');
+  const viewWeek = s.w + offset;
+  if (!s.wks?.[viewWeek - 1]) return [];
+  return resolveWeekWorkouts(s, viewWeek).filter((w: any) => w.status !== 'replaced');
 }
 
 /**
@@ -360,8 +342,9 @@ export function triggerExcessLoadAdjustment(): void {
     return;
   }
 
-  // Has remaining workouts. Offer to reduce/replace them.
-  const weekRuns = workoutsToPlannedRuns(remainingWorkouts, s.pac);
+  // Has remaining workouts. Offer to reduce/replace them (not a session the user
+  // scaled by hand: their Adjust stands).
+  const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(remainingWorkouts), s.pac);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
@@ -407,16 +390,7 @@ export function triggerExcessLoadAdjustment(): void {
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
       const freshW = getWeekWorkouts(0);
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
-      if (!wk3.workoutMods) wk3.workoutMods = [];
-      for (const adj of decision.adjustments) {
-        const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-        if (!mw) continue;
-        wk3.workoutMods.push({
-          name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
-          modReason: `Garmin: ${sportLabel}`, confidence: mw.confidence,
-          originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
-        } as WorkoutMod);
-      }
+      writeAdjustmentMods(wk3, modified, decision.adjustments, `Garmin: ${sportLabel}`);
     }
 
     // Clear unspent items only when the user acted on them (Reduce/Replace).
@@ -459,7 +433,7 @@ function _triggerCarryoverToNextWeek(
     return;
   }
 
-  const weekRuns = workoutsToPlannedRuns(nextWeekWorkouts, s.pac);
+  const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(nextWeekWorkouts), s.pac);
   const _tier2 = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
@@ -484,16 +458,7 @@ function _triggerCarryoverToNextWeek(
     if (decision.choice !== 'keep' && decision.adjustments.length > 0 && nextWk3) {
       const nextW = getWeekWorkouts(1);
       const modified = applyAdjustments(nextW, decision.adjustments, normalizeSport(sport), s3.pac);
-      if (!nextWk3.workoutMods) nextWk3.workoutMods = [];
-      for (const adj of decision.adjustments) {
-        const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-        if (!mw) continue;
-        nextWk3.workoutMods.push({
-          name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
-          modReason: `Garmin: ${sportLabel} (carried)`, confidence: mw.confidence,
-          originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
-        } as WorkoutMod);
-      }
+      writeAdjustmentMods(nextWk3, modified, decision.adjustments, `Garmin: ${sportLabel} (carried)`);
     }
 
     // Clear unspent items on current week

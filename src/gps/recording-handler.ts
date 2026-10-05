@@ -10,10 +10,10 @@ import { rate } from '@/ui/events';
 import { render } from '@/ui/renderer';
 import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion-modal';
 import { deleteGpsRecording } from '@/gps/persistence';
-import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { isLongRun } from '@/workouts/long-run';
-import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
@@ -41,15 +41,10 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
   // to the adhoc-save path. Skipping the generateWeekWorkouts call also avoids
   // passing stale defaults (s.rd='half', s.v=50) into the generator.
   if (!s.trackOnly && s.w >= 1 && s.w <= s.wks.length) {
-    const wk = s.wks[s.w - 1];
-    const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-    const injuryState = (s as any).injuryState || null;
-    weekWorkouts = generateWeekWorkouts(
-      wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-      undefined, undefined, s.w, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
-    );
+    // The week as the Plan tab shows it (canonical resolver): the cards the run
+    // was started from, with every accepted change applied, so a cut or replaced
+    // session is seen as cut or replaced by the matcher and the suggester below.
+    weekWorkouts = resolveWeekWorkouts(s, s.w) as Workout[];
     const matched = weekWorkouts.find(w => w.n === workoutName);
     if (matched) {
       workout = matched;
@@ -113,11 +108,10 @@ function handleImpromptuRun(
   const distKm = recording.totalDistance / 1000;
   const durationMin = recording.totalElapsed / 60;
 
-  // Filter to unrated, non-replaced planned runs
+  // Filter to unrated, non-replaced planned runs (weekWorkouts is resolved, so a
+  // replaced session carries status 'replaced').
   const unratedRuns = weekWorkouts.filter(w => {
-    const isReplaced = w.status === 'replaced' ||
-      week.workoutMods?.some(m => m.name === w.n && m.status === 'replaced');
-    if (isReplaced) return false;
+    if (w.status === 'replaced') return false;
     const wid = w.id || w.n;
     return week.rated[wid] == null && week.rated[w.n] == null;
   });
@@ -156,22 +150,9 @@ function handleImpromptuRun(
     // how much extra load this adds and offer plan adjustments
     const activity = createActivity('extra_run', durationMin, rpe, undefined, undefined, ms.w);
 
-    // Apply existing mods so the suggester sees the true state of the week
-    if (week.workoutMods?.length) {
-      for (const mod of week.workoutMods) {
-        const w = weekWorkouts.find(w => w.n === mod.name && w.dayOfWeek === mod.dayOfWeek);
-        if (w) {
-          w.status = mod.status as any;
-          w.d = modDisplayDescription(mod, ms.pac?.e);
-          w.t = mod.newType || w.t;
-          const loads = calculateWorkoutLoad(w.t, w.d, (mod.newRpe || 5) * 10);
-          w.aerobic = loads.aerobic;
-          w.anaerobic = loads.anaerobic;
-        }
-      }
-    }
-
-    const plannedRuns = workoutsToPlannedRuns(weekWorkouts, ms.pac);
+    // weekWorkouts is the resolved week: existing changes (and their re-priced
+    // loads) are already applied. Sessions the user scaled by hand keep their Adjust.
+    const plannedRuns = workoutsToPlannedRuns(adjustableWorkouts(weekWorkouts), ms.pac);
     const _tier = ms.athleteTierOverride ?? ms.athleteTier;
     const _atlSeed = (ms.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (ms.gs ?? 0), 0.3));
     const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined, undefined, (ms as any).previousPlanWks, ms.adaptiveRecovery);
@@ -198,24 +179,7 @@ function handleImpromptuRun(
       showSuggestionModal(popup, 'run', (decision) => {
         if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
           const modifiedWorkouts = applyAdjustments(weekWorkouts, decision.adjustments, 'run', ms.pac);
-          if (!week.workoutMods) week.workoutMods = [];
-          for (const adj of decision.adjustments) {
-            const modified = modifiedWorkouts.find(
-              w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex,
-            );
-            if (!modified) continue;
-            week.workoutMods.push({
-              name: modified.n,
-              dayOfWeek: modified.dayOfWeek,
-              status: modified.status || 'reduced',
-              modReason: `GPS: ${workoutName}`,
-              confidence: modified.confidence,
-              originalDistance: modified.originalDistance,
-              newDistance: modified.d,
-              newType: modified.t,
-              newRpe: modified.rpe || modified.r,
-            });
-          }
+          writeAdjustmentMods(week, modifiedWorkouts, decision.adjustments, `GPS: ${workoutName}`);
         }
         saveState();
         render();

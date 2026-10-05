@@ -238,6 +238,11 @@ export interface WorkoutMod {
   originalDurationMin?: number;
   /** When the AI capped intensity (adjust_intensity), this is the zone cap. */
   zoneCap?: 2 | 3;
+  /** The mod this one replaced on the same workout (upsertWorkoutMod). A workout
+   *  carries one plan-change mod at a time; the replaced one is kept here so that
+   *  removing this mod (an undo, a re-review strip) restores it instead of the
+   *  unmodified session. See removeWorkoutMods (workouts/workout-mods.ts). */
+  previousMod?: WorkoutMod;
 }
 
 /** Simple cross-training record (old format) */
