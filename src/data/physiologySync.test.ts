@@ -34,7 +34,8 @@ vi.mock('./supabaseClient', async (importOriginal) => {
   };
 });
 
-import { syncPhysiologySnapshot } from './physiologySync';
+import { syncPhysiologySnapshot, syncTodaySteps } from './physiologySync';
+import { releaseAppleOwnership } from './physiology-provenance';
 
 /** ISO date string n days before 2026-06-05 */
 function daysAgo(n: number): string {
@@ -119,5 +120,55 @@ describe('syncPhysiologySnapshot — physiologyHistory merge', () => {
     expect(hist.length).toBe(28);
     expect(hist[hist.length - 1].date).toBe(daysAgo(0)); // newest kept
     expect(hist[0].date).toBe(daysAgo(27));              // oldest dropped, not newest
+  });
+});
+
+describe('Garmin writers take ownership from Apple gap-fills (appleValues)', () => {
+  it('a Garmin value equal to an Apple gap-fill becomes Garmin-owned; untouched Apple fields stay Apple-owned', async () => {
+    const today = daysAgo(0);
+    mockState.physiologyHistory = [{
+      date: today, restingHR: 52, respiratoryRate: 14,
+      appleValues: { restingHR: 52, respiratoryRate: 14 },
+    }];
+    mockResponse = {
+      days: [{ calendar_date: today, resting_hr: 52 }],
+      maxHR: null,
+      latestPhysio: null,
+    };
+
+    await syncPhysiologySnapshot(7);
+
+    const entry = mockState.physiologyHistory!.find(e => e.date === today)!;
+    expect(entry.restingHR).toBe(52);
+    // Garmin sent restingHR, so Apple no longer owns it, even at the same value.
+    expect(entry.appleValues).toEqual({ respiratoryRate: 14 });
+  });
+
+  it("Garmin's epoch steps take ownership of today's steps", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-05T12:00:00Z'));
+    try {
+      const today = '2026-06-05';
+      mockState.physiologyHistory = [{ date: today, steps: 4000, appleValues: { steps: 4000, restingHR: 50 }, restingHR: 50 }];
+      mockResponse = { ok: true, steps: 4000, activeCalories: 0, activeMinutes: 0, highlyActiveMinutes: 0, epochCount: 1 };
+
+      await syncTodaySteps();
+
+      const entry = mockState.physiologyHistory!.find(e => e.date === today)!;
+      expect(entry.steps).toBe(4000);
+      expect(entry.appleValues).toEqual({ restingHR: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('releaseAppleOwnership drops appleValues entirely when nothing is left, and never mutates its input', () => {
+    const input = { date: '2026-06-05', steps: 10, appleValues: { steps: 10 } };
+    const out = releaseAppleOwnership(input, ['steps', 'activeMinutes']);
+    expect(out).toEqual({ date: '2026-06-05', steps: 10 });
+    expect(input.appleValues).toEqual({ steps: 10 });
+    // Nothing to release: the same object comes back.
+    const plain = { date: '2026-06-05', steps: 10 };
+    expect(releaseAppleOwnership(plain, ['steps'])).toBe(plain);
   });
 });

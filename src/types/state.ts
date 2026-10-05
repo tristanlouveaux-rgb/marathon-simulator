@@ -330,7 +330,9 @@ export interface PhysiologyDayEntry {
    *  field. While Apple is a supplementary source (Garmin primary), a field
    *  whose current value still equals its value here came from Apple, so a
    *  newer Apple read may refresh it. A field whose value differs was written
-   *  by the primary source and is kept. Absent on entries Apple never wrote. */
+   *  by the primary source and is kept. Garmin writers drop a field from here
+   *  whenever they write it, even at the same value (releaseAppleOwnership in
+   *  src/data/physiology-provenance.ts). Absent on entries Apple never wrote. */
   appleValues?: Partial<Record<ApplePhysiologyField, number>>;
 }
 

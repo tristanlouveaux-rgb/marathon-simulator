@@ -73,6 +73,15 @@ vi.mock('@/data/healthExtras', () => ({
   addWorkoutObserverListener: vi.fn(async () => ({ remove: async () => undefined })),
 }));
 
+// The Garmin snapshot (physiologySync) is driven through a stubbed edge call so
+// one test can interleave a Garmin write with Apple reads.
+const edge = vi.hoisted(() => ({ response: null as unknown }));
+vi.mock('@/data/supabaseClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/supabaseClient')>();
+  return { ...actual, callEdgeFunction: vi.fn(async () => edge.response) };
+});
+
+import { syncPhysiologySnapshot } from './physiologySync';
 import {
   syncAppleHealthPhysiology,
   dailyStepsAcrossSources,
@@ -297,6 +306,23 @@ describe('Apple physiology sync in UTC+10 (Australia/Brisbane)', () => {
     await syncAppleHealthPhysiology(7);
     expect(entry('2026-10-01')?.respiratoryRate).toBe(15);
     expect(entry('2026-10-01')?.steps).toBe(6000);
+  });
+
+  it('once Garmin writes a value equal to an Apple gap-fill, a newer Apple read no longer overwrites it', async () => {
+    mockState.connectedSources = { physiology: 'garmin' };
+    hk.quantity.restingHeartRate = [{ value: 52, startDate: local(2026, 10, 1, 6, 0), endDate: local(2026, 10, 1, 6, 0) }];
+    setNow(local(2026, 10, 1, 7, 0));
+    await syncAppleHealthPhysiology(7);
+    expect(entry('2026-10-01')?.restingHR).toBe(52);          // Apple gap-fill
+
+    // Garmin (primary) reports the same 52 for that local date.
+    edge.response = { days: [{ calendar_date: '2026-10-01', resting_hr: 52 }], maxHR: null, latestPhysio: null };
+    await syncPhysiologySnapshot(7);
+
+    hk.quantity.restingHeartRate.push({ value: 55, startDate: local(2026, 10, 1, 8, 0), endDate: local(2026, 10, 1, 8, 0) });
+    setNow(local(2026, 10, 1, 9, 0));
+    await syncAppleHealthPhysiology(7);
+    expect(entry('2026-10-01')?.restingHR).toBe(52);
   });
 
   it('leaves manual sleep ratings alone (they live in recoveryHistory)', async () => {

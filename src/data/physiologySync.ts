@@ -14,6 +14,7 @@ import type { RecoveryEntry } from '@/recovery/engine';
 import { recomputeLT, LT_NOTIFY_THRESHOLD_SEC_KM } from './ltSync';
 import { formatPace } from '@/utils/format';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
+import { releaseAppleOwnership } from './physiology-provenance';
 
 /** Shape of a single day row from sync-physiology-snapshot */
 interface PhysiologyRow {
@@ -266,7 +267,9 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
         const defined = Object.fromEntries(
           Object.entries(entry).filter(([, v]) => v !== undefined),
         ) as Partial<PhysiologyDayEntry>;
-        byDate.set(entry.date, { ...prev, ...defined });
+        // Garmin now owns every field it sent, even one whose value equals an
+        // earlier Apple gap-fill, so a later Apple read can't overwrite it.
+        byDate.set(entry.date, releaseAppleOwnership({ ...prev, ...defined }, Object.keys(defined)));
       }
       s.physiologyHistory = [...byDate.values()]
         .sort((a, b) => a.date.localeCompare(b.date))
@@ -318,7 +321,8 @@ export async function syncTodaySteps(): Promise<number | null> {
     const todayIdx = history.findIndex(e => e.date === today);
     const patch = { steps, activeCalories, activeMinutes, highlyActiveMinutes };
     if (todayIdx >= 0) {
-      history[todayIdx] = { ...history[todayIdx], ...patch };
+      // Garmin's epoch steps now own `steps` (see releaseAppleOwnership).
+      history[todayIdx] = releaseAppleOwnership({ ...history[todayIdx], ...patch }, Object.keys(patch));
     } else {
       history.push({ date: today, ...patch });
     }

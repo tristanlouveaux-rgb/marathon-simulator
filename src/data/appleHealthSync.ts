@@ -37,6 +37,7 @@ import { isPbTombstoned } from '@/calculations/physiological-vdot';
 import { SPORTS_DB } from '@/constants/sports';
 import type { PhysiologyDayEntry, ApplePhysiologyField } from '@/types';
 import { localDateKey } from '@/utils/local-date';
+import { APPLE_PHYSIOLOGY_FIELDS } from '@/data/physiology-provenance';
 import { type WorkoutType, type Workout, type HealthSample, type SleepState } from '@capgo/capacitor-health';
 import {
   isHealthExtrasAvailable,
@@ -649,9 +650,10 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // change). `healMissingITrimp` recovers iTRIMP later once those values
     // arrive (e.g. when user enters maxHR or Garmin sync populates it).
     // The HR stream needs the `heartRate` read type. Ask once on installs that
-    // were never asked (audit D4) BEFORE the first read; otherwise these
-    // workouts are matched without HR and the garminMatched dedup never
-    // revisits them.
+    // were never asked (audit D4) BEFORE the first read. A workout matched
+    // without HR regains iTRIMP and zones only when it is read again (inside
+    // the incremental window, or via the Account full-history sync), through
+    // the matcher's re-enrich loop. That loop never restores avg HR.
     await ensureHeartRatePermissionRequested();
     const enrichment = await enrichWorkoutsWithHR(workouts);
 
@@ -844,13 +846,6 @@ const SLEEP_VALUE_TO_STATE: Record<number, SleepState> = {
  *  belongs to the NEXT morning's night. This is the same noon boundary the
  *  old `endHour >= 12` nap filter used; no new constant. */
 const SLEEP_NIGHT_BOUNDARY_HOUR = 12;
-
-/** Fields the Apple physiology sync writes into a PhysiologyDayEntry. */
-const APPLE_PHYSIOLOGY_FIELDS: ApplePhysiologyField[] = [
-  'sleepScore', 'sleepDurationSec', 'sleepDeepSec', 'sleepRemSec',
-  'sleepLightSec', 'sleepAwakeSec', 'restingHR', 'hrvRmssd', 'steps',
-  'respiratoryRate', 'spo2',
-];
 
 /** Raw HealthExtras reads that feed one physiology sync. */
 export interface ApplePhysiologyReads {
