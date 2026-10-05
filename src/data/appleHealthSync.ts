@@ -35,7 +35,9 @@ import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { isPbTombstoned } from '@/calculations/physiological-vdot';
 import { SPORTS_DB } from '@/constants/sports';
-import type { PhysiologyDayEntry } from '@/types';
+import type { PhysiologyDayEntry, ApplePhysiologyField } from '@/types';
+import { localDateKey } from '@/utils/local-date';
+import { APPLE_PHYSIOLOGY_FIELDS } from '@/data/physiology-provenance';
 import { type WorkoutType, type Workout, type HealthSample, type SleepState } from '@capgo/capacitor-health';
 import {
   isHealthExtrasAvailable,
@@ -50,6 +52,8 @@ import {
   addWorkoutObserverListener,
   type RouteLocation,
   type HealthExtrasPermission,
+  type QuantitySample,
+  type SleepSample,
 } from '@/data/healthExtras';
 import type { PluginListenerHandle } from '@capacitor/core';
 import {
@@ -229,6 +233,62 @@ export function getLastAppleWorkoutDiag(): string {
   return _lastWorkoutSyncDiag;
 }
 
+/** Core read types, requested in the PRIMARY HealthKit sheet (connect flow and
+ *  every physiology sync). `workouts` is core activity data. `heartRate` is the
+ *  per-workout HR stream that `enrichWorkoutsWithHR` reads to compute iTRIMP
+ *  and zones. It used to arrive through capgo's `requestAuthorization`
+ *  (ALL_READ_TYPES); ae0545e removed that call and nothing asked for
+ *  `heartRate` again, so every Apple workout on a fresh install had no HR and
+ *  was costed as minutes × a flat rate (audit D4). The Swift plugin maps
+ *  'heartRate' to HKQuantityTypeIdentifierHeartRate (HealthExtrasPlugin.swift
+ *  `quantityType(for:)`). */
+export const CORE_READ_TYPES: HealthExtrasPermission[] = [
+  'restingHeartRate',
+  'heartRateVariabilitySDNN',
+  'stepCount',
+  'sleepAnalysis',
+  'respiratoryRate',
+  'oxygenSaturation',
+  'workouts',
+  'heartRate',
+];
+
+/** One shared in-flight core-permission request. The launch workout sync and
+ *  the physiology sync can both reach here at once; sharing the promise means
+ *  HealthKit gets one `requestAuthorization` call instead of two racing ones. */
+let _corePermsInFlight: Promise<void> | null = null;
+
+/** Request CORE_READ_TYPES. Bounded by AUTH_REQUEST_TIMEOUT_MS: on a hang the
+ *  grant is already app-level, so the caller proceeds to its reads. Once the
+ *  request has settled, `heartRate` has been asked for on this install, so the
+ *  one-time workout-sync guard is satisfied. */
+function requestCorePermissions(): Promise<void> {
+  if (_corePermsInFlight) return _corePermsInFlight;
+  _corePermsInFlight = withTimeout(
+    requestHealthExtrasPermissions(CORE_READ_TYPES).then(() => undefined, () => undefined),
+    AUTH_REQUEST_TIMEOUT_MS,
+    undefined,
+  ).then(() => {
+    const s = getMutableState();
+    if (!s.appleHeartRatePermissionRequested) {
+      s.appleHeartRatePermissionRequested = true;
+      saveState();
+    }
+  }).finally(() => { _corePermsInFlight = null; });
+  return _corePermsInFlight;
+}
+
+/** Re-prompt existing connected users once for `heartRate` before the workout
+ *  sync's first HR-stream read. The workout sync never requested permissions,
+ *  and users connected before this fix were never asked for `heartRate`, so
+ *  their HR reads return [] and the workout is processed (and deduped forever)
+ *  without HR. iOS presents the sheet only for types not yet requested; a user
+ *  who already answered sees nothing. */
+async function ensureHeartRatePermissionRequested(): Promise<void> {
+  if (getMutableState().appleHeartRatePermissionRequested) return;
+  await requestCorePermissions();
+}
+
 /** Permissions to request from the HealthExtras plugin on Apple Health connect.
  *  Includes iOS-17+ types. Swift filters unavailable ones automatically so
  *  the prompt only ever lists what the user's OS actually supports. */
@@ -296,7 +356,10 @@ export async function syncAppleVO2(): Promise<boolean> {
   // the capgo physiology sync).
   const byDate = new Map<string, number>();
   for (const sample of valid) {
-    const date = sample.startDate.slice(0, 10);
+    // Local calendar date: the plugin emits GMT ISO strings, so slice(0, 10)
+    // would key by UTC day (a day off in UTC+ mornings / UTC- evenings).
+    const date = localDateKey(sample.startDate);
+    if (!date) continue;
     byDate.set(date, sample.value); // ascending sort → last write wins (latest of the day)
   }
   const existing = new Map((s.physiologyHistory ?? []).map(e => [e.date, e]));
@@ -586,6 +649,12 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // matcher then falls back to duration-based TSS, same as before this
     // change). `healMissingITrimp` recovers iTRIMP later once those values
     // arrive (e.g. when user enters maxHR or Garmin sync populates it).
+    // The HR stream needs the `heartRate` read type. Ask once on installs that
+    // were never asked (audit D4) BEFORE the first read. A workout matched
+    // without HR regains iTRIMP and zones only when it is read again (inside
+    // the incremental window, or via the Account full-history sync), through
+    // the matcher's re-enrich loop. That loop never restores avg HR.
+    await ensureHeartRatePermissionRequested();
     const enrichment = await enrichWorkoutsWithHR(workouts);
 
     const rows = workouts.map(w => convertToActivityRow(w, enrichment.get(workoutKey(w))));
@@ -772,6 +841,289 @@ const SLEEP_VALUE_TO_STATE: Record<number, SleepState> = {
   5: 'rem' as SleepState,
 };
 
+/** Hour (local) that splits one night from the next. A sleep segment ending
+ *  before it belongs to that morning's night; a segment ending at or after it
+ *  belongs to the NEXT morning's night. This is the same noon boundary the
+ *  old `endHour >= 12` nap filter used; no new constant. */
+const SLEEP_NIGHT_BOUNDARY_HOUR = 12;
+
+/** Raw HealthExtras reads that feed one physiology sync. */
+export interface ApplePhysiologyReads {
+  rhr: QuantitySample[];
+  hrv: QuantitySample[];
+  steps: QuantitySample[];
+  resp: QuantitySample[];
+  spo2: QuantitySample[];
+  sleep: SleepSample[];
+}
+
+/**
+ * Read window for a physiology sync of `days` days (tracking side).
+ *
+ * `since` is local midnight `days` days ago, so every date from `since` to
+ * today is read in full. The old window started at `now − days` and kept the
+ * time of day, so its first date was partial. That was harmless under the old
+ * fill-only merge, but a newest-wins merge would overwrite that day's full
+ * values with partial ones. `sleepSince` starts at the night boundary on the
+ * day before `since`, so the night that wakes on `since` is read whole.
+ */
+export function applePhysiologyWindow(days: number, now: Date = new Date()): { since: Date; sleepSince: Date } {
+  const since = new Date(now);
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - days);
+  const sleepSince = new Date(since);
+  sleepSince.setDate(sleepSince.getDate() - 1);
+  sleepSince.setHours(SLEEP_NIGHT_BOUNDARY_HOUR, 0, 0, 0);
+  return { since, sleepSince };
+}
+
+/**
+ * Local date of the morning a sleep segment's night wakes on. Segments ending
+ * before the noon boundary belong to that date. Segments ending at or after it
+ * (the pre-midnight part of a night, or a daytime nap) belong to the next date.
+ * Returns '' for an unparseable timestamp.
+ */
+export function sleepWakeDateKey(endIso: string): string {
+  const end = new Date(endIso);
+  if (Number.isNaN(end.getTime())) return '';
+  if (end.getHours() >= SLEEP_NIGHT_BOUNDARY_HOUR) end.setDate(end.getDate() + 1);
+  return localDateKey(end);
+}
+
+/** Local midnight strictly after `t` (ms). */
+function nextLocalMidnight(t: number): number {
+  const d = new Date(t);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * Daily step totals (local dates) from raw HealthKit step samples, without
+ * counting the same steps twice when several sources record them.
+ *
+ * An iPhone in a pocket and an Apple Watch on the wrist both write stepCount
+ * samples for the same walk, so summing every sample doubles the overlap.
+ * Each sample's steps are spread evenly over its own interval. Wherever two or
+ * more sources overlap, only the source with the highest step rate in that
+ * stretch is counted. Samples from one source are always summed. Intervals
+ * covered by a single source count in full. Samples spanning local midnight
+ * are split across both days. A zero-length sample (a manual entry) has no
+ * interval to overlap and is added as-is.
+ *
+ * This approximates HealthKit's own statistics merge, which picks one source
+ * per overlapping stretch by the user's source priority. The plugin returns
+ * `sourceName` but not that priority, so "the source that saw more steps"
+ * stands in for it. The result never exceeds the sum and is never below the
+ * largest single source.
+ */
+export function dailyStepsAcrossSources(samples: QuantitySample[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const add = (key: string, v: number) => {
+    if (key && v > 0) out.set(key, (out.get(key) ?? 0) + v);
+  };
+  const events: { t: number; src: string; dRate: number }[] = [];
+  const cuts: number[] = [];
+  for (const smp of samples) {
+    const v = smp.value;
+    if (!(v > 0)) continue;
+    const start = Date.parse(smp.startDate);
+    const end = Date.parse(smp.endDate);
+    if (Number.isNaN(start)) continue;
+    if (Number.isNaN(end) || end <= start) { add(localDateKey(new Date(start)), v); continue; }
+    const src = smp.sourceName ?? '';
+    const rate = v / (end - start);
+    events.push({ t: start, src, dRate: rate }, { t: end, src, dRate: -rate });
+    for (let m = nextLocalMidnight(start); m < end; m = nextLocalMidnight(m)) cuts.push(m);
+  }
+  if (events.length === 0) return out;
+  events.sort((a, b) => a.t - b.t);
+  const times = [...new Set([...events.map(e => e.t), ...cuts])].sort((a, b) => a - b);
+  const activeRate = new Map<string, number>();
+  let ei = 0;
+  for (let i = 0; i < times.length - 1; i++) {
+    const t = times[i];
+    while (ei < events.length && events[ei].t === t) {
+      const ev = events[ei++];
+      activeRate.set(ev.src, (activeRate.get(ev.src) ?? 0) + ev.dRate);
+    }
+    let maxRate = 0;
+    for (const r of activeRate.values()) if (r > maxRate) maxRate = r;
+    if (maxRate > 0) add(localDateKey(new Date(t)), maxRate * (times[i + 1] - t));
+  }
+  return out;
+}
+
+/** Last (most recent) value per local date. Sorted here so the result does not
+ *  depend on the order the plugin returned. */
+function lastValueByLocalDate(samples: QuantitySample[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const sorted = samples
+    .map(s => ({ s, t: Date.parse(s.startDate) }))
+    .filter(x => !Number.isNaN(x.t))
+    .sort((a, b) => a.t - b.t);
+  for (const { s } of sorted) {
+    const key = localDateKey(s.startDate);
+    if (key) out.set(key, s.value);
+  }
+  return out;
+}
+
+/**
+ * Group sleep segments into nights keyed by local wake date, keeping one
+ * source per night. Summing iPhone, Watch and third-party apps counts the
+ * same night twice. Per night, a source that reports stages (core, deep or
+ * REM) beats one that writes only generic "asleep", so a third-party app's
+ * unstaged night never displaces the Watch's staged night. Ties go to the
+ * source with more asleep seconds.
+ */
+function groupSleepNights(samples: SleepSample[]): Map<string, HealthSample[]> {
+  const byNight = new Map<string, Map<string, HealthSample[]>>();
+  for (const seg of samples) {
+    const state = SLEEP_VALUE_TO_STATE[seg.value];
+    if (!state) continue;                       // unknown value → skip
+    const wake = sleepWakeDateKey(seg.endDate);
+    if (!wake) continue;
+    const src = seg.sourceName ?? '';
+    let sources = byNight.get(wake);
+    if (!sources) { sources = new Map(); byNight.set(wake, sources); }
+    let segs = sources.get(src);
+    if (!segs) { segs = []; sources.set(src, segs); }
+    // computeSleepStageDurations only reads .sleepState/.startDate/.endDate.
+    segs.push({ sleepState: state, startDate: seg.startDate, endDate: seg.endDate } as HealthSample);
+  }
+  const nights = new Map<string, HealthSample[]>();
+  for (const [wake, sources] of byNight) {
+    let best: HealthSample[] | null = null;
+    let bestStaged = false;
+    let bestAsleep = -1;
+    for (const segs of sources.values()) {
+      // 'light' only comes from asleepCore (3); generic asleep (1) maps to 'asleep'.
+      const staged = segs.some(x => x.sleepState === 'light' || x.sleepState === 'deep' || x.sleepState === 'rem');
+      const d = computeSleepStageDurations(segs);
+      const asleep = d.deep + d.rem + d.light;
+      if (best === null || (staged && !bestStaged) || (staged === bestStaged && asleep > bestAsleep)) {
+        best = segs;
+        bestStaged = staged;
+        bestAsleep = asleep;
+      }
+    }
+    if (best) nights.set(wake, best);
+  }
+  return nights;
+}
+
+/**
+ * Turn one sync's raw reads into PhysiologyDayEntry rows keyed by LOCAL date
+ * (tracking side: it describes what the devices recorded).
+ *
+ * Dates after `now`'s local date are dropped. Under the noon rule, a segment
+ * ending this afternoon or evening belongs to tomorrow's night, and that night
+ * is not over yet. A later sync picks it up once the wake morning arrives.
+ */
+export function buildApplePhysiologyEntries(reads: ApplePhysiologyReads, now: Date = new Date()): PhysiologyDayEntry[] {
+  const today = localDateKey(now);
+  const nightMap = groupSleepNights(reads.sleep);
+  const rhrByDate = lastValueByLocalDate(reads.rhr);
+  const hrvByDate = lastValueByLocalDate(reads.hrv);
+  const stepsByDate = dailyStepsAcrossSources(reads.steps);
+  const respByDate = lastValueByLocalDate(reads.resp);
+  const spo2ByDate = lastValueByLocalDate(reads.spo2);
+
+  const allDates = new Set<string>();
+  for (const m of [nightMap, rhrByDate, hrvByDate, stepsByDate, respByDate, spo2ByDate]) {
+    for (const d of m.keys()) if (d <= today) allDates.add(d);
+  }
+
+  const entries: PhysiologyDayEntry[] = [];
+  for (const date of allDates) {
+    const entry: PhysiologyDayEntry = { date };
+
+    // Sleep stages
+    const night = nightMap.get(date);
+    if (night && night.length > 0) {
+      const stageSecs = computeSleepStageDurations(night);
+      entry.sleepDeepSec = stageSecs.deep;
+      entry.sleepRemSec = stageSecs.rem;
+      entry.sleepLightSec = stageSecs.light;
+      entry.sleepAwakeSec = stageSecs.awake;
+      entry.sleepDurationSec = stageSecs.deep + stageSecs.rem + stageSecs.light;
+      entry.sleepScore = computeSleepScore(entry);
+    }
+
+    // Resting HR
+    const rhr = rhrByDate.get(date);
+    if (rhr != null && rhr > 0) entry.restingHR = Math.round(rhr);
+
+    // HRV. HealthExtras returns SDNN in ms (its defaultUnit). Our model uses
+    // RMSSD (ms): RMSSD ≈ SDNN × 1.28 (Shaffer & Ginsberg 2017, nocturnal
+    // short-term recordings) so Apple values land in the same range as Garmin.
+    const hrv = hrvByDate.get(date);
+    if (hrv != null && hrv > 0) entry.hrvRmssd = Math.round(hrv * SDNN_TO_RMSSD * 10) / 10;
+
+    // Steps
+    const steps = stepsByDate.get(date);
+    if (steps != null && steps > 0) entry.steps = Math.round(steps);
+
+    // Respiratory rate (breaths/min) + blood oxygen (recovery / illness /
+    // altitude signals). HealthExtras returns SpO2 as a fraction; store percent.
+    const resp = respByDate.get(date);
+    if (resp != null && resp > 0) entry.respiratoryRate = Math.round(resp * 10) / 10;
+    const spo2 = spo2ByDate.get(date);
+    if (spo2 != null && spo2 > 0) entry.spo2 = Math.round(spo2 * 100 * 10) / 10;
+
+    entries.push(entry);
+  }
+
+  return entries.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Merge one sync's entries into the stored history. Every date in `incoming`
+ * was read in full by this sync (see applePhysiologyWindow), so a newer Apple
+ * value replaces the value an earlier sync stored for that date. The old merge
+ * let the first value seen each day win, which froze steps, sleep and HRV at
+ * whatever the first launch of the day saw.
+ *
+ * - `appleOwns` (Apple is the primary physiology source): Apple's newest value
+ *   wins for every field it reports.
+ * - Otherwise (Garmin primary, Apple supplementary): Apple fills empty fields
+ *   and refreshes fields it filled itself (tracked in `appleValues`), but never
+ *   overwrites a value the primary source wrote.
+ *
+ * Fields Apple does not report this time (vo2max, stress, LT, a type whose
+ * read timed out) keep their stored value. Manual sleep ratings live in
+ * `recoveryHistory` and are folded in at read time by mergeManualSleepHistory,
+ * so nothing here touches them.
+ */
+export function mergeApplePhysiologyEntries(
+  existing: PhysiologyDayEntry[],
+  incoming: PhysiologyDayEntry[],
+  appleOwns: boolean,
+): PhysiologyDayEntry[] {
+  const byDate = new Map(existing.map(e => [e.date, e]));
+  for (const entry of incoming) {
+    const prev = byDate.get(entry.date);
+    const next: PhysiologyDayEntry = prev ? { ...prev } : { date: entry.date };
+    const written: Partial<Record<ApplePhysiologyField, number>> = { ...(prev?.appleValues ?? {}) };
+    for (const f of APPLE_PHYSIOLOGY_FIELDS) {
+      const v = entry[f];
+      if (v == null) continue;
+      const cur = prev?.[f];
+      const appleWroteCur = cur != null && prev?.appleValues?.[f] === cur;
+      if (appleOwns || cur == null || appleWroteCur) {
+        next[f] = v;
+        written[f] = v;
+      } else {
+        delete written[f];                      // the primary source owns this field
+      }
+    }
+    if (Object.keys(written).length > 0) next.appleValues = written;
+    else delete next.appleValues;
+    byDate.set(entry.date, next);
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
 /**
  * Sync physiology data (sleep, HRV, resting HR) from HealthKit.
  * Populates `s.physiologyHistory` with up to 28 days of PhysiologyDayEntry[],
@@ -804,29 +1156,32 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     // sleep (sleepAnalysis category) — the full recovery picture.
     // Bounded: if our own plugin's auth also hangs on this OS, proceed anyway —
     // the grant is already in HealthKit (app-level), so the reads still work.
-    // Request core read types in the PRIMARY sheet, including `workouts` —
-    // workouts are core data and must be prompted up front with HR/sleep, not
-    // deferred to the fire-and-forget extras sheet.
+    // Request the core read types in the PRIMARY sheet, including `workouts`
+    // and `heartRate` (the per-workout HR stream). iOS presents the sheet only
+    // for types it has not asked about, so on every later call this resolves
+    // without UI. Shared with the workout sync's one-time heart-rate request.
     _lastPhysiologyDiag = `${TAG} hung@requestPerms`;
-    await withTimeout(
-      requestHealthExtrasPermissions(['restingHeartRate', 'heartRateVariabilitySDNN', 'stepCount', 'sleepAnalysis', 'respiratoryRate', 'oxygenSaturation', 'workouts'])
-        .catch((e: any) => { readErrs.push(`perms:${String(e?.message ?? e).slice(0, 40)}`); return null; }),
-      AUTH_REQUEST_TIMEOUT_MS,
-      null,
-    );
+    await requestCorePermissions();
     stage = 'perms-done';
 
-    const since = new Date();
-    since.setDate(since.getDate() - days);
+    // Window: local midnight `days` ago to now, sleep from the noon before, so
+    // every date the sync writes was read in full (newest-wins merge below).
+    const now = new Date();
+    const { since, sleepSince } = applePhysiologyWindow(days, now);
     const sinceISO = since.toISOString();
-    const nowISO = new Date().toISOString();
+    const sleepSinceISO = sleepSince.toISOString();
+    const nowISO = now.toISOString();
 
     // Each read via HealthExtras (already internally try/caught → [] on error),
     // wrapped in our own timeout so a stuck native read can't freeze the flow.
+    // limit 0 = HKObjectQueryNoLimit (every sample in the window). The old
+    // limits (1000 quantity, 4000 sleep) were applied oldest-first, so a long
+    // read lost the NEWEST days: raw step samples run to hundreds a day, and a
+    // staged Watch night is dozens of segments.
     _lastPhysiologyDiag = `${TAG} hung@reads`;
     const readQ = (dataType: 'restingHeartRate' | 'heartRateVariabilitySDNN' | 'stepCount' | 'respiratoryRate' | 'oxygenSaturation', label: string) =>
       withTimeout(
-        readQuantitySamples({ dataType, startDate: sinceISO, endDate: nowISO, limit: 1000, ascending: true })
+        readQuantitySamples({ dataType, startDate: sinceISO, endDate: nowISO, limit: 0, ascending: true })
           .catch((e: any) => { readErrs.push(`${label}:${String(e?.message ?? e).slice(0, 40)}`); return []; }),
         PHYS_READ_TIMEOUT_MS,
         [],
@@ -838,7 +1193,7 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       readQ('respiratoryRate', 'resp'),
       readQ('oxygenSaturation', 'spo2'),
       withTimeout(
-        readSleepSamples({ startDate: sinceISO, endDate: nowISO, limit: 4000 })
+        readSleepSamples({ startDate: sleepSinceISO, endDate: nowISO, limit: 0 })
           .catch((e: any) => { readErrs.push(`sleep:${String(e?.message ?? e).slice(0, 40)}`); return []; }),
         PHYS_READ_TIMEOUT_MS,
         [],
@@ -853,125 +1208,21 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       (readErrs.length ? ` errs=[${readErrs.join(' | ')}]` : '');
     console.log('[AppleHealthSync] physiology diag:', _lastPhysiologyDiag);
 
-    // ── Group sleep samples into nights ────────────────────────────────────
-    // Map HealthKit's raw HKCategoryValueSleepAnalysis to our SleepState, then
-    // key each night by the calendar date the user woke up on. Only count
-    // segments ending before noon (excludes daytime naps inflating the night).
-    const nightMap = new Map<string, HealthSample[]>();
-    for (const seg of sleepSamples) {
-      const state = SLEEP_VALUE_TO_STATE[seg.value];
-      if (!state) continue;                       // unknown value → skip
-      const endHour = new Date(seg.endDate).getHours();
-      if (endHour >= 12) continue;                // daytime nap
-      const wakeDate = seg.endDate.split('T')[0];
-      if (!nightMap.has(wakeDate)) nightMap.set(wakeDate, []);
-      // computeSleepStageDurations only reads .sleepState/.startDate/.endDate.
-      nightMap.get(wakeDate)!.push({ sleepState: state, startDate: seg.startDate, endDate: seg.endDate } as HealthSample);
-    }
-
-    // ── Index resting HR and HRV by date ───────────────────────────────────
-    const rhrByDate = new Map<string, number>();
-    for (const sample of rhrSamples) {
-      const date = sample.startDate.split('T')[0];
-      rhrByDate.set(date, sample.value); // last value wins (most recent reading)
-    }
-
-    const hrvByDate = new Map<string, number>();
-    for (const sample of hrvSamples) {
-      const date = sample.startDate.split('T')[0];
-      // HealthExtras returns HRV SDNN in ms (its defaultUnit). Our model uses
-      // RMSSD (ms): RMSSD ≈ SDNN * 1.28 (Shaffer & Ginsberg 2017, nocturnal
-      // short-term recordings) so Apple values land in the same range as Garmin.
-      hrvByDate.set(date, sample.value * SDNN_TO_RMSSD);
-    }
-
-    // ── Index steps by date ────────────────────────────────────────────────
-    // HealthExtras returns individual step samples (not daily aggregates), so
-    // sum per calendar day to match the daily total capgo's queryAggregated gave.
-    const stepsByDate = new Map<string, number>();
-    for (const sample of stepSamples) {
-      const date = sample.startDate.split('T')[0];
-      stepsByDate.set(date, (stepsByDate.get(date) ?? 0) + sample.value);
-    }
-
-    // ── Index respiratory rate + SpO2 by date (last reading wins) ───────────
-    const respByDate = new Map<string, number>();
-    for (const sample of respSamples) {
-      respByDate.set(sample.startDate.split('T')[0], sample.value); // breaths/min
-    }
-    const spo2ByDate = new Map<string, number>();
-    for (const sample of spo2Samples) {
-      // HealthExtras returns oxygenSaturation as a fraction (0–1); store percent.
-      spo2ByDate.set(sample.startDate.split('T')[0], sample.value * 100);
-    }
-
-    // ── Build PhysiologyDayEntry per date ──────────────────────────────────
-    // Collect all dates that have any data
-    const allDates = new Set<string>();
-    for (const d of nightMap.keys()) allDates.add(d);
-    for (const d of rhrByDate.keys()) allDates.add(d);
-    for (const d of hrvByDate.keys()) allDates.add(d);
-    for (const d of stepsByDate.keys()) allDates.add(d);
-    for (const d of respByDate.keys()) allDates.add(d);
-    for (const d of spo2ByDate.keys()) allDates.add(d);
-
-    if (allDates.size === 0) return false;
-
-    const entries: PhysiologyDayEntry[] = [];
-    for (const date of allDates) {
-      const entry: PhysiologyDayEntry = { date };
-
-      // Sleep stages
-      const sleepSamples = nightMap.get(date);
-      if (sleepSamples && sleepSamples.length > 0) {
-        const stageSecs = computeSleepStageDurations(sleepSamples);
-        entry.sleepDeepSec = stageSecs.deep;
-        entry.sleepRemSec = stageSecs.rem;
-        entry.sleepLightSec = stageSecs.light;
-        entry.sleepAwakeSec = stageSecs.awake;
-        entry.sleepDurationSec = stageSecs.deep + stageSecs.rem + stageSecs.light;
-        entry.sleepScore = computeSleepScore(entry);
-      }
-
-      // Resting HR
-      const rhr = rhrByDate.get(date);
-      if (rhr != null && rhr > 0) entry.restingHR = Math.round(rhr);
-
-      // HRV
-      const hrv = hrvByDate.get(date);
-      if (hrv != null && hrv > 0) entry.hrvRmssd = Math.round(hrv * 10) / 10;
-
-      // Steps
-      const steps = stepsByDate.get(date);
-      if (steps != null && steps > 0) entry.steps = Math.round(steps);
-
-      // Respiratory rate + blood oxygen (recovery / illness / altitude signals)
-      const resp = respByDate.get(date);
-      if (resp != null && resp > 0) entry.respiratoryRate = Math.round(resp * 10) / 10;
-      const spo2 = spo2ByDate.get(date);
-      if (spo2 != null && spo2 > 0) entry.spo2 = Math.round(spo2 * 10) / 10;
-
-      entries.push(entry);
-    }
-
-    entries.sort((a, b) => a.date.localeCompare(b.date));
+    // Local-date day keys, nights keyed by wake date with the pre-midnight part
+    // kept, one sleep source per night, steps de-duplicated across sources.
+    const entries = buildApplePhysiologyEntries({
+      rhr: rhrSamples, hrv: hrvSamples, steps: stepSamples,
+      resp: respSamples, spo2: spo2Samples, sleep: sleepSamples,
+    }, now);
+    if (entries.length === 0) return false;
 
     // ── Store in state ─────────────────────────────────────────────────────
     const s = getMutableState();
-    // Merge with existing history (Garmin data may have fields Apple doesn't)
-    const existing = new Map((s.physiologyHistory ?? []).map(e => [e.date, e]));
-    for (const entry of entries) {
-      const prev = existing.get(entry.date);
-      if (prev) {
-        // Apple data fills in missing fields; doesn't overwrite Garmin data
-        existing.set(entry.date, { ...entry, ...prev, ...pickDefined(entry, prev) });
-      } else {
-        existing.set(entry.date, entry);
-      }
-    }
-    s.physiologyHistory = [...existing.values()]
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .slice(-28);
+    s.physiologyHistory = mergeApplePhysiologyEntries(
+      s.physiologyHistory ?? [],
+      entries,
+      getPhysiologySource(s) === 'apple',
+    ).slice(-28);
 
     // Update top-level state fields from latest entry
     const latest = entries[entries.length - 1];
@@ -1053,25 +1304,6 @@ export function computeSleepScore(entry: PhysiologyDayEntry): number {
 
   const score = durationScore * 0.55 + deepScore * 0.25 + remScore * 0.20;
   return Math.round(Math.max(0, Math.min(100, score)));
-}
-
-/**
- * Merge helper: for each field, pick the Apple value only if the existing
- * Garmin/other value is undefined or null.
- */
-function pickDefined(apple: PhysiologyDayEntry, existing: PhysiologyDayEntry): Partial<PhysiologyDayEntry> {
-  const result: Partial<PhysiologyDayEntry> = {};
-  const keys: (keyof PhysiologyDayEntry)[] = [
-    'sleepScore', 'sleepDurationSec', 'sleepDeepSec', 'sleepRemSec',
-    'sleepLightSec', 'sleepAwakeSec', 'restingHR', 'hrvRmssd', 'steps', 'activeMinutes',
-    'respiratoryRate', 'spo2',
-  ];
-  for (const k of keys) {
-    if (existing[k] == null && apple[k] != null) {
-      (result as any)[k] = apple[k];
-    }
-  }
-  return result;
 }
 
 // ---------------------------------------------------------------------------

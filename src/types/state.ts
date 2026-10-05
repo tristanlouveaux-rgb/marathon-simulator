@@ -326,7 +326,21 @@ export interface PhysiologyDayEntry {
   ltHR?: number;          // bpm at lactate threshold. From physiology_snapshots
   respiratoryRate?: number; // breaths/min (sleeping/resting). Apple Health / Garmin-via-Apple-Health.
   spo2?: number;            // blood oxygen saturation, percent (0–100). Recovery / altitude / illness signal.
+  /** Values the Apple Health physiology sync last wrote into this entry, by
+   *  field. While Apple is a supplementary source (Garmin primary), a field
+   *  whose current value still equals its value here came from Apple, so a
+   *  newer Apple read may refresh it. A field whose value differs was written
+   *  by the primary source and is kept. Garmin writers drop a field from here
+   *  whenever they write it, even at the same value (releaseAppleOwnership in
+   *  src/data/physiology-provenance.ts). Absent on entries Apple never wrote. */
+  appleValues?: Partial<Record<ApplePhysiologyField, number>>;
 }
+
+/** PhysiologyDayEntry fields the Apple Health physiology sync can write. */
+export type ApplePhysiologyField =
+  | 'sleepScore' | 'sleepDurationSec' | 'sleepDeepSec' | 'sleepRemSec'
+  | 'sleepLightSec' | 'sleepAwakeSec' | 'restingHR' | 'hrvRmssd' | 'steps'
+  | 'respiratoryRate' | 'spo2';
 
 /**
  * A Garmin cross-training activity awaiting user reduce/replace/keep decision.
@@ -1154,6 +1168,13 @@ export interface SimulatorState {
    * a Garmin/Strava primary. Launch reads this to additively run the Apple sync
    * (gap-fills physiology, prefers Garmin) without demoting the primary source. */
   appleHealthConnected?: boolean;
+  /** Device-local, one-time: the HealthKit `heartRate` read type has been
+   *  included in a permission request on this install. Builds after ae0545e
+   *  never asked for it, so every Apple workout arrived without its HR stream
+   *  and was costed on duration alone. The workout sync asks once before its
+   *  first HR read; iOS shows the sheet only for types it has not asked about,
+   *  so a user who already answered sees nothing. */
+  appleHeartRatePermissionRequested?: boolean;
   /** ISSUE-263: one-time load-currency migration ran (pre-2026-06-04 stored
    *  workout loads restamped to canonical TSS). Optional — fresh installs
    *  start canonical and the migration is a no-op. */
