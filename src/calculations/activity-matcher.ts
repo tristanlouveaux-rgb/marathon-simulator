@@ -12,7 +12,7 @@ import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
 import { log } from '@/ui/renderer';
-import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
+import { IMPACT_PER_KM } from '@/constants';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
@@ -753,13 +753,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         };
       }
 
-      // Signal B TSS
-      const rawITrimp = item.iTrimp ?? null;
-      const rawTSS = (rawITrimp != null && rawITrimp > 0)
-        ? normalizeiTrimp(rawITrimp)
-        : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-      wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
-
+      // No week total to bump: computeWeekActualTSS derives it from the record above (B18).
       wk.garminMatched[item.garminId] = id;
       enrichChanged = true;
       console.log(`[ActivityMatcher] Resolved stale pending ${item.activityType} (${item.garminId}) → adhoc in past week ${weekIdx}`);
@@ -1149,12 +1143,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             (wk.garminActuals[workoutId] as any).hyroxParserHint = 'name-detected';
           }
 
-          // Signal B TSS (no runSpec discount. Station work is primary load in HYROX)
+          // iTRIMP for the pending item below. No week total to bump:
+          // computeWeekActualTSS derives it from the garminActuals record above (B18).
           const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
-          const rawTSS = (rawITrimp != null && rawITrimp > 0)
-            ? normalizeiTrimp(rawITrimp)
-            : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-          wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 
           // Also store in garminPending so ActivityReview can surface it for re-rating
           const stationPending: GarminPendingItem = {
@@ -1315,11 +1306,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             elevationGainM: row.elevationGainM ?? null,
           };
 
+          // iTRIMP for the pending item below. No week total to bump:
+          // computeWeekActualTSS derives it from the garminActuals record above (B18).
           const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
-          const runTSS = (runITrimp != null && runITrimp > 0)
-            ? normalizeiTrimp(runITrimp)
-            : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-          wk.actualTSS = (wk.actualTSS ?? 0) + runTSS;
 
           const pendingItem: GarminPendingItem = {
             garminId: row.garmin_id,
@@ -1532,12 +1521,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         }
         wk.garminActuals[match.workoutId] = actual;
 
-        // Compute TSS-calibrated Training Load for this matched run
-        const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
-        const runTL = (runITrimp != null && runITrimp > 0)
-          ? normalizeiTrimp(runITrimp)
-          : (actual.durationSec / 60) * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-        wk.actualTSS = (wk.actualTSS ?? 0) + runTL;
+        // No week total to bump: computeWeekActualTSS derives it from the record above (B18).
 
         // Musculoskeletal impact load (km-based for running). For commute
         // runs carried with a backpack, ground reaction force scales linearly
@@ -1798,13 +1782,7 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
   (workout as any).garminAvgPace = row.avg_pace_sec_km ?? null;
 
   wk.adhocWorkouts.push(workout);
-
-  // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
-  const rawITrimp = row.iTrimp ?? null;
-  const rawTSS = (rawITrimp != null && rawITrimp > 0)
-    ? normalizeiTrimp(rawITrimp)
-    : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-  wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
+  // No week total to bump: computeWeekActualTSS derives it from the record above (B18).
 }
 
 /**
@@ -1949,11 +1927,6 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
     };
   }
 
-  // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
-  const rawITrimp = item.iTrimp ?? null;
-  const rawTSS = (rawITrimp != null && rawITrimp > 0)
-    ? normalizeiTrimp(rawITrimp)
-    : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-  wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
+  // No week total to bump: computeWeekActualTSS derives it from the record above (B18).
 }
 

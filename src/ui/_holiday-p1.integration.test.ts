@@ -16,8 +16,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { setState, getMutableState, resetState } from '@/state/store';
 import { detrainingLossFraction, DETRAINING_DEADZONE_DAYS } from './welcome-back';
-import { showHolidayWelcomeBack, applyBridgeModsAllDisciplines } from './holiday-modal';
-import type { SimulatorState, Week } from '@/types';
+import { showHolidayWelcomeBack, applyBridgeModsAllDisciplines, preHolidayWeeklyLoad } from './holiday-modal';
+import { setAthleteNormalizer, getAthleteNormalizer, computeWeekActualTSS } from '@/calculations/fitness-model';
+import type { GarminActual, SimulatorState, Week } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Minimal document + body stub. The state mutations in showHolidayWelcomeBack
@@ -64,6 +65,9 @@ const bodyEl = makeElement('body');
   removeItem(k: string) { delete this._store[k]; },
 };
 
+// Population normalizer, so holidayRun's iTRIMP decodes to exactly its TSS.
+beforeEach(() => setAthleteNormalizer());
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -75,6 +79,22 @@ function daysAgo(n: number): string {
   return d.toISOString().split('T')[0];
 }
 
+/** A synced run whose iTRIMP decodes to `tss` under the current normalizer. */
+function holidayRun(garminId: string, tss: number): GarminActual {
+  return {
+    garminId,
+    startTime: `${daysAgo(3)}T08:00:00.000Z`,
+    distanceKm: 10,
+    durationSec: 3600,
+    avgPaceSecKm: 360,
+    avgHR: 145,
+    maxHR: 165,
+    calories: null,
+    iTrimp: (tss * getAthleteNormalizer()) / 100,
+    activityType: 'RUNNING',
+  } as GarminActual;
+}
+
 /** Build a minimal SimulatorState with tri config for detraining tests. */
 function buildState(opts: {
   vdot: number;
@@ -83,6 +103,8 @@ function buildState(opts: {
   holidayDays: number;
   holidayWeeksTSS?: number;   // TSS for EVERY week that overlaps the holiday window (uniform)
   preHolidayWeeklyTSS?: number;
+  /** A legacy wk.actualTSS running total left on every holiday week (never read since F6). */
+  staleStoredTSS?: number;
 }): SimulatorState {
   // Plan started 12 weeks ago (Monday). 16 planned weeks.
   const planStart = daysAgo(84); // 12 weeks ago
@@ -112,14 +134,19 @@ function buildState(opts: {
     adjustments: [],
     unspentLoad: 0,
     extraRunLoad: 0,
-    actualTSS: 0,
   } as any));
 
-  // Write holiday TSS into ALL weeks the production code will iterate over.
-  // This ensures classifyHolidayActivity sees the intended retention ratio.
-  if (opts.holidayWeeksTSS !== undefined) {
+  // Put one synced run carrying the holiday TSS into ALL weeks the production
+  // code iterates over, so classifyHolidayActivity reads the intended retention
+  // ratio from real activities (computeWeekActualTSS), the way the app does.
+  if (opts.holidayWeeksTSS) {
     for (let w = startWeek; w <= endWeek && w <= 16; w++) {
-      (wks[w - 1] as any).actualTSS = opts.holidayWeeksTSS;
+      wks[w - 1].garminActuals = { [`garmin-hol-${w}`]: holidayRun(`hol-${w}`, opts.holidayWeeksTSS) };
+    }
+  }
+  if (opts.staleStoredTSS !== undefined) {
+    for (let w = startWeek; w <= endWeek && w <= 16; w++) {
+      (wks[w - 1] as any).actualTSS = opts.staleStoredTSS;
     }
   }
 
@@ -400,10 +427,10 @@ describe('showHolidayWelcomeBack — scenario c: active holiday, 21 days, 70% re
   const HOLIDAY_WEEK_TSS = Math.round(PRE_HOLIDAY_TSS * 0.7);
 
   const fracSedentary = detrainingLossFraction(DAYS_AWAY, 0);
-  // classifyHolidayActivity averages actualTSS over all holiday weeks, including any
-  // that fall before the first filled slot (no zero-pad on the left). With the corrected
-  // fixture (all holiday weeks filled), avgWeeklyTSS = HOLIDAY_WEEK_TSS, ratio = 0.7.
-  // We use 0.7 as the intended retention; the fixture now writes TSS to ALL holiday weeks.
+  // classifyHolidayActivity averages each holiday week's actual load
+  // (computeWeekActualTSS) over all holiday weeks. The fixture puts one synced run
+  // of HOLIDAY_WEEK_TSS in every holiday week, so avgWeeklyTSS = HOLIDAY_WEEK_TSS
+  // and ratio = 0.7.
   const INTENDED_RETENTION = 0.7;
   const fracActive = detrainingLossFraction(DAYS_AWAY, INTENDED_RETENTION);
 
@@ -463,6 +490,65 @@ describe('showHolidayWelcomeBack — scenario c: active holiday, 21 days, 70% re
 
     console.log(`[scenario-c] CSS: ${CSS_BEFORE}s/100m → ${cssAfter}s/100m (expected ${expectedCssAfter}s/100m)`);
     expect(cssAfter).toBe(expectedCssAfter);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario (e): a stale stored wk.actualTSS no longer drives detraining (B18)
+// ---------------------------------------------------------------------------
+
+describe('showHolidayWelcomeBack: holiday load comes from the weeks\' activities, not a stored running total', () => {
+  const FTP_BEFORE = 250;
+  const VDOT_BEFORE = 50;
+  const DAYS_AWAY = 21;
+  const fracSedentary = detrainingLossFraction(DAYS_AWAY, 0);
+
+  it('an inflated legacy actualTSS on sedentary holiday weeks no longer cancels detraining', () => {
+    // Each holiday week carries a legacy add-only total equal to the pre-holiday
+    // load (e.g. a re-reviewed week), but no activity was done. The old reader
+    // took ratio = 1, so VDOT, FTP and CSS never detrained.
+    resetState();
+    setState(buildState({
+      vdot: VDOT_BEFORE, ftp: FTP_BEFORE, css: 100, holidayDays: DAYS_AWAY,
+      staleStoredTSS: 400, preHolidayWeeklyTSS: 400,
+    }));
+    showHolidayWelcomeBack(vi.fn());
+
+    const s = getMutableState();
+    expect(s.triConfig!.bike!.ftp).toBe(Math.round(FTP_BEFORE * (1 - fracSedentary)));
+    expect(s.v!).toBeLessThan(VDOT_BEFORE);
+  });
+
+  it('a stale legacy total does not lower the ratio below the activities actually synced', () => {
+    // 70% of pre-holiday load was synced, but the legacy total reads 40.
+    resetState();
+    setState(buildState({
+      vdot: VDOT_BEFORE, ftp: FTP_BEFORE, css: 100, holidayDays: DAYS_AWAY,
+      holidayWeeksTSS: 280, staleStoredTSS: 40, preHolidayWeeklyTSS: 400,
+    }));
+    showHolidayWelcomeBack(vi.fn());
+
+    const fracActive = detrainingLossFraction(DAYS_AWAY, 0.7);
+    expect(getMutableState().triConfig!.bike!.ftp).toBe(Math.round(FTP_BEFORE * (1 - fracActive)));
+  });
+});
+
+describe('preHolidayWeeklyLoad: the pre-holiday snapshot is last week\'s actual load', () => {
+  it('reads the previous week\'s activities and ignores a stored running total', () => {
+    resetState();
+    const s = buildState({ vdot: 50, ftp: 250, css: 100, holidayDays: 21 });
+    s.w = 5;
+    s.wks[3].garminActuals = { 'garmin-pre-1': holidayRun('pre-1', 180) };
+    (s.wks[3] as any).actualTSS = 540; // a legacy total re-added over three re-reviews
+
+    expect(preHolidayWeeklyLoad(s)).toBe(180);
+    expect(preHolidayWeeklyLoad(s)).toBe(computeWeekActualTSS(s.wks[3], s.planStartDate));
+  });
+
+  it('is zero in the first plan week, when there is no previous week', () => {
+    const s = buildState({ vdot: 50, ftp: 250, css: 100, holidayDays: 21 });
+    s.w = 1;
+    expect(preHolidayWeeklyLoad(s)).toBe(0);
   });
 });
 

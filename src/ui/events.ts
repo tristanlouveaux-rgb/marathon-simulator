@@ -19,7 +19,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } f
 import { isLongRun } from '@/workouts/long-run';
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekActualTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { render, log } from './renderer';
@@ -1131,8 +1131,10 @@ export async function next(): Promise<void> {
   // ─── Zone Carry Tracking ─────────────────────────────────────────────
   // When actual TSS > planned TSS × 1.10, store the excess by zone on this week.
   // The carry banner in main-view reads this and applies CTL decay per elapsed week.
+  // Actual = the week's load derived from its activities (computeWeekActualTSS,
+  // canonical Signal B), never the retired add-only wk.actualTSS total (B18).
   {
-    const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated, s.planStartDate);
+    const actualTSS = computeWeekActualTSS(wk, s.planStartDate);
     // Type-keyed canonical valuation (ISSUE-263) — this map used to be a
     // private literal copy (with an off-table hill_repeats 2.0); it now reads
     // the same TSS_RPE_BY_TYPE → TL_PER_MIN chain as calculateWorkoutLoad and
@@ -1860,7 +1862,7 @@ export function logActivity(): void {
       };
       if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
       wk.adhocWorkouts.push(adhoc);
-      wk.actualTSS = (wk.actualTSS ?? 0) + estimatedTSS;
+      // No week total to bump: computeWeekActualTSS derives it from this adhoc entry.
     }
     durInput.value = '';
     rpeInput.value = '';

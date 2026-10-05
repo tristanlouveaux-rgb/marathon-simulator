@@ -22,7 +22,7 @@ import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
-import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp, listWeekSignalAEntries } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, computeWeekRawTSS, computeWeekActualTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp, listWeekSignalAEntries } from '@/calculations/fitness-model';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
@@ -1852,7 +1852,7 @@ function updateLoadChart(s: SimulatorState): void {
   setZoneProgress('zone-bar-threshold', 'stat-load-threshold-label', actualThreshold, plannedThreshold, 'var(--c-caution)', 'var(--c-warn)');
   setZoneProgress('zone-bar-intensity', 'stat-load-intensity-label', actualIntensity, plannedIntensity, '#F97316', 'var(--c-warn)');
 
-  // --- Load History chart (last 6 weeks, using extraRunLoad as proxy) ---
+  // --- Load History chart (last 6 weeks, each week's actual load from computeWeekActualTSS) ---
   const historyContainer = document.getElementById('load-history-chart');
   if (!historyContainer || !s.wks) return;
 
@@ -1864,12 +1864,12 @@ function updateLoadChart(s: SimulatorState): void {
     return;
   }
 
-  const histLoads = histWeeks.map(hw => hw.actualTSS ?? hw.extraRunLoad ?? 0);
+  const histLoads = histWeeks.map(hw => computeWeekActualTSS(hw, s.planStartDate));
   const histMax = Math.max(...histLoads, 1);
 
   const bars = histWeeks.map((hw, i) => {
     const weekAbsIdx = startIdx + i; // 0-based absolute index
-    const load = hw.actualTSS ?? hw.extraRunLoad ?? 0;
+    const load = histLoads[i];
     const pct = Math.min(100, Math.round((load / histMax) * 100));
     const isCurrentWeek = weekAbsIdx === s.w - 1;
     const barColor = load === 0 ? 'rgba(0,0,0,0.10)'
@@ -1947,7 +1947,7 @@ function updateACWRBar(s: SimulatorState): void {
   // ── Over-plan % trigger (§5.2) ────────────────────────────────────────
   // Show "Reduce this week" even when ACWR is safe/unknown, if actual TSS > planned × 1.20
   const wk = s.wks?.[s.w - 1];
-  const actualTSSNow = wk?.actualTSS ?? 0;
+  const actualTSSNow = computeWeekActualTSS(wk, s.planStartDate);
   // Re-use updateLoadChart's planned total if we have it; approximate here from wk
   // We sum planned TSS from the same weekKm proxy used elsewhere
   let showReduceBtn = acwr.status === 'caution' || acwr.status === 'high';
@@ -1957,7 +1957,7 @@ function updateACWRBar(s: SimulatorState): void {
   if (!showReduceBtn && actualTSSNow > 0) {
     // We need plannedTSS. Compute a quick estimate from the week's planned km
     // Use the same weekWos call as getWeekWorkoutsForACWR
-    // (cheaper: just check wk.actualTSS vs s.wkm * rough load factor)
+    // (cheaper: just check the week's actual load vs s.wkm * rough load factor)
     const roughPlannedTSS = (s.wkm ?? 30) * 5; // ≈ 5 TSS/km as rough baseline
     if (actualTSSNow > roughPlannedTSS * 1.20) {
       const overPct = Math.round((actualTSSNow / roughPlannedTSS - 1) * 100);

@@ -13,7 +13,7 @@ import type { GarminActual } from '@/types/state';
 import { computeDailyCoach, buildCoachSignalsPayload } from '@/calculations/daily-coach';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { generateWeekWorkouts } from '@/workouts';
-import { getTrailingEffortScore } from '@/calculations/fitness-model';
+import { getTrailingEffortScore, computeWeekActualTSS } from '@/calculations/fitness-model';
 import { sanitizeField } from './prompt-sanitizer';
 
 // Max activities to include per week (keeps context bounded)
@@ -126,11 +126,13 @@ export function buildPlanSkeleton(state: SimulatorState): Array<Record<string, u
     }
 
     // Running: only phase + week is reliably available without regenerating.
-    // Actual TSS for past weeks is on wk.actualTSS. Useful for the coach.
+    // actual_tss is the week's load derived from its activities
+    // (computeWeekActualTSS, the Plan bar's Signal B): the full week for past
+    // weeks, the load so far for the current week, null for future weeks.
     return {
       week: weekNum,
       phase: wk.ph ?? null,
-      actual_tss: typeof wk.actualTSS === 'number' ? Math.round(wk.actualTSS) : null,
+      actual_tss: isPast || isCurrent ? computeWeekActualTSS(wk, state.planStartDate) : null,
       completed_km: typeof wk.completedKm === 'number' ? roundTo(wk.completedKm, 1) : null,
       marker,
     };

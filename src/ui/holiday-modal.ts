@@ -8,7 +8,7 @@
 
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState, Workout, Week } from '@/types';
-import { computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { computeWeekActualTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
 import { detrainingLossFraction } from './welcome-back';
 import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import { generateWeekWorkouts } from '@/workouts';
@@ -417,6 +417,19 @@ export function openHolidayModal(): void {
 
 // ─── Confirm + persist ──────────────────────────────────────────────────────
 
+/**
+ * Pre-holiday weekly load snapshot: the actual load of the most recent completed
+ * week (computeWeekActualTSS, canonical weekly Signal B). It is the denominator
+ * of the holiday activity ratio, whose numerator classifyHolidayActivity reads
+ * the same way, so both sides share one currency: total physiological TSS,
+ * discipline-agnostic (SCIENCE_LOG §AS). Tracking side: it describes load the
+ * athlete carried; the ratio then sizes the comeback bridge and detraining.
+ */
+export function preHolidayWeeklyLoad(s: SimulatorState): number {
+  if (!s.wks || s.w <= 1) return 0;
+  return computeWeekActualTSS(s.wks[s.w - 2], s.planStartDate);
+}
+
 function confirmHoliday(
   startDate: string,
   endDate: string,
@@ -426,14 +439,7 @@ function confirmHoliday(
 ): void {
   const s = getMutableState();
 
-  // Snapshot pre-holiday weekly TSS from most recent completed week
-  let preHolidayWeeklyTSS = 0;
-  if (s.wks && s.w > 1) {
-    const prevWk = s.wks[s.w - 2];
-    if (prevWk) {
-      preHolidayWeeklyTSS = prevWk.actualTSS ?? computeWeekTSS(prevWk, prevWk.rated ?? {}, s.planStartDate);
-    }
-  }
+  const preHolidayWeeklyTSS = preHolidayWeeklyLoad(s);
 
   const today = todayISO();
   const isFuture = startDate > today;
@@ -1100,12 +1106,14 @@ function classifyHolidayActivity(s: SimulatorState): { ratio: number; level: Act
   const startWeek = weekNumForDate(holiday.startDate, s.planStartDate);
   const endWeek = weekNumForDate(holiday.endDate, s.planStartDate);
 
+  // Same currency as the preHolidayWeeklyLoad snapshot: each week's actual load
+  // derived from its activities (computeWeekActualTSS), never a stored total.
   let totalActualTSS = 0;
   let weekCount = 0;
   for (let w = startWeek; w <= endWeek && w <= (s.wks?.length || 0); w++) {
     const wk = s.wks![w - 1];
     if (wk) {
-      totalActualTSS += wk.actualTSS ?? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate);
+      totalActualTSS += computeWeekActualTSS(wk, s.planStartDate);
       weekCount++;
     }
   }

@@ -25,7 +25,7 @@ import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computePlannedWorkoutSignalBTSS, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeWeekActualTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computePlannedWorkoutSignalBTSS, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
@@ -2319,7 +2319,8 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
   // Week load. Signal B (full physiological, all sports) for all weeks
   // Using Signal B everywhere so the bar always matches what the breakdown sheet shows.
-  const _weekRawTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
+  // computeWeekActualTSS is the one "week actual load" every reader uses (B18).
+  const _weekRawTSS = computeWeekActualTSS(wk, s.planStartDate);
   // Canonical per-week target: deload weeks and the race-taper position included.
   const _plannedTSS = computePlannedWeekTarget(s, viewWeek);
   // Include decayed carry from previous weeks in the effective total (current week only)
