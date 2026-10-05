@@ -1,7 +1,7 @@
 import type { SimulatorState } from '@/types/state';
 import { resolveWeekWorkouts } from './week-resolve';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-resolve.triathlon';
-import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio } from '@/calculations/fitness-model';
+import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio, isUnscheduledPlannedWorkout } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { signalARunSpec } from '@/cross-training/activities';
@@ -24,7 +24,7 @@ const GYM_PLANNED_TYPES = new Set(['gym', 'strength']);
  *                     week-resolve.ts) → computePlannedDaySignalBTSS
  *   - tri / cycling:  resolveTriWeekWorkouts → (w.aerobic + w.anaerobic),
  *                     the same per-workout TSS the plan card badge shows
- *   - HYROX:          resolveTriWeekWorkouts → duration × TL_PER_MIN[rpe]
+ *   - HYROX:          resolveTriWeekWorkouts → duration × plannedTssPerMin(type, rpe)
  *                     (HYROX workouts carry musculoTendonLoad, not TSS; the
  *                     fallback is the exact formula computePlannedDaySignalBTSS
  *                     already uses for duration-based sessions)
@@ -94,6 +94,12 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
         const rested = w.illnessSeverity === 'resting'
           || ((w.illnessMod || w.holidayMod) && (w.rpe ?? w.r) === 0);
         if (rested) continue;
+        // Pushed or dropped sessions (tri-skip-handler sets 'skipped'; a pushed
+        // session's clone lives in next week) are off this week's plan. Mirror
+        // of the running replaced/skipped guard (computePlannedWorkoutSignalBTSS).
+        // 'replaced' is NOT excluded here: in these modes it marks a session
+        // swapped to an easier one that is still to be done.
+        if (w.status === 'skipped') continue;
         const day = w.dayOfWeek;
         if (day == null || day < 0 || day > 6) continue;
         const durMin = estimateTriWorkoutMin(w);
@@ -122,6 +128,9 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
       // Running: the canonical Plan-tab resolver (generation + adhoc + mods +
       // moves + illness + holiday + bridge). Cross-training sessions are
       // excluded from planned TSS, matching the historical strain computation.
+      // Replaced and skipped runs price at 0 (computePlannedWorkoutSignalBTSS),
+      // so a day whose only run was replaced is a rest day, not a 1-TSS
+      // training day (audit B11). They stay listed with their status.
       const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
       const workouts = resolveWeekWorkouts(s, viewWeek).filter((w: any) => w.t !== 'cross');
       for (const w of workouts as any[]) {
@@ -133,7 +142,7 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           type: w.t ?? '',
           description: w.d ?? null,
           plannedTSS: tss,
-          plannedDurationMin: Math.round(estimateWorkoutDurMin(w, baseMinPerKm)),
+          plannedDurationMin: isUnscheduledPlannedWorkout(w) ? 0 : Math.round(estimateWorkoutDurMin(w, baseMinPerKm)),
           isHard: isHardPlannedType(w.t ?? ''),
           status: w.status,
         });

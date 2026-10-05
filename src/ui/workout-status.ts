@@ -14,6 +14,8 @@
  * a non-neutral colour, matching the running original.
  */
 
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+
 export const TODAY_ACCENT = '#C4553A'; // warm terracotta, matches Load/Taper hero
 const DONE_GREEN = '#34C759';
 const MISSED_ORANGE = '#FF9500';
@@ -237,7 +239,7 @@ export function deriveWorkoutStatus(w: any, wk: any, ctx: WeekStatusContext): Wo
     isReplaced: w.status === 'replaced',
     isHoliday: w.status === 'holiday',
     isIllness: !!w.illnessMod,
-    isAdded: String(id).startsWith('holiday-') || String(id).startsWith('adhoc-'),
+    isAdded: isPlannedAdhocId(String(id)),
     isReduced: w.status === 'reduced',
     isToday: isCurrentWeek && !ctx.weekEnded && dow === ctx.actualToday,
     isPast:

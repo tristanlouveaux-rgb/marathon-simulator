@@ -4,16 +4,23 @@
  * Shown at the start of the first week after a deload block in continuous mode.
  * Instead of manual pace entry, selecting a check-in type generates a structured
  * workout (identical to the session generator) and adds it to the current week.
- * When watch/Strava data lands for that workout, it gets recorded as a benchmark.
+ *
+ * The added `benchmark-` workout is a PLANNED session (isPlannedAdhocId): the
+ * Plan tab renders it as an "Added" card, it prices into the day's planned TSS,
+ * and no load reader counts it as done. The synced run carries the load. The
+ * entry is also the record that a check-in was chosen this week: the auto-trigger
+ * stops once it exists, and choosing again replaces it instead of stacking.
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import type { Workout, BenchmarkType } from '@/types/state';
+import type { Workout, BenchmarkType, Week } from '@/types/state';
 import { getBenchmarkOptions, skipBenchmark } from './events';
 import { intentToWorkout } from '@/workouts/intent_to_workout';
 import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 
 const OVERLAY_ID = 'benchmark-overlay';
+/** Id prefix of check-in workouts. Listed in PLANNED_ADHOC_ID_PREFIXES (workouts/planned-adhoc.ts). */
+const BENCHMARK_ID_PREFIX = 'benchmark-';
 
 /** Map benchmark type → session generator slot + duration */
 const BM_SESSION_MAP: Record<BenchmarkType, { slot: SlotType; totalMin: number; workRatio: number }> = {
@@ -74,7 +81,7 @@ function generateBenchmarkWorkout(bmType: BenchmarkType): Workout {
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
   return {
-    id: `benchmark-${bmType}-${Date.now()}`,
+    id: `${BENCHMARK_ID_PREFIX}${bmType}-${Date.now()}`,
     t: wo.t,
     n: `Check-in: ${wo.n}`,
     d: wo.d,
@@ -84,6 +91,11 @@ function generateBenchmarkWorkout(bmType: BenchmarkType): Workout {
   };
 }
 
+/** True when this week already holds a chosen check-in workout. */
+function hasBenchmarkWorkout(wk: Week | undefined): boolean {
+  return !!wk?.adhocWorkouts?.some(w => (w.id ?? '').startsWith(BENCHMARK_ID_PREFIX));
+}
+
 function addBenchmarkToWeek(bmType: BenchmarkType): void {
   const workout = generateBenchmarkWorkout(bmType);
   const ms = getMutableState();
@@ -91,6 +103,14 @@ function addBenchmarkToWeek(bmType: BenchmarkType): void {
   if (!wk) return;
 
   if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+  // One check-in per week. Choosing again (the panel's Choose button, or a
+  // second entry point) replaces a not-yet-done pick instead of stacking a
+  // second session. A pick that already has a rating or a matched actual stays.
+  wk.adhocWorkouts = wk.adhocWorkouts.filter(w => {
+    const id = w.id ?? '';
+    if (!id.startsWith(BENCHMARK_ID_PREFIX)) return true;
+    return wk.rated?.[id] != null || wk.garminActuals?.[id] != null;
+  });
   wk.adhocWorkouts.push(workout);
 
   saveState();
@@ -172,7 +192,8 @@ export function openBenchmarkOverlay(): void {
 
 /**
  * Check whether to auto-show the benchmark overlay on page load.
- * Only fires once per benchmark week (tracks via benchmarkResults).
+ * Only fires once per benchmark week: stops once the week has a result
+ * (recorded or skipped, benchmarkResults) or a chosen check-in workout.
  */
 export function maybeTriggerBenchmarkOverlay(): void {
   const s = getState();
@@ -181,9 +202,14 @@ export function maybeTriggerBenchmarkOverlay(): void {
   // Only on post-deload weeks (week 5, 9, 13, …)
   if (s.w <= 4 || (s.w - 1) % 4 !== 0) return;
 
-  // Already have a result for this week (recorded, skipped, or workout added)
+  // Already have a result for this week (recorded or skipped)
   const existing = s.benchmarkResults?.find(b => b.week === s.w);
   if (existing) return;
+
+  // Check-in workout already chosen. The option click re-renders the Plan tab,
+  // which calls this again: without this guard the overlay reopened 400 ms
+  // after every pick and each tap added another session (audit B8).
+  if (hasBenchmarkWorkout(s.wks?.[s.w - 1])) return;
 
   // Small delay so the plan view renders first
   setTimeout(() => openBenchmarkOverlay(), 400);

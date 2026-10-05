@@ -23,6 +23,7 @@ import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
 import { plausibleLtHR } from '@/calculations/lt-derivation';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -533,9 +534,10 @@ export function computeWeekRawTSS(
   // Adhoc workouts. RunSpec = 1.0 (full physiological cost, Signal B)
   // Include ALL adhoc workouts regardless of ID prefix: Garmin-synced ('garmin-'),
   // GPS-recorded (UUID), and any other manually logged entries.
-  // Skip holiday-generated sessions ('holiday-'). These are suggestions, not real activity.
+  // Skip planned sessions (adhoc-/holiday-/benchmark-). They are prescriptions,
+  // not real activity; the synced activity carries the load once they are done.
   for (const w of wk.adhocWorkouts ?? []) {
-    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    if (isPlannedAdhocId(w.id)) continue;
     // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     // Extract garminId from the adhoc workout id (format: 'garmin-<garminId>')
@@ -614,9 +616,9 @@ export function computeTodaySignalBTSS(
   }
 
   // adhocWorkouts. Garmin-prefixed filtered by garminTimestamp; non-garmin matched by dayOfWeek
-  // Skip holiday-generated sessions ('holiday-'). These are suggestions, not real activity.
+  // Skip planned sessions (adhoc-/holiday-/benchmark-). They are prescriptions, not real activity.
   for (const w of wk.adhocWorkouts ?? []) {
-    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    if (isPlannedAdhocId(w.id)) continue;
     // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
@@ -769,12 +771,58 @@ export function estimateWorkoutDurMin(w: Workout, baseMinPerKm: number): number 
 }
 
 /**
+ * True when a planned workout's status says it is no longer to be done this week:
+ * 'replaced' (the run was fully covered by other training, suggester.ts / injury
+ * engine) or 'skipped' (dropped or pushed by a skip handler).
+ *
+ * Running semantics only. In the stored-plan modes (triathlon, cycling, HYROX)
+ * 'replaced' marks a session swapped to an easier one that is still to be done
+ * (tri-suggestion-apply.ts), so getPlannedDayTSSContext's tri branch checks
+ * 'skipped' alone.
+ *
+ * A running skip recorded only as `wk.rated[id] === 'skip'` is a rating, not a
+ * plan change. It stays priced: resolveCtlAdherence reads the same planned-day
+ * context after next() auto-skips unrated runs, and an unpriced skip would read
+ * an all-skipped week as "nothing planned" and never re-anchor.
+ */
+export function isUnscheduledPlannedWorkout(w: Pick<Workout, 'status'>): boolean {
+  return w.status === 'replaced' || w.status === 'skipped';
+}
+
+/**
+ * Planned Signal B TSS for ONE running-plan workout (no actual data yet), unrounded.
+ *
+ * PLANNING side. The canonical per-session pricer: computePlannedDaySignalBTSS
+ * sums it for the day's strain target, and the Plan tab's per-workout "Planned
+ * load" bar (plan-view.ts) and the activity-detail "Load vs plan" card read it
+ * directly, so the bar and the day target show the same number for the same run.
+ *
+ * Type-keyed valuation (ISSUE-263): an easy run is prescribed RPE 3 but valued
+ * at the RPE-4 row (0.92 TSS/min), the same rule as calculateWorkoutLoad.
+ *
+ * Replaced and skipped sessions price at 0 (isUnscheduledPlannedWorkout). A
+ * fully replaced run keeps the description '0km (replaced)', which
+ * estimateWorkoutDurMin floors to a 1-minute run: before this guard the day
+ * priced at 1 TSS, counted as a training day with a 1-TSS target, and pulled
+ * perSessionAvg down (audit B11). calculateWorkoutLoad (workouts/load.ts) already
+ * returns 0 for replaced descriptions.
+ *
+ * @param w             Planned workout (mods applied, e.g. from resolveWeekWorkouts).
+ * @param baseMinPerKm  Easy pace in min/km (s.pac.e / 60). Defaults to 5.5.
+ */
+export function computePlannedWorkoutSignalBTSS(w: Workout, baseMinPerKm = 5.5): number {
+  if (isUnscheduledPlannedWorkout(w)) return 0;
+  const rpe = w.rpe ?? w.r ?? 5;
+  return estimateWorkoutDurMin(w, baseMinPerKm) * plannedTssPerMin(w.t, rpe);
+}
+
+/**
  * Estimate Signal B TSS for a day's planned workouts (no actual data yet).
  * Used as the strain target on training days so 100% = "you completed your plan".
  *
- * Uses the same RPE × TL_PER_MIN fallback as computeTodaySignalBTSS (no runSpec
- * discount. Signal B counts full physiological load regardless of sport).
- * Falls back to 0 when no workouts are scheduled for this day-of-week.
+ * Sums computePlannedWorkoutSignalBTSS (no runSpec discount: Signal B counts full
+ * physiological load regardless of sport). Falls back to 0 when no workouts are
+ * scheduled for this day-of-week, or when every one is replaced or skipped.
  *
  * @param workouts      Full week's generated workouts.
  * @param dayOfWeek     0=Mon … 6=Sun (same convention as Workout.dayOfWeek).
@@ -784,11 +832,7 @@ export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: numb
   let tl = 0;
   for (const w of workouts) {
     if (w.dayOfWeek !== dayOfWeek) continue;
-    const rpe = w.rpe ?? w.r ?? 5;
-    const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
-    // Type-keyed valuation (ISSUE-263): an easy run is prescribed RPE 3 but
-    // valued at the RPE-4 row (~55 TSS/h) — same rule as calculateWorkoutLoad.
-    tl += durMin * plannedTssPerMin(w.t, rpe);
+    tl += computePlannedWorkoutSignalBTSS(w, baseMinPerKm);
   }
   return Math.round(tl);
 }
@@ -1285,10 +1329,10 @@ export function getDailyLoadHistory(
       activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin), avgHR: actual.avgHR ?? null, hrZones: actual.hrZones ?? null });
     }
 
-    // Adhoc workouts. Skip holiday-generated sessions (suggestions, not real activity)
+    // Adhoc workouts. Skip planned sessions (adhoc-/holiday-/benchmark-): prescriptions, not real activity
     const ourDay = (d.getDay() + 6) % 7;
     for (const w of wk.adhocWorkouts ?? []) {
-      if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+      if (isPlannedAdhocId(w.id)) continue;
       // Twin of a garminActuals entry: listed above, and skipped by
       // computeTodaySignalBTSS (the day's tss), even after a Strava upgrade
       // has changed the twin's garminId.

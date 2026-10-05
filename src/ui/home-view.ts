@@ -48,6 +48,7 @@ import { collectTriSuggestions, type TriSuggestionBundle } from '@/calculations/
 import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint, shouldPlayEntrance } from './page-flair';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -218,9 +219,9 @@ export function computeLoadBreakdown(
   }
 
   // Adhoc workouts. All types, no runSpec discount for Signal B
-  // Skip user-generated sessions (not real activity. Just suggestions)
+  // Skip planned sessions (adhoc-/holiday-/benchmark-): not real activity, just prescriptions
   for (const w of wk.adhocWorkouts ?? []) {
-    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    if (isPlannedAdhocId(w.id)) continue;
     // Skip if garminActuals already covers this entry (garminActuals wins. May have been Strava-upgraded)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     // Dedup by garminId. Check both id prefix and direct garminId property
@@ -2176,7 +2177,7 @@ function buildRecentActivity(s: SimulatorState): string {
       // (Was track-only-gated; running plan mode leaked them as undated
       // "This week" rows — 2026-06-04 dogfood.)
       const wid = w.id || '';
-      const isPlannedInjected = wid.startsWith('adhoc-') || wid.startsWith('holiday-') || wid.startsWith('benchmark-');
+      const isPlannedInjected = isPlannedAdhocId(wid);
       if (isPlannedInjected && !w.garminTimestamp && (week.rated?.[w.id]) == null) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';

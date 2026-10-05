@@ -24,6 +24,7 @@ import { TL_PER_MIN } from '@/constants';
 import { detectBricks, type DetectionActivity } from '@/calculations/brick-detector';
 import { computeStrengthRpeTSS, normalizeiTrimp } from '@/calculations/fitness-model';
 import type { Week, GarminActual, Workout } from '@/types/state';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /** Sessions shorter than this don't trigger compounding (filters out short accessory work). */
 export const DOUBLE_DAY_MIN_SESSION_MIN = 20;
@@ -180,9 +181,10 @@ export function computeWeekDoubleDayDays(
     });
   }
 
-  // adhocWorkouts (Garmin-prefixed and freeform)
+  // adhocWorkouts (Garmin-prefixed and freeform). Planned sessions
+  // (adhoc-/holiday-/benchmark-) are prescriptions, not sessions done.
   for (const w of wk.adhocWorkouts ?? []) {
-    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    if (isPlannedAdhocId(w.id)) continue;
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {

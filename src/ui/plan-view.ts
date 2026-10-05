@@ -24,7 +24,7 @@ import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computePlannedWorkoutSignalBTSS, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
@@ -45,6 +45,7 @@ import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
@@ -346,6 +347,41 @@ function fmtZoneSec(sec: number): string {
 
 // ─── Workout expanded detail ──────────────────────────────────────────────────
 
+/**
+ * Planned TSS shown on a running Plan-tab card: the "Planned load" line, the
+ * Planned-vs-Actual bar, and the plannedTSS forwarded to the activity-detail
+ * "Load vs plan" card (data-planned-tss).
+ *
+ * PLANNING side. Runs read the canonical per-workout pricer, the same one the
+ * day's strain target sums (computePlannedDaySignalBTSS via
+ * getPlannedDayTSSContext), so the card and Home agree on the same session.
+ * Audit B2: this used TL_PER_MIN[w.rpe], 0.65/min for an RPE-3 easy run against
+ * the 0.92/min day target, so on-plan easy runs read about 140% in red.
+ * Replaced and skipped runs price at 0, as in the day target.
+ */
+export function planCardPlannedTSS(w: any, s: Pick<SimulatorState, 'pac' | 'wks'>): number {
+  const t = (w.t || '').toLowerCase();
+  if (!t || t === 'rest') return 0;
+  const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
+
+  // Cross-training: use historical iTrimp-based rate when available,
+  // fall back to TL_PER_MIN × sport runSpec (avoids running-calibrated inflation).
+  if (t === 'cross' || t === 'gym') {
+    const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
+    const rpe = w.rpe ?? w.r ?? 5;
+    const sportKey = t === 'gym' ? 'strength' : normalizeSport(w.n || 'generic_sport');
+    const historicalRate = computeCrossTrainTSSPerMin(s.wks, sportKey);
+    if (historicalRate != null) {
+      return Math.round(historicalRate * durMin);
+    }
+    const cfg = (SPORTS_DB as Record<string, { runSpec?: number }>)[sportKey];
+    const runSpec = cfg?.runSpec ?? 0.40;
+    return Math.round((TL_PER_MIN[Math.round(rpe)] ?? 1.15) * durMin * runSpec);
+  }
+
+  return Math.round(computePlannedWorkoutSignalBTSS(w, baseMinPerKm));
+}
+
 function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: number, currentWeek?: number): string {
   const id = w.id || w.n;
   const rated = wk?.rated ?? {};
@@ -354,30 +390,8 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   const isDone = (typeof ratingVal === 'number' && ratingVal > 0) || !!garminActual;
   const isSkipped = ratingVal === 'skip';
 
-  // Compute planned TSS using TL_PER_MIN (same scale as fitness-model.ts)
   const _s = getState();
-  const plannedTSS = (() => {
-    const t = (w.t || '').toLowerCase();
-    if (!t || t === 'rest') return 0;
-    const baseMinPerKm = _s.pac?.e ? _s.pac.e / 60 : 5.5;
-    const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
-    const rpe = w.rpe ?? w.r ?? 5;
-
-    // Cross-training: use historical iTrimp-based rate when available,
-    // fall back to TL_PER_MIN × sport runSpec (avoids running-calibrated inflation).
-    if (t === 'cross' || t === 'gym') {
-      const sportKey = t === 'gym' ? 'strength' : normalizeSport(w.n || 'generic_sport');
-      const historicalRate = computeCrossTrainTSSPerMin(_s.wks, sportKey);
-      if (historicalRate != null) {
-        return Math.round(historicalRate * durMin);
-      }
-      const cfg = (SPORTS_DB as Record<string, { runSpec?: number }>)[sportKey];
-      const runSpec = cfg?.runSpec ?? 0.40;
-      return Math.round((TL_PER_MIN[Math.round(rpe)] ?? 1.15) * durMin * runSpec);
-    }
-
-    return Math.round((TL_PER_MIN[Math.round(rpe)] ?? 1.15) * durMin);
-  })();
+  const plannedTSS = planCardPlannedTSS(w, _s);
 
   // Derive HR target on the fly if not already stored on the workout
   const _hrTarget = w.hrTarget ?? (() => {
@@ -899,7 +913,7 @@ function buildWorkoutCards(
       if (isDone) statusLabel = garminAct ? 'Logged' : 'Done';
       else if (isReplaced) statusLabel = 'Replaced';
       else if ((w as any).status === 'holiday') statusLabel = 'Holiday';
-      else if ((w as any).id?.startsWith('holiday-') || (w as any).id?.startsWith('adhoc-')) statusLabel = 'Added';
+      else if (isPlannedAdhocId((w as any).id)) statusLabel = 'Added';
       else if (isReduced) statusLabel = 'Adjusted';
       else if (isSkipped) statusLabel = 'Skipped';
       else if (isToday) statusLabel = 'Today';
@@ -958,7 +972,7 @@ function buildWorkoutCards(
 
       const isRunnable = w.t && w.t !== 'gym' && w.t !== 'cross' && w.t !== 'rest';
       const showHeaderStart = isCurrentWeek && !isDone && isRunnable;
-      const isUserGenerated = (w as any).id?.startsWith('holiday-') || (w as any).id?.startsWith('adhoc-');
+      const isUserGenerated = isPlannedAdhocId((w as any).id);
       const deleteBtn = isUserGenerated && !isDone
         ? `<button class="plan-adhoc-delete-btn" data-workout-id="${id}" data-week-num="${viewWeek}"
             style="padding:7px 10px;font-size:11px;border-radius:8px;border:1px solid var(--c-border);
