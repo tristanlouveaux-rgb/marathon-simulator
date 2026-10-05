@@ -8,6 +8,17 @@
  * adjustment, the ACWR reduction projection, the week-advance settle, the
  * launch carry-over, the Stats forecast and the daily coach.
  *
+ * Which modes can see it. The displaying surfaces (Plan card and Adjust-week
+ * strip, Load & Taper, the running week debrief, Stats forecast) are the
+ * running-plan views. Triathlon (cycling included, it runs as
+ * eventType 'triathlon') and HYROX route to their own Plan, Load, Stats and
+ * debrief views (main-view.ts, stats-view.ts, week-debrief.ts), none of which
+ * read this target. In those modes it reaches the user only as the daily
+ * coach's Signal A figure in the AI Coach context (`planned_week_tss`,
+ * coach-context-builder.ts), plus bookkeeping that shows no number: the
+ * week-advance settle and launch carry-over of `unspentLoadItems`, and for
+ * HYROX the Home adjust-button gate (computeAcwrReductionProjection).
+ *
  * Why it exists (audit A10/A11, 2026-09). Each caller used to build its own
  * `computePlannedSignalB(..., wk.ph, ..., undefined, undefined, ...)`:
  *   - `Week.ph` never holds 'deload', so the deload row of PHASE_MULTIPLIERS was
@@ -119,9 +130,10 @@ export function resolvePlannedWeekPhase(s: PlannedTargetState, weekNum: number):
  * Planned weekly load target for plan week `weekNum` (1-indexed), canonical TSS.
  *
  * signal 'B' (default): full physiological load, all sports. Compare with
- *   computeWeekRawTSS. This is the target every load surface shows.
+ *   computeWeekRawTSS. This is the target every running load surface shows.
  * signal 'A': running-equivalent target. Compare with computeWeekTSS only
- *   (daily coach week signal).
+ *   (daily coach week signal, sent to the AI Coach as `planned_week_tss` in
+ *   every mode).
  */
 export function computePlannedWeekTarget(
   s: PlannedTargetState,

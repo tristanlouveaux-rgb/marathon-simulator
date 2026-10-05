@@ -14,6 +14,7 @@ import {
   resolvePlannedWeekPhase,
 } from './planned-week-target';
 import { computePlanPhases } from '@/workouts/phases';
+import { buildCoachContext } from '@/coach/coach-context-builder';
 
 // Median 400, so every multiplier reads straight off the target.
 const HIST = [380, 390, 400, 410, 420];
@@ -195,6 +196,32 @@ describe('The race taper steps down week by week', () => {
       expect(computePlannedWeekTarget(s, 1)).toBe(594); // 200 x 0.97 + 400
       expect([7, 8].map(w => computePlannedWeekTarget(s, w))).toEqual([540, 510]); // 200 x 0.70 / 0.55 + 400
       expect(computePlannedWeekTarget(s, 8, 'A')).toBe(Math.round(385 * 0.55));
+    }
+  });
+
+  it('triathlon and HYROX race week: the AI Coach context carries the 0.55 Signal A target, the only place those modes read it', () => {
+    // Tri and HYROX Plan, Load, Stats and debrief views never read the weekly target, so the
+    // Signal B figures above (594 / 540 / 510) appear on no tri or HYROX screen. The coach
+    // context is where race week's lower target reaches these users.
+    const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
+    setClock(8, 2);
+    for (const eventType of ['triathlon', 'hyrox'] as const) {
+      const s = makeState({
+        phases,
+        eventType,
+        w: 8,
+        historicWeeklyTSS: [365, 375, 385, 395, 405],
+        ctlBaseline: 385,
+        sportBaselineByType: {
+          cycling: { avgSessionRawTSS: 100, sessionsPerWeek: 3 },
+          swimming: { avgSessionRawTSS: 50, sessionsPerWeek: 2 },
+        } as any,
+        ...(eventType === 'triathlon' ? { triConfig: { distance: '70.3' } as any } : {}),
+      });
+      const ctx = buildCoachContext(s) as { fitness_trend: { planned_week_tss: number | null } };
+      // 385 x 0.55 = 212. The 0-indexed position gave 385 x 0.70 = 270.
+      expect(ctx.fitness_trend.planned_week_tss).toBe(Math.round(385 * 0.55));
+      expect(ctx.fitness_trend.planned_week_tss).toBe(computePlannedWeekTarget(s, 8, 'A'));
     }
   });
 });
