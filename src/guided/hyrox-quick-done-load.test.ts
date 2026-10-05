@@ -61,4 +61,26 @@ describe('HYROX quick Mark as done carries load (audit B9)', () => {
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(workout.estimatedDurationMin! * TL_PER_MIN[Math.round(rpe)])); // was 0
     expect(computeTodaySignalBTSS(wk, actual!.startTime!.slice(0, 10))).toBeGreaterThan(0);              // was 0
   });
+
+  it('a station session in a future week keeps the rating only (no record stamped now in a week the matcher does not search)', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const s = getDefaultState();
+    s.planStartDate = '2026-09-28';
+    s.w = 1;
+    s.wks = [week(), { ...week(), w: 2 } as Week];
+    setState(s);
+
+    const station = generateHyroxStation({
+      kind: 'station_density', targetMinutes: 55, band: 'intermediate',
+      stationAccess: ACCESS, phase: 'build', slotIndex: 0,
+    }) as Workout;
+    const workout = { ...station, id: 'hx-w2-station-0', dayOfWeek: 2 } as Workout;
+
+    completeStrengthSession(workout, { targetWeek: 2 });
+
+    const wk2 = getMutableState().wks[1];
+    expect(typeof wk2.rated['hx-w2-station-0']).toBe('number');
+    expect(wk2.garminActuals?.['hx-w2-station-0']).toBeUndefined();
+  });
 });
+

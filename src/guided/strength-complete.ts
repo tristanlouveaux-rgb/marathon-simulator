@@ -311,7 +311,9 @@ function findCompletionHRMatch(wk: Week) {
  * (never later than now), so it counts in every load signal once. The matcher's
  * HYROX station path already treats a `guided-` actual as an upgrade candidate,
  * so a later watch recording replaces it in place. A synced actual already at
- * the slot wins. Returns true if it wrote.
+ * the slot wins. A future-week session keeps the rating only, as Mark as Done
+ * on a running plan card does (recordPlannedRunDone): the matcher would not
+ * find its record when today's watch copy syncs. Returns true if it wrote.
  */
 function logQuickHyroxActivity(
   workout: Workout,
@@ -321,6 +323,7 @@ function logQuickHyroxActivity(
   state: SimulatorState,
 ): boolean {
   const weekNum = targetWeek ?? state.w;
+  if (weekNum > state.w) return false;
   const wk = state.wks?.[weekNum - 1];
   if (!wk) return false;
   const workoutId = (workout as any).id ?? workout.n;

@@ -302,12 +302,16 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
  * supersedes it in place (matchAndAutoComplete). Cross sessions (bike / erg /
  * swim) keep the rating only: an in-app record without an activityType reads
  * as a run in the load model, and their sport mapping is an open question.
+ * A future-week session keeps the rating only too, as on the running plan card
+ * (recordPlannedRunDone): the matcher would not find its record when today's
+ * watch copy syncs.
  */
 function recordHxRunDone(weekIdx: number, workout: Workout, rpe: number): void {
   if ((workout.discipline as string) !== 'run') return;
   const durationMin = workout.estimatedDurationMin;
   if (typeof durationMin !== 'number' || durationMin <= 0) return;
   const s = getMutableState();
+  if (weekIdx + 1 > s.w) return;
   const wk = s.wks?.[weekIdx];
   if (!wk) return;
   writeInAppActual(wk, (workout as any).id ?? workout.n, buildPlannedRunActual(workout, {

@@ -41,11 +41,19 @@
  *   - completion window (the guided-strength upgrade in matchAndAutoComplete):
  *     start within 36 h and duration ratio 0.5 to 2.0. Used only for manual
  *     completions, whose start is the planned day, not a recorded start.
+ *
+ * A manual completion stamped on the synced run's own calendar day is checked
+ * BEFORE any planned slot can claim the run ('same-day-completion'): the user
+ * already said that session happened that day, so an unrated slot on a
+ * neighbouring day (the HYROX run branch accepts day ±1) must not take the
+ * watch copy and count the session twice. Cross-day completions are checked
+ * only after slot matching ('completion').
  */
 
 import type { GarminActual, GpsRecording, Week, Workout } from '@/types';
 import { parseDistanceKm } from '@/calculations/matching';
 import { isStrengthActual } from '@/cross-training/activities';
+import { localDateKey } from '@/utils/local-date';
 
 /** garminId prefix of every in-app record (strength-complete.ts convention). */
 export const IN_APP_GARMIN_ID_PREFIX = 'guided-';
@@ -261,6 +269,63 @@ export function writeInAppActual(wk: Week, key: string, actual: GarminActual): G
   return actual;
 }
 
+/**
+ * Plan-card types that are not runs: the list plan-view's week effort score has
+ * always skipped (events.ts and week-debrief.ts carry the same list). Covers
+ * the injury plan's `cross_training` replacement ("Cross-Train: <sport>"), its
+ * `strength` rehab session and its `capacity_test`, which the narrower
+ * gym / cross / rest check used to treat as runs.
+ */
+export const PLAN_CARD_NON_RUN_TYPES: readonly string[] = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+
+/** True when a plan card of this workout type is a run. */
+export function isPlanCardRunType(type: string | null | undefined): boolean {
+  return !!type && !PLAN_CARD_NON_RUN_TYPES.includes(type);
+}
+
+/**
+ * Mark as Done on a running-plan card: store the run's planned load as its
+ * activity record, or return null and write nothing.
+ *
+ * Writes nothing when:
+ *   - the card is not a run (cross, injury cross-training, strength, capacity
+ *     test, gym, rest). An in-app record with no activityType reads as a run
+ *     in the load model, so a cross card would put bike or swim minutes into
+ *     the running-specific Signal A. Those cards keep the rating only.
+ *   - the slot is not rated (rate() refused it).
+ *   - the card sits in a future week. A record there would be stamped now but
+ *     stored in a week the matcher does not search for today's watch copy, so
+ *     the session could count twice. The rating alone records the tick, as
+ *     before audit B9.
+ *
+ * `durationMin` is the caller's canonical planned duration (plan-view passes
+ * estimateWorkoutDurMin with the card's base pace).
+ */
+export function recordPlannedRunDone(
+  wk: Week,
+  key: string,
+  w: Pick<Workout, 'n' | 't' | 'd' | 'dayOfWeek'>,
+  opts: {
+    rpe: number;
+    durationMin: number;
+    planStartDate: string | null | undefined;
+    weekNum: number;
+    currentWeek: number;
+    nowMs?: number;
+  },
+): GarminActual | null {
+  if (!isPlanCardRunType(w.t)) return null;
+  if (opts.weekNum > opts.currentWeek) return null;
+  if (typeof wk.rated?.[key] !== 'number') return null;
+  if (!(opts.durationMin > 0)) return null;
+  return writeInAppActual(wk, key, buildPlannedRunActual(w, {
+    rpe: opts.rpe,
+    startTime: manualCompletionStartIso(opts.planStartDate, opts.weekNum, w.dayOfWeek, opts.nowMs),
+    durationMin: opts.durationMin,
+    nowMs: opts.nowMs,
+  }));
+}
+
 /** Remove the in-app record at `key`, if that is what sits there. Synced actuals are untouched. */
 export function dropInAppActual(wk: Week | undefined, key: string): boolean {
   const a = wk?.garminActuals?.[key];
@@ -273,23 +338,29 @@ export function dropInAppActual(wk: Week | undefined, key: string): boolean {
  * The in-app run record in `wk` that a synced run recording supersedes, or null.
  *
  *   - 'recorded': any in-app run (GPS or manual) inside the recorded window.
- *   - 'completion': manual completions only, inside the completion window.
- *     GPS records are excluded: their start is a real recorded start, so a
- *     synced run outside the recorded window is a different session.
+ *   - 'same-day-completion': manual completions stamped on the synced run's
+ *     local calendar day, inside the completion window. The matcher checks
+ *     this before any planned slot may claim the run.
+ *   - 'completion': manual completions inside the completion window, any day.
+ *     The matcher checks this only when no planned slot claimed the run.
  *
- * When several qualify, the nearest start wins.
+ * GPS records never match the completion modes: their start is a real
+ * recorded start, so a synced run outside the recorded window is a different
+ * session. When several qualify, the nearest start wins.
  */
 export function findInAppRunToSupersede(
   wk: Week,
   synced: { startTime: string; durationSec: number },
-  mode: 'recorded' | 'completion',
+  mode: 'recorded' | 'same-day-completion' | 'completion',
 ): string | null {
   const syncedMs = new Date(synced.startTime).getTime();
+  const syncedDay = mode === 'same-day-completion' ? localDateKey(synced.startTime) : '';
   let bestKey: string | null = null;
   let bestGap = Infinity;
   for (const [key, a] of Object.entries(wk.garminActuals ?? {})) {
     if (!isInAppRunActual(a)) continue;
-    if (mode === 'completion' && isGpsInAppActual(a)) continue;
+    if (mode !== 'recorded' && !isManualInAppActual(a)) continue;
+    if (mode === 'same-day-completion' && (!a.startTime || !syncedDay || localDateKey(a.startTime) !== syncedDay)) continue;
     const same = mode === 'recorded'
       ? isSameRecordedSession(a, synced)
       : isSameCompletedSession(a, synced);

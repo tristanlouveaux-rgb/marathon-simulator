@@ -24,10 +24,14 @@ vi.mock('@/state/persistence', async (orig) => ({
   ...(await orig<typeof import('@/state/persistence')>()),
   saveState: vi.fn(),
 }));
+const plan = vi.hoisted(() => ({
+  extra: [] as Array<Record<string, unknown>>,
+}));
 vi.mock('@/workouts', async (orig) => ({
   ...(await orig<typeof import('@/workouts')>()),
   generateWeekWorkouts: () => [
     { n: 'Easy Run', t: 'easy', d: '8km', r: 3, rpe: 3, dayOfWeek: 2, id: 'W1-easy-0' },
+    ...plan.extra,
   ],
 }));
 
@@ -62,6 +66,7 @@ function recording(): GpsRecording {
 describe('handleCompletedRecording stores the run as load (audit B9)', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    plan.extra = [];
   });
 
   it('an impromptu in-app GPS run (track-only) counts in Signal A, weekly and daily Signal B', () => {
@@ -100,5 +105,27 @@ describe('handleCompletedRecording stores the run as load (audit B9)', () => {
     expect(wk.garminActuals?.['W1-easy-0']?.garminId).toBe(`guided-${rec.id}`);
     expect(wk.adhocWorkouts ?? []).toHaveLength(0);
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(45 * TL_PER_MIN[7])); // was 0
+  });
+
+  it('a GPS recording started from an injury cross-training card keeps the rating only (no run record in Signal A)', () => {
+    // Injury plans replace a banned run with a cross_training card (injury/engine.ts).
+    plan.extra = [{
+      n: 'Cross-Train: Cycling', t: 'cross_training', d: '60 min', r: 5, rpe: 5, dayOfWeek: 3,
+      id: 'W1-cross_training-0', status: 'replaced',
+    }];
+    const s = getDefaultState();
+    s.planStartDate = '2026-09-28';
+    s.w = 1;
+    s.wks = [week()];
+    setState(s);
+
+    const rec = recording();
+    handleCompletedRecording(rec, 'Cross-Train: Cycling');
+
+    const wk = getMutableState().wks[0];
+    expect(wk.rated['W1-cross_training-0']).toBe(7);           // the tick is kept
+    expect(wk.gpsRecordings?.['W1-cross_training-0']).toBe(rec.id);
+    expect(wk.garminActuals ?? {}).toEqual({});                // no run record
+    expect(computeWeekTSS(wk, wk.rated)).toBe(0);
   });
 });

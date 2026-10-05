@@ -47,7 +47,7 @@ import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
-import { buildPlannedRunActual, manualCompletionStartIso, writeInAppActual, isInAppActual, isManualInAppActual } from '@/calculations/in-app-activity';
+import { recordPlannedRunDone, PLAN_CARD_NON_RUN_TYPES, isInAppActual, isManualInAppActual } from '@/calculations/in-app-activity';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
@@ -2279,8 +2279,9 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
  * the planned day, so the run counts in Signal A, weekly and daily Signal B and
  * the rolling ACWR. A watch copy that syncs later supersedes it in place.
  *
- * Cross and gym cards without exercises keep the rating-only behaviour: their
- * sport and duration source is not settled (see the B9 open questions).
+ * recordPlannedRunDone decides whether a record is written: non-run cards
+ * (cross, injury cross-training, strength, capacity test, gym, rest) and
+ * future-week cards keep the rating-only behaviour.
  */
 function markPlanCardDone(el: HTMLElement): void {
   const wId = el.dataset.workoutId || '';
@@ -2292,19 +2293,19 @@ function markPlanCardDone(el: HTMLElement): void {
   const w = _workoutLookup.get(wId);
   rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
 
-  const isRunType = type !== 'gym' && type !== 'cross' && type !== 'rest';
-  if (!isRunType || !w) return;
+  if (!w) return;
   const ms = getMutableState();
   const wn = weekNum ?? ms.w;
   const wk = ms.wks?.[wn - 1];
-  if (!wk || typeof wk.rated?.[wId] !== 'number') return;
-  const durationMin = estimateWorkoutDurMin(w, planCardBaseMinPerKm(ms));
-  writeInAppActual(wk, wId, buildPlannedRunActual(w, {
+  if (!wk) return;
+  const written = recordPlannedRunDone(wk, wId, w, {
     rpe,
-    startTime: manualCompletionStartIso(ms.planStartDate, wn, w.dayOfWeek),
-    durationMin,
-  }));
-  saveState();
+    durationMin: estimateWorkoutDurMin(w, planCardBaseMinPerKm(ms)),
+    planStartDate: ms.planStartDate,
+    weekNum: wn,
+    currentWeek: ms.w,
+  });
+  if (written) saveState();
 }
 
 // ─── Main render ─────────────────────────────────────────────────────────────
@@ -2397,7 +2398,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   // ── Week Overview signals ───────────────────────────────────────────────────
   const isFutureWeek = viewWeek > s.w;
   // Compute RPE on-the-fly from rated workouts (same as events.ts / week-debrief)
-  const _nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+  const _nonRunTypes = PLAN_CARD_NON_RUN_TYPES;
   let _effortScore: number | null = wk?.rpeEffort ?? wk?.effortScore ?? null;
   {
     const allRunsForEffort = [

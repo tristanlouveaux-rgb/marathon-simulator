@@ -1351,10 +1351,19 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // window (start ±4h, duration within 15%: reconcileCrossSourceDuplicates'
       // rule), the synced copy replaces it in place instead of landing as a
       // second activity. Runs in every mode (running, HYROX, triathlon fallthrough).
+      //
+      // A run marked done on the same calendar day as the synced run is checked
+      // here too, before any planned slot can claim the row (completion window:
+      // duration 0.5–2.0×). Its stamp is planned-day noon, so an evening run or a
+      // run whose length differs from plan by over 15% misses the recorded
+      // window; the HYROX run branch below would then hand the watch copy to an
+      // unrated run slot on the neighbouring day (day ±1, Mon/Sun wrapping) and
+      // the session would count twice. Cross-day completions keep the
+      // post-matching check in the run else-branch.
       if (appType === 'run' && !isInAppRow) {
-        const inAppKey = findInAppRunToSupersede(
-          wk, { startTime: row.start_time, durationSec: row.duration_sec }, 'recorded',
-        );
+        const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
+        const inAppKey = findInAppRunToSupersede(wk, syncedStamp, 'recorded')
+          ?? findInAppRunToSupersede(wk, syncedStamp, 'same-day-completion');
         if (inAppKey) {
           supersedeInAppRun(s, wk, inAppKey, row, rhrBaseline);
           changed = true;

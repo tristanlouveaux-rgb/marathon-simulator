@@ -455,8 +455,9 @@ export interface SignalAEntry {
  *   - Each activity counts at most once. garminActuals win over their adhoc
  *     twin; the dedup keys are garminId and the twin's garminActuals key.
  *   - Scope: garminActuals and `garmin-` adhoc entries only. In-app GPS runs and
- *     manual logs (non-`garmin-` adhoc ids) are outside Signal A (audit B9);
- *     Signal B counts them.
+ *     runs marked done are in scope through their `guided-` garminActuals record
+ *     (audit B9). Manual logs with only a non-`garmin-` adhoc entry are outside
+ *     Signal A; Signal B counts them.
  *   - `unspentLoadItems` are never load. Each one points at an activity (or the
  *     surplus slice of a run) that garminActuals / adhocWorkouts already hold.
  *   - Signal A = TSS × runSpec of the activity's OWN sport, never the slot's.

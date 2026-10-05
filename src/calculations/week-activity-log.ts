@@ -1,6 +1,5 @@
 import type { Week } from '@/types';
 import { formatActivityType } from '@/calculations/activity-matcher';
-import { isInAppActual } from '@/calculations/in-app-activity';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /**
@@ -99,12 +98,14 @@ export function collectWeekActivities(wk: Week | undefined): WeekActivityEntry[]
   for (const [workoutId, raw] of Object.entries(actuals)) {
     if (workoutId.startsWith('garmin-') && adhocGarminIds.has(workoutId)) continue;
     const a = raw as any;
-    // No plan slot behind it: a standalone synced activity, or an in-app GPS run
-    // recorded outside the plan (its record is keyed by its own adhoc id).
-    const isOrphan = workoutId.startsWith('garmin-') || (isInAppActual(a) && doneAdhocIds.has(workoutId));
+    // No plan slot behind it: a standalone synced activity, or an actual keyed
+    // by a done (non-planned) adhoc id, such as an in-app GPS run recorded
+    // outside the plan. Decided by the key, not the source, so the run stays
+    // "Logged" after a watch copy supersedes the in-app record under that key.
+    const isOrphan = workoutId.startsWith('garmin-') || doneAdhocIds.has(workoutId);
     const name = a.displayName || a.workoutName || workoutId;
     const slotName = !isOrphan && a.workoutName && a.workoutName !== a.displayName ? a.workoutName : null;
-    const isExcess = isOrphan && excessGarminIds.has(workoutId.slice('garmin-'.length));
+    const isExcess = workoutId.startsWith('garmin-') && excessGarminIds.has(workoutId.slice('garmin-'.length));
     entries.push({
       badge: isOrphan ? (isExcess ? 'excess' : 'logged') : 'matched',
       name,

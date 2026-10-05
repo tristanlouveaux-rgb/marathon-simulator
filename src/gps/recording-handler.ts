@@ -17,7 +17,7 @@ import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/ca
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
-import { buildGpsRunActual, writeInAppActual } from '@/calculations/in-app-activity';
+import { buildGpsRunActual, writeInAppActual, isPlanCardRunType } from '@/calculations/in-app-activity';
 
 /**
  * Handle a completed GPS recording: find the matching workout,
@@ -31,7 +31,9 @@ import { buildGpsRunActual, writeInAppActual } from '@/calculations/in-app-activ
  *                    so the plan can be adjusted accordingly.
  *
  * Every branch also stores the recording as an activity (`recordGpsActual`),
- * so the run carries its load into every signal exactly once (audit B9).
+ * so the run carries its load into every signal exactly once (audit B9). The
+ * exception is a recording started from a non-run card (injury cross-training
+ * or rehab strength): it keeps the rating only, like Mark as Done there.
  */
 export function handleCompletedRecording(recording: GpsRecording, workoutName: string): void {
   const s = getState();
@@ -80,7 +82,12 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
         if (week) {
           if (!week.gpsRecordings) week.gpsRecordings = {};
           week.gpsRecordings[workoutId] = recording.id;
-          recordGpsActual(week, workoutId, recording, rpe, workout.n, { workoutName: workout.n, plannedType: workout.t });
+          // A run record on a non-run card (injury cross-training, rehab
+          // strength) would read as running in Signal A. Those cards keep the
+          // rating only, as Mark as Done does (recordPlannedRunDone).
+          if (isPlanCardRunType(workout.t)) {
+            recordGpsActual(week, workoutId, recording, rpe, workout.n, { workoutName: workout.n, plannedType: workout.t });
+          }
           saveState();
         }
         render();
