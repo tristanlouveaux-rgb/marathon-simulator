@@ -7,7 +7,7 @@
 import { getState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import {
-  computeACWR,
+  computeReadinessACWR,
   getDailyLoadHistory,
   type DailyLoadEntry,
   type ZoneLoad,
@@ -247,20 +247,9 @@ function buildZoneBalance(entries: DailyLoadEntry[]): string {
 // ── Main HTML ────────────────────────────────────────────────────────────────
 
 function getRollingLoadHTML(s: SimulatorState): string {
-  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  // Use 0 as the seed (instead of ctlBaseline-derived) when track-only mode OR
-  // we have explicit `previousPlanWks` to read from. In both cases, days
-  // outside any plan window are genuine no-training days, not gaps to fill
-  // with a phantom baseline that would inflate ACWR/ATL. The ring + 28d-avg
-  // numbers must use the same seed as the daily chart, or they disagree.
-  const _archivedPlansForACWR = (s as any).previousPlanWks ?? undefined;
-  const _hasExplicitHistory = !!(_archivedPlansForACWR && _archivedPlansForACWR.length > 0);
-  const acwrSeed = ((s as any).trackOnly || _hasExplicitHistory) ? 0 : atlSeed;
-  const acwr = computeACWR(
-    s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined,
-    s.planStartDate, acwrSeed, acwrSeed, undefined,
-    _archivedPlansForACWR, s.adaptiveRecovery,
-  );
+  // Canonical ACWR: the same call the Readiness "7-Day Rolling Load" card makes,
+  // so the ring, the 28d avg and the label match the card that opens this page.
+  const acwr = computeReadinessACWR(s);
 
   const rollingTSS = Math.round(acwr.atl);
   const chronicTSS = Math.round(acwr.ctl);
@@ -277,16 +266,11 @@ function getRollingLoadHTML(s: SimulatorState): string {
   // a new plan is generated) so the 28-day chart still shows recent training
   // history immediately after a plan reset.
   const archivedPlans = (s as any).previousPlanWks ?? undefined;
-  // Use 0 (not atlSeed/7) for days outside any plan window when:
-  //   • track-only mode (post-plan, no plan to compare against), or
-  //   • we have explicit `previousPlanWks` history covering recent training —
-  //     gaps after the archive's last activity are real "no-training" days, not
-  //     a phantom baseline. seedDaily ≈ 30 was painting a flat line that masked
-  //     the actual training pattern.
-  const hasExplicitHistory = !!(archivedPlans && archivedPlans.length > 0);
-  const chartSeed = ((s as any).trackOnly || hasExplicitHistory) ? 0 : atlSeed;
+  // The chart draws recorded days only. No seed is passed, so days no live or
+  // archived plan week covers are left off rather than drawn as a flat
+  // synthetic baseline or as zero-load rest days.
   const entries = s.planStartDate
-    ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, chartSeed, undefined, s.maxHR, archivedPlans)
+    ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, undefined, undefined, s.maxHR, archivedPlans)
     : [];
 
   const chart = entries.length >= 2 ? buildDailyLoadChart(entries) : '';
@@ -499,9 +483,8 @@ export function renderRollingLoadView(): void {
   const s = getState();
   const html = getRollingLoadHTML(s);
   container.innerHTML = html;
-  // Extract ringOffset from the rendered state
-  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
+  // Extract ringOffset from the rendered state (same canonical call as the HTML)
+  const acwr = computeReadinessACWR(s);
   const rollingTSS = Math.round(acwr.atl);
   const chronicTSS = Math.round(acwr.ctl);
   const loadRatio = chronicTSS > 0 ? rollingTSS / chronicTSS : 0;

@@ -1095,12 +1095,43 @@ export const TIER_ACWR_CONFIG: Record<string, { safeUpper: number; label: string
 };
 
 /**
- * Compute rolling 7-day (acute) and 28-day (chronic) load from actual daily TSS.
- * Returns null if fewer than 14 days of plan data available.
+ * Minimum completed days of observed load before an UNSEEDED rolling ACWR is
+ * reported. This is the 14-day guard computeRollingLoadRatio has always had; it
+ * used to count calendar days since planStartDate (and any archive entry, even
+ * an empty one, switched it off). It now counts days that the live plan or an
+ * archived plan actually covers, so it measures data, not plan age.
+ */
+export const ROLLING_ACWR_MIN_OBSERVED_DAYS = 14;
+
+/**
+ * Compute rolling 7-day (acute) and 28-day (chronic) Signal B load from actual
+ * daily TSS. chronic = 28-day sum / 4 (weekly average); the acute week sits
+ * inside the chronic window (coupled ratio, Hulin 2014 / Gabbett 2016).
  *
- * For days before the plan started, uses signalBSeed / 7 as a daily fill so that
- * early plan weeks have a reasonable chronic baseline. This fill naturally phases
- * out as real data fills the 28-day window.
+ * A day is OBSERVED when the live plan or an archived plan has a week covering
+ * it: activities are only ever stored on plan weeks, so any other day in the
+ * window has no record at all.
+ *
+ * - With a Signal B seed (signalBSeed > 0): unobserved days are filled with
+ *   signalBSeed / 7, the athlete's measured pre-plan weekly load. Unchanged.
+ * - Without a seed: an unobserved day is MISSING, not a rest day. Counting it as
+ *   0 understated chronic and read steady training as a spike (1.87 'high' on
+ *   plan day 14; 4.00 from day 0 once an archive entry bypassed the old guard).
+ *   Returns null until ROLLING_ACWR_MIN_OBSERVED_DAYS completed days are
+ *   observed. After that the 21 days before the acute week are valued at the
+ *   athlete's own mean daily load B/7, taken from the most recent whole weeks
+ *   (multiples of 7 days) of observed days in that span, so the weekday mix
+ *   cannot bias it:
+ *       chronic = (acute + 21 · B/7) / 4 = (acute + 3B) / 4
+ *   which is the 28-day coupled chronic the athlete would show had those 21 days
+ *   matched their observed baseline (Windt & Gabbett 2019: coupled and uncoupled
+ *   ratios map onto each other deterministically for fixed windows). When all 21
+ *   days are observed this equals the plain 28-day sum / 4 exactly. A missing day
+ *   inside the acute week is valued at B/7 for the same reason.
+ *
+ * Tracking calculation (describes recent load against chronic load). Planning
+ * consumes it: the week advance stamps scheduledAcwrStatus / scheduledChronicTSS
+ * from computeACWR, and the ease-back ladder sizes L_max = safeUpper × chronic.
  */
 export function computeRollingLoadRatio(
   wks: Week[],
@@ -1111,33 +1142,43 @@ export function computeRollingLoadRatio(
 ): { acute: number; chronic: number } | null {
   const now = new Date();
   now.setHours(12, 0, 0, 0);
-  const planStart = new Date(planStartDate + 'T12:00:00');
-  const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
+  const seedDaily = signalBSeed != null && signalBSeed > 0 ? signalBSeed / 7 : 0;
 
-  // Need at least 14 days since plan start for a meaningful chronic window
-  // (or archived data extending the effective history back further).
-  const daysSincePlanStart = Math.floor((now.getTime() - planStart.getTime()) / 86400000);
-  if (daysSincePlanStart < 14 && seedDaily === 0 && !archivedPlans?.length) return null;
-
-  // Collect daily Signal B TSS for the last 28 days (index 0 = 27 days ago).
-  // _resolveWeekForDate also checks archived plans, so activities from a prior
-  // plan keep contributing to ACWR after the user generates a new plan.
-  const daily: number[] = [];
+  // Daily Signal B TSS for the last 28 days (index 0 = 27 days ago, 27 = today).
+  // null = no live or archived plan week covers the day. _resolveWeekForDate
+  // also checks archived plans, so activities from a prior plan keep
+  // contributing to ACWR after the user generates a new plan.
+  const observed: (number | null)[] = [];
   for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
     const d = new Date(now);
     d.setDate(d.getDate() - daysAgo);
     const dateStr = d.toISOString().split('T')[0];
-
     const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
-    if (!wk) {
-      daily.push(seedDaily);
-    } else {
-      daily.push(computeTodaySignalBTSS(wk, dateStr, null, norm));
-    }
+    observed.push(wk ? computeTodaySignalBTSS(wk, dateStr, null, norm) : null);
   }
 
-  const acute   = daily.slice(-7).reduce((a, b) => a + b, 0);
-  const chronic = daily.reduce((a, b) => a + b, 0) / 4; // 28-day sum / 4 = weekly average
+  if (seedDaily > 0) {
+    const daily = observed.map(v => v ?? seedDaily);
+    const acute   = daily.slice(-7).reduce((a, b) => a + b, 0);
+    const chronic = daily.reduce((a, b) => a + b, 0) / 4; // 28-day sum / 4 = weekly average
+    return { acute, chronic };
+  }
+
+  // No seed: count observed COMPLETED days (today is still in progress), matching
+  // the old guard's "days since plan start".
+  const completedObserved = observed.slice(0, 27).filter(v => v != null).length;
+  if (completedObserved < ROLLING_ACWR_MIN_OBSERVED_DAYS) return null;
+
+  // Observed days in the 21 days before the acute week. The guard guarantees at
+  // least 8 (14 completed observed days, at most 6 of them in the acute week).
+  const beforeAcute = observed.slice(0, 21).filter((v): v is number => v != null);
+  const wholeWeekDays = Math.floor(beforeAcute.length / 7) * 7;
+  if (wholeWeekDays === 0) return null;
+  const baselineDays = beforeAcute.slice(beforeAcute.length - wholeWeekDays);
+  const baselineDaily = baselineDays.reduce((a, b) => a + b, 0) / baselineDays.length;
+
+  const acute   = observed.slice(-7).reduce<number>((a, v) => a + (v ?? baselineDaily), 0);
+  const chronic = (acute + 21 * baselineDaily) / 4;
   return { acute, chronic };
 }
 
@@ -1164,7 +1205,9 @@ export interface DailyLoadEntry {
 
 /**
  * Build 28-day daily load history with per-day activity breakdown.
- * Used by the rolling-load detail view.
+ * Used by the rolling-load detail view. Days no live or archived plan week
+ * covers are drawn at signalBSeed / 7 when a seed is passed, and omitted
+ * otherwise (there is no record of them), so the list can be shorter than 28.
  */
 /**
  * Resolve which Week (from current `wks` or any archived plan) covers a given
@@ -1201,7 +1244,7 @@ export function getDailyLoadHistory(
 ): DailyLoadEntry[] {
   const now = new Date();
   now.setHours(12, 0, 0, 0);
-  const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
+  const seedDaily = signalBSeed != null && signalBSeed > 0 ? signalBSeed / 7 : 0;
 
   const entries: DailyLoadEntry[] = [];
   for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
@@ -1211,7 +1254,12 @@ export function getDailyLoadHistory(
 
     const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
     if (!wk) {
-      entries.push({ date: dateStr, tss: Math.round(seedDaily), activities: [], zoneLoad: { lowAerobic: 0, highAerobic: 0, anaerobic: 0 } });
+      // No plan week covers this day, so there is no record of it. Without a
+      // seed it is missing, not a rest day: leave it off the chart rather than
+      // draw a zero bar (same rule as computeRollingLoadRatio).
+      if (seedDaily > 0) {
+        entries.push({ date: dateStr, tss: Math.round(seedDaily), activities: [], zoneLoad: { lowAerobic: 0, highAerobic: 0, anaerobic: 0 } });
+      }
       continue;
     }
     const tss = computeTodaySignalBTSS(wk, dateStr, null, norm);
@@ -1304,8 +1352,9 @@ export function getDailyLoadHistory(
 /**
  * Compute the Acute:Chronic Workload Ratio for the current point in the plan.
  *
- * Requires at least 3 weeks of history for a meaningful signal. Returns
- * status='unknown' until that threshold is met.
+ * Rolling mode returns status='unknown' until there is a Signal B seed or
+ * ROLLING_ACWR_MIN_OBSERVED_DAYS observed days (see computeRollingLoadRatio).
+ * The weekly-EMA fallback (no planStartDate) needs 3 completed weeks.
  *
  * When signalBSeed is provided (recommended), both CTL and ATL use Signal B
  * (raw physiological TSS, no runSpec discount). This correctly handles cross-training
@@ -1316,9 +1365,11 @@ export function getDailyLoadHistory(
  * 1. **Rolling (preferred)**: When planStartDate is available, uses a true rolling
  *    7-day (acute) / 28-day (chronic) window over actual daily TSS. No weekly
  *    bucket artifacts. A half marathon on Saturday is fully reflected on Sunday.
- *    Pre-plan days are filled with signalBSeed / 7 (historical daily average).
- * 2. **Weekly EMA (fallback)**: When planStartDate is missing or rolling data is
- *    insufficient, falls back to the EMA-based approach on completed weeks only.
+ *    Days no plan covers are filled with signalBSeed / 7 (historical daily
+ *    average); without a seed they are missing and valued at the athlete's own
+ *    observed baseline.
+ * 2. **Weekly EMA (fallback)**: Only when planStartDate is missing (or there are
+ *    no weeks at all). Uses the EMA-based approach on completed weeks only.
  *
  * @param wks - All weeks in the plan
  * @param currentWeek - Current 1-indexed week number
@@ -1355,22 +1406,27 @@ export function computeACWR(
   // doesn't cliff-drop the ratio.
   if (planStartDate && (wks.length > 0 || archivedPlans?.length)) {
     const rolling = computeRollingLoadRatio(wks, planStartDate, signalBSeed, norm, archivedPlans);
-    if (rolling) {
-      ctl = rolling.chronic;
-      atl = rolling.acute;
+    // null = no Signal B seed and fewer than ROLLING_ACWR_MIN_OBSERVED_DAYS
+    // observed days. Report 'unknown'. The weekly-EMA fallback below must not
+    // stand in: for an unseeded athlete it starts from zero (pre-plan weeks read
+    // as rest), and it is only reachable here when s.w runs ahead of the
+    // calendar (simulator / "Complete week"), where it read a false spike.
+    if (!rolling) return { ratio: 0, safeUpper, status: 'unknown', atl: 0, ctl: 0 };
 
-      if (ctl < 1) {
-        return { ratio: 0, safeUpper, status: 'unknown', atl, ctl };
-      }
+    ctl = rolling.chronic;
+    atl = rolling.acute;
 
-      const ratio = atl / ctl;
-      let status: AthleteACWRStatus;
-      if (ratio < 0.8) status = 'low';
-      else if (ratio <= safeUpper) status = 'safe';
-      else if (ratio <= safeUpper + 0.2) status = 'caution';
-      else status = 'high';
-      return { ratio, safeUpper, status, atl, ctl };
+    if (ctl < 1) {
+      return { ratio: 0, safeUpper, status: 'unknown', atl, ctl };
     }
+
+    const ratio = atl / ctl;
+    let status: AthleteACWRStatus;
+    if (ratio < 0.8) status = 'low';
+    else if (ratio <= safeUpper) status = 'safe';
+    else if (ratio <= safeUpper + 0.2) status = 'caution';
+    else status = 'high';
+    return { ratio, safeUpper, status, atl, ctl };
   }
 
   // ── Weekly EMA fallback ──────────────────────────────────────────────────────
@@ -1641,6 +1697,54 @@ export function computeSameSignalCtlHistory(
     out.push(ctl);
   }
   return out;
+}
+
+export interface WeeklyAcwrEntry { week: number; ratio: number; rawTSS: number; }
+
+/**
+ * Weekly Signal B ACWR (EMA ATL ÷ EMA CTL) at the end of each completed live-plan
+ * week. Feeds the Load Ratio page's weekly trend bars and its "most recent
+ * completed week hit N×" line.
+ *
+ * - Seeded (seed > 0): both EMAs start at the seed. Unchanged.
+ * - Unseeded: there is no record before week 1, so starting both EMAs at 0
+ *   treated every earlier week as rest and read steady training as a spike
+ *   (4.1, 3.1, 2.4, 2.0 in weeks 1 to 4). Each EMA is instead bias-corrected:
+ *   after t weeks it is divided by (1 − decay^t), the share of its weight that
+ *   sits on observed weeks, which makes it the decay-weighted mean of the
+ *   observed weeks only. This is the standard correction for a zero-initialised
+ *   EMA (Kingma & Ba 2015). Steady training reads 1.0 from week 1. Limitation:
+ *   with only a few weeks the chronic mean leans on the latest week, so an early
+ *   spike reads lower than a seeded athlete's would (never higher).
+ *
+ * Tracking calculation (display only; no plan logic reads it).
+ */
+export function computeWeeklyAcwrHistory(
+  wks: Week[],
+  completedWeek: number,
+  seed: number | undefined,
+  planStartDate?: string,
+): WeeklyAcwrEntry[] {
+  const hasSeed = seed != null && seed > 0;
+  let ctl = hasSeed ? seed : 0;
+  let atl = hasSeed ? seed : 0;
+  let ctlUnobservedWeight = 1; // CTL_DECAY^t: weight still sitting on the (missing) start value
+  let atlUnobservedWeight = 1; // ATL_DECAY^t
+  const results: WeeklyAcwrEntry[] = [];
+  const limit = Math.min(completedWeek, wks.length);
+  for (let i = 0; i < limit; i++) {
+    const wk = wks[i];
+    const weekRawTSS = computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate);
+    ctl = ctl * CTL_DECAY + weekRawTSS * (1 - CTL_DECAY);
+    atl = atl * ATL_DECAY + weekRawTSS * (1 - ATL_DECAY);
+    ctlUnobservedWeight *= CTL_DECAY;
+    atlUnobservedWeight *= ATL_DECAY;
+    const ctlEst = hasSeed ? ctl : ctl / (1 - ctlUnobservedWeight);
+    const atlEst = hasSeed ? atl : atl / (1 - atlUnobservedWeight);
+    const ratio = ctlEst > 1 ? atlEst / ctlEst : 0;
+    results.push({ week: wk.w, ratio, rawTSS: weekRawTSS });
+  }
+  return results;
 }
 
 /**
