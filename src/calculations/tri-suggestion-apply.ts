@@ -136,6 +136,14 @@ function currentRungIdx(w: Workout, d: 'bike' | 'swim'): number {
   return ladder.findIndex(r => r.key === (w.intensityLevel ?? w.t));
 }
 
+/** Planned minutes, or 0 when the session carries none. A swap or downgrade
+ *  needs minutes to price the new prescription (Load Currency Law), so a
+ *  session without them is left untouched and counted as skipped rather than
+ *  changing type, targets and RPE under its old load. estimateTriWorkoutMin
+ *  (week-resolve.triathlon.ts) is not a usable fallback here: it reads the
+ *  largest single "Nmin" token, so a structured session reads as one block (a
+ *  generated 80-min bike threshold reads 15 min, which would re-price 105 TSS
+ *  as about 17). Generated sessions always carry estimatedDurationMin. */
 function minutesOf(w: Workout): number {
   return typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0 ? w.estimatedDurationMin : 0;
 }
@@ -264,7 +272,8 @@ function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSu
   if (!d) return false;
   const longRun = isLongRun(w);
   const oldMin = minutesOf(w);
-  const newMin = oldMin > 0 ? Math.round(oldMin * SWAP_EASY_DURATION_FACTOR) : 0;
+  if (oldMin <= 0) return false; // no minutes to price the easy session at
+  const newMin = Math.round(oldMin * SWAP_EASY_DURATION_FACTOR);
 
   const oldT = w.t;
   if (d === 'run') {
@@ -302,6 +311,7 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
   const d = ladderDiscipline(w);
   if (!d) return false;
   const minutes = minutesOf(w);
+  if (minutes <= 0) return false; // no minutes to price the lower rung at
 
   if (d === 'run') {
     if (runPaceRung(w.t) < 0) return false; // off RUN_PACE_LADDER

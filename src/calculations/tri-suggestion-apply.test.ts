@@ -303,3 +303,32 @@ describe('applyTriSuggestions — canonical ladders on real tri sessions', () =>
     expect(after).toBeLessThan(before);
   });
 });
+
+// ─── Sessions without estimatedDurationMin ─────────────────────────────────
+// Regression (review of a2): minutesOf returned 0, so setRung / setRunType
+// skipped re-pricing. A bike_threshold with no duration became bike_endurance
+// with watts x0.65 and kept its threshold load. With no minutes to price the
+// new prescription at, the session is now left untouched and counted as
+// skipped. estimateTriWorkoutMin is not used as a fallback: it reads the
+// largest single "Nmin" token, so this generated 80-min threshold reads 15 min.
+
+describe('applyTriSuggestions — sessions without estimatedDurationMin', () => {
+  const noDuration = (t: string) => {
+    const s = realTriState('70.3');
+    const { w } = sessionOf(s, t);
+    delete w.estimatedDurationMin;
+    return { s, w, snapshot: structuredClone(w) };
+  };
+
+  for (const t of ['bike_threshold', 'threshold', 'swim_threshold']) {
+    for (const action of ['downgrade_today', 'swap_easy'] as const) {
+      it(`${t} ${action}: left untouched and counted as skipped`, () => {
+        const { s, w, snapshot } = noDuration(t);
+        const r = applyTriSuggestions(s, [modFor(w, action)]);
+        expect(r.applied).toBe(0);
+        expect(r.skipped).toBe(1);
+        expect(w).toEqual(snapshot);
+      });
+    }
+  }
+});
