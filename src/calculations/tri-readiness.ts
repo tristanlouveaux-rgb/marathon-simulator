@@ -17,6 +17,7 @@ import type { ReadinessLabel, ReadinessResult } from './readiness';
 import { computeReadiness } from './readiness';
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { buildDailySignalBTSS, computeSleepDebtOutlook, deriveSleepTarget, mergeManualSleepHistory } from './sleep-insights';
+import { observedDisciplineLoad, perDisciplineAcwrRaw } from './fitness-model.triathlon';
 
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const QUALITY_KEYWORDS = ['threshold', 'vo2', 'tempo', 'sweet_spot', 'sweetspot', 'speed', 'race_pace', 'intervals', 'hills', 'brick'];
@@ -106,24 +107,39 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   // which is a running concern. Swim is non-impact; cycling tolerates tired legs.
   // So only the run input carries recentLegLoads — bike/swim/cross-training stay
   // honest. Mirrors running mode exactly (same floor, same ledger).
-  const buildInput = (f: { ctl: number; atl: number; tsb: number }, withLegLoad = false) => ({
-    tsb: f.tsb / 7,
-    // Mirror perDisciplineACWR's guard: below CTL 10 the ratio is too noisy to
-    // flag overreaching. Pass a safe neutral (1.0) instead.
-    acwr: f.ctl >= 10 ? f.atl / f.ctl : 1.0,
-    ctlNow: f.ctl / 7,
-    sleepScore: lastSleep?.sleepScore ?? null,
-    sleepHistory: physio,
-    hrvRmssd: recentHrv?.hrvRmssd ?? null,
-    hrvPersonalAvg: hrv28d,
-    sleepDebtExcessSec,
-    weeksOfHistory: state.triConfig?.fitnessHistory?.length ?? 0,
-    hasUpcomingHardSession: upcomingHardForInput,
-    recentLegLoads: withLegLoad ? (state.recentLegLoads ?? []) : undefined,
-    // Run is blocked by injury → the leg-load floor (impact risk) is moot. Only
-    // the run input carries leg load, so this mirrors that gating exactly.
-    impactBlocked: withLegLoad ? isImpactBlockedByInjury(state.injuryState) : undefined,
-  });
+  //
+  // No record before plan start (loadObservedDays set): days before it are
+  // unknown, not rest. CTL / ATL / TSB are read over the observed days only
+  // (observedDisciplineLoad), the ratio is unknown for the first
+  // ROLLING_ACWR_MIN_OBSERVED_DAYS (perDisciplineAcwrRaw), and history counts the
+  // observed whole weeks rather than the 12 fixed fitnessHistory entries, so the
+  // insufficient-history gate (< 3 weeks) applies as it does for a new runner
+  // (computeFitnessModel weeks). An athlete with any earlier record is unchanged.
+  const observedDays = fit.loadObservedDays;
+  const weeksOfHistory = observedDays !== undefined
+    ? Math.floor(observedDays / 7)
+    : (state.triConfig?.fitnessHistory?.length ?? 0);
+  const buildInput = (f: { ctl: number; atl: number; tsb: number }, withLegLoad = false) => {
+    const load = observedDisciplineLoad(f, observedDays);
+    return {
+      tsb: load.tsb / 7,
+      // perDisciplineAcwrRaw is undefined below CTL 10 (too noisy to flag
+      // overreaching) and before 14 observed days. Pass a safe neutral (1.0) instead.
+      acwr: perDisciplineAcwrRaw(f, observedDays) ?? 1.0,
+      ctlNow: load.ctl / 7,
+      sleepScore: lastSleep?.sleepScore ?? null,
+      sleepHistory: physio,
+      hrvRmssd: recentHrv?.hrvRmssd ?? null,
+      hrvPersonalAvg: hrv28d,
+      sleepDebtExcessSec,
+      weeksOfHistory,
+      hasUpcomingHardSession: upcomingHardForInput,
+      recentLegLoads: withLegLoad ? (state.recentLegLoads ?? []) : undefined,
+      // Run is blocked by injury → the leg-load floor (impact risk) is moot. Only
+      // the run input carries leg load, so this mirrors that gating exactly.
+      impactBlocked: withLegLoad ? isImpactBlockedByInjury(state.injuryState) : undefined,
+    };
+  };
 
   const swim = computeReadiness(buildInput(fit.swim));
   const bike = computeReadiness(buildInput(fit.bike));

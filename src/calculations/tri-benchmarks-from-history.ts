@@ -27,6 +27,7 @@ import { isGpsInAppActual } from '@/calculations/in-app-activity';
 import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
+import { TRI_FITNESS_WINDOW_DAYS } from '@/calculations/fitness-model.triathlon';
 import { SWIM_TYPE_MULTIPLIER } from '@/constants/triathlon-course-factors';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -707,7 +708,7 @@ export function estimatePerDisciplineCTLFromActivities(
     const aTs = Date.parse(iso);
     if (!Number.isFinite(aTs)) continue;
     const day = Math.floor((refTs - aTs) / 86400000);
-    if (day < 0 || day > 120) continue;
+    if (day < 0 || day > TRI_FITNESS_WINDOW_DAYS) continue;
 
     const tss = estimateTss(a, sport);
     if (tss <= 0) continue;
@@ -807,7 +808,7 @@ export function estimateDirectPerDisciplineCTLFromActivities(
     const aTs = Date.parse(iso);
     if (!Number.isFinite(aTs)) continue;
     const day = Math.floor((refTs - aTs) / 86400000);
-    if (day < 0 || day > 120) continue;
+    if (day < 0 || day > TRI_FITNESS_WINDOW_DAYS) continue;
 
     const tss = estimateTss(a, sport);
     if (tss <= 0) continue;
@@ -845,6 +846,38 @@ export function estimateDirectPerDisciplineCTLFromActivities(
     crossTrainingCtl: Math.round(normalise(crossCtlSum, CTL_TAU_DAYS) * 10) / 10,
     activityCount: count,
   };
+}
+
+/**
+ * Completed days the athlete's activity record covers, for per-discipline
+ * readiness (observedDisciplineLoad, perDisciplineAcwrRaw). Tracking side.
+ *
+ * Returns the whole days from `planStartDate` to `referenceDateISO` when NO
+ * activity of any sport in `activities` started before the plan: the athlete has
+ * no record before plan start, so those days are unknown, not rest (the running
+ * rule in computeRollingLoadRatio). Returns undefined, meaning "the record covers
+ * the window, read the EMAs as they are", when any activity predates the plan
+ * (a runner of several years who has just started swimming keeps the swim ramp:
+ * the record shows no swimming, so that ramp is real) or when the plan start is
+ * missing or unparseable.
+ *
+ * Pass every activity fed to estimateDirectPerDisciplineCTLFromActivities, with
+ * the same reference date, so the day count matches the stored sums.
+ */
+export function triLoadObservedDays(
+  activities: Array<Pick<GarminActual, 'startTime'>>,
+  planStartDate: string | undefined,
+  referenceDateISO: string = new Date().toISOString(),
+): number | undefined {
+  if (!planStartDate) return undefined;
+  const startMs = Date.parse(planStartDate);
+  const refMs = Date.parse(referenceDateISO);
+  if (!Number.isFinite(startMs) || !Number.isFinite(refMs)) return undefined;
+  for (const a of activities) {
+    const t = a.startTime ? Date.parse(a.startTime) : NaN;
+    if (Number.isFinite(t) && t < startMs) return undefined;
+  }
+  return Math.max(0, Math.floor((refMs - startMs) / 86400000));
 }
 
 /**

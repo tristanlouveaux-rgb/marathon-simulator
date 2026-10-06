@@ -44,7 +44,7 @@ export function computeTriDisciplineFloorTSS(
   // Rule 2: hot ramp → no floor.
   const fit = state.triConfig?.fitness?.[discipline];
   if (fit) {
-    const acwr = perDisciplineACWR(fit);
+    const acwr = perDisciplineACWR(fit, state.triConfig?.fitness?.loadObservedDays);
     if (acwr != null && acwr > ACWR_HOT_THRESHOLD) return 0;
   }
 

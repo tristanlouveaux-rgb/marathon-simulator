@@ -99,7 +99,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
               const fatigueVal = f.atl / 7;
               const formVal    = f.tsb / 7;
               const conf = confidence[d];
-              const acwr = perDisciplineACWR(f);
+              const acwr = perDisciplineACWR(f, fitness.loadObservedDays);
               const hasDirect = conf.sessions > 0;
               const showAcwr = hasDirect && (conf.confidence === 'medium' || conf.confidence === 'high');
               const acwrLabel = showAcwr && acwr !== undefined ? `Workload ratio ${acwr.toFixed(2)}` : '';

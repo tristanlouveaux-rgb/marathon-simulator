@@ -549,7 +549,7 @@ async function launchApp(): Promise<void> {
       // to race prediction internals because cross-training transfer is real
       // physiology; the direct version is what the user sees because they
       // expect "swim load" to mean what they did in the pool.
-      const { estimateDirectPerDisciplineCTLFromActivities, manualDoneTriActivities, inAppGpsRunActivities } = await import('@/calculations/tri-benchmarks-from-history');
+      const { estimateDirectPerDisciplineCTLFromActivities, manualDoneTriActivities, inAppGpsRunActivities, triLoadObservedDays } = await import('@/calculations/tri-benchmarks-from-history');
       // Manually-completed sessions (rated, no synced activity) deposit their
       // planned load into CTL so the Adjust Harder/Easier choice has a fitness
       // consequence even without a watch. Fitness-only (not benchmark derivation);
@@ -558,7 +558,13 @@ async function launchApp(): Promise<void> {
       // In-app GPS runs live only in wk.garminActuals (the DB log never holds
       // them) until a watch copy supersedes them in place.
       const inAppGpsRuns = inAppGpsRunActivities(state.wks);
-      const directFitness = estimateDirectPerDisciplineCTLFromActivities([...activityLog, ...manualDoneActs, ...inAppGpsRuns]);
+      const fitnessActivities = [...activityLog, ...manualDoneActs, ...inAppGpsRuns];
+      const fitnessRefISO = new Date().toISOString();
+      const directFitness = estimateDirectPerDisciplineCTLFromActivities(fitnessActivities, fitnessRefISO);
+      // Nothing recorded before plan start (no activity of any sport): readiness
+      // counts the days before it as unknown, not rest (observedDisciplineLoad).
+      // Same activities and reference date as the EMAs above.
+      const loadObservedDays = triLoadObservedDays(fitnessActivities, state.planStartDate, fitnessRefISO);
 
       // Diagnostic. Once-per-launch so we can see why Training Load might be
       // zero. Activity count, derived fitness per discipline, and how many
@@ -591,6 +597,7 @@ async function launchApp(): Promise<void> {
           combinedCtl: derived.fitness.combinedCtl,  // matrix-aggregate stays
           crossTrainingAtl: directFitness.crossTrainingAtl,
           crossTrainingCtl: directFitness.crossTrainingCtl,
+          loadObservedDays,
         };
         mutable.triConfig.fitnessHistory = derived.fitnessHistory.slice(-52);
         // Fill or refresh CSS / FTP. Per CLAUDE.md "Manually-set Benchmarks
