@@ -183,9 +183,11 @@ export function retargetDescriptionPace(desc: string, newType: string, easyPaceS
   );
   // Remaining work-pace tokens, with or without the MP wrapper. A trailing
   // "(steady)"-style annotation from the suggester is dropped (it described
-  // the old intensity).
+  // the old intensity). The triathlon generator writes its easy warm-up and
+  // cool-down as "15min warm up @ 4:59/km"; those stay easy-anchored, like
+  // the running generator's "(6:10/km+)" form.
   out = out.replace(
-    /@\s*(?:MP\s*\()?\d+:\d{2}\/km\)?(?!\+)(\s*\((?:steady|easy|hard)\))?/g,
+    /(?<![Ww]arm up |[Cc]ool down )@\s*(?:MP\s*\()?\d+:\d{2}\/km\)?(?!\+)(\s*\((?:steady|easy|hard)\))?/g,
     `@ ${newLabel}`,
   );
   // Legacy pace-less simple distance ("7km"): append the target.

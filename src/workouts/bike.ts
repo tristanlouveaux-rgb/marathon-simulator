@@ -153,7 +153,7 @@ export function generateBikeSession(input: BikeSessionInput): Workout {
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────
 
-function nameForBike(kind: BikeSessionKind): string {
+export function nameForBike(kind: BikeSessionKind): string {
   switch (kind) {
     case 'endurance':  return 'Endurance ride';
     case 'tempo':      return 'Tempo ride';
@@ -332,7 +332,7 @@ export function describeBikeSession(
   }
 }
 
-function rpeForBike(kind: BikeSessionKind, phase: TrainingPhase): number {
+export function rpeForBike(kind: BikeSessionKind, phase: TrainingPhase): number {
   const base: Record<BikeSessionKind, number> = {
     endurance: 4,
     tempo: 6,

@@ -32,17 +32,7 @@ import {
   retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens,
 } from '@/workouts/workout-scaling';
 import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER, BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
-import { loadForBike, type BikeSessionKind } from '@/workouts/bike';
-import { loadForSwim, type SwimSessionKind } from '@/workouts/swim';
-
-/** Planned aerobic/anaerobic load for an intensity-rung key at a given duration,
- *  using the existing per-kind TSS/min helpers (loadForBike / loadForSwim, the
- *  same source the plan engine uses). Returns null for an unknown key. */
-function loadForRung(key: string, minutes: number): { aerobic: number; anaerobic: number } | null {
-  if (key.startsWith('bike_')) return loadForBike(key.slice(5) as BikeSessionKind, minutes);
-  if (key.startsWith('swim_')) return loadForSwim(key.slice(5) as SwimSessionKind, minutes);
-  return null;
-}
+import { loadForRung } from '@/workouts/rung-load';
 
 const TYPE_LABEL: Record<string, string> = {
   easy: 'Easy', marathon: 'Marathon pace', threshold: 'Threshold',
