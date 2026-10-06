@@ -519,7 +519,9 @@ const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Map @capgo/capacitor-health WorkoutType strings to our internal activity types.
+ * Map the workout-type strings the HealthExtras plugin emits
+ * (HealthExtrasPlugin.swift `workoutActivityTypeName`, capgo's keys plus the
+ * HKWorkoutActivityType case names it adds) to our internal activity types.
  *
  * Coverage matches the matcher's `mapGarminType` switch so a tennis match on
  * Apple Watch lands in the same `'other'` bucket as a Garmin tennis activity,
@@ -527,8 +529,25 @@ const AUTH_REQUEST_TIMEOUT_MS = 15_000;
  * misclassified every team sport, racket sport, water sport, and yoga
  * session. Now `CARDIO`, which the matcher routes to cross-training rather
  * than counting as locomotion.
+ *
+ * Each type below is emitted as the string the Garmin/Strava pipeline already
+ * uses for the same sport, so it reaches the same matcher bucket and the same
+ * SPORTS_DB entry (audit D2):
+ *  - HIIT → 'HIIT', the gym bucket Garmin and Strava HIIT use: it can fill a
+ *    planned gym slot and, in HYROX, a station session.
+ *  - Core training → STRENGTH_TRAINING. No SPORTS_DB entry of its own; filed
+ *    with strength like functional strength and cross training above.
+ *  - Pilates, dance, boxing, kickboxing, martial arts, climbing, rugby, skiing,
+ *    snowboarding, skating, jump rope, surfing, sailing → their SPORTS_DB key
+ *    via deriveSportFromActivityType (DANCE through the 'dance' alias,
+ *    CROSS_COUNTRY_SKIING through its alias, PICKLEBALL → tennis).
+ *  - Golf → GOLF and paddle sports → PADDLEBOARDING, the walk class Garmin uses.
+ *    Golf has no SPORTS_DB entry and keeps the walking cost.
+ *  - Volleyball, squash, badminton, racquetball, table tennis, cricket and
+ *    softball have no SPORTS_DB entry: generic_sport cost as before, with
+ *    their own label, so a recurring sport slot of that name can match them.
  */
-function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
+export function mapWorkoutType(type: WorkoutType | string): GarminActivityRow['activity_type'] {
   switch (type) {
     // Endurance. Own categories
     case 'running':                    return 'RUNNING';
@@ -543,16 +562,47 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
     // Strength / studio
     case 'strengthTraining':
     case 'traditionalStrengthTraining':
-    case 'crossTraining':              return 'STRENGTH_TRAINING';
+    case 'crossTraining':
+    case 'coreTraining':               return 'STRENGTH_TRAINING';
+    case 'highIntensityIntervalTraining': return 'HIIT';
     case 'yoga':                       return 'YOGA';
+    case 'pilates':                    return 'PILATES';
+    case 'socialDance':
+    case 'cardioDance':                return 'DANCE';
+    case 'jumpRope':                   return 'JUMP_ROPE';
+
+    // Combat sports
+    case 'boxing':
+    case 'kickboxing':                 return 'BOXING';
+    case 'martialArts':
+    case 'wrestling':                  return 'MARTIAL_ARTS';
 
     // Racket + ball sports. Match `mapGarminType`'s 'other' bucket
     case 'tennis':                     return 'TENNIS';
     case 'basketball':                 return 'BASKETBALL';
     case 'soccer':                     return 'SOCCER';
     case 'americanFootball':           return 'FOOTBALL';
-    case 'baseball':                   return 'SOFTBALL';
-    case 'wrestling':                  return 'MARTIAL_ARTS';
+    case 'baseball':
+    case 'softball':                   return 'SOFTBALL';
+    case 'rugby':                      return 'RUGBY';
+    case 'volleyball':                 return 'VOLLEYBALL';
+    case 'cricket':                    return 'CRICKET';
+    case 'squash':                     return 'SQUASH';
+    case 'badminton':                  return 'BADMINTON';
+    case 'racquetball':                return 'RACQUETBALL';
+    case 'tableTennis':                return 'TABLETENNIS';
+    case 'pickleball':                 return 'PICKLEBALL';
+
+    // Outdoor / board sports
+    case 'climbing':                   return 'CLIMBING';
+    case 'golf':                       return 'GOLF';
+    case 'downhillSkiing':             return 'SKIING';
+    case 'crossCountrySkiing':         return 'CROSS_COUNTRY_SKIING';
+    case 'snowboarding':               return 'SNOWBOARDING';
+    case 'skatingSports':              return 'SKATING';
+    case 'surfingSports':              return 'SURFING';
+    case 'sailing':                    return 'SAILING';
+    case 'paddleSports':               return 'PADDLEBOARDING';
 
     // Water sports. Closest internal mapping
     case 'waterFitness':               return 'AEROBIC_TRAINING';

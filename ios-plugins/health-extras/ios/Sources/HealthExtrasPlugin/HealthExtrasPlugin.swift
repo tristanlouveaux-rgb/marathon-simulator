@@ -385,7 +385,10 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     /// Map HKWorkoutActivityType → the string keys capgo emitted (so the TS
-    /// `mapWorkoutType` switch is reused unchanged). Unknown types → "other".
+    /// `mapWorkoutType` switch is reused unchanged), plus the HK case name for
+    /// the types capgo never emitted. Every string here has a case in
+    /// `mapWorkoutType` (src/data/appleHealthSync.ts); a contract test reads
+    /// this switch to keep the two in step. Unknown types → "other".
     private func workoutActivityTypeName(_ type: HKWorkoutActivityType) -> String {
         switch type {
         case .running:                     return "running"
@@ -399,13 +402,43 @@ public class HealthExtrasPlugin: CAPPlugin, CAPBridgedPlugin {
         case .traditionalStrengthTraining: return "traditionalStrengthTraining"
         case .functionalStrengthTraining:  return "strengthTraining"
         case .crossTraining:               return "crossTraining"
+        case .coreTraining:                return "coreTraining"
+        case .highIntensityIntervalTraining: return "highIntensityIntervalTraining"
         case .yoga:                        return "yoga"
+        case .pilates:                     return "pilates"
+        case .socialDance:                 return "socialDance"
+        case .cardioDance:                 return "cardioDance"
+        case .jumpRope:                    return "jumpRope"
+        case .boxing:                      return "boxing"
+        case .kickboxing:                  return "kickboxing"
+        case .martialArts:                 return "martialArts"
+        case .wrestling:                   return "wrestling"
         case .tennis:                      return "tennis"
         case .basketball:                  return "basketball"
         case .soccer:                      return "soccer"
         case .americanFootball:            return "americanFootball"
         case .baseball:                    return "baseball"
-        case .wrestling:                   return "wrestling"
+        case .softball:                    return "softball"
+        case .rugby:                       return "rugby"
+        case .volleyball:                  return "volleyball"
+        case .cricket:                     return "cricket"
+        case .squash:                      return "squash"
+        case .badminton:                   return "badminton"
+        case .racquetball:                 return "racquetball"
+        case .tableTennis:                 return "tableTennis"
+        case .pickleball:                  return "pickleball"
+        case .climbing:                    return "climbing"
+        case .golf:                        return "golf"
+        case .downhillSkiing:              return "downhillSkiing"
+        case .crossCountrySkiing:          return "crossCountrySkiing"
+        case .snowboarding:                return "snowboarding"
+        case .skatingSports:               return "skatingSports"
+        case .surfingSports:               return "surfingSports"
+        case .sailing:                     return "sailing"
+        case .paddleSports:                return "paddleSports"
+        case .waterFitness:                return "waterFitness"
+        case .waterPolo:                   return "waterPolo"
+        case .waterSports:                 return "waterSports"
         default:                           return "other"
         }
     }

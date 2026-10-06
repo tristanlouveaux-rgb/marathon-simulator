@@ -6,6 +6,7 @@
  */
 
 import type { Workout } from '@/types';
+import { isLongRun } from '@/workouts/long-run';
 
 /** Incoming activity from an external source */
 export interface ExternalActivity {
@@ -36,6 +37,62 @@ const RUN_WORKOUT_TYPES = new Set([
 ]);
 
 /**
+ * A planned running slot: the running engine's run types, plus HYROX's run
+ * sessions (`hyrox_run_easy` / `_tempo` / `_intervals`, hyrox-generators.ts),
+ * which live in wk.triWorkouts next to the station and brick sessions.
+ */
+export function isRunSlot(w: Pick<Workout, 't'>): boolean {
+  const t = w.t ?? '';
+  return RUN_WORKOUT_TYPES.has(t) || t.startsWith('hyrox_run_');
+}
+
+/**
+ * Activity classes that can fill a planned running slot: runs only.
+ *
+ * The 'walk' class (mapGarminType: walking, hiking, wheelchair, paddleboarding,
+ * rowing, kayaking, canoe, golf) is never run-compatible. A walk or a row is not
+ * the prescribed run, so it cannot complete a planned Easy, Long or Threshold
+ * run (audit D3). It fills a cross slot by sport name, like any other sport,
+ * and otherwise counts as cross-training load.
+ *
+ * Tracking side: this decides which planned slot a recorded activity is filed
+ * against. It changes no load number.
+ */
+export function isRunClassActivity(type: string): boolean {
+  return type === 'run';
+}
+
+/** Run-slot types beyond isRunSlot that the matching screen lets a run fill. */
+const EXTRA_RUN_SLOT_TYPES = new Set(['run', 'steady', 'float']);
+
+/**
+ * The one compatibility rule between a synced activity (its matcher app type:
+ * run / gym / ride / swim / walk / other) and a planned slot. Used by the
+ * auto-match paths, the matching screen's pre-assignment and its manual taps,
+ * so no path can file an activity where a manual tap would be refused.
+ *
+ *  - run   → any run slot (incl. the fast-finish long run and HYROX run
+ *            sessions), a generic cross slot, or a tri brick.
+ *  - gym   → a gym slot, or a HYROX station / brick session.
+ *  - ride  → a cross slot, a tri brick or any tri bike slot.
+ *  - swim  → a cross slot or any tri swim slot.
+ *  - walk, other → a cross slot only. Never a run slot (audit D3).
+ */
+export function isActivityCompatibleWithSlot(
+  appType: string,
+  workout: Pick<Workout, 't'> & { longRun?: boolean; discipline?: string },
+): boolean {
+  const wt = workout.t ?? '';
+  if (isRunClassActivity(appType)) {
+    return isRunSlot(workout) || isLongRun(workout) || EXTRA_RUN_SLOT_TYPES.has(wt) || wt === 'cross' || wt === 'brick';
+  }
+  if (appType === 'gym') return wt === 'gym' || workout.discipline === 'station' || workout.discipline === 'brick';
+  if (appType === 'ride') return wt === 'cross' || wt === 'brick' || wt.startsWith('bike_');
+  if (appType === 'swim') return wt === 'cross' || wt.startsWith('swim_');
+  return wt === 'cross';
+}
+
+/**
  * Try to match an external activity to a planned workout.
  *
  * Heuristic layers:
@@ -49,14 +106,17 @@ export function findMatchingWorkout(
   activity: ExternalActivity,
   weeklyPlan: Workout[],
 ): MatchResult | null {
-  const isRun  = activity.type === 'run' || activity.type === 'walk';
+  // Walks, hikes, rows and the rest of the 'walk' class are never run-compatible
+  // (isRunClassActivity, audit D3): like any other sport they fill a cross slot
+  // only on a sport-name match.
+  const isRun  = isRunClassActivity(activity.type);
   const isGym  = activity.type === 'gym';
-  const isOther = activity.type === 'other';
+  const isOther = activity.type === 'other' || activity.type === 'walk';
 
   // Filter to matchable workouts
   const candidates = weeklyPlan.filter(w => {
     if (w.status === 'replaced') return false;
-    if (isRun)   return RUN_WORKOUT_TYPES.has(w.t);
+    if (isRun)   return isRunSlot(w);
     if (isGym)   return w.t === 'gym';
     if (isOther) return w.t === 'cross';
     return false;
@@ -122,7 +182,7 @@ export function findMatchingWorkout(
     }
 
     // --- Type affinity (runs) ---
-    if (isRun && RUN_WORKOUT_TYPES.has(w.t)) {
+    if (isRun && isRunSlot(w)) {
       score += 1;
       reasons.push('type match (run)');
     }
