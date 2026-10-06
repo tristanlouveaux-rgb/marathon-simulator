@@ -129,9 +129,10 @@ function getMtlLoadHTML(): string {
   // "This week", an actual MTL of 0 and a trend one week ahead.
   const wIdx = Math.max(0, Math.min((s.w ?? 1) - 1, weeks.length - 1));
 
-  // Derived at render time. `hyroxConfig.weeklyActualMTL` is a dead field
-  // (typed but never written); deriving here keeps actual / planned /
-  // chronic / acute on a single source. See ISSUE-184 history.
+  // Derived at render time from the week's completed sessions
+  // (computeWeekActualMTL), so actual / planned / chronic / acute share one
+  // source. The stored `hyroxConfig.weeklyActualMTL` is no longer written.
+  // See ISSUE-184 history.
   const currentWk = weeks[wIdx];
   const weeklyActual = currentWk ? computeWeekActualMTL(currentWk) : 0;
   const weeklyPlanned = currentWk ? computeWeekMTL(currentWk) : (hx?.weeklyMTL ?? 0);

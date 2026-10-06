@@ -110,9 +110,9 @@ export function isMtlSessionCompleted(wk: Week, w: Workout): boolean {
  *
  * Mirrors `computeWeekMTL`'s scope (all triWorkouts incl. runs) so the
  * actual / planned / chronic / acute display numbers share one source of
- * truth. Replaces the dead `hyroxConfig.weeklyActualMTL` field, which was
- * never populated despite its type comment claiming activity-match
- * computation.
+ * truth. Replaces the stored `hyroxConfig.weeklyActualMTL` accumulator,
+ * which only the matcher's station branch added to and which is no longer
+ * written.
  */
 export function computeWeekActualMTL(wk: Week): number {
   const workouts = wk.triWorkouts ?? [];

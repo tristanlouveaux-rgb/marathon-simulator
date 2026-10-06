@@ -161,13 +161,6 @@ export function advanceWeekToToday(): void {
     s.wks[s.w - 1].detrainApplied = true;
   }
 
-  // HYROX: reset weekly accumulators when the week pointer actually moves.
-  // weeklyActualMTL is per-week (sums completed station/brick load); without
-  // a reset it would accumulate forever across week rollover.
-  if (actualAdvance > 0 && s.eventType === 'hyrox' && s.hyroxConfig) {
-    s.hyroxConfig.weeklyActualMTL = 0;
-  }
-
   saveState();
 }
 

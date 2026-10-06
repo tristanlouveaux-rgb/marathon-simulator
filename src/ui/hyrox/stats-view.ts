@@ -43,9 +43,10 @@ export function renderHyroxStatsView(): void {
   const format = hx.format ?? 'open_singles';
   const bandLabel = band.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const mtlCap = hx.mtlCap ?? HYROX_MTL_CAP[band];
-  // Derived at render time. `hyroxConfig.weeklyActualMTL` is a dead field
-  // (typed but never written). Same scope as the chronic/acute computation
-  // so all four numbers share one source. See ISSUE-184.
+  // Derived at render time from the week's completed sessions
+  // (computeWeekActualMTL). Same scope as the chronic/acute computation so all
+  // four numbers share one source. The stored `hyroxConfig.weeklyActualMTL` is
+  // no longer written. See ISSUE-184.
   const currentWk = (s.wks ?? [])[(s.w ?? 1) - 1];
   const weeklyActualMTL = currentWk ? computeWeekActualMTL(currentWk) : 0;
   const weeklyPlannedMTL = currentWk ? computeWeekMTL(currentWk) : (hx.weeklyMTL ?? 0);

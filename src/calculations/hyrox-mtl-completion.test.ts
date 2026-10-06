@@ -136,6 +136,20 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     expect(plannedMinutes(week2)).toBeLessThan(fullWeek2);
   });
 
+  it('a matched station session keeps no parallel accumulator: the slot record is the only source', () => {
+    setState(hyroxState());
+    const st = getMutableState();
+    const wk = st.wks[0];
+    const circuit = wk.triWorkouts!.find(w => w.n === 'Station Circuit')!;
+
+    matchAndAutoComplete([rowFor(circuit, 'strava-st')]);
+
+    expect(wk.garminActuals?.[circuit.id!]).toBeDefined();
+    // hyroxConfig.weeklyActualMTL had a writer (this branch) and no reader.
+    expect(st.hyroxConfig!.weeklyActualMTL).toBeUndefined();
+    expect(computeWeekActualMTL(wk)).toBeCloseTo(circuit.musculoTendonLoad!, 6);
+  });
+
   it('a session rated done with no activity record stays uncounted', () => {
     const s = hyroxState();
     const wk = s.wks[0];

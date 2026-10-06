@@ -740,8 +740,8 @@ function getReadinessHTML(s: SimulatorState): string {
           ${crossTrainingCard}
           ${isHyrox ? (() => {
             // Same derivation as the Stats card and the MTL page. The stored
-            // weeklyActualMTL only ever received station matches, so a week of
-            // runs or Mark as Done completions read 0 here.
+            // hyroxConfig.weeklyActualMTL only ever received station matches
+            // (a week of runs read 0) and is no longer written.
             const mtlWk = (s.wks ?? [])[(s.w ?? 1) - 1];
             const weeklyActualMTL = mtlWk ? computeWeekActualMTL(mtlWk) : 0;
             const weeklyPlannedMTL = mtlWk ? computeWeekMTL(mtlWk) : (s.hyroxConfig?.weeklyMTL ?? 0);

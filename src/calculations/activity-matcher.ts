@@ -1173,7 +1173,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // mislogs a casual gym session or cardio class as completed station work.
       // New rule: name regex (hyrox/mixed session/roxfit) OR activity_type === 'HIIT'
       // (the most HYROX-shaped of the buckets). Other types fall through to
-      // cross-training and don't pollute weeklyActualMTL.
+      // cross-training and don't count toward the week's actual MTL.
       const isHyrox = s.eventType === 'hyrox';
       const nameLooksLikeHyrox = isHyrox && /\b(hyrox|mixed\s*session|roxfit)\b/i.test(row.activity_name ?? '');
       const isHyroxStationType = isHyrox && (
@@ -1247,14 +1247,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             ...(priorRecap ? { hyroxSession: priorRecap } : {}),
           };
 
-          // Accumulate ACTUAL MTL from the matched workout. WeeklyMTL holds the planned target;
-          // weeklyActualMTL holds completed station/brick load *this* week only. Skip the
-          // accumulator for past-week matches (e.g. backfilled historical activities)
-          // to avoid corrupting the current-week display.
-          const plannedMTL = (stationMatch as any).musculoTendonLoad as number | undefined;
-          if (plannedMTL && plannedMTL > 0 && s.hyroxConfig && weekIdx === s.w) {
-            s.hyroxConfig.weeklyActualMTL = (s.hyroxConfig.weeklyActualMTL ?? 0) + plannedMTL;
-          }
+          // Actual MTL needs no accumulator: the slot record written above is
+          // what computeWeekActualMTL (mtl.ts) counts, the same as runs, GPS
+          // runs, Mark as Done and quick done.
 
           // HYROX activity-parser pass: if the activity has lap data (kmSplits already
           // imported, full Garmin laps separately), try to decompose into per-station
