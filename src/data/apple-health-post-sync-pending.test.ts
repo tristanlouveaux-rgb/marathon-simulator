@@ -15,14 +15,17 @@
  * 28 day gap the older sessions never reached the matcher.
  *
  * D4 remainder. matchAndAutoComplete returns {changed, pending}; the Apple sync
- * tested the object for truthiness, so it re-rendered on every sync.
+ * tested the object for truthiness, so it re-rendered on every sync. Reading
+ * `changed` makes the sync depend on it, so `changed` must also cover a sync
+ * that only re-enriches a matched workout (HR read again after the D4 permission
+ * prompt) while a workout dated before the plan sits in the window.
  *
  * Real matcher and real processPendingCrossTraining; the review UI is spied.
  * Track-only state keeps the plan generator out of the way (a ride always queues).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { SimulatorState, GarminPendingItem } from '@/types';
+import type { SimulatorState, GarminPendingItem, Workout } from '@/types';
 import { getDefaultState } from '@/state/store';
 
 let mockState: SimulatorState;
@@ -115,6 +118,7 @@ import {
 } from './appleHealthSync';
 import { resetPendingModalGuard } from './activitySync';
 import { ACTIVITY_SYNC_LOOKBACK_DAYS } from './activity-sync-window';
+import { readQuantitySamples } from '@/data/healthExtras';
 
 const MONDAY = '2026-09-28';
 const NOW = new Date('2026-09-30T18:00:00.000Z'); // Wednesday of plan week 1
@@ -188,6 +192,7 @@ beforeEach(() => {
   ui.render.mockClear();
   ui.autoProcess.mockClear();
   ui.review.mockClear();
+  vi.mocked(readQuantitySamples).mockImplementation(async () => []);
   openModals.clear();
   resetPendingModalGuard();
   doc = Object.assign(new EventTarget(), {
@@ -362,5 +367,44 @@ describe('the Apple sync reads matchAndAutoComplete as {changed, pending} (audit
     await syncAppleHealth(); // same ride again: already queued, nothing new
     expect(matchSpy.results[1].changed).toBe(false);
     expect(ui.render).not.toHaveBeenCalled();
+  });
+
+  // The ride was matched on an earlier sync that had no heart rate (as
+  // autoProcessActivities leaves a same-day ride: an adhoc plus its actual).
+  // HR now reads, so the matcher's re-enrich loop gives it iTRIMP and zones,
+  // which moves the week's load. A swim from before planStartDate is never
+  // processed by the matcher, so it counts as a new row on every sync in the
+  // plan's first weeks; it must not hide the enrichment from the render check.
+  it.each([
+    ['a workout dated before the plan is also in the window', true],
+    ['nothing else is in the window', false],
+  ])('a sync that only re-enriches a matched ride with heart rate re-renders (%s)', async (_label, withPrePlanSwim) => {
+    const adhocId = `garmin-${RIDE_ID}`;
+    const wk = mockState.wks[0];
+    wk.garminMatched![RIDE_ID] = adhocId;
+    wk.adhocWorkouts!.push({ id: adhocId, t: 'cross', n: 'Ride', d: '75min', r: 5, rpe: 5 } as Workout);
+    wk.garminActuals![adhocId] = {
+      garminId: RIDE_ID, startTime: RIDE_START, durationSec: 4500, distanceKm: 30, avgPaceSecKm: null,
+      avgHR: null, maxHR: null, calories: 700, iTrimp: null, hrZones: null, activityType: 'CYCLING',
+    };
+    const PRE_PLAN_SWIM = '2026-09-20T07:00:00.000Z'; // 8 days before planStartDate, inside the 28-day window
+    if (withPrePlanSwim) hk.workouts.push(hkWorkout('swimming', PRE_PLAN_SWIM, 2400, 2000));
+    // One HR sample every 10 s across the ride.
+    const rideMs = Date.parse(RIDE_START);
+    const rideHr = Array.from({ length: 451 }, (_, i) => {
+      const t = new Date(rideMs + i * 10_000).toISOString();
+      return { value: 145, unit: 'count/min', startDate: t, endDate: t };
+    });
+    vi.mocked(readQuantitySamples).mockImplementation(async (opts) =>
+      (opts.dataType === 'heartRate' && opts.startDate === RIDE_START ? rideHr : []));
+
+    await syncAppleHealth();
+
+    expect(matchSpy.calls[0].map(r => r.start_time).sort())
+      .toEqual((withPrePlanSwim ? [PRE_PLAN_SWIM, RIDE_START] : [RIDE_START]).sort());
+    expect(wk.garminActuals![adhocId].iTrimp).toBeGreaterThan(0);
+    expect(wk.garminActuals![adhocId].hrZones).not.toBeNull();
+    expect(matchSpy.results[0].changed).toBe(true);
+    expect(ui.render).toHaveBeenCalled();
   });
 });

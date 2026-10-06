@@ -617,7 +617,9 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
  * - Past-week RUNS: Auto-matched where possible; unmatched → logged as adhoc in that week.
  * - Past-week CROSS-TRAINING: Logged as adhoc in that week (modal review not meaningful for done weeks).
  *
- * Returns { changed, pending } where pending is new current-week cross-training items.
+ * Returns { changed, pending } where pending is new current-week cross-training items
+ * and changed is true whenever state changed, including re-enrichment of
+ * already-matched activities in a batch that also carries new rows.
  */
 export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   changed: boolean;
@@ -1026,13 +1028,21 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   if (outOfRangeCount > 0) {
     console.log(`[ActivityMatcher] ${outOfRangeCount} activities outside plan range — skipped`);
   }
+  // `changed` on every return below carries enrichChanged: the stale-pending
+  // resolution, the Strava upgrade and the re-enrich loop above all change state
+  // (week load included) even when the batch also holds new rows. Rows dated
+  // before planStartDate are never processed, so they stay "new" on every sync
+  // and would otherwise hide an enrichment-only change from the callers'
+  // `if (result.changed) render()`.
   if (rowsByWeek.size === 0) {
-    if (collapseTwinsOfStravaBatch([])) { saveState(); return { changed: true, pending: [] }; }
-    return { changed: false, pending: [] };
+    const collapsed = collapseTwinsOfStravaBatch([]);
+    const changedOutOfRange = enrichChanged || collapsed;
+    if (changedOutOfRange) saveState();
+    return { changed: changedOutOfRange, pending: [] };
   }
 
   const allPending: GarminPendingItem[] = [];
-  let changed = false;
+  let changed = enrichChanged;
 
   for (const [weekIdx, weekRows] of rowsByWeek) {
     const wk = s.wks[weekIdx - 1];
