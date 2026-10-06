@@ -3,7 +3,7 @@
  * Shows the completion modal and calls rate() when the user confirms.
  */
 
-import type { GpsRecording, Workout } from '@/types';
+import type { GpsRecording, Week, Workout } from '@/types';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state';
 import { rate } from '@/ui/events';
@@ -17,6 +17,7 @@ import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/ca
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
+import { buildGpsRunActual, writeInAppActual, isPlanCardRunType } from '@/calculations/in-app-activity';
 
 /**
  * Handle a completed GPS recording: find the matching workout,
@@ -28,6 +29,11 @@ import { showSuggestionModal } from '@/ui/suggestion-modal';
  *                    If no match or user declines → save as adhoc and run
  *                    the load through the cross-training suggestion pipeline
  *                    so the plan can be adjusted accordingly.
+ *
+ * Every branch also stores the recording as an activity (`recordGpsActual`),
+ * so the run carries its load into every signal exactly once (audit B9). The
+ * exception is a recording started from a non-run card (injury cross-training
+ * or rehab strength): it keeps the rating only, like Mark as Done there.
  */
 export function handleCompletedRecording(recording: GpsRecording, workoutName: string): void {
   const s = getState();
@@ -76,6 +82,12 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
         if (week) {
           if (!week.gpsRecordings) week.gpsRecordings = {};
           week.gpsRecordings[workoutId] = recording.id;
+          // A run record on a non-run card (injury cross-training, rehab
+          // strength) would read as running in Signal A. Those cards keep the
+          // rating only, as Mark as Done does (recordPlannedRunDone).
+          if (isPlanCardRunType(workout.t)) {
+            recordGpsActual(week, workoutId, recording, rpe, workout.n, { workoutName: workout.n, plannedType: workout.t });
+          }
           saveState();
         }
         render();
@@ -146,6 +158,10 @@ function handleImpromptuRun(
     week.gpsRecordings[recording.id] = recording.id;
     // Rate the adhoc entry so it counts toward completedKm and effort
     rate(recording.id, workoutName, rpe, 5, 'easy', false);
+    // The activity record under the adhoc's own id: Signal B skips an adhoc
+    // whose id has a garminActuals entry, so the run counts once, at its
+    // measured duration instead of the old flat 30-minute default.
+    recordGpsActual(week, recording.id, recording, rpe, workoutName);
   };
 
   const runLoadLogic = () => {
@@ -232,6 +248,7 @@ function handleImpromptuRun(
         // Assign the GPS run to the matched planned workout
         if (!week.gpsRecordings) week.gpsRecordings = {};
         week.gpsRecordings[matchId] = recording.id;
+        recordGpsActual(week, matchId, recording, rpe, matchResult.n, { workoutName: matchResult.n, plannedType: matchResult.t });
         saveState();
         rate(matchId, matchResult.n, rpe, matchResult.rpe ?? matchResult.r, matchResult.t, false);
         render();
@@ -242,6 +259,27 @@ function handleImpromptuRun(
   } else {
     runLoadLogic();
   }
+}
+
+/**
+ * Store a finished GPS recording as the activity behind `key` (a plan slot id,
+ * or the adhoc id for an impromptu run). Tracking side: the record carries the
+ * recording's own start, elapsed time and distance at the RPE the user just
+ * rated, so Signal A, weekly and daily Signal B and the rolling ACWR all count
+ * it once. A synced actual already at the key (the watch got there first) is
+ * kept. When the watch copy arrives later it supersedes this record in place
+ * (matchAndAutoComplete, in-app-activity.ts). `slot` is the planned workout the
+ * run completed; an impromptu run outside the plan passes none.
+ */
+function recordGpsActual(
+  week: Week,
+  key: string,
+  recording: GpsRecording,
+  rpe: number,
+  name: string,
+  slot?: { workoutName: string; plannedType?: string | null },
+): void {
+  writeInAppActual(week, key, buildGpsRunActual(recording, { rpe, name, slot }));
 }
 
 // Run types whose intensity is "quality" (not easy/long)

@@ -22,6 +22,7 @@
 
 import type { GarminActual } from '@/types';
 import type { GarminActivityRow } from '@/calculations/activity-matcher';
+import { isInAppActual } from '@/calculations/in-app-activity';
 
 // The user is enriching a SPECIFIC activity they're looking at, so the file's
 // start time should align with the activity's start to within a minute (same
@@ -45,10 +46,19 @@ const MATCH_DUR_RATIO = 0.15; // ±15% duration
  * Canonical definition used by BOTH the per-activity "Add detail from Strava"
  * affordance (activity-detail.ts) and the Home enrich-prompt banner
  * (home-view.ts) so the two surfaces never disagree about what counts as thin.
+ *
+ * An in-app record (GPS run, Mark as Done, guided or quick-done session: a
+ * `guided-` id) never synced through anything, so it is not thin. Counting it
+ * made the Home banner say Mark as Done runs "came through Apple Health", and
+ * let ingestActivityFile attach a dropped file to it on start time and
+ * duration alone, whatever the file's sport. A file of that session goes
+ * through importActivityFile instead, where the matcher supersedes the in-app
+ * record by sport (audit B9).
  */
 export function isThinActivity(actual: GarminActual): boolean {
   return (
     !actual.garminId?.startsWith('strava-')
+    && !isInAppActual(actual)
     && !actual.enrichedFromFile
     && !actual.hrZones
     && !actual.polyline

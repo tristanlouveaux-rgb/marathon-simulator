@@ -13,6 +13,7 @@ import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
+import { buildPlannedRunActual, dropInAppActual, manualCompletionStartIso, writeInAppActual } from '@/calculations/in-app-activity';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -214,6 +215,7 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
   });
   overlay.querySelector('#hx-detail-mark-done')?.addEventListener('click', () => {
     setHxRated(wkIdx, workout, rpe);
+    recordHxRunDone(wkIdx, workout, rpe);
     close();
     import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {});
   });
@@ -285,7 +287,38 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
   const wk = s.wks?.[weekIdx];
   if (!wk) return;
   if (!wk.rated) wk.rated = {};
-  wk.rated[(workout as any).id ?? workout.n] = value;
+  const key = (workout as any).id ?? workout.n;
+  wk.rated[key] = value;
+  // A skipped session carries no load: drop an in-app record left on the slot.
+  if (value === 'skip') dropInAppActual(wk, key);
+  saveState();
+}
+
+/**
+ * HYROX run Mark as Done: store the session's planned load as its activity
+ * record (audit B9), mirroring the running plan card. Tracking side: the
+ * session's own estimatedDurationMin at the rated RPE, stamped on the planned
+ * day, so it counts in every load signal once; a watch copy that syncs later
+ * supersedes it in place (matchAndAutoComplete). Cross sessions (bike / erg /
+ * swim) keep the rating only: an in-app record without an activityType reads
+ * as a run in the load model, and their sport mapping is an open question.
+ * A future-week session keeps the rating only too, as on the running plan card
+ * (recordPlannedRunDone): the matcher would not find its record when today's
+ * watch copy syncs.
+ */
+function recordHxRunDone(weekIdx: number, workout: Workout, rpe: number): void {
+  if ((workout.discipline as string) !== 'run') return;
+  const durationMin = workout.estimatedDurationMin;
+  if (typeof durationMin !== 'number' || durationMin <= 0) return;
+  const s = getMutableState();
+  if (weekIdx + 1 > s.w) return;
+  const wk = s.wks?.[weekIdx];
+  if (!wk) return;
+  writeInAppActual(wk, (workout as any).id ?? workout.n, buildPlannedRunActual(workout, {
+    rpe,
+    startTime: manualCompletionStartIso(s.planStartDate, weekIdx + 1, workout.dayOfWeek),
+    durationMin,
+  }));
   saveState();
 }
 

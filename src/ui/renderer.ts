@@ -30,6 +30,7 @@ import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
+import { dropInAppActual, isInAppActual } from '@/calculations/in-app-activity';
 
 // Expose explanation modals globally for onclick handlers
 declare global {
@@ -64,7 +65,12 @@ function clearGarminAndResync(): void {
       if (workoutId && workoutId !== '__pending__') delete wk.rated[workoutId];
     }
     wk.garminMatched = {};
-    wk.garminActuals = {};
+    // In-app records (GPS runs, Mark as Done, guided sessions) live only on the
+    // device and their slot ratings stay, so they are kept; a re-synced watch
+    // copy supersedes them as usual.
+    wk.garminActuals = Object.fromEntries(
+      Object.entries(wk.garminActuals ?? {}).filter(([, a]) => isInAppActual(a)),
+    );
     wk.garminPending = [];
     wk.garminReviewChoices = {};
     wk.unspentLoadItems = [];
@@ -124,6 +130,7 @@ if (typeof window !== 'undefined') {
     if (!wk) return;
     delete wk.rated[wId];
     if (wk.gpsRecordings?.[wId]) delete wk.gpsRecordings[wId];
+    dropInAppActual(wk, wId); // the run's load record goes with it (audit B9)
     if (wk.adhocWorkouts) {
       wk.adhocWorkouts = wk.adhocWorkouts.filter(w => (w.id || w.n) !== wId);
     }

@@ -47,6 +47,7 @@ import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { recordPlannedRunDone, PLAN_CARD_NON_RUN_TYPES, isInAppActual, isManualInAppActual } from '@/calculations/in-app-activity';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
@@ -348,6 +349,11 @@ function fmtZoneSec(sec: number): string {
 
 // ─── Workout expanded detail ──────────────────────────────────────────────────
 
+/** Easy pace (min/km) the Plan tab prices planned sessions with (5.5 when no paces yet). */
+function planCardBaseMinPerKm(s: Pick<SimulatorState, 'pac'>): number {
+  return s.pac?.e ? s.pac.e / 60 : 5.5;
+}
+
 /**
  * Planned TSS shown on a running Plan-tab card: the "Planned load" line, the
  * Planned-vs-Actual bar, and the plannedTSS forwarded to the activity-detail
@@ -363,7 +369,7 @@ function fmtZoneSec(sec: number): string {
 export function planCardPlannedTSS(w: any, s: Pick<SimulatorState, 'pac' | 'wks'>): number {
   const t = (w.t || '').toLowerCase();
   if (!t || t === 'rest') return 0;
-  const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
+  const baseMinPerKm = planCardBaseMinPerKm(s);
 
   // Cross-training: use historical iTrimp-based rate when available,
   // fall back to TL_PER_MIN × sport runSpec (avoids running-calibrated inflation).
@@ -440,7 +446,9 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     statsArr.push(`${dur} min`);
     if (actualTSS != null) statsArr.push(`TSS ${actualTSS}`);
     if (garminActual.calories) statsArr.push(`${garminActual.calories} kcal`);
-    const source = garminActual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
+    // In-app records (GPS run, Mark as Done, guided session) are logged by Mosaic itself.
+    const source = isInAppActual(garminActual) ? 'Mosaic'
+      : garminActual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
     html += `<div style="padding:9px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2);border-radius:var(--r-card);margin-bottom:4px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px">`;
     html += `<div>`;
     html += `<div style="font-size:11px;font-weight:600;color:var(--c-ok);margin-bottom:3px">✓ ${source}${actName ? `: ${escapeHtml(actName)}` : ' activity logged'}</div>`;
@@ -548,7 +556,10 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
 
     const isCrossTraining = w.t === 'cross' || w.t === 'gym';
 
-    if (garminActual && actualTSSForBars != null && plannedTSS > 0 && !isCrossTraining) {
+    // A Mark as Done record carries the planned dose itself, so a planned-vs-actual
+    // bar would compare the plan with the plan. It falls through to Planned Load.
+    const hasMeasuredActual = !!garminActual && !isManualInAppActual(garminActual);
+    if (hasMeasuredActual && actualTSSForBars != null && plannedTSS > 0 && !isCrossTraining) {
       // Show planned vs actual comparison (running sessions only. Cross-training
       // intensity varies too much vs RPE assumptions to make this meaningful)
       const maxTSS = Math.max(plannedTSS, actualTSSForBars, 1);
@@ -590,7 +601,9 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
 
   // ── Action buttons ────────────────────────────────────────────────────────
   const _isPastWeek = currentWeek != null && viewWeek < currentWeek;
-  const _isSynced = !!garminActual;
+  // An in-app record (GPS run, Mark as Done) is not a watch sync: the card keeps
+  // its Unmark action so the user can undo their own entry on a past week.
+  const _isSynced = !!garminActual && !isInAppActual(garminActual);
 
   // Synced-from-watch guard: past weeks with garmin/strava match are read-only
   if (_isPastWeek && _isSynced) {
@@ -2258,6 +2271,43 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
   return workouts;
 }
 
+/**
+ * Plan-card Mark as Done. Rates the slot (as before) and, for a run, stores the
+ * session's planned load as its activity record (audit B9). Tracking side: the
+ * record carries the planned duration (the same estimateWorkoutDurMin dose the
+ * card's planned load uses) and planned distance at the rated RPE, stamped on
+ * the planned day, so the run counts in Signal A, weekly and daily Signal B and
+ * the rolling ACWR. A watch copy that syncs later supersedes it in place.
+ *
+ * recordPlannedRunDone decides whether a record is written: non-run cards
+ * (cross, injury cross-training, strength, capacity test, gym, rest) and
+ * future-week cards keep the rating-only behaviour.
+ */
+function markPlanCardDone(el: HTMLElement): void {
+  const wId = el.dataset.workoutId || '';
+  const name = el.dataset.name || '';
+  const rpe = parseInt(el.dataset.rpe || '5', 10);
+  const type = el.dataset.type || 'easy';
+  const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
+  // Read the rendered workout before rate(): rate() re-renders, which rebuilds the lookup.
+  const w = _workoutLookup.get(wId);
+  rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
+
+  if (!w) return;
+  const ms = getMutableState();
+  const wn = weekNum ?? ms.w;
+  const wk = ms.wks?.[wn - 1];
+  if (!wk) return;
+  const written = recordPlannedRunDone(wk, wId, w, {
+    rpe,
+    durationMin: estimateWorkoutDurMin(w, planCardBaseMinPerKm(ms)),
+    planStartDate: ms.planStartDate,
+    weekNum: wn,
+    currentWeek: ms.w,
+  });
+  if (written) saveState();
+}
+
 // ─── Main render ─────────────────────────────────────────────────────────────
 
 function getPlanHTML(s: SimulatorState, viewWeek: number): string {
@@ -2349,7 +2399,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   // ── Week Overview signals ───────────────────────────────────────────────────
   const isFutureWeek = viewWeek > s.w;
   // Compute RPE on-the-fly from rated workouts (same as events.ts / week-debrief)
-  const _nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+  const _nonRunTypes = PLAN_CARD_NON_RUN_TYPES;
   let _effortScore: number | null = wk?.rpeEffort ?? wk?.effortScore ?? null;
   {
     const allRunsForEffort = [
@@ -2908,13 +2958,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   document.querySelectorAll('.plan-action-mark-done').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const el = btn as HTMLElement;
-      const wId = el.dataset.workoutId || '';
-      const name = el.dataset.name || '';
-      const rpe = parseInt(el.dataset.rpe || '5', 10);
-      const type = el.dataset.type || 'easy';
-      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
-      rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
+      markPlanCardDone(btn as HTMLElement);
       renderPlanView();
     });
   });
@@ -3747,13 +3791,7 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
   root.querySelectorAll('.plan-action-mark-done').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const el = btn as HTMLElement;
-      const wId = el.dataset.workoutId || '';
-      const name = el.dataset.name || '';
-      const rpe = parseInt(el.dataset.rpe || '5', 10);
-      const type = el.dataset.type || 'easy';
-      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
-      rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
+      markPlanCardDone(btn as HTMLElement);
       renderPlanView();
     });
   });

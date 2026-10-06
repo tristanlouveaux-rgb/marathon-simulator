@@ -40,6 +40,7 @@ import {
   type MatchResult,
 } from '@/calculations/matching';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
+import { isInAppActual } from '@/calculations/in-app-activity';
 import { classifyByName } from '@/data/stravaSync';
 import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } from '@/types';
 import type { SportKey } from '@/types/activities';
@@ -1139,9 +1140,15 @@ function applyReview(
       ? (matchObj?.workoutName ?? allW.find(w => (w.id || w.n) === matchWorkoutId)?.n ?? matchWorkoutId)
       : null;
 
-    if (matchWorkoutId && !usedWorkoutIds.has(matchWorkoutId) && wk.rated[matchWorkoutId] === undefined) {
+    // A slot completed in-app (GPS run or Mark as Done, a `guided-` actual) is
+    // open to this recording too: the matching screen offers it, and the synced
+    // copy replaces the in-app record in place so the run counts once (audit B9).
+    // The user's rating on that slot is kept; rate() has already applied it.
+    const supersedesInApp = !!matchWorkoutId && isInAppActual(wk.garminActuals?.[matchWorkoutId]);
+    if (matchWorkoutId && !usedWorkoutIds.has(matchWorkoutId)
+      && (wk.rated[matchWorkoutId] === undefined || supersedesInApp)) {
       usedWorkoutIds.add(matchWorkoutId);
-      wk.rated[matchWorkoutId] = rpe;
+      if (!(supersedesInApp && typeof wk.rated[matchWorkoutId] === 'number')) wk.rated[matchWorkoutId] = rpe;
       wk.garminMatched[item.garminId] = matchWorkoutId;
       // Alias to reuse existing code below
       const match = { workoutId: matchWorkoutId, workoutName: resolvedName ?? matchWorkoutId, confidence: matchObj?.confidence ?? 'low' as const };

@@ -20,6 +20,8 @@ import { isLongRun } from '@/workouts/long-run';
 import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
 import { computeACWR, computeWeekActualTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { dropInAppActual, isInAppActual } from '@/calculations/in-app-activity';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { render, log } from './renderer';
@@ -697,6 +699,7 @@ export function skip(
     const wk = s.wks[targetWeek - 1];
     if (!wk) return;
     wk.rated[workoutId] = 'skip';
+    dropInAppActual(wk, workoutId); // a skipped session carries no in-app load record
     saveState();
     return;
   }
@@ -728,6 +731,9 @@ function skipInner(
 ): void {
   const s = getMutableState();
   const wk = s.wks[s.w - 1];
+  // A skipped session carries no load: drop an in-app record (Mark as Done,
+  // GPS run) left on the slot. Synced recordings are untouched.
+  dropInAppActual(wk, workoutId);
   // The long-run slot in any format (incl. the fast-finish run, type
   // 'progressive') is charged and carried as the long run.
   const isLong = isLongRun({ t: workoutType, longRun });
@@ -2832,6 +2838,24 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     saveState();
     render();
     return;
+  }
+
+  // An in-app record (GPS run, Mark as Done, guided session) has no
+  // garminMatched entry, so the lookup above never finds it. Remove it by value:
+  // the record, the slot's rating, and an impromptu run's own adhoc entry (a
+  // planned session the record sits on stays in the plan).
+  if (!found && isInAppActual({ garminId })) {
+    for (const wk of s.wks || []) {
+      for (const [slotKey, actual] of Object.entries(wk.garminActuals ?? {})) {
+        if (actual.garminId !== garminId) continue;
+        delete wk.garminActuals![slotKey];
+        if (wk.rated) delete wk.rated[slotKey];
+        if (wk.adhocWorkouts && !isPlannedAdhocId(slotKey)) {
+          wk.adhocWorkouts = wk.adhocWorkouts.filter(w => (w.id || w.n) !== slotKey);
+        }
+        found = true;
+      }
+    }
   }
 
   if (!found) return;
