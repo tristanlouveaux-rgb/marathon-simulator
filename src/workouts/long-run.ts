@@ -14,9 +14,11 @@
  *
  * A workout counts as the long run while it is still in one of the long-run
  * slot's generated formats (`'long'` or `'progressive'`). Once a mod rewrites
- * the type to something else (a downgrade to 'easy', 'recovery', 'marathon'),
- * it stops being the long run. That is exactly how a plain `t: 'long'` workout
- * already behaves, so the fast-finish run and the steady run follow one rule.
+ * the type to something else (a downgrade to 'recovery' pace), it stops being
+ * the long run. That is exactly how a plain `t: 'long'` workout already behaves,
+ * so the fast-finish run and the steady run follow one rule. A cut long run, and
+ * a fast-finish run stepped down to an easy long run, are written as 'long'
+ * (constants/intensity-ladder.ts), so they stay the long run.
  *
  * Planning side: this decides how sessions are placed and protected. It does
  * not change any load, pace or prediction number.

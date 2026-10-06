@@ -28,6 +28,7 @@ import type { DataTier, HRZoneData } from './universal-load-types';
 import type { WorkoutClassification, IntensityThresholds } from './universalLoad';
 import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
 import { isLongRun } from '@/workouts/long-run';
+import { stepDownRunType, generatorRpeForRunType, runPaceRung } from '@/constants/intensity-ladder';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -299,23 +300,16 @@ function workoutPriorityForRace(ctx: AthleteContext, wt: WorkoutType): number {
 }
 
 /**
- * Downgrade a workout type one step (not straight to easy).
- * Intensity ladder: vo2/intervals → threshold → marathon_pace → easy
+ * Downgrade a workout type one pace category (canonical running ladder,
+ * constants/intensity-ladder.ts): vo2/intervals/hill_repeats → threshold;
+ * threshold/race_pace/float → marathon_pace; marathon_pace/progressive/mixed →
+ * easy; easy → recovery. Never up: a progressive run used to go to
+ * marathon_pace, which is harder than its easy running with an MP finish.
+ * An already-downgraded session steps one more category from where it is now,
+ * not straight to easy.
  */
 function downgradeType(wt: WorkoutType): WorkoutType {
-  const downgrades: Partial<Record<WorkoutType, WorkoutType>> = {
-    vo2: 'threshold',
-    intervals: 'threshold',
-    hill_repeats: 'threshold',
-    threshold: 'marathon_pace',
-    race_pace: 'marathon_pace',
-    marathon_pace: 'easy',
-    easy: 'recovery',
-    mixed: 'marathon_pace',
-    progressive: 'marathon_pace',
-    float: 'marathon_pace',
-  };
-  return downgrades[wt] || wt;
+  return stepDownRunType(wt, 1) as WorkoutType;
 }
 
 function isQualityWorkout(wt: WorkoutType): boolean {
@@ -497,7 +491,7 @@ function buildReduceAdjustments(
       // The long-run slot is never a quality downgrade target: the fast-finish
       // long run follows the long-run reduce rule below.
       if (!runIsLong(run) && isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
-        const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
+        const newType = downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
                   : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
                   : 6;
@@ -609,7 +603,9 @@ function buildReduceAdjustments(
         continue;
       }
 
-      // Long run reduction (only heavy/extreme)
+      // Long run reduction (only heavy/extreme). The cut session stays type
+      // 'long' (a fast-finish long run becomes an easy long run): retyped 'easy',
+      // a later light session cut it again under easy-run rules (audit A8).
       if (runIsLong(run) && severity !== 'light') {
         const runKm = run.plannedDistanceKm;
         const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
@@ -643,7 +639,7 @@ function buildReduceAdjustments(
           action: 'reduce',
           originalType: run.workoutType,
           originalDistanceKm: runKm,
-          newType: 'easy',
+          newType: 'long', // a cut long run is still the long run (audit A8)
           newDistanceKm: newKm,
           loadReduction,
         });
@@ -729,7 +725,7 @@ function buildReplaceAdjustments(
       // Quality downgrade (keeps km. No floor impact). Long-run slot excluded,
       // as in buildReduceAdjustments.
       if (!runIsLong(run) && isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
-        const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
+        const newType = downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
                   : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
                   : 6;
@@ -797,7 +793,7 @@ function buildReplaceAdjustments(
         adjustments.push({
           workoutId: run.workoutId, dayIndex: run.dayIndex,
           action: 'reduce', originalType: run.workoutType,
-          originalDistanceKm: runKm, newType: 'easy', newDistanceKm: newKm,
+          originalDistanceKm: runKm, newType: 'long', newDistanceKm: newKm, // still the long run (audit A8)
           loadReduction: loadPerKm * actualReductionKm,
         });
         remainingLoad -= loadPerKm * actualReductionKm;
@@ -1220,6 +1216,15 @@ export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): Plann
     });
 }
 
+/** Stamp the plan generator's RPE for the workout's (new) type, so a downgraded
+ *  session's effort, card TSS and debrief read the new prescription. */
+function writeGeneratorRpe(workout: Workout): void {
+  const rpe = generatorRpeForRunType(workout.t);
+  if (rpe == null) return;
+  workout.rpe = rpe;
+  workout.r = rpe;
+}
+
 /**
  * Apply adjustments from a user's choice to workouts
  */
@@ -1288,14 +1293,18 @@ export function applyAdjustments(
       const newPace = paceForType(adj.newType, adj.originalType);
       const label = paceLabelForType(adj.newType, adj.originalType);
 
-      // Progressive/fast-finish (e.g. "13km: last 3 @ MP") → plain easy long run
+      // The type the session is written as. One ladder step from a progressive
+      // run is easy running, so its marathon-pace finish goes.
+      let newType = adj.newType;
+
+      // Progressive/fast-finish (e.g. "13km: last 3 @ MP") → plain easy run of the
+      // same distance. Never written as marathon pace: the old path overwrote the
+      // easy type with 'marathon_pace' and the card read "13km @ MP" (audit A8, X13).
       if (/last\s+\d/.test(origDesc)) {
         const totalMatch = origDesc.match(/^(\d+\.?\d*)km/);
         const totalKm = totalMatch ? parseFloat(totalMatch[1]) : Math.round(adj.originalDistanceKm);
         workout.d = `${totalKm}km`;
-        workout.t = 'easy';
-        workout.rpe = 3;
-        workout.r = 3;
+        if (runPaceRung(newType) >= runPaceRung('marathon_pace')) newType = 'easy';
       }
       // Intervals with time (e.g. "3×8min @ 4:05/km ...") → same structure, new pace
       else if (/\d+×\d/.test(origDesc)) {
@@ -1324,7 +1333,8 @@ export function applyAdjustments(
 
       workout.modReason = `Downgraded from ${adj.originalType} to ${label} due to ${sportName}`;
       workout.confidence = 'medium';
-      workout.t = adj.newType;
+      workout.t = newType;
+      writeGeneratorRpe(workout);
     } else if (adj.action === 'reduce') {
       workout.status = 'reduced';
       workout.originalDistance = workout.d;
@@ -1335,6 +1345,9 @@ export function applyAdjustments(
       workout.modReason = `Reduced due to ${sportName}`;
       workout.confidence = 'medium';
       workout.t = adj.newType;
+      // A cut fast-finish long run becomes an easy long run ('long'): it takes
+      // that type's RPE. A plain distance cut keeps its RPE.
+      if (adj.newType !== adj.originalType) writeGeneratorRpe(workout);
     }
 
     // Recalculate loads

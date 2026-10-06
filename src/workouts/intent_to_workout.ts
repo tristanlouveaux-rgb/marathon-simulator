@@ -23,8 +23,12 @@ export interface SessionIntent {
  * exactly the pace generation would have prescribed.
  * Keys cover both the plan-engine slot names and the Adjust ladder's type
  * names ('marathon' in INTENSITY_LADDER ≡ 'marathon_pace' here).
+ * 'recovery' is the bottom rung of the downgrade ladder (constants/
+ * intensity-ladder.ts); 1.12 is the recovery pace load.ts and the suggester's
+ * recovery downgrade already use (easy pace + 12%).
  */
 export const RUN_PACE_FACTOR_VS_EASY: Record<string, number> = {
+  recovery: 1.12,
   easy: 1,
   long: 1,
   marathon: 0.913,

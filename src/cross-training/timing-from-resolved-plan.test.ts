@@ -160,10 +160,10 @@ describe('mergeTimingMods builds suggestions from the resolved plan', () => {
     setState(s);
     const lr = longRun(s);
     const wk = getMutableState().wks[0];
-    hardSessionOn(wk, lr.dayOfWeek - 1, 60); // 50–74 TSS tier: 1 step (long → marathon pace), no cut
+    hardSessionOn(wk, lr.dayOfWeek - 1, 60); // 50–74 TSS tier: 1 step (long → recovery pace), no cut
     mergeTimingMods(getMutableState(), wk);
     const [suggestion] = timingModsFor(wk, lr);
-    expect(suggestion.newType).toBe('marathon_pace');
+    expect(suggestion.newType).toBe('recovery');
     acceptTimingSuggestion(wk, { workoutId: lr.id, name: lr.n, dayOfWeek: lr.dayOfWeek });
 
     const accepted = wk.workoutMods!.find(m => m.workoutId === lr.id) as WorkoutMod;

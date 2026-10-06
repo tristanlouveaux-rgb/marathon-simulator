@@ -3,11 +3,14 @@ import { applyTimingDowngradesFromWorkouts } from './timing-check';
 import { createActivity } from './activities';
 import { buildCrossTrainingPopup, workoutsToPlannedRuns, type SuggestionPopup } from './suggester';
 import type { Week, Workout } from '@/types';
+import { isLongRun } from '@/workouts/long-run';
 
 /**
  * Audit X5: the fast-finish long run is t:'progressive', so every long-run rule
  * keyed on t === 'long' skipped it. These tests pin that it now gets the same
- * treatment as the steady long run (shared isLongRun helper).
+ * treatment as the steady long run (shared isLongRun helper). The timing steps
+ * follow the canonical pace ladder (constants/intensity-ladder.ts): one step
+ * takes the fast-finish run to an easy long run and the steady run to recovery.
  */
 
 // Same distance and planned load, so any difference in treatment comes from the
@@ -20,13 +23,18 @@ const STEADY: Workout = {
   t: 'long', n: 'Long Run', d: '24km', r: 3, rpe: 3, dayOfWeek: 6, aerobic: 180, anaerobic: 20, longRun: true,
 };
 
-describe('timing check: fast-finish long run uses the long-run sub-ladder', () => {
+describe('timing check: fast-finish long run is treated as the long run', () => {
   // Monday 2026-10-05. A 2 h Saturday session (no iTRIMP → 0.92 TSS/min ≈ 110 TSS)
   // sits in the ≥100 TSS tier, so the Sunday session after it is flagged.
   const weekStart = '2026-10-05';
   const wk = {
     w: 1, rated: {},
     garminActuals: { 'strava-1': { startTime: '2026-10-10T08:00:00Z', durationSec: 7200, iTrimp: null } },
+  } as unknown as Week;
+  // ≈80 TSS the Saturday before (75–99 tier: 1 step, 10% shorter).
+  const wk1Step = {
+    w: 1, rated: {},
+    garminActuals: { 'strava-1': { startTime: '2026-10-10T08:00:00Z', durationSec: 5220, iTrimp: null } },
   } as unknown as Week;
 
   it('flags the fast-finish long run the day after a hard session, like the steady long run', () => {
@@ -35,25 +43,32 @@ describe('timing check: fast-finish long run uses the long-run sub-ladder', () =
     expect(steadyMods).toHaveLength(1);
     expect(ffMods).toHaveLength(1);
     expect(ffMods[0].name).toBe('Long Run (Fast Finish)');
-    expect(ffMods[0].newType).toBe(steadyMods[0].newType);
   });
 
-  it('stepped down to easy, the fast-finish run drops its marathon-pace finish', () => {
-    // ≈110 TSS the day before → 2 steps (long → easy) and 15% shorter.
-    const [ff] = applyTimingDowngradesFromWorkouts(wk, [FF], weekStart);
-    const [steady] = applyTimingDowngradesFromWorkouts(wk, [STEADY], weekStart);
-    expect(ff.newType).toBe('easy');
+  it('one step down, the fast-finish run becomes an easy long run without its marathon-pace finish', () => {
+    const [ff] = applyTimingDowngradesFromWorkouts(wk1Step, [FF], weekStart);
+    expect(ff.newType).toBe('long');
+    expect(isLongRun({ t: ff.newType, longRun: true })).toBe(true);
     // Written in the generator's "<n>km" form (no space) so the planned-TSS and
     // distance parsers read it (audit A14: "20.4 km" parsed as no distance).
-    expect(ff.newDistance).toBe('20.4km');
+    expect(ff.newDistance).toBe('21.6km');
     expect(ff.newDistance).not.toMatch(/MP|last/);
-    // Same accepted session as the steady long run of the same distance.
+  });
+
+  it('two steps down, the fast-finish run and the steady long run both end at recovery pace', () => {
+    const [ff] = applyTimingDowngradesFromWorkouts(wk, [FF], weekStart);
+    const [steady] = applyTimingDowngradesFromWorkouts(wk, [STEADY], weekStart);
+    expect(ff.newType).toBe('recovery');
+    expect(steady.newType).toBe('recovery');
+    expect(ff.newDistance).toBe('20.4km');
     expect(ff.newDistance).toBe(steady.newDistance);
   });
 
-  it('still ignores an ordinary progressive run (no long-run stamp)', () => {
+  it('an ordinary progressive run (no long-run stamp) steps to an easy run, not to a long run', () => {
     const plain: Workout = { ...FF, n: 'Progressive Run', longRun: undefined };
-    expect(applyTimingDowngradesFromWorkouts(wk, [plain], weekStart)).toHaveLength(0);
+    const [mod] = applyTimingDowngradesFromWorkouts(wk1Step, [plain], weekStart);
+    expect(mod.newType).toBe('easy');
+    expect(mod.newDistance).toBe('21.6km');
   });
 });
 

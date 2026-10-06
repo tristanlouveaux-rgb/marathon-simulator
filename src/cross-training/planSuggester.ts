@@ -30,6 +30,7 @@ import type {
 import { computeUniversalLoad, isExtremeSession } from './universalLoad';
 import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
 import { isLongRun } from '@/workouts/long-run';
+import { stepDownRunType } from '@/constants/intensity-ladder';
 import {
   ANAEROBIC_WEIGHT,
   REPLACE_THRESHOLD,
@@ -82,19 +83,10 @@ function isQualityWorkout(wt: string): boolean {
   ].includes(wt);
 }
 
-/** Downgrade a workout type to an easier version */
+/** Downgrade a workout type one pace category down the canonical running ladder
+ *  (constants/intensity-ladder.ts). Never up: progressive steps to easy. */
 function downgradeType(wt: string): WorkoutType {
-  const downgrades: Record<string, WorkoutType> = {
-    vo2: 'threshold',
-    intervals: 'threshold',
-    hill_repeats: 'threshold',
-    threshold: 'marathon_pace',
-    race_pace: 'marathon_pace',
-    marathon_pace: 'easy',
-    mixed: 'marathon_pace',
-    progressive: 'marathon_pace',
-  };
-  return (downgrades[wt] || wt) as WorkoutType;
+  return stepDownRunType(wt, 1) as WorkoutType;
 }
 
 /** Default paces for distance estimation when paces not available */
