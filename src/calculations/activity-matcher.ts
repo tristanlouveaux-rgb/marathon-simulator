@@ -317,11 +317,6 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
   // the adhoc path, and returning an empty list avoids passing stale defaults
   // into generateWeekWorkouts.
   if (s.trackOnly) return [];
-  // HYROX: the plan is wk.triWorkouts, matched by the HYROX station and run
-  // branches in matchAndAutoComplete. The running engine's week is shown nowhere
-  // in HYROX mode, so a run those branches miss must not auto-complete one of its
-  // phantom slots; it queues for review (current week) or logs as adhoc (audit D3).
-  if (s.eventType === 'hyrox') return [];
   const currentVDOT = getEffectiveVdot(s);
 
   const previousSkips = weekIdx > 1 ? s.wks[weekIdx - 2].skip : [];
@@ -1084,7 +1079,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
 
     // Regenerate workouts for this specific week (uses weekIdx for correct VDOT / phase)
-    const weekWorkouts = regenerateWeekWorkouts(s, wk, weekIdx);
+    // HYROX: the plan is wk.triWorkouts, matched by the HYROX station and run
+    // branches below. The running engine's week is shown nowhere in HYROX mode,
+    // so a run those branches miss must not auto-complete one of its phantom
+    // slots; it queues for review (current week) or logs as adhoc (audit D3).
+    const weekWorkouts = s.eventType === 'hyrox' ? [] : regenerateWeekWorkouts(s, wk, weekIdx);
     const unratedWorkouts = weekWorkouts.filter(w => {
       const key = w.id || w.n;
       return wk.rated![key] === undefined;
