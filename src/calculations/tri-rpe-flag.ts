@@ -15,6 +15,7 @@
 
 import type { SimulatorState, Workout } from '@/types/state';
 import { RPE_BLOWN_DELTA } from '@/constants/triathlon-adaptation-params';
+import { isOpenForTriSuggestion } from './tri-suggestion-handled';
 
 export interface RpeFlag {
   yesterdayWorkout: Workout;
@@ -44,7 +45,9 @@ export function detectRpeBlownSession(state: SimulatorState): RpeFlag | null {
   const todayDow = (new Date().getDay() + 6) % 7;
   const yesterdayDow = (todayDow + 6) % 7;  // = (todayDow - 1 + 7) % 7
 
-  const todayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
+  // Skip a session already changed (accepted swap/downgrade, Adjust), done or
+  // dropped: it has already been eased, so proposing a swap again repeats it.
+  const todayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
   if (!todayWorkout || !isQuality(todayWorkout)) return null;
 
   // Yesterday's workout. On Monday it is the previous week's Sunday; this

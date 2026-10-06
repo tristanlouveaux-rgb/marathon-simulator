@@ -139,6 +139,40 @@ describe('collectTriSuggestions', () => {
       markTriSuggestionsHandled(s, { modIds: [mod!.id] });
       expect(collectTriSuggestions(s).mods.find(m => m.source === 'readiness')).toBeUndefined();
     });
+
+    it('an accepted downgrade is not downgraded again on the next launch', () => {
+      // Regression (review of a1): the finder excluded only 'skipped', and the
+      // downgraded rungs (sweet spot, tempo) still read as quality, so each
+      // launch stepped today's bike session down another rung.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0)); // local Wednesday (dow 2)
+      const disc = { ctl: 70, atl: 56, tsb: 14, directCount: 5 };
+      const s = state({
+        w: 1,
+        physiologyHistory: [],
+        recentLegLoads: [{ load: 80, sport: 'strength', sportLabel: 'Strength', timestampMs: Date.now(), recoveryMultOverride: 1.2 }],
+        triConfig: {
+          distance: 'ironman',
+          fitness: { swim: { ...disc }, bike: { ...disc }, run: { ...disc } },
+          fitnessHistory: [{}, {}, {}, {}],
+          bike: { ftp: 220, hasPowerMeter: true },
+        },
+        wks: [
+          { ph: 'build', triWorkouts: [{ id: 'cur-wed-bike', t: 'bike_threshold', n: 'Threshold ride', d: '2×20min @ 213–227W', r: 8, rpe: 8, discipline: 'bike', dayOfWeek: 2, estimatedDurationMin: 75 }] },
+        ],
+      } as any);
+      const bike = (s.wks as any)[0].triWorkouts[0];
+      const first = collectTriSuggestions(s).mods.find(m => m.source === 'readiness');
+      expect(first?.action).toBe('downgrade_today'); // Ease Back / Manage Load
+      for (let launch = 0; launch < 3; launch++) {
+        const mod = collectTriSuggestions(s).mods.find(m => m.source === 'readiness');
+        if (mod) applyTriSuggestions(s, [mod]);
+      }
+      // One rung (threshold -> sweet spot), not three (-> tempo -> endurance).
+      expect(bike.t).toBe('bike_sweet_spot');
+      expect(bike.status).toBe('reduced');
+      expect(collectTriSuggestions(s).mods.find(m => m.source === 'readiness')).toBeUndefined();
+    });
   });
 });
 

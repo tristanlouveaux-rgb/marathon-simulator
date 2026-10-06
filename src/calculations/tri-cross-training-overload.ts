@@ -32,6 +32,7 @@ import type { GarminActual } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
 import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
+import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -138,7 +139,8 @@ export interface DisciplineOption {
 }
 
 export interface CrossTrainingOverloadResult {
-  /** Total cross-training TSS this week (after dedup, after carry decay if any). */
+  /** Cross-training TSS this week not yet answered in the modal (after dedup,
+   *  plus decayed carry, minus Week.triSuggestionsHandled.crossTrainingTSS). */
   crossTrainingTSS: number;
   /** Sum of planned tri-discipline TSS for the week. */
   plannedTriTSS: number;
@@ -192,7 +194,17 @@ export function detectCrossTrainingOverload(
   }
   if (summary.totalTSS <= 0) return null;
 
-  const overshootPct = summary.totalTSS / plannedTriTSS;
+  // Notify-once: cross-training the user already answered this week (Reduce,
+  // Replace & Reduce, Keep, Push, or closing the modal) is out of the count.
+  // Without this the proposal re-fired on every launch: Keep stored nothing,
+  // Push left the load in this week, and after Reduce the re-priced plan made
+  // the overshoot RISE. New cross-training later in the week is judged on its
+  // own against the same threshold. Pushed load counts once, next week, through
+  // the carry. The affinity mix (byAffinity) stays the whole week's.
+  const unansweredTSS = summary.totalTSS - answeredCrossTrainingTSS(wk);
+  if (unansweredTSS <= 0) return null;
+
+  const overshootPct = unansweredTSS / plannedTriTSS;
   if (overshootPct < OVERLOAD_THRESHOLD) return null;
 
   const severity: 'heavy' | 'extreme' = overshootPct > EXTREME_THRESHOLD ? 'extreme' : 'heavy';
@@ -201,7 +213,7 @@ export function detectCrossTrainingOverload(
   // Saturation: a single huge cross-training session shouldn't unlock
   // unbounded reductions. Cap the "credit" available per discipline by
   // running's saturation curve.
-  const reductionCredit = SATURATION_CAP * (1 - Math.exp(-summary.totalTSS / SATURATION_TAU));
+  const reductionCredit = SATURATION_CAP * (1 - Math.exp(-unansweredTSS / SATURATION_TAU));
 
   const options = {
     swim: buildDisciplineOption(state, wk, weekIdx, 'swim', todayDow, maxMods, reductionCredit),
@@ -216,7 +228,7 @@ export function detectCrossTrainingOverload(
   if (options[recommendedDiscipline].remainingTSS <= 0) return null;
 
   return {
-    crossTrainingTSS: Math.round(summary.totalTSS),
+    crossTrainingTSS: Math.round(unansweredTSS),
     plannedTriTSS: Math.round(plannedTriTSS),
     overshootPct,
     severity,
@@ -342,14 +354,20 @@ function buildDisciplineOption(
   maxMods: number,
   reductionCredit: number,
 ): DisciplineOption {
-  const candidates = (wk.triWorkouts ?? []).filter(
-    w => w.discipline === discipline && isModifiable(w, todayDow),
+  const upcoming = (wk.triWorkouts ?? []).filter(
+    w => w.discipline === discipline && isUpcoming(w, todayDow),
   );
 
-  const remainingTSS = candidates.reduce(
+  // Remaining load counts every upcoming session, including one an earlier
+  // suggestion already reduced (it is still on the plan at its new load).
+  const remainingTSS = upcoming.reduce(
     (acc, w) => acc + (w.aerobic ?? 0) + (w.anaerobic ?? 0),
     0,
   );
+
+  // Proposals skip sessions already changed: re-proposing a trim or downgrade on
+  // a 'reduced' session steps it down again on every launch.
+  const candidates = upcoming.filter(w => isOpenForTriSuggestion(w));
 
   const floorTSS = computeTriDisciplineFloorTSS(state, discipline, weekIdx);
 
@@ -371,8 +389,9 @@ function buildDisciplineOption(
   };
 }
 
-/** Modifiable = upcoming, not skipped/replaced/completed, has an id. */
-function isModifiable(w: Workout, todayDow: number): boolean {
+/** Upcoming = still on this week's plan: not skipped/replaced/completed, today
+ *  or later, has an id. Proposals additionally need isOpenForTriSuggestion. */
+function isUpcoming(w: Workout, todayDow: number): boolean {
   if (!w.id) return false;
   const status = w.status as string | undefined;
   if (status === 'skipped' || status === 'replaced' || status === 'completed') return false;

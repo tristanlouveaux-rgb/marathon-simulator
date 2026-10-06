@@ -16,7 +16,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectCrossTrainingOverload } from './tri-cross-training-overload';
+import { detectCrossTrainingOverload, type OverloadAdjustment } from './tri-cross-training-overload';
+import { applyTriSuggestions } from './tri-suggestion-apply';
+import { markTriSuggestionsHandled } from './tri-suggestion-handled';
+import type { TriSuggestionMod } from './tri-suggestion-aggregator';
 import type { SimulatorState } from '@/types/state';
 
 // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1], so
@@ -453,5 +456,58 @@ describe('detectCrossTrainingOverload — reads the week the user is in (s.w is 
       ] as any,
     });
     expect(detectCrossTrainingOverload(s, 0)?.crossTrainingTSS).toBe(220);
+  });
+});
+
+// ─── Notify-once: an answered overload is not proposed again ───────────────
+// Regression (review of a1): once the detector read the current week, the
+// overload modal re-fired on every launch. After Reduce the re-priced plan made
+// the overshoot RISE and the same sessions were proposed again (isModifiable
+// let 'reduced' through); Keep stored nothing; Push left the load in this week.
+
+describe('detectCrossTrainingOverload — answered proposals', () => {
+  const padel = (id: string, iTrimp: number) => ({ id, t: 'cross', n: 'padel', d: '150min', r: 7, iTrimp });
+  const asMods = (adj: OverloadAdjustment[]): TriSuggestionMod[] => adj.map((a, i) => ({
+    id: `xt_${i}`, source: 'cross_training_overload', discipline: a.discipline,
+    headline: a.workoutLabel, body: '', severity: 'caution', targetWorkoutId: a.workoutId, action: a.action,
+  }));
+
+  it('sessions an accepted Reduce changed are not proposed again', () => {
+    const s = state({ w: 1, wks: [{ ...canonicalTriWeek(), adhocWorkouts: [padel('padel', 33000)] }] as any });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    const reduced = r.options.run.reduceMods.map(m => m.workoutId);
+    expect(reduced).toEqual(['mon-r', 'sun-r']);
+    expect(applyTriSuggestions(s, asMods(r.options.run.reduceMods)).applied).toBe(2);
+
+    // Even without the answered stamp, the reduced sessions are no longer targets.
+    const again = detectCrossTrainingOverload(s, 0);
+    for (const d of ['swim', 'bike', 'run'] as const) {
+      const ids = [...(again?.options[d].reduceMods ?? []), ...(again?.options[d].replaceMods ?? [])].map(m => m.workoutId);
+      expect(ids).not.toContain('mon-r');
+      expect(ids).not.toContain('sun-r');
+    }
+    // They still count toward the run's remaining planned load, at the new load.
+    const wk = s.wks![0] as any;
+    const runLoad = wk.triWorkouts.filter((w: any) => w.discipline === 'run')
+      .reduce((a: number, w: any) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+    expect(again?.options.run.remainingTSS).toBe(Math.round(runLoad));
+  });
+
+  it('an answered load is not proposed again; a new session is judged on its own', () => {
+    const s = state({ w: 1, wks: [{ ...canonicalTriWeek(), adhocWorkouts: [padel('padel', 33000)] }] as any });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    expect(r.crossTrainingTSS).toBe(220);
+    markTriSuggestionsHandled(s, { crossTrainingTSS: r.crossTrainingTSS }); // e.g. Keep
+    expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+
+    // A small session afterwards (40 TSS, 8% of plan) is below the threshold on its own.
+    (s.wks![0] as any).adhocWorkouts.push(padel('padel-2', 6000));
+    expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+
+    // A second big session (220 TSS) fires, built on the unanswered load only.
+    (s.wks![0] as any).adhocWorkouts.push(padel('padel-3', 33000));
+    const next = detectCrossTrainingOverload(s, 0);
+    expect(next).not.toBeNull();
+    expect(next!.crossTrainingTSS).toBe(260); // 40 + 220, the 220 answered earlier is out
   });
 });

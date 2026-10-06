@@ -692,6 +692,12 @@ export interface Week {
      *  unticked or dismissed): 'ramp_<discipline>', 'readiness_<workoutId>',
      *  'rpe_<workoutId>'. collectTriSuggestions does not propose them again. */
     modIds?: string[];
+    /** Cross-training TSS (this week's, plus any decayed carry) the user
+     *  already answered in the overload modal (Reduce / Replace & Reduce /
+     *  Keep / Push, or closing it). detectCrossTrainingOverload counts only
+     *  cross-training above this, so an answered load is not proposed again
+     *  and a new session later in the week is judged on its own. */
+    crossTrainingTSS?: number;
   };
   acwrOverridden?: boolean;                   // User dismissed "Reduce this week". Adds synthetic ATL debt
   /** Undo snapshot for the most recent ACWR reduction (readiness "Reduce session

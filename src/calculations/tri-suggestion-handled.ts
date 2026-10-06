@@ -42,10 +42,29 @@ export function handledTriSuggestionIds(state: SimulatorState): Set<string> {
 }
 
 /**
- * Record that the user answered these proposals in the current week (accepted,
- * left unticked or dismissed). Mutates state; caller saves.
+ * Cross-training TSS the user already answered in the overload modal this week.
+ * detectCrossTrainingOverload subtracts it, so only cross-training logged since
+ * the last answer can fire a new proposal.
  */
-export function markTriSuggestionsHandled(state: SimulatorState, answered: { modIds?: string[] }): void {
+export function answeredCrossTrainingTSS(wk: Week | undefined): number {
+  const v = wk?.triSuggestionsHandled?.crossTrainingTSS;
+  return typeof v === 'number' && v > 0 ? v : 0;
+}
+
+/**
+ * Record that the user answered these proposals in the current week.
+ *  - modIds: generic rows (ramp / readiness / RPE) accepted, left unticked or
+ *    dismissed.
+ *  - crossTrainingTSS: the cross-training load an overload proposal was built
+ *    on (CrossTrainingOverloadResult.crossTrainingTSS, which already excludes
+ *    load answered earlier), answered with Reduce, Replace & Reduce, Keep, Push
+ *    or by closing the modal. Added to the week's answered total.
+ * Mutates state; caller saves.
+ */
+export function markTriSuggestionsHandled(
+  state: SimulatorState,
+  answered: { modIds?: string[]; crossTrainingTSS?: number },
+): void {
   const wk = currentWeek(state);
   if (!wk) return;
   const handled = wk.triSuggestionsHandled ?? (wk.triSuggestionsHandled = {});
@@ -53,5 +72,8 @@ export function markTriSuggestionsHandled(state: SimulatorState, answered: { mod
     const ids = new Set(handled.modIds ?? []);
     for (const id of answered.modIds) ids.add(id);
     handled.modIds = [...ids];
+  }
+  if (typeof answered.crossTrainingTSS === 'number' && answered.crossTrainingTSS > 0) {
+    handled.crossTrainingTSS = answeredCrossTrainingTSS(wk) + answered.crossTrainingTSS;
   }
 }

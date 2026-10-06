@@ -143,7 +143,10 @@ export function collectTriSuggestions(
       // Find today's planned workout. Quality only.
       const todayDow = (new Date().getDay() + 6) % 7;
       const wk = (state.wks ?? [])[curIdx];
-      const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
+      // A session already changed (an accepted downgrade or swap, an Adjust),
+      // done or dropped is not proposed again: re-proposing stepped a bike
+      // threshold down a rung per launch (threshold, sweet spot, tempo, endurance).
+      const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
       if (todayWorkout && isQuality(todayWorkout)) {
         const sentence = readiness.sentence;
         mods.push({
@@ -189,8 +192,9 @@ export function collectTriSuggestions(
 
   // Notify-once: proposals the user already answered this week (ticked, left
   // unticked or dismissed in the modal) are not proposed again until the week
-  // rolls over. Cross-training overload ids carry the recommended discipline,
-  // which can change between launches, so they are not filtered by id here.
+  // rolls over. Cross-training overload keeps its own record instead
+  // (Week.triSuggestionsHandled.crossTrainingTSS): the detector counts only
+  // cross-training the user has not answered yet.
   const handled = handledTriSuggestionIds(state);
   const open = mods.filter(m => m.source === 'cross_training_overload' || !handled.has(m.id));
 

@@ -45,6 +45,18 @@ describe('detectRpeBlownSession — week index', () => {
       expect(flag!.yesterdayActualRpe).toBe(4 + RPE_BLOWN_DELTA);
     });
 
+    it('no flag when today\'s session was already eased (accepted swap or downgrade)', () => {
+      // Regression (review of a1): the finder excluded only 'skipped', so an
+      // accepted swap was proposed again on every launch.
+      for (const status of ['reduced', 'replaced', 'completed'] as const) {
+        const s = state(1, [{
+          triWorkouts: [ride('b-tue', 'bike_endurance', 1, 4), { ...run('r-wed', 'threshold', 2, 8), status }],
+          rated: { 'b-tue': 4 + RPE_BLOWN_DELTA },
+        }]);
+        expect(detectRpeBlownSession(s)).toBeNull();
+      }
+    });
+
     it('no flag when yesterday was rated within the expected band', () => {
       const s = state(1, [{
         triWorkouts: [ride('b-tue', 'bike_endurance', 1, 4), run('r-wed', 'threshold', 2, 8)],
