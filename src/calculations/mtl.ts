@@ -271,22 +271,51 @@ export function computeMTLFitnessFatigueSeries(
   weeks: Week[],
   currentWeekIndex: number,
 ): Array<{ mtlCTL: number; mtlATL: number }> {
+  return mtlEmaSeries(weeks, currentWeekIndex, computeWeekActualMTL);
+}
+
+/**
+ * The MTL impulse-response walk behind computeMTLFitnessFatigueSeries, over any
+ * weekly series: completed MTL (computeWeekActualMTL) for the athlete's chronic
+ * and acute load, or planned MTL (computeWeekMTL) for the load the plan
+ * prescribed. Both EMAs start at that series' own observed baseline
+ * (observedBaselineWeeklyMTL). Daily-equivalent (÷7).
+ */
+function mtlEmaSeries(
+  weeks: Week[],
+  currentWeekIndex: number,
+  weekValue: (wk: Week) => number,
+): Array<{ mtlCTL: number; mtlATL: number }> {
   const CTL_DECAY = Math.exp(-7 / 42);
   const ATL_DECAY = Math.exp(-7 / 7);
 
-  const seed = observedBaselineWeeklyMTL(weeks, currentWeekIndex, computeWeekActualMTL);
+  const seed = observedBaselineWeeklyMTL(weeks, currentWeekIndex, weekValue);
   let ctl = seed;
   let atl = seed;
 
   const out: Array<{ mtlCTL: number; mtlATL: number }> = [];
   const limit = Math.min(currentWeekIndex + 1, weeks.length);
   for (let i = 0; i < limit; i++) {
-    const weeklyMTL = computeWeekActualMTL(weeks[i]);
+    const weeklyMTL = weekValue(weeks[i]);
     ctl = ctl * CTL_DECAY + weeklyMTL * (1 - CTL_DECAY);
     atl = atl * ATL_DECAY + weeklyMTL * (1 - ATL_DECAY);
     out.push({ mtlCTL: ctl / 7, mtlATL: atl / 7 });
   }
   return out;
+}
+
+/** Plan weeks completed before the current week (0-based current index). */
+function completedPlanWeeks(weeks: Week[], currentWeekIndex: number): number {
+  return Math.max(0, Math.min(currentWeekIndex, weeks.length - 1));
+}
+
+/**
+ * The MTL history guard: fewer than ROLLING_ACWR_MIN_OBSERVED_DAYS of completed
+ * plan weeks. Before then the observed baseline the EMAs start from rests on a
+ * single week (or none). Shared by computeMtlAcwr and computeMtlChronicVsPlan.
+ */
+function mtlHistoryTooShort(completedWeeks: number): boolean {
+  return completedWeeks * 7 < ROLLING_ACWR_MIN_OBSERVED_DAYS;
 }
 
 /**
@@ -322,9 +351,8 @@ export interface MtlAcwr {
  */
 export function computeMtlAcwr(weeks: Week[], currentWeekIndex: number): MtlAcwr {
   const { mtlCTL, mtlATL } = computeMTLFitnessFatigue(weeks, currentWeekIndex);
-  const completedWeeks = Math.max(0, Math.min(currentWeekIndex, weeks.length - 1));
   const base = { chronic: mtlCTL, acute: mtlATL };
-  if (completedWeeks * 7 < ROLLING_ACWR_MIN_OBSERVED_DAYS) return { ...base, ratio: null, reason: 'history' };
+  if (mtlHistoryTooShort(completedPlanWeeks(weeks, currentWeekIndex))) return { ...base, ratio: null, reason: 'history' };
   if (mtlCTL < MTL_ACWR_MIN_CHRONIC) return { ...base, ratio: null, reason: 'lowChronic' };
   return { ...base, ratio: mtlATL / mtlCTL, reason: 'ok' };
 }
@@ -333,6 +361,54 @@ export function computeMtlAcwr(weeks: Week[], currentWeekIndex: number): MtlAcwr
 export function hyroxMtlAcwr(s: SimulatorState): MtlAcwr | null {
   if (s.eventType !== 'hyrox') return null;
   return computeMtlAcwr(s.wks ?? [], Math.max(0, (s.w ?? 1) - 1));
+}
+
+export interface MtlChronicVsPlan {
+  /** completed ÷ prescribed chronic MTL, or null when withheld (see `reason`). */
+  ratio: number | null;
+  /** Daily-equivalent chronic MTL from completed sessions at the end of the last completed week. */
+  actual: number;
+  /** Daily-equivalent chronic MTL the plan prescribed for the same weeks. */
+  prescribed: number;
+  /** Plan weeks the comparison covers (weeks before the current one). */
+  completedWeeks: number;
+  /** 'history': computeMtlAcwr's history guard is still closed.
+   *  'noPlan': the completed weeks prescribed no MTL. */
+  reason: 'ok' | 'history' | 'noPlan';
+}
+
+/**
+ * TRACKING side: the athlete's chronic MTL against the chronic MTL the plan
+ * prescribed, over the completed plan weeks (the current, partial week is
+ * left out on both sides so a mid-week read is not a shortfall). Both sides
+ * run the same impulse-response walk with the same starting rule
+ * (mtlEmaSeries), so a plan-compliant athlete reads exactly 1. The actual side
+ * equals computeMTLFitnessFatigue at the last completed week.
+ *
+ * Reads below 1 when completed load fell short of the prescription. It cannot
+ * exceed 1 on plan sessions alone: completed MTL counts plan sessions only
+ * (isMtlSessionCompleted), and a session the athlete adds joins the plan.
+ *
+ * Withheld behind computeMtlAcwr's history guard. The race projection's
+ * "Training fitness" factor and the staleness model's MTL mitigation signal
+ * read this one computation.
+ */
+export function computeMtlChronicVsPlan(weeks: Week[], currentWeekIndex: number): MtlChronicVsPlan {
+  const completedWeeks = completedPlanWeeks(weeks, currentWeekIndex);
+  if (mtlHistoryTooShort(completedWeeks)) {
+    return { ratio: null, actual: 0, prescribed: 0, completedWeeks, reason: 'history' };
+  }
+  const last = completedWeeks - 1;
+  const actual = mtlEmaSeries(weeks, last, computeWeekActualMTL)[last]?.mtlCTL ?? 0;
+  const prescribed = mtlEmaSeries(weeks, last, computeWeekMTL)[last]?.mtlCTL ?? 0;
+  if (prescribed <= 0) return { ratio: null, actual, prescribed, completedWeeks, reason: 'noPlan' };
+  return { ratio: actual / prescribed, actual, prescribed, completedWeeks, reason: 'ok' };
+}
+
+/** computeMtlChronicVsPlan for the current week of a HYROX plan; null in every other mode. */
+export function hyroxMtlChronicVsPlan(s: SimulatorState): MtlChronicVsPlan | null {
+  if (s.eventType !== 'hyrox') return null;
+  return computeMtlChronicVsPlan(s.wks ?? [], Math.max(0, (s.w ?? 1) - 1));
 }
 
 export interface MtlAdherence {

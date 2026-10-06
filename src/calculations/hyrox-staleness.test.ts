@@ -2,8 +2,10 @@
  * computeHyroxStaleness tests.
  *
  * Confirms time-based decay across categories (fresh/aging/stale/very_stale)
- * and physiology mitigation (current VDOT + MTL CTL + Strava CTL pulling
- * weights back toward 1.0 when the athlete has clearly held fitness).
+ * and physiology mitigation (current VDOT + Strava CTL pulling weights back
+ * toward 1.0 when the athlete has clearly held fitness). The MTL signal reads
+ * the plan (chronic MTL against the plan's prescription) and is covered on
+ * real plans in hyrox-mtl-vs-plan.test.ts.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -21,7 +23,6 @@ function buildState(opts: {
   raceDateOffsetMonths?: number | null;
   band?: AbilityBand;
   vdot?: number | null;
-  mtlCTL?: number | null;
   ctlBaseline?: number | null;
   raceId?: string;
 }): SimulatorState {
@@ -37,7 +38,6 @@ function buildState(opts: {
       weeklyMTL: 0,
       mtlCap: 1300,
       mtlHistory: [],
-      mtlCTL: opts.mtlCTL ?? undefined,
       runsPerWeek: 3,
       stationSessionsPerWeek: 1,
       bricksPerWeek: 1,
@@ -96,7 +96,6 @@ describe('computeHyroxStaleness', () => {
     const withPhys = computeHyroxStaleness(buildState({
       raceDateOffsetMonths: 18, band: 'intermediate',
       vdot: 50,                 // above intermediate-implied 45
-      mtlCTL: 130,              // above 70% × cap / 7 anchor
       ctlBaseline: 80,          // strong Strava signal
     }));
     expect(withPhys.physiologyMitigation).toBeGreaterThan(noPhys.physiologyMitigation);
@@ -107,7 +106,7 @@ describe('computeHyroxStaleness', () => {
     // Mitigation only adjusts weights, not the confidence cap. UI still shows
     // "stale" chip when the data is stale.
     const r = computeHyroxStaleness(buildState({
-      raceDateOffsetMonths: 14, vdot: 60, mtlCTL: 200, ctlBaseline: 90,
+      raceDateOffsetMonths: 14, vdot: 60, ctlBaseline: 90,
     }));
     expect(r.confidenceCap).toBe('low');
   });
