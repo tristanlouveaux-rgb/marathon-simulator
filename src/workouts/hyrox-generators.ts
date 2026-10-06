@@ -162,12 +162,14 @@ function fillRounds(budgetSec: number, roundDurSec: number, bandMax: number): nu
 // ─── Run session generator ────────────────────────────────────────────────────
 
 /**
- * Easy run pace from race pace (seed × 1.2).
- * Race pace is already fatigued race pace from HyroxDataLab. 20% slower is a
- * physiologically reasonable easy training pace (Maffetone; Seiler 2010).
+ * HYROX easy run pace (sec/km): race pace × 1.2, where race pace is the
+ * athlete's HYROX run pace (`hyroxConfig.hyroxRunPaceSecKm`) or, without one,
+ * the band seed pace. Race pace is already fatigued race pace from
+ * HyroxDataLab. 20% slower is a physiologically reasonable easy training pace
+ * (Maffetone; Seiler 2010). Prices easy runs and commute runs alike.
  */
-function easyTrainingPaceSecKm(band: AbilityBand): number {
-  return Math.round(SEED_RUN_PACE_SEC_KM[band] * 1.2);
+export function hyroxEasyRunPaceSecKm(band: AbilityBand, runPaceSecKm?: number): number {
+  return Math.round((runPaceSecKm ?? SEED_RUN_PACE_SEC_KM[band]) * 1.2);
 }
 
 export function generateHyroxRun(params: RunParams): Workout {
@@ -180,7 +182,7 @@ export function generateHyroxRun(params: RunParams): Workout {
   let mtlKind: 'run_easy' | 'run_tempo' | 'run_intervals';
 
   const racePace = params.runPaceSecKm ?? SEED_RUN_PACE_SEC_KM[band];
-  const easyPace = Math.round(racePace * 1.2);
+  const easyPace = hyroxEasyRunPaceSecKm(band, params.runPaceSecKm);
   const easyDistKm = Math.round((dur * 60) / easyPace * 10) / 10;
 
   switch (kind) {
