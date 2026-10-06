@@ -376,3 +376,58 @@ describe('Ironman long-run build + key-session alternation (SCIENCE_LOG §CD)', 
     }
   });
 });
+
+describe('Triathlon race week (mirrors running isRaceWeek, 2026-10-06)', () => {
+  // Before: every tri race week carried a "Long run" that the scheduler put on
+  // Sunday, race day for a Sunday race. The race takes the long-run slot, and
+  // nothing else is scheduled on Sunday in race week.
+  const cases: Array<{ distance: '70.3' | 'ironman' | 'olympic' | 'sprint'; tw: number; hours: number }> = [
+    { distance: 'sprint', tw: 12, hours: 6 },
+    { distance: 'olympic', tw: 16, hours: 8 },
+    { distance: '70.3', tw: 20, hours: 10 },
+    { distance: '70.3', tw: 20, hours: 6 },
+    { distance: 'ironman', tw: 24, hours: 14 },
+  ];
+
+  for (const c of cases) {
+    it(`${c.distance} ${c.tw}wk ${c.hours}h: race week has no long run and leaves Sunday free`, () => {
+      const weeks = generateTriathlonPlan(makeTriState({
+        tw: c.tw,
+        triConfig: {
+          distance: c.distance,
+          timeAvailableHoursPerWeek: c.hours,
+          volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 },
+          bike: { hasPowerMeter: false },
+          swim: { cssSecPer100m: 100 },
+          weeksToRace: c.tw,
+        },
+      }));
+      const raceWeek = weeks[c.tw - 1].triWorkouts ?? [];
+      expect(raceWeek.filter(w => w.t === 'long')).toHaveLength(0);
+      expect(raceWeek.filter(w => w.dayOfWeek === 6).map(w => w.n)).toEqual([]);
+      // The week before race week still has its long run on Sunday.
+      const prior = weeks[c.tw - 2].triWorkouts ?? [];
+      const priorLong = prior.filter(w => w.t === 'long');
+      if (priorLong.length > 0) expect(priorLong[0].dayOfWeek).toBe(6);
+    });
+  }
+
+  it('commute runs do not displace the long run from Sunday', () => {
+    // Before: the scheduler took the LAST run in the array as the long run, and
+    // commute runs are appended after the generated runs, so a commute landed on
+    // Sunday and the long run on a weekday.
+    const weeks = generateTriathlonPlan(makeTriState({
+      tw: 20,
+      commuteConfig: { enabled: true, commuteDaysPerWeek: 2, isBidirectional: false, distanceKm: 5 } as any,
+    }));
+    let longWeeks = 0;
+    for (const wk of weeks.slice(0, 19)) {
+      const long = (wk.triWorkouts ?? []).find(w => w.t === 'long');
+      if (!long) continue;
+      longWeeks++;
+      expect(long.dayOfWeek, `wk${wk.w}`).toBe(6);
+    }
+    expect(longWeeks).toBeGreaterThan(10);
+  });
+});

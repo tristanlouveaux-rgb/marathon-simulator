@@ -37,7 +37,7 @@ import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations'
 import { gp } from '@/calculations/paces';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
-import { isFourWeekCycleDeloadWeek } from './plan_engine';
+import { isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -49,7 +49,11 @@ import { isFourWeekCycleDeloadWeek } from './plan_engine';
 // ids. The bump forces a regen so PERSISTED weeks pick the ids up; without it,
 // pre-existing weeks keep id-less workouts and every `w.id ?? w.n` consumer
 // stays name-keyed (the duplicate-name collision the ids exist to fix).
-export const TRI_GENERATOR_VERSION = 18;
+// v19: race week has no long run (the race is that week's long effort, mirrors
+// running's isRaceWeek), and the scheduler finds the long run by type instead of
+// array position, so a commute run no longer lands on Sunday with the long run
+// pushed to a weekday.
+export const TRI_GENERATOR_VERSION = 19;
 
 /**
  * Representative average session length (hours) per discipline. The generator
@@ -437,6 +441,14 @@ function generateWeekForTriathlon(
     }
     run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
   }
+  // Race week: the race takes the long-run slot (mirrors running's isRaceWeek in
+  // plan_engine.ts). Before, every tri race week carried a "Long run" that the
+  // scheduler put on Sunday, race day for a Sunday race. The other runs keep the
+  // minutes they were given with the long run present.
+  if (isRaceWeek(phase, weekIndex, totalWeeks, state.continuousMode) && run.length > 0
+      && run[run.length - 1].t === 'long') {
+    run.pop();
+  }
 
   // Brick = the long ride + a transition run off it (SCIENCE_LOG §CD). Pop the
   // long ride (last bike slot, with any emphasis maintenance already applied) out
@@ -570,7 +582,8 @@ function generateWeekForTriathlon(
     adapted.brick,
     phase,
     adapted.gym,
-    minutesCapByDay
+    minutesCapByDay,
+    isRaceWeek(phase, weekIndex, totalWeeks, state.continuousMode),
   );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;
