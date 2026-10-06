@@ -1,9 +1,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { collectTriSuggestions, TRI_VOLUME_RAMP_SUGGESTIONS_LIVE } from './tri-suggestion-aggregator';
+import { collectTriSuggestions, answeredModIds, TRI_VOLUME_RAMP_SUGGESTIONS_LIVE } from './tri-suggestion-aggregator';
 import { applyTriSuggestions } from './tri-suggestion-apply';
 import { markTriSuggestionsHandled } from './tri-suggestion-handled';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import { getDefaultState } from '@/state/store';
+import { loadForTriRun } from '@/workouts/rung-load';
+import { loadForSwim } from '@/workouts/swim';
 import type { SimulatorState, Workout } from '@/types/state';
 
 // s.w is 1-based (store.ts default w: 1): w: 1 means the current week is
@@ -260,5 +262,111 @@ describe('volume ramp is not live on a partial week', () => {
     expect(next.mods.find(m => m.id === 'ramp_bike')).toBeUndefined();
     // The stamp lives on the week the user answered in (week 3).
     expect(s.wks[2].triSuggestionsHandled?.modIds).toContain('ramp_bike');
+  });
+});
+
+// ─── RPE + readiness on one session: one change per Apply ───────────────────
+// Regression (review of the a2 fixes): the RPE-blown row (swap to easy) and the
+// readiness row (one-rung downgrade) both target today's first open session and
+// are both ticked by default. applyTriSuggestions applied every row in turn, so
+// one "Apply selected" stepped the session twice: threshold run -> easy ->
+// recovery, swim threshold -> endurance -> technique.
+
+describe('RPE-blown and readiness rows on the same session', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  // Wednesday. Yesterday's easy run was rated 8 against a planned 4 (RPE-blown),
+  // and a heavy leg load floors readiness (readiness gate), so both rows fire on
+  // today's quality session.
+  function bothFire(today: Workout): SimulatorState {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0)); // local Wednesday (dow 2)
+    const disc = { ctl: 70, atl: 56, tsb: 14, directCount: 5 };
+    return state({
+      w: 1,
+      physiologyHistory: [],
+      recentLegLoads: [{ load: 80, sport: 'strength', sportLabel: 'Strength', timestampMs: Date.now(), recoveryMultOverride: 1.2 }],
+      triConfig: {
+        distance: 'ironman',
+        fitness: { swim: { ...disc }, bike: { ...disc }, run: { ...disc } },
+        fitnessHistory: [{}, {}, {}, {}],
+        swim: { cssSecPer100m: 100 },
+      },
+      wks: [{
+        ph: 'build',
+        rated: { 'tue-easy': 8 },
+        triWorkouts: [
+          { id: 'tue-easy', t: 'easy', n: 'Easy run', d: '40min', r: 4, rpe: 4, discipline: 'run', dayOfWeek: 1, estimatedDurationMin: 40 },
+          today,
+        ],
+      }],
+    } as any);
+  }
+
+  it('a threshold run gets one row and one swap: easy at 45 min, not recovery', () => {
+    const s = bothFire({ id: 'wed-thr', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 } as Workout);
+    const r = collectTriSuggestions(s);
+    expect(r.diagnostics.rpeBlown).toBe(true);
+    expect(r.diagnostics.readinessLabel).not.toBeNull();
+    const rows = r.mods.filter(m => m.targetWorkoutId === 'wed-thr');
+    // One row: the swap (stronger than the downgrade), answering both ids.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe('swap_easy');
+    expect(rows[0].alsoAnswers).toEqual(['readiness_wed-thr']);
+
+    const res = applyTriSuggestions(s, r.mods);
+    expect(res.applied).toBe(1);
+    const w = findWorkout(s, 'wed-thr')!;
+    expect(w.t).toBe('easy');
+    expect(w.estimatedDurationMin).toBe(45);
+    const easy = loadForTriRun('easy', 45)!;
+    expect((w.aerobic ?? 0) + (w.anaerobic ?? 0)).toBe(easy.aerobic + easy.anaerobic);
+  });
+
+  it('applying both raw rows still changes the run once (apply backstop)', () => {
+    const s = bothFire({ id: 'wed-thr', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 } as Workout);
+    const raw = [
+      { id: 'rpe_wed-thr', source: 'rpe_blown', discipline: 'run', headline: 'h', body: 'b', severity: 'caution', targetWorkoutId: 'wed-thr', action: 'swap_easy' },
+      { id: 'readiness_wed-thr', source: 'readiness', discipline: 'run', headline: 'h', body: 'b', severity: 'caution', targetWorkoutId: 'wed-thr', action: 'downgrade_today' },
+    ] as const;
+    const res = applyTriSuggestions(s, [...raw]);
+    expect(res).toMatchObject({ applied: 1, skipped: 1, touched: ['wed-thr'] });
+    expect(findWorkout(s, 'wed-thr')!.t).toBe('easy');
+    expect(findWorkout(s, 'wed-thr')!.estimatedDurationMin).toBe(45);
+  });
+
+  it('a threshold swim gets one row and one swap: endurance at 45 min, not technique', () => {
+    const s = bothFire({ id: 'wed-swim', t: 'swim_threshold', n: 'CSS intervals', d: '6×200m @ 1:40/100m', r: 7, rpe: 7, discipline: 'swim', dayOfWeek: 2, estimatedDurationMin: 60 } as Workout);
+    const r = collectTriSuggestions(s);
+    const rows = r.mods.filter(m => m.targetWorkoutId === 'wed-swim');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action).toBe('swap_easy');
+
+    applyTriSuggestions(s, r.mods);
+    const w = findWorkout(s, 'wed-swim')!;
+    expect(w.t).toBe('swim_endurance');
+    expect(w.estimatedDurationMin).toBe(45);
+    const end = loadForSwim('endurance', 45);
+    expect((w.aerobic ?? 0) + (w.anaerobic ?? 0)).toBe(end.aerobic + end.anaerobic);
+  });
+
+  it('two swaps on one session (Overreaching) cut the minutes once: 60 -> 45, not 34', () => {
+    const s = state({
+      w: 1,
+      wks: [{ triWorkouts: [{ id: 'wed-thr', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 }] }],
+    } as any);
+    const swap = (id: string, source: 'rpe_blown' | 'readiness') =>
+      ({ id, source, discipline: 'run', headline: 'h', body: 'b', severity: 'caution', targetWorkoutId: 'wed-thr', action: 'swap_easy' }) as const;
+    const res = applyTriSuggestions(s, [swap('rpe_wed-thr', 'rpe_blown'), swap('readiness_wed-thr', 'readiness')]);
+    expect(res).toMatchObject({ applied: 1, skipped: 1 });
+    expect(findWorkout(s, 'wed-thr')!.estimatedDurationMin).toBe(45);
+  });
+
+  it('a declined merged row answers both detectors for the week', () => {
+    const s = bothFire({ id: 'wed-thr', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 } as Workout);
+    const shown = collectTriSuggestions(s).mods.filter(m => m.source !== 'cross_training_overload');
+    markTriSuggestionsHandled(s, { modIds: answeredModIds(shown) });
+    const again = collectTriSuggestions(s).mods.filter(m => m.targetWorkoutId === 'wed-thr');
+    expect(again).toEqual([]);
   });
 });

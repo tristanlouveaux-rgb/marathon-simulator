@@ -138,4 +138,26 @@ describe('tri suggestion modal: generic rows are remembered for the week', () =>
       expect(collectTriSuggestions(getState()).mods.find(m => m.source === 'readiness')).toBeUndefined();
     });
   }
+
+  // RPE-blown (yesterday's easy run rated 8 vs 4) and readiness both fire on
+  // today's threshold run. The modal shows one merged row; dismissing it answers
+  // both detectors, so the readiness downgrade does not come back on its own.
+  it('Dismiss on a merged RPE + readiness row answers both for the week', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0)); // local Wednesday (dow 2)
+    resetState();
+    const s = readinessState() as any;
+    s.wks[0].rated = { 'tue-easy': 8 };
+    s.wks[0].triWorkouts.unshift({ id: 'tue-easy', t: 'easy', n: 'Easy run', d: '40min', r: 4, rpe: 4, discipline: 'run', dayOfWeek: 1, estimatedDurationMin: 40 });
+    setState(s);
+    const bundle = collectTriSuggestions(getState());
+    const rows = bundle.mods.filter(m => m.targetWorkoutId === 'wed-thr');
+    expect(rows).toHaveLength(1);
+    expect(document.querySelectorAll('[id^="tri-sm-mod-"]').length).toBe(0);
+    const done = showTriSuggestionModal(bundle);
+    expect(document.querySelectorAll('[id^="tri-sm-mod-"]').length).toBe(1);
+    document.getElementById('tri-sm-dismiss')!.click();
+    await done;
+    expect(collectTriSuggestions(getState()).mods.filter(m => m.targetWorkoutId === 'wed-thr')).toEqual([]);
+  });
 });

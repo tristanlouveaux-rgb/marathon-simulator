@@ -68,13 +68,27 @@ const SWAP_EASY_RUNG = { bike: 'bike_endurance', swim: 'swim_endurance' } as con
 type Disc = 'run' | 'bike' | 'swim';
 type Rung = { key: string };
 
+/**
+ * Apply accepted mods. At most one mod changes a given session per call: a later
+ * mod whose target an earlier mod in the same batch already changed is counted
+ * as skipped. The RPE-blown row and the readiness row both target today's first
+ * open session, and both are ticked by default, so without this one "Apply
+ * selected" stepped the session twice (threshold run -> easy -> recovery; swim
+ * threshold -> endurance -> technique) or cut its minutes twice (60 -> 45 -> 34).
+ * The first mod for a target wins; collectTriSuggestions already merges rows on
+ * one target into the strongest, so in the modal this guard is the backstop.
+ * Across launches, isOpenForTriSuggestion keeps a changed session out of new
+ * proposals.
+ */
 export function applyTriSuggestions(state: SimulatorState, mods: TriSuggestionMod[]): ApplyResult {
   let applied = 0;
   let skipped = 0;
   const touched: string[] = [];
+  const changedThisBatch = new Set<string>();
 
   for (const mod of mods) {
     if (!mod.targetWorkoutId) { skipped += 1; continue; }
+    if (changedThisBatch.has(mod.targetWorkoutId)) { skipped += 1; continue; }
     const hit = findWorkoutById(state, mod.targetWorkoutId);
     if (!hit) { skipped += 1; continue; }
     const { workout, week } = hit;
@@ -97,6 +111,7 @@ export function applyTriSuggestions(state: SimulatorState, mods: TriSuggestionMo
     if (ok) {
       applied += 1;
       touched.push(workout.id ?? '');
+      changedThisBatch.add(mod.targetWorkoutId);
     } else {
       skipped += 1;
     }

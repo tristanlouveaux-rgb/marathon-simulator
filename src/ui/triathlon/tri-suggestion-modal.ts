@@ -26,6 +26,7 @@ import type {
   OverloadAdjustment,
 } from '@/calculations/tri-cross-training-overload';
 import type { Discipline } from '@/types/triathlon';
+import { answeredModIds } from '@/calculations/tri-suggestion-aggregator';
 import { applyTriSuggestions } from '@/calculations/tri-suggestion-apply';
 import { markTriSuggestionsHandled } from '@/calculations/tri-suggestion-handled';
 import { getMutableState, saveState } from '@/state';
@@ -80,7 +81,7 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
     overlay.addEventListener('click', (e) => {
       if (e.target !== overlay) return;
       markTriSuggestionsHandled(getMutableState(), {
-        modIds: otherMods.map(m => m.id),
+        modIds: answeredModIds(otherMods),
         crossTrainingTSS: overload?.overloadOptions?.crossTrainingTSS,
       });
       saveState();
@@ -156,8 +157,9 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
     // ── Generic checkbox section wiring (other mods) ───────────────────────
     // Notify-once: every row the user saw is answered by Dismiss or Apply
     // (ticked rows accepted, unticked rows declined), so none is proposed again
-    // this week (tri-suggestion-handled.ts).
-    const otherModIds = otherMods.map(m => m.id);
+    // this week (tri-suggestion-handled.ts). A row merged from two detectors on
+    // one session answers both (answeredModIds).
+    const otherModIds = answeredModIds(otherMods);
     document.getElementById('tri-sm-dismiss')?.addEventListener('click', () => {
       markTriSuggestionsHandled(getMutableState(), { modIds: otherModIds });
       saveState();

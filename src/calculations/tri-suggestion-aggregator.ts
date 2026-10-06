@@ -63,6 +63,10 @@ export interface TriSuggestionMod {
    *  at the recommended discipline's first proposed mod (used as a fallback if
    *  the modal is rendered in the legacy generic-list layout). */
   overloadOptions?: CrossTrainingOverloadResult;
+  /** Ids of rows merged into this one because they targeted the same session
+   *  (oneRowPerSession). Answering this row answers them too, so a declined
+   *  swap does not come back as a separate downgrade row the same week. */
+  alsoAnswers?: string[];
 }
 
 export interface TriSuggestionBundle {
@@ -196,7 +200,9 @@ export function collectTriSuggestions(
   // (Week.triSuggestionsHandled.crossTrainingTSS): the detector counts only
   // cross-training the user has not answered yet.
   const handled = handledTriSuggestionIds(state);
-  const open = mods.filter(m => m.source === 'cross_training_overload' || !handled.has(m.id));
+  const open = oneRowPerSession(
+    mods.filter(m => m.source === 'cross_training_overload' || !handled.has(m.id)),
+  );
 
   return {
     mods: open,
@@ -207,6 +213,55 @@ export function collectTriSuggestions(
       crossTrainingOverload: !!overload,
     },
   };
+}
+
+/**
+ * Every proposal id a set of shown rows answers: each row's own id plus the ids
+ * merged into it (alsoAnswers). The modal records these as handled.
+ */
+export function answeredModIds(mods: TriSuggestionMod[]): string[] {
+  return mods.flatMap(m => [m.id, ...(m.alsoAnswers ?? [])]);
+}
+
+// ─── One row per session ─────────────────────────────────────────────────────
+// The RPE-blown and readiness detectors both pick today's first open session, so
+// when both fire they propose two changes to one session, both ticked by default.
+// Applying both stepped the session twice. Keep one row per target session: the
+// stronger action (a swap to easy over a one-rung downgrade over a trim), then the
+// higher severity, then the earlier row. The dropped row's id rides along in
+// alsoAnswers. applyTriSuggestions also applies at most one mod per session per
+// batch, as the backstop. Overload rows carry their own per-discipline option
+// set and are left as they are.
+
+const ACTION_STRENGTH: Record<TriSuggestionMod['action'], number> = {
+  swap_easy: 2,
+  downgrade_today: 1,
+  trim_volume: 0,
+};
+const SEVERITY_STRENGTH: Record<TriSuggestionMod['severity'], number> = {
+  warning: 1,
+  caution: 0,
+};
+
+function strongerRow(a: TriSuggestionMod, b: TriSuggestionMod): boolean {
+  const byAction = ACTION_STRENGTH[a.action] - ACTION_STRENGTH[b.action];
+  if (byAction !== 0) return byAction > 0;
+  return SEVERITY_STRENGTH[a.severity] > SEVERITY_STRENGTH[b.severity];
+}
+
+function oneRowPerSession(mods: TriSuggestionMod[]): TriSuggestionMod[] {
+  const out: TriSuggestionMod[] = [];
+  const slotOfTarget = new Map<string, number>();
+  for (const m of mods) {
+    const target = m.source === 'cross_training_overload' ? undefined : m.targetWorkoutId;
+    if (!target) { out.push(m); continue; }
+    const slot = slotOfTarget.get(target);
+    if (slot == null) { slotOfTarget.set(target, out.length); out.push(m); continue; }
+    const kept = out[slot];
+    const [winner, loser] = strongerRow(m, kept) ? [m, kept] : [kept, m];
+    out[slot] = { ...winner, alsoAnswers: [...(winner.alsoAnswers ?? []), ...answeredModIds([loser])] };
+  }
+  return out;
 }
 
 // ─── Heuristics ────────────────────────────────────────────────────────────
