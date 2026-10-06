@@ -61,13 +61,15 @@ describe('collectTriSuggestions', () => {
     // v2 anchors recommendation on RUN by default for tennis (run-affinity)
     // and surfaces the full per-discipline option set via `overloadOptions`.
     // All workouts dated dow=6 so they're upcoming regardless of "today".
+    // Planned minutes as generated sessions carry them: a session without
+    // minutes cannot be re-priced, so it is not proposed (canApplyTriSuggestion).
     const s = state({
       w: 1,
       wks: [{
         triWorkouts: [
-          { id: 'b1', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 6 },
-          { id: 'r1', t: 'threshold', n: 'Run threshold', d: '60min', r: 8, discipline: 'run', aerobic: 80, anaerobic: 30, dayOfWeek: 6 },
-          { id: 's1', t: 'swim_endurance', n: 'Swim', d: '45min', r: 4, discipline: 'swim', aerobic: 60, anaerobic: 10, dayOfWeek: 6 },
+          { id: 'b1', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 6, estimatedDurationMin: 240 },
+          { id: 'r1', t: 'threshold', n: 'Run threshold', d: '60min', r: 8, discipline: 'run', aerobic: 80, anaerobic: 30, dayOfWeek: 6, estimatedDurationMin: 60 },
+          { id: 's1', t: 'swim_endurance', n: 'Swim', d: '45min', r: 4, discipline: 'swim', aerobic: 60, anaerobic: 10, dayOfWeek: 6, estimatedDurationMin: 45 },
         ],
         adhocWorkouts: [
           { id: 'tennis', t: 'cross', n: 'tennis', d: '120min', r: 7, iTrimp: 18000 } as any,

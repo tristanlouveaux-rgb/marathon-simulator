@@ -30,7 +30,8 @@
  * Off-ladder sessions (bike_over_under, bike_vo2_micros, bike_vlamax,
  * bike_hills, swim_openwater, brick, run types off RUN_PACE_LADDER) have no rung
  * to step from: they are left untouched and counted as skipped, pending a
- * decision on where they step to.
+ * decision on where they step to. canApplyTriSuggestion is the one gate: the
+ * detectors filter their targets with it, so they do not propose those changes.
  *
  * Every accepted change re-prices aerobic/anaerobic, so the plan header, the
  * Home day target (getPlannedDayTSSContext) and the overload detector read the
@@ -92,6 +93,7 @@ export function applyTriSuggestions(state: SimulatorState, mods: TriSuggestionMo
     const hit = findWorkoutById(state, mod.targetWorkoutId);
     if (!hit) { skipped += 1; continue; }
     const { workout, week } = hit;
+    if (!canApplyTriSuggestion(workout, mod.action)) { skipped += 1; continue; }
 
     let ok = false;
     switch (mod.action) {
@@ -161,6 +163,37 @@ function currentRungIdx(w: Workout, d: 'bike' | 'swim'): number {
  *  as about 17). Generated sessions always carry estimatedDurationMin. */
 function minutesOf(w: Workout): number {
   return typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0 ? w.estimatedDurationMin : 0;
+}
+
+/**
+ * True when accepting `action` on this session would change it. The single
+ * gate shared by the apply step and every detector that proposes a target (the
+ * cross-training overload Reduce / Replace builders, the readiness gate and the
+ * RPE-blown row), so no row promises a change the apply step then skips, and an
+ * overload's reduction budget goes to sessions that can take it.
+ *  - every action needs planned minutes (minutesOf) to price the result;
+ *  - trim_volume: any session with minutes (same intensity, 15% shorter);
+ *  - swap_easy / downgrade_today need a single ladder (ladderDiscipline) with
+ *    the session's type on it: run RUN_PACE_LADDER, bike / swim
+ *    BIKE_INTENSITY_LADDER / SWIM_INTENSITY_LADDER. Off-ladder sessions (brick,
+ *    bike_over_under, bike_vo2_micros, bike_vlamax, bike_hills, swim_openwater,
+ *    run types off the ladder) are pending a decision on where they step to;
+ *  - downgrade_today also needs a rung below the current one. A swap on a
+ *    session already at or below easy still applies (it keeps its type and
+ *    loses 25% of the minutes).
+ */
+export function canApplyTriSuggestion(w: Workout, action: TriSuggestionMod['action']): boolean {
+  if (minutesOf(w) <= 0) return false;
+  if (action === 'trim_volume') return true;
+  const d = ladderDiscipline(w);
+  if (!d) return false;
+  if (d === 'run') {
+    if (runPaceRung(w.t) < 0) return false;
+    return action === 'swap_easy' || stepDownRunType(w.t, 1, { longRun: isLongRun(w) }) !== w.t;
+  }
+  const cur = currentRungIdx(w, d);
+  if (cur < 0) return false;
+  return action === 'swap_easy' || cur > 0;
 }
 
 /** Easy pace the run pace tokens are anchored to. The tri generator writes run
@@ -282,18 +315,20 @@ function swapReason(source: TriSuggestionMod['source']): string {
   }
 }
 
+// applySwapEasy / applyDowngrade / applyTrim run only after
+// canApplyTriSuggestion passed: the session has minutes, a ladder and a rung on
+// it, and (downgrade) a rung below. The remaining checks narrow types.
+
 function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSuggestionMod): boolean {
   const d = ladderDiscipline(w);
   if (!d) return false;
   const longRun = isLongRun(w);
   const oldMin = minutesOf(w);
-  if (oldMin <= 0) return false; // no minutes to price the easy session at
   const newMin = Math.round(oldMin * SWAP_EASY_DURATION_FACTOR);
 
   const oldT = w.t;
   if (d === 'run') {
     const rung = runPaceRung(w.t);
-    if (rung < 0) return false; // off RUN_PACE_LADDER
     // Easy rung ('long' for the long-run slot). Never up: a session already at
     // or below easy keeps its type and only loses the minutes.
     const easyT = longRun ? 'long' : 'easy';
@@ -305,7 +340,6 @@ function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSu
   } else {
     const ladder = ladderFor(d);
     const cur = currentRungIdx(w, d);
-    if (cur < 0) return false; // off-ladder kind
     const easyIdx = ladder.findIndex(r => r.key === SWAP_EASY_RUNG[d]);
     const to = cur > easyIdx ? ladder[easyIdx] : ladder[cur];
     stampOriginal(w);
@@ -326,20 +360,15 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
   const d = ladderDiscipline(w);
   if (!d) return false;
   const minutes = minutesOf(w);
-  if (minutes <= 0) return false; // no minutes to price the lower rung at
 
   if (d === 'run') {
-    if (runPaceRung(w.t) < 0) return false; // off RUN_PACE_LADDER
     const newT = stepDownRunType(w.t, 1, { longRun: isLongRun(w) });
-    if (newT === w.t) return false; // already on the bottom rung
     stampOriginal(w);
     setRunType(state, w, newT, minutes);
     w.n = `${capitalize(newT.replace(/_/g, ' '))} run (downgrade)`;
   } else {
     const ladder = ladderFor(d);
     const cur = currentRungIdx(w, d);
-    if (cur < 0) return false; // off-ladder kind
-    if (cur === 0) return false; // already on the bottom rung
     const to = ladder[cur - 1];
     stampOriginal(w);
     setRung(state, week, w, d, to, minutes);
@@ -354,7 +383,6 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
 
 function applyTrim(w: Workout): boolean {
   const oldMin = minutesOf(w);
-  if (oldMin <= 0) return false; // nothing to trim
   const newMin = Math.round(oldMin * TRIM_DURATION_FACTOR);
   stampOriginal(w);
   w.estimatedDurationMin = newMin;

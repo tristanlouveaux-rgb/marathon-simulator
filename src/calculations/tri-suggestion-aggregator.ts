@@ -20,6 +20,7 @@ import {
   type CrossTrainingOverloadResult,
 } from './tri-cross-training-overload';
 import { handledTriSuggestionIds, isOpenForTriSuggestion } from './tri-suggestion-handled';
+import { canApplyTriSuggestion } from './tri-suggestion-apply';
 
 /**
  * Volume-ramp suggestions are OFF pending Tristan's decision on the comparison
@@ -122,7 +123,10 @@ export function collectTriSuggestions(
 
   // ── RPE-flagged blown session ────────────────────────────────────────────
   const rpe: RpeFlag | null = detectRpeBlownSession(state);
-  if (rpe) {
+  // Proposed only when the swap would change today's session
+  // (canApplyTriSuggestion): a brick or an off-ladder kind is left untouched by
+  // the apply step, so a row for it would promise a change that never happens.
+  if (rpe && canApplyTriSuggestion(rpe.todayWorkout, 'swap_easy')) {
     const expected = rpe.yesterdayExpectedRpe;
     const actual = rpe.yesterdayActualRpe;
     const todayLabel = rpe.todayWorkout.n || rpe.todayWorkout.t;
@@ -151,7 +155,10 @@ export function collectTriSuggestions(
       // done or dropped is not proposed again: re-proposing stepped a bike
       // threshold down a rung per launch (threshold, sweet spot, tempo, endurance).
       const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
-      if (todayWorkout && isQuality(todayWorkout)) {
+      const action = readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today';
+      // Proposed only when the apply step would change the session
+      // (canApplyTriSuggestion), not for a brick or an off-ladder kind.
+      if (todayWorkout && isQuality(todayWorkout) && canApplyTriSuggestion(todayWorkout, action)) {
         const sentence = readiness.sentence;
         mods.push({
           id: `readiness_${todayWorkout.id ?? 'today'}`,
@@ -161,7 +168,7 @@ export function collectTriSuggestions(
           body: `${sentence} Today's ${todayWorkout.n || todayWorkout.t} is a quality session — swap for an easy session.`,
           severity: readiness.overall === 'Overreaching' ? 'warning' : 'caution',
           targetWorkoutId: todayWorkout.id,
-          action: readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today',
+          action,
         });
       }
     }
