@@ -4013,21 +4013,79 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
   `;
 }
 
+/** One logged activity on the Just-Track Plan tab. */
+interface TrackOnlyLogItem {
+  day: string;
+  name: string;
+  /** Distance, else duration, else blank. */
+  value: string;
+  distanceKm: number;
+  sortTime: number;
+}
+
+/**
+ * The activities a Just-Track week holds, each once, newest first. The one list
+ * the This week card (rows and distance) and the History row (distance and
+ * session count) both read, so the two cannot disagree. Tracking side: it
+ * describes what the user did. Load stays computeWeekRawTSS.
+ *
+ * Base: collectWeekActivities (week-activity-log.ts), the canonical week list,
+ * de-duplicated by key. An activity record and its adhoc card under the same
+ * key count once: an in-app GPS run (card and record under the recording id,
+ * recording-handler.ts saveAsAdhoc) and an accepted synced activity (card and
+ * actual under `garmin-<id>`). Pending items stay out: they are not reviewed
+ * yet, carry no load in computeWeekRawTSS, and this card never listed them.
+ *
+ * Added: a non-synced adhoc card with no activity record, which the canonical
+ * list does not model, once it is done (rated or timestamped). That is a
+ * generated, holiday or benchmark session marked done, or a GPS card stored
+ * before the run carried a record. A planned session not done yet renders
+ * under Planned (buildTrackOnlyUpcoming) and stays out of this record of what
+ * happened. So does an unfinished Quick Run placeholder (justRun: no id, no
+ * rating).
+ */
+function trackOnlyWeekLog(wk: Week, unit: 'km' | 'mi'): TrackOnlyLogItem[] {
+  const actuals = wk.garminActuals ?? {};
+  const adhocs = (wk.adhocWorkouts ?? []) as any[];
+  const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
+  const dayLabel = (ms: number) => ms > 0 ? new Date(ms).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
+  const valueOf = (km: number, min: number) => km > 0 ? formatKm(km, unit) : min > 0 ? `${Math.round(min)} min` : '';
+  const adhocName = (w: any) => w?.activityType ? formatActivityType(w.activityType) : (w?.n || 'Workout');
+  const items: TrackOnlyLogItem[] = [];
+
+  for (const e of collectWeekActivities(wk)) {
+    if (e.source === 'pending') continue;
+    let name: string;
+    if (e.source === 'actual') {
+      const a = actuals[e.key] as any;
+      name = a?.displayName || a?.workoutName || (a?.activityType ? formatActivityType(a.activityType) : 'Activity');
+    } else {
+      name = adhocName(adhocs.find(w => w.id === e.key));
+    }
+    items.push({ day: dayLabel(e.sortTime), name, value: valueOf(e.distanceKm, e.durationMin), distanceKm: e.distanceKm, sortTime: e.sortTime });
+  }
+
+  for (const w of adhocs) {
+    const id: string = w.id || '';
+    if (id.startsWith('garmin-')) continue; // listed above, as its card or its record
+    if (id && actuals[id]) continue;        // its record is listed above
+    if (!w.garminTimestamp && ratedMap[id] == null) continue; // not done
+    const km = w.garminDistKm ?? w.distanceKm;
+    const distanceKm = typeof km === 'number' && km > 0 ? km : 0;
+    const sortTime = w.garminTimestamp ? (Date.parse(w.garminTimestamp) || 0) : 0;
+    items.push({ day: dayLabel(sortTime), name: adhocName(w), value: valueOf(distanceKm, w.durationMin ?? 0), distanceKm, sortTime });
+  }
+
+  return items.sort((a, b) => b.sortTime - a.sortTime);
+}
+
 /** Per-week row for the Plan-tab history list. */
 function buildTrackOnlyWeekRow(s: SimulatorState, wk: Week, unit: 'km' | 'mi'): string {
   const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
   const tss = Math.round(computeWeekRawTSS(wk, ratedMap, s.planStartDate));
-  let km = 0;
-  let sessions = 0;
-  for (const actual of Object.values(wk.garminActuals ?? {})) {
-    km += actual.distanceKm || 0;
-    sessions++;
-  }
-  for (const w of wk.adhocWorkouts ?? []) {
-    const ad = (w as any).garminDistKm ?? (w as any).distanceKm;
-    if (typeof ad === 'number') km += ad;
-    sessions++;
-  }
+  const log = trackOnlyWeekLog(wk, unit);
+  const km = log.reduce((sum, item) => sum + item.distanceKm, 0);
+  const sessions = log.length;
   return `
     <div class="tp-week-row">
       <div style="flex:1;min-width:0">
@@ -4105,47 +4163,14 @@ function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): s
   const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
   const tss = Math.round(computeWeekRawTSS(wk, ratedMap, s.planStartDate));
 
-  type Row = { day: string; name: string; value: string };
-  const rows: Row[] = [];
-  let km = 0;
-
-  for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
-    if (key.startsWith('garmin-')) {
-      // Will also appear in adhoc; skip here to dedupe.
-      const hasAdhoc = (wk.adhocWorkouts ?? []).some((w: any) => w.id === key);
-      if (hasAdhoc) continue;
-    }
-    km += actual.distanceKm || 0;
-    const d = actual.startTime ? new Date(actual.startTime) : null;
-    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
-    const val = actual.distanceKm ? formatKm(actual.distanceKm, unit)
-              : actual.durationSec ? `${Math.round(actual.durationSec / 60)} min` : '';
-    const name = (actual as any).displayName || (actual as any).workoutName || (actual.activityType ? formatActivityType(actual.activityType) : 'Activity');
-    rows.push({ day: dayLabel, name, value: val });
-  }
-  for (const w of (wk.adhocWorkouts ?? [])) {
-    // Skip not-yet-done generated sessions — they render above as interactive
-    // "Planned" cards (buildTrackOnlyUpcoming), so this summary stays a record of
-    // what actually happened, not a double-listing of upcoming to-dos.
-    if (((w as any).id || '').startsWith('adhoc-') && !(w as any).garminTimestamp && ratedMap[(w as any).id] == null) continue;
-    const dist = (w as any).garminDistKm ?? (w as any).distanceKm;
-    if (typeof dist === 'number') km += dist;
-    const ts = (w as any).garminTimestamp;
-    const d = ts ? new Date(ts) : null;
-    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
-    const name = (w as any).activityType ? formatActivityType((w as any).activityType) : (w.n || 'Workout');
-    const val = typeof dist === 'number' ? formatKm(dist, unit)
-              : (w as any).durationMin ? `${Math.round((w as any).durationMin)} min` : '';
-    rows.push({ day: dayLabel, name, value: val });
-  }
-
-  // Sort newest-first within the week.
-  rows.reverse();
+  // Same list as the History row (trackOnlyWeekLog): each activity once, newest first.
+  const rows = trackOnlyWeekLog(wk, unit);
+  const km = rows.reduce((sum, r) => sum + r.distanceKm, 0);
 
   const rowsHtml = rows.length === 0
     ? '<div style="padding:16px;text-align:center;font-size:13px;color:var(--c-muted)">No activities logged this week.</div>'
     : rows.map(r => `
-        <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.04)">
+        <div class="tp-log-row" style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.04)">
           <div style="min-width:54px;font-size:11px;color:#64748B">${r.day}</div>
           <div style="flex:1;min-width:0;font-size:14px;color:#0F172A">${escapeHtml(r.name)}</div>
           <div style="font-size:13px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${r.value}</div>
@@ -4157,7 +4182,7 @@ function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): s
         <div style="padding:16px 16px 12px;display:flex;align-items:baseline;justify-content:space-between">
           <div>
             <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.05em;text-transform:uppercase">${title}</div>
-            <div style="font-size:24px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;margin-top:4px">${formatKm(km, unit)}</div>
+            <div class="tp-detail-total" style="font-size:24px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;margin-top:4px">${formatKm(km, unit)}</div>
           </div>
           <div style="text-align:right">
             <div style="font-size:11px;color:#64748B">TSS</div>
