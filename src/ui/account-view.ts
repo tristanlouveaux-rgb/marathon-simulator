@@ -18,7 +18,7 @@ import { syncAppleHealth, syncAppleHealthPhysiology, getLastAppleWorkoutDiag } f
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
 import { isSimulatorMode } from '@/app/runtime';
-import { getPhysiologySource, hasPhysiologySource } from '@/data/sources';
+import { getPhysiologySource, hasPhysiologySource, appleWorkoutsEnabled } from '@/data/sources';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { getState, getMutableState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
@@ -413,13 +413,15 @@ function renderGarminRow(): string {
 }
 
 function renderAppleRow(): string {
+  // With Strava connected Apple supplies recovery data only (appleWorkoutsEnabled).
+  const sub = appleWorkoutsEnabled(getState()) ? 'Syncs automatically' : 'Sleep and recovery. Workouts come from Strava.';
   return `
     <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
       <div style="flex:1;min-width:0">
         <div style="font-size:15px;font-weight:500;color:var(--c-black)">Apple Watch</div>
         <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
           ${statusDot('var(--c-ok)')}
-          <span style="font-size:12px;color:var(--c-muted)">Syncs automatically</span>
+          <span style="font-size:12px;color:var(--c-muted)">${sub}</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
@@ -2348,7 +2350,7 @@ function wireAccountHandlers(): void {
     rerender();
 
     try {
-      // Manual tap pulls the FULL history (not the 14-day incremental the
+      // Manual tap pulls the FULL history (not the 28-day incremental the
       // background syncs use), so a user whose rides/swims/runs never backfilled
       // can recover them here instead of resetting their plan. Takes longer
       // (full-window query + HR enrichment), hence the wait copy below.
@@ -2356,7 +2358,9 @@ function wireAccountHandlers(): void {
         syncAppleHealth({ forceFullHistory: true }),
         syncAppleHealthPhysiology(28),
       ]);
-      syncResultMsg = 'Full history synced from Apple Health. Activities, sleep, and recovery updated.';
+      syncResultMsg = appleWorkoutsEnabled(getState())
+        ? 'Full history synced from Apple Health. Activities, sleep, and recovery updated.'
+        : 'Sleep and recovery synced from Apple Health. Workouts come from Strava.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;

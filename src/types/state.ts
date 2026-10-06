@@ -1149,8 +1149,8 @@ export interface SimulatorState {
    * flag lets `detectedWeeklyKm` seed the plan's starting `s.wkm`. We only seed
    * plan volume from a number the user gave or accepted, never a silent derive. */
   weeklyVolumeConfirmed?: boolean;
-  /** True once the 16-week Apple Health backfill has run at least once.
-   * Subsequent launches use a 14-day incremental window. Same role as
+  /** True once the 364-day Apple Health backfill has run at least once.
+   * Subsequent launches use the 28-day incremental window. Same role as
    * `stravaHistoryFetched` for the Apple-only path. */
   appleHistoryFetched?: boolean;
   /** One-time migration flag (build 24+). Pre-build-23, the Apple workout sync
@@ -1328,6 +1328,19 @@ export interface SimulatorState {
   // so a backfill duplicate that was deleted does not re-import. Stores the raw garminId
   // (numeric for Garmin, "strava-{id}" for Strava).
   ignoredGarminIds?: string[];
+
+  /** Apple Health activity ids removed because a Strava record of the same session
+   *  won (see `collapseAppleStravaTwins` in calculations/cross-source-twins.ts).
+   *  Read next to `ignoredGarminIds` in matchAndAutoComplete and the Apple upload,
+   *  so the superseded copy never re-imports. Kept apart from `ignoredGarminIds`,
+   *  which records the user's own discards. */
+  supersededGarminIds?: string[];
+  /** The one-time forced garmin_activities twin cleanup (cleanupDbDuplicates,
+   *  regardless of its 30-day cadence) for Strava-connected users has run: set by
+   *  the first Strava sync after the 2026-10-05 change (Apple workouts off while
+   *  Strava is connected). Gates only that DB pass; the local Apple/Strava twin
+   *  collapse keeps running at launch and after each Strava sync. */
+  appleStravaTwinCleanupDone?: boolean;
 
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;

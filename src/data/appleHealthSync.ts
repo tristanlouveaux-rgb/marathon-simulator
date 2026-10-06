@@ -29,7 +29,9 @@ import { matchAndAutoComplete, healMissingITrimp, type GarminActivityRow } from 
 import { uploadAppleActivitiesToDB } from '@/data/appleActivityUpload';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
-import { getPhysiologySource } from '@/data/sources';
+import { getPhysiologySource, appleWorkoutsEnabled } from '@/data/sources';
+import { processPendingAfterAppleSync } from '@/data/activitySync';
+import { ACTIVITY_SYNC_LOOKBACK_DAYS } from '@/data/activity-sync-window';
 import { calculateZones, type HRZones } from '@/calculations/heart-rate';
 import { deriveAthleteTier } from '@/data/stravaSync';
 import { detectArchetype } from '@/calculations/athlete-archetype';
@@ -402,6 +404,16 @@ export async function syncAppleCyclingFTP(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Refresh the HealthKit device readings that are not workouts: VO2max and cycling
+ * FTP. Runs with every workout sync, and on its own while Strava is connected
+ * (Apple workouts off, see `appleWorkoutsEnabled`). No-op off iOS.
+ */
+export async function syncAppleDeviceMetrics(): Promise<void> {
+  await syncAppleVO2().catch(() => null);
+  await syncAppleCyclingFTP().catch(() => null);
+}
+
 /** Compute whole-years age from an ISO date-of-birth string. Null on parse fail. */
 function ageFromISODob(iso: string): number | null {
   const dob = new Date(iso);
@@ -511,7 +523,9 @@ const AUTH_REQUEST_TIMEOUT_MS = 15_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Map @capgo/capacitor-health WorkoutType strings to our internal activity types.
+ * Map the workout-type strings the HealthExtras plugin emits
+ * (HealthExtrasPlugin.swift `workoutActivityTypeName`, capgo's keys plus the
+ * HKWorkoutActivityType case names it adds) to our internal activity types.
  *
  * Coverage matches the matcher's `mapGarminType` switch so a tennis match on
  * Apple Watch lands in the same `'other'` bucket as a Garmin tennis activity,
@@ -519,8 +533,25 @@ const AUTH_REQUEST_TIMEOUT_MS = 15_000;
  * misclassified every team sport, racket sport, water sport, and yoga
  * session. Now `CARDIO`, which the matcher routes to cross-training rather
  * than counting as locomotion.
+ *
+ * Each type below is emitted as the string the Garmin/Strava pipeline already
+ * uses for the same sport, so it reaches the same matcher bucket and the same
+ * SPORTS_DB entry (audit D2):
+ *  - HIIT → 'HIIT', the gym bucket Garmin and Strava HIIT use: it can fill a
+ *    planned gym slot and, in HYROX, a station session.
+ *  - Core training → STRENGTH_TRAINING. No SPORTS_DB entry of its own; filed
+ *    with strength like functional strength and cross training above.
+ *  - Pilates, dance, boxing, kickboxing, martial arts, climbing, rugby, skiing,
+ *    snowboarding, skating, jump rope, surfing, sailing → their SPORTS_DB key
+ *    via deriveSportFromActivityType (DANCE through the 'dance' alias,
+ *    CROSS_COUNTRY_SKIING through its alias, PICKLEBALL → tennis).
+ *  - Golf → GOLF and paddle sports → PADDLEBOARDING, the walk class Garmin uses.
+ *    Golf has no SPORTS_DB entry and keeps the walking cost.
+ *  - Volleyball, squash, badminton, racquetball, table tennis, cricket and
+ *    softball have no SPORTS_DB entry: generic_sport cost as before, with
+ *    their own label, so a recurring sport slot of that name can match them.
  */
-function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
+export function mapWorkoutType(type: WorkoutType | string): GarminActivityRow['activity_type'] {
   switch (type) {
     // Endurance. Own categories
     case 'running':                    return 'RUNNING';
@@ -535,16 +566,47 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
     // Strength / studio
     case 'strengthTraining':
     case 'traditionalStrengthTraining':
-    case 'crossTraining':              return 'STRENGTH_TRAINING';
+    case 'crossTraining':
+    case 'coreTraining':               return 'STRENGTH_TRAINING';
+    case 'highIntensityIntervalTraining': return 'HIIT';
     case 'yoga':                       return 'YOGA';
+    case 'pilates':                    return 'PILATES';
+    case 'socialDance':
+    case 'cardioDance':                return 'DANCE';
+    case 'jumpRope':                   return 'JUMP_ROPE';
+
+    // Combat sports
+    case 'boxing':
+    case 'kickboxing':                 return 'BOXING';
+    case 'martialArts':
+    case 'wrestling':                  return 'MARTIAL_ARTS';
 
     // Racket + ball sports. Match `mapGarminType`'s 'other' bucket
     case 'tennis':                     return 'TENNIS';
     case 'basketball':                 return 'BASKETBALL';
     case 'soccer':                     return 'SOCCER';
     case 'americanFootball':           return 'FOOTBALL';
-    case 'baseball':                   return 'SOFTBALL';
-    case 'wrestling':                  return 'MARTIAL_ARTS';
+    case 'baseball':
+    case 'softball':                   return 'SOFTBALL';
+    case 'rugby':                      return 'RUGBY';
+    case 'volleyball':                 return 'VOLLEYBALL';
+    case 'cricket':                    return 'CRICKET';
+    case 'squash':                     return 'SQUASH';
+    case 'badminton':                  return 'BADMINTON';
+    case 'racquetball':                return 'RACQUETBALL';
+    case 'tableTennis':                return 'TABLETENNIS';
+    case 'pickleball':                 return 'PICKLEBALL';
+
+    // Outdoor / board sports
+    case 'climbing':                   return 'CLIMBING';
+    case 'golf':                       return 'GOLF';
+    case 'downhillSkiing':             return 'SKIING';
+    case 'crossCountrySkiing':         return 'CROSS_COUNTRY_SKIING';
+    case 'snowboarding':               return 'SNOWBOARDING';
+    case 'skatingSports':              return 'SKATING';
+    case 'surfingSports':              return 'SURFING';
+    case 'sailing':                    return 'SAILING';
+    case 'paddleSports':               return 'PADDLEBOARDING';
 
     // Water sports. Closest internal mapping
     case 'waterFitness':               return 'AEROBIC_TRAINING';
@@ -570,9 +632,11 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
  *  summer). HealthKit reads are local and fast, so the extra range adds only
  *  ~1-2s on first launch. */
 const FIRST_BACKFILL_DAYS = 364;
-/** Incremental window for every subsequent launch — last 14 days, dedup keeps
- *  the older workouts intact. */
-const INCREMENTAL_DAYS = 14;
+/** Incremental window for every sync after the first backfill. Same 28-day
+ *  lookback as the Strava and Garmin syncs (audit D5: it was 14, so a 15 to 28
+ *  day gap with no sync lost those sessions). Dedup keeps re-read workouts
+ *  intact. */
+const INCREMENTAL_DAYS = ACTIVITY_SYNC_LOOKBACK_DAYS;
 /** Concurrency cap for per-workout HR-stream queries. HealthKit reads are
  *  local and fast, but stacking 100+ promises at once burns memory on older
  *  devices. 4 keeps total wall-time under ~2s for 16w of typical data. */
@@ -588,19 +652,42 @@ const HR_SAMPLE_LIMIT = 6000;
  * Safe to call on every launch. Already-processed workouts are skipped
  * by the garminMatched dedup key (keyed as "apple-<stableId>").
  *
- * On first invocation (no `appleHistoryFetched` flag), runs a 16-week backfill
+ * On first invocation (no `appleHistoryFetched` flag), runs a 364-day backfill
  * with per-workout HR-stream enrichment and aggregates weekly history into
  * `historicWeeklyTSS`, `ctlBaseline`, `detectedWeeklyKm`, `athleteTier` —
  * mirroring `fetchStravaHistory` for the Apple-only path. Subsequent launches
- * use a 14-day incremental window to pick up new workouts cheaply.
+ * use the 28-day incremental window (ACTIVITY_SYNC_LOOKBACK_DAYS) to pick up
+ * new workouts cheaply.
+ *
+ * Every sync that reads workouts ends with the post-sync pending step
+ * (processPendingAfterAppleSync), including one that returns no workouts, so
+ * this week's cross-training and unmatched runs never sit at '__pending__' with
+ * zero load until the user taps Review (audit D1). Every caller gets it: launch,
+ * HealthKit observer, foreground resume, Account Sync, onboarding review and the
+ * tri DB-empty backfill.
  */
 export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Promise<void> {
   if (!isNativeiOS()) { _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} not-ios (web/Android — no HealthKit)`; return; }
+  // Strava connected: Apple workouts are not ingested at all (no HealthKit
+  // workout read, no matchAndAutoComplete, no garmin_activities upload, no
+  // history aggregate over the Strava-derived baselines). Strava is canonical and
+  // an Apple copy of the same session double counts. Every caller (launch,
+  // HealthKit observer, foreground resume, Account Sync, onboarding review, tri
+  // DB-empty backfill) passes through here. The device readings (VO2max, cycling
+  // FTP) are not workouts and keep refreshing; sleep / HRV / resting HR come
+  // from syncAppleHealthPhysiology, which this gate does not touch.
+  // Checked before the sex gate: with Strava connected there is nothing to hold.
+  if (!appleWorkoutsEnabled(getMutableState())) {
+    _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} off: Strava is the activity source, Apple workouts not imported`;
+    await syncAppleDeviceMetrics();
+    return;
+  }
   // Mid-wizard, before the sex is final (about-you or schedule still ahead):
   // the iTRIMP below carries the β of the sex resolved now, the male β when
   // none is, and is upserted into garmin_activities. After the first backfill
-  // only the latest 14 days are re-read automatically. Hold the sync
-  // (trimp-sex-gate.ts).
+  // only the incremental window is re-read automatically. Hold the sync
+  // (trimp-sex-gate.ts); the held call re-enters here, so it still ends with
+  // the post-sync pending step.
   if (isTrimpSexPending(getMutableState())) {
     holdUntilTrimpSexKnown('apple-workouts', () => syncAppleHealth(opts));
     _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} held: waiting for the athlete's sex (iTRIMP β)`;
@@ -634,7 +721,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // key) makes re-pulling existing workouts a no-op, and aggregateAppleHistory
     // recomputes weekly history from scratch, so forcing this is idempotent.
     // Only the manual button passes it; automatic launch / foreground / observer
-    // syncs stay on the cheap 14-day incremental path.
+    // syncs stay on the cheap 28-day incremental path.
     if (opts?.forceFullHistory && s.appleHealthConnected) {
       s.appleHistoryFetched = false;
       s.appleDeepHistoryFetched = false;
@@ -647,14 +734,17 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     if (workouts.length === 0) {
       _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=0 window=${daysBack}d first=${isFirstBackfill} — HealthKit returned no workouts (check Workouts permission, or no recorded activities)`;
       if (isFirstBackfill) {
-        // Mark backfill complete even when empty so we don't re-run a 16w
+        // Mark backfill complete even when empty so we don't re-run a 364-day
         // query on every launch. User who installs without any historic
         // workouts is just a fresh starter; subsequent syncs will pick up
-        // new workouts via the 14d incremental path.
+        // new workouts via the 28-day incremental path.
         s.appleHistoryFetched = true;
         s.appleHistoryLastRefreshedAt = new Date().toISOString();
         saveState();
       }
+      // Items queued by an earlier sync still need processing when nothing new
+      // came back (the Strava and Garmin syncs do the same on zero rows).
+      processPendingAfterAppleSync();
       return;
     }
 
@@ -673,7 +763,11 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     const enrichment = await enrichWorkoutsWithHR(workouts);
 
     const rows = workouts.map(w => convertToActivityRow(w, enrichment.get(workoutKey(w))));
-    const changed = matchAndAutoComplete(rows);
+    const result = matchAndAutoComplete(rows);
+    // A discarded or superseded Apple copy must not go back into garmin_activities
+    // either (the matcher already drops it locally).
+    const tombstoned = new Set([...(s.ignoredGarminIds ?? []), ...(s.supersededGarminIds ?? [])]);
+    const uploadRows = tombstoned.size > 0 ? rows.filter(r => !tombstoned.has(r.garmin_id)) : rows;
 
     // Mirror Strava/Garmin: persist Apple workouts to the Supabase
     // `garmin_activities` table. This is the ONLY path that feeds the triathlon
@@ -681,7 +775,7 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
     // fitnessHistory / CSS / FTP / PBs), which never reads local garminActuals.
     // Awaited so the tri-init DB-empty fallback (main.ts) sees the rows on the
     // SAME launch when it calls this synchronously. Idempotent + dedup-safe.
-    const uploaded = await uploadAppleActivitiesToDB(rows);
+    const uploaded = await uploadAppleActivitiesToDB(uploadRows);
     _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} pulled=${rows.length} hrEnriched=${enrichment.size} uploaded=${uploaded} window=${daysBack}d first=${isFirstBackfill}`;
 
     // First-time backfill: aggregate weekly history so the plan engine has
@@ -698,15 +792,14 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
       saveState();
     }
 
-    if (changed || isFirstBackfill) render();
-    console.log(`[AppleHealthSync] Processed ${rows.length} workouts (window=${daysBack}d, firstBackfill=${isFirstBackfill}, hrEnriched=${enrichment.size})`);
+    if (result.changed || isFirstBackfill) render();
+    console.log(`[AppleHealthSync] Processed ${rows.length} workouts (window=${daysBack}d, firstBackfill=${isFirstBackfill}, hrEnriched=${enrichment.size}, queued=${result.pending.length})`);
 
     // Refresh VO2max + cycling FTP every sync. Both are no-ops on web/Android,
     // when the user denied the HealthExtras permission, or when they don't
     // exist in HealthKit (cycling FTP is rare without an external power
     // meter; VO2 needs outdoor GPS runs to update).
-    syncAppleVO2().catch(() => null);
-    syncAppleCyclingFTP().catch(() => null);
+    syncAppleDeviceMetrics().catch(() => null);
 
     // After the standard backfill completes, kick off a one-shot deep history
     // pull for users whose HealthKit goes back further than 52 weeks. Surfaces
@@ -716,6 +809,11 @@ export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Pr
         console.warn('[AppleHealthSync] Deep history pull failed', err);
       });
     }
+
+    // Post-sync pending step, last as in the Strava sync: this week's non-runs
+    // and unmatched runs go to '__pending__' in the matcher and carry no load
+    // until processed. Timing mods (mergeTimingMods) are not recomputed here yet.
+    processPendingAfterAppleSync();
   } catch (err) {
     // Non-fatal. App continues without Apple Health sync
     _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} threw: ${String((err as { message?: string })?.message ?? err).slice(0, 90)}`;
@@ -775,6 +873,8 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
   if (!isNativeiOS()) return;
   const s = getMutableState();
   if (s.appleDeepHistoryFetched) return;
+  // Same gate as syncAppleHealth: no Apple workouts while Strava is connected.
+  if (!appleWorkoutsEnabled(s)) return;
 
   try {
     let totalProcessed = 0;
@@ -1944,7 +2044,7 @@ function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number)
  * sport-level breakdown is left empty (used only for cross-training session
  * baselines, which the plan engine treats as optional Phase 2 calibration).
  *
- * Run only on first connection; subsequent launches use the 14-day incremental
+ * Run only on first connection; subsequent launches use the 28-day incremental
  * sync path which doesn't re-aggregate. A future weekly-refresh pass can call
  * this again from main.ts when `appleHistoryLastRefreshedAt` is older than 7
  * days, mirroring the Strava refresh logic.
@@ -2217,7 +2317,7 @@ function mondayOfISO(d: Date): string {
 
 /** Debounce window. Apple Watch sometimes fires the observer 2 to 3 times in
  *  rapid succession as workout samples land in batches. Coalescing avoids
- *  redundant 14-day re-queries. */
+ *  redundant 28-day re-queries. */
 const OBSERVER_DEBOUNCE_MS = 5_000;
 
 let observerListenerHandle: PluginListenerHandle | null = null;
@@ -2286,7 +2386,7 @@ let foregroundListenerRegistered = false;
  * suspended, this catches the missed workout the instant the user reopens the
  * app, without waiting for a cold launch. The 5-minute throttle (read against
  * `appleHistoryLastRefreshedAt`, now stamped on every sync) keeps a brief
- * app-switch from triggering a redundant 14-day re-query.
+ * app-switch from triggering a redundant 28-day re-query.
  *
  * Uses the WebView `visibilitychange` event rather than @capacitor/app, so no
  * new native plugin is required. Idempotent; no-op on web/Android.

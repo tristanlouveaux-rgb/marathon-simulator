@@ -13,7 +13,7 @@
 import type { GarminPendingItem } from '@/types/state';
 import type { Workout } from '@/types/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
-import { isLongRun } from '@/workouts/long-run';
+import { isActivityCompatibleWithSlot } from '@/calculations/matching';
 import { getState } from '@/state';
 import { formatKm, fmtDesc } from '@/utils/format';
 import { buildAtmosphereBase, buildSunGlint } from '@/ui/page-flair';
@@ -63,21 +63,10 @@ function workoutTypeShort(t: string): string {
   return map[t] ?? t;
 }
 
+/** The shared slot-compatibility rule (matching.ts). Walks, hikes and rows only
+ *  take cross slots, never a run slot (audit D3). */
 function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
-  const type = item.appType;
-  const wt   = workout.t;
-  // Runs match run-type slots, general sport (cross) slots, and the run leg of a brick
-  // isLongRun covers the fast-finish long run (t:'progressive'), which otherwise
-  // could not take a run in this screen (audit X5).
-  if (type === 'run') return wt === 'run' || wt === 'easy' || isLongRun(workout) || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross' || wt === 'brick';
-  // Gym/strength matches gym slots
-  if (type === 'gym') return wt === 'gym';
-  // Cycling matches any tri bike slot, brick (bike+run combo), or generic cross slot
-  if (type === 'ride') return wt === 'cross' || wt === 'brick' || wt.startsWith('bike_');
-  // Swimming matches any tri swim slot or generic cross slot
-  if (type === 'swim') return wt === 'cross' || wt.startsWith('swim_');
-  // Other cross-training (walks, sports, etc.) only match cross slots
-  return wt === 'cross';
+  return isActivityCompatibleWithSlot(item.appType, workout);
 }
 
 function escHtml(s: string | null | undefined): string {
@@ -512,7 +501,12 @@ export function showMatchingScreen(
       // They become Excess Load on confirm if still unassigned.
       assignments.set(p.item.garminId, null);
     } else {
-      assignments.set(p.item.garminId, p.proposedWorkoutId);
+      // A proposal (auto-match or a saved slot from an earlier review) passes the
+      // same compatibility rule as a manual tap. A walk proposed onto a run slot
+      // starts in the tray instead (audit D3).
+      const slot = allWorkouts.find(w => (w.id || w.n) === p.proposedWorkoutId);
+      const ok = !slot || isCompatible(p.item, slot);
+      assignments.set(p.item.garminId, ok ? p.proposedWorkoutId : null);
     }
   }
   // Original log-only items go to logonly bucket

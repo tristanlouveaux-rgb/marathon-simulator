@@ -22,6 +22,7 @@ import {
   isInAppRunActual, isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
   isExtraActivityKey,
 } from './in-app-activity';
+import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-source-twins';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -724,7 +725,9 @@ function supersedeInAppRun(
  * - Past-week RUNS: Auto-matched where possible; unmatched → logged as adhoc in that week.
  * - Past-week CROSS-TRAINING: Logged as adhoc in that week (modal review not meaningful for done weeks).
  *
- * Returns { changed, pending } where pending is new current-week cross-training items.
+ * Returns { changed, pending } where pending is new current-week cross-training items
+ * and changed is true whenever state changed, including re-enrichment of
+ * already-matched activities in a batch that also carries new rows.
  */
 export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   changed: boolean;
@@ -743,6 +746,17 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       console.log(`[matchAndAutoComplete] Skipped ${before - rows.length} ignored activities`);
     }
   }
+  // Apple copies removed because their Strava twin won (cross-source-twins.ts)
+  // stay out, so a later sync cannot bring them back.
+  const supersededIds = s.supersededGarminIds;
+  if (supersededIds && supersededIds.length > 0) {
+    const superseded = new Set(supersededIds);
+    rows = rows.filter(r => !superseded.has(r.garmin_id));
+  }
+  // Strava wins: an incoming Apple row whose session Strava already holds (in
+  // state or in this batch) never enters state. Covers Apple rows read back from
+  // garmin_activities and the Apple sync after Strava is disconnected.
+  rows = dropAppleRowsWithStravaTwin(rows, s.wks);
 
   // Strava > Apple Health > Garmin-webhook dedup. Same logic now also runs on app
   // load via reconcileCrossSourceDuplicates (network-independent), so a dev-account
@@ -1082,9 +1096,34 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
   }
 
+  // Strava wins, state side (the mirror of dropAppleRowsWithStravaTwin above,
+  // which keeps incoming Apple rows out): an Apple copy already in state whose
+  // Strava twin is in this batch goes. The upgrade loop above only rewrites
+  // copies within 15% duration, so a paused session (HealthKit excludes the
+  // pause, Strava's duration is elapsed time) would otherwise count twice until
+  // the next launch. Runs after ingest on every path that carries Strava rows.
+  // Returns true when it removed anything; `pending` loses any Strava item the
+  // collapse moved onto an Apple copy's plan slot (no longer awaiting review).
+  const batchHasStrava = rows.some(r => r.garmin_id.startsWith('strava-'));
+  const collapseTwinsOfStravaBatch = (pending: GarminPendingItem[]): boolean => {
+    if (!batchHasStrava) return false;
+    const pointerOf = (id: string): string | undefined => {
+      for (const w of s.wks) { const p = w.garminMatched?.[id]; if (p !== undefined) return p; }
+      return undefined;
+    };
+    const before = new Map(pending.map(p => [p.garminId, pointerOf(p.garminId)]));
+    if (collapseAppleStravaTwins(s).removed.length === 0) return false;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const id = pending[i].garminId;
+      if (pointerOf(id) !== before.get(id)) pending.splice(i, 1);
+    }
+    return true;
+  };
+
   // Filter out already-processed activities (across all weeks)
   const newRows = rows.filter(r => !globalProcessed.has(r.garmin_id));
   if (newRows.length === 0) {
+    if (collapseTwinsOfStravaBatch([])) enrichChanged = true;
     if (enrichChanged) saveState();
     return { changed: enrichChanged, pending: [] };
   }
@@ -1105,10 +1144,21 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   if (outOfRangeCount > 0) {
     console.log(`[ActivityMatcher] ${outOfRangeCount} activities outside plan range — skipped`);
   }
-  if (rowsByWeek.size === 0) return { changed: false, pending: [] };
+  // `changed` on every return below carries enrichChanged: the stale-pending
+  // resolution, the Strava upgrade and the re-enrich loop above all change state
+  // (week load included) even when the batch also holds new rows. Rows dated
+  // before planStartDate are never processed, so they stay "new" on every sync
+  // and would otherwise hide an enrichment-only change from the callers'
+  // `if (result.changed) render()`.
+  if (rowsByWeek.size === 0) {
+    const collapsed = collapseTwinsOfStravaBatch([]);
+    const changedOutOfRange = enrichChanged || collapsed;
+    if (changedOutOfRange) saveState();
+    return { changed: changedOutOfRange, pending: [] };
+  }
 
   const allPending: GarminPendingItem[] = [];
-  let changed = false;
+  let changed = enrichChanged;
 
   for (const [weekIdx, weekRows] of rowsByWeek) {
     const wk = s.wks[weekIdx - 1];
@@ -1145,7 +1195,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
 
     // Regenerate workouts for this specific week (uses weekIdx for correct VDOT / phase)
-    const weekWorkouts = regenerateWeekWorkouts(s, wk, weekIdx);
+    // HYROX: the plan is wk.triWorkouts, matched by the HYROX station and run
+    // branches below. The running engine's week is shown nowhere in HYROX mode,
+    // so a run those branches miss must not auto-complete one of its phantom
+    // slots; it queues for review (current week) or logs as adhoc (audit D3).
+    const weekWorkouts = s.eventType === 'hyrox' ? [] : regenerateWeekWorkouts(s, wk, weekIdx);
     const unratedWorkouts = weekWorkouts.filter(w => {
       const key = w.id || w.n;
       return wk.rated![key] === undefined;
@@ -1824,6 +1878,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       }
     }
   }
+
+  if (collapseTwinsOfStravaBatch(allPending)) changed = true;
 
   if (changed) {
     saveState();

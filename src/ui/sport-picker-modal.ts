@@ -12,7 +12,8 @@
  */
 
 import { getMutableState, saveState } from '@/state';
-import { formatActivityType } from '@/calculations/activity-matcher';
+import { formatActivityType, mapAppTypeToSport } from '@/calculations/activity-matcher';
+import { isRunSport } from '@/cross-training/activities';
 import { SPORTS_DB, SPORT_LABELS, SPORT_ALIASES, IMPACT_PER_KM } from '@/constants';
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { buildStrengthLegLoadEntry, legFeelRawLoad, legFeelRecoveryMult } from '@/calculations/strength-leg-load';
@@ -176,7 +177,12 @@ export function resolveActivityDisplayName(actual: GarminActual, fallback = 'Act
 
 /**
  * Resolve a SportKey for an incoming activity during sync. Order of precedence:
- *   1. App-type mapping (from mapAppTypeToSport) when it gives a real sport
+ *   1. App-type mapping (from mapAppTypeToSport) when it gives a real sport.
+ *      The walk class is refined first: the raw activityType gives the
+ *      session's own sport (rowing, hiking, kayaking, paddleboard), so a row is
+ *      costed as rowing, not walking (audit C7). A type with no SPORTS_DB entry
+ *      (GOLF) or one the derivation reads as a run (WHEELCHAIR_PUSH_RUN) keeps
+ *      the class sport, walking.
  *   2. Raw activityType deriving when it gives a real sport
  *   3. Persistent name mapping (only when the type is ambiguous / generic_sport)
  *   4. generic_sport fallback
@@ -191,6 +197,13 @@ export function resolveSportForActivity(
   rawActivityType?: string | null,
 ): SportKey {
   if (appTypeSport && appTypeSport in SPORTS_DB && appTypeSport !== 'generic_sport') {
+    // The matcher's 'walk' bucket is a class, not one sport: mapGarminType puts
+    // walking, hiking, wheelchair, paddleboarding, rowing, kayaking, canoe and
+    // golf in it, and mapAppTypeToSport gives the whole class 'walking'.
+    if (appTypeSport === mapAppTypeToSport('walk')) {
+      const own = deriveSportFromActivityType(rawActivityType ?? null);
+      if (own !== 'generic_sport' && !isRunSport(own)) return own;
+    }
     return appTypeSport as SportKey;
   }
   const derived = deriveSportFromActivityType(rawActivityType ?? appTypeSport ?? null);

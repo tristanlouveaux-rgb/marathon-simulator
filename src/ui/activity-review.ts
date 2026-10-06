@@ -36,13 +36,14 @@ import { generateWeekWorkouts } from '@/workouts';
 import { calculateWorkoutLoad } from '@/workouts/load';
 import {
   findMatchingWorkout,
+  isActivityCompatibleWithSlot,
   type ExternalActivity,
   type MatchResult,
 } from '@/calculations/matching';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 import { isInAppActual } from '@/calculations/in-app-activity';
 import { classifyByName } from '@/data/stravaSync';
-import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } from '@/types';
+import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem, Workout } from '@/types';
 import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
@@ -78,6 +79,14 @@ function getWeekWorkoutsForReview() {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
+  // Just-track: no plan, so no slots to fill and no runs to adjust. Same gate as
+  // the matcher's regenerateWeekWorkouts. Without it the running engine built a
+  // week from s.rw and walks bound to its phantom run slots (audit D3).
+  if (s.trackOnly) return [];
+  // HYROX: the plan is wk.triWorkouts (run, station and brick sessions). The
+  // running engine's week is shown nowhere in HYROX mode, so matching against it
+  // filed activities into phantom running slots (audit D3).
+  if (s.eventType === 'hyrox') return wk.triWorkouts ?? [];
   // Triathlon mode: the running plan-engine isn't the source of truth. The
   // tri plan engine populates `wk.triWorkouts[]` directly. The running modal
   // path won't fire in tri mode (see redirectToTriSuggestionFlow) but other
@@ -157,6 +166,18 @@ function redirectToTriSuggestionFlow(
 
 // ---------------------------------------------------------------------------
 // Helpers
+
+/**
+ * findMatchingWorkout for a pending item, held to the shared slot-compatibility
+ * rule (isActivityCompatibleWithSlot) that the matching screen applies to its
+ * pre-assignments and manual taps. Every auto-match in this file goes through
+ * here, so no path files an activity where a manual tap would be refused: a
+ * walk, hike or row never completes a planned run (audit D3).
+ */
+function matchItemToSlot(item: GarminPendingItem, candidates: Workout[]): MatchResult | null {
+  const match = findMatchingWorkout(buildExternalActivity(item), candidates);
+  return match && isActivityCompatibleWithSlot(item.appType, match.matchedWorkout) ? match : null;
+}
 
 function buildExternalActivity(item: GarminPendingItem): ExternalActivity {
   const distanceKm = (item.distanceM ?? 0) / 1000;
@@ -539,7 +560,7 @@ function buildMatchCache(
   const unratedWorkouts = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
   const matchCache = new Map<string, import('@/calculations/matching').MatchResult | null>();
   for (const item of pending) {
-    matchCache.set(item.garminId, findMatchingWorkout(buildExternalActivity(item), unratedWorkouts));
+    matchCache.set(item.garminId, matchItemToSlot(item, unratedWorkouts));
   }
   return matchCache;
 }
@@ -623,7 +644,7 @@ function showReviewScreen(
   // Pre-compute matches for run, gym, and other (sport → recurring activity)
   const matchCache = new Map<string, MatchResult | null>();
   for (const item of pending) {
-    matchCache.set(item.garminId, findMatchingWorkout(buildExternalActivity(item), unratedWorkouts));
+    matchCache.set(item.garminId, matchItemToSlot(item, unratedWorkouts));
   }
 
   const choices: Record<string, 'integrate' | 'log'> = {};
@@ -1230,7 +1251,7 @@ function applyReview(
     const rpe = deriveItemRPE(item, s);
     // If user confirmed a specific slot in the Matching Confirmation screen, use it
     const confirmedGymId = confirmedMatchings?.get(item.garminId) ?? undefined;
-    const autoMatch = findMatchingWorkout(buildExternalActivity(item), planCandidates);
+    const autoMatch = matchItemToSlot(item, planCandidates);
     const matchId   = confirmedMatchings ? (confirmedGymId ?? null) : (autoMatch?.workoutId ?? null);
     const matchName = matchId
       ? (allWorkouts.find(w => (w.id || w.n) === matchId)?.n ?? matchId)
@@ -1617,7 +1638,7 @@ function proposeMatchings(
   for (const pass of [0, 1] as const) {
     const queue = pass === 0 ? sortedGymItems : gymLeftovers;
     for (const item of queue) {
-      const match = findMatchingWorkout(buildExternalActivity(item), gymCandidates);
+      const match = matchItemToSlot(item, gymCandidates);
       const sameDay = match != null && match.matchedWorkout.dayOfWeek === itemDay(item);
       if (match && !used.has(match.workoutId) && (pass === 1 || sameDay)) {
         used.add(match.workoutId);
@@ -1845,7 +1866,7 @@ export function autoProcessActivities(
   // Runs → match closest planned run
   for (const item of runItems) {
     const rpe   = deriveItemRPE(item, s);
-    const match = findMatchingWorkout(buildExternalActivity(item), planCandidates);
+    const match = matchItemToSlot(item, planCandidates);
     if (match && !usedWorkoutIds.has(match.workoutId)) {
       usedWorkoutIds.add(match.workoutId);
       wk.rated[match.workoutId] = rpe;
@@ -1886,7 +1907,7 @@ export function autoProcessActivities(
   const gymOverflowAuto: GarminPendingItem[] = [];
   for (const item of gymItems) {
     const rpe   = deriveItemRPE(item, s);
-    const match = findMatchingWorkout(buildExternalActivity(item), planCandidates);
+    const match = matchItemToSlot(item, planCandidates);
     if (match && !usedWorkoutIds.has(match.workoutId)) {
       usedWorkoutIds.add(match.workoutId);
       wk.rated[match.workoutId] = rpe;
@@ -1937,7 +1958,7 @@ export function autoProcessActivities(
   for (const item of crossItems) {
     const rpe  = deriveItemRPE(item, s);
     // Named recurring match
-    const namedMatch = findMatchingWorkout(buildExternalActivity(item), planCandidates);
+    const namedMatch = matchItemToSlot(item, planCandidates);
     if (namedMatch && !usedWorkoutIds.has(namedMatch.workoutId)) {
       usedWorkoutIds.add(namedMatch.workoutId);
       wk.rated[namedMatch.workoutId] = rpe;
@@ -2197,9 +2218,11 @@ function buildCombinedActivity(
   }
   const dominantAppType = Object.entries(durationByType)
     .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
-  // Pick the dominant item for its activityType (used as name-mapping key).
+  // Pick the dominant item for its activityType (used as name-mapping key and
+  // to refine the walk class to its own sport). Taken from the dominant app type,
+  // so a long ride can't lend its type to a walk-dominated set.
   const dominantItem = items
-    .slice()
+    .filter(i => i.appType === dominantAppType)
     .sort((a, b) => b.durationSec - a.durationSec)[0];
   const sport = resolveSportForActivity(
     dominantItem?.activityType,

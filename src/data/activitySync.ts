@@ -17,6 +17,7 @@ import { openActivityReReview, autoProcessActivities } from '@/ui/activity-revie
 import { reconcileRecentLegLoads } from '@/ui/sport-picker-modal';
 import type { GarminLap } from '@/types';
 import { mergeTimingMods } from '@/cross-training/timing-check';
+import { ACTIVITY_SYNC_LOOKBACK_DAYS } from './activity-sync-window';
 
 /**
  * Fetch recent Garmin activities and match them to the current week's plan.
@@ -25,7 +26,7 @@ import { mergeTimingMods } from '@/cross-training/timing-check';
 export async function syncActivities(): Promise<void> {
   try {
     const since = new Date();
-    since.setDate(since.getDate() - 28); // Look back 28 days
+    since.setDate(since.getDate() - ACTIVITY_SYNC_LOOKBACK_DAYS);
 
     const data = await callEdgeFunction<GarminActivityRow[]>(
       'sync-activities',
@@ -97,6 +98,43 @@ let _pendingModalActive = false;
 
 /** Reset the guard — called by stravaSync before processPendingCrossTraining */
 export function resetPendingModalGuard(): void { _pendingModalActive = false; }
+
+/**
+ * Post-sync pending step for the Apple Health workout sync. Run after matching on
+ * every sync, including one that returned no workouts, so items queued by an
+ * earlier sync still surface.
+ *
+ * Same two steps the Garmin and Strava syncs run inline after matching:
+ *  1. Clear a stale review guard, but only while no Activity Review or suggestion
+ *     modal is on screen. A review the user cancelled earlier otherwise leaves
+ *     the guard stuck and blocks every later pending pass.
+ *  2. processPendingCrossTraining(): a single same-day non-run is matched
+ *     silently; a batch (any run, 3 or more items, or anything over 24 h old)
+ *     opens Activity Review, at most once per calendar day.
+ *
+ * Unlike the inline Strava and Garmin blocks, it does nothing while the wizard
+ * is up. A mid-plan edit (Account > Edit Profile, editSettings,
+ * upgradeFromTrackOnly) runs the wizard with the old weeks still in state, and
+ * the wizard's review step runs an Apple sync, so without this check Activity
+ * Review could open over the wizard. The items stay queued for the next sync
+ * from the main view.
+ *
+ * "Wizard up" = onboarding not complete, or the wizard's "Return to plan" button
+ * is on screen. Edit Profile leaves hasCompletedOnboarding true, and the wizard
+ * renders that button on every step while a plan exists (wizard/renderer.ts).
+ * onboarding.currentStep is not used: "Return to plan" goes back to the plan
+ * without resetting it, so it can stay on a wizard step for good.
+ */
+export function processPendingAfterAppleSync(): void {
+  const s = getMutableState();
+  const doc = typeof document !== 'undefined' ? document : undefined;
+  const wizardUp = !s.hasCompletedOnboarding || !!doc?.getElementById?.('wizard-return-btn');
+  if (wizardUp) return;
+  const modalOpen = !!doc?.getElementById?.('activity-review-overlay')
+    || !!doc?.getElementById?.('suggestion-modal');
+  if (!modalOpen) _pendingModalActive = false;
+  processPendingCrossTraining();
+}
 
 /**
  * Returns true when the pending items constitute a "backlog" that warrants

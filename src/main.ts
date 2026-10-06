@@ -27,9 +27,10 @@ import { READINESS_LONGEST_WINDOW_WEEKS } from '@/constants/race-readiness-targe
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import { renderAuthView } from '@/ui/auth-view';
-import { syncAppleHealth, syncAppleHealthPhysiology, subscribeToWorkoutObserver, subscribeToForegroundResume } from '@/data/appleHealthSync';
+import { syncAppleHealth, syncAppleHealthPhysiology, syncAppleDeviceMetrics, subscribeToWorkoutObserver, subscribeToForegroundResume } from '@/data/appleHealthSync';
+import { collapseAppleStravaTwinsOnLaunch, finishAppleStravaTwinCleanup } from '@/data/apple-strava-twin-cleanup';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
-import { getActivitySource, hasPhysiologySource } from '@/data/sources';
+import { getActivitySource, hasPhysiologySource, appleWorkoutsEnabled } from '@/data/sources';
 import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnostic';
 import { initRevenueCat, identifyRevenueCatUser } from '@/coach/revenuecat-client';
 import { isNative } from '@/utils/platform';
@@ -493,7 +494,7 @@ async function launchApp(): Promise<void> {
           } catch (err) {
             console.warn('[tri] Backfill failed', err);
           }
-        } else if (state.appleHealthConnected) {
+        } else if (state.appleHealthConnected && appleWorkoutsEnabled(state)) {
           // Apple-Watch-only triathlete: workouts live in the on-device
           // HealthKit store, never the DB, so this pipeline sees nothing and
           // shows swim/bike/run = 0. Run the Apple backfill now — it upserts
@@ -508,6 +509,10 @@ async function launchApp(): Promise<void> {
           } catch (err) {
             console.warn('[tri] Apple backfill failed', err);
           }
+        } else if (state.appleHealthConnected) {
+          // Strava connected but its backfill is unavailable: Apple workouts stay
+          // off (Strava is canonical, see appleWorkoutsEnabled).
+          console.log('[tri] DB empty, Strava connected, Apple workouts off — no Apple backfill');
         } else {
           console.log('[tri] DB empty and no Strava/Apple source — benchmarks will stay skill-slider based');
         }
@@ -1465,6 +1470,10 @@ async function launchApp(): Promise<void> {
     // loads. Running it here is network-independent, so a dev-account user who
     // receives each session from both Garmin webhook and Strava sees one copy
     // immediately on launch. Idempotent; re-render only when it changed something.
+    // The Apple/Strava twin collapse runs FIRST: it moves a plan-slot completion
+    // from an Apple copy to its Strava twin, where the reconcile below would drop
+    // the Apple copy and un-rate the slot.
+    if (collapseAppleStravaTwinsOnLaunch()) scheduleHomeRefresh();
     if (reconcileCrossSourceDuplicates()) { saveState(); scheduleHomeRefresh(); }
 
     // Pull any activity enrichments done on another device (e.g. a Strava file
@@ -1494,6 +1503,12 @@ async function launchApp(): Promise<void> {
       isStravaConnected().then((stravaOk) => {
         if (!stravaOk) return;
         syncStravaActivities().then(() => {
+          // Apple/Strava twin collapse again now that this sync has landed the
+          // latest Strava copies; the first time, also forces the
+          // garmin_activities twin cleanup.
+          finishAppleStravaTwinCleanup()
+            .then((changed) => { if (changed) scheduleHomeRefresh(); })
+            .catch(() => {});
           // After Strava sync, also run the DB sync so the upgrade loop in matchAndAutoComplete
           // can replace any Garmin-sourced actuals that now have Strava counterparts in DB.
           // sync-strava-activities skips cached-with-zones rows in its response, so without
@@ -1519,19 +1534,28 @@ async function launchApp(): Promise<void> {
       }).catch(() => {});
     }
 
-    // Supplementary Apple Health activity source. A Garmin/Strava user who has
-    // also connected Apple Health gets their workouts pulled from HealthKit too,
+    // Supplementary Apple Health activity source. A Garmin user who has also
+    // connected Apple Health gets their workouts pulled from HealthKit too,
     // carrying the HR stream, zones, route and km splits the Garmin webhook
-    // summary lacks. For users with no Strava/Garmin API access this is the only
-    // automatic activity path. Runs IN ADDITION to the primary source above;
-    // matchAndAutoComplete dedups so Strava > Apple Health > Garmin-webhook-summary
-    // for the same activity. Gated on Apple Health being authorized on this device
-    // so we never surprise-prompt a user who hasn't opted in.
+    // summary lacks. Runs IN ADDITION to the Garmin source above;
+    // matchAndAutoComplete dedups so Apple Health > Garmin-webhook-summary for the
+    // same activity. NOT for Strava users (2026-10-05): with Strava connected,
+    // Apple workouts are off entirely (appleWorkoutsEnabled). Gated on Apple
+    // Health being authorized on this device so we never surprise-prompt a user
+    // who hasn't opted in.
     if (activitySrc !== 'apple' && appleConnected) {
-      syncAppleHealth()
-        .then(() => { subscribeToWorkoutObserver().catch(() => {}); })
-        .catch(() => {});
-      subscribeToForegroundResume();
+      if (appleWorkoutsEnabled(state)) {
+        syncAppleHealth()
+          .then(() => { subscribeToWorkoutObserver().catch(() => {}); })
+          .catch(() => {});
+        subscribeToForegroundResume();
+      } else {
+        // Strava connected: Apple workouts are not ingested (Strava is canonical;
+        // an Apple copy of the same session double counts), so no workout sync,
+        // observer or foreground hook. Apple keeps supplying physiology (below)
+        // and the device VO2max / cycling FTP readings.
+        syncAppleDeviceMetrics().catch(() => {});
+      }
     }
 
     // ── PHYSIOLOGY (additive: Garmin primary, Apple fills the gaps) ─────────────

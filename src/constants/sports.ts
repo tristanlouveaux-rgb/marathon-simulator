@@ -215,6 +215,7 @@ export const SPORT_ALIASES: Record<string, SportKey> = {
   'ice_skating': 'skating',
   'roller_skating': 'skating',
   'ballet': 'dancing',
+  'dance': 'dancing',      // Garmin DANCE, Apple socialDance/cardioDance (appleHealthSync mapWorkoutType)
   'zumba': 'dancing',
   'skipping': 'jump_rope',
   'cross_country_skiing': 'skiing',

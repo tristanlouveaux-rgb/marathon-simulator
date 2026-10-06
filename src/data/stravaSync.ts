@@ -14,12 +14,14 @@ import { matchAndAutoComplete, formatActivityType, type GarminActivityRow } from
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { processPendingCrossTraining, resetPendingModalGuard } from './activitySync';
+import { ACTIVITY_SYNC_LOOKBACK_DAYS } from './activity-sync-window';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { resolveBiologicalSex } from '@/calculations/trimp';
 import { isTrimpSexPending, holdUntilTrimpSexKnown, heldTrimpSyncKeys, releaseHeldTrimpSyncs } from './trimp-sex-gate';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
+import { isSameSession } from '@/calculations/cross-source-twins';
 import { NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { isNativeiOS } from './appleHealthSync';
 import { NATIVE_OAUTH_RETURN_URL, runNativeOAuth } from './oauth-native';
@@ -148,7 +150,7 @@ export async function syncStravaActivities(): Promise<{ processed: number; held?
     }
 
     const since = new Date();
-    since.setDate(since.getDate() - 28);
+    since.setDate(since.getDate() - ACTIVITY_SYNC_LOOKBACK_DAYS);
     const afterTimestamp = Math.floor(since.getTime() / 1000);
 
     const rows = await callEdgeFunction<GarminActivityRow[]>(
@@ -1138,6 +1140,8 @@ export async function fetchExtendedHistory(weeks: 16 | 52): Promise<void> {
   }
 }
 
+let _dbDedupInFlight: Promise<{ groups: number; deleted: number }> | null = null;
+
 /**
  * Find and delete duplicate rows in `garmin_activities` for the current user.
  *
@@ -1159,7 +1163,15 @@ export async function fetchExtendedHistory(weeks: 16 | 52): Promise<void> {
  * Returns counts so the caller can log a summary; does NOT touch local state
  * beyond the timestamp.
  */
-export async function cleanupDbDuplicates(daysBack = 90): Promise<{ groups: number; deleted: number }> {
+export function cleanupDbDuplicates(daysBack = 90): Promise<{ groups: number; deleted: number }> {
+  // The launch gate and the one-time Apple/Strava cleanup can both start a pass
+  // in the same launch; the second caller rides the first instead of racing it.
+  if (_dbDedupInFlight) return _dbDedupInFlight;
+  _dbDedupInFlight = cleanupDbDuplicatesInner(daysBack).finally(() => { _dbDedupInFlight = null; });
+  return _dbDedupInFlight;
+}
+
+async function cleanupDbDuplicatesInner(daysBack: number): Promise<{ groups: number; deleted: number }> {
   try {
     const { data: sessionData } = await supabase.auth.getSession();
     const userId = sessionData.session?.user?.id;
@@ -1195,25 +1207,17 @@ export async function cleanupDbDuplicates(daysBack = 90): Promise<{ groups: numb
       return { groups: 0, deleted: 0 };
     }
 
-    // Group rows where start_time is within 10 min AND (same type OR duration ratio < 15%).
+    // Group rows where start_time is within 10 min AND (same type OR duration ratio < 15%):
+    // the canonical same-session rule in cross-source-twins.ts, shared with the
+    // in-state Apple/Strava twin collapse and the tri loader.
     // Single pass: each row joins the most recent group whose anchor matches.
-    const TEN_MIN_MS = 10 * 60 * 1000;
     type Row = (typeof rows)[number];
+    const ref = (r: Row) => ({ startMs: new Date(r.start_time).getTime(), durationSec: r.duration_sec, activityType: r.activity_type });
     const groups: Row[][] = [];
     for (const row of rows) {
-      const ms = new Date(row.start_time).getTime();
       let placed = false;
       for (const g of groups) {
-        const anchor = g[0];
-        const anchorMs = new Date(anchor.start_time).getTime();
-        if (Math.abs(ms - anchorMs) > TEN_MIN_MS) continue;
-        const sameType = !!row.activity_type && row.activity_type === anchor.activity_type;
-        let durSimilar = false;
-        if (row.duration_sec && anchor.duration_sec && row.duration_sec > 0 && anchor.duration_sec > 0) {
-          const ratio = Math.abs(row.duration_sec - anchor.duration_sec) / Math.max(row.duration_sec, anchor.duration_sec);
-          durSimilar = ratio < 0.15;
-        }
-        if (sameType || durSimilar) { g.push(row); placed = true; break; }
+        if (isSameSession(ref(row), ref(g[0]))) { g.push(row); placed = true; break; }
       }
       if (!placed) groups.push([row]);
     }
