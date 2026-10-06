@@ -2,6 +2,7 @@ import type { OnboardingStep, OnboardingState } from '@/types/onboarding';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { releaseHeldTrimpSyncs } from '@/data/trimp-sex-gate';
+import { restoreJustTrackIfNoPlanBuilt } from './controller';
 import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
 import { renderConnectData } from './steps/connect-data';
@@ -152,6 +153,10 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
     btn.style.cssText = 'position:fixed;bottom:calc(32px + env(safe-area-inset-bottom, 0px));right:32px;display:flex;align-items:center;gap:6px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50';
     btn.innerHTML = `Return to plan <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>`;
     btn.addEventListener('click', () => {
+      // Backing out of a Just-Track upgrade (no plan was built): drop any mode
+      // picked on the way, so the user is wholly back in Just-Track. Runs
+      // before getMutableState because it replaces the state object.
+      restoreJustTrackIfNoPlanBuilt();
       const s = getMutableState();
       s.hasCompletedOnboarding = true;
       saveState();
