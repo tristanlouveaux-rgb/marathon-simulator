@@ -13,7 +13,7 @@ import { getState } from '@/state/store';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
-import { computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
+import { computeWeekActualMTL, computeWeekMTL, hyroxMtlAcwr } from '@/calculations/mtl';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
 import { getFinishTimePercentile, percentileLabel, percentileHeadline } from '@/calculations/hyrox-population';
@@ -50,13 +50,15 @@ export function renderHyroxStatsView(): void {
   const weeklyActualMTL = currentWk ? computeWeekActualMTL(currentWk) : 0;
   const weeklyPlannedMTL = currentWk ? computeWeekMTL(currentWk) : (hx.weeklyMTL ?? 0);
   const mtlPct = mtlCap > 0 ? Math.min(1, weeklyActualMTL / mtlCap) : 0;
-  const mtlCTL = hx.mtlCTL ?? 0;
-  const mtlATL = hx.mtlATL ?? 0;
-  // Suppress ACWR until CTL has built up enough to be meaningful (≥1.0 daily-equivalent).
-  // In Week 1 with no history CTL rounds to ~0 and any ATL produces a nonsensical ratio.
-  // Only meaningful after enough actual station history has built up (>= 4 weeks of consistent work).
-  // In Week 1–2 the ratio is a false alarm: tiny CTL vs first week's planned ATL.
-  const mtlAcwr = mtlCTL >= 15 ? mtlATL / mtlCTL : null;
+  // Load ratio and the chronic / acute tiles under it come from one canonical
+  // computation (mtl.ts hyroxMtlAcwr), the value Home and Readiness feed the
+  // readiness MTL floor. It withholds the ratio until 14 days of plan weeks
+  // are complete and values the weeks before the plan at the athlete's own
+  // baseline, so a plan-compliant week 2 no longer reads as a spike.
+  const mtlLoad = hyroxMtlAcwr(s);
+  const mtlCTL = mtlLoad?.chronic ?? 0;
+  const mtlATL = mtlLoad?.acute ?? 0;
+  const mtlAcwr = mtlLoad?.ratio ?? null;
 
   const raceDate = hx.raceDate ?? s.onboarding?.customRaceDate;
   const raceDays = raceDate ? daysUntil(raceDate) : null;

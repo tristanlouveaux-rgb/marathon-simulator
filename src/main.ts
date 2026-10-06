@@ -909,7 +909,7 @@ async function launchApp(): Promise<void> {
     }
 
     try {
-      const { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline } = await import('@/calculations/mtl');
+      const { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline, computeMtlAcwr } = await import('@/calculations/mtl');
       const mutable = getMutableState();
       const weeks = mutable.wks ?? [];
       const currentIdx = Math.max(0, (mutable.w ?? 1) - 1);
@@ -927,7 +927,8 @@ async function launchApp(): Promise<void> {
         // weeklyMTL = current week's planned MTL (for display / cap enforcement)
         const { computeWeekMTL } = await import('@/calculations/mtl');
         mutable.hyroxConfig.weeklyMTL = computeWeekMTL(weeks[currentIdx] ?? { triWorkouts: [] } as any);
-        console.log(`[hyrox] MTL CTL/ATL refreshed: CTL=${mtlCTL.toFixed(1)} ATL=${mtlATL.toFixed(1)} ACWR=${mtlCTL > 0 ? (mtlATL / mtlCTL).toFixed(2) : '—'} · run=${split.runMtlCTL.toFixed(1)} station=${split.stationMtlCTL.toFixed(1)} brick=${split.brickMtlCTL.toFixed(1)}`);
+        const mtlAcwr = computeMtlAcwr(weeks, currentIdx);
+        console.log(`[hyrox] MTL CTL/ATL refreshed: CTL=${mtlCTL.toFixed(1)} ATL=${mtlATL.toFixed(1)} ACWR=${mtlAcwr.ratio != null ? mtlAcwr.ratio.toFixed(2) : `withheld (${mtlAcwr.reason})`} · run=${split.runMtlCTL.toFixed(1)} station=${split.stationMtlCTL.toFixed(1)} brick=${split.brickMtlCTL.toFixed(1)}`);
       }
       saveState();
     } catch (err) {

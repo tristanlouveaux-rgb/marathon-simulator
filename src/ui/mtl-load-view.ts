@@ -16,7 +16,8 @@
  */
 
 import { getState } from '@/state';
-import { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
+import { computeMTLFitnessFatigueSeries, computeMTLFitnessFatigueByDiscipline, computeWeekActualMTL, computeWeekMTL, computeMtlAcwr, MTL_ACWR_MIN_CHRONIC, type MtlAcwr } from '@/calculations/mtl';
+import { ROLLING_ACWR_MIN_OBSERVED_DAYS } from '@/calculations/fitness-model';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground } from './sky-background';
 import { atmosphereGradient } from './page-flair';
@@ -34,8 +35,18 @@ const ZONE_CAUTION = '#F59E0B';
 const ZONE_HIGH    = '#DC2626';
 const HERO_BRONZE  = '#b8742c';
 
-function acwrZone(acwr: number | null, ctl: number, atl: number): { label: string; colour: string; note: string } {
+function acwrZone(load: MtlAcwr): { label: string; colour: string; note: string } {
+  const { ratio: acwr, chronic: ctl, acute: atl } = load;
   if (acwr == null) {
+    // Too few completed plan weeks for a baseline: the ratio is withheld, so
+    // no chronic threshold or acute multiple is quoted.
+    if (load.reason === 'history') {
+      return {
+        label: 'Building',
+        colour: TEXT_M,
+        note: `Ramp rate appears once ${ROLLING_ACWR_MIN_OBSERVED_DAYS} days of plan weeks are complete.`,
+      };
+    }
     // Chronic hasn't crossed the 15 daily-equivalent threshold for the ramp signal
     // to be reliable. Acknowledge the visible acute/chronic relationship rather
     // than saying "no signal". Tristan's feedback 2026-05-08.
@@ -43,10 +54,10 @@ function acwrZone(acwr: number | null, ctl: number, atl: number): { label: strin
       return {
         label: 'Building',
         colour: TEXT_M,
-        note: `Chronic base is still building (${ctl.toFixed(1)}, ramp rate becomes meaningful at 15). Acute is ${(atl / ctl).toFixed(1)}× chronic but absolute load is still low.`,
+        note: `Chronic base is still building (${ctl.toFixed(1)}, ramp rate becomes meaningful at ${MTL_ACWR_MIN_CHRONIC}). Acute is ${(atl / ctl).toFixed(1)}× chronic but absolute load is still low.`,
       };
     }
-    return { label: 'Building', colour: TEXT_M, note: 'Chronic base is still building. Ramp rate will become meaningful once chronic load crosses 15.' };
+    return { label: 'Building', colour: TEXT_M, note: `Chronic base is still building. Ramp rate will become meaningful once chronic load crosses ${MTL_ACWR_MIN_CHRONIC}.` };
   }
   if (acwr > 1.5)  return { label: 'Ease Back', colour: ZONE_HIGH, note: 'Acute load spiked relative to your chronic base. Skip or downgrade density sessions.' };
   if (acwr > 1.3)  return { label: 'Manage Load', colour: ZONE_CAUTION, note: 'Mechanical load is elevated. Avoid adding extra eccentric work this week.' };
@@ -123,11 +134,13 @@ function getMtlLoadHTML(): string {
   const weeklyActual = currentWk ? computeWeekActualMTL(currentWk) : 0;
   const weeklyPlanned = currentWk ? computeWeekMTL(currentWk) : (hx?.weeklyMTL ?? 0);
   const cap = hx?.mtlCap ?? 0;
-  const ctl = hx?.mtlCTL ?? 0;
-  const atl = hx?.mtlATL ?? 0;
-  // Match the readiness gating: ACWR only meaningful once chronic load is established.
-  const acwr = ctl >= 15 ? atl / ctl : null;
-  const zone = acwrZone(acwr, ctl, atl);
+  // Chronic, acute and the load ratio come from the canonical computation the
+  // readiness MTL floor and the Stats row read (mtl.ts computeMtlAcwr).
+  const mtlLoad = computeMtlAcwr(weeks, wIdx);
+  const ctl = mtlLoad.chronic;
+  const atl = mtlLoad.acute;
+  const acwr = mtlLoad.ratio;
+  const zone = acwrZone(mtlLoad);
 
   const capPct = cap > 0 ? Math.min(1, weeklyActual / cap) : 0;
   const plannedPct = cap > 0 ? Math.min(1, weeklyPlanned / cap) : 0;
@@ -137,13 +150,11 @@ function getMtlLoadHTML(): string {
     : HERO_BRONZE;
   const targetOffset = (RING_C * (1 - ringPct / 100)).toFixed(2);
 
-  // ── 12-week PMC trail ──
+  // ── 12-week PMC trail ── (one walk, so its last point is the chronic / acute above)
   const trailStart = Math.max(0, wIdx - 11);
-  const pmcPoints: PMCPoint[] = [];
-  for (let i = trailStart; i <= wIdx; i++) {
-    const r = computeMTLFitnessFatigue(weeks, i);
-    pmcPoints.push({ weekIdx: i, ctl: r.mtlCTL, atl: r.mtlATL });
-  }
+  const pmcPoints: PMCPoint[] = computeMTLFitnessFatigueSeries(weeks, wIdx)
+    .map((r, i) => ({ weekIdx: i, ctl: r.mtlCTL, atl: r.mtlATL }))
+    .slice(trailStart);
 
   // ── Discipline split (current week index) ──
   const disc = weeks.length > 0 ? computeMTLFitnessFatigueByDiscipline(weeks, wIdx) : null;
