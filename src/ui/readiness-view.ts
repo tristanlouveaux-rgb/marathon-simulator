@@ -28,7 +28,7 @@ import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildD
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
-import { hyroxMtlAcwr } from '@/calculations/mtl';
+import { hyroxMtlAcwr, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -739,8 +739,12 @@ function getReadinessHTML(s: SimulatorState): string {
           ${triDiscCard}
           ${crossTrainingCard}
           ${isHyrox ? (() => {
-            const weeklyActualMTL = s.hyroxConfig?.weeklyActualMTL ?? 0;
-            const weeklyPlannedMTL = s.hyroxConfig?.weeklyMTL ?? 0;
+            // Same derivation as the Stats card and the MTL page. The stored
+            // weeklyActualMTL only ever received station matches, so a week of
+            // runs or Mark as Done completions read 0 here.
+            const mtlWk = (s.wks ?? [])[(s.w ?? 1) - 1];
+            const weeklyActualMTL = mtlWk ? computeWeekActualMTL(mtlWk) : 0;
+            const weeklyPlannedMTL = mtlWk ? computeWeekMTL(mtlWk) : (s.hyroxConfig?.weeklyMTL ?? 0);
             const mtlCap = s.hyroxConfig?.mtlCap ?? 1000;
             const mtlPct = mtlCap > 0 ? Math.min(1, weeklyActualMTL / mtlCap) : 0;
             const acwrVal = mtlAcwrValue;
