@@ -186,9 +186,12 @@ describe('no phantom running slots in just-track or HYROX', () => {
     expect(getWeekWorkoutsForPlanChange()).toEqual([]);
   });
 
-  it('HYROX: a cross-training change is sized from wk.triWorkouts, never a phantom running week', () => {
+  it('HYROX: a cross-training change has no week to size from or write against (no running mod reaches wk.triWorkouts)', () => {
+    // Corrected expectation: returning wk.triWorkouts here sized the running modal
+    // against HYROX sessions at 0 km and let the Tier-1 trim write a mod on a HYROX
+    // commute run, which resolveTriWeekWorkouts never applies.
     setup({ eventType: 'hyrox', triWorkouts: HYROX_WEEK.map(w => ({ ...w })) });
-    expect(getWeekWorkoutsForPlanChange().map(w => w.id)).toEqual(HYROX_WEEK.map(w => w.id));
+    expect(getWeekWorkoutsForPlanChange()).toEqual([]);
   });
 
   it('HYROX: a walk binds to no slot, neither a HYROX session nor a phantom run', () => {

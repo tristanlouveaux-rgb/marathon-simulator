@@ -104,6 +104,13 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
         // 'replaced' is NOT excluded here: in these modes it marks a session
         // swapped to an easier one that is still to be done.
         if (w.status === 'skipped') continue;
+        // The user's Skip on a tri/cycling/HYROX card writes wk.rated[key] =
+        // 'skip' and never sets status (workout-detail-modal setRated /
+        // setHxRated), so the status guard above never saw it. Running prices a
+        // rated skip on purpose (its CTL-gap re-anchor reads this context);
+        // tri and HYROX re-anchor from per-discipline adherence and MTL
+        // (resolveCtlAdherence is neutral for both), so a skip is off the plan.
+        if (wk.rated?.[w.id ?? w.n] === 'skip') continue;
         const day = w.dayOfWeek;
         if (day == null || day < 0 || day > 6) continue;
         const durMin = estimateTriWorkoutMin(w);

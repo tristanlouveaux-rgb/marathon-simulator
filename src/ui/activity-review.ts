@@ -32,7 +32,7 @@ import {
   createActivity,
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
-import { resolveWeekWorkouts, resolveWeekForPlanChanges } from '@/ui/week-resolve';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges, hasRunningPlanWeek } from '@/ui/week-resolve';
 import { renderLayerOf } from '@/workouts/render-layer';
 import { writeAdjustmentMods, upsertWorkoutMod, removeWorkoutMods, adjustableWorkouts, isUserAdjusted } from '@/workouts/workout-mods';
 import { collectActivityAliases, scrubExcessRecords, addUnspentItemOnce } from '@/calculations/excess-records';
@@ -120,13 +120,12 @@ export function getWeekWorkoutsForPlanChange() {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
-  // Same mode gates as getWeekWorkoutsForReview (audit D3): just-track has no
-  // plan to change, and HYROX's plan is wk.triWorkouts, so neither may size or
-  // write a change against the running engine's phantom week.
-  if (s.trackOnly) return [];
-  if (s.eventType === 'hyrox' || s.eventType === 'triathlon') {
-    return wk.triWorkouts ?? [];
-  }
+  // Running mode only (week-resolve.ts hasRunningPlanWeek). Just-track has no plan
+  // to change. HYROX, triathlon and cycling keep their plan in wk.triWorkouts, which
+  // no running mod reaches (resolveTriWeekWorkouts ignores wk.workoutMods): sizing a
+  // change from those sessions offered cuts on a HYROX run at 0 km and let the
+  // silent Tier-1 trim write a dead 'Auto:' mod on a tri easy run.
+  if (!hasRunningPlanWeek(s)) return [];
   return resolveWeekForPlanChanges(s, s.w);
 }
 
@@ -150,15 +149,26 @@ export function getWeekWorkoutsForPlanChange() {
  *      used for volume-ramp / RPE-blown / readiness triggers.
  *   4. Call `onComplete()` so the review flow can resolve.
  *
- * Returns true if the tri redirect fired (caller should early-return). False
- * means we're not in tri mode and the running modal path should run.
+ * HYROX takes steps 1 and 4 only. Its plan lives in `wk.triWorkouts` and no
+ * running mod reaches it, so the running modal could only offer cuts on sessions
+ * the HYROX plan does not have; the overflow is logged and the review continues.
+ * `afterHyroxLog` is the caller's continuation for that case (the same toast and
+ * RPE prompt the running modal's Keep reaches), defaulting to `onComplete`.
+ *
+ * Step 1 skips an item already logged (autoProcessActivities logs its overflow
+ * before this runs), the same guard every other adhoc write here uses.
+ *
+ * Returns true if the redirect fired (caller should early-return). False means
+ * running mode: the running modal path should run.
  */
 function redirectToTriSuggestionFlow(
   items: GarminPendingItem[],
   onComplete: () => void,
+  afterHyroxLog?: () => void,
 ): boolean {
   const s = getState();
-  if (s.eventType !== 'triathlon') return false;
+  if (s.eventType !== 'triathlon' && s.eventType !== 'hyrox') return false;
+  const isHyrox = s.eventType === 'hyrox';
 
   const sM = getMutableState();
   const wkM = sM.wks?.[sM.w - 1];
@@ -169,11 +179,18 @@ function redirectToTriSuggestionFlow(
 
   for (const item of items) {
     const adhocId = `garmin-${item.garminId}`;
-    addAdhocWorkoutFromPending(wkM, item, adhocId, deriveItemRPE(item, sM));
+    if (!wkM.adhocWorkouts?.some(w => w.id === adhocId)) {
+      addAdhocWorkoutFromPending(wkM, item, adhocId, deriveItemRPE(item, sM));
+    }
     if (!wkM.garminMatched) wkM.garminMatched = {};
     wkM.garminMatched[item.garminId] = adhocId;
   }
   saveState();
+
+  if (isHyrox) {
+    (afterHyroxLog ?? onComplete)();
+    return true;
+  }
 
   void (async () => {
     const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
@@ -1499,10 +1516,18 @@ function applyReview(
     ? formatActivityType(remainingCross[0].activityType)
     : `${remainingCross.length} cross-training activities`;
 
-  // Tri-mode redirect: skip the running modal (running-only copy + running-only
-  // adjustments don't fit Ironman setup). Routes through the tri suggestion
-  // pipeline instead. See ISSUE-151.
-  if (redirectToTriSuggestionFlow(remainingCross, onComplete)) return;
+  // Tri/HYROX redirect: skip the running modal (running-only copy + running-only
+  // adjustments don't fit these plans). Tri routes through the tri suggestion
+  // pipeline (ISSUE-151). HYROX logs the overflow and continues as the running
+  // modal's Keep did: an RPE row per logged activity, then the RPE prompt.
+  if (redirectToTriSuggestionFlow(remainingCross, onComplete, () => {
+    for (const item of remainingCross) {
+      const adhocId = `garmin-${item.garminId}`;
+      matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), deriveItemRPE(item, s2), null, item));
+    }
+    render();
+    showRpePrompt(matchedRunsForRpe, onComplete);
+  })) return;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {
@@ -2177,8 +2202,14 @@ export function autoProcessActivities(
     ? formatActivityType(overflow[0].activityType)
     : `${overflow.length} cross-training activities`;
 
-  // Tri-mode redirect. See ISSUE-151 / redirectToTriSuggestionFlow comment.
-  if (redirectToTriSuggestionFlow(overflow, onComplete)) return;
+  // Tri/HYROX redirect. See ISSUE-151 / redirectToTriSuggestionFlow comment.
+  // HYROX continues as the dismissed modal does here: the overflow stays as
+  // unspent items, already logged above with its RPE rows.
+  if (redirectToTriSuggestionFlow(overflow, onComplete, () => {
+    showAssignmentToast(autoAssignLines);
+    render();
+    showRpePrompt(autoMatchedRuns, onComplete);
+  })) return;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {

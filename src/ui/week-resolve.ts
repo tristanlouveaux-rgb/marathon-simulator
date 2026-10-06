@@ -173,7 +173,24 @@ function applyRenderLayers(s: SimulatorState, viewWeek: number, isCurrentWeek: b
  * bridge-scaled distance after the illness or holiday ended. A session such a
  * layer adjusts carries `renderLayer` (workouts/render-layer.ts) so a flow can
  * leave it alone. Matching and display keep the full resolver.
+ *
+ * Running mode only (hasRunningPlanWeek). In just-track, triathlon, cycling and
+ * HYROX the running engine's week is shown nowhere, so this returns [] and every
+ * flow above finds no session to cut and writes no mod. resolveWeekWorkouts itself
+ * stays ungated: the activity matcher's regenerateWeekWorkouts reads it.
  */
 export function resolveWeekForPlanChanges(s: SimulatorState, viewWeek: number): any[] {
+  if (!hasRunningPlanWeek(s)) return [];
   return resolveWeekWorkouts(s, viewWeek, { renderLayers: false });
+}
+
+/**
+ * True when the user's plan is the running engine's week, the only plan a running
+ * plan change (wk.workoutMods) reaches. Just-track has no plan. Triathlon, cycling
+ * (eventType 'triathlon') and HYROX store their plan in wk.triWorkouts, and
+ * resolveTriWeekWorkouts never applies wk.workoutMods, so a running mod written
+ * there changes nothing the user can see. Planning side.
+ */
+export function hasRunningPlanWeek(s: Pick<SimulatorState, 'trackOnly' | 'eventType'>): boolean {
+  return !s.trackOnly && s.eventType !== 'triathlon' && s.eventType !== 'hyrox';
 }

@@ -18,7 +18,7 @@ import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
 import { writeAdjustmentMods, removeWorkoutMods, adjustableWorkouts } from '@/workouts/workout-mods';
-import { resolveWeekWorkouts, resolveWeekForPlanChanges } from './week-resolve';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges, hasRunningPlanWeek } from './week-resolve';
 import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SPORTS_DB } from '@/constants';
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
@@ -2133,7 +2133,10 @@ export function triggerACWRReduction(): void {
   // Tri uses per-discipline volume ramps (Gabbett 5–10% in `tri-volume-ramp.ts`)
   // surfaced via the tri suggestion modal. Skip the running-modal path here so
   // we don't propose running-only adjustments in Ironman setup. See ISSUE-151.
-  if (s.eventType === 'triathlon') return;
+  // Just-track has no plan, and HYROX's plan (wk.triWorkouts) is never reached by
+  // a running mod: neither has a session this modal could cut, so the cut was
+  // sized against a running week shown nowhere and cleared the unspent items.
+  if (!hasRunningPlanWeek(s)) return;
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed3 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));

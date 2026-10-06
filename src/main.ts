@@ -549,13 +549,16 @@ async function launchApp(): Promise<void> {
       // to race prediction internals because cross-training transfer is real
       // physiology; the direct version is what the user sees because they
       // expect "swim load" to mean what they did in the pool.
-      const { estimateDirectPerDisciplineCTLFromActivities, manualDoneTriActivities } = await import('@/calculations/tri-benchmarks-from-history');
+      const { estimateDirectPerDisciplineCTLFromActivities, manualDoneTriActivities, inAppGpsRunActivities } = await import('@/calculations/tri-benchmarks-from-history');
       // Manually-completed sessions (rated, no synced activity) deposit their
       // planned load into CTL so the Adjust Harder/Easier choice has a fitness
       // consequence even without a watch. Fitness-only (not benchmark derivation);
       // a real matched activity overrides the estimate (handled in the helper).
       const manualDoneActs = manualDoneTriActivities(state.wks, state.planStartDate);
-      const directFitness = estimateDirectPerDisciplineCTLFromActivities([...activityLog, ...manualDoneActs]);
+      // In-app GPS runs live only in wk.garminActuals (the DB log never holds
+      // them) until a watch copy supersedes them in place.
+      const inAppGpsRuns = inAppGpsRunActivities(state.wks);
+      const directFitness = estimateDirectPerDisciplineCTLFromActivities([...activityLog, ...manualDoneActs, ...inAppGpsRuns]);
 
       // Diagnostic. Once-per-launch so we can see why Training Load might be
       // zero. Activity count, derived fitness per discipline, and how many

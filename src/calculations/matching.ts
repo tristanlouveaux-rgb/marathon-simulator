@@ -223,8 +223,9 @@ export function parseDistanceKm(description: string): number {
   const kmMatch = description.match(/(\d+(?:\.\d+)?)\s*km/i);
   if (kmMatch) return parseFloat(kmMatch[1]);
 
-  // Miles match: "8 miles"
-  const miMatch = description.match(/(\d+(?:\.\d+)?)\s*mi(?:le)?s?/i);
+  // Miles match: "8 miles", "1 mile", "5 mi". The unit must end the word, so the
+  // "mi" of a minutes token ("10 min easy warm-up") is never read as miles.
+  const miMatch = description.match(/(\d+(?:\.\d+)?)\s*mi(?:les?)?\b/i);
   if (miMatch) return parseFloat(miMatch[1]) * 1.609;
 
   // Interval: "6 x 800m" → approximate total = reps * dist + rest jog
