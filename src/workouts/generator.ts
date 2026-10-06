@@ -10,7 +10,7 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { planWeekSessions, isRaceWeek, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
@@ -119,6 +119,11 @@ export function generateWeekWorkouts(
       archetype,
       easyPaceSecPerKm,
       ctlRatio,
+      // Every week's phase, so the engine replays the long runs and week totals it
+      // prescribed before this week (10% long-run rule, deload guards). Ignored by
+      // the engine unless it covers the whole plan (length === totalWeeks).
+      planPhases: sNow.wks?.map(w => w.ph),
+      continuousMode: !!sNow.continuousMode,
     });
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
@@ -127,10 +132,10 @@ export function generateWeekWorkouts(
     // (race) week is exempt: its single quality session is already a minimal primer (ISSUE-298) and
     // its volume is already cut, so easing it would neuter the primer for no load benefit.
     const wkNow = sNow.wks?.[weekIndex - 1] as Week | undefined;
-    const isRaceWeek = phase === 'taper' && totalWeeks != null && weekIndex >= totalWeeks;
+    const raceWeek = isRaceWeek(phase, weekIndex, totalWeeks, !!sNow.continuousMode);
     const easedIntents = (
       acwrStatus === 'high' &&
-      !isRaceWeek &&
+      !raceWeek &&
       (wkNow as any)?.acwrChoice !== 'keep' &&
       ((wkNow as any)?.scheduledChronicTSS ?? 0) >= 1 &&
       ((wkNow as any)?.scheduledSafeUpper ?? 0) > 0

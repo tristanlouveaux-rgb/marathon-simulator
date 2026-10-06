@@ -58,8 +58,15 @@ describe('fast-finish long run sits on the long-run day', () => {
           expect(ffWeeks).toBeGreaterThan(0);
 
           // Every week has exactly one long run, and it is on the long-run day.
+          // The race week (final taper week) is the exception: the race is that
+          // week's long effort, so it carries no long run and the long-run day
+          // stays free for a Sunday race (plan_engine isRaceWeek, 2026-10-06).
           weeks.forEach((ws, i) => {
             const longs = ws.filter(isLongRun);
+            if (i === weeks.length - 1) {
+              expect(longs, `race week wk${i + 1}`).toHaveLength(0);
+              return;
+            }
             expect(longs, `wk${i + 1}`).toHaveLength(1);
             expect(longs[0].dayOfWeek, `wk${i + 1}`).toBe(6);
           });

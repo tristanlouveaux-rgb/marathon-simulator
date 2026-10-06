@@ -1,6 +1,7 @@
 import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/types';
 import type { SessionIntent, SlotType } from './intent_to_workout';
 import { weekVolumeBudgetKm, type Archetype } from '@/calculations/athlete-archetype';
+import { computePlanPhases } from './phases';
 
 export interface PlanContext {
   runsPerWeek: number;
@@ -39,6 +40,15 @@ export interface PlanContext {
    *  budget. Falls back to 360 s/km (6:00/km) when omitted. Matches
    *  intent_to_workout.minutesToKm. */
   easyPaceSecPerKm?: number;
+  /** Phase of every plan week (index i = week i + 1), i.e. `s.wks.map(w => w.ph)`.
+   *  The engine replays the weeks before `weekIndex` to read the long runs and
+   *  week totals it actually prescribed (the long-run 10% rule and the deload
+   *  guards). Used only when its length equals `totalWeeks`; otherwise the
+   *  canonical running split `computePlanPhases(totalWeeks)` stands in. */
+  planPhases?: readonly TrainingPhase[];
+  /** Continuous (no-race) plan. Its final taper week is a block deload, not a
+   *  race week, so it keeps its long run and gets no race-week primer. */
+  continuousMode?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +223,20 @@ export function isFourWeekCycleDeloadWeek(weekIndex: number, phase: TrainingPhas
   return weekIndex % 4 === 0;
 }
 
+/**
+ * Race week = the final taper week of a race plan. It carries the race, so the
+ * plan seats a short primer instead of a full quality session (SCIENCE_LOG §CE)
+ * and no long run: the race is the week's long effort. A continuous (no-race)
+ * plan's final taper week is a block deload, never a race week. Single source
+ * for the plan engine, the generator's ACWR ease-back exemption and the
+ * week-debrief preview.
+ */
+export function isRaceWeek(
+  phase: TrainingPhase, weekIndex: number, totalWeeks: number, continuousMode?: boolean,
+): boolean {
+  return !continuousMode && phase === 'taper' && weekIndex >= totalWeeks;
+}
+
 // ---------------------------------------------------------------------------
 // Effort multiplier (within-band adaptive scaling)
 // ---------------------------------------------------------------------------
@@ -295,6 +319,61 @@ function longRunCapMin(ability: AbilityBand, race: RaceDistance): number {
   return cap[ability];
 }
 
+/**
+ * Long-run progression ceiling. A long run may be at most 10% longer than the
+ * longest long run the plan prescribed in the previous 4 weeks (~30 days).
+ *
+ * Source: Frandsen et al. 2025, Br J Sports Med, "How much running is too much?"
+ * In a large prospective running cohort, single sessions that exceeded the
+ * longest run of the preceding 30 days by more than 10% were associated with a
+ * higher rate of running-related injury. Approved for the plan engine by
+ * Tristan on 2026-10-06. The study measured distance; the engine prescribes long
+ * runs in minutes at a constant easy pace, so minutes stand in for distance.
+ *
+ * Planning-side rule (it caps a prescription). It is not a tracking or forecast
+ * input.
+ */
+export const LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST = 0.10;
+/** The lookback for the rule above: 4 plan weeks (28 days), the plan-week form
+ *  of the study's 30-day window. */
+export const LONG_RUN_LOOKBACK_WEEKS = 4;
+
+/** Taper long run as a fraction of the build long run. Pre-existing value (the
+ *  taper phase cap longRunMinutes always applied), named so the taper path and
+ *  the ramp fallback share it. planWeekSessions applies it to the long run the
+ *  plan actually prescribed, not the untrimmed ramp. */
+export const TAPER_LONG_RUN_FRACTION = 0.65;
+
+/** Ceiling for this week's long run given the longest recent long run. */
+export function longRunCeilingMin(recentLongestMin: number): number {
+  return Math.floor(recentLongestMin * (1 + LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST));
+}
+
+/**
+ * Position (0 to 1) on the long-run ramp for `weekIndex`.
+ *
+ * The ramp reaches full progress at 75% of the plan (existing anchor). Scheduled
+ * deload weeks do NOT advance it: a deload week holds the previous week's ramp
+ * position (then takes the deload multiplier), and the week after it resumes
+ * one step above the pre-deload week. Indexing by raw weekIndex instead put the
+ * week after a deload two ramp steps above the last full long run. The span is
+ * shortened by the same deload count so full progress still lands at 75% of the
+ * plan, keeping the peak long run of SCIENCE_LOG §BW. No new constant: the
+ * deload cycle is `isDeloadWeek`.
+ */
+function longRunRampProgress(weekIndex: number, totalWeeks: number, ability: AbilityBand): number {
+  const deloadsThrough = (w: number): number => {
+    let n = 0;
+    for (let j = 2; j <= Math.floor(w); j++) if (isDeloadWeek(j, ability)) n++;
+    return n;
+  };
+  const fullAt = totalWeeks * 0.75;
+  const span = fullAt - deloadsThrough(fullAt);
+  if (!(span > 0)) return 1;
+  const position = weekIndex - deloadsThrough(weekIndex);
+  return Math.min(1, Math.max(0, position / span));
+}
+
 export function longRunMinutes(
   weekIndex: number, totalWeeks: number, ability: AbilityBand,
   race: RaceDistance, phase: TrainingPhase
@@ -303,8 +382,9 @@ export function longRunMinutes(
   const baseLong: Record<RaceDistance, number> = {
     '5k': 50, '10k': 60, half: 80, marathon: 90,
   };
-  // Progressive ramp across the plan (1.0 by totalWeeks * 0.75).
-  const progress = Math.min(1, weekIndex / (totalWeeks * 0.75));
+  // Progressive ramp across the plan (1.0 by totalWeeks * 0.75), held through
+  // scheduled deload weeks (longRunRampProgress).
+  const progress = longRunRampProgress(weekIndex, totalWeeks, ability);
 
   let base: number;
   if (race === 'marathon') {
@@ -322,8 +402,9 @@ export function longRunMinutes(
     base = baseLong[race] * (0.80 + 0.20 * progress);
   }
 
-  // Phase caps
-  if (phase === 'taper') base *= 0.65;
+  // Phase caps. (planWeekSessions scales a taper long run from the long run it
+  // actually prescribed; this ramp value is the fallback with no history.)
+  if (phase === 'taper') base *= TAPER_LONG_RUN_FRACTION;
   else if (phase === 'peak') base *= 1.05;
 
   // Ability + distance ceiling
@@ -514,7 +595,112 @@ function effectiveWeeklyBudgetMin(ctx: PlanContext): number {
 // Main entry: planWeekSessions
 // ---------------------------------------------------------------------------
 
+/** Slots that count as quality sessions (never trimmed by the budget). */
+const QUALITY_SLOT_SET: ReadonlySet<string> = new Set(['threshold', 'vo2', 'marathon_pace', 'float']);
+
+/**
+ * What the plan prescribed for one week, as the cross-week rules read it: the
+ * long run, the week's total minutes and its quality-session count.
+ */
+interface PrescribedWeek {
+  longMin: number | null;
+  totalMin: number;
+  qualityCount: number;
+}
+
+function summariseWeek(intents: SessionIntent[]): PrescribedWeek {
+  return {
+    longMin: intents.find(i => i.slot === 'long')?.totalMinutes ?? null,
+    totalMin: intents.reduce((s, i) => s + i.totalMinutes, 0),
+    qualityCount: intents.filter(i => QUALITY_SLOT_SET.has(i.slot)).length,
+  };
+}
+
+/** Phase of each plan week: the caller's list when it covers the whole plan,
+ *  otherwise the canonical running split. */
+function resolvePlanPhases(ctx: PlanContext): TrainingPhase[] {
+  const given = ctx.planPhases;
+  if (given && given.length === ctx.totalWeeks && given.every(p => typeof p === 'string')) {
+    return [...given];
+  }
+  return computePlanPhases(ctx.totalWeeks).map(p => p.ph);
+}
+
+// Replayed nominal weeks, keyed by every input that shapes a nominal week. The
+// value is the prefix computed so far (weeks 1..n); it only ever grows, and the
+// same inputs always give the same weeks, so entries never go stale.
+const NOMINAL_PLAN_CACHE_MAX = 32;
+const nominalPlanCache = new Map<string, PrescribedWeek[]>();
+
+/**
+ * The weeks the plan prescribed before `ctx.weekIndex`, replayed with the
+ * static plan inputs only (no effort score, ACWR status, CTL ratio or holiday
+ * deload: those adjust one week as it is generated and are not known for past
+ * weeks here). Each replayed week applies the same cross-week rules from its own
+ * replayed history, so week k reads exactly the long runs weeks k-4..k-1 were
+ * given, budget trims included.
+ */
+function nominalHistory(ctx: PlanContext): PrescribedWeek[] {
+  const upto = Math.max(0, ctx.weekIndex - 1);
+  if (upto === 0 || ctx.totalWeeks <= 0) return [];
+  const phases = resolvePlanPhases(ctx);
+  const key = JSON.stringify([
+    ctx.runsPerWeek, ctx.raceDistance, ctx.runnerType, ctx.fitnessLevel, ctx.totalWeeks, ctx.vdot,
+    ctx.weeklyHoursTarget ?? null, [...(ctx.excludedSlots ?? [])].sort(), ctx.baselineKm ?? null,
+    ctx.archetype ?? null, ctx.easyPaceSecPerKm ?? null, !!ctx.continuousMode, phases,
+  ]);
+  let weeks = nominalPlanCache.get(key);
+  if (!weeks) {
+    weeks = [];
+    nominalPlanCache.set(key, weeks);
+    if (nominalPlanCache.size > NOMINAL_PLAN_CACHE_MAX) {
+      const oldest = nominalPlanCache.keys().next().value;
+      if (oldest !== undefined) nominalPlanCache.delete(oldest);
+    }
+  }
+  while (weeks.length < upto) {
+    const w = weeks.length + 1;
+    const nominalCtx: PlanContext = {
+      runsPerWeek: ctx.runsPerWeek,
+      raceDistance: ctx.raceDistance,
+      runnerType: ctx.runnerType,
+      fitnessLevel: ctx.fitnessLevel,
+      totalWeeks: ctx.totalWeeks,
+      vdot: ctx.vdot,
+      weeklyHoursTarget: ctx.weeklyHoursTarget,
+      excludedSlots: ctx.excludedSlots,
+      baselineKm: ctx.baselineKm,
+      archetype: ctx.archetype,
+      easyPaceSecPerKm: ctx.easyPaceSecPerKm,
+      continuousMode: ctx.continuousMode,
+      weekIndex: w,
+      phase: phases[Math.min(w, phases.length) - 1],
+    };
+    weeks.push(summariseWeek(buildWeekSessions(nominalCtx, weeks)));
+  }
+  return weeks.slice(0, upto);
+}
+
+/** Longest long run prescribed in the LONG_RUN_LOOKBACK_WEEKS weeks before
+ *  `weekIndex`, or null when none of them had one. */
+function recentLongestLongRun(history: PrescribedWeek[], weekIndex: number): number | null {
+  let best: number | null = null;
+  for (let w = Math.max(1, weekIndex - LONG_RUN_LOOKBACK_WEEKS); w < weekIndex; w++) {
+    const l = history[w - 1]?.longMin;
+    if (l != null && l > 0 && (best == null || l > best)) best = l;
+  }
+  return best;
+}
+
 export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
+  return buildWeekSessions(ctx, nominalHistory(ctx));
+}
+
+/**
+ * One week's sessions. `history[i]` is what the plan prescribed in week i + 1,
+ * for every week before `ctx.weekIndex` (see nominalHistory).
+ */
+function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
   const {
     runsPerWeek, raceDistance, runnerType, phase, fitnessLevel,
     weekIndex, totalWeeks, vdot, acwrStatus,
@@ -534,8 +720,9 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   const variantPhase: TrainingPhase = deload ? 'base' : phase;
   // Race week = the final taper week. Its single quality session is a short primer
   // (a few minutes at intensity), not a build-phase block, regardless of which
-  // slot the priority list seats here (threshold for most distances, vo2 for 5K).
-  const raceWeek = phase === 'taper' && weekIndex >= totalWeeks;
+  // slot the priority list seats here (threshold for most distances, vo2 for 5K),
+  // and it has no long run (the race is the week's long effort).
+  const raceWeek = isRaceWeek(phase, weekIndex, totalWeeks, ctx.continuousMode);
   const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
   // CTL-gap re-anchor: reduce volume when the athlete fell behind the plan's load. Suppressed on
   // deload weeks (already a planned reduction — re-anchoring a deload down would double up the same
@@ -554,8 +741,54 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   // only the two volume-re-anchor levers (effort + CTL-gap), which CAN measure the same shortfall.
   const dMult = (deload ? deloadMultiplier(ability) : 1.0) * adaptive;
 
+  // What the plan prescribed in the weeks before this one (see nominalHistory).
+  const prevWeek = weekIndex >= 2 ? history[weekIndex - 2] : undefined;
+  const recentLongest = recentLongestLongRun(history, weekIndex);
+
+  /**
+   * This week's long run in minutes, before the budget fit.
+   *  - Taper: TAPER_LONG_RUN_FRACTION of the longest long run actually prescribed
+   *    in the last 4 weeks (trimmed values included), not of the untrimmed ramp,
+   *    which could put a taper long run far above every build long run.
+   *  - Otherwise: the ramp (held through deloads), capped at the 10% rule
+   *    (longRunCeilingMin) BEFORE the deload/effort multiplier, so a deload long
+   *    run is a reduction of the long run the athlete would otherwise have run.
+   *  - These history rules never cut a long run below LONG_SOFT_FLOOR_MIN, the
+   *    shortest long run the budget fit keeps, unless the ramp value itself is
+   *    shorter (a 5K taper long run, as before). Without this a deload or taper
+   *    week after floor-bound long runs fell to 16 to 28 min, shorter than its
+   *    easy runs.
+   *  - The 10% rule is applied last: neither that floor nor an upward effort
+   *    multiplier lifts a long run past it.
+   */
+  const longRunForWeek = (): number => {
+    const rampMin = longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase);
+    let target: number;
+    if (phase === 'taper' && recentLongest != null) {
+      target = recentLongest * TAPER_LONG_RUN_FRACTION;
+    } else {
+      target = rampMin;
+      if (recentLongest != null) target = Math.min(target, longRunCeilingMin(recentLongest));
+    }
+    let mins = Math.round(target * dMult);
+    mins = Math.max(mins, Math.min(Math.round(rampMin * dMult), LONG_SOFT_FLOOR_MIN));
+    return recentLongest != null ? Math.min(mins, longRunCeilingMin(recentLongest)) : mins;
+  };
+
   const intents: SessionIntent[] = [];
   let maxQuality = qualityCap(ability, fitnessLevel, runsPerWeek);
+
+  // The weekly minute budget. A deload week takes the same deload reduction its
+  // sessions take (deloadMultiplier), so the budget fit and the quality cap read a
+  // reduced budget too. Before, the budget kept ramping through the deload, and a
+  // week whose predecessor was budget-bound refilled the higher budget: the deload
+  // came out heavier than the week before, sometimes with an extra quality session.
+  let weeklyBudgetMin = effectiveWeeklyBudgetMin(ctx) * (deload ? deloadMultiplier(ability) : 1);
+  if (deload && prevWeek) {
+    // Backstop: a deload week is never heavier than the week before it.
+    weeklyBudgetMin = Math.min(weeklyBudgetMin, prevWeek.totalMin);
+  }
+  weeklyBudgetMin = Number.isFinite(weeklyBudgetMin) ? Math.round(weeklyBudgetMin) : weeklyBudgetMin;
 
   // Volume-aware quality cap. A quality session only earns its slot if the
   // weekly volume budget can also seat a long run and at least one easy run at
@@ -568,13 +801,14 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   // Floored at 1 so a fit athlete keeps one quality session for intensity
   // retention even at the lowest volume (the residual overflow is accepted and
   // surfaced by the plan-view budget banner).
-  const weeklyBudgetMin = effectiveWeeklyBudgetMin(ctx);
   if (Number.isFinite(weeklyBudgetMin)) {
     const approxQualityMin = thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) + 20;
     const aerobicReserve = LONG_SOFT_FLOOR_MIN + EASY_FLOOR_MIN;
     const affordable = Math.floor((weeklyBudgetMin - aerobicReserve) / Math.max(1, approxQualityMin));
     maxQuality = Math.max(1, Math.min(maxQuality, affordable));
   }
+  // A deload week never carries more quality sessions than the week before it.
+  if (deload && prevWeek) maxQuality = Math.min(maxQuality, prevWeek.qualityCount);
 
   // ACWR-driven quality session reduction — CAUTION only (ISSUE-295).
   // HIGH-ACWR weeks are no longer reduced here by dropping quality slots + freezing the long run.
@@ -588,9 +822,10 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     : '';
   if (acwrStatus === 'caution') maxQuality = Math.max(0, maxQuality - 1);
 
-  // For 1 run/week: single combined session
+  // For 1 run/week: single combined session. In a race week the race is that run.
   if (runsPerWeek <= 1) {
-    const mins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
+    if (raceWeek) return intents;
+    const mins = longRunForWeek();
     intents.push({
       dayIndex: 0,
       slot: 'long',
@@ -606,8 +841,12 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   const needsLong = raceDistance === 'half' || raceDistance === 'marathon' || runsPerWeek >= 3;
   let slotsRemaining = runsPerWeek;
 
-  if (needsLong) {
-    const longMins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
+  if (needsLong && raceWeek) {
+    // Race week: the race takes the long-run slot. No long run is prescribed, so
+    // the long-run day (Sunday in the scheduler) stays free for a Sunday race.
+    slotsRemaining--;
+  } else if (needsLong) {
+    const longMins = longRunForWeek();
     // (ACWR-high long-run freeze removed — the ease-back ladder protects the long run distance
     //  until last resort, then trims it by the computed overshoot. ISSUE-295.)
     const longVar = pickPhaseVariant(LONG_VARIANTS, weekIndex, variantPhase, v => v.load);
@@ -623,123 +862,151 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     slotsRemaining--;
   }
 
-  // Fill quality sessions. Filter any slots the user has opted out of
-  let qualityFilled = 0;
-  const rawPriority = applyRunnerTypeBias(workoutPriority(raceDistance, phase), runnerType);
-  // Base-first periodisation: no VO2 intervals in the base phase. The aerobic
-  // and musculoskeletal base is built at lower intensity first; VO2 work enters
-  // in build/peak (Daniels; Bompa). This makes the base quality session a
-  // tempo, which is both gentler on a low-volume base and the right stimulus.
-  const priority = rawPriority.filter(s => !excludedSlots.has(s) && !(phase === 'base' && s === 'vo2'));
-  let dayIdx = 0;
+  // Quality sessions, then easy runs, then the budget fit. A closure so a deload
+  // week can be re-assembled with one quality session fewer (the backstop below).
+  const longOnly = intents;              // the long run (or nothing in race week)
+  const slotsAfterLong = slotsRemaining;
+  const assemble = (qualityLimit: number): SessionIntent[] => {
+    const week: SessionIntent[] = longOnly.map(i => ({ ...i }));
+    let slots = slotsAfterLong;
 
-  for (const slot of priority) {
-    if (qualityFilled >= maxQuality || slotsRemaining <= 0) break;
-    // Reserve at least 1 slot for easy (unless we're the last slot)
-    if (slotsRemaining <= 1 && qualityFilled > 0) break;
+    // Fill quality sessions. Filter any slots the user has opted out of
+    let qualityFilled = 0;
+    const rawPriority = applyRunnerTypeBias(workoutPriority(raceDistance, phase), runnerType);
+    // Base-first periodisation: no VO2 intervals in the base phase. The aerobic
+    // and musculoskeletal base is built at lower intensity first; VO2 work enters
+    // in build/peak (Daniels; Bompa). This makes the base quality session a
+    // tempo, which is both gentler on a low-volume base and the right stimulus.
+    const priority = rawPriority.filter(s => !excludedSlots.has(s) && !(phase === 'base' && s === 'vo2'));
+    let dayIdx = 0;
 
-    const qualityNote = acwrNote || (deload ? 'Deload week' : '');
+    for (const slot of priority) {
+      if (qualityFilled >= qualityLimit || slots <= 0) break;
+      // Reserve at least 1 slot for easy (unless we're the last slot)
+      if (slots <= 1 && qualityFilled > 0) break;
 
-    if (slot === 'threshold') {
-      // Race week: fixed short primer (not dMult-scaled — it is already minimal).
-      const variant = raceWeek
-        ? TAPER_PRIMER_THRESHOLD
-        : pickPhaseVariant(THRESH_VARIANTS, weekIndex, variantPhase, variantWork);
-      const workMins = raceWeek
-        ? variant.reps! * variant.repMin!
-        : Math.round(thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) * dMult);
-      const totalMins = variant.reps
-        ? Math.round(variant.reps * (variant.repMin! + variant.recMin!) + 15) // warmup/cooldown
-        : workMins + 20; // continuous: warmup + cooldown
-      intents.push({
-        dayIndex: dayIdx++,
-        slot: 'threshold',
-        totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
-        workMinutes: workMins,
-        reps: variant.reps,
-        repMinutes: variant.repMin,
-        recoveryMinutes: variant.recMin,
-        variantId: variant.id,
-        notes: raceWeek ? 'Race-week primer' : qualityNote,
-      });
-    } else if (slot === 'vo2') {
-      // Race week: short sharp primer (5K taper seats vo2 here, not threshold).
-      const variant = raceWeek
-        ? TAPER_PRIMER_VO2
-        : pickPhaseVariant(VO2_VARIANTS, weekIndex, variantPhase, variantWork);
-      const workMins = raceWeek
-        ? variant.reps * variant.repMin
-        : Math.round(vo2WorkMinutes(ability, phase) * dMult);
-      const totalMins = Math.round(variant.reps * (variant.repMin + variant.recMin) + 15);
-      intents.push({
-        dayIndex: dayIdx++,
-        slot: 'vo2',
-        totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
-        workMinutes: workMins,
-        reps: variant.reps,
-        repMinutes: variant.repMin,
-        recoveryMinutes: variant.recMin,
-        variantId: variant.id,
-        notes: raceWeek ? 'Race-week primer' : qualityNote,
-      });
-    } else if (slot === 'marathon_pace') {
-      const workMins = Math.round(mpWorkMinutes(raceDistance, ability, phase) * dMult);
-      if (workMins <= 0) continue; // skip if not applicable
-      intents.push({
-        dayIndex: dayIdx++,
-        slot: 'marathon_pace',
-        totalMinutes: workMins + 20,
-        workMinutes: workMins,
-        variantId: 'mp_continuous',
-        notes: qualityNote,
-      });
-    } else if (slot === 'float') {
-      const workMins = Math.round(floatWorkMinutes(raceDistance, ability, phase) * dMult);
-      if (workMins <= 0) continue; // skip if not eligible (beginner/novice, base/taper, 5K/10K)
-      const variant = pickPhaseVariant(FLOAT_VARIANTS, weekIndex, variantPhase, variantWork);
-      const totalMins = Math.round(variant.reps * (variant.repMin + variant.floatMin) + 15);
-      intents.push({
-        dayIndex: dayIdx++,
-        slot: 'float',
-        totalMinutes: Math.round(totalMins * dMult),
-        workMinutes: workMins,
-        reps: variant.reps,
-        repMinutes: variant.repMin,
-        recoveryMinutes: variant.floatMin,
-        variantId: variant.id,
-        notes: qualityNote,
-      });
+      const qualityNote = acwrNote || (deload ? 'Deload week' : '');
+
+      if (slot === 'threshold') {
+        // Race week: fixed short primer (not dMult-scaled — it is already minimal).
+        const variant = raceWeek
+          ? TAPER_PRIMER_THRESHOLD
+          : pickPhaseVariant(THRESH_VARIANTS, weekIndex, variantPhase, variantWork);
+        const workMins = raceWeek
+          ? variant.reps! * variant.repMin!
+          : Math.round(thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) * dMult);
+        const totalMins = variant.reps
+          ? Math.round(variant.reps * (variant.repMin! + variant.recMin!) + 15) // warmup/cooldown
+          : workMins + 20; // continuous: warmup + cooldown
+        week.push({
+          dayIndex: dayIdx++,
+          slot: 'threshold',
+          totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
+          workMinutes: workMins,
+          reps: variant.reps,
+          repMinutes: variant.repMin,
+          recoveryMinutes: variant.recMin,
+          variantId: variant.id,
+          notes: raceWeek ? 'Race-week primer' : qualityNote,
+        });
+      } else if (slot === 'vo2') {
+        // Race week: short sharp primer (5K taper seats vo2 here, not threshold).
+        const variant = raceWeek
+          ? TAPER_PRIMER_VO2
+          : pickPhaseVariant(VO2_VARIANTS, weekIndex, variantPhase, variantWork);
+        const workMins = raceWeek
+          ? variant.reps * variant.repMin
+          : Math.round(vo2WorkMinutes(ability, phase) * dMult);
+        const totalMins = Math.round(variant.reps * (variant.repMin + variant.recMin) + 15);
+        week.push({
+          dayIndex: dayIdx++,
+          slot: 'vo2',
+          totalMinutes: raceWeek ? totalMins : Math.round(totalMins * dMult),
+          workMinutes: workMins,
+          reps: variant.reps,
+          repMinutes: variant.repMin,
+          recoveryMinutes: variant.recMin,
+          variantId: variant.id,
+          notes: raceWeek ? 'Race-week primer' : qualityNote,
+        });
+      } else if (slot === 'marathon_pace') {
+        const workMins = Math.round(mpWorkMinutes(raceDistance, ability, phase) * dMult);
+        if (workMins <= 0) continue; // skip if not applicable
+        week.push({
+          dayIndex: dayIdx++,
+          slot: 'marathon_pace',
+          totalMinutes: workMins + 20,
+          workMinutes: workMins,
+          variantId: 'mp_continuous',
+          notes: qualityNote,
+        });
+      } else if (slot === 'float') {
+        const workMins = Math.round(floatWorkMinutes(raceDistance, ability, phase) * dMult);
+        if (workMins <= 0) continue; // skip if not eligible (beginner/novice, base/taper, 5K/10K)
+        const variant = pickPhaseVariant(FLOAT_VARIANTS, weekIndex, variantPhase, variantWork);
+        const totalMins = Math.round(variant.reps * (variant.repMin + variant.floatMin) + 15);
+        week.push({
+          dayIndex: dayIdx++,
+          slot: 'float',
+          totalMinutes: Math.round(totalMins * dMult),
+          workMinutes: workMins,
+          reps: variant.reps,
+          repMinutes: variant.repMin,
+          recoveryMinutes: variant.floatMin,
+          variantId: variant.id,
+          notes: qualityNote,
+        });
+      }
+
+      qualityFilled++;
+      slots--;
     }
 
-    qualityFilled++;
-    slotsRemaining--;
+    // Fill remaining with easy
+    while (slots > 0) {
+      const easyMins = Math.round(easyRunMinutes(ability, raceDistance, phase) * dMult);
+      week.push({
+        dayIndex: dayIdx++,
+        slot: 'easy',
+        totalMinutes: easyMins,
+        workMinutes: easyMins,
+        variantId: 'easy_steady',
+        notes: deload ? 'Deload week' : '',
+      });
+      slots--;
+    }
+
+    // Fit the sessions into the effective weekly budget — the tighter of the
+    // archetype ramp budget (km anchored to the athlete's current volume, ramping
+    // geometrically toward the ability-driven peak) and the user's weekly hours
+    // target. Easy runs are consolidated and the long run trimmed to its floors;
+    // quality minutes are preserved (stimulus depends on work-interval duration,
+    // Seiler 2010 / Billat 2001). `Infinity` (no ramp, no target) is a no-op.
+    if (Number.isFinite(weeklyBudgetMin)) {
+      applyHoursBudget(week, weeklyBudgetMin);
+    }
+    return week;
+  };
+
+  let week = assemble(maxQuality);
+
+  // Deload backstop, last resort. When every flexible session is already at its
+  // floor, the budget fit cannot pull a deload week under the week before. Seen
+  // on tiny budgets where the deload week opens a new phase and its first quality
+  // session (marathon pace) is longer than the previous phase's (threshold). The
+  // deload week then swaps quality sessions for easy runs one at a time (the
+  // ACWR-caution move) until it is no heavier than the week before. Only here does
+  // the volume-aware cap's floor of one quality session give way.
+  if (deload && prevWeek) {
+    const totalOf = (xs: SessionIntent[]) => xs.reduce((s, i) => s + i.totalMinutes, 0);
+    const qualityOf = (xs: SessionIntent[]) => xs.filter(i => QUALITY_SLOT_SET.has(i.slot)).length;
+    for (let q = qualityOf(week) - 1; q >= 0 && totalOf(week) > prevWeek.totalMin; q--) {
+      const candidate = assemble(q);
+      if (totalOf(candidate) < totalOf(week)) week = candidate;
+    }
   }
 
-  // Fill remaining with easy
-  while (slotsRemaining > 0) {
-    const easyMins = Math.round(easyRunMinutes(ability, raceDistance, phase) * dMult);
-    intents.push({
-      dayIndex: dayIdx++,
-      slot: 'easy',
-      totalMinutes: easyMins,
-      workMinutes: easyMins,
-      variantId: 'easy_steady',
-      notes: deload ? 'Deload week' : '',
-    });
-    slotsRemaining--;
-  }
-
-  // Fit the sessions into the effective weekly budget — the tighter of the
-  // archetype ramp budget (km anchored to the athlete's current volume, ramping
-  // geometrically toward the ability-driven peak) and the user's weekly hours
-  // target. Easy runs are consolidated and the long run trimmed to its floors;
-  // quality minutes are preserved (stimulus depends on work-interval duration,
-  // Seiler 2010 / Billat 2001). `Infinity` (no ramp, no target) is a no-op.
-  if (Number.isFinite(weeklyBudgetMin)) {
-    applyHoursBudget(intents, weeklyBudgetMin);
-  }
-
-  return intents;
+  return week;
 }
 
 /**
@@ -824,7 +1091,6 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
   const EASY_MIN = EASY_FLOOR_MIN;
   const STD_LONG_MIN = LONG_STD_FLOOR_MIN;
   const SOFT_LONG_MIN = LONG_SOFT_FLOOR_MIN;
-  const qualitySlots = new Set(['threshold', 'vo2', 'marathon_pace', 'float']);
 
   const total = () => intents.reduce((s, i) => s + i.totalMinutes, 0);
   if (total() <= budgetMin) return;
@@ -897,7 +1163,7 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
   // Past all floors. Accept the overflow rather than compress further. The
   // plan-view budget banner reads the actual total vs. budget on render and
   // lets the user pick a resolution.
-  const qualityTotal = intents.filter(i => qualitySlots.has(i.slot)).reduce((s, i) => s + i.totalMinutes, 0);
+  const qualityTotal = intents.filter(i => QUALITY_SLOT_SET.has(i.slot)).reduce((s, i) => s + i.totalMinutes, 0);
   if (qualityTotal > budgetMin) {
     console.warn(`[planWeekSessions] Quality sessions alone (${qualityTotal}min) exceed budget (${budgetMin}min). Budget not enforced on quality sessions.`);
   }

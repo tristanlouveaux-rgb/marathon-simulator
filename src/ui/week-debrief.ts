@@ -25,7 +25,7 @@ import { next } from '@/ui/events';
 import { computePlanAdherence, detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
-import { planWeekSessions, effortMultiplier, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
+import { planWeekSessions, effortMultiplier, isRaceWeek, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts, planEngineStateInputs } from '@/workouts/generator';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
@@ -784,6 +784,7 @@ export function debriefPreviewPlanInputs(
     weekIndex: number; totalWeeks: number; vdot: number; forceDeload?: boolean;
     weeklyHoursTarget?: number; excludedSlots?: string[]; easyPaceSecPerKm?: number;
     baselineKm?: number; archetype?: ReturnType<typeof planEngineStateInputs>['archetype'];
+    planPhases?: any[]; continuousMode?: boolean;
   };
   acwrStatus: 'safe' | 'caution' | 'high' | 'unknown';
 } {
@@ -805,6 +806,9 @@ export function debriefPreviewPlanInputs(
     easyPaceSecPerKm: s.pac?.e,
     baselineKm,
     archetype,
+    // Same plan-history inputs the generator hands the engine (generator.ts).
+    planPhases: (s.wks ?? []).map((w: any) => w?.ph),
+    continuousMode: !!s.continuousMode,
   };
 
   let acwrStatus: 'safe' | 'caution' | 'high' | 'unknown' = nextWk?.scheduledAcwrStatus ?? 'safe';
@@ -892,7 +896,7 @@ function _renderPlanPreview(
   // eased plan, the ALTERNATIVE is "keep ramping" (the un-eased adjusted plan); the toggle persists
   // to wk.acwrChoice and the generator honours it. The final taper (race) week is exempt — it
   // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298).
-  const _raceWeek = nextPhase === 'taper' && nextWeekIdx >= (s.tw ?? nextWeekIdx);
+  const _raceWeek = isRaceWeek(nextPhase, nextWeekIdx, s.tw ?? nextWeekIdx, !!s.continuousMode);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = (acwrStatus === 'high' && !_raceWeek)
