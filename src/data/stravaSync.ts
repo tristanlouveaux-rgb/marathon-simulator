@@ -18,6 +18,7 @@ import { mergeTimingMods } from '@/cross-training/timing-check';
 import { detectArchetype } from '@/calculations/athlete-archetype';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { resolveBiologicalSex } from '@/calculations/trimp';
+import { isTrimpSexPending, holdUntilTrimpSexKnown, heldTrimpSyncKeys, releaseHeldTrimpSyncs } from './trimp-sex-gate';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import { NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { isNativeiOS } from './appleHealthSync';
@@ -100,12 +101,51 @@ export async function startStravaConnect(): Promise<void> {
 }
 
 /**
+ * Pre-fill the onboarding profile from the Strava athlete the OAuth callback
+ * passed back (sex 'M'/'F', weight in kg), without clobbering anything the user
+ * already entered. Strava exposes no birthdate, so age is still asked.
+ *
+ * The Strava profile is often the first source of the athlete's sex. On the
+ * OAuth return launch the launch backfill fires before this runs and is held
+ * (trimp-sex-gate.ts), so held syncs are released here when that sex is final
+ * (running and fitness: schedule will not ask again). Triathlon, cycling and
+ * HYROX keep holding until about-you, which shows the prefill for confirmation.
+ */
+export function applyStravaAthletePrefill(stravaSex: string | null, stravaWeight: string | null): void {
+  const s = getMutableState();
+  const ob = s.onboarding;
+  if (ob) {
+    const patch: Partial<typeof ob> = {};
+    if (!ob.biologicalSex && (stravaSex === 'M' || stravaSex === 'F')) {
+      patch.biologicalSex = stravaSex === 'M' ? 'male' : 'female';
+    }
+    const w = stravaWeight ? Number(stravaWeight) : NaN;
+    if (!ob.bodyWeightKg && Number.isFinite(w) && w > 0) {
+      patch.bodyWeightKg = Math.round(w * 10) / 10;
+    }
+    if (Object.keys(patch).length > 0) {
+      s.onboarding = { ...ob, ...patch };
+    }
+  }
+  void releaseHeldTrimpSyncs(s);
+}
+
+/**
  * Fetch recent Strava activities and match them to the current week's plan.
  * Returns the number of activities processed.
  */
-export async function syncStravaActivities(): Promise<{ processed: number }> {
+export async function syncStravaActivities(): Promise<{ processed: number; held?: true }> {
   try {
     const s = getMutableState();
+
+    // Mid-wizard, before the sex is final (connect-data runs before about-you
+    // and schedule): the edge function would stamp and cache these rows with
+    // the β of whatever sex is sent now, the male β when none is. Hold the
+    // sync (trimp-sex-gate.ts).
+    if (isTrimpSexPending(s)) {
+      holdUntilTrimpSexKnown('strava-sync', () => syncStravaActivities());
+      return { processed: 0, held: true };
+    }
 
     const since = new Date();
     since.setDate(since.getDate() - 28);
@@ -737,6 +777,9 @@ export interface BackfillResult {
   withHRStream: number;
   withAvgHR: number;
   hasHRMonitor: boolean;
+  /** True when the backfill did not run because the athlete's sex is not yet
+   *  final mid-wizard (trimp-sex-gate.ts). It runs once the sex is final. */
+  held?: true;
   stravaWeeks?: Record<string, number>;
   totalStravaActivities?: number;
   bestEffortsHealed?: number;
@@ -762,6 +805,11 @@ export interface BackfillResult {
   };
 }
 
+/** Widest window asked for while the backfill is held (trimp-sex-gate.ts),
+ *  so a held 52-week launch backfill is not narrowed by a later 16-week call.
+ *  Only read while 'strava-backfill' is still held. */
+let _heldBackfillWeeks = 0;
+
 /**
  * Fetch N weeks of Strava activity history, compute HR-based iTRIMP for each,
  * and store in garmin_activities. Full HR stream for the most-recent ≤99
@@ -771,6 +819,17 @@ export interface BackfillResult {
  * Safe to call multiple times. Already-cached activities are skipped.
  */
 export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult> {
+  // Mid-wizard, before the sex is final: every row this backfill stamps is
+  // cached with the β of the sex sent, so hold it (trimp-sex-gate.ts). This is
+  // the launch backfill on the OAuth return launch, which fires before the
+  // Strava profile prefill lands, or a mid-wizard relaunch.
+  if (isTrimpSexPending(getMutableState())) {
+    const alreadyHeld = heldTrimpSyncKeys().includes('strava-backfill');
+    const heldWeeks = alreadyHeld ? Math.max(_heldBackfillWeeks, weeks) : weeks;
+    _heldBackfillWeeks = heldWeeks;
+    holdUntilTrimpSexKnown('strava-backfill', () => backfillStravaHistory(heldWeeks));
+    return { processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, held: true };
+  }
   console.log(`[StravaBackfill] Starting ${weeks}-week backfill…`);
   try {
     const s = getMutableState();

@@ -98,8 +98,12 @@ describe('onboarding Strava producers send the wizard\'s sex answer (the β the 
     expect(sentSex(undefined)).toBe('female');
   });
 
-  it('no answer anywhere sends nothing (edge function defaults to β 1.92, as does the normaliser)', async () => {
+  it('no answer anywhere, with no question coming (Just-Track), sends nothing (edge function defaults to β 1.92, as does the normaliser)', async () => {
+    // While a question is still ahead the backfill is held instead
+    // (stravaSync-held-until-sex.test.ts). Just-Track never asks, so the blank
+    // answer is final and the backfill runs.
     mockState = midWizardState(undefined);
+    mockState.onboarding!.trackOnly = true;
     await backfillStravaHistory(16);
     expect(sentSex('backfill')).toBeUndefined();
   });

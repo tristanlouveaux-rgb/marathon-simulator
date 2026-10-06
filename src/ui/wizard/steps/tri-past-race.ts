@@ -24,6 +24,7 @@ import { getState } from '@/state/store';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { supabase } from '@/data/supabaseClient';
 import { callEdgeFunction } from '@/data/supabaseClient';
+import { awaitStartupSyncs } from '@/app/runtime';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Internal types
@@ -343,6 +344,13 @@ function guessDistance(swimM: number): PastTriathlonDistance {
 async function scanStravaForRaces(): Promise<RaceCandidate[]> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return [];
+
+  // The year of history this scan reads may still be landing: a Strava or
+  // Apple sync held until the athlete's sex was final (trimp-sex-gate.ts)
+  // starts when about-you is left (about-you, triathlon-setup, then this
+  // step). Released syncs are startup tasks, so wait for them (bounded at
+  // 20 s) before reading.
+  await awaitStartupSyncs();
 
   const since = new Date();
   since.setFullYear(since.getFullYear() - 1);
