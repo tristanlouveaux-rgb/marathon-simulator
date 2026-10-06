@@ -19,12 +19,18 @@
  *    the `garminMatched` values and `gpsRecordings`. The fresh sessions carry
  *    W{week}-{type}-{idx} ids, so those entries are re-keyed to the session's
  *    new id. When two sessions in the week share the name, an entry follows the
- *    session on the day its activity started; with no activity day to go on
- *    (a rating alone) or no session on that day, the entry stays under the name
- *    for the athlete to review, rather than guessing a slot.
+ *    session on the day its activity started. When no single session of that
+ *    name is on the activity's day, the activity goes to Activity Review
+ *    (`garminPending` + `garminMatched[id] = '__pending__'`) so the athlete
+ *    picks the slot, rather than guessing one. Left under the name, it matched
+ *    no session, never reached review (the matcher skips any activity whose
+ *    `garminMatched` value is not '__pending__'), and still counted in load, so
+ *    a later Mark as Done on either session counted the work twice. A rating
+ *    with no activity behind it stays under the name: there is nothing to
+ *    review and it carries no load.
  */
 
-import type { SimulatorState, Week, Workout } from '@/types/state';
+import type { GarminActual, GarminPendingItem, SimulatorState, Week, Workout } from '@/types/state';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 
 /** True for a session the athlete added (its own id survives the regen). */
@@ -61,7 +67,9 @@ function dayOfWeekOf(startTime: string | null | undefined): number | null {
 /**
  * Re-key the week's name-keyed slot entries (rated, garminActuals keys,
  * garminMatched values, gpsRecordings) to the id of the session that now owns
- * them. Entries already keyed by a session id, and keys that are not a session
+ * them. An activity under a name two sessions share, with neither (or both)
+ * on its day, goes to Activity Review along with its rating (sendToReview).
+ * Entries already keyed by a session id, and keys that are not a session
  * name in this week (adhoc activity ids, `garmin-…`, `__pending__`), are left as
  * they are. Never overwrites an entry already present under the target id.
  * Idempotent.
@@ -92,19 +100,34 @@ export function rekeyNameKeyedHyroxSlots(wk: Week): void {
   // garminActuals first: an actual's start time settles which same-named
   // session it belongs to, and the rating / match / recording follow it.
   const moved: Record<string, string> = {};
+  const toReview = new Set<string>();
   if (wk.garminActuals) {
     for (const key of Object.keys(wk.garminActuals)) {
-      const target = resolve(key, wk.garminActuals[key]?.startTime);
-      if (!target || wk.garminActuals[target]) continue;
-      wk.garminActuals[target] = wk.garminActuals[key];
-      delete wk.garminActuals[key];
-      moved[key] = target;
+      const actual = wk.garminActuals[key];
+      const target = resolve(key, actual?.startTime);
+      if (target) {
+        if (wk.garminActuals[target]) continue;
+        wk.garminActuals[target] = actual;
+        delete wk.garminActuals[key];
+        moved[key] = target;
+        continue;
+      }
+      // A name two or more sessions share, with no single one on the
+      // activity's day: Activity Review decides the slot. An actual with no
+      // start time has no day to show in review and stays where it is.
+      const sameName = byName.get(key) ?? [];
+      if (ids.has(key) || sameName.length < 2 || !actual?.garminId || !actual.startTime) continue;
+      sendToReview(wk, key, actual, sameName[0].discipline === 'run' ? 'run' : 'gym');
+      toReview.add(key);
     }
   }
   const targetFor = (key: string): string | null => moved[key] ?? resolve(key);
 
   if (wk.rated) {
     for (const key of Object.keys(wk.rated)) {
+      // The rating belonged to the activity now in review; the review writes
+      // a fresh one on the slot the athlete picks.
+      if (toReview.has(key)) { delete wk.rated[key]; continue; }
       const target = targetFor(key);
       if (!target || wk.rated[target] !== undefined) continue;
       wk.rated[target] = wk.rated[key];
@@ -128,6 +151,44 @@ export function rekeyNameKeyedHyroxSlots(wk: Week): void {
       delete wk.gpsRecordings[key];
     }
   }
+}
+
+/**
+ * Move a name-keyed activity that no single session can claim into Activity
+ * Review: a pending record (reusing the matcher's re-review record when one is
+ * there), `garminMatched` set to '__pending__', and the name-keyed actual
+ * removed so it no longer counts as a completion or as load until assigned.
+ * `appType` follows the HYROX matcher: 'run' for runs, 'gym' for station and
+ * brick work. An in-app GPS route (`gpsRecordings`) stays under the name.
+ */
+function sendToReview(wk: Week, key: string, actual: GarminActual, appType: 'run' | 'gym'): void {
+  const garminId = actual.garminId;
+  wk.garminPending ??= [];
+  if (!wk.garminPending.some(p => p.garminId === garminId)) {
+    const item: GarminPendingItem = {
+      garminId,
+      activityType: actual.activityType ?? (appType === 'run' ? 'RUNNING' : key),
+      appType,
+      startTime: actual.startTime!,
+      durationSec: actual.durationSec,
+      distanceM: actual.distanceKm > 0 ? actual.distanceKm * 1000 : null,
+      avgPaceSecKm: actual.avgPaceSecKm ?? null,
+      avgHR: actual.avgHR ?? null,
+      maxHR: actual.maxHR ?? null,
+      aerobicEffect: actual.aerobicEffect ?? null,
+      anaerobicEffect: actual.anaerobicEffect ?? null,
+      garminRpe: null,
+      calories: actual.calories ?? null,
+      iTrimp: actual.iTrimp ?? null,
+      hrZones: actual.hrZones ?? null,
+      polyline: actual.polyline ?? null,
+      kmSplits: actual.kmSplits ?? null,
+    };
+    wk.garminPending.push(item);
+  }
+  wk.garminMatched ??= {};
+  wk.garminMatched[garminId] = '__pending__';
+  delete wk.garminActuals![key];
 }
 
 /**

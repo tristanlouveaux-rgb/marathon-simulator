@@ -30,6 +30,7 @@ import { deriveWorkoutStatus, type WeekStatusContext } from '@/ui/workout-status
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { parseDistanceKm } from '@/calculations/matching';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
+import { collectWeekActivities } from '@/calculations/week-activity-log';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 
@@ -171,7 +172,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
     expect(s.hyroxConfig!.generatorVersion).toBe(HYROX_GENERATOR_VERSION);
   });
 
-  it('with two Easy Runs, a synced run follows the session on its own day; a bare rating is left for review', () => {
+  it('with two Easy Runs, a synced run follows the session on its own day; a bare rating stays under the name', () => {
     const s = v13State();
     const wk = s.wks[0];
     const sundayStart = new Date(2026, 9, 4, 12, 0, 0).toISOString();
@@ -191,6 +192,79 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
     expect(wk.rated).toEqual({ [sun.id!]: 4 });
     expect(easyRuns(w2).length).toBe(2);
     expect(w2.rated).toEqual({ 'Easy Run': 3 });
+  });
+
+  /** Week 1 of a v13 plan holding a synced Tuesday run under the shared name 'Easy Run' (Easy Runs are Fri and Sun). */
+  function v13WithTuesdayEasyRun(): { s: SimulatorState; tuesday: string } {
+    const s = v13State();
+    const wk = s.wks[0];
+    const tuesday = new Date(2026, 8, 29, 12, 0, 0).toISOString();
+    wk.garminActuals = {
+      'Easy Run': { garminId: 'strava-TUE', startTime: tuesday, distanceKm: 5, durationSec: 2100, avgPaceSecKm: 420, avgHR: 140, maxHR: 160, calories: 300 },
+    };
+    wk.garminMatched = { 'strava-TUE': 'Easy Run' };
+    wk.rated = { 'Easy Run': 4 };
+    return { s, tuesday };
+  }
+
+  it('a synced run under a shared name on a day with neither session goes to Activity Review', () => {
+    const { s, tuesday } = v13WithTuesdayEasyRun();
+    applyHyroxGeneratorRegen(s);
+    setState(s);
+    const wk = getMutableState().wks[0];
+    const [fri, sun] = easyRuns(wk);
+
+    // Off the name key, onto the review queue, with its rating.
+    expect(wk.garminActuals).toEqual({});
+    expect(wk.rated).toEqual({});
+    expect(wk.garminMatched).toEqual({ 'strava-TUE': '__pending__' });
+    expect(wk.garminPending).toEqual([expect.objectContaining({
+      garminId: 'strava-TUE', appType: 'run', startTime: tuesday, durationSec: 2100, distanceM: 5000, avgHR: 140,
+    })]);
+    expect(collectWeekActivities(wk)).toContainEqual(expect.objectContaining({ badge: 'pending', garminId: 'strava-TUE' }));
+    expect(DONE_LABELS).not.toContain(deriveWorkoutStatus(fri, wk, ctx(6)).label);
+    expect(DONE_LABELS).not.toContain(deriveWorkoutStatus(sun, wk, ctx(6)).label);
+
+    // The next sync leaves the decision to review: no second queue entry, no slot bound.
+    matchAndAutoComplete([runRow({ garmin_id: 'strava-TUE', start_time: tuesday, duration_sec: 2100, distance_m: 5000 })]);
+    expect(wk.garminMatched!['strava-TUE']).toBe('__pending__');
+    expect(wk.garminPending!.filter(p => p.garminId === 'strava-TUE')).toHaveLength(1);
+
+    // Mark as Done on Friday's run adds one record; the Tuesday run is not counted beside it.
+    openHyroxWorkoutDetail(fri, 0);
+    (document.querySelector('#hx-detail-mark-done') as HTMLButtonElement).click();
+    expect(Object.keys(wk.garminActuals!)).toEqual([fri.id]);
+  });
+
+  it('a legacy added Easy Run on the same day as the generated one: the synced run goes to review', () => {
+    const s = v13State();
+    const wk = s.wks[0];
+    const [genFri] = easyRuns(wk);
+    wk.triWorkouts!.push({ ...genFri, addedManually: true } as Workout); // same name, same day, no id
+    const friday = new Date(2026, 9, 2, 12, 0, 0).toISOString();
+    wk.garminActuals = {
+      'Easy Run': { garminId: 'strava-FRI', startTime: friday, distanceKm: 5, durationSec: 2100, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null },
+    };
+    wk.garminMatched = { 'strava-FRI': 'Easy Run' };
+
+    applyHyroxGeneratorRegen(s);
+
+    expect(wk.triWorkouts!.filter(w => w.n === 'Easy Run' && w.dayOfWeek === 4)).toHaveLength(2);
+    expect(wk.garminActuals).toEqual({});
+    expect(wk.garminMatched).toEqual({ 'strava-FRI': '__pending__' });
+    expect(wk.garminPending!.map(p => p.garminId)).toEqual(['strava-FRI']);
+  });
+
+  it('in a past week the queued run is logged once as an activity of that week', () => {
+    const { s } = v13WithTuesdayEasyRun();
+    s.w = 3;
+    applyHyroxGeneratorRegen(s);
+    setState(s);
+    matchAndAutoComplete([]);
+    const wk = getMutableState().wks[0];
+    expect(wk.garminMatched!['strava-TUE']).toBe('garmin-strava-TUE');
+    expect(wk.adhocWorkouts!.map(w => w.id)).toContain('garmin-strava-TUE');
+    expect(Object.keys(wk.garminActuals!)).toEqual(['garmin-strava-TUE']);
   });
 
   it('a session added in the app keeps its adhoc- id through the regen', () => {
