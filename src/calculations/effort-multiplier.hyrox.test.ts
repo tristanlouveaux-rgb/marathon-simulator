@@ -6,11 +6,15 @@ function workout(id: string, plannedRpe: number, durMin = 45): Workout {
   return { id, t: 'hyrox_station_sled', n: 'Sled', d: '45min', r: plannedRpe, estimatedDurationMin: durMin } as Workout;
 }
 
+// `weeks` are COMPLETED weeks, the last being week `currentWeek`. The athlete is
+// now in the following week, which is empty: the score reads completed weeks
+// only (s.w is 1-based, wks[s.w - 1] is the week in progress), as running's
+// getTrailingEffortScore does.
 function state(weeks: Array<{ workouts: Workout[]; rated: Record<string, number | 'skip'> }>, currentWeek: number): SimulatorState {
   return {
     eventType: 'hyrox',
-    w: currentWeek,
-    wks: weeks.map(wk => ({ triWorkouts: wk.workouts, rated: wk.rated })),
+    w: currentWeek + 1,
+    wks: [...weeks.map(wk => ({ triWorkouts: wk.workouts, rated: wk.rated })), { triWorkouts: [], rated: {} }],
     hyroxConfig: {},
   } as unknown as SimulatorState;
 }

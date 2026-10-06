@@ -51,13 +51,16 @@ function buildSwimState(paceAdherence: number): SimulatorState {
   };
   return {
     eventType: 'triathlon',
-    w: 1,                   // current week = 1; history is week 0
+    // s.w is 1-based: wks[0] is week 1 (completed history), wks[1] is week 2,
+    // the week in progress (empty). The effort score reads completed weeks only.
+    w: 2,
     wks: [
       {
         triWorkouts: [swimWorkout],
         rated: { 'swim-wk0': 5 },    // rated RPE = 5 = planned → rpeDev = 0
         garminActuals: { 'act-swim-1': garminActual },
       },
+      { triWorkouts: [], rated: {} },
     ],
     triConfig: { distance: 'ironman' },
   } as unknown as SimulatorState;
