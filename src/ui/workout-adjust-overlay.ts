@@ -332,6 +332,10 @@ export function openWorkoutAdjust(workout: Workout, weekIdx: number, opts: Adjus
     let newDesc = canDuration ? scaleDescriptionProportional(origDesc, f) : origDesc;
     // Intensity change → the pace baked into the description must follow.
     // Same canonical factors generation uses, anchored to the live easy pace.
+    // Running mode only: typeChanged needs intensityMode 'run', which stored
+    // (tri / cycling / HYROX) sessions never get, so tri runs stay duration-only
+    // here. A tri run's pace is retargeted only by an accepted suggestion, from
+    // triRunEasyPaceSec (workouts/tri-run-pace.ts), the generator's easy pace.
     if (typeChanged) newDesc = retargetDescriptionPace(newDesc, selectedType, s.pac?.e);
     const args: ScaleArgs = {
       origDesc,

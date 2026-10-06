@@ -47,7 +47,7 @@ import { retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens } from '@/w
 import { loadForRung, loadForTriRun, type PlannedLoad } from '@/workouts/rung-load';
 import { nameForBike, rpeForBike, type BikeSessionKind } from '@/workouts/bike';
 import { nameForSwim, rpeForSwim, type SwimSessionKind } from '@/workouts/swim';
-import { gp } from '@/calculations/paces';
+import { triRunEasyPaceSec } from '@/workouts/tri-run-pace';
 
 export interface ApplyResult {
   applied: number;
@@ -196,14 +196,13 @@ export function canApplyTriSuggestion(w: Workout, action: TriSuggestionMod['acti
   return action === 'swap_easy' || cur > 0;
 }
 
-/** Easy pace the run pace tokens are anchored to. The tri generator writes run
- *  legs (and their easy warm-up / cool-down) from gp(s.v, s.lt).e
- *  (plan_engine.triathlon.ts generateTriathlonPlan), so a retargeted rep pace
- *  comes from the same source as the pace already in the description. The live
- *  pace table is the fallback when no VDOT is set. */
-function easyPaceSec(state: SimulatorState): number | undefined {
-  if (state.v) return gp(state.v, state.lt ?? null).e;
-  return state.pac?.e && state.pac.e > 0 ? state.pac.e : undefined;
+/** Easy pace the run pace tokens are anchored to: triRunEasyPaceSec, the pace
+ *  the tri generator wrote the session from (gp(s.v, s.lt).e, else the run
+ *  skill estimate), so a retargeted rep pace comes from the same source as the
+ *  pace already in the description. Not s.pac: that is built from effective
+ *  VDOT (events.ts) and differs from s.v whenever the two diverge. */
+function easyPaceSec(state: SimulatorState): number {
+  return triRunEasyPaceSec(state);
 }
 
 // ── Adjust overlay baseline ────────────────────────────────────────────────

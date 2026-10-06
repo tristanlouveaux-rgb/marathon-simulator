@@ -155,4 +155,20 @@ describe('Adjust -> accepted suggestion -> Adjust', () => {
     const mp = loadForTriRun('marathon_pace', genMin)!;
     expect(load(w)).toBe(mp.aerobic + mp.anaerobic);
   });
+
+  // The suggestion path is the only writer of a tri run's pace tokens: Adjust
+  // keeps a stored run session duration-only (no intensity stepper), so its
+  // s.pac-anchored retarget is the running-mode path and never touches a tri
+  // run. A duration change keeps the generated paces.
+  it('run: Adjust offers no intensity step on a tri run and keeps its paces', () => {
+    const { w, weekIdx } = sessionOf('threshold');
+    const genDesc = w.d!;
+    openWorkoutAdjust(w, weekIdx, { persist: 'object', workoutId: w.id, allowIntensity: false, rerender: () => {} });
+    expect(document.getElementById('wadj-harder')).toBeNull();
+    click('wadj-preset-same'); // "Less time" only: no type step on a stored run
+    (document.getElementById('wadj-apply') as HTMLButtonElement).click();
+    expect(w.t).toBe('threshold');
+    const paces = (d: string) => [...d.matchAll(/\d+:\d{2}\/km/g)].map(m => m[0]);
+    expect(paces(w.d!)).toEqual(paces(genDesc));
+  });
 });
