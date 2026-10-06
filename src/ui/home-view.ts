@@ -891,7 +891,8 @@ function buildRaceForecastCard(s: SimulatorState): string {
 
 // ─── Training Readiness Ring ────────────────────────────────────────────────
 
-function buildReadinessRing(s: SimulatorState): string {
+/** Exported for tests (plan-changes-running-only.test.ts). */
+export function buildReadinessRing(s: SimulatorState): string {
   const isTri = s.eventType === 'triathlon';
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeReadinessACWR(s);
@@ -1303,6 +1304,11 @@ function buildReadinessRing(s: SimulatorState): string {
     // Tri: only show the button when the suggestion pipeline has something to
     // act on. A poor readiness score with no actionable mod is a dead button.
     ? triHasMods
+    // Just-track and HYROX: nothing to act on. Every branch of the click handler
+    // changes the running engine's week (ACWR reduction, recovery advice), which
+    // neither mode shows, so the button would only reach a no-op. Same principle
+    // as tri's triHasMods gate.
+    : (s.trackOnly || s.eventType === 'hyrox') ? false
     : readiness.score <= 59 && (
         readiness.drivingSignal === 'legLoad'
           ? ((acwrElevatedForBtn || hasUnspentForBtn) && reductionWouldAct) || hasRemainingHardRun
@@ -3504,6 +3510,10 @@ function showManualSleepPicker(): void {
 
 function showRecoveryAdviceSheet(): boolean {
   const s = getState();
+  // Running mode only. The sheet offers changes to the running engine's week
+  // (applyRecoveryAdjustment writes a running mod), which just-track and HYROX
+  // never show. Tri never reaches here (the adjust handler returns first).
+  if (s.trackOnly || s.eventType === 'hyrox') return false;
   const wk = s.wks?.[s.w - 1];
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
