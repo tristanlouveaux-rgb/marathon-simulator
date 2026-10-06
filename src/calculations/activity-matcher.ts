@@ -16,13 +16,14 @@ import { IMPACT_PER_KM } from '@/constants';
 import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
-import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import {
   isSameRecordedSession, isSameCompletedSession, findInAppRunToSupersede, isInAppActual,
   isInAppRunActual, isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
   isExtraActivityKey,
 } from './in-app-activity';
 import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-source-twins';
+import { resolveWeekWorkouts } from '@/ui/week-resolve';
+import { addUnspentItemOnce } from './excess-records';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -312,8 +313,14 @@ export function deriveRPE(
 }
 
 /**
- * Regenerate a specific week's workouts using the same sequence as renderer.ts
- * to get stable workout IDs for matching.
+ * The week's workouts as the Plan tab shows them, for matching: the canonical
+ * resolver (ui/week-resolve.ts resolveWeekWorkouts) with the Plan's generator
+ * arguments (injury, forced deload, hours cap, excluded session types, ACWR
+ * status, no makeup sessions) and every accepted change applied. A run is
+ * matched against the same sessions and ids the Plan tab renders, so an
+ * auto-match always lands on a card the user can see (audit X12: the matcher
+ * once regenerated without ACWR status, forced deload or excluded types, and
+ * its ids diverged from the Plan's).
  *
  * @param weekIdx  1-based week index to generate for (may differ from s.w for historic weeks)
  */
@@ -321,77 +328,11 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
   // Track-only users have no plan. Every matched activity falls through to
   // the adhoc path, and returning an empty list avoids passing stale defaults
   // into generateWeekWorkouts.
-  if (s.trackOnly) return [];
-  const currentVDOT = getEffectiveVdot(s);
+  if (s.trackOnly || !wk) return [];
 
-  const previousSkips = weekIdx > 1 ? s.wks[weekIdx - 2].skip : [];
-  const injuryState = (s as any).injuryState || null;
-
-  // getTrailingEffortScore equivalent
-  let trailingEffort = 0;
-  const lookback = Math.min(3, weekIdx - 1);
-  if (lookback > 0) {
-    let total = 0;
-    let count = 0;
-    for (let i = weekIdx - 2; i >= weekIdx - 1 - lookback && i >= 0; i--) {
-      if (s.wks[i].effortScore != null) {
-        total += s.wks[i].effortScore!;
-        count++;
-      }
-    }
-    if (count > 0) trailingEffort = total / count;
-  }
-
-  let wos = generateWeekWorkouts(
-    wk.ph,
-    s.rw,
-    s.rd,
-    s.typ,
-    previousSkips,
-    s.commuteConfig,
-    injuryState,
-    s.recurringActivities,
-    s.onboarding?.experienceLevel,
-    (s.maxHR || s.restingHR || s.onboarding?.age)
-      ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
-      : undefined,
-    gp(currentVDOT, s.lt).e,
-    weekIdx,
-    s.tw,
-    currentVDOT,
-    s.gs,
-    trailingEffort,
-  );
-
-  // Apply stored mods (before rename, same as renderer's computeRenderedWorkouts).
-  // Match by the stable slot id first (findWorkoutForMod), name+day fallback — so the grade
-  // reads the user's scaled target after a same-week reshuffle instead of the original slot.
-  if (wk.workoutMods && wk.workoutMods.length > 0) {
-    for (const mod of wk.workoutMods) {
-      const workout = findWorkoutForMod(wos as any[], mod);
-      if (workout) {
-        workout.status = mod.status as any;
-        workout.modReason = mod.modReason;
-        workout.confidence = mod.confidence as any;
-        if (mod.status === 'reduced' || mod.status === 'replaced') {
-          workout.originalDistance = mod.originalDistance;
-          // Same easy pace the generation above used (gp(currentVDOT, s.lt).e),
-          // so the graded target carries the same retargeted pace the plan shows.
-          workout.d = modDisplayDescription(mod, gp(currentVDOT, s.lt).e);
-          if (mod.newType) workout.t = mod.newType;
-          if (mod.newRpe != null) {
-            workout.rpe = mod.newRpe;
-            workout.r = mod.newRpe;
-          }
-          if (mod.newDurationMin != null) (workout as any).estimatedDurationMin = mod.newDurationMin;
-          if (mod.originalDurationMin != null) (workout as any).originalDurationMin = mod.originalDurationMin;
-          const newLoads = calculateWorkoutLoad(workout.t, workout.d, (workout.rpe || workout.r || 5) * 10);
-          workout.aerobic = newLoads.aerobic;
-          workout.anaerobic = newLoads.anaerobic;
-        }
-      }
-    }
-  }
+  // Copies: the name dedup below must not write onto anything the resolver
+  // shares with state.
+  const wos = (resolveWeekWorkouts(s, weekIdx) as Workout[]).map(w => ({ ...w }));
 
   // Deduplicate names (same as renderer)
   const nameCounts: Record<string, number> = {};
@@ -1778,8 +1719,10 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             date: row.start_time,
             reason: 'surplus_run',
           };
-          wk.unspentLoadItems = [...(wk.unspentLoadItems ?? []), surplusItem];
-          wk.unspentLoad = (wk.unspentLoad || 0) + surplusLoads.aerobic + surplusLoads.anaerobic;
+          // Once per run (audit B19): a second pass over the same row adds nothing.
+          if (addUnspentItemOnce(wk, surplusItem)) {
+            wk.unspentLoad = (wk.unspentLoad || 0) + surplusLoads.aerobic + surplusLoads.anaerobic;
+          }
           console.log(`[ActivityMatcher] Surplus run +${surplusKm.toFixed(1)}km → unspentLoad item (aero ${surplusLoads.aerobic}, anaero ${surplusLoads.anaerobic})`);
         }
 

@@ -3,8 +3,9 @@
  * ================
  * Phase 7: Day-proximity → quality session downgrade (suggestion).
  *
- * When a high-load activity (Signal B ≥ 50 TSS) is completed the day before
- * a quality run (threshold, vo2, long), a suggestion mod is generated.
+ * When a high-load activity (Signal B ≥ 50 TSS) is completed the day before a
+ * session above easy pace (vo2, threshold, float, marathon pace, progressive) or
+ * the long run, a suggestion mod is generated.
  *
  * The downgrade magnitude scales with prior day TSS:
  *   50–74 TSS  → 1 intensity step down, no distance cut
@@ -12,50 +13,55 @@
  *   100–124 TSS → 2 steps down + 15% shorter
  *   125+ TSS   → 2 steps down + 25% shorter
  *
- * Floor: max(3 km, reduced distance). Approx. 20 min minimum.
+ * The distance cut shortens the main set: the total of a plain distance run
+ * (floor max(3 km, reduced), never lengthened), or the work block of a structured
+ * session. A warm-up or cool-down line is never cut.
  *
- * Intensity ladder (ascending): easy → marathon → threshold → vo2
- * Long run: long → marathon (1 step), long → easy (2 steps). "Long run" is the
- * long-run slot in any format (isLongRun), so the fast-finish long run uses this
- * sub-ladder too; stepped to easy, it drops its marathon-pace finish.
+ * Each step is one pace category down the canonical running ladder
+ * (constants/intensity-ladder.ts): vo2 → threshold → marathon pace → easy →
+ * recovery, never up. Float sits on the threshold rung, progressive on the
+ * marathon-pace rung. "Long run" is the long-run slot in any format (isLongRun):
+ * the fast-finish long run steps to an easy long run ('long', its marathon-pace
+ * finish dropped), the steady long run to recovery pace, at the same distance
+ * before the tier's cut. The accepted session carries the new type's generator
+ * RPE and, when easy pace is known, the new type's pace in its description.
  *
  * Mods are suggestions only. Workout unchanged until user accepts.
- * Recomputed fresh each sync, so they clear on reschedule.
+ * Recomputed fresh each sync from the resolved week (every accepted change already
+ * applied), so they clear on reschedule and never undo an earlier cut.
  */
 
 import type { Week, WorkoutMod } from '@/types/state';
 import type { SimulatorState } from '@/types/state';
-import { generateWeekWorkouts } from '@/workouts';
-import { getTrailingEffortScore, normalizeiTrimp } from '@/calculations/fitness-model';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { TL_PER_MIN } from '@/constants';
 import { isLongRun } from '@/workouts/long-run';
+import { scaleDescriptionProportional, retargetDescriptionPace } from '@/workouts/workout-scaling';
+import { runPaceRung, stepDownRunType, generatorRpeForRunType } from '@/constants/intensity-ladder';
+import { upsertWorkoutMod, modsTargetSameWorkout } from '@/workouts/workout-mods';
+import { resolveWeekForPlanChanges } from '@/ui/week-resolve';
+import { renderLayerOf } from '@/workouts/render-layer';
+import {
+  TIMING_MOD_PREFIX,
+  TIMING_ACCEPTED_PREFIX,
+  isTimingMod,
+  isTimingAcceptedMod,
+} from './timing-mod-reason';
 
-const QUALITY_TYPES = new Set(['threshold', 'vo2', 'long']);
+export { TIMING_MOD_PREFIX, TIMING_ACCEPTED_PREFIX, isTimingMod, isTimingAcceptedMod };
+
 const SIGNAL_B_TRIGGER = 50;       // TSS: minimum to show any suggestion
 const MIN_DISTANCE_KM  = 3;        // Floor: ~20 min including warm-up
-export const TIMING_MOD_PREFIX = 'Timing:';
 
 // ─── Intensity ladder ─────────────────────────────────────────────────────────
 
-// Ascending order: index 0 = easiest
-const PACE_LADDER = ['easy', 'marathon', 'threshold', 'vo2'] as const;
-type PaceType = typeof PACE_LADDER[number];
+const EASY_RUNG = runPaceRung('easy');
+const MARATHON_RUNG = runPaceRung('marathon_pace');
 
-const RPE_BY_TYPE: Record<string, number> = {
-  easy: 4, marathon: 6, threshold: 7, vo2: 9, long: 6,
-};
-
-/** Step a run type down the ladder by `steps`. Returns the new type string. */
-function stepDown(type: string, steps: number): string {
-  const idx = PACE_LADDER.indexOf(type as PaceType);
-  if (idx < 0) return type; // type not in ladder (e.g. 'long' handled separately)
-  return PACE_LADDER[Math.max(0, idx - steps)];
-}
-
-/** Long runs step through their own sub-ladder. */
-function stepDownLong(steps: number): string {
-  if (steps >= 2) return 'easy';
-  return 'marathon'; // 1 step: long → marathon-effort long run
+/** A session the day-after check protects: any run above easy pace, plus the
+ *  long run in any format. Easy and recovery runs are left alone. */
+function isProtectedSession(type: string, longRun: boolean): boolean {
+  return longRun || runPaceRung(type) > EASY_RUNG;
 }
 
 // ─── Tier computation ─────────────────────────────────────────────────────────
@@ -72,14 +78,39 @@ function getTier(tssYesterday: number): DowngradeTier {
   return                          { steps: 1, distReduction: 0 };    // 50–74
 }
 
-/** Apply distance reduction with floor, returning new distance string. */
-function applyDistReduction(originalDesc: string, reduction: number): string {
-  if (reduction === 0) return originalDesc;
-  const match = originalDesc.match(/(\d+\.?\d*)\s*km/i);
-  if (!match) return originalDesc;
-  const original = parseFloat(match[1]);
-  const reduced  = Math.max(MIN_DISTANCE_KM, Math.round(original * (1 - reduction) * 10) / 10);
-  return originalDesc.replace(match[0], `${reduced} km`);
+/**
+ * Shorten a session's main set by `reduction` (a fraction), returning the new
+ * description. Output keeps the generator's "<n>km" form (no space), which every
+ * planned-TSS and distance parser reads.
+ *
+ *   - Structured session ("Wkm warm up …" / main set / "Wkm cool down …"): only the
+ *     main-set line(s) are scaled, with the proportional rule the Adjust control
+ *     uses (scaleDescriptionProportional: km, min and m tokens scale, paces stay).
+ *     The warm-up and cool-down are left as written.
+ *   - Plain distance run ("16km @ 4:50/km", "24km: last 5 @ MP"): the leading total
+ *     is cut, floored at MIN_DISTANCE_KM, and never lengthened (a run already under
+ *     the floor keeps its distance).
+ *   - Time-based session with no warm-up line ("5×4min @ …", "20min @ …"): the whole
+ *     description is the main set and is scaled.
+ */
+export function applyDistReduction(originalDesc: string, reduction: number): string {
+  if (reduction === 0 || !originalDesc) return originalDesc;
+  const factor = 1 - reduction;
+
+  const lines = originalDesc.split('\n');
+  if (lines.length >= 3 && /warm up/i.test(lines[0])) {
+    const main = lines.slice(1, -1).map(l => scaleDescriptionProportional(l, factor));
+    return [lines[0], ...main, lines[lines.length - 1]].join('\n');
+  }
+
+  const lead = /^(\s*)(\d+(?:\.\d+)?)\s*km/i.exec(originalDesc);
+  if (lead) {
+    const original = parseFloat(lead[2]);
+    const reduced = Math.min(original, Math.max(MIN_DISTANCE_KM, Math.round(original * factor * 10) / 10));
+    return `${lead[1]}${reduced}km${originalDesc.slice(lead[0].length)}`;
+  }
+
+  return scaleDescriptionProportional(originalDesc, factor);
 }
 
 /** The leading total distance of a description ("24km: last 5 @ MP" → "24km"). */
@@ -143,16 +174,28 @@ function buildDayTSSMap(wk: Week, weekStartISO: string): Map<number, number> {
 
 // ─── Core computation ─────────────────────────────────────────────────────────
 
+/** Button and banner wording for each type a downgrade can write. */
+const PACE_LABEL: Record<string, string> = {
+  recovery: 'recovery pace',
+  easy: 'easy pace',
+  long: 'easy pace',
+  marathon_pace: 'marathon pace',
+  threshold: 'threshold pace',
+};
+
 /**
  * Compute timing suggestion mods for the given workout list.
- * Pure function. No state mutation.
+ * Pure function. No state mutation. `easyPaceSecPerKm` (the athlete's easy pace)
+ * lets the new description carry the new type's pace; without it the
+ * description keeps its pace tokens.
  */
 export function applyTimingDowngradesFromWorkouts(
   wk: Week,
-  workouts: Array<{ id?: string; n: string; t: string; d?: string; dayOfWeek?: number; r?: number; rpe?: number; longRun?: boolean }>,
+  workouts: Array<{ id?: string; n: string; t: string; d?: string; dayOfWeek?: number; r?: number; rpe?: number; longRun?: boolean; originalDistance?: string }>,
   weekStartISO: string,
   prevWeek?: Week,
   prevWeekStartISO?: string,
+  easyPaceSecPerKm?: number,
 ): WorkoutMod[] {
   if (!wk || !workouts.length) return [];
 
@@ -170,11 +213,11 @@ export function applyTimingDowngradesFromWorkouts(
   for (const workout of workouts) {
     const id    = workout.id || workout.n;
     const wType = workout.t?.toLowerCase() ?? '';
-    // The fast-finish long run is t:'progressive'. isLongRun puts it on the
-    // long-run sub-ladder with the steady long run (audit X5).
+    // The fast-finish long run is t:'progressive'. isLongRun gives it the
+    // long-run slot's treatment (audit X5).
     const longRun = isLongRun(workout);
 
-    if (!QUALITY_TYPES.has(wType) && !longRun) continue;
+    if (!isProtectedSession(wType, longRun)) continue;
 
     // Skip already-completed sessions
     const isRated = typeof rated[id] === 'number' && (rated[id] as number) > 0;
@@ -189,32 +232,39 @@ export function applyTimingDowngradesFromWorkouts(
 
     const { steps, distReduction } = getTier(tssYesterday);
 
-    // Compute new type
-    const newType = longRun ? stepDownLong(steps) : stepDown(wType, steps);
+    // One pace category down per step (never up). The long-run slot stepped onto
+    // the easy rung stays a long run ('long').
+    const newType = stepDownRunType(wType, steps, { longRun });
+    if (newType === wType) continue; // already at the bottom rung
 
-    // Compute new distance (stored for when user accepts). The fast-finish long
-    // run stepped down to easy loses its marathon-pace finish: only its total
-    // distance carries over, so the accepted session is a plain easy run rather
-    // than an easy-typed run that still reads "last 5 @ MP".
-    const baseDesc = longRun && wType !== 'long' && newType === 'easy'
-      ? leadingDistance(workout.d ?? '')
-      : (workout.d ?? '');
-    const newDistance = applyDistReduction(baseDesc, distReduction);
+    // New description (stored for when the user accepts). A progressive or
+    // fast-finish run stepped below marathon pace drops its finish: only its total
+    // distance carries over, so the accepted session does not still read
+    // "last 5 @ MP". The pace tokens then follow the new type.
+    const dropsFinish = wType === 'progressive' && runPaceRung(newType) < MARATHON_RUNG;
+    const baseDesc = dropsFinish ? leadingDistance(workout.d ?? '') : (workout.d ?? '');
+    const newDistance = retargetDescriptionPace(applyDistReduction(baseDesc, distReduction), newType, easyPaceSecPerKm);
 
-    const newRpe = RPE_BY_TYPE[newType] ?? 5;
+    // The generator's RPE for the new type, so the card's effort and the debrief
+    // read the new prescription.
+    const newRpe = generatorRpeForRunType(newType) ?? workout.rpe ?? workout.r;
 
-    // Build label for button: "Downgrade to marathon pace (−10%)"
-    const paceLabel: Record<string, string> = { easy: 'easy pace', marathon: 'marathon pace', threshold: 'threshold pace' };
+    // Build label for button: "easy pace · −10% distance"
     const distLabel = distReduction > 0 ? ` · −${Math.round(distReduction * 100)}% distance` : '';
-    const suggestionLabel = `${paceLabel[newType] ?? newType}${distLabel}`;
+    const suggestionLabel = `${PACE_LABEL[newType] ?? newType}${distLabel}`;
 
     mods.push({
       name: workout.n,
       dayOfWeek: sessionDay,
+      // Stable slot id: the resolver matches by id before applying moves, so the
+      // suggestion (and its accepted mod) lands on a drag-moved session too.
+      workoutId: workout.id,
       status: 'planned',     // suggestion only. Not applied until user accepts
       modReason: `${TIMING_MOD_PREFIX} hard session day before`,
       confidence: 'medium',
-      originalDistance: workout.d ?? '',
+      // The plan's original description. The session may already carry a cut
+      // (the input is the resolved week), whose originalDistance is the plan's.
+      originalDistance: workout.originalDistance ?? workout.d ?? '',
       newDistance,           // stored for accept action
       newType,
       newRpe,
@@ -239,35 +289,45 @@ function weekStartISO(planStartDate: string, weekNum: number): string {
 }
 
 /**
+ * Sessions a timing suggestion may target, from the plan-layers week. Excluded:
+ *   - replaced or skipped sessions (nothing left to downgrade);
+ *   - a session whose suggestion was already accepted (so it does not come back);
+ *   - a session the user scaled by hand (their explicit choice);
+ *   - sessions an illness, holiday or post-holiday bridge layer already adjusts
+ *     (renderLayer). The bridge already eases the session, and a suggestion built
+ *     from its plan values would not read like the card the Plan shows.
+ */
+function timingCandidates(workouts: any[]): any[] {
+  return workouts.filter(w =>
+    w.status !== 'replaced'
+    && w.status !== 'skipped'
+    && !isTimingAcceptedMod(w.modReason)
+    && !w.userScaledAt
+    && !renderLayerOf(w),
+  );
+}
+
+/**
  * Recompute timing mods for the current week and merge into wk.workoutMods,
  * replacing any previous Timing: mods. Does NOT save state. Caller must save.
  * Returns true if anything changed.
+ *
+ * The suggestions are computed from the canonical resolver with the plan layers
+ * only (resolveWeekForPlanChanges): the same generator arguments as the Plan tab,
+ * every accepted change and move applied, so accepting a suggestion never reverses
+ * an earlier cut. The illness, holiday and bridge layers are left out because an
+ * accepted suggestion becomes a mod and those layers are re-applied on top of it at
+ * render; the sessions they adjust get no suggestion. Planning side only.
  */
 export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
   if (!s.planStartDate) return false;
 
   const ws = weekStartISO(s.planStartDate, wk.w);
-
-  const workouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [],
-    s.commuteConfig || undefined, s.injuryState,
-    s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    wk.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, wk.w), wk.scheduledAcwrStatus,
-  );
-
-  // Apply manual day moves so timing check sees the rescheduled days
-  if (wk.workoutMoves) {
-    for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
-      const w = workouts.find(wo => (wo.id || wo.n) === workoutId);
-      if (w) w.dayOfWeek = newDay;
-    }
-  }
+  const workouts = timingCandidates(resolveWeekForPlanChanges(s, wk.w));
 
   const prevWk = s.wks?.find((w: Week) => w.w === wk.w - 1);
   const prevWs = prevWk ? weekStartISO(s.planStartDate, prevWk.w) : undefined;
-  const newTimingMods = applyTimingDowngradesFromWorkouts(wk, workouts, ws, prevWk, prevWs);
+  const newTimingMods = applyTimingDowngradesFromWorkouts(wk, workouts, ws, prevWk, prevWs, s.pac?.e);
   const nonTimingMods = (wk.workoutMods ?? []).filter(m => !isTimingMod(m.modReason));
 
   const oldTiming = (wk.workoutMods ?? []).filter(m => isTimingMod(m.modReason));
@@ -275,6 +335,7 @@ export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
     oldTiming.length === newTimingMods.length &&
     newTimingMods.every((m, i) =>
       m.name === oldTiming[i]?.name &&
+      m.workoutId === oldTiming[i]?.workoutId &&
       m.newType === oldTiming[i]?.newType &&
       m.newDistance === oldTiming[i]?.newDistance
     )
@@ -286,8 +347,43 @@ export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
   return true;
 }
 
-// ─── UI helper ────────────────────────────────────────────────────────────────
+/** Identifies the session whose pending timing suggestion is being accepted. */
+export interface TimingSuggestionKey {
+  workoutId?: string;
+  name: string;
+  dayOfWeek?: number;
+}
 
-export function isTimingMod(modReason: string | undefined): boolean {
-  return (modReason ?? '').startsWith(TIMING_MOD_PREFIX);
+/**
+ * Accept a pending timing suggestion: replace it with a real plan change.
+ *
+ * The accepted mod carries the suggestion's stable slot id (so it applies to a
+ * drag-moved session), its new type, description and RPE, and the plan's original
+ * description. It is written with upsertWorkoutMod, so it replaces (and keeps
+ * underneath, for undo) any cut the session already carried, rather than stacking.
+ * Returns false when no pending suggestion matches the key.
+ */
+export function acceptTimingSuggestion(wk: Week, key: TimingSuggestionKey): boolean {
+  const mods = wk.workoutMods ?? [];
+  const suggestion = mods.find(m => isTimingMod(m.modReason) && (
+    key.workoutId && m.workoutId
+      ? m.workoutId === key.workoutId
+      : modsTargetSameWorkout(m, key)
+  ));
+  if (!suggestion || !suggestion.newType) return false;
+
+  wk.workoutMods = mods.filter(m => m !== suggestion);
+  upsertWorkoutMod(wk, {
+    name: suggestion.name,
+    dayOfWeek: suggestion.dayOfWeek,
+    workoutId: suggestion.workoutId,
+    status: 'reduced',
+    modReason: `${TIMING_ACCEPTED_PREFIX} hard session day before`,
+    confidence: 'medium',
+    originalDistance: suggestion.originalDistance,
+    newDistance: suggestion.newDistance,
+    newType: suggestion.newType,
+    newRpe: suggestion.newRpe,
+  });
+  return true;
 }

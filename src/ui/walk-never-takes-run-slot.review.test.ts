@@ -41,7 +41,7 @@ vi.mock('@/ui/toast', () => ({ showAssignmentToast: vi.fn(), showSimpleToast: vi
 vi.mock('@/ui/suggestion-modal', () => ({ showSuggestionModal: vi.fn() }));
 
 import { getDefaultState, setState, getMutableState } from '@/state/store';
-import { autoProcessActivities, showActivityReview } from './activity-review';
+import { autoProcessActivities, showActivityReview, getWeekWorkoutsForPlanChange } from './activity-review';
 import { showMatchingScreen, type ProposedPairing } from './matching-screen';
 import { mapGarminType } from '@/calculations/activity-matcher';
 
@@ -180,6 +180,16 @@ describe('no phantom running slots in just-track or HYROX', () => {
     { id: 'H1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', d: '40 min easy at 6:00/km (~6.7 km).', r: 4, rpe: 4, dayOfWeek: 0, estimatedDurationMin: 40 },
     { id: 'H1-station-0', n: 'Station Technique', t: 'hyrox_station_technique', discipline: 'station', d: '45 min', r: 6, rpe: 6, dayOfWeek: 2, estimatedDurationMin: 45 },
   ] as Workout[];
+
+  it('just-track: a cross-training change has no week to size from or write against', () => {
+    setup({ trackOnly: true });
+    expect(getWeekWorkoutsForPlanChange()).toEqual([]);
+  });
+
+  it('HYROX: a cross-training change is sized from wk.triWorkouts, never a phantom running week', () => {
+    setup({ eventType: 'hyrox', triWorkouts: HYROX_WEEK.map(w => ({ ...w })) });
+    expect(getWeekWorkoutsForPlanChange().map(w => w.id)).toEqual(HYROX_WEEK.map(w => w.id));
+  });
 
   it('HYROX: a walk binds to no slot, neither a HYROX session nor a phantom run', () => {
     setup({ eventType: 'hyrox', triWorkouts: HYROX_WEEK.map(w => ({ ...w })) });

@@ -32,7 +32,10 @@ import {
   createActivity,
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
-import { generateWeekWorkouts } from '@/workouts';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges } from '@/ui/week-resolve';
+import { renderLayerOf } from '@/workouts/render-layer';
+import { writeAdjustmentMods, upsertWorkoutMod, removeWorkoutMods, adjustableWorkouts, isUserAdjusted } from '@/workouts/workout-mods';
+import { collectActivityAliases, scrubExcessRecords, addUnspentItemOnce } from '@/calculations/excess-records';
 import { calculateWorkoutLoad } from '@/workouts/load';
 import {
   findMatchingWorkout,
@@ -95,15 +98,36 @@ function getWeekWorkoutsForReview() {
   if (s.eventType === 'triathlon') {
     return wk.triWorkouts ?? [];
   }
-  // CRITICAL: must use IDENTICAL parameters to getPlanHTML's generateWeekWorkouts call
-  // so that workout IDs (w.id || w.n) match exactly. Matching breaks if they differ.
-  return generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
+  // The week exactly as the Plan tab shows it: the canonical resolver
+  // (week-resolve.ts) with the Plan's generator arguments (injury, forced deload,
+  // hours cap, excluded session types, ACWR status) and every accepted change,
+  // move, illness and holiday adjustment applied. Matching and review slots read
+  // this, so workout ids always match the Plan's (audit X12).
+  return resolveWeekWorkouts(s, s.w);
+}
+
+/**
+ * The week a cross-training change is sized from and written against: the same
+ * resolver with the plan layers only (resolveWeekForPlanChanges). Accepted changes
+ * and moves are applied, so a replaced run is not offered again and a cut run is
+ * priced at its cut distance (audit A2). The illness, holiday and bridge layers
+ * are left out: they are re-applied on top of every mod at render, so a mod sized
+ * from their output would be scaled twice and keep the scaled distance after the
+ * illness or holiday ended.
+ */
+/** Exported for tests (walk-never-takes-run-slot.review.test.ts). */
+export function getWeekWorkoutsForPlanChange() {
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return [];
+  // Same mode gates as getWeekWorkoutsForReview (audit D3): just-track has no
+  // plan to change, and HYROX's plan is wk.triWorkouts, so neither may size or
+  // write a change against the running engine's phantom week.
+  if (s.trackOnly) return [];
+  if (s.eventType === 'hyrox' || s.eventType === 'triathlon') {
+    return wk.triWorkouts ?? [];
+  }
+  return resolveWeekForPlanChanges(s, s.w);
 }
 
 /**
@@ -383,6 +407,10 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
   for (const item of wk.garminPending) {
     const id = item.garminId;
     const matchedId = wk.garminMatched?.[id];
+    // Every id this activity has carried, collected before garminMatched changes
+    // (collectActivityAliases: a Strava upgrade keeps the pre-upgrade id on its
+    // excess records).
+    const aliases = collectActivityAliases(wk, id, matchedId);
 
     // Remove garmin adhoc entry
     const adhocId = `garmin-${id}`;
@@ -396,10 +424,11 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
       if (wk.garminActuals) delete wk.garminActuals[matchedId];
     }
 
-    // Clear stale unspentLoadItems so re-review starts from a clean slate
-    if (wk.unspentLoadItems) {
-      wk.unspentLoadItems = wk.unspentLoadItems.filter(u => u.garminId !== id);
-    }
+    // Clear this activity's excess records (overflow item and surplus slice,
+    // under every id it has carried) so re-review starts from a clean slate and
+    // reprocessing writes them once, not once more per review (audit B19). Scoped
+    // to the reviewed week so Cancel's snapshot restores it exactly.
+    scrubExcessRecords([wk], aliases);
 
     // Reset to pending so auto-review can present them again
     if (wk.garminMatched) {
@@ -407,10 +436,10 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
     }
   }
 
-  // Remove all Garmin-sourced workout modifications
-  if (wk.workoutMods) {
-    wk.workoutMods = wk.workoutMods.filter(m => !m.modReason?.startsWith('Garmin:'));
-  }
+  // Remove all Garmin-sourced workout modifications. A Garmin mod that replaced
+  // another change (an ACWR cut, a Tier-1 trim) gives that change back
+  // (removeWorkoutMods); reprocessing below then sizes against it.
+  removeWorkoutMods(wk, m => !!m.modReason?.startsWith('Garmin:'));
 
   saveState();
 
@@ -1225,8 +1254,11 @@ function applyReview(
             date: item.startTime,
             reason: 'surplus_run',
           };
-          wk.unspentLoadItems = [...(wk.unspentLoadItems ?? []), surplusItem];
-          wk.unspentLoad = (wk.unspentLoad || 0) + surplusLoads.aerobic + surplusLoads.anaerobic;
+          // Once per run: a re-review or repeated apply must not add a second copy
+          // (the excess modal summed every copy, audit B19).
+          if (addUnspentItemOnce(wk, surplusItem)) {
+            wk.unspentLoad = (wk.unspentLoad || 0) + surplusLoads.aerobic + surplusLoads.anaerobic;
+          }
         }
       }
     } else {
@@ -1441,12 +1473,13 @@ function applyReview(
 
   const combinedActivity = buildCombinedActivity(remainingCross, s2);
 
-  // Exclude already-rated workouts so matched runs/gym aren't offered for downgrade
-  const freshWorkouts = getWeekWorkoutsForReview().filter(w => {
+  // Exclude already-rated workouts so matched runs/gym aren't offered for downgrade,
+  // and sessions the user scaled by hand (their Adjust stands).
+  const freshWorkouts = getWeekWorkoutsForPlanChange().filter(w => {
     const key = w.id || w.n;
     return wk2.rated[key] === undefined;
   });
-  const weekRuns = workoutsToPlannedRuns(freshWorkouts, s2.pac);
+  const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(freshWorkouts), s2.pac);
 
   const _arTier = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
@@ -1494,7 +1527,7 @@ function applyReview(
     const affectedNames: string[] = [];
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
-      const freshW   = getWeekWorkoutsForReview();
+      const freshW   = getWeekWorkoutsForPlanChange();
       const primary  = remainingCross.find(i => i.appType !== 'other') ?? remainingCross[0];
       const sport    = resolveSportForActivity(
         primary?.activityType,
@@ -1503,24 +1536,14 @@ function applyReview(
       );
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
 
-      if (!wk3.workoutMods) wk3.workoutMods = [];
       for (const adj of decision.adjustments) {
         const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-        if (!mw) continue;
-        affectedNames.push(mw.n);
-        wk3.workoutMods.push({
-          name: mw.n,
-          dayOfWeek: mw.dayOfWeek,
-          status: mw.status || 'reduced',
-          // Always use "Garmin: <activity>" so openActivityReReview() can find and remove it
-          modReason: `Garmin: ${sportLabel}`,
-          confidence: mw.confidence,
-          originalDistance: mw.originalDistance,
-          newDistance: mw.d,
-          newType: mw.t,
-          newRpe: mw.rpe || mw.r,
-        } as WorkoutMod);
+        if (mw) affectedNames.push(mw.n);
       }
+      // One mod per session, replacing the session's current change rather than
+      // stacking (upsert). Always "Garmin: <activity>" so openActivityReReview()
+      // can find and remove it.
+      writeAdjustmentMods(wk3, modified, decision.adjustments, `Garmin: ${sportLabel}`);
     }
 
     for (const item of remainingCross) {
@@ -2063,11 +2086,31 @@ export function autoProcessActivities(
   if (!forceModal && _signalBBaseline > 0 && overflow.length > 0) {
     const _excess = getWeeklyExcess(wk, _signalBBaseline, s.planStartDate, computeDecayedCarry(s.wks ?? [], s.w, _signalBBaseline, s.planStartDate));
     if (_excess > 0 && _excess <= 15) {
-      const easyRun = allWorkouts.find(
-        w => (w.t === 'easy' || w.t === 'e') && wk.rated[w.id || w.n] === undefined,
-      );
+      // Target: an unrated easy run from the plan-layers week (accepted changes and
+      // moves applied, illness/holiday/bridge left out so the trim is sized from
+      // the plan, never from a render layer's output). Tier 1 only ever trims a
+      // session it owns: one with no change yet, or the one carrying its own
+      // earlier 'Auto:' trim. A replaced run, a deeper cut from a modal, an
+      // accepted timing change, a user Adjust or a session an illness, holiday or
+      // bridge layer adjusts is never touched (audit A2: a later small spin used
+      // to resurrect a replaced run here). The excess is the whole week's, so a
+      // run already carrying an Auto trim is preferred and re-trimmed from its
+      // plan distance: the new trim replaces the old one instead of adding to it.
+      const planWeek = getWeekWorkoutsForPlanChange();
+      const isAutoTrim = (w: any) => !!w.modReason?.startsWith?.('Auto:');
+      const tier1Target = (w: any) =>
+        (w.t === 'easy' || w.t === 'e')
+        && wk.rated[w.id || w.n] === undefined
+        && !isUserAdjusted(w)
+        && !renderLayerOf(w)
+        && (w.status == null || w.status === 'planned' || (w.status === 'reduced' && isAutoTrim(w)));
+      const easyRun = planWeek.find(w => tier1Target(w) && isAutoTrim(w))
+        ?? planWeek.find(tier1Target);
       if (easyRun) {
-        const origKm: number = parseFloat(easyRun.d) || 0;
+        const planDesc: string = isAutoTrim(easyRun) && (easyRun as any).originalDistance
+          ? (easyRun as any).originalDistance
+          : easyRun.d;
+        const origKm: number = parseFloat(planDesc) || 0;
         if (origKm >= 2) {
           // ~5.5 TSS per easy km (RPE4 × 6 min/km: TL_PER_MIN[4] × 6 = 0.92 × 6)
           const EASY_TSS_PER_KM = (TL_PER_MIN[4] ?? 0.92) * 6;
@@ -2080,10 +2123,10 @@ export function autoProcessActivities(
             const sportLabel = overflow.length === 1
               ? formatActivityType(overflow[0].activityType)
               : 'heavy load activities';
-            if (!wk.workoutMods) wk.workoutMods = [];
-            wk.workoutMods.push({
+            upsertWorkoutMod(wk, {
               name: easyRun.n,
               dayOfWeek: easyRun.dayOfWeek,
+              workoutId: easyRun.id,
               status: 'reduced',
               modReason: `Auto: ${sportLabel}`,
               originalDistance: `${origKm}km`,
@@ -2122,8 +2165,8 @@ export function autoProcessActivities(
   if (!wk2) { onComplete(); return; }
 
   const combinedActivity = buildCombinedActivity(overflow, s2);
-  const freshWorkouts    = getWeekWorkoutsForReview().filter(w => wk2.rated[w.id || w.n] === undefined);
-  const weekRuns         = workoutsToPlannedRuns(freshWorkouts, s2.pac);
+  const freshWorkouts    = getWeekWorkoutsForPlanChange().filter(w => wk2.rated[w.id || w.n] === undefined);
+  const weekRuns         = workoutsToPlannedRuns(adjustableWorkouts(freshWorkouts), s2.pac);
   const _arTier2 = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
   const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
@@ -2151,7 +2194,7 @@ export function autoProcessActivities(
     if (!wk3) { onComplete(); return; }
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
-      const freshW   = getWeekWorkoutsForReview();
+      const freshW   = getWeekWorkoutsForPlanChange();
       const primary  = overflow.find(i => i.appType !== 'other') ?? overflow[0];
       const sport    = resolveSportForActivity(
         primary?.activityType,
@@ -2159,16 +2202,7 @@ export function autoProcessActivities(
         primary?.activityType,
       );
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
-      if (!wk3.workoutMods) wk3.workoutMods = [];
-      for (const adj of decision.adjustments) {
-        const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-        if (!mw) continue;
-        wk3.workoutMods.push({
-          name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
-          modReason: `Garmin: ${sportLabel}`, confidence: mw.confidence,
-          originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
-        } as WorkoutMod);
-      }
+      writeAdjustmentMods(wk3, modified, decision.adjustments, `Garmin: ${sportLabel}`);
     }
 
     for (const item of overflow) {

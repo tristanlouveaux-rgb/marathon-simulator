@@ -17,6 +17,8 @@ import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { modDisplayDescription } from '@/workouts/workout-scaling';
+import { writeAdjustmentMods, removeWorkoutMods, adjustableWorkouts } from '@/workouts/workout-mods';
+import { resolveWeekWorkouts, resolveWeekForPlanChanges } from './week-resolve';
 import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SPORTS_DB } from '@/constants';
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
@@ -2109,30 +2111,17 @@ function updateLightenedWeekBanner(s: SimulatorState): void {
 // ACWR reduction trigger (absorbed from retired excess-load-card.ts)
 // ---------------------------------------------------------------------------
 
+/**
+ * The current week an ACWR cut is sized from and written against: the canonical
+ * resolver with the plan layers only (week-resolve.ts resolveWeekForPlanChanges).
+ * The Plan's generator arguments and every accepted change apply, so a replaced
+ * run is not offered again and a cut run is priced at its cut distance (audit A2).
+ * The illness, holiday and bridge layers are re-applied at render on top of every
+ * mod, so a cut is never sized from their output.
+ */
 function getWeekWorkoutsForACWR(s: ReturnType<typeof getMutableState>) {
-  const wk = s.wks?.[s.w - 1];
-  if (!wk) return [];
-  const currentVDOT = getEffectiveVdot(s);
-  const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-  let trailingEffort = 0;
-  const lookback = Math.min(3, s.w - 1);
-  if (lookback > 0) {
-    let total = 0; let count = 0;
-    for (let i = s.w - 2; i >= s.w - 1 - lookback && i >= 0; i--) {
-      if (s.wks[i].effortScore != null) { total += s.wks[i].effortScore!; count++; }
-    }
-    if (count > 0) trailingEffort = total / count;
-  }
-  return generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-    (s as any).injuryState || null, s.recurringActivities,
-    s.onboarding?.experienceLevel,
-    (s.maxHR || s.restingHR || s.onboarding?.age)
-      ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
-      : undefined,
-    gp(currentVDOT, s.lt).e, s.w, s.tw, currentVDOT, s.gs, trailingEffort, wk.scheduledAcwrStatus, undefined,
-    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
-  );
+  if (!s.wks?.[s.w - 1]) return [];
+  return resolveWeekForPlanChanges(s, s.w);
 }
 
 export function triggerACWRReduction(): void {
@@ -2216,7 +2205,15 @@ export function triggerACWRReduction(): void {
   }
 
   const freshWorkouts = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
-  const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
+  // Sessions the user scaled by hand keep their Adjust, and sessions a holiday or
+  // an illness rest day stands down are not run: neither is offered for a cut.
+  const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(freshWorkouts), s.pac);
+  // The week as the Plan tab shows it (every layer applied). The projection, the
+  // intensity header and the km-spike rule describe this week, and the projection
+  // input is exactly the Home button's (home-view clickPlan), so the button and
+  // this handler reach the same verdict.
+  const shownWeek = resolveWeekWorkouts(s, s.w);
+  const shownFresh = shownWeek.filter((w: any) => !(wk.rated ?? {})[w.id || w.n]);
 
   // Compute overshoot: only reduce enough to bring projected week back to target.
   // Canonical projection shared with the Home nudge's button-visibility logic
@@ -2226,7 +2223,7 @@ export function triggerACWRReduction(): void {
   let overshootTSS: number | undefined;
   let targetTSS: number | undefined;
   if (wk.unspentLoadItems?.length) {
-    const projection = computeAcwrReductionProjection(s, weekRuns);
+    const projection = computeAcwrReductionProjection(s, workoutsToPlannedRuns(shownFresh as any, s.pac));
     if (projection) {
       targetTSS = projection.target;
       if (!projection.over) {
@@ -2276,21 +2273,22 @@ export function triggerACWRReduction(): void {
   }
 
   // Compute intensity % for ACWR context header
-  const plannedThreshold = freshWorkouts.filter(w => w.t === 'threshold' || w.t === 'marathon_pace' || w.t === 'float').length;
-  const plannedIntensity = freshWorkouts.filter(w => w.t === 'vo2' || w.t === 'intervals').length;
-  const intensityPct = freshWorkouts.length > 0
-    ? Math.round(((plannedThreshold + plannedIntensity) / freshWorkouts.length) * 100)
+  const plannedThreshold = shownFresh.filter((w: any) => w.t === 'threshold' || w.t === 'marathon_pace' || w.t === 'float').length;
+  const plannedIntensity = shownFresh.filter((w: any) => w.t === 'vo2' || w.t === 'intervals').length;
+  const intensityPct = shownFresh.length > 0
+    ? Math.round(((plannedThreshold + plannedIntensity) / shownFresh.length) * 100)
     : 0;
 
   // Compute rule-driving fields for the 5-rule plain language advice
   // Rule 2. Km spike
   let actualRunKmForRule = 0;
-  const plannedRunKmForRule = (getWeekWorkoutsForACWR(s) as any[])
+  const planWeekForRule = shownWeek as any[];
+  const plannedRunKmForRule = planWeekForRule
     .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes(w.t))
     .reduce((sum: number, w: any) => { const m = (w.d ?? '').match(/(\d+\.?\d*)\s*km/); return sum + (m ? parseFloat(m[1]) : 0); }, 0);
   if (wk.garminActuals) {
     for (const [wId, act] of Object.entries(wk.garminActuals)) {
-      const pw = getWeekWorkoutsForACWR(s).find((w: any) => (w.id || w.n) === wId);
+      const pw = planWeekForRule.find((w: any) => (w.id || w.n) === wId);
       if (pw && ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes((pw as any).t)) {
         actualRunKmForRule += (act as any).distanceKm ?? 0;
       }
@@ -2334,17 +2332,9 @@ export function triggerACWRReduction(): void {
       const appliedAt = new Date().toISOString().split('T')[0];
       const freshW = getWeekWorkoutsForACWR(s3);
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
-      if (!wk3.workoutMods) wk3.workoutMods = [];
-      for (const adj of decision.adjustments) {
-        const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-        if (!mw) continue;
-        wk3.workoutMods.push({
-          name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
-          modReason: `ACWR: ${sportLabel}`, confidence: mw.confidence,
-          originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
-          appliedAt,
-        } as WorkoutMod);
-      }
+      // One mod per session: an ACWR cut replaces the session's current change and
+      // keeps it underneath, so undoACWRReduction gives it back.
+      writeAdjustmentMods(wk3, modified, decision.adjustments, `ACWR: ${sportLabel}`, { appliedAt });
       // Undo snapshot: lets the Home readiness card offer "Undo reduction" for
       // the rest of the day. Captured before unspent items are cleared below.
       wk3.acwrReductionUndo = {
@@ -2378,9 +2368,10 @@ export function triggerACWRReduction(): void {
 /**
  * Undo the most recent ACWR reduction for the current week. Removes the
  * `appliedAt`-stamped ACWR workoutMods (mods are a render-time layer applied in
- * week-resolve.ts, so removal restores the original sessions) and restores the
- * unspent cross-training items that were cleared on apply. Returns false when
- * there is nothing to undo.
+ * week-resolve.ts). Where an ACWR cut replaced an earlier change on the same
+ * session, that change comes back (removeWorkoutMods); otherwise the original
+ * session does. Restores the unspent cross-training items that were cleared on
+ * apply. Returns false when there is nothing to undo.
  */
 export function undoACWRReduction(): boolean {
   const s = getMutableState();
@@ -2388,9 +2379,7 @@ export function undoACWRReduction(): boolean {
   const undo = wk?.acwrReductionUndo;
   if (!wk || !undo) return false;
 
-  wk.workoutMods = (wk.workoutMods ?? []).filter(
-    m => !(m.modReason?.startsWith('ACWR') && (m as WorkoutMod).appliedAt === undo.date),
-  );
+  removeWorkoutMods(wk, m => !!m.modReason?.startsWith('ACWR') && m.appliedAt === undo.date);
   if (undo.unspentLoadItems?.length) {
     wk.unspentLoadItems = undo.unspentLoadItems;
     wk.unspentLoad = undo.unspentLoad ?? 0;

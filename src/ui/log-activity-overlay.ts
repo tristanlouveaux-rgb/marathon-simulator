@@ -22,7 +22,8 @@ import {
   applyAdjustments,
 } from '@/cross-training';
 import { showSuggestionModal } from './suggestion-modal';
-import { resolveWeekWorkouts } from './week-resolve';
+import { resolveWeekForPlanChanges } from './week-resolve';
+import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods';
 import { showSimpleToast } from './toast';
 import { addAdhocWorkoutFromPending } from '@/calculations/activity-matcher';
 import type { GarminPendingItem } from '@/types';
@@ -115,8 +116,12 @@ function submitManualActivity(sport: string, durationMin: number, rpe: number): 
   const jsDay = new Date().getDay();
   activity.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
 
-  const workouts = resolveWeekWorkouts(s, s.w);
-  const weekRuns = workoutsToPlannedRuns(workouts.filter((w: any) => w.t !== 'cross' && w.t !== 'gym'), s.pac);
+  // Plan layers only: the change is written as a mod, and the illness, holiday and
+  // bridge layers are re-applied on top of every mod at render.
+  const workouts = resolveWeekForPlanChanges(s, s.w);
+  // Sessions the user scaled by hand keep their Adjust, and sessions a holiday or
+  // an illness rest day stands down are not run: neither is offered for a cut.
+  const weekRuns = workoutsToPlannedRuns(adjustableWorkouts(workouts.filter((w: any) => w.t !== 'cross' && w.t !== 'gym')), s.pac);
   const popup = buildCrossTrainingPopup(
     {
       raceGoal: s.rd,
@@ -149,21 +154,12 @@ function submitManualActivity(sport: string, durationMin: number, rpe: number): 
 
     if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
       const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, normalizeSport(sport), s.pac);
-      if (!wk.workoutMods) wk.workoutMods = [];
+      // One mod per session: replaces the session's current change (upsert). The
+      // reason is the one applyAdjustments wrote for each session.
       for (const adj of decision.adjustments) {
         const modified = modifiedWorkouts.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
         if (!modified) continue;
-        wk.workoutMods.push({
-          name: modified.n,
-          dayOfWeek: modified.dayOfWeek,
-          status: modified.status || 'reduced',
-          modReason: modified.modReason || '',
-          confidence: modified.confidence,
-          originalDistance: modified.originalDistance,
-          newDistance: modified.d,
-          newType: modified.t,
-          newRpe: modified.rpe || modified.r,
-        });
+        writeAdjustmentMods(wk, modifiedWorkouts, [adj], modified.modReason || '');
       }
     }
     saveState();

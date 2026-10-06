@@ -29,12 +29,15 @@
 
 import { paceSecPerKmForRunType, fmtDist } from './intent_to_workout';
 
-/** Ascending intensity ladder. Mirrors PACE_LADDER in cross-training/timing-check.ts:37
- *  (index 0 = easiest). Long runs step through their own sub-ladder below. */
+/** Ascending intensity ladder for the user's Adjust control (index 0 = easiest).
+ *  Long runs step through their own sub-ladder below. Plan-change downgrades
+ *  (timing check, cross-training suggester) use the canonical running ladder in
+ *  constants/intensity-ladder.ts instead. */
 export const INTENSITY_LADDER = ['easy', 'marathon', 'threshold', 'vo2'] as const;
 export type LadderType = typeof INTENSITY_LADDER[number];
 
-/** Expected RPE per run type. Identical to RPE_BY_TYPE in timing-check.ts:40-42. */
+/** Expected RPE per run type for the Adjust control. Plan-change downgrades
+ *  write the generator's RPE (RUN_GENERATOR_RPE, constants/intensity-ladder.ts). */
 export const RPE_BY_TYPE: Record<string, number> = {
   easy: 4, marathon: 6, threshold: 7, vo2: 9, long: 6,
 };
@@ -47,7 +50,7 @@ export const DURATION_SCALE_MIN = 0.50;
 export const DURATION_SCALE_MAX = 1.15;
 
 /** "Less time" preset target, as a fraction of prescribed.
- *  0.75 = the maximum cross-training reduction tier (getTier, timing-check.ts:65). */
+ *  0.75 = the maximum cross-training reduction tier (getTier, timing-check.ts). */
 export const LESS_TIME_FACTOR = 0.75;
 
 /** Markers that indicate a structured session (intervals, rep sets, pace-target

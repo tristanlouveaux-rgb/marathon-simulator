@@ -19,7 +19,7 @@
 import { getState, getMutableState, saveState } from '@/state';
 import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
-import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
+import { computeAcwrEaseBack, resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
 import { formatKm, ft } from '@/utils/format';
 import { next } from '@/ui/events';
 import { computePlanAdherence, detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
@@ -27,7 +27,7 @@ import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type Sig
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
 import { planWeekSessions, effortMultiplier, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
-import { generateWeekWorkouts } from '@/workouts/generator';
+import { generateWeekWorkouts, planEngineStateInputs } from '@/workouts/generator';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
 import { getHREffort } from '@/calculations/activity-matcher';
 
@@ -761,6 +761,95 @@ function _wirePlanCompleteHandlers(
   });
 }
 
+/**
+ * The plan-engine inputs for the debrief's next-week preview (audit X12).
+ *
+ * `baseCtx` carries every input generateWeekWorkouts hands planWeekSessions for that
+ * week: forced deload, the hours cap, excluded session types, easy pace, and the
+ * ramp baseline and archetype it reads from state (planEngineStateInputs). Without
+ * them the preview showed sessions the user had opted out of, or a different volume
+ * from the week they then got.
+ *
+ * `acwrStatus` is next week's ACWR stamp. In 'complete' mode next() has not run, so
+ * the stamp is not written yet: it is read from the same computeACWR call next()
+ * makes for the completed week (high and caution are stamped, anything else is safe).
+ */
+export function debriefPreviewPlanInputs(
+  s: any,
+  weekNum: number,
+  mode: 'complete' | 'review',
+): {
+  baseCtx: {
+    runsPerWeek: number; raceDistance: any; runnerType: any; phase: any; fitnessLevel: string;
+    weekIndex: number; totalWeeks: number; vdot: number; forceDeload?: boolean;
+    weeklyHoursTarget?: number; excludedSlots?: string[]; easyPaceSecPerKm?: number;
+    baselineKm?: number; archetype?: ReturnType<typeof planEngineStateInputs>['archetype'];
+  };
+  acwrStatus: 'safe' | 'caution' | 'high' | 'unknown';
+} {
+  const nextWk = s.wks?.[weekNum]; // 0-based array index of next week
+  const nextPhase = nextWk?.ph ?? s.wks?.[weekNum - 1]?.ph ?? 'base';
+  const { baselineKm, archetype } = planEngineStateInputs(s);
+  const baseCtx = {
+    runsPerWeek: s.rw ?? 3,
+    raceDistance: s.rd ?? 'marathon',
+    runnerType: s.typ ?? 'balanced',
+    phase: nextPhase,
+    fitnessLevel: s.onboarding?.experienceLevel ?? 'intermediate',
+    weekIndex: weekNum + 1,
+    totalWeeks: s.tw ?? 16,
+    vdot: s.v ?? 45,
+    forceDeload: nextWk?.forceDeload,
+    weeklyHoursTarget: s.onboarding?.weeklyTrainingHours,
+    excludedSlots: s.onboarding?.runningExcludedWorkouts,
+    easyPaceSecPerKm: s.pac?.e,
+    baselineKm,
+    archetype,
+  };
+
+  let acwrStatus: 'safe' | 'caution' | 'high' | 'unknown' = nextWk?.scheduledAcwrStatus ?? 'safe';
+  if (nextWk?.scheduledAcwrStatus == null && mode === 'complete') {
+    const tier = s.athleteTierOverride ?? s.athleteTier;
+    const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+    const st = computeACWR(s.wks, weekNum, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, s.previousPlanWks, s.adaptiveRecovery).status;
+    acwrStatus = st === 'high' || st === 'caution' ? st : 'safe';
+  }
+  return { baseCtx, acwrStatus };
+}
+
+/**
+ * The pane the ACWR ease-back toggle opens on, so that Accept without a tap commits
+ * the same choice next() would (ISSUE-295 episode memory).
+ *
+ *   - A choice already stamped on next week wins: in 'review' mode next() (or an
+ *     earlier Accept) has written it.
+ *   - In 'complete' mode next() has not run, so the choice is the episode decision
+ *     next() makes for this rollover: resolveAcwrEpisodeChoice over the statuses of
+ *     weeks 1..weekNum, the upcoming ratio, and the completed week's own choice. A
+ *     'keep' from the previous high week carries forward unless the ratio is very
+ *     high or the streak forces a re-prompt (`carried` is then true).
+ *   - Otherwise 'ease', the recommended pane (the generator eases unless 'keep').
+ *
+ * Before: the toggle always opened on Ease back and Accept stamped 'ease', which
+ * next() prefers over the carried choice, so a Keep ramping choice was silently
+ * reverted at the next high-ACWR rollover.
+ */
+export function debriefAcwrInitialChoice(
+  s: any,
+  weekNum: number,
+  mode: 'complete' | 'review',
+  upcomingRatio: number,
+): { choice: 'ease' | 'keep'; carried: boolean } {
+  const stamped = s.wks?.[weekNum]?.acwrChoice;
+  if (stamped === 'ease' || stamped === 'keep') return { choice: stamped, carried: false };
+  if (mode !== 'complete') return { choice: 'ease', carried: false };
+  const priorStatuses = (s.wks ?? []).slice(0, weekNum).map((w: any) => w?.scheduledAcwrStatus);
+  const decision = resolveAcwrEpisodeChoice(priorStatuses, upcomingRatio, s.wks?.[weekNum - 1]?.acwrChoice);
+  return decision.acwrChoice
+    ? { choice: decision.acwrChoice, carried: true }
+    : { choice: 'ease', carried: false };
+}
+
 function _renderPlanPreview(
   card: HTMLElement,
   weekNum: number,
@@ -773,21 +862,9 @@ function _renderPlanPreview(
   const nextWk = s.wks?.[weekNum]; // 0-based array index
   const nextPhase = nextWk?.ph ?? s.wks?.[weekNum - 1]?.ph ?? 'base';
 
-  // Build plan context shared between adjusted and standard
-  const baseCtx = {
-    runsPerWeek: s.rw ?? 3,
-    raceDistance: s.rd ?? 'marathon',
-    runnerType: s.typ ?? 'balanced',
-    phase: nextPhase,
-    fitnessLevel: s.onboarding?.experienceLevel ?? 'intermediate',
-    weekIndex: nextWeekIdx,
-    totalWeeks: s.tw ?? 16,
-    vdot: s.v ?? 45,
-  };
-
-  // Trailing effort score and ACWR status (with debug override)
+  const { baseCtx, acwrStatus: previewAcwrStatus } = debriefPreviewPlanInputs(s, weekNum, mode);
   const trailingEffort = debugOverride?.effort ?? getTrailingEffortScore(s.wks ?? [], nextWeekIdx);
-  const acwrStatus = debugOverride?.acwrStatus ?? nextWk?.scheduledAcwrStatus ?? 'safe';
+  const acwrStatus = debugOverride?.acwrStatus ?? previewAcwrStatus;
 
   // CTL-gap adherence for the week just finished (weekNum). Same source the engine stores at
   // rollover (events.next() → wk.ctlRatio), computed live here so the preview matches the week the
@@ -828,6 +905,9 @@ function _renderPlanPreview(
     ? computeAcwrEaseBack(adjustedIntents, { chronicWeeklyTSS: _chronicTSS, safeUpper: _safeUpper, easyFloorMin: EASY_FLOOR_MIN, longFloorMin: LONG_SOFT_FLOOR_MIN })
     : null;
   const acwrEaseActive = easeResult != null && easeResult.shedTSS > 0;
+  // The pane the toggle opens on: the choice next() would commit, so Accept without
+  // a tap never reverts a carried Keep ramping (ISSUE-295 episode memory).
+  const acwrInitial = acwrEaseActive ? debriefAcwrInitialChoice(s, weekNum, mode, _ratio) : null;
   const veryHigh = _ratio >= 1.6;
   // Whether the ladder actually reached the safe ceiling (it can fall short when every session is at
   // its floor) — drives honest copy below.
@@ -927,7 +1007,7 @@ function _renderPlanPreview(
       <p style="font-size:13px;color:var(--c-black);line-height:1.5;margin:0 0 4px">Training load reached ${_ratio.toFixed(2)}× the recent 28-day average, ${veryHigh ? 'well above' : 'above'} the ${_safeUpper.toFixed(2)} safe range.</p>
       <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">${veryHigh
         ? `The long run distance is kept; intensity and some volume are reduced${reachedRange ? ' to bring load into range' : ''}. Easing back is advised. Keeping the ramp raises injury risk.`
-        : `Ease back keeps the long run distance and reduces intensity${reachedRange ? ' to bring load into range' : ' as far as the plan structure allows'}. Keep ramping leaves the week as planned.`}</p>
+        : `Ease back keeps the long run distance and reduces intensity${reachedRange ? ' to bring load into range' : ' as far as the plan structure allows'}. Keep ramping leaves the week as planned.`}${acwrInitial?.carried && acwrInitial.choice === 'keep' ? ' Keep ramping carries over from last week.' : ''}</p>
     </div>
   ` : '';
   // Toggle labels are contextual: the ACWR choice reads as keep/ease, the effort/CTL view as adjusted/standard.
@@ -968,7 +1048,8 @@ function _renderPlanPreview(
     </div>
   `;
 
-  _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent, acwrEaseActive ? nextWeekIdx : null);
+  _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent, acwrEaseActive ? nextWeekIdx : null,
+    acwrInitial?.choice !== 'keep');
 }
 
 function _renderWorkoutList(workouts: any[], annotations: string[]): string {
@@ -1084,11 +1165,12 @@ function _wireStep3Handlers(
   mode: 'complete' | 'review',
   visiblyDifferent: boolean,
   acwrWeekIdx: number | null, // 1-based week to stamp acwrChoice on (ISSUE-295), or null if no ACWR choice
+  initialAdjusted = true, // the pane shown first; false opens on Keep ramping (debriefAcwrInitialChoice)
 ): void {
   // No cancel wiring (ISSUE-273: the debrief has no ✕; Continue records).
 
   // Which pane is selected — lifted to function scope so Accept can persist the ACWR choice.
-  let showingAdjusted = true;
+  let showingAdjusted = initialAdjusted;
 
   // Plan toggle
   if (visiblyDifferent) {
@@ -1113,6 +1195,9 @@ function _wireStep3Handlers(
 
     btnAdj?.addEventListener('click', () => setToggle(true));
     btnStd?.addEventListener('click', () => setToggle(false));
+    // The markup opens on the recommended pane; switch when the carried or stamped
+    // choice is the alternative.
+    if (!initialAdjusted) setToggle(false);
   }
 
   // Accept
@@ -1122,7 +1207,8 @@ function _wireStep3Handlers(
       _applyPacingAdj(effortScore);
     }
     // Persist the ACWR ease-back choice so the generator commits the plan the user is looking at
-    // (ISSUE-295). 'ease' = recommended pane, 'keep' = keep ramping. Default-shown pane is eased.
+    // (ISSUE-295). 'ease' = recommended pane, 'keep' = keep ramping. The pane shown first is the
+    // choice next() would make (debriefAcwrInitialChoice), so Accept without a tap keeps it.
     if (acwrWeekIdx != null) {
       const ms = getMutableState() as any;
       const wk = ms.wks?.[acwrWeekIdx - 1];
