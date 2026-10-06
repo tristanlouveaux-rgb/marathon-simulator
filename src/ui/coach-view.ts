@@ -105,7 +105,7 @@ export function stripMarkdown(s: string): string {
   return s
     .replace(/^\s*#+\s*/gm, '')                          // headings
     .replace(/\*\*(.+?)\*\*/g, '$1')                      // bold
-    .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g, '$1')   // italic
+    .replace(/(^|[^*])\*(?!\*)([^*\n]+?)\*(?!\*)/g, '$1$2') // italic (no lookbehind: iOS 15)
     .replace(/`([^`\n]+?)`/g, '$1')                        // inline code
     .replace(/^\s*[-*]\s+/gm, '')                          // bullet markers
     .replace(/ — /g, ', ')                                   // em dashes (banned by copy rules)
