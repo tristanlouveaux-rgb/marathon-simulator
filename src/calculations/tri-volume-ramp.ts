@@ -8,6 +8,11 @@
  * **Side of the line**: planning. Pure function. Caller surfaces the result
  * as a suggestion (modal) and applies the proposed trim if the user accepts.
  *
+ * NOT LIVE: the aggregator does not call this unless asked
+ * (TRI_VOLUME_RAMP_SUGGESTIONS_LIVE, tri-suggestion-aggregator.ts). "This week's
+ * actual" is the current week so far, so mid-week the comparison is a partial
+ * week against a full one. Which gate fixes that is pending a decision.
+ *
  * Source: Gabbett TJ (2016) "The training-injury prevention paradox" Br J
  * Sports Med 50:273–280.
  */

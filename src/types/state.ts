@@ -684,7 +684,16 @@ export interface Week {
    *  button. Single number (cross-training stimulus isn't decomposed by zone).
    *  Decayed via 7-day ATL τ when read by `computeDecayedTriCarry` (Tier 2). */
   carriedCrossTrainingTSS?: number;
-  acwrOverridden?: boolean;                     // User dismissed "Reduce this week". Adds synthetic ATL debt
+  /** Notify-once record for the tri / cycling suggestion modal
+   *  (tri-suggestion-handled.ts). Lives on the week the user answered in, so it
+   *  resets at week rollover. */
+  triSuggestionsHandled?: {
+    /** TriSuggestionMod ids the user already answered this week (ticked,
+     *  unticked or dismissed): 'ramp_<discipline>', 'readiness_<workoutId>',
+     *  'rpe_<workoutId>'. collectTriSuggestions does not propose them again. */
+    modIds?: string[];
+  };
+  acwrOverridden?: boolean;                   // User dismissed "Reduce this week". Adds synthetic ATL debt
   /** Undo snapshot for the most recent ACWR reduction (readiness "Reduce session
    *  load" flow). Set when the user confirms Replace/Reduce in the suggestion
    *  modal; lets the Home readiness card show "Session load reduced" with an

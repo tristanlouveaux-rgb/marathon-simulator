@@ -27,6 +27,7 @@ import type {
 } from '@/calculations/tri-cross-training-overload';
 import type { Discipline } from '@/types/triathlon';
 import { applyTriSuggestions } from '@/calculations/tri-suggestion-apply';
+import { markTriSuggestionsHandled } from '@/calculations/tri-suggestion-handled';
 import { getMutableState, saveState } from '@/state';
 
 const OVERLAY_ID = 'tri-suggestion-overlay';
@@ -133,18 +134,24 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
     }
 
     // ── Generic checkbox section wiring (other mods) ───────────────────────
-    document.getElementById('tri-sm-dismiss')?.addEventListener('click', () => cleanup(0));
+    // Notify-once: every row the user saw is answered by Dismiss or Apply
+    // (ticked rows accepted, unticked rows declined), so none is proposed again
+    // this week (tri-suggestion-handled.ts).
+    const otherModIds = otherMods.map(m => m.id);
+    document.getElementById('tri-sm-dismiss')?.addEventListener('click', () => {
+      markTriSuggestionsHandled(getMutableState(), { modIds: otherModIds });
+      saveState();
+      cleanup(0);
+    });
     document.getElementById('tri-sm-accept')?.addEventListener('click', () => {
       const checked: TriSuggestionMod[] = [];
       for (const mod of otherMods) {
         const cb = document.getElementById(`tri-sm-mod-${mod.id}`) as HTMLInputElement | null;
         if (cb?.checked) checked.push(mod);
       }
-      if (checked.length === 0) {
-        cleanup(0);
-        return;
-      }
-      const result = applyTriSuggestions(getMutableState(), checked);
+      const sM = getMutableState();
+      const result = checked.length > 0 ? applyTriSuggestions(sM, checked) : { applied: 0 };
+      markTriSuggestionsHandled(sM, { modIds: otherModIds });
       saveState();
       cleanup(result.applied);
     });

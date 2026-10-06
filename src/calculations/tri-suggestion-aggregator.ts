@@ -19,6 +19,20 @@ import {
   detectCrossTrainingOverload,
   type CrossTrainingOverloadResult,
 } from './tri-cross-training-overload';
+import { handledTriSuggestionIds, isOpenForTriSuggestion } from './tri-suggestion-handled';
+
+/**
+ * Volume-ramp suggestions are OFF pending Tristan's decision on the comparison
+ * window. checkVolumeRamp compares the current week's actuals SO FAR with next
+ * week's full plan, so mid-week it fires on a partial week (an Ironman week with
+ * one 1 h ride logged proposes trimming next week's long ride on every launch).
+ * The plan's own deload-to-build steps also exceed the 10% cap with full
+ * adherence. The two candidate gates (evaluate only once the current week is
+ * complete, or compare the last completed week's actuals with the current
+ * week's plan) need his call. The detector, its trim target and the notify-once
+ * stamp stay wired and tested behind `opts.volumeRamp`.
+ */
+export const TRI_VOLUME_RAMP_SUGGESTIONS_LIVE = false;
 
 /** A single proposed modification surfaced to the user. */
 export interface TriSuggestionMod {
@@ -62,19 +76,34 @@ export interface TriSuggestionBundle {
   };
 }
 
-export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundle {
+export interface CollectTriSuggestionsOptions {
+  /** Evaluate the volume-ramp detector. Defaults to
+   *  TRI_VOLUME_RAMP_SUGGESTIONS_LIVE (off); tests switch it on. */
+  volumeRamp?: boolean;
+}
+
+export function collectTriSuggestions(
+  state: SimulatorState,
+  opts: CollectTriSuggestionsOptions = {},
+): TriSuggestionBundle {
   const mods: TriSuggestionMod[] = [];
 
   // ── Volume-ramp violations (one per discipline that exceeds 10% cap) ────
   // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1]
   // and next week is wks[s.w].
   const curIdx = (state.w ?? 1) - 1;
-  const ramps: VolumeRampViolation[] = checkVolumeRamp(state);
+  const rampOn = opts.volumeRamp ?? TRI_VOLUME_RAMP_SUGGESTIONS_LIVE;
+  const ramps: VolumeRampViolation[] = rampOn ? checkVolumeRamp(state) : [];
   for (const v of ramps) {
     const nextWk = (state.wks ?? [])[curIdx + 1];
+    // A session an earlier trim (or any other change) already touched is not a
+    // target: trimming it again compounds 15% per launch (87 -> 74 -> 63 min).
     const targetWorkout = nextWk?.triWorkouts?.find(
-      w => (w.discipline ?? 'run') === v.discipline && isLongOrEndurance(w),
+      w => (w.discipline ?? 'run') === v.discipline && isLongOrEndurance(w) && isOpenForTriSuggestion(w),
     );
+    // Nothing left to trim in that discipline: no proposal (accepting it would
+    // change nothing).
+    if (!targetWorkout?.id) continue;
     mods.push({
       id: `ramp_${v.discipline}`,
       source: 'volume_ramp',
@@ -158,8 +187,15 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
     });
   }
 
+  // Notify-once: proposals the user already answered this week (ticked, left
+  // unticked or dismissed in the modal) are not proposed again until the week
+  // rolls over. Cross-training overload ids carry the recommended discipline,
+  // which can change between launches, so they are not filtered by id here.
+  const handled = handledTriSuggestionIds(state);
+  const open = mods.filter(m => m.source === 'cross_training_overload' || !handled.has(m.id));
+
   return {
-    mods,
+    mods: open,
     diagnostics: {
       rampViolations: ramps.length,
       rpeBlown: !!rpe,

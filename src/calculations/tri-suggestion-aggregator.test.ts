@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { collectTriSuggestions } from './tri-suggestion-aggregator';
-import type { SimulatorState } from '@/types/state';
+import { collectTriSuggestions, TRI_VOLUME_RAMP_SUGGESTIONS_LIVE } from './tri-suggestion-aggregator';
+import { applyTriSuggestions } from './tri-suggestion-apply';
+import { markTriSuggestionsHandled } from './tri-suggestion-handled';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { getDefaultState } from '@/state/store';
+import type { SimulatorState, Workout } from '@/types/state';
 
 // s.w is 1-based (store.ts default w: 1): w: 1 means the current week is
 // wks[0] and next week is wks[1].
@@ -22,7 +26,7 @@ describe('collectTriSuggestions', () => {
     expect(r.diagnostics.rpeBlown).toBe(false);
   });
 
-  it('volume-ramp violation → emits a trim_volume mod', () => {
+  it('volume-ramp violation → emits a trim_volume mod (detector switched on)', () => {
     const s = state({
       w: 1,
       wks: [
@@ -34,7 +38,7 @@ describe('collectTriSuggestions', () => {
         },
       ] as any,
     });
-    const r = collectTriSuggestions(s);
+    const r = collectTriSuggestions(s, { volumeRamp: true });
     expect(r.mods.length).toBeGreaterThanOrEqual(1);
     const ramp = r.mods.find(m => m.source === 'volume_ramp');
     expect(ramp).toBeDefined();
@@ -91,7 +95,8 @@ describe('collectTriSuggestions', () => {
         },
       ] as any,
     });
-    const r = collectTriSuggestions(s);
+    const r = collectTriSuggestions(s, { volumeRamp: true });
+    expect(r.mods.length).toBeGreaterThan(0);
     for (const m of r.mods) {
       expect(m.headline.length).toBeGreaterThan(5);
       expect(m.body.length).toBeGreaterThan(10);
@@ -129,6 +134,97 @@ describe('collectTriSuggestions', () => {
       const mod = r.mods.find(m => m.source === 'readiness');
       expect(mod).toBeDefined();
       expect(mod!.targetWorkoutId).toBe('cur-wed');
+
+      // Dismissed (or left unticked) in the modal: not proposed again this week.
+      markTriSuggestionsHandled(s, { modIds: [mod!.id] });
+      expect(collectTriSuggestions(s).mods.find(m => m.source === 'readiness')).toBeUndefined();
     });
+  });
+});
+
+// ─── Volume ramp: off pending a comparison window; notify-once ─────────────
+// Regression (review of a1): reading the current week made the ramp check live,
+// and it compares the current week's actuals SO FAR with next week's full plan.
+// An Ironman plan at week 3 with one 1 h ride logged proposed trimming next
+// week's long ride on every launch, and each accepted trim compounded
+// (87 -> 74 -> 63 -> 54 min) because the target finder still matched the
+// already-trimmed session.
+
+function realIronman(w: number): SimulatorState {
+  const s = {
+    ...getDefaultState(),
+    eventType: 'triathlon',
+    w,
+    tw: 20,
+    v: 50,
+    pac: { e: 300, t: 250, i: 230, m: 275, r: 200 },
+    wks: [],
+    triConfig: {
+      distance: 'ironman',
+      timeAvailableHoursPerWeek: 12,
+      volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+      skillRating: { swim: 3, bike: 3, run: 3 },
+      bike: { hasPowerMeter: true, ftp: 220 },
+      swim: { cssSecPer100m: 100 },
+      weeksToRace: 20,
+    },
+  } as unknown as SimulatorState;
+  s.wks = generateTriathlonPlan(s);
+  // One 1 h ride logged so far this week (week 3).
+  s.wks[w - 1].garminActuals = {
+    ride: { garminId: 'ride', durationSec: 3600, activityType: 'CYCLING', startTime: '2026-10-06T07:00:00Z' } as any,
+  };
+  return s;
+}
+
+const findWorkout = (s: SimulatorState, id: string): Workout | undefined => {
+  for (const wk of s.wks ?? []) {
+    const w = wk.triWorkouts?.find(x => x.id === id);
+    if (w) return w;
+  }
+  return undefined;
+};
+
+describe('volume ramp is not live on a partial week', () => {
+  it('is off by default', () => {
+    expect(TRI_VOLUME_RAMP_SUGGESTIONS_LIVE).toBe(false);
+  });
+
+  it('an Ironman week with one 1 h ride logged proposes no trim', () => {
+    const s = realIronman(3);
+    const r = collectTriSuggestions(s);
+    expect(r.mods.filter(m => m.source === 'volume_ramp')).toEqual([]);
+    expect(r.diagnostics.rampViolations).toBe(0);
+  });
+
+  it('with the detector on, an accepted trim is not trimmed again on later launches', () => {
+    const s = realIronman(3);
+    const first = collectTriSuggestions(s, { volumeRamp: true }).mods.find(m => m.id === 'ramp_bike');
+    expect(first?.targetWorkoutId).toBeDefined();
+    const targetId = first!.targetWorkoutId!;
+    const origMin = findWorkout(s, targetId)!.estimatedDurationMin!;
+
+    // Three launches, the user accepts every proposal.
+    for (let launch = 0; launch < 3; launch++) {
+      const ramp = collectTriSuggestions(s, { volumeRamp: true }).mods.find(m => m.id === 'ramp_bike');
+      if (ramp) applyTriSuggestions(s, [ramp]);
+    }
+
+    // Trimmed once (85%), not compounded.
+    expect(findWorkout(s, targetId)!.estimatedDurationMin).toBe(Math.round(origMin * 0.85));
+    const again = collectTriSuggestions(s, { volumeRamp: true }).mods.find(m => m.id === 'ramp_bike');
+    expect(again?.targetWorkoutId).not.toBe(targetId);
+  });
+
+  it('an answered ramp proposal is not proposed again this week', () => {
+    const s = realIronman(3);
+    const ramp = collectTriSuggestions(s, { volumeRamp: true }).mods.find(m => m.id === 'ramp_bike');
+    expect(ramp).toBeDefined();
+    applyTriSuggestions(s, [ramp!]);
+    markTriSuggestionsHandled(s, { modIds: [ramp!.id] });
+    const next = collectTriSuggestions(s, { volumeRamp: true });
+    expect(next.mods.find(m => m.id === 'ramp_bike')).toBeUndefined();
+    // The stamp lives on the week the user answered in (week 3).
+    expect(s.wks[2].triSuggestionsHandled?.modIds).toContain('ramp_bike');
   });
 });
