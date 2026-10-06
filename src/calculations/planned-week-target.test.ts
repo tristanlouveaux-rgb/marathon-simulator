@@ -14,6 +14,7 @@ import {
   resolvePlannedWeekPhase,
 } from './planned-week-target';
 import { computePlanPhases } from '@/workouts/phases';
+import { buildCoachContext } from '@/coach/coach-context-builder';
 
 // Median 400, so every multiplier reads straight off the target.
 const HIST = [380, 390, 400, 410, 420];
@@ -108,26 +109,120 @@ describe('Deload weeks target the deload multiplier', () => {
 });
 
 describe('The race taper steps down week by week', () => {
-  it('a 3-week taper targets 0.85, 0.75, 0.65 of baseline (0-indexed taperMultiplier)', () => {
+  it('a 3-week race taper targets 0.75, 0.65, 0.55 of baseline, so race week reaches the 0.55 endpoint', () => {
     // 18 weeks: taper 16-18. Advanced ability deloads weeks 5/10/15, so no taper week is a deload.
     const s = makeState({ phases: racePhases(18) });
     expect(s.wks.slice(15).map(w => w.ph)).toEqual(['taper', 'taper', 'taper']);
+    expect([16, 17, 18].map(w => resolvePlannedWeekPhase(s, w).weekInTaper)).toEqual([1, 2, 3]);
     const targets = [16, 17, 18].map(w => computePlannedWeekTarget(s, w));
-    expect(targets).toEqual([340, 300, 260]);
-    expect(targets).toEqual([0, 1, 2].map(i => rowTarget('taper', 'recreational', i, 3)));
+    // Median 400: 0.75 / 0.65 / 0.55 (Tristan, 2026-10-05).
+    expect(targets).toEqual([300, 260, 220]);
+    expect(targets).toEqual([1, 2, 3].map(i => rowTarget('taper', 'recreational', i, 3)));
+  });
+
+  it('a 2-week race taper targets 0.70 then 0.55 of baseline', () => {
+    // 12 weeks: taper 11-12. Advanced deloads weeks 5/10, so neither taper week is a deload.
+    const s = makeState({ phases: racePhases(12) });
+    expect(s.wks.slice(10).map(w => w.ph)).toEqual(['taper', 'taper']);
+    expect([11, 12].map(w => resolvePlannedWeekPhase(s, w))).toMatchObject([
+      { phase: 'taper', weekInTaper: 1, taperWeeks: 2, alsoDeload: false },
+      { phase: 'taper', weekInTaper: 2, taperWeeks: 2, alsoDeload: false },
+    ]);
+    expect([11, 12].map(w => computePlannedWeekTarget(s, w))).toEqual([280, 220]);
+  });
+
+  it('a 1-week race taper keeps its 0.70 special case', () => {
+    // 8 weeks: the real phase generator gives a single taper week (week 8).
+    const s = makeState({ phases: racePhases(8) });
+    expect(s.wks.map(w => w.ph).filter(ph => ph === 'taper')).toHaveLength(1);
+    expect(resolvePlannedWeekPhase(s, 8)).toMatchObject({ phase: 'taper', weekInTaper: 1, taperWeeks: 1, alsoDeload: false });
+    expect(computePlannedWeekTarget(s, 8)).toBe(280);
   });
 
   it('a race-taper week the engine also deloads takes the lower of the two targets', () => {
     // Intermediate: week 16 is both the first taper week and a 4-week-cycle deload.
     const s = makeState({ phases: racePhases(18), v: 45, onboarding: { experienceLevel: 'intermediate' } as any });
-    expect(resolvePlannedWeekPhase(s, 16)).toMatchObject({ phase: 'taper', weekInTaper: 0, taperWeeks: 3, alsoDeload: true });
-    expect(computePlannedWeekTarget(s, 16)).toBe(Math.min(rowTarget('taper', 'recreational', 0, 3), rowTarget('deload', 'recreational')));
-    expect(computePlannedWeekTarget(s, 17)).toBe(rowTarget('taper', 'recreational', 1, 3));
+    expect(resolvePlannedWeekPhase(s, 16)).toMatchObject({ phase: 'taper', weekInTaper: 1, taperWeeks: 3, alsoDeload: true });
+    expect(computePlannedWeekTarget(s, 16)).toBe(Math.min(rowTarget('taper', 'recreational', 1, 3), rowTarget('deload', 'recreational')));
+    expect(computePlannedWeekTarget(s, 17)).toBe(rowTarget('taper', 'recreational', 2, 3));
   });
 
   it('the Signal A target (daily coach) resolves the same phase', () => {
     const s = makeState({ phases: racePhases(18) });
-    expect(computePlannedWeekTarget(s, 18, 'A')).toBe(computePlannedWeekTSS(HIST, 400, 'taper', 'recreational', 4, 2, 3));
+    expect(computePlannedWeekTarget(s, 18, 'A')).toBe(computePlannedWeekTSS(HIST, 400, 'taper', 'recreational', 4, 3, 3));
+    expect(computePlannedWeekTarget(s, 18, 'A')).toBe(220);
+  });
+
+  it('triathlon and HYROX race tapers read the same 1-indexed ramp', () => {
+    // Tri and HYROX tapers are 1 to 2 weeks (taperCap 2). Weeks 7-8 here.
+    const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
+    for (const eventType of ['triathlon', 'hyrox'] as const) {
+      const s = makeState({ phases, eventType });
+      expect([7, 8].map(w => computePlannedWeekTarget(s, w))).toEqual([280, 220]);
+    }
+  });
+
+  it('with cross-training history, the ramp scales the running-only term and the cross-training budget stays whole', () => {
+    // Signal B = round(runningOnly x multiplier) + budget (computePlannedSignalB). The budget
+    // (sportBaselineByType) takes no phase multiplier in deload or taper weeks. That predates
+    // ISSUE-317a and is an open decision for Tristan; this pins today's behaviour so any change
+    // to it is deliberate. Signal A has no budget, so it keeps the full 0.55 step.
+    const runner = makeState({
+      phases: racePhases(18),
+      sportBaselineByType: { cycling: { avgSessionRawTSS: 100, sessionsPerWeek: 3 } } as any,
+    });
+    // Budget 300 raw TSS. Running-only history = HIST - 300 x 0.55 (cycling runSpec): median 235.
+    expect([16, 17, 18].map(w => computePlannedWeekTarget(runner, w))).toEqual([
+      Math.round(235 * 0.75) + 300, Math.round(235 * 0.65) + 300, Math.round(235 * 0.55) + 300,
+    ]);
+    expect(computePlannedWeekTarget(runner, 18)).toBe(429);
+    expect(computePlannedWeekTarget(runner, 1)).toBe(Math.round(235 * 0.97) + 300); // base week: 528
+    expect(computePlannedWeekTarget(runner, 18, 'A')).toBe(220);
+
+    // Triathlon and HYROX: Signal A median 385, cycling 3 x 100 and swimming 2 x 50 raw TSS.
+    // Budget 400, running-only median 385 - (300 x 0.55 + 100 x 0.20) = 200.
+    const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
+    for (const eventType of ['triathlon', 'hyrox'] as const) {
+      const s = makeState({
+        phases,
+        eventType,
+        historicWeeklyTSS: [365, 375, 385, 395, 405],
+        ctlBaseline: 385,
+        sportBaselineByType: {
+          cycling: { avgSessionRawTSS: 100, sessionsPerWeek: 3 },
+          swimming: { avgSessionRawTSS: 50, sessionsPerWeek: 2 },
+        } as any,
+      });
+      expect(computePlannedWeekTarget(s, 1)).toBe(594); // 200 x 0.97 + 400
+      expect([7, 8].map(w => computePlannedWeekTarget(s, w))).toEqual([540, 510]); // 200 x 0.70 / 0.55 + 400
+      expect(computePlannedWeekTarget(s, 8, 'A')).toBe(Math.round(385 * 0.55));
+    }
+  });
+
+  it('triathlon and HYROX race week: the AI Coach context carries the 0.55 Signal A target, the only place those modes read it', () => {
+    // Tri and HYROX Plan, Load, Stats and debrief views never read the weekly target, so the
+    // Signal B figures above (594 / 540 / 510) appear on no tri or HYROX screen. The coach
+    // context is where race week's lower target reaches these users.
+    const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
+    setClock(8, 2);
+    for (const eventType of ['triathlon', 'hyrox'] as const) {
+      const s = makeState({
+        phases,
+        eventType,
+        w: 8,
+        historicWeeklyTSS: [365, 375, 385, 395, 405],
+        ctlBaseline: 385,
+        sportBaselineByType: {
+          cycling: { avgSessionRawTSS: 100, sessionsPerWeek: 3 },
+          swimming: { avgSessionRawTSS: 50, sessionsPerWeek: 2 },
+        } as any,
+        ...(eventType === 'triathlon' ? { triConfig: { distance: '70.3' } as any } : {}),
+      });
+      const ctx = buildCoachContext(s) as { fitness_trend: { planned_week_tss: number | null } };
+      // 385 x 0.55 = 212. The 0-indexed position gave 385 x 0.70 = 270.
+      expect(ctx.fitness_trend.planned_week_tss).toBe(Math.round(385 * 0.55));
+      expect(ctx.fitness_trend.planned_week_tss).toBe(computePlannedWeekTarget(s, 8, 'A'));
+    }
   });
 });
 
@@ -140,7 +235,7 @@ describe("'taper'-labelled recovery weeks are deloads, not a race taper", () => 
       expect(resolvePlannedWeekPhase(s, w).phase).toBe('deload');
       expect(computePlannedWeekTarget(s, w)).toBe(rowTarget('deload', 'performance'));
     }
-    expect(rowTarget('deload', 'performance')).not.toBe(rowTarget('taper', 'performance', 0, 1));
+    expect(rowTarget('deload', 'performance')).not.toBe(rowTarget('taper', 'performance', 1, 1));
   });
 
   it('double periodization: the inter-cycle recovery weeks are deloads, the final run is the race taper', () => {
@@ -153,7 +248,7 @@ describe("'taper'-labelled recovery weeks are deloads, not a race taper", () => 
     for (const w of midTaper) expect(resolvePlannedWeekPhase(s, w).phase).toBe('deload');
     const finalLen = phases.length - finalStart + 1;
     for (let i = 0; i < finalLen; i++) {
-      expect(resolvePlannedWeekPhase(s, finalStart + i)).toMatchObject({ phase: 'taper', weekInTaper: i, taperWeeks: finalLen });
+      expect(resolvePlannedWeekPhase(s, finalStart + i)).toMatchObject({ phase: 'taper', weekInTaper: i + 1, taperWeeks: finalLen });
     }
   });
 });
@@ -197,9 +292,26 @@ describe('Decayed carry judges each past week against its own target', () => {
     s.w = 12;
     setWeekLoad(s.wks[8], rowTarget('build', 'recreational'));
     setWeekLoad(s.wks[9], rowTarget('peak', 'recreational'));
-    setWeekLoad(s.wks[10], rowTarget('taper', 'recreational', 0, 2));
+    setWeekLoad(s.wks[10], rowTarget('taper', 'recreational', 1, 2));
     setClock(12, 0);
     expect(computeCurrentWeekCarry(s, 12)).toBe(0);
+  });
+
+  it('a first taper week loaded above its 0.70 target carries into race week, though it sat under the old 0.85 one', () => {
+    // The live carry re-judges past taper weeks against their 1-indexed targets on every render,
+    // so a mid-taper user can see carry appear that the 0-indexed reading did not produce.
+    const s = eliteState();
+    s.w = 12;
+    expect(rowTarget('taper', 'recreational', 1, 2)).toBe(280);
+    expect(rowTarget('taper', 'recreational', 0, 2)).toBe(340); // batch-1 reading of week 11
+    setWeekLoad(s.wks[10], 310);
+    setClock(12, 0);
+    const carry = computeCurrentWeekCarry(s, 12);
+    // 30 TSS over target, decayed about 3.5 to 4 days to Monday noon.
+    expect(carry).toBeGreaterThan(30 * 0.5);
+    expect(carry).toBeLessThan(30 * 0.7);
+    const oldReading = (w: number) => (w === 11 ? rowTarget('taper', 'recreational', 0, 2) : computePlannedWeekTarget(s, w));
+    expect(computeDecayedCarry(s.wks, 12, oldReading, PLAN_START)).toBe(0);
   });
 
   it('continuous mode: the base week after a block deload done to plan starts at zero carry', () => {
@@ -222,7 +334,7 @@ describe('Decayed carry judges each past week against its own target', () => {
     const projection = computeAcwrReductionProjection(s, []);
     expect(projection).not.toBeNull();
     expect(projection!.projected).toBe(0);
-    expect(projection!.target).toBe(rowTarget('taper', 'recreational', 0, 2));
+    expect(projection!.target).toBe(rowTarget('taper', 'recreational', 1, 2));
   });
 
   it('a genuine overshoot still carries, decayed from that week', () => {

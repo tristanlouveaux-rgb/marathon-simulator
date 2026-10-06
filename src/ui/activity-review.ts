@@ -47,7 +47,7 @@ import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
 import { TL_PER_MIN, SPORTS_DB, SPORT_LABELS } from '@/constants';
 import { resolveSportForActivity } from '@/ui/sport-picker-modal';
-import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { formatKm } from '@/utils/format';
 
@@ -107,8 +107,8 @@ function getWeekWorkoutsForReview() {
  *
  * In tri mode we instead:
  *   1. Persist each cross-training item as an adhoc workout. This also
- *      writes to `wk.garminActuals` and increments `wk.actualTSS` (see
- *      `addAdhocWorkoutFromPending`).
+ *      writes to `wk.garminActuals` (see `addAdhocWorkoutFromPending`); the
+ *      week's load is derived from those records (computeWeekActualTSS).
  *   2. Run the tri suggestion aggregator. The `detectCrossTrainingOverload`
  *      detector reads `wk.adhocWorkouts` + `wk.garminActuals` and proposes
  *      per-discipline mods if the week is meaningfully over plan.
@@ -1506,16 +1506,13 @@ function applyReview(
       matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
     }
 
-    // Store cross-training TL, impact load, and leg load
+    // Store impact load and leg load. No week TSS to bump: computeWeekActualTSS
+    // derives it from the adhoc entries above (B18). The runSpec-weighted add that
+    // used to sit here put a second, Signal A copy of the overflow on the total.
     {
       const sport = normalizeSport(combinedActivity.sport) as SportKey;
       const cfg = SPORTS_DB[sport];
-      const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
-      const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? normalizeiTrimp(combinedActivity.iTrimp) * runSpec
-        : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
-      wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
       const mostRecentStart = remainingCross.reduce((a, b) => (a.startTime > b.startTime ? a : b)).startTime;
       recordLegLoad(sport, combinedActivity.duration_min, new Date(mostRecentStart).getTime());
@@ -2161,16 +2158,13 @@ export function autoProcessActivities(
       wk3.unspentLoadItems = wk3.unspentLoadItems.filter(u => !overflowIds.has(u.garminId));
     }
 
-    // Store cross-training TL, impact load, and leg load
+    // Store impact load and leg load. No week TSS to bump: computeWeekActualTSS
+    // derives it from the adhoc entries above (B18). The runSpec-weighted add that
+    // used to sit here put a second, Signal A copy of the overflow on the total.
     {
       const sport = normalizeSport(combinedActivity.sport) as SportKey;
       const cfg = SPORTS_DB[sport];
-      const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
-      const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? normalizeiTrimp(combinedActivity.iTrimp) * runSpec
-        : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
-      wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
       const mostRecentStart = overflow.reduce((a, b) => (a.startTime > b.startTime ? a : b)).startTime;
       recordLegLoad(sport, combinedActivity.duration_min, new Date(mostRecentStart).getTime());

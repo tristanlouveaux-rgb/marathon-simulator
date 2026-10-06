@@ -2222,7 +2222,6 @@ function wireAccountHandlers(): void {
     const oldWks = (s.wks ?? []).map(wk => ({
       garminActuals: wk.garminActuals,
       garminMatched: wk.garminMatched,
-      actualTSS: wk.actualTSS,
       rated: wk.rated,
     }));
 
@@ -2244,7 +2243,6 @@ function wireAccountHandlers(): void {
       if (old.garminActuals && Object.keys(old.garminActuals).length > 0) {
         freshState.wks[i].garminActuals = old.garminActuals;
         freshState.wks[i].garminMatched = old.garminMatched;
-        freshState.wks[i].actualTSS = old.actualTSS;
         freshState.wks[i].rated = old.rated;
       }
     }

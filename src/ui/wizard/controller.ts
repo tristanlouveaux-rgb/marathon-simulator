@@ -3,6 +3,7 @@ import { defaultOnboardingState } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderStep } from './renderer';
+import { releaseHeldTrimpSyncs } from '@/data/trimp-sex-gate';
 
 /** Consolidated wizard (re-ordered 2026-04-27): welcome → connect-data → goals →
  *  race-target → schedule → review → initializing → plan-preview-v2 → main-view.
@@ -569,6 +570,9 @@ export function completeOnboarding(): void {
     },
   });
   saveState();
+  // Completion opens the sex gate whatever the answer: s.biologicalSex is
+  // canonical from here on.
+  void releaseHeldTrimpSyncs(getState());
 }
 
 /**
@@ -681,6 +685,13 @@ export function canGoBack(): boolean {
 function renderCurrentStep(): void {
   const s = getState();
   if (!s.onboarding) return;
+  // Every step change passes through here. Syncs held for the athlete's sex
+  // (trimp-sex-gate.ts) run once it is final or the question is behind the
+  // user. Releasing on the step change rather than in updateOnboarding means
+  // the about-you / schedule answer counts when Continue is pressed, not on a
+  // pill tap the user may still correct. Released before the step renders, so
+  // the review step's awaitStartupSyncs sees them.
+  void releaseHeldTrimpSyncs(s);
   renderStep(s.onboarding.currentStep, s.onboarding);
 }
 

@@ -21,7 +21,7 @@ import { healMissingITrimp, reconcileCrossSourceDuplicates } from '@/calculation
 import { bindAthleteNormalizerToState, calibrateTssPerActiveMinute, normalizeiTrimp } from '@/calculations/fitness-model';
 import { plannedTssPerMin } from '@/constants';
 import { calculateWorkoutLoad } from '@/workouts';
-import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates, applyStravaAthletePrefill } from '@/data/stravaSync';
 import { STRAVA_ENABLED, NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { READINESS_LONGEST_WINDOW_WEEKS } from '@/constants/race-readiness-targets';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
@@ -1335,21 +1335,9 @@ async function launchApp(): Promise<void> {
     import('@/state').then(({ updateState, saveState }) => {
       updateState({ stravaConnected: true });
       // Pre-fill onboarding profile from the Strava athlete, without clobbering
-      // anything the user already entered.
-      const ob = state.onboarding;
-      if (ob) {
-        const patch: Partial<typeof ob> = {};
-        if (!ob.biologicalSex && (stravaSex === 'M' || stravaSex === 'F')) {
-          patch.biologicalSex = stravaSex === 'M' ? 'male' : 'female';
-        }
-        const w = stravaWeight ? Number(stravaWeight) : NaN;
-        if (!ob.bodyWeightKg && Number.isFinite(w) && w > 0) {
-          patch.bodyWeightKg = Math.round(w * 10) / 10;
-        }
-        if (Object.keys(patch).length > 0) {
-          updateState({ onboarding: { ...ob, ...patch } });
-        }
-      }
+      // anything the user already entered. Also releases syncs held for the
+      // athlete's sex: the launch backfill below fires before this callback.
+      applyStravaAthletePrefill(stravaSex, stravaWeight);
       saveState();
     });
     resetStravaCache();
@@ -1362,6 +1350,10 @@ async function launchApp(): Promise<void> {
     //     onboarding numbers are strictly better with it
     //   - main view: confirm via overlay — an established plan exists, the
     //     user decides when their history merges in
+    // Mid-wizard, the sync holds itself until the sex is final: about-you is
+    // left (triathlon, cycling, HYROX) or, for running and fitness with no sex
+    // from Strava, schedule is answered (trimp-sex-gate.ts). The rows it stamps
+    // are cached with the β of the sex it sends.
     const runStravaSync = () => syncStravaActivities().catch(() => {});
     if (existingCount > 0 && !onMainView) {
       setTimeout(() => {
@@ -1613,7 +1605,12 @@ async function launchApp(): Promise<void> {
     console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0}, needsTempHeal=${needsTempHeal}, baselineAgeDays=${ageDays === Infinity ? 'never' : ageDays.toFixed(1)})`);
     // Tracked so `awaitStartupSyncs()` (e.g. the onboarding review pipeline)
     // can wait for this DB write to land before reading.
-    trackStartupTask(backfillStravaHistory(52).then(() => {
+    trackStartupTask(backfillStravaHistory(52).then((result) => {
+      // Held for the athlete's sex mid-wizard (trimp-sex-gate.ts): nothing ran
+      // yet, so the heal flag stays unset. The held backfill runs the same 52
+      // weeks once the sex is final; the next launch's backfill sets the flag
+      // (cached rows are skipped).
+      if (result.held) return;
       const mut = getMutableState();
       mut.ambientTempHealDone = true;
       saveState();

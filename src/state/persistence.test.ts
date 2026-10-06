@@ -448,6 +448,34 @@ describe('State Persistence', () => {
     });
   });
 
+  // wk.actualTSS was an add-only running total that drifted from the activities
+  // (audit B18). A week's load is derived by computeWeekActualTSS; loading saved
+  // state strips the legacy key so no reader can ever pick it up.
+  describe('loadState drops the retired wk.actualTSS running total', () => {
+    it('removes a legacy actualTSS from every plan week and archived week, and persists the cleanup', () => {
+      const wks = createEmptyWeeks(16).map((wk, i) => (i < 3 ? { ...wk, actualTSS: 240 + i } : wk));
+      const blob = {
+        ...getDefaultState(),
+        planStartDate: '2026-06-01',
+        initialBaseline: 6000,
+        currentFitness: 6000,
+        forecastTime: 5800,
+        w: 3,
+        tw: 16,
+        wks,
+        previousPlanWks: [{ planStartDate: '2026-01-05', weeks: [{ w: 1, actualTSS: 313 }], archivedAt: '2026-05-30T00:00:00Z' }],
+      };
+      localStorageMock.setItem('marathonSimulatorState', JSON.stringify(blob));
+
+      expect(loadState()).toBe(true);
+      const live = getState();
+      expect(live.wks.some(wk => 'actualTSS' in wk)).toBe(false);
+      expect('actualTSS' in live.previousPlanWks![0].weeks[0]).toBe(false);
+      const saved = JSON.parse(localStorageMock.getItem('marathonSimulatorState')!);
+      expect(saved.wks.some((wk: Record<string, unknown>) => 'actualTSS' in wk)).toBe(false);
+    });
+  });
+
   // "Reset plan" (preserve) vs "Wipe everything" (full): the only state-level
   // difference is whether the archived weekly history (previousPlanWks) survives
   // so the rebuilt plan can re-attach this week's activities.

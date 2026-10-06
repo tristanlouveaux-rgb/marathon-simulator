@@ -65,6 +65,7 @@ import {
 } from '@/data/appleHealthRoute';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { resolveTrimpSex } from '@/calculations/trimp';
+import { isTrimpSexPending, holdUntilTrimpSexKnown, releaseHeldTrimpSyncs } from '@/data/trimp-sex-gate';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import {
   detectRunRepsFromStream,
@@ -454,6 +455,9 @@ export async function syncAppleAthleteProfile(): Promise<void> {
   if (changed) {
     saveState();
     console.log('[AppleHealthSync] Athlete profile seeded from HealthKit (clobber-safe)');
+    // HealthKit can be the first source of the athlete's sex mid-wizard:
+    // syncs held for it (trimp-sex-gate.ts) run now if that sex is final.
+    void releaseHeldTrimpSyncs(s);
   }
 }
 
@@ -592,6 +596,16 @@ const HR_SAMPLE_LIMIT = 6000;
  */
 export async function syncAppleHealth(opts?: { forceFullHistory?: boolean }): Promise<void> {
   if (!isNativeiOS()) { _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} not-ios (web/Android — no HealthKit)`; return; }
+  // Mid-wizard, before the sex is final (about-you or schedule still ahead):
+  // the iTRIMP below carries the β of the sex resolved now, the male β when
+  // none is, and is upserted into garmin_activities. After the first backfill
+  // only the latest 14 days are re-read automatically. Hold the sync
+  // (trimp-sex-gate.ts).
+  if (isTrimpSexPending(getMutableState())) {
+    holdUntilTrimpSexKnown('apple-workouts', () => syncAppleHealth(opts));
+    _lastWorkoutSyncDiag = `${DIAG_BUILD_TAG} held: waiting for the athlete's sex (iTRIMP β)`;
+    return;
+  }
   // Workouts now read through our HealthExtras plugin (HKWorkoutType query),
   // NOT capgo — capgo's auth crashes on iOS 26.x. This is the Garmin-via-Apple-
   // Health activity pipe (Garmin Connect → Apple Health → here), so Apple-only /

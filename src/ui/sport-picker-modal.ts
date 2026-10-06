@@ -6,18 +6,17 @@
  *
  * Writes back:
  *  - actual.manualSport (user override for load/impact/leg-load)
- *  - wk.actualTSS / wk.actualImpactLoad delta
+ *  - wk.actualImpactLoad delta (weekly TSS is derived from the actual, computeWeekActualTSS)
  *  - recentLegLoads entry (old removed, new added)
  *  - sportNameMappings[normalizedName] so future syncs of same-named activities auto-apply
  */
 
 import { getMutableState, saveState } from '@/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
-import { SPORTS_DB, SPORT_LABELS, SPORT_ALIASES, TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
+import { SPORTS_DB, SPORT_LABELS, SPORT_ALIASES, IMPACT_PER_KM } from '@/constants';
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { buildStrengthLegLoadEntry, legFeelRawLoad, legFeelRecoveryMult } from '@/calculations/strength-leg-load';
 import type { GarminActual, SportKey, Week } from '@/types';
-import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ── Running leg load ─────────────────────────────────────────────────────────
 //
@@ -206,21 +205,6 @@ export function resolveSportForActivity(
 }
 
 // ── Load deltas ──────────────────────────────────────────────────────────────
-
-/** Compute crossTL for an activity using a given sport's runSpec.
- *  Mirrors the calculation in activity-review.ts:1293 and activity-matcher.ts so
- *  the reclassify delta lines up exactly. */
-function computeCrossTL(actual: GarminActual, sport: SportKey): number {
-  const cfg = SPORTS_DB[sport];
-  const runSpec = cfg?.runSpec ?? 0.35;
-  const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
-  if (actual.iTrimp != null && actual.iTrimp > 0) {
-    return normalizeiTrimp(actual.iTrimp) * runSpec;
-  }
-  // Fallback to RPE-based. No RPE on GarminActual → use moderate default (5 ≈ 1.15/min).
-  const rpeRate = TL_PER_MIN[5] ?? 1.15;
-  return durationMin * rpeRate * runSpec;
-}
 
 function computeImpact(actual: GarminActual, sport: SportKey): number {
   const cfg = SPORTS_DB[sport];
@@ -439,11 +423,12 @@ export function reclassifyActivity(actual: GarminActual, newSport: SportKey): Ga
   // but we still update leg-load + the persisted override below.
   if (located) {
     const { wk } = located;
-    const oldTL = computeCrossTL(actual, oldSport);
-    const newTL = computeCrossTL(actual, newSport);
+    // No weekly TSS delta: computeWeekActualTSS derives the week's load from the
+    // actual itself (Signal B carries no runSpec), and Signal A reads manualSport
+    // on its own. The old runSpec delta here moved a Signal B total by a Signal A
+    // amount (B18).
     const oldImpact = computeImpact(actual, oldSport);
     const newImpact = computeImpact(actual, newSport);
-    wk.actualTSS = Math.max(0, Math.round((wk.actualTSS ?? 0) + (newTL - oldTL)));
     wk.actualImpactLoad = Math.max(0, Math.round((wk.actualImpactLoad ?? 0) + (newImpact - oldImpact)));
   }
 

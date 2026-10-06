@@ -535,8 +535,8 @@ export function listWeekSignalAEntries(
 
 /**
  * Signal A (running-specific) Training Stress Score for a single week: the sum
- * of listWeekSignalAEntries. Always recomputed from raw data (wk.actualTSS may be
- * stale, ISSUE-85).
+ * of listWeekSignalAEntries. Always recomputed from raw data (ISSUE-85; the
+ * stored wk.actualTSS running total is retired, see computeWeekActualTSS).
  *
  * Tracking side: it describes running-specific load. It also feeds planning
  * through the running CTL-gap re-anchor (resolveCtlAdherence → wk.ctlRatio).
@@ -636,6 +636,46 @@ export function computeWeekRawTSS(
   tl += computeWeekDoubleDayBonus(wk, planStartDate, norm);
 
   return Math.round(tl);
+}
+
+/**
+ * A week's actual training load: the one number every "how much load did this
+ * week carry" reader uses. It is the canonical weekly Signal B
+ * (computeWeekRawTSS over the week's own activities and ratings), the same
+ * number the Plan tab's Week Load bar shows before it adds carry.
+ *
+ * It replaces the stored `wk.actualTSS` running total (audit B18). That field
+ * was add-only: a re-review re-added logged and excess items, a last-week
+ * re-review wrote into the current week, and removal, reconcile drops and
+ * Discard never subtracted. Deriving the value means every change to the
+ * activities (remove, dedup, Strava upgrade, re-review, reclassify) shows up
+ * at once, and nothing can drift. A legacy `actualTSS` key on a stored week is
+ * never read.
+ *
+ * Tracking side: it describes load the athlete carried. It leaves out the
+ * decayed carry from earlier weeks (computeCurrentWeekCarry), which the Plan
+ * bar adds on the current week, because carry is not activity done that week.
+ */
+export function computeWeekActualTSS(wk: Week | null | undefined, planStartDate?: string): number {
+  if (!wk) return 0;
+  return computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate);
+}
+
+/**
+ * computeWeekActualTSS for up to `count` plan weeks ending at `currentWeek`
+ * (1-based, inclusive), oldest first. Future plan weeks are never included, and
+ * the current week counts its load so far.
+ */
+export function recentWeeksActualTSS(
+  wks: Week[] | null | undefined,
+  currentWeek: number,
+  count: number,
+  planStartDate?: string,
+): number[] {
+  if (!wks?.length || currentWeek < 1 || count < 1) return [];
+  const end = Math.min(currentWeek, wks.length);
+  const start = Math.max(0, end - count);
+  return wks.slice(start, end).map(wk => computeWeekActualTSS(wk, planStartDate));
 }
 
 /**
@@ -1057,9 +1097,12 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
 
 /**
  * Compute taper multiplier: linear ramp from 0.85 → 0.55 over taper weeks.
- * `weekInTaper` is 0-indexed (the contract the JSDoc of computePlannedWeekTSS
- * states): a 3-week taper gives 0.85 / 0.75 / 0.65, a 2-week taper 0.85 / 0.70,
- * and a 1-week taper 0.70.
+ * `weekInTaper` is 1-indexed (1 = first taper week, totalTaperWeeks = race
+ * week), so race week lands on the 0.55 endpoint: a 3-week taper gives
+ * 0.75 / 0.65 / 0.55 and a 2-week taper 0.70 / 0.55 (Tristan, 2026-10-05).
+ * A 1-week taper keeps its 0.70 special case. Position 0 (no position known)
+ * reads as the ramp's 0.85 start; the canonical caller
+ * (`computePlannedWeekTarget`, planned-week-target.ts) always passes one.
  */
 function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
   if (totalTaperWeeks <= 1) return 0.70;
@@ -1080,7 +1123,7 @@ function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
  * @param phase - Training phase: base/build/peak/deload/taper
  * @param athleteTier - Athlete tier for multiplier selection
  * @param runsPerWeek - Fallback when no history at all
- * @param weekInPhase - For taper: which week within taper (0-indexed)
+ * @param weekInPhase - For taper: which week within taper (1-indexed; totalPhaseWeeks = race week)
  * @param totalPhaseWeeks - For taper: total taper weeks
  */
 export function computePlannedWeekTSS(

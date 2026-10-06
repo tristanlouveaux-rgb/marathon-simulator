@@ -279,6 +279,27 @@ function clearGarminData(s: SimulatorState): void {
 }
 
 /**
+ * Remove the retired `actualTSS` key from every plan week and archived week.
+ * Returns true when anything was removed. A week's actual load is derived by
+ * computeWeekActualTSS (fitness-model.ts); the stored running total was
+ * add-only and drifted from the activities (audit B18).
+ */
+export function stripRetiredWeekTotals(s: Pick<SimulatorState, 'wks' | 'previousPlanWks'>): boolean {
+  let stripped = false;
+  const strip = (wk: unknown) => {
+    if (wk && typeof wk === 'object' && 'actualTSS' in wk) {
+      delete (wk as Record<string, unknown>).actualTSS;
+      stripped = true;
+    }
+  };
+  for (const wk of s.wks ?? []) strip(wk);
+  for (const archive of s.previousPlanWks ?? []) {
+    for (const wk of archive?.weeks ?? []) strip(wk);
+  }
+  return stripped;
+}
+
+/**
  * Load state from localStorage
  * @returns True if state was loaded successfully
  */
@@ -334,6 +355,15 @@ export function loadState(): boolean {
       console.log('  Cleared garmin data for week-aware re-sync');
 
       localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+    }
+
+    // Drop the retired wk.actualTSS running total (audit B18) from every plan and
+    // archived week. It was add-only and drifted from the activities; the week's
+    // load is derived by computeWeekActualTSS. Stripping it means no future
+    // reader can pick up a legacy value.
+    if (stripRetiredWeekTotals(migrated)) {
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+      console.log('  Dropped the retired wk.actualTSS running total from stored weeks');
     }
 
     // Clean up old-format workout mods created before the modReason prefix fix.

@@ -26,6 +26,7 @@ import {
   buildDailySignalBTSS,
   fmtSleepDebt,
 } from '@/calculations/sleep-insights';
+import { recentWeeksActualTSS } from '@/calculations/fitness-model';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
@@ -221,10 +222,15 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
 
   // Insights
   const stageInsight   = entry != null ? getStageInsight(entry, physiologyHistory) : null;
-  const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS: wks.slice(-4).map((w: any) => w.actualTSS ?? 0) });
+  // Recent weekly load: the 4 plan weeks ending at the current week (the current
+  // week counts its load so far), each derived from its activities. Reading
+  // wks.slice(-4) took the final plan weeks, so the hard-week check looked at the
+  // end of the plan, not at recent training.
+  const state = getState();
+  const recentWeeklyTSS = recentWeeksActualTSS(wks, state.w, 4, state.planStartDate);
+  const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS });
   const primaryInsight = stageInsight ?? generalInsight;
 
-  const state = getState();
   const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks);
 
   // Sleep bank

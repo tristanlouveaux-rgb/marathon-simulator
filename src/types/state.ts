@@ -623,7 +623,10 @@ export interface Week {
   unspentLoad: number;                  // Unspent cross-training load
   unspentLoadItems?: UnspentLoadItem[]; // Individual items making up unspentLoad
   extraRunLoad: number;                 // Extra run load (kept for backward compat)
-  actualTSS?: number;                   // Training Stress Score this week (TSS-calibrated, all activities)
+  // `actualTSS` is retired (audit B18): it was an add-only running total that
+  // drifted from the activities. A week's actual load is derived on demand by
+  // computeWeekActualTSS (fitness-model.ts). Legacy stored values are stripped
+  // on load and never read.
   actualImpactLoad?: number;            // Musculoskeletal leg/impact stress this week
   crossVDOTBonus?: number;              // Bonus from cross-training
   crossTrainingBonus?: number;          // Display bonus

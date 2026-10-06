@@ -1,6 +1,7 @@
 import type { OnboardingStep, OnboardingState } from '@/types/onboarding';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { releaseHeldTrimpSyncs } from '@/data/trimp-sex-gate';
 import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
 import { renderConnectData } from './steps/connect-data';
@@ -154,6 +155,11 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       const s = getMutableState();
       s.hasCompletedOnboarding = true;
       saveState();
+      // Leaving the wizard opens the sex gate (trimp-sex-gate.ts): the launch
+      // syncs it held at goals / connect-data / about-you run now with the
+      // canonical s.biologicalSex. No step change follows, so nothing else
+      // would release them before the next launch.
+      void releaseHeldTrimpSyncs(s);
       document.getElementById('onboarding-banner')?.remove();
       document.getElementById('wizard-return-btn')?.remove();
       // On-demand has no plan — land on Home (where sessions are generated), not the

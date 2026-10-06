@@ -15,10 +15,9 @@
  * existing upgrade path.
  *
  * Load is intentionally NOT recomputed here: the canonical week load
- * (`computeWeekRawTSS`) and the detail TSS read `iTrimp` live, so filling
- * `iTrimp` self-corrects every surface. The stored `wk.actualTSS` running total
- * is left untouched on purpose (recomputing a precise delta would have to mirror
- * `computeWeekRawTSS` and risk a "two numbers, one source" divergence).
+ * (`computeWeekActualTSS` / `computeWeekRawTSS`) and the detail TSS read
+ * `iTrimp` live, so filling `iTrimp` self-corrects every surface. There is no
+ * stored week total to patch (the `wk.actualTSS` running total is retired, B18).
  */
 
 import type { GarminActual } from '@/types';
