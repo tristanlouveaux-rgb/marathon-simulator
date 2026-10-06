@@ -2887,7 +2887,7 @@ function buildHeroSessionCard(opts: {
  * hero language. Two-a-days (e.g. AM swim + PM bike) render as separate glass
  * cards with clear air between them. Tap a session to drill in.
  */
-function buildTodayWorkoutTriathlon(s: SimulatorState): string {
+export function buildTodayWorkoutTriathlon(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   if (!wk) return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your triathlon plan.', false);
 

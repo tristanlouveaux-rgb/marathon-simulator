@@ -36,7 +36,8 @@ describe('applyTriSuggestions', () => {
     const r = applyTriSuggestions(s, [mod]);
     expect(r.applied).toBe(1);
     const w = s.wks![0].triWorkouts![0];
-    expect(w.status).toBe('replaced');
+    expect(w.status).toBe('reduced');
+    expect(w.modReason).toBe('Swapped to easy: high RPE yesterday');
     expect(w.t).toBe('bike_endurance');
     expect(w.estimatedDurationMin).toBe(45);  // 60 × 0.75
     expect(w.originalName).toBeDefined();
@@ -221,7 +222,7 @@ describe('applyTriSuggestions — canonical ladders on real tri sessions', () =>
     w.anaerobic = Math.round(total * 0.23);
     applyTriSuggestions(s, [modFor(w, 'swap_easy', 'rpe_blown')]);
     expect(w.t).toBe('easy');
-    expect(w.status).toBe('replaced');
+    expect(w.status).toBe('reduced');
     expect(w.estimatedDurationMin).toBe(38);
     expect(load(w)).toBe(35);
     expect(w.rpe).toBe(3);

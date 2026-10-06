@@ -2,9 +2,17 @@
  * Apply accepted suggestion mods to `state.wks[*].triWorkouts`.
  *
  * Mirrors how running-side `mergeTimingMods` mutates `wk.workoutMods`. For
- * tri we mutate the planned workouts directly (mark replaced/reduced, attach
- * a `modReason`) so the plan engine and the matcher both see the change.
+ * tri we mutate the planned workouts directly (mark 'reduced', attach a
+ * `modReason`) so the plan engine and the matcher both see the change.
  * Cycling reuses eventType 'triathlon' and goes through the same path.
+ *
+ * Every accepted change, the swap to easy included, sets status 'reduced' (the
+ * generic "changed from plan, still to be done" status, "Adjusted" chip), never
+ * 'replaced'. Most surfaces read 'replaced' as "no longer to be done": the tri
+ * Home Today list and plan-view active-card checks drop it, the run matcher
+ * skips it, the overload detector and the readiness lookahead skip it. A swapped
+ * session is still to be done, so it must stay on all of them. The Adjust
+ * overlay avoids 'replaced' for the same reason (workout-adjust-overlay.ts).
  *
  * **Side of the line**: planning. Mutates state. Caller must `saveState()`.
  *
@@ -224,7 +232,7 @@ function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSu
     setRung(state, week, w, d, to, newMin);
   }
 
-  w.status = 'replaced';
+  w.status = 'reduced';
   w.modReason = `Swapped to easy: ${swapReason(mod.source)}`;
   // A session that was already easy keeps its name (it is the same session,
   // shorter); one that changed intensity reads as the easy swap.

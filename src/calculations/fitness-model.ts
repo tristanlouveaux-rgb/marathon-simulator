@@ -888,9 +888,10 @@ export function estimateWorkoutDurMin(w: Workout, baseMinPerKm: number): number 
  * engine) or 'skipped' (dropped or pushed by a skip handler).
  *
  * Running semantics only. In the stored-plan modes (triathlon, cycling, HYROX)
- * 'replaced' marks a session swapped to an easier one that is still to be done
- * (tri-suggestion-apply.ts), so getPlannedDayTSSContext's tri branch checks
- * 'skipped' alone.
+ * the AI coach swap (coach-tools.ts swap_workout) marks a session swapped to
+ * another type 'replaced' while it is still to be done, so
+ * getPlannedDayTSSContext's tri branch checks 'skipped' alone. Accepted tri
+ * suggestions set 'reduced' (tri-suggestion-apply.ts).
  *
  * A running skip recorded only as `wk.rated[id] === 'skip'` is a rating, not a
  * plan change. It stays priced: resolveCtlAdherence reads the same planned-day

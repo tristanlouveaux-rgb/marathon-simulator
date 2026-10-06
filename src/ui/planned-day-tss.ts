@@ -101,8 +101,10 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
         // Pushed or dropped sessions (tri-skip-handler sets 'skipped'; a pushed
         // session's clone lives in next week) are off this week's plan. Mirror
         // of the running replaced/skipped guard (computePlannedWorkoutSignalBTSS).
-        // 'replaced' is NOT excluded here: in these modes it marks a session
-        // swapped to an easier one that is still to be done.
+        // 'replaced' is NOT excluded here: in these modes the AI coach swap
+        // (coach-tools.ts swap_workout) marks a session swapped to another
+        // type that is still to be done. Accepted tri suggestions, the swap to
+        // easy included, set 'reduced' (tri-suggestion-apply.ts).
         if (w.status === 'skipped') continue;
         const day = w.dayOfWeek;
         if (day == null || day < 0 || day > 6) continue;
