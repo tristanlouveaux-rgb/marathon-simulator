@@ -51,11 +51,34 @@
  * current week the synced run goes to Activity Review, which offers the
  * in-app slot, so the user decides whether it is the same session.
  *
+ * Plan weeks: the matcher files a synced row by its UTC calendar day
+ * (weekIndexForDate), while an in-app GPS run sits in s.wks[s.w - 1] and a Mark
+ * as Done record in its card's week. A Monday-morning session east of UTC, a
+ * Sunday-evening session west of UTC, or any session while s.w is held back by
+ * the debrief gate puts the two copies in different weeks. The recorded and
+ * same-day checks are bounded in time (start within 4 h, or the same local
+ * calendar day), so the matcher runs them over every plan week
+ * (findInAppRunToSupersedeAcrossWeeks) and supersedes the record in the week
+ * that holds it. The cross-day 'completion' check stays in the row's own week.
+ *
  * Sport: a synced activity of a different sport never supersedes, overwrites
- * or drops an in-app record. The windows above are timing rules only, so every
- * check that applies them to an in-app record also requires the same sport
- * family (isSameSportAsInApp): the matcher's run-only supersede, the Strava
- * upgrade loop and the cross-source reconcile passes.
+ * or drops an in-app record. The windows above are timing rules only, so each
+ * check that applies them to an in-app record carries a sport gate:
+ *   - the matcher's run supersede runs for run rows only (mapGarminType(...)
+ *     === 'run') and matches in-app RUN records only (isInAppRunActual);
+ *   - the guided-strength and HYROX station upgrades keep their own gates:
+ *     the guided-strength upgrade takes gym-bucket rows (mapGarminType 'gym')
+ *     onto a strength in-app record (isStrengthActual), and the HYROX station
+ *     upgrade takes HIIT rows or a HYROX-named row. Both search the row's own
+ *     plan week only;
+ *   - the Strava upgrade loop and the cross-source reconcile passes use
+ *     isSameSportAsInApp.
+ *
+ * Plan slots: a manual-completion record (`guided-manual-`: a run-card Mark as
+ * Done or a HYROX session quick done) is stamped at planned-day noon, so a
+ * timing collision with an activity that fills ANOTHER plan slot is no evidence
+ * of one session. The reconcile drops it only for a synced extra
+ * (isExtraActivityKey), never for another slot's activity.
  */
 
 import type { GarminActual, GpsRecording, Week, Workout } from '@/types';
@@ -64,13 +87,23 @@ import {
   isStrengthActual, isGymSessionActual, resolveActualSport, isRunSport,
 } from '@/cross-training/activities';
 import { localDateKey } from '@/utils/local-date';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 /** garminId prefix of every in-app record (strength-complete.ts convention). */
 export const IN_APP_GARMIN_ID_PREFIX = 'guided-';
 /** In-app GPS recording ids are `gps_<ts>` (gps-events.ts), so their actual is `guided-gps_<ts>`. */
 const GPS_GARMIN_ID_PREFIX = `${IN_APP_GARMIN_ID_PREFIX}gps_`;
-/** Manual completions (Mark as Done) carry `guided-manual-<ts>`. */
+/**
+ * Manual completions carry `guided-manual-<ts>`: a run-card Mark as Done and a
+ * HYROX session quick done (strength-complete.ts logQuickHyroxActivity). Both
+ * hold planned numbers stamped at planned-day noon, nothing measured.
+ */
 const MANUAL_GARMIN_ID_PREFIX = `${IN_APP_GARMIN_ID_PREFIX}manual-`;
+
+/** garminId for a new manual-completion record. */
+export function manualInAppGarminId(nowMs: number = Date.now()): string {
+  return `${MANUAL_GARMIN_ID_PREFIX}${nowMs}`;
+}
 
 // ── Same-session windows (single source; activity-matcher imports these) ─────
 
@@ -140,7 +173,10 @@ export function isGpsInAppActual(a: { garminId?: string | null } | null | undefi
   return !!a?.garminId && a.garminId.startsWith(GPS_GARMIN_ID_PREFIX);
 }
 
-/** True for a Mark as Done record: planned numbers, nothing measured. */
+/**
+ * True for a manual-completion record (run-card Mark as Done, HYROX session
+ * quick done): planned numbers stamped at planned-day noon, nothing measured.
+ */
 export function isManualInAppActual(a: { garminId?: string | null } | null | undefined): boolean {
   return !!a?.garminId && a.garminId.startsWith(MANUAL_GARMIN_ID_PREFIX);
 }
@@ -202,6 +238,21 @@ export function isSameSportAsInApp(
 ): boolean {
   const family = inAppSportFamily(inApp);
   return family !== 'other' && family === syncedSportFamily(syncedKey, synced);
+}
+
+/**
+ * True when the actual at `key` in `wk.garminActuals` has no plan slot behind
+ * it: a standalone synced activity (`garmin-<id>`), or an actual kept under a
+ * done (non-planned) adhoc id, such as an impromptu in-app GPS run's record or
+ * the watch copy that superseded it. Planned adhoc ids (isPlannedAdhocId) are
+ * plan slots. collectWeekActivities reads its Logged badge from this rule.
+ */
+export function isExtraActivityKey(wk: Week, key: string): boolean {
+  if (key.startsWith('garmin-')) return true;
+  return (wk.adhocWorkouts ?? []).some(w => {
+    const id = (w.id || w.n) as string;
+    return id === key && !isPlannedAdhocId(id);
+  });
 }
 
 // ── Builders ─────────────────────────────────────────────────────────────────
@@ -293,7 +344,7 @@ export function buildPlannedRunActual(
 ): GarminActual {
   const distanceKm = parseDistanceKm(w.d || '');
   return {
-    garminId: `${MANUAL_GARMIN_ID_PREFIX}${opts.nowMs ?? Date.now()}`,
+    garminId: manualInAppGarminId(opts.nowMs),
     startTime: opts.startTime,
     distanceKm: distanceKm > 0 ? distanceKm : 0,
     durationSec: Math.max(0, Math.round(opts.durationMin * 60)),
@@ -409,8 +460,18 @@ export function dropInAppActual(wk: Week | undefined, key: string): boolean {
 export function findInAppRunToSupersede(
   wk: Week,
   synced: { startTime: string; durationSec: number },
-  mode: 'recorded' | 'same-day-completion' | 'completion',
+  mode: SupersedeMode,
 ): string | null {
+  return nearestInAppRun(wk, synced, mode)?.key ?? null;
+}
+
+type SupersedeMode = 'recorded' | 'same-day-completion' | 'completion';
+
+function nearestInAppRun(
+  wk: Week,
+  synced: { startTime: string; durationSec: number },
+  mode: SupersedeMode,
+): { key: string; gap: number } | null {
   const syncedMs = new Date(synced.startTime).getTime();
   const syncedDay = mode === 'same-day-completion' ? localDateKey(synced.startTime) : '';
   let bestKey: string | null = null;
@@ -426,5 +487,33 @@ export function findInAppRunToSupersede(
     const gap = a.startTime ? Math.abs(syncedMs - new Date(a.startTime).getTime()) : Infinity;
     if (bestKey == null || gap < bestGap) { bestKey = key; bestGap = gap; }
   }
-  return bestKey;
+  return bestKey == null ? null : { key: bestKey, gap: bestGap };
+}
+
+/**
+ * findInAppRunToSupersede over several plan weeks: the in-app run record with
+ * the nearest start among `weeks`, and the week that holds it. Weeks are
+ * searched in order and a tie keeps the earlier one, so the caller passes the
+ * synced row's own week first.
+ *
+ * For 'recorded' and 'same-day-completion' the matcher passes every plan week.
+ * Those windows are bounded in time (start within 4 h, or the same local
+ * calendar day), so a wider search can only reach the same session filed in
+ * another week: weekIndexForDate files the row by its UTC day, a GPS run sits
+ * in s.wks[s.w - 1] (s.w can trail the calendar by more than one week while a
+ * debrief is pending, welcome-back.ts debriefCap) and a Mark as Done record in
+ * its card's week.
+ */
+export function findInAppRunToSupersedeAcrossWeeks(
+  weeks: readonly (Week | null | undefined)[],
+  synced: { startTime: string; durationSec: number },
+  mode: SupersedeMode,
+): { week: Week; key: string } | null {
+  let best: { week: Week; key: string; gap: number } | null = null;
+  for (const week of weeks) {
+    if (!week) continue;
+    const hit = nearestInAppRun(week, synced, mode);
+    if (hit && (best == null || hit.gap < best.gap)) best = { week, key: hit.key, gap: hit.gap };
+  }
+  return best ? { week: best.week, key: best.key } : null;
 }

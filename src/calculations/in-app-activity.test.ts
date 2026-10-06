@@ -5,7 +5,7 @@
  * The load assertions run the real fitness-model functions on the exact week
  * shapes the app writes. The dedup assertions run the real matchAndAutoComplete.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 vi.mock('@/state/persistence', async (orig) => ({
@@ -720,5 +720,243 @@ describe('a cross-day watch run in the current week goes to review instead of re
     expect(wk.garminActuals!['hx-w1-run-0'].garminId.startsWith('guided-manual-')).toBe(true);
     expect(wk.garminMatched!['apple-TUE']).toBe('__pending__');
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(40 * TL_PER_MIN[4])); // the review decides the Tuesday run
+  });
+});
+
+// ── Week boundary: the watch copy and the in-app record can sit in different plan weeks ──
+//
+// The matcher files a synced row by its UTC calendar day (weekIndexForDate),
+// while an in-app GPS record sits in s.wks[s.w - 1] and a Mark as Done record in
+// the card's week. A Monday-morning session east of UTC, a Sunday-evening session
+// west of UTC, or any session while s.w is held back by the debrief gate puts the
+// two copies in different weeks. Both same-session windows are bounded in time
+// (start within 4 h, or the same local calendar day), so the supersede searches
+// every plan week and the copy lands on the record's own key and week.
+
+const ORIGINAL_TZ = process.env.TZ;
+function restoreTz(): void {
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+}
+
+/** A GPS recording whose first fix is `startIso`, 45 min, 8 km. */
+function gpsAt(startIso: string): GpsRecording {
+  const startMs = Date.parse(startIso);
+  return gpsRecording({
+    id: `gps_${startMs}`,
+    date: new Date(startMs + 2700 * 1000).toISOString(),
+    route: [{ lat: 51.5, lng: -0.1, altitude: null, accuracy: 5, speed: null, timestamp: startMs }],
+  });
+}
+
+/** Impromptu GPS run stored the way handleImpromptuRun stores it, in plan week `weekNum`. */
+function storeImpromptuGps(s: ReturnType<typeof baseState>, weekNum: number, rec: GpsRecording): void {
+  const wk = s.wks[weekNum - 1];
+  wk.adhocWorkouts = [{ n: 'Quick Run', d: '8.0km', r: 5, t: 'easy', id: rec.id } as Workout];
+  wk.rated[rec.id] = 7;
+  writeInAppActual(wk, rec.id, buildGpsRunActual(rec, { rpe: 7, name: 'Quick Run' }));
+}
+
+/** Weekly raw Signal B summed over every plan week: one session must count once across weeks. */
+function rawTssAllWeeks(): number {
+  return getMutableState().wks.reduce((sum, wk) => sum + computeWeekRawTSS(wk, wk.rated), 0);
+}
+
+/** True when any plan week logged `garminId` as a standalone extra. */
+function loggedAsExtraAnywhere(garminId: string): boolean {
+  return getMutableState().wks.some(wk =>
+    !!wk.garminActuals?.[`garmin-${garminId}`] || (wk.adhocWorkouts ?? []).some(w => w.id === `garmin-${garminId}`));
+}
+
+describe('a watch copy filed in the neighbouring plan week supersedes the in-app record, UTC+10 (audit B9)', () => {
+  beforeAll(() => { process.env.TZ = 'Australia/Brisbane'; });
+  afterAll(restoreTz);
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('the zone is applied (guards against a runtime that ignores TZ)', () => {
+    expect(new Date(2026, 9, 5).getTimezoneOffset()).toBe(-600);
+  });
+
+  // Monday 5 Oct 07:00 in Brisbane is Sunday 4 Oct 21:00Z: the copy maps to
+  // week 1 (a past week) while the run was recorded in week 2.
+  it.each([
+    ['Strava', 'strava-Y'],
+    ['Apple Health', 'apple-Y'],
+  ])('an impromptu GPS run recorded Monday morning is superseded by its %s copy under its own key in week 2', (_label, gid) => {
+    const s = baseState(2, 2);
+    const rec = gpsAt('2026-10-04T21:00:00Z');
+    storeImpromptuGps(s, 2, rec);
+    setState(s);
+
+    matchAndAutoComplete([runRow({ garmin_id: gid, start_time: '2026-10-04T21:02:00Z', duration_sec: 2760, distance_m: 8100 })]);
+
+    const [wk1, wk2] = getMutableState().wks;
+    expect(wk2.garminActuals![rec.id].garminId).toBe(gid);
+    expect(wk2.garminMatched![gid]).toBe(rec.id);
+    expect(wk2.adhocWorkouts!.map(w => w.id)).toEqual([rec.id]);
+    expect(Object.keys(wk1.garminActuals ?? {})).toHaveLength(0);
+    expect(loggedAsExtraAnywhere(gid)).toBe(false);
+    // One run across both weeks, at the watch's 46 minutes.
+    expect(rawTssAllWeeks()).toBe(Math.round(46 * TL_PER_MIN[7]));
+  });
+
+  it('a run marked done on week 2 Monday is superseded by the Monday-morning watch copy filed in week 1', () => {
+    const s = baseState(2, 2);
+    const monday = { id: 'W2-easy-0', n: 'Easy Run', t: 'easy', d: '8km', r: 3, rpe: 3, dayOfWeek: 0 } as Workout;
+    s.wks[1].rated['W2-easy-0'] = 3;
+    writeInAppActual(s.wks[1], 'W2-easy-0', buildPlannedRunActual(monday, {
+      rpe: 3, startTime: manualCompletionStartIso(PLAN_START, 2, 0, Date.parse('2026-10-06T08:00:00Z')), durationMin: 46,
+    }));
+    setState(s);
+
+    // 07:00 local Monday: five hours before the noon stamp, same local day.
+    matchAndAutoComplete([runRow({ garmin_id: 'apple-MON', start_time: '2026-10-04T21:00:00Z', duration_sec: 2760, distance_m: 8100 })]);
+
+    const [wk1, wk2] = getMutableState().wks;
+    expect(wk2.garminActuals!['W2-easy-0'].garminId).toBe('apple-MON');
+    expect(wk2.garminMatched!['apple-MON']).toBe('W2-easy-0');
+    expect(wk2.rated['W2-easy-0']).toBe(3);
+    expect(Object.keys(wk1.garminActuals ?? {})).toHaveLength(0);
+    expect(loggedAsExtraAnywhere('apple-MON')).toBe(false);
+    expect(rawTssAllWeeks()).toBe(Math.round(46 * TL_PER_MIN[3]));
+  });
+});
+
+describe('a watch copy filed in the neighbouring plan week supersedes the in-app record, UTC-7 (audit B9)', () => {
+  beforeAll(() => { process.env.TZ = 'America/Phoenix'; });
+  afterAll(restoreTz);
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('the zone is applied (guards against a runtime that ignores TZ)', () => {
+    expect(new Date(2026, 9, 4).getTimezoneOffset()).toBe(420);
+  });
+
+  it('a run marked done on week 1 Sunday is superseded by the Sunday-evening watch copy filed in week 2', () => {
+    const s = baseState(2, 2);
+    const sunday = { id: 'W1-long-0', n: 'Long Run', t: 'long', d: '16km', r: 4, rpe: 4, dayOfWeek: 6 } as Workout;
+    s.wks[0].rated['W1-long-0'] = 4;
+    writeInAppActual(s.wks[0], 'W1-long-0', buildPlannedRunActual(sunday, {
+      rpe: 4, startTime: manualCompletionStartIso(PLAN_START, 1, 6, Date.parse('2026-10-06T08:00:00Z')), durationMin: 95,
+    }));
+    setState(s);
+
+    // Sunday 4 Oct 19:00 in Phoenix is Monday 5 Oct 02:00Z: week 2, the current week.
+    matchAndAutoComplete([runRow({ garmin_id: 'strava-SUN', start_time: '2026-10-05T02:00:00Z', duration_sec: 100 * 60, distance_m: 16200 })]);
+
+    const [wk1, wk2] = getMutableState().wks;
+    expect(wk1.garminActuals!['W1-long-0'].garminId).toBe('strava-SUN');
+    expect(wk1.garminMatched!['strava-SUN']).toBe('W1-long-0');
+    expect(wk2.garminMatched?.['strava-SUN']).toBeUndefined(); // not '__pending__' in week 2
+    expect((wk2.garminPending ?? []).some(p => p.garminId === 'strava-SUN')).toBe(false);
+    expect(rawTssAllWeeks()).toBe(Math.round(100 * TL_PER_MIN[4]));
+  });
+});
+
+describe('a watch copy supersedes the in-app record while s.w is held back by the debrief gate (audit B9)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  // recording-handler stores a GPS run in s.wks[s.w - 1]; with the debrief
+  // unfinished, s.w stays at lastCompleteDebriefWeek + 1 (welcome-back.ts).
+  it.each([
+    ['one week', 2, '2026-10-05T07:00:00Z'],
+    ['two weeks', 3, '2026-10-12T07:00:00Z'],
+  ])('a GPS run stored in week 1 but recorded %s later is superseded there, not queued in week %s', (_label, copyWeek, startIso) => {
+    const s = baseState(3, 1);
+    const rec = gpsAt(startIso as string);
+    storeImpromptuGps(s, 1, rec);
+    setState(s);
+
+    const copyStart = new Date(Date.parse(startIso as string) + 120 * 1000).toISOString();
+    matchAndAutoComplete([runRow({ garmin_id: 'strava-LAG', start_time: copyStart, duration_sec: 2760, distance_m: 8100 })]);
+
+    const wks = getMutableState().wks;
+    expect(wks[0].garminActuals![rec.id].garminId).toBe('strava-LAG');
+    expect(wks[0].garminMatched!['strava-LAG']).toBe(rec.id);
+    const copyWk = wks[(copyWeek as number) - 1];
+    expect(copyWk.garminMatched?.['strava-LAG']).toBeUndefined();
+    expect((copyWk.garminPending ?? []).some(p => p.garminId === 'strava-LAG')).toBe(false);
+    expect(rawTssAllWeeks()).toBe(Math.round(46 * TL_PER_MIN[7]));
+  });
+});
+
+// ── Reconcile: a Mark as Done record is never dropped for another plan slot's activity ──
+
+describe('reconcile never deletes a run marked done because another plan slot\'s copy collides with its noon stamp (audit B9)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  /** Local wall-clock time on Wednesday 30 Sep. */
+  const wedAt = (h: number, m = 0) => new Date(2026, 8, 30, h, m, 0).toISOString();
+  const second = { id: 'W1-easy-1', n: 'Easy Run', t: 'easy', d: '7km', r: 3, rpe: 3, dayOfWeek: 2 } as Workout;
+
+  function syncedRun(garminId: string, startTime: string, durationSec: number): GarminActual {
+    return {
+      garminId, startTime, durationSec, distanceKm: 8, avgPaceSecKm: null, avgHR: null, maxHR: null,
+      calories: null, iTrimp: null, activityType: 'RUNNING', displayName: 'Run', workoutName: 'Easy Run',
+    };
+  }
+
+  /** Double-run Wednesday: one run synced onto W1-easy-0, the other ticked Mark as Done on W1-easy-1 (44 min, noon stamp). */
+  function doubleRunDay(otherKey: string, other: GarminActual) {
+    const s = baseState(1, 1);
+    s.wks[0].rated[otherKey] = 4;
+    s.wks[0].garminActuals = { [otherKey]: other };
+    s.wks[0].rated['W1-easy-1'] = 3;
+    writeInAppActual(s.wks[0], 'W1-easy-1', buildPlannedRunActual(second, {
+      rpe: 3, startTime: manualCompletionStartIso(PLAN_START, 1, 2, Date.parse('2026-10-04T20:00:00Z')), durationMin: 44,
+    }));
+    return s;
+  }
+
+  it.each([
+    ['Strava', 'strava-AM'],
+    ['Apple Health', 'apple-AM'],
+  ])('%s: a run on another plan slot three hours before the stamp leaves both runs and both ticks in place', (_label, gid) => {
+    const s = doubleRunDay('W1-easy-0', syncedRun(gid, wedAt(9), 46 * 60));
+    const before = computeWeekRawTSS(s.wks[0], s.wks[0].rated);
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(false);
+    expect(s.wks[0].garminActuals!['W1-easy-0'].garminId).toBe(gid);
+    expect(s.wks[0].garminActuals!['W1-easy-1'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(s.wks[0].rated['W1-easy-0']).toBe(4);
+    expect(s.wks[0].rated['W1-easy-1']).toBe(3);
+    expect(computeWeekRawTSS(s.wks[0], s.wks[0].rated)).toBe(before);
+  });
+
+  it('a run marked done still collapses against the same run synced as an extra (no plan slot behind it)', () => {
+    const s = doubleRunDay('garmin-strava-PM', syncedRun('strava-PM', wedAt(13, 30), 45 * 60));
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(true);
+    expect(Object.keys(s.wks[0].garminActuals!)).toEqual(['garmin-strava-PM']);
+    expect(s.wks[0].rated['W1-easy-1']).toBeUndefined();
+  });
+
+  it('a run marked done still collapses against a watch copy kept under an impromptu GPS run\'s adhoc id (an extra, not a plan slot)', () => {
+    const s = doubleRunDay('gps_1', syncedRun('strava-GPS', wedAt(13, 30), 45 * 60));
+    s.wks[0].adhocWorkouts = [{ n: 'Quick Run', d: '8.0km', r: 5, t: 'easy', id: 'gps_1' } as Workout];
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(true);
+    expect(Object.keys(s.wks[0].garminActuals!)).toEqual(['gps_1']);
+    expect(collectWeekActivities(s.wks[0]).map(e => e.badge)).toEqual(['logged']);
+  });
+
+  it('an impromptu GPS run still collapses against its watch copy already matched to a plan slot', () => {
+    const s = baseState(1, 1);
+    const rec = gpsRecording(); // 07:00Z, 45 min
+    storeImpromptuGps(s, 1, rec);
+    s.wks[0].rated['W1-easy-0'] = 6;
+    s.wks[0].garminActuals!['W1-easy-0'] = syncedRun('strava-SLOT', '2026-09-30T07:03:00Z', 2750);
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(true);
+    expect(Object.keys(s.wks[0].garminActuals!)).toEqual(['W1-easy-0']);
+    expect(s.wks[0].adhocWorkouts ?? []).toHaveLength(0);
+    expect(s.wks[0].rated[rec.id]).toBeUndefined();
   });
 });

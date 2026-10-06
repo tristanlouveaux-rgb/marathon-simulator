@@ -39,7 +39,7 @@ import { persistBodyweightProgress } from '@/calculations/bodyweight-progression
 import type { TrainingPhase } from '@/types/training';
 import { snapshotNotifiedStrengthPrs } from '@/calculations/strength-marker-bumps';
 import { deriveStrengthLegLoad, buildStrengthLegLoadEntry, dropSupersededStrengthEntries } from '@/calculations/strength-leg-load';
-import { manualCompletionStartIso } from '@/calculations/in-app-activity';
+import { manualCompletionStartIso, manualInAppGarminId } from '@/calculations/in-app-activity';
 
 export interface CompleteStrengthOpts {
   /** RPE the user actually rated; defaults to the workout's prescribed RPE so
@@ -314,6 +314,11 @@ function findCompletionHRMatch(wk: Week) {
  * the slot wins. A future-week session keeps the rating only, as Mark as Done
  * on a running plan card does (recordPlannedRunDone): the matcher would not
  * find its record when today's watch copy syncs. Returns true if it wrote.
+ *
+ * The id is a manual-completion id (`guided-manual-`), as on a run card's
+ * Mark as Done: the record carries planned numbers and a noon stamp, so the
+ * cross-source reconcile never drops it for an activity that fills another
+ * plan slot (two filled slots are two sessions).
  */
 function logQuickHyroxActivity(
   workout: Workout,
@@ -331,7 +336,7 @@ function logQuickHyroxActivity(
   const existing = wk.garminActuals[workoutId];
   if (existing && !String(existing.garminId).startsWith('guided-')) return false;
   wk.garminActuals[workoutId] = {
-    garminId: `guided-${Date.now()}`,
+    garminId: manualInAppGarminId(),
     startTime: manualCompletionStartIso(state.planStartDate, weekNum, workout.dayOfWeek),
     distanceKm: 0,
     durationSec: Math.max(0, Math.round(durationSec)),

@@ -19,7 +19,8 @@ import { isStrengthActual } from '@/cross-training/activities';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import {
   isSameRecordedSession, isSameCompletedSession, findInAppRunToSupersede, isInAppActual,
-  isInAppRunActual, isSameSportAsInApp,
+  isInAppRunActual, isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
+  isExtraActivityKey,
 } from './in-app-activity';
 
 /** Row shape returned by the sync-activities Edge Function */
@@ -500,13 +501,24 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
 
   // The passes below drop the lower-priority copy. An in-app record (GPS run,
   // Mark as Done, guided or quick-done strength/HYROX: a `guided-` id) is not a
-  // Garmin-webhook copy, so it is dropped only when the colliding synced entry
-  // is the same sport family (audit B9). Without the sport check an Apple walk
-  // or a Strava ride near a run's noon stamp deleted the run record and the
-  // user's tick on its slot. A run logged as an extra still drops its in-app
-  // run twin.
-  const supersedes = (actual: GarminActual, otherKey: string, other: GarminActual): boolean =>
-    collidesWith(actual, other) && (!isInAppActual(actual) || isSameSportAsInApp(actual, otherKey, other));
+  // Garmin-webhook copy (audit B9):
+  //   - it is dropped only when the colliding synced entry is the same sport
+  //     family. Without the sport check an Apple walk or a Strava ride near a
+  //     run's noon stamp deleted the run record and the user's tick on its slot.
+  //   - a manual completion (run-card Mark as Done, HYROX quick done) is dropped
+  //     only for a synced EXTRA. Its start is a planned-day noon stamp, not a
+  //     recorded start, so colliding with an activity that fills another plan
+  //     slot (the other run on a double-run day) is no evidence of one session:
+  //     two filled plan slots are two sessions. Without this the reconcile on
+  //     every app load deleted the ticked run and its rating.
+  // A GPS or guided record keeps the recorded-window rule against any
+  // same-sport entry, and a run logged as an extra still drops its in-app twin.
+  const supersedes = (week: Week, actual: GarminActual, otherKey: string, other: GarminActual): boolean => {
+    if (!collidesWith(actual, other)) return false;
+    if (!isInAppActual(actual)) return true;
+    if (!isSameSportAsInApp(actual, otherKey, other)) return false;
+    return !isManualInAppActual(actual) || isExtraActivityKey(week, otherKey);
+  };
 
   const dropActual = (week: Week, wid: string, gid: string): void => {
     delete week.garminActuals![wid];
@@ -532,7 +544,7 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
     if (stravaEntries.length === 0) continue;
     for (const [wid, actual] of Object.entries(week.garminActuals)) {
       if (actual.garminId.startsWith('strava-')) continue;
-      if (stravaEntries.some(([sk, sa]) => supersedes(actual, sk, sa))) {
+      if (stravaEntries.some(([sk, sa]) => supersedes(week, actual, sk, sa))) {
         console.log(`[dedup] Removed Garmin actual ${wid} (${actual.garminId}) — Strava entry exists`);
         dropActual(week, wid, actual.garminId);
       }
@@ -549,7 +561,7 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
     for (const [wid, actual] of Object.entries(week.garminActuals)) {
       const gid = actual.garminId;
       if (gid.startsWith('strava-') || gid.startsWith('apple-')) continue;
-      if (appleEntries.some(([ak, ae]) => supersedes(actual, ak, ae))) {
+      if (appleEntries.some(([ak, ae]) => supersedes(week, actual, ak, ae))) {
         console.log(`[dedup] Removed Garmin summary ${wid} (${gid}) — richer Apple Health entry exists`);
         dropActual(week, wid, gid);
       }
@@ -878,12 +890,13 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         if (actual.garminId.startsWith('strava-')) continue; // already Strava
         if (!actual.startTime) continue;
         // In-app records (audit B9) are superseded by sport, never by this
-        // timing-only check. A run (GPS or Mark as Done) is left to
-        // findInAppRunToSupersede in the main loop, which every source goes
-        // through. A guided strength or HYROX session is upgraded here only by a
-        // row of the same sport family. Without this a same-day ride replaced a
-        // run marked done (stamped at planned-day noon) and a same-day run
-        // replaced a HYROX quick done, misfiling both sessions.
+        // timing-only check. A run (GPS or Mark as Done) is left to the main
+        // loop's in-app run supersede, which every source goes through and
+        // which searches every plan week. A guided strength or HYROX session
+        // is upgraded here only by a row of the same sport family. Without
+        // this a same-day ride replaced a run marked done (stamped at
+        // planned-day noon) and a same-day run replaced a HYROX quick done,
+        // misfiling both sessions.
         if (isInAppActual(actual)) {
           if (isInAppRunActual(actual)) continue;
           if (!isSameSportAsInApp(actual, `garmin-${row.garmin_id}`, {
@@ -1386,12 +1399,23 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // post-matching check in the run else-branch (past weeks only).
       // Only run rows reach this point, and both checks match in-app RUN records
       // only, so a synced activity of another sport never supersedes one here.
+      //
+      // Both checks search every plan week, the row's own first, and the record
+      // is superseded in the week that holds it. `wk` is the row's week by UTC
+      // day (weekIndexForDate), but a GPS run sits in s.wks[s.w - 1] and a Mark
+      // as Done record in its card's week: a Monday-morning session east of UTC,
+      // a Sunday-evening one west of UTC, or s.w held back by the debrief gate
+      // puts the two copies in different weeks, and a same-week search counted
+      // the session twice. Both windows are bounded in time (start within 4 h,
+      // or the same local calendar day), so the wider search reaches only the
+      // same session.
       if (appType === 'run' && !isInAppRow) {
         const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
-        const inAppKey = findInAppRunToSupersede(wk, syncedStamp, 'recorded')
-          ?? findInAppRunToSupersede(wk, syncedStamp, 'same-day-completion');
-        if (inAppKey) {
-          supersedeInAppRun(s, wk, inAppKey, row, rhrBaseline);
+        const searchWeeks = [wk, ...s.wks.filter(w => w !== wk)];
+        const hit = findInAppRunToSupersedeAcrossWeeks(searchWeeks, syncedStamp, 'recorded')
+          ?? findInAppRunToSupersedeAcrossWeeks(searchWeeks, syncedStamp, 'same-day-completion');
+        if (hit) {
+          supersedeInAppRun(s, hit.week, hit.key, row, rhrBaseline);
           changed = true;
           continue;
         }
@@ -1765,7 +1789,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         // covers a separate run on the next day, and in the current week the
         // row goes to Activity Review, which offers the in-app slot (a done slot
         // with a `guided-` actual) and supersedes it there if the user says it
-        // is the same session. A past week has no review step.
+        // is the same session. A past week has no review step. This check stays
+        // in the row's own plan week: the 36 h window spans a real day change,
+        // so a wider search would pull a next-week run into the ticked week.
         const completionKey = (isInAppRow || !isPastWeek) ? null : findInAppRunToSupersede(
           wk, { startTime: row.start_time, durationSec: row.duration_sec }, 'completion',
         );

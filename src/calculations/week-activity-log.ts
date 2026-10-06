@@ -1,6 +1,6 @@
 import type { Week } from '@/types';
 import { formatActivityType } from '@/calculations/activity-matcher';
-import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { isExtraActivityKey } from '@/calculations/in-app-activity';
 
 /**
  * Canonical "what the user actually did this week" list.
@@ -84,11 +84,6 @@ export function collectWeekActivities(wk: Week | undefined): WeekActivityEntry[]
   const garminMatched = wk.garminMatched || {};
   const pendingItems = (wk.garminPending || []).filter(p => garminMatched[p.garminId] === '__pending__');
   const excessGarminIds = new Set((wk.unspentLoadItems || []).map((u: any) => u.garminId));
-  // Done-activity adhoc ids (an impromptu in-app GPS run stores its record under
-  // its own adhoc id). Planned sessions in adhocWorkouts are plan slots.
-  const doneAdhocIds = new Set((wk.adhocWorkouts || [])
-    .map((w: any) => (w.id || w.n) as string)
-    .filter(id => !isPlannedAdhocId(id)));
 
   const entries: WeekActivityEntry[] = [];
 
@@ -102,7 +97,8 @@ export function collectWeekActivities(wk: Week | undefined): WeekActivityEntry[]
     // by a done (non-planned) adhoc id, such as an in-app GPS run recorded
     // outside the plan. Decided by the key, not the source, so the run stays
     // "Logged" after a watch copy supersedes the in-app record under that key.
-    const isOrphan = workoutId.startsWith('garmin-') || doneAdhocIds.has(workoutId);
+    // isExtraActivityKey is the same rule the cross-source reconcile uses.
+    const isOrphan = isExtraActivityKey(wk, workoutId);
     const name = a.displayName || a.workoutName || workoutId;
     const slotName = !isOrphan && a.workoutName && a.workoutName !== a.displayName ? a.workoutName : null;
     const isExcess = workoutId.startsWith('garmin-') && excessGarminIds.has(workoutId.slice('garmin-'.length));

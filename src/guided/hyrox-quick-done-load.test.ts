@@ -24,9 +24,9 @@ import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { completeStrengthSession } from './strength-complete';
 import { generateHyroxStation } from '@/workouts/hyrox-generators';
 import { computeWeekRawTSS, computeTodaySignalBTSS } from '@/calculations/fitness-model';
-import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
+import { matchAndAutoComplete, reconcileCrossSourceDuplicates, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { TL_PER_MIN } from '@/constants';
-import type { Week, Workout } from '@/types';
+import type { GarminActual, Week, Workout } from '@/types';
 
 const ACCESS = { sled: 'always' as const, skiErg: true, rowErg: true };
 
@@ -150,5 +150,63 @@ describe('a HYROX quick done is superseded by sport, never by a same-day activit
     expect(wk.garminActuals!['hx-w1-station-0'].garminId).toBe('strava-LIFT');
     expect(wk.garminActuals!['hx-w1-station-0'].workoutName).toBe(workout.n);
     expect(Object.keys(wk.garminActuals!)).toEqual(['hx-w1-station-0']);
+  });
+});
+
+describe('reconcile never drops a HYROX quick done for an activity on another plan slot (audit B9)', () => {
+  // Wednesday 30 Sep: a station session marked done (stamped local noon, at its
+  // prescribed duration) and a gym slot the same day.
+  function quickDoneStation() {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const s = getDefaultState();
+    s.planStartDate = '2026-09-28';
+    s.eventType = 'hyrox';
+    s.w = 1;
+    s.wks = [week()];
+    const station = generateHyroxStation({
+      kind: 'station_density', targetMinutes: 55, band: 'intermediate',
+      stationAccess: ACCESS, phase: 'build', slotIndex: 0,
+    }) as Workout;
+    const workout = { ...station, id: 'hx-w1-station-0', dayOfWeek: 2 } as Workout;
+    setState(s);
+    completeStrengthSession(workout);
+    return workout;
+  }
+
+  /** A synced strength session two hours after the noon stamp, 4 minutes shorter: inside the recorded window. */
+  function syncedLift(garminId: string, stationSec: number): GarminActual {
+    return {
+      garminId, startTime: new Date(2026, 8, 30, 14, 0, 0).toISOString(), durationSec: stationSec - 240,
+      distanceKm: 0, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null,
+      activityType: 'STRENGTH_TRAINING', displayName: 'Weight Training',
+    };
+  }
+
+  it('the quick-done record carries a manual-completion id (planned numbers, noon stamp)', () => {
+    quickDoneStation();
+    expect(getMutableState().wks[0].garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-manual-')).toBe(true);
+  });
+
+  it('a Strava strength session filling another plan slot leaves the station record and its tick in place', () => {
+    const workout = quickDoneStation();
+    const s = getMutableState();
+    const wk = s.wks[0];
+    wk.rated['hx-w1-strength-0'] = 6;
+    wk.garminActuals!['hx-w1-strength-0'] = syncedLift('strava-GYM', workout.estimatedDurationMin! * 60);
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(false);
+    expect(wk.garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(typeof wk.rated['hx-w1-station-0']).toBe('number');
+    expect(wk.garminActuals!['hx-w1-strength-0'].garminId).toBe('strava-GYM');
+  });
+
+  it('the station record still collapses against the same session synced as a strength extra', () => {
+    const workout = quickDoneStation();
+    const s = getMutableState();
+    const wk = s.wks[0];
+    wk.garminActuals!['garmin-strava-LIFT'] = syncedLift('strava-LIFT', workout.estimatedDurationMin! * 60);
+
+    expect(reconcileCrossSourceDuplicates(s)).toBe(true);
+    expect(Object.keys(wk.garminActuals!)).toEqual(['garmin-strava-LIFT']);
   });
 });
