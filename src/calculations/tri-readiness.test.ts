@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { computeTriReadiness } from './tri-readiness';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { computeTriReadiness, findUpcomingHardSession } from './tri-readiness';
 import type { SimulatorState } from '@/types/state';
 
 // Minimal tri state with identical fitness across all three disciplines, so the
@@ -8,7 +8,7 @@ import type { SimulatorState } from '@/types/state';
 function triState(recentLegLoads: SimulatorState['recentLegLoads'] = []): SimulatorState {
   const disc = { ctl: 70, atl: 56, tsb: 14, directCount: 5 }; // fresh, ACWR 0.8
   return {
-    w: 0,
+    w: 1,
     wks: [],
     physiologyHistory: [],
     recentLegLoads,
@@ -53,5 +53,38 @@ describe('computeTriReadiness — leg-load floor is run-only', () => {
     expect(FLOORED.has(r.bike.label)).toBe(false);
     expect(r.swim.hardFloor).not.toBe('legLoad');
     expect(r.bike.hardFloor).not.toBe('legLoad');
+  });
+});
+
+describe('findUpcomingHardSession — week index (s.w is 1-based)', () => {
+  // Regression: the lookahead indexed wks[s.w] as the current week, which is
+  // next week under the store convention (store.ts default w: 1).
+  afterEach(() => { vi.useRealTimers(); });
+
+  const q = (id: string, dow: number) =>
+    ({ id, t: 'bike_threshold', n: id, d: '60min', r: 8, rpe: 8, discipline: 'bike', dayOfWeek: dow });
+  const s = (wks: any[]) => ({ w: 1, wks } as unknown as SimulatorState);
+
+  it('looks at the current week (wks[0]) first', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0)); // local Wednesday (dow 2)
+    const hit = findUpcomingHardSession(s([
+      { triWorkouts: [q('cur-thu', 3)] },
+      { triWorkouts: [q('next-thu', 3)] },
+    ]), 2);
+    expect(hit?.workout.id).toBe('cur-thu');
+    expect(hit?.dayLabel).toBe('Thursday');
+  });
+
+  it('wraps into next week (wks[1]) past Sunday', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0, 0)); // local Saturday (dow 5)
+    const hit = findUpcomingHardSession(s([
+      { triWorkouts: [] },
+      { triWorkouts: [q('next-mon', 0)] },
+      { triWorkouts: [q('after-mon', 0)] },
+    ]), 2);
+    expect(hit?.workout.id).toBe('next-mon');
+    expect(hit?.dayLabel).toBe('Monday');
   });
 });

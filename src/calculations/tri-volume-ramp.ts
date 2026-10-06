@@ -30,9 +30,11 @@ export interface VolumeRampViolation {
 export function checkVolumeRamp(state: SimulatorState): VolumeRampViolation[] {
   const violations: VolumeRampViolation[] = [];
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const thisWk = wks[currentWeek];
-  const nextWk = wks[currentWeek + 1];
+  // s.w is 1-based (store.ts default w: 1): this week = wks[s.w - 1],
+  // next week = wks[s.w].
+  const curIdx = (state.w ?? 1) - 1;
+  const thisWk = wks[curIdx];
+  const nextWk = wks[curIdx + 1];
   if (!thisWk || !nextWk) return violations;
 
   const disciplines: Discipline[] = ['swim', 'bike', 'run'];

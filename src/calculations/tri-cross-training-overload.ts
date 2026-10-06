@@ -167,7 +167,9 @@ export function detectCrossTrainingOverload(
 ): CrossTrainingOverloadResult | null {
   if (state.eventType !== 'triathlon') return null;
 
-  const weekIdx = state.w ?? 0;
+  // s.w is 1-based (store.ts default w: 1). weekIdx is the 0-based array index
+  // of the week the user is in; the carry and floor helpers take that index.
+  const weekIdx = (state.w ?? 1) - 1;
   const wk = (state.wks ?? [])[weekIdx];
   if (!wk?.triWorkouts?.length) return null;
 

@@ -66,9 +66,12 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
   const mods: TriSuggestionMod[] = [];
 
   // ── Volume-ramp violations (one per discipline that exceeds 10% cap) ────
+  // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1]
+  // and next week is wks[s.w].
+  const curIdx = (state.w ?? 1) - 1;
   const ramps: VolumeRampViolation[] = checkVolumeRamp(state);
   for (const v of ramps) {
-    const nextWk = (state.wks ?? [])[(state.w ?? 0) + 1];
+    const nextWk = (state.wks ?? [])[curIdx + 1];
     const targetWorkout = nextWk?.triWorkouts?.find(
       w => (w.discipline ?? 'run') === v.discipline && isLongOrEndurance(w),
     );
@@ -110,7 +113,7 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
     if (readiness.overall === 'Manage Load' || readiness.overall === 'Ease Back' || readiness.overall === 'Overreaching') {
       // Find today's planned workout. Quality only.
       const todayDow = (new Date().getDay() + 6) % 7;
-      const wk = (state.wks ?? [])[state.w ?? 0];
+      const wk = (state.wks ?? [])[curIdx];
       const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
       if (todayWorkout && isQuality(todayWorkout)) {
         const sentence = readiness.sentence;

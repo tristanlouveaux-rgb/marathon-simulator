@@ -35,7 +35,9 @@ function isQuality(workout: Workout): boolean {
 
 export function detectRpeBlownSession(state: SimulatorState): RpeFlag | null {
   const wks = state.wks ?? [];
-  const wk = wks[state.w ?? 0];
+  // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1].
+  const curIdx = (state.w ?? 1) - 1;
+  const wk = wks[curIdx];
   if (!wk?.triWorkouts) return null;
 
   // Today + yesterday in `dayOfWeek` (0=Mon..6=Sun).
@@ -45,13 +47,12 @@ export function detectRpeBlownSession(state: SimulatorState): RpeFlag | null {
   const todayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
   if (!todayWorkout || !isQuality(todayWorkout)) return null;
 
-  // Yesterday's workout. Could be in this week or last week (Sunday → Saturday wrap).
-  let yesterdayWk = wk;
-  let yesterdayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === yesterdayDow);
-  if (!yesterdayWorkout && state.w! > 0) {
-    yesterdayWk = wks[state.w! - 1];
-    yesterdayWorkout = yesterdayWk?.triWorkouts?.find(w => w.dayOfWeek === yesterdayDow);
-  }
+  // Yesterday's workout. On Monday it is the previous week's Sunday; this
+  // week's Sunday is still ahead and must not be read as yesterday.
+  const yesterdayWk = todayDow === 0
+    ? (curIdx > 0 ? wks[curIdx - 1] : undefined)
+    : wk;
+  const yesterdayWorkout = yesterdayWk?.triWorkouts?.find(w => w.dayOfWeek === yesterdayDow);
   if (!yesterdayWorkout || !yesterdayWorkout.id) return null;
 
   // Look up yesterday's actual RPE from rated.

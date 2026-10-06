@@ -1,11 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { collectTriSuggestions } from './tri-suggestion-aggregator';
 import type { SimulatorState } from '@/types/state';
 
+// s.w is 1-based (store.ts default w: 1): w: 1 means the current week is
+// wks[0] and next week is wks[1].
 function state(overrides: Partial<SimulatorState> = {}): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: 0,
+    w: 1,
     wks: [],
     triConfig: { distance: 'ironman', fitness: { swim: { ctl: 0, atl: 0, tsb: 0 }, bike: { ctl: 0, atl: 0, tsb: 0 }, run: { ctl: 0, atl: 0, tsb: 0 }, combinedCtl: 0 } },
     ...overrides,
@@ -22,7 +24,7 @@ describe('collectTriSuggestions', () => {
 
   it('volume-ramp violation → emits a trim_volume mod', () => {
     const s = state({
-      w: 0,
+      w: 1,
       wks: [
         { garminActuals: { a1: { garminId: 'a1', durationSec: 5 * 3600, activityType: 'CYCLING' } } as any },
         {
@@ -54,7 +56,7 @@ describe('collectTriSuggestions', () => {
     // and surfaces the full per-discipline option set via `overloadOptions`.
     // All workouts dated dow=6 so they're upcoming regardless of "today".
     const s = state({
-      w: 0,
+      w: 1,
       wks: [{
         triWorkouts: [
           { id: 'b1', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 6 },
@@ -79,7 +81,7 @@ describe('collectTriSuggestions', () => {
 
   it('headline + body strings are populated for every mod', () => {
     const s = state({
-      w: 0,
+      w: 1,
       wks: [
         { garminActuals: { a1: { garminId: 'a1', durationSec: 5 * 3600, activityType: 'CYCLING' } } as any },
         {
@@ -95,5 +97,38 @@ describe('collectTriSuggestions', () => {
       expect(m.body.length).toBeGreaterThan(10);
       expect(['caution', 'warning']).toContain(m.severity);
     }
+  });
+
+  describe('readiness gate targets today in the current week', () => {
+    afterEach(() => { vi.useRealTimers(); });
+
+    it("the readiness mod targets today's session in wks[0], not next week's", () => {
+      // Regression: the gate read wks[s.w] (next week under the store
+      // convention), so the swap/downgrade landed on next week's session that
+      // shares today's weekday.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(2026, 9, 7, 12, 0, 0)); // local Wednesday (dow 2)
+      const disc = { ctl: 70, atl: 56, tsb: 14, directCount: 5 };
+      const s = state({
+        w: 1,
+        physiologyHistory: [],
+        // Heavy leg load floors run readiness (Ease Back or worse), which
+        // fires the readiness gate. Same fixture as tri-readiness.test.ts.
+        recentLegLoads: [{ load: 80, sport: 'strength', sportLabel: 'Strength', timestampMs: Date.now(), recoveryMultOverride: 1.2 }],
+        triConfig: {
+          distance: 'ironman',
+          fitness: { swim: { ...disc }, bike: { ...disc }, run: { ...disc } },
+          fitnessHistory: [{}, {}, {}, {}],
+        },
+        wks: [
+          { triWorkouts: [{ id: 'cur-wed', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 }] },
+          { triWorkouts: [{ id: 'next-wed', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 }] },
+        ],
+      } as any);
+      const r = collectTriSuggestions(s);
+      const mod = r.mods.find(m => m.source === 'readiness');
+      expect(mod).toBeDefined();
+      expect(mod!.targetWorkoutId).toBe('cur-wed');
+    });
   });
 });

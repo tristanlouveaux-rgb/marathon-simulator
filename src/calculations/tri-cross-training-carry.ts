@@ -27,10 +27,15 @@ const MAX_LOOKBACK_WEEKS = 3;
 /**
  * Returns the sum of decayed `carriedCrossTrainingTSS` from prior weeks,
  * evaluated at "now". Zero if no plan start date or current week is week 1.
+ *
+ * `currentWeekIdx` is the 0-based array index of the current week. s.w is
+ * 1-based (store.ts default w: 1), so the default is s.w - 1: a push stored on
+ * the current week shows up from the following week on, which is what the
+ * Home carry banner and the overload detector both read.
  */
 export function computeDecayedTriCarry(
   state: SimulatorState,
-  currentWeekIdx: number = state.w ?? 0,
+  currentWeekIdx: number = (state.w ?? 1) - 1,
 ): number {
   const wks = state.wks ?? [];
   if (wks.length === 0 || currentWeekIdx <= 0) return 0;

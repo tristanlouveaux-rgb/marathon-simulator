@@ -19,10 +19,12 @@ import { describe, it, expect } from 'vitest';
 import { detectCrossTrainingOverload } from './tri-cross-training-overload';
 import type { SimulatorState } from '@/types/state';
 
+// s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1], so
+// these fixtures put the week under test at wks[0] with w: 1.
 function state(overrides: Partial<SimulatorState> = {}): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: 0,
+    w: 1,
     wks: [],
     ...overrides,
   } as unknown as SimulatorState;
@@ -404,5 +406,52 @@ describe('detectCrossTrainingOverload — floor enforcement', () => {
     expect(r!.options.bike.floorTSS).toBe(0);
     expect(r!.options.run.floorTSS).toBe(0);
     expect(r!.options.swim.floorTSS).toBe(0);
+  });
+});
+
+describe('detectCrossTrainingOverload — reads the week the user is in (s.w is 1-based)', () => {
+  // Regression: the detector indexed wks[s.w], which is NEXT week under the
+  // store convention (store.ts default w: 1, current week = wks[s.w - 1]).
+  // Extra padel logged this week never produced a proposal for this week.
+  const padel = { id: 'padel', t: 'cross', n: 'padel', d: '150min', r: 7, iTrimp: 33000 }; // 220 TSS
+
+  it('220 TSS of padel in the current week (wks[0], w: 1) fires an overload', () => {
+    const s = state({
+      w: 1,
+      wks: [
+        { ...canonicalTriWeek(), adhocWorkouts: [padel] },
+        canonicalTriWeek(), // next week: planned only, no cross-training
+      ] as any,
+    });
+    const r = detectCrossTrainingOverload(s, 0);
+    expect(r).not.toBeNull();
+    expect(r!.crossTrainingTSS).toBe(220);
+    expect(r!.plannedTriTSS).toBe(510);
+    // The proposal acts on this week's sessions.
+    expect(r!.options.run.reduceMods.map(m => m.workoutId)).toContain('mon-r');
+  });
+
+  it('cross-training in next week (wks[1]) does not fire for the current week', () => {
+    const s = state({
+      w: 1,
+      wks: [
+        canonicalTriWeek(),
+        { ...canonicalTriWeek(), adhocWorkouts: [padel] },
+      ] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+  });
+
+  it('mid-plan: w: 3 reads wks[2]', () => {
+    const s = state({
+      w: 3,
+      wks: [
+        canonicalTriWeek(),
+        canonicalTriWeek(),
+        { ...canonicalTriWeek(), adhocWorkouts: [padel] },
+        canonicalTriWeek(),
+      ] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)?.crossTrainingTSS).toBe(220);
   });
 });
