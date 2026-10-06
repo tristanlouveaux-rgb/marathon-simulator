@@ -60,7 +60,12 @@ export function hyroxTrailingEffortScore(state: SimulatorState): number {
 
       // Under-duration guard (mirrors tri): a session cut to < 80% of planned
       // duration was not genuinely easy, so don't let a low RPE inflate next week.
-      const actual = wk.garminActuals?.[workout.matchedActivityId ?? ''];
+      // The session's record: its match link when set (tri-style), else the
+      // record on its slot key. HYROX never sets matchedActivityId: the matcher,
+      // GPS runs, Mark as Done and quick done all key the record by the slot id,
+      // the same slot-record rule isMtlSessionCompleted (mtl.ts) reads. Reading
+      // the link alone left the guard blind in HYROX.
+      const actual = wk.garminActuals?.[workout.matchedActivityId ?? workout.id];
       const plannedMin = workout.estimatedDurationMin;
       const actualMin = actual ? (actual.durationSec ?? 0) / 60 : null;
       const underDuration = plannedMin != null && actualMin != null && actualMin < plannedMin * 0.8;
