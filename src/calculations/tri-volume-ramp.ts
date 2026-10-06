@@ -8,6 +8,11 @@
  * **Side of the line**: planning. Pure function. Caller surfaces the result
  * as a suggestion (modal) and applies the proposed trim if the user accepts.
  *
+ * NOT LIVE: the aggregator does not call this unless asked
+ * (TRI_VOLUME_RAMP_SUGGESTIONS_LIVE, tri-suggestion-aggregator.ts). "This week's
+ * actual" is the current week so far, so mid-week the comparison is a partial
+ * week against a full one. Which gate fixes that is pending a decision.
+ *
  * Source: Gabbett TJ (2016) "The training-injury prevention paradox" Br J
  * Sports Med 50:273–280.
  */
@@ -30,9 +35,11 @@ export interface VolumeRampViolation {
 export function checkVolumeRamp(state: SimulatorState): VolumeRampViolation[] {
   const violations: VolumeRampViolation[] = [];
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const thisWk = wks[currentWeek];
-  const nextWk = wks[currentWeek + 1];
+  // s.w is 1-based (store.ts default w: 1): this week = wks[s.w - 1],
+  // next week = wks[s.w].
+  const curIdx = (state.w ?? 1) - 1;
+  const thisWk = wks[curIdx];
+  const nextWk = wks[curIdx + 1];
   if (!thisWk || !nextWk) return violations;
 
   const disciplines: Discipline[] = ['swim', 'bike', 'run'];

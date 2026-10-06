@@ -35,6 +35,9 @@ import { scheduleTriathlonWeek } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
 import { gp } from '@/calculations/paces';
+// Moved verbatim to tri-run-pace.ts so accepted suggestions retarget run paces
+// from the same easy pace the generator writes (triRunEasyPaceSec).
+import { easyPaceSecPerKmFromSkill } from './tri-run-pace';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { isFourWeekCycleDeloadWeek } from './plan_engine';
@@ -746,16 +749,6 @@ function phaseMultiplier(phase: TrainingPhase, weekIndex: number, totalWeeks: nu
 // ───────────────────────────────────────────────────────────────────────────
 // Run session generator (tri-aware, not a fork of the running engine)
 // ───────────────────────────────────────────────────────────────────────────
-
-/**
- * Rough Z2 easy pace in sec/km by skill slider. Lets us estimate distance
- * alongside duration for long runs so the user sees "~16 km (1h 45min)"
- * instead of bare minutes.
- */
-function easyPaceSecPerKmFromSkill(skill: TriSkillSlider): number {
-  // Skill 1 → 7:00/km, 5 → 4:30/km (linear interpolation)
-  return 420 - (skill - 1) * 37.5;
-}
 
 function roundMin(mins: number): number {
   return mins >= 30 ? Math.round(mins / 5) * 5 : Math.round(mins);

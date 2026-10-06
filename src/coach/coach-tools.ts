@@ -369,8 +369,11 @@ export function scaleWorkoutDescription(desc: string, factor: number): string {
   //     unchanged so reductions don't destroy interval prescriptions).
   // Real fixture covered by this guard: "8x400m threshold" must NOT become
   // "8x300m threshold" under a 30% reduce.
-  desc = desc.replace(/(\d+\s*[x×]\s*)?(?<![\/\d])(\d{2,5})\s*m\b/g, (full, multiplier: string | undefined, n: string) => {
+  // No regex lookbehind (iOS 15 WKWebView cannot parse it; no-regex-lookbehind.test.ts):
+  // the "not after '/' or a digit" check reads the character before the match.
+  desc = desc.replace(/(\d+\s*[x×]\s*)?(\d{2,5})\s*m\b/g, (full: string, multiplier: string | undefined, n: string, offset: number, str: string) => {
     if (multiplier) return full;
+    if (offset > 0 && /[\/\d]/.test(str[offset - 1])) return full;
     const v = parseInt(n, 10);
     if (!isFinite(v) || v < 100) return `${n}m`; // skip tiny tokens. Likely pace
     return `${round50(v * factor)}m`;

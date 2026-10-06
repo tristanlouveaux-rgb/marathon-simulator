@@ -201,6 +201,12 @@ describe('retargetDescriptionPace', () => {
     const out = retargetDescriptionPace('5×6min @ 4:30/km (~1.3km), 1 min recovery between sets', 'threshold', EASY);
     expect(out).toContain('5×6min @ 5:08/km (~1.2km)');
   });
+  it('leaves the triathlon generator\'s "warm up @ pace" easy anchor untouched', () => {
+    // Tri run legs write "15min warm up @ <easy>/km" (plan_engine.triathlon.ts).
+    const desc = '15min warm up @ 6:10/km. 3×8min @ 5:08/km, 2min jog recovery. 10min cool down.';
+    const out = retargetDescriptionPace(desc, 'marathon_pace', EASY);
+    expect(out).toBe('15min warm up @ 6:10/km. 3×8min @ MP (5:37/km), 2min jog recovery. 10min cool down.');
+  });
   it('leaves warm-up/cool-down easy anchors untouched', () => {
     const desc = '2km warm up (6:10/km+)\n13min @ 5:08/km (~2.5km)\n2km cool down (6:10/km+)';
     const out = retargetDescriptionPace(desc, 'vo2', EASY);

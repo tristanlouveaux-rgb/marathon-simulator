@@ -26,7 +26,9 @@ import type {
   OverloadAdjustment,
 } from '@/calculations/tri-cross-training-overload';
 import type { Discipline } from '@/types/triathlon';
+import { answeredModIds } from '@/calculations/tri-suggestion-aggregator';
 import { applyTriSuggestions } from '@/calculations/tri-suggestion-apply';
+import { markTriSuggestionsHandled } from '@/calculations/tri-suggestion-handled';
 import { getMutableState, saveState } from '@/state';
 
 const OVERLAY_ID = 'tri-suggestion-overlay';
@@ -73,8 +75,17 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
       resolve(appliedCount);
     };
 
+    // Closing on the backdrop answers everything shown (overload as Keep, the
+    // generic rows as dismissed), so the modal does not pop again on the next
+    // launch (notify-once, tri-suggestion-handled.ts).
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) cleanup(0);
+      if (e.target !== overlay) return;
+      markTriSuggestionsHandled(getMutableState(), {
+        modIds: answeredModIds(otherMods),
+        crossTrainingTSS: overload?.overloadOptions?.crossTrainingTSS,
+      });
+      saveState();
+      cleanup(0);
     });
 
     // ── Cross-training overload wiring ─────────────────────────────────────
@@ -98,11 +109,14 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
       };
       wireChips();
 
+      // Every overload choice answers this load (notify-once): the detector
+      // then counts only cross-training logged after it.
+      const answerOverload = () => markTriSuggestionsHandled(getMutableState(), { crossTrainingTSS: opts.crossTrainingTSS });
+
       const commitMods = (which: 'reduce' | 'replace') => {
-        if (!selectedDiscipline) { cleanup(0); return; }
-        const opt = opts.options[selectedDiscipline];
-        const adjustments = which === 'reduce' ? opt.reduceMods : opt.replaceMods;
-        if (adjustments.length === 0) { cleanup(0); return; }
+        const opt = selectedDiscipline ? opts.options[selectedDiscipline] : undefined;
+        const adjustments = opt ? (which === 'reduce' ? opt.reduceMods : opt.replaceMods) : [];
+        if (adjustments.length === 0) { answerOverload(); saveState(); cleanup(0); return; }
         const triMods: TriSuggestionMod[] = adjustments.map((a, idx) => ({
           id: `xt_${selectedDiscipline}_${idx}`,
           source: 'cross_training_overload',
@@ -114,37 +128,52 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
           action: a.action,
         }));
         const result = applyTriSuggestions(getMutableState(), triMods);
+        answerOverload();
         saveState();
         cleanup(result.applied);
       };
 
       document.getElementById('tri-sm-reduce')?.addEventListener('click', () => commitMods('reduce'));
       document.getElementById('tri-sm-replace')?.addEventListener('click', () => commitMods('replace'));
-      document.getElementById('tri-sm-keep')?.addEventListener('click', () => cleanup(0));
+      document.getElementById('tri-sm-keep')?.addEventListener('click', () => {
+        answerOverload();
+        saveState();
+        cleanup(0);
+      });
       document.getElementById('tri-sm-push')?.addEventListener('click', () => {
         const sM = getMutableState();
         const wk = sM.wks?.[sM.w - 1];
         if (wk) {
           wk.carriedCrossTrainingTSS = (wk.carriedCrossTrainingTSS ?? 0) + opts.crossTrainingTSS;
         }
+        // Answered here, so it leaves this week's count; it counts once, next
+        // week, through the decayed carry (computeDecayedTriCarry).
+        answerOverload();
         saveState();
         cleanup(0);
       });
     }
 
     // ── Generic checkbox section wiring (other mods) ───────────────────────
-    document.getElementById('tri-sm-dismiss')?.addEventListener('click', () => cleanup(0));
+    // Notify-once: every row the user saw is answered by Dismiss or Apply
+    // (ticked rows accepted, unticked rows declined), so none is proposed again
+    // this week (tri-suggestion-handled.ts). A row merged from two detectors on
+    // one session answers both (answeredModIds).
+    const otherModIds = answeredModIds(otherMods);
+    document.getElementById('tri-sm-dismiss')?.addEventListener('click', () => {
+      markTriSuggestionsHandled(getMutableState(), { modIds: otherModIds });
+      saveState();
+      cleanup(0);
+    });
     document.getElementById('tri-sm-accept')?.addEventListener('click', () => {
       const checked: TriSuggestionMod[] = [];
       for (const mod of otherMods) {
         const cb = document.getElementById(`tri-sm-mod-${mod.id}`) as HTMLInputElement | null;
         if (cb?.checked) checked.push(mod);
       }
-      if (checked.length === 0) {
-        cleanup(0);
-        return;
-      }
-      const result = applyTriSuggestions(getMutableState(), checked);
+      const sM = getMutableState();
+      const result = checked.length > 0 ? applyTriSuggestions(sM, checked) : { applied: 0 };
+      markTriSuggestionsHandled(sM, { modIds: otherModIds });
       saveState();
       cleanup(result.applied);
     });

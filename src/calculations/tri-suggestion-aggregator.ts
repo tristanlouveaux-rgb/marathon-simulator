@@ -19,6 +19,21 @@ import {
   detectCrossTrainingOverload,
   type CrossTrainingOverloadResult,
 } from './tri-cross-training-overload';
+import { handledTriSuggestionIds, isOpenForTriSuggestion } from './tri-suggestion-handled';
+import { canApplyTriSuggestion } from './tri-suggestion-apply';
+
+/**
+ * Volume-ramp suggestions are OFF pending Tristan's decision on the comparison
+ * window. checkVolumeRamp compares the current week's actuals SO FAR with next
+ * week's full plan, so mid-week it fires on a partial week (an Ironman week with
+ * one 1 h ride logged proposes trimming next week's long ride on every launch).
+ * The plan's own deload-to-build steps also exceed the 10% cap with full
+ * adherence. The two candidate gates (evaluate only once the current week is
+ * complete, or compare the last completed week's actuals with the current
+ * week's plan) need his call. The detector, its trim target and the notify-once
+ * stamp stay wired and tested behind `opts.volumeRamp`.
+ */
+export const TRI_VOLUME_RAMP_SUGGESTIONS_LIVE = false;
 
 /** A single proposed modification surfaced to the user. */
 export interface TriSuggestionMod {
@@ -49,6 +64,10 @@ export interface TriSuggestionMod {
    *  at the recommended discipline's first proposed mod (used as a fallback if
    *  the modal is rendered in the legacy generic-list layout). */
   overloadOptions?: CrossTrainingOverloadResult;
+  /** Ids of rows merged into this one because they targeted the same session
+   *  (oneRowPerSession). Answering this row answers them too, so a declined
+   *  swap does not come back as a separate downgrade row the same week. */
+  alsoAnswers?: string[];
 }
 
 export interface TriSuggestionBundle {
@@ -62,16 +81,34 @@ export interface TriSuggestionBundle {
   };
 }
 
-export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundle {
+export interface CollectTriSuggestionsOptions {
+  /** Evaluate the volume-ramp detector. Defaults to
+   *  TRI_VOLUME_RAMP_SUGGESTIONS_LIVE (off); tests switch it on. */
+  volumeRamp?: boolean;
+}
+
+export function collectTriSuggestions(
+  state: SimulatorState,
+  opts: CollectTriSuggestionsOptions = {},
+): TriSuggestionBundle {
   const mods: TriSuggestionMod[] = [];
 
   // ── Volume-ramp violations (one per discipline that exceeds 10% cap) ────
-  const ramps: VolumeRampViolation[] = checkVolumeRamp(state);
+  // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1]
+  // and next week is wks[s.w].
+  const curIdx = (state.w ?? 1) - 1;
+  const rampOn = opts.volumeRamp ?? TRI_VOLUME_RAMP_SUGGESTIONS_LIVE;
+  const ramps: VolumeRampViolation[] = rampOn ? checkVolumeRamp(state) : [];
   for (const v of ramps) {
-    const nextWk = (state.wks ?? [])[(state.w ?? 0) + 1];
+    const nextWk = (state.wks ?? [])[curIdx + 1];
+    // A session an earlier trim (or any other change) already touched is not a
+    // target: trimming it again compounds 15% per launch (87 -> 74 -> 63 min).
     const targetWorkout = nextWk?.triWorkouts?.find(
-      w => (w.discipline ?? 'run') === v.discipline && isLongOrEndurance(w),
+      w => (w.discipline ?? 'run') === v.discipline && isLongOrEndurance(w) && isOpenForTriSuggestion(w),
     );
+    // Nothing left to trim in that discipline: no proposal (accepting it would
+    // change nothing).
+    if (!targetWorkout?.id) continue;
     mods.push({
       id: `ramp_${v.discipline}`,
       source: 'volume_ramp',
@@ -86,7 +123,10 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
 
   // ── RPE-flagged blown session ────────────────────────────────────────────
   const rpe: RpeFlag | null = detectRpeBlownSession(state);
-  if (rpe) {
+  // Proposed only when the swap would change today's session
+  // (canApplyTriSuggestion): a brick or an off-ladder kind is left untouched by
+  // the apply step, so a row for it would promise a change that never happens.
+  if (rpe && canApplyTriSuggestion(rpe.todayWorkout, 'swap_easy')) {
     const expected = rpe.yesterdayExpectedRpe;
     const actual = rpe.yesterdayActualRpe;
     const todayLabel = rpe.todayWorkout.n || rpe.todayWorkout.t;
@@ -110,9 +150,15 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
     if (readiness.overall === 'Manage Load' || readiness.overall === 'Ease Back' || readiness.overall === 'Overreaching') {
       // Find today's planned workout. Quality only.
       const todayDow = (new Date().getDay() + 6) % 7;
-      const wk = (state.wks ?? [])[state.w ?? 0];
-      const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
-      if (todayWorkout && isQuality(todayWorkout)) {
+      const wk = (state.wks ?? [])[curIdx];
+      // A session already changed (an accepted downgrade or swap, an Adjust),
+      // done or dropped is not proposed again: re-proposing stepped a bike
+      // threshold down a rung per launch (threshold, sweet spot, tempo, endurance).
+      const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
+      const action = readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today';
+      // Proposed only when the apply step would change the session
+      // (canApplyTriSuggestion), not for a brick or an off-ladder kind.
+      if (todayWorkout && isQuality(todayWorkout) && canApplyTriSuggestion(todayWorkout, action)) {
         const sentence = readiness.sentence;
         mods.push({
           id: `readiness_${todayWorkout.id ?? 'today'}`,
@@ -122,7 +168,7 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
           body: `${sentence} Today's ${todayWorkout.n || todayWorkout.t} is a quality session — swap for an easy session.`,
           severity: readiness.overall === 'Overreaching' ? 'warning' : 'caution',
           targetWorkoutId: todayWorkout.id,
-          action: readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today',
+          action,
         });
       }
     }
@@ -155,8 +201,18 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
     });
   }
 
+  // Notify-once: proposals the user already answered this week (ticked, left
+  // unticked or dismissed in the modal) are not proposed again until the week
+  // rolls over. Cross-training overload keeps its own record instead
+  // (Week.triSuggestionsHandled.crossTrainingTSS): the detector counts only
+  // cross-training the user has not answered yet.
+  const handled = handledTriSuggestionIds(state);
+  const open = oneRowPerSession(
+    mods.filter(m => m.source === 'cross_training_overload' || !handled.has(m.id)),
+  );
+
   return {
-    mods,
+    mods: open,
     diagnostics: {
       rampViolations: ramps.length,
       rpeBlown: !!rpe,
@@ -164,6 +220,55 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
       crossTrainingOverload: !!overload,
     },
   };
+}
+
+/**
+ * Every proposal id a set of shown rows answers: each row's own id plus the ids
+ * merged into it (alsoAnswers). The modal records these as handled.
+ */
+export function answeredModIds(mods: TriSuggestionMod[]): string[] {
+  return mods.flatMap(m => [m.id, ...(m.alsoAnswers ?? [])]);
+}
+
+// ─── One row per session ─────────────────────────────────────────────────────
+// The RPE-blown and readiness detectors both pick today's first open session, so
+// when both fire they propose two changes to one session, both ticked by default.
+// Applying both stepped the session twice. Keep one row per target session: the
+// stronger action (a swap to easy over a one-rung downgrade over a trim), then the
+// higher severity, then the earlier row. The dropped row's id rides along in
+// alsoAnswers. applyTriSuggestions also applies at most one mod per session per
+// batch, as the backstop. Overload rows carry their own per-discipline option
+// set and are left as they are.
+
+const ACTION_STRENGTH: Record<TriSuggestionMod['action'], number> = {
+  swap_easy: 2,
+  downgrade_today: 1,
+  trim_volume: 0,
+};
+const SEVERITY_STRENGTH: Record<TriSuggestionMod['severity'], number> = {
+  warning: 1,
+  caution: 0,
+};
+
+function strongerRow(a: TriSuggestionMod, b: TriSuggestionMod): boolean {
+  const byAction = ACTION_STRENGTH[a.action] - ACTION_STRENGTH[b.action];
+  if (byAction !== 0) return byAction > 0;
+  return SEVERITY_STRENGTH[a.severity] > SEVERITY_STRENGTH[b.severity];
+}
+
+function oneRowPerSession(mods: TriSuggestionMod[]): TriSuggestionMod[] {
+  const out: TriSuggestionMod[] = [];
+  const slotOfTarget = new Map<string, number>();
+  for (const m of mods) {
+    const target = m.source === 'cross_training_overload' ? undefined : m.targetWorkoutId;
+    if (!target) { out.push(m); continue; }
+    const slot = slotOfTarget.get(target);
+    if (slot == null) { slotOfTarget.set(target, out.length); out.push(m); continue; }
+    const kept = out[slot];
+    const [winner, loser] = strongerRow(m, kept) ? [m, kept] : [kept, m];
+    out[slot] = { ...winner, alsoAnswers: [...(winner.alsoAnswers ?? []), ...answeredModIds([loser])] };
+  }
+  return out;
 }
 
 // ─── Heuristics ────────────────────────────────────────────────────────────

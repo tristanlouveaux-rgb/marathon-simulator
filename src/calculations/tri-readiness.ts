@@ -31,9 +31,10 @@ function isQuality(w: Workout): boolean {
  * upcoming `lookaheadDays` window, looking across the current and next week's
  * `triWorkouts`. Excludes completed/skipped/replaced workouts.
  */
-function findUpcomingHardSession(state: SimulatorState, lookaheadDays: number): { dayLabel: string; workout: Workout } | null {
+export function findUpcomingHardSession(state: SimulatorState, lookaheadDays: number): { dayLabel: string; workout: Workout } | null {
   const wks = state.wks ?? [];
-  const curIdx = state.w ?? 0;
+  // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1].
+  const curIdx = (state.w ?? 1) - 1;
   const cur = wks[curIdx]?.triWorkouts ?? [];
   const next = wks[curIdx + 1]?.triWorkouts ?? [];
   const todayDow = (new Date().getDay() + 6) % 7;

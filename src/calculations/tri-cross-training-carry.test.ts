@@ -11,10 +11,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import type { SimulatorState } from '@/types/state';
 
+// s.w is 1-based (store.ts default w: 1): s.w = 4 means the current week is
+// wks[3]. computeDecayedTriCarry defaults its array index to s.w - 1.
 function state(overrides: Partial<SimulatorState> = {}): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: 0,
+    w: 1,
     wks: [],
     planStartDate: '2026-04-01',
     ...overrides,
@@ -33,7 +35,7 @@ describe('computeDecayedTriCarry', () => {
 
   it('returns 0 when no carried load exists', () => {
     const s = state({
-      w: 3,
+      w: 4,
       wks: [{}, {}, {}, {}] as any,
     });
     expect(computeDecayedTriCarry(s)).toBe(0);
@@ -41,7 +43,7 @@ describe('computeDecayedTriCarry', () => {
 
   it('returns 0 when planStartDate is missing', () => {
     const s = state({
-      w: 3,
+      w: 4,
       planStartDate: undefined,
       wks: [{ carriedCrossTrainingTSS: 100 }, {}, {}, {}] as any,
     });
@@ -50,7 +52,7 @@ describe('computeDecayedTriCarry', () => {
 
   it('returns 0 when current week is week 1 (no prior weeks to decay)', () => {
     const s = state({
-      w: 0,
+      w: 1,
       wks: [{ carriedCrossTrainingTSS: 100 }] as any,
     });
     expect(computeDecayedTriCarry(s)).toBe(0);
@@ -61,15 +63,15 @@ describe('computeDecayedTriCarry', () => {
     // ~7-3.5 = 3.5 days ago (Wed of week 3 to start of week 4).
     // decay = exp(-3.5/7) ≈ 0.606. Expect ~60.6.
     const s = state({
-      w: 3, // currentWeekIdx = 3
-      wks: [{}, {}, {}, { carriedCrossTrainingTSS: 100 }] as any, // week 3 (idx 3) is current
+      w: 4, // currentWeekIdx = 3
+      wks: [{}, {}, {}, { carriedCrossTrainingTSS: 100 }] as any, // week 4 (idx 3) is current
     });
     // Wait. Current week is idx 3, but we want the carry on idx 2 (week 3
     // becomes the prior week of idx 3 ... let me re-index. The detector reads
     // wk.carriedCrossTrainingTSS from PRIOR weeks. If currentWeekIdx=3, prior
     // weeks are 2, 1, 0.
     const s2 = state({
-      w: 3,
+      w: 4,
       wks: [{}, {}, { carriedCrossTrainingTSS: 100 }, {}] as any,
     });
     const decayed = computeDecayedTriCarry(s2);
@@ -83,7 +85,7 @@ describe('computeDecayedTriCarry', () => {
   it('caps lookback at 3 weeks', () => {
     // Week 0 (4 weeks back) carries 1000 TSS. Should NOT contribute.
     const s = state({
-      w: 4,
+      w: 5,
       wks: [{ carriedCrossTrainingTSS: 1000 }, {}, {}, {}, {}] as any,
     });
     expect(computeDecayedTriCarry(s)).toBe(0);
@@ -95,7 +97,7 @@ describe('computeDecayedTriCarry', () => {
     // days ago → exp(-10.5/7) ≈ 0.223 → ~22.3. Total ~83.
     vi.setSystemTime(new Date('2026-04-22T12:00:00Z'));
     const s = state({
-      w: 3,
+      w: 4,
       wks: [{}, { carriedCrossTrainingTSS: 100 }, { carriedCrossTrainingTSS: 50 }, {}] as any,
     });
     const decayed = computeDecayedTriCarry(s);
@@ -103,5 +105,16 @@ describe('computeDecayedTriCarry', () => {
     // The point is: both weeks contribute proportional to age (recent > old).
     expect(decayed).toBeGreaterThan(45);
     expect(decayed).toBeLessThan(65);
+  });
+
+  it('a push stored on the current week does not count until the next week', () => {
+    // Regression: the default index was s.w (next week's array index), so a
+    // push made this week (stored on wks[s.w - 1]) counted as already carried
+    // into this week. Push to next week means it lands next week.
+    const s = state({
+      w: 4,
+      wks: [{}, {}, {}, { carriedCrossTrainingTSS: 100 }] as any,
+    });
+    expect(computeDecayedTriCarry(s)).toBe(0);
   });
 });

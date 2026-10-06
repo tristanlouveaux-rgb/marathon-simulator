@@ -112,7 +112,7 @@ export function estimateDistanceMetres(minutes: number, skill: TriSkillSlider, c
   return Math.round(metres / 100) * 100;
 }
 
-function nameForSwim(kind: SwimSessionKind): string {
+export function nameForSwim(kind: SwimSessionKind): string {
   switch (kind) {
     case 'technique': return 'Swim technique';
     case 'endurance': return 'Endurance swim';
@@ -205,7 +205,7 @@ export function describeSwimSession(
   return variants[idx](totalM, hint) + (kind === 'technique' ? drillHint : '');
 }
 
-function rpeForSwim(kind: SwimSessionKind, phase: TrainingPhase): number {
+export function rpeForSwim(kind: SwimSessionKind, phase: TrainingPhase): number {
   const base: Record<SwimSessionKind, number> = {
     technique: 3,
     endurance: 5,

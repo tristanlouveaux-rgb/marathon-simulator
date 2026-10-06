@@ -183,10 +183,17 @@ export function retargetDescriptionPace(desc: string, newType: string, easyPaceS
   );
   // Remaining work-pace tokens, with or without the MP wrapper. A trailing
   // "(steady)"-style annotation from the suggester is dropped (it described
-  // the old intensity).
+  // the old intensity). The triathlon generator writes its easy warm-up and
+  // cool-down as "15min warm up @ 4:59/km"; those stay easy-anchored, like
+  // the running generator's "(6:10/km+)" form.
+  // No regex lookbehind: the app supports iOS 15 and WKWebView only parses
+  // lookbehind from iOS 16.4, so one in a startup chunk blanks the app
+  // (no-regex-lookbehind.test.ts). The warm-up / cool-down check reads the
+  // text before each match instead.
   out = out.replace(
     /@\s*(?:MP\s*\()?\d+:\d{2}\/km\)?(?!\+)(\s*\((?:steady|easy|hard)\))?/g,
-    `@ ${newLabel}`,
+    (m: string, _ann: string | undefined, offset: number, str: string) =>
+      /(?:[Ww]arm up|[Cc]ool down) $/.test(str.slice(Math.max(0, offset - 10), offset)) ? m : `@ ${newLabel}`,
   );
   // Legacy pace-less simple distance ("7km"): append the target.
   if (out === desc && !/@/.test(desc) && /^\s*\d+(?:\.\d+)?\s*km\s*$/i.test(desc)) {
