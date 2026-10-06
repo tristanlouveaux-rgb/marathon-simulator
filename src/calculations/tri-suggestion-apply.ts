@@ -43,7 +43,7 @@ import { runPaceRung, stepDownRunType, generatorRpeForRunType } from '@/constant
 import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER } from '@/constants/triathlon-constants';
 import { isLongRun } from '@/workouts/long-run';
 import { retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens } from '@/workouts/workout-scaling';
-import { loadForRung, loadForTriRun } from '@/workouts/rung-load';
+import { loadForRung, loadForTriRun, type PlannedLoad } from '@/workouts/rung-load';
 import { nameForBike, rpeForBike, type BikeSessionKind } from '@/workouts/bike';
 import { nameForSwim, rpeForSwim, type SwimSessionKind } from '@/workouts/swim';
 import { gp } from '@/calculations/paces';
@@ -150,39 +150,93 @@ function easyPaceSec(state: SimulatorState): number | undefined {
   return state.pac?.e && state.pac.e > 0 ? state.pac.e : undefined;
 }
 
+// ── Adjust overlay baseline ────────────────────────────────────────────────
+// The per-session Adjust overlay (workout-adjust-overlay.ts applyObjectScale)
+// stashes the plan baseline the first time it scales a session
+// (originalDistance, originalDurationMin, originalAerobic, originalAnaerobic)
+// and derives every later adjustment, and Reset, from it. It reads the rung the
+// baseline description is written at as originalIntensityLevel ?? w.t. An
+// accepted suggestion is a plan change, so it moves that baseline with the live
+// session: otherwise a later Adjust scales watts from the wrong rung (the
+// suggestion rewrote w.t) and Reset restores the pre-suggestion description and
+// load under the suggestion's type and name.
+
+/** Adjust's stashed load, written by the overlay on the stored object. */
+type AdjustBaseline = Workout & { originalAerobic?: number; originalAnaerobic?: number };
+
+/** Minutes the Adjust baseline load is priced at: the stashed plan minutes, else
+ *  the live minutes (Adjust stashes plan minutes only when it had some). */
+function baselineMinutes(w: Workout, liveMinutes: number): number {
+  return typeof w.originalDurationMin === 'number' && w.originalDurationMin > 0 ? w.originalDurationMin : liveMinutes;
+}
+
+/** Re-price Adjust's stashed baseline load, when there is one. */
+function repriceBaselineLoad(w: Workout, load: PlannedLoad | null): void {
+  const b = w as AdjustBaseline;
+  if (!load || (b.originalAerobic == null && b.originalAnaerobic == null)) return;
+  b.originalAerobic = load.aerobic;
+  b.originalAnaerobic = load.anaerobic;
+}
+
+/** Scale Adjust's stashed baseline minutes by the factor a swap or trim applied
+ *  to the live session, rounded the same way. Returns [old, new] baseline minutes. */
+function scaleBaselineMinutes(w: Workout, factor: number, liveMinutesBefore: number): [number, number] {
+  const before = baselineMinutes(w, liveMinutesBefore);
+  const after = Math.round(before * factor);
+  if (typeof w.originalDurationMin === 'number' && w.originalDurationMin > 0) w.originalDurationMin = after;
+  return [before, after];
+}
+
+/** Rewrite a description's bike watts / swim paces from rung `fromKey` to `toKey`
+ *  (bike: watt ratio; swim: CSS + the new rung's offset), as Adjust does. */
+function retargetRung(state: SimulatorState, d: 'bike' | 'swim', desc: string, fromKey: string, toKey: string): string {
+  if (d === 'bike') {
+    const from = BIKE_INTENSITY_LADDER.find(r => r.key === fromKey);
+    const toB = BIKE_INTENSITY_LADDER.find(r => r.key === toKey);
+    return from && toB ? scaleWattRanges(desc, toB.pct / from.pct) : desc;
+  }
+  const toS = SWIM_INTENSITY_LADDER.find(r => r.key === toKey);
+  const css = state.triConfig?.swim?.cssSecPer100m;
+  return toS && css && css > 0 ? setSwimPaceTokens(desc, css + toS.cssOffsetSec) : desc;
+}
+
 /** Move a run to `newT` and price it at `minutes`. Type, RPE and pace tokens
- *  change only when the type changes. */
+ *  change only when the type changes. Adjust's baseline follows. */
 function setRunType(state: SimulatorState, w: Workout, newT: string, minutes: number): void {
   if (newT !== w.t) {
     const rpe = generatorRpeForRunType(newT);
     if (rpe != null) { w.rpe = rpe; w.r = rpe; }
-    if (w.d) w.d = retargetDescriptionPace(w.d, newT, easyPaceSec(state));
+    const easy = easyPaceSec(state);
+    if (w.d) w.d = retargetDescriptionPace(w.d, newT, easy);
+    // Pace retargeting is absolute (easy pace x the type's factor), so the
+    // baseline needs no source type.
+    if (w.originalDistance) w.originalDistance = retargetDescriptionPace(w.originalDistance, newT, easy);
     w.t = newT;
   }
   const load = minutes > 0 ? loadForTriRun(newT, minutes) : null;
   if (load) { w.aerobic = load.aerobic; w.anaerobic = load.anaerobic; }
+  const baseMin = baselineMinutes(w, minutes);
+  repriceBaselineLoad(w, baseMin > 0 ? loadForTriRun(newT, baseMin) : null);
 }
 
 /** Move a bike/swim session to rung `to` and price it at `minutes`, the way the
- *  Adjust overlay applies a rung (workout-adjust-overlay.ts applyObjectScale). */
+ *  Adjust overlay applies a rung (workout-adjust-overlay.ts applyObjectScale).
+ *  Adjust's baseline follows. */
 function setRung(state: SimulatorState, week: Week, w: Workout, d: 'bike' | 'swim', to: Rung, minutes: number): void {
   const fromKey = w.intensityLevel ?? w.t;
   if (to.key !== fromKey) {
-    // Stash the generation-time rung once (null = "had none"), as Adjust does.
-    if (w.originalIntensityLevel === undefined) w.originalIntensityLevel = w.intensityLevel ?? null;
-    if (w.d) {
-      if (d === 'bike') {
-        const from = BIKE_INTENSITY_LADDER.find(r => r.key === fromKey);
-        const toB = BIKE_INTENSITY_LADDER.find(r => r.key === to.key);
-        if (from && toB) w.d = scaleWattRanges(w.d, toB.pct / from.pct);
-      } else {
-        const toS = SWIM_INTENSITY_LADDER.find(r => r.key === to.key);
-        const css = state.triConfig?.swim?.cssSecPer100m;
-        if (toS && css && css > 0) w.d = setSwimPaceTokens(w.d, css + toS.cssOffsetSec);
-      }
-    }
+    // Rung Adjust's baseline description is written at: its own anchor once it
+    // has changed a rung (originalIntensityLevel defined), else the session's.
+    const baseKey = w.originalIntensityLevel !== undefined ? (w.originalIntensityLevel ?? w.t) : fromKey;
+    if (w.d) w.d = retargetRung(state, d, w.d, fromKey, to.key);
+    if (w.originalDistance) w.originalDistance = retargetRung(state, d, w.originalDistance, baseKey, to.key);
     w.intensityLevel = to.key;
     w.t = to.key;
+    // The description (and Adjust's baseline) is now written at to.key = w.t,
+    // so Adjust's rung anchor (originalIntensityLevel ?? w.t) must resolve to
+    // w.t: null ("no generation-stamped rung"). A stashed generation rung would
+    // point re-adjusts and Reset at a rung the description no longer carries.
+    w.originalIntensityLevel = null;
     const kind = to.key.slice(d.length + 1);
     const rpe = d === 'bike'
       ? rpeForBike(kind as BikeSessionKind, week.ph)
@@ -192,6 +246,8 @@ function setRung(state: SimulatorState, week: Week, w: Workout, d: 'bike' | 'swi
   }
   const load = minutes > 0 ? loadForRung(to.key, minutes) : null;
   if (load) { w.aerobic = load.aerobic; w.anaerobic = load.anaerobic; }
+  const baseMin = baselineMinutes(w, minutes);
+  repriceBaselineLoad(w, baseMin > 0 ? loadForRung(to.key, baseMin) : null);
 }
 
 function swapReason(source: TriSuggestionMod['source']): string {
@@ -220,6 +276,7 @@ function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSu
     const newT = rung > runPaceRung(easyT) ? easyT : w.t;
     stampOriginal(w);
     if (newMin > 0) w.estimatedDurationMin = newMin;
+    if (newMin > 0) scaleBaselineMinutes(w, SWAP_EASY_DURATION_FACTOR, oldMin);
     setRunType(state, w, newT, newMin);
   } else {
     const ladder = ladderFor(d);
@@ -229,6 +286,7 @@ function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSu
     const to = cur > easyIdx ? ladder[easyIdx] : ladder[cur];
     stampOriginal(w);
     if (newMin > 0) w.estimatedDurationMin = newMin;
+    if (newMin > 0) scaleBaselineMinutes(w, SWAP_EASY_DURATION_FACTOR, oldMin);
     setRung(state, week, w, d, to, newMin);
   }
 
@@ -280,6 +338,14 @@ function applyTrim(w: Workout): boolean {
   const f = newMin / oldMin;
   if (typeof w.aerobic === 'number') w.aerobic = Math.round(w.aerobic * f);
   if (typeof w.anaerobic === 'number') w.anaerobic = Math.round(w.anaerobic * f);
+  // Adjust's baseline takes the same trim, so Reset keeps it.
+  const [baseBefore, baseAfter] = scaleBaselineMinutes(w, TRIM_DURATION_FACTOR, oldMin);
+  const b = w as AdjustBaseline;
+  if (baseBefore > 0) {
+    const bf = baseAfter / baseBefore;
+    if (typeof b.originalAerobic === 'number') b.originalAerobic = Math.round(b.originalAerobic * bf);
+    if (typeof b.originalAnaerobic === 'number') b.originalAnaerobic = Math.round(b.originalAnaerobic * bf);
+  }
   w.status = 'reduced';
   w.modReason = 'Volume ramp trim';
   return true;
