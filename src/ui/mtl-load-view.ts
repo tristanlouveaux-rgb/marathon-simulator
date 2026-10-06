@@ -16,7 +16,8 @@
  */
 
 import { getState } from '@/state';
-import { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
+import { computeMTLFitnessFatigueSeries, computeMTLFitnessFatigueByDiscipline, computeWeekActualMTL, computeWeekMTL, computeMtlAcwr, isMtlSessionCompleted, MTL_ACWR_MIN_CHRONIC, type MtlAcwr } from '@/calculations/mtl';
+import { ROLLING_ACWR_MIN_OBSERVED_DAYS } from '@/calculations/fitness-model';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground } from './sky-background';
 import { atmosphereGradient } from './page-flair';
@@ -34,8 +35,18 @@ const ZONE_CAUTION = '#F59E0B';
 const ZONE_HIGH    = '#DC2626';
 const HERO_BRONZE  = '#b8742c';
 
-function acwrZone(acwr: number | null, ctl: number, atl: number): { label: string; colour: string; note: string } {
+function acwrZone(load: MtlAcwr): { label: string; colour: string; note: string } {
+  const { ratio: acwr, chronic: ctl, acute: atl } = load;
   if (acwr == null) {
+    // Too few completed plan weeks for a baseline: the ratio is withheld, so
+    // no chronic threshold or acute multiple is quoted.
+    if (load.reason === 'history') {
+      return {
+        label: 'Building',
+        colour: TEXT_M,
+        note: `Ramp rate appears once ${ROLLING_ACWR_MIN_OBSERVED_DAYS} days of plan weeks are complete.`,
+      };
+    }
     // Chronic hasn't crossed the 15 daily-equivalent threshold for the ramp signal
     // to be reliable. Acknowledge the visible acute/chronic relationship rather
     // than saying "no signal". Tristan's feedback 2026-05-08.
@@ -43,10 +54,10 @@ function acwrZone(acwr: number | null, ctl: number, atl: number): { label: strin
       return {
         label: 'Building',
         colour: TEXT_M,
-        note: `Chronic base is still building (${ctl.toFixed(1)}, ramp rate becomes meaningful at 15). Acute is ${(atl / ctl).toFixed(1)}× chronic but absolute load is still low.`,
+        note: `Chronic base is still building (${ctl.toFixed(1)}, ramp rate becomes meaningful at ${MTL_ACWR_MIN_CHRONIC}). Acute is ${(atl / ctl).toFixed(1)}× chronic but absolute load is still low.`,
       };
     }
-    return { label: 'Building', colour: TEXT_M, note: 'Chronic base is still building. Ramp rate will become meaningful once chronic load crosses 15.' };
+    return { label: 'Building', colour: TEXT_M, note: `Chronic base is still building. Ramp rate will become meaningful once chronic load crosses ${MTL_ACWR_MIN_CHRONIC}.` };
   }
   if (acwr > 1.5)  return { label: 'Ease Back', colour: ZONE_HIGH, note: 'Acute load spiked relative to your chronic base. Skip or downgrade density sessions.' };
   if (acwr > 1.3)  return { label: 'Manage Load', colour: ZONE_CAUTION, note: 'Mechanical load is elevated. Avoid adding extra eccentric work this week.' };
@@ -114,20 +125,25 @@ function getMtlLoadHTML(): string {
   const s = getState();
   const hx = s.hyroxConfig;
   const weeks = s.wks ?? [];
-  const wIdx = Math.max(0, Math.min(s.w ?? 0, weeks.length - 1));
+  // s.w is 1-based. Reading weeks[s.w] showed next week: its sessions as
+  // "This week", an actual MTL of 0 and a trend one week ahead.
+  const wIdx = Math.max(0, Math.min((s.w ?? 1) - 1, weeks.length - 1));
 
-  // Derived at render time. `hyroxConfig.weeklyActualMTL` is a dead field
-  // (typed but never written); deriving here keeps actual / planned /
-  // chronic / acute on a single source. See ISSUE-184 history.
+  // Derived at render time from the week's completed sessions
+  // (computeWeekActualMTL), so actual / planned / chronic / acute share one
+  // source. The stored `hyroxConfig.weeklyActualMTL` is no longer written.
+  // See ISSUE-184 history.
   const currentWk = weeks[wIdx];
   const weeklyActual = currentWk ? computeWeekActualMTL(currentWk) : 0;
   const weeklyPlanned = currentWk ? computeWeekMTL(currentWk) : (hx?.weeklyMTL ?? 0);
   const cap = hx?.mtlCap ?? 0;
-  const ctl = hx?.mtlCTL ?? 0;
-  const atl = hx?.mtlATL ?? 0;
-  // Match the readiness gating: ACWR only meaningful once chronic load is established.
-  const acwr = ctl >= 15 ? atl / ctl : null;
-  const zone = acwrZone(acwr, ctl, atl);
+  // Chronic, acute and the load ratio come from the canonical computation the
+  // readiness MTL floor and the Stats row read (mtl.ts computeMtlAcwr).
+  const mtlLoad = computeMtlAcwr(weeks, wIdx);
+  const ctl = mtlLoad.chronic;
+  const atl = mtlLoad.acute;
+  const acwr = mtlLoad.ratio;
+  const zone = acwrZone(mtlLoad);
 
   const capPct = cap > 0 ? Math.min(1, weeklyActual / cap) : 0;
   const plannedPct = cap > 0 ? Math.min(1, weeklyPlanned / cap) : 0;
@@ -137,13 +153,11 @@ function getMtlLoadHTML(): string {
     : HERO_BRONZE;
   const targetOffset = (RING_C * (1 - ringPct / 100)).toFixed(2);
 
-  // ── 12-week PMC trail ──
+  // ── 12-week PMC trail ── (one walk, so its last point is the chronic / acute above)
   const trailStart = Math.max(0, wIdx - 11);
-  const pmcPoints: PMCPoint[] = [];
-  for (let i = trailStart; i <= wIdx; i++) {
-    const r = computeMTLFitnessFatigue(weeks, i);
-    pmcPoints.push({ weekIdx: i, ctl: r.mtlCTL, atl: r.mtlATL });
-  }
+  const pmcPoints: PMCPoint[] = computeMTLFitnessFatigueSeries(weeks, wIdx)
+    .map((r, i) => ({ weekIdx: i, ctl: r.mtlCTL, atl: r.mtlATL }))
+    .slice(trailStart);
 
   // ── Discipline split (current week index) ──
   const disc = weeks.length > 0 ? computeMTLFitnessFatigueByDiscipline(weeks, wIdx) : null;
@@ -157,7 +171,7 @@ function getMtlLoadHTML(): string {
         : (w.n || 'Run'),
       discipline: ((w as { discipline?: string }).discipline ?? 'run') as 'run' | 'station' | 'brick',
       mtl: w.musculoTendonLoad ?? 0,
-      done: !!w.matchedActivityId,
+      done: currentWk ? isMtlSessionCompleted(currentWk, w) : false,
       day: w.dayOfWeek ?? 0,
     }))
     .filter(c => c.mtl > 0)
@@ -265,7 +279,7 @@ function getMtlLoadHTML(): string {
     <div style="font-size:13px;color:${TEXT_S};line-height:1.55">
       <p style="margin:0 0 10px">MusculoTendon Load (MTL) tracks eccentric and mechanical strain across every session in your Hyrox plan: runs, stations, and bricks. It is a separate currency to aerobic TSS. A sled push and a tempo run can have similar TSS but very different tissue cost.</p>
       <p style="margin:0 0 10px">Per session: <code style="font-family:var(--f-mono,monospace);font-size:12px">duration × RPE × modality × impact × (1 + external load)</code>. Stations carry heavier per-minute coefficients than runs, but runs accumulate more weekly minutes. So runs often dominate chronic load even though stations dominate acute spikes.</p>
-      <p style="margin:0 0 10px">Chronic (42-day EMA) tracks your absorbed mechanical base from <strong>completed</strong> work. Only sessions matched to a Strava or Garmin activity contribute. Acute (7-day EMA) tracks the last week of completed work. Until you match activities, both are zero. The ratio of acute to chronic is the ramp rate. Above 1.3× caps readiness at Manage Load, above 1.5× at Ease Back.</p>
+      <p style="margin:0 0 10px">Chronic (42-day EMA) tracks your absorbed mechanical base from <strong>completed</strong> work: sessions with a synced activity, a GPS recording or a Mark as Done record. Weeks before the plan carry no record, so they are valued at your average weekly load from the plan weeks so far. Acute (7-day EMA) tracks the last week of completed work. The ratio of acute to chronic is the ramp rate, shown once ${ROLLING_ACWR_MIN_OBSERVED_DAYS} days of plan weeks are complete. Above 1.3× caps readiness at Manage Load, above 1.5× at Ease Back.</p>
       <p style="margin:0;color:${TEXT_L}">Weekly cap (${cap > 0 ? Math.round(cap) : '—'}) is set from your ability band and refines as benchmark tests calibrate. Independent of TSB and HRV. Eccentric tissue recovers slower than cardiovascular load.</p>
     </div>
   `);

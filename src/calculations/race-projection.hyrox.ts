@@ -34,9 +34,9 @@ function toRunAbilityBand(b: AbilityBand): RunAbilityBand {
 import {
   HYROX_WEEKLY_SESSIONS,
   HYROX_TAPER_DAYS,
-  HYROX_MTL_CAP,
 } from '@/constants/hyrox-constants';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
+import { hyroxMtlChronicVsPlan } from './mtl';
 import { bandFromVdot } from './hyrox-staleness';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 
@@ -109,16 +109,6 @@ function computeWeeksRemaining(state: SimulatorState): number {
   const days = daysBetween(today, raceDate);
   if (days <= 0) return 0;
   return days / 7;
-}
-
-/**
- * Approximate per-band CTL anchor. The expected MTL CTL (daily-equivalent ÷7
- * EMA of weeklyMTL) for an athlete training at band-default volume.
- * Below this anchor the athlete is undertrained for their declared band; above,
- * they have headroom. Anchors are ~70% of the band's MTL cap, divided by 7.
- */
-function expectedMtlCtl(band: AbilityBand): number {
-  return (HYROX_MTL_CAP[band] * 0.70) / 7;
 }
 
 /**
@@ -310,28 +300,31 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   // back to `improvementSec`.
   let factorPct = 0;
 
-  // Factor: MTL CTL fitness vs band anchor.
-  const expected = expectedMtlCtl(band);
-  const runCtl     = hx.runMtlCTL     ?? 0;
-  const stationCtl = hx.stationMtlCTL ?? 0;
-  const brickCtl   = hx.brickMtlCTL   ?? 0;
-  const splitTotalCtl = runCtl + stationCtl + brickCtl;
-  const actualCtl = splitTotalCtl > 0 ? splitTotalCtl : (hx.mtlCTL ?? 0);
-  if (expected > 0 && actualCtl > 0) {
-    const ratio = actualCtl / expected;
-    // ratio > 1 = trained above band = expected to be faster → negative pct.
+  // Factor: chronic MTL against the chronic MTL the plan prescribed (reality
+  // against plan, like every modulator here). Canonical computation:
+  // mtl.ts computeMtlChronicVsPlan, which the staleness model's MTL signal also
+  // reads. The anchor used to be 70% of the band's MTL cap, but the generator
+  // prescribes about 57% of cap in base (intermediate), so a fully compliant
+  // athlete read as undertrained and took up to +5% once f2 let completions
+  // reach chronic MTL. Withheld behind computeMtlAcwr's history guard (weeks 1
+  // and 2), where the EMA start rests on one week. Same slope (0.10) and clamp
+  // (±5%) as before. Completed MTL counts plan sessions only, so the ratio is
+  // at most 1 and the factor only ever slows the projection.
+  const mtlVsPlan = hyroxMtlChronicVsPlan(state);
+  if (mtlVsPlan?.ratio != null) {
+    const ratio = mtlVsPlan.ratio;
+    // ratio > 1 = more chronic load than prescribed = faster → negative pct.
     const ctlPct = -Math.max(-0.05, Math.min(0.05, (ratio - 1) * 0.10));
-    factorPct += ctlPct;
-    const splitNote = splitTotalCtl > 0
-      ? ` Run ${runCtl.toFixed(1)} · stations ${stationCtl.toFixed(1)} · brick ${brickCtl.toFixed(1)}.`
-      : '';
-    factors.push({
-      name: 'Training fitness',
-      deltaSec: Math.round(ctlPct * disciplineHorizonTotal),
-      explanation: (ratio >= 1.0
-        ? `MTL chronic load (${actualCtl.toFixed(1)}) is above the ${band} band anchor (${expected.toFixed(1)}). Training above your declared level.`
-        : `MTL chronic load (${actualCtl.toFixed(1)}) is below the ${band} band anchor (${expected.toFixed(1)}). Currently undertrained for your target.`) + splitNote,
-    });
+    const ctlSec = ctlPct * disciplineHorizonTotal;
+    if (Math.abs(ctlSec) >= 1) {
+      factorPct += ctlPct;
+      const pctOfPlan = Math.round(ratio * 100);
+      factors.push({
+        name: 'Training fitness',
+        deltaSec: Math.round(ctlSec),
+        explanation: `Chronic MTL is ${pctOfPlan}% of the load the plan prescribed through week ${mtlVsPlan.completedWeeks}. ${ratio > 1 ? 'Load to date is above plan.' : 'Completed load to date is below plan.'}`,
+      });
+    }
   }
 
   // Factor: sessions per week vs band default.

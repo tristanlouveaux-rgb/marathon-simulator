@@ -21,6 +21,7 @@ import {
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
+import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { isImpactBlockedByInjury } from '@/injury/engine';
 import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
@@ -375,6 +376,11 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     strainPct: strain?.trainedToday ? (strain.capacityStrainPct ?? strain.strainPct) : null,
     acwrSafeUpper: acwr.safeUpper,
     hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
+    // HYROX MTL load ratio: the canonical value Home and Readiness feed their
+    // own computeReadiness call (mtl.ts hyroxMtlAcwr; null outside HYROX).
+    // Without it the MTL floor capped the ring score on those surfaces while
+    // the ring label, sentence and stance read from this uncapped result.
+    mtlAcwr: hyroxMtlAcwr(s)?.ratio ?? null,
   });
 
   // ── Week signals ──────────────────────────────────────────────────────────

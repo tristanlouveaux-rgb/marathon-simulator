@@ -49,7 +49,12 @@ export function triTrailingEffortScore(state: SimulatorState, discipline: Discip
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const samples: number[] = [];
-  for (let w = currentWeek - 1; w >= 0 && samples.length < TRI_EFFORT_LOOKBACK_WEEKS; w--) {
+  // s.w is 1-based, so wks[currentWeek - 1] is the week in progress. Start at
+  // the last COMPLETED week (wks[currentWeek - 2]), as running's
+  // getTrailingEffortScore does: a mid-week regeneration or the live plan note
+  // must not rescale the current week by its own partial ratings. At rollover
+  // the new week is empty, so the result there is unchanged.
+  for (let w = currentWeek - 2; w >= 0 && samples.length < TRI_EFFORT_LOOKBACK_WEEKS; w--) {
     const wk = wks[w];
     if (!wk?.triWorkouts || !wk.rated) continue;
     const weekDeviations: number[] = [];

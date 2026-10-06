@@ -28,17 +28,20 @@ import {
   hyroxBaseMultiplier,
   computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
-import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment } from './hyrox-generators';
+import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm } from './hyrox-generators';
 import { scheduleHyroxWeek } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
+import { stampTriWorkoutIds } from './plan_engine.triathlon';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
  * main.ts checks this on launch and regenerates if stored version is lower.
+ * v14: per-slot session ids and commute run durations; the regen re-keys
+ * name-keyed slot entries to the new ids (state/hyrox-plan-regen.ts).
  */
-export const HYROX_GENERATOR_VERSION = 13;
+export const HYROX_GENERATOR_VERSION = 14;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
@@ -325,6 +328,10 @@ function generateWeekSessions(
   if (commuteDays > 0 && state.commuteConfig) {
     const oneWayKm = state.commuteConfig.distanceKm;
     const bi = state.commuteConfig.isBidirectional;
+    // Duration at the generator's own easy pace, as generateHyroxRun prices an
+    // easy run. Without it Mark as Done recorded no load and the planned-day
+    // pricer fell back to 60 minutes (estimateTriWorkoutMin).
+    const commuteMin = Math.round((oneWayKm * hyroxEasyRunPaceSecKm(band, hx.hyroxRunPaceSecKm)) / 60);
     for (let i = 0; i < commuteDays; i++) {
       if (bi) {
         workouts.push({
@@ -335,6 +342,7 @@ function generateWeekSessions(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteMin,
         });
         workouts.push({
           t: 'easy',
@@ -344,6 +352,7 @@ function generateWeekSessions(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteMin,
         });
       } else {
         workouts.push({
@@ -354,6 +363,7 @@ function generateWeekSessions(
           r: 3,
           discipline: 'run',
           commute: true,
+          estimatedDurationMin: commuteMin,
         });
       }
     }
@@ -379,7 +389,14 @@ function generateWeekSessions(
   // Enforce MTL cap
   const capped = enforceMTLCap(gated, hx.mtlCap);
 
-  return scheduleHyroxWeek(capped, band);
+  // Stable per-slot ids (W{week}-{type}-{idx}), the triathlon engine's helper.
+  // Every HYROX writer keys by `id ?? n` (Mark as Done, quick done, the matcher's
+  // station and run branches, the status chip). Without ids a week's two
+  // 'Easy Run' or two 'Station Circuit' sessions shared one slot key: one done
+  // showed both done, and a second synced run found no free slot.
+  const scheduled = scheduleHyroxWeek(capped, band);
+  stampTriWorkoutIds(scheduled, weekIndex);
+  return scheduled;
 }
 
 /**

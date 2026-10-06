@@ -18,6 +18,7 @@ import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-pr
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
 import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
+import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
 import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
@@ -1025,10 +1026,9 @@ export function buildReadinessRing(s: SimulatorState): string {
 
   // Big ring = global recovery readiness (sleep + HRV + physiology + combined load).
   // Per-discipline load status surfaces in the discipline ring row in tri mode.
-  // MTL ACWR for HYROX. Station eccentric ramp rate
-  const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
-  const hxMtlATL = s.hyroxConfig?.mtlATL ?? 0;
-  const mtlAcwr = s.eventType === 'hyrox' && hxMtlCTL >= 15 ? hxMtlATL / hxMtlCTL : null;
+  // MTL ACWR for HYROX. Station eccentric ramp rate. Canonical computation
+  // (mtl.ts hyroxMtlAcwr), shared with Readiness, Stats and the MTL page.
+  const mtlAcwr = hyroxMtlAcwr(s)?.ratio ?? null;
 
   const readiness: ReadinessResult = computeReadiness({
     tsb,

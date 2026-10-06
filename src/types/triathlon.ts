@@ -79,7 +79,9 @@ export interface HyroxConfig {
   previousHyroxTimeSec?: number;
   /** Planned MTL for the current week (from plan workouts). Used for cap enforcement display. */
   weeklyMTL: number;
-  /** Actual MTL accumulated this week from completed station/brick activities. Computed at activity-match time. */
+  /** No longer written or read. The week's actual MTL is derived from its
+   *  completed sessions (mtl.ts computeWeekActualMTL). Kept optional so older
+   *  saved states still type-check. */
   weeklyActualMTL?: number;
   /** Per-band weekly MTL cap (derived at init; refinable via benchmark tests). */
   mtlCap: number;

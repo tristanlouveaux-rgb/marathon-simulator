@@ -1,7 +1,54 @@
 import { describe, expect, it } from 'vitest';
 import { buildHyroxProjection } from './race-projection.hyrox';
 import { predictHyroxRace } from './race-prediction.hyrox';
-import type { SimulatorState } from '@/types/state';
+import { getDefaultState } from '@/state/store';
+import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
+import type { SimulatorState, Workout } from '@/types/state';
+
+/**
+ * A real generated intermediate HYROX plan at week `currentWeek`. Every session
+ * in the weeks before it that `done` accepts gets the slot record a HYROX
+ * completion writes (wk.garminActuals[id]).
+ */
+function realHyroxPlanState(currentWeek: number, done: (w: Workout) => boolean): SimulatorState {
+  const band = 'intermediate' as const;
+  const s = getDefaultState();
+  s.eventType = 'hyrox';
+  s.trackOnly = false;
+  s.planStartDate = '2026-09-28';
+  s.w = 1;
+  s.tw = 16;
+  s.hyroxConfig = {
+    format: 'open_singles',
+    athleteBand: band,
+    hyroxPhase: 'base',
+    stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+    weeklyMTL: 0,
+    mtlCap: HYROX_MTL_CAP[band],
+    mtlHistory: [],
+    runsPerWeek: HYROX_WEEKLY_SESSIONS[band].runs,
+    stationSessionsPerWeek: HYROX_WEEKLY_SESSIONS[band].stations,
+    bricksPerWeek: HYROX_WEEKLY_SESSIONS[band].bricks,
+    weeklyHoursAvailable: HYROX_HOURS_RANGE[band].default,
+    generatorVersion: HYROX_GENERATOR_VERSION,
+  };
+  s.wks = generateHyroxPlan(s);
+  for (let i = 0; i < currentWeek - 1; i++) {
+    const wk = s.wks[i];
+    wk.garminActuals ??= {};
+    for (const w of wk.triWorkouts ?? []) {
+      if (!done(w)) continue;
+      wk.garminActuals[w.id!] = {
+        garminId: `guided-manual-${w.id}`, startTime: null, distanceKm: 0,
+        durationSec: (w.estimatedDurationMin ?? 0) * 60,
+        avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null,
+      };
+    }
+  }
+  s.w = currentWeek;
+  return s;
+}
 
 function buildState(overrides: Partial<SimulatorState['hyroxConfig']> = {}, extra: Partial<SimulatorState> = {}): SimulatorState {
   return {
@@ -31,29 +78,39 @@ describe('buildHyroxProjection', () => {
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
     // No race date → weeksRemaining = 0, no taper bonus.
-    // No mtlCTL → no fitness factor. Default sessions match band → no volume factor.
+    // No plan weeks → no fitness factor. Default sessions match band → no volume factor.
     // No history → adherence = 1.0 → no penalty.
     expect(proj.projectedTotalSec).toBe(p.totalSec);
     expect(proj.factors.length).toBe(0);
   });
 
-  it('applies a fitness bonus when MTL CTL is above band anchor', () => {
-    const s = buildState({ mtlCTL: 200 });  // intermediate anchor ~ 130
+  // The "Training fitness" factor compares chronic MTL with the chronic MTL the
+  // plan prescribed (mtl.ts computeMtlChronicVsPlan). Real plans, real records.
+  it('adds no fitness factor when every plan session was completed', () => {
+    const s = realHyroxPlanState(5, () => true);
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
-    expect(proj.improvementSec).toBeLessThan(0);
-    const fitnessFactor = proj.factors.find(f => f.name === 'Training fitness');
-    expect(fitnessFactor).toBeDefined();
-    expect(fitnessFactor!.deltaSec).toBeLessThan(0);
+    expect(proj.factors.find(f => f.name === 'Training fitness')).toBeUndefined();
   });
 
-  it('applies a fitness penalty when MTL CTL is below band anchor', () => {
-    const s = buildState({ mtlCTL: 50 });  // below intermediate anchor
+  it('applies a fitness penalty when completed MTL fell short of the plan', () => {
+    const s = realHyroxPlanState(5, w => w.discipline === 'run'); // runs only, stations and bricks missed
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
     expect(proj.improvementSec).toBeGreaterThan(0);
     const fitnessFactor = proj.factors.find(f => f.name === 'Training fitness');
+    expect(fitnessFactor).toBeDefined();
     expect(fitnessFactor!.deltaSec).toBeGreaterThan(0);
+    expect(fitnessFactor!.explanation).toContain('of the load the plan prescribed through week 4');
+    expect(fitnessFactor!.explanation).toContain('below plan');
+  });
+
+  it('withholds the fitness factor while the MTL history guard is closed (weeks 1 and 2)', () => {
+    for (const week of [1, 2]) {
+      const s = realHyroxPlanState(week, w => w.discipline === 'run');
+      const proj = buildHyroxProjection(s, predictHyroxRace(s)!);
+      expect(proj.factors.find(f => f.name === 'Training fitness'), `week ${week}`).toBeUndefined();
+    }
   });
 
   it('applies a taper bonus via the horizon models when race is within taper window', () => {
@@ -108,14 +165,14 @@ describe('buildHyroxProjection', () => {
     const eightWeeks = new Date();
     eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
     const raceDate = eightWeeks.toISOString().slice(0, 10);
-    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
-    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
-    const s = buildState(
-      { raceDate, mtlCTL: 200 },
-      { v: 50, wkm: 50, typ: 'Balanced', wks } as unknown as Partial<SimulatorState>,
-    );
+    // Real plan at week 5 with runs only completed, so the Training fitness
+    // factor fires alongside the horizons.
+    const s = realHyroxPlanState(5, w => w.discipline === 'run');
+    s.hyroxConfig!.raceDate = raceDate;
+    Object.assign(s, { v: 50, wkm: 50, typ: 'Balanced' });
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
+    expect(proj.factors.find(f => f.name === 'Training fitness')).toBeDefined();
     const sumOfDisciplines =
       proj.byDiscipline.run.projectedSec +
       proj.byDiscipline.stations.projectedSec +
@@ -146,19 +203,17 @@ describe('buildHyroxProjection', () => {
 
   it('reconciles: sum of factors[].deltaSec equals improvementSec', () => {
     // Transparency contract. The factor breakdown the UI shows must sum to
-    // the headline delta. With MTL above anchor, run horizon, and station
+    // the headline delta. With the MTL shortfall, run horizon, and station
     // horizon all firing, the breakdown should still close.
     const eightWeeks = new Date();
     eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
     const raceDate = eightWeeks.toISOString().slice(0, 10);
-    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
-    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
-    const s = buildState(
-      { raceDate, mtlCTL: 200 },
-      { v: 50, wkm: 50, typ: 'Balanced', wks } as unknown as Partial<SimulatorState>,
-    );
+    const s = realHyroxPlanState(5, w => w.discipline === 'run');
+    s.hyroxConfig!.raceDate = raceDate;
+    Object.assign(s, { v: 50, wkm: 50, typ: 'Balanced' });
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
+    expect(proj.factors.find(f => f.name === 'Training fitness')).toBeDefined();
     const factorSum = proj.factors.reduce((s, f) => s + f.deltaSec, 0);
     // Multiple Math.round calls per factor row → tolerance of ±factor count.
     expect(Math.abs(factorSum - proj.improvementSec)).toBeLessThanOrEqual(proj.factors.length);

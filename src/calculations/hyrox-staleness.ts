@@ -21,7 +21,7 @@
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 import { getHyroxEventById } from '@/data/hyrox-events';
-import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
+import { hyroxMtlChronicVsPlan } from './mtl';
 
 export type HyroxStalenessCategory = 'fresh' | 'aging' | 'stale' | 'very_stale' | 'unknown';
 
@@ -82,12 +82,16 @@ function computePhysiologyMitigation(state: SimulatorState): number {
     factors.push(f);
   }
 
-  // Signal 2: MTL CTL vs band-expected (anchor at 70% of cap). Above = good.
-  const ctl = hx.mtlCTL ?? 0;
-  if (ctl > 0) {
-    const expectedCtl = (HYROX_MTL_CAP[hx.athleteBand] * 0.70) / 7;
-    const ratio = ctl / expectedCtl;
-    const f = Math.max(0, Math.min(1, 0.5 + (ratio - 1) * 0.5));
+  // Signal 2: chronic MTL against the chronic MTL the plan prescribed
+  // (mtl.ts computeMtlChronicVsPlan, the computation the race projection's
+  // "Training fitness" factor reads). At plan = 0.5, the value the signal
+  // gave at its anchor. The anchor used to be 70% of the band's MTL cap, which
+  // sits above what the generator prescribes in base (about 57% of cap,
+  // intermediate), so a plan-compliant athlete scored 0.35 and released less
+  // of the staleness penalty. Withheld behind computeMtlAcwr's history guard.
+  const mtlVsPlan = hyroxMtlChronicVsPlan(state);
+  if (mtlVsPlan?.ratio != null) {
+    const f = Math.max(0, Math.min(1, 0.5 + (mtlVsPlan.ratio - 1) * 0.5));
     factors.push(f);
   }
 

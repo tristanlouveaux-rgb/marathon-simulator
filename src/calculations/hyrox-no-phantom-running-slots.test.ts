@@ -38,8 +38,8 @@ function run(id: string, dayOffset: number, km: number, min: number): GarminActi
 }
 
 const HYROX_WEEK: Workout[] = [
-  { id: 'H1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', d: '40 min easy at 6:00/km (~6.7 km).', r: 4, rpe: 4, dayOfWeek: 0, estimatedDurationMin: 40 },
-  { id: 'H1-station-0', n: 'Station Technique', t: 'hyrox_station_technique', discipline: 'station', d: '45 min', r: 6, rpe: 6, dayOfWeek: 1, estimatedDurationMin: 45 },
+  { id: 'W1-hyrox_run_easy-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', d: '40 min easy at 6:00/km (~6.7 km).', r: 4, rpe: 4, dayOfWeek: 0, estimatedDurationMin: 40 },
+  { id: 'W1-hyrox_station_technique-0', n: 'Station Technique', t: 'hyrox_station_technique', discipline: 'station', d: '45 min', r: 6, rpe: 6, dayOfWeek: 1, estimatedDurationMin: 45 },
 ] as Workout[];
 
 beforeEach(() => {
@@ -75,13 +75,13 @@ describe('HYROX runs never complete a phantom running slot', () => {
   it('a run next to the HYROX run session still matches it in wk.triWorkouts', () => {
     matchAndAutoComplete([run('r-mon', 0, 7, 40)]);
     const wk = getMutableState().wks[0];
-    expect(wk.garminMatched!['r-mon']).toBe('H1-run-0');
-    expect(Object.keys(wk.rated)).toEqual(['H1-run-0']);
+    expect(wk.garminMatched!['r-mon']).toBe('W1-hyrox_run_easy-0');
+    expect(Object.keys(wk.rated)).toEqual(['W1-hyrox_run_easy-0']);
   });
 
   it('a HIIT next to the HYROX station session still matches it', () => {
     matchAndAutoComplete([{ ...run('hiit-tue', 1, 1, 45), activity_type: 'HIIT', distance_m: null, avg_pace_sec_km: null }]);
     const wk = getMutableState().wks[0];
-    expect(wk.garminMatched!['hiit-tue']).toBe('H1-station-0');
+    expect(wk.garminMatched!['hiit-tue']).toBe('W1-hyrox_station_technique-0');
   });
 });

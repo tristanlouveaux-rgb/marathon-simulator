@@ -46,7 +46,12 @@ export function hyroxTrailingEffortScore(state: SimulatorState): number {
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const samples: number[] = [];
-  for (let w = currentWeek - 1; w >= 0 && samples.length < TRI_EFFORT_LOOKBACK_WEEKS; w--) {
+  // s.w is 1-based, so wks[currentWeek - 1] is the week in progress. Start at
+  // the last COMPLETED week (wks[currentWeek - 2]), as running's
+  // getTrailingEffortScore does: a mid-week regeneration or the live plan note
+  // must not rescale the current week by its own partial ratings. At rollover
+  // the new week is empty, so the result there is unchanged.
+  for (let w = currentWeek - 2; w >= 0 && samples.length < TRI_EFFORT_LOOKBACK_WEEKS; w--) {
     const wk = wks[w];
     if (!wk?.triWorkouts || !wk.rated) continue;
     const weekDeviations: number[] = [];
@@ -60,7 +65,12 @@ export function hyroxTrailingEffortScore(state: SimulatorState): number {
 
       // Under-duration guard (mirrors tri): a session cut to < 80% of planned
       // duration was not genuinely easy, so don't let a low RPE inflate next week.
-      const actual = wk.garminActuals?.[workout.matchedActivityId ?? ''];
+      // The session's record: its match link when set (tri-style), else the
+      // record on its slot key. HYROX never sets matchedActivityId: the matcher,
+      // GPS runs, Mark as Done and quick done all key the record by the slot id,
+      // the same slot-record rule isMtlSessionCompleted (mtl.ts) reads. Reading
+      // the link alone left the guard blind in HYROX.
+      const actual = wk.garminActuals?.[workout.matchedActivityId ?? workout.id];
       const plannedMin = workout.estimatedDurationMin;
       const actualMin = actual ? (actual.durationSec ?? 0) / 60 : null;
       const underDuration = plannedMin != null && actualMin != null && actualMin < plannedMin * 0.8;

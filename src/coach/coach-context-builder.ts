@@ -14,6 +14,7 @@ import { computeDailyCoach, buildCoachSignalsPayload } from '@/calculations/dail
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore, computeWeekActualTSS } from '@/calculations/fitness-model';
+import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { sanitizeField } from './prompt-sanitizer';
 
 // Max activities to include per week (keeps context bounded)
@@ -107,7 +108,13 @@ export function buildPlanSkeleton(state: SimulatorState): Array<Record<string, u
     // get the structured per-week skeleton. Running falls through to the
     // simpler (phase + actual TSS) shape below.
     if ((state.eventType === 'triathlon' || state.eventType === 'hyrox') && wk.triWorkouts) {
-      const tss = wk.triWorkouts.reduce((s, w) => s + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+      // HYROX sessions carry musculoTendonLoad, not aerobic / anaerobic, so the
+      // aerobic + anaerobic sum read 0 for every HYROX week. HYROX takes the
+      // canonical planned-day pricer instead, the same number the Home strain
+      // ring shows for the week (duration x plannedTssPerMin per session).
+      const tss = state.eventType === 'hyrox'
+        ? getPlannedDayTSSContext(state, weekNum).plannedWeekTSS
+        : wk.triWorkouts.reduce((s, w) => s + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
       const hours = wk.triWorkouts.reduce((s, w) => s + (w.estimatedDurationMin ?? 0), 0) / 60;
       const swimCount = wk.triWorkouts.filter(w => w.discipline === 'swim').length;
       const bikeCount = wk.triWorkouts.filter(w => w.discipline === 'bike').length;

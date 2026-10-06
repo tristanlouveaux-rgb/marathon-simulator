@@ -10,11 +10,15 @@ function workout(id: string, discipline: 'swim' | 'bike' | 'run', plannedRpe: nu
   return { id, t: 'easy', n: 'Test', d: '60min', r: plannedRpe, discipline, estimatedDurationMin: durMin };
 }
 
+// `weeks` are COMPLETED weeks, the last being week `currentWeek`. The athlete is
+// now in the following, empty week: the score reads completed weeks only (s.w is
+// 1-based, wks[s.w - 1] is the week in progress), as running's
+// getTrailingEffortScore does.
 function state(weeks: Array<{ workouts: Workout[]; rated: Record<string, number | 'skip'> }>, currentWeek: number): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: currentWeek,
-    wks: weeks.map(wk => ({ triWorkouts: wk.workouts, rated: wk.rated })),
+    w: currentWeek + 1,
+    wks: [...weeks.map(wk => ({ triWorkouts: wk.workouts, rated: wk.rated })), { triWorkouts: [], rated: {} }],
     triConfig: { distance: 'ironman' },
   } as unknown as SimulatorState;
 }
@@ -91,8 +95,8 @@ describe('triTrailingEffortScore — swim pace-vs-CSS blend (D6)', () => {
     const actual: any = {}; // no durationSec → under-duration guard inert
     if (paceAdherence != null) actual.paceAdherence = paceAdherence;
     return {
-      eventType: 'triathlon', w: 1,
-      wks: [{ triWorkouts: [w], rated: { s1: ratedRpe }, garminActuals: { a1: actual } }],
+      eventType: 'triathlon', w: 2, // week 1 completed, week 2 in progress (empty)
+      wks: [{ triWorkouts: [w], rated: { s1: ratedRpe }, garminActuals: { a1: actual } }, { triWorkouts: [], rated: {} }],
       triConfig: { distance: 'ironman' },
     } as unknown as SimulatorState;
   }

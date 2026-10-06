@@ -28,6 +28,7 @@ import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildD
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
+import { hyroxMtlAcwr, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
@@ -175,9 +176,9 @@ function getReadinessHTML(s: SimulatorState): string {
   const capStrain = computeCapacityStrain(s);
 
   const isHyroxMode = s.eventType === 'hyrox';
-  const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
-  const hxMtlATL = s.hyroxConfig?.mtlATL ?? 0;
-  const mtlAcwrValue = isHyroxMode && hxMtlCTL >= 15 ? hxMtlATL / hxMtlCTL : null;
+  // Canonical MTL load ratio (mtl.ts hyroxMtlAcwr), the same value Home feeds
+  // computeReadiness and the MTL factor card below shows.
+  const mtlAcwrValue = hyroxMtlAcwr(s)?.ratio ?? null;
 
   const readiness = computeReadiness({
     tsb,
@@ -738,8 +739,12 @@ function getReadinessHTML(s: SimulatorState): string {
           ${triDiscCard}
           ${crossTrainingCard}
           ${isHyrox ? (() => {
-            const weeklyActualMTL = s.hyroxConfig?.weeklyActualMTL ?? 0;
-            const weeklyPlannedMTL = s.hyroxConfig?.weeklyMTL ?? 0;
+            // Same derivation as the Stats card and the MTL page. The stored
+            // hyroxConfig.weeklyActualMTL only ever received station matches
+            // (a week of runs read 0) and is no longer written.
+            const mtlWk = (s.wks ?? [])[(s.w ?? 1) - 1];
+            const weeklyActualMTL = mtlWk ? computeWeekActualMTL(mtlWk) : 0;
+            const weeklyPlannedMTL = mtlWk ? computeWeekMTL(mtlWk) : (s.hyroxConfig?.weeklyMTL ?? 0);
             const mtlCap = s.hyroxConfig?.mtlCap ?? 1000;
             const mtlPct = mtlCap > 0 ? Math.min(1, weeklyActualMTL / mtlCap) : 0;
             const acwrVal = mtlAcwrValue;
