@@ -23,6 +23,7 @@
  */
 
 import { normalizeiTrimp, getAthleteNormalizer } from '@/calculations/fitness-model';
+import { isGpsInAppActual } from '@/calculations/in-app-activity';
 import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
@@ -856,8 +857,10 @@ export function estimateDirectPerDisciplineCTLFromActivities(
  * never to benchmark derivation (CSS/FTP) — these carry no pace/power, only load.
  *
  * Override guard (no double-count): a session with a real matched activity
- * (`matchedActivityId` set, or `status==='completed'`) is skipped — the real
- * activity is already in the activity log and always wins (Strava-canonical).
+ * (`matchedActivityId` set, `status==='completed'`, or an activity record stored
+ * under its own key, which the tri matcher direct-binds) is skipped — the real
+ * activity is already in the activity log (or, for an in-app GPS run, in
+ * inAppGpsRunActivities) and always wins (Strava-canonical).
  * The planned load is encoded as `iTrimp = TSS × normalizer / 100` so `estimateTss` recovers
  * exactly the planned (aerobic+anaerobic) TSS. The 120-day window is applied
  * downstream by the CTL function.
@@ -883,6 +886,7 @@ export function manualDoneTriActivities(
       const rv = id != null ? rated[id] : undefined;
       if (typeof rv !== 'number' || rv <= 0) continue;            // not manually marked done
       if ((w as { matchedActivityId?: string }).matchedActivityId || w.status === 'completed') continue; // real activity wins
+      if (wk.garminActuals?.[id]?.garminId) continue;               // record at the slot key (direct bind) wins
       const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
       if (tss <= 0) continue;                                     // nothing planned to deposit
       const activityType = DISC_TO_TYPE[(w.discipline as string) ?? ''];
@@ -895,6 +899,35 @@ export function manualDoneTriActivities(
         startTime,
         iTrimp: Math.round((tss * getAthleteNormalizer()) / 100), // exact inverse of normalizeiTrimp (round-trip safe)
       });
+    }
+  }
+  return out;
+}
+
+/**
+ * In-app GPS runs (isGpsInAppActual: a `guided-gps_` record in wk.garminActuals)
+ * as RUNNING activities for per-discipline CTL. Tracking side. The DB activity
+ * log never holds these, so without this a run recorded on the phone (a tri card
+ * started with GPS, or an impromptu run) never reached tri fitness.
+ *
+ * No double count: when the watch copy syncs it supersedes the record in place
+ * (same key, synced garminId), so the record stops matching here and the synced
+ * row counts from the DB log instead. A slot completed by a GPS run carries the
+ * record at its key, which manualDoneTriActivities skips.
+ *
+ * Valuation is the CTL function's own: the record has no heart rate, so
+ * estimateTss uses its per-minute fallback for runs, exactly as for any synced
+ * run without heart rate. Feed ONLY to estimateDirectPerDisciplineCTLFromActivities,
+ * never to benchmark derivation (no pace or power quality gate applies).
+ */
+export function inAppGpsRunActivities(
+  wks: Week[] | undefined,
+): Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> {
+  const out: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> = [];
+  for (const wk of wks ?? []) {
+    for (const a of Object.values(wk?.garminActuals ?? {})) {
+      if (!isGpsInAppActual(a) || !a.startTime || !(a.durationSec > 0)) continue;
+      out.push({ activityType: 'RUNNING', durationSec: a.durationSec, startTime: a.startTime, iTrimp: a.iTrimp ?? null });
     }
   }
   return out;

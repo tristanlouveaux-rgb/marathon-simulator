@@ -18,6 +18,8 @@ import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { buildGpsRunActual, writeInAppActual, isPlanCardRunType } from '@/calculations/in-app-activity';
+import { resolveTriWeekWorkouts } from '@/ui/triathlon/week-resolve.triathlon';
+import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 
 /**
  * Handle a completed GPS recording: find the matching workout,
@@ -34,9 +36,18 @@ import { buildGpsRunActual, writeInAppActual, isPlanCardRunType } from '@/calcul
  * so the run carries its load into every signal exactly once (audit B9). The
  * exception is a recording started from a non-run card (injury cross-training
  * or rehab strength): it keeps the rating only, like Mark as Done there.
+ *
+ * Triathlon, cycling and HYROX (isMultiSportPlan): the cards are the run
+ * sessions of wk.triWorkouts, not the running engine's week, which these modes
+ * show nowhere. The run completes the card it was started from, keyed by the
+ * card's own slot key, with the rating written as those modes write it (a
+ * completion flag, never events.ts rate(), which moves running VDOT). With the
+ * record under the slot key, the tri matcher direct-binds it and the watch copy
+ * supersedes it in place, so the card stays done when the synced run arrives.
  */
 export function handleCompletedRecording(recording: GpsRecording, workoutName: string): void {
   const s = getState();
+  const multiSport = isMultiSportPlan(s);
 
   // Try to find a matching scheduled workout by name (normal GPS-from-workout-card flow)
   let workout: Workout | null = null;
@@ -47,14 +58,24 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
   // to the adhoc-save path. Skipping the generateWeekWorkouts call also avoids
   // passing stale defaults (s.rd='half', s.v=50) into the generator.
   if (!s.trackOnly && s.w >= 1 && s.w <= s.wks.length) {
-    // The week as the Plan tab shows it (canonical resolver): the cards the run
-    // was started from, with every accepted change applied, so a cut or replaced
-    // session is seen as cut or replaced by the matcher below.
-    weekWorkouts = resolveWeekWorkouts(s, s.w) as Workout[];
-    const matched = weekWorkouts.find(w => w.n === workoutName);
-    if (matched) {
-      workout = matched;
-      workoutId = matched.id || matched.n;
+    if (multiSport) {
+      // The run sessions of this week as the tri/HYROX plan view shows them.
+      weekWorkouts = multiSportRunSessions(s);
+      const matched = findStartedMultiSportCard(weekWorkouts, workoutName, s.wks[s.w - 1]?.rated ?? {});
+      if (matched) {
+        workout = matched;
+        workoutId = matched.id ?? matched.n;
+      }
+    } else {
+      // The week as the Plan tab shows it (canonical resolver): the cards the run
+      // was started from, with every accepted change applied, so a cut or replaced
+      // session is seen as cut or replaced by the matcher below.
+      weekWorkouts = resolveWeekWorkouts(s, s.w) as Workout[];
+      const matched = weekWorkouts.find(w => w.n === workoutName);
+      if (matched) {
+        workout = matched;
+        workoutId = matched.id || matched.n;
+      }
     }
   }
 
@@ -69,7 +90,16 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
     completionData,
     // onComplete
     (rpe: number) => {
-      if (workout) {
+      if (workout && multiSport) {
+        // Tri/HYROX card: complete that slot (no running VDOT rating).
+        const ms = getMutableState();
+        const week = ms.wks[ms.w - 1];
+        if (week) {
+          completeMultiSportRunSlot(week, workoutId, workout, recording, rpe);
+          saveState();
+        }
+        render();
+      } else if (workout) {
         // Name-matched scheduled workout: rate it and link the recording
         rate(workoutId, workout.n, rpe, workout.rpe || workout.r, workout.t, false);
         const ms = getMutableState();
@@ -87,7 +117,7 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
         }
         render();
       } else if (s.w >= 1 && s.w <= s.wks.length) {
-        handleImpromptuRun(recording, workoutName, rpe, weekWorkouts);
+        handleImpromptuRun(recording, workoutName, rpe, weekWorkouts, multiSport);
       } else {
         render();
       }
@@ -106,12 +136,19 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
  *    Day-of-week is intentionally ignored. The run could have been done on any day.
  * 2. If match found → offer assignment to that workout.
  * 3. Otherwise → save as adhoc and run load through suggestion pipeline.
+ *
+ * Triathlon, cycling and HYROX (`multiSport`): the candidates are the week's
+ * tri/HYROX run sessions, an assigned run completes that slot as a card start
+ * does (completeMultiSportRunSlot), and an extra run never reaches the running
+ * suggestion pipeline (these modes have no running plan to change). Triathlon
+ * offers its own suggestion pipeline instead; HYROX logs the run.
  */
 function handleImpromptuRun(
   recording: GpsRecording,
   workoutName: string,
   rpe: number,
   weekWorkouts: Workout[],
+  multiSport = false,
 ): void {
   const ms = getMutableState();
   const week = ms.wks[ms.w - 1];
@@ -121,10 +158,17 @@ function handleImpromptuRun(
   const durationMin = recording.totalElapsed / 60;
 
   // Filter to unrated, non-replaced planned runs (weekWorkouts is resolved, so a
-  // replaced session carries status 'replaced').
+  // replaced session carries status 'replaced'). In tri/HYROX 'replaced' marks a
+  // session swapped to an easier one that is still to be done (planned-day-tss.ts),
+  // and a session the matcher completed carries status 'completed' or a record at
+  // its key without a rating, so those are the done checks there.
   const unratedRuns = weekWorkouts.filter(w => {
-    if (w.status === 'replaced') return false;
     const wid = w.id || w.n;
+    if (multiSport) {
+      if (w.status === 'completed' || w.status === 'skipped' || week.garminActuals?.[wid]) return false;
+    } else if (w.status === 'replaced') {
+      return false;
+    }
     return week.rated[wid] == null && week.rated[w.n] == null;
   });
 
@@ -150,8 +194,13 @@ function handleImpromptuRun(
     }
     if (!week.gpsRecordings) week.gpsRecordings = {};
     week.gpsRecordings[recording.id] = recording.id;
-    // Rate the adhoc entry so it counts toward completedKm and effort
-    rate(recording.id, workoutName, rpe, 5, 'easy', false);
+    if (multiSport) {
+      // Tri/HYROX ratings are completion flags; rate() would move running VDOT.
+      week.rated[recording.id] = rpe;
+    } else {
+      // Rate the adhoc entry so it counts toward completedKm and effort
+      rate(recording.id, workoutName, rpe, 5, 'easy', false);
+    }
     // The activity record under the adhoc's own id: Signal B skips an adhoc
     // whose id has a garminActuals entry, so the run counts once, at its
     // measured duration instead of the old flat 30-minute default.
@@ -161,6 +210,15 @@ function handleImpromptuRun(
   const runLoadLogic = () => {
     saveAsAdhoc();
     saveState();
+
+    if (multiSport) {
+      // No running plan to change. Triathlon/cycling: the tri suggestion
+      // pipeline reads the logged run (steps 2 and 3 of activity-review's
+      // redirectToTriSuggestionFlow). HYROX: logged only.
+      render();
+      if (ms.eventType === 'triathlon') void offerTriSuggestions();
+      return;
+    }
 
     // Build a CrossActivity from the run so the suggestion pipeline can assess
     // how much extra load this adds and offer plan adjustments
@@ -211,7 +269,11 @@ function handleImpromptuRun(
   if (matchResult) {
     const matchId = matchResult.id || matchResult.n;
     showMatchConfirm(matchResult.n, distKm).then(confirmed => {
-      if (confirmed) {
+      if (confirmed && multiSport) {
+        completeMultiSportRunSlot(week, matchId, matchResult, recording, rpe);
+        saveState();
+        render();
+      } else if (confirmed) {
         // Assign the GPS run to the matched planned workout
         if (!week.gpsRecordings) week.gpsRecordings = {};
         week.gpsRecordings[matchId] = recording.id;
@@ -226,6 +288,78 @@ function handleImpromptuRun(
   } else {
     runLoadLogic();
   }
+}
+
+/** Triathlon, cycling (eventType 'triathlon') and HYROX: the plan is wk.triWorkouts. */
+function isMultiSportPlan(s: { trackOnly?: boolean; eventType?: string }): boolean {
+  return !s.trackOnly && (s.eventType === 'triathlon' || s.eventType === 'hyrox');
+}
+
+/**
+ * The current week's tri/cycling/HYROX run sessions as the plan view shows them
+ * (resolveTriWeekWorkouts, cloned): the cards a GPS run can be started from.
+ */
+function multiSportRunSessions(s: ReturnType<typeof getState>): Workout[] {
+  return resolveTriWeekWorkouts(s, s.w).filter(w => w.discipline === 'run');
+}
+
+/**
+ * The card a GPS run was started from: the run session with that name. Names
+ * repeat (two HYROX "Easy Run"s, two tri "Easy run"s), so an unrated one is
+ * preferred, today's first.
+ */
+function findStartedMultiSportCard(
+  runs: Workout[],
+  name: string,
+  rated: Record<string, number | 'skip'>,
+): Workout | null {
+  const named = runs.filter(w => w.n === name);
+  if (named.length === 0) return null;
+  const jsDay = new Date().getDay();
+  const today = jsDay === 0 ? 6 : jsDay - 1;
+  const unrated = named.filter(w => rated[w.id ?? w.n] == null);
+  return unrated.find(w => w.dayOfWeek === today)
+    ?? unrated[0]
+    ?? named.find(w => w.dayOfWeek === today)
+    ?? named[0];
+}
+
+/**
+ * Complete a tri/cycling/HYROX run session with a GPS recording. Tracking side.
+ * The rating is the completion flag those modes write (triathlon setRated,
+ * HYROX setHxRated), never events.ts rate(), which feeds running VDOT through
+ * rpeAdj and IMP[s.rd]. The record sits under the slot key, so the tri matcher
+ * direct-binds it (reconcileTriCompletions, run here so the card and the tri
+ * fitness feed see it now) and a synced watch copy supersedes it in place
+ * (matchAndAutoComplete), keeping the slot completed.
+ */
+function completeMultiSportRunSlot(
+  week: Week,
+  key: string,
+  slot: Workout,
+  recording: GpsRecording,
+  rpe: number,
+): void {
+  if (!week.rated) week.rated = {};
+  week.rated[key] = rpe;
+  if (!week.gpsRecordings) week.gpsRecordings = {};
+  week.gpsRecordings[key] = recording.id;
+  recordGpsActual(week, key, recording, rpe, slot.n, { workoutName: slot.n, plannedType: slot.t });
+  if (getState().eventType === 'triathlon') reconcileTriCompletions(week);
+}
+
+/**
+ * Triathlon/cycling extra run: the tri suggestion aggregator reads the logged
+ * run (its cross-training and volume detectors) and the tri modal offers any
+ * change, as activity-review does for synced overflow.
+ */
+async function offerTriSuggestions(): Promise<void> {
+  const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
+  const bundle = collectTriSuggestions(getState());
+  if (bundle.mods.length === 0) return;
+  const { showTriSuggestionModal } = await import('@/ui/triathlon/tri-suggestion-modal');
+  await showTriSuggestionModal(bundle);
+  render();
 }
 
 /**
