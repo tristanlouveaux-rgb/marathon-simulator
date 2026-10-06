@@ -401,11 +401,11 @@ describe('a same-day run marked done wins over a neighbouring slot claim (HYROX 
     const s = baseState(1, 1);
     s.trackOnly = false;
     s.eventType = 'hyrox';
-    const monday = hxRun('hx-w1-run-0', 0);
-    s.wks[0].triWorkouts = [monday, hxRun('hx-w1-run-1', neighbourDay)];
+    const monday = hxRun('W1-hyrox_run_easy-0', 0);
+    s.wks[0].triWorkouts = [monday, hxRun('W1-hyrox_run_easy-1', neighbourDay)];
     // HYROX run Mark as Done on Monday (recordHxRunDone): planned 40 min, stamped Monday noon.
-    s.wks[0].rated['hx-w1-run-0'] = 4;
-    writeInAppActual(s.wks[0], 'hx-w1-run-0', buildPlannedRunActual(monday, {
+    s.wks[0].rated['W1-hyrox_run_easy-0'] = 4;
+    writeInAppActual(s.wks[0], 'W1-hyrox_run_easy-0', buildPlannedRunActual(monday, {
       rpe: 4, startTime: manualCompletionStartIso(PLAN_START, 1, 0, Date.parse('2026-10-04T20:00:00Z')), durationMin: 40,
     }));
     return s;
@@ -426,11 +426,11 @@ describe('a same-day run marked done wins over a neighbouring slot claim (HYROX 
     matchAndAutoComplete([mondayEveningRow()]);
 
     const wk = getMutableState().wks[0];
-    expect(Object.keys(wk.garminActuals ?? {})).toEqual(['hx-w1-run-0']);
-    expect(wk.garminActuals!['hx-w1-run-0'].garminId).toBe('apple-RUN1');
-    expect(wk.garminMatched!['apple-RUN1']).toBe('hx-w1-run-0');
-    expect(wk.rated['hx-w1-run-1']).toBeUndefined();       // the neighbouring session is still to do
-    expect(wk.rated['hx-w1-run-0']).toBe(4);               // the user's rating kept
+    expect(Object.keys(wk.garminActuals ?? {})).toEqual(['W1-hyrox_run_easy-0']);
+    expect(wk.garminActuals!['W1-hyrox_run_easy-0'].garminId).toBe('apple-RUN1');
+    expect(wk.garminMatched!['apple-RUN1']).toBe('W1-hyrox_run_easy-0');
+    expect(wk.rated['W1-hyrox_run_easy-1']).toBeUndefined();       // the neighbouring session is still to do
+    expect(wk.rated['W1-hyrox_run_easy-0']).toBe(4);               // the user's rating kept
     // Counted once, at the watch's 50 minutes.
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(50 * TL_PER_MIN[4]));
   });
@@ -444,8 +444,8 @@ describe('a same-day run marked done wins over a neighbouring slot claim (HYROX 
     })]);
 
     const wk = getMutableState().wks[0];
-    expect(wk.garminActuals!['hx-w1-run-0'].garminId.startsWith('guided-manual-')).toBe(true);
-    expect(wk.garminActuals!['hx-w1-run-1'].garminId).toBe('apple-RUN1');
+    expect(wk.garminActuals!['W1-hyrox_run_easy-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(wk.garminActuals!['W1-hyrox_run_easy-1'].garminId).toBe('apple-RUN1');
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(40 * TL_PER_MIN[4]) + Math.round(50 * TL_PER_MIN[4]));
   });
 
@@ -702,12 +702,12 @@ describe('a cross-day watch run in the current week goes to review instead of re
     s.trackOnly = false;
     s.eventType = 'hyrox';
     const monday = {
-      id: 'hx-w1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 0,
+      id: 'W1-hyrox_run_easy-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 0,
       d: '40 min easy at 6:30/km (~6.2 km). Fully conversational.', r: 4, rpe: 4, estimatedDurationMin: 40,
     } as unknown as Workout;
     s.wks[0].triWorkouts = [monday]; // no run slot on Tuesday
-    s.wks[0].rated['hx-w1-run-0'] = 4;
-    writeInAppActual(s.wks[0], 'hx-w1-run-0', buildPlannedRunActual(monday, {
+    s.wks[0].rated['W1-hyrox_run_easy-0'] = 4;
+    writeInAppActual(s.wks[0], 'W1-hyrox_run_easy-0', buildPlannedRunActual(monday, {
       rpe: 4, startTime: manualCompletionStartIso(PLAN_START, 1, 0, Date.parse('2026-10-04T20:00:00Z')), durationMin: 40,
     }));
     setState(s);
@@ -717,7 +717,7 @@ describe('a cross-day watch run in the current week goes to review instead of re
     })]);
 
     const wk = getMutableState().wks[0];
-    expect(wk.garminActuals!['hx-w1-run-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(wk.garminActuals!['W1-hyrox_run_easy-0'].garminId.startsWith('guided-manual-')).toBe(true);
     expect(wk.garminMatched!['apple-TUE']).toBe('__pending__');
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(40 * TL_PER_MIN[4])); // the review decides the Tuesday run
   });

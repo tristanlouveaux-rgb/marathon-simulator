@@ -898,27 +898,12 @@ async function launchApp(): Promise<void> {
     // triathlon path at the top of this file. Without this, every bump of
     // HYROX_GENERATOR_VERSION was a silent no-op for existing users. The
     // header comment claimed regen-on-launch but the wiring was never built.
+    // Mirror of the tri regen: user-added sessions are carried over, and slot
+    // entries keyed by session name (pre-v14 HYROX sessions had no ids) are
+    // re-keyed to the regenerated session ids (state/hyrox-plan-regen.ts).
     try {
-      const { generateHyroxPlan, HYROX_GENERATOR_VERSION } = await import('@/workouts/plan_engine.hyrox');
-      const mutable = getMutableState();
-      const savedVersion = mutable.hyroxConfig?.generatorVersion ?? 0;
-      if (savedVersion < HYROX_GENERATOR_VERSION && mutable.hyroxConfig) {
-        const freshWeeks = generateHyroxPlan(mutable);
-        if (freshWeeks.length > 0) {
-          for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
-            // Mirror of the tri regen: preserve user-added sessions (adhoc-/
-            // holiday- ids) — wholesale replacement deletes them.
-            const userAdded = (mutable.wks[i].triWorkouts ?? []).filter(
-              (w: any) => typeof w.id === 'string' && (w.id.startsWith('adhoc-') || w.id.startsWith('holiday-')),
-            );
-            mutable.wks[i].triWorkouts = [...freshWeeks[i].triWorkouts!, ...userAdded];
-            mutable.wks[i].ph = freshWeeks[i].ph;
-          }
-          mutable.hyroxConfig.generatorVersion = HYROX_GENERATOR_VERSION;
-          console.log(`[hyrox] plan regenerated (generator v${savedVersion} → v${HYROX_GENERATOR_VERSION})`);
-          saveState();
-        }
-      }
+      const { applyHyroxGeneratorRegen } = await import('@/state/hyrox-plan-regen');
+      if (applyHyroxGeneratorRegen(getMutableState())) saveState();
     } catch (err) {
       console.warn('[hyrox] plan regeneration failed', err);
     }

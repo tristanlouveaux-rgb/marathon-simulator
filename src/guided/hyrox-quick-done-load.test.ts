@@ -50,16 +50,16 @@ describe('HYROX quick Mark as done carries load (audit B9)', () => {
       kind: 'station_density', targetMinutes: 55, band: 'intermediate',
       stationAccess: ACCESS, phase: 'build', slotIndex: 0,
     }) as Workout;
-    const workout = { ...station, id: 'hx-w1-station-0', dayOfWeek: 2 } as Workout;
+    const workout = { ...station, id: 'W1-hyrox_station_density-0', dayOfWeek: 2 } as Workout;
     expect(workout.estimatedDurationMin).toBeGreaterThan(0);
 
     completeStrengthSession(workout);
 
     const wk = getMutableState().wks[0];
-    const actual = wk.garminActuals?.['hx-w1-station-0'];
+    const actual = wk.garminActuals?.['W1-hyrox_station_density-0'];
     expect(actual?.garminId.startsWith('guided-')).toBe(true);
     expect(actual?.durationSec).toBe(workout.estimatedDurationMin! * 60);
-    const rpe = wk.rated['hx-w1-station-0'] as number;
+    const rpe = wk.rated['W1-hyrox_station_density-0'] as number;
     expect(computeWeekRawTSS(wk, wk.rated)).toBe(Math.round(workout.estimatedDurationMin! * TL_PER_MIN[Math.round(rpe)])); // was 0
     expect(computeTodaySignalBTSS(wk, actual!.startTime!.slice(0, 10))).toBeGreaterThan(0);              // was 0
   });
@@ -76,13 +76,13 @@ describe('HYROX quick Mark as done carries load (audit B9)', () => {
       kind: 'station_density', targetMinutes: 55, band: 'intermediate',
       stationAccess: ACCESS, phase: 'build', slotIndex: 0,
     }) as Workout;
-    const workout = { ...station, id: 'hx-w2-station-0', dayOfWeek: 2 } as Workout;
+    const workout = { ...station, id: 'W2-hyrox_station_density-0', dayOfWeek: 2 } as Workout;
 
     completeStrengthSession(workout, { targetWeek: 2 });
 
     const wk2 = getMutableState().wks[1];
-    expect(typeof wk2.rated['hx-w2-station-0']).toBe('number');
-    expect(wk2.garminActuals?.['hx-w2-station-0']).toBeUndefined();
+    expect(typeof wk2.rated['W2-hyrox_station_density-0']).toBe('number');
+    expect(wk2.garminActuals?.['W2-hyrox_station_density-0']).toBeUndefined();
   });
 });
 
@@ -101,9 +101,9 @@ describe('a HYROX quick done is superseded by sport, never by a same-day activit
       kind: 'station_density', targetMinutes: 55, band: 'intermediate',
       stationAccess: ACCESS, phase: 'build', slotIndex: 0,
     }) as Workout;
-    const workout = { ...station, id: 'hx-w1-station-0', dayOfWeek: 2 } as Workout;
+    const workout = { ...station, id: 'W1-hyrox_station_density-0', dayOfWeek: 2 } as Workout;
     const run = {
-      id: 'hx-w1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 2,
+      id: 'W1-hyrox_run_easy-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', dayOfWeek: 2,
       d: '55 min easy at 6:30/km (~8.5 km). Fully conversational.', r: 4, rpe: 4, estimatedDurationMin: 55,
     } as unknown as Workout;
     s.wks[0].triWorkouts = [workout, run];
@@ -129,11 +129,11 @@ describe('a HYROX quick done is superseded by sport, never by a same-day activit
     matchAndAutoComplete([stravaRow({ garmin_id: 'strava-RUN', duration_sec: stationSec - 240, distance_m: 8600 })]);
 
     const wk = getMutableState().wks[0];
-    expect(wk.garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-')).toBe(true);
-    expect(wk.garminActuals!['hx-w1-station-0'].activityType).toBe('hyrox');
-    expect(wk.garminActuals!['hx-w1-run-0'].garminId).toBe('strava-RUN');
-    expect(wk.garminMatched!['strava-RUN']).toBe('hx-w1-run-0');
-    expect(typeof wk.rated['hx-w1-run-0']).toBe('number');
+    expect(wk.garminActuals!['W1-hyrox_station_density-0'].garminId.startsWith('guided-')).toBe(true);
+    expect(wk.garminActuals!['W1-hyrox_station_density-0'].activityType).toBe('hyrox');
+    expect(wk.garminActuals!['W1-hyrox_run_easy-0'].garminId).toBe('strava-RUN');
+    expect(wk.garminMatched!['strava-RUN']).toBe('W1-hyrox_run_easy-0');
+    expect(typeof wk.rated['W1-hyrox_run_easy-0']).toBe('number');
   });
 
   it('a same-day Strava strength copy of the session still replaces the quick-done record in place', () => {
@@ -147,9 +147,9 @@ describe('a HYROX quick done is superseded by sport, never by a same-day activit
     })]);
 
     const wk = getMutableState().wks[0];
-    expect(wk.garminActuals!['hx-w1-station-0'].garminId).toBe('strava-LIFT');
-    expect(wk.garminActuals!['hx-w1-station-0'].workoutName).toBe(workout.n);
-    expect(Object.keys(wk.garminActuals!)).toEqual(['hx-w1-station-0']);
+    expect(wk.garminActuals!['W1-hyrox_station_density-0'].garminId).toBe('strava-LIFT');
+    expect(wk.garminActuals!['W1-hyrox_station_density-0'].workoutName).toBe(workout.n);
+    expect(Object.keys(wk.garminActuals!)).toEqual(['W1-hyrox_station_density-0']);
   });
 });
 
@@ -167,7 +167,7 @@ describe('reconcile never drops a HYROX quick done for an activity on another pl
       kind: 'station_density', targetMinutes: 55, band: 'intermediate',
       stationAccess: ACCESS, phase: 'build', slotIndex: 0,
     }) as Workout;
-    const workout = { ...station, id: 'hx-w1-station-0', dayOfWeek: 2 } as Workout;
+    const workout = { ...station, id: 'W1-hyrox_station_density-0', dayOfWeek: 2 } as Workout;
     setState(s);
     completeStrengthSession(workout);
     return workout;
@@ -184,20 +184,20 @@ describe('reconcile never drops a HYROX quick done for an activity on another pl
 
   it('the quick-done record carries a manual-completion id (planned numbers, noon stamp)', () => {
     quickDoneStation();
-    expect(getMutableState().wks[0].garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(getMutableState().wks[0].garminActuals!['W1-hyrox_station_density-0'].garminId.startsWith('guided-manual-')).toBe(true);
   });
 
   it('a Strava strength session filling another plan slot leaves the station record and its tick in place', () => {
     const workout = quickDoneStation();
     const s = getMutableState();
     const wk = s.wks[0];
-    wk.rated['hx-w1-strength-0'] = 6;
-    wk.garminActuals!['hx-w1-strength-0'] = syncedLift('strava-GYM', workout.estimatedDurationMin! * 60);
+    wk.rated['W1-strength-0'] = 6;
+    wk.garminActuals!['W1-strength-0'] = syncedLift('strava-GYM', workout.estimatedDurationMin! * 60);
 
     expect(reconcileCrossSourceDuplicates(s)).toBe(false);
-    expect(wk.garminActuals!['hx-w1-station-0'].garminId.startsWith('guided-manual-')).toBe(true);
-    expect(typeof wk.rated['hx-w1-station-0']).toBe('number');
-    expect(wk.garminActuals!['hx-w1-strength-0'].garminId).toBe('strava-GYM');
+    expect(wk.garminActuals!['W1-hyrox_station_density-0'].garminId.startsWith('guided-manual-')).toBe(true);
+    expect(typeof wk.rated['W1-hyrox_station_density-0']).toBe('number');
+    expect(wk.garminActuals!['W1-strength-0'].garminId).toBe('strava-GYM');
   });
 
   it('the station record still collapses against the same session synced as a strength extra', () => {

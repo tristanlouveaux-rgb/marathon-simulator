@@ -266,6 +266,10 @@ function addSession(kind: SessionKind, durationMin?: number): void {
 
   // Tag as user-added so it can be filtered later if needed.
   (workout as any).addedManually = true;
+  // A user-added id, the prefix triathlon's added sessions use (session-generator.ts).
+  // It gives the session its own slot key (rated / garminActuals / garminMatched)
+  // and keeps it through a plan regen, which carries only adhoc-/holiday- ids over.
+  workout.id = `adhoc-${Date.now()}`;
 
   const updated = [...(wk.triWorkouts ?? []), workout];
   wk.triWorkouts = scheduleHyroxWeek(updated, hx.athleteBand);

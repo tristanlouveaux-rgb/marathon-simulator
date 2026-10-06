@@ -33,12 +33,13 @@ import { scheduleHyroxWeek } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
+import { stampTriWorkoutIds } from './plan_engine.triathlon';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
  * main.ts checks this on launch and regenerates if stored version is lower.
  */
-export const HYROX_GENERATOR_VERSION = 13;
+export const HYROX_GENERATOR_VERSION = 14;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
@@ -379,7 +380,14 @@ function generateWeekSessions(
   // Enforce MTL cap
   const capped = enforceMTLCap(gated, hx.mtlCap);
 
-  return scheduleHyroxWeek(capped, band);
+  // Stable per-slot ids (W{week}-{type}-{idx}), the triathlon engine's helper.
+  // Every HYROX writer keys by `id ?? n` (Mark as Done, quick done, the matcher's
+  // station and run branches, the status chip). Without ids a week's two
+  // 'Easy Run' or two 'Station Circuit' sessions shared one slot key: one done
+  // showed both done, and a second synced run found no free slot.
+  const scheduled = scheduleHyroxWeek(capped, band);
+  stampTriWorkoutIds(scheduled, weekIndex);
+  return scheduled;
 }
 
 /**

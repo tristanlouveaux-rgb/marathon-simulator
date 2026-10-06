@@ -177,8 +177,8 @@ describe('no phantom running slots in just-track or HYROX', () => {
   });
 
   const HYROX_WEEK: Workout[] = [
-    { id: 'H1-run-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', d: '40 min easy at 6:00/km (~6.7 km).', r: 4, rpe: 4, dayOfWeek: 0, estimatedDurationMin: 40 },
-    { id: 'H1-station-0', n: 'Station Technique', t: 'hyrox_station_technique', discipline: 'station', d: '45 min', r: 6, rpe: 6, dayOfWeek: 2, estimatedDurationMin: 45 },
+    { id: 'W1-hyrox_run_easy-0', n: 'Easy Run', t: 'hyrox_run_easy', discipline: 'run', d: '40 min easy at 6:00/km (~6.7 km).', r: 4, rpe: 4, dayOfWeek: 0, estimatedDurationMin: 40 },
+    { id: 'W1-hyrox_station_technique-0', n: 'Station Technique', t: 'hyrox_station_technique', discipline: 'station', d: '45 min', r: 6, rpe: 6, dayOfWeek: 2, estimatedDurationMin: 45 },
   ] as Workout[];
 
   it('just-track: a cross-training change has no week to size from or write against', () => {
@@ -201,7 +201,7 @@ describe('no phantom running slots in just-track or HYROX', () => {
   it('HYROX: a run binds to the HYROX run session in wk.triWorkouts, not a phantom running slot', () => {
     setup({ eventType: 'hyrox', triWorkouts: HYROX_WEEK.map(w => ({ ...w })) });
     autoProcessActivities([item('run-4', 'RUNNING', 0, 40, 7)], () => {});
-    expect(wk().garminMatched!['run-4']).toBe('H1-run-0');
-    expect(Object.keys(wk().rated)).toEqual(['H1-run-0']);
+    expect(wk().garminMatched!['run-4']).toBe('W1-hyrox_run_easy-0');
+    expect(Object.keys(wk().rated)).toEqual(['W1-hyrox_run_easy-0']);
   });
 });
