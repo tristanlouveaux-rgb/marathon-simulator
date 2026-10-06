@@ -1,5 +1,5 @@
 import type { OnboardingState } from '@/types/onboarding';
-import { nextStep, updateOnboarding } from '../controller';
+import { nextStep, updateOnboarding, JUST_TRACK_ONBOARDING } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import runningImgUrl from '@/assets/onboarding/running.jpg';
@@ -183,17 +183,9 @@ function wireEventHandlers(): void {
       if (mode === 'track') {
         // Just-Track mode: log activities only. No plan, no event, no focus branching.
         // trainingMode='fitness' matches resolveMode() on race-target which auto-skips
-        // when trackOnly=true (via the early return we add there).
-        updateOnboarding({
-          trainingMode: 'fitness',
-          trainingFocus: 'track',
-          trackOnly: true,
-          continuousMode: true,
-          trainingForEvent: null,
-          raceDistance: null,
-          selectedRace: null,
-          customRaceDate: null,
-        });
+        // when trackOnly=true (via the early return we add there). The same
+        // record "Return to plan" restores after a backed-out upgrade.
+        updateOnboarding({ ...JUST_TRACK_ONBOARDING });
       } else if (mode === 'running') {
         // Running: race-target page will ask Yes/No event and handle the branch.
         updateOnboarding({

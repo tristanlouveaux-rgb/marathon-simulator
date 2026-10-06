@@ -17,6 +17,12 @@
  * branch clears s.trackOnly when it builds a plan, and the initializing step
  * runs a full init when the two flags differ. The second block walks the
  * upgrade through the initializing step for running, HYROX and triathlon.
+ *
+ * The third block picks a mode on goals before backing out. goals writes
+ * onboarding.trainingMode, which is read after onboarding ends: main-view
+ * routed the Plan tab to the HYROX plan view (blank with no hyroxConfig) and
+ * isCyclingOnlyMode turned cycling copy on across Just-Track surfaces. Return
+ * to plan now restores the Just-Track onboarding record when no plan was built.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -26,10 +32,13 @@ vi.mock('@/state/persistence', async (importOriginal) => ({
   loadState: vi.fn(),
 }));
 
-// The Return button lands on Home (Just-Track) or the Plan view through a
-// dynamic import; neither view is under test.
+// The Return button lands on Just-Track Home through a dynamic import; Home is
+// not under test. main-view and the running plan view are real: the third
+// block taps the Plan tab after backing out. The HYROX and triathlon plan views
+// are spies, so a route to either shows up.
 vi.mock('@/ui/home-view', () => ({ renderHomeView: vi.fn() }));
-vi.mock('@/ui/main-view', () => ({ renderMainView: vi.fn() }));
+vi.mock('@/ui/hyrox/plan-view', () => ({ renderHyroxPlanView: vi.fn() }));
+vi.mock('@/ui/triathlon/plan-view', () => ({ renderTriathlonPlanView: vi.fn() }));
 
 // The real renderer draws goals (it carries the Return button) and the
 // initializing step (it runs plan generation). The steps after initializing
@@ -54,6 +63,11 @@ import type { Week } from '@/types';
 import { upgradeFromTrackOnly, updateOnboarding, goToStep } from './controller';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { isTrimpSexPending } from '@/data/trimp-sex-gate';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { renderHomeView } from '@/ui/home-view';
+import { renderMainView } from '@/ui/main-view';
+import { renderHyroxPlanView } from '@/ui/hyrox/plan-view';
+import { renderTriathlonPlanView } from '@/ui/triathlon/plan-view';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -121,6 +135,9 @@ const settle = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
 beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.mocked(renderHomeView).mockClear();
+  vi.mocked(renderHyroxPlanView).mockClear();
+  vi.mocked(renderTriathlonPlanView).mockClear();
   document.body.innerHTML = '<div id="app-root"></div>';
 });
 
@@ -220,4 +237,87 @@ describe('Create a training plan, completed, builds the plan and leaves Just-Tra
       }
     });
   }
+});
+
+/** What the goals cycling tile writes (goals.ts). The tile is hidden from the
+ *  picker (HIDDEN_MODES) but its handler and every cycling path downstream
+ *  stay live, so the record is written directly. */
+const CYCLING_PICK: Partial<OnboardingState> = {
+  trainingMode: 'cycling', trackOnly: false, continuousMode: false, trainingForEvent: true,
+  raceDistance: null, trainingFocus: null, selectedRace: null, customRaceDate: null,
+};
+
+describe('Create a training plan, pick a mode, then Return to plan, keeps Just-Track', () => {
+  for (const mode of ['hyrox', 'cycling', 'triathlon', 'running'] as const) {
+    it(`${mode} picked on goals: Return to plan restores the Just-Track record and the Plan tab shows the Just-Track log`, async () => {
+      justTrackUserOneWeekIn();
+      upgradeFromTrackOnly();
+
+      if (mode === 'cycling') {
+        updateOnboarding(CYCLING_PICK);
+      } else {
+        // The real goals tile: it writes the mode's onboarding fields and moves on.
+        const tile = document.querySelector<HTMLElement>(`.mode-tile[data-mode="${mode}"]`);
+        expect(tile).not.toBeNull();
+        tile!.click();
+      }
+      expect(getState().onboarding?.trainingMode).toBe(mode);
+      expect(getState().onboarding?.trackOnly).toBe(false);
+
+      document.getElementById('wizard-return-btn')!.click();
+      await settle();
+
+      const s = getState();
+      expect(s.hasCompletedOnboarding).toBe(true);
+      expect(s.trackOnly).toBe(true);
+      expect(renderHomeView).toHaveBeenCalledTimes(1);
+
+      // Plan tab: the running plan view's Just-Track branch, not a mode view.
+      // Before the fix a HYROX pick routed here to the HYROX plan view, which
+      // renders nothing without a hyroxConfig.
+      renderMainView();
+      const modeViewCalls = () =>
+        vi.mocked(renderHyroxPlanView).mock.calls.length + vi.mocked(renderTriathlonPlanView).mock.calls.length;
+      await vi.waitFor(() => {
+        expect(modeViewCalls() > 0 || document.getElementById('track-generate-session') !== null).toBe(true);
+      });
+      expect(renderHyroxPlanView).not.toHaveBeenCalled();
+      expect(renderTriathlonPlanView).not.toHaveBeenCalled();
+      expect(document.getElementById('track-generate-session')).not.toBeNull();
+
+      // Before the fix a cycling pick left cycling copy and logic on across
+      // Just-Track surfaces (account volume label, VO2max card, injury risk).
+      expect(isCyclingOnlyMode(s)).toBe(false);
+
+      // The record the goals Just-Track tile writes.
+      expect(s.onboarding).toMatchObject({
+        trainingMode: 'fitness',
+        trainingFocus: 'track',
+        trackOnly: true,
+        continuousMode: true,
+        trainingForEvent: null,
+        raceDistance: null,
+        selectedRace: null,
+        customRaceDate: null,
+      });
+    });
+  }
+
+  it('a user with a plan keeps their onboarding record on Return to plan', async () => {
+    justTrackUserOneWeekIn();
+    const s0 = getMutableState();
+    s0.trackOnly = false; // a plan exists
+    s0.hasCompletedOnboarding = false;
+    s0.onboarding = { ...s0.onboarding!, trainingMode: 'hyrox', trackOnly: false, trainingFocus: null, currentStep: 'goals' };
+    goToStep('goals');
+
+    document.getElementById('wizard-return-btn')!.click();
+    await settle();
+
+    const s = getState();
+    expect(s.hasCompletedOnboarding).toBe(true);
+    expect(s.onboarding?.trainingMode).toBe('hyrox');
+    expect(s.onboarding?.trackOnly).toBe(false);
+    expect(renderHomeView).not.toHaveBeenCalled();
+  });
 });
