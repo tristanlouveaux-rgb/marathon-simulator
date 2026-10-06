@@ -338,11 +338,13 @@ describe('buildPlanSkeleton — HYROX uses the structured per-week shape (P0 reg
     const s = getMutableState();
     s.eventType = 'hyrox' as any;
     s.w = 1;
+    // Scheduled sessions carry a day, as scheduleHyroxWeek writes them: HYROX
+    // planned_tss comes from the planned-day pricer, which prices by day.
     s.wks[0] = {
       w: 1, ph: 'build' as any,
       triWorkouts: [
-        { n: 'Stations', t: 'hyrox_station', discipline: 'station', d: '4 stations', r: 7, aerobic: 80, anaerobic: 20, estimatedDurationMin: 70 },
-        { n: 'Easy run', t: 'easy_run', discipline: 'run', d: '8km easy', r: 3, aerobic: 30, anaerobic: 0, estimatedDurationMin: 42 },
+        { n: 'Stations', t: 'hyrox_station', discipline: 'station', d: '4 stations', r: 7, aerobic: 80, anaerobic: 20, estimatedDurationMin: 70, dayOfWeek: 1 },
+        { n: 'Easy run', t: 'easy_run', discipline: 'run', d: '8km easy', r: 3, aerobic: 30, anaerobic: 0, estimatedDurationMin: 42, dayOfWeek: 3 },
       ],
     } as any;
 
