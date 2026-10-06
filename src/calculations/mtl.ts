@@ -18,7 +18,7 @@
  */
 
 import type { HyroxStation } from '@/types/triathlon';
-import type { Week, SimulatorState } from '@/types/state';
+import type { Week, SimulatorState, Workout } from '@/types/state';
 import { STATION_MTL_FACTORS, RUN_MTL_FACTORS } from '@/constants/hyrox-constants';
 import { ctlAdherenceRatio } from '@/calculations/fitness-model';
 
@@ -88,8 +88,25 @@ export function computeWeekMTL(wk: Week): number {
 }
 
 /**
- * Sum `musculoTendonLoad` across **completed** workouts in a week (those
- * with a `matchedActivityId`). Returns 0 when no completions yet.
+ * TRACKING side: did the athlete complete this planned session? True when the
+ * session carries a matched activity (`matchedActivityId`, set by the
+ * triathlon matcher and the cross-source twin rebind) or an activity record
+ * sits on its slot key (`wk.garminActuals[id || n]`). HYROX writes only the
+ * second: the matcher's station and run branches, in-app GPS runs, Mark as
+ * Done run records and quick-done station records all key the record by the
+ * slot. Same completion test as the status chip (deriveWorkoutStatus) minus
+ * the bare rating: a session rated done with no record (HYROX bike / erg /
+ * swim cross sessions) carries no activity and is not counted.
+ */
+export function isMtlSessionCompleted(wk: Week, w: Workout): boolean {
+  if (w.matchedActivityId) return true;
+  const key = w.id || w.n;
+  return !!key && !!wk.garminActuals?.[key];
+}
+
+/**
+ * Sum `musculoTendonLoad` across **completed** workouts in a week
+ * (isMtlSessionCompleted). Returns 0 when no completions yet.
  *
  * Mirrors `computeWeekMTL`'s scope (all triWorkouts incl. runs) so the
  * actual / planned / chronic / acute display numbers share one source of
@@ -100,7 +117,7 @@ export function computeWeekMTL(wk: Week): number {
 export function computeWeekActualMTL(wk: Week): number {
   const workouts = wk.triWorkouts ?? [];
   return workouts.reduce(
-    (acc, w) => acc + (w.matchedActivityId ? (w.musculoTendonLoad ?? 0) : 0),
+    (acc, w) => acc + (isMtlSessionCompleted(wk, w) ? (w.musculoTendonLoad ?? 0) : 0),
     0,
   );
 }
@@ -122,14 +139,14 @@ export function computeWeekMTLByDiscipline(wk: Week): DisciplineMTL {
   return { run, station, brick };
 }
 
-/** Discipline-split weekly MTL (actuals): only workouts with a matched
- *  activity contribute. Used by the CTL/ATL impulse-response EMAs so chronic
- *  and acute reflect completed training, mirroring running CTL/ATL behaviour. */
+/** Discipline-split weekly MTL (actuals): only completed workouts
+ *  (isMtlSessionCompleted) contribute. Used by the CTL/ATL impulse-response EMAs
+ *  so chronic and acute reflect completed training, mirroring running CTL/ATL. */
 export function computeWeekActualMTLByDiscipline(wk: Week): DisciplineMTL {
   const workouts = wk.triWorkouts ?? [];
   let run = 0, station = 0, brick = 0;
   for (const w of workouts) {
-    if (!w.matchedActivityId) continue;
+    if (!isMtlSessionCompleted(wk, w)) continue;
     const mtl = w.musculoTendonLoad ?? 0;
     const disc = (w as { discipline?: string }).discipline;
     if (disc === 'station') station += mtl;
@@ -146,8 +163,8 @@ export interface DisciplineFitnessFatigue {
 
 /**
  * Discipline-split CTL/ATL. Separate impulse-response EMAs per
- * run / station / brick. Reads **completed** workouts only (those with a
- * `matchedActivityId`), mirroring how running CTL/ATL is fed by actual TSS
+ * run / station / brick. Reads **completed** workouts only
+ * (isMtlSessionCompleted), mirroring how running CTL/ATL is fed by actual TSS
  * rather than planned. Returns daily-equivalent values (÷7).
  */
 export function computeMTLFitnessFatigueByDiscipline(
@@ -181,9 +198,9 @@ export function computeMTLFitnessFatigueByDiscipline(
 
 /**
  * Compute MTL CTL (chronic) and ATL (acute) from **completed** weekly MTL.
- * Only workouts with a `matchedActivityId` contribute, mirroring how running
- * CTL/ATL is fed by actual TSS rather than planned. Until the user matches
- * activities, both are zero. That is correct: a fresh user has no history
+ * Only completed workouts (isMtlSessionCompleted) contribute, mirroring how
+ * running CTL/ATL is fed by actual TSS rather than planned. Until the user
+ * completes a session, both are zero. That is correct: a fresh user has no history
  * to smooth.
  *
  * Uses Banister impulse-response EMA constants (same as running CTL/ATL):
