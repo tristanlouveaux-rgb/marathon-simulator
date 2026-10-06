@@ -259,6 +259,16 @@ function retargetRung(state: SimulatorState, d: 'bike' | 'swim', desc: string, f
  *  change only when the type changes. Adjust's baseline follows. */
 function setRunType(state: SimulatorState, w: Workout, newT: string, minutes: number): void {
   if (newT !== w.t) {
+    // OPEN DECISION (Tristan): this writes running mode's generator RPE
+    // (RUN_GENERATOR_RPE: easy 3, marathon pace 6, threshold 7, vo2 8). The tri
+    // generator writes its own run RPEs (plan_engine.triathlon.ts
+    // generateRunSessionForTri: easy 4, long 5 / 6 at peak, threshold 8, vo2 9)
+    // and has no value for marathon pace or recovery, the rungs a downgrade can
+    // reach. So a tri run swapped to easy expects 3 where a generated easy run
+    // expects 4, and a rating of 5 trips detectRpeBlownSession (RPE_BLOWN_DELTA
+    // 2) the next day on the swapped session only. A tri-native table needs
+    // marathon-pace and recovery values that do not exist yet; until decided,
+    // the running scale stays (one table for every rung a downgrade writes).
     const rpe = generatorRpeForRunType(newT);
     if (rpe != null) { w.rpe = rpe; w.r = rpe; }
     const easy = easyPaceSec(state);
