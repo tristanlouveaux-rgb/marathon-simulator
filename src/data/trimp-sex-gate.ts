@@ -26,8 +26,9 @@
  * releaseHeldTrimpSyncs() runs everything held once the gate opens. It is
  * called where the answer becomes final: a wizard step change (so the about-you
  * or schedule answer counts when the user presses Continue, not on a pill tap
- * they may correct), onboarding completion, the Strava profile prefill on the
- * OAuth return, and the HealthKit characteristics seed.
+ * they may correct), onboarding completion, the mid-plan "Return to plan"
+ * exit from an Edit settings session (renderer.ts), the Strava profile
+ * prefill on the OAuth return, and the HealthKit characteristics seed.
  *
  * A sex prefilled by Strava or HealthKit is final for running and fitness
  * (schedule hides the question once a sex is known) but not for triathlon,
