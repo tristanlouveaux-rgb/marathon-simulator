@@ -578,15 +578,23 @@ export function completeOnboarding(): void {
 /**
  * Upgrade from Just-Track mode: relaunch the wizard at the training-goal step
  * so the user walks goals → race/target → schedule → plan-preview and a plan
- * is generated. Clears `trackOnly` on both the onboarding record and global
- * state; preserves name, PBs, physiology, and Strava-derived fitness baselines
- * (ctlBaseline / historicWeeklyTSS / athleteTier).
+ * is generated. Clears `trackOnly` on the onboarding record only; preserves
+ * name, PBs, physiology, and Strava-derived fitness baselines (ctlBaseline /
+ * historicWeeklyTSS / athleteTier).
  *
- * Wipes `s.wks` (skeleton tracking weeks with no planned workouts) so the
- * initializing step's mid-plan guard (`wks.length > 0 → skip plan gen`)
- * doesn't short-circuit the upgrade. Any activities previously matched into
- * these weeks' `garminActuals` re-sync from `garmin_activities` on the next
- * poll. Server-side history is the source of truth.
+ * The global `s.trackOnly` stays true until a plan exists. Every init branch
+ * clears it when it builds one (initialization.ts, .hyrox, .triathlon,
+ * .cycling), and the initializing step runs a full init when the two flags
+ * differ. Clearing it here, before any plan exists, meant that backing out
+ * through "Return to plan" left the user running as a continuous running plan
+ * built from defaults over the Just-Track bucket weeks, and synced runs
+ * auto-completed those phantom slots. Kept true, "Return to plan" lands back
+ * on Just-Track Home.
+ *
+ * The bucket weeks stay in state while the wizard runs. The initializing
+ * step's mid-plan guard (`wks.length > 0 → skip plan gen`) does not
+ * short-circuit the upgrade because `onboarding.trackOnly` (false) differs
+ * from `s.trackOnly` (true), which forces the full init.
  */
 export function upgradeFromTrackOnly(): void {
   const s = getState();
@@ -597,7 +605,6 @@ export function upgradeFromTrackOnly(): void {
   // historical stats (activity matches, CTL history, VDOT chart data).
   updateState({
     hasCompletedOnboarding: false,
-    trackOnly: false,
     onboarding: {
       ...s.onboarding,
       trackOnly: false,
