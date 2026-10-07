@@ -29,12 +29,15 @@ import {
   normalizeiTrimp,
   getAthleteNormalizer,
   setAthleteNormalizer,
+  computeWeekRawTSS,
 } from '@/calculations/fitness-model';
+import { triActivityTss, withTriRatedRpe } from '@/calculations/tri-benchmarks-from-history';
 import { calculateITrimpFromSummary } from '@/calculations/trimp';
 import { computeUniversalLoad } from '@/cross-training/universalLoad';
 import { EASY_LOAD_PER_KM, TAU, HR_ZONE_TSS_PER_MIN } from '@/cross-training/universal-load-constants';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import type { SimulatorState, Workout } from '@/types';
+import type { GarminActual, Week } from '@/types/state';
 
 const EASY_HOUR_TSS = 60 * TL_PER_MIN[4]; // 55.2 — THE anchor
 
@@ -222,4 +225,25 @@ describe('Anchor 9: type-keyed valuation map stays on canonical table rows', () 
     expect(TSS_RPE_BY_TYPE.long).toBe(4);
     expect(TSS_RPE_BY_TYPE.recovery).toBe(3);
   });
+});
+
+describe('Anchor 10: a session without heart rate is worth the same in tri fitness and Signal B', () => {
+  // Triathlon / cycling per-discipline fitness (triActivityTss) once valued a
+  // heart-rate-less hour on a private per-minute scale (ride 60, swim 54,
+  // class 36 TSS) while computeWeekRawTSS read 69 (TL_PER_MIN[5]).
+  const actual = (activityType: string): GarminActual => ({
+    garminId: 'strava-anchor', activityType, startTime: '2026-10-07T08:00:00.000Z', durationSec: 3600,
+    distanceKm: 0, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null,
+  } as GarminActual);
+
+  for (const activityType of ['CYCLING', 'LAP_SWIMMING', 'HIIT']) {
+    for (const rated of [undefined, 7]) {
+      it(`${activityType}, ${rated == null ? 'unrated' : `rated ${rated}`}`, () => {
+        const wk = { w: 1, garminActuals: { slot: actual(activityType) }, rated: rated == null ? {} : { slot: rated } } as unknown as Week;
+        const [dbRow] = withTriRatedRpe([actual(activityType)], [wk]);
+        expect(Math.round(triActivityTss(dbRow))).toBe(computeWeekRawTSS(wk, wk.rated));
+        expect(triActivityTss(dbRow)).toBeCloseTo(60 * TL_PER_MIN[rated ?? 5], 6);
+      });
+    }
+  }
 });

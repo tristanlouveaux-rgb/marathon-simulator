@@ -23,10 +23,13 @@
  */
 
 import { normalizeiTrimp, getAthleteNormalizer } from '@/calculations/fitness-model';
+import { TL_PER_MIN } from '@/constants';
 import { isGpsInAppActual } from '@/calculations/in-app-activity';
+import { isStrengthActual } from '@/cross-training/activities';
 import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
+import { TRI_FITNESS_WINDOW_DAYS } from '@/calculations/fitness-model.triathlon';
 import { SWIM_TYPE_MULTIPLIER } from '@/constants/triathlon-course-factors';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -678,18 +681,28 @@ export interface PerDisciplineCtlEstimate {
 }
 
 /**
+ * The activity fields the per-discipline load model reads. `ratedRpe` is the
+ * RPE Signal B (computeWeekRawTSS) prices the same activity at when it has no
+ * heart rate: the athlete's rating of the session (a strength session's own
+ * RPE tag first), else a logged session's RPE. withTriRatedRpe and
+ * inAppGpsRunActivities attach it. Absent means unrated (RPE 5).
+ */
+export type TriLoadActivity = Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'> & {
+  ratedRpe?: number | null;
+};
+
+/**
  * Seed per-discipline CTL / ATL / TSB from activity history.
  *
  * Uses raw physiological TSS (Signal B) per activity, weighted by the
  * transfer matrix into swim / bike / run tracks. Combined CTL is the raw
  * sum of TSS contributions (matching the model introduced in §8 feedback).
  *
- * For activities with no iTrimp, estimates TSS as duration × 60 (so a
- * 60-min ride ≈ 60 TSS at moderate effort). Conservative and good enough
- * for seeding. Real CTL converges quickly once new activities sync in.
+ * Each activity is valued by triActivityTss: iTRIMP when present, else the
+ * canonical table at the rated RPE (RPE 5 when unrated), as Signal B does.
  */
 export function estimatePerDisciplineCTLFromActivities(
-  activities: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>>,
+  activities: TriLoadActivity[],
   referenceDateISO: string = new Date().toISOString()
 ): PerDisciplineCtlEstimate {
   const refTs = Date.parse(referenceDateISO);
@@ -707,9 +720,9 @@ export function estimatePerDisciplineCTLFromActivities(
     const aTs = Date.parse(iso);
     if (!Number.isFinite(aTs)) continue;
     const day = Math.floor((refTs - aTs) / 86400000);
-    if (day < 0 || day > 120) continue;
+    if (day < 0 || day > TRI_FITNESS_WINDOW_DAYS) continue;
 
-    const tss = estimateTss(a, sport);
+    const tss = triActivityTss(a);
     if (tss <= 0) continue;
     contribs.push({ day, sport, tss });
   }
@@ -764,17 +777,6 @@ export function estimatePerDisciplineCTLFromActivities(
 }
 
 /**
- * Convert an activity to its Signal-B TSS-equivalent.
- *
- * iTRIMP (Banister 1991) is the canonical raw physiological load metric
- * stored on garmin_activities. To compare it against TSS-space (where
- * 100 = 1h at threshold), divide by 150. The same conversion the
- * running-side activity-matcher uses (`normalizeiTrimp`, personal-gated).
- *
- * Without this conversion, CTL estimates run ~150× too high (e.g. 2296
- * instead of ~15 for a base of one 60-min Z2 run per day).
- */
-/**
  * Direct per-discipline CTL/ATL. Own-discipline activity only, NO cross-
  * transfer matrix. Used for the user-facing "Training load" display so an
  * athlete with zero swims doesn't see 8.4 swim fatigue from bike spillover.
@@ -784,7 +786,7 @@ export function estimatePerDisciplineCTLFromActivities(
  * "what I've done in the pool".
  */
 export function estimateDirectPerDisciplineCTLFromActivities(
-  activities: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>>,
+  activities: TriLoadActivity[],
   referenceDateISO: string = new Date().toISOString(),
 ): PerDisciplineCtlEstimate {
   const refTs = Date.parse(referenceDateISO);
@@ -807,9 +809,9 @@ export function estimateDirectPerDisciplineCTLFromActivities(
     const aTs = Date.parse(iso);
     if (!Number.isFinite(aTs)) continue;
     const day = Math.floor((refTs - aTs) / 86400000);
-    if (day < 0 || day > 120) continue;
+    if (day < 0 || day > TRI_FITNESS_WINDOW_DAYS) continue;
 
-    const tss = estimateTss(a, sport);
+    const tss = triActivityTss(a);
     if (tss <= 0) continue;
 
     const ctlDecay = Math.exp(-day / CTL_TAU_DAYS);
@@ -848,6 +850,38 @@ export function estimateDirectPerDisciplineCTLFromActivities(
 }
 
 /**
+ * Completed days the athlete's activity record covers, for per-discipline
+ * readiness (observedDisciplineLoad, perDisciplineAcwrRaw). Tracking side.
+ *
+ * Returns the whole days from `planStartDate` to `referenceDateISO` when NO
+ * activity of any sport in `activities` started before the plan: the athlete has
+ * no record before plan start, so those days are unknown, not rest (the running
+ * rule in computeRollingLoadRatio). Returns undefined, meaning "the record covers
+ * the window, read the EMAs as they are", when any activity predates the plan
+ * (a runner of several years who has just started swimming keeps the swim ramp:
+ * the record shows no swimming, so that ramp is real) or when the plan start is
+ * missing or unparseable.
+ *
+ * Pass every activity fed to estimateDirectPerDisciplineCTLFromActivities, with
+ * the same reference date, so the day count matches the stored sums.
+ */
+export function triLoadObservedDays(
+  activities: Array<Pick<GarminActual, 'startTime'>>,
+  planStartDate: string | undefined,
+  referenceDateISO: string = new Date().toISOString(),
+): number | undefined {
+  if (!planStartDate) return undefined;
+  const startMs = Date.parse(planStartDate);
+  const refMs = Date.parse(referenceDateISO);
+  if (!Number.isFinite(startMs) || !Number.isFinite(refMs)) return undefined;
+  for (const a of activities) {
+    const t = a.startTime ? Date.parse(a.startTime) : NaN;
+    if (Number.isFinite(t) && t < startMs) return undefined;
+  }
+  return Math.max(0, Math.floor((refMs - startMs) / 86400000));
+}
+
+/**
  * Synthetic activities for tri/cycling sessions the user MANUALLY marked done
  * (rated with an RPE) but that have NO synced/matched activity. Lets a manual
  * completion deposit its planned load into per-discipline CTL — so the per-session
@@ -861,7 +895,7 @@ export function estimateDirectPerDisciplineCTLFromActivities(
  * under its own key, which the tri matcher direct-binds) is skipped — the real
  * activity is already in the activity log (or, for an in-app GPS run, in
  * inAppGpsRunActivities) and always wins (Strava-canonical).
- * The planned load is encoded as `iTrimp = TSS × normalizer / 100` so `estimateTss` recovers
+ * The planned load is encoded as `iTrimp = TSS × normalizer / 100` so `triActivityTss` recovers
  * exactly the planned (aerobic+anaerobic) TSS. The 120-day window is applied
  * downstream by the CTL function.
  */
@@ -915,46 +949,108 @@ export function manualDoneTriActivities(
  * row counts from the DB log instead. A slot completed by a GPS run carries the
  * record at its key, which manualDoneTriActivities skips.
  *
- * Valuation is the CTL function's own: the record has no heart rate, so
- * estimateTss uses its per-minute fallback for runs, exactly as for any synced
- * run without heart rate. Feed ONLY to estimateDirectPerDisciplineCTLFromActivities,
+ * Valuation is the CTL function's own (triActivityTss): the record has no
+ * heart rate, so it is priced at the RPE the athlete rated it (wk.rated under
+ * the record's key, RPE 5 when unrated), the rule computeWeekRawTSS applies to
+ * the same record. Feed ONLY to estimateDirectPerDisciplineCTLFromActivities,
  * never to benchmark derivation (no pace or power quality gate applies).
  */
 export function inAppGpsRunActivities(
   wks: Week[] | undefined,
-): Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> {
-  const out: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>> = [];
+): TriLoadActivity[] {
+  const out: TriLoadActivity[] = [];
   for (const wk of wks ?? []) {
-    for (const a of Object.values(wk?.garminActuals ?? {})) {
+    for (const [key, a] of Object.entries(wk?.garminActuals ?? {})) {
       if (!isGpsInAppActual(a) || !a.startTime || !(a.durationSec > 0)) continue;
-      out.push({ activityType: 'RUNNING', durationSec: a.durationSec, startTime: a.startTime, iTrimp: a.iTrimp ?? null });
+      const rv = wk.rated?.[key];
+      out.push({
+        activityType: 'RUNNING', durationSec: a.durationSec, startTime: a.startTime, iTrimp: a.iTrimp ?? null,
+        ...(typeof rv === 'number' ? { ratedRpe: rv } : {}),
+      });
     }
   }
   return out;
 }
 
-function estimateTss(
-  a: Pick<GarminActual, 'durationSec' | 'iTrimp'>,
-  sport: 'swim' | 'bike' | 'run' | 'other'
-): number {
-  if (a.iTrimp != null && a.iTrimp > 0) {
-    // Personal athlete normalizer (plausibility-gated, population fallback) —
-    // the same conversion running-mode CTL/ATL uses, so tri and running
-    // fitness agree on what a session is worth (ISSUE-262/263; was /150
-    // population, ~1.65× divergent for a corrupted profile).
-    return normalizeiTrimp(a.iTrimp);
+/**
+ * The RPE computeWeekRawTSS (Signal B, fitness-model.ts) prices each synced
+ * activity at when it has no heart rate, keyed by garminId. Tracking side. Read
+ * from the same places, in the same order:
+ *  - a wk.garminActuals record: the rating under its key (wk.rated); a strength
+ *    session's own RPE tag wins over it (computeStrengthRpeTSS);
+ *  - otherwise a logged `garmin-<id>` adhoc session: its rpe (else r).
+ * An activity with a record but no rating is left out (unrated: RPE 5), even
+ * when an adhoc twin carries an RPE, as Signal B counts the record.
+ */
+export function triRatedRpeByGarminId(wks: Week[] | undefined): Map<string, number> {
+  const seen = new Set<string>();
+  const out = new Map<string, number>();
+  for (const wk of wks ?? []) {
+    for (const [key, a] of Object.entries(wk?.garminActuals ?? {})) {
+      const gid = a?.garminId;
+      if (!gid || seen.has(gid)) continue;
+      seen.add(gid);
+      const rv = wk.rated?.[key];
+      const slotRpe = typeof rv === 'number' ? rv : undefined;
+      const rpe = isStrengthActual(a) ? (a.rpe ?? slotRpe) : slotRpe;
+      if (typeof rpe === 'number') out.set(gid, rpe);
+    }
   }
-  // Fallback when iTRIMP is missing: coarse TSS estimate per minute.
-  // Values tuned so a 60-min Z2 ride ≈ 60 TSS, 60-min easy run ≈ 65 TSS.
+  for (const wk of wks ?? []) {
+    for (const w of wk?.adhocWorkouts ?? []) {
+      if (!w.id?.startsWith('garmin-') || wk.garminActuals?.[w.id]) continue;
+      const gid = w.id.slice('garmin-'.length);
+      if (seen.has(gid)) continue;
+      seen.add(gid);
+      const rpe = w.rpe ?? w.r;
+      if (typeof rpe === 'number') out.set(gid, rpe);
+    }
+  }
+  return out;
+}
+
+/**
+ * The activity log with each synced activity's Signal B RPE attached as
+ * `ratedRpe` (triRatedRpeByGarminId), so triActivityTss prices a heart-rate-less
+ * session at the rating the weekly / daily load numbers use. Activities with no
+ * rating are returned unchanged.
+ */
+export function withTriRatedRpe<T extends Pick<GarminActual, 'garminId'>>(
+  activities: T[],
+  wks: Week[] | undefined,
+): Array<T & Pick<TriLoadActivity, 'ratedRpe'>> {
+  const rated = triRatedRpeByGarminId(wks);
+  if (rated.size === 0) return activities;
+  return activities.map(a => {
+    const rpe = a.garminId ? rated.get(a.garminId) : undefined;
+    return rpe == null ? a : { ...a, ratedRpe: rpe };
+  });
+}
+
+/**
+ * One activity's load in canonical TSS (Signal B, tracking side), as the
+ * per-discipline CTL / ATL sums it.
+ *  - iTRIMP present: normalizeiTrimp, the personal plausibility-gated
+ *    conversion running-mode CTL/ATL uses (Load Currency Law), so tri and
+ *    running fitness agree on what a session is worth (ISSUE-262/263).
+ *  - no iTRIMP (no heart rate): minutes x TL_PER_MIN at the rated RPE, RPE 5
+ *    when unrated, the rule computeWeekRawTSS (fitness-model.ts) applies to the
+ *    same activity in the weekly / daily load numbers. One table for every
+ *    sport: the session's sport changes how it is routed (own discipline or
+ *    cross-training), never its TSS.
+ * Before 2026-10-06 this fallback used a private per-minute scale (swim 0.9,
+ * bike 1.0, run 1.1, other 0.6), so the same unrated hour read 54 / 60 / 66 /
+ * 36 TSS here and 69 in the load numbers.
+ */
+export function triActivityTss(
+  a: Pick<TriLoadActivity, 'durationSec' | 'iTrimp' | 'ratedRpe'>,
+): number {
+  if (a.iTrimp != null && a.iTrimp > 0) return normalizeiTrimp(a.iTrimp);
   const minutes = (a.durationSec ?? 0) / 60;
-  if (minutes <= 0) return 0;
-  const perMinute: Record<typeof sport, number> = {
-    swim: 0.9,
-    bike: 1.0,
-    run: 1.1,
-    other: 0.6,
-  };
-  return Math.round(minutes * perMinute[sport]);
+  if (!(minutes > 0)) return 0;
+  const rated = a.ratedRpe;
+  const rpe = typeof rated === 'number' && Number.isFinite(rated) ? Math.max(1, Math.min(10, Math.round(rated))) : 5;
+  return minutes * TL_PER_MIN[rpe];
 }
 
 function zeroEstimate(count: number): PerDisciplineCtlEstimate {
@@ -1130,7 +1226,7 @@ export interface FitnessHistoryEntry {
  * look-back ran off the end of the activity log.
  */
 export function buildTriFitnessHistory(
-  activities: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp' | 'distanceKm'>>,
+  activities: Array<TriLoadActivity & Pick<GarminActual, 'distanceKm'>>,
   referenceDateISO: string = new Date().toISOString(),
   weeks = 12,
 ): FitnessHistoryEntry[] {
@@ -1213,7 +1309,9 @@ export interface DirectBenchmarkInputs {
  * engine cares about.
  */
 export function deriveTriBenchmarksFromHistory(
-  activities: GarminActual[],
+  /** The activity log; entries may carry `ratedRpe` (withTriRatedRpe), which
+   *  the per-discipline load model reads for activities without heart rate. */
+  activities: Array<GarminActual & Pick<TriLoadActivity, 'ratedRpe'>>,
   referenceDateISO: string = new Date().toISOString(),
   direct: DirectBenchmarkInputs = {},
   /** Athlete's default open-water environment tag. Read from

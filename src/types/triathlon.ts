@@ -734,6 +734,12 @@ export interface TriConfig {
     combinedCtl: number;  // Weighted sum per §18.3 transfer matrix
     crossTrainingAtl?: number;  // ATL from non-swim/bike/run activities
     crossTrainingCtl?: number;  // CTL from non-swim/bike/run activities
+    /** Completed days since plan start, set only when no activity of any sport was
+     *  recorded before the plan started (triLoadObservedDays). Readiness and the
+     *  workload ratio then count earlier days as unknown, not rest
+     *  (observedDisciplineLoad). Undefined = the record covers the window. Written
+     *  with the EMAs at launch (main.ts), at the same reference date. */
+    loadObservedDays?: number;
   };
 
   // User overrides for race-time prediction

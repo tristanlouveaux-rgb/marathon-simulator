@@ -14,7 +14,16 @@ import type { SimulatorState, Week } from '@/types/state';
 import type { Discipline, PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { sportToTransferSource, transferWeight, type TransferSourceSport } from '@/constants/transfer-matrix';
-import { ctlAdherenceRatio } from '@/calculations/fitness-model';
+import { ctlAdherenceRatio, ROLLING_ACWR_MIN_OBSERVED_DAYS } from '@/calculations/fitness-model';
+
+/**
+ * Look-back of the per-discipline EMA sums: an activity more than this many days
+ * before the reference date is dropped (estimate*PerDisciplineCTLFromActivities
+ * in tri-benchmarks-from-history.ts, rebuildTriFitnessFromActivities below). The
+ * existing 120-day window, named so observedDisciplineLoad divides by the same
+ * window the sums are taken over.
+ */
+export const TRI_FITNESS_WINDOW_DAYS = 120;
 
 /**
  * Record of an activity contributing to fitness. Generic across all sports —
@@ -104,12 +113,76 @@ function finaliseFitness(
 }
 
 /**
- * Per-discipline ACWR. Ratio of ATL (acute) to CTL (chronic). 0.8–1.3 is safe
- * (Gabbett 2016). Returns undefined when CTL is too small to be meaningful.
+ * Per-discipline CTL / ATL / TSB with the days before the athlete's record
+ * counted as unknown, not as rest. Tracking side.
+ *
+ * `observedDays` is `triConfig.fitness.loadObservedDays` (triLoadObservedDays):
+ * the completed days since plan start, set only when no activity of any sport
+ * was recorded before the plan started. Undefined means the record reaches back
+ * before the plan, and the stored values are returned unchanged.
+ *
+ * The stored EMAs are decay-weighted sums over the window, started from zero, so
+ * for an athlete with no record before the plan every earlier day read as a rest
+ * day: steady training (50 TSS every other day) read run ATL/CTL 4.4 on day 7 and
+ * 2.3 on day 28, "Overreaching", while the shared rolling ACWR read it as safe.
+ * Each sum is divided by the share of its window weight that sits on observed
+ * days,
+ *     share(τ) = (1 − e^(−n/τ)) / (1 − e^(−(W+1)/τ))
+ * with n = observedDays + 1 day indices (day 0 = the last 24 h, as the sums
+ * index days) and W = TRI_FITNESS_WINDOW_DAYS, τ = CTL_TAU_DAYS / ATL_TAU_DAYS.
+ * That is the exact weight a constant daily load puts on n of the window's W + 1
+ * days, so the result is the decay-weighted mean of the observed days scaled to
+ * the full window: steady training reads exactly what it reads for an athlete
+ * whose record covers the window. This is the zero-initialised EMA correction
+ * computeWeeklyAcwrHistory applies for an unseeded runner (Kingma & Ba 2015), the
+ * EMA form of running's rule in computeRollingLoadRatio (a day no record covers
+ * is missing, valued at the athlete's own observed baseline).
+ *
+ * Limitation: with few observed days the chronic mean leans on the latest
+ * sessions, so a genuine early ramp reads lower than it would with a full record
+ * (never higher). The ratio stays unknown until ROLLING_ACWR_MIN_OBSERVED_DAYS
+ * (perDisciplineAcwrRaw).
  */
-export function perDisciplineACWR(fit: PerDisciplineFitness): number | undefined {
-  if (fit.ctl < 10) return undefined;
-  return Math.round((fit.atl / fit.ctl) * 100) / 100;
+export function observedDisciplineLoad(
+  f: { ctl: number; atl: number; tsb?: number },
+  observedDays?: number,
+): { ctl: number; atl: number; tsb: number } {
+  if (observedDays === undefined) return { ctl: f.ctl, atl: f.atl, tsb: f.tsb ?? f.ctl - f.atl };
+  const n = Math.min(Math.max(0, Math.floor(observedDays)) + 1, TRI_FITNESS_WINDOW_DAYS + 1);
+  const share = (tau: number) => (1 - Math.exp(-n / tau)) / (1 - Math.exp(-(TRI_FITNESS_WINDOW_DAYS + 1) / tau));
+  const ctl = f.ctl / share(CTL_TAU_DAYS);
+  const atl = f.atl / share(ATL_TAU_DAYS);
+  return { ctl, atl, tsb: ctl - atl };
+}
+
+/**
+ * Per-discipline ACWR (ATL ÷ CTL), unrounded. The one computation behind the
+ * readiness load-safety input (tri-readiness.ts) and the displayed workload
+ * ratio (perDisciplineACWR). Undefined when the ratio is not meaningful:
+ *  - the athlete's record starts at plan start (observedDays set) and fewer than
+ *    ROLLING_ACWR_MIN_OBSERVED_DAYS completed days are observed, the same guard
+ *    running's unseeded rolling ACWR uses (computeRollingLoadRatio);
+ *  - chronic load (observedDisciplineLoad) below 10 weekly TSS, too noisy.
+ */
+export function perDisciplineAcwrRaw(
+  fit: { ctl: number; atl: number; tsb?: number },
+  observedDays?: number,
+): number | undefined {
+  if (observedDays !== undefined && observedDays < ROLLING_ACWR_MIN_OBSERVED_DAYS) return undefined;
+  const o = observedDisciplineLoad(fit, observedDays);
+  if (o.ctl < 10) return undefined;
+  return o.atl / o.ctl;
+}
+
+/**
+ * Per-discipline ACWR. Ratio of ATL (acute) to CTL (chronic). 0.8–1.3 is safe
+ * (Gabbett 2016). Returns undefined when the ratio is not meaningful
+ * (perDisciplineAcwrRaw). Pass `triConfig.fitness.loadObservedDays` so a new
+ * athlete's ratio counts days before their record as unknown.
+ */
+export function perDisciplineACWR(fit: PerDisciplineFitness, observedDays?: number): number | undefined {
+  const r = perDisciplineAcwrRaw(fit, observedDays);
+  return r === undefined ? undefined : Math.round(r * 100) / 100;
 }
 
 /**
@@ -120,6 +193,8 @@ export function readTriFitness(state: SimulatorState): {
   bike: PerDisciplineFitness;
   run:  PerDisciplineFitness;
   combinedCtl: number;
+  /** Completed days the record covers when it starts at plan start (observedDisciplineLoad). */
+  loadObservedDays?: number;
 } {
   const f = state.triConfig?.fitness;
   if (!f) {
@@ -130,7 +205,7 @@ export function readTriFitness(state: SimulatorState): {
       combinedCtl: 0,
     };
   }
-  return { swim: f.swim, bike: f.bike, run: f.run, combinedCtl: f.combinedCtl };
+  return { swim: f.swim, bike: f.bike, run: f.run, combinedCtl: f.combinedCtl, loadObservedDays: f.loadObservedDays };
 }
 
 /**
@@ -149,7 +224,7 @@ export function rebuildTriFitnessFromActivities(
     const aTs = Date.parse(a.dateISO);
     if (!Number.isFinite(aTs)) continue;
     const dayIndex = Math.floor((refTs - aTs) / 86400000);
-    if (dayIndex < 0 || dayIndex > 120) continue;  // 120-day window covers 42d CTL safely
+    if (dayIndex < 0 || dayIndex > TRI_FITNESS_WINDOW_DAYS) continue;  // 120-day window covers 42d CTL safely
     contributions.push({
       sport: sportToTransferSource(a.sport),
       rawTSS: a.rawTSS,
