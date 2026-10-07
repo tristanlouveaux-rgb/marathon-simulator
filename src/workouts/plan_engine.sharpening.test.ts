@@ -94,10 +94,12 @@ describe('example A: marathon 7 weeks out, 4 runs, 40 km a week, longest recent 
 // ---------------------------------------------------------------------------
 
 const LENGTHS: Array<[RaceDistance, number[]]> = [['marathon', [1, 2, 3, 4, 5, 6, 7]], ['half', [1, 2, 3]]];
-const RUNS = [1, 2, 3, 4, 5, 6];
+const RUNS = [1, 2, 3, 4, 5, 6, 7];
 const PEOPLE: Array<{ archetype?: Archetype; baselineKm?: number; start: SharpeningInputs | undefined }> = [
   { archetype: 'consistent-runner', baselineKm: 40, start: { startLongMin: 100, startSource: 'history-30d' } },
   { archetype: 'consistent-runner', baselineKm: 25, start: { startLongMin: 35, startSource: 'history-30d' } },
+  // Low base, long run near the weekly volume (review 2026-10-07: loaded weeks jumped 50 to 60%).
+  { archetype: 'consistent-runner', baselineKm: 15, start: { startLongMin: 60, startSource: 'history-30d' } },
   { archetype: 'high-mileage', baselineKm: 70, start: { startLongMin: 140, startSource: 'history-30d' } },
   { archetype: 'detrained-with-history', baselineKm: 0, start: { startLongMin: 30, startSource: 'history-no-recent-run' } },
   { archetype: 'detrained-with-history', baselineKm: 20, start: { startLongMin: 60, startSource: 'history-30d' } },
@@ -250,15 +252,75 @@ describe('sharpening block properties (grid through planWeekSessions)', () => {
           bad.push(`${s.label} long ${fmt(r)} after ${fmt(lastLoaded)}`);
         }
         const ref = Math.max(lastLoaded?.total ?? 0, currentMin);
-        // Past every floor the residual overflow is accepted (one floor-length easy run).
+        // Past every floor the residual overflow is accepted, up to the one
+        // floor-length easy run the week holds (none when it holds no easy run).
+        // Before (review 2026-10-07): any week with at most one floor easy run was
+        // exempt outright, which hid loaded weeks 50 to 60% over the ramp.
         const atFloors = r.easy.length <= 1 && r.easy.every(e => e === EASY_FLOOR_MIN);
-        if (ref > 0 && !atFloors && r.total > Math.ceil(ref * (1 + ramp)) + 1) {
+        const allowance = atFloors ? r.easy.length * EASY_FLOOR_MIN : 0;
+        if (ref > 0 && r.total > Math.ceil(ref * (1 + ramp)) + 1 + allowance) {
           bad.push(`${s.label} total ${fmt(r)} vs ${ref.toFixed(0)}`);
         }
         lastLoaded = r;
       }
     }
     expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+});
+
+describe('a weekly hours target is a ceiling on every block week, whichever budget binds', () => {
+  it('grid: no week passes its hours target', () => {
+    const bad: string[] = [];
+    for (const s of samples) {
+      const h = s.ctx.weeklyHoursTarget;
+      if (h == null) continue;
+      for (const r of s.rows) if (r.total > h * 60) bad.push(`${s.label} ${fmt(r)}`);
+    }
+    expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+});
+
+describe('past every floor, a quality session is seated only within one floor-length easy run of the budget (review 2026-10-07)', () => {
+  // Before: with the long run held to seat a quality session, the whole session was
+  // accepted as overflow. Marathon 5 weeks, 3 runs, 15 km, 60-min longest: 87, 131
+  // [long 60, marathon pace 46, easy 25] (+51%), 135, and the long run never grew.
+  const LOW: Ctx = { ...A, totalWeeks: 5, baselineKm: 15, sharpening: { startLongMin: 60, startSource: 'history-30d' } };
+
+  it('15 km a week, 60-min longest, 3 to 7 runs: loaded weeks grow by the ramp and the long run grows each week', () => {
+    const ramp = sharpeningRampPct(A.archetype);
+    for (const rpw of [3, 4, 5, 6, 7]) for (const [fitnessLevel, vdot] of [['intermediate', 45], ['advanced', 55]] as const) {
+      const rows = blockRows({ ...LOW, runsPerWeek: rpw, fitnessLevel, vdot });
+      const loaded = rows.filter(r => (r.phase === 'build' || r.phase === 'peak') && !r.deload);
+      const label = `${rpw} runs ${fitnessLevel}: ${rows.map(fmt).join(' | ')}`;
+      expect(loaded.map(r => r.long), label).toEqual([60, 64, 68]);
+      expect(loaded.map(r => r.total), label).toEqual([87, 93, 99]);
+      for (let i = 1; i < loaded.length; i++) {
+        expect(loaded[i].total, label).toBeLessThanOrEqual(Math.ceil(loaded[i - 1].total * (1 + ramp)) + 1);
+      }
+    }
+  });
+
+  it('2-hour target on the same runner: no week passes 120 min', () => {
+    // Before: 131 and 135 against the 120-min target (the chain budget bound, not the target).
+    for (const rpw of [3, 4, 5, 6, 7]) {
+      const rows = blockRows({ ...LOW, runsPerWeek: rpw, weeklyHoursTarget: 2 });
+      for (const r of rows) expect(r.total, fmt(r)).toBeLessThanOrEqual(120);
+    }
+  });
+
+  it('a session seated past the budget never takes the week past a target the chain budget sits under', () => {
+    // 20 km, 60-min longest, advanced, detrained-with-history: the chain budget (117) binds
+    // below the 2-hour target. Without the target week 2 seats marathon pace with the
+    // 25-min easy run as accepted overflow (139); with it the week stays at or under 120.
+    const ctx: Ctx = {
+      ...LOW, baselineKm: 20, archetype: 'detrained-with-history', fitnessLevel: 'advanced', vdot: 55, easyPaceSecPerKm: 290,
+    };
+    const free = blockRows(ctx);
+    expect(free[1].xs.map(i => `${i.slot}:${i.totalMinutes}`)).toEqual(['long:60', 'marathon_pace:54', 'easy:25']);
+    for (const rpw of [3, 4]) {
+      const rows = blockRows({ ...ctx, runsPerWeek: rpw, weeklyHoursTarget: 2 });
+      for (const r of rows) expect(r.total, fmt(r)).toBeLessThanOrEqual(120);
+    }
   });
 });
 

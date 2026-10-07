@@ -1350,6 +1350,9 @@ interface BlockWeekRow {
   acwrNote: string;
   /** The weekly hours target is the binding budget of this loaded week. */
   hoursBound?: boolean;
+  /** The weekly hours target in minutes (absent: none). No week passes it, whichever
+   *  ceiling binds, accepted past-floor overflow included. */
+  hoursCapMin?: number;
 }
 
 /** Build one quality session (same shapes and sizes as the full-plan engine). */
@@ -1419,9 +1422,19 @@ function blockQualityIntent(
  *   5. One quality session left: one easy run at the floor, the long run trimmed
  *      toward the longest long run already seated (LONG_SOFT_FLOOR_MIN when
  *      there is none), residual overflow accepted (the existing past-all-floors
- *      rule). When that trim would unseat the quality session through the
- *      single-session cap, the long run keeps its growth and the week holds no
- *      quality session instead.
+ *      rule) up to the one EASY_FLOOR_MIN easy run the week holds (no overflow
+ *      in a 2-run week, which holds none), never past the hours target.
+ *      When that trim would unseat the quality session through the
+ *      single-session cap, or would leave more overflow than that (the held long
+ *      run plus the session alone pass the budget), the long run keeps its
+ *      growth and the week holds no quality session instead: the freed slot is
+ *      an easy run. The session returns once the budget, growing with the
+ *      chain, seats it (review 2026-10-07: holding the long run to seat the
+ *      session let loaded weeks jump 50 to 60% past the ramp).
+ *   6. Past every floor without a quality session: the long run holds at the
+ *      longest long run already seated, residual overflow accepted, unless that
+ *      passes the hours target; then it is cut to what the target leaves (never
+ *      below LONG_SOFT_FLOOR_MIN), as under a binding target.
  *
  * Binding hours target (owner decision 2026-10-06: start at the target and hold;
  * the long run still grows each week): the long run's growth comes before every
@@ -1438,12 +1451,15 @@ function assembleBlockLoadedWeek(
   const excluded = new Set(ctx.excludedSlots ?? []);
   const longNote = row.acwrNote || (row.deload ? 'Deload week' : '');
   const budget = row.budgetMin;
+  const hoursCap = row.hoursCapMin ?? Infinity;
 
   if (runsPerWeek <= 1) {
     if (row.longTarget != null) {
       let mins = Math.round(row.longTarget);
       // A binding hours target: the single run is as long as the target allows.
-      if (row.hoursBound && Number.isFinite(budget)) mins = Math.max(LONG_SOFT_FLOOR_MIN, Math.min(mins, Math.floor(budget)));
+      // Any set target is a ceiling, whichever budget binds.
+      const cap = row.hoursBound ? budget : hoursCap;
+      if (Number.isFinite(cap)) mins = Math.max(LONG_SOFT_FLOOR_MIN, Math.min(mins, Math.floor(cap)));
       return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
     }
     // No long run this week (a deload long run under LONG_SOFT_FLOOR_MIN): the
@@ -1506,6 +1522,7 @@ function assembleBlockLoadedWeek(
     }
     return { long, quality: underCap(qs, long), easyCount, easyLen: EASY_FLOOR_MIN };
   };
+  const totalOf = (f: Fit) => (f.long ?? 0) + f.quality.reduce((a, q) => a + q.totalMinutes, 0) + f.easyCount * f.easyLen;
 
   const target = row.longTarget;
   const hold = row.longHold;
@@ -1524,13 +1541,20 @@ function assembleBlockLoadedWeek(
         if (held && held.quality.length === set.length) chosen = held;
       }
     }
-    if (!chosen && seatable.length === 0) chosen = fit(target, []);
-    if (!chosen) {
+    if (!chosen && seatable.length > 0) {
+      // Step 5: the trim keeps one quality session only while the overflow it
+      // leaves is at most the floor-length easy run the week holds (none in a
+      // 2-run week) and the week stays inside the hours target.
       const last = seatable.slice(0, 1);
       const trimmed = pastFloors(last, hold ?? LONG_SOFT_FLOOR_MIN);
-      chosen = trimmed.quality.length === last.length
-        ? trimmed
-        : (fit(target, []) ?? pastFloors([], hold ?? LONG_SOFT_FLOOR_MIN));
+      const overflowOk = totalOf(trimmed) <= Math.min(budget + trimmed.easyCount * EASY_FLOOR_MIN, hoursCap);
+      if (trimmed.quality.length === last.length && overflowOk) chosen = trimmed;
+    }
+    if (!chosen) chosen = fit(target, []);
+    if (!chosen) {
+      // Step 6.
+      const held = pastFloors([], hold ?? LONG_SOFT_FLOOR_MIN);
+      chosen = totalOf(held) <= hoursCap ? held : pastFloors([], LONG_SOFT_FLOOR_MIN);
     }
   }
 
@@ -1706,6 +1730,7 @@ function buildSharpeningWeek(
     const hoursBound = Number.isFinite(hoursCapMin) && hoursCapMin <= Math.min(archBudget, chainBudget);
     return {
       hoursBound,
+      hoursCapMin: Number.isFinite(hoursCapMin) ? hoursCapMin : undefined,
       sessionPhase: caseB ? 'base' : ph,
       variantPhase: caseB ? 'base' : ph,
       longTarget,
@@ -1752,6 +1777,7 @@ function buildSharpeningWeek(
       longHold: null,
       sessionCapMin: lastLongOf(history),
       budgetMin: Math.round(base.totalMin * dm * lever),
+      hoursCapMin: Number.isFinite(hoursCapMin) ? hoursCapMin : undefined,
       qualityLimit: Math.min(qualityCap(ability, fitnessLevel, ctx.runsPerWeek), base.qualityCount),
       sizeMult: dm * lever,
       deload: true,
