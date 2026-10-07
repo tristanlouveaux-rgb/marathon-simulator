@@ -962,9 +962,13 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
       slots--;
     }
 
-    // Fill remaining with easy
+    // Fill remaining with easy. An easy run is never longer than the week's long
+    // run: the long run is by definition the week's longest run. When the 10% rule
+    // holds the long run low, the easy runs are held to it instead of outgrowing it.
+    const longCapMin = week.find(i => i.slot === 'long')?.totalMinutes;
     while (slots > 0) {
-      const easyMins = Math.round(easyRunMinutes(ability, raceDistance, phase) * dMult);
+      const naturalEasy = Math.round(easyRunMinutes(ability, raceDistance, phase) * dMult);
+      const easyMins = longCapMin != null ? Math.min(naturalEasy, longCapMin) : naturalEasy;
       week.push({
         dayIndex: dayIdx++,
         slot: 'easy',
@@ -1083,7 +1087,16 @@ export function computePeakWeeklyKm(ctx: PeakWeeklyKmInputs): number {
  * total. The volume-aware quality cap upstream keeps that overflow small by
  * limiting how much budget the quality sessions can claim.
  *
- * The long run keeps its two-tier floor (40 min standard, 30 min soft). Past
+ * The long run has first claim on the budget after quality: the easy budget is
+ * what is left once the full long run is seated, and no easy run is sized
+ * longer than the long run (the long run is the week's longest run). When the
+ * 10% rule holds the long run low, the minutes it frees are not handed to the
+ * easy runs past the long run's length; they stay unprescribed.
+ *
+ * The long run keeps its two-tier floor (40 min standard, 30 min soft) and is
+ * trimmed only by the overflow: first down to no lower than the standard floor,
+ * then, if the week still overflows, down to no lower than the soft floor. A
+ * long run already below a floor is never snapped down to the next one. Past
  * all floors we accept the residual overflow; the plan-view budget banner is
  * the user-facing surface for it.
  */
@@ -1095,19 +1108,28 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
   const total = () => intents.reduce((s, i) => s + i.totalMinutes, 0);
   if (total() <= budgetMin) return;
 
+  const longIntent = intents.find(i => i.slot === 'long');
+
   // ── Consolidate easy runs ──────────────────────────────────────────────────
   // Compute the budget left for easy running after the untrimmable quality
-  // sessions and (for now) the full long run. Then choose the FEWEST easy
-  // run-days such that each survivor lands within [EASY_MIN, naturalEasyMin],
-  // dropping the rest. Never shrink an easy run below the floor.
+  // sessions and the full long run. Then choose the FEWEST easy run-days such
+  // that each survivor lands within [EASY_MIN, easyCapMin], dropping the
+  // rest. Never shrink an easy run below the floor, and never size one longer
+  // than the long run.
   const easyIntents = intents.filter(i => i.slot === 'easy');
   if (easyIntents.length > 0) {
     const nonEasyTotal = intents
       .filter(i => i.slot !== 'easy')
       .reduce((s, i) => s + i.totalMinutes, 0);
     const easyBudget = budgetMin - nonEasyTotal;
-    // All easy intents share the same natural length (easyRunMinutes).
+    // All easy intents share the same natural length (easyRunMinutes), already
+    // held to the long run's length when the week was assembled. The cap is
+    // re-applied here so the sizing below never lengthens an easy run past the
+    // long run (the floor only takes over if the long run is itself under it).
     const naturalEasyMin = Math.max(...easyIntents.map(i => i.totalMinutes));
+    const easyCapMin = longIntent
+      ? Math.min(naturalEasyMin, Math.max(EASY_MIN, longIntent.totalMinutes))
+      : naturalEasyMin;
     const desired = easyIntents.length;
 
     let finalCount: number;
@@ -1117,8 +1139,8 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
       // aerobic running. The resulting overflow is accepted and surfaced.
       finalCount = 1;
     } else {
-      // Fewest runs keeping each survivor ≤ natural; capped so each ≥ floor.
-      const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / naturalEasyMin));
+      // Fewest runs keeping each survivor ≤ the cap; capped so each ≥ floor.
+      const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / easyCapMin));
       const mostAboveFloor = Math.floor(easyBudget / EASY_MIN);
       finalCount = Math.min(desired, fewestAtNatural, mostAboveFloor);
     }
@@ -1129,9 +1151,12 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
       if (intents[i].slot === 'easy') { intents.splice(i, 1); toRemove--; }
     }
     // Size the survivors: split the easy budget evenly, clamped to the floor
-    // and the natural length.
+    // and the cap. Rounded DOWN so the split never overflows the budget it was
+    // sized from. Rounding to nearest overflowed by up to a minute, and that
+    // minute was then taken off the long run (and with a long run under the
+    // standard floor, the whole long run went to the soft floor).
     if (finalCount > 0) {
-      const per = Math.min(naturalEasyMin, Math.max(EASY_MIN, Math.round(easyBudget / finalCount)));
+      const per = Math.min(easyCapMin, Math.max(EASY_MIN, Math.floor(easyBudget / finalCount)));
       for (const e of intents) {
         if (e.slot === 'easy') { e.totalMinutes = per; e.workMinutes = per; }
       }
@@ -1140,22 +1165,32 @@ function applyHoursBudget(intents: SessionIntent[], budgetMin: number): void {
 
   if (total() <= budgetMin) return;
 
-  // ── Trim the long run (unchanged two-tier floor) ────────────────────────────
-  const longIntent = intents.find(i => i.slot === 'long');
+  // ── Trim the long run by the overflow (two-tier floor) ─────────────────────
+  // Tier 1 trims no lower than the standard floor, tier 2 no lower than the soft
+  // floor. Each tier removes only the overflow and never lengthens the long run.
+  // Before, tier 2 set the long run to the soft floor on ANY remaining overflow:
+  // a 37-min long run one minute over budget became 30, which also lowered the
+  // next weeks' 10% ceiling and kept the long run pinned near the floor.
   if (longIntent) {
-    const nonLongTotal = intents.filter(i => i.slot !== 'long').reduce((s, i) => s + i.totalMinutes, 0);
-    const longBudget = Math.max(STD_LONG_MIN, budgetMin - nonLongTotal);
-    if (longBudget < longIntent.totalMinutes) {
-      longIntent.totalMinutes = longBudget;
-      longIntent.workMinutes = longBudget;
+    const trimLongTo = (floorMin: number): void => {
+      const nonLongTotal = intents.filter(i => i.slot !== 'long').reduce((s, i) => s + i.totalMinutes, 0);
+      const target = Math.max(floorMin, budgetMin - nonLongTotal);
+      if (target < longIntent.totalMinutes) {
+        longIntent.totalMinutes = target;
+        longIntent.workMinutes = target;
+      }
+    };
+    trimLongTo(STD_LONG_MIN);
+    if (total() <= budgetMin) return;
+    trimLongTo(SOFT_LONG_MIN);
+    // The long run stays the week's longest run (only binds when the long run
+    // was trimmed below an easy run that is itself above the easy floor).
+    for (const e of intents) {
+      if (e.slot !== 'easy') continue;
+      const capped = Math.min(e.totalMinutes, Math.max(EASY_MIN, longIntent.totalMinutes));
+      e.totalMinutes = capped;
+      e.workMinutes = capped;
     }
-  }
-
-  if (total() <= budgetMin) return;
-
-  if (longIntent && longIntent.totalMinutes > SOFT_LONG_MIN) {
-    longIntent.totalMinutes = SOFT_LONG_MIN;
-    longIntent.workMinutes = SOFT_LONG_MIN;
   }
 
   if (total() <= budgetMin) return;

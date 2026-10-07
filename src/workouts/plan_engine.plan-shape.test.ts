@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import {
   planWeekSessions, isDeloadWeek, abilityBandFromVdot, isRaceWeek, longRunMinutes,
   longRunCeilingMin, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS,
+  EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN,
   type PlanContext,
 } from './plan_engine';
 import { computePlanPhases } from './phases';
@@ -25,8 +26,16 @@ import type { Archetype } from '@/calculations/athlete-archetype';
  *      the next week released it, the ramp counted deload weeks, and the taper
  *      long run was 0.65 x the untrimmed ramp.
  *   3. A long run in every race week, scheduled on Sunday (race day).
+ * The first fix then produced a fourth defect in budget-bound plans: with the
+ * long run held low by the 10% rule, the budget fit handed the freed minutes to
+ * the easy runs (up to 51 min against a 30-min long run) and cut a 31-39 min
+ * long run to the 30-min soft floor on any overflow, even a rounding minute,
+ * which lowered the next weeks' 10% ceiling and pinned the long run there.
+ *   4. No easy run is longer than the same week's long run.
+ *   5. The budget fit never trims the long run while an easy run still has
+ *      minutes above the easy floor.
  * This test replays a representative sample of that sweep through the real
- * engine and asserts the three properties on every plan. The 10% rule is
+ * engine and asserts the five properties on every plan. The 10% rule is
  * Frandsen et al. 2025 (BJSM), see LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST.
  */
 
@@ -39,6 +48,8 @@ interface WeekRow {
   total: number;
   quality: number;
   long: number | null;
+  /** Longest easy run of the week (0 when none). */
+  easyMax: number;
   sessions: string;
 }
 
@@ -55,6 +66,7 @@ function planRows(ctx: Omit<PlanContext, 'weekIndex' | 'phase'>): WeekRow[] {
       total: xs.reduce((a, i) => a + i.totalMinutes, 0),
       quality: xs.filter(i => QUALITY.has(i.slot)).length,
       long: xs.find(i => i.slot === 'long')?.totalMinutes ?? null,
+      easyMax: Math.max(0, ...xs.filter(i => i.slot === 'easy').map(i => i.totalMinutes)),
       sessions: xs.map(i => `${i.slot}:${i.totalMinutes}`).join(' '),
     });
   }
@@ -79,7 +91,13 @@ const BASELINES: Array<[Archetype | undefined, number | undefined]> = [
 const ABILITIES: Array<[string, number]> = [['novice', 38], ['intermediate', 45], ['advanced', 55]];
 const HOURS: Array<number | undefined> = [undefined, 4];
 
-interface Sample { label: string; rows: WeekRow[] }
+interface Sample {
+  label: string;
+  rows: WeekRow[];
+  race: RaceDistance;
+  totalWeeks: number;
+  ability: ReturnType<typeof abilityBandFromVdot>;
+}
 let samples: Sample[] = [];
 
 describe('whole-plan shape (representative sweep through planWeekSessions)', () => {
@@ -97,6 +115,9 @@ describe('whole-plan shape (representative sweep through planWeekSessions)', () 
           samples.push({
             label: `${rd} ${N}wk ${rpw}/wk ${archetype ?? 'no-archetype'} ${baselineKm ?? '-'}km ${fitnessLevel} ${weeklyHoursTarget ?? '-'}h`,
             rows,
+            race: rd,
+            totalWeeks: N,
+            ability: abilityBandFromVdot(vdot, fitnessLevel),
           });
         }
   });
@@ -141,6 +162,86 @@ describe('whole-plan shape (representative sweep through planWeekSessions)', () 
       .filter(({ rows }) => rows[rows.length - 1].long != null)
       .map(({ label, rows }) => `${label}: race week [${rows[rows.length - 1].sessions}]`);
     expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+
+  it('no easy run is longer than the same week\'s long run', () => {
+    const bad: string[] = [];
+    for (const { label, rows } of samples) {
+      for (const r of rows) {
+        if (r.long != null && r.easyMax > r.long) bad.push(`${label} wk${r.k} (${r.phase}): [${r.sessions}]`);
+      }
+    }
+    expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+
+  it('the budget fit never trims the long run while an easy run has minutes above the easy floor', () => {
+    // Outside deload and taper weeks (no effort lever here), the long run before the
+    // budget fit is the ramp capped by the 10% rule. If the delivered long run is
+    // shorter, the budget fit trimmed it, and it may only do that once every easy
+    // run is down to EASY_FLOOR_MIN: the long run has first claim on the budget
+    // after quality, ahead of easy volume.
+    const bad: string[] = [];
+    for (const { label, rows, race, totalWeeks, ability } of samples) {
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        if (r.long == null || r.deload || r.phase === 'taper') continue;
+        if (r.easyMax <= EASY_FLOOR_MIN) continue;
+        const ramp = longRunMinutes(r.k, totalWeeks, ability, race, r.phase as PlanContext['phase']);
+        const prior = rows.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(x => x.long ?? 0);
+        const longest = Math.max(0, ...prior);
+        const untrimmed = longest > 0 ? Math.min(ramp, longRunCeilingMin(longest)) : ramp;
+        if (r.long < untrimmed) {
+          bad.push(`${label} wk${r.k} (${r.phase}): long ${r.long} < ${untrimmed} with easy ${r.easyMax} [${r.sessions}]`);
+        }
+      }
+    }
+    expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+});
+
+describe('budget-bound plan: the long run builds instead of the easy runs (review case)', () => {
+  // Marathon, 20 weeks, 6 runs, detrained 20 km, advanced, 4 h. After the first
+  // 10% fix the long run sat at 30-37 min for the whole plan while easy runs
+  // reached 51 min (wk14: long 30, easy 51, easy 51). The long run must take the
+  // full 10% step whenever the easy runs have minutes above their floor, and no
+  // easy run may outgrow it.
+  const ctx = {
+    runsPerWeek: 6, raceDistance: 'marathon' as RaceDistance, runnerType: 'Balanced' as const,
+    fitnessLevel: 'advanced', totalWeeks: 20, vdot: 55, easyPaceSecPerKm: 330,
+    baselineKm: 20, archetype: 'detrained-with-history' as Archetype, weeklyHoursTarget: 4,
+  };
+  let rows: WeekRow[] = [];
+  beforeAll(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    rows = planRows(ctx);
+  });
+  afterAll(() => { vi.restoreAllMocks(); });
+
+  it('no easy run is longer than the long run in any week', () => {
+    for (const r of rows) {
+      if (r.long != null) expect(r.easyMax, `wk${r.k} [${r.sessions}]`).toBeLessThanOrEqual(r.long);
+    }
+  });
+
+  it('build/peak weeks with easy minutes above the floor take the full 10% step', () => {
+    let checked = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.long == null || r.deload || r.phase === 'taper' || r.easyMax <= EASY_FLOOR_MIN) continue;
+      const longest = Math.max(0, ...rows.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(x => x.long ?? 0));
+      expect(r.long, `wk${r.k} [${r.sessions}] after ${longest}`).toBe(longRunCeilingMin(longest));
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(5);
+  });
+
+  it('the long run leaves the soft floor and keeps climbing through the build', () => {
+    const build = rows.filter(r => r.phase !== 'taper' && r.long != null);
+    const peakBuild = Math.max(...build.map(r => r.long!));
+    expect(peakBuild).toBeGreaterThan(LONG_SOFT_FLOOR_MIN);
+    // The last build/peak week is the plan's longest long run so far (no pinning).
+    const lastBuild = build[build.length - 1];
+    expect(lastBuild.long).toBe(peakBuild);
   });
 });
 
