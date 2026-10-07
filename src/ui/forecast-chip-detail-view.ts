@@ -1236,9 +1236,9 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
     : enduranceGap
       ? enduranceGap
       : rddPenalty > 0
-      ? `The plan's longest run before race day is ${rddLongestMin} min, short of the ${thresholdMin}-min threshold. The race-day forecast carries a ${rddPenalty.toFixed(2)}% durability penalty.`
+      ? `The longest run before race day is ${rddLongestMin} min, short of the ${thresholdMin}-min threshold. The race-day forecast carries a ${rddPenalty.toFixed(2)}% durability penalty.`
       : rdd.metFraction >= 1
-        ? `The plan builds a ${rddLongestMin}-min long run by race day. The race-day forecast carries no durability penalty.`
+        ? `The longest run before race day reaches ${rddLongestMin} min. The race-day forecast carries no durability penalty.`
         : `The plan prescribes ${rdd.qualifyingLongRunCount} long runs over ${qualMin} min before race day, which offsets the shortfall. The race-day forecast carries no durability penalty.`;
   const bannerText = [capped ? "Today's prediction has the run capped by recent durability." : '', (capped || rddPenalty > 0 || enduranceGap) ? raceDayLine : '']
     .filter(Boolean).join(' ');
@@ -1283,7 +1283,7 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
         ${statRow('Penalty applied today', penalty > 0 ? `+${penalty.toFixed(2)}%` : 'None')}
         ${statRow('Long runs logged (12 wks)', `${cnt} of ${tgt}`)}
         ${statRow('Applied to race-day forecast', enduranceGap ? 'Not estimable: long runs too short' : rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
-        ${rdd ? statRow("Plan's longest run before race day", `${rddLongestMin} min`) : ''}
+        ${rdd ? statRow('Longest run before race day', `${rddLongestMin} min`) : ''}
         ${statRow('Look-back window', '12 weeks')}
       </div>
       ${captionCard('Durability is an asymmetric cap: it can only slow you down, never speed you up. Two things lift it: a single long run reaching the distance threshold, or regular time on feet (a long run over ' + qualMin + ' min roughly every 10 days). Repeated long runs build the same connective-tissue durability a peak run does, so they buy down the shortfall penalty. The race-day forecast applies the same cap to the runs the plan prescribes in the 12 weeks before race day. Beyond threshold, additional long-session volume shows up in <strong>Capacity</strong> (VDOT) and <strong>Training</strong> (weekly km), not here. Calibrated against Karp 2007, Daniels 2014, Pfitzinger 2009. see SCIENCE_LOG §H-run.')}

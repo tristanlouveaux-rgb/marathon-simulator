@@ -34,6 +34,30 @@ import { computePlanPhases, computeRunningPlanPhases } from './phases';
  * @param injuryState - Current injury state (optional)
  * @returns Array of workouts
  */
+/**
+ * The easy run a stepped-down session becomes (race-day rule 4): same duration.
+ * The duration is the session's own estimatedDurationMin (every plan-engine
+ * session carries one, intentToWorkout); else its own distance at easy pace for
+ * a plain "<n>km" description; else EASY_FLOOR_MIN, the shortest easy run the
+ * plan prescribes.
+ */
+export function steppedDownEasyRun(
+  w: Workout, raceDistance: RaceDistance, runnerType: RunnerType, easyPaceSecPerKm?: number,
+): Workout {
+  let mins = w.estimatedDurationMin != null && w.estimatedDurationMin > 0 ? w.estimatedDurationMin : null;
+  if (mins == null && easyPaceSecPerKm) {
+    const m = /^(\d+(?:\.\d+)?)km(\s*@.*)?$/.exec(w.d ?? '');
+    if (m) mins = Math.round((parseFloat(m[1]) * easyPaceSecPerKm) / 60);
+  }
+  const total = mins ?? EASY_FLOOR_MIN;
+  const easy = intentToWorkout(
+    { dayIndex: 0, slot: 'easy', totalMinutes: total, workMinutes: total, variantId: 'easy_steady', notes: '' },
+    raceDistance, runnerType, easyPaceSecPerKm,
+  );
+  const loads = calculateWorkoutLoad(easy.t, easy.d, (easy.rpe || easy.r || 3) * 10, easyPaceSecPerKm);
+  return { ...easy, n: `Easy Run (was ${w.n})`, aerobic: loads.aerobic, anaerobic: loads.anaerobic, hrTarget: w.hrTarget };
+}
+
 export function generateWeekWorkouts(
   phase: TrainingPhase,
   runsPerWeek: number,
@@ -440,15 +464,7 @@ export function generateWeekWorkouts(
   // plans with a race date only.
   const raceLayout = weekIndex != null ? planRaceLayout(sPlan) : null;
   if (raceLayout && weekIndex != null) {
-    const toEasy = (w: Workout): Workout => {
-      const mins = w.estimatedDurationMin ?? 30;
-      const easy = intentToWorkout(
-        { dayIndex: 0, slot: 'easy', totalMinutes: mins, workMinutes: mins, variantId: 'easy_steady', notes: '' },
-        raceDistance, runnerType, easyPaceSecPerKm,
-      );
-      const loads = calculateWorkoutLoad(easy.t, easy.d, (easy.rpe || easy.r || 3) * 10, easyPaceSecPerKm);
-      return { ...easy, n: `Easy Run (was ${w.n})`, aerobic: loads.aerobic, anaerobic: loads.anaerobic, hrTarget: w.hrTarget };
-    };
+    const toEasy = (w: Workout): Workout => steppedDownEasyRun(w, raceDistance, runnerType, easyPaceSecPerKm);
     scheduledWorkouts = applyRaceDayRules(scheduledWorkouts, {
       weekIndex,
       layout: raceLayout,

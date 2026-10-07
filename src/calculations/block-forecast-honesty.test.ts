@@ -45,7 +45,7 @@ describe('raceDayEnduranceGapText: no precise penalty outside the model\'s calib
     const r = applyLongRunCap(66 * 60, 'marathon', 0);
     expect(raceDayEnduranceBeyondModel(r, 'marathon')).toBe(true);
     expect(raceDayEnduranceGapText(r, 'marathon')).toBe(
-      "The plan's longest run before race day is about 1:06, short of the 2:45 marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.",
+      "The longest run before race day is about 1:06, short of the 2:45 marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.",
     );
   });
 

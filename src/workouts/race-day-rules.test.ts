@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { generateWeekWorkouts, initializeWeeks } from './generator';
+import { generateWeekWorkouts, initializeWeeks, steppedDownEasyRun } from './generator';
 import { raceWeekLayout, planTrainingWeeks } from './race-week-layout';
 import { isQualityRun, applyRaceDayRules, PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from './race-day-rules';
-import { planWeekSessions } from './plan_engine';
+import { planWeekSessions, EASY_FLOOR_MIN } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
 import { assignDefaultDays } from './scheduler';
 import { isLongRun } from './long-run';
@@ -192,4 +192,19 @@ describe('makeups never break the taper (rule 5 backstop in the generator)', () 
       expect(raceWeek.filter(w => w.skipped)).toEqual([]);
     });
   }
+});
+
+describe('steppedDownEasyRun: the easy run a stepped-down session becomes keeps its duration', () => {
+  // Before: the generator's rule-4 step-down used an unsourced 30-min fallback when
+  // a session carried no estimatedDurationMin.
+  it('own duration, else own distance at easy pace, else EASY_FLOOR_MIN', () => {
+    const q = { t: 'threshold', n: 'Threshold', d: '3×10min @ 4:40/km', estimatedDurationMin: 52 } as Workout;
+    expect(steppedDownEasyRun(q, 'marathon', 'Balanced', 330).estimatedDurationMin).toBe(52);
+    expect(steppedDownEasyRun(q, 'marathon', 'Balanced', 330).t).toBe('easy');
+    const km = { t: 'marathon_pace', n: 'Marathon Pace', d: '10km @ MP' } as Workout;
+    expect(steppedDownEasyRun(km, 'marathon', 'Balanced', 330).estimatedDurationMin).toBe(55);
+    const unknown = { t: 'vo2', n: 'VO2', d: '1km warm up\n5×3min\n1km cool down' } as Workout;
+    expect(steppedDownEasyRun(unknown, 'marathon', 'Balanced', 330).estimatedDurationMin).toBe(EASY_FLOOR_MIN);
+    expect(steppedDownEasyRun(km, 'marathon', 'Balanced', undefined).estimatedDurationMin).toBe(EASY_FLOOR_MIN);
+  });
 });

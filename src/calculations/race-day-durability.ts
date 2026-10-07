@@ -103,5 +103,5 @@ export function raceDayEnduranceGapText(
   r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
 ): string | null {
   if (!raceDayEnduranceBeyondModel(r, rd)) return null;
-  return `The plan's longest run before race day is about ${fmtHm(r!.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
+  return `The longest run before race day is about ${fmtHm(r!.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
 }
