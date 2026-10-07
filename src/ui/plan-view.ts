@@ -4,6 +4,7 @@
  * Complex interactions (rating, Garmin matching) delegate to renderMainView() for now.
  */
 
+import { extraRunAddsQualitySession, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { getState, getMutableState, saveState } from '@/state';
 import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState, Week, Workout } from '@/types';
@@ -1297,12 +1298,15 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
   if (gapSec < 20 * 60) return '';
   const gapMin = Math.round(gapSec / 60);
   const canAddSession = (s.epw ?? 0) < 7;
+  // One more run a week only adds a quality session when the plan can seat it
+  // (quality cap, block budget); otherwise it is an easy run, and the button says so.
+  const addsQuality = canAddSession && extraRunAddsQualitySession(runningPlanShapeInputs(s), s.w ?? 1);
   return `
     <div style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Goal check</div>
       <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.5;margin-bottom:4px">Forecast finish ${ft(forecastSec)} is ${gapMin} min slower than your goal of ${ft(goalSec)}.</div>
-      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:${canAddSession ? '12px' : '0'}">The prediction updates weekly as your running data comes in. Adding a quality session raises the ceiling the plan can hit.</div>
-      ${canAddSession ? `<button id="goal-add-session" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">Add a quality session</button>` : ''}
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:${canAddSession ? '12px' : '0'}">The prediction updates weekly as your running data comes in. ${addsQuality ? 'Adding a quality session raises the ceiling the plan can hit.' : 'Adding a run a week raises the volume the plan builds.'}</div>
+      ${canAddSession ? `<button id="goal-add-session" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">${addsQuality ? 'Add a quality session' : 'Add a run a week'}</button>` : ''}
     </div>
   `;
 }

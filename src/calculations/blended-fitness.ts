@@ -15,7 +15,7 @@
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
-import { computePeakWeeklyKm } from '@/workouts/plan_engine';
+import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
@@ -764,16 +764,11 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // and easy pace the plan uses, so the forecast credits precisely the mileage
       // the plan builds — no more (a thin beginner whose plan only reaches the
       // 20-30 km band keeps the residual penalty), no less.
-      const peakKm = (s.rw ?? 0) > 0
-        ? computePeakWeeklyKm({
-            runsPerWeek: s.rw!,
-            raceDistance: s.rd,
-            fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
-            totalWeeks: trainingWeeks || 16,
-            vdot: s.v ?? engineVdot,
-            easyPaceSecPerKm: s.pac?.e,
-          })
-        : null;
+      // A sharpening block never reaches that destination: plannedPeakWeeklyKm
+      // reads the block's own highest pre-taper week instead (the volume the
+      // plan delivers); a full plan gets computePeakWeeklyKm unchanged.
+      const peakInputs = { ...runningPlanShapeInputs(s), vdot: s.v ?? engineVdot, totalWeeks: trainingWeeks || 16 };
+      const peakKm = (s.rw ?? 0) > 0 ? plannedPeakWeeklyKm(peakInputs) : null;
       // Re-run the SAME prediction pipeline at peak volume. Raw blend only:
       // calibration is applied to forecastTime below, and durability is applied
       // from the plan's prescribed long runs (raceDayPlanDurability), not from

@@ -28,6 +28,7 @@ import { plannedRunMinutesByWeek, runningPlanShapeInputs, type RunningPlanState 
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import {
   plannedRaceDayDurability, getRunDurationsBetweenSec, DURABILITY_WINDOW_WEEKS,
+  LONG_RUN_QUALIFYING_FRACTION, LONG_RUN_THRESHOLD_SEC,
   type RunDurabilityResult,
 } from './run-durability';
 
@@ -68,4 +69,39 @@ export function raceDayPlanDurability(s: RaceDayPlanState, nowMs: number = Date.
 /** The forecast multiplier (>= 1) from `raceDayPlanDurability`; undefined = no penalty. */
 export function raceDayDurabilityMultiplier(s: RaceDayPlanState, nowMs?: number): number | undefined {
   return raceDayPlanDurability(s, nowMs)?.multiplier;
+}
+
+/**
+ * True when a marathon's race-day durability rests on a longest run below the
+ * model's long-run bar (LONG_RUN_QUALIFYING_FRACTION x LONG_RUN_THRESHOLD_SEC,
+ * 0.70 x 2:45 = 1:55). The marathon penalty cap (LONG_RUN_MAX_PENALTY 5%) is
+ * calibrated on volume-shortened marathoners who still did long runs (SCIENCE_LOG
+ * §AL.4); a plan whose longest run stays far below that is outside the
+ * calibration, so surfaces must not present its penalty as a small precise
+ * number (M4 design v4 review, major 4). Tracking side.
+ */
+export function raceDayEnduranceBeyondModel(
+  r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
+): boolean {
+  if (rd !== 'marathon' || !r) return false;
+  return r.longestRunSec < LONG_RUN_QUALIFYING_FRACTION * LONG_RUN_THRESHOLD_SEC.marathon;
+}
+
+/** h:mm */
+function fmtHm(sec: number): string {
+  const m = Math.round(sec / 60);
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The plain statement every forecast surface shows instead of a precise
+ * penalty when raceDayEnduranceBeyondModel holds (owner decision 2026-10-06:
+ * say plainly that the plan cannot build marathon endurance in time and that
+ * the forecast is optimistic). Null otherwise.
+ */
+export function raceDayEnduranceGapText(
+  r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
+): string | null {
+  if (!raceDayEnduranceBeyondModel(r, rd)) return null;
+  return `The plan's longest run before race day is about ${fmtHm(r!.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
 }

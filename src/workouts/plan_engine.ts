@@ -757,6 +757,50 @@ export function plannedRunMinutesByWeek(inputs: PlanShapeInputs): number[][] {
 }
 
 /**
+ * Whether one more run a week seats one more quality session in plan week
+ * `weekIndex` (the nominal week, no live levers). The ability quality cap
+ * (qualityCap) and, in a sharpening block, the week's budget often hold the
+ * count, and then the extra run is an easy run (M4 design v4 review, minor 7).
+ * The "Add a quality session" buttons read it so they never promise a session
+ * the plan will not seat.
+ */
+export function extraRunAddsQualitySession(inputs: PlanShapeInputs, weekIndex: number): boolean {
+  if (!(inputs.totalWeeks > 0) || weekIndex < 1 || weekIndex > inputs.totalWeeks) return false;
+  const phases = resolvePlanPhases({ ...inputs, weekIndex, phase: 'build' });
+  const phase = phases[weekIndex - 1];
+  const quality = (rw: number) => planWeekSessions({ ...inputs, runsPerWeek: rw, weekIndex, phase })
+    .filter(i => QUALITY_SLOT_SET.has(i.slot)).length;
+  return quality(inputs.runsPerWeek + 1) > quality(inputs.runsPerWeek);
+}
+
+/**
+ * Weekly running volume the plan builds to (km), the forecast's race-approach
+ * volume anchor (ISSUE-297: credit the volume the plan delivers). Tracking-side
+ * reader of the plan.
+ *  - Full plan: computePeakWeeklyKm, the destination every week ramps toward.
+ *  - Sharpening block: it never reaches that destination in 1 to 7 weeks, so it
+ *    reads its own highest pre-taper week as prescribed (the replayed plan,
+ *    minutes at easy pace, the computePeakWeeklyKm convention); a taper-only
+ *    block, the current weekly volume it starts from.
+ */
+export function plannedPeakWeeklyKm(inputs: PlanShapeInputs): number {
+  const easyPace = inputs.easyPaceSecPerKm ?? 360;
+  if (inputs.continuousMode || !isSharpeningBlock(inputs.raceDistance, inputs.totalWeeks)) {
+    return computePeakWeeklyKm(inputs);
+  }
+  const phases = resolvePlanPhases({ ...inputs, weekIndex: 1, phase: 'build' });
+  const weeks = nominalHistory({ ...inputs, weekIndex: inputs.totalWeeks + 1, phase: 'taper' });
+  let peakMin = 0;
+  weeks.forEach((w, i) => {
+    const raceWeek = i + 1 === inputs.totalWeeks;
+    if (!raceWeek && phases[i] !== 'taper' && w.totalMin > peakMin) peakMin = w.totalMin;
+  });
+  if (peakMin > 0) return (peakMin * 60) / easyPace;
+  if (inputs.baselineKm != null && inputs.baselineKm > 0) return inputs.baselineKm;
+  return computePeakWeeklyKm(inputs);
+}
+
+/**
  * The plan-engine inputs generateWeekWorkouts reads from state rather than from
  * its arguments: the ramp baseline (detected weekly km; in continuous mode the
  * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode

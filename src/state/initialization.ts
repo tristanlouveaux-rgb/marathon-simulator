@@ -11,7 +11,7 @@ import {
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
 import { pbMedianVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
-import { computePeakWeeklyKm } from '@/workouts/plan_engine';
+import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
@@ -611,13 +611,13 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           easyPaceSecPerKm: pac.e,
         })
       : null;
-    const peakBlend = (peakKm != null && peakKm > 0)
+    const blendAtPeakKm = (km: number | null): number | null => (km != null && km > 0)
       ? blendPredictions(
           targetDistMeters, pbs, ltPace, vo2max, b,
           runnerType.toLowerCase(),
           blendInputs.recentRun ?? rec ?? null,
           undefined,
-          peakKm,
+          km,
           blendInputs.avgPaceSecPerKm ?? undefined,
           { weeksCovered: blendInputs.weeksCovered, paceConfidence: blendInputs.paceConfidence, isStale: blendInputs.isStale },
           undefined,
@@ -626,7 +626,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           effectiveCrossSessions,
         )
       : null;
-    const forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
+    const peakBlend = blendAtPeakKm(peakKm);
+    let forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
     // Publish the peak-volume anchor for the live-recomputing forecast surfaces
     // (renderer, plan-preview) so they credit the ramp instead of anchoring on
     // the penalised today-time (ISSUE-297 forecast-display facet).
@@ -734,6 +735,16 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, trainingWeeks)
       ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks, noSignal: noRunningSignal })
       : undefined;
+    if (s.sharpenBlock && runsPerWeek > 0) {
+      // A block never reaches computePeakWeeklyKm: anchor the forecast on the
+      // block's own highest pre-taper week (plannedPeakWeeklyKm, the reader
+      // refreshBlendedFitness uses), now that its weeks and start exist.
+      const blockPeakBlend = blendAtPeakKm(plannedPeakWeeklyKm(runningPlanShapeInputs({ ...s, onboarding: state })));
+      if (blockPeakBlend != null && blockPeakBlend > 0) {
+        forecastAnchorSec = blockPeakBlend;
+        s.forecastBlendAnchorSec = blockPeakBlend;
+      }
+    }
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {

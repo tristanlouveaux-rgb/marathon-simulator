@@ -8,7 +8,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
+import { raceDayDurabilityMultiplier, raceDayEnduranceGapText } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -93,6 +93,9 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const showMilestonePopup = !!milestone && !state.acceptedMilestoneChallenge && state.targetMilestone === null;
 
   const shownTime = state.targetMilestone ? state.targetMilestone.time : forecastTime;
+  // A marathon plan whose long runs stay under the long-run bar: the forecast
+  // above assumes endurance the plan does not build (race-day-durability).
+  const enduranceGapText = noEvent ? null : raceDayEnduranceGapText(s.raceDayDurability, raceDistance);
 
   container.innerHTML = `
     <style>
@@ -222,6 +225,14 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             ` : ''}
           </div>
         `}
+
+        ${enduranceGapText ? `
+        <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.15s">
+          <div class="pp-note-card">
+            <p class="pp-note">${enduranceGapText}</p>
+          </div>
+        </div>
+        ` : ''}
 
         ${(s.ctlBaseline ?? 0) >= 20 ? `
         <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.16s">

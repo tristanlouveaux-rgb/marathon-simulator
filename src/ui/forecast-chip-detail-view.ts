@@ -11,6 +11,7 @@
  * (sky atmosphere, sun glint, back button, tab bar).
  */
 
+import { raceDayEnduranceGapText } from '@/calculations/race-day-durability';
 import { getState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
 import { ft, fp, formatKm } from '@/utils/format';
@@ -1227,9 +1228,14 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
   const rdd = s.raceDayDurability;
   const rddPenalty = rdd ? Math.max(0, (rdd.multiplier - 1) * 100) : 0;
   const rddLongestMin = rdd ? Math.round(rdd.longestRunSec / 60) : 0;
+  // A marathon plan whose longest run stays under the long-run bar is outside the
+  // model's calibration: say so instead of quoting a precise penalty.
+  const enduranceGap = raceDayEnduranceGapText(rdd, s.rd);
   const raceDayLine = !rdd
     ? (capped ? 'The race-day forecast does not carry this penalty.' : '')
-    : rddPenalty > 0
+    : enduranceGap
+      ? enduranceGap
+      : rddPenalty > 0
       ? `The plan's longest run before race day is ${rddLongestMin} min, short of the ${thresholdMin}-min threshold. The race-day forecast carries a ${rddPenalty.toFixed(2)}% durability penalty.`
       : rdd.metFraction >= 1
         ? `The plan builds a ${rddLongestMin}-min long run by race day. The race-day forecast carries no durability penalty.`

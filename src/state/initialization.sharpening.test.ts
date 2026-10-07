@@ -128,3 +128,29 @@ describe('initializeSimulator: the plan calendar runs to race day', () => {
     expect(getState().selectedMarathon).toBeUndefined();
   });
 });
+
+describe('initializeSimulator: a block anchors its forecast on the volume it delivers', () => {
+  beforeEach(() => resetState());
+
+  it('a low-volume runner: the block anchor (its own peak week) is slower than a full plan\'s (the ramp destination)', () => {
+    const history = () => {
+      const m = getMutableState();
+      m.detectedWeeklyKm = 20;
+      m.stravaHistoryAccepted = true;
+      m.athleteArchetype = { archetype: 'consistent-runner' } as any;
+      m.onboardingRunHistory = [
+        { startTime: new Date(Date.now() - 4 * 86400000).toISOString(), distKm: 10, durSec: 3600, activityType: 'RUNNING' },
+      ];
+    };
+    history();
+    initializeSimulator(onboarding({ planDurationWeeks: 5 }));
+    const block = getState().forecastBlendAnchorSec!;
+    expect(getState().sharpenBlock).toBeDefined();
+    resetState();
+    history();
+    initializeSimulator(onboarding({ planDurationWeeks: 16 }));
+    const full = getState().forecastBlendAnchorSec!;
+    expect(getState().sharpenBlock).toBeUndefined();
+    expect(block).toBeGreaterThan(full);
+  });
+});
