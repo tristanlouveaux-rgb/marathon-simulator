@@ -292,12 +292,35 @@ describe('long-run ramp and the 10% rule (unit)', () => {
 });
 
 describe('race week', () => {
-  it('isRaceWeek: final taper week of a race plan only; never in continuous mode', () => {
-    expect(isRaceWeek('taper', 16, 16)).toBe(true);
-    expect(isRaceWeek('taper', 15, 16)).toBe(false);
-    expect(isRaceWeek('peak', 16, 16)).toBe(false);
-    expect(isRaceWeek('taper', 16, 16, true)).toBe(false);
+  it('isRaceWeek: the final week of a race plan, whatever its phase label; never in continuous mode', () => {
+    expect(isRaceWeek(16, 16)).toBe(true);
+    expect(isRaceWeek(15, 16)).toBe(false);
+    expect(isRaceWeek(16, 16, true)).toBe(false);
+    // 1- and 2-week plans: computeSingleArc labels them [build] and [build, peak].
+    expect(isRaceWeek(1, 1)).toBe(true);
+    expect(isRaceWeek(2, 2)).toBe(true);
+    expect(isRaceWeek(1, 2)).toBe(false);
+    expect(isRaceWeek(0, 0)).toBe(false);
   });
+
+  for (const N of [1, 2]) {
+    it(`a ${N}-week race plan (no taper label): race week has no long run, a primer and no full quality session`, () => {
+      const phases = computePlanPhases(N).map(p => p.ph);
+      expect(phases[N - 1]).not.toBe('taper');
+      for (const rd of ['marathon', 'half', '10k', '5k'] as RaceDistance[]) {
+        for (const rpw of [3, 5]) {
+          const xs = planWeekSessions({
+            runsPerWeek: rpw, raceDistance: rd, runnerType: 'Balanced', phase: phases[N - 1],
+            fitnessLevel: 'intermediate', weekIndex: N, totalWeeks: N, vdot: 45, easyPaceSecPerKm: 330,
+          });
+          const label = `${rd} ${N}wk ${rpw}/wk [${xs.map(i => `${i.slot}:${i.totalMinutes}`).join(' ')}]`;
+          expect(xs.find(i => i.slot === 'long'), label).toBeUndefined();
+          expect(xs.filter(i => i.notes === 'Race-week primer'), label).toHaveLength(1);
+          expect(xs.filter(i => i.slot === 'marathon_pace' || i.slot === 'float'), label).toHaveLength(0);
+        }
+      }
+    });
+  }
 
   it('a continuous plan keeps the long run in its final taper (block deload) week, with no primer', () => {
     const ctx: PlanContext = {

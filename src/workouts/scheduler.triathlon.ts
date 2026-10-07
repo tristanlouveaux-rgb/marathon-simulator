@@ -16,6 +16,7 @@
 
 import type { Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
+import { isLongRun } from './long-run';
 
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -88,7 +89,7 @@ export function scheduleTriathlonWeek(
   //    appended after the generated runs, so "last in the array" put a commute on
   //    Sunday and the long run on a weekday, and a race week (no long run) would
   //    have reserved race day for whatever run came last.
-  const longRunIdx = run.findIndex((w) => w.t === 'long' && !w.commute);
+  const longRunIdx = run.findIndex((w) => isLongRun(w) && !w.commute);
   if (longRunIdx >= 0) {
     const [longRun] = run.splice(longRunIdx, 1);
     place(6, longRun);

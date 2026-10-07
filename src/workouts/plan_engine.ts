@@ -224,17 +224,18 @@ export function isFourWeekCycleDeloadWeek(weekIndex: number, phase: TrainingPhas
 }
 
 /**
- * Race week = the final taper week of a race plan. It carries the race, so the
- * plan seats a short primer instead of a full quality session (SCIENCE_LOG §CE)
- * and no long run: the race is the week's long effort. A continuous (no-race)
- * plan's final taper week is a block deload, never a race week. Single source
- * for the plan engine, the generator's ACWR ease-back exemption and the
+ * Race week = the final week of a race plan, whatever its phase label. It
+ * carries the race, so the plan seats a short primer instead of a full quality
+ * session (SCIENCE_LOG §CE) and no long run: the race is the week's long effort.
+ * Not gated on phase === 'taper': computeSingleArc labels a 1-week plan [build]
+ * and a 2-week plan [build, peak], and the triathlon wizard builds plans that
+ * short when the race is 1 or 2 weeks out. A continuous (no-race) plan's final
+ * week is a block deload, never a race week. Single source for the running and
+ * triathlon engines, the generator's ACWR ease-back exemption and the
  * week-debrief preview.
  */
-export function isRaceWeek(
-  phase: TrainingPhase, weekIndex: number, totalWeeks: number, continuousMode?: boolean,
-): boolean {
-  return !continuousMode && phase === 'taper' && weekIndex >= totalWeeks;
+export function isRaceWeek(weekIndex: number, totalWeeks: number, continuousMode?: boolean): boolean {
+  return !continuousMode && totalWeeks > 0 && weekIndex === totalWeeks;
 }
 
 // ---------------------------------------------------------------------------
@@ -702,10 +703,19 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
  */
 function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
   const {
-    runsPerWeek, raceDistance, runnerType, phase, fitnessLevel,
+    runsPerWeek, raceDistance, runnerType, fitnessLevel,
     weekIndex, totalWeeks, vdot, acwrStatus,
   } = ctx;
   const excludedSlots = new Set(ctx.excludedSlots ?? []);
+  // Race week = the final week of a race plan (isRaceWeek). Its single quality
+  // session is a short primer (a few minutes at intensity), not a build-phase
+  // block, regardless of which slot the priority list seats (threshold for most
+  // distances, vo2 for 5K), and it has no long run (the race is the week's long
+  // effort). It is always sized as a taper week: a 1- or 2-week plan's final week
+  // carries a build/peak label (computeSingleArc), and sizing it by that label
+  // seated a full marathon-pace session in race week.
+  const raceWeek = isRaceWeek(weekIndex, totalWeeks, ctx.continuousMode);
+  const phase: TrainingPhase = raceWeek ? 'taper' : ctx.phase;
 
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
   const deload = ctx.forceDeload || isDeloadWeek(weekIndex, ability);
@@ -718,11 +728,6 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
   // deload genuinely light, the following week resumes the ramp instead of
   // spiking above the peak phase. dMult still scales the volume on top.
   const variantPhase: TrainingPhase = deload ? 'base' : phase;
-  // Race week = the final taper week. Its single quality session is a short primer
-  // (a few minutes at intensity), not a build-phase block, regardless of which
-  // slot the priority list seats here (threshold for most distances, vo2 for 5K),
-  // and it has no long run (the race is the week's long effort).
-  const raceWeek = isRaceWeek(phase, weekIndex, totalWeeks, ctx.continuousMode);
   const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
   // CTL-gap re-anchor: reduce volume when the athlete fell behind the plan's load. Suppressed on
   // deload weeks (already a planned reduction — re-anchoring a deload down would double up the same

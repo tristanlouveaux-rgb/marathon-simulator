@@ -430,4 +430,29 @@ describe('Triathlon race week (mirrors running isRaceWeek, 2026-10-06)', () => {
     }
     expect(longWeeks).toBeGreaterThan(10);
   });
+
+  for (const tw of [1, 2]) {
+    it(`a ${tw}-week plan (race date ${tw} week${tw > 1 ? 's' : ''} out): the final week has no long run and leaves Sunday free`, () => {
+      // The tri wizard builds max(1, weeksUntil(raceDate)) weeks, so a race 1 or 2
+      // weeks out is reachable. computeSingleArc labels those plans [build] and
+      // [build, peak]: no taper week, so a phase-gated race-week test missed them.
+      const weeks = generateTriathlonPlan(makeTriState({
+        tw,
+        triConfig: {
+          distance: '70.3',
+          timeAvailableHoursPerWeek: 10,
+          volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 },
+          bike: { hasPowerMeter: false },
+          swim: { cssSecPer100m: 100 },
+          weeksToRace: tw,
+        },
+      }));
+      expect(weeks).toHaveLength(tw);
+      expect(weeks[tw - 1].ph).not.toBe('taper');
+      const raceWeek = weeks[tw - 1].triWorkouts ?? [];
+      expect(raceWeek.filter(w => w.t === 'long')).toHaveLength(0);
+      expect(raceWeek.filter(w => w.dayOfWeek === 6).map(w => w.n)).toEqual([]);
+    });
+  }
 });

@@ -38,6 +38,7 @@ import { gp } from '@/calculations/paces';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
+import { isLongRun } from './long-run';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -52,7 +53,9 @@ import { isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
 // v19: race week has no long run (the race is that week's long effort, mirrors
 // running's isRaceWeek), and the scheduler finds the long run by type instead of
 // array position, so a commute run no longer lands on Sunday with the long run
-// pushed to a weekday.
+// pushed to a weekday. Race week is the plan's final week whatever its phase
+// label (1- and 2-week plans have no taper week). Both ship together in v19
+// (unreleased when the race-week definition was widened, so no second bump).
 export const TRI_GENERATOR_VERSION = 19;
 
 /**
@@ -445,8 +448,8 @@ function generateWeekForTriathlon(
   // plan_engine.ts). Before, every tri race week carried a "Long run" that the
   // scheduler put on Sunday, race day for a Sunday race. The other runs keep the
   // minutes they were given with the long run present.
-  if (isRaceWeek(phase, weekIndex, totalWeeks, state.continuousMode) && run.length > 0
-      && run[run.length - 1].t === 'long') {
+  if (isRaceWeek(weekIndex, totalWeeks, state.continuousMode) && run.length > 0
+      && isLongRun(run[run.length - 1])) {
     run.pop();
   }
 
@@ -583,7 +586,7 @@ function generateWeekForTriathlon(
     phase,
     adapted.gym,
     minutesCapByDay,
-    isRaceWeek(phase, weekIndex, totalWeeks, state.continuousMode),
+    isRaceWeek(weekIndex, totalWeeks, state.continuousMode),
   );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;

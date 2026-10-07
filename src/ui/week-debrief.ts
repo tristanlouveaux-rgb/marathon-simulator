@@ -894,9 +894,10 @@ function _renderPlanPreview(
   // exact values the generator will read) and fall back to a live computeACWR only when the stamp
   // isn't present yet, so preview and commit agree. On a high-ACWR week the RECOMMENDED pane is the
   // eased plan, the ALTERNATIVE is "keep ramping" (the un-eased adjusted plan); the toggle persists
-  // to wk.acwrChoice and the generator honours it. The final taper (race) week is exempt — it
-  // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298).
-  const _raceWeek = isRaceWeek(nextPhase, nextWeekIdx, s.tw ?? nextWeekIdx, !!s.continuousMode);
+  // to wk.acwrChoice and the generator honours it. The race week (isRaceWeek) is exempt — it
+  // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298). Read
+  // from the same baseCtx the engine got, so the preview and the plan agree on which week it is.
+  const _raceWeek = isRaceWeek(baseCtx.weekIndex, baseCtx.totalWeeks, baseCtx.continuousMode);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = (acwrStatus === 'high' && !_raceWeek)

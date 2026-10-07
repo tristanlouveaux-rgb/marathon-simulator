@@ -128,11 +128,12 @@ export function generateWeekWorkouts(
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
     // long-run distance last). Default-until-chosen is eased — 'keep' is the only opt-out. Caution
-    // is handled inside planWeekSessions; safe/unknown weeks skip this entirely. The final taper
-    // (race) week is exempt: its single quality session is already a minimal primer (ISSUE-298) and
-    // its volume is already cut, so easing it would neuter the primer for no load benefit.
+    // is handled inside planWeekSessions; safe/unknown weeks skip this entirely. The race week
+    // (isRaceWeek: the final week of a race plan) is exempt: its single quality session is already
+    // a minimal primer (ISSUE-298) and its volume is already cut, so easing it would neuter the
+    // primer for no load benefit.
     const wkNow = sNow.wks?.[weekIndex - 1] as Week | undefined;
-    const raceWeek = isRaceWeek(phase, weekIndex, totalWeeks, !!sNow.continuousMode);
+    const raceWeek = isRaceWeek(weekIndex, totalWeeks, !!sNow.continuousMode);
     const easedIntents = (
       acwrStatus === 'high' &&
       !raceWeek &&
