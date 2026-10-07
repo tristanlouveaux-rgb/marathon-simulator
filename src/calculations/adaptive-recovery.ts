@@ -188,8 +188,13 @@ export function getEffectiveSafeUpper(baseSafeUpper: number, ar: AdaptiveRecover
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
+/** YYYY-MM-DD of the instant's LOCAL calendar day. Session entries are dated by
+ * the local day (ingestNewActualsAsImpacts) and physiology entries are keyed by
+ * the local day, so "today", the fit's "now" and addDays must be local too. The
+ * UTC day (toISOString) put today a day ahead on evenings west of UTC and a day
+ * behind on mornings east of UTC. */
 function isoDate(d: Date): string {
-  return d.toISOString().split('T')[0];
+  return localDateKey(d);
 }
 
 function daysBetween(aIso: string, bIso: string): number {

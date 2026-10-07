@@ -11,10 +11,15 @@
  * in another week (its card's week, or s.w held back by the debrief gate) was
  * not upgraded and the session counted twice.
  *
+ * Adaptive recovery dated sessions by the local day but measured their age
+ * against the UTC "today": a same-morning session east of UTC was skipped, and
+ * a Sunday-evening entry west of UTC closed on Wednesday evening as
+ * right-censored at 96 h before the day-4 reading existed.
+ *
  * Fixed-offset zones with no DST: America/Phoenix = UTC-7,
  * Australia/Brisbane = UTC+10 (the local-date.test.ts convention).
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 vi.mock('@/state/persistence', async (orig) => ({
@@ -25,6 +30,7 @@ vi.mock('@/state/persistence', async (orig) => ({
 import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { matchAndAutoComplete, weekIndexForDate, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { computeTodaySignalBTSS } from '@/calculations/fitness-model';
+import { ingestNewActualsAsImpacts, closeOutObservedRecovery } from '@/calculations/adaptive-recovery';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { IN_APP_HYROX_ACTIVITY_TYPE } from '@/cross-training/activities';
@@ -33,6 +39,7 @@ import {
   isOnLocalDay, localMondayKey, calendarDaysBetween, localMidnightOfPlanWeek,
 } from '@/utils/local-date';
 import type { GarminActual, SimulatorState, Week } from '@/types';
+import type { PhysiologyDayEntry, SessionImpactEntry } from '@/types/state';
 
 const PLAN_START = '2026-09-28'; // a Monday
 const ORIGINAL_TZ = process.env.TZ;
@@ -236,5 +243,71 @@ describe('the HYROX station and guided-strength upgrades search every plan week'
     };
     matchAndAutoComplete([row({ garmin_id: 'strava-GYM2', activity_type: 'STRENGTH_TRAINING', start_time: ROW_START, duration_sec: 45 * 60, distance_m: 0 })]);
     expect(s.wks[0].garminActuals!['W1-gym-0'].garminId).toBe('guided-3');
+  });
+});
+
+describe('adaptive recovery measures session age against the local day', () => {
+  // Session entries are dated by the local day and physiology entries are keyed
+  // by the local day; "today" was the UTC day, so the two disagreed on evenings
+  // west of UTC and mornings east of UTC.
+  afterEach(() => { vi.useRealTimers(); restoreTz(); });
+
+  function addDayKeys(key: string, n: number): string {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+  }
+
+  function recoveryState(startTime: string) {
+    return {
+      sessionImpactLog: [] as SessionImpactEntry[],
+      physiologyHistory: [] as PhysiologyDayEntry[],
+      ctlBaseline: 350,
+      wks: [{
+        garminActuals: {
+          slot: { garminId: 'strava-AR', startTime, durationSec: 3600, iTrimp: null, activityType: 'RUNNING' },
+        },
+      }],
+    };
+  }
+
+  it('Brisbane: a session at 06:00 is ingested at 07:30 the same morning', () => {
+    process.env.TZ = 'Australia/Brisbane';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-04T21:30:00.000Z')); // Mon 5 Oct 07:30 local
+    const s = recoveryState('2026-10-04T20:00:00.000Z');    // Mon 5 Oct 06:00 local
+
+    const { added } = ingestNewActualsAsImpacts(s);
+
+    expect(added).toBe(1); // was 0: ageDays -1 against the UTC day (Sunday)
+    expect(s.sessionImpactLog[0].date).toBe('2026-10-05');
+  });
+
+  it('Phoenix: a Sunday-evening entry is not closed on Wednesday evening, before the day-4 reading', () => {
+    process.env.TZ = 'America/Phoenix';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-05T03:00:00.000Z')); // Sun 4 Oct 20:00 local
+    const s = recoveryState('2026-10-05T01:00:00.000Z');    // Sun 4 Oct 18:00 local
+    expect(ingestNewActualsAsImpacts(s).added).toBe(1);
+    const entry = s.sessionImpactLog[0];
+    expect(entry.date).toBe('2026-10-04');
+
+    // 28-day baseline before the session, then depressed readings on T+1..T+3.
+    for (let i = 28; i >= 1; i--) {
+      s.physiologyHistory.push({ date: addDayKeys(entry.date, -i), hrvRmssd: 60 + (i % 5 - 2), restingHR: 50 + (i % 3 - 1) });
+    }
+    for (let i = 1; i <= 3; i++) {
+      s.physiologyHistory.push({ date: addDayKeys(entry.date, i), hrvRmssd: 45, restingHR: 56 });
+    }
+
+    vi.setSystemTime(new Date('2026-10-08T03:00:00.000Z')); // Wed 7 Oct 20:00 local, Thursday in UTC
+    expect(closeOutObservedRecovery(s)).toBe(0); // was 1: closed as right-censored at 96 h
+    expect(entry.observedHours).toBeUndefined();
+
+    // Thursday morning: the day-4 reading shows recovery and the entry closes uncensored.
+    s.physiologyHistory.push({ date: addDayKeys(entry.date, 4), hrvRmssd: 62, restingHR: 49 });
+    vi.setSystemTime(new Date('2026-10-08T14:00:00.000Z')); // Thu 8 Oct 07:00 local
+    expect(closeOutObservedRecovery(s)).toBe(1);
+    expect(entry.observedHours).toBe(96);
+    expect(entry.rightCensored).toBe(false);
   });
 });

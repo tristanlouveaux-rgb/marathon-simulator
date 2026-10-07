@@ -29,9 +29,11 @@ import type {
   SessionImpactEntry,
   SimulatorState,
 } from '@/types/state';
+import { localDateKey } from '@/utils/local-date';
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
+// Local calendar keys, as the module dates sessions and reads physiology.
 // Anchored to the real clock, not a fixed date. `pruneImpactLog` and
 // `backfillHistoricalImpacts` both cut against `todayIso()` with a 90-day window
 // (IMPACT_LOG_MAX_DAYS) and neither takes an injectable clock, so a hardcoded
@@ -39,7 +41,7 @@ import type {
 function isoOffset(daysFromToday: number, today = new Date()): string {
   const d = new Date(today);
   d.setDate(d.getDate() + daysFromToday);
-  return d.toISOString().split('T')[0];
+  return localDateKey(d);
 }
 
 /** Build a `physiologyHistory` array centred on a session date with controlled
@@ -74,7 +76,7 @@ function buildPhysiology(
 function addDays(iso: string, n: number): string {
   const d = new Date(iso + 'T12:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().split('T')[0];
+  return localDateKey(d);
 }
 
 // ─── Confidence + effective values ──────────────────────────────────────────
