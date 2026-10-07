@@ -224,6 +224,27 @@ export function isDeloadWeek(weekIndex: number, ability: AbilityBand): boolean {
   return weekIndex % cycle === 0;
 }
 
+/**
+ * Scheduled deload week of a running plan (a holiday week, PlanContext.forceDeload,
+ * is a deload on top of this).
+ *  - Race plan: the ability cycle (isDeloadWeek).
+ *  - Continuous (no-race) plan: the block's recovery week, its 4th week, labelled
+ *    'taper' (initialization.ts, welcome-back.ts block append) and shown as
+ *    "Deload week" (main-view.ts getPhaseLabel). The ability cycle lined up with
+ *    the 4-week block only for intermediate runners: a beginner or novice deloaded
+ *    the Intensify week and an advanced or elite runner week 5 or 6, so the week
+ *    labelled Deload came out heavier than the week before.
+ * Week 1 is never a deload (isDeloadWeek's rule). Shared by the engine
+ * (buildWeekSessions, the long-run ramp hold) and the weekly load target
+ * (planned-week-target.ts) so plan and target agree.
+ */
+export function isRunningDeloadWeek(
+  weekIndex: number, ability: AbilityBand, phase: TrainingPhase | undefined, continuousMode?: boolean,
+): boolean {
+  if (continuousMode) return weekIndex > 1 && phase === 'taper';
+  return isDeloadWeek(weekIndex, ability);
+}
+
 export function deloadMultiplier(ability: AbilityBand): number {
   switch (ability) {
     case 'beginner': return 0.80;
@@ -384,12 +405,17 @@ export function longRunCeilingMin(recentLongestMin: number): number {
  * week after a deload two ramp steps above the last full long run. The span is
  * shortened by the same deload count so full progress still lands at 75% of the
  * plan, keeping the peak long run of SCIENCE_LOG §BW. No new constant: the
- * deload cycle is `isDeloadWeek`.
+ * deload weeks are the plan's scheduled deloads, `isDeloadAt` (default the
+ * ability cycle, isDeloadWeek; a continuous plan passes its block recovery
+ * weeks, isRunningDeloadWeek).
  */
-function longRunRampProgress(weekIndex: number, totalWeeks: number, ability: AbilityBand): number {
+function longRunRampProgress(
+  weekIndex: number, totalWeeks: number, ability: AbilityBand,
+  isDeloadAt: (week: number) => boolean = (week) => isDeloadWeek(week, ability),
+): number {
   const deloadsThrough = (w: number): number => {
     let n = 0;
-    for (let j = 2; j <= Math.floor(w); j++) if (isDeloadWeek(j, ability)) n++;
+    for (let j = 2; j <= Math.floor(w); j++) if (isDeloadAt(j)) n++;
     return n;
   };
   const fullAt = totalWeeks * 0.75;
@@ -401,7 +427,8 @@ function longRunRampProgress(weekIndex: number, totalWeeks: number, ability: Abi
 
 export function longRunMinutes(
   weekIndex: number, totalWeeks: number, ability: AbilityBand,
-  race: RaceDistance, phase: TrainingPhase
+  race: RaceDistance, phase: TrainingPhase,
+  isDeloadAt?: (week: number) => boolean,
 ): number {
   // Base long run by race
   const baseLong: Record<RaceDistance, number> = {
@@ -409,7 +436,7 @@ export function longRunMinutes(
   };
   // Progressive ramp across the plan (1.0 by totalWeeks * 0.75), held through
   // scheduled deload weeks (longRunRampProgress).
-  const progress = longRunRampProgress(weekIndex, totalWeeks, ability);
+  const progress = longRunRampProgress(weekIndex, totalWeeks, ability, isDeloadAt);
 
   let base: number;
   if (race === 'marathon') {
@@ -963,7 +990,14 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
   const phase: TrainingPhase = raceWeek ? 'taper' : ctx.phase;
 
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
-  const deload = ctx.forceDeload || isDeloadWeek(weekIndex, ability);
+  // Continuous plans deload the block's recovery week ('taper', shown as Deload),
+  // race plans the ability cycle (isRunningDeloadWeek). The long-run ramp holds
+  // through the same weeks.
+  const deload = ctx.forceDeload || isRunningDeloadWeek(weekIndex, ability, ctx.phase, ctx.continuousMode);
+  const blockPhases = ctx.continuousMode ? resolvePlanPhases(ctx) : null;
+  const isDeloadAt = blockPhases
+    ? (week: number) => isRunningDeloadWeek(week, ability, blockPhases[week - 1], true)
+    : undefined;
   // Variant selection phase. A deload week is a recovery week, so it draws the
   // LIGHTEST variants (same subset as a base week) — a steady long run, gentler
   // intervals — rather than a `fast_finish` long run or the hardest interval
@@ -1008,7 +1042,7 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
    *    multiplier lifts a long run past it.
    */
   const longRunForWeek = (): number => {
-    const rampMin = longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase);
+    const rampMin = longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase, isDeloadAt);
     let target: number;
     if (phase === 'taper' && recentLongest != null) {
       target = recentLongest * TAPER_LONG_RUN_FRACTION;

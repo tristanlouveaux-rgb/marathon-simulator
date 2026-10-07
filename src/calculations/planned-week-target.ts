@@ -32,9 +32,11 @@
  *     target, so weeks done exactly to plan left phantom carry in the taper.
  *
  * The resolution reads the same plan data the generator does:
- *   - Deload, running: `forceDeload || isDeloadWeek(weekNum, ability)` with
- *     ability = abilityBandFromVdot(s.v || 45, experienceLevel || 'intermediate'),
- *     the inputs resolveWeekWorkouts (week-resolve.ts) hands generateWeekWorkouts.
+ *   - Deload, running: `forceDeload || isRunningDeloadWeek(weekNum, ability,
+ *     ph, continuousMode)` with ability = abilityBandFromVdot(s.v || 45,
+ *     experienceLevel || 'intermediate'), the inputs resolveWeekWorkouts
+ *     (week-resolve.ts) hands generateWeekWorkouts: the ability cycle in a race
+ *     plan, the block recovery week ('taper') in a continuous plan.
  *   - Deload, triathlon (cycling runs on the tri engine) and HYROX:
  *     `forceDeload || isFourWeekCycleDeloadWeek(weekNum, ph)`, the rule those
  *     engines generate with.
@@ -57,7 +59,7 @@
 
 import type { SimulatorState, TrainingPhase, Week } from '@/types';
 import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry } from './fitness-model';
-import { abilityBandFromVdot, isDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
+import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
 import { isSharpeningBlock } from '@/workouts/phases';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 
@@ -100,7 +102,9 @@ function isEngineDeloadWeek(s: PlannedTargetState, weekNum: number, wk: Week): b
     const trainingWeeks = planTrainingWeeks({ wks: s.wks });
     return isSharpeningDeloadWeek(weekNum, ability, (s.wks ?? []).slice(0, trainingWeeks).map(w => w.ph ?? 'base'));
   }
-  return isDeloadWeek(weekNum, ability);
+  // A continuous plan deloads its block recovery week ('taper') and no other,
+  // a race plan the ability cycle (isRunningDeloadWeek, the engine's rule).
+  return isRunningDeloadWeek(weekNum, ability, wk.ph, !!s.continuousMode);
 }
 
 /**
