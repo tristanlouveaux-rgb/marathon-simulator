@@ -42,7 +42,7 @@ import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathl
 import { manualDoneTriActivities, inAppGpsRunActivities } from '@/calculations/tri-benchmarks-from-history';
 import { computeTriPlanAdherence } from '@/calculations/plan-adherence.triathlon';
 import { localDateKey } from '@/utils/local-date';
-import type { SimulatorState, Week, Workout } from '@/types';
+import type { GarminActual, SimulatorState, Week, Workout } from '@/types';
 
 const PLAN_START = '2026-09-28'; // a Monday
 
@@ -214,6 +214,102 @@ describe('triathlon Mark as Done stores the planned load as a record', () => {
     for (const w of scorable) markDone(w);
     s.w = 2;
     expect(computeTriPlanAdherence(s).pct).toBe(100);
+  });
+});
+
+describe('Mark as Done adds no record when an activity already completes the session', () => {
+  function synced(garminId: string, activityType: string, start: Date, durationSec: number): GarminActual {
+    return {
+      garminId, startTime: start.toISOString(), distanceKm: activityType === 'RUNNING' ? 10 : 40,
+      durationSec, avgPaceSecKm: null, avgHR: 140, maxHR: 165, calories: null, iTrimp: 9000,
+      hrZones: null, activityType, displayName: activityType,
+    } as GarminActual;
+  }
+
+  // What runTriActivityMatching (main.ts) leaves after a fuzzy match: the
+  // recording stays under its own key, the slot is completed and linked to it.
+  // A synced run in triathlon mode sits under a running-engine slot key; a
+  // ride with no placement decided under its garmin- key.
+  for (const [label, pred, type, otherKey] of [
+    ['bike', isPlainBike, 'CYCLING', 'garmin-strava-B1'],
+    ['run', (w: Workout) => w.discipline === 'run', 'RUNNING', 'Easy Run'],
+  ] as const) {
+    it(`a ${label} the fuzzy matcher linked to a synced recording under another key keeps the week TSS unchanged`, () => {
+      const s = triState();
+      vi.setSystemTime(new Date(2026, 9, 4, 20, 0, 0));
+      const wk = s.wks[0];
+      const w = find(wk, pred);
+      const start = new Date(2026, 8, 28 + w.dayOfWeek!, 7, 0, 0);
+      wk.garminActuals = { ...(wk.garminActuals ?? {}), [otherKey]: synced(`strava-${label}`, type, start, Math.round(estimateTriWorkoutMin(w) * 60)) };
+      w.status = 'completed';
+      w.matchedActivityId = otherKey;
+      reconcileTriCompletions(wk);
+      expect(w.matchedActivityId).toBe(otherKey); // the link survives reconcile
+      const before = computeWeekRawTSS(wk, wk.rated, s.planStartDate);
+      const holidayBefore = computeWeekActualTSS(wk, s.planStartDate);
+      expect(before).toBeGreaterThan(0);
+
+      markDone(w);
+
+      expect(wk.rated[w.id!]).toBe(plannedRpe(w)); // the tap still records the rating
+      expect(wk.garminActuals![w.id!]).toBeUndefined(); // was a second, planned-load record
+      expect(computeWeekRawTSS(wk, wk.rated, s.planStartDate)).toBe(before);
+      expect(computeWeekActualTSS(wk, s.planStartDate)).toBe(holidayBefore);
+    });
+  }
+
+  it('a brick completed by brick detection (status only, no link, no record) keeps the week TSS unchanged', () => {
+    const s = triState();
+    const wi = s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(w => !!w.brickSegments));
+    expect(wi).toBeGreaterThanOrEqual(0);
+    s.w = wi + 1;
+    vi.setSystemTime(new Date(2026, 8, 28 + wi * 7 + 6, 20, 0, 0)); // that week's Sunday evening
+    const wk = s.wks[wi];
+    const brick = find(wk, w => !!w.brickSegments);
+    const [bikeSeg, runSeg] = brick.brickSegments!;
+    const start = new Date(2026, 8, 28 + wi * 7 + brick.dayOfWeek!, 8, 0, 0);
+    const runStart = new Date(start.getTime() + ((bikeSeg.durationMin ?? 60) + 5) * 60000);
+    wk.garminActuals = {
+      ...(wk.garminActuals ?? {}),
+      'garmin-strava-BR1': synced('strava-BR1', 'CYCLING', start, (bikeSeg.durationMin ?? 60) * 60),
+      'garmin-strava-BR2': synced('strava-BR2', 'RUNNING', runStart, (runSeg.durationMin ?? 20) * 60),
+    };
+    brick.status = 'completed'; // main.ts brick detection: both legs matched
+    reconcileTriCompletions(wk);
+    expect(brick.status).toBe('completed');
+    expect(brick.matchedActivityId).toBeUndefined();
+    const before = computeWeekRawTSS(wk, wk.rated, s.planStartDate);
+    expect(before).toBeGreaterThan(0);
+
+    markDone(brick, wi);
+
+    expect(wk.rated[brick.id!]).toBe(plannedRpe(brick));
+    expect(wk.garminActuals![brick.id!]).toBeUndefined(); // was a 2.5 h bike-tagged record on top of both legs
+    expect(computeWeekRawTSS(wk, wk.rated, s.planStartDate)).toBe(before);
+  });
+
+  it('the slot\'s own record still re-ticks after reconcile direct-binds it, and Skip then Mark as Done restores it', () => {
+    const s = triState();
+    vi.setSystemTime(new Date(2026, 9, 4, 20, 0, 0));
+    const wk = s.wks[0];
+    const bike = find(wk, isPlainBike);
+    markDone(bike);
+    reconcileTriCompletions(wk);
+    expect(bike.status).toBe('completed');
+    expect(bike.matchedActivityId).toBe(bike.id);
+    const tss = computeWeekRawTSS(wk, wk.rated, s.planStartDate);
+    expect(tss).toBeGreaterThan(0);
+
+    markDone(bike); // re-tick: the session's own record is the completion
+    expect(isManualInAppActual(wk.garminActuals![bike.id!])).toBe(true);
+    expect(computeWeekRawTSS(wk, wk.rated, s.planStartDate)).toBe(tss);
+
+    skipFromCard(bike);
+    expect(wk.garminActuals![bike.id!]).toBeUndefined();
+    expect(bike.status).toBe('completed'); // the dead link clears on the next reconcile
+    markDone(bike);
+    expect(isManualInAppActual(wk.garminActuals![bike.id!])).toBe(true);
+    expect(computeWeekRawTSS(wk, wk.rated, s.planStartDate)).toBe(tss);
   });
 });
 

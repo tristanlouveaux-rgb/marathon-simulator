@@ -234,8 +234,11 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
  * stamped on the planned day, with a bike or swim tagged with its sport. The
  * session then counts in the Home strain ring, the week debrief and the holiday
  * return. A watch copy that syncs later supersedes the record in place
- * (matchAndAutoComplete), so it counts once. Skip drops the record. Shared by
- * triathlon, cycling and Just-Track generated sessions (this modal).
+ * (matchAndAutoComplete), so it counts once. A session a synced activity
+ * already completes (a fuzzy-matched link, a brick completed by detection) gets
+ * the rating only: that activity carries the load
+ * (isSessionCompletedByActivity). Skip drops the record. Shared by triathlon,
+ * cycling and Just-Track generated sessions (this modal).
  */
 function setRated(weekIdx: number, workout: Workout, value: number | 'skip'): void {
   const s = getMutableState();

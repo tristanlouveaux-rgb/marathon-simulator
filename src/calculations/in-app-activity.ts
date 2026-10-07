@@ -556,6 +556,41 @@ export function plannedSessionRecordSport(
 }
 
 /**
+ * True when an activity other than an in-app record at the slot key already
+ * completes the plan session at `key`, so a Mark as Done record would count the
+ * session a second time. Tracking side. Two triathlon completions leave nothing
+ * at the slot key:
+ *   - the launch fuzzy matcher (main.ts runTriActivityMatching) links a synced
+ *     recording stored under another key: `matchedActivityId` names a live
+ *     actual that is not the slot's own;
+ *   - brick detection sets a brick `status: 'completed'` with no link and no
+ *     record when the ride and the run each matched.
+ *
+ * Not "completed by an activity", so a record may be written:
+ *   - the slot's own key is the completion (`matchedActivityId === key`, set
+ *     when reconcileTriCompletions direct-binds a record there). A synced actual
+ *     at the key is kept by writeInAppActual; an in-app one is the session's
+ *     own record, which a re-tick rewrites;
+ *   - the link names an actual that no longer exists (the linked activity was
+ *     removed), so nothing else carries the session's load.
+ *
+ * Reads the live session in `wk` (triWorkouts, then adhocWorkouts) when one
+ * sits at `key`, since a caller may hold a resolved copy; `w` otherwise.
+ */
+export function isSessionCompletedByActivity(
+  wk: Week,
+  key: string,
+  w: Partial<Pick<Workout, 'status' | 'matchedActivityId'>>,
+): boolean {
+  const live = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])]
+    .find(x => ((x as { id?: string }).id ?? x.n) === key);
+  const session = live ?? w;
+  const link = session.matchedActivityId;
+  if (link) return link !== key && !!wk.garminActuals?.[link];
+  return session.status === 'completed' && !isInAppActual(wk.garminActuals?.[key]);
+}
+
+/**
  * Mark as Done on a triathlon, cycling, Just-Track or HYROX session card (audit
  * B9, decision 2026-10-06): store the session's planned load as its activity
  * record, or return null and write nothing. Tracking side. Mirrors
@@ -570,6 +605,10 @@ export function plannedSessionRecordSport(
  *   - the session has no record sport (plannedSessionRecordSport);
  *   - `key` is an activity rather than a plan slot (a synced extra opened from
  *     Recent: isExtraActivityKey). Its own record already counts;
+ *   - a synced activity already completes the session without sitting at its
+ *     key (isSessionCompletedByActivity: a fuzzy-matched triathlon link, or a
+ *     brick completed by brick detection). That activity carries the load; the
+ *     tap only rewrites the rating, as before;
  *   - the session sits in a future week (the matcher would not find the record
  *     when today's watch copy syncs, as on a running plan card);
  *   - the slot is not rated, or has no planned duration.
@@ -581,7 +620,7 @@ export function plannedSessionRecordSport(
 export function recordPlannedSessionDone(
   wk: Week,
   key: string,
-  w: Pick<Workout, 'n' | 't' | 'd' | 'dayOfWeek' | 'discipline'>,
+  w: Pick<Workout, 'n' | 't' | 'd' | 'dayOfWeek' | 'discipline'> & Partial<Pick<Workout, 'status' | 'matchedActivityId'>>,
   opts: {
     rpe: number;
     durationMin: number;
@@ -594,6 +633,7 @@ export function recordPlannedSessionDone(
   const sport = plannedSessionRecordSport(w);
   if (!sport) return null;
   if (isExtraActivityKey(wk, key)) return null;
+  if (isSessionCompletedByActivity(wk, key, w)) return null;
   if (opts.weekNum > opts.currentWeek) return null;
   if (typeof wk.rated?.[key] !== 'number') return null;
   if (!(opts.durationMin > 0)) return null;
