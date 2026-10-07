@@ -13,7 +13,7 @@ import { generateOrderedRunSlots, type SlotType } from './rules_engine';
 import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { liveSharpeningLongRunCapMin } from './sharpening-block';
 import { isClosingWeek, planTrainingWeeks, planRaceLayout } from './race-week-layout';
-import { applyRaceDayRules, raceDayRulesApply } from './race-day-rules';
+import { applyRaceDayRules, raceDayRulesApply, filterTaperMakeups } from './race-day-rules';
 import { firstTrackedDow } from '@/ui/workout-status';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
@@ -274,8 +274,17 @@ export function generateWeekWorkouts(
     }
   }
 
-  // Add skipped workouts from previous week (prefix name to avoid collisions)
-  for (const skip of previousSkips) {
+  // Add skipped workouts from previous week (prefix name to avoid collisions).
+  // A taper week of a running race plan carries no makeup long run or quality
+  // session, and race week no makeup at all (race-day-rules.ts rule 5).
+  const taperWeekOfRace = !sPlan.continuousMode && !sPlan.trackOnly && phase === 'taper'
+    && sPlan.eventType !== 'triathlon' && sPlan.eventType !== 'hyrox';
+  const carriedSkips = taperWeekOfRace
+    ? filterTaperMakeups(previousSkips, {
+        raceWeek: weekIndex != null && engineTotalWeeks != null && isRaceWeek(weekIndex, engineTotalWeeks, false),
+      })
+    : previousSkips;
+  for (const skip of carriedSkips) {
     workouts.push({
       ...skip.workout,
       n: `[Makeup] ${skip.workout.n}`,

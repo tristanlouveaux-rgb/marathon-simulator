@@ -1,3 +1,4 @@
+import { isTaperCarryBlocked } from '@/workouts/race-day-rules';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } from '@/types';
 import {
@@ -774,6 +775,17 @@ function skipInner(
     }
 
     wk.rated[workoutId] = 'skip';
+  } else if (isTaperCarryBlocked(s, s.w + 1, { t: workoutType, longRun: isLong })) {
+    // Next week is a taper week of the race plan (race-day-rules.ts rule 5): a
+    // long run or quality session is not carried into it. Dropped with the
+    // base penalty, the path sessions past the carry limit take in next().
+    wk.rated[workoutId] = 'skip';
+    const penaltyKey = isLong ? 'long' : workoutType;
+    const basePenalty = TIM[s.rd]?.[penaltyKey as keyof typeof TIM[typeof s.rd]] || 20;
+    s.timp += basePenalty;
+    wk.skipPenalty = wk.skipPenalty || {};
+    wk.skipPenalty[workoutId] = (wk.skipPenalty[workoutId] || 0) + basePenalty;
+    log(`${name} skipped: not carried into the taper (+${basePenalty}s)`);
   } else {
     // First skip - move to next week
     if (wk.rated[workoutId]) delete wk.rated[workoutId];
@@ -889,9 +901,12 @@ export async function next(): Promise<void> {
       nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
     }
 
-    // Carry forward up to MAX_CARRY_FORWARD, penalize the rest
-    const toCarry = unrated.slice(0, MAX_CARRY_FORWARD);
-    const toPenalize = unrated.slice(MAX_CARRY_FORWARD);
+    // Carry forward up to MAX_CARRY_FORWARD, penalize the rest. A long run or
+    // quality session is never carried into a taper week of the race plan
+    // (race-day-rules.ts rule 5): it takes the past-the-limit path.
+    const carriable = unrated.filter(w => !isTaperCarryBlocked(s, s.w + 1, w));
+    const toCarry = carriable.slice(0, MAX_CARRY_FORWARD);
+    const toPenalize = unrated.filter(w => !toCarry.includes(w));
 
     let carriedHardCount = 0;
     for (const w of toCarry) {

@@ -156,3 +156,34 @@ describe('week-debrief preview parity: race week lists exactly the generated ses
     });
   }
 });
+
+describe('makeups never break the taper (rule 5 backstop in the generator)', () => {
+  beforeAll(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterAll(() => vi.restoreAllMocks());
+  afterEach(() => resetState());
+
+  const runMin = (ws: Workout[]) => ws.filter(w => !NON_RUN.has(w.t) && !w.commute)
+    .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+
+  for (const runs of [3, 4, 5, 6, 7]) {
+    it(`${runs} runs: a skipped peak-week long run and quality session are not carried into the taper; the taper stays below the peak`, () => {
+      const race = addCalendarDays(START, 48); // Sunday of week 7: build x4, peak, taper, race week
+      setupPlan(race, 'marathon', runs);
+      const s = getState();
+      const peak = generateWeekWorkouts(s.wks[4].ph, runs, 'marathon', 'Balanced', [], undefined, null, undefined, 'intermediate', undefined, 330, 5, s.tw, 45, 0);
+      const longRun = peak.find(isLongRun)!;
+      const quality = peak.find(isQualityRun)!;
+      const easy = peak.find(w => w.t === 'easy');
+      const skips = [longRun, quality, ...(easy ? [easy] : [])].map(w => ({ workout: w, skipCount: 1 }));
+      const taper = generateWeekWorkouts(s.wks[5].ph, runs, 'marathon', 'Balanced', skips, undefined, null, undefined, 'intermediate', undefined, 330, 6, s.tw, 45, 0);
+      const makeups = taper.filter(w => w.skipped);
+      expect(makeups.filter(w => isLongRun(w) || isQualityRun(w))).toEqual([]);
+      if (easy) expect(makeups).toHaveLength(1);
+      expect(taper.filter(isLongRun)).toHaveLength(1);
+      // Makeups included: the taper week stays below the peak week.
+      expect(runMin(taper)).toBeLessThan(runMin(peak));
+      const raceWeek = generateWeekWorkouts(s.wks[6].ph, runs, 'marathon', 'Balanced', skips, undefined, null, undefined, 'intermediate', undefined, 330, 7, s.tw, 45, 0);
+      expect(raceWeek.filter(w => w.skipped)).toEqual([]);
+    });
+  }
+});

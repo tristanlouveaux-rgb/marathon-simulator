@@ -168,11 +168,37 @@ export function applyRaceDayRules(workouts: Workout[], inp: RaceDayRulesInput): 
 }
 
 /**
- * Rule 5 backstop: makeups (skipped sessions carried from the week before)
- * never put a long run or a quality session into a taper week. events.ts drops
- * them at skip time with the base penalty; this filters any pushed before that
- * rule existed. A makeup easy run is kept.
+ * Rule 5 at skip time (review major 1): a skipped long run or quality session
+ * is not carried into a taper week (race week and a closing week included) of
+ * a running race plan. Carried, a skipped peak-week long run landed at full
+ * length in the first taper week beside that week's own long run (example A:
+ * 181 + 122 = 303 min against a 263-min peak week). The caller drops it with
+ * the existing base penalty, the path sessions past the carry limit take
+ * (events.ts). Easy runs are still carried.
  */
-export function filterTaperMakeups<T extends { workout: Pick<Workout, 't' | 'longRun'> }>(skips: T[]): T[] {
+export function isTaperCarryBlocked(
+  s: {
+    continuousMode?: boolean; trackOnly?: boolean; eventType?: string;
+    wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
+  },
+  nextWeekIndex: number,
+  w: Pick<Workout, 't' | 'longRun'>,
+): boolean {
+  if (s.continuousMode || s.trackOnly || s.eventType === 'triathlon' || s.eventType === 'hyrox') return false;
+  const next = s.wks?.[nextWeekIndex - 1];
+  if (!next) return false;
+  return (next.ph === 'taper' || !!next.raceClosing) && isHard(w);
+}
+
+/**
+ * Rule 5 backstop in the generator, for skips pushed before the skip-time rule
+ * existed: a taper week carries no makeup long run or quality session, and
+ * race week carries no makeup at all (its ceiling holds the primer and short
+ * easy runs; nothing more fits before race day).
+ */
+export function filterTaperMakeups<T extends { workout: Pick<Workout, 't' | 'longRun'> }>(
+  skips: T[], opts: { raceWeek?: boolean } = {},
+): T[] {
+  if (opts.raceWeek) return [];
   return skips.filter(sk => !isHard(sk.workout));
 }
