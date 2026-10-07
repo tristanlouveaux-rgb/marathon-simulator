@@ -33,7 +33,7 @@ import type { Workout } from '@/types';
 import { DAY_NAMES } from '@/utils';
 import { isLongRun } from './long-run';
 import { stepDownRunType } from '@/constants/intensity-ladder';
-import type { RaceWeekLayout } from './race-week-layout';
+import { raceWeekLayout, type RaceWeekLayout } from './race-week-layout';
 
 /** Quality run types (the scheduler's quality pool plus float). */
 const QUALITY_TYPES = new Set(['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive', 'float']);
@@ -201,4 +201,23 @@ export function filterTaperMakeups<T extends { workout: Pick<Workout, 't' | 'lon
 ): T[] {
   if (opts.raceWeek) return [];
   return skips.filter(sk => !isHard(sk.workout));
+}
+
+/**
+ * Rule 1 for the stored-plan modes (triathlon, cycling on the tri engine, and
+ * HYROX): drop every session dated on or after race day. Their generators lay
+ * race week out their own way (triathlon keeps Sunday free, scheduler
+ * .triathlon); this only removes sessions that would fall on or after the
+ * race, e.g. a Saturday race's Saturday session. Weeks entirely before race
+ * day are returned unchanged. Pure; `dayOfWeek` 0 = Monday.
+ */
+export function dropSessionsOnOrAfterRaceDay<T extends { dayOfWeek?: number }>(
+  workouts: T[], weekIndex: number, planStartISO: string | undefined | null, raceISO: string | undefined | null,
+): T[] {
+  if (!planStartISO || !raceISO) return workouts;
+  const layout = raceWeekLayout(planStartISO.slice(0, 10), raceISO.slice(0, 10));
+  if (!layout) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  if (weekStart + 6 < layout.raceDayIndex) return workouts;
+  return workouts.filter(w => w.dayOfWeek == null || weekStart + w.dayOfWeek < layout.raceDayIndex);
 }

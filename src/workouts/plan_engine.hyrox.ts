@@ -15,6 +15,7 @@
  *   8. Wrap into Week[]
  */
 
+import { dropSessionsOnOrAfterRaceDay } from './race-day-rules';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
@@ -40,7 +41,8 @@ import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
  */
 // v14: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
 // a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
-// [build, peak]).
+// [build, peak]). Also in v14 (unreleased when added): nothing is generated on
+// or after race day (race-day-rules dropSessionsOnOrAfterRaceDay).
 export const HYROX_GENERATOR_VERSION = 14;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
@@ -491,7 +493,10 @@ export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): W
   const planPhases = computeHyroxPlanPhases(totalWeeks);
   const p = planPhases[weekIndex - 1];
   if (!p) return null;
-  const workouts = generateWeekSessions(state, weekIndex, totalWeeks, p.ph);
+  // Nothing on or after race day (race-day-rules.ts rule 1, shared with running).
+  const workouts = dropSessionsOnOrAfterRaceDay(
+    generateWeekSessions(state, weekIndex, totalWeeks, p.ph), weekIndex, state.planStartDate, state.hyroxConfig?.raceDate,
+  );
   const existing = state.wks[weekIndex - 1];
   return {
     ...existing,
@@ -513,7 +518,10 @@ export function generateHyroxPlan(state: SimulatorState): Week[] {
   for (let w = 1; w <= totalWeeks; w++) {
     const p = planPhases[w - 1];
     const phase = p.ph;
-    const workouts = generateWeekSessions(state, w, totalWeeks, phase);
+    // Nothing on or after race day (race-day-rules.ts rule 1, shared with running).
+    const workouts = dropSessionsOnOrAfterRaceDay(
+      generateWeekSessions(state, w, totalWeeks, phase), w, state.planStartDate, state.hyroxConfig?.raceDate,
+    );
 
     weeks.push({
       w,

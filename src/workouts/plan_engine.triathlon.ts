@@ -15,6 +15,7 @@
  * marathon training).
  */
 
+import { dropSessionsOnOrAfterRaceDay } from './race-day-rules';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider, TriathlonDistance } from '@/types/triathlon';
@@ -58,7 +59,10 @@ import { isLongRun } from './long-run';
 // (unreleased when the race-week definition was widened, so no second bump).
 // v20: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
 // a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
-// [build, peak]), so week 1 of a 2-week plan now runs peak sessions.
+// [build, peak]), so week 1 of a 2-week plan now runs peak sessions. Also in
+// v20 (unreleased when added): nothing is generated on or after race day
+// (race-day-rules dropSessionsOnOrAfterRaceDay), e.g. a Saturday race's
+// Saturday session.
 export const TRI_GENERATOR_VERSION = 20;
 
 /**
@@ -163,7 +167,10 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   for (let w = 1; w <= totalWeeks; w++) {
     const p = planPhases[w - 1];
     const phase = p.ph;
-    const weekWorkouts = generateWeekForTriathlon(state, w, totalWeeks, phase);
+    // Nothing on or after race day (race-day-rules.ts rule 1, shared with running).
+    const weekWorkouts = dropSessionsOnOrAfterRaceDay(
+      generateWeekForTriathlon(state, w, totalWeeks, phase), w, state.planStartDate, tri.raceDate,
+    );
 
     weeks.push({
       w,
@@ -220,7 +227,9 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   const planPhases = computeTriPlanPhases(tri.distance, totalWeeks);
   const p = planPhases[weekIndex - 1];
   const phase = p.ph;
-  const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
+  const weekWorkouts = dropSessionsOnOrAfterRaceDay(
+    generateWeekForTriathlon(state, weekIndex, totalWeeks, phase), weekIndex, state.planStartDate, tri.raceDate,
+  );
 
   // Apply per-discipline effort multiplier + CTL-gap re-anchor when regenerating a future week.
   // For a same-week or past-week regen, skip. Preserves historical duration.
