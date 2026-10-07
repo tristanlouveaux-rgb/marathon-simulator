@@ -1586,18 +1586,22 @@ function assembleBlockLoadedWeek(
  *     ceiling by at most half an easy run, or by the long run plus quality
  *     sessions alone when those already pass it. A primer that alone fills the
  *     ceiling leaves no easy run.
+ *   - The taper never rises: when rounding the easy-run count up would make the
+ *     week longer than the week before it (`prevTotalMin`, race week included),
+ *     the count rounds down instead. Makeup room never passes that total either.
  *   - One threshold session (continuous, the existing taper work minutes) in a
  *     taper week, the primer in race week; neither when the reference week held
  *     no quality session. Single-session cap applies.
  */
 function assembleBlockTaperWeek(
   ctx: PlanContext, ability: AbilityBand, ref: PrescribedWeek, f: number, raceWeek: boolean,
-  lastLongMin: number | null, lever: number, acwrCaution: boolean,
+  lastLongMin: number | null, lever: number, acwrCaution: boolean, prevTotalMin: number | null,
   out?: { taperRoom?: TaperMakeupRoom },
 ): SessionIntent[] {
   const { runsPerWeek, raceDistance, runnerType, weekIndex, totalWeeks } = ctx;
   const excluded = new Set(ctx.excludedSlots ?? []);
   const ceiling = Math.round(f * ref.totalMin * lever);
+  const roomCeiling = prevTotalMin != null ? Math.min(ceiling, prevTotalMin) : ceiling;
   let long: number | null = null;
   if (!raceWeek && ref.longMin != null) {
     const l = Math.round(f * ref.longMin * lever);
@@ -1609,7 +1613,7 @@ function assembleBlockTaperWeek(
   let easyLen = Math.max(EASY_FLOOR_MIN, Math.round(f * refEasy * lever));
   if (capRef != null && capRef >= EASY_FLOOR_MIN) easyLen = Math.min(easyLen, capRef);
   // Makeup room (taperMakeupRoom): race week carries none.
-  if (out) out.taperRoom = raceWeek ? { easyMin: 0, ceilingMin: 0 } : { easyMin: easyLen, ceilingMin: ceiling };
+  if (out) out.taperRoom = raceWeek ? { easyMin: 0, ceilingMin: 0 } : { easyMin: easyLen, ceilingMin: roomCeiling };
   if (raceWeek && runsPerWeek <= 1) return [];
 
   if (runsPerWeek <= 1) {
@@ -1645,8 +1649,12 @@ function assembleBlockTaperWeek(
 
   const slots = runsPerWeek - 1 /* long run, or the race in race week */ - (quality ? 1 : 0)
     + (!raceWeek && long == null ? 1 : 0);
-  const easyBudget = ceiling - (long ?? 0) - (quality?.totalMinutes ?? 0);
-  const easyCount = Math.max(0, Math.min(slots, Math.round(Math.max(0, easyBudget) / easyLen)));
+  const fixedMin = (long ?? 0) + (quality?.totalMinutes ?? 0);
+  const easyBudget = ceiling - fixedMin;
+  let easyCount = Math.max(0, Math.min(slots, Math.round(Math.max(0, easyBudget) / easyLen)));
+  if (prevTotalMin != null && easyCount > 0 && fixedMin + easyCount * easyLen > prevTotalMin) {
+    easyCount = Math.max(0, Math.min(easyCount, Math.floor(Math.max(0, easyBudget) / easyLen)));
+  }
 
   const week: SessionIntent[] = [];
   let dayIdx = 0;
@@ -1759,7 +1767,8 @@ function buildSharpeningWeek(
     const pos = Math.min(taperWeeks, Math.max(1, k - firstTaper + 1));
     const f = taperFraction(pos, taperWeeks);
     const ref = lastLoadedOf(history.slice(0, Math.max(0, firstTaper - 1))) ?? virtualReference();
-    let week = assembleBlockTaperWeek(ctx, ability, ref, f, raceWeek, lastLongOf(history) ?? ref.longMin, lever, acwrCaution, out);
+    const prevTotal = history[k - 2]?.totalMin ?? null;
+    let week = assembleBlockTaperWeek(ctx, ability, ref, f, raceWeek, lastLongOf(history) ?? ref.longMin, lever, acwrCaution, prevTotal, out);
     if (ctx.liveLongRunCapMin != null) week = capLongRun(week, ctx.liveLongRunCapMin);
     return week;
   }

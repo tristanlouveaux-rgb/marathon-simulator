@@ -324,6 +324,20 @@ describe('past every floor, a quality session is seated only within one floor-le
   });
 });
 
+describe('the taper never rises, race week included', () => {
+  it('total beginner, 20 km, 90-min longest, 2-hour target, 7-week marathon, 4 to 7 runs: race week is not longer than the taper week', () => {
+    // Before: 74 then 75 (three 25-min easy runs, the count rounded up past the week before).
+    for (const rpw of [4, 5, 6, 7]) {
+      const rows = blockRows({
+        ...A, runsPerWeek: rpw, fitnessLevel: 'total_beginner', vdot: 28, baselineKm: 20, weeklyHoursTarget: 2,
+        sharpening: { startLongMin: 90, startSource: 'history-30d' },
+      });
+      expect(rows[6].total, `${fmt(rows[5])} | ${fmt(rows[6])}`).toBeLessThanOrEqual(rows[5].total);
+      expect(rows[6].long).toBeNull();
+    }
+  });
+});
+
 describe('without a binding hours target, the block fit keeps quality sessions before it gives up the long run\'s growth', () => {
   it('reviewer case: 5 runs, 40 km, longest 70 min keeps marathon pace and float in every loaded week', () => {
     const rows = blockRows({ ...A, runsPerWeek: 5, sharpening: { startLongMin: 70, startSource: 'history-30d' } });
