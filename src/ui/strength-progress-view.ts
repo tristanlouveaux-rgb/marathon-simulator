@@ -19,7 +19,7 @@ import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { isGymSessionActual } from '@/cross-training/activities';
 import { STRENGTH_PR_THRESHOLD_KG } from '@/constants/strength-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
@@ -160,7 +160,7 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
   if (!blended || blended <= 0) return null;
   const weeksRemaining = Math.max(1, (planTrainingWeeks(s) || 16) - ((s.w ?? 1) - 1));
   const sessions = s.epw || s.rw || 4;
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd) ?? s.wkm;
+  const planMeanKm = planForecastWeeklyKm(s, sessions) ?? s.wkm;
   const base = {
     currentVdot: s.v,
     targetDistance: s.rd,

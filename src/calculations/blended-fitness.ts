@@ -454,6 +454,28 @@ export function getStandardForecastProjection(
 }
 
 /**
+ * The weekly volume the end-of-plan forecast credits for `sessionsPerWeek`:
+ * getPlanPrescribedMeanWeeklyKm integrated over the archetype-gated ramp from
+ * the runner's current volume (s.detectedWeeklyKm) across the plan's training
+ * weeks and taper. One source for the Home forecast (refreshBlendedFitness)
+ * and the onboarding preview hero (design v4 Q18): without the ramp context
+ * the preview read the flat full-plan peak (52.8 km for a 4-run marathon) and
+ * credited a 6-week block at 15 km a week with volume it never reaches.
+ * Planning side (what the plan prescribes), read by the tracking forecast.
+ */
+export function planForecastWeeklyKm(
+  s: Pick<SimulatorState, 'rd' | 'detectedWeeklyKm' | 'athleteArchetype' | 'tw' | 'wks' | 'continuousMode' | 'trackOnly' | 'eventType'>,
+  sessionsPerWeek: number,
+): number | null {
+  return getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, s.rd, {
+    baselineKm: s.detectedWeeklyKm,
+    archetype: s.athleteArchetype?.archetype,
+    totalWeeks: planTrainingWeeks(s),
+    taperWeeks: planTaperWeeks(s),
+  });
+}
+
+/**
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
  * Idempotent. Safe to call any time. Does nothing and returns false if
  * required inputs are missing.
@@ -737,12 +759,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         ? (s.commuteConfig.commuteDaysPerWeek ?? 0)
         : 0;
       const sessionsForHorizon = baseSessions + commuteSessions;
-      const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd, {
-        baselineKm: s.detectedWeeklyKm,
-        archetype: s.athleteArchetype?.archetype,
-        totalWeeks: trainingWeeks,
-        taperWeeks: planTaperWeeks(s),
-      });
+      const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
       // Injury-aware: build from the return date, not flat. A current run
       // restriction debits its recovery weeks so the forecast doesn't credit
       // build during weeks the athlete cannot run. Mirrors the tri predictor.

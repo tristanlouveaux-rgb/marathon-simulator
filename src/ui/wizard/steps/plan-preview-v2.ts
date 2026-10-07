@@ -7,7 +7,7 @@ import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { raceDayDurabilityMultiplier, raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
@@ -423,14 +423,16 @@ function fmtBenefitSec(sec: number): string {
 /**
  * Single source for the onboarding forecast at a given session count. The hero,
  * the milestone feasibility check, and the goal overlay all read from this one
- * call so the numbers can never diverge between surfaces.
+ * call so the numbers can never diverge between surfaces. Its volume is the
+ * Home forecast's (planForecastWeeklyKm, design v4 Q18), so the hero equals the
+ * forecast the built plan carries.
  */
-function forecastForSessions(
+export function forecastForSessions(
   s: ReturnType<typeof getState>,
   sessions: number,
   strengthSessions?: number,
 ): number {
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd);
+  const planMeanKm = planForecastWeeklyKm(s, sessions);
   return calculateLiveForecast({
     currentVdot: s.v || 50,
     targetDistance: s.rd,

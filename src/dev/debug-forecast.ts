@@ -10,10 +10,8 @@ import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import { getState } from '@/state';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
-import {
-  getPlanPrescribedMeanWeeklyKm,
-  applyTrainingHorizonAdjustment,
-} from '@/calculations/training-horizon';
+import { applyTrainingHorizonAdjustment } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { applyRunningCourseFactors } from '@/calculations/course-factors-running';
 import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 import { getAbilityBand } from '@/calculations/fatigue';
@@ -37,7 +35,7 @@ export function installDebugForecast(): void {
     const weeksRemaining = Math.max(1, planTrainingWeeks(s) - ((s.w ?? 1) - 1));
     const sessionsForHorizon = (s.epw || s.rw || 0)
       + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-    const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
+    const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
     const abilityBand = getAbilityBand(s.v ?? 0);
 
     console.group('%c[debugForecast]', 'color:#2563eb;font-weight:bold');

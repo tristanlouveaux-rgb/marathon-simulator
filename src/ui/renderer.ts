@@ -7,7 +7,7 @@ import {
   rdKm, tv, gp, getRunnerType,
   calculateLiveForecast
 } from '@/calculations';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { injuryAdjustedBuildWeeks } from '@/calculations/injury-recovery';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
@@ -214,7 +214,7 @@ export function render(): void {
     // weeks the athlete cannot run. Same helper as the s.forecastTime recompute.
     const effectiveWr = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', wr);
     const sessionsForHorizon = (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-    const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
+    const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon); // the volume s.forecastTime credits (design v4 Q18)
     const { forecastTime: rawForecast } = calculateLiveForecast({
       currentVdot: currentVDOT,
       targetDistance: s.rd,

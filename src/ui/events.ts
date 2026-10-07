@@ -30,9 +30,8 @@ import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
-import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { refreshBlendedFitness, planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
@@ -379,7 +378,7 @@ export function init(): void {
   // FROM the plan, so the dose input should reflect what the plan will deliver
   // (sessions × ref-km-per-session × build-phase factor), not the user's
   // pre-plan maintenance volume.
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(s.epw, s.rd);
+  const planMeanKm = planForecastWeeklyKm(s, s.epw);
   const { forecastVdot, forecastTime } = calculateLiveForecast({
     currentVdot: s.v,
     targetDistance: s.rd,
