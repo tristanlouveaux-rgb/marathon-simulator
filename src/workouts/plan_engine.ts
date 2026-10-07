@@ -1281,6 +1281,8 @@ interface BlockWeekRow {
   sizeMult: number;
   deload: boolean;
   acwrNote: string;
+  /** The weekly hours target is the binding budget of this loaded week. */
+  hoursBound?: boolean;
 }
 
 /** Build one quality session (same shapes and sizes as the full-plan engine). */
@@ -1336,17 +1338,31 @@ function blockQualityIntent(
  * Fit a loaded or deload block week to its row (design 4.5):
  *   1. Seat the long run at its row length and quality sessions at their natural
  *      lengths, up to the row's limit; a quality session covering more distance
- *      than the long run is not seated.
+ *      than the long run is not seated (single-session cap).
  *   2. Easy runs consolidate first (fewest runs at natural length, each at least
  *      EASY_FLOOR_MIN, sized by floor so rounding never overflows).
  *   3. If one EASY_FLOOR_MIN easy run does not fit, the long run gives up this
- *      week's growth (holds at the longest long run already seated).
+ *      week's growth (holds at the longest long run already seated), but only
+ *      when the held long run keeps every quality session it holds for: a held
+ *      long run that lowers the single-session cap below one of them gains
+ *      nothing, so the long run keeps its growth.
  *   4. Still no room with more than one quality session: the lowest-priority one
  *      is not seated (its slot joins the easy runs), and the long run gets its
  *      growth back to try again.
  *   5. One quality session left: one easy run at the floor, the long run trimmed
- *      toward LONG_SOFT_FLOOR_MIN, residual overflow accepted (the existing
- *      past-all-floors rule), then the single-session cap re-checked.
+ *      toward the longest long run already seated (LONG_SOFT_FLOOR_MIN when
+ *      there is none), residual overflow accepted (the existing past-all-floors
+ *      rule). When that trim would unseat the quality session through the
+ *      single-session cap, the long run keeps its growth and the week holds no
+ *      quality session instead.
+ *
+ * Binding hours target (owner decision 2026-10-06: start at the target and hold;
+ * the long run still grows each week): the long run's growth comes before every
+ * quality session. Quality sessions give way first, the lowest priority first,
+ * down to none; only when the grown long run and one floor-length easy run alone
+ * pass the target is the long run cut to what the target leaves (as close to its
+ * row length as the target allows, never below LONG_SOFT_FLOOR_MIN), residual
+ * overflow accepted.
  */
 function assembleBlockLoadedWeek(
   ctx: PlanContext, ability: AbilityBand, row: BlockWeekRow,
@@ -1354,9 +1370,16 @@ function assembleBlockLoadedWeek(
   const { runsPerWeek, raceDistance, runnerType } = ctx;
   const excluded = new Set(ctx.excludedSlots ?? []);
   const longNote = row.acwrNote || (row.deload ? 'Deload week' : '');
+  const budget = row.budgetMin;
 
   if (runsPerWeek <= 1) {
-    const mins = Math.round(row.longTarget ?? row.sessionCapMin ?? LONG_SOFT_FLOOR_MIN);
+    if (row.longTarget != null) {
+      let mins = Math.round(row.longTarget);
+      // A binding hours target: the single run is as long as the target allows.
+      if (row.hoursBound && Number.isFinite(budget)) mins = Math.max(LONG_SOFT_FLOOR_MIN, Math.min(mins, Math.floor(budget)));
+      return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
+    }
+    const mins = Math.round(row.sessionCapMin ?? LONG_SOFT_FLOOR_MIN);
     return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
   }
 
@@ -1373,60 +1396,72 @@ function assembleBlockLoadedWeek(
   const maxQuality = Math.min(row.qualityLimit, slotsAfterLong >= 2 ? slotsAfterLong - 1 : slotsAfterLong);
   const naturalEasy = Math.round(easyRunMinutes(ability, raceDistance, 'build') * row.sizeMult);
 
-  let quality = candidates.slice(0, Math.max(0, maxQuality));
-  let long = row.longTarget;
-  let held = false;
-  let easyCount = 0;
-  let easyLen = 0;
-  const budget = row.budgetMin;
-  for (let iter = 0; iter < 32; iter++) {
-    const capRef = long ?? row.sessionCapMin;
-    if (capRef != null) quality = quality.filter(q => sessionEasyEquivalentMin(q) <= capRef);
+  interface Fit { long: number | null; quality: SessionIntent[]; easyCount: number; easyLen: number }
+  const capOf = (longMin: number | null) => longMin ?? row.sessionCapMin;
+  const underCap = (qs: SessionIntent[], longMin: number | null) => {
+    const capRef = capOf(longMin);
+    return capRef != null ? qs.filter(q => sessionEasyEquivalentMin(q) <= capRef) : qs;
+  };
+  /** Steps 1 and 2 for one long run and one set of quality sessions; null when one
+   *  floor-length easy run does not fit beside them. */
+  const fit = (longMin: number | null, qs: SessionIntent[]): Fit | null => {
+    const capRef = capOf(longMin);
+    const quality = underCap(qs, longMin);
     const easySlots = slotsAfterLong - quality.length;
     const easyNatural = capRef != null ? Math.min(naturalEasy, Math.max(EASY_FLOOR_MIN, capRef)) : naturalEasy;
-    const fixed = (long ?? 0) + quality.reduce((a, q) => a + q.totalMinutes, 0);
+    const fixed = (longMin ?? 0) + quality.reduce((a, q) => a + q.totalMinutes, 0);
     if (!Number.isFinite(budget) || fixed + easySlots * easyNatural <= budget) {
-      easyCount = easySlots; easyLen = easyNatural;
-      break;
+      return { long: longMin, quality, easyCount: easySlots, easyLen: easyNatural };
     }
     const easyBudget = budget - fixed;
-    const need = easySlots > 0 ? EASY_FLOOR_MIN : 0;
-    if (easyBudget >= need) {
-      if (easySlots === 0) { easyCount = 0; break; }
-      const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / easyNatural));
-      const mostAboveFloor = Math.max(1, Math.floor(easyBudget / EASY_FLOOR_MIN));
-      easyCount = Math.min(easySlots, fewestAtNatural, mostAboveFloor);
-      easyLen = Math.min(easyNatural, Math.max(EASY_FLOOR_MIN, Math.floor(easyBudget / easyCount)));
-      break;
-    }
-    if (!held && long != null && row.longHold != null && long > row.longHold) {
-      long = row.longHold;
-      held = true;
-      continue;
-    }
-    if (quality.length > 1) {
-      quality = quality.slice(0, -1);
-      long = row.longTarget;
-      held = false;
-      continue;
-    }
-    // Past all floors: one floor-length easy run and the long run trimmed by the
-    // overflow, residual overflow accepted (the existing past-all-floors rule).
-    // The trim stops at the longest long run already seated (the long run never
-    // shrinks in a loaded week; with an hours target the long run keeps the
-    // shape the owner approved, 2026-10-06), or at LONG_SOFT_FLOOR_MIN in the
-    // block's first loaded week and in deload weeks, which have nothing to hold.
-    easyCount = Math.min(easySlots, 1);
-    easyLen = EASY_FLOOR_MIN;
+    if (easySlots === 0) return easyBudget >= 0 ? { long: longMin, quality, easyCount: 0, easyLen: 0 } : null;
+    if (easyBudget < EASY_FLOOR_MIN) return null;
+    const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / easyNatural));
+    const mostAboveFloor = Math.max(1, Math.floor(easyBudget / EASY_FLOOR_MIN));
+    const easyCount = Math.min(easySlots, fewestAtNatural, mostAboveFloor);
+    const easyLen = Math.min(easyNatural, Math.max(EASY_FLOOR_MIN, Math.floor(easyBudget / easyCount)));
+    return { long: longMin, quality, easyCount, easyLen };
+  };
+  /** Past every floor: one floor-length easy run and the long run cut to the room
+   *  left, never below `floorMin`; residual overflow accepted. */
+  const pastFloors = (qs: SessionIntent[], floorMin: number): Fit => {
+    const easyCount = Math.min(Math.max(0, slotsAfterLong - qs.length), 1);
+    let long = row.longTarget;
     if (long != null) {
-      const room = budget - quality.reduce((a, q) => a + q.totalMinutes, 0) - easyCount * EASY_FLOOR_MIN;
-      const floorMin = row.longHold ?? LONG_SOFT_FLOOR_MIN;
+      const room = budget - qs.reduce((a, q) => a + q.totalMinutes, 0) - easyCount * EASY_FLOOR_MIN;
       long = Math.max(Math.min(long, floorMin), Math.min(long, Math.floor(room)));
-      quality = quality.filter(q => sessionEasyEquivalentMin(q) <= long!);
     }
-    break;
+    return { long, quality: underCap(qs, long), easyCount, easyLen: EASY_FLOOR_MIN };
+  };
+
+  const target = row.longTarget;
+  const hold = row.longHold;
+  const seatable = underCap(candidates.slice(0, Math.max(0, maxQuality)), target);
+  let chosen: Fit | null = null;
+
+  if (row.hoursBound) {
+    for (let nq = seatable.length; nq >= 0 && !chosen; nq--) chosen = fit(target, seatable.slice(0, nq));
+    if (!chosen) chosen = pastFloors([], LONG_SOFT_FLOOR_MIN);
+  } else {
+    for (let nq = seatable.length; nq >= 1 && !chosen; nq--) {
+      const set = seatable.slice(0, nq);
+      chosen = fit(target, set);
+      if (!chosen && target != null && hold != null && target > hold) {
+        const held = fit(hold, set);
+        if (held && held.quality.length === set.length) chosen = held;
+      }
+    }
+    if (!chosen && seatable.length === 0) chosen = fit(target, []);
+    if (!chosen) {
+      const last = seatable.slice(0, 1);
+      const trimmed = pastFloors(last, hold ?? LONG_SOFT_FLOOR_MIN);
+      chosen = trimmed.quality.length === last.length
+        ? trimmed
+        : (fit(target, []) ?? pastFloors([], hold ?? LONG_SOFT_FLOOR_MIN));
+    }
   }
 
+  const { long, quality, easyCount, easyLen } = chosen;
   const week: SessionIntent[] = [];
   let dayIdx = 0;
   if (long != null) {
@@ -1591,7 +1626,10 @@ function buildSharpeningWeek(ctx: PlanContext, history: PrescribedWeek[]): Sessi
     const chainRef = Math.max(lastLoaded?.totalMin ?? 0, currentMin);
     const chainBudget = chainRef > 0 ? chainRef * (1 + ramp) : Infinity;
     const budgetMin = Math.min(archBudget, chainBudget, hoursCapMin);
+    // The hours target binds when it is the lowest of the three ceilings.
+    const hoursBound = Number.isFinite(hoursCapMin) && hoursCapMin <= Math.min(archBudget, chainBudget);
     return {
+      hoursBound,
       sessionPhase: caseB ? 'base' : ph,
       variantPhase: caseB ? 'base' : ph,
       longTarget,

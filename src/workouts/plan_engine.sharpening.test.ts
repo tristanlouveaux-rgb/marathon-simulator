@@ -104,7 +104,7 @@ const PEOPLE: Array<{ archetype?: Archetype; baselineKm?: number; start: Sharpen
   { archetype: 'sedentary-novice', baselineKm: 8, start: { startLongMin: 30, startSource: 'history-30d' } },
 ];
 const ABILITIES: Array<[string, number]> = [['beginner', 28], ['novice', 38], ['intermediate', 45], ['advanced', 55]];
-const HOURS: Array<number | undefined> = [undefined, 3, 5];
+const HOURS: Array<number | undefined> = [undefined, 2, 3, 5];
 
 interface Sample { label: string; ctx: Ctx; rows: Row[] }
 let samples: Sample[] = [];
@@ -237,7 +237,7 @@ describe('sharpening block properties (grid through planWeekSessions)', () => {
   });
 });
 
-describe('the block fit keeps quality sessions before it gives up the long run\'s growth', () => {
+describe('without a binding hours target, the block fit keeps quality sessions before it gives up the long run\'s growth', () => {
   it('reviewer case: 5 runs, 40 km, longest 70 min keeps marathon pace and float in every loaded week', () => {
     const rows = blockRows({ ...A, runsPerWeek: 5, sharpening: { startLongMin: 70, startSource: 'history-30d' } });
     for (const r of rows.slice(0, 5)) expect(r.qualitySlots, fmt(r)).toEqual(['marathon_pace', 'float']);
@@ -249,10 +249,23 @@ describe('the block fit keeps quality sessions before it gives up the long run\'
   });
 
   it('a week whose quality sessions fit only when the long run holds: the long run holds, both sessions stay', () => {
-    // 4 h target: week 5 needs 121 + 50 + 45 + 25 = 241 > 240, so the long run holds at 114.
-    const rows = blockRows({ ...A, weeklyHoursTarget: 4 });
-    expect(rows[4].long).toBe(114);
-    expect(rows[4].qualitySlots).toEqual(['marathon_pace', 'float']);
+    // 4-week marathon, 'unknown' archetype (7% ramp), 40 km, longest 110 min, no hours target:
+    // the peak week's archetype budget seats 117 + 50 + 47 + 25 only with the long run held at 110.
+    const rows = blockRows({ ...A, totalWeeks: 4, archetype: 'unknown', sharpening: { startLongMin: 110, startSource: 'history-30d' } });
+    expect(rows[1].phase).toBe('peak');
+    expect(rows[1].long).toBe(110);
+    expect(rows[1].qualitySlots).toEqual(['marathon_pace', 'float']);
+  });
+
+  it('the long run is never cut for a quality session the single-session cap then unseats (review 2026-10-07)', () => {
+    // 3-week marathon, 2 runs, 15 km, longest 60 min. Before: the past-all-floors rule cut the
+    // long run to 37 min to make room for marathon pace, the cap (no session longer than the long
+    // run) then unseated marathon pace, and the week was one 37-min run. Now the long run keeps
+    // its row length and the freed slot is an easy run.
+    const rows = blockRows({ ...A, runsPerWeek: 2, totalWeeks: 3, baselineKm: 15, sharpening: { startLongMin: 60, startSource: 'history-30d' } });
+    expect(rows[0].long).toBe(60);
+    expect(rows[0].easy).toEqual([27]);
+    expect(rows[0].quality).toBe(0);
   });
 
   it('live 0.85 lever on example A week 3 keeps both quality sessions', () => {
@@ -264,7 +277,35 @@ describe('the block fit keeps quality sessions before it gives up the long run\'
   });
 });
 
-describe('hours target: start at the target and hold (owner decision 2026-10-06, RC2 rule)', () => {
+describe('hours target: start at the target and hold; the long run still grows each week (owner decision 2026-10-06)', () => {
+  it('3-hour target (example A): the long run grows every loaded week; quality sessions give way first', () => {
+    // Before: the long run held at 107 from week 2 to keep marathon pace (100, 107, 107, 86, 107, 75).
+    const rows = blockRows({ ...A, weeklyHoursTarget: 3 });
+    expect(rows.map(r => r.long)).toEqual([100, 107, 114, 97, 121, 85, null]);
+    expect(rows.map(r => r.total)).toEqual([180, 180, 180, 153, 179, 135, 75]);
+    expect(rows.map(r => r.qualitySlots.length)).toEqual([1, 1, 0, 0, 0, 0, 0]);
+  });
+
+  it('2-hour target (example A): week 1 starts as close to the 100-min longest as the target allows and never halves it', () => {
+    // Before: 49, 49, 49, 42, 49, 34 beside marathon pace; the peak week then lost marathon
+    // pace to the single-session cap and kept the held 49. Now 120 - one 25-min easy run = 95.
+    const rows = blockRows({ ...A, weeklyHoursTarget: 2 });
+    expect(rows.map(r => r.long)).toEqual([95, 95, 95, 77, 95, 67, null]);
+    expect(rows.map(r => r.total)).toEqual([120, 120, 120, 102, 120, 92, 75]);
+    for (const r of rows.filter(r => r.long != null && !r.deload && r.phase !== 'taper')) {
+      expect(r.long! + EASY_FLOOR_MIN, fmt(r)).toBe(120);
+    }
+  });
+
+  it('4-hour target (example A): the peak week grows the long run to 121 and keeps marathon pace', () => {
+    // Before: the long run held at 114 to keep float as well.
+    const rows = blockRows({ ...A, weeklyHoursTarget: 4 });
+    expect(rows.map(r => r.long)).toEqual([100, 107, 114, 97, 121, 85, null]);
+    expect(rows[4].qualitySlots).toEqual(['marathon_pace']);
+    expect(rows[4].total).toBeLessThanOrEqual(240);
+  });
+
+
   it('a target below current volume: every loaded week sits at the target, the deload below it, the taper steps down', () => {
     const rows = blockRows({ ...A, weeklyHoursTarget: 3 });
     const loaded = rows.filter(r => (r.phase === 'build' || r.phase === 'peak') && !r.deload);
