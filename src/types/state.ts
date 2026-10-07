@@ -1020,11 +1020,19 @@ export interface SimulatorState {
   /**
    * Long-run durability result. Multiplier applied to `blendedRaceTimeSec`
    * (today's prediction) when the user's longest recent run falls below the
-   * distance-specific threshold. NOT applied to `forecastTime`. The
-   * projection assumes the plan delivers long runs before race day. See
-   * `src/calculations/run-durability.ts`.
+   * distance-specific threshold. NOT applied to `forecastTime`, which reads
+   * `raceDayDurability` instead. See `src/calculations/run-durability.ts`.
    */
   runDurability?: import('@/calculations/run-durability').RunDurabilityResult;
+  /**
+   * Race-day durability: the same model evaluated on the runs of the 12 weeks
+   * that end with race week, i.e. the long runs the PLAN prescribes (plus logged
+   * runs for any pre-plan weeks inside that window). `raceDayPlanDurability` in
+   * `src/calculations/race-day-durability.ts`. Its multiplier is applied to
+   * `forecastTime`. Undefined when there is no running race plan. Read by the
+   * Durability drill-down so it shows the same result the forecast used.
+   */
+  raceDayDurability?: import('@/calculations/run-durability').RunDurabilityResult;
 
   // Athlete tier (for ACWR thresholds and plan ramp rate)
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';

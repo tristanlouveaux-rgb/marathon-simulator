@@ -8,6 +8,7 @@
 
 import { getState } from '@/state';
 import { calculateLiveForecast } from '@/calculations/predictions';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import {
   getPlanPrescribedMeanWeeklyKm,
   applyTrainingHorizonAdjustment,
@@ -93,6 +94,7 @@ export function installDebugForecast(): void {
       ltPaceSecPerKm: s.lt || undefined,
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+      raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
     });
 
     const profile = s.selectedMarathon?.profile

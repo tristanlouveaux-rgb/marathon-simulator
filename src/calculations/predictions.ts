@@ -486,6 +486,14 @@ export interface LiveForecastParams {
    * downstream display does not compare against a blended baseline.
    */
   blendedAnchorSec?: number;
+  /**
+   * Race-day durability multiplier (>= 1) from the long runs the plan prescribes
+   * (`raceDayDurabilityMultiplier`, src/calculations/race-day-durability.ts). The
+   * forecast is end-of-plan fitness on the assumption that the plan is followed,
+   * so durability is judged on the plan's own long runs. Every running forecast
+   * caller passes it. Omitted = 1 (no running race plan).
+   */
+  raceDayDurabilityMultiplier?: number;
   /** Race-day course profile (climate/altitude/elevation). When supplied,
    * the result includes `forecastTimeAdjusted` + `courseFactors`. */
   courseProfile?: import('@/types/onboarding').CourseProfile;
@@ -538,6 +546,12 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     forecastTime = p.blendedAnchorSec - horizonDeltaSec;
   } else {
     forecastTime = bareForecastTime;
+  }
+
+  // Long-run durability on race day, from the plan's prescribed long runs.
+  const durabilityMult = p.raceDayDurabilityMultiplier;
+  if (durabilityMult != null && Number.isFinite(durabilityMult) && durabilityMult > 1) {
+    forecastTime *= durabilityMult;
   }
 
   if (p.courseProfile) {

@@ -1221,9 +1221,24 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
       : `No long runs over ${qualMin} min in the window. One every 10 days builds durability a single peak run cannot.`
     : `${cnt} of ${tgt} long runs logged. Consistent time on feet maintains durability between peak efforts.`;
 
-  const banner = capped ? `
+  // Race-day durability: the same cap on the runs the plan prescribes in the 12
+  // weeks before race day (race-day-durability.ts). The forecast applies this
+  // exact stored result, so the page and the forecast cannot disagree.
+  const rdd = s.raceDayDurability;
+  const rddPenalty = rdd ? Math.max(0, (rdd.multiplier - 1) * 100) : 0;
+  const rddLongestMin = rdd ? Math.round(rdd.longestRunSec / 60) : 0;
+  const raceDayLine = !rdd
+    ? (capped ? 'The race-day forecast does not carry this penalty.' : '')
+    : rddPenalty > 0
+      ? `The plan's longest run before race day is ${rddLongestMin} min, short of the ${thresholdMin}-min threshold. The race-day forecast carries a ${rddPenalty.toFixed(2)}% durability penalty.`
+      : rdd.metFraction >= 1
+        ? `The plan builds a ${rddLongestMin}-min long run by race day. The race-day forecast carries no durability penalty.`
+        : `The plan prescribes ${rdd.qualifyingLongRunCount} long runs over ${qualMin} min before race day, which offsets the shortfall. The race-day forecast carries no durability penalty.`;
+  const bannerText = [capped ? "Today's prediction has the run capped by recent durability." : '', (capped || rddPenalty > 0) ? raceDayLine : '']
+    .filter(Boolean).join(' ');
+  const banner = bannerText ? `
     <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(196,138,58,0.10);font-size:13px;color:#6B5B2E;line-height:1.5">
-      Today's prediction has the run capped by recent durability. The projection assumes the plan delivers longer runs by race day, so the race-day forecast does not carry this penalty.
+      ${bannerText}
     </div>
   ` : '';
 
@@ -1261,10 +1276,11 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
       <div style="${CARD};margin-bottom:14px">
         ${statRow('Penalty applied today', penalty > 0 ? `+${penalty.toFixed(2)}%` : 'None')}
         ${statRow('Long runs logged (12 wks)', `${cnt} of ${tgt}`)}
-        ${statRow('Applied to race-day forecast', 'No. projection assumes plan delivers long runs')}
+        ${statRow('Applied to race-day forecast', rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
+        ${rdd ? statRow("Plan's longest run before race day", `${rddLongestMin} min`) : ''}
         ${statRow('Look-back window', '12 weeks')}
       </div>
-      ${captionCard('Durability is an asymmetric cap: it can only slow you down, never speed you up. Two things lift it: a single long run reaching the distance threshold, or regular time on feet (a long run over ' + qualMin + ' min roughly every 10 days). Repeated long runs build the same connective-tissue durability a peak run does, so they buy down the shortfall penalty. Beyond threshold, additional long-session volume shows up in <strong>Capacity</strong> (VDOT) and <strong>Training</strong> (weekly km), not here. Calibrated against Karp 2007, Daniels 2014, Pfitzinger 2009. see SCIENCE_LOG §H-run.')}
+      ${captionCard('Durability is an asymmetric cap: it can only slow you down, never speed you up. Two things lift it: a single long run reaching the distance threshold, or regular time on feet (a long run over ' + qualMin + ' min roughly every 10 days). Repeated long runs build the same connective-tissue durability a peak run does, so they buy down the shortfall penalty. The race-day forecast applies the same cap to the runs the plan prescribes in the 12 weeks before race day. Beyond threshold, additional long-session volume shows up in <strong>Capacity</strong> (VDOT) and <strong>Training</strong> (weekly km), not here. Calibrated against Karp 2007, Daniels 2014, Pfitzinger 2009. see SCIENCE_LOG §H-run.')}
     `,
   };
 }

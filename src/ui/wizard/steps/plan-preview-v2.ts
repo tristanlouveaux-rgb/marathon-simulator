@@ -7,6 +7,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -432,6 +433,10 @@ function forecastForSessions(
     // pass 0 to compute the no-strength baseline for the benefit callout).
     strengthSessionsPerWeek: strengthSessions ?? s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0,
     blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    // Race-day durability from the long runs the plan prescribes. Read at the
+    // plan's runs per week (s.rw): a hypothetical extra session does not change
+    // the plan's long runs.
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
   }).forecastTime;
 }
 

@@ -107,6 +107,14 @@ export const LONG_RUN_QUALIFYING_FRACTION = 0.70;
 export const LONG_RUN_CONSISTENCY_TARGET = 8;
 
 /**
+ * Look-back window (weeks) for the longest run and the qualifying-run count.
+ * The value every caller already passes (`getLongestRunSec(s, 12)`,
+ * `getQualifyingLongRunCount(s, rd, 12)`), named so the race-day planned
+ * durability below reads the same window.
+ */
+export const DURABILITY_WINDOW_WEEKS = 12;
+
+/**
  * Compute the durability penalty given the longest recent run and race
  * distance. Linear shortfall ramp capped at the per-distance maximum.
  *
@@ -178,6 +186,47 @@ export function applyLongRunCap(
 }
 
 /**
+ * Durability the plan itself builds by race day: `applyLongRunCap` over the
+ * runs in the `DURABILITY_WINDOW_WEEKS` weeks that end with race week. Same
+ * model, constants and window as the logged-run cap (longest run plus the count
+ * of runs over the qualifying bar). Plan weeks contribute the running sessions
+ * the plan prescribes; when the plan is shorter than the window, the weeks
+ * before plan start contribute the runs actually logged there
+ * (`preplanRunSec`, see `getRunDurationsBetweenSec`).
+ *
+ * Why: the race-day forecast is end-of-plan fitness and assumes the plan is
+ * followed. It used to drop the durability cap on the stated assumption that
+ * the plan delivers the threshold long run by race day. That only holds when
+ * the plan's own long runs reach the threshold: the plan caps its long run by
+ * the 10% rule (plan_engine LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST), the weekly
+ * budget (archetype ramp, hours target) and, for the half and 10K, a distance
+ * ramp that peaks below LONG_RUN_THRESHOLD_SEC. This reads them instead of
+ * assuming.
+ *
+ * `plannedRunMinByWeek[i]` = the minutes of every running session in plan week
+ * i + 1 (plan_engine `plannedRunMinutesByWeek`). Pure.
+ *
+ * Tracking side: it describes what the plan delivers and never changes it.
+ * Limitation: plan weeks count as prescribed, also once they are in the past
+ * (a long run skipped or extended in week 3 does not move the race-day value).
+ */
+export function plannedRaceDayDurability(
+  plannedRunMinByWeek: ReadonlyArray<ReadonlyArray<number>>,
+  distance: RaceDistance,
+  preplanRunSec: ReadonlyArray<number> = [],
+): RunDurabilityResult {
+  const durationsSec: number[] = [];
+  for (const week of plannedRunMinByWeek.slice(-DURABILITY_WINDOW_WEEKS)) {
+    for (const min of week) if (min > 0) durationsSec.push(min * 60);
+  }
+  if (plannedRunMinByWeek.length < DURABILITY_WINDOW_WEEKS) {
+    for (const sec of preplanRunSec) if (sec > 0) durationsSec.push(sec);
+  }
+  const longestSec = durationsSec.reduce((m, sec) => (sec > m ? sec : m), 0);
+  return applyLongRunCap(longestSec, distance, countQualifyingLongRuns(durationsSec, distance));
+}
+
+/**
  * Longest single run in the last 12 weeks (seconds). Reads `garminActuals`
  * across the `wks` array and the optional `onboardingRunHistory`. Returns 0
  * when no runs are found.
@@ -199,10 +248,24 @@ type DurabilityState = {
  * (accumulated exposure) derive from, so the two numbers can never disagree
  * about which runs are in scope.
  */
-export function getRunDurationsSec(state: DurabilityState, weeks: number = 12): number[] {
-  const nowMs = Date.now();
+export function getRunDurationsSec(state: DurabilityState, weeks: number = DURABILITY_WINDOW_WEEKS): number[] {
   const lookbackMs = weeks * 7 * 24 * 3600 * 1000;
+  return getRunDurationsBetweenSec(state, Date.now() - lookbackMs, Infinity);
+}
+
+/**
+ * Run durations (seconds) with a start time in [fromMs, toMs): the traversal
+ * behind `getRunDurationsSec` (logged `garminActuals` runs across `wks`, plus
+ * `onboardingRunHistory`), for an explicit window. The race-day planned
+ * durability reads it for the weeks before plan start that still sit inside
+ * the race-day window.
+ */
+export function getRunDurationsBetweenSec(state: DurabilityState, fromMs: number, toMs: number): number[] {
   const out: number[] = [];
+  const outside = (startTime: string): boolean => {
+    const t = Date.parse(startTime);
+    return t < fromMs || t >= toMs;
+  };
 
   for (const wk of state.wks ?? []) {
     if (!wk?.garminActuals) continue;
@@ -210,7 +273,7 @@ export function getRunDurationsSec(state: DurabilityState, weeks: number = 12): 
       if (!a?.startTime || !a.activityType || !a.durationSec) continue;
       const t = a.activityType.toUpperCase();
       if (t !== 'RUNNING' && !t.includes('RUN')) continue;
-      if (nowMs - Date.parse(a.startTime) > lookbackMs) continue;
+      if (outside(a.startTime)) continue;
       out.push(a.durationSec);
     }
   }
@@ -218,7 +281,7 @@ export function getRunDurationsSec(state: DurabilityState, weeks: number = 12): 
   // Onboarding history may push the bar higher when synced activity is thin.
   for (const r of state.onboardingRunHistory ?? []) {
     if (!r?.durSec || !r.startTime) continue;
-    if (nowMs - Date.parse(r.startTime) > lookbackMs) continue;
+    if (outside(r.startTime)) continue;
     out.push(r.durSec);
   }
 
@@ -226,7 +289,7 @@ export function getRunDurationsSec(state: DurabilityState, weeks: number = 12): 
 }
 
 /** Longest single run in the window (seconds). 0 when no runs found. */
-export function getLongestRunSec(state: DurabilityState, weeks: number = 12): number {
+export function getLongestRunSec(state: DurabilityState, weeks: number = DURABILITY_WINDOW_WEEKS): number {
   let max = 0;
   for (const sec of getRunDurationsSec(state, weeks)) {
     if (sec > max) max = sec;
@@ -259,7 +322,7 @@ export function countQualifyingLongRuns(
 export function getQualifyingLongRunCount(
   state: DurabilityState,
   distance: RaceDistance,
-  weeks: number = 12,
+  weeks: number = DURABILITY_WINDOW_WEEKS,
 ): number {
   return countQualifyingLongRuns(getRunDurationsSec(state, weeks), distance);
 }

@@ -38,6 +38,7 @@ import { getMutableState, getState } from './store';
 import { cv, rd } from '@/calculations';
 import { predictFromPB } from '@/calculations/predictions';
 import { LONG_RUN_MAX_PENALTY, LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
+import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 
 /** Thin-data athlete: one typed 5K PB, nothing else. The 2026-06-04 case. */
 function buildThinHalfOnboarding(overrides: Partial<OnboardingState> = {}): OnboardingState {
@@ -64,6 +65,7 @@ function resetState() {
   s.stravaHistoryAccepted = undefined;
   s.onboardingRunHistory = undefined;
   s.runDurability = undefined;
+  s.raceDayDurability = undefined;
   s.runRaceLog = undefined;
   s.trackOnly = false;
   localStorageMock.clear();
@@ -141,5 +143,29 @@ describe('initializeSimulator — durability cap on the onboarding anchor', () =
     const after = getState();
     const expectedMult = 1 + LONG_RUN_MAX_PENALTY.half * 0.5; // 1.02
     expect(after.runDurability!.multiplier).toBeCloseTo(expectedMult, 5);
+  });
+});
+
+describe('initializeSimulator: the first race-day forecast reads the plan\'s long runs (2026-10-07)', () => {
+  beforeEach(() => resetState());
+
+  it('stores the race-day plan durability, computed from the plan being built', () => {
+    // A 16-week half plan's long run peaks under the 105-min half threshold, so the
+    // race-day forecast carries a durability penalty instead of assuming it met.
+    const result = initializeSimulator(buildThinHalfOnboarding());
+    expect(result.success).toBe(true);
+    const s = getState();
+    expect(s.raceDayDurability).toBeDefined();
+    expect(s.raceDayDurability!.longestRunSec).toBeLessThan(LONG_RUN_THRESHOLD_SEC.half);
+    expect(s.raceDayDurability!.multiplier).toBeGreaterThan(1);
+    // Computed mid-initialisation with the inputs the plan is built from: equal to
+    // the result from the finished state (onboarding, continuous flag, plan start).
+    expect(s.raceDayDurability).toEqual(raceDayPlanDurability(s));
+  });
+
+  it('no-event (continuous) plan: no race-day durability term', () => {
+    const result = initializeSimulator(buildThinHalfOnboarding({ trainingForEvent: false }));
+    expect(result.success).toBe(true);
+    expect(getState().raceDayDurability).toBeUndefined();
   });
 });

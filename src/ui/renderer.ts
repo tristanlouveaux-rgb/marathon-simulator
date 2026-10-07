@@ -8,6 +8,7 @@ import {
 } from '@/calculations';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { injuryAdjustedBuildWeeks } from '@/calculations/injury-recovery';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
 import {
   generateWeekWorkouts, parseWorkoutDescription,
@@ -227,6 +228,7 @@ export function render(): void {
       strengthSessionsPerWeek: s.gs,
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+      raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
     });
     forecast = rawForecast;
     if (s.timp > 0) forecast += s.timp;

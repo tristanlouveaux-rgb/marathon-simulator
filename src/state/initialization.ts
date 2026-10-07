@@ -12,7 +12,8 @@ import {
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
 import { pbMedianVdot } from '@/calculations/physiological-vdot';
 import { computePeakWeeklyKm } from '@/workouts/plan_engine';
-import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount } from '@/calculations/run-durability';
+import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
+import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
@@ -521,8 +522,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // refresher uses. Calibration bias (runRaceLog) is intentionally not
     // mirrored: onboarding users have no logged races against THIS plan
     // yet, and the first refresh applies it regardless.
-    const longestRunSec = getLongestRunSec(sCurrent, 12);
-    const durability = applyLongRunCap(longestRunSec, targetDistStr, getQualifyingLongRunCount(sCurrent, targetDistStr, 12));
+    const longestRunSec = getLongestRunSec(sCurrent, DURABILITY_WINDOW_WEEKS);
+    const durability = applyLongRunCap(longestRunSec, targetDistStr, getQualifyingLongRunCount(sCurrent, targetDistStr, DURABILITY_WINDOW_WEEKS));
     // The durability cap is a short-anchor-extrapolation penalty (e.g. a single
     // 5K Riegel-projected to a half with no endurance base). It must NOT push the
     // anchor slower than a time the athlete has actually run at the target
@@ -780,7 +781,17 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;
-    s.forecastTime = forecast.forecastTime;
+    // Race-day durability from the long runs the plan prescribes (race-day-durability),
+    // read with the inputs this plan is being built from: s.onboarding, the
+    // continuous flag and the plan start are assigned further down.
+    const raceDayDurability = raceDayPlanDurability({
+      ...s,
+      onboarding: state,
+      continuousMode: state.trainingForEvent === false,
+      planStartDate: getMondayOf(new Date()).toISOString().slice(0, 10),
+    });
+    s.raceDayDurability = raceDayDurability ?? undefined;
+    s.forecastTime = forecast.forecastTime * (raceDayDurability?.multiplier ?? 1);
 
     // Store selected marathon (must be set BEFORE refreshing course factors,
     // since the helper reads s.selectedMarathon.profile)

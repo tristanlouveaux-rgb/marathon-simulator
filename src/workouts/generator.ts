@@ -10,7 +10,7 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, isRaceWeek, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { planWeekSessions, isRaceWeek, planEngineStateInputs, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
@@ -451,22 +451,8 @@ export function generateWeekWorkouts(
   return scheduledWorkouts;
 }
 
-/**
- * The plan-engine inputs generateWeekWorkouts reads from state rather than from
- * its arguments: the ramp baseline (detected weekly km; in continuous mode the
- * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode
- * the neutral 'unknown'). Exported so a caller that runs planWeekSessions directly
- * (the week-debrief preview) feeds the engine exactly what the committed plan gets.
- */
-export function planEngineStateInputs(
-  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>,
-): { baselineKm: number | undefined; archetype: Archetype | undefined } {
-  const baselineKm = s.detectedWeeklyKm
-    ?? (s.continuousMode && s.wkm && s.wkm > 0 ? s.wkm : undefined);
-  const archetype = s.athleteArchetype?.archetype
-    ?? (s.continuousMode ? 'unknown' as const : undefined);
-  return { baselineKm, archetype };
-}
+/** Re-exported from plan_engine.ts, where the race-day forecast reads it too. */
+export { planEngineStateInputs };
 
 /**
  * Initialize weeks array for a training plan

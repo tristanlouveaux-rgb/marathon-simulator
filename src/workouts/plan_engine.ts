@@ -1,4 +1,5 @@
 import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/types';
+import type { SimulatorState } from '@/types/state';
 import type { SessionIntent, SlotType } from './intent_to_workout';
 import { weekVolumeBudgetKm, type Archetype } from '@/calculations/athlete-archetype';
 import { computePlanPhases } from './phases';
@@ -607,6 +608,8 @@ interface PrescribedWeek {
   longMin: number | null;
   totalMin: number;
   qualityCount: number;
+  /** Duration of every running session of the week (minutes). */
+  runMins: number[];
 }
 
 function summariseWeek(intents: SessionIntent[]): PrescribedWeek {
@@ -614,6 +617,7 @@ function summariseWeek(intents: SessionIntent[]): PrescribedWeek {
     longMin: intents.find(i => i.slot === 'long')?.totalMinutes ?? null,
     totalMin: intents.reduce((s, i) => s + i.totalMinutes, 0),
     qualityCount: intents.filter(i => QUALITY_SLOT_SET.has(i.slot)).length,
+    runMins: intents.map(i => i.totalMinutes),
   };
 }
 
@@ -695,6 +699,78 @@ function recentLongestLongRun(history: PrescribedWeek[], weekIndex: number): num
 
 export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   return buildWeekSessions(ctx, nominalHistory(ctx));
+}
+
+/** The static plan inputs: everything that shapes the nominal plan, without the
+ *  per-week phase/index and the adaptive levers (effort, ACWR, CTL gap, holiday). */
+export type PlanShapeInputs = Omit<
+  PlanContext,
+  'phase' | 'weekIndex' | 'effortScore' | 'acwrStatus' | 'ctlRatio' | 'forceDeload'
+>;
+
+/**
+ * Duration (minutes) of every running session the plan prescribes in each week
+ * 1..totalWeeks, from the static inputs: the same replay the 10% rule and the
+ * deload guards read (nominalHistory). Index i = week i + 1; the race week has no
+ * long run, so its list holds only the primer and easy runs. This is the plan's
+ * own prescription, read by the race-day forecast so the forecast assumes the
+ * long runs the plan actually builds (race-day-durability raceDayPlanDurability).
+ */
+export function plannedRunMinutesByWeek(inputs: PlanShapeInputs): number[][] {
+  if (!(inputs.totalWeeks > 0)) return [];
+  return nominalHistory({ ...inputs, weekIndex: inputs.totalWeeks + 1, phase: 'taper' })
+    .map(w => [...w.runMins]);
+}
+
+/**
+ * The plan-engine inputs generateWeekWorkouts reads from state rather than from
+ * its arguments: the ramp baseline (detected weekly km; in continuous mode the
+ * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode
+ * the neutral 'unknown'). Lives here so the generator, the week-debrief preview
+ * and the race-day forecast read one definition (re-exported by generator.ts).
+ */
+export function planEngineStateInputs(
+  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>,
+): { baselineKm: number | undefined; archetype: Archetype | undefined } {
+  const baselineKm = s.detectedWeeklyKm
+    ?? (s.continuousMode && s.wkm && s.wkm > 0 ? s.wkm : undefined);
+  const archetype = s.athleteArchetype?.archetype
+    ?? (s.continuousMode ? 'unknown' as const : undefined);
+  return { baselineKm, archetype };
+}
+
+/** State fields the running plan is generated from. */
+export type RunningPlanState = Pick<
+  SimulatorState,
+  'rw' | 'rd' | 'typ' | 'tw' | 'v' | 'pac' | 'wks' | 'onboarding' | 'continuousMode'
+  | 'detectedWeeklyKm' | 'wkm' | 'athleteArchetype'
+>;
+
+/**
+ * The static plan inputs for a running plan, read from state exactly as the
+ * committed plan reads them: the arguments every generateWeekWorkouts caller
+ * passes (s.rw, s.rd, s.typ, s.onboarding experience level, s.pac.e, s.tw, s.v,
+ * weekly hours, excluded workouts) with the generator's own fallbacks
+ * ('intermediate', VDOT 45), plus planEngineStateInputs, the week phases and
+ * continuous mode (generator.ts).
+ */
+export function runningPlanShapeInputs(s: RunningPlanState): PlanShapeInputs {
+  const { baselineKm, archetype } = planEngineStateInputs(s);
+  return {
+    runsPerWeek: s.rw,
+    raceDistance: s.rd,
+    runnerType: s.typ,
+    fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
+    totalWeeks: s.tw,
+    vdot: s.v || 45,
+    weeklyHoursTarget: s.onboarding?.weeklyTrainingHours,
+    excludedSlots: s.onboarding?.runningExcludedWorkouts,
+    baselineKm,
+    archetype,
+    easyPaceSecPerKm: s.pac?.e,
+    planPhases: s.wks?.map(w => w.ph),
+    continuousMode: !!s.continuousMode,
+  };
 }
 
 /**

@@ -17,6 +17,7 @@
 
 import type { SimulatorState, RaceDistance } from '@/types';
 import { calculateLiveForecast } from '@/calculations/predictions';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { isGymSessionActual } from '@/cross-training/activities';
 import { STRENGTH_PR_THRESHOLD_KG } from '@/constants/strength-constants';
@@ -172,6 +173,7 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
     ltPaceSecPerKm: s.lt || undefined,
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blended,
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
   };
   const withStrength = calculateLiveForecast({ ...base, strengthSessionsPerWeek: s.gs }).forecastTime;
   const without = calculateLiveForecast({ ...base, strengthSessionsPerWeek: 0 }).forecastTime;

@@ -31,6 +31,7 @@ import { calculateLiveForecast } from '@/calculations/predictions';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 import type { ActivityStream } from '@/calculations/stream-processor';
@@ -391,6 +392,7 @@ export function init(): void {
     strengthSessionsPerWeek: s.gs,
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blendedTime,
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
   });
   s.expectedFinal = forecastVdot;
   s.forecastTime = forecastTime;
@@ -622,7 +624,8 @@ export function rate(
     : 0;
   const bareForecast = tv(currentVDOT + remainingGain, raceDistKm);
   const horizonDeltaSec = bareToday - bareForecast;
-  s.forecastTime = anchor - horizonDeltaSec;
+  // Race-day durability from the long runs the plan prescribes (race-day-durability).
+  s.forecastTime = (anchor - horizonDeltaSec) * (raceDayDurabilityMultiplier(s) ?? 1);
   refreshForecastCourseFactors(s);
 
   // Record VDOT snapshot whenever RPE changes VDOT
