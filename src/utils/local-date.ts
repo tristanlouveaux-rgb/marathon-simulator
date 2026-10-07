@@ -37,8 +37,12 @@ export function localDateKey(input: Date | string): string {
  * the same calendar plan weekdays use. `startTime.startsWith(day)` compared the
  * UTC day, so a late-evening session west of UTC or an early-morning one east
  * of UTC landed on the neighbouring day.
+ *
+ * Plain boolean, not a type guard: false also means "a valid start on another
+ * day", so a guard would wrongly narrow `startTime` to null | undefined in the
+ * false branch. Callers that need the string check it themselves.
  */
-export function isOnLocalDay(startTime: string | null | undefined, day: string): startTime is string {
+export function isOnLocalDay(startTime: string | null | undefined, day: string): boolean {
   return !!startTime && localDateKey(startTime) === day;
 }
 

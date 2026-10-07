@@ -2107,7 +2107,7 @@ export function computeToBaseline(
       let totalTss = 0;
       let weightedSum = 0;
       for (const [id, actual] of Object.entries(wk.garminActuals)) {
-        if (!isOnLocalDay(actual.startTime, session.date)) continue;
+        if (!actual.startTime || !isOnLocalDay(actual.startTime, session.date)) continue;
         const sportKey = actual.activityType ? normalizeSport(actual.activityType) : 'generic_sport';
         const config = SPORTS_DB[sportKey];
         const rm = config?.recoveryMult ?? 1.0;
