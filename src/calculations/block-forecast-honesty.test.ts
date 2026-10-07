@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { raceDayEnduranceBeyondModel, raceDayEnduranceGapText, raceDayPlanDurability } from './race-day-durability';
+import {
+  raceDayEnduranceBeyondModel, raceDayEnduranceGapText, raceDayPlanDurability, marathonEnduranceGap, enduranceGapPlanContext,
+} from './race-day-durability';
+import { lowBaseMarathon } from '@/ui/wizard/steps/race-target-plan-note';
 import { applyLongRunCap } from './run-durability';
 import {
   plannedPeakWeeklyKm, computePeakWeeklyKm, extraRunAddsQualitySession, planWeekSessions,
@@ -68,6 +71,50 @@ describe('raceDayEnduranceGapText: no precise penalty outside the model\'s calib
     expect(r).not.toBeNull();
     expect(Math.round(r!.longestRunSec / 60)).toBe(39);
     expect(raceDayEnduranceBeyondModel(r, 'marathon')).toBe(true);
+  });
+});
+
+describe('one low-base check for the race page and the forecast (marathonEnduranceGap)', () => {
+  // Before: the race page flagged a beginner, no run in 30 days, or a projected peak
+  // long run under 1:55; the forecast surfaces flagged only a longest run under 1:55.
+  // A beginner whose block reaches 2:01 saw the race-page warning and a forecast with
+  // no plain statement. Both now read marathonEnduranceGap.
+  const NOW = new Date(2026, 9, 7, 10, 0);
+  const RACE_6WK = '2026-11-15';
+  const runner = (experienceLevel: string, daysAgo: number) => ({
+    v: 45, pac: { e: 330 } as any, onboarding: {} as any, athleteArchetype: { archetype: 'consistent-runner' as const },
+    onboardingRunHistory: [{ startTime: new Date(NOW.getTime() - daysAgo * 86400000).toISOString(), distKm: 18.2, durSec: 6000, activityType: 'RUNNING' }],
+  });
+  const blockState = (experienceLevel: string, startSource: string) => ({
+    continuousMode: false, onboarding: { experienceLevel },
+    sharpenBlock: { v: 1, startLongMin: 100, startSource, recentLongestMin: 100, noSignal: false, trainingWeeks: 6, builtISO: '2026-10-07' },
+  }) as unknown as SimulatorState;
+  // The plan's longest run before race day reaches 2:01: inside the model's calibration.
+  const r = applyLongRunCap(121 * 60, 'marathon', 1);
+
+  it('a beginner marathon block: the race page and the forecast both say it plainly; the penalty stays estimable', () => {
+    expect(lowBaseMarathon('marathon', RACE_6WK, runner('beginner', 5), 'beginner', NOW)).not.toBeNull();
+    const plan = enduranceGapPlanContext(blockState('beginner', 'history-30d'));
+    expect(marathonEnduranceGap({ rd: 'marathon', ...plan, longestRunMin: 121 })).toEqual({ beginner: true, noRecentRun: false, shortLongRuns: false });
+    expect(raceDayEnduranceGapText(r, 'marathon', plan)).toContain('so the finish time is optimistic');
+    expect(raceDayEnduranceBeyondModel(r, 'marathon')).toBe(false);
+  });
+
+  it('no run in the 30 days before build: both surfaces flag it', () => {
+    expect(lowBaseMarathon('marathon', RACE_6WK, runner('intermediate', 60), 'intermediate', NOW)).not.toBeNull();
+    const plan = enduranceGapPlanContext(blockState('intermediate', 'history-no-recent-run'));
+    expect(raceDayEnduranceGapText(r, 'marathon', plan)).not.toBeNull();
+  });
+
+  it('example A (intermediate, 1:40 recent longest, block reaches 2:01): neither surface flags it', () => {
+    expect(lowBaseMarathon('marathon', RACE_6WK, runner('intermediate', 5), 'intermediate', NOW)).toBeNull();
+    expect(raceDayEnduranceGapText(r, 'marathon', enduranceGapPlanContext(blockState('intermediate', 'history-30d')))).toBeNull();
+  });
+
+  it('a beginner on a full marathon build (no sharpening block) is outside the owner decision', () => {
+    const full = { continuousMode: false, onboarding: { experienceLevel: 'beginner' }, sharpenBlock: undefined } as unknown as SimulatorState;
+    expect(raceDayEnduranceGapText(r, 'marathon', enduranceGapPlanContext(full))).toBeNull();
+    expect(lowBaseMarathon('marathon', '2027-01-24', runner('beginner', 5), 'beginner', NOW)).toBeNull();
   });
 });
 

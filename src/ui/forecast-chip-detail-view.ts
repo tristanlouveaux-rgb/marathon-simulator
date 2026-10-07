@@ -11,7 +11,7 @@
  * (sky atmosphere, sun glint, back button, tab bar).
  */
 
-import { raceDayEnduranceGapText } from '@/calculations/race-day-durability';
+import { raceDayEnduranceGapText, raceDayEnduranceBeyondModel, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { getState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
 import { ft, fp, formatKm } from '@/utils/format';
@@ -1228,9 +1228,11 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
   const rdd = s.raceDayDurability;
   const rddPenalty = rdd ? Math.max(0, (rdd.multiplier - 1) * 100) : 0;
   const rddLongestMin = rdd ? Math.round(rdd.longestRunSec / 60) : 0;
-  // A marathon plan whose longest run stays under the long-run bar is outside the
-  // model's calibration: say so instead of quoting a precise penalty.
-  const enduranceGap = raceDayEnduranceGapText(rdd, s.rd);
+  // The low-base marathon check (marathonEnduranceGap, the same check as the race
+  // page) gets the plain statement. A longest run under the long-run bar is also
+  // outside the model's calibration: no precise race-day penalty is quoted then.
+  const enduranceGap = raceDayEnduranceGapText(rdd, s.rd, enduranceGapPlanContext(s));
+  const rddBeyondModel = raceDayEnduranceBeyondModel(rdd, s.rd);
   const raceDayLine = !rdd
     ? (capped ? 'The race-day forecast does not carry this penalty.' : '')
     : enduranceGap
@@ -1282,7 +1284,7 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
       <div style="${CARD};margin-bottom:14px">
         ${statRow('Penalty applied today', penalty > 0 ? `+${penalty.toFixed(2)}%` : 'None')}
         ${statRow('Long runs logged (12 wks)', `${cnt} of ${tgt}`)}
-        ${statRow('Applied to race-day forecast', enduranceGap ? 'Not estimable: long runs too short' : rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
+        ${statRow('Applied to race-day forecast', rddBeyondModel ? 'Not estimable: long runs too short' : rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
         ${rdd ? statRow('Longest run before race day', `${rddLongestMin} min`) : ''}
         ${statRow('Look-back window', '12 weeks')}
       </div>

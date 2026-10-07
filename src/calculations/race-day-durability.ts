@@ -72,19 +72,67 @@ export function raceDayDurabilityMultiplier(s: RaceDayPlanState, nowMs?: number)
 }
 
 /**
- * True when a marathon's race-day durability rests on a longest run below the
- * model's long-run bar (LONG_RUN_QUALIFYING_FRACTION x LONG_RUN_THRESHOLD_SEC,
- * 0.70 x 2:45 = 1:55). The marathon penalty cap (LONG_RUN_MAX_PENALTY 5%) is
- * calibrated on volume-shortened marathoners who still did long runs (SCIENCE_LOG
- * §AL.4); a plan whose longest run stays far below that is outside the
- * calibration, so surfaces must not present its penalty as a small precise
- * number (M4 design v4 review, major 4). Tracking side.
+ * The low-base marathon check (owner decision 2026-10-06), one helper for the
+ * race page (race-target-plan-note lowBaseMarathon) and every forecast surface
+ * (raceDayEnduranceGapText). A marathon plan that cannot build marathon
+ * endurance in time is allowed, said plainly, and its forecast called
+ * optimistic. Categories:
+ *   - beginner: experience level total_beginner or beginner, in a sharpening block;
+ *   - noRecentRun: a sharpening block whose runner has logged runs but none in
+ *     the 30 days before build (start source 'history-no-recent-run');
+ *   - shortLongRuns: the longest run before race day under the durability
+ *     model's long-run bar (LONG_RUN_QUALIFYING_FRACTION x LONG_RUN_THRESHOLD_SEC,
+ *     0.70 x 2:45 = 1:55), any marathon plan. The marathon penalty cap
+ *     (LONG_RUN_MAX_PENALTY 5%) is calibrated on volume-shortened marathoners who
+ *     still did long runs (SCIENCE_LOG §AL.4); a plan whose longest run stays far
+ *     below that is outside the calibration (M4 design v4 review, major 4).
+ * `longestRunMin`: the plan's own longest run before race day on the forecast
+ * (s.raceDayDurability), the block's projected peak long run on the race page
+ * (no plan exists yet). Null when no category applies. Tracking side.
+ */
+export interface MarathonEnduranceGapInput {
+  rd: string | null | undefined;
+  /** The plan is (or, on the race page, will be) a sharpening block. */
+  sharpeningBlock: boolean;
+  experienceLevel?: string | null;
+  /** The block's start source (s.sharpenBlock.startSource). */
+  startSource?: string | null;
+  longestRunMin: number | null | undefined;
+}
+export interface MarathonEnduranceGap { beginner: boolean; noRecentRun: boolean; shortLongRuns: boolean }
+
+export function marathonEnduranceGap(i: MarathonEnduranceGapInput): MarathonEnduranceGap | null {
+  if (i.rd !== 'marathon') return null;
+  const shortLongRuns = i.longestRunMin != null
+    && i.longestRunMin * 60 < LONG_RUN_QUALIFYING_FRACTION * LONG_RUN_THRESHOLD_SEC.marathon;
+  const beginner = i.sharpeningBlock && (i.experienceLevel === 'total_beginner' || i.experienceLevel === 'beginner');
+  const noRecentRun = i.sharpeningBlock && i.startSource === 'history-no-recent-run';
+  return beginner || noRecentRun || shortLongRuns ? { beginner, noRecentRun, shortLongRuns } : null;
+}
+
+/** The low-base inputs a built plan carries (sharpening block, experience level, start source). */
+export type EnduranceGapPlanContext = Pick<MarathonEnduranceGapInput, 'sharpeningBlock' | 'experienceLevel' | 'startSource'>;
+
+export function enduranceGapPlanContext(
+  s: Pick<SimulatorState, 'sharpenBlock' | 'onboarding' | 'continuousMode'>,
+): EnduranceGapPlanContext {
+  return {
+    sharpeningBlock: !!s.sharpenBlock && !s.continuousMode,
+    experienceLevel: s.onboarding?.experienceLevel ?? null,
+    startSource: s.sharpenBlock ? s.sharpenBlock.startSource : null,
+  };
+}
+
+/**
+ * True when the race-day penalty is outside the durability model's calibration
+ * (marathonEnduranceGap shortLongRuns): surfaces must not present it as a small
+ * precise number. Tracking side.
  */
 export function raceDayEnduranceBeyondModel(
   r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
 ): boolean {
-  if (rd !== 'marathon' || !r) return false;
-  return r.longestRunSec < LONG_RUN_QUALIFYING_FRACTION * LONG_RUN_THRESHOLD_SEC.marathon;
+  if (!r) return false;
+  return !!marathonEnduranceGap({ rd, sharpeningBlock: false, longestRunMin: r.longestRunSec / 60 })?.shortLongRuns;
 }
 
 /** h:mm */
@@ -94,14 +142,21 @@ function fmtHm(sec: number): string {
 }
 
 /**
- * The plain statement every forecast surface shows instead of a precise
- * penalty when raceDayEnduranceBeyondModel holds (owner decision 2026-10-06:
- * say plainly that the plan cannot build marathon endurance in time and that
- * the forecast is optimistic). Null otherwise.
+ * The plain statement every forecast surface shows when marathonEnduranceGap
+ * holds for the plan (owner decision 2026-10-06: say plainly that the plan
+ * cannot build marathon endurance in time and that the forecast is optimistic).
+ * Without `plan` only the shortLongRuns category is checked. Null otherwise,
+ * and null when the longest run reaches the marathon threshold.
  */
 export function raceDayEnduranceGapText(
   r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
+  plan?: EnduranceGapPlanContext,
 ): string | null {
-  if (!raceDayEnduranceBeyondModel(r, rd)) return null;
-  return `The longest run before race day is about ${fmtHm(r!.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
+  if (!r || r.longestRunSec >= LONG_RUN_THRESHOLD_SEC.marathon) return null;
+  const gap = marathonEnduranceGap({
+    rd, sharpeningBlock: plan?.sharpeningBlock ?? false, experienceLevel: plan?.experienceLevel,
+    startSource: plan?.startSource, longestRunMin: r.longestRunSec / 60,
+  });
+  if (!gap) return null;
+  return `The longest run before race day is about ${fmtHm(r.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
 }

@@ -11,7 +11,7 @@
  *   - Race-day pacing disclaimer footnote
  */
 
-import { raceDayEnduranceGapText } from '@/calculations/race-day-durability';
+import { raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { extraRunAddsQualitySession, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState } from '@/types/state';
@@ -349,10 +349,10 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
   // One more run a week only adds a quality session when the plan can seat it
   // (quality cap, block budget); otherwise the button offers the run it is.
   const addsQuality = showCTA && extraRunAddsQualitySession(runningPlanShapeInputs(s), currentWeek);
-  // Long-run endurance the plan does not build (a marathon plan whose longest
-  // run stays under the durability model's long-run bar): said plainly, the
-  // forecast called optimistic (race-day-durability raceDayEnduranceGapText).
-  const enduranceGapText = raceDayEnduranceGapText(s.raceDayDurability, s.rd);
+  // Long-run endurance the plan does not build (the low-base marathon check,
+  // race-day-durability marathonEnduranceGap, the same check as the race page):
+  // said plainly, the forecast called optimistic.
+  const enduranceGapText = raceDayEnduranceGapText(s.raceDayDurability, s.rd, enduranceGapPlanContext(s));
   const enduranceGapCard = enduranceGapText ? `
     <div class="rfc-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
       <div style="${CARD};padding:18px">

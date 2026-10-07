@@ -8,7 +8,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { raceDayDurabilityMultiplier, raceDayEnduranceGapText } from '@/calculations/race-day-durability';
+import { raceDayDurabilityMultiplier, raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -93,9 +93,10 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const showMilestonePopup = !!milestone && !state.acceptedMilestoneChallenge && state.targetMilestone === null;
 
   const shownTime = state.targetMilestone ? state.targetMilestone.time : forecastTime;
-  // A marathon plan whose long runs stay under the long-run bar: the forecast
-  // above assumes endurance the plan does not build (race-day-durability).
-  const enduranceGapText = noEvent ? null : raceDayEnduranceGapText(s.raceDayDurability, raceDistance);
+  // The low-base marathon check (race-day-durability marathonEnduranceGap, the
+  // same check as the race page): the forecast above assumes endurance the plan
+  // does not build.
+  const enduranceGapText = noEvent ? null : raceDayEnduranceGapText(s.raceDayDurability, raceDistance, enduranceGapPlanContext(s));
 
   container.innerHTML = `
     <style>

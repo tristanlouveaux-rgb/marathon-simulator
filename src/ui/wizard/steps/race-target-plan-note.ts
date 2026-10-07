@@ -17,7 +17,8 @@ import { raceWeekLayout } from '@/workouts/race-week-layout';
 import { computeRunningPlanPhases, isSharpeningBlock, FULL_BUILD_WEEKS } from '@/workouts/phases';
 import { abilityBandFromVdot, projectedSharpeningPeakLongMin } from '@/workouts/plan_engine';
 import { buildSharpenBlockState, type SharpenBuildState } from '@/workouts/sharpening-block';
-import { LONG_RUN_QUALIFYING_FRACTION, LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
+import { LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
+import { marathonEnduranceGap } from '@/calculations/race-day-durability';
 import { localMondayKey, localDateKey, calendarDayNumber } from '@/utils/local-date';
 import type { Archetype } from '@/calculations/athlete-archetype';
 
@@ -70,11 +71,11 @@ export type LowBaseState = SharpenBuildState & { athleteArchetype?: { archetype?
  * A marathon block that cannot build marathon endurance in time (owner
  * decision 2026-10-06: allowed, said plainly, forecast called optimistic, a
  * half or a later race offered). Fires for a marathon under FULL_BUILD_WEEKS
- * when the runner is a beginner, has logged runs but none in the last 30 days,
- * or the block's projected longest long run stays under the durability
- * model's long-run bar (LONG_RUN_QUALIFYING_FRACTION x the marathon
- * threshold, 0.70 x 2:45 = 1:55: shorter runs do not count as marathon long
- * runs, run-durability.ts). Null otherwise.
+ * when marathonEnduranceGap (race-day-durability.ts, the same check every
+ * forecast surface reads) holds: a beginner, logged runs but none in the last
+ * 30 days, or the block's projected longest long run under the durability
+ * model's long-run bar (0.70 x 2:45 = 1:55). No plan exists yet, so the
+ * longest run is the block's projected peak. Null otherwise.
  */
 export function lowBaseMarathon(
   rd: RaceDistance, raceISO: string, s: LowBaseState, experienceLevel: string | undefined,
@@ -91,11 +92,11 @@ export function lowBaseMarathon(
   const phases = computeRunningPlanPhases(n, 'marathon').map(p => p.ph);
   const peakLongMin = projectedSharpeningPeakLongMin(start.startLongMin, phases, ability, s.athleteArchetype?.archetype, 'marathon');
   const thresholdMin = LONG_RUN_THRESHOLD_SEC.marathon / 60;
-  const beginner = experienceLevel === 'total_beginner' || experienceLevel === 'beginner';
-  const noRecentRun = start.startSource === 'history-no-recent-run';
-  const shortLongRuns = peakLongMin < LONG_RUN_QUALIFYING_FRACTION * thresholdMin;
-  if (!beginner && !noRecentRun && !shortLongRuns) return null;
-  const lead = noRecentRun ? 'No runs in the last 30 days. ' : '';
+  const gap = marathonEnduranceGap({
+    rd, sharpeningBlock: true, experienceLevel, startSource: start.startSource, longestRunMin: peakLongMin,
+  });
+  if (!gap) return null;
+  const lead = gap.noRecentRun ? 'No runs in the last 30 days. ' : '';
   return {
     peakLongMin,
     text: `${lead}${plural(n, 'week')} cannot build marathon endurance. Long runs reach about ${fmtHm(peakLongMin)}, short of the ${fmtHm(thresholdMin)} marathon-readiness long run, so the forecast finish time is optimistic.`,
