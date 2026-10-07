@@ -20,7 +20,7 @@ import {
   isSameRecordedSession, isSameCompletedSession, findInAppRunToSupersede, isInAppActual,
   isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
   isExtraActivityKey, isInAppEnduranceActual, findInAppSessionToSupersede,
-  findInAppSessionToSupersedeAcrossWeeks, type EnduranceFamily,
+  findInAppSessionToSupersedeAcrossWeeks, syncedCrossEnduranceFamily,
 } from './in-app-activity';
 import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-source-twins';
 import { resolveWeekWorkouts } from '@/ui/week-resolve';
@@ -656,17 +656,11 @@ function supersedeInAppRun(
   console.log(`[ActivityMatcher] ${row.garmin_id} supersedes in-app ${prior.garminId} at ${key}`);
 }
 
-/** Matcher app type of a synced ride or swim, as the in-app family it can supersede. */
-function crossEnduranceFamily(appType: string): Exclude<EnduranceFamily, 'run'> | null {
-  if (appType === 'ride') return 'bike';
-  if (appType === 'swim') return 'swim';
-  return null;
-}
-
 /**
- * A synced ride or swim replaces a bike or swim marked done (a `guided-manual-`
- * record tagged manualSport 'cycling' / 'swimming', triathlon, cycling and
- * Just-Track Mark as Done) in place, so the session counts once and Strava's
+ * A synced ride, swim or row replaces the same session marked done (a
+ * `guided-manual-` record tagged manualSport 'cycling' / 'swimming' /
+ * 'rowing': triathlon, cycling and Just-Track Mark as Done, HYROX cross
+ * sessions) in place, so the session counts once and Strava's
  * copy wins. Tracking side. Same contract as supersedeInAppRun: the record's
  * slot (key, workoutName, plannedType, displayName) is kept and the user's
  * rating stays; everything measured comes from the row, power included. The
@@ -1492,15 +1486,17 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         }
       }
 
-      // Bike or swim marked done superseded by the watch copy (decision
-      // 2026-10-06). Triathlon, cycling and Just-Track Mark as Done store a
-      // ride or swim as an in-app record tagged with its sport; a synced ride
-      // or swim of the same session replaces it in place, by the same two
-      // checks and the same every-week search as the run supersede above (the
-      // windows are bounded in time, so a wider search reaches only the same
-      // session). A row of another sport never matches: each check compares
-      // one family (findInAppSessionToSupersedeAcrossWeeks).
-      const crossFamily = crossEnduranceFamily(appType);
+      // Bike, swim or row erg marked done superseded by the watch copy
+      // (decision 2026-10-06). Triathlon, cycling and Just-Track Mark as Done
+      // and HYROX cross sessions store a ride, swim or row as an in-app record
+      // tagged with its sport; a synced ride, swim or row of the same session
+      // replaces it in place, by the same two checks and the same every-week
+      // search as the run supersede above (the windows are bounded in time, so
+      // a wider search reaches only the same session). A row of another sport
+      // never matches: each check compares one family
+      // (findInAppSessionToSupersedeAcrossWeeks), from the row's activity type
+      // (syncedCrossEnduranceFamily: a row erg is 'walk' to mapGarminType).
+      const crossFamily = syncedCrossEnduranceFamily(row.activity_type);
       if (crossFamily && !isInAppRow) {
         const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
         const searchWeeks = [wk, ...s.wks.filter(w => w !== wk)];

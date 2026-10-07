@@ -30,10 +30,11 @@
  * synced extra's label does), but every fitness-inference reader that filters
  * on `activityType` containing RUN (race prediction inputs, durability, VO2,
  * race outcome) skips them, so planned numbers never feed back into the
- * forecast as if they were measured. A bike or swim marked done (triathlon,
- * cycling, Just-Track, HYROX cross sessions) also leaves activityType null and
- * carries its sport as a `manualSport` tag instead (buildPlannedSessionActual),
- * so it is weighted at its own sport's runSpec and never read as a run.
+ * forecast as if they were measured. A bike, swim or row erg marked done
+ * (triathlon, cycling, Just-Track, HYROX cross sessions) also leaves
+ * activityType null and carries its sport as a `manualSport` tag instead
+ * (buildPlannedSessionActual), so it is weighted at its own sport's runSpec and
+ * never read as a run.
  *
  * Superseding: when the watch recorded the same session and it syncs later
  * (Strava, Apple Health or the Garmin webhook), the synced copy replaces the
@@ -91,6 +92,7 @@ import type { GarminActual, GpsRecording, SportKey, Week, Workout } from '@/type
 import { parseDistanceKm } from '@/calculations/matching';
 import {
   isStrengthActual, isGymSessionActual, resolveActualSport, isRunSport,
+  deriveSportFromActivityType, deriveSportFromLabel,
 } from '@/cross-training/activities';
 import { localDateKey } from '@/utils/local-date';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
@@ -202,22 +204,36 @@ export function isInAppRunActual(a: GarminActual | null | undefined): boolean {
   return t === '' || t.includes('RUN');
 }
 
-type SportFamily = 'run' | 'gym' | 'bike' | 'swim' | 'other';
+type SportFamily = 'run' | 'gym' | 'bike' | 'swim' | 'row' | 'other';
 
 /**
  * Sport families a synced recording can supersede an in-app record within, by
  * the matcher's supersede windows (findInAppSessionToSupersedeAcrossWeeks):
- * runs (GPS or marked done) and bikes or swims marked done.
+ * runs (GPS or marked done) and bikes, swims or rows marked done.
  */
-export type EnduranceFamily = 'run' | 'bike' | 'swim';
+export type EnduranceFamily = 'run' | 'bike' | 'swim' | 'row';
 
-/** Family of a SportKey: the run, gym, bike and swim buckets the supersede rules compare. */
+/** Family of a SportKey: the run, gym, bike, swim and row buckets the supersede rules compare. */
 function familyOfSport(sport: SportKey): SportFamily {
   if (isRunSport(sport)) return 'run';
   if (sport === 'strength') return 'gym';
   if (sport === 'cycling') return 'bike';
   if (sport === 'swimming') return 'swim';
+  if (sport === 'rowing') return 'row';
   return 'other';
+}
+
+/**
+ * The non-run endurance family a SYNCED row of this activity type supersedes a
+ * session marked done within, or null: rides, swims and rows, by the canonical
+ * activityType → sport rule (deriveSportFromActivityType). The matcher's run
+ * supersede handles runs by mapGarminType. A row erg needs this rule: its
+ * Garmin types (ROWING, INDOOR_ROWING) map to the matcher's 'walk' / 'other'
+ * buckets, not to a sport of their own.
+ */
+export function syncedCrossEnduranceFamily(activityType: string | null | undefined): 'bike' | 'swim' | 'row' | null {
+  const family = familyOfSport(deriveSportFromActivityType(activityType));
+  return family === 'bike' || family === 'swim' || family === 'row' ? family : null;
 }
 
 /**
@@ -225,8 +241,8 @@ function familyOfSport(sport: SportKey): SportFamily {
  * A guided or quick-done strength session (STRENGTH_TRAINING) or HYROX session
  * ('hyrox') is 'gym': the matcher's gym bucket (mapGarminType sends
  * STRENGTH_TRAINING and HIIT there), where the guided-strength upgrade and the
- * HYROX station upgrade (HIIT rows) look for the watch copy. A bike or swim
- * marked done is 'bike' / 'swim' from its `manualSport` tag.
+ * HYROX station upgrade (HIIT rows) look for the watch copy. A bike, swim or
+ * row erg marked done is 'bike' / 'swim' / 'row' from its `manualSport` tag.
  */
 function inAppSportFamily(a: GarminActual): SportFamily {
   if (isInAppRunActual(a)) return 'run';
@@ -256,7 +272,7 @@ export function inAppRecordDiscipline(a: GarminActual | null | undefined): 'swim
 export function isInAppEnduranceActual(a: GarminActual | null | undefined): boolean {
   if (!a || !isInAppActual(a)) return false;
   const family = inAppSportFamily(a);
-  return family === 'run' || family === 'bike' || family === 'swim';
+  return family === 'run' || family === 'bike' || family === 'swim' || family === 'row';
 }
 
 /**
@@ -398,14 +414,15 @@ export function buildPlannedRunActual(
  * duration at the rated RPE (fitness-model values it at
  * `durationMin × TL_PER_MIN[rated]`, as for a run marked done).
  *
- * `manualSport` tags a bike ('cycling') or swim ('swimming'). activityType
+ * `manualSport` tags a bike ('cycling'), swim ('swimming') or row erg
+ * ('rowing'). activityType
  * stays null, as on a run record, so FTP / CSS / pace readers that filter on
  * activityType never take planned numbers as measured. The tag is what
  * resolveActualSport reads first, so Signal A weights the session at its own
- * sport's runSpec (SPORTS_DB cycling 0.55, swimming 0.20) and the matcher and
- * reconcile passes compare it with synced rides and swims. A bike or swim
- * record carries no distance: a planned ride's kilometres are not measured and
- * must not reach distance totals that do not filter by sport.
+ * sport's runSpec (SPORTS_DB cycling 0.55, swimming 0.20, rowing 0.35) and the
+ * matcher and reconcile passes compare it with synced rides, swims and rows. A
+ * tagged record carries no distance: a planned ride's kilometres are not
+ * measured and must not reach distance totals that do not filter by sport.
  */
 export function buildPlannedSessionActual(
   w: Pick<Workout, 'n' | 't' | 'd'>,
@@ -505,18 +522,28 @@ export function recordPlannedRunDone(
 }
 
 /**
- * Sport of a triathlon, cycling or Just-Track session for its Mark as Done
- * record, from the session's own discipline: 'run' for a run record (no tag,
- * as on a running plan card), 'cycling' for a bike, 'swimming' for a swim.
+ * Sport of a triathlon, cycling, Just-Track or HYROX session for its Mark as
+ * Done record, from the session's own discipline: 'run' for a run record (no
+ * tag, as on a running plan card), 'cycling' for a bike, 'swimming' for a swim.
  * A brick carries discipline 'bike' (brick.ts: it "belongs to" bike), so it
  * records as one bike session for its full bike + run duration. A Just-Track
  * run generated outside triathlon carries no discipline, so its run type
- * decides (isPlanCardRunType). Anything else (gym and strength complete
- * through completeStrengthSession, HYROX station / brick, rest) gets no record.
+ * decides (isPlanCardRunType).
+ *
+ * An injury cross-training session with no discipline lane (the row erg
+ * offer, capability-substitution buildAerobicOffer: "Row erg: aerobic
+ * maintenance") takes its sport from its label, by the canonical label rule
+ * (deriveSportFromLabel): 'rowing' for the erg. Its bike and swim offers carry
+ * a discipline. Anything else (gym and strength complete through
+ * completeStrengthSession, HYROX station / brick, rest) gets no record.
  */
 export function plannedSessionRecordSport(
-  w: Pick<Workout, 't' | 'discipline'>,
-): 'run' | 'cycling' | 'swimming' | null {
+  w: Pick<Workout, 't' | 'discipline'> & Partial<Pick<Workout, 'n'>>,
+): 'run' | 'cycling' | 'swimming' | 'rowing' | null {
+  if (!w.discipline && w.t === 'cross_training') {
+    const sport = deriveSportFromLabel(w.n);
+    return sport === 'cycling' || sport === 'swimming' || sport === 'rowing' ? sport : null;
+  }
   const disc = w.discipline ?? (isPlanCardRunType(w.t) ? 'run' : undefined);
   if (disc === 'run') return 'run';
   if (disc === 'bike') return 'cycling';
@@ -525,8 +552,8 @@ export function plannedSessionRecordSport(
 }
 
 /**
- * Mark as Done on a triathlon, cycling or Just-Track session card (audit B9,
- * decision 2026-10-06): store the session's planned load as its activity
+ * Mark as Done on a triathlon, cycling, Just-Track or HYROX session card (audit
+ * B9, decision 2026-10-06): store the session's planned load as its activity
  * record, or return null and write nothing. Tracking side. Mirrors
  * recordPlannedRunDone: the planned duration at the rated RPE, stamped on the
  * planned day, valued by fitness-model at `durationMin × TL_PER_MIN[rated]`,
@@ -609,8 +636,9 @@ export function findInAppRunToSupersede(
 /**
  * findInAppRunToSupersede for any endurance family: the in-app record of
  * `family` in `wk` that a synced recording of that sport supersedes, or null.
- * A bike or swim record is only ever a manual completion (no in-app recorder
- * exists for them), so all three modes apply to it as to a run marked done.
+ * A bike, swim or row record is only ever a manual completion (no in-app
+ * recorder exists for them), so all three modes apply to it as to a run marked
+ * done.
  */
 export function findInAppSessionToSupersede(
   wk: Week,
@@ -671,8 +699,9 @@ export function findInAppRunToSupersedeAcrossWeeks(
 
 /**
  * findInAppRunToSupersedeAcrossWeeks for any endurance family. The matcher
- * runs it for synced rides and swims against bikes and swims marked done in
- * triathlon, cycling and Just-Track, with the same bounded windows as runs.
+ * runs it for synced rides, swims and rows against the same sessions marked
+ * done in triathlon, cycling, Just-Track and HYROX (cross-training), with the
+ * same bounded windows as runs.
  */
 export function findInAppSessionToSupersedeAcrossWeeks(
   weeks: readonly (Week | null | undefined)[],

@@ -13,7 +13,7 @@ import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
-import { buildPlannedRunActual, dropInAppActual, manualCompletionStartIso, writeInAppActual } from '@/calculations/in-app-activity';
+import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -215,7 +215,7 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
   });
   overlay.querySelector('#hx-detail-mark-done')?.addEventListener('click', () => {
     setHxRated(wkIdx, workout, rpe);
-    recordHxRunDone(wkIdx, workout, rpe);
+    recordHxSessionDone(wkIdx, workout, rpe);
     close();
     import('./plan-view').then(m => m.renderHyroxPlanView()).catch(() => {});
   });
@@ -295,31 +295,34 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
 }
 
 /**
- * HYROX run Mark as Done: store the session's planned load as its activity
- * record (audit B9), mirroring the running plan card. Tracking side: the
- * session's own estimatedDurationMin at the rated RPE, stamped on the planned
- * day, so it counts in every load signal once; a watch copy that syncs later
- * supersedes it in place (matchAndAutoComplete). Cross sessions (bike / erg /
- * swim) keep the rating only: an in-app record without an activityType reads
- * as a run in the load model, and their sport mapping is an open question.
- * A future-week session keeps the rating only too, as on the running plan card
- * (recordPlannedRunDone): the matcher would not find its record when today's
- * watch copy syncs.
+ * HYROX Mark as Done on a time-defined session (a run, or an injury
+ * cross-training session: bike, row erg, swim): store the session's planned
+ * load as its activity record (audit B9; cross sessions by decision
+ * 2026-10-06), mirroring the running plan card and triathlon Mark as Done
+ * through the same recordPlannedSessionDone. Tracking side: the session's own
+ * estimatedDurationMin at the rated RPE, stamped on the planned day. A run
+ * carries no sport tag; a cross session is tagged cycling / rowing / swimming
+ * (plannedSessionRecordSport), so Signal A weights it at that sport's runSpec
+ * and never as a run. The record is what makes a ticked cross session count
+ * like a recorded one: in every load signal once, and as completed in the
+ * slot-record test the MTL sums use (isMtlSessionCompleted). A watch copy
+ * that syncs later supersedes it in place (matchAndAutoComplete). A
+ * future-week session keeps the rating only, as on the running plan card: the
+ * matcher would not find its record when today's watch copy syncs. Stations
+ * and bricks complete through completeStrengthSession (quick done).
  */
-function recordHxRunDone(weekIdx: number, workout: Workout, rpe: number): void {
-  if ((workout.discipline as string) !== 'run') return;
-  const durationMin = workout.estimatedDurationMin;
-  if (typeof durationMin !== 'number' || durationMin <= 0) return;
+function recordHxSessionDone(weekIdx: number, workout: Workout, rpe: number): void {
   const s = getMutableState();
-  if (weekIdx + 1 > s.w) return;
   const wk = s.wks?.[weekIdx];
   if (!wk) return;
-  writeInAppActual(wk, (workout as any).id ?? workout.n, buildPlannedRunActual(workout, {
+  const written = recordPlannedSessionDone(wk, (workout as any).id ?? workout.n, workout, {
     rpe,
-    startTime: manualCompletionStartIso(s.planStartDate, weekIdx + 1, workout.dayOfWeek),
-    durationMin,
-  }));
-  saveState();
+    durationMin: workout.estimatedDurationMin ?? 0,
+    planStartDate: s.planStartDate,
+    weekNum: weekIdx + 1,
+    currentWeek: s.w,
+  });
+  if (written) saveState();
 }
 
 /** Persist a swap (or revert) on the workout, recomputing per-component MTL and total MTL. */
