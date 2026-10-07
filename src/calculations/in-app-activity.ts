@@ -92,7 +92,7 @@ import type { GarminActual, GpsRecording, SportKey, Week, Workout } from '@/type
 import { parseDistanceKm } from '@/calculations/matching';
 import {
   isStrengthActual, isGymSessionActual, resolveActualSport, isRunSport,
-  deriveSportFromActivityType, deriveSportFromLabel,
+  deriveSportFromActivityType, deriveSportFromLabel, isInAppHyroxSession,
 } from '@/cross-training/activities';
 import { localDateKey } from '@/utils/local-date';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
@@ -246,7 +246,7 @@ export function syncedCrossEnduranceFamily(activityType: string | null | undefin
  */
 function inAppSportFamily(a: GarminActual): SportFamily {
   if (isInAppRunActual(a)) return 'run';
-  if (isGymSessionActual(a) || (a.activityType ?? '').toLowerCase() === 'hyrox') return 'gym';
+  if (isGymSessionActual(a) || isInAppHyroxSession(a)) return 'gym';
   if (a.manualSport) return familyOfSport(a.manualSport);
   return 'other';
 }
