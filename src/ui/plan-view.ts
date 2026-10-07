@@ -25,7 +25,7 @@ import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, computeWeekActualTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computePlannedWorkoutSignalBTSS, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeWeekActualTSS, getWeeklyExcess, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computePlannedWorkoutSignalBTSS, normalizeiTrimp, planCardBaseMinPerKm} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
@@ -367,11 +367,6 @@ function fmtZoneSec(sec: number): string {
 }
 
 // ─── Workout expanded detail ──────────────────────────────────────────────────
-
-/** Easy pace (min/km) the Plan tab prices planned sessions with (5.5 when no paces yet). */
-function planCardBaseMinPerKm(s: Pick<SimulatorState, 'pac'>): number {
-  return s.pac?.e ? s.pac.e / 60 : 5.5;
-}
 
 /**
  * Planned TSS shown on a running Plan-tab card: the "Planned load" line, the

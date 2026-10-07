@@ -15,8 +15,8 @@ import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind }
 import { openGuidedStrength } from '@/ui/guided-strength-overlay';
 import { completeStrengthSession } from '@/guided/strength-complete';
 import { recordPlannedSessionDone, dropInAppActual, plannedSessionRecordSport } from '@/calculations/in-app-activity';
-import { estimateWorkoutDurMin } from '@/calculations/fitness-model';
-import { estimateTriWorkoutMin } from './week-resolve.triathlon';
+import { estimateWorkoutDurMin, planCardBaseMinPerKm } from '@/calculations/fitness-model';
+import { estimateTriWorkoutMin, readTriWorkoutMin } from './week-resolve.triathlon';
 
 export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
   // HYROX sessions (station/brick) carry `hyroxComponents`; only the guided
@@ -263,18 +263,17 @@ function setRated(weekIdx: number, workout: Workout, value: number | 'skip'): vo
 
 /**
  * Planned duration for a Mark as Done record: the dose the session's card and
- * the day target price. A session with a stored duration uses it, as does any
- * session estimateTriWorkoutMin can read a duration from (a brick's segments, a
- * minutes token). A run with neither (a Just-Track run generated as "8km @
- * 5:00/km") uses the running plan card's estimate at the athlete's easy pace,
- * the same dose markPlanCardDone records (plan-view.ts planCardBaseMinPerKm).
+ * the day target price. A session that states a duration (readTriWorkoutMin: a
+ * stored duration, a brick's segments, a minutes token) uses it. A run that
+ * states none (a Just-Track run generated as "8km @ 5:00/km") uses the running
+ * plan card's estimate at the athlete's easy pace (planCardBaseMinPerKm), the
+ * same dose markPlanCardDone records. Anything else takes
+ * estimateTriWorkoutMin's fallback, as its card does.
  */
 function markDoneDurationMin(workout: Workout, s: { pac?: { e?: number } }): number {
-  const hasStoredDuration = typeof workout.estimatedDurationMin === 'number' && workout.estimatedDurationMin > 0;
-  const readsMinutes = !!workout.brickSegments || /\d+\s*min/i.test(workout.d || '');
-  if (!hasStoredDuration && !readsMinutes && plannedSessionRecordSport(workout) === 'run') {
-    return estimateWorkoutDurMin(workout, s.pac?.e ? s.pac.e / 60 : 5.5);
-  }
+  const stated = readTriWorkoutMin(workout);
+  if (stated != null) return stated;
+  if (plannedSessionRecordSport(workout) === 'run') return estimateWorkoutDurMin(workout, planCardBaseMinPerKm(s));
   return estimateTriWorkoutMin(workout);
 }
 

@@ -410,4 +410,23 @@ describe('Just-Track generated sessions', () => {
 
     expect(computeWeekRawTSS(wk, wk.rated, s.planStartDate)).toBe(Math.round(70 * TL_PER_MIN[7] + 40 * TL_PER_MIN[3]));
   });
+
+  it('a generated run that states no duration the tri reader understands gets the running card dose, at 5.5 min/km with no paces', () => {
+    const s = trackOnlyState();
+    vi.setSystemTime(new Date(2026, 9, 4, 20, 0, 0));
+    const wk = s.wks[0];
+    const upper = { id: 'adhoc-3', t: 'easy', n: 'Easy Run', d: '45MIN easy', rpe: 3, r: 3, dayOfWeek: 4 } as Workout;
+    wk.adhocWorkouts!.push(upper);
+    markDone(upper);
+    // The tri reader's minutes token is lower-case, so the running card's
+    // estimate prices it (as the card does), not the tri 60-min fallback.
+    expect(wk.garminActuals!['adhoc-3'].durationSec).toBe(estimateWorkoutDurMin(upper, 5) * 60);
+    expect(wk.garminActuals!['adhoc-3'].durationSec).not.toBe(60 * 60);
+
+    (s.pac as { e?: number }).e = undefined; // no paces yet: the card's 5.5 min/km
+    const run = wk.adhocWorkouts![1];
+    markDone(run);
+    expect(wk.garminActuals!['adhoc-2'].durationSec).toBe(Math.round(estimateWorkoutDurMin(run, 5.5) * 60));
+    expect(wk.garminActuals!['adhoc-2'].durationSec).toBe(Math.round(8 * 5.5 * 60));
+  });
 });

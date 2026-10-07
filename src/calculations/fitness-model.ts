@@ -863,6 +863,16 @@ export function computeDayStrainTSS(
 }
 
 /**
+ * Easy pace (min/km) the Plan tab prices planned sessions with: s.pac.e / 60,
+ * or 5.5 when no paces exist yet (estimateWorkoutDurMin's documented default).
+ * Shared by the running plan card (pricing and Mark as Done) and the
+ * triathlon / Just-Track Mark as Done dose for a run with only a distance.
+ */
+export function planCardBaseMinPerKm(s: { pac?: { e?: number } | null }): number {
+  return s.pac?.e ? s.pac.e / 60 : 5.5;
+}
+
+/**
  * Estimate duration in minutes for a planned workout.
  * Handles km-based descriptions (most common), interval formats, and min-based fallback.
  * Pace multipliers by workout type match the plan-view planned-TSS calculation exactly.
