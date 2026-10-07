@@ -7,7 +7,9 @@ import { isActivityCompatibleWithSlot } from './matching';
 import { plannedTssPerMin } from '@/constants';
 import { describeBikeSession, loadForBike, rpeForBike } from '@/workouts/bike';
 import { loadForSwim, rpeForSwim } from '@/workouts/swim';
-import { canApplyTriSuggestion } from './tri-suggestion-apply';
+import { canApplyTriSuggestion, triDowngradeTssReduction } from './tri-suggestion-apply';
+import { loadForRung } from '@/workouts/rung-load';
+import { triEffortMultiplier } from './effort-multiplier.triathlon';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { getDefaultState } from '@/state/store';
 
@@ -457,5 +459,130 @@ describe('applyTriSuggestions — off-ladder downgrades', () => {
     const r = applyTriSuggestions(s, [modFor(w, 'swap_easy', 'rpe_blown')]);
     expect(r.applied).toBe(0);
     expect(w).toEqual(snapshot);
+  });
+});
+
+// ─── Off-ladder downgrade on an effort-scaled session ──────────────────────
+// Regression (review of 92d662e): the load guard compared the landing rung's
+// price at the session's current minutes with its STORED load. That load goes
+// stale on the canonical path: applyTriEffortMultipliers scales
+// estimatedDurationMin by the trailing-effort multiplier (0.85 to 1.15) at every
+// rollover rebake (events.ts rebakeFutureWeeksInPlace -> generateTriathlonPlan)
+// and leaves aerobic / anaerobic. For an athlete rating bike sessions a point
+// easier (x1.05) a generated VO2 micros session went 87 -> 91 min at 153 TSS
+// stored, threshold at 91 min prices 155, so the approved micros -> threshold
+// step vanished from week 3 on; an over-under went the same way at x1.10+.
+// "Raises load" is now judged by rate at the same minutes.
+
+describe('applyTriSuggestions — off-ladder downgrade on an effort-scaled session', () => {
+  const cases = [
+    { t: 'bike_vo2_micros', to: 'bike_threshold', dist: 'sprint' as const },
+    { t: 'bike_over_under', to: 'bike_sweet_spot', dist: '70.3' as const },
+  ];
+  for (const { t, to, dist } of cases) {
+    for (const mult of [1.05, 1.15]) {
+      it(`${t} with minutes x${mult} and its load left as is still steps to ${to}`, () => {
+        const s = realTriState(dist);
+        const { w } = sessionOf(s, t);
+        const stored = load(w);
+        // What applyTriEffortMultipliers leaves: minutes scaled, load untouched.
+        w.estimatedDurationMin = Math.round(w.estimatedDurationMin! * mult);
+        const landing = loadForRung(to, w.estimatedDurationMin)!;
+        expect(canApplyTriSuggestion(w, 'downgrade_today')).toBe(true);
+        expect(applyTriSuggestions(s, [modFor(w, 'downgrade_today')]).applied).toBe(1);
+        expect(w.t).toBe(to);
+        expect(load(w)).toBe(landing.aerobic + landing.anaerobic);
+        // The landing rung still prices below the session's own rate at these minutes.
+        const own = loadForRung(t, w.estimatedDurationMin!)!;
+        expect(load(w)).toBeLessThan(own.aerobic + own.anaerobic);
+        // The old stored-load comparison blocked these (landing above the stale load).
+        if (t === 'bike_vo2_micros' || mult === 1.15) expect(load(w)).toBeGreaterThan(stored);
+      });
+    }
+  }
+
+  it('through the canonical path: bike sessions rated a point easy, plan regenerated at week 3', () => {
+    const s = realTriState('sprint');
+    s.w = 3;
+    for (const wk of s.wks.slice(0, 2)) {
+      wk.rated = {};
+      for (const w of wk.triWorkouts ?? []) if (w.discipline === 'bike' && w.id) wk.rated[w.id] = (w.rpe ?? w.r)! - 1;
+    }
+    expect(triEffortMultiplier(s, 'bike')).toBeCloseTo(1.05, 5);
+    const unrated = realTriState('sprint');
+    const regen = generateTriathlonPlan(s);
+    const wi = regen.findIndex((wk, i) => i >= 2 && (wk.triWorkouts ?? []).some(w => w.t === 'bike_vo2_micros'));
+    expect(wi).toBeGreaterThanOrEqual(2);
+    const si = regen[wi].triWorkouts!.findIndex(w => w.t === 'bike_vo2_micros');
+    const w = regen[wi].triWorkouts![si];
+    const plain = unrated.wks[wi].triWorkouts![si];
+    expect(w.estimatedDurationMin).toBeGreaterThan(plain.estimatedDurationMin!); // scaled up
+    expect(load(w)).toBe(load(plain)); // load not re-priced
+    expect(canApplyTriSuggestion(w, 'downgrade_today')).toBe(true);
+    const st = { ...s, wks: regen } as SimulatorState;
+    expect(applyTriSuggestions(st, [modFor(w, 'downgrade_today')]).applied).toBe(1);
+    expect(w.t).toBe('bike_threshold');
+  });
+
+  it('neuromuscular sprints stay held back at any multiplier (1.10 < 1.5 TSS/min)', () => {
+    for (const mult of [0.85, 1, 1.15]) {
+      const s = realTriState('sprint');
+      const { w } = sessionOf(s, 'bike_vlamax');
+      w.estimatedDurationMin = Math.round(w.estimatedDurationMin! * mult);
+      expect(canApplyTriSuggestion(w, 'downgrade_today'), `x${mult}`).toBe(false);
+    }
+  });
+
+  it('an open-water swim (no rate of its own) falls back to its stored load', () => {
+    const ow = (aerobic: number): Workout => ({ id: 'ow1', t: 'swim_openwater', discipline: 'swim', n: 'Open water', d: '2000m', r: 6, estimatedDurationMin: 45, aerobic, anaerobic: 0 });
+    // Endurance swim at 45 min prices 45 TSS (loadForSwim 1.0 TSS/min).
+    expect(canApplyTriSuggestion(ow(60), 'downgrade_today')).toBe(true);
+    expect(canApplyTriSuggestion(ow(30), 'downgrade_today')).toBe(false);
+    expect(canApplyTriSuggestion({ ...ow(0) }, 'downgrade_today')).toBe(true); // nothing known: not blocked
+  });
+});
+
+// ─── TSS a downgrade takes off (overload modal "-N TSS") ───────────────────
+// Regression (review of 92d662e): the overload detector booked and showed a
+// flat 25% for every downgrade. A VO2 micros hour (105 TSS) showed -26 TSS while
+// the applied step (threshold, 102) takes off 3. triDowngradeTssReduction prices
+// it from the landing rung the apply step uses.
+
+describe('triDowngradeTssReduction', () => {
+  it('equals the change in the stored load on every generated downgrade', () => {
+    let n = 0;
+    for (const dist of ['ironman', '70.3', 'sprint'] as const) {
+      const base = realTriState(dist);
+      base.wks.forEach((wk, wi) => (wk.triWorkouts ?? []).forEach((w, si) => {
+        if (!canApplyTriSuggestion(w, 'downgrade_today')) return;
+        const s = structuredClone(base);
+        const t = s.wks[wi].triWorkouts![si];
+        const before = load(t);
+        const est = triDowngradeTssReduction(t);
+        expect(applyTriSuggestions(s, [modFor(t, 'downgrade_today')]).applied).toBe(1);
+        expect(est, `${dist} wk${wi + 1} ${w.t}`).toBe(before - load(t));
+        n += 1;
+      }));
+    }
+    expect(n).toBeGreaterThan(200);
+  });
+
+  it('a 60-min VO2 micros ride: -3 TSS (threshold), not a flat quarter', () => {
+    const micro = { ...workout('m1', 'bike_vo2_micros', 'bike', 60), ...loadForBike('vo2_micros', 60) };
+    expect(load(micro)).toBe(105);
+    expect(triDowngradeTssReduction(micro)).toBe(3);
+    const thr = { ...workout('t1', 'bike_threshold', 'bike', 60), ...loadForBike('threshold', 60) };
+    expect(triDowngradeTssReduction(thr)).toBe(11); // 102 -> sweet spot 91 (68 + 23 after rounding)
+  });
+
+  it('0 when no downgrade applies or the landing load is not below the stored one', () => {
+    const s = realTriState('sprint');
+    expect(triDowngradeTssReduction(sessionOf(s, 'bike_vlamax').w)).toBe(0);
+    expect(triDowngradeTssReduction(sessionOf(s, 'brick').w)).toBe(0);
+    // Stale stored load (minutes x1.05, load untouched): threshold at 63 min
+    // prices 107 against 105 stored, so it books no reduction.
+    const micro = { ...workout('m1', 'bike_vo2_micros', 'bike', 63), ...loadForBike('vo2_micros', 60) };
+    expect(canApplyTriSuggestion(micro, 'downgrade_today')).toBe(true);
+    expect(triDowngradeTssReduction(micro)).toBe(0);
   });
 });

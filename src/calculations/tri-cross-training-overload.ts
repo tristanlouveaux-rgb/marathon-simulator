@@ -33,7 +33,7 @@ import type { Discipline } from '@/types/triathlon';
 import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
-import { canApplyTriSuggestion } from './tri-suggestion-apply';
+import { canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -54,28 +54,11 @@ const MAX_MODS_EXTREME = 3;
 const SATURATION_CAP = 1500;
 const SATURATION_TAU = 800;
 
-/** Workout-type substrings marking a session as quality (intensity-heavy). */
-const QUALITY_KEYWORDS = [
-  'threshold',
-  'vo2',
-  'tempo',
-  'sweet_spot',
-  'sweetspot',
-  'speed',
-  'race_pace',
-  'intervals',
-  'hills',
-  'brick',
-];
-
 /** Trim fraction for endurance reductions (15% off planned duration). */
 const TRIM_FRACTION = 0.15;
 
 /** Replace-with-easy reduces the session's TSS by ~50% (intensity drop). */
 const REPLACE_WITH_EASY_TSS_REDUCTION = 0.50;
-
-/** Quality downgrade reduces TSS by ~25% (one tier down on the intensity ladder). */
-const DOWNGRADE_TSS_REDUCTION = 0.25;
 
 const DISCIPLINES: Discipline[] = ['swim', 'bike', 'run'];
 
@@ -371,8 +354,9 @@ function buildDisciplineOption(
   // also skip a session the apply step cannot change with the chosen action
   // (canApplyTriSuggestion: a brick, a swap on an off-ladder kind such as
   // bike_vo2_micros / bike_over_under, a downgrade that would raise planned load,
-  // sessions without planned minutes), so the budget goes to sessions that can
-  // take it.
+  // sessions without planned minutes) and a downgrade that would not lower the
+  // stored load (triDowngradeTssReduction 0), so the budget goes to sessions
+  // that can take it.
   const candidates = upcoming.filter(w => isOpenForTriSuggestion(w));
 
   const floorTSS = computeTriDisciplineFloorTSS(state, discipline, weekIdx);
@@ -405,9 +389,26 @@ function isUpcoming(w: Workout, todayDow: number): boolean {
   return true;
 }
 
+/** Quality = isTriQualitySession (tri-suggestion-apply.ts): the type keywords
+ *  plus every off-ladder kind canApplyTriSuggestion lands a downgrade for
+ *  (OFF_LADDER_DOWNGRADE_RUNG), shared with the readiness row so the classifier
+ *  and the gate cannot drift. */
 function isQualityWorkout(w: Workout): boolean {
-  const t = (w.t ?? '').toLowerCase();
-  return QUALITY_KEYWORDS.some(k => t.includes(k));
+  return isTriQualitySession(w);
+}
+
+/**
+ * TSS an adjustment takes off the session, as booked against the reduction
+ * budget and shown in the modal ("-N TSS"). A downgrade is priced from the rung
+ * the apply step lands on (triDowngradeTssReduction: the stored load minus the
+ * landing rung's load at the planned minutes, the exact change in the plan
+ * total); 0 when the step would not lower the stored load, so it is not
+ * proposed. A trim and a swap keep their pre-existing fractions of the planned
+ * load (TRIM_FRACTION, REPLACE_WITH_EASY_TSS_REDUCTION).
+ */
+function estimatedReduction(w: Workout, action: OverloadAdjustment['action'], planTSS: number): number {
+  if (action === 'downgrade_today') return triDowngradeTssReduction(w);
+  return planTSS * (action === 'swap_easy' ? REPLACE_WITH_EASY_TSS_REDUCTION : TRIM_FRACTION);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -442,8 +443,7 @@ function buildReduceMods(
     const action = isQuality ? 'downgrade_today' : 'trim_volume';
     // A session the apply step would leave untouched is not proposed.
     if (!canApplyTriSuggestion(w, action)) continue;
-    const reductionFraction = isQuality ? DOWNGRADE_TSS_REDUCTION : TRIM_FRACTION;
-    const proposedReduction = Math.min(planTSS * reductionFraction, budget);
+    const proposedReduction = Math.min(estimatedReduction(w, action, planTSS), budget);
     if (proposedReduction <= 0) continue;
 
     mods.push({
@@ -490,18 +490,15 @@ function buildReplaceMods(
     // Reduce-only path. A session the apply step would leave untouched with
     // the chosen action is not proposed (canApplyTriSuggestion).
     let action: 'swap_easy' | 'downgrade_today' | 'trim_volume';
-    let reductionFraction: number;
     if (!didReplace && isQuality && canApplyTriSuggestion(w, 'swap_easy')) {
       action = 'swap_easy';
-      reductionFraction = REPLACE_WITH_EASY_TSS_REDUCTION;
       didReplace = true;
     } else {
       action = isQuality ? 'downgrade_today' : 'trim_volume';
-      reductionFraction = isQuality ? DOWNGRADE_TSS_REDUCTION : TRIM_FRACTION;
       if (!canApplyTriSuggestion(w, action)) continue;
     }
 
-    const proposedReduction = Math.min(planTSS * reductionFraction, budget);
+    const proposedReduction = Math.min(estimatedReduction(w, action, planTSS), budget);
     if (proposedReduction <= 0) continue;
 
     mods.push({

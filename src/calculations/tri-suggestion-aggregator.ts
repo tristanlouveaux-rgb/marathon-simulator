@@ -20,7 +20,7 @@ import {
   type CrossTrainingOverloadResult,
 } from './tri-cross-training-overload';
 import { handledTriSuggestionIds, isOpenForTriSuggestion } from './tri-suggestion-handled';
-import { canApplyTriSuggestion } from './tri-suggestion-apply';
+import { canApplyTriSuggestion, isTriQualitySession } from './tri-suggestion-apply';
 
 /**
  * Volume-ramp suggestions are OFF pending Tristan's decision on the comparison
@@ -156,10 +156,13 @@ export function collectTriSuggestions(
       // threshold down a rung per launch (threshold, sweet spot, tempo, endurance).
       const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
       const action = readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today';
-      // Proposed only when the apply step would change the session
-      // (canApplyTriSuggestion): never a brick; an off-ladder kind takes a
-      // downgrade (OFF_LADDER_DOWNGRADE_RUNG) but no swap.
-      if (todayWorkout && isQuality(todayWorkout) && canApplyTriSuggestion(todayWorkout, action)) {
+      // Quality by the shared classifier (isTriQualitySession), which counts
+      // every off-ladder kind the gate lands a downgrade for: over-unders and
+      // open-water swims match no type keyword. Proposed only when the apply
+      // step would change the session (canApplyTriSuggestion): never a brick;
+      // an off-ladder kind takes a downgrade (OFF_LADDER_DOWNGRADE_RUNG) but no
+      // swap, and a neuromuscular sprint neither (sweet spot would add load).
+      if (todayWorkout && isTriQualitySession(todayWorkout) && canApplyTriSuggestion(todayWorkout, action)) {
         const sentence = readiness.sentence;
         mods.push({
           id: `readiness_${todayWorkout.id ?? 'today'}`,
@@ -274,13 +277,9 @@ function oneRowPerSession(mods: TriSuggestionMod[]): TriSuggestionMod[] {
 
 // ─── Heuristics ────────────────────────────────────────────────────────────
 
-const QUALITY_KEYWORDS = ['threshold', 'vo2', 'tempo', 'sweet_spot', 'sweetspot', 'speed', 'race_pace', 'intervals', 'hills', 'brick'];
+// Quality: isTriQualitySession (tri-suggestion-apply.ts), shared with the
+// cross-training overload builders and read from the same table as the gate.
 const LONG_KEYWORDS = ['long', 'endurance'];
-
-function isQuality(workout: Workout): boolean {
-  const t = (workout.t ?? '').toLowerCase();
-  return QUALITY_KEYWORDS.some(k => t.includes(k));
-}
 
 function isLongOrEndurance(workout: Workout): boolean {
   const t = (workout.t ?? '').toLowerCase();

@@ -34,13 +34,17 @@
  *    description is rebuilt for the new kind at the same minutes with the
  *    generator's builders (describeBikeSession / describeSwimSession); load and
  *    RPE as for a ladder rung. A mapped step that would raise the planned load
- *    is not offered (raisesPlannedLoad: neuromuscular sprints price below
- *    sweet spot).
+ *    is not offered (raisesPlannedLoad, judged by rate at the same minutes:
+ *    neuromuscular sprints price below sweet spot).
  * Sessions with no rung to step from are left untouched and counted as
  * skipped: a brick, run types off RUN_PACE_LADDER, a swap to easy on an
  * off-ladder kind (not decided), and a session already on the bottom rung.
  * canApplyTriSuggestion is the one gate: the detectors filter their targets
- * with it, so they do not propose those changes.
+ * with it, so they do not propose those changes. isTriQualitySession is the
+ * one quality classifier the detectors pick a downgrade with, and it counts
+ * every OFF_LADDER_DOWNGRADE_RUNG kind, so the classifier and the gate read the
+ * same table. triDowngradeTssReduction is the TSS a downgrade takes off, priced
+ * by the same landing rung and loadForRung the apply step stamps.
  *
  * Every accepted change re-prices aerobic/anaerobic, so the plan header, the
  * Home day target (getPlannedDayTSSContext) and the overload detector read the
@@ -192,28 +196,111 @@ function downgradeRungIdx(w: Workout, d: 'bike' | 'swim'): number {
   return raisesPlannedLoad(w, ladder[to].key) ? -1 : to;
 }
 
+/** Total planned TSS of a load; NaN when unknown (no load, or a kind with no
+ *  rate: loadForSwim returns NaN shares for swim_openwater). */
+function totalOf(load: PlannedLoad | null): number {
+  return load ? load.aerobic + load.anaerobic : NaN;
+}
+
 /**
- * True when pricing the session at rung `toKey` (loadForRung at its planned
- * minutes) would give more planned TSS than it carries now. The ladders rise in
- * TSS per minute rung by rung (loadForBike / loadForSwim), so a step down a
- * ladder never trips this. An off-ladder kind's rate is its own: neuromuscular
- * sprints (bike_vlamax, loadForBike 1.10 TSS/min, rest-dominated) sit below
- * sweet spot (1.5), so the mapped step would add load under a "downgrade"
- * label, and the overload detector would book a reduction that is an increase.
- * Current load: the stored aerobic + anaerobic (what the plan header and the
- * day target read), else the kind's own rate at the same minutes. When neither
- * is known (a kind with no rate, carrying no load) nothing is blocked.
+ * Planned TSS of a bike / swim session's current prescription at `minutes`, by
+ * its own rate: loadForRung for the rung it is written at (an Adjust-stamped
+ * intensityLevel, else its type), the rate the generator, the Adjust overlay
+ * and the apply step price with. The stored aerobic + anaerobic is the fallback
+ * only for a kind with no rate (swim_openwater), because it goes stale on the
+ * canonical path: applyTriEffortMultipliers (effort-multiplier.triathlon.ts)
+ * scales estimatedDurationMin by 0.85 to 1.15 at every week-rollover rebake
+ * (events.ts rebakeFutureWeeksInPlace -> generateTriathlonPlan) and does not
+ * re-price the load. NaN when neither is known.
+ */
+function ownLoadTotal(w: Workout, minutes: number): number {
+  const own = totalOf(loadForRung(w.intensityLevel ?? w.t, minutes));
+  if (Number.isFinite(own) && own > 0) return own;
+  const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  return stored > 0 ? stored : NaN;
+}
+
+/**
+ * True when rung `toKey` prices above the session's current prescription, both
+ * at its planned minutes (ownLoadTotal vs loadForRung). The ladders rise in TSS
+ * per minute rung by rung (loadForBike / loadForSwim), so a step down a ladder
+ * never trips this. An off-ladder kind's rate is its own: neuromuscular sprints
+ * (bike_vlamax, loadForBike 1.10 TSS/min, rest-dominated) sit below sweet spot
+ * (1.5), so the mapped step would add load under a "downgrade" label. Judged by
+ * rate, not against the stored load, so an effort-scaled session (minutes x
+ * 1.05, load unchanged) keeps its step: over-under / hills (1.65 -> 1.5) and VO2
+ * micros (1.75 -> 1.7) pass at any multiplier. When either side is unknown
+ * nothing is blocked.
  */
 function raisesPlannedLoad(w: Workout, toKey: string): boolean {
   const minutes = minutesOf(w);
-  const next = loadForRung(toKey, minutes);
-  if (!next) return false;
+  const next = totalOf(loadForRung(toKey, minutes));
+  const current = ownLoadTotal(w, minutes);
+  if (!Number.isFinite(next) || !Number.isFinite(current)) return false;
+  return next > current;
+}
+
+/**
+ * The load applyDowngrade stamps on the session: the landing run type
+ * (stepDownRunType, loadForTriRun) or bike / swim rung (downgradeRungIdx,
+ * loadForRung), at the session's planned minutes. Null when no downgrade
+ * applies (canApplyTriSuggestion).
+ */
+function downgradeLandingLoad(w: Workout): PlannedLoad | null {
+  if (!canApplyTriSuggestion(w, 'downgrade_today')) return null;
+  const d = ladderDiscipline(w);
+  const minutes = minutesOf(w);
+  if (!d) return null;
+  if (d === 'run') return loadForTriRun(stepDownRunType(w.t, 1, { longRun: isLongRun(w) }), minutes);
+  return loadForRung(ladderFor(d)[downgradeRungIdx(w, d)].key, minutes);
+}
+
+/**
+ * Planned TSS an accepted downgrade_today takes off the session: its stored
+ * aerobic + anaerobic minus the load the apply step stamps at the landing rung
+ * or type (downgradeLandingLoad, the same downgradeRungIdx / loadForRung /
+ * loadForTriRun applyDowngrade prices with). That is exactly the change in the
+ * plan header, and it is in the currency the cross-training overload detector
+ * does all its arithmetic in (plannedTriTSS, remainingTSS and the floor are
+ * stored sums), so the modal's "-N TSS" and the applied change come from one
+ * computation. A generated 60-min VO2 micros ride steps 105 -> 102 TSS (-3);
+ * a 60-min threshold ride to sweet spot 102 -> 91 (-11).
+ * 0 when no downgrade applies, or when the landing load is not below the
+ * stored one. That happens when the stored load is stale:
+ * applyTriEffortMultipliers scaled the minutes up and left the load (a VO2
+ * micros session at x1.05: 105 stored, threshold at 63 min prices 107). The
+ * overload builders then book no reduction and skip the downgrade, while the
+ * readiness row, which books no TSS, still offers it (raisesPlannedLoad judges
+ * by rate).
+ */
+export function triDowngradeTssReduction(w: Workout): number {
+  const landing = totalOf(downgradeLandingLoad(w));
   const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
-  const own = loadForRung(w.intensityLevel ?? w.t, minutes);
-  const ownTotal = own ? own.aerobic + own.anaerobic : NaN;
-  const current = stored > 0 ? stored : Number.isFinite(ownTotal) && ownTotal > 0 ? ownTotal : NaN;
-  if (!Number.isFinite(current)) return false;
-  return next.aerobic + next.anaerobic > current;
+  if (!Number.isFinite(landing) || stored <= 0) return 0;
+  return Math.max(0, stored - landing);
+}
+
+/** Type substrings marking a tri / cycling session as quality. The list both
+ *  detectors carried (tri-suggestion-aggregator.ts, tri-cross-training-overload.ts),
+ *  unchanged. */
+const TRI_QUALITY_TYPE_KEYWORDS = ['threshold', 'vo2', 'tempo', 'sweet_spot', 'sweetspot', 'speed', 'race_pace', 'intervals', 'hills', 'brick'];
+
+/**
+ * True when the session is a quality session for the readiness row and the
+ * cross-training overload builders (they propose a downgrade or swap for it,
+ * a trim otherwise). The keyword list plus every OFF_LADDER_DOWNGRADE_RUNG kind
+ * (bike_over_under, bike_vlamax, bike_hills, bike_vo2_micros, swim_openwater),
+ * the table canApplyTriSuggestion lands their downgrade with, so the classifier
+ * and the gate cannot drift: over-unders, sprints and open-water swims match
+ * no keyword. A kind the gate still refuses (bike_vlamax: sweet spot would add
+ * load) is quality but gets no downgrade, so neither detector proposes one; the
+ * overload builders do not trim it either (a quality session gets a downgrade,
+ * a swap or nothing, as a brick does).
+ */
+export function isTriQualitySession(w: Workout): boolean {
+  const t = (w.t ?? '').toLowerCase();
+  return TRI_QUALITY_TYPE_KEYWORDS.some(k => t.includes(k))
+    || Object.prototype.hasOwnProperty.call(OFF_LADDER_DOWNGRADE_RUNG, w.t ?? '');
 }
 
 /** Planned minutes, or 0 when the session carries none. A swap or downgrade

@@ -14,14 +14,21 @@
  * Since 2026-10-06 (Tristan's rule) off-ladder bike / swim kinds take a
  * downgrade to the rung OFF_LADDER_DOWNGRADE_RUNG maps them to, unless it would
  * raise their planned load; a brick and an off-ladder swap still take none.
+ *
+ * Regression (review of 92d662e): neither detector proposed that downgrade for
+ * an over-under or an open-water swim. Both picked quality sessions by type
+ * keyword, and 'bike_over_under' / 'swim_openwater' match none, so the readiness
+ * row skipped them and the overload builders trimmed them instead. Both now
+ * read isTriQualitySession, which counts every OFF_LADDER_DOWNGRADE_RUNG kind.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { applyTriSuggestions, canApplyTriSuggestion } from './tri-suggestion-apply';
+import { applyTriSuggestions, canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
 import { collectTriSuggestions, type TriSuggestionMod } from './tri-suggestion-aggregator';
 import { detectCrossTrainingOverload } from './tri-cross-training-overload';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import { getDefaultState } from '@/state/store';
 import { loadForBike } from '@/workouts/bike';
+import { loadForSwim } from '@/workouts/swim';
 import type { SimulatorState, Workout } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
 
@@ -211,5 +218,164 @@ describe('readiness and RPE rows skip sessions the apply step cannot change', ()
   it('a threshold run today still gets its row', () => {
     const s = wednesday({ id: 'wed-thr', t: 'threshold', n: 'Threshold run', d: '60min', r: 8, rpe: 8, discipline: 'run', dayOfWeek: 2, estimatedDurationMin: 60 } as Workout);
     expect(collectTriSuggestions(s).mods.filter(m => m.targetWorkoutId === 'wed-thr')).toHaveLength(1);
+  });
+
+  // Generated sessions, moved to today (Wednesday). Readiness reads 'Ease Back'.
+  const g703 = generated(PLANS[1]);
+  const gSprint = generated(PLANS[3]);
+  const todayOf = (s: SimulatorState, t: string): Workout => ({ ...firstOfType(s, t)!, id: 'wed-q', dayOfWeek: 2, status: undefined });
+  const openWater = { id: 'wed-q', t: 'swim_openwater', n: 'Open water', d: '2000m continuous', r: 6, rpe: 6, discipline: 'swim', dayOfWeek: 2, estimatedDurationMin: 45 } as Workout;
+
+  for (const [label, today, landsOn] of [
+    ['a generated over-under', () => todayOf(g703, 'bike_over_under'), 'bike_sweet_spot'],
+    ['a generated VO2 micros ride', () => todayOf(gSprint, 'bike_vo2_micros'), 'bike_threshold'],
+    ['an open-water swim', () => openWater, 'swim_endurance'],
+  ] as const) {
+    it(`${label} today gets one readiness downgrade row, and it lands on ${landsOn}`, () => {
+      const s = wednesday(today());
+      const r = collectTriSuggestions(s);
+      expect(r.diagnostics.readinessLabel).toBe('Ease Back');
+      const rows = r.mods.filter(m => m.targetWorkoutId === 'wed-q');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ source: 'readiness', action: 'downgrade_today' });
+      // The RPE-blown swap is never proposed for an off-ladder kind.
+      expect(r.mods.some(m => m.action === 'swap_easy')).toBe(false);
+      expect(applyTriSuggestions(s, rows).applied).toBe(1);
+      expect(s.wks[0].triWorkouts![1].t).toBe(landsOn);
+    });
+  }
+
+  it('the RPE-blown detector still fires on a VO2 micros day, with no swap row', () => {
+    const r = collectTriSuggestions(wednesday(todayOf(gSprint, 'bike_vo2_micros')));
+    expect(r.diagnostics.rpeBlown).toBe(true);
+    expect(r.mods.map(m => m.action)).toEqual(['downgrade_today']);
+  });
+
+  it('a neuromuscular sprint today gets no row (quality, but sweet spot would add load)', () => {
+    const vlamax = todayOf(gSprint, 'bike_vlamax');
+    expect(isTriQualitySession(vlamax)).toBe(true);
+    const r = collectTriSuggestions(wednesday(vlamax));
+    expect(r.diagnostics.readinessLabel).toBe('Ease Back');
+    expect(r.mods.filter(m => m.targetWorkoutId === 'wed-q')).toEqual([]);
+  });
+});
+
+describe('isTriQualitySession', () => {
+  it('counts the type keywords and every off-ladder kind the gate lands a downgrade for', () => {
+    const w = (t: string) => ({ t } as Workout);
+    for (const t of ['bike_threshold', 'bike_sweet_spot', 'bike_tempo', 'bike_vo2', 'swim_threshold', 'swim_speed', 'threshold', 'vo2', 'brick',
+      'bike_over_under', 'bike_vlamax', 'bike_hills', 'bike_vo2_micros', 'swim_openwater']) {
+      expect(isTriQualitySession(w(t)), t).toBe(true);
+    }
+    for (const t of ['bike_endurance', 'swim_endurance', 'swim_technique', 'easy', 'long', 'recovery', 'gym', 'cross']) {
+      expect(isTriQualitySession(w(t)), t).toBe(false);
+    }
+  });
+});
+
+describe('cross-training overload: off-ladder quality sessions take a downgrade priced at its landing rung', () => {
+  const ouLoad = loadForBike('over_under', 75);
+  function week(extra: Workout[] = []): SimulatorState {
+    return {
+      eventType: 'triathlon', w: 1,
+      triConfig: { distance: 'ironman', bike: { ftp: 220, hasPowerMeter: true }, swim: { cssSecPer100m: 100 } },
+      wks: [{
+        triWorkouts: [
+          // Priced as the generator prices it (loadForBike).
+          { id: 'tue-ou', t: 'bike_over_under', n: 'Over-unders', d: '3×(2min @ 95% / 1min @ 105%)', r: 8, discipline: 'bike', ...ouLoad, dayOfWeek: 1, estimatedDurationMin: 75 },
+          { id: 'thu-thr', t: 'bike_threshold', n: 'Threshold ride', d: '2×20min @ 213–227W', r: 8, discipline: 'bike', ...loadForBike('threshold', 75), dayOfWeek: 3, estimatedDurationMin: 75 },
+          { id: 'sat-end', t: 'bike_endurance', n: 'Long ride', d: '4h', r: 5, discipline: 'bike', ...loadForBike('endurance', 240), dayOfWeek: 5, estimatedDurationMin: 240 },
+          ...extra,
+        ],
+        adhocWorkouts: [{ id: 'spin', t: 'cross', n: 'spin class', d: '90min', r: 7, iTrimp: 33000 }],
+      }],
+    } as unknown as SimulatorState;
+  }
+
+  it('an over-under takes downgrade_today, not trim_volume, in Reduce and Replace; the swap goes to the threshold ride', () => {
+    const s = week();
+    const o = detectCrossTrainingOverload(s, 0)!;
+    expect(o).not.toBeNull();
+    const reduce = o.options.bike.reduceMods.find(a => a.workoutId === 'tue-ou');
+    const replace = o.options.bike.replaceMods.find(a => a.workoutId === 'tue-ou');
+    expect(reduce).toMatchObject({ action: 'downgrade_today' });
+    expect(replace).toMatchObject({ action: 'downgrade_today' });
+    expect(o.options.bike.replaceMods.find(a => a.action === 'swap_easy')).toMatchObject({ workoutId: 'thu-thr' });
+    // -N TSS = stored load minus sweet spot at 75 min (124 -> 113), not a flat 25% (31).
+    const ss = loadForBike('sweet_spot', 75);
+    const expected = ouLoad.aerobic + ouLoad.anaerobic - (ss.aerobic + ss.anaerobic);
+    expect(reduce!.tssReduction).toBe(expected);
+    expect(replace!.tssReduction).toBe(expected);
+    // ... and that is what accepting it takes off the plan.
+    const c = structuredClone(s);
+    const mod: TriSuggestionMod = { id: 'x', source: 'cross_training_overload', discipline: 'bike', headline: '', body: '', severity: 'caution', targetWorkoutId: 'tue-ou', action: 'downgrade_today' };
+    expect(applyTriSuggestions(c, [mod]).applied).toBe(1);
+    const w = c.wks[0].triWorkouts![0];
+    expect(w.t).toBe('bike_sweet_spot');
+    expect(ouLoad.aerobic + ouLoad.anaerobic - ((w.aerobic ?? 0) + (w.anaerobic ?? 0))).toBe(reduce!.tssReduction);
+  });
+
+  it('an open-water swim takes downgrade_today in the swim option set', () => {
+    const o = detectCrossTrainingOverload(week([
+      { id: 'wed-ow', t: 'swim_openwater', n: 'Open water', d: '2000m continuous', r: 6, discipline: 'swim', aerobic: 54, anaerobic: 6, dayOfWeek: 2, estimatedDurationMin: 45 } as Workout,
+    ]), 0)!;
+    const ow = o.options.swim.reduceMods.find(a => a.workoutId === 'wed-ow');
+    // 60 stored -> endurance swim at 45 min (loadForSwim: 41 + 5 after rounding).
+    const end = loadForSwim('endurance', 45);
+    expect(ow).toMatchObject({ action: 'downgrade_today', tssReduction: 60 - (end.aerobic + end.anaerobic) });
+  });
+
+  it('a neuromuscular sprint is quality with no downgrade, so it is not proposed', () => {
+    const vlamax = { ...firstOfType(generated(PLANS[3]), 'bike_vlamax')!, id: 'mon-vl', dayOfWeek: 0, status: undefined } as Workout;
+    const o = detectCrossTrainingOverload(week([vlamax]), 0)!;
+    for (const set of [o.options.bike.reduceMods, o.options.bike.replaceMods]) {
+      expect(set.map(a => a.workoutId)).not.toContain('mon-vl');
+    }
+  });
+
+  it('a downgrade that would not lower the stored load (stale, effort-scaled minutes) books no reduction and is not proposed', () => {
+    // Minutes x1.05 as applyTriEffortMultipliers leaves them, load not re-priced:
+    // threshold at 63 min (107) is above the 105 stored.
+    const micro = { id: 'mon-mi', t: 'bike_vo2_micros', n: 'VO2 micros', d: '3×10×30/30', r: 9, discipline: 'bike', ...loadForBike('vo2_micros', 60), dayOfWeek: 0, estimatedDurationMin: 63 } as Workout;
+    expect(canApplyTriSuggestion(micro, 'downgrade_today')).toBe(true);
+    expect(triDowngradeTssReduction(micro)).toBe(0);
+    const o = detectCrossTrainingOverload(week([micro]), 0)!;
+    for (const set of [o.options.bike.reduceMods, o.options.bike.replaceMods]) {
+      expect(set.map(a => a.workoutId)).not.toContain('mon-mi');
+    }
+  });
+
+  it('every downgrade proposed in generated plans shows the TSS the apply step takes off', () => {
+    let downgrades = 0;
+    for (const p of PLANS) {
+      const base = generated(p);
+      for (let wi = 0; wi < base.wks.length; wi++) {
+        const s = structuredClone(base);
+        s.w = wi + 1;
+        s.wks[wi].adhocWorkouts = [{ id: 'padel', t: 'cross', n: 'padel', d: '150min', r: 7, iTrimp: 33000 } as any];
+        const o = detectCrossTrainingOverload(s, 0);
+        if (!o) continue;
+        for (const d of ['swim', 'bike', 'run'] as const) {
+          for (const set of [o.options[d].reduceMods, o.options[d].replaceMods]) {
+            set.forEach((a, i) => {
+              if (a.action !== 'downgrade_today') return;
+              const c = structuredClone(s);
+              const w = c.wks[wi].triWorkouts!.find(x => x.id === a.workoutId)!;
+              const before = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+              const mod: TriSuggestionMod = { id: 'x', source: 'cross_training_overload', discipline: a.discipline, headline: '', body: '', severity: 'caution', targetWorkoutId: a.workoutId, action: a.action };
+              expect(applyTriSuggestions(c, [mod]).applied).toBe(1);
+              const taken = before - ((w.aerobic ?? 0) + (w.anaerobic ?? 0));
+              const where = `${p.label} wk${wi + 1} ${a.workoutLabel}`;
+              expect(a.tssReduction, where).toBeGreaterThan(0);
+              // Equal; the last adjustment of a set can be cut to the budget left.
+              if (i < set.length - 1) expect(a.tssReduction, where).toBe(taken);
+              else expect(a.tssReduction, where).toBeLessThanOrEqual(taken);
+              downgrades += 1;
+            });
+          }
+        }
+      }
+    }
+    expect(downgrades).toBeGreaterThan(50);
   });
 });
