@@ -15,7 +15,7 @@ vi.mock('@/state', async (importOriginal) => {
 import { setState, getMutableState } from '@/state/store';
 import { skip } from './events';
 import { TIM } from '@/constants';
-import { isTaperCarryBlocked, filterTaperMakeups } from '@/workouts/race-day-rules';
+import { isTaperCarryBlocked, filterTaperMakeups, fitTaperEasyMakeups } from '@/workouts/race-day-rules';
 import type { SimulatorState } from '@/types';
 
 function makeElement(): any {
@@ -63,6 +63,24 @@ describe('isTaperCarryBlocked / filterTaperMakeups', () => {
     ];
     expect(filterTaperMakeups(skips).map(x => x.workout.t)).toEqual(['easy']);
     expect(filterTaperMakeups(skips, { raceWeek: true })).toEqual([]);
+  });
+});
+
+describe('fitTaperEasyMakeups: easy makeups in a taper week', () => {
+  const resize = (w: any, m: number) => ({ ...w, estimatedDurationMin: m, d: `${m}min` });
+  const easy = (min: number) => ({ workout: { t: 'easy', n: 'Easy Run', d: '8km', estimatedDurationMin: min } as any });
+  it('carried at the taper easy length, only while the week stays at or under the ceiling; non-run makeups pass', () => {
+    const gym = { workout: { t: 'gym', n: 'Strength', d: '45min' } as any };
+    const out = fitTaperEasyMakeups([easy(46), easy(46), gym, easy(46)], 120, { easyMin: 32, ceilingMin: 183 }, resize);
+    // 120 + 32 = 152 fits; 152 + 32 = 184 passes 183.
+    expect(out.map(x => [x.workout.t, x.workout.estimatedDurationMin])).toEqual([['easy', 32], ['gym', undefined]]);
+  });
+  it('a makeup shorter than the taper easy length keeps its own length; a hard one is never carried', () => {
+    const out = fitTaperEasyMakeups([easy(28), { workout: { t: 'long', longRun: true, estimatedDurationMin: 90 } as any }], 100, { easyMin: 32, ceilingMin: 200 }, resize);
+    expect(out.map(x => x.workout.estimatedDurationMin)).toEqual([28]);
+  });
+  it('ceiling 0 (race week, or no reference week): no run makeup', () => {
+    expect(fitTaperEasyMakeups([easy(30)], 0, { easyMin: 0, ceilingMin: 0 }, resize)).toEqual([]);
   });
 });
 

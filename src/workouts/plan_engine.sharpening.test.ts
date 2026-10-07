@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import {
   planWeekSessions, abilityBandFromVdot, isDeloadWeek, isSharpeningDeloadWeek, sessionEasyEquivalentMin, sharpeningRampPct,
-  EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST,
+  taperMakeupRoom, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST,
   type PlanContext, type SharpeningInputs,
 } from './plan_engine';
 import { computeRunningPlanPhases } from './phases';
@@ -9,6 +9,7 @@ import { buildSharpenBlockState, liveSharpeningLongRunCapMin, loggedRuns, RECENT
 import { generateWeekWorkouts, initializeWeeks } from './generator';
 import { updateState, resetState } from '@/state';
 import { isLongRun } from './long-run';
+import { fitTaperEasyMakeups } from './race-day-rules';
 import type { RaceDistance, SimulatorState } from '@/types';
 import type { SessionIntent } from './intent_to_workout';
 import type { Archetype } from '@/calculations/athlete-archetype';
@@ -196,6 +197,30 @@ describe('sharpening block properties (grid through planWeekSessions)', () => {
         if (r.long != null && p.long != null && r.long > p.long) bad.push(`${s.label} long ${fmt(r)} after ${fmt(p)}`);
         const re = Math.max(0, ...r.easy), pe = Math.max(0, ...p.easy);
         if (pe > 0 && re > Math.max(pe, EASY_FLOOR_MIN)) bad.push(`${s.label} easy ${fmt(r)} after ${fmt(p)}`);
+      }
+    }
+    expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+
+  it('the taper never rises, easy makeups included: carried makeups only fill up to f x the reference total', () => {
+    // Three easy makeups at the previous week's longest easy run (EASY_FLOOR_MIN when it had none),
+    // fitted the way the generator fits them (taperMakeupRoom + fitTaperEasyMakeups).
+    const bad: string[] = [];
+    for (const s of samples) {
+      const phases = computeRunningPlanPhases(s.ctx.totalWeeks, s.ctx.raceDistance, { noSignal: s.ctx.sharpening == null }).map(p => p.ph);
+      for (let i = 1; i < s.rows.length; i++) {
+        const r = s.rows[i], p = s.rows[i - 1];
+        const room = taperMakeupRoom({ ...s.ctx, planPhases: phases, weekIndex: r.k, phase: phases[r.k - 1] });
+        if (r.phase !== 'taper') { if (room) bad.push(`${s.label} ${fmt(r)}: room outside the taper`); continue; }
+        if (!room) { bad.push(`${s.label} ${fmt(r)}: no room computed`); continue; }
+        const len = Math.max(EASY_FLOOR_MIN, ...p.easy);
+        const skips = [0, 1, 2].map(() => ({ workout: { t: 'easy', n: 'Easy', d: '', estimatedDurationMin: len } as any }));
+        const carried = fitTaperEasyMakeups(skips, r.total, room, (w, m) => ({ ...w, estimatedDurationMin: m }));
+        const added = carried.reduce((a, x) => a + (x.workout.estimatedDurationMin ?? 0), 0);
+        if (r.total + added > Math.max(r.total, room.ceilingMin)) bad.push(`${s.label} ${fmt(r)}: +${added} past ${room.ceilingMin}`);
+        if (added > 0 && r.total + added > p.total) bad.push(`${s.label} ${fmt(r)}: +${added} after ${fmt(p)}`);
+        if (carried.some(x => (x.workout.estimatedDurationMin ?? 0) > room.easyMin)) bad.push(`${s.label} ${fmt(r)}: makeup longer than ${room.easyMin}`);
+        if (r.k === s.rows.length && carried.length > 0) bad.push(`${s.label} race week carried ${carried.length}`);
       }
     }
     expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
@@ -459,6 +484,62 @@ describe('live long-run cap (liveSharpeningLongRunCapMin)', () => {
   it('future weeks stay on the plan rows', () => {
     const runs: Array<[string, number]> = [[at(2026, 9, 9), 12]];
     expect(liveSharpeningLongRunCapMin(s(runs, 2) as any, 3)).toBeUndefined();
+  });
+});
+
+describe('the taper never rises, makeups included (generateWeekWorkouts)', () => {
+  afterEach(() => { resetState(); vi.restoreAllMocks(); });
+
+  /**
+   * Before: filterTaperMakeups dropped makeup long runs and quality sessions but
+   * carried easy makeups at their original length with no bound. Skipping the
+   * peak week's easy runs lifted the first taper week above the peak week
+   * (16-week marathon, 6 runs: 267 + 3 x 46 = 405 against a 400-min peak week)
+   * and far above its taper ceiling (7-week block: 192 + 2 x 31 = 254 against
+   * 0.70 x 278 = 195).
+   */
+  function run(rd: 'marathon' | 'half', tw: number, rw: number) {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const wks = initializeWeeks(tw, { raceDistance: rd });
+    updateState({
+      rw, rd, typ: 'Balanced', tw, v: 45, gs: 0, w: 1, pac: { e: 330 }, wks, continuousMode: false,
+      detectedWeeklyKm: 40, athleteArchetype: { archetype: 'consistent-runner' }, eventType: 'running',
+      onboarding: { experienceLevel: 'intermediate' },
+      ...(tw < 8 ? { sharpenBlock: { v: 1, startLongMin: 100, startSource: 'history-30d', recentLongestMin: 100, noSignal: false, trainingWeeks: tw, builtISO: '2026-10-05' } } : {}),
+    } as unknown as SimulatorState);
+    const gen = (k: number, skips: Array<{ workout: any; skipCount: number }> = []) => generateWeekWorkouts(
+      wks[k - 1].ph, rw, rd, 'Balanced', skips, undefined, null, undefined, 'intermediate', undefined, 330, k, tw, 45, 0,
+    );
+    const runMin = (ws: any[]) => ws.filter(w => !['gym', 'cross', 'rest'].includes(w.t))
+      .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    const first = wks.findIndex(w => w.ph === 'taper') + 1;
+    const peak = gen(first - 1);
+    const easySkips = peak.filter(w => w.t === 'easy').map(w => ({ workout: w, skipCount: 1 }));
+    const own = gen(first);
+    const withMakeups = gen(first, easySkips);
+    const ownEasy = Math.max(...own.filter(w => w.t === 'easy' && !w.skipped).map(w => w.estimatedDurationMin ?? 0));
+    return { peak: runMin(peak), skipped: easySkips.length, own: runMin(own), withMakeups: runMin(withMakeups), makeups: withMakeups.filter(w => w.skipped), ownEasy };
+  }
+
+  it('16-week marathon, 6 runs: three skipped peak-week easy runs never lift the first taper week above the peak week', () => {
+    const r = run('marathon', 16, 6);
+    expect(r.skipped).toBe(3);
+    expect(r.withMakeups).toBeLessThanOrEqual(r.peak);
+    expect(r.withMakeups).toBeLessThanOrEqual(Math.max(r.own, Math.round(0.70 * r.peak)));
+    for (const m of r.makeups) expect(m.estimatedDurationMin).toBeLessThanOrEqual(r.ownEasy);
+  });
+
+  it('7-week block, 6 runs: the first taper week stays at or under 0.70 x the reference week', () => {
+    const r = run('marathon', 7, 6);
+    expect(r.skipped).toBeGreaterThanOrEqual(2);
+    expect(r.withMakeups).toBeLessThanOrEqual(Math.max(r.own, Math.round(0.70 * r.peak)));
+    for (const m of r.makeups) expect(m.estimatedDurationMin).toBeLessThanOrEqual(r.ownEasy);
+  });
+
+  it('12-week half, 6 runs: the same bound', () => {
+    const r = run('half', 12, 6);
+    expect(r.withMakeups).toBeLessThanOrEqual(r.peak);
+    expect(r.withMakeups).toBeLessThanOrEqual(Math.max(r.own, Math.round(0.70 * r.peak)));
   });
 });
 

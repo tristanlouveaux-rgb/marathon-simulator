@@ -10,10 +10,10 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, taperMakeupRoom, type PlanContext, type TaperMakeupRoom } from './plan_engine';
 import { liveSharpeningLongRunCapMin } from './sharpening-block';
 import { isClosingWeek, planTrainingWeeks, planRaceLayout } from './race-week-layout';
-import { applyRaceDayRules, raceDayRulesApply, filterTaperMakeups } from './race-day-rules';
+import { applyRaceDayRules, raceDayRulesApply, filterTaperMakeups, fitTaperEasyMakeups } from './race-day-rules';
 import { firstTrackedDow } from '@/ui/workout-status';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
@@ -86,6 +86,11 @@ export function generateWeekWorkouts(
     ? ` @ ${Math.floor(easyPaceSecPerKm / 60)}:${String(Math.floor(easyPaceSecPerKm % 60)).padStart(2, '0')}/km`
     : '';
 
+  // Taper weeks of a running race plan: the room carried easy makeups may fill
+  // (plan_engine taperMakeupRoom) and the week's prescribed running minutes.
+  let taperRoom: TaperMakeupRoom | null = null;
+  let prescribedRunMin = 0;
+
   if (weekIndex != null && totalWeeks != null) {
     // Read archetype + baseline from state. Drives the ramp budget inside
     // planWeekSessions so week 1 starts near the user's current km rather than
@@ -113,7 +118,7 @@ export function generateWeekWorkouts(
     const ctlRatio = (sNow.wks?.[weekIndex - 1] as any)?.ctlRatio;
 
     // New plan engine path: time-based sessions with progression & deload
-    const intents = planWeekSessions({
+    const engineCtx: PlanContext = {
       runsPerWeek,
       raceDistance,
       runnerType,
@@ -140,7 +145,9 @@ export function generateWeekWorkouts(
       // build, and the live reduce-only long-run cap for weeks already reached.
       sharpening: sharpeningInputsFromState(sNow),
       liveLongRunCapMin: liveSharpeningLongRunCapMin(sNow, weekIndex),
-    });
+    };
+    const intents = planWeekSessions(engineCtx);
+    taperRoom = taperMakeupRoom(engineCtx);
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
     // long-run distance last). Default-until-chosen is eased — 'keep' is the only opt-out. Caution
@@ -167,6 +174,11 @@ export function generateWeekWorkouts(
     for (const intent of easedIntents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
     }
+    prescribedRunMin = easedIntents.reduce((a, i) => a + i.totalMinutes, 0);
+    // A makeup is never longer than the week's own easy runs as committed (the live
+    // long-run cap and the ACWR ease-back can shorten them below the taper length).
+    const ownEasy = easedIntents.filter(i => i.slot === 'easy').map(i => i.totalMinutes);
+    if (taperRoom && ownEasy.length) taperRoom = { ...taperRoom, easyMin: Math.min(taperRoom.easyMin, Math.max(...ownEasy)) };
   } else {
     // Fallback: existing rules engine (no week context)
     const { slots, warnings } = generateOrderedRunSlots({
@@ -276,14 +288,26 @@ export function generateWeekWorkouts(
 
   // Add skipped workouts from previous week (prefix name to avoid collisions).
   // A taper week of a running race plan carries no makeup long run or quality
-  // session, and race week no makeup at all (race-day-rules.ts rule 5).
+  // session, and race week no makeup at all (race-day-rules.ts rule 5). An easy
+  // makeup is carried at the taper week's easy length, only while the week stays
+  // at or under its taper ceiling (fitTaperEasyMakeups, taperMakeupRoom).
   const taperWeekOfRace = !sPlan.continuousMode && !sPlan.trackOnly && phase === 'taper'
     && sPlan.eventType !== 'triathlon' && sPlan.eventType !== 'hyrox';
-  const carriedSkips = taperWeekOfRace
+  let carriedSkips = taperWeekOfRace
     ? filterTaperMakeups(previousSkips, {
         raceWeek: weekIndex != null && engineTotalWeeks != null && isRaceWeek(weekIndex, engineTotalWeeks, false),
       })
     : previousSkips;
+  if (taperWeekOfRace && taperRoom) {
+    const resizeEasy = (w: Workout, minutes: number): Workout => {
+      const easy = intentToWorkout(
+        { dayIndex: 0, slot: 'easy', totalMinutes: minutes, workMinutes: minutes, variantId: 'easy_steady', notes: '' },
+        raceDistance, runnerType, easyPaceSecPerKm,
+      );
+      return { ...w, t: 'easy', d: easy.d, estimatedDurationMin: minutes };
+    };
+    carriedSkips = fitTaperEasyMakeups(carriedSkips, prescribedRunMin, taperRoom, resizeEasy);
+  }
   for (const skip of carriedSkips) {
     workouts.push({
       ...skip.workout,

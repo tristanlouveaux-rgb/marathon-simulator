@@ -23,7 +23,9 @@
  *      above the easy rung, so the result is an easy run.
  *   5. Makeups never put a long run or a quality session in a taper week
  *      (events.ts skip push and rollover carry; the generator filters stale
- *      ones, filterTaperMakeups).
+ *      ones, filterTaperMakeups). An easy makeup is carried at the taper
+ *      week's easy length while the week stays under its taper ceiling
+ *      (fitTaperEasyMakeups).
  *
  * Pure: the generator (generateWeekWorkouts) and the week-debrief preview call
  * the same function, so the preview lists exactly the sessions the week gets.
@@ -201,6 +203,38 @@ export function filterTaperMakeups<T extends { workout: Pick<Workout, 't' | 'lon
 ): T[] {
   if (opts.raceWeek) return [];
   return skips.filter(sk => !isHard(sk.workout));
+}
+
+/**
+ * Rule 5 for easy makeups (M4 design v4 review, major 1): in a taper week of a
+ * running race plan an easy makeup is carried only at the week's taper easy
+ * length (never longer than the run that was skipped), and only while the
+ * week's running minutes, makeups included, stay at or under the taper ceiling
+ * (f x the reference total, plan_engine taperMakeupRoom). Skipped peak-week
+ * easy runs carried at full length could otherwise lift the first taper week
+ * above the peak week. A run makeup that does not fit is not carried. Non-run
+ * makeups (gym, cross-training) are not runs and pass unchanged. Pure.
+ *   `weekRunMin`: the week's prescribed running minutes before makeups.
+ *   `resize`: rebuilds an easy run at a new length (minutes).
+ */
+export function fitTaperEasyMakeups<T extends { workout: Workout }>(
+  skips: T[],
+  weekRunMin: number,
+  room: { easyMin: number; ceilingMin: number },
+  resize: (w: Workout, minutes: number) => Workout,
+): T[] {
+  let total = weekRunMin;
+  const out: T[] = [];
+  for (const sk of skips) {
+    if (!isRun(sk.workout)) { out.push(sk); continue; }
+    if (isHard(sk.workout)) continue;
+    const own = sk.workout.estimatedDurationMin;
+    const len = own != null && own > 0 ? Math.min(own, room.easyMin) : room.easyMin;
+    if (!(len > 0) || total + len > room.ceilingMin) continue;
+    total += len;
+    out.push(len === own ? sk : { ...sk, workout: resize(sk.workout, len) });
+  }
+  return out;
 }
 
 /**

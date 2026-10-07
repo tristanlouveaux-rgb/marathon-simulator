@@ -166,19 +166,25 @@ describe('makeups never break the taper (rule 5 backstop in the generator)', () 
     .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
 
   for (const runs of [3, 4, 5, 6, 7]) {
-    it(`${runs} runs: a skipped peak-week long run and quality session are not carried into the taper; the taper stays below the peak`, () => {
+    it(`${runs} runs: no skipped peak-week long run or quality session in the taper; easy makeups only at the taper easy length and within 0.70 x the peak week`, () => {
       const race = addCalendarDays(START, 48); // Sunday of week 7: build x4, peak, taper, race week
       setupPlan(race, 'marathon', runs);
       const s = getState();
       const peak = generateWeekWorkouts(s.wks[4].ph, runs, 'marathon', 'Balanced', [], undefined, null, undefined, 'intermediate', undefined, 330, 5, s.tw, 45, 0);
       const longRun = peak.find(isLongRun)!;
       const quality = peak.find(isQualityRun)!;
-      const easy = peak.find(w => w.t === 'easy');
-      const skips = [longRun, quality, ...(easy ? [easy] : [])].map(w => ({ workout: w, skipCount: 1 }));
+      // Every easy run of the peak week skipped too (several at 5 to 7 runs).
+      const easyRuns = peak.filter(w => w.t === 'easy');
+      const skips = [longRun, quality, ...easyRuns].map(w => ({ workout: w, skipCount: 1 }));
+      const own = generateWeekWorkouts(s.wks[5].ph, runs, 'marathon', 'Balanced', [], undefined, null, undefined, 'intermediate', undefined, 330, 6, s.tw, 45, 0);
       const taper = generateWeekWorkouts(s.wks[5].ph, runs, 'marathon', 'Balanced', skips, undefined, null, undefined, 'intermediate', undefined, 330, 6, s.tw, 45, 0);
       const makeups = taper.filter(w => w.skipped);
       expect(makeups.filter(w => isLongRun(w) || isQualityRun(w))).toEqual([]);
-      if (easy) expect(makeups).toHaveLength(1);
+      // Easy makeups: at the taper week's own easy length, and only while the week
+      // stays at or under f x the reference total (2-week taper: 0.70 x the peak week).
+      const ownEasy = Math.max(0, ...own.filter(w => w.t === 'easy').map(w => w.estimatedDurationMin ?? 0));
+      for (const m of makeups) expect(m.estimatedDurationMin).toBeLessThanOrEqual(ownEasy);
+      expect(runMin(taper)).toBeLessThanOrEqual(Math.max(runMin(own), Math.round(0.70 * runMin(peak))));
       expect(taper.filter(isLongRun)).toHaveLength(1);
       // Makeups included: the taper week stays below the peak week.
       expect(runMin(taper)).toBeLessThan(runMin(peak));

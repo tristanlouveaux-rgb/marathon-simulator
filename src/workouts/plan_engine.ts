@@ -571,6 +571,19 @@ function applyRunnerTypeBias(priority: SlotType[], runnerType: RunnerType): Slot
   return priority;
 }
 
+/**
+ * The two live volume levers combined: effort (effortMultiplier) and the CTL-gap
+ * re-anchor (ctlGapMultiplier, suppressed on deload weeks), clamped to the
+ * effort band (no lower than the ability deload, no higher than +15%) when both
+ * apply. Shared by the full-plan week, the sharpening block (which uses it
+ * reduce-only) and the taper makeup room.
+ */
+function adaptiveVolumeMultiplier(ctx: PlanContext, ability: AbilityBand, deload: boolean): number {
+  const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
+  const cMult = (!deload && ctx.ctlRatio != null) ? ctlGapMultiplier(ctx.ctlRatio) : 1.0;
+  return cMult === 1.0 ? eMult : Math.max(deloadMultiplier(ability), Math.min(1.15, eMult * cMult));
+}
+
 // ---------------------------------------------------------------------------
 // Session-duration floors (single source for the budget logic and the
 // volume-aware quality cap). An easy run below EASY_FLOOR_MIN is not worth
@@ -733,6 +746,64 @@ function recentLongestLongRun(history: PrescribedWeek[], weekIndex: number): num
 
 export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   return buildWeekSessions(ctx, nominalHistory(ctx));
+}
+
+/**
+ * Room for carried easy makeups in a taper week of a running race plan (rule 5,
+ * race-day-rules.ts fitTaperEasyMakeups; M4 design v4 review, major 1). An easy
+ * makeup is carried at the week's taper easy length, and only while the week's
+ * running minutes stay at or under f x the reference total, so skipped easy runs
+ * can never lift a taper week above the week it tapers from.
+ *   - Sharpening block: the reference, f, lever and easy length the block's own
+ *     taper week uses (assembleBlockTaperWeek).
+ *   - Full plan: reference = the last pre-taper week as prescribed that is not a
+ *     deload (the replayed plan, nominalHistory), f = taperFraction at the week's
+ *     position in the trailing taper, the live levers reduce-only (a makeup never
+ *     refills a week a lever cut); easy length = the week's own longest easy run,
+ *     else f x the reference week's longest easy run (at least EASY_FLOOR_MIN).
+ *     With no pre-taper week there is no reference: ceiling 0, nothing carried.
+ *   - Race week: ceiling 0 (it carries no makeup at all).
+ * Null when the week is not in the plan's trailing taper (continuous mode, a
+ * build week, or a mid-plan recovery week labelled 'taper'): no bound applies.
+ */
+export interface TaperMakeupRoom {
+  /** Length an easy makeup is carried at, minutes. */
+  easyMin: number;
+  /** The week's running minutes, makeups included, may not pass this. 0 = none carried. */
+  ceilingMin: number;
+}
+
+export function taperMakeupRoom(ctx: PlanContext): TaperMakeupRoom | null {
+  const n = ctx.totalWeeks;
+  const k = ctx.weekIndex;
+  if (ctx.continuousMode || !(n > 0) || !(k >= 1) || k > n) return null;
+  const raceWeek = isRaceWeek(k, n, false);
+  if (!raceWeek && ctx.phase !== 'taper') return null;
+  const phases = resolvePlanPhases(ctx);
+  let taperWeeks = 0;
+  for (let j = n; j >= 1 && (j === n || phases[j - 1] === 'taper'); j--) taperWeeks++;
+  const firstTaper = n - taperWeeks + 1;
+  if (k < firstTaper) return null;
+  if (raceWeek) return { easyMin: 0, ceilingMin: 0 };
+  const history = nominalHistory(ctx);
+
+  if (isSharpeningBlock(ctx.raceDistance, n)) {
+    const out: { taperRoom?: TaperMakeupRoom } = {};
+    buildSharpeningWeek(ctx, history, out);
+    return out.taperRoom ?? null;
+  }
+
+  const ability = abilityBandFromVdot(ctx.vdot, ctx.fitnessLevel);
+  let ref: PrescribedWeek | undefined;
+  for (let j = firstTaper - 1; j >= 1 && !ref; j--) if (!isDeloadWeek(j, ability)) ref = history[j - 1];
+  if (!ref) ref = history[firstTaper - 2];
+  if (!ref) return { easyMin: 0, ceilingMin: 0 };
+  const f = taperFraction(Math.min(taperWeeks, k - firstTaper + 1), taperWeeks);
+  const deload = !!ctx.forceDeload || isDeloadWeek(k, ability);
+  const lever = Math.min(1, adaptiveVolumeMultiplier(ctx, ability, deload));
+  const own = summariseWeek(buildWeekSessions(ctx, history)).easyMin;
+  const easyMin = own ?? (ref.easyMin != null ? Math.max(EASY_FLOOR_MIN, Math.round(f * ref.easyMin * lever)) : 0);
+  return { easyMin, ceilingMin: easyMin > 0 ? Math.round(f * ref.totalMin * lever) : 0 };
 }
 
 /** The static plan inputs: everything that shapes the nominal plan, without the
@@ -902,17 +973,13 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
   // deload genuinely light, the following week resumes the ramp instead of
   // spiking above the peak phase. dMult still scales the volume on top.
   const variantPhase: TrainingPhase = deload ? 'base' : phase;
-  const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
   // CTL-gap re-anchor: reduce volume when the athlete fell behind the plan's load. Suppressed on
   // deload weeks (already a planned reduction — re-anchoring a deload down would double up the same
   // "go easy"). Effort and CTL-gap both scale duration, so THESE TWO adaptive levers have their
   // COMBINED effect clamped to the effort band (no lower than the ability deload, no higher than
   // +15%) — they cannot stack past what either alone may do. When ctlRatio is absent, adaptive ===
-  // eMult and dMult is byte-identical to the effort-only path.
-  const cMult = (!deload && ctx.ctlRatio != null) ? ctlGapMultiplier(ctx.ctlRatio) : 1.0;
-  const adaptive = cMult === 1.0
-    ? eMult
-    : Math.max(deloadMultiplier(ability), Math.min(1.15, eMult * cMult));
+  // eMult and dMult is byte-identical to the effort-only path. (adaptiveVolumeMultiplier)
+  const adaptive = adaptiveVolumeMultiplier(ctx, ability, !!deload);
   // deload × effort IS allowed to compound (deloadMult × eMult, e.g. 0.85 × 0.85 ≈ 0.72). This is
   // intentional autoregulation, not the stacking the clamp above prevents: a deload week where
   // recent sessions were rated harder than prescribed signals accumulated fatigue, and a deeper
@@ -1502,9 +1569,9 @@ function assembleBlockLoadedWeek(
 function assembleBlockTaperWeek(
   ctx: PlanContext, ability: AbilityBand, ref: PrescribedWeek, f: number, raceWeek: boolean,
   lastLongMin: number | null, lever: number, acwrCaution: boolean,
+  out?: { taperRoom?: TaperMakeupRoom },
 ): SessionIntent[] {
   const { runsPerWeek, raceDistance, runnerType, weekIndex, totalWeeks } = ctx;
-  if (raceWeek && runsPerWeek <= 1) return [];
   const excluded = new Set(ctx.excludedSlots ?? []);
   const ceiling = Math.round(f * ref.totalMin * lever);
   let long: number | null = null;
@@ -1513,6 +1580,13 @@ function assembleBlockTaperWeek(
     long = l >= LONG_SOFT_FLOOR_MIN ? l : null;
   }
   const capRef = long ?? (lastLongMin != null ? Math.round(lastLongMin) : null);
+  // Easy runs: f x the reference easy-run length, held to the long run.
+  const refEasy = ref.easyMin ?? easyRunMinutes(ability, raceDistance, 'build');
+  let easyLen = Math.max(EASY_FLOOR_MIN, Math.round(f * refEasy * lever));
+  if (capRef != null && capRef >= EASY_FLOOR_MIN) easyLen = Math.min(easyLen, capRef);
+  // Makeup room (taperMakeupRoom): race week carries none.
+  if (out) out.taperRoom = raceWeek ? { easyMin: 0, ceilingMin: 0 } : { easyMin: easyLen, ceilingMin: ceiling };
+  if (raceWeek && runsPerWeek <= 1) return [];
 
   if (runsPerWeek <= 1) {
     const mins = Math.max(EASY_FLOOR_MIN, long ?? Math.round(f * (ref.longMin ?? ref.totalMin) * lever));
@@ -1545,9 +1619,6 @@ function assembleBlockTaperWeek(
     if (quality && capRef != null && sessionEasyEquivalentMin(quality) > capRef) quality = null;
   }
 
-  const refEasy = ref.easyMin ?? easyRunMinutes(ability, raceDistance, 'build');
-  let easyLen = Math.max(EASY_FLOOR_MIN, Math.round(f * refEasy * lever));
-  if (capRef != null && capRef >= EASY_FLOOR_MIN) easyLen = Math.min(easyLen, capRef);
   const slots = runsPerWeek - 1 /* long run, or the race in race week */ - (quality ? 1 : 0)
     + (!raceWeek && long == null ? 1 : 0);
   const easyBudget = ceiling - (long ?? 0) - (quality?.totalMinutes ?? 0);
@@ -1564,7 +1635,9 @@ function assembleBlockTaperWeek(
 }
 
 /** One week of a sharpening block. `history[i]` = what the block prescribed in week i + 1. */
-function buildSharpeningWeek(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
+function buildSharpeningWeek(
+  ctx: PlanContext, history: PrescribedWeek[], out?: { taperRoom?: TaperMakeupRoom },
+): SessionIntent[] {
   const { raceDistance, weekIndex: k, totalWeeks: n, fitnessLevel, vdot } = ctx;
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
   const phases = resolvePlanPhases(ctx);
@@ -1592,10 +1665,7 @@ function buildSharpeningWeek(ctx: PlanContext, history: PrescribedWeek[]): Sessi
   // Live levers, reduce-only (rows are ceilings).
   const forced = !!ctx.forceDeload && phase !== 'taper';
   const deload = phase !== 'taper' && (forced || isDeloadAt(k, phase));
-  const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1;
-  const cMult = !deload && ctx.ctlRatio != null ? ctlGapMultiplier(ctx.ctlRatio) : 1;
-  const adaptive = cMult === 1 ? eMult : Math.max(deloadMultiplier(ability), Math.min(1.15, eMult * cMult));
-  const lever = Math.min(1, adaptive);
+  const lever = Math.min(1, adaptiveVolumeMultiplier(ctx, ability, deload));
   const acwrCaution = ctx.acwrStatus === 'caution';
   const acwrNote = acwrCaution ? 'ACWR caution — one quality session replaced with easy' : '';
 
@@ -1664,7 +1734,7 @@ function buildSharpeningWeek(ctx: PlanContext, history: PrescribedWeek[]): Sessi
     const pos = Math.min(taperWeeks, Math.max(1, k - firstTaper + 1));
     const f = taperFraction(pos, taperWeeks);
     const ref = lastLoadedOf(history.slice(0, Math.max(0, firstTaper - 1))) ?? virtualReference();
-    let week = assembleBlockTaperWeek(ctx, ability, ref, f, raceWeek, lastLongOf(history) ?? ref.longMin, lever, acwrCaution);
+    let week = assembleBlockTaperWeek(ctx, ability, ref, f, raceWeek, lastLongOf(history) ?? ref.longMin, lever, acwrCaution, out);
     if (ctx.liveLongRunCapMin != null) week = capLongRun(week, ctx.liveLongRunCapMin);
     return week;
   }
