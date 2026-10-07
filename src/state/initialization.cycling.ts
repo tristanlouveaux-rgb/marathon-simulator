@@ -15,7 +15,8 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
-import { saveState, getMondayOf } from '@/state/persistence';
+import { saveState } from '@/state/persistence';
+import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
@@ -122,9 +123,10 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     s.tw = weeks;
     // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
     // (dropPreOnboardSessions), a Sat/Sun onboard a chill 1–2 session lead-in week.
-    const _planMonday = getMondayOf(new Date());
-    s.planStartDate = _planMonday.toISOString().slice(0, 10);
-    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+    // Local calendar dates (approved default Q10: every mode): the UTC Monday is the
+    // previous week's Monday in the first hours of a Monday east of UTC.
+    s.planStartDate = localMondayKey(new Date());
+    s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
     s.rd = 'marathon';  // Placeholder. Tri/cycling views ignore this.

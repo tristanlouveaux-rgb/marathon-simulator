@@ -4,7 +4,7 @@ import { STATE_SCHEMA_VERSION, type GarminActual } from '@/types/state';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { getMutableState } from '@/state/store';
 import { clearStaleGatesForMode } from '@/injury/engine';
-import { saveState, getMondayOf } from '@/state/persistence';
+import { saveState } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
@@ -313,8 +313,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.timp = 0;
       s.rpeAdj = 0;
       s.schemaVersion = STATE_SCHEMA_VERSION;
-      s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
-      s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+      // Local calendar dates (approved default Q10: every mode), as the race-plan path.
+      s.planStartDate = localMondayKey(new Date());
+      s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
       s.onboarding = state;
 
       // Persist whatever the user provided. PBs aren't required for trackOnly —
