@@ -183,10 +183,18 @@ export type LiveCapState = LoggedRunState
  * week's own Monday, so a week's cap never changes while it is current and a
  * past week keeps the cap it had. Future weeks stay on the plan's rows.
  * Undefined when the cap does not apply.
+ *
+ * `opts.nextWeekPreview`: the week-debrief preview of week s.w + 1 (end-of-week
+ * 'complete' debrief, before s.w advances). That week is about to be reached,
+ * and its window already ends at its own Monday, so the preview reads the same
+ * cap generateWeekWorkouts applies once s.w advances.
  */
-export function liveSharpeningLongRunCapMin(s: LiveCapState, weekIndex: number): number | undefined {
+export function liveSharpeningLongRunCapMin(
+  s: LiveCapState, weekIndex: number, opts: { nextWeekPreview?: boolean } = {},
+): number | undefined {
   if (!s.sharpenBlock || !s.planStartDate) return undefined;
-  if (!(weekIndex >= 1) || weekIndex > (s.w ?? 1)) return undefined;
+  const reached = (s.w ?? 1) + (opts.nextWeekPreview ? 1 : 0);
+  if (!(weekIndex >= 1) || weekIndex > reached) return undefined;
   const startDay = calendarDayNumber(s.planStartDate.slice(0, 10));
   if (!Number.isFinite(startDay)) return undefined;
   // Local midnight of the plan's first Monday and of this week's Monday.

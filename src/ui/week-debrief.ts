@@ -830,8 +830,10 @@ export function debriefPreviewPlanInputs(
     planPhases: (s.wks ?? []).slice(0, planTrainingWeeks(s) || undefined).map((w: any) => w?.ph),
     continuousMode: !!s.continuousMode,
     // Sharpening block: the same stored start and live long-run cap the generator reads.
+    // Next week is about to be reached: in 'complete' mode s.w has not advanced yet, so
+    // the cap is read as the generator will read it for that week (nextWeekPreview).
     sharpening: sharpeningInputsFromState(s),
-    liveLongRunCapMin: liveSharpeningLongRunCapMin(s, weekNum + 1),
+    liveLongRunCapMin: liveSharpeningLongRunCapMin(s, weekNum + 1, { nextWeekPreview: true }),
   };
 
   let acwrStatus: 'safe' | 'caution' | 'high' | 'unknown' = nextWk?.scheduledAcwrStatus ?? 'safe';
