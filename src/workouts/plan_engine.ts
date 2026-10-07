@@ -1636,6 +1636,33 @@ export function isSharpeningDeloadWeek(
   return weekIndex !== firstTaper - 1;
 }
 
+/**
+ * The longest long run a sharpening block can reach: its nominal long-run chain
+ * (week 1 = the start, each later loaded week (1 + ramp) x the longest so far,
+ * capped at the ability ceiling; deload and taper weeks never grow it) before a
+ * weekly budget holds any week's growth. An upper bound on what the block
+ * prescribes, for the race page, which reads it before the plan exists. A built
+ * plan's own longest run comes from the plan (plannedRunMinutesByWeek).
+ */
+export function projectedSharpeningPeakLongMin(
+  startLongMin: number, phases: readonly TrainingPhase[], ability: AbilityBand,
+  archetype: Archetype | undefined, raceDistance: RaceDistance,
+): number {
+  const ramp = sharpeningRampPct(archetype);
+  const cap = longRunCapMin(ability, raceDistance);
+  let longest = clampSharpeningStartMin(startLongMin, ability, raceDistance);
+  let seated = false;
+  const n = phases.length;
+  for (let j = 1; j <= n; j++) {
+    const ph = j === n ? 'taper' : phases[j - 1];
+    const loaded = (ph === 'build' || ph === 'peak') && !isSharpeningDeloadWeek(j, ability, phases, ph);
+    if (!loaded) continue;
+    if (seated) longest = Math.min(cap, Math.floor(longest * (1 + ramp)));
+    seated = true;
+  }
+  return longest;
+}
+
 /** Reduce-only: hold a week's long run (and every easy run) to `capMin`. */
 function capLongRun(week: SessionIntent[], capMin: number): SessionIntent[] {
   const cap = Math.max(LONG_SOFT_FLOOR_MIN, Math.floor(capMin));

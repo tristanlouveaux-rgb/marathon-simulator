@@ -361,22 +361,31 @@ export const WORLD_MARATHONS: Marathon[] = [
 ];
 
 /**
- * Calculate weeks until a race from today
+ * A race date as a local calendar date. A bare YYYY-MM-DD is built from its
+ * parts: `new Date('2026-11-15')` is UTC midnight, which west of UTC is the
+ * previous evening, so a race tomorrow read as today (and displayed a day
+ * early) in New York or Los Angeles.
+ */
+function parseRaceDate(dateString: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateString);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(dateString);
+}
+
+/**
+ * Weeks until a race from today: ceil(calendar days / 7). A rough count for
+ * lists and sorting; a plan's length comes from the calendar weeks it spans
+ * (raceWeekLayout, workouts/race-week-layout.ts).
  */
 export function calculateWeeksUntil(dateString: string): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const raceDate = new Date(dateString);
-  const diffMs = raceDate.getTime() - today.getTime();
-  const diffWeeks = Math.ceil(diffMs / (7 * 24 * 60 * 60 * 1000));
-  return diffWeeks;
+  return Math.ceil(calculateDaysUntil(dateString) / 7);
 }
 
 /** Calendar days from today to a race date. Negative = past, 0 = today, 1 = tomorrow. */
 export function calculateDaysUntil(dateString: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const raceDate = new Date(dateString);
+  const raceDate = parseRaceDate(dateString);
   raceDate.setHours(0, 0, 0, 0);
   return Math.round((raceDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
 }
@@ -401,12 +410,15 @@ export function isUpcoming(dateString: string): boolean {
 }
 
 /**
- * Get marathons or half marathons filtered by distance and sorted by date
- * Only returns events at least minWeeks away (default 8 weeks)
+ * Get marathons or half marathons filtered by distance and sorted by date.
+ * Returns events from `minWeeks` to `maxWeeks` away (default: at least 8
+ * weeks), never today's or a past race. The running race page passes 0 so
+ * near races are listed too (a sharpening block, Tristan 2026-10-05).
  */
 export function getMarathonsByDistance(
   distance: 'half' | 'marathon',
-  minWeeks: number = 8
+  minWeeks: number = 8,
+  maxWeeks: number = Infinity,
 ): Marathon[] {
   return WORLD_MARATHONS
     .filter(m => m.distance === distance)
@@ -415,8 +427,9 @@ export function getMarathonsByDistance(
       ...m,
       weeksUntil: calculateWeeksUntil(m.date),
     }))
-    .filter(m => m.weeksUntil !== undefined && m.weeksUntil >= minWeeks)
-    .sort((a, b) => (a.weeksUntil ?? 0) - (b.weeksUntil ?? 0));
+    .filter(m => m.weeksUntil !== undefined && m.weeksUntil >= minWeeks && m.weeksUntil <= maxWeeks)
+    .filter(m => calculateDaysUntil(m.date) >= 1)
+    .sort((a, b) => calculateDaysUntil(a.date) - calculateDaysUntil(b.date));
 }
 
 /**
@@ -452,7 +465,7 @@ export function getMarathonById(id: string): Marathon | undefined {
  * Format a date for display
  */
 export function formatRaceDate(dateString: string): string {
-  const date = new Date(dateString);
+  const date = parseRaceDate(dateString);
   return date.toLocaleDateString('en-GB', {
     day: 'numeric',
     month: 'short',
