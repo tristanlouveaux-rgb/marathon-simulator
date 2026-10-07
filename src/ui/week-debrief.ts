@@ -25,7 +25,8 @@ import { next } from '@/ui/events';
 import { computePlanAdherence, detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
-import { planWeekSessions, effortMultiplier, isRaceWeek, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
+import { planWeekSessions, effortMultiplier, isRaceWeek, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
+import { liveSharpeningLongRunCapMin } from '@/workouts/sharpening-block';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts, planEngineStateInputs } from '@/workouts/generator';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
@@ -785,6 +786,8 @@ export function debriefPreviewPlanInputs(
     weeklyHoursTarget?: number; excludedSlots?: string[]; easyPaceSecPerKm?: number;
     baselineKm?: number; archetype?: ReturnType<typeof planEngineStateInputs>['archetype'];
     planPhases?: any[]; continuousMode?: boolean;
+    sharpening?: ReturnType<typeof sharpeningInputsFromState>;
+    liveLongRunCapMin?: number;
   };
   acwrStatus: 'safe' | 'caution' | 'high' | 'unknown';
 } {
@@ -809,6 +812,9 @@ export function debriefPreviewPlanInputs(
     // Same plan-history inputs the generator hands the engine (generator.ts).
     planPhases: (s.wks ?? []).map((w: any) => w?.ph),
     continuousMode: !!s.continuousMode,
+    // Sharpening block: the same stored start and live long-run cap the generator reads.
+    sharpening: sharpeningInputsFromState(s),
+    liveLongRunCapMin: liveSharpeningLongRunCapMin(s, weekNum + 1),
   };
 
   let acwrStatus: 'safe' | 'caution' | 'high' | 'unknown' = nextWk?.scheduledAcwrStatus ?? 'safe';

@@ -1,8 +1,9 @@
 import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/types';
 import type { SimulatorState } from '@/types/state';
 import type { SessionIntent, SlotType } from './intent_to_workout';
-import { weekVolumeBudgetKm, type Archetype } from '@/calculations/athlete-archetype';
-import { computePlanPhases, computeRunningPlanPhases } from './phases';
+import { RUN_PACE_FACTOR_VS_EASY } from './intent_to_workout';
+import { weekVolumeBudgetKm, ARCHETYPE_PARAMS, type Archetype } from '@/calculations/athlete-archetype';
+import { computePlanPhases, computeRunningPlanPhases, isSharpeningBlock, taperFraction } from './phases';
 
 export interface PlanContext {
   runsPerWeek: number;
@@ -51,6 +52,26 @@ export interface PlanContext {
   /** Continuous (no-race) plan. Its final taper week is a block deload, not a
    *  race week, so it keeps its long run and gets no race-week primer. */
   continuousMode?: boolean;
+  /** Sharpening-block start inputs, frozen at plan build (s.sharpenBlock). Read
+   *  only when the plan is a sharpening block (isSharpeningBlock on raceDistance
+   *  and totalWeeks, not continuous); absent, a block starts from the no-data
+   *  anchor. */
+  sharpening?: SharpeningInputs;
+  /** Live reduce-only long-run cap for the CURRENT week of a sharpening block:
+   *  (1 + ramp) x the longest run actually logged in the last 30 days, at least
+   *  LONG_SOFT_FLOOR_MIN (generateWeekWorkouts). Never part of the replayed
+   *  history. */
+  liveLongRunCapMin?: number;
+}
+
+/** Where a sharpening block's first long run comes from (s.sharpenBlock.startSource). */
+export type SharpenStartSource = 'history-30d' | 'history-no-recent-run' | 'no-data';
+
+/** The sharpening-block inputs that depend on the build date (s.sharpenBlock). */
+export interface SharpeningInputs {
+  /** Week-1 long run, minutes at easy pace. */
+  startLongMin: number;
+  startSource: SharpenStartSource;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,14 +632,18 @@ interface PrescribedWeek {
   qualityCount: number;
   /** Duration of every running session of the week (minutes). */
   runMins: number[];
+  /** Longest easy run of the week (minutes), null when none. */
+  easyMin: number | null;
 }
 
 function summariseWeek(intents: SessionIntent[]): PrescribedWeek {
+  const easy = intents.filter(i => i.slot === 'easy').map(i => i.totalMinutes);
   return {
     longMin: intents.find(i => i.slot === 'long')?.totalMinutes ?? null,
     totalMin: intents.reduce((s, i) => s + i.totalMinutes, 0),
     qualityCount: intents.filter(i => QUALITY_SLOT_SET.has(i.slot)).length,
     runMins: intents.map(i => i.totalMinutes),
+    easyMin: easy.length ? Math.max(...easy) : null,
   };
 }
 
@@ -658,6 +683,7 @@ function nominalHistory(ctx: PlanContext): PrescribedWeek[] {
     ctx.runsPerWeek, ctx.raceDistance, ctx.runnerType, ctx.fitnessLevel, ctx.totalWeeks, ctx.vdot,
     ctx.weeklyHoursTarget ?? null, [...(ctx.excludedSlots ?? [])].sort(), ctx.baselineKm ?? null,
     ctx.archetype ?? null, ctx.easyPaceSecPerKm ?? null, !!ctx.continuousMode, phases,
+    ctx.sharpening ? [ctx.sharpening.startLongMin, ctx.sharpening.startSource] : null,
   ]);
   let weeks = nominalPlanCache.get(key);
   if (!weeks) {
@@ -683,6 +709,8 @@ function nominalHistory(ctx: PlanContext): PrescribedWeek[] {
       archetype: ctx.archetype,
       easyPaceSecPerKm: ctx.easyPaceSecPerKm,
       continuousMode: ctx.continuousMode,
+      sharpening: ctx.sharpening,
+      planPhases: phases,
       weekIndex: w,
       phase: phases[Math.min(w, phases.length) - 1],
     };
@@ -710,7 +738,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
  *  per-week phase/index and the adaptive levers (effort, ACWR, CTL gap, holiday). */
 export type PlanShapeInputs = Omit<
   PlanContext,
-  'phase' | 'weekIndex' | 'effortScore' | 'acwrStatus' | 'ctlRatio' | 'forceDeload'
+  'phase' | 'weekIndex' | 'effortScore' | 'acwrStatus' | 'ctlRatio' | 'forceDeload' | 'liveLongRunCapMin'
 >;
 
 /**
@@ -735,12 +763,17 @@ export function plannedRunMinutesByWeek(inputs: PlanShapeInputs): number[][] {
  * and the race-day forecast read one definition (re-exported by generator.ts).
  */
 export function planEngineStateInputs(
-  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>,
+  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>
+    & Partial<Pick<SimulatorState, 'sharpenBlock'>>,
 ): { baselineKm: number | undefined; archetype: Archetype | undefined } {
+  // A sharpening block needs a weekly volume too (its budgets ramp from current
+  // volume), so it takes the continuous-mode fallback when nothing is synced:
+  // the plan's own starting volume s.wkm and the neutral 'unknown' archetype.
+  const fallback = !!s.continuousMode || !!s.sharpenBlock;
   const baselineKm = s.detectedWeeklyKm
-    ?? (s.continuousMode && s.wkm && s.wkm > 0 ? s.wkm : undefined);
+    ?? (fallback && s.wkm && s.wkm > 0 ? s.wkm : undefined);
   const archetype = s.athleteArchetype?.archetype
-    ?? (s.continuousMode ? 'unknown' as const : undefined);
+    ?? (fallback ? 'unknown' as const : undefined);
   return { baselineKm, archetype };
 }
 
@@ -749,7 +782,15 @@ export type RunningPlanState = Pick<
   SimulatorState,
   'rw' | 'rd' | 'typ' | 'tw' | 'v' | 'pac' | 'wks' | 'onboarding' | 'continuousMode'
   | 'detectedWeeklyKm' | 'wkm' | 'athleteArchetype'
->;
+> & Partial<Pick<SimulatorState, 'sharpenBlock'>>;
+
+/** The sharpening-block engine inputs stored on state (s.sharpenBlock), or undefined. */
+export function sharpeningInputsFromState(
+  s: Partial<Pick<SimulatorState, 'sharpenBlock'>>,
+): SharpeningInputs | undefined {
+  const b = s.sharpenBlock;
+  return b ? { startLongMin: b.startLongMin, startSource: b.startSource } : undefined;
+}
 
 /**
  * The static plan inputs for a running plan, read from state exactly as the
@@ -775,6 +816,7 @@ export function runningPlanShapeInputs(s: RunningPlanState): PlanShapeInputs {
     easyPaceSecPerKm: s.pac?.e,
     planPhases: s.wks?.map(w => w.ph),
     continuousMode: !!s.continuousMode,
+    sharpening: sharpeningInputsFromState(s),
   };
 }
 
@@ -783,6 +825,9 @@ export function runningPlanShapeInputs(s: RunningPlanState): PlanShapeInputs {
  * for every week before `ctx.weekIndex` (see nominalHistory).
  */
 function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
+  if (!ctx.continuousMode && isSharpeningBlock(ctx.raceDistance, ctx.totalWeeks)) {
+    return buildSharpeningWeek(ctx, history);
+  }
   const {
     runsPerWeek, raceDistance, runnerType, fitnessLevel,
     weekIndex, totalWeeks, vdot, acwrStatus,
@@ -1097,6 +1142,502 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
   }
 
   return week;
+}
+
+// ---------------------------------------------------------------------------
+// Sharpening block: a running marathon under 8 weeks out, or a half under 4
+// (isSharpeningBlock, phases.ts; Tristan 2026-10-05). Planning side: every rule
+// below prescribes. Design: M4 design v4 as amended by its review (2026-10-06).
+//
+// The block has no time to ramp toward the full-plan destination, so it builds
+// from what the runner does now:
+//   - Long run: week 1 is the longest run of the 30 days before build
+//     (s.sharpenBlock.startLongMin); each later loaded week grows by at most
+//     the archetype weekly ramp (3 to 10%, ARCHETYPE_PARAMS.weeklyRampPct) over
+//     the longest long run seated so far, never above 10% (Frandsen et al. 2025,
+//     LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST) and never above the ability ceiling.
+//   - No session covers more distance than the week's long run (Frandsen
+//     measured every single session against the 30-day longest), distance
+//     taken as minutes at easy pace (sessionEasyEquivalentMin).
+//   - Weekly volume: a loaded week is the lower of the archetype budget for its
+//     loaded-week index, (1 + ramp) x the larger of the last loaded week and
+//     current volume, and the weekly hours target. With an hours target below
+//     what the block would build, the block starts at the target and holds
+//     there (RC2's rule for an athlete already at the capped destination,
+//     plan_engine effectiveWeeklyBudgetMin; owner decision 2026-10-06).
+//   - Deload weeks (build weeks on the ability cycle) take deloadMultiplier of
+//     the last loaded week, with no more quality sessions than it had.
+//   - Taper weeks: taperFraction (0.70 / 0.55 for a 2-week taper, 0.55 for
+//     race week alone) of the last pre-taper loaded week, for the week
+//     ceiling, the long run and the easy-run length; one threshold session;
+//     race week holds the primer and no long run. Reduce-only: a taper week
+//     never adds a session type its reference week lacked.
+//   - Live levers (effort, CTL gap) can only reduce a block week. Rows are
+//     ceilings set by the ramp and Frandsen caps; a +15% lift would break them.
+//     (Running full plans and triathlon keep their two-way lever.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Distance a running session covers, as minutes at easy pace: work at the
+ * session's pace (RUN_PACE_FACTOR_VS_EASY), warm-up, cool-down and jog
+ * recoveries at easy pace, float recoveries at marathon pace. A long run is
+ * its minutes (the fast-finish variant covers the same distance). Used by the
+ * sharpening block's single-session cap.
+ */
+export function sessionEasyEquivalentMin(i: SessionIntent): number {
+  const total = i.totalMinutes;
+  if (i.slot === 'easy' || i.slot === 'long') return total;
+  const factor = RUN_PACE_FACTOR_VS_EASY[i.slot];
+  if (!factor) return total;
+  const fast = i.reps != null && i.repMinutes != null ? i.reps * i.repMinutes : i.workMinutes;
+  const fastMin = Math.max(0, Math.min(total, fast));
+  if (i.slot === 'float' && i.reps != null && i.recoveryMinutes != null) {
+    const floatMin = Math.max(0, Math.min(total - fastMin, i.reps * i.recoveryMinutes));
+    const rest = Math.max(0, total - fastMin - floatMin);
+    return rest + fastMin / factor + floatMin / RUN_PACE_FACTOR_VS_EASY.marathon_pace;
+  }
+  return (total - fastMin) + fastMin / factor;
+}
+
+/** The no-data start of a sharpening block: the existing week-1 long-run anchor
+ *  (marathon 90 min, half 80 x 0.80 = 64; longRunMinutes at ramp progress 0). */
+export function sharpeningNoDataStartMin(
+  raceDistance: RaceDistance, ability: AbilityBand, totalWeeks: number,
+): number {
+  return longRunMinutes(0, totalWeeks, ability, raceDistance, 'build');
+}
+
+/** Clamp a block's week-1 long run to [LONG_SOFT_FLOOR_MIN, ability ceiling]. */
+export function clampSharpeningStartMin(min: number, ability: AbilityBand, raceDistance: RaceDistance): number {
+  return Math.round(Math.max(LONG_SOFT_FLOOR_MIN, Math.min(longRunCapMin(ability, raceDistance), min)));
+}
+
+/** The weekly ramp a sharpening block grows by (archetype, never above 10%). */
+export function sharpeningRampPct(archetype: Archetype | undefined): number {
+  return Math.min(LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, ARCHETYPE_PARAMS[archetype ?? 'unknown'].weeklyRampPct);
+}
+
+interface BlockWeekRow {
+  /** Sizing phase for quality work minutes and priority ('base' in a case-b block). */
+  sessionPhase: TrainingPhase;
+  variantPhase: TrainingPhase;
+  /** Long run before the fit (null: no long run this week). */
+  longTarget: number | null;
+  /** Long run with this week's growth given up (the longest seated so far). */
+  longHold: number | null;
+  /** Single-session cap when the week has no long run (the last long run prescribed). */
+  sessionCapMin: number | null;
+  budgetMin: number;
+  qualityLimit: number;
+  /** Duration scale for quality and natural easy runs (deload multiplier x live lever). */
+  sizeMult: number;
+  deload: boolean;
+  acwrNote: string;
+}
+
+/** Build one quality session (same shapes and sizes as the full-plan engine). */
+function blockQualityIntent(
+  slot: SlotType, ctx: PlanContext, ability: AbilityBand, row: BlockWeekRow,
+): SessionIntent | null {
+  const { raceDistance, weekIndex, totalWeeks } = ctx;
+  const ph = row.sessionPhase;
+  const m = row.sizeMult;
+  const note = row.acwrNote || (row.deload ? 'Deload week' : '');
+  if (slot === 'threshold') {
+    const variant = pickPhaseVariant(THRESH_VARIANTS, weekIndex, row.variantPhase, variantWork);
+    const workMins = Math.round(thresholdWorkMinutes(ability, ph, weekIndex, totalWeeks) * m);
+    const totalMins = variant.reps
+      ? Math.round(variant.reps * (variant.repMin! + variant.recMin!) + 15)
+      : workMins + 20;
+    return {
+      dayIndex: 0, slot: 'threshold', totalMinutes: Math.round(totalMins * m), workMinutes: workMins,
+      reps: variant.reps, repMinutes: variant.repMin, recoveryMinutes: variant.recMin,
+      variantId: variant.id, notes: note,
+    };
+  }
+  if (slot === 'vo2') {
+    const variant = pickPhaseVariant(VO2_VARIANTS, weekIndex, row.variantPhase, variantWork);
+    const workMins = Math.round(vo2WorkMinutes(ability, ph) * m);
+    const totalMins = Math.round(variant.reps * (variant.repMin + variant.recMin) + 15);
+    return {
+      dayIndex: 0, slot: 'vo2', totalMinutes: Math.round(totalMins * m), workMinutes: workMins,
+      reps: variant.reps, repMinutes: variant.repMin, recoveryMinutes: variant.recMin,
+      variantId: variant.id, notes: note,
+    };
+  }
+  if (slot === 'marathon_pace') {
+    const workMins = Math.round(mpWorkMinutes(raceDistance, ability, ph) * m);
+    if (workMins <= 0) return null;
+    return { dayIndex: 0, slot: 'marathon_pace', totalMinutes: workMins + 20, workMinutes: workMins, variantId: 'mp_continuous', notes: note };
+  }
+  if (slot === 'float') {
+    const workMins = Math.round(floatWorkMinutes(raceDistance, ability, ph) * m);
+    if (workMins <= 0) return null;
+    const variant = pickPhaseVariant(FLOAT_VARIANTS, weekIndex, row.variantPhase, variantWork);
+    const totalMins = Math.round(variant.reps * (variant.repMin + variant.floatMin) + 15);
+    return {
+      dayIndex: 0, slot: 'float', totalMinutes: Math.round(totalMins * m), workMinutes: workMins,
+      reps: variant.reps, repMinutes: variant.repMin, recoveryMinutes: variant.floatMin,
+      variantId: variant.id, notes: note,
+    };
+  }
+  return null;
+}
+
+/**
+ * Fit a loaded or deload block week to its row (design 4.5):
+ *   1. Seat the long run at its row length and quality sessions at their natural
+ *      lengths, up to the row's limit; a quality session covering more distance
+ *      than the long run is not seated.
+ *   2. Easy runs consolidate first (fewest runs at natural length, each at least
+ *      EASY_FLOOR_MIN, sized by floor so rounding never overflows).
+ *   3. If one EASY_FLOOR_MIN easy run does not fit, the long run gives up this
+ *      week's growth (holds at the longest long run already seated).
+ *   4. Still no room with more than one quality session: the lowest-priority one
+ *      is not seated (its slot joins the easy runs), and the long run gets its
+ *      growth back to try again.
+ *   5. One quality session left: one easy run at the floor, the long run trimmed
+ *      toward LONG_SOFT_FLOOR_MIN, residual overflow accepted (the existing
+ *      past-all-floors rule), then the single-session cap re-checked.
+ */
+function assembleBlockLoadedWeek(
+  ctx: PlanContext, ability: AbilityBand, row: BlockWeekRow,
+): SessionIntent[] {
+  const { runsPerWeek, raceDistance, runnerType } = ctx;
+  const excluded = new Set(ctx.excludedSlots ?? []);
+  const longNote = row.acwrNote || (row.deload ? 'Deload week' : '');
+
+  if (runsPerWeek <= 1) {
+    const mins = Math.round(row.longTarget ?? row.sessionCapMin ?? LONG_SOFT_FLOOR_MIN);
+    return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
+  }
+
+  const priority = applyRunnerTypeBias(workoutPriority(raceDistance, row.sessionPhase), runnerType)
+    .filter(sl => !excluded.has(sl) && !(row.sessionPhase === 'base' && sl === 'vo2'));
+  const candidates: SessionIntent[] = [];
+  for (const sl of priority) {
+    const q = blockQualityIntent(sl, ctx, ability, row);
+    if (q) candidates.push(q);
+  }
+  // Without a long run the long slot is an easy run.
+  const slotsAfterLong = row.longTarget != null ? runsPerWeek - 1 : runsPerWeek;
+  // The existing slot rule: at least one easy run unless a single slot is left.
+  const maxQuality = Math.min(row.qualityLimit, slotsAfterLong >= 2 ? slotsAfterLong - 1 : slotsAfterLong);
+  const naturalEasy = Math.round(easyRunMinutes(ability, raceDistance, 'build') * row.sizeMult);
+
+  let quality = candidates.slice(0, Math.max(0, maxQuality));
+  let long = row.longTarget;
+  let held = false;
+  let easyCount = 0;
+  let easyLen = 0;
+  const budget = row.budgetMin;
+  for (let iter = 0; iter < 32; iter++) {
+    const capRef = long ?? row.sessionCapMin;
+    if (capRef != null) quality = quality.filter(q => sessionEasyEquivalentMin(q) <= capRef);
+    const easySlots = slotsAfterLong - quality.length;
+    const easyNatural = capRef != null ? Math.min(naturalEasy, Math.max(EASY_FLOOR_MIN, capRef)) : naturalEasy;
+    const fixed = (long ?? 0) + quality.reduce((a, q) => a + q.totalMinutes, 0);
+    if (!Number.isFinite(budget) || fixed + easySlots * easyNatural <= budget) {
+      easyCount = easySlots; easyLen = easyNatural;
+      break;
+    }
+    const easyBudget = budget - fixed;
+    const need = easySlots > 0 ? EASY_FLOOR_MIN : 0;
+    if (easyBudget >= need) {
+      if (easySlots === 0) { easyCount = 0; break; }
+      const fewestAtNatural = Math.max(1, Math.ceil(easyBudget / easyNatural));
+      const mostAboveFloor = Math.max(1, Math.floor(easyBudget / EASY_FLOOR_MIN));
+      easyCount = Math.min(easySlots, fewestAtNatural, mostAboveFloor);
+      easyLen = Math.min(easyNatural, Math.max(EASY_FLOOR_MIN, Math.floor(easyBudget / easyCount)));
+      break;
+    }
+    if (!held && long != null && row.longHold != null && long > row.longHold) {
+      long = row.longHold;
+      held = true;
+      continue;
+    }
+    if (quality.length > 1) {
+      quality = quality.slice(0, -1);
+      long = row.longTarget;
+      held = false;
+      continue;
+    }
+    // Past all floors: one floor-length easy run and the long run trimmed by the
+    // overflow, residual overflow accepted (the existing past-all-floors rule).
+    // The trim stops at the longest long run already seated (the long run never
+    // shrinks in a loaded week; with an hours target the long run keeps the
+    // shape the owner approved, 2026-10-06), or at LONG_SOFT_FLOOR_MIN in the
+    // block's first loaded week and in deload weeks, which have nothing to hold.
+    easyCount = Math.min(easySlots, 1);
+    easyLen = EASY_FLOOR_MIN;
+    if (long != null) {
+      const room = budget - quality.reduce((a, q) => a + q.totalMinutes, 0) - easyCount * EASY_FLOOR_MIN;
+      const floorMin = row.longHold ?? LONG_SOFT_FLOOR_MIN;
+      long = Math.max(Math.min(long, floorMin), Math.min(long, Math.floor(room)));
+      quality = quality.filter(q => sessionEasyEquivalentMin(q) <= long!);
+    }
+    break;
+  }
+
+  const week: SessionIntent[] = [];
+  let dayIdx = 0;
+  if (long != null) {
+    const longVar = pickPhaseVariant(LONG_VARIANTS, ctx.weekIndex, row.variantPhase, v => v.load);
+    week.push({ dayIndex: runsPerWeek - 1, slot: 'long', totalMinutes: long, workMinutes: long, variantId: longVar.id, notes: longNote });
+  }
+  for (const q of quality) week.push({ ...q, dayIndex: dayIdx++ });
+  for (let i = 0; i < easyCount; i++) {
+    week.push({ dayIndex: dayIdx++, slot: 'easy', totalMinutes: easyLen, workMinutes: easyLen, variantId: 'easy_steady', notes: row.deload ? 'Deload week' : '' });
+  }
+  return week;
+}
+
+/**
+ * A taper week of a sharpening block (design 4.6). `ref` is the last pre-taper
+ * loaded week as prescribed; `f` its taper fraction.
+ *   - Long run f x the reference long run; none in race week; none below
+ *     LONG_SOFT_FLOOR_MIN (that slot is an easy run).
+ *   - Easy runs: each f x the reference easy-run length, at least EASY_FLOOR_MIN,
+ *     never longer than the long run (or the last long run prescribed). Because f
+ *     falls week to week, easy runs never lengthen through the taper.
+ *   - Week ceiling f x the reference total. Runs are kept and shortened (Bosquet
+ *     et al. 2007: no benefit from cutting frequency); the easy-run count is the
+ *     whole number of runs nearest the easy budget, so a week overshoots its
+ *     ceiling by at most half an easy run, or by the long run plus quality
+ *     sessions alone when those already pass it. A primer that alone fills the
+ *     ceiling leaves no easy run.
+ *   - One threshold session (continuous, the existing taper work minutes) in a
+ *     taper week, the primer in race week; neither when the reference week held
+ *     no quality session. Single-session cap applies.
+ */
+function assembleBlockTaperWeek(
+  ctx: PlanContext, ability: AbilityBand, ref: PrescribedWeek, f: number, raceWeek: boolean,
+  lastLongMin: number | null, lever: number, acwrCaution: boolean,
+): SessionIntent[] {
+  const { runsPerWeek, raceDistance, runnerType, weekIndex, totalWeeks } = ctx;
+  if (raceWeek && runsPerWeek <= 1) return [];
+  const excluded = new Set(ctx.excludedSlots ?? []);
+  const ceiling = Math.round(f * ref.totalMin * lever);
+  let long: number | null = null;
+  if (!raceWeek && ref.longMin != null) {
+    const l = Math.round(f * ref.longMin * lever);
+    long = l >= LONG_SOFT_FLOOR_MIN ? l : null;
+  }
+  const capRef = long ?? (lastLongMin != null ? Math.round(lastLongMin) : null);
+
+  if (runsPerWeek <= 1) {
+    const mins = Math.max(EASY_FLOOR_MIN, long ?? Math.round(f * (ref.longMin ?? ref.totalMin) * lever));
+    return [{ dayIndex: 0, slot: long != null ? 'long' : 'easy', totalMinutes: mins, workMinutes: mins, variantId: long != null ? 'long_steady' : 'easy_steady', notes: '' }];
+  }
+
+  let quality: SessionIntent | null = null;
+  const taperPriority = applyRunnerTypeBias(workoutPriority(raceDistance, 'taper'), runnerType)
+    .filter(sl => !excluded.has(sl));
+  const qSlot = taperPriority[0];
+  if (ref.qualityCount >= 1 && !acwrCaution && (qSlot === 'threshold' || qSlot === 'vo2')) {
+    if (raceWeek) {
+      const v = qSlot === 'vo2' ? TAPER_PRIMER_VO2 : TAPER_PRIMER_THRESHOLD;
+      const total = Math.round(v.reps * (v.repMin + v.recMin) + 15);
+      quality = {
+        dayIndex: 0, slot: qSlot, totalMinutes: total, workMinutes: v.reps * v.repMin,
+        reps: v.reps, repMinutes: v.repMin, recoveryMinutes: v.recMin, variantId: v.id, notes: 'Race-week primer',
+      };
+    } else if (qSlot === 'threshold') {
+      const work = Math.round(thresholdWorkMinutes(ability, 'taper', weekIndex, totalWeeks) * lever);
+      quality = { dayIndex: 0, slot: 'threshold', totalMinutes: work + 20, workMinutes: work, variantId: 'thr_20cont', notes: '' };
+    } else {
+      const v = pickPhaseVariant(VO2_VARIANTS, weekIndex, 'taper', variantWork);
+      const work = Math.round(vo2WorkMinutes(ability, 'taper') * lever);
+      quality = {
+        dayIndex: 0, slot: 'vo2', totalMinutes: Math.round(v.reps * (v.repMin + v.recMin) + 15), workMinutes: work,
+        reps: v.reps, repMinutes: v.repMin, recoveryMinutes: v.recMin, variantId: v.id, notes: '',
+      };
+    }
+    if (quality && capRef != null && sessionEasyEquivalentMin(quality) > capRef) quality = null;
+  }
+
+  const refEasy = ref.easyMin ?? easyRunMinutes(ability, raceDistance, 'build');
+  let easyLen = Math.max(EASY_FLOOR_MIN, Math.round(f * refEasy * lever));
+  if (capRef != null && capRef >= EASY_FLOOR_MIN) easyLen = Math.min(easyLen, capRef);
+  const slots = runsPerWeek - 1 /* long run, or the race in race week */ - (quality ? 1 : 0)
+    + (!raceWeek && long == null ? 1 : 0);
+  const easyBudget = ceiling - (long ?? 0) - (quality?.totalMinutes ?? 0);
+  const easyCount = Math.max(0, Math.min(slots, Math.round(Math.max(0, easyBudget) / easyLen)));
+
+  const week: SessionIntent[] = [];
+  let dayIdx = 0;
+  if (long != null) week.push({ dayIndex: runsPerWeek - 1, slot: 'long', totalMinutes: long, workMinutes: long, variantId: 'long_steady', notes: '' });
+  if (quality) week.push({ ...quality, dayIndex: dayIdx++ });
+  for (let i = 0; i < easyCount; i++) {
+    week.push({ dayIndex: dayIdx++, slot: 'easy', totalMinutes: easyLen, workMinutes: easyLen, variantId: 'easy_steady', notes: '' });
+  }
+  return week;
+}
+
+/** One week of a sharpening block. `history[i]` = what the block prescribed in week i + 1. */
+function buildSharpeningWeek(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
+  const { raceDistance, weekIndex: k, totalWeeks: n, fitnessLevel, vdot } = ctx;
+  const ability = abilityBandFromVdot(vdot, fitnessLevel);
+  const phases = resolvePlanPhases(ctx);
+  const raceWeek = isRaceWeek(k, n, false);
+  const phaseOf = (j: number): TrainingPhase => (j === k ? ctx.phase : (phases[j - 1] ?? 'build'));
+  const phase: TrainingPhase = raceWeek ? 'taper' : phaseOf(k);
+  const start = ctx.sharpening ?? {
+    startLongMin: sharpeningNoDataStartMin(raceDistance, ability, n),
+    startSource: 'no-data' as const,
+  };
+  const startLong = clampSharpeningStartMin(start.startLongMin, ability, raceDistance);
+  const caseB = start.startSource === 'history-no-recent-run';
+  const archetype = ctx.archetype;
+  const ramp = sharpeningRampPct(archetype);
+  const longCap = longRunCapMin(ability, raceDistance);
+  const easyPace = ctx.easyPaceSecPerKm ?? 360;
+  const kmToMin = (km: number) => (km * easyPace) / 60;
+  const hoursCapMin = ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0 ? ctx.weeklyHoursTarget * 60 : Infinity;
+  const isDeloadAt = (j: number, ph: TrainingPhase) => isSharpeningDeloadWeek(j, ability, phases, ph);
+  const isLoadedAt = (j: number) => {
+    const ph = j === n ? 'taper' : phaseOf(j);
+    return (ph === 'build' || ph === 'peak') && !isDeloadAt(j, ph);
+  };
+
+  // Live levers, reduce-only (rows are ceilings).
+  const forced = !!ctx.forceDeload && phase !== 'taper';
+  const deload = phase !== 'taper' && (forced || isDeloadAt(k, phase));
+  const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1;
+  const cMult = !deload && ctx.ctlRatio != null ? ctlGapMultiplier(ctx.ctlRatio) : 1;
+  const adaptive = cMult === 1 ? eMult : Math.max(deloadMultiplier(ability), Math.min(1.15, eMult * cMult));
+  const lever = Math.min(1, adaptive);
+  const acwrCaution = ctx.acwrStatus === 'caution';
+  const acwrNote = acwrCaution ? 'ACWR caution — one quality session replaced with easy' : '';
+
+  const longestSeated = (hist: PrescribedWeek[]): number | null => {
+    let best: number | null = null;
+    for (const w of hist) if (w.longMin != null && (best == null || w.longMin > best)) best = w.longMin;
+    return best;
+  };
+  const lastLongOf = (hist: PrescribedWeek[]): number | null => {
+    for (let j = hist.length - 1; j >= 0; j--) if (hist[j].longMin != null) return hist[j].longMin;
+    return null;
+  };
+  const lastLoadedOf = (hist: PrescribedWeek[]): PrescribedWeek | null => {
+    for (let j = hist.length; j >= 1; j--) if (isLoadedAt(j)) return hist[j - 1] ?? null;
+    return null;
+  };
+
+  /** The loaded-week row for week j (1-based) given the weeks before it. */
+  const loadedRow = (j: number, hist: PrescribedWeek[], ph: TrainingPhase): BlockWeekRow => {
+    const seated = longestSeated(hist);
+    let longTarget = seated == null ? startLong : Math.min(longCap, Math.floor(seated * (1 + ramp)));
+    const recent = recentLongestLongRun(hist, j);
+    if (recent != null) longTarget = Math.min(longTarget, longRunCeilingMin(recent));
+    const longHold = seated != null ? Math.min(longTarget, seated) : null;
+    let loadedIndex = 0;
+    for (let i = 1; i <= j; i++) if (i === j || isLoadedAt(i)) loadedIndex++;
+    let archBudget = Infinity;
+    if (ctx.baselineKm != null && ctx.archetype != null) {
+      const km = weekVolumeBudgetKm(loadedIndex, ctx.baselineKm, computePeakWeeklyKm(ctx), ctx.archetype);
+      if (km > 0) archBudget = kmToMin(km);
+    }
+    const lastLoaded = lastLoadedOf(hist);
+    const currentMin = ctx.baselineKm != null && ctx.baselineKm > 0 ? kmToMin(ctx.baselineKm) : 0;
+    const chainRef = Math.max(lastLoaded?.totalMin ?? 0, currentMin);
+    const chainBudget = chainRef > 0 ? chainRef * (1 + ramp) : Infinity;
+    const budgetMin = Math.min(archBudget, chainBudget, hoursCapMin);
+    return {
+      sessionPhase: caseB ? 'base' : ph,
+      variantPhase: caseB ? 'base' : ph,
+      longTarget,
+      longHold,
+      sessionCapMin: null,
+      budgetMin: Number.isFinite(budgetMin) ? Math.round(budgetMin) : budgetMin,
+      qualityLimit: qualityCap(ability, fitnessLevel, ctx.runsPerWeek),
+      sizeMult: 1,
+      deload: false,
+      acwrNote: '',
+    };
+  };
+
+  /** Summary of a virtual week-1 build week: the taper reference of a taper-only block. */
+  const virtualReference = (): PrescribedWeek => {
+    const row = loadedRow(1, [], 'build');
+    const vctx: PlanContext = { ...ctx, weekIndex: 1, phase: 'build', effortScore: undefined, acwrStatus: undefined, ctlRatio: undefined, forceDeload: undefined };
+    return summariseWeek(assembleBlockLoadedWeek(vctx, ability, row));
+  };
+
+  if (phase === 'taper') {
+    // Taper position: the trailing run of taper weeks in the plan.
+    let taperWeeks = 0;
+    for (let j = n; j >= 1 && (j === n || phases[j - 1] === 'taper'); j--) taperWeeks++;
+    const firstTaper = n - taperWeeks + 1;
+    const pos = Math.min(taperWeeks, Math.max(1, k - firstTaper + 1));
+    const f = taperFraction(pos, taperWeeks);
+    const ref = lastLoadedOf(history.slice(0, Math.max(0, firstTaper - 1))) ?? virtualReference();
+    let week = assembleBlockTaperWeek(ctx, ability, ref, f, raceWeek, lastLongOf(history) ?? ref.longMin, lever, acwrCaution);
+    if (ctx.liveLongRunCapMin != null) week = capLongRun(week, ctx.liveLongRunCapMin);
+    return week;
+  }
+
+  const lastLoaded = lastLoadedOf(history);
+  let row: BlockWeekRow;
+  if (deload) {
+    const dm = deloadMultiplier(ability);
+    const base = lastLoaded ?? summariseWeek(assembleBlockLoadedWeek({ ...ctx, phase: 'build' }, ability, loadedRow(k, history, 'build')));
+    const longD = base.longMin != null ? Math.round(base.longMin * dm * lever) : null;
+    row = {
+      sessionPhase: caseB ? 'base' : phase,
+      variantPhase: 'base',
+      longTarget: longD != null && longD >= LONG_SOFT_FLOOR_MIN ? longD : null,
+      longHold: null,
+      sessionCapMin: lastLongOf(history),
+      budgetMin: Math.round(base.totalMin * dm * lever),
+      qualityLimit: Math.min(qualityCap(ability, fitnessLevel, ctx.runsPerWeek), base.qualityCount),
+      sizeMult: dm * lever,
+      deload: true,
+      acwrNote,
+    };
+  } else {
+    row = loadedRow(k, history, phase);
+    row.acwrNote = acwrNote;
+    if (lever < 1) {
+      row.longTarget = row.longTarget != null ? Math.round(row.longTarget * lever) : null;
+      row.longHold = row.longHold != null ? Math.min(row.longHold, row.longTarget ?? row.longHold) : null;
+      row.budgetMin = Math.round(row.budgetMin * lever);
+      row.sizeMult = lever;
+    }
+  }
+  if (acwrCaution) row.qualityLimit = Math.max(0, row.qualityLimit - 1);
+  if (ctx.liveLongRunCapMin != null && row.longTarget != null) {
+    row.longTarget = Math.min(row.longTarget, Math.max(LONG_SOFT_FLOOR_MIN, Math.floor(ctx.liveLongRunCapMin)));
+    if (row.longHold != null) row.longHold = Math.min(row.longHold, row.longTarget);
+  }
+  return assembleBlockLoadedWeek(ctx, ability, row);
+}
+
+/**
+ * Deload rule of a sharpening block: a build week on the ability cycle
+ * (isDeloadWeek), except the last week before the taper, which takes the place
+ * of the peak week (a block without a real fitness signal has no peak week) and
+ * never deloads, like the peak. Peak and taper weeks never deload in a block:
+ * the taper is the block's reduction. `phase` overrides phases[weekIndex - 1]
+ * (the caller's label for the week being generated). Shared with the weekly
+ * load target (planned-week-target.ts) so target and plan agree.
+ */
+export function isSharpeningDeloadWeek(
+  weekIndex: number, ability: AbilityBand, phases: readonly TrainingPhase[], phase?: TrainingPhase,
+): boolean {
+  const ph = phase ?? phases[weekIndex - 1];
+  if (ph !== 'build' || !isDeloadWeek(weekIndex, ability)) return false;
+  let firstTaper = phases.length + 1;
+  for (let j = phases.length; j >= 1 && phases[j - 1] === 'taper'; j--) firstTaper = j;
+  return weekIndex !== firstTaper - 1;
+}
+
+/** Reduce-only: hold a week's long run (and every easy run) to `capMin`. */
+function capLongRun(week: SessionIntent[], capMin: number): SessionIntent[] {
+  const cap = Math.max(LONG_SOFT_FLOOR_MIN, Math.floor(capMin));
+  return week.map(i => (i.slot === 'long' || i.slot === 'easy') && i.totalMinutes > cap
+    ? { ...i, totalMinutes: cap, workMinutes: cap }
+    : i);
 }
 
 /**

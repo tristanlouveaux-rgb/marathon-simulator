@@ -20,6 +20,8 @@ import { refreshForecastCourseFactors } from '@/calculations/course-factors-runn
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
 import { recomputeLT } from '@/data/ltSync';
 import { initializeWeeks } from '@/workouts';
+import { isSharpeningBlock } from '@/workouts/phases';
+import { buildSharpenBlockState } from '@/workouts/sharpening-block';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
 import { initializeHyroxSimulator } from './initialization.hyrox';
@@ -696,9 +698,16 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // A race plan takes the running race split (marathon 2-week taper floor;
     // a sharpening block when the race is closer than a full build, phases.ts).
     // A block built without a real running fitness signal gets no peak week.
+    const noRunningSignal = !hasRealRunningFitnessSignal(s);
     s.wks = state.trainingForEvent === false
       ? initializeWeeks(s.tw)
-      : initializeWeeks(s.tw, { raceDistance: targetDistStr, noSignal: !hasRealRunningFitnessSignal(s) });
+      : initializeWeeks(s.tw, { raceDistance: targetDistStr, noSignal: noRunningSignal });
+    // Sharpening block: freeze the inputs that depend on today's 30-day run
+    // window (the first long run) so every later week replays the same block.
+    // Any other plan clears a stale block.
+    s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, s.tw)
+      ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks: s.tw, noSignal: noRunningSignal })
+      : undefined;
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {

@@ -13,7 +13,7 @@ import {
   computeCurrentWeekCarry,
   resolvePlannedWeekPhase,
 } from './planned-week-target';
-import { computePlanPhases } from '@/workouts/phases';
+import { computePlanPhases, computeRunningPlanPhases } from '@/workouts/phases';
 import { buildCoachContext } from '@/coach/coach-context-builder';
 
 // Median 400, so every multiplier reads straight off the target.
@@ -387,5 +387,33 @@ describe('Anchor: one canonical weekly target', () => {
     };
     walk(root);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('sharpening block (marathon under 8 weeks, half under 4): target deloads follow the block rule', () => {
+  const blockPhases = (n: number, noSignal = false) => computeRunningPlanPhases(n, 'marathon', { noSignal }).map(p => p.ph);
+
+  it('a block build week on the ability cycle is a deload; peak and taper weeks never are', () => {
+    // Intermediate 7-week block: build x4 (week 4 on the 4-week cycle), peak, taper x2.
+    const s = makeState({ phases: blockPhases(7), rd: 'marathon', v: 45, onboarding: { experienceLevel: 'intermediate' } as any });
+    expect(resolvePlannedWeekPhase(s, 4).phase).toBe('deload');
+    expect(resolvePlannedWeekPhase(s, 5).phase).toBe('peak');
+    expect(resolvePlannedWeekPhase(s, 7)).toMatchObject({ phase: 'taper', weekInTaper: 2, taperWeeks: 2, alsoDeload: false });
+  });
+
+  it('the week before the taper never deloads, even without a peak week (no fitness signal)', () => {
+    // Novice 5-week no-signal block: build x3, taper x2. Week 3 is on the 3-week cycle.
+    const s = makeState({ phases: blockPhases(5, true), rd: 'marathon', v: 38, onboarding: { experienceLevel: 'novice' } as any });
+    expect(s.wks.map(w => w.ph)).toEqual(['build', 'build', 'build', 'taper', 'taper']);
+    expect(resolvePlannedWeekPhase(s, 3).phase).toBe('build');
+    // A full plan of the same shape would still deload it (unchanged behaviour outside blocks).
+    const full = makeState({ phases: blockPhases(5, true), v: 38, onboarding: { experienceLevel: 'novice' } as any });
+    expect(resolvePlannedWeekPhase(full, 3).phase).toBe('deload');
+  });
+
+  it('a block taper week is never also a deload, even in a holiday (forced deload) week', () => {
+    const s = makeState({ phases: blockPhases(6), rd: 'marathon', v: 45, onboarding: { experienceLevel: 'intermediate' } as any });
+    (s.wks[4] as Week & { forceDeload?: boolean }).forceDeload = true;
+    expect(resolvePlannedWeekPhase(s, 5)).toMatchObject({ phase: 'taper', weekInTaper: 1, alsoDeload: false });
   });
 });

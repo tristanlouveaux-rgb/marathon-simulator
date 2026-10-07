@@ -10,7 +10,8 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, isRaceWeek, planEngineStateInputs, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { liveSharpeningLongRunCapMin } from './sharpening-block';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
@@ -124,6 +125,10 @@ export function generateWeekWorkouts(
       // the engine unless it covers the whole plan (length === totalWeeks).
       planPhases: sNow.wks?.map(w => w.ph),
       continuousMode: !!sNow.continuousMode,
+      // Sharpening block (phases.ts isSharpeningBlock): the start inputs frozen at
+      // build, and the live reduce-only long-run cap for weeks already reached.
+      sharpening: sharpeningInputsFromState(sNow),
+      liveLongRunCapMin: liveSharpeningLongRunCapMin(sNow, weekIndex),
     });
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,

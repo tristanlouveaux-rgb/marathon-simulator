@@ -1034,6 +1034,37 @@ export interface SimulatorState {
    */
   raceDayDurability?: import('@/calculations/run-durability').RunDurabilityResult;
 
+  /**
+   * Sharpening block: a running marathon race plan with fewer than 8 training
+   * weeks, or a half with fewer than 4 (`isSharpeningBlock`, phases.ts). Written
+   * once at plan build (`buildSharpenBlockState`, workouts/sharpening-block.ts)
+   * and cleared on any other plan. Holds only the inputs that depend on the
+   * date the plan was built (the 30-day run window), so every later week
+   * replays the same block (plan_engine reads it through runningPlanShapeInputs
+   * and generateWeekWorkouts). Everything else (runs per week, paces, hours
+   * target, archetype) is read live like any running plan. Optional: absent
+   * for full plans and plans built before 2026-10-07 (the engine then starts
+   * the block from the no-data anchor).
+   */
+  sharpenBlock?: {
+    /** Block formula version. */
+    v: number;
+    /** Week-1 long run, minutes at easy pace (already within [30, ability ceiling]). */
+    startLongMin: number;
+    /** 'history-30d': longest run of the 30 days before build; 'history-no-recent-run':
+     *  synced history but no run in those 30 days (30-min restart); 'no-data': the
+     *  existing week-1 anchor (marathon 90, half 64 min). */
+    startSource: 'history-30d' | 'history-no-recent-run' | 'no-data';
+    /** Longest run of the 30 days before build, minutes at easy pace (null: none). */
+    recentLongestMin: number | null;
+    /** No real running fitness signal at build: the block has no peak week. */
+    noSignal: boolean;
+    /** Training weeks: calendar weeks up to and including race week. */
+    trainingWeeks: number;
+    /** ISO date the block was built (local). */
+    builtISO: string;
+  };
+
   // Athlete tier (for ACWR thresholds and plan ramp rate)
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
   athleteTierOverride?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';

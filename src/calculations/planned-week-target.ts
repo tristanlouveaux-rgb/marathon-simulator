@@ -57,7 +57,8 @@
 
 import type { SimulatorState, TrainingPhase, Week } from '@/types';
 import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry } from './fitness-model';
-import { abilityBandFromVdot, isDeloadWeek, isFourWeekCycleDeloadWeek } from '@/workouts/plan_engine';
+import { abilityBandFromVdot, isDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
+import { isSharpeningBlock } from '@/workouts/phases';
 
 /** The state fields the target reads. Structural so persistence's raw `migrated` object fits. */
 export type PlannedTargetState = Pick<
@@ -65,7 +66,13 @@ export type PlannedTargetState = Pick<
   | 'wks' | 'w' | 'v' | 'rw' | 'onboarding' | 'eventType' | 'continuousMode' | 'trackOnly'
   | 'historicWeeklyTSS' | 'ctlBaseline' | 'athleteTier' | 'athleteTierOverride'
   | 'sportBaselineByType' | 'planStartDate'
->;
+> & Partial<Pick<SimulatorState, 'rd'>>;
+
+/** True when the running plan is a sharpening block (phases.ts isSharpeningBlock). */
+function isRunningBlock(s: PlannedTargetState): boolean {
+  if (s.trackOnly || s.continuousMode || s.eventType === 'triathlon' || s.eventType === 'hyrox') return false;
+  return isSharpeningBlock(s.rd, (s.wks ?? []).length);
+}
 
 export interface PlannedWeekPhase {
   /** Phase key for computePlannedWeekTSS's multiplier lookup. */
@@ -86,6 +93,9 @@ function isEngineDeloadWeek(s: PlannedTargetState, weekNum: number, wk: Week): b
     return isFourWeekCycleDeloadWeek(weekNum, wk.ph);
   }
   const ability = abilityBandFromVdot(s.v || 45, s.onboarding?.experienceLevel || 'intermediate');
+  // A sharpening block deloads build weeks only, never the week before the
+  // taper (plan_engine isSharpeningDeloadWeek, the rule the block generates with).
+  if (isRunningBlock(s)) return isSharpeningDeloadWeek(weekNum, ability, (s.wks ?? []).map(w => w.ph ?? 'base'));
   return isDeloadWeek(weekNum, ability);
 }
 
@@ -122,7 +132,9 @@ export function resolvePlannedWeekPhase(s: PlannedTargetState, weekNum: number):
     phase: 'taper',
     weekInTaper: idx - start + 1,
     taperWeeks: end - start + 1,
-    alsoDeload: deload,
+    // A sharpening block's taper weeks are never also deloads (the taper is the
+    // block's reduction; buildSharpeningWeek ignores the deload cycle there).
+    alsoDeload: deload && !isRunningBlock(s),
   };
 }
 
