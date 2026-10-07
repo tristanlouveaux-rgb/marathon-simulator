@@ -1,4 +1,4 @@
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { OnboardingState, MilestoneTarget } from '@/types/onboarding';
 import { findNearestMilestone } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
@@ -449,6 +449,7 @@ function forecastForSessions(
     // plan's runs per week (s.rw): a hypothetical extra session does not change
     // the plan's long runs.
     raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   }).forecastTime;
 }
 

@@ -6,7 +6,7 @@
  * clamps).
  */
 
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import { getState } from '@/state';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
@@ -66,7 +66,7 @@ export function installDebugForecast(): void {
       sessions_per_week: sessionsForHorizon,
       runner_type: getRunnerType(s.b ?? 0),
       ability_band: abilityBand,
-      taper_weeks: TAPER_NOMINAL[s.rd] ?? 2,
+      taper_weeks: planTaperWeeks(s) ?? TAPER_NOMINAL[s.rd] ?? 2,
       experience_level: s.onboarding?.experienceLevel || 'intermediate',
       weekly_volume_km: planMeanKm ?? s.wkm,
       hm_pb_seconds: s.pbs?.h || undefined,
@@ -96,6 +96,7 @@ export function installDebugForecast(): void {
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
       raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+      taperWeeks: planTaperWeeks(s),
     });
 
     const profile = s.selectedMarathon?.profile

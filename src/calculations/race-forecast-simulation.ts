@@ -26,7 +26,7 @@
  * distance, no VDOT, no plan weeks remaining).
  */
 
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance, AbilityBand, RunnerType } from '@/types';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { vt, rdKm } from './vdot';
@@ -129,7 +129,7 @@ export function runMarathonForecastSim(
     baselineKm: s.detectedWeeklyKm,
     archetype: s.athleteArchetype?.archetype,
     totalWeeks,
-    taperWeeks: (s.rd as RaceDistance) === 'marathon' ? 3 : 2,
+    taperWeeks: planTaperWeeks(s),
   }) ?? s.wkm;
   const abilityBand: AbilityBand = getAbilityBand(currentVdot);
   const runnerType: RunnerType = (s.typ ?? 'Balanced') as RunnerType;

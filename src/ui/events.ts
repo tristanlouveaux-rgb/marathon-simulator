@@ -1,5 +1,5 @@
 import { isTaperCarryBlocked } from '@/workouts/race-day-rules';
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } from '@/types';
 import {
   getState, getMutableState, updateState,
@@ -395,6 +395,7 @@ export function init(): void {
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blendedTime,
     raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   });
   s.expectedFinal = forecastVdot;
   s.forecastTime = forecastTime;

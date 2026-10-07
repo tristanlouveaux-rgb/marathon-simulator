@@ -12,7 +12,7 @@
  * re-runs the blend on render.
  */
 
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
 import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
@@ -741,7 +741,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         baselineKm: s.detectedWeeklyKm,
         archetype: s.athleteArchetype?.archetype,
         totalWeeks: trainingWeeks,
-        taperWeeks: s.rd === 'marathon' ? 3 : 2,
+        taperWeeks: planTaperWeeks(s),
       });
       // Injury-aware: build from the return date, not flat. A current run
       // restriction debits its recovery weeks so the forecast doesn't credit
@@ -821,6 +821,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         adaptationRatio: s.adaptationRatio,
         blendedAnchorSec: forecastAnchorSec,
         raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
+        taperWeeks: planTaperWeeks(s),
       });
       s.expectedFinal = forecastVdot;
       // Calibration bias applies to the projection (systematic prediction

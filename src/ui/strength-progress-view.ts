@@ -15,7 +15,7 @@
  * neutral. No tinted cards, no decorative icons, no gradients (UX_PATTERNS).
  */
 
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
@@ -175,6 +175,7 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blended,
     raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   };
   const withStrength = calculateLiveForecast({ ...base, strengthSessionsPerWeek: s.gs }).forecastTime;
   const without = calculateLiveForecast({ ...base, strengthSessionsPerWeek: 0 }).forecastTime;

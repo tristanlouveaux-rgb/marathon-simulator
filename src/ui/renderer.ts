@@ -1,4 +1,4 @@
-import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { Workout, Week, GarminActual } from '@/types';
 import {
   getState, getMutableState, saveState
@@ -230,6 +230,7 @@ export function render(): void {
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
       raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+      taperWeeks: planTaperWeeks(s),
     });
     forecast = rawForecast;
     if (s.timp > 0) forecast += s.timp;

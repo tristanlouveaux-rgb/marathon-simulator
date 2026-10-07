@@ -1,4 +1,6 @@
 import { calendarDayNumber } from '@/utils/local-date';
+import { computeRunningPlanPhases } from './phases';
+import type { RaceDistance } from '@/types';
 
 /**
  * Where race day falls in a plan's calendar weeks (Monday to Sunday, week 1 =
@@ -105,4 +107,29 @@ export function planRaceLayout(s: {
   if (layout.calendarWeeks !== tw) return null;
   if (layout.trainingWeeks !== planTrainingWeeks(s)) return null;
   return layout;
+}
+
+/**
+ * Race-taper weeks of a running race plan, for the forecast (M4 design v4,
+ * 7.1): the trailing 'taper' weeks of the plan's training weeks (a closing
+ * week excluded), or, before the plan's weeks exist, the split initializeWeeks
+ * builds (computeRunningPlanPhases). Every forecast taper input reads this so
+ * the forecast's taper is the plan's. Undefined for continuous, Just-Track,
+ * triathlon and HYROX plans and without a race distance: callers keep the
+ * TAPER_NOMINAL default.
+ */
+export function planTaperWeeks(s: {
+  tw?: number; rd?: RaceDistance | null; continuousMode?: boolean; trackOnly?: boolean; eventType?: string;
+  wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
+}): number | undefined {
+  if (s.continuousMode || s.trackOnly || s.eventType === 'triathlon' || s.eventType === 'hyrox' || !s.rd) return undefined;
+  const training = planTrainingWeeks(s);
+  if (!(training > 0)) return undefined;
+  let taper = 0;
+  const wks = s.wks ?? [];
+  if (wks.length >= training) {
+    for (let i = training - 1; i >= 0 && wks[i]?.ph === 'taper'; i--) taper++;
+  }
+  if (taper > 0) return taper;
+  return computeRunningPlanPhases(training, s.rd).filter(p => p.ph === 'taper').length;
 }

@@ -162,12 +162,17 @@ export const TIM: TimeImpact = {
   'marathon': { easy: 15, threshold: 30, marathon_pace: 35, mixed: 25, long: 60, progressive: 35, float: 28 }
 };
 
-/** Taper nominal weeks by race distance */
+/** Taper nominal weeks by race distance: the taper length that earns the full
+ *  taper bonus in the forecast (training-horizon taper_ratio). Marathon 2
+ *  (was 3, 2026-10-07): Bosquet et al. 2007 found the largest taper effect with
+ *  8 to 14-day tapers, and the plans themselves taper a marathon 2 weeks
+ *  (phases.ts MARATHON_MIN_TAPER_WEEKS; 9+ week plans under ceil(N x 0.12)), so
+ *  a 2-week marathon taper counts as a full taper (M4 design v4, Q11 default). */
 export const TAPER_NOMINAL: Record<string, number> = {
   '5k': 1,
   '10k': 2,
   'half': 2,
-  'marathon': 3,
+  'marathon': 2,
 };
 
 /** Expected weekly improvement by athlete level */
