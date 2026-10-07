@@ -1240,7 +1240,7 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
       : rdd.metFraction >= 1
         ? `The plan builds a ${rddLongestMin}-min long run by race day. The race-day forecast carries no durability penalty.`
         : `The plan prescribes ${rdd.qualifyingLongRunCount} long runs over ${qualMin} min before race day, which offsets the shortfall. The race-day forecast carries no durability penalty.`;
-  const bannerText = [capped ? "Today's prediction has the run capped by recent durability." : '', (capped || rddPenalty > 0) ? raceDayLine : '']
+  const bannerText = [capped ? "Today's prediction has the run capped by recent durability." : '', (capped || rddPenalty > 0 || enduranceGap) ? raceDayLine : '']
     .filter(Boolean).join(' ');
   const banner = bannerText ? `
     <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(196,138,58,0.10);font-size:13px;color:#6B5B2E;line-height:1.5">
@@ -1282,7 +1282,7 @@ function pageDurability(s: SimulatorState): { title: string; subhead: string; bo
       <div style="${CARD};margin-bottom:14px">
         ${statRow('Penalty applied today', penalty > 0 ? `+${penalty.toFixed(2)}%` : 'None')}
         ${statRow('Long runs logged (12 wks)', `${cnt} of ${tgt}`)}
-        ${statRow('Applied to race-day forecast', rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
+        ${statRow('Applied to race-day forecast', enduranceGap ? 'Not estimable: long runs too short' : rddPenalty > 0 ? `+${rddPenalty.toFixed(2)}%` : 'None')}
         ${rdd ? statRow("Plan's longest run before race day", `${rddLongestMin} min`) : ''}
         ${statRow('Look-back window', '12 weeks')}
       </div>
