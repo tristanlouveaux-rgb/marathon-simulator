@@ -1,4 +1,4 @@
-import { calendarDayNumber } from '@/utils/local-date';
+import { calendarDayNumber, localDateKey } from '@/utils/local-date';
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
 
@@ -80,6 +80,26 @@ export function runningRaceDateISO(s: {
 export function planTrainingWeeks(s: { tw?: number; wks?: ReadonlyArray<{ raceClosing?: boolean } | null | undefined> }): number {
   const tw = s.tw ?? s.wks?.length ?? 0;
   return tw > 0 && s.wks?.[tw - 1]?.raceClosing ? tw - 1 : tw;
+}
+
+/**
+ * Whether a plan's completion screen ("Plan complete", "View plan summary",
+ * "Start a new plan") may show. A running race plan completes only once race
+ * day is behind the local calendar (today after race day): the final week of
+ * a race plan holds the race, so on race eve, or on race day itself, the final
+ * week is reviewed, not closed. Plans without a running race date (continuous,
+ * Just-Track, triathlon including cycling, HYROX, no date stored) are not tied
+ * to a race day and keep the existing final-week rule.
+ */
+export function planCompletionDue(
+  s: Parameters<typeof runningRaceDateISO>[0],
+  todayKey: string = localDateKey(new Date()),
+): boolean {
+  const race = runningRaceDateISO(s);
+  if (!race) return true;
+  const today = calendarDayNumber(todayKey);
+  if (!Number.isFinite(today)) return false;
+  return today > calendarDayNumber(race);
 }
 
 /** True when plan week `weekIndex` is the closing week (it holds only the race). */

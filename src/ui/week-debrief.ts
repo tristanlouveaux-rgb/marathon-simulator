@@ -16,7 +16,7 @@
  * Internal names (ATL/CTL/TSB/rpeAdj) must NOT appear in user-facing copy.
  */
 
-import { planTrainingWeeks, planRaceLayout, isClosingWeek, runningRaceDateISO } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, planRaceLayout, isClosingWeek, runningRaceDateISO, planCompletionDue } from '@/workouts/race-week-layout';
 import { applyRaceDayRules, raceDayRulesApply } from '@/workouts/race-day-rules';
 import { assignDefaultDays } from '@/workouts/scheduler';
 import { firstTrackedDow } from './workout-status';
@@ -125,12 +125,15 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
   if (!pendingDebrief && targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
 
   // End-of-plan: if the user is on the last planned week and the final complete debrief
-  // hasn't fired yet, trigger it unconditionally. No calendar maths required.
-  // This catches the case where planStartDate is absent (isWeekPendingDebrief returns false)
-  // and lastDebriefWeek already covers week tw-1 (shouldAutoDebrief returns false too).
+  // hasn't fired yet, trigger it. This catches the case where planStartDate is absent
+  // (isWeekPendingDebrief returns false) and lastDebriefWeek already covers week tw-1
+  // (shouldAutoDebrief returns false too). A running race plan's final week holds the
+  // race, so the completion debrief waits until race day is behind the local calendar
+  // (planCompletionDue); before that the normal review paths below run.
   const tw = s.tw as number | undefined;
   const lastComplete = (s.lastCompleteDebriefWeek ?? 0) as number;
-  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly) {
+  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly
+      && planCompletionDue(s)) {
     showWeekDebrief(s.w, 'complete');
     return;
   }
@@ -177,6 +180,13 @@ export function showWeekDebrief(
   }
 
   const wk = s.wks[weekNum - 1];
+
+  // A running race plan's final week holds the race. Before race day has passed
+  // (planCompletionDue) its debrief reviews the week: no "View plan summary",
+  // no completion screen, nothing recorded as the plan's complete debrief. Every
+  // trigger (end-of-plan launch, Sunday auto-show, Wrap up week) lands here.
+  const finalWeek = weekNum >= (s.tw ?? Infinity);
+  if (mode === 'complete' && finalWeek && !planCompletionDue(s)) mode = 'review';
 
   // ── Compute metrics ──────────────────────────────────────────────────────
 
@@ -334,7 +344,7 @@ export function showWeekDebrief(
   }).join('');
 
   // CTA label depends on mode and whether this is the final plan week
-  const isLastWeek = weekNum >= ((s as any).tw ?? Infinity);
+  const isLastWeek = finalWeek;
   const ctaLabel = mode === 'complete'
     ? (isLastWeek ? 'View plan summary' : 'Generate next week')
     : 'Continue →';
@@ -536,9 +546,11 @@ function _showPlanPreview(
   if (!card) return;
   const s = getState() as any;
 
-  // Last week of the plan → show plan completion screen instead of next-week preview
+  // Last week of the plan → show plan completion screen instead of next-week preview,
+  // once race day has passed (planCompletionDue). Before that the week is reviewed only.
   if (weekNum >= (s.tw ?? Infinity)) {
-    _renderPlanComplete(card, weekNum, mode);
+    if (planCompletionDue(s)) _renderPlanComplete(card, weekNum, mode);
+    else _closeAndRecord(weekNum, 'review');
     return;
   }
 
