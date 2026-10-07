@@ -17,7 +17,7 @@ import { getState } from '@/state';
 import { swapFractionForState } from '@/calculations/body-mass-adaptations';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
 import { generateGymWorkouts } from './gym';
-import { computePlanPhases } from './phases';
+import { computePlanPhases, computeRunningPlanPhases } from './phases';
 
 /**
  * Generate workouts for a week based on phase and runner profile
@@ -455,12 +455,22 @@ export function generateWeekWorkouts(
 export { planEngineStateInputs };
 
 /**
- * Initialize weeks array for a training plan
+ * Initialize weeks array for a training plan.
  * @param totalWeeks - Total number of weeks
+ * @param opts.raceDistance - Running RACE plan: phases from computeRunningPlanPhases
+ *   (marathon 2-week taper floor, sharpening-block layout). Omit for continuous
+ *   mode and the legacy path, which keep the generic single arc.
+ * @param opts.noSignal - No real running fitness signal at build: a sharpening
+ *   block gets no peak week (computeRunningPlanPhases).
  * @returns Array of week objects
  */
-export function initializeWeeks(totalWeeks: number): Week[] {
-  const planPhases = computePlanPhases(totalWeeks);
+export function initializeWeeks(
+  totalWeeks: number,
+  opts: { raceDistance?: RaceDistance; noSignal?: boolean } = {},
+): Week[] {
+  const planPhases = opts.raceDistance
+    ? computeRunningPlanPhases(totalWeeks, opts.raceDistance, { noSignal: opts.noSignal })
+    : computePlanPhases(totalWeeks);
   return planPhases.map((p, i) => ({
     w: i + 1,
     ph: p.ph,

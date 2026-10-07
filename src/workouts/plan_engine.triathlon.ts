@@ -56,7 +56,10 @@ import { isLongRun } from './long-run';
 // pushed to a weekday. Race week is the plan's final week whatever its phase
 // label (1- and 2-week plans have no taper week). Both ship together in v19
 // (unreleased when the race-week definition was widened, so no second bump).
-export const TRI_GENERATOR_VERSION = 19;
+// v20: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
+// a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
+// [build, peak]), so week 1 of a 2-week plan now runs peak sessions.
+export const TRI_GENERATOR_VERSION = 20;
 
 /**
  * Representative average session length (hours) per discipline. The generator

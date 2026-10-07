@@ -2,7 +2,7 @@ import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/typ
 import type { SimulatorState } from '@/types/state';
 import type { SessionIntent, SlotType } from './intent_to_workout';
 import { weekVolumeBudgetKm, type Archetype } from '@/calculations/athlete-archetype';
-import { computePlanPhases } from './phases';
+import { computePlanPhases, computeRunningPlanPhases } from './phases';
 
 export interface PlanContext {
   runsPerWeek: number;
@@ -45,7 +45,8 @@ export interface PlanContext {
    *  The engine replays the weeks before `weekIndex` to read the long runs and
    *  week totals it actually prescribed (the long-run 10% rule and the deload
    *  guards). Used only when its length equals `totalWeeks`; otherwise the
-   *  canonical running split `computePlanPhases(totalWeeks)` stands in. */
+   *  canonical running split stands in (`computeRunningPlanPhases` for a race
+   *  plan, `computePlanPhases` in continuous mode). */
   planPhases?: readonly TrainingPhase[];
   /** Continuous (no-race) plan. Its final taper week is a block deload, not a
    *  race week, so it keeps its long run and gets no race-week primer. */
@@ -622,13 +623,17 @@ function summariseWeek(intents: SessionIntent[]): PrescribedWeek {
 }
 
 /** Phase of each plan week: the caller's list when it covers the whole plan,
- *  otherwise the canonical running split. */
+ *  otherwise the canonical running split (race plans: computeRunningPlanPhases,
+ *  the split initializeWeeks builds a running race plan with). */
 function resolvePlanPhases(ctx: PlanContext): TrainingPhase[] {
   const given = ctx.planPhases;
   if (given && given.length === ctx.totalWeeks && given.every(p => typeof p === 'string')) {
     return [...given];
   }
-  return computePlanPhases(ctx.totalWeeks).map(p => p.ph);
+  const split = ctx.continuousMode
+    ? computePlanPhases(ctx.totalWeeks)
+    : computeRunningPlanPhases(ctx.totalWeeks, ctx.raceDistance);
+  return split.map(p => p.ph);
 }
 
 // Replayed nominal weeks, keyed by every input that shapes a nominal week. The

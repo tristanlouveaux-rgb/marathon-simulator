@@ -5,12 +5,12 @@ import {
   EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN,
   type PlanContext,
 } from './plan_engine';
-import { computePlanPhases } from './phases';
+import { computePlanPhases, computeRunningPlanPhases } from './phases';
 import { generateWeekWorkouts, initializeWeeks } from './generator';
 import { updateState, resetState } from '@/state';
 import type { SimulatorState } from '@/types';
 import { isLongRun } from './long-run';
-import type { RaceDistance } from '@/types';
+import type { RaceDistance, TrainingPhase } from '@/types';
 import type { Archetype } from '@/calculations/athlete-archetype';
 
 /**
@@ -54,7 +54,7 @@ interface WeekRow {
 }
 
 function planRows(ctx: Omit<PlanContext, 'weekIndex' | 'phase'>): WeekRow[] {
-  const phases = computePlanPhases(ctx.totalWeeks).map(p => p.ph);
+  const phases = computeRunningPlanPhases(ctx.totalWeeks, ctx.raceDistance).map(p => p.ph);
   const ability = abilityBandFromVdot(ctx.vdot, ctx.fitnessLevel);
   const rows: WeekRow[] = [];
   for (let k = 1; k <= ctx.totalWeeks; k++) {
@@ -304,19 +304,22 @@ describe('race week', () => {
   });
 
   for (const N of [1, 2]) {
-    it(`a ${N}-week race plan (no taper label): race week has no long run, a primer and no full quality session`, () => {
-      const phases = computePlanPhases(N).map(p => p.ph);
-      expect(phases[N - 1]).not.toBe('taper');
-      for (const rd of ['marathon', 'half', '10k', '5k'] as RaceDistance[]) {
-        for (const rpw of [3, 5]) {
-          const xs = planWeekSessions({
-            runsPerWeek: rpw, raceDistance: rd, runnerType: 'Balanced', phase: phases[N - 1],
-            fitnessLevel: 'intermediate', weekIndex: N, totalWeeks: N, vdot: 45, easyPaceSecPerKm: 330,
-          });
-          const label = `${rd} ${N}wk ${rpw}/wk [${xs.map(i => `${i.slot}:${i.totalMinutes}`).join(' ')}]`;
-          expect(xs.find(i => i.slot === 'long'), label).toBeUndefined();
-          expect(xs.filter(i => i.notes === 'Race-week primer'), label).toHaveLength(1);
-          expect(xs.filter(i => i.slot === 'marathon_pace' || i.slot === 'float'), label).toHaveLength(0);
+    it(`a ${N}-week race plan: race week has no long run, a primer and no full quality session`, () => {
+      // Whatever the final week's label: before the taper-first split (phases.ts)
+      // a 1- and 2-week plan ended in a build or peak week.
+      const labels: TrainingPhase[] = [computePlanPhases(N)[N - 1].ph, N === 1 ? 'build' : 'peak'];
+      for (const phase of labels) {
+        for (const rd of ['marathon', 'half', '10k', '5k'] as RaceDistance[]) {
+          for (const rpw of [3, 5]) {
+            const xs = planWeekSessions({
+              runsPerWeek: rpw, raceDistance: rd, runnerType: 'Balanced', phase,
+              fitnessLevel: 'intermediate', weekIndex: N, totalWeeks: N, vdot: 45, easyPaceSecPerKm: 330,
+            });
+            const label = `${rd} ${N}wk ${phase} ${rpw}/wk [${xs.map(i => `${i.slot}:${i.totalMinutes}`).join(' ')}]`;
+            expect(xs.find(i => i.slot === 'long'), label).toBeUndefined();
+            expect(xs.filter(i => i.notes === 'Race-week primer'), label).toHaveLength(1);
+            expect(xs.filter(i => i.slot === 'marathon_pace' || i.slot === 'float'), label).toHaveLength(0);
+          }
         }
       }
     });

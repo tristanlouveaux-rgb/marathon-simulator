@@ -38,7 +38,10 @@ import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
  * Bump when plan output changes in a way that should invalidate cached plans.
  * main.ts checks this on launch and regenerates if stored version is lower.
  */
-export const HYROX_GENERATOR_VERSION = 13;
+// v14: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
+// a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
+// [build, peak]).
+export const HYROX_GENERATOR_VERSION = 14;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from

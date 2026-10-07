@@ -434,8 +434,9 @@ describe('Triathlon race week (mirrors running isRaceWeek, 2026-10-06)', () => {
   for (const tw of [1, 2]) {
     it(`a ${tw}-week plan (race date ${tw} week${tw > 1 ? 's' : ''} out): the final week has no long run and leaves Sunday free`, () => {
       // The tri wizard builds max(1, weeksUntil(raceDate)) weeks, so a race 1 or 2
-      // weeks out is reachable. computeSingleArc labels those plans [build] and
-      // [build, peak]: no taper week, so a phase-gated race-week test missed them.
+      // weeks out is reachable. computeSingleArc used to label those plans [build]
+      // and [build, peak] (no taper week, so a phase-gated race-week test missed
+      // them); since the taper-first split they end in a taper week.
       const weeks = generateTriathlonPlan(makeTriState({
         tw,
         triConfig: {
@@ -449,7 +450,7 @@ describe('Triathlon race week (mirrors running isRaceWeek, 2026-10-06)', () => {
         },
       }));
       expect(weeks).toHaveLength(tw);
-      expect(weeks[tw - 1].ph).not.toBe('taper');
+      expect(weeks.map(w => w.ph)).toEqual(tw === 1 ? ['taper'] : ['peak', 'taper']);
       const raceWeek = weeks[tw - 1].triWorkouts ?? [];
       expect(raceWeek.filter(w => w.t === 'long')).toHaveLength(0);
       expect(raceWeek.filter(w => w.dayOfWeek === 6).map(w => w.n)).toEqual([]);

@@ -1,4 +1,4 @@
-import type { TrainingPhase } from '@/types';
+import type { TrainingPhase, RaceDistance } from '@/types';
 
 /**
  * Phase assignment for training plans. Replaces the legacy "<=16w single arc,
@@ -37,6 +37,9 @@ export interface PhaseConfig {
   taperRatio: number;
   peakRatio: number;
   buildRatio: number;
+  /** Minimum taper weeks (default 1). The running marathon sets 2, see
+   *  MARATHON_MIN_TAPER_WEEKS. Never above the plan length. */
+  taperMin?: number;
   // Double periodization
   doublePeriodizationThreshold: number; // plan length at which 2 cycles kick in
   cycle2Fraction: number;               // fraction of totalWeeks allocated to cycle 2
@@ -70,6 +73,84 @@ export const RUNNING_PHASE_CONFIG: PhaseConfig = {
 };
 
 /**
+ * Weeks a full build needs, by race distance. A running race plan with fewer
+ * training weeks than this is a sharpening block (marathon and half only, see
+ * `isSharpeningBlock`). Values locked 2026-04-22 as the race page's minimum
+ * plan length (`MIN_PLAN_WEEKS_BY_DISTANCE`, race-target.ts); moved here so the
+ * race page, the plan phases and the generator read one table. Since
+ * 2026-10-05 (Tristan) a nearer marathon or half gets a sharpening block
+ * instead of being refused.
+ */
+export const FULL_BUILD_WEEKS: Record<RaceDistance, number> = {
+  '5k': 4,
+  '10k': 4,
+  'half': 4,
+  'marathon': 8,
+};
+
+/**
+ * Minimum race taper for a running marathon of 2 or more training weeks.
+ * Bosquet, Montpetit, Arvisais & Mujika 2007 (Med Sci Sports Exerc 39:1358-1365)
+ * found the largest taper effect with tapers of 8 to 14 days. Marathon plans of
+ * 9 to 16 weeks already taper 2 weeks under ceil(N x 0.12); this floor gives
+ * the 8-week plan and the sharpening block the same 2 weeks. Approved as a
+ * default (M4 design v4 review, Q1/Q2). Half, 10K and 5K keep 1.
+ */
+export const MARATHON_MIN_TAPER_WEEKS = 2;
+
+/** Running marathon phase config: the running config plus the 2-week taper floor. */
+export const RUNNING_MARATHON_PHASE_CONFIG: PhaseConfig = {
+  ...RUNNING_PHASE_CONFIG,
+  taperMin: MARATHON_MIN_TAPER_WEEKS,
+};
+
+/**
+ * Sharpening block: a running marathon or half race plan with fewer training
+ * weeks (calendar weeks up to and including race week, not counting a closing
+ * week) than a full build (`FULL_BUILD_WEEKS`). 5K and 10K keep their 4-week
+ * slider floor and are never a block (design v4 Q13, not approved).
+ *
+ * Planning side: it selects the plan shape (taper first, then one peak week,
+ * then build weeks, no base).
+ */
+export function isSharpeningBlock(rd: RaceDistance | null | undefined, trainingWeeks: number): boolean {
+  if (rd !== 'marathon' && rd !== 'half') return false;
+  return trainingWeeks >= 1 && trainingWeeks < FULL_BUILD_WEEKS[rd];
+}
+
+/**
+ * Phases of a running RACE plan (not continuous mode) of `trainingWeeks`
+ * weeks. Full builds use the running single arc (marathon with the 2-week
+ * taper floor). A sharpening block allocates the taper first, then one peak
+ * week, then build weeks with whatever is left, and has no base:
+ *   marathon 1: taper; 2: taper x2; 3: peak, taper x2; 4 to 7: build x(N-3), peak, taper x2
+ *   half 1: taper; 2: peak, taper; 3: build, peak, taper
+ * `noSignal` (no real running fitness signal at build, hasRealRunningFitnessSignal)
+ * turns the block's peak week into a build week: a peak week's heavier
+ * variants and work minutes assume a measured runner.
+ */
+export function computeRunningPlanPhases(
+  trainingWeeks: number,
+  rd: RaceDistance,
+  opts: { noSignal?: boolean } = {},
+): PlanPhaseWeek[] {
+  if (trainingWeeks <= 0) return [];
+  const cfg = rd === 'marathon' ? RUNNING_MARATHON_PHASE_CONFIG : RUNNING_PHASE_CONFIG;
+  if (!isSharpeningBlock(rd, trainingWeeks)) return computePlanPhases(trainingWeeks, cfg);
+  const n = trainingWeeks;
+  const taper = Math.min(n, cfg.taperCap, Math.max(cfg.taperMin ?? 1, Math.ceil(n * cfg.taperRatio)));
+  const peak = opts.noSignal
+    ? 0
+    : Math.min(n - taper, cfg.peakCap, Math.max(1, Math.round(n * cfg.peakRatio)));
+  const build = n - taper - peak;
+  const phases: PlanPhaseWeek[] = [];
+  for (let i = 0; i < build; i++) phases.push({ ph: 'build' });
+  for (let i = 0; i < peak; i++) phases.push({ ph: 'peak' });
+  for (let i = 0; i < taper; i++) phases.push({ ph: 'taper' });
+  return phases;
+}
+
+/**
  * Compute the phase (and optional checkpoint flag) for every week of a plan.
  * Returned array length === totalWeeks. Index i is plan week i+1.
  */
@@ -100,20 +181,34 @@ export function computePlanPhases(
 function computeSingleArc(totalWeeks: number, cfg: PhaseConfig): TrainingPhase[] {
   if (totalWeeks <= 0) return [];
 
-  const taperWeeks = Math.min(cfg.taperCap, Math.max(1, Math.ceil(totalWeeks * cfg.taperRatio)));
+  const taperWeeks = Math.min(cfg.taperCap, Math.max(cfg.taperMin ?? 1, Math.ceil(totalWeeks * cfg.taperRatio)));
   const peakWeeks  = Math.min(cfg.peakCap,  Math.max(1, Math.round(totalWeeks * cfg.peakRatio)));
   const buildWeeks = Math.min(cfg.buildCap, Math.max(1, Math.round(totalWeeks * cfg.buildRatio)));
-  const baseWeeks  = Math.max(0, totalWeeks - buildWeeks - peakWeeks - taperWeeks);
 
+  // Too short for one week of each phase (1 or 2 weeks with every shipped
+  // config): allocate taper first, then peak, then build. The plan ends in the
+  // race, so the taper is the one phase it cannot drop. Truncating from the end
+  // (the previous rule) labelled a 1-week plan [build] and a 2-week plan
+  // [build, peak]: no taper at all. Taper-first is the documented priority
+  // (SCIENCE_LOG "Triathlon short-plan phase compression") and applies to every
+  // format sharing this strategy (running, triathlon incl. cycling, HYROX).
+  if (taperWeeks + peakWeeks + buildWeeks > totalWeeks) {
+    const t = Math.min(taperWeeks, totalWeeks);
+    const p = Math.min(peakWeeks, totalWeeks - t);
+    const b = totalWeeks - t - p;
+    const short: TrainingPhase[] = [];
+    for (let i = 0; i < b; i++) short.push('build');
+    for (let i = 0; i < p; i++) short.push('peak');
+    for (let i = 0; i < t; i++) short.push('taper');
+    return short;
+  }
+
+  const baseWeeks  = Math.max(0, totalWeeks - buildWeeks - peakWeeks - taperWeeks);
   const phases: TrainingPhase[] = [];
   for (let i = 0; i < baseWeeks; i++) phases.push('base');
   for (let i = 0; i < buildWeeks; i++) phases.push('build');
   for (let i = 0; i < peakWeeks; i++) phases.push('peak');
   for (let i = 0; i < taperWeeks; i++) phases.push('taper');
-
-  if (phases.length === totalWeeks) return phases;
-  if (phases.length > totalWeeks) return phases.slice(0, totalWeeks);
-  while (phases.length < totalWeeks) phases.unshift('base');
   return phases;
 }
 

@@ -10,7 +10,7 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbMedianVdot } from '@/calculations/physiological-vdot';
+import { pbMedianVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { computePeakWeeklyKm } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
@@ -693,7 +693,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // the refresher writes), so the drill-down can explain the cap from day 1.
     s.runDurability = durability;
     archiveCurrentWksIfPopulated();
-    s.wks = initializeWeeks(s.tw);
+    // A race plan takes the running race split (marathon 2-week taper floor;
+    // a sharpening block when the race is closer than a full build, phases.ts).
+    // A block built without a real running fitness signal gets no peak week.
+    s.wks = state.trainingForEvent === false
+      ? initializeWeeks(s.tw)
+      : initializeWeeks(s.tw, { raceDistance: targetDistStr, noSignal: !hasRealRunningFitnessSignal(s) });
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {

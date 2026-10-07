@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { computePlanPhases } from './phases';
+import { computePlanPhases, computeRunningPlanPhases, isSharpeningBlock, FULL_BUILD_WEEKS } from './phases';
+import { computeTriPlanPhases } from '@/constants/triathlon-constants';
+import { computeHyroxPlanPhases } from '@/constants/hyrox-constants';
+import type { RaceDistance } from '@/types';
 
 function countByPhase(weeks: { ph: string }[]): Record<string, number> {
   return weeks.reduce((acc, w) => {
@@ -134,6 +137,98 @@ describe('computePlanPhases', () => {
   it('every length from 4 to 52 produces totalWeeks weeks', () => {
     for (let n = 4; n <= 52; n++) {
       expect(computePlanPhases(n)).toHaveLength(n);
+    }
+  });
+});
+
+describe('taper-first allocation for plans shorter than one week of each phase', () => {
+  // Before: a 1-week plan was [build] and a 2-week plan [build, peak] (no taper),
+  // because the phases were truncated from the end. The race needs the taper.
+  it('generic single arc: 1 = taper, 2 = peak + taper, 3 unchanged', () => {
+    expect(computePlanPhases(1).map(w => w.ph)).toEqual(['taper']);
+    expect(computePlanPhases(2).map(w => w.ph)).toEqual(['peak', 'taper']);
+    expect(computePlanPhases(3).map(w => w.ph)).toEqual(['build', 'peak', 'taper']);
+  });
+
+  it('triathlon (every distance) and HYROX end 1- and 2-week plans in a taper week', () => {
+    for (const d of ['sprint', 'olympic', '70.3', 'ironman'] as const) {
+      expect(computeTriPlanPhases(d, 1).map(w => w.ph), d).toEqual(['taper']);
+      expect(computeTriPlanPhases(d, 2).map(w => w.ph), d).toEqual(['peak', 'taper']);
+    }
+    expect(computeHyroxPlanPhases(1).map(w => w.ph)).toEqual(['taper']);
+    expect(computeHyroxPlanPhases(2).map(w => w.ph)).toEqual(['peak', 'taper']);
+  });
+
+  it('plans of 3 or more weeks are unchanged in every format', () => {
+    // The ratio split already fits from 3 weeks: one build, one peak, one taper.
+    for (let n = 3; n <= 52; n++) {
+      expect(computePlanPhases(n)).toHaveLength(n);
+      expect(computePlanPhases(n)[n - 1].ph).toBe('taper');
+    }
+  });
+});
+
+describe('running race plans (computeRunningPlanPhases)', () => {
+  const seq = (n: number, rd: RaceDistance, noSignal = false) =>
+    computeRunningPlanPhases(n, rd, { noSignal }).map(w => w.ph);
+
+  it('FULL_BUILD_WEEKS: marathon 8, every other distance 4', () => {
+    expect(FULL_BUILD_WEEKS).toEqual({ '5k': 4, '10k': 4, half: 4, marathon: 8 });
+  });
+
+  it('isSharpeningBlock: marathon under 8 weeks, half under 4; never 5K or 10K', () => {
+    for (let n = 1; n <= 7; n++) expect(isSharpeningBlock('marathon', n)).toBe(true);
+    expect(isSharpeningBlock('marathon', 8)).toBe(false);
+    for (let n = 1; n <= 3; n++) expect(isSharpeningBlock('half', n)).toBe(true);
+    expect(isSharpeningBlock('half', 4)).toBe(false);
+    expect(isSharpeningBlock('10k', 2)).toBe(false);
+    expect(isSharpeningBlock('5k', 1)).toBe(false);
+    expect(isSharpeningBlock('marathon', 0)).toBe(false);
+    expect(isSharpeningBlock(null, 3)).toBe(false);
+  });
+
+  it('marathon block: taper first (2 weeks from 2 weeks out), then one peak week, then build, no base', () => {
+    expect(seq(1, 'marathon')).toEqual(['taper']);
+    expect(seq(2, 'marathon')).toEqual(['taper', 'taper']);
+    expect(seq(3, 'marathon')).toEqual(['peak', 'taper', 'taper']);
+    expect(seq(4, 'marathon')).toEqual(['build', 'peak', 'taper', 'taper']);
+    expect(seq(5, 'marathon')).toEqual(['build', 'build', 'peak', 'taper', 'taper']);
+    expect(seq(6, 'marathon')).toEqual(['build', 'build', 'build', 'peak', 'taper', 'taper']);
+    expect(seq(7, 'marathon')).toEqual(['build', 'build', 'build', 'build', 'peak', 'taper', 'taper']);
+  });
+
+  it('half block: 1 = race week, 2 = peak + race week, 3 = build + peak + race week; 4 is the full build', () => {
+    expect(seq(1, 'half')).toEqual(['taper']);
+    expect(seq(2, 'half')).toEqual(['peak', 'taper']);
+    expect(seq(3, 'half')).toEqual(['build', 'peak', 'taper']);
+    expect(seq(4, 'half')).toEqual(['build', 'build', 'peak', 'taper']);
+  });
+
+  it('the 8-week marathon gets the 2-week taper (one base week fewer)', () => {
+    expect(seq(8, 'marathon')).toEqual(['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper']);
+  });
+
+  it('full plans are otherwise unchanged: marathon from 9 weeks, half/10K/5K at every length', () => {
+    for (let n = 9; n <= 52; n++) expect(seq(n, 'marathon'), `marathon ${n}`).toEqual(computePlanPhases(n).map(w => w.ph));
+    for (const rd of ['half', '10k', '5k'] as RaceDistance[]) {
+      for (let n = 4; n <= 52; n++) expect(seq(n, rd), `${rd} ${n}`).toEqual(computePlanPhases(n).map(w => w.ph));
+    }
+  });
+
+  it('no real fitness signal: a block has no peak week; full plans keep theirs', () => {
+    expect(seq(7, 'marathon', true)).toEqual(['build', 'build', 'build', 'build', 'build', 'taper', 'taper']);
+    expect(seq(3, 'marathon', true)).toEqual(['build', 'taper', 'taper']);
+    expect(seq(2, 'half', true)).toEqual(['build', 'taper']);
+    expect(seq(12, 'marathon', true)).toEqual(seq(12, 'marathon'));
+  });
+
+  it('every length 1 to 52 produces exactly that many weeks, ending in a taper', () => {
+    for (const rd of ['marathon', 'half', '10k', '5k'] as RaceDistance[]) {
+      for (let n = 1; n <= 52; n++) {
+        const s = seq(n, rd);
+        expect(s, `${rd} ${n}`).toHaveLength(n);
+        expect(s[n - 1], `${rd} ${n}`).toBe('taper');
+      }
     }
   });
 });
