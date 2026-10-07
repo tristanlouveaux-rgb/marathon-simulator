@@ -11,7 +11,7 @@ import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
   computeFitnessModel,
-  computeTodayStrainTSS,
+  computeDayStrainTSS,
   computeToBaseline,
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
@@ -38,6 +38,7 @@ import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyHaloBackground, buildSunGlint, atmosphereGradient } from './page-flair';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 // Suppress unused warnings. Keeping legacy sky imports for safety
 void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M = '#0F172A';
@@ -139,9 +140,14 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // ── Strain % (must match home-view logic so readiness score is consistent) ──
   const strainWk = (s.wks ?? [])[s.w - 1];
-  const todayPhysioR = (s.physiologyHistory ?? []).find(e => e.date === today);
-  const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysioR, s.tssPerActiveMinute) : 0;
-  const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
+  // The strain day is the athlete's local calendar day: synced activities are
+  // filed by their local start day (isOnLocalDay), physiology entries are keyed
+  // by local day, and plan weekdays are local. computeDayStrainTSS reads the
+  // activities and that day's physiology entry together (Home, capacity strain
+  // and the strain view make the same call). Sleep and HRV lookups keep `today`.
+  const strainDay = localDateKey(new Date());
+  const todaySignalBTSS = strainWk ? computeDayStrainTSS(strainWk, strainDay, s.physiologyHistory, s.tssPerActiveMinute) : 0;
+  const todayDayOfWeek = (new Date(strainDay + 'T12:00:00').getDay() + 6) % 7;
   // Canonical mode-aware planned TSS (planned-day-tss.ts): reads the real plan
   // per mode (running resolver / tri-cycling-HYROX stored weeks). Just-Track
   // returns zeros (no plan), matching the old trackOnly guard.
@@ -153,7 +159,7 @@ function getReadinessHTML(s: SimulatorState): string {
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
     for (const [, actual] of Object.entries(strainWk.garminActuals ?? {})) {
-      if (!actual.startTime?.startsWith(today)) continue;
+      if (!isOnLocalDay(actual.startTime, strainDay)) continue;
       matchedActivityToday = true;
       break;
     }

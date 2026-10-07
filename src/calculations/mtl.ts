@@ -93,10 +93,16 @@ export function computeWeekMTL(wk: Week): number {
  * triathlon matcher and the cross-source twin rebind) or an activity record
  * sits on its slot key (`wk.garminActuals[id || n]`). HYROX writes only the
  * second: the matcher's station and run branches, in-app GPS runs, Mark as
- * Done run records and quick-done station records all key the record by the
- * slot. Same completion test as the status chip (deriveWorkoutStatus) minus
- * the bare rating: a session rated done with no record (HYROX bike / erg /
- * swim cross sessions) carries no activity and is not counted.
+ * Done records (runs and, since 2026-10-06, bike / erg / swim cross sessions)
+ * and quick-done station records all key the record by the slot. Same
+ * completion test as the status chip (deriveWorkoutStatus) minus the bare
+ * rating: a rating with no record (a future-week tick) is not counted.
+ *
+ * The MTL sums below read wk.triWorkouts. HYROX cross sessions are injury
+ * capability offers stored in wk.adhocWorkouts and carry no
+ * musculoTendonLoad (the MTL model has factors for stations and runs only,
+ * hyrox-constants STATION_MTL_FACTORS / RUN_MTL_FACTORS), so a completed cross
+ * session adds no MTL, ticked or recorded.
  */
 export function isMtlSessionCompleted(wk: Week, w: Workout): boolean {
   if (w.matchedActivityId) return true;

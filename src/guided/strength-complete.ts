@@ -40,6 +40,7 @@ import type { TrainingPhase } from '@/types/training';
 import { snapshotNotifiedStrengthPrs } from '@/calculations/strength-marker-bumps';
 import { deriveStrengthLegLoad, buildStrengthLegLoadEntry, dropSupersededStrengthEntries } from '@/calculations/strength-leg-load';
 import { manualCompletionStartIso, manualInAppGarminId } from '@/calculations/in-app-activity';
+import { IN_APP_HYROX_ACTIVITY_TYPE } from '@/cross-training/activities';
 
 export interface CompleteStrengthOpts {
   /** RPE the user actually rated; defaults to the workout's prescribed RPE so
@@ -344,7 +345,7 @@ function logQuickHyroxActivity(
     avgHR: null,
     maxHR: null,
     calories: null,
-    activityType: 'hyrox',
+    activityType: IN_APP_HYROX_ACTIVITY_TYPE,
     plannedType: workout.t ?? null,
     rpe,
     workoutName: workout.n,
@@ -389,7 +390,7 @@ function logGuidedHyroxActivity(
     avgHR: null,
     maxHR: null,
     calories: null,
-    activityType: 'hyrox',
+    activityType: IN_APP_HYROX_ACTIVITY_TYPE,
     plannedType: workout.t ?? null,
     workoutName: workout.n,
     displayName: workout.n,

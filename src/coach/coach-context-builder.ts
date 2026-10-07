@@ -16,6 +16,7 @@ import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore, computeWeekActualTSS } from '@/calculations/fitness-model';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { sanitizeField } from './prompt-sanitizer';
+import { localDateKey } from '@/utils/local-date';
 
 // Max activities to include per week (keeps context bounded)
 const MAX_ACTIVITIES_PER_WEEK = 5;
@@ -75,7 +76,7 @@ export function collectRecentActivities(
 function formatActivity(act: GarminActual) {
   if (!act.startTime && !act.distanceKm) return null;
   return {
-    date: act.startTime?.slice(0, 10) ?? null,
+    date: act.startTime ? localDateKey(act.startTime) : null,
     type: sanitizeField(act.displayName ?? act.activityType, 40),
     matched_workout: sanitizeField(act.workoutName, 50),
     distance_km: roundTo(act.distanceKm, 1),

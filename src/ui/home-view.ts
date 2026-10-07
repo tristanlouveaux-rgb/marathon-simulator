@@ -12,7 +12,7 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
@@ -39,6 +39,7 @@ import { maybeShowCheckinHint } from './checkin-hint';
 import { clearIllness } from './illness-modal';
 import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
 import { formatKm, fmtDateUK, fmtDesc, formatPace, ft } from '@/utils/format';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 import { setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
@@ -950,12 +951,15 @@ export function buildReadinessRing(s: SimulatorState): string {
   // otherwise fall back to signalBBaseline ÷ 7 (typical daily average).
   // This means 100% = "you completed what was planned for today".
   const strainWk = (s.wks ?? [])[s.w - 1];
-  // Today's epoch data from Garmin (updated on launch + foreground resume)
-  const todayPhysio = (s.physiologyHistory ?? []).find(e => e.date === today);
-  const todaySteps = todayPhysio?.steps ?? null;
-  const todayActiveMin = todayPhysio?.activeMinutes ?? null;
-  const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysio, s.tssPerActiveMinute) : 0;
-  const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
+  // The strain day is the athlete's local calendar day: synced activities are
+  // filed by their local start day (isOnLocalDay), physiology entries (steps,
+  // active minutes, updated on launch + foreground resume) are keyed by local
+  // day, and plan weekdays are local. computeDayStrainTSS reads the activities
+  // and that day's physiology entry together, the call the strain page this
+  // ring opens makes. Sleep and HRV lookups keep `today`.
+  const strainDay = localDateKey(new Date());
+  const todaySignalBTSS = strainWk ? computeDayStrainTSS(strainWk, strainDay, s.physiologyHistory, s.tssPerActiveMinute) : 0;
+  const todayDayOfWeek = (new Date(strainDay + 'T12:00:00').getDay() + 6) % 7;
   // Canonical mode-aware planned TSS (planned-day-tss.ts): reads the real plan
   // per mode (running resolver / tri-cycling-HYROX stored weeks) so the ring's
   // target matches what the plan view shows in every mode.
@@ -975,7 +979,7 @@ export function buildReadinessRing(s: SimulatorState): string {
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
     for (const [, actual] of Object.entries(strainWk.garminActuals ?? {})) {
-      if (!actual.startTime?.startsWith(today)) continue;
+      if (!isOnLocalDay(actual.startTime, strainDay)) continue;
       matchedActivityToday = true;
       break;
     }
@@ -1862,11 +1866,12 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
 type CompletedActivity = { name: string; distanceKm: number | null; durationMin: number | null; workoutKey?: string; adhocIdx?: number; weekNum: number };
 
 /** Find a completed activity for today across garminActuals and adhocWorkouts.
- *  Uses YYYY-MM-DD prefix match on startTime/garminTimestamp (same as readiness ring). */
+ *  `todayISO` is the local calendar day; an activity is on it when its start's
+ *  local day is (isOnLocalDay, the readiness ring's rule). */
 function findTodayCompletedActivity(wk: Week, todayISO: string, s: SimulatorState): CompletedActivity | null {
   // 1. garminActuals. Matched to a plan slot (e.g. skiing → General Sport)
   for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
-    if (!actual.startTime?.startsWith(todayISO)) continue;
+    if (!isOnLocalDay(actual.startTime, todayISO)) continue;
     const name = (actual.activityType ? formatActivityType(actual.activityType) : null)
       || actual.displayName || actual.workoutName || key;
     return {
@@ -1883,7 +1888,7 @@ function findTodayCompletedActivity(wk: Week, todayISO: string, s: SimulatorStat
   for (let i = 0; i < adhocs.length; i++) {
     const w = adhocs[i] as any;
     const ts: string | undefined = w.garminTimestamp;
-    if (!ts?.startsWith(todayISO)) continue;
+    if (!isOnLocalDay(ts, todayISO)) continue;
     return {
       name: (w.activityType ? formatActivityType(w.activityType) : null) || w.workoutName || w.displayName || w.name || w.n || 'Workout',
       distanceKm: w.garminDistKm || w.distanceKm || null,
@@ -1968,7 +1973,7 @@ function buildTodayWorkout(s: SimulatorState): string {
 
   if (!todayW || (todayW as any).t === 'rest' || (todayW as any).n?.toLowerCase().includes('rest')) {
     // No planned workout today. Check for completed ad-hoc/matched activities done today
-    const todayISO = new Date().toISOString().split('T')[0];
+    const todayISO = localDateKey(new Date());
     const todayActivity = findTodayCompletedActivity(wk, todayISO, s);
     if (todayActivity) {
       return buildCompletedActivityHero(todayActivity, ourDay, s);

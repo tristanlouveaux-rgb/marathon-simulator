@@ -71,12 +71,11 @@ export function resolveTriWeekWorkouts(
 }
 
 /**
- * Estimate a tri / cycling / HYROX workout's duration in minutes.
- * Single shared copy of the helper both plan views previously duplicated.
- * Order: explicit estimatedDurationMin → brick segment sum → "Xh Ymin" in the
- * description → max "Nmin" in the description → 60 fallback.
+ * The duration in minutes a tri / cycling / HYROX workout states, or null when
+ * it states none. Order: explicit estimatedDurationMin → brick segment sum →
+ * "Xh Ymin" in the description → max "Nmin" in the description.
  */
-export function estimateTriWorkoutMin(w: any): number {
+export function readTriWorkoutMin(w: any): number | null {
   if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
     return w.estimatedDurationMin;
   }
@@ -86,6 +85,15 @@ export function estimateTriWorkoutMin(w: any): number {
   const hm = String(w.d || '').match(/(\d+)\s*h\s*(\d+)\s*min/i);
   if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
   const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g)) as RegExpMatchArray[];
-  if (!matches.length) return 60;
+  if (!matches.length) return null;
   return matches.reduce((acc: number, m: RegExpMatchArray) => Math.max(acc, parseInt(m[1], 10)), 0);
+}
+
+/**
+ * Estimate a tri / cycling / HYROX workout's duration in minutes.
+ * Single shared copy of the helper both plan views previously duplicated:
+ * the stated duration (readTriWorkoutMin), else the 60 fallback.
+ */
+export function estimateTriWorkoutMin(w: any): number {
+  return readTriWorkoutMin(w) ?? 60;
 }

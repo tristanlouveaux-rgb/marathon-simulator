@@ -17,6 +17,7 @@ import { triEffortMultiplier } from '@/calculations/effort-multiplier.triathlon'
 import { getRaceOutcomeRetro } from '@/calculations/tri-race-outcome';
 import { computeTriAdaptationRatios } from '@/calculations/tri-adaptation-ratio';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
+import { inAppRecordDiscipline } from '@/calculations/in-app-activity';
 import { computeWeekRawTSS } from '@/calculations/fitness-model';
 import { readTriFitness, resolveTriDisciplineAdherence } from '@/calculations/fitness-model.triathlon';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
@@ -110,6 +111,19 @@ function parseDurationMin(w: Workout): number {
   return ms.reduce((acc, m) => Math.max(acc, parseInt(m[1], 10)), 0);
 }
 
+/**
+ * Discipline of a week actual for the debrief rows: the recorded activityType,
+ * else an in-app record's own discipline (a run marked done or recorded with
+ * the app GPS, a bike or swim marked done; inAppRecordDiscipline). Those carry
+ * no activityType, and the headline TSS already counts them, so the rows and
+ * hours count them too.
+ */
+function debriefDisciplineOf(a: Record<string, unknown>): 'swim' | 'bike' | 'run' | 'other' {
+  const byType = classifyActivity(a.activityType as string);
+  if (byType !== 'other') return byType;
+  return inAppRecordDiscipline(a as unknown as Parameters<typeof inAppRecordDiscipline>[0]) ?? 'other';
+}
+
 function buildEffortSignal(
   discipline: 'swim' | 'bike' | 'run',
   actuals: Array<Record<string, unknown>>,
@@ -127,7 +141,8 @@ function buildEffortSignal(
   return { effortLabel: 'On target', effortColor: '#0F172A' };
 }
 
-function buildWeekSummary(state: SimulatorState, weekNum: number): WeekSummary {
+/** Exported for tests: the data behind the debrief (rows, hours, headline TSS). */
+export function buildWeekSummary(state: SimulatorState, weekNum: number): WeekSummary {
   const wk = state.wks?.[weekNum - 1];
   const allActuals = Object.values(wk?.garminActuals ?? {}) as unknown as Array<Record<string, unknown>>;
 
@@ -137,7 +152,7 @@ function buildWeekSummary(state: SimulatorState, weekNum: number): WeekSummary {
     const plannedSessions = planned.length;
 
     const statusCount = planned.filter(w => w.status === 'completed').length;
-    const disciplineActuals = allActuals.filter(a => classifyActivity(a.activityType as string) === d);
+    const disciplineActuals = allActuals.filter(a => debriefDisciplineOf(a) === d);
     const completedSessions = Math.min(
       plannedSessions,
       Math.max(statusCount, disciplineActuals.length),

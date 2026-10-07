@@ -24,7 +24,7 @@
 
 import { normalizeiTrimp, getAthleteNormalizer } from '@/calculations/fitness-model';
 import { TL_PER_MIN } from '@/constants';
-import { isGpsInAppActual } from '@/calculations/in-app-activity';
+import { isGpsInAppActual, isManualInAppActual } from '@/calculations/in-app-activity';
 import { isStrengthActual } from '@/cross-training/activities';
 import type { GarminActual, Week, Workout } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
@@ -895,6 +895,14 @@ export function triLoadObservedDays(
  * under its own key, which the tri matcher direct-binds) is skipped — the real
  * activity is already in the activity log (or, for an in-app GPS run, in
  * inAppGpsRunActivities) and always wins (Strava-canonical).
+ *
+ * A Mark as Done record (isManualInAppActual: planned numbers, nothing
+ * measured) is not a real activity. Mark as Done writes one at the slot key and
+ * the tri matcher then direct-binds it (status 'completed', matchedActivityId =
+ * the slot key), but the DB log never holds it, so the session still deposits
+ * its planned load here. When the watch copy syncs it supersedes the record in
+ * place (synced garminId), the guard above applies again and the synced row
+ * counts from the DB log instead.
  * The planned load is encoded as `iTrimp = TSS × normalizer / 100` so `triActivityTss` recovers
  * exactly the planned (aerobic+anaerobic) TSS. The 120-day window is applied
  * downstream by the CTL function.
@@ -919,8 +927,12 @@ export function manualDoneTriActivities(
       const id = (w as { id?: string }).id ?? w.n;
       const rv = id != null ? rated[id] : undefined;
       if (typeof rv !== 'number' || rv <= 0) continue;            // not manually marked done
-      if ((w as { matchedActivityId?: string }).matchedActivityId || w.status === 'completed') continue; // real activity wins
-      if (wk.garminActuals?.[id]?.garminId) continue;               // record at the slot key (direct bind) wins
+      const slotRecord = wk.garminActuals?.[id];
+      const markedDoneRecord = isManualInAppActual(slotRecord);   // planned numbers, not an activity
+      const link = (w as { matchedActivityId?: string }).matchedActivityId;
+      if (link && !(markedDoneRecord && link === id)) continue;   // real activity wins
+      if (w.status === 'completed' && !markedDoneRecord) continue;
+      if (slotRecord?.garminId && !markedDoneRecord) continue;    // record at the slot key (direct bind) wins
       const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
       if (tss <= 0) continue;                                     // nothing planned to deposit
       const activityType = DISC_TO_TYPE[(w.discipline as string) ?? ''];

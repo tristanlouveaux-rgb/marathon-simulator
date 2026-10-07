@@ -38,7 +38,7 @@ import { detectArchetype } from '@/calculations/athlete-archetype';
 import { isPbTombstoned } from '@/calculations/physiological-vdot';
 import { SPORTS_DB } from '@/constants/sports';
 import type { PhysiologyDayEntry, ApplePhysiologyField } from '@/types';
-import { localDateKey } from '@/utils/local-date';
+import { localDateKey, localMondayKey } from '@/utils/local-date';
 import { APPLE_PHYSIOLOGY_FIELDS } from '@/data/physiology-provenance';
 import { type WorkoutType, type Workout, type HealthSample, type SleepState } from '@capgo/capacitor-health';
 import {
@@ -2069,12 +2069,15 @@ export function aggregateHistoryFromRows(
 ): void {
   const s = getMutableState();
 
-  const thisMondayISO = mondayOfISO(new Date());
+  // Calendar weeks by the athlete's local day, as plan weeks file activities
+  // (weekIndexForDate). The UTC week put a late-Sunday session west of UTC or
+  // an early-Monday one east of UTC in the neighbouring week.
+  const thisMondayISO = localMondayKey(new Date());
 
   // Bucket rows by Monday-of-week
   const byWeek = new Map<string, GarminActivityRow[]>();
   for (const row of rows) {
-    const monday = mondayOfISO(new Date(row.start_time));
+    const monday = localMondayKey(row.start_time);
     if (monday >= thisMondayISO) continue; // exclude in-progress current week
     if (!byWeek.has(monday)) byWeek.set(monday, []);
     byWeek.get(monday)!.push(row);
@@ -2300,15 +2303,6 @@ function mapActivityTypeToSportKey(activityType: string): string {
     case 'STAIR_CLIMBING':     return 'stair_climbing';
     default:                   return 'generic_sport';
   }
-}
-
-/** ISO date (YYYY-MM-DD) of the Monday in the same UTC week as `d`. */
-function mondayOfISO(d: Date): string {
-  const utcDay = d.getUTCDay();
-  const daysToMonday = utcDay === 0 ? -6 : 1 - utcDay;
-  const m = new Date(d);
-  m.setUTCDate(d.getUTCDate() + daysToMonday);
-  return m.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------

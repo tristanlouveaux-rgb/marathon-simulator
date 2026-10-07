@@ -25,8 +25,9 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import { computeTodayStrainTSS, computeLiveSameSignalTSB } from './fitness-model';
+import { computeDayStrainTSS, computeLiveSameSignalTSB } from './fitness-model';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 
 export interface CapacityStrain {
   /** Today's completed Signal B TSS (sessions + passive), same number the Strain ring shows. */
@@ -51,11 +52,15 @@ export interface CapacityStrain {
 }
 
 export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
-  const today = new Date().toISOString().split('T')[0];
   const wk = (s.wks ?? [])[s.w - 1];
-  const todayPhysio = (s.physiologyHistory ?? []).find(e => e.date === today);
-  const todayTSS = wk ? computeTodayStrainTSS(wk, today, todayPhysio, s.tssPerActiveMinute) : 0;
-  const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
+  // The strain day is the athlete's local calendar day: synced activities are
+  // filed by their local start day (isOnLocalDay), physiology entries are keyed
+  // by local day, and plan weekdays are local. computeDayStrainTSS reads the
+  // activities and that day's physiology entry together, the call the strain
+  // view makes.
+  const strainDay = localDateKey(new Date());
+  const todayTSS = wk ? computeDayStrainTSS(wk, strainDay, s.physiologyHistory, s.tssPerActiveMinute) : 0;
+  const todayDayOfWeek = (new Date(strainDay + 'T12:00:00').getDay() + 6) % 7;
 
   const plannedCtx = getPlannedDayTSSContext(s, s.w);
   const plannedDayTSS = wk ? plannedCtx.plannedTSSForDay(todayDayOfWeek) : 0;
@@ -66,8 +71,8 @@ export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
   // CTL/7 and crater the score. adhocWorkouts covers Garmin imports that
   // bypass garminActuals.
   const loggedSessionToday =
-    Object.values(wk?.garminActuals ?? {}).some(a => a.startTime?.startsWith(today))
-    || (wk?.adhocWorkouts ?? []).some((w: any) => ((w.garminTimestamp as string | undefined) ?? '').startsWith(today));
+    Object.values(wk?.garminActuals ?? {}).some(a => isOnLocalDay(a.startTime, strainDay))
+    || (wk?.adhocWorkouts ?? []).some((w: any) => isOnLocalDay(w.garminTimestamp as string | undefined, strainDay));
 
   // Weekly-equivalent CTL. Tri = per-discipline weekly EMAs + crossTrainingCtl
   // (the numerator counts ALL sports — excluding cross made every routine HIIT

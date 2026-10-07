@@ -28,6 +28,7 @@ import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insig
 import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { isLongRun } from '@/workouts/long-run';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
 import {
   computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
@@ -188,7 +189,9 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   const wk = (s.wks ?? [])[s.w - 1];
   if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, upcomingHard: null, recentCrossTraining: null, actualTSS: 0 };
 
-  const today = new Date().toISOString().split('T')[0];
+  // The strain day is the athlete's local calendar day: synced activities are
+  // filed by their local start day (isOnLocalDay) and plan weekdays are local.
+  const today = localDateKey(new Date());
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
   const todayTSS = computeTodaySignalBTSS(wk, today);
 
@@ -205,7 +208,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   let matchedActivityToday = false;
   if (!hasPlannedWorkout) {
     for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
-      if (!actual.startTime?.startsWith(today)) continue;
+      if (!isOnLocalDay(actual.startTime, today)) continue;
       matchedActivityToday = true;
       break;
     }

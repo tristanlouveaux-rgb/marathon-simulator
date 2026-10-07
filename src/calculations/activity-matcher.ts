@@ -18,12 +18,14 @@ import { getEffectiveVdot } from './effective-vdot';
 import { isStrengthActual } from '@/cross-training/activities';
 import {
   isSameRecordedSession, isSameCompletedSession, findInAppRunToSupersede, isInAppActual,
-  isInAppRunActual, isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
-  isExtraActivityKey,
+  isSameSportAsInApp, findInAppRunToSupersedeAcrossWeeks, isManualInAppActual,
+  isExtraActivityKey, isInAppEnduranceActual, findInAppSessionToSupersede,
+  findInAppSessionToSupersedeAcrossWeeks, syncedCrossEnduranceFamily, findInAppGymSessionAcrossWeeks,
 } from './in-app-activity';
 import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-source-twins';
 import { resolveWeekWorkouts } from '@/ui/week-resolve';
 import { addUnspentItemOnce } from './excess-records';
+import { localDateKey, calendarDaysBetween } from '@/utils/local-date';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -355,6 +357,12 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
  * Determine which 1-based plan week index a given date falls in.
  * Returns null if the date is before the plan start or beyond the plan length.
  *
+ * The date is filed by the athlete's LOCAL calendar day (decision 2026-10-06),
+ * the calendar plan weekdays use (dayOfWeekFromDate, planStartDate is a local
+ * Monday). It used the UTC day, so a late-Sunday session west of UTC or an
+ * early-Monday one east of UTC landed in the neighbouring week, its weekday
+ * and its week disagreeing.
+ *
  * Exported so the launch-time anchor consistency check
  * (`assertPlanAnchorConsistent` in welcome-back.ts) can mirror the matcher's
  * exact routing logic. Anything that diverges here would file activities
@@ -362,12 +370,8 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
  */
 export function weekIndexForDate(date: Date, s: ReturnType<typeof getMutableState>): number | null {
   if (!s.planStartDate) return null;
-  const planStart = new Date(s.planStartDate);
-  // Compare at day granularity in UTC to avoid timezone drift
-  const planStartDay = Date.UTC(planStart.getUTCFullYear(), planStart.getUTCMonth(), planStart.getUTCDate());
-  const actDay = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-  const daysDiff = Math.floor((actDay - planStartDay) / (1000 * 60 * 60 * 24));
-  if (daysDiff < 0) return null;
+  const daysDiff = calendarDaysBetween(localDateKey(s.planStartDate), localDateKey(date));
+  if (!Number.isFinite(daysDiff) || daysDiff < 0) return null;
   const idx = Math.floor(daysDiff / 7) + 1;
   if (idx < 1 || idx > s.wks.length) return null;
   return idx;
@@ -553,7 +557,9 @@ export function reconcileCrossSourceDuplicates(state?: ReturnType<typeof getMuta
     week.unspentLoadItems = week.unspentLoadItems.filter(u => {
       if (!u.garminId || u.garminId.startsWith('strava-') || u.garminId.startsWith('apple-')) return true;
       const twin = stravaRecords.some(r => {
-        if ((r.startTime ?? '').slice(0, 10) !== u.date) return false;
+        // Local calendar day on both sides (activity-review writes u.date with
+        // localDateKey; a surplus item stores the full start).
+        if (!r.startTime || !u.date || localDateKey(r.startTime) !== localDateKey(u.date)) return false;
         const rMin = Math.round((r.durationSec ?? 0) / 60);
         if (!rMin || !u.durationMin) return false;
         return Math.abs(rMin - u.durationMin) / Math.max(rMin, u.durationMin) < 0.15;
@@ -653,6 +659,187 @@ function supersedeInAppRun(
     });
   }
   console.log(`[ActivityMatcher] ${row.garmin_id} supersedes in-app ${prior.garminId} at ${key}`);
+}
+
+/**
+ * Write a synced HYROX station row onto the station / brick slot `workoutId` in
+ * `targetWk`: rated from the row (deriveRPE), garminMatched, the slot record
+ * (an in-app record there is replaced in place, its per-station recap kept)
+ * and the re-review record. Shared by the cross-week in-app upgrade
+ * (findInAppGymSessionAcrossWeeks) and the same-week slot match, so a session
+ * lands the same way whichever check found it.
+ */
+function matchHyroxStationRow(
+  s: ReturnType<typeof getMutableState>,
+  targetWk: Week,
+  workoutId: string,
+  slot: Pick<Workout, 'n' | 't'> & { rpe?: number; r?: number },
+  row: GarminActivityRow,
+  rhrBaseline: number | null | undefined,
+  nameLooksLikeHyrox: boolean,
+): void {
+  if (!targetWk.rated) targetWk.rated = {};
+  if (!targetWk.garminMatched) targetWk.garminMatched = {};
+  if (!targetWk.garminPending) targetWk.garminPending = [];
+  const rpe = deriveRPE(row, slot.rpe || slot.r || 6, s.maxHR, s.restingHR, s.onboarding?.age);
+  targetWk.rated![workoutId] = rpe;
+  targetWk.garminMatched![row.garmin_id] = workoutId;
+
+  if (!targetWk.garminActuals) targetWk.garminActuals = {};
+  // Carry the in-app per-station recap across the upgrade so the
+  // activity-detail summary survives when the watch recording replaces
+  // the guided actual (the synced row has no per-station breakdown).
+  const priorRecap = targetWk.garminActuals[workoutId]?.hyroxSession;
+  targetWk.garminActuals[workoutId] = {
+    garminId: row.garmin_id,
+    startTime: row.start_time,
+    distanceKm: (row.distance_m ?? 0) / 1000,
+    durationSec: row.duration_sec,
+    avgPaceSecKm: null,
+    avgHR: row.avg_hr ?? null,
+    maxHR: row.max_hr ?? null,
+    calories: row.calories ?? null,
+    iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
+    hrZones: row.hrZones ?? null,
+    activityType: row.activity_type,
+    plannedType: slot.t ?? null,
+    hrEffortScore: null,
+    paceAdherence: null,
+    hrDrift: null,
+    ambientTempC: null,
+    plannedDistanceKm: null,
+    elevationGainM: null,
+    workoutName: slot.n,
+    ...(priorRecap ? { hyroxSession: priorRecap } : {}),
+  };
+
+  // Actual MTL needs no accumulator: the slot record written above is
+  // what computeWeekActualMTL (mtl.ts) counts, the same as runs, GPS
+  // runs, Mark as Done and quick done.
+
+  // HYROX activity-parser pass: if the activity has lap data (kmSplits already
+  // imported, full Garmin laps separately), try to decompose into per-station
+  // times and update calibrated benchmarks on PB. Best-effort, silent on failure.
+  if (s.hyroxConfig && nameLooksLikeHyrox) {
+    // We don't yet have GarminLap[] on row. Just kmSplits. Schedule a follow-up
+    // import once full lap data lands; for now use the name signal alone to flag
+    // the activity for the activity-detail page to surface a "parse this" CTA.
+    (targetWk.garminActuals[workoutId] as any).hyroxParserHint = 'name-detected';
+  }
+
+  // iTRIMP for the pending item below. No week total to bump:
+  // computeWeekActualTSS derives it from the garminActuals record above (B18).
+  const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
+
+  // Also store in garminPending so ActivityReview can surface it for re-rating
+  const stationPending: GarminPendingItem = {
+    garminId: row.garmin_id,
+    activityType: row.activity_type,
+    appType: 'gym',
+    startTime: row.start_time,
+    durationSec: row.duration_sec,
+    distanceM: row.distance_m ?? null,
+    avgPaceSecKm: null,
+    avgHR: row.avg_hr ?? null,
+    maxHR: row.max_hr ?? null,
+    aerobicEffect: row.aerobic_effect ?? null,
+    anaerobicEffect: row.anaerobic_effect ?? null,
+    garminRpe: row.garmin_rpe ?? null,
+    calories: row.calories ?? null,
+    iTrimp: rawITrimp,
+    hrZones: row.hrZones ?? null,
+    polyline: null,
+    kmSplits: null,
+  };
+  if (!targetWk.garminPending!.some(p => p.garminId === row.garmin_id)) {
+    targetWk.garminPending!.push(stationPending);
+  }
+}
+
+/**
+ * A synced ride, swim or row replaces the same session marked done (a
+ * `guided-manual-` record tagged manualSport 'cycling' / 'swimming' /
+ * 'rowing': triathlon, cycling and Just-Track Mark as Done, HYROX cross
+ * sessions) in place, so the session counts once and Strava's
+ * copy wins. Tracking side. Same contract as supersedeInAppRun: the record's
+ * slot (key, workoutName, plannedType, displayName) is kept and the user's
+ * rating stays; everything measured comes from the row, power included. The
+ * sport tag goes: the row's own activityType names the sport now, so FTP and
+ * CSS readers see a real ride or swim. No impact load (not a run).
+ */
+function supersedeInAppCrossSession(
+  s: ReturnType<typeof getMutableState>,
+  wk: Week,
+  key: string,
+  row: GarminActivityRow,
+  rhrBaseline: number | null | undefined,
+  appType: string,
+): void {
+  const prior = wk.garminActuals![key];
+  const { manualSport: _tag, ...slot } = prior;
+  const iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
+  wk.garminActuals![key] = {
+    ...slot,
+    garminId: row.garmin_id,
+    startTime: row.start_time,
+    distanceKm: (row.distance_m ?? 0) / 1000,
+    durationSec: row.duration_sec,
+    avgPaceSecKm: row.avg_pace_sec_km ?? null,
+    avgHR: row.avg_hr ?? null,
+    maxHR: row.max_hr ?? null,
+    calories: row.calories ?? null,
+    aerobicEffect: row.aerobic_effect ?? null,
+    anaerobicEffect: row.anaerobic_effect ?? null,
+    iTrimp,
+    hrZones: row.hrZones ?? null,
+    activityType: row.activity_type,
+    hrDrift: row.hrDrift ?? null,
+    ambientTempC: row.ambientTempC ?? null,
+    elevationGainM: row.elevationGainM ?? null,
+    polyline: row.polyline ?? null,
+    kmSplits: row.kmSplits ?? null,
+    averageWatts: row.averageWatts ?? null,
+    normalizedPowerW: row.normalizedPowerW ?? null,
+    maxWatts: row.maxWatts ?? null,
+    deviceWatts: row.deviceWatts ?? null,
+    kilojoules: row.kilojoules ?? null,
+  };
+  if (!wk.garminMatched) wk.garminMatched = {};
+  wk.garminMatched[row.garmin_id] = key;
+  if (!wk.rated) wk.rated = {};
+  if (typeof wk.rated[key] !== 'number') {
+    wk.rated[key] = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
+  }
+
+  // Re-review record, as for the run supersede (openActivityReReview reads it).
+  if (!wk.garminPending) wk.garminPending = [];
+  if (!wk.garminPending.some(p => p.garminId === row.garmin_id)) {
+    wk.garminPending.push({
+      garminId: row.garmin_id,
+      activityType: row.activity_type,
+      appType,
+      startTime: row.start_time,
+      durationSec: row.duration_sec,
+      distanceM: row.distance_m ?? null,
+      avgPaceSecKm: row.avg_pace_sec_km ?? null,
+      avgHR: row.avg_hr ?? null,
+      maxHR: row.max_hr ?? null,
+      aerobicEffect: row.aerobic_effect ?? null,
+      anaerobicEffect: row.anaerobic_effect ?? null,
+      garminRpe: row.garmin_rpe ?? null,
+      calories: row.calories ?? null,
+      iTrimp,
+      hrZones: row.hrZones ?? null,
+      polyline: row.polyline ?? null,
+      kmSplits: row.kmSplits ?? null,
+      averageWatts: row.averageWatts ?? null,
+      normalizedPowerW: row.normalizedPowerW ?? null,
+      maxWatts: row.maxWatts ?? null,
+      deviceWatts: row.deviceWatts ?? null,
+      kilojoules: row.kilojoules ?? null,
+    });
+  }
+  console.log(`[ActivityMatcher] ${row.garmin_id} supersedes in-app ${prior.garminId} (${appType}) at ${key}`);
 }
 
 /**
@@ -836,15 +1023,15 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         if (actual.garminId.startsWith('strava-')) continue; // already Strava
         if (!actual.startTime) continue;
         // In-app records (audit B9) are superseded by sport, never by this
-        // timing-only check. A run (GPS or Mark as Done) is left to the main
-        // loop's in-app run supersede, which every source goes through and
-        // which searches every plan week. A guided strength or HYROX session
+        // timing-only check. A run (GPS or Mark as Done) and a bike or swim
+        // marked done are left to the main loop's in-app supersede, which every
+        // source goes through and which searches every plan week. A guided strength or HYROX session
         // is upgraded here only by a row of the same sport family. Without
         // this a same-day ride replaced a run marked done (stamped at
         // planned-day noon) and a same-day run replaced a HYROX quick done,
         // misfiling both sessions.
         if (isInAppActual(actual)) {
-          if (isInAppRunActual(actual)) continue;
+          if (isInAppEnduranceActual(actual)) continue;
           if (!isSameSportAsInApp(actual, `garmin-${row.garmin_id}`, {
             activityType: row.activity_type, displayName: row.activity_name ?? undefined,
           })) continue;
@@ -1185,6 +1372,34 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         const activityDayOfWeek = dayOfWeekFromDate(new Date(row.start_time));
         const activityDurMin = row.duration_sec / 60;
 
+        // A station or brick session already recorded in the app (guided or
+        // quick done) is the same session when the row falls inside a bounded
+        // window: start within 4 h with duration within 15 %, or the same
+        // local calendar day with duration 0.5 to 2.0x. Those windows are
+        // bounded in time, so every plan week is searched, the row's own first,
+        // as the in-app run supersede does: a session done on another day than
+        // planned across a week boundary keeps its record in the card's week
+        // while the row is filed by its own day, and a same-week search left
+        // the session counted twice. The wider same-week slot match below
+        // (day +/-1) still runs when nothing qualifies. 30 min is the duration
+        // assumed for an entry with none, this branch's planned-duration
+        // fallback below.
+        if (!isInAppRow) {
+          const searchWeeks = [wk, ...s.wks.filter(w => w !== wk)];
+          const hit = findInAppGymSessionAcrossWeeks(
+            searchWeeks, { startTime: row.start_time, durationSec: row.duration_sec }, 'hyrox', 30,
+          );
+          if (hit) {
+            const prior = hit.week.garminActuals![hit.key];
+            const slot = (hit.week.triWorkouts ?? []).find(w => (w.id || w.n) === hit.key)
+              ?? { n: prior.workoutName ?? prior.displayName ?? hit.key, t: prior.plannedType ?? '' };
+            matchHyroxStationRow(s, hit.week, hit.key, slot, row, rhrBaseline, nameLooksLikeHyrox);
+            changed = true;
+            console.log(`[ActivityMatcher] HYROX: ${row.activity_type} (${Math.round(activityDurMin)}min) upgrades in-app "${slot.n}" (week ${hit.week.w})`);
+            continue;
+          }
+        }
+
         // Find a station/brick triWorkout on the same day (or ±1 day) with similar
         // duration. Normally we skip already-rated workouts, but a workout whose
         // current actual was logged in-app (a guided session, `garminId` prefixed
@@ -1215,80 +1430,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
         if (stationMatch) {
           const workoutId = stationMatch.id || stationMatch.n;
-          const rpe = deriveRPE(row, (stationMatch as any).rpe || (stationMatch as any).r || 6, s.maxHR, s.restingHR, s.onboarding?.age);
-          wk.rated![workoutId] = rpe;
-          wk.garminMatched![row.garmin_id] = workoutId;
-
-          if (!wk.garminActuals) wk.garminActuals = {};
-          // Carry the in-app per-station recap across the upgrade so the
-          // activity-detail summary survives when the watch recording replaces
-          // the guided actual (the synced row has no per-station breakdown).
-          const priorRecap = wk.garminActuals[workoutId]?.hyroxSession;
-          wk.garminActuals[workoutId] = {
-            garminId: row.garmin_id,
-            startTime: row.start_time,
-            distanceKm: (row.distance_m ?? 0) / 1000,
-            durationSec: row.duration_sec,
-            avgPaceSecKm: null,
-            avgHR: row.avg_hr ?? null,
-            maxHR: row.max_hr ?? null,
-            calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s)),
-            hrZones: row.hrZones ?? null,
-            activityType: row.activity_type,
-            plannedType: stationMatch.t ?? null,
-            hrEffortScore: null,
-            paceAdherence: null,
-            hrDrift: null,
-            ambientTempC: null,
-            plannedDistanceKm: null,
-            elevationGainM: null,
-            workoutName: stationMatch.n,
-            ...(priorRecap ? { hyroxSession: priorRecap } : {}),
-          };
-
-          // Actual MTL needs no accumulator: the slot record written above is
-          // what computeWeekActualMTL (mtl.ts) counts, the same as runs, GPS
-          // runs, Mark as Done and quick done.
-
-          // HYROX activity-parser pass: if the activity has lap data (kmSplits already
-          // imported, full Garmin laps separately), try to decompose into per-station
-          // times and update calibrated benchmarks on PB. Best-effort, silent on failure.
-          if (s.hyroxConfig && nameLooksLikeHyrox) {
-            // We don't yet have GarminLap[] on row. Just kmSplits. Schedule a follow-up
-            // import once full lap data lands; for now use the name signal alone to flag
-            // the activity for the activity-detail page to surface a "parse this" CTA.
-            (wk.garminActuals[workoutId] as any).hyroxParserHint = 'name-detected';
-          }
-
-          // iTRIMP for the pending item below. No week total to bump:
-          // computeWeekActualTSS derives it from the garminActuals record above (B18).
-          const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
-
-          // Also store in garminPending so ActivityReview can surface it for re-rating
-          const stationPending: GarminPendingItem = {
-            garminId: row.garmin_id,
-            activityType: row.activity_type,
-            appType: 'gym',
-            startTime: row.start_time,
-            durationSec: row.duration_sec,
-            distanceM: row.distance_m ?? null,
-            avgPaceSecKm: null,
-            avgHR: row.avg_hr ?? null,
-            maxHR: row.max_hr ?? null,
-            aerobicEffect: row.aerobic_effect ?? null,
-            anaerobicEffect: row.anaerobic_effect ?? null,
-            garminRpe: row.garmin_rpe ?? null,
-            calories: row.calories ?? null,
-            iTrimp: rawITrimp,
-            hrZones: row.hrZones ?? null,
-            polyline: null,
-            kmSplits: null,
-          };
-          if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
-            wk.garminPending!.push(stationPending);
-          }
-
+          matchHyroxStationRow(s, wk, workoutId, stationMatch, row, rhrBaseline, nameLooksLikeHyrox);
           changed = true;
           console.log(`[ActivityMatcher] HYROX: matched ${row.activity_type} (${Math.round(activityDurMin)}min) → "${stationMatch.n}" week ${weekIdx}`);
           continue;
@@ -1379,12 +1521,12 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // only, so a synced activity of another sport never supersedes one here.
       //
       // Both checks search every plan week, the row's own first, and the record
-      // is superseded in the week that holds it. `wk` is the row's week by UTC
-      // day (weekIndexForDate), but a GPS run sits in s.wks[s.w - 1] and a Mark
-      // as Done record in its card's week: a Monday-morning session east of UTC,
-      // a Sunday-evening one west of UTC, or s.w held back by the debrief gate
-      // puts the two copies in different weeks, and a same-week search counted
-      // the session twice. Both windows are bounded in time (start within 4 h,
+      // is superseded in the week that holds it. `wk` is the row's week by its
+      // local day (weekIndexForDate), but a GPS run sits in s.wks[s.w - 1] and
+      // a Mark as Done record in its card's week: a session done on another day
+      // than planned across a week boundary, or s.w held back by the debrief
+      // gate, puts the two copies in different weeks, and a same-week search
+      // counted the session twice. Both windows are bounded in time (start within 4 h,
       // or the same local calendar day), so the wider search reaches only the
       // same session.
       if (appType === 'run' && !isInAppRow) {
@@ -1394,6 +1536,29 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           ?? findInAppRunToSupersedeAcrossWeeks(searchWeeks, syncedStamp, 'same-day-completion');
         if (hit) {
           supersedeInAppRun(s, hit.week, hit.key, row, rhrBaseline);
+          changed = true;
+          continue;
+        }
+      }
+
+      // Bike, swim or row erg marked done superseded by the watch copy
+      // (decision 2026-10-06). Triathlon, cycling and Just-Track Mark as Done
+      // and HYROX cross sessions store a ride, swim or row as an in-app record
+      // tagged with its sport; a synced ride, swim or row of the same session
+      // replaces it in place, by the same two checks and the same every-week
+      // search as the run supersede above (the windows are bounded in time, so
+      // a wider search reaches only the same session). A row of another sport
+      // never matches: each check compares one family
+      // (findInAppSessionToSupersedeAcrossWeeks), from the row's activity type
+      // (syncedCrossEnduranceFamily: a row erg is 'walk' to mapGarminType).
+      const crossFamily = syncedCrossEnduranceFamily(row.activity_type);
+      if (crossFamily && !isInAppRow) {
+        const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
+        const searchWeeks = [wk, ...s.wks.filter(w => w !== wk)];
+        const hit = findInAppSessionToSupersedeAcrossWeeks(searchWeeks, syncedStamp, 'recorded', crossFamily)
+          ?? findInAppSessionToSupersedeAcrossWeeks(searchWeeks, syncedStamp, 'same-day-completion', crossFamily);
+        if (hit) {
+          supersedeInAppCrossSession(s, hit.week, hit.key, row, rhrBaseline, appType);
           changed = true;
           continue;
         }
@@ -1505,23 +1670,36 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         // the Strava-beats-Garmin rule. Scans the stored guided actuals (planned
         // running workouts aren't persisted on the Week), so it is mode-agnostic.
         if (appType === 'gym') {
-          let guidedId: string | null = null;
-          for (const [wid, ga] of Object.entries(wk.garminActuals ?? {})) {
-            if (!String(ga.garminId).startsWith('guided-')) continue;
-            if (!isStrengthActual(ga)) continue;
-            // Same session ≈ same day: ±36h start, duration 0.5–2.0× the in-app
-            // entry's (30 min assumed when it has none). Shared with the in-app
-            // run supersede (in-app-activity.ts).
-            if (!isSameCompletedSession(ga, { startTime: row.start_time, durationSec: row.duration_sec }, 30)) continue;
-            guidedId = wid;
-            break;
+          const syncedStamp = { startTime: row.start_time, durationSec: row.duration_sec };
+          // Every plan week first, with the bounded windows (recorded, or the
+          // same local day inside the completion window), as the in-app run
+          // supersede and the HYROX station upgrade do: the record can sit in
+          // its card's week while the row is filed by its own day.
+          let target: { week: Week; key: string } | null = !isInAppRow
+            ? findInAppGymSessionAcrossWeeks([wk, ...s.wks.filter(w => w !== wk)], syncedStamp, 'strength', 30)
+            : null;
+          if (!target) {
+            for (const [wid, ga] of Object.entries(wk.garminActuals ?? {})) {
+              if (!String(ga.garminId).startsWith('guided-')) continue;
+              if (!isStrengthActual(ga)) continue;
+              // Same session ≈ same day: ±36h start, duration 0.5–2.0× the in-app
+              // entry's (30 min assumed when it has none). Shared with the in-app
+              // run supersede (in-app-activity.ts). Row's own week only.
+              if (!isSameCompletedSession(ga, syncedStamp, 30)) continue;
+              target = { week: wk, key: wid };
+              break;
+            }
           }
-          if (guidedId) {
-            const prior = wk.garminActuals![guidedId];
+          if (target) {
+            const tw = target.week;
+            const guidedId = target.key;
+            if (!tw.rated) tw.rated = {};
+            if (!tw.garminMatched) tw.garminMatched = {};
+            const prior = tw.garminActuals![guidedId];
             const rpe = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
-            wk.rated![guidedId] = rpe;
-            wk.garminMatched![row.garmin_id] = guidedId;
-            wk.garminActuals![guidedId] = {
+            tw.rated[guidedId] = rpe;
+            tw.garminMatched[row.garmin_id] = guidedId;
+            tw.garminActuals![guidedId] = {
               ...prior,
               garminId: row.garmin_id,
               startTime: row.start_time,
@@ -1536,7 +1714,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               rpe,
             };
             changed = true;
-            console.log(`[ActivityMatcher] Upgraded guided strength "${prior.displayName ?? guidedId}" with synced HR (week ${weekIdx})`);
+            console.log(`[ActivityMatcher] Upgraded guided strength "${prior.displayName ?? guidedId}" with synced HR (week ${tw.w})`);
             continue;
           }
         }
@@ -1546,6 +1724,21 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         // adhoc session instead of re-queuing it for review (the bug: a gym
         // session finished this week reappeared as "not done" after a regen).
         const isRedistributedGuided = String(row.garmin_id).startsWith('guided-');
+        // A past-week ride or swim that matched no same-day mark-as-done above:
+        // check the cross-day completion window in the row's own week before it
+        // becomes a second activity, as the run else-branch does for runs (past
+        // weeks only; the current week goes to Activity Review, which offers the
+        // in-app slot).
+        if (crossFamily && isPastWeek && !isInAppRow) {
+          const completionKey = findInAppSessionToSupersede(
+            wk, { startTime: row.start_time, durationSec: row.duration_sec }, 'completion', crossFamily,
+          );
+          if (completionKey) {
+            supersedeInAppCrossSession(s, wk, completionKey, row, rhrBaseline, appType);
+            changed = true;
+            continue;
+          }
+        }
         if (isPastWeek || isRedistributedGuided) {
           // Past week (or an already-completed guided session): log as adhoc
           // directly. The session is done, so no point queuing for modal review.

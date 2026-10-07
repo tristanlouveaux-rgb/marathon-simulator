@@ -41,6 +41,7 @@ import { runPaceRung, stepDownRunType, generatorRpeForRunType } from '@/constant
 import { upsertWorkoutMod, modsTargetSameWorkout } from '@/workouts/workout-mods';
 import { resolveWeekForPlanChanges } from '@/ui/week-resolve';
 import { renderLayerOf } from '@/workouts/render-layer';
+import { localDateKey, calendarDaysBetween } from '@/utils/local-date';
 import {
   TIMING_MOD_PREFIX,
   TIMING_ACCEPTED_PREFIX,
@@ -135,11 +136,12 @@ function adhocSignalBTSS(iTrimp: number | null | undefined, durationMin: number,
 }
 
 function dayOfWeekFromISO(isoTimestamp: string, weekStartISO: string): number {
-  const actDate = new Date(isoTimestamp);
-  const weekStart = new Date(weekStartISO);
-  const diff = Math.floor((actDate.getTime() - weekStart.getTime()) / 86400000);
-  if (diff < 0 || diff >= 7) return -1;
+  // Calendar days from the week start to the activity's LOCAL day (the day the
+  // matcher files it under), not the UTC-instant difference.
+  const diff = calendarDaysBetween(weekStartISO, localDateKey(isoTimestamp));
+  if (!Number.isFinite(diff) || diff < 0 || diff >= 7) return -1;
   // Remap to scheduler convention (0=Monday). WeekStartISO may not be a Monday
+  const weekStart = new Date(weekStartISO + 'T00:00:00Z'); // calendar date at UTC midnight
   const weekStartJsDay = weekStart.getUTCDay(); // JS: 0=Sun
   const offset = (weekStartJsDay + 6) % 7;      // Convert to 0=Mon
   return (diff + offset) % 7;
@@ -283,9 +285,9 @@ export function applyTimingDowngradesFromWorkouts(
 // ─── State integration ────────────────────────────────────────────────────────
 
 function weekStartISO(planStartDate: string, weekNum: number): string {
-  const d = new Date(planStartDate);
-  d.setDate(d.getDate() + (weekNum - 1) * 7);
-  return d.toISOString().slice(0, 10);
+  // Calendar arithmetic on the date components (no DST or time-zone shift).
+  const [y, m, d] = localDateKey(planStartDate).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + (weekNum - 1) * 7)).toISOString().slice(0, 10);
 }
 
 /**

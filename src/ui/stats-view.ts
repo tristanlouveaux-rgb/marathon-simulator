@@ -37,6 +37,7 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntra
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
 import { gp } from '@/calculations/paces';
 import { buildStrengthProgressCard, openStrengthProgressDetail } from './strength-progress-view';
+import { localDateKey } from '@/utils/local-date';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -1478,7 +1479,7 @@ function aggregateAllTimeStats(s: SimulatorState): {
         }
         // Track the activity-window range (irrespective of passive filter. It's
         // a "what dates are these stats from" hint, so any logged activity counts).
-        const dateOnly = (actual.startTime ?? '').split('T')[0];
+        const dateOnly = actual.startTime ? localDateKey(actual.startTime) : '';
         if (dateOnly) {
           if (oldestActivityDate == null || dateOnly < oldestActivityDate) oldestActivityDate = dateOnly;
           if (newestActivityDate == null || dateOnly > newestActivityDate) newestActivityDate = dateOnly;
@@ -2877,7 +2878,7 @@ export function buildLTMetricPage(s: SimulatorState): string {
     const qualifiedCount = diag.filter(d => d.qualified).length;
     const fmtPace = (p: number | null) => (p && p > 0 ? `${Math.floor(p / 60)}:${String(Math.round(p % 60)).padStart(2, '0')}/km` : '—');
     const rows = diag.map(d => ({
-      date: d.startTime.slice(0, 10),
+      date: localDateKey(d.startTime),
       duration: `${d.durationMin}min`,
       pace: fmtPace(d.paceSecKm),
       hr: d.avgHR != null ? `${Math.round(d.avgHR)} (${d.hrPctMax}%)` : '—',

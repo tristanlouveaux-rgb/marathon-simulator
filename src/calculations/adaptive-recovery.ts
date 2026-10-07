@@ -33,6 +33,7 @@ import type {
 import { clamp } from '@/utils/helpers';
 import { SPORTS_DB } from '@/constants/sports';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { localDateKey } from '@/utils/local-date';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -187,8 +188,13 @@ export function getEffectiveSafeUpper(baseSafeUpper: number, ar: AdaptiveRecover
 
 // ─── Date helpers ────────────────────────────────────────────────────────────
 
+/** YYYY-MM-DD of the instant's LOCAL calendar day. Session entries are dated by
+ * the local day (ingestNewActualsAsImpacts) and physiology entries are keyed by
+ * the local day, so "today", the fit's "now" and addDays must be local too. The
+ * UTC day (toISOString) put today a day ahead on evenings west of UTC and a day
+ * behind on mornings east of UTC. */
 function isoDate(d: Date): string {
-  return d.toISOString().split('T')[0];
+  return localDateKey(d);
 }
 
 function daysBetween(aIso: string, bIso: string): number {
@@ -654,7 +660,7 @@ export function ingestNewActualsAsImpacts(
       if (!actual.startTime) continue;
       if (known.has(actual.garminId)) continue;
 
-      const date = actual.startTime.split('T')[0];
+      const date = localDateKey(actual.startTime); // local day, as physiology entries are keyed
       const ageDays = daysBetween(date, todayIso());
       if (ageDays < 0 || ageDays > IMPACT_LOG_MAX_DAYS) continue;
 

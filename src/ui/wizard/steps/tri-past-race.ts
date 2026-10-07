@@ -25,6 +25,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { supabase } from '@/data/supabaseClient';
 import { callEdgeFunction } from '@/data/supabaseClient';
 import { awaitStartupSyncs } from '@/app/runtime';
+import { localDateKey } from '@/utils/local-date';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Internal types
@@ -377,7 +378,7 @@ async function scanStravaForRaces(): Promise<RaceCandidate[]> {
     const isStrava = garminId.startsWith('strava-');
     candidates.push({
       stravaId: isStrava ? garminId.replace('strava-', '') : null,
-      dateISO: (row.start_time as string).slice(0, 10),
+      dateISO: localDateKey(row.start_time as string),
       source: 'multisport',
       swimSec: null, bikeSec: null, runSec: null,
       totalSec,
@@ -394,7 +395,7 @@ async function scanStravaForRaces(): Promise<RaceCandidate[]> {
   for (const row of data) {
     const t = (row.activity_type as string).toUpperCase();
     if (t === 'TRIATHLON') continue;
-    const day = (row.start_time as string).slice(0, 10);
+    const day = localDateKey(row.start_time as string); // local race day: swim, bike and run on one morning
     byDay[day] ??= {};
     if ((t === 'SWIMMING' || t === 'OPEN_WATER_SWIMMING') && !byDay[day].swim) byDay[day].swim = row;
     if (t === 'CYCLING' && !byDay[day].bike) byDay[day].bike = row;

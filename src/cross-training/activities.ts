@@ -100,6 +100,18 @@ export function isGymSessionActual(actual: {
   return raw.includes('hiit') || raw.includes('high_intensity_interval');
 }
 
+/**
+ * activityType of a HYROX station or brick session recorded in the app, guided
+ * or quick done (strength-complete.ts). Not a device type: the watch copy of the
+ * same session arrives as HIIT, which the matcher files in its gym bucket.
+ */
+export const IN_APP_HYROX_ACTIVITY_TYPE = 'hyrox';
+
+/** True for a HYROX station or brick session recorded in the app. */
+export function isInAppHyroxSession(actual: { activityType?: string | null }): boolean {
+  return (actual.activityType ?? '').toLowerCase() === IN_APP_HYROX_ACTIVITY_TYPE;
+}
+
 // ─── The activity's own sport, for load weighting ────────────────────────────
 //
 // Signal A (running-specific load) weights every activity by the runSpec of the
@@ -149,7 +161,10 @@ function isGymSlotKey(key: string): boolean {
  * An ambiguous result (`generic_sport`) for a gym-bucket activity (HIIT, see
  * isGymSessionActual) or a gym plan slot resolves to strength, the same mapping
  * the matcher applies to its 'gym' bucket (mapAppTypeToSport('gym') = 'gym',
- * SPORT_ALIASES.gym = 'strength').
+ * SPORT_ALIASES.gym = 'strength'). So does a HYROX station or brick session
+ * recorded in the app (isInAppHyroxSession, decision 2026-10-06): its watch
+ * copy is a HIIT, so the session weighs the same in Signal A whichever copy
+ * holds the slot (SPORTS_DB strength runSpec, not generic_sport's).
  */
 export function resolveActualSport(
   key: string,
@@ -166,7 +181,7 @@ export function resolveActualSport(
   if (actual.activityType) sport = deriveSportFromActivityType(actual.activityType);
   else if (actual.displayName && !actual.workoutName) sport = deriveSportFromLabel(actual.displayName);
   else sport = isGymSlotKey(key) ? 'strength' : 'running';
-  if (sport === 'generic_sport' && (isGymSessionActual(actual) || isGymSlotKey(key))) return 'strength';
+  if (sport === 'generic_sport' && (isGymSessionActual(actual) || isInAppHyroxSession(actual) || isGymSlotKey(key))) return 'strength';
   return sport;
 }
 
