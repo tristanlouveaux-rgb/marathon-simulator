@@ -111,6 +111,19 @@ describe('one low-base check for the race page and the forecast (marathonEnduran
     expect(raceDayEnduranceGapText(r, 'marathon', enduranceGapPlanContext(blockState('intermediate', 'history-30d')))).toBeNull();
   });
 
+  it('a beginner whose block reaches the 2:45 marathon-readiness long run: neither surface flags it', () => {
+    // Review 2026-10-07: a 30 km run in the last 30 days at 5:30/km (165 min, the novice
+    // long-run cap) made the race page say "Long runs reach about 2:45, short of the 2:45
+    // marathon-readiness long run" while the forecast said nothing. The threshold guard
+    // now sits inside marathonEnduranceGap, the one check both surfaces read.
+    const thirtyKm = { ...runner('beginner', 5), onboardingRunHistory: [{ startTime: new Date(NOW.getTime() - 5 * 86400000).toISOString(), distKm: 30, durSec: 30 * 330, activityType: 'RUNNING' }] };
+    expect(lowBaseMarathon('marathon', RACE_6WK, thirtyKm, 'beginner', NOW)).toBeNull();
+    const plan = enduranceGapPlanContext(blockState('beginner', 'history-30d'));
+    expect(marathonEnduranceGap({ rd: 'marathon', ...plan, longestRunMin: 165 })).toBeNull();
+    expect(marathonEnduranceGap({ rd: 'marathon', ...plan, longestRunMin: 164 })).toEqual({ beginner: true, noRecentRun: false, shortLongRuns: false });
+    expect(raceDayEnduranceGapText(applyLongRunCap(165 * 60, 'marathon', 1), 'marathon', plan)).toBeNull();
+  });
+
   it('a beginner on a full marathon build (no sharpening block) is outside the owner decision', () => {
     const full = { continuousMode: false, onboarding: { experienceLevel: 'beginner' }, sharpenBlock: undefined } as unknown as SimulatorState;
     expect(raceDayEnduranceGapText(r, 'marathon', enduranceGapPlanContext(full))).toBeNull();

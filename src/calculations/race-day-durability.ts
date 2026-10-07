@@ -88,7 +88,10 @@ export function raceDayDurabilityMultiplier(s: RaceDayPlanState, nowMs?: number)
  *     below that is outside the calibration (M4 design v4 review, major 4).
  * `longestRunMin`: the plan's own longest run before race day on the forecast
  * (s.raceDayDurability), the block's projected peak long run on the race page
- * (no plan exists yet). Null when no category applies. Tracking side.
+ * (no plan exists yet). Null when no category applies, and null whenever that
+ * longest run reaches the marathon-readiness long run (LONG_RUN_THRESHOLD_SEC,
+ * 2:45): the plan then builds marathon endurance, whatever the category, so
+ * neither surface may say it falls short. Tracking side.
  */
 export interface MarathonEnduranceGapInput {
   rd: string | null | undefined;
@@ -103,6 +106,10 @@ export interface MarathonEnduranceGap { beginner: boolean; noRecentRun: boolean;
 
 export function marathonEnduranceGap(i: MarathonEnduranceGapInput): MarathonEnduranceGap | null {
   if (i.rd !== 'marathon') return null;
+  // The longest run reaches the threshold: no gap (review 2026-10-07: a beginner
+  // whose block reached 2:45 read "short of the 2:45 marathon-readiness long run"
+  // on the race page while the forecast said nothing).
+  if (i.longestRunMin != null && i.longestRunMin * 60 >= LONG_RUN_THRESHOLD_SEC.marathon) return null;
   const shortLongRuns = i.longestRunMin != null
     && i.longestRunMin * 60 < LONG_RUN_QUALIFYING_FRACTION * LONG_RUN_THRESHOLD_SEC.marathon;
   const beginner = i.sharpeningBlock && (i.experienceLevel === 'total_beginner' || i.experienceLevel === 'beginner');
@@ -145,14 +152,14 @@ function fmtHm(sec: number): string {
  * The plain statement every forecast surface shows when marathonEnduranceGap
  * holds for the plan (owner decision 2026-10-06: say plainly that the plan
  * cannot build marathon endurance in time and that the forecast is optimistic).
- * Without `plan` only the shortLongRuns category is checked. Null otherwise,
- * and null when the longest run reaches the marathon threshold.
+ * Without `plan` only the shortLongRuns category is checked. Null otherwise
+ * (marathonEnduranceGap is null when the longest run reaches the threshold).
  */
 export function raceDayEnduranceGapText(
   r: RunDurabilityResult | null | undefined, rd: string | null | undefined,
   plan?: EnduranceGapPlanContext,
 ): string | null {
-  if (!r || r.longestRunSec >= LONG_RUN_THRESHOLD_SEC.marathon) return null;
+  if (!r) return null;
   const gap = marathonEnduranceGap({
     rd, sharpeningBlock: plan?.sharpeningBlock ?? false, experienceLevel: plan?.experienceLevel,
     startSource: plan?.startSource, longestRunMin: r.longestRunSec / 60,
