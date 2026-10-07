@@ -93,7 +93,7 @@ describe('example A: marathon 7 weeks out, 4 runs, 40 km a week, longest recent 
 // ---------------------------------------------------------------------------
 
 const LENGTHS: Array<[RaceDistance, number[]]> = [['marathon', [1, 2, 3, 4, 5, 6, 7]], ['half', [1, 2, 3]]];
-const RUNS = [2, 3, 4, 5, 6];
+const RUNS = [1, 2, 3, 4, 5, 6];
 const PEOPLE: Array<{ archetype?: Archetype; baselineKm?: number; start: SharpeningInputs | undefined }> = [
   { archetype: 'consistent-runner', baselineKm: 40, start: { startLongMin: 100, startSource: 'history-30d' } },
   { archetype: 'consistent-runner', baselineKm: 25, start: { startLongMin: 35, startSource: 'history-30d' } },
@@ -340,6 +340,20 @@ describe('no run in the last 30 days (case b)', () => {
 });
 
 describe('block deloads', () => {
+  it('1 run a week: a deload whose long run falls under 30 min is one shorter easy run, below the week before', () => {
+    // Before: the single run fell back to the last long run (32 then 32).
+    for (const n of [6, 7]) {
+      const rows = blockRows({ ...A, runsPerWeek: 1, fitnessLevel: 'beginner', vdot: 28, totalWeeks: n, sharpening: { startLongMin: 30, startSource: 'history-30d' } });
+      const deloads = rows.filter(r => r.deload);
+      expect(deloads.length, rows.map(fmt).join(' | ')).toBeGreaterThan(0);
+      for (const r of deloads) {
+        const prev = rows[r.k - 2];
+        expect(r.total, `${fmt(r)} after ${fmt(prev)}`).toBeLessThan(prev.total);
+        expect(r.total).toBeGreaterThanOrEqual(EASY_FLOOR_MIN);
+      }
+    }
+  });
+
   it('build weeks on the ability cycle deload; the last week before the taper never does (it stands in for the peak)', () => {
     const noPeak = computeRunningPlanPhases(5, 'marathon', { noSignal: true }).map(p => p.ph); // build x3, taper x2
     expect(isDeloadWeek(3, 'novice')).toBe(true);

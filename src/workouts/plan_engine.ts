@@ -1379,8 +1379,14 @@ function assembleBlockLoadedWeek(
       if (row.hoursBound && Number.isFinite(budget)) mins = Math.max(LONG_SOFT_FLOOR_MIN, Math.min(mins, Math.floor(budget)));
       return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
     }
-    const mins = Math.round(row.sessionCapMin ?? LONG_SOFT_FLOOR_MIN);
-    return [{ dayIndex: 0, slot: 'long', totalMinutes: mins, workMinutes: mins, variantId: 'long_steady', notes: longNote }];
+    // No long run this week (a deload long run under LONG_SOFT_FLOOR_MIN): the
+    // single run is an easy run sized from the week's own budget (the last loaded
+    // week x the deload multiplier), at least EASY_FLOOR_MIN, so the deload stays
+    // below the week before. It used to fall back to the last long run.
+    const ref = row.sessionCapMin ?? LONG_SOFT_FLOOR_MIN;
+    const sized = Number.isFinite(budget) ? Math.round(budget) : ref;
+    const mins = Math.max(EASY_FLOOR_MIN, Math.min(ref, sized));
+    return [{ dayIndex: 0, slot: 'easy', totalMinutes: mins, workMinutes: mins, variantId: 'easy_steady', notes: row.deload ? 'Deload week' : '' }];
   }
 
   const priority = applyRunnerTypeBias(workoutPriority(raceDistance, row.sessionPhase), runnerType)
