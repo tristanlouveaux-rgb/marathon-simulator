@@ -304,8 +304,11 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
  * carries no sport tag; a cross session is tagged cycling / rowing / swimming
  * (plannedSessionRecordSport), so Signal A weights it at that sport's runSpec
  * and never as a run. The record is what makes a ticked cross session count
- * like a recorded one: in every load signal once, and as completed in the
- * slot-record test the MTL sums use (isMtlSessionCompleted). A watch copy
+ * like a recorded one in every load signal, once. It adds no muscle-tendon
+ * load: these offers carry no musculoTendonLoad and the MTL sums read
+ * wk.triWorkouts only, so a cross session, ticked or recorded, adds 0 MTL and
+ * does not move the MTL adherence check (open question: accept 0, or price
+ * them). A watch copy
  * that syncs later supersedes it in place (matchAndAutoComplete). A
  * future-week session keeps the rating only, as on the running plan card: the
  * matcher would not find its record when today's watch copy syncs. Stations

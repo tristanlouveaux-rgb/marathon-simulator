@@ -12,6 +12,9 @@
  * Now the tick writes the same planned-load record as triathlon Mark as Done
  * (recordPlannedSessionDone), tagged cycling / rowing / swimming so Signal A
  * weights it at that sport's runSpec, and a synced copy supersedes it.
+ * The offers carry no musculoTendonLoad and the MTL sums read wk.triWorkouts
+ * only, so passing isMtlSessionCompleted adds no MTL: a cross session, ticked
+ * or recorded, still contributes 0 MTL (open question for Tristan).
  *
  * Real HYROX plan, real injury cross-training offers (buildAerobicOffer, the
  * sessions the injury modal adds), real modal (jsdom), real matcher.
