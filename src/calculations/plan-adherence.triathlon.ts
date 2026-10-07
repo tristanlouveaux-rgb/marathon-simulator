@@ -14,6 +14,7 @@
 
 import type { SimulatorState, GarminActual, Workout } from '@/types';
 import { sportToTransferSource } from '@/constants/transfer-matrix';
+import { inAppRecordDiscipline } from '@/calculations/in-app-activity';
 
 /**
  * Whether a planned tri session counts toward adherence. Only swim/bike/run
@@ -39,9 +40,9 @@ export interface TriPlanAdherenceResult {
 }
 
 /**
- * Per-week: count `triWorkouts.length` as planned, count synced
- * swim/bike/run actuals as completed (clamped at planned to avoid
- * 'extra session' weeks reading as >100%).
+ * Per-week: count `triWorkouts.length` as planned, count swim/bike/run
+ * actuals as completed, synced or in-app (a GPS run, a session marked done),
+ * clamped at planned to avoid 'extra session' weeks reading as >100%.
  *
  * The current in-progress week is excluded so the number doesn't drop
  * every Monday. Rest weeks (zero planned) are skipped entirely.
@@ -104,5 +105,8 @@ function disciplineOf(a: GarminActual): 'swim' | 'bike' | 'run' | null {
   if (manual === 'running' || manual === 'extra_run') return 'run';
   const mapped = sportToTransferSource(a.activityType ?? '');
   if (mapped === 'swim' || mapped === 'bike' || mapped === 'run') return mapped;
-  return null;
+  // An in-app record carries no activityType: a run marked done or recorded
+  // with the app GPS counts as a run, as a bike or swim marked done counts by
+  // its sport tag above.
+  return inAppRecordDiscipline(a);
 }

@@ -14,6 +14,9 @@ import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { openGuidedStrength } from '@/ui/guided-strength-overlay';
 import { completeStrengthSession } from '@/guided/strength-complete';
+import { recordPlannedSessionDone, dropInAppActual, plannedSessionRecordSport } from '@/calculations/in-app-activity';
+import { estimateWorkoutDurMin } from '@/calculations/fitness-model';
+import { estimateTriWorkoutMin } from './week-resolve.triathlon';
 
 export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
   // HYROX sessions (station/brick) carry `hyroxComponents`; only the guided
@@ -223,16 +226,53 @@ export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
 /**
  * Mark a tri session done (rpe number) or skipped ('skip') by writing the shared
  * `wk.rated` map — the same map the running plan card writes and the shared status
- * chip reads. This is a lightweight manual completion flag (no synced activity);
- * effort/adherence still derive from a matched activity when one arrives.
+ * chip reads.
+ *
+ * Mark as Done with no watch also stores the session's planned load as its
+ * activity record (decision 2026-10-06), mirroring the running plan card:
+ * recordPlannedSessionDone writes the planned duration at the rated RPE,
+ * stamped on the planned day, with a bike or swim tagged with its sport. The
+ * session then counts in the Home strain ring, the week debrief and the holiday
+ * return. A watch copy that syncs later supersedes the record in place
+ * (matchAndAutoComplete), so it counts once. Skip drops the record. Shared by
+ * triathlon, cycling and Just-Track generated sessions (this modal).
  */
 function setRated(weekIdx: number, workout: Workout, value: number | 'skip'): void {
   const s = getMutableState();
   const wk = s.wks?.[weekIdx];
   if (!wk) return;
   if (!wk.rated) wk.rated = {};
-  wk.rated[(workout as any).id ?? workout.n] = value;
+  const key = (workout as any).id ?? workout.n;
+  wk.rated[key] = value;
+  if (value === 'skip') {
+    dropInAppActual(wk, key); // a skipped session carries no load record
+  } else {
+    recordPlannedSessionDone(wk, key, workout, {
+      rpe: value,
+      durationMin: markDoneDurationMin(workout, s),
+      planStartDate: s.planStartDate,
+      weekNum: weekIdx + 1,
+      currentWeek: s.w,
+    });
+  }
   saveState();
+}
+
+/**
+ * Planned duration for a Mark as Done record: the dose the session's card and
+ * the day target price. A session with a stored duration uses it, as does any
+ * session estimateTriWorkoutMin can read a duration from (a brick's segments, a
+ * minutes token). A run with neither (a Just-Track run generated as "8km @
+ * 5:00/km") uses the running plan card's estimate at the athlete's easy pace,
+ * the same dose markPlanCardDone records (plan-view.ts planCardBaseMinPerKm).
+ */
+function markDoneDurationMin(workout: Workout, s: { pac?: { e?: number } }): number {
+  const hasStoredDuration = typeof workout.estimatedDurationMin === 'number' && workout.estimatedDurationMin > 0;
+  const readsMinutes = !!workout.brickSegments || /\d+\s*min/i.test(workout.d || '');
+  if (!hasStoredDuration && !readsMinutes && plannedSessionRecordSport(workout) === 'run') {
+    return estimateWorkoutDurMin(workout, s.pac?.e ? s.pac.e / 60 : 5.5);
+  }
+  return estimateTriWorkoutMin(workout);
 }
 
 /**

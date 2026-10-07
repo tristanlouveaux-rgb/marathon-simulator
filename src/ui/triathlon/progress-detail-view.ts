@@ -41,6 +41,7 @@ const DISC_CHART = {
   run:  { stroke: '#16A34A', fill: 'rgba(22,163,74,0.08)' },
 } as const;
 import { sportToTransferSource } from '@/constants/transfer-matrix';
+import { inAppRecordDiscipline } from '@/calculations/in-app-activity';
 import { formatKm, type UnitPref } from '@/utils/format';
 import {
   smoothAreaPath,
@@ -93,7 +94,9 @@ export function disciplineOf(actual: GarminActual): Discipline | null {
   const aType = actual.activityType ?? '';
   const mapped = sportToTransferSource(aType);
   if (mapped === 'swim' || mapped === 'bike' || mapped === 'run') return mapped;
-  return null;
+  // An in-app record (a run recorded with the app GPS or marked done) carries no
+  // activityType; it is a run, as a bike or swim marked done counts by its tag.
+  return inAppRecordDiscipline(actual);
 }
 
 /** Walk every (deduped) actual on a week and call `fn` once per. */
