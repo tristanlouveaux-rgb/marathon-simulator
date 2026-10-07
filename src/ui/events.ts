@@ -624,8 +624,12 @@ export function rate(
     : 0;
   const bareForecast = tv(currentVDOT + remainingGain, raceDistKm);
   const horizonDeltaSec = bareToday - bareForecast;
-  // Race-day durability from the long runs the plan prescribes (race-day-durability).
-  s.forecastTime = (anchor - horizonDeltaSec) * (raceDayDurabilityMultiplier(s) ?? 1);
+  // Race-day durability from the long runs the plan prescribes (race-day-durability),
+  // applied to the published peak-volume forecast anchor like renderer.ts and the
+  // plan preview. Today's estimate (`anchor`) already carries today's logged-run
+  // durability cap, so anchoring the race-day term on it would count durability twice.
+  const forecastAnchor = s.forecastBlendAnchorSec ?? anchor;
+  s.forecastTime = (forecastAnchor - horizonDeltaSec) * (raceDayDurabilityMultiplier(s) ?? 1);
   refreshForecastCourseFactors(s);
 
   // Record VDOT snapshot whenever RPE changes VDOT
