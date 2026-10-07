@@ -507,6 +507,27 @@ export const SWIM_INTENSITY_LADDER: Array<{ key: string; label: string; cssOffse
   { key: 'swim_speed',     label: 'Speed',         cssOffsetSec: -6 },
 ];
 
+/**
+ * The ladder rung an off-ladder bike / swim session steps to when a downgrade is
+ * accepted (tri-suggestion-apply.ts). These kinds sit outside
+ * BIKE_INTENSITY_LADDER / SWIM_INTENSITY_LADDER by design (no single %FTP or CSS
+ * offset), so each is mapped to the rung one category below it. Tristan's rule,
+ * 2026-10-06: a downgrade moves one category down, never up.
+ *   over-unders, neuromuscular (vlamax) and hill rides -> sweet spot
+ *   VO2 micro-intervals -> threshold
+ *   open-water swim -> endurance swim
+ * The apply step does not offer a mapped step that would raise the session's
+ * planned load. At generator pricing that holds back vlamax (loadForBike 1.10
+ * TSS/min) -> sweet spot (1.5 TSS/min); the others all price lower after the step.
+ */
+export const OFF_LADDER_DOWNGRADE_RUNG: Readonly<Record<string, string>> = {
+  bike_over_under: 'bike_sweet_spot',
+  bike_vlamax:     'bike_sweet_spot',
+  bike_hills:      'bike_sweet_spot',
+  bike_vo2_micros: 'bike_threshold',
+  swim_openwater:  'swim_endurance',
+};
+
 // ───────────────────────────────────────────────────────────────────────────
 // Adaptation transparency. Marker auto-bump notification thresholds
 // ───────────────────────────────────────────────────────────────────────────

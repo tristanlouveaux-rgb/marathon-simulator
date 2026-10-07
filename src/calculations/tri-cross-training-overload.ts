@@ -369,9 +369,10 @@ function buildDisciplineOption(
   // Proposals skip sessions already changed: re-proposing a trim or downgrade on
   // a 'reduced' session steps it down again on every launch. The builders below
   // also skip a session the apply step cannot change with the chosen action
-  // (canApplyTriSuggestion: off-ladder brick / bike_vo2_micros / bike_over_under
-  // and the like, sessions without planned minutes), so the budget goes to
-  // sessions that can take it.
+  // (canApplyTriSuggestion: a brick, a swap on an off-ladder kind such as
+  // bike_vo2_micros / bike_over_under, a downgrade that would raise planned load,
+  // sessions without planned minutes), so the budget goes to sessions that can
+  // take it.
   const candidates = upcoming.filter(w => isOpenForTriSuggestion(w));
 
   const floorTSS = computeTriDisciplineFloorTSS(state, discipline, weekIdx);

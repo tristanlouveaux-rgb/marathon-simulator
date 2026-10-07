@@ -10,6 +10,10 @@
  * 1226 overload proposals across generated 70.3, Ironman, olympic and sprint
  * plans were skipped on apply. canApplyTriSuggestion is now the one gate both
  * ends read.
+ *
+ * Since 2026-10-06 (Tristan's rule) off-ladder bike / swim kinds take a
+ * downgrade to the rung OFF_LADDER_DOWNGRADE_RUNG maps them to, unless it would
+ * raise their planned load; a brick and an off-ladder swap still take none.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { applyTriSuggestions, canApplyTriSuggestion } from './tri-suggestion-apply';
@@ -17,6 +21,7 @@ import { collectTriSuggestions, type TriSuggestionMod } from './tri-suggestion-a
 import { detectCrossTrainingOverload } from './tri-cross-training-overload';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import { getDefaultState } from '@/state/store';
+import { loadForBike } from '@/workouts/bike';
 import type { SimulatorState, Workout } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
 
@@ -59,15 +64,26 @@ const firstOfType = (s: SimulatorState, t: string): Workout | undefined => allSe
 describe('canApplyTriSuggestion', () => {
   const s = generated(PLANS[1]);
 
-  it('off-ladder kinds take no swap or downgrade, only a trim', () => {
-    for (const t of ['brick', 'bike_vo2_micros', 'bike_over_under']) {
-      const w = firstOfType(s, t);
-      if (!w) continue; // not every plan generates every kind
+  it('a brick takes only a trim; off-ladder kinds take a downgrade and a trim, no swap', () => {
+    const sprint = generated(PLANS[3]); // generates every off-ladder bike kind but hills
+    const brick = firstOfType(sprint, 'brick')!;
+    expect(brick).toBeDefined();
+    expect(canApplyTriSuggestion(brick, 'swap_easy')).toBe(false);
+    expect(canApplyTriSuggestion(brick, 'downgrade_today')).toBe(false);
+    expect(canApplyTriSuggestion(brick, 'trim_volume')).toBe(true);
+    for (const t of ['bike_vo2_micros', 'bike_over_under']) {
+      const w = firstOfType(sprint, t)!;
+      expect(w, t).toBeDefined();
       expect(canApplyTriSuggestion(w, 'swap_easy'), t).toBe(false);
-      expect(canApplyTriSuggestion(w, 'downgrade_today'), t).toBe(false);
+      expect(canApplyTriSuggestion(w, 'downgrade_today'), t).toBe(true);
       expect(canApplyTriSuggestion(w, 'trim_volume'), t).toBe(true);
     }
-    expect(firstOfType(s, 'brick')).toBeDefined();
+    // Neuromuscular sprints price below sweet spot (loadForBike 1.10 vs 1.5
+    // TSS/min): the mapped step would add load, so no downgrade is offered.
+    const vlamax = firstOfType(sprint, 'bike_vlamax')!;
+    expect(vlamax).toBeDefined();
+    expect(canApplyTriSuggestion(vlamax, 'downgrade_today')).toBe(false);
+    expect(canApplyTriSuggestion(vlamax, 'trim_volume')).toBe(true);
   });
 
   it('a session on the bottom rung takes a swap (shorter) but no downgrade', () => {
@@ -132,14 +148,15 @@ describe('cross-training overload proposes only changes the apply step makes', (
     expect(proposals).toBeGreaterThan(500);
   });
 
-  it('an off-ladder quality session hands the swap to the next session that can take it', () => {
+  it('an off-ladder quality session takes a downgrade and hands the swap to the next session that can take it', () => {
     const s = {
       eventType: 'triathlon', w: 1,
       triConfig: { distance: 'ironman', bike: { ftp: 220, hasPowerMeter: true } },
       wks: [{
         triWorkouts: [
           { id: 'mon-brick', t: 'brick', n: 'Brick', d: '90min bike + 20min run', r: 7, discipline: 'bike', aerobic: 120, anaerobic: 20, dayOfWeek: 0, estimatedDurationMin: 110 },
-          { id: 'tue-micro', t: 'bike_vo2_micros', n: 'VO2 micros', d: '3×10×30/30', r: 9, discipline: 'bike', aerobic: 50, anaerobic: 30, dayOfWeek: 1, estimatedDurationMin: 60 },
+          // Priced as the generator prices it (loadForBike), above the threshold rung it steps to.
+          { id: 'tue-micro', t: 'bike_vo2_micros', n: 'VO2 micros', d: '3×10×30/30', r: 9, discipline: 'bike', ...loadForBike('vo2_micros', 60), dayOfWeek: 1, estimatedDurationMin: 60 },
           { id: 'thu-thr', t: 'bike_threshold', n: 'Threshold ride', d: '2×20min @ 213–227W', r: 8, discipline: 'bike', aerobic: 80, anaerobic: 25, dayOfWeek: 3, estimatedDurationMin: 75 },
           { id: 'sat-end', t: 'bike_endurance', n: 'Long ride', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 5, estimatedDurationMin: 240 },
         ],
@@ -150,8 +167,10 @@ describe('cross-training overload proposes only changes the apply step makes', (
     expect(o).not.toBeNull();
     const ids = (set: { workoutId: string }[]) => set.map(a => a.workoutId);
     expect(ids(o.options.bike.reduceMods)).not.toContain('mon-brick');
-    expect(ids(o.options.bike.reduceMods)).not.toContain('tue-micro');
-    expect(o.options.bike.replaceMods[0]).toMatchObject({ workoutId: 'thu-thr', action: 'swap_easy' });
+    expect(ids(o.options.bike.replaceMods)).not.toContain('mon-brick');
+    expect(o.options.bike.reduceMods.find(a => a.workoutId === 'tue-micro')).toMatchObject({ action: 'downgrade_today' });
+    expect(o.options.bike.replaceMods.find(a => a.workoutId === 'tue-micro')).toMatchObject({ action: 'downgrade_today' });
+    expect(o.options.bike.replaceMods.find(a => a.action === 'swap_easy')).toMatchObject({ workoutId: 'thu-thr' });
   });
 });
 

@@ -157,7 +157,8 @@ export function collectTriSuggestions(
       const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && isOpenForTriSuggestion(w));
       const action = readiness.overall === 'Overreaching' ? 'swap_easy' : 'downgrade_today';
       // Proposed only when the apply step would change the session
-      // (canApplyTriSuggestion), not for a brick or an off-ladder kind.
+      // (canApplyTriSuggestion): never a brick; an off-ladder kind takes a
+      // downgrade (OFF_LADDER_DOWNGRADE_RUNG) but no swap.
       if (todayWorkout && isQuality(todayWorkout) && canApplyTriSuggestion(todayWorkout, action)) {
         const sentence = readiness.sentence;
         mods.push({

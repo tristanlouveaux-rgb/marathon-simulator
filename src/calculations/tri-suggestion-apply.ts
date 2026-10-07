@@ -27,11 +27,20 @@
  *    the per-session Adjust overlay applies a rung (originalIntensityLevel
  *    stash, intensityLevel, watt ratio or CSS pace tokens, loadForRung), plus
  *    the generator's RPE for that kind (rpeForBike / rpeForSwim).
- * Off-ladder sessions (bike_over_under, bike_vo2_micros, bike_vlamax,
- * bike_hills, swim_openwater, brick, run types off RUN_PACE_LADDER) have no rung
- * to step from: they are left untouched and counted as skipped, pending a
- * decision on where they step to. canApplyTriSuggestion is the one gate: the
- * detectors filter their targets with it, so they do not propose those changes.
+ *  - off-ladder bike / swim kinds (bike_over_under, bike_vlamax, bike_hills,
+ *    bike_vo2_micros, swim_openwater) downgrade to the rung
+ *    OFF_LADDER_DOWNGRADE_RUNG maps them to (one category down, never up). Their
+ *    interval structure has no single %FTP / CSS offset to scale, so the
+ *    description is rebuilt for the new kind at the same minutes with the
+ *    generator's builders (describeBikeSession / describeSwimSession); load and
+ *    RPE as for a ladder rung. A mapped step that would raise the planned load
+ *    is not offered (raisesPlannedLoad: neuromuscular sprints price below
+ *    sweet spot).
+ * Sessions with no rung to step from are left untouched and counted as
+ * skipped: a brick, run types off RUN_PACE_LADDER, a swap to easy on an
+ * off-ladder kind (not decided), and a session already on the bottom rung.
+ * canApplyTriSuggestion is the one gate: the detectors filter their targets
+ * with it, so they do not propose those changes.
  *
  * Every accepted change re-prices aerobic/anaerobic, so the plan header, the
  * Home day target (getPlannedDayTSSContext) and the overload detector read the
@@ -41,12 +50,13 @@
 import type { SimulatorState, Workout, Week } from '@/types/state';
 import type { TriSuggestionMod } from './tri-suggestion-aggregator';
 import { runPaceRung, stepDownRunType, generatorRpeForRunType } from '@/constants/intensity-ladder';
-import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER } from '@/constants/triathlon-constants';
+import { BIKE_INTENSITY_LADDER, SWIM_INTENSITY_LADDER, OFF_LADDER_DOWNGRADE_RUNG } from '@/constants/triathlon-constants';
+import type { TriSkillSlider } from '@/types/triathlon';
 import { isLongRun } from '@/workouts/long-run';
 import { retargetDescriptionPace, scaleWattRanges, setSwimPaceTokens } from '@/workouts/workout-scaling';
 import { loadForRung, loadForTriRun, type PlannedLoad } from '@/workouts/rung-load';
-import { nameForBike, rpeForBike, type BikeSessionKind } from '@/workouts/bike';
-import { nameForSwim, rpeForSwim, type SwimSessionKind } from '@/workouts/swim';
+import { describeBikeSession, nameForBike, rpeForBike, type BikeSessionKind } from '@/workouts/bike';
+import { describeSwimSession, estimateDistanceMetres, nameForSwim, rpeForSwim, type SwimSessionKind } from '@/workouts/swim';
 import { triRunEasyPaceSec } from '@/workouts/tri-run-pace';
 
 export interface ApplyResult {
@@ -153,6 +163,59 @@ function currentRungIdx(w: Workout, d: 'bike' | 'swim'): number {
   return ladder.findIndex(r => r.key === (w.intensityLevel ?? w.t));
 }
 
+/** True when the session's type is not on its discipline's ladder. */
+function isOffLadder(w: Workout, d: 'bike' | 'swim'): boolean {
+  return ladderFor(d).findIndex(r => r.key === w.t) < 0;
+}
+
+/**
+ * Index of the rung a downgrade lands on, or -1 when there is none.
+ *  - type on the ladder: one rung below currentRungIdx (none on the bottom rung);
+ *  - off-ladder type: the rung OFF_LADDER_DOWNGRADE_RUNG maps it to. When the
+ *    Adjust overlay has stamped a rung on it (intensityLevel), the session is
+ *    priced and shown at that rung (loadForRung, intensityTargetLabel), so it
+ *    steps one rung below that instead: the mapped rung could sit at or above
+ *    it (an over-under Adjusted to tempo would otherwise step UP to sweet spot).
+ *    An off-ladder step that would raise the session's planned load is not a
+ *    downgrade and is not offered (raisesPlannedLoad).
+ */
+function downgradeRungIdx(w: Workout, d: 'bike' | 'swim'): number {
+  const ladder = ladderFor(d);
+  if (!isOffLadder(w, d)) {
+    const cur = currentRungIdx(w, d);
+    return cur > 0 ? cur - 1 : -1;
+  }
+  const stamped = w.intensityLevel ? ladder.findIndex(r => r.key === w.intensityLevel) : -1;
+  const mapped = OFF_LADDER_DOWNGRADE_RUNG[w.t];
+  const to = stamped >= 0 ? stamped - 1 : mapped ? ladder.findIndex(r => r.key === mapped) : -1;
+  if (to < 0) return -1;
+  return raisesPlannedLoad(w, ladder[to].key) ? -1 : to;
+}
+
+/**
+ * True when pricing the session at rung `toKey` (loadForRung at its planned
+ * minutes) would give more planned TSS than it carries now. The ladders rise in
+ * TSS per minute rung by rung (loadForBike / loadForSwim), so a step down a
+ * ladder never trips this. An off-ladder kind's rate is its own: neuromuscular
+ * sprints (bike_vlamax, loadForBike 1.10 TSS/min, rest-dominated) sit below
+ * sweet spot (1.5), so the mapped step would add load under a "downgrade"
+ * label, and the overload detector would book a reduction that is an increase.
+ * Current load: the stored aerobic + anaerobic (what the plan header and the
+ * day target read), else the kind's own rate at the same minutes. When neither
+ * is known (a kind with no rate, carrying no load) nothing is blocked.
+ */
+function raisesPlannedLoad(w: Workout, toKey: string): boolean {
+  const minutes = minutesOf(w);
+  const next = loadForRung(toKey, minutes);
+  if (!next) return false;
+  const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  const own = loadForRung(w.intensityLevel ?? w.t, minutes);
+  const ownTotal = own ? own.aerobic + own.anaerobic : NaN;
+  const current = stored > 0 ? stored : Number.isFinite(ownTotal) && ownTotal > 0 ? ownTotal : NaN;
+  if (!Number.isFinite(current)) return false;
+  return next.aerobic + next.anaerobic > current;
+}
+
 /** Planned minutes, or 0 when the session carries none. A swap or downgrade
  *  needs minutes to price the new prescription (Load Currency Law), so a
  *  session without them is left untouched and counted as skipped rather than
@@ -173,14 +236,17 @@ function minutesOf(w: Workout): number {
  * overload's reduction budget goes to sessions that can take it.
  *  - every action needs planned minutes (minutesOf) to price the result;
  *  - trim_volume: any session with minutes (same intensity, 15% shorter);
- *  - swap_easy / downgrade_today need a single ladder (ladderDiscipline) with
- *    the session's type on it: run RUN_PACE_LADDER, bike / swim
- *    BIKE_INTENSITY_LADDER / SWIM_INTENSITY_LADDER. Off-ladder sessions (brick,
- *    bike_over_under, bike_vo2_micros, bike_vlamax, bike_hills, swim_openwater,
- *    run types off the ladder) are pending a decision on where they step to;
- *  - downgrade_today also needs a rung below the current one. A swap on a
- *    session already at or below easy still applies (it keeps its type and
- *    loses 25% of the minutes).
+ *  - swap_easy / downgrade_today need a single ladder (ladderDiscipline): never
+ *    a brick;
+ *  - run: the type on RUN_PACE_LADDER; downgrade_today also needs a pace
+ *    category below it;
+ *  - bike / swim swap_easy: the type on BIKE_INTENSITY_LADDER /
+ *    SWIM_INTENSITY_LADDER (an off-ladder kind's swap is not decided);
+ *  - bike / swim downgrade_today: a rung to land on (downgradeRungIdx), which
+ *    off-ladder kinds get from OFF_LADDER_DOWNGRADE_RUNG when it does not raise
+ *    their planned load.
+ * A swap on a session already at or below easy still applies (it keeps its type
+ * and loses 25% of the minutes).
  */
 export function canApplyTriSuggestion(w: Workout, action: TriSuggestionMod['action']): boolean {
   if (minutesOf(w) <= 0) return false;
@@ -191,9 +257,8 @@ export function canApplyTriSuggestion(w: Workout, action: TriSuggestionMod['acti
     if (runPaceRung(w.t) < 0) return false;
     return action === 'swap_easy' || stepDownRunType(w.t, 1, { longRun: isLongRun(w) }) !== w.t;
   }
-  const cur = currentRungIdx(w, d);
-  if (cur < 0) return false;
-  return action === 'swap_easy' || cur > 0;
+  if (action === 'downgrade_today') return downgradeRungIdx(w, d) >= 0;
+  return currentRungIdx(w, d) >= 0;
 }
 
 /** Easy pace the run pace tokens are anchored to: triRunEasyPaceSec, the pace
@@ -284,17 +349,46 @@ function setRunType(state: SimulatorState, w: Workout, newT: string, minutes: nu
   repriceBaselineLoad(w, baseMin > 0 ? loadForTriRun(newT, baseMin) : null);
 }
 
+/** The generator's description for rung `toKey` at `minutes` (bike.ts
+ *  describeBikeSession / swim.ts describeSwimSession, the builders the plan
+ *  engine uses), for a session whose own description has no rung to scale
+ *  from. Variant from the week number, slot 0 (as the ad-hoc session generator
+ *  does); skill falls back to 3 as the plan engine does
+ *  (plan_engine.triathlon.ts: tri.skillRating ?? { swim: 3, bike: 3, run: 3 }). */
+function describeAtRung(state: SimulatorState, week: Week, d: 'bike' | 'swim', toKey: string, minutes: number): string {
+  const kind = toKey.slice(d.length + 1);
+  const weekNo = week.w ?? 1;
+  if (d === 'bike') {
+    const bike = state.triConfig?.bike;
+    return describeBikeSession(kind as BikeSessionKind, minutes, bike?.ftp, bike?.hasPowerMeter, weekNo, 0);
+  }
+  const skill = (state.triConfig?.skillRating?.swim ?? 3) as TriSkillSlider;
+  const css = state.triConfig?.swim?.cssSecPer100m;
+  const desc = describeSwimSession(kind as SwimSessionKind, estimateDistanceMetres(minutes, skill, css), css, skill, weekNo, 0);
+  // Paces at the rung's CSS offset, as a ladder step writes them (retargetRung),
+  // so the description agrees with the rung target the card shows.
+  return retargetRung(state, 'swim', desc, toKey, toKey);
+}
+
 /** Move a bike/swim session to rung `to` and price it at `minutes`, the way the
  *  Adjust overlay applies a rung (workout-adjust-overlay.ts applyObjectScale).
- *  Adjust's baseline follows. */
+ *  Adjust's baseline follows. An off-ladder session's description (and Adjust's
+ *  baseline description) is rebuilt for the new rung rather than scaled. */
 function setRung(state: SimulatorState, week: Week, w: Workout, d: 'bike' | 'swim', to: Rung, minutes: number): void {
   const fromKey = w.intensityLevel ?? w.t;
-  if (to.key !== fromKey) {
-    // Rung Adjust's baseline description is written at: its own anchor once it
-    // has changed a rung (originalIntensityLevel defined), else the session's.
-    const baseKey = w.originalIntensityLevel !== undefined ? (w.originalIntensityLevel ?? w.t) : fromKey;
-    if (w.d) w.d = retargetRung(state, d, w.d, fromKey, to.key);
-    if (w.originalDistance) w.originalDistance = retargetRung(state, d, w.originalDistance, baseKey, to.key);
+  const offLadder = isOffLadder(w, d);
+  if (to.key !== fromKey || offLadder) {
+    if (offLadder) {
+      if (w.d && minutes > 0) w.d = describeAtRung(state, week, d, to.key, minutes);
+      const baseMin = baselineMinutes(w, minutes);
+      if (w.originalDistance && baseMin > 0) w.originalDistance = describeAtRung(state, week, d, to.key, baseMin);
+    } else {
+      // Rung Adjust's baseline description is written at: its own anchor once it
+      // has changed a rung (originalIntensityLevel defined), else the session's.
+      const baseKey = w.originalIntensityLevel !== undefined ? (w.originalIntensityLevel ?? w.t) : fromKey;
+      if (w.d) w.d = retargetRung(state, d, w.d, fromKey, to.key);
+      if (w.originalDistance) w.originalDistance = retargetRung(state, d, w.originalDistance, baseKey, to.key);
+    }
     w.intensityLevel = to.key;
     w.t = to.key;
     // The description (and Adjust's baseline) is now written at to.key = w.t,
@@ -376,9 +470,7 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
     setRunType(state, w, newT, minutes);
     w.n = `${capitalize(newT.replace(/_/g, ' '))} run (downgrade)`;
   } else {
-    const ladder = ladderFor(d);
-    const cur = currentRungIdx(w, d);
-    const to = ladder[cur - 1];
+    const to = ladderFor(d)[downgradeRungIdx(w, d)];
     stampOriginal(w);
     setRung(state, week, w, d, to, minutes);
     const kind = to.key.slice(d.length + 1);
