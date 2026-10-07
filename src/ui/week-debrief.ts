@@ -138,6 +138,17 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
     return;
   }
 
+  // Before race day the final week of a running race plan is reviewed once. A
+  // calendar past the plan's last week (an anchor pulled back a week by
+  // reconcilePlanAnchorToEarliestActivity, or a plan built before plans ran on
+  // race day's calendar) keeps isWeekPendingDebrief true until race day, and the
+  // review records nothing that advances, so without this guard the same review
+  // reopened on every launch, twice on the same day included.
+  if (pendingDebrief && tw && (s.w ?? 0) >= tw && !planCompletionDue(s)) {
+    const today = new Date().toISOString().split('T')[0];
+    if ((s.lastDebriefWeek ?? 0) >= s.w || (s.lastDebriefShownDate ?? '') === today) return;
+  }
+
   if (pendingDebrief && !s.trackOnly) {
     showWeekDebrief(s.w, 'complete');
   } else if (shouldAutoDebrief()) {

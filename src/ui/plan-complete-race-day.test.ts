@@ -32,7 +32,7 @@ vi.mock('@/ui/main-view', () => ({ renderMainView: vi.fn() }));
 vi.mock('@/ui/wizard/controller', () => ({ resetOnboarding: vi.fn() }));
 
 import { fireDebriefIfReady, showWeekDebrief } from './week-debrief';
-import { isWeekPendingDebrief } from './welcome-back';
+import { isWeekPendingDebrief, advanceWeekToToday } from './welcome-back';
 import { initializeSimulator } from '@/state/initialization';
 import { getMutableState, getState, setState, resetState } from '@/state/store';
 import { planCompletionDue } from '@/workouts/race-week-layout';
@@ -161,3 +161,44 @@ for (const c of CASES) {
     }
   });
 }
+
+describe('an anchor pulled back a week: the final week is reviewed once before race day', () => {
+  // Review 2026-10-07: once the calendar is past the plan's last week,
+  // isWeekPendingDebrief stays true until race day. fireDebriefIfReady took the
+  // pending path, showWeekDebrief turned 'complete' into a review, and the review
+  // records nothing that advances, so the same modal opened on every launch: 9 Nov
+  // (twice), 10, 11 and 14 Nov for a Sunday 15 Nov marathon.
+  it('Sunday 15 Nov marathon, planStartDate one week earlier, launches on 9 (twice), 10, 11 and 14 Nov: one review, Plan complete on 16 Nov', () => {
+    const plan = buildPlan('2026-11-15', 'marathon');
+    document.body.innerHTML = '';
+    setState(JSON.parse(JSON.stringify(plan)));
+    const s = getMutableState() as any;
+    // As reconcilePlanAnchorToEarliestActivity does when an activity predates the anchor.
+    s.planStartDate = addCalendarDays(plan.planStartDate!, -7);
+    s.w = s.tw;
+    s.lastDebriefWeek = s.tw - 1;
+    s.lastCompleteDebriefWeek = s.tw - 1;
+
+    const opened: string[] = [];
+    for (const day of ['2026-11-09', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-14']) {
+      document.body.innerHTML = '';
+      vi.setSystemTime(at(day));
+      advanceWeekToToday();
+      expect(isWeekPendingDebrief(), day).toBe(true);
+      fireDebriefIfReady(isWeekPendingDebrief());
+      if (document.getElementById('week-debrief-modal')) {
+        opened.push(day);
+        const text = clickThrough();
+        expect(COMPLETION_TEXT.filter(t => text.includes(t)), day).toEqual([]);
+        expect(document.getElementById('week-debrief-modal'), `${day}: Continue closes the review`).toBeNull();
+      }
+    }
+    expect(opened).toEqual(['2026-11-09']);
+
+    document.body.innerHTML = '';
+    vi.setSystemTime(at('2026-11-16'));
+    advanceWeekToToday();
+    fireDebriefIfReady(isWeekPendingDebrief());
+    expect(clickThrough()).toContain('Plan complete');
+  });
+});
