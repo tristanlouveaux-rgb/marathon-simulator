@@ -41,8 +41,8 @@
  *   - Race taper: the last contiguous run of 'taper' weeks in the plan. Its
  *     1-indexed position (1 = first taper week, taperWeeks = race week) feeds
  *     the existing taperMultiplier ramp: 0.75 / 0.65 / 0.55 over 3 weeks and
- *     0.70 / 0.55 over 2 (Tristan, 2026-10-05). A 1-week taper keeps
- *     taperMultiplier's own 0.70 special case.
+ *     0.70 / 0.55 over 2 (Tristan, 2026-10-05). A 1-week taper is race week
+ *     alone and targets 0.55 too (taperFraction, phases.ts).
  *   - Any other 'taper'-labelled week is a recovery week, not a race taper:
  *     continuous mode labels each block's 4th (deload) week 'taper'
  *     (initialization.ts, events.ts block append) and double-periodization plans

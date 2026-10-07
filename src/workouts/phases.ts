@@ -151,6 +151,24 @@ export function computeRunningPlanPhases(
 }
 
 /**
+ * Taper fraction for taper week `weekInTaper` (1-indexed; `totalTaperWeeks` =
+ * race week): a linear ramp from 0.85 down to 0.55, so race week lands on the
+ * 0.55 endpoint. 3 weeks: 0.75 / 0.65 / 0.55; 2 weeks: 0.70 / 0.55 (Tristan,
+ * 2026-10-05). A 1-week taper is race week alone, so it is 0.55 too (the same
+ * decision; it was a 0.70 special case before 2026-10-07). Position 0 (no
+ * position known) reads as the ramp's 0.85 start.
+ *
+ * Single source for the weekly load target (fitness-model taperMultiplier,
+ * every mode) and the sharpening block's taper weeks (plan_engine), so plan
+ * and target keep one shape. Progressive step-down per Mujika & Padilla 2003.
+ */
+export function taperFraction(weekInTaper: number, totalTaperWeeks: number): number {
+  if (totalTaperWeeks <= 1) return 0.55;
+  const t = Math.min(weekInTaper, totalTaperWeeks) / totalTaperWeeks;
+  return 0.85 - t * 0.30; // 0.85 → 0.55
+}
+
+/**
  * Compute the phase (and optional checkpoint flag) for every week of a plan.
  * Returned array length === totalWeeks. Index i is plan week i+1.
  */

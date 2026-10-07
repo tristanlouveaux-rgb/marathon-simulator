@@ -131,12 +131,15 @@ describe('The race taper steps down week by week', () => {
     expect([11, 12].map(w => computePlannedWeekTarget(s, w))).toEqual([280, 220]);
   });
 
-  it('a 1-week race taper keeps its 0.70 special case', () => {
-    // 8 weeks: the real phase generator gives a single taper week (week 8).
+  it('a 1-week race taper is race week alone and targets 0.55 (was a 0.70 special case)', () => {
+    // 8 weeks on the generic split: a single taper week (week 8).
     const s = makeState({ phases: racePhases(8) });
     expect(s.wks.map(w => w.ph).filter(ph => ph === 'taper')).toHaveLength(1);
     expect(resolvePlannedWeekPhase(s, 8)).toMatchObject({ phase: 'taper', weekInTaper: 1, taperWeeks: 1, alsoDeload: false });
-    expect(computePlannedWeekTarget(s, 8)).toBe(280);
+    expect(computePlannedWeekTarget(s, 8)).toBe(220);
+    // Same row as the race week of a 2-week taper.
+    const two = makeState({ phases: racePhases(12) });
+    expect(computePlannedWeekTarget(s, 8)).toBe(computePlannedWeekTarget(two, 12));
   });
 
   it('a race-taper week the engine also deloads takes the lower of the two targets', () => {
@@ -229,7 +232,7 @@ describe('The race taper steps down week by week', () => {
 describe("'taper'-labelled recovery weeks are deloads, not a race taper", () => {
   it("continuous mode: each block's 4th week takes the deload row, the last block included", () => {
     const phases: TrainingPhase[] = Array.from({ length: 12 }, (_, i) => (['base', 'build', 'peak', 'taper'] as const)[i % 4]);
-    // performance deload (0.65) differs from a 1-week race taper (0.70), so the two readings are distinguishable.
+    // performance deload (0.65) differs from a 1-week race taper (0.55), so the two readings are distinguishable.
     const s = makeState({ phases, continuousMode: true, athleteTier: 'performance', v: 65, onboarding: { experienceLevel: 'competitive' } as any });
     for (const w of [4, 8, 12]) {
       expect(resolvePlannedWeekPhase(s, w).phase).toBe('deload');

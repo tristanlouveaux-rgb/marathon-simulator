@@ -16,6 +16,7 @@
 import type { Week, Workout, PhysiologyDayEntry, SportKey } from '@/types';
 import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB, plannedTssPerMin } from '@/constants';
+import { taperFraction } from '@/workouts/phases';
 import {
   normalizeSport, isStrengthActual, resolveActualSport, resolveAdhocSport, isRunSport, signalARunSpec,
 } from '@/cross-training/activities';
@@ -1097,19 +1098,12 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
 };
 
 /**
- * Compute taper multiplier: linear ramp from 0.85 → 0.55 over taper weeks.
- * `weekInTaper` is 1-indexed (1 = first taper week, totalTaperWeeks = race
- * week), so race week lands on the 0.55 endpoint: a 3-week taper gives
- * 0.75 / 0.65 / 0.55 and a 2-week taper 0.70 / 0.55 (Tristan, 2026-10-05).
- * A 1-week taper keeps its 0.70 special case. Position 0 (no position known)
- * reads as the ramp's 0.85 start; the canonical caller
- * (`computePlannedWeekTarget`, planned-week-target.ts) always passes one.
+ * Taper multiplier: `taperFraction` (phases.ts), the one taper ramp the
+ * weekly load target and the sharpening-block generator share. 0.75 / 0.65 /
+ * 0.55 over 3 weeks, 0.70 / 0.55 over 2, and 0.55 for a 1-week taper, whose
+ * only week is race week (Tristan, 2026-10-05: race week reaches 0.55).
  */
-function taperMultiplier(weekInTaper: number, totalTaperWeeks: number): number {
-  if (totalTaperWeeks <= 1) return 0.70;
-  const t = Math.min(weekInTaper, totalTaperWeeks) / totalTaperWeeks;
-  return 0.85 - t * 0.30; // 0.85 → 0.55
-}
+const taperMultiplier = taperFraction;
 
 /**
  * Compute the planned weekly TSS target for a given phase.
