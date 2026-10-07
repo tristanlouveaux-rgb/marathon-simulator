@@ -16,6 +16,7 @@ import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import {
   HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
@@ -177,7 +178,12 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     const sessions = state.hyroxWeeklySessionCount != null
       ? distributeSessionCount(state.hyroxWeeklySessionCount, band)
       : HYROX_WEEKLY_SESSIONS[band];
-    const weeks = state.planDurationWeeks || HYROX_DEFAULT_PLAN_WEEKS[band];
+    // Plan length: with a race date the plan runs through the calendar week
+    // holding race day (racePlanCalendarWeeks), computed from today's local
+    // Monday, the plan's anchor. Mirrors initializeSimulator and the triathlon
+    // path. Without a race date the wizard's week count stands.
+    const weeks = racePlanCalendarWeeks(state.customRaceDate)
+      ?? (state.planDurationWeeks || HYROX_DEFAULT_PLAN_WEEKS[band]);
 
     // Seed station benchmarks from historic race splits (entered during onboarding).
     // Store in the slot matching the PREVIOUS-RACE format. We only seed when the

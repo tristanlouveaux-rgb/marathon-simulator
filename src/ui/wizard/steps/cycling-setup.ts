@@ -3,7 +3,7 @@ import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState } from '@/state/store';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
-import { calculateWeeksUntil } from '@/data/marathons';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 
 /**
  * Cycling setup. V1 single-step config for cycling-only mode.
@@ -276,12 +276,14 @@ function wireEventHandlers(): void {
     if (current.triWeekdayHoursPerWeek === undefined) {
       finalPatch.triWeekdayHoursPerWeek = Math.round(totalH * 0.4 * 2) / 2;
     }
-    // Plan length follows the picked race date when set, falling back to the
-    // distance default otherwise. Mirrors triathlon-setup.ts:408 and the
-    // 2026-05-07 HYROX fix. Without this a user with a 6-week race window
-    // sees "Week 1 of 16" because the distance default ignores the date.
+    // Plan length follows the picked race date when set: the calendar weeks
+    // from this local Monday through the week holding race day
+    // (racePlanCalendarWeeks), falling back to the distance default otherwise.
+    // Mirrors triathlon-setup.ts and hyrox-setup.ts. Without this a user with a
+    // 6-week race window sees "Week 1 of 16" because the distance default
+    // ignores the date.
     finalPatch.planDurationWeeks = current.customRaceDate
-      ? Math.max(1, calculateWeeksUntil(current.customRaceDate))
+      ? (racePlanCalendarWeeks(current.customRaceDate) ?? 1)
       : DEFAULT_PLAN_WEEKS_BY_DISTANCE[dist];
     finalPatch.trainingForEvent = true;
     if (Object.keys(finalPatch).length > 0) updateOnboarding(finalPatch);

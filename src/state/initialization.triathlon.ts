@@ -19,6 +19,7 @@ import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import {
@@ -43,7 +44,13 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     const s = getMutableState();
 
     const distance = state.triDistance ?? '70.3';
-    const weeks = state.planDurationWeeks || PLAN_WEEKS_DEFAULT[distance];
+    // Plan length: with a race date the plan runs through the calendar week
+    // holding race day (racePlanCalendarWeeks), computed here from today's
+    // local Monday, the plan's anchor, so a wizard count computed on an earlier
+    // day cannot drift. Mirrors initializeSimulator (initialization.ts). Without
+    // a race date the wizard's week count stands.
+    const weeks = racePlanCalendarWeeks(state.customRaceDate)
+      ?? (state.planDurationWeeks || PLAN_WEEKS_DEFAULT[distance]);
     const skillRating = state.triSkillRating ?? { swim: 3, bike: 3, run: 3 };
 
     // Seed time-available from wizard, falling back to skill-based default.

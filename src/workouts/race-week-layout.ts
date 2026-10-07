@@ -1,4 +1,4 @@
-import { calendarDayNumber, localDateKey } from '@/utils/local-date';
+import { calendarDayNumber, localDateKey, localMondayKey } from '@/utils/local-date';
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
 
@@ -52,6 +52,22 @@ export function raceWeekLayout(planStartISO: string, raceDateISO: string): RaceW
     raceDayOfWeek: ((days % 7) + 7) % 7,
     raceDayIndex: days,
   };
+}
+
+/**
+ * Plan length in calendar weeks for a race plan built on `now`: weeks from the
+ * local Monday of `now` (the plan's planStartDate) through the week holding
+ * race day (raceWeekLayout calendarWeeks). The length of every stored-plan mode
+ * with a race date (triathlon, cycling, HYROX): these plans have no closing
+ * week, so the plan's final week must hold race day for isRaceWeek and
+ * dropSessionsOnOrAfterRaceDay to act on it. A weeks-until count from today
+ * (calculateWeeksUntil) ends a week early whenever the race weekday is on or
+ * before today's weekday. Running builds the same layout in
+ * initializeSimulator. Null without a race date on or after that Monday.
+ */
+export function racePlanCalendarWeeks(raceDateISO: string | null | undefined, now: Date = new Date()): number | null {
+  if (!raceDateISO) return null;
+  return raceWeekLayout(localMondayKey(now), raceDateISO.slice(0, 10))?.calendarWeeks ?? null;
 }
 
 /** The running race date (YYYY-MM-DD) of a running race plan, or null: the

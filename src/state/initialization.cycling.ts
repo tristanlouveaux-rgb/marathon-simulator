@@ -17,6 +17,7 @@ import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
@@ -47,7 +48,12 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     const s = getMutableState();
 
     const cyclingDistance = state.cyclingDistance ?? '160km';
-    const weeks = state.planDurationWeeks || DEFAULT_PLAN_WEEKS_BY_DISTANCE[cyclingDistance];
+    // Plan length: with a race date the plan runs through the calendar week
+    // holding race day (racePlanCalendarWeeks), computed from today's local
+    // Monday, the plan's anchor. Mirrors initializeSimulator and the triathlon
+    // path. Without a race date the wizard's week count stands.
+    const weeks = racePlanCalendarWeeks(state.customRaceDate)
+      ?? (state.planDurationWeeks || DEFAULT_PLAN_WEEKS_BY_DISTANCE[cyclingDistance]);
     const timeAvailable = state.triTimeAvailableHoursPerWeek ?? DEFAULT_HOURS_BY_DISTANCE[cyclingDistance];
     const weekdayHours = state.triWeekdayHoursPerWeek ?? Math.round(timeAvailable * 0.4 * 2) / 2;
 
