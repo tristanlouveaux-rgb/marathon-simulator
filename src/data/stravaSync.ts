@@ -25,6 +25,7 @@ import { isSameSession } from '@/calculations/cross-source-twins';
 import { NATIVE_OAUTH_ENABLED } from '@/constants/feature-flags';
 import { isNativeiOS } from './appleHealthSync';
 import { NATIVE_OAUTH_RETURN_URL, runNativeOAuth } from './oauth-native';
+import { localDateKey, localMondayKey, calendarDaysBetween } from '@/utils/local-date';
 
 /**
  * Derive athlete tier from weekly-scale CTL baseline plus a performance floor.
@@ -1002,21 +1003,25 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
       return { activitiesRecovered: 0, weeksReconstructed: 0 };
     }
 
-    // Anchor week 1 to the Monday on or before the first activity.
-    const firstDate = new Date(firstStart.split('T')[0] + 'T12:00:00');
-    const dayOfWeek = (firstDate.getDay() + 6) % 7; // 0 = Mon
-    firstDate.setDate(firstDate.getDate() - dayOfWeek);
-    const archivePlanStartISO = firstDate.toISOString().split('T')[0];
-    const archiveStartMs = firstDate.getTime();
+    // Anchor week 1 to the Monday on or before the first activity's LOCAL day,
+    // and file each row by its local calendar day (decision 2026-10-06, the
+    // rule weekIndexForDate uses). `split('T')[0]` took the UTC day, and the ms
+    // offset from a local-noon Monday put rows before noon on that Monday (and
+    // a first activity on a local Sunday evening west of UTC) at index -1,
+    // where they were dropped, or anchored the archive a week early east of UTC.
+    const archivePlanStartISO = localMondayKey(firstStart);
+    if (!archivePlanStartISO) {
+      console.warn('[RestoreHistory] First row start_time unparseable, aborting.');
+      return { activitiesRecovered: 0, weeksReconstructed: 0 };
+    }
 
     // Build week buckets by date offset. DB columns are snake_case + distance in
     // metres; map to the camelCase / km shape the views expect.
     const weekMap = new Map<number, any>();
     for (const r of activityRows) {
       if (!r.start_time) continue;
-      const rowMs = new Date(r.start_time).getTime();
-      const weekIdx = Math.floor((rowMs - archiveStartMs) / (7 * 86400000));
-      if (weekIdx < 0) continue;
+      const weekIdx = Math.floor(calendarDaysBetween(archivePlanStartISO, localDateKey(r.start_time)) / 7);
+      if (!Number.isFinite(weekIdx) || weekIdx < 0) continue;
       let wk = weekMap.get(weekIdx);
       if (!wk) {
         wk = {
