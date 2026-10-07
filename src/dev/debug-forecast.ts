@@ -6,6 +6,7 @@
  * clamps).
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import { getState } from '@/state';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
@@ -33,7 +34,7 @@ export function installDebugForecast(): void {
       : s.rd === 'half' ? 21.0975
       : 42.195;
 
-    const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
+    const weeksRemaining = Math.max(1, planTrainingWeeks(s) - ((s.w ?? 1) - 1));
     const sessionsForHorizon = (s.epw || s.rw || 0)
       + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
     const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);

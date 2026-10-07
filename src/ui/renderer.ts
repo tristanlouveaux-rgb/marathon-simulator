@@ -1,3 +1,4 @@
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { Workout, Week, GarminActual } from '@/types';
 import {
   getState, getMutableState, saveState
@@ -207,7 +208,7 @@ export function render(): void {
   if (realW === 1 && s.rpeAdj === 0 && s.forecastTime) {
     forecast = s.forecastTime;
   } else {
-    const wr = s.tw - realW + 1;
+    const wr = planTrainingWeeks(s) - realW + 1; // training weeks: a closing week holds only the race
     // Injury-aware: a current run restriction debits its recovery weeks so the
     // forecast builds from the return date instead of crediting build during
     // weeks the athlete cannot run. Same helper as the s.forecastTime recompute.

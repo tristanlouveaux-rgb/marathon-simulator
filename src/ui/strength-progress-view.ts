@@ -15,6 +15,7 @@
  * neutral. No tinted cards, no decorative icons, no gradients (UX_PATTERNS).
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
@@ -157,7 +158,7 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
   if (!s.gs || s.gs <= 0 || s.continuousMode || !s.rd || !(s.v && s.v > 0)) return null;
   const blended = s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined;
   if (!blended || blended <= 0) return null;
-  const weeksRemaining = Math.max(1, (s.tw ?? 16) - ((s.w ?? 1) - 1));
+  const weeksRemaining = Math.max(1, (planTrainingWeeks(s) || 16) - ((s.w ?? 1) - 1));
   const sessions = s.epw || s.rw || 4;
   const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd) ?? s.wkm;
   const base = {

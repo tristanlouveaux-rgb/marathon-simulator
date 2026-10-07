@@ -4,6 +4,7 @@ import type { SessionIntent, SlotType } from './intent_to_workout';
 import { RUN_PACE_FACTOR_VS_EASY } from './intent_to_workout';
 import { weekVolumeBudgetKm, ARCHETYPE_PARAMS, type Archetype } from '@/calculations/athlete-archetype';
 import { computePlanPhases, computeRunningPlanPhases, isSharpeningBlock, taperFraction } from './phases';
+import { planTrainingWeeks } from './race-week-layout';
 
 export interface PlanContext {
   runsPerWeek: number;
@@ -802,19 +803,22 @@ export function sharpeningInputsFromState(
  */
 export function runningPlanShapeInputs(s: RunningPlanState): PlanShapeInputs {
   const { baselineKm, archetype } = planEngineStateInputs(s);
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
+  // only the race and is not part of the plan the engine builds.
+  const trainingWeeks = planTrainingWeeks(s);
   return {
     runsPerWeek: s.rw,
     raceDistance: s.rd,
     runnerType: s.typ,
     fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
-    totalWeeks: s.tw,
+    totalWeeks: trainingWeeks,
     vdot: s.v || 45,
     weeklyHoursTarget: s.onboarding?.weeklyTrainingHours,
     excludedSlots: s.onboarding?.runningExcludedWorkouts,
     baselineKm,
     archetype,
     easyPaceSecPerKm: s.pac?.e,
-    planPhases: s.wks?.map(w => w.ph),
+    planPhases: s.wks?.slice(0, trainingWeeks).map(w => w.ph),
     continuousMode: !!s.continuousMode,
     sharpening: sharpeningInputsFromState(s),
   };

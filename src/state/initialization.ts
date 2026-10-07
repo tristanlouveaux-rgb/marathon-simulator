@@ -22,6 +22,8 @@ import { recomputeLT } from '@/data/ltSync';
 import { initializeWeeks } from '@/workouts';
 import { isSharpeningBlock } from '@/workouts/phases';
 import { buildSharpenBlockState } from '@/workouts/sharpening-block';
+import { raceWeekLayout } from '@/workouts/race-week-layout';
+import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
 import { initializeHyroxSimulator } from './initialization.hyrox';
@@ -409,6 +411,23 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       : (state.raceDistance || 'half');
     const targetDistMeters = rd(targetDistStr);
 
+    // Plan calendar (race-week-layout.ts). Weeks run Monday to Sunday from this
+    // local Monday. With a race date the plan runs through the week holding race
+    // day: race week is the week holding the day 3 days out, and a Monday to
+    // Wednesday race adds a closing week holding only the race. Training weeks
+    // (through race week) are the plan's horizon: phases, engine, forecast.
+    // Without a race date (5K/10K length slider, continuous) the wizard's week
+    // count stands.
+    const planStartISO = localMondayKey(new Date());
+    const raceDateForPlan = state.trainingForEvent === false
+      ? null
+      : (state.selectedRace?.date ?? state.customRaceDate ?? null);
+    const raceLayout = raceDateForPlan ? raceWeekLayout(planStartISO, raceDateForPlan) : null;
+    const trainingWeeks = raceLayout ? raceLayout.trainingWeeks : state.planDurationWeeks;
+    const calendarWeeks = raceLayout ? raceLayout.calendarWeeks : state.planDurationWeeks;
+    // Onboarding state with the plan's training weeks, for the forecast inputs.
+    const stateForForecast: OnboardingState = { ...state, planDurationWeeks: trainingWeeks };
+
     // Recent race for blending
     const rec = state.recentRace;
 
@@ -587,7 +606,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           runsPerWeek,
           raceDistance: targetDistStr,
           fitnessLevel: state.experienceLevel || 'intermediate',
-          totalWeeks: state.planDurationWeeks ?? 16,
+          totalWeeks: trainingWeeks ?? 16,
           vdot: engineVdot,
           easyPaceSecPerKm: pac.e,
         })
@@ -634,7 +653,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.injuryState = clearStaleGatesForMode(s.injuryState, 'running');
     }
     s.w = 1;
-    s.tw = state.planDurationWeeks;
+    s.tw = calendarWeeks;
     s.v = curr;
     s.iv = curr;
     s.rpeAdj = 0;
@@ -701,12 +720,19 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const noRunningSignal = !hasRealRunningFitnessSignal(s);
     s.wks = state.trainingForEvent === false
       ? initializeWeeks(s.tw)
-      : initializeWeeks(s.tw, { raceDistance: targetDistStr, noSignal: noRunningSignal });
+      : initializeWeeks(trainingWeeks, { raceDistance: targetDistStr, noSignal: noRunningSignal });
+    if (raceLayout?.closingWeek) {
+      // The race's own week after race week: it holds only the race.
+      s.wks.push({
+        w: s.wks.length + 1, ph: 'taper', raceClosing: true,
+        rated: {}, skip: [], cross: [], wkGain: 0, workoutMods: [], adjustments: [], unspentLoad: 0, extraRunLoad: 0,
+      });
+    }
     // Sharpening block: freeze the inputs that depend on today's 30-day run
     // window (the first long run) so every later week replays the same block.
     // Any other plan clears a stale block.
-    s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, s.tw)
-      ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks: s.tw, noSignal: noRunningSignal })
+    s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, trainingWeeks)
+      ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks, noSignal: noRunningSignal })
       : undefined;
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
@@ -791,7 +817,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
       : 0;
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, forecastAnchorSec,
+      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, stateForForecast, runnerType, forecastAnchorSec,
       { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;
@@ -802,7 +828,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ...s,
       onboarding: state,
       continuousMode: state.trainingForEvent === false,
-      planStartDate: getMondayOf(new Date()).toISOString().slice(0, 10),
+      planStartDate: planStartISO,
     });
     s.raceDayDurability = raceDayDurability ?? undefined;
     s.forecastTime = forecast.forecastTime * (raceDayDurability?.multiplier ?? 1);
@@ -811,6 +837,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // since the helper reads s.selectedMarathon.profile)
     if (state.selectedRace) {
       s.selectedMarathon = state.selectedRace;
+    } else if (state.trainingForEvent !== false && state.customRaceDate) {
+      // A custom date replaces an earlier event pick: every running race-date
+      // reader takes the event first (runningRaceDateISO), so a stale one would
+      // move race day.
+      s.selectedMarathon = undefined;
     }
     refreshForecastCourseFactors(s);
 
@@ -820,8 +851,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // first full week landing the following Monday. We never anchor to a future Monday:
     // weekIndexForDate can't file pre-start activities and reconcilePlanAnchorToEarliestActivity
     // would pull the anchor back the moment a lead-in run is logged.
-    s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
-    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+    // Local calendar dates: the UTC Monday was the previous week's Monday in the
+    // first hours of a Monday east of UTC, which moved race day by a week.
+    s.planStartDate = planStartISO;
+    s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
 
     // Store onboarding reference
     s.onboarding = state;

@@ -12,6 +12,9 @@ import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
 import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { liveSharpeningLongRunCapMin } from './sharpening-block';
+import { isClosingWeek, planTrainingWeeks, planRaceLayout } from './race-week-layout';
+import { applyRaceDayRules, raceDayRulesApply } from './race-day-rules';
+import { firstTrackedDow } from '@/ui/workout-status';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
@@ -55,7 +58,15 @@ export function generateWeekWorkouts(
   weekdayHoursTarget?: number,
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
-  // at the end of this function. No early return here.
+  // at the end of this function. No early return here, except the closing week.
+
+  // Closing week: the own week of a Monday to Wednesday race (race-week-layout.ts).
+  // It holds only the race, so nothing of any kind is generated. Planned adhoc
+  // sessions the user adds are kept by the resolver (week-resolve.ts).
+  const sPlan = getState();
+  if (weekIndex != null && !sPlan.continuousMode && isClosingWeek(sPlan, weekIndex)) return [];
+  // The plan engine's horizon: training weeks, without a closing week.
+  const engineTotalWeeks = totalWeeks != null ? planTrainingWeeks({ tw: totalWeeks, wks: sPlan.wks }) : undefined;
 
   // Commute-aware planning. `runsPerWeek` is the user's count of DEDICATED
   // (non-commute) runs. Commute runs are appended on top as extra easy
@@ -109,7 +120,7 @@ export function generateWeekWorkouts(
       phase,
       fitnessLevel: fitnessLevel || 'intermediate',
       weekIndex,
-      totalWeeks,
+      totalWeeks: engineTotalWeeks ?? totalWeeks,
       vdot: vdot || 45,
       effortScore,
       acwrStatus,
@@ -123,7 +134,7 @@ export function generateWeekWorkouts(
       // Every week's phase, so the engine replays the long runs and week totals it
       // prescribed before this week (10% long-run rule, deload guards). Ignored by
       // the engine unless it covers the whole plan (length === totalWeeks).
-      planPhases: sNow.wks?.map(w => w.ph),
+      planPhases: sNow.wks?.slice(0, engineTotalWeeks ?? totalWeeks).map(w => w.ph),
       continuousMode: !!sNow.continuousMode,
       // Sharpening block (phases.ts isSharpeningBlock): the start inputs frozen at
       // build, and the live reduce-only long-run cap for weeks already reached.
@@ -138,7 +149,7 @@ export function generateWeekWorkouts(
     // a minimal primer (ISSUE-298) and its volume is already cut, so easing it would neuter the
     // primer for no load benefit.
     const wkNow = sNow.wks?.[weekIndex - 1] as Week | undefined;
-    const raceWeek = isRaceWeek(weekIndex, totalWeeks, !!sNow.continuousMode);
+    const raceWeek = isRaceWeek(weekIndex, engineTotalWeeks ?? totalWeeks, !!sNow.continuousMode);
     const easedIntents = (
       acwrStatus === 'high' &&
       !raceWeek &&
@@ -390,6 +401,29 @@ export function generateWeekWorkouts(
   }
   let scheduledWorkouts = assignDefaultDays(workouts, weekdayBudgetMin, weekendBudgetMin);
 
+  // Race-day placement (race-day-rules.ts): nothing on or after race day, the
+  // primer 3 to 5 days out, no long run or quality session (except the primer)
+  // in the last 6 days, no back-to-back hard days in the last 13. Running race
+  // plans with a race date only.
+  const raceLayout = weekIndex != null ? planRaceLayout(sPlan) : null;
+  if (raceLayout && weekIndex != null) {
+    const toEasy = (w: Workout): Workout => {
+      const mins = w.estimatedDurationMin ?? 30;
+      const easy = intentToWorkout(
+        { dayIndex: 0, slot: 'easy', totalMinutes: mins, workMinutes: mins, variantId: 'easy_steady', notes: '' },
+        raceDistance, runnerType, easyPaceSecPerKm,
+      );
+      const loads = calculateWorkoutLoad(easy.t, easy.d, (easy.rpe || easy.r || 3) * 10, easyPaceSecPerKm);
+      return { ...easy, n: `Easy Run (was ${w.n})`, aerobic: loads.aerobic, anaerobic: loads.anaerobic, hrTarget: w.hrTarget };
+    };
+    scheduledWorkouts = applyRaceDayRules(scheduledWorkouts, {
+      weekIndex,
+      layout: raceLayout,
+      firstScheduleDow: firstTrackedDow(sPlan.planStartDate, weekIndex, sPlan.planCreatedAt),
+      toEasy,
+    });
+  }
+
   // Apply injury adaptations if injury is active — but only to the current and
   // future weeks. A current injury must NEVER rewrite past weeks: doing so turns
   // already-trained sessions into rehab/rest, which orphans their matched actuals
@@ -440,6 +474,14 @@ export function generateWeekWorkouts(
       w.dayOfWeek = day;
       usedDays.add(day);
     }
+  }
+
+  // Rule 1 again after injury adaptation, which can emit sessions on any day.
+  if (raceLayout && weekIndex != null && raceDayRulesApply(weekIndex, raceLayout)) {
+    const weekStart = (weekIndex - 1) * 7;
+    scheduledWorkouts = scheduledWorkouts.filter(
+      w => w.dayOfWeek == null || weekStart + w.dayOfWeek < raceLayout.raceDayIndex,
+    );
   }
 
   // Generate stable IDs for each workout (W{week}-{type}-{index})

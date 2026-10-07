@@ -12,6 +12,7 @@
  * re-runs the blend on render.
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
 import { computePeakWeeklyKm } from '@/workouts/plan_engine';
@@ -721,7 +722,10 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
 
   // Recompute end-of-plan forecast from the fresh baseline so s.expectedFinal
   // tracks reality instead of being frozen at onboarding.
-  const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
+  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
+  const trainingWeeks = planTrainingWeeks(s);
+  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
   if (s.rd && s.typ && weeksRemaining > 0) {
     try {
       // Include commute days so the live forecast matches what the
@@ -736,7 +740,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd, {
         baselineKm: s.detectedWeeklyKm,
         archetype: s.athleteArchetype?.archetype,
-        totalWeeks: s.tw,
+        totalWeeks: trainingWeeks,
         taperWeeks: s.rd === 'marathon' ? 3 : 2,
       });
       // Injury-aware: build from the return date, not flat. A current run
@@ -765,7 +769,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
             runsPerWeek: s.rw!,
             raceDistance: s.rd,
             fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
-            totalWeeks: s.tw ?? 16,
+            totalWeeks: trainingWeeks || 16,
             vdot: s.v ?? engineVdot,
             easyPaceSecPerKm: s.pac?.e,
           })

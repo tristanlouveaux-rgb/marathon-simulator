@@ -59,6 +59,7 @@ import type { SimulatorState, TrainingPhase, Week } from '@/types';
 import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry } from './fitness-model';
 import { abilityBandFromVdot, isDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
 import { isSharpeningBlock } from '@/workouts/phases';
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 
 /** The state fields the target reads. Structural so persistence's raw `migrated` object fits. */
 export type PlannedTargetState = Pick<
@@ -71,7 +72,7 @@ export type PlannedTargetState = Pick<
 /** True when the running plan is a sharpening block (phases.ts isSharpeningBlock). */
 function isRunningBlock(s: PlannedTargetState): boolean {
   if (s.trackOnly || s.continuousMode || s.eventType === 'triathlon' || s.eventType === 'hyrox') return false;
-  return isSharpeningBlock(s.rd, (s.wks ?? []).length);
+  return isSharpeningBlock(s.rd, planTrainingWeeks({ wks: s.wks }));
 }
 
 export interface PlannedWeekPhase {
@@ -95,7 +96,10 @@ function isEngineDeloadWeek(s: PlannedTargetState, weekNum: number, wk: Week): b
   const ability = abilityBandFromVdot(s.v || 45, s.onboarding?.experienceLevel || 'intermediate');
   // A sharpening block deloads build weeks only, never the week before the
   // taper (plan_engine isSharpeningDeloadWeek, the rule the block generates with).
-  if (isRunningBlock(s)) return isSharpeningDeloadWeek(weekNum, ability, (s.wks ?? []).map(w => w.ph ?? 'base'));
+  if (isRunningBlock(s)) {
+    const trainingWeeks = planTrainingWeeks({ wks: s.wks });
+    return isSharpeningDeloadWeek(weekNum, ability, (s.wks ?? []).slice(0, trainingWeeks).map(w => w.ph ?? 'base'));
+  }
   return isDeloadWeek(weekNum, ability);
 }
 
@@ -108,6 +112,13 @@ export function resolvePlannedWeekPhase(s: PlannedTargetState, weekNum: number):
   const idx = weekNum - 1;
   const wk = wks[idx];
   if (!wk) return { phase: 'base' };
+  // A closing week (a Monday to Wednesday race's own week) holds only the race:
+  // it targets the race-week row, and the taper run ends before it so the
+  // taper's length and positions match a Sunday race's.
+  if (wk.raceClosing && idx > 0) {
+    const raceWeek = resolvePlannedWeekPhase(s, weekNum - 1);
+    return raceWeek.phase === 'taper' ? { ...raceWeek, alsoDeload: false } : { phase: 'taper', weekInTaper: 1, taperWeeks: 1 };
+  }
   const ph: TrainingPhase = wk.ph ?? 'base';
   const deload = isEngineDeloadWeek(s, weekNum, wk);
 
@@ -117,14 +128,14 @@ export function resolvePlannedWeekPhase(s: PlannedTargetState, weekNum: number):
   let start = idx;
   while (start > 0 && wks[start - 1]?.ph === 'taper') start--;
   let end = idx;
-  while (end < wks.length - 1 && wks[end + 1]?.ph === 'taper') end++;
+  while (end < wks.length - 1 && wks[end + 1]?.ph === 'taper' && !wks[end + 1]?.raceClosing) end++;
 
   // Continuous (non-event) plans have no race, so every 'taper' week is a block
   // deload. Just-Track after a finished race plan keeps continuousMode = true,
   // but that plan's final taper was still a race taper.
   let isRaceTaper = !(s.continuousMode && !s.trackOnly);
   for (let i = end + 1; isRaceTaper && i < wks.length; i++) {
-    if (wks[i]?.ph === 'taper') isRaceTaper = false; // a later taper run exists: this one is a mid-plan recovery block
+    if (wks[i]?.ph === 'taper' && !wks[i]?.raceClosing) isRaceTaper = false; // a later taper run exists: this one is a mid-plan recovery block
   }
   if (!isRaceTaper) return { phase: 'deload' };
 

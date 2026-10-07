@@ -16,6 +16,10 @@
  * Internal names (ATL/CTL/TSB/rpeAdj) must NOT appear in user-facing copy.
  */
 
+import { planTrainingWeeks, planRaceLayout, isClosingWeek, runningRaceDateISO } from '@/workouts/race-week-layout';
+import { applyRaceDayRules, raceDayRulesApply } from '@/workouts/race-day-rules';
+import { assignDefaultDays } from '@/workouts/scheduler';
+import { firstTrackedDow } from './workout-status';
 import { getState, getMutableState, saveState } from '@/state';
 import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
@@ -801,7 +805,8 @@ export function debriefPreviewPlanInputs(
     phase: nextPhase,
     fitnessLevel: s.onboarding?.experienceLevel ?? 'intermediate',
     weekIndex: weekNum + 1,
-    totalWeeks: s.tw ?? 16,
+    // Training weeks, as the generator passes the engine (a closing week holds only the race).
+    totalWeeks: planTrainingWeeks(s) || 16,
     vdot: s.v ?? 45,
     forceDeload: nextWk?.forceDeload,
     weeklyHoursTarget: s.onboarding?.weeklyTrainingHours,
@@ -810,7 +815,7 @@ export function debriefPreviewPlanInputs(
     baselineKm,
     archetype,
     // Same plan-history inputs the generator hands the engine (generator.ts).
-    planPhases: (s.wks ?? []).map((w: any) => w?.ph),
+    planPhases: (s.wks ?? []).slice(0, planTrainingWeeks(s) || undefined).map((w: any) => w?.ph),
     continuousMode: !!s.continuousMode,
     // Sharpening block: the same stored start and live long-run cap the generator reads.
     sharpening: sharpeningInputsFromState(s),
@@ -928,10 +933,23 @@ function _renderPlanPreview(
   const recommendedIntents = acwrEaseActive ? easeResult!.intents : adjustedIntents;
   const alternativeIntents = acwrEaseActive ? adjustedIntents : standardIntents;
 
-  // Convert intents to workouts for display
+  // Convert intents to workouts for display. Near race day the week also goes
+  // through the generator's race-day placement (race-day-rules.ts), so the
+  // preview lists exactly the sessions the week gets (nothing on or after race
+  // day, the primer dropped when no day 3 to 5 days out remains).
   const easyPace = s.pac?.e;
-  const adjustedWorkouts = recommendedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
-  const standardWorkouts = alternativeIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+  const raceLayout = planRaceLayout(s);
+  const withRaceDayRules = (ws: any[]): any[] => {
+    if (!raceLayout || !raceDayRulesApply(nextWeekIdx, raceLayout)) return ws;
+    const placed = applyRaceDayRules(assignDefaultDays(ws.map(w => ({ ...w }))), {
+      weekIndex: nextWeekIdx, layout: raceLayout,
+      firstScheduleDow: firstTrackedDow(s.planStartDate, nextWeekIdx, s.planCreatedAt),
+    });
+    return placed;
+  };
+  const closingWeek = isClosingWeek(s, nextWeekIdx);
+  const adjustedWorkouts = closingWeek ? [] : withRaceDayRules(recommendedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace)));
+  const standardWorkouts = closingWeek ? [] : withRaceDayRules(alternativeIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace)));
 
   // Build per-workout annotations first. They define what "visibly different" means
   const easyPaceSec = easyPace ?? 360; // fallback 6:00/km
@@ -976,7 +994,11 @@ function _renderPlanPreview(
     </div>
   ` : '';
 
-  const workoutsHtml = _renderWorkoutList(adjustedWorkouts, perWorkoutAnnotations);
+  // Closing week (a Monday to Wednesday race's own week): no sessions before the race.
+  const raceDateIso = runningRaceDateISO(s);
+  const workoutsHtml = closingWeek
+    ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0;padding:8px 0">${raceDateIso ? `Race on ${_fmtRaceDay(raceDateIso)}. ` : ''}No sessions before it.</p>`
+    : _renderWorkoutList(adjustedWorkouts, adjustedWorkouts.length === recommendedIntents.length ? perWorkoutAnnotations : []);
   const standardWorkoutsHtml = _renderWorkoutList(standardWorkouts, []);
 
   // Behind-plan headline. Factual, no judgement (Tristan, 2026-06-09): lead with the number, state
@@ -1028,7 +1050,7 @@ function _renderPlanPreview(
   card.innerHTML = `
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:18px">
-      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase · Week ${nextWeekIdx}</span>
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${closingWeek ? 'Race week' : `${PHASE_LABEL[nextPhase] ?? nextPhase} Phase`} · Week ${nextWeekIdx}</span>
     </div>
 
     ${adherenceNote}
@@ -1061,6 +1083,12 @@ function _renderPlanPreview(
 
   _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent, acwrEaseActive ? nextWeekIdx : null,
     acwrInitial?.choice !== 'keep');
+}
+
+/** "Tuesday 14 October" from a YYYY-MM-DD key, read as a local calendar date. */
+function _fmtRaceDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
 function _renderWorkoutList(workouts: any[], annotations: string[]): string {

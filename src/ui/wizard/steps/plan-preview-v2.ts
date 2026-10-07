@@ -1,3 +1,4 @@
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { OnboardingState, MilestoneTarget } from '@/types/onboarding';
 import { findNearestMilestone } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
@@ -421,7 +422,7 @@ function forecastForSessions(
   return calculateLiveForecast({
     currentVdot: s.v || 50,
     targetDistance: s.rd,
-    weeksRemaining: s.tw || 16,
+    weeksRemaining: planTrainingWeeks(s) || 16, // training weeks: a closing week holds only the race
     sessionsPerWeek: sessions,
     runnerType: getRunnerType(s.b || 1.06),
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',

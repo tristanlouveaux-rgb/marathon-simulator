@@ -25,6 +25,7 @@
 
 import type { SimulatorState } from '@/types/state';
 import { plannedRunMinutesByWeek, runningPlanShapeInputs, type RunningPlanState } from '@/workouts/plan_engine';
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import {
   plannedRaceDayDurability, getRunDurationsBetweenSec, DURABILITY_WINDOW_WEEKS,
   type RunDurabilityResult,
@@ -47,15 +48,18 @@ const WEEK_MS = 7 * 24 * 3600 * 1000;
 export function raceDayPlanDurability(s: RaceDayPlanState, nowMs: number = Date.now()): RunDurabilityResult | null {
   if (s.trackOnly || s.continuousMode) return null;
   if (s.eventType === 'triathlon' || s.eventType === 'hyrox') return null;
-  if (!s.rd || !(s.tw > 0) || !(s.rw > 0)) return null;
+  // Training weeks: the window ends with race week; a closing week (a Monday to
+  // Wednesday race's own week) holds only the race (planTrainingWeeks).
+  const trainingWeeks = planTrainingWeeks(s);
+  if (!s.rd || !(trainingWeeks > 0) || !(s.rw > 0)) return null;
 
   const plannedWeeks = plannedRunMinutesByWeek(runningPlanShapeInputs(s));
   let preplanRunSec: number[] = [];
-  if (s.tw < DURABILITY_WINDOW_WEEKS) {
+  if (trainingWeeks < DURABILITY_WINDOW_WEEKS) {
     const parsed = s.planStartDate ? Date.parse(s.planStartDate) : NaN;
     const planStartMs = Number.isFinite(parsed) ? parsed : nowMs;
     preplanRunSec = getRunDurationsBetweenSec(
-      s, planStartMs - (DURABILITY_WINDOW_WEEKS - s.tw) * WEEK_MS, planStartMs,
+      s, planStartMs - (DURABILITY_WINDOW_WEEKS - trainingWeeks) * WEEK_MS, planStartMs,
     );
   }
   return plannedRaceDayDurability(plannedWeeks, s.rd, preplanRunSec);

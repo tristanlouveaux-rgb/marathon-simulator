@@ -607,6 +607,11 @@ export interface UnspentLoadItem {
 export interface Week {
   w: number;                            // Week number
   ph: TrainingPhase;                    // Training phase
+  /** Closing week: the own week of a Monday to Wednesday race, after race week
+   *  (race-week-layout.ts). Holds only the race (no generated session), is
+   *  labelled 'taper' and counts in s.tw, but not in the training weeks every
+   *  weeks-to-race input reads (planTrainingWeeks). */
+  raceClosing?: boolean;
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
    *  the workout generator and Phase Timeline read this flag to swap content

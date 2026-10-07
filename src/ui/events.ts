@@ -1,3 +1,4 @@
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } from '@/types';
 import {
   getState, getMutableState, updateState,
@@ -381,7 +382,7 @@ export function init(): void {
   const { forecastVdot, forecastTime } = calculateLiveForecast({
     currentVdot: s.v,
     targetDistance: s.rd,
-    weeksRemaining: s.tw,
+    weeksRemaining: planTrainingWeeks(s),
     sessionsPerWeek: s.epw,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
@@ -619,8 +620,10 @@ export function rate(
   // Update Forecast (end-of-plan projection)
   const totalExpectedGain = s.expectedFinal - s.iv;
   const weeksCompleted = s.w - 1;
-  const remainingGain = totalExpectedGain > 0
-    ? totalExpectedGain * ((s.tw - weeksCompleted) / s.tw)
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds only the race.
+  const gainWeeks = planTrainingWeeks(s);
+  const remainingGain = totalExpectedGain > 0 && gainWeeks > 0
+    ? totalExpectedGain * (Math.max(0, gainWeeks - weeksCompleted) / gainWeeks)
     : 0;
   const bareForecast = tv(currentVDOT + remainingGain, raceDistKm);
   const horizonDeltaSec = bareToday - bareForecast;
@@ -969,7 +972,8 @@ export async function next(): Promise<void> {
   // Normal progression (no injury)
   // Calculate per-week VDOT gain from training horizon model instead of flat 0.06
   const totalExpectedVdotGain = (s.expectedFinal || s.iv) - s.iv;
-  const perWeekGain = s.tw > 0 ? totalExpectedVdotGain / s.tw : 0;
+  // Spread over training weeks: the closing week holds only the race.
+  const perWeekGain = planTrainingWeeks(s) > 0 ? totalExpectedVdotGain / planTrainingWeeks(s) : 0;
   // Apply adherence modifier: scale by what fraction of RUNNING workouts were completed.
   // Only running contributes to VDOT gain (Signal A). Cross-training/gym build systemic
   // fitness (Signal B) but not running-specific adaptation. Per PRINCIPLES.md.
@@ -1315,7 +1319,7 @@ export async function next(): Promise<void> {
       // for 2+ consecutive weeks, signal the plan-view card to show.
       // Never fires during taper (deliberately low volume) or when ACWR is elevated.
       if (acwr.status === 'safe' && nextWk.ph !== 'taper') {
-        const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, nextWk.ph);
+        const floorKm = computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), nextWk.ph);
 
         const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
         const consecutiveBelow = prevWeeks.length >= 1 &&
@@ -1934,7 +1938,7 @@ export function logActivity(): void {
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
-  const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, s.tw ?? 16, wk.ph);
+  const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, (planTrainingWeeks(s) || 16), wk.ph);
 
   // -----------------------------------------------------------------------
   // Cross-training slot matching: pair logged sport with planned slots
@@ -2925,7 +2929,7 @@ export function maybeInitKmNudge(): void {
   const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   if (acwr.status !== 'safe') return;
 
-  const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph);
+  const floorKm = computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), wk.ph);
 
   const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
   const below = prevWeeks.length >= 1 &&
