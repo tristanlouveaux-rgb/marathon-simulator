@@ -25,6 +25,7 @@ import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calcula
 import { plausibleLtHR } from '@/calculations/lt-derivation';
 import { getBeta, resolveBiologicalSex, type BiologicalSex, type BiologicalSexSource } from '@/calculations/trimp';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -705,7 +706,7 @@ export function computeTodaySignalBTSS(
 
   // garminActuals. Filter to today by startTime
   for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
-    if (!actual.startTime?.startsWith(today)) continue;
+    if (!isOnLocalDay(actual.startTime, today)) continue;
     if (actual.garminId) {
       if (seenGarminIds.has(actual.garminId)) continue;
       seenGarminIds.add(actual.garminId);
@@ -738,7 +739,7 @@ export function computeTodaySignalBTSS(
       if (seenGarminIds.has(rawId)) continue;
       // Use garminTimestamp (stored by addAdhocWorkoutFromPending) to filter by date
       const ts = (w as any).garminTimestamp as string | undefined;
-      if (!ts?.startsWith(today)) continue;
+      if (!isOnLocalDay(ts, today)) continue;
       seenGarminIds.add(rawId);
       const adhocDur = parseDurMinFromDesc(w.d);
       workoutMinutes += adhocDur;
@@ -801,7 +802,7 @@ export function computeTodayStrainTSS(
   const loggedActivities: Array<{ durationSec: number; activityType?: string | null }> = [];
   const seen = new Set<string>();
   for (const a of Object.values(wk.garminActuals ?? {})) {
-    if (!a.startTime?.startsWith(date)) continue;
+    if (!isOnLocalDay(a.startTime, date)) continue;
     if (a.garminId) {
       if (seen.has(a.garminId)) continue;
       seen.add(a.garminId);
@@ -816,7 +817,7 @@ export function computeTodayStrainTSS(
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (!rawId) continue;
     const ts = (w as any).garminTimestamp as string | undefined;
-    if (!ts?.startsWith(date)) continue;
+    if (!isOnLocalDay(ts, date)) continue;
     if (seen.has(rawId)) continue;
     seen.add(rawId);
     loggedActivities.push({
@@ -1312,7 +1313,7 @@ export function computeRollingLoadRatio(
   for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
     const d = new Date(now);
     d.setDate(d.getDate() - daysAgo);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = localDateKey(d);
     const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
     observed.push(wk ? computeTodaySignalBTSS(wk, dateStr, null, norm) : null);
   }
@@ -1410,7 +1411,7 @@ export function getDailyLoadHistory(
   for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
     const d = new Date(now);
     d.setDate(d.getDate() - daysAgo);
-    const dateStr = d.toISOString().split('T')[0];
+    const dateStr = localDateKey(d);
 
     const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
     if (!wk) {
@@ -1428,7 +1429,7 @@ export function getDailyLoadHistory(
 
     // Collect activities for this day
     for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
-      if (!actual.startTime?.startsWith(dateStr)) continue;
+      if (!isOnLocalDay(actual.startTime, dateStr)) continue;
       if (actual.garminId) {
         if (seenIds.has(actual.garminId)) continue;
         seenIds.add(actual.garminId);
@@ -1457,7 +1458,7 @@ export function getDailyLoadHistory(
       if (rawId) {
         if (seenIds.has(rawId)) continue;
         const ts = (w as any).garminTimestamp as string | undefined;
-        if (!ts?.startsWith(dateStr)) continue;
+        if (!isOnLocalDay(ts, dateStr)) continue;
         seenIds.add(rawId);
       } else {
         if ((w as any).dayOfWeek !== ourDay) continue;
@@ -1973,7 +1974,7 @@ export function computeLiveSameSignalTSB(
     for (let d = 0; d < daysIntoWeek; d++) {
       const dayD = new Date(weekStartDate);
       dayD.setDate(dayD.getDate() + d);
-      const dayDate = dayD.toISOString().split('T')[0];
+      const dayDate = localDateKey(dayD);
       const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
       const weekEquiv = dayTSS * 7;
       atl = atl * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
@@ -2036,7 +2037,7 @@ export function computeToBaseline(
       for (let d = 4; d < 7; d++) {
         const dayD = new Date(weekStartDate);
         dayD.setDate(dayD.getDate() - (7 - d));
-        const dayDate = dayD.toISOString().split('T')[0];
+        const dayDate = localDateKey(dayD);
         const tss = computeTodaySignalBTSS(prevWk, dayDate);
         recentDays.push({ date: dayDate, tss, noonMs: dayD.getTime(), weekIdx: completedWeek - 1 });
       }
@@ -2051,7 +2052,7 @@ export function computeToBaseline(
   for (let d = 0; d < daysToCheck; d++) {
     const dayD = new Date(weekStartDate);
     dayD.setDate(dayD.getDate() + d);
-    const dayDate = dayD.toISOString().split('T')[0];
+    const dayDate = localDateKey(dayD);
     const tss = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
     recentDays.push({ date: dayDate, tss, noonMs: dayD.getTime(), weekIdx: completedWeek });
   }
@@ -2074,7 +2075,7 @@ export function computeToBaseline(
       let totalTss = 0;
       let weightedSum = 0;
       for (const [id, actual] of Object.entries(wk.garminActuals)) {
-        if (!actual.startTime?.startsWith(session.date)) continue;
+        if (!isOnLocalDay(actual.startTime, session.date)) continue;
         const sportKey = actual.activityType ? normalizeSport(actual.activityType) : 'generic_sport';
         const config = SPORTS_DB[sportKey];
         const rm = config?.recoveryMult ?? 1.0;

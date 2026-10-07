@@ -55,15 +55,17 @@
  * current week the synced run goes to Activity Review, which offers the
  * in-app slot, so the user decides whether it is the same session.
  *
- * Plan weeks: the matcher files a synced row by its UTC calendar day
- * (weekIndexForDate), while an in-app GPS run sits in s.wks[s.w - 1] and a Mark
- * as Done record in its card's week. A Monday-morning session east of UTC, a
- * Sunday-evening session west of UTC, or any session while s.w is held back by
- * the debrief gate puts the two copies in different weeks. The recorded and
- * same-day checks are bounded in time (start within 4 h, or the same local
- * calendar day), so the matcher runs them over every plan week
- * (findInAppRunToSupersedeAcrossWeeks) and supersedes the record in the week
- * that holds it. The cross-day 'completion' check stays in the row's own week.
+ * Plan weeks: the matcher files a synced row by its local calendar day
+ * (weekIndexForDate, decision 2026-10-06), while an in-app GPS run sits in
+ * s.wks[s.w - 1] and a Mark as Done record in its card's week. A session done
+ * on another day than planned across a week boundary, or any session while s.w
+ * is held back by the debrief gate, puts the two copies in different weeks.
+ * The recorded and same-day checks are bounded in time (start within 4 h, or
+ * the same local calendar day), so the matcher runs them over every plan week
+ * (findInAppRunToSupersedeAcrossWeeks; findInAppGymSessionAcrossWeeks for the
+ * HYROX station and guided-strength upgrades) and supersedes the record in the
+ * week that holds it. The cross-day 'completion' check stays in the row's own
+ * week.
  *
  * Sport: a synced activity of a different sport never supersedes, overwrites
  * or drops an in-app record. The windows above are timing rules only, so each
@@ -76,8 +78,10 @@
  *   - the guided-strength and HYROX station upgrades keep their own gates:
  *     the guided-strength upgrade takes gym-bucket rows (mapGarminType 'gym')
  *     onto a strength in-app record (isStrengthActual), and the HYROX station
- *     upgrade takes HIIT rows or a HYROX-named row. Both search the row's own
- *     plan week only;
+ *     upgrade takes HIIT rows or a HYROX-named row onto an in-app HYROX record
+ *     (isInAppHyroxSession). Both search every plan week with the bounded
+ *     windows first (findInAppGymSessionAcrossWeeks), then their own wider
+ *     same-week rules;
  *   - the Strava upgrade loop and the cross-source reconcile passes use
  *     isSameSportAsInApp.
  *
@@ -684,10 +688,10 @@ function nearestInAppSession(
  * For 'recorded' and 'same-day-completion' the matcher passes every plan week.
  * Those windows are bounded in time (start within 4 h, or the same local
  * calendar day), so a wider search can only reach the same session filed in
- * another week: weekIndexForDate files the row by its UTC day, a GPS run sits
- * in s.wks[s.w - 1] (s.w can trail the calendar by more than one week while a
- * debrief is pending, welcome-back.ts debriefCap) and a Mark as Done record in
- * its card's week.
+ * another week: weekIndexForDate files the row by its local day, a GPS run
+ * sits in s.wks[s.w - 1] (s.w can trail the calendar by more than one week
+ * while a debrief is pending, welcome-back.ts debriefCap) and a Mark as Done
+ * record in its card's week.
  */
 export function findInAppRunToSupersedeAcrossWeeks(
   weeks: readonly (Week | null | undefined)[],
@@ -695,6 +699,56 @@ export function findInAppRunToSupersedeAcrossWeeks(
   mode: SupersedeMode,
 ): { week: Week; key: string } | null {
   return findInAppSessionToSupersedeAcrossWeeks(weeks, synced, mode, 'run');
+}
+
+/**
+ * In-app records the matcher's gym-bucket upgrades replace with a synced
+ * gym-bucket row: 'hyrox' is a HYROX station or brick session recorded in the
+ * app, guided or quick done (isInAppHyroxSession); 'strength' is a guided or
+ * quick-done strength session (isStrengthActual).
+ */
+export type InAppGymKind = 'hyrox' | 'strength';
+
+/**
+ * The in-app `kind` record across `weeks` that a synced gym-bucket row is the
+ * same session as, and the week that holds it, by bounded windows only:
+ *   - the recorded window (isSameRecordedSession: start within 4 h, duration
+ *     within 15 %), or
+ *   - on the row's own local calendar day, the completion window
+ *     (isSameCompletedSession; `entryFallbackMin` is the duration to assume
+ *     for an entry with none, the upgrade paths' 30 min).
+ * A guided record's start is its completion moment and a quick done's is
+ * planned-day noon, neither a recorded start, so both take the same-day
+ * completion window, as a run marked done does. Both windows are bounded in
+ * time, so searching every plan week reaches only the same session filed in
+ * another week (findInAppRunToSupersedeAcrossWeeks' rule for runs): a session
+ * done on another day than planned across a week boundary, or a record in its
+ * card's week while the row sits in the week of its own day. Nearest start
+ * wins; a tie keeps the earlier week, so pass the row's own week first.
+ */
+export function findInAppGymSessionAcrossWeeks(
+  weeks: readonly (Week | null | undefined)[],
+  synced: { startTime: string; durationSec: number },
+  kind: InAppGymKind,
+  entryFallbackMin: number,
+): { week: Week; key: string } | null {
+  const syncedMs = new Date(synced.startTime).getTime();
+  const syncedDay = localDateKey(synced.startTime);
+  let best: { week: Week; key: string; gap: number } | null = null;
+  for (const week of weeks) {
+    if (!week) continue;
+    for (const [key, a] of Object.entries(week.garminActuals ?? {})) {
+      if (!isInAppActual(a) || isGpsInAppActual(a)) continue;
+      if (kind === 'hyrox' ? !isInAppHyroxSession(a) : !isStrengthActual(a)) continue;
+      const sameDay = !!a.startTime && !!syncedDay && localDateKey(a.startTime) === syncedDay;
+      const same = isSameRecordedSession(a, synced)
+        || (sameDay && isSameCompletedSession(a, synced, entryFallbackMin));
+      if (!same) continue;
+      const gap = a.startTime ? Math.abs(syncedMs - new Date(a.startTime).getTime()) : Infinity;
+      if (best == null || gap < best.gap) best = { week, key, gap };
+    }
+  }
+  return best ? { week: best.week, key: best.key } : null;
 }
 
 /**

@@ -33,6 +33,7 @@ import type {
 import { clamp } from '@/utils/helpers';
 import { SPORTS_DB } from '@/constants/sports';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { localDateKey } from '@/utils/local-date';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -654,7 +655,7 @@ export function ingestNewActualsAsImpacts(
       if (!actual.startTime) continue;
       if (known.has(actual.garminId)) continue;
 
-      const date = actual.startTime.split('T')[0];
+      const date = localDateKey(actual.startTime); // local day, as physiology entries are keyed
       const ageDays = daysBetween(date, todayIso());
       if (ageDays < 0 || ageDays > IMPACT_LOG_MAX_DAYS) continue;
 

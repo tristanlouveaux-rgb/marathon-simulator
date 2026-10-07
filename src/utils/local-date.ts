@@ -29,3 +29,53 @@ export function localDateKey(input: Date | string): string {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+/**
+ * True when the instant `startTime` (an activity's ISO start) falls on the local
+ * calendar day `day` (YYYY-MM-DD). The single rule for "which day does this
+ * activity belong to": synced activities are filed by the athlete's local day,
+ * the same calendar plan weekdays use. `startTime.startsWith(day)` compared the
+ * UTC day, so a late-evening session west of UTC or an early-morning one east
+ * of UTC landed on the neighbouring day.
+ */
+export function isOnLocalDay(startTime: string | null | undefined, day: string): startTime is string {
+  return !!startTime && localDateKey(startTime) === day;
+}
+
+/**
+ * YYYY-MM-DD of the Monday on or before the instant's local calendar day: the
+ * calendar week an activity belongs to. Calendar arithmetic runs on the date
+ * components at UTC midnight, so no DST shift can move it.
+ */
+export function localMondayKey(input: Date | string): string {
+  const key = localDateKey(input);
+  if (!key) return '';
+  const [y, m, d] = key.split('-').map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d));
+  const dow = day.getUTCDay(); // 0 = Sunday
+  day.setUTCDate(day.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+  return day.toISOString().slice(0, 10);
+}
+
+/**
+ * Whole calendar days from local day `fromKey` to local day `toKey`
+ * (YYYY-MM-DD each), e.g. 7 from a Monday to the next Monday. NaN when either
+ * key is malformed.
+ */
+export function calendarDaysBetween(fromKey: string, toKey: string): number {
+  const parse = (k: string): number => {
+    const [y, m, d] = k.split('-').map(Number);
+    return Date.UTC(y, m - 1, d);
+  };
+  return Math.round((parse(toKey) - parse(fromKey)) / 86400000);
+}
+
+/**
+ * Local midnight that starts plan week `weekNum` (1-based) for a plan starting
+ * on local day `planStartDate` (YYYY-MM-DD). `new Date('YYYY-MM-DD')` reads UTC
+ * midnight, which is not the start of the athlete's day anywhere off UTC.
+ */
+export function localMidnightOfPlanWeek(planStartDate: string, weekNum: number): Date {
+  const [y, m, d] = localDateKey(planStartDate).split('-').map(Number);
+  return new Date(y, m - 1, d + (weekNum - 1) * 7, 0, 0, 0, 0);
+}

@@ -15,7 +15,7 @@
 
 import { getState, getMutableState, saveState } from '@/state';
 import { weekIndexForDate } from '@/calculations/activity-matcher';
-import { getMondayOf } from '@/state/persistence';
+import { localDateKey, localMondayKey, calendarDaysBetween } from '@/utils/local-date';
 
 const GAP_SEEN_KEY = 'mosaic_gap_seen';
 const LAST_OPENED_KEY = 'mosaic_last_opened_at';
@@ -297,17 +297,19 @@ export function reconcilePlanAnchorToEarliestActivity(): boolean {
   }
   if (earliestMs === null) return false;
 
-  const earliestMonday = getMondayOf(new Date(earliestMs));
-  // planStartDate is stored as a Monday-snapped YYYY-MM-DD; compare at UTC midnight.
-  const planStartUtc = new Date(s.planStartDate + 'T00:00:00Z').getTime();
-  if (planStartUtc <= earliestMonday.getTime()) return false; // invariant already holds
+  // The earliest activity's calendar week by its LOCAL day, the day
+  // weekIndexForDate files it under (a UTC Monday put an early-Monday session
+  // east of UTC in the previous week and pulled the anchor back for nothing).
+  // planStartDate is a Monday-snapped YYYY-MM-DD.
+  const earliestDate = new Date(earliestMs);
+  const corrected = localMondayKey(earliestDate);
+  const daysBack = calendarDaysBetween(corrected, s.planStartDate);
+  if (!(daysBack > 0)) return false; // invariant already holds
 
-  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-  const weeksMoved = Math.round((planStartUtc - earliestMonday.getTime()) / msPerWeek);
-  const corrected = earliestMonday.toISOString().slice(0, 10);
+  const weeksMoved = Math.round(daysBack / 7);
   console.log(
     `[plan-anchor] planStartDate ${s.planStartDate} is after earliest activity ` +
-      `(${new Date(earliestMs).toISOString().slice(0, 10)}) — pulling anchor back ${weeksMoved}w to ${corrected}, ` +
+      `(${localDateKey(earliestDate)}) — pulling anchor back ${weeksMoved}w to ${corrected}, ` +
       `s.w ${s.w}→${s.w + weeksMoved}.`,
   );
   s.planStartDate = corrected;

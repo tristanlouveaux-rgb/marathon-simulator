@@ -18,6 +18,7 @@ import { reconcileRecentLegLoads } from '@/ui/sport-picker-modal';
 import type { GarminLap } from '@/types';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 import { ACTIVITY_SYNC_LOOKBACK_DAYS } from './activity-sync-window';
+import { localMidnightOfPlanWeek } from '@/utils/local-date';
 
 /**
  * Fetch recent Garmin activities and match them to the current week's plan.
@@ -181,8 +182,10 @@ export function processPendingCrossTraining(): void {
   let weekStart: Date | undefined;
   let weekEnd: Date | undefined;
   if (s.planStartDate) {
-    weekStart = new Date(s.planStartDate);
-    weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
+    // Local midnight boundaries: the current week by the athlete's local
+    // calendar, as the matcher files rows (weekIndexForDate). new Date(ymd)
+    // parsed UTC midnight, so a late-Sunday session west of UTC fell outside.
+    weekStart = localMidnightOfPlanWeek(s.planStartDate, s.w);
     weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
   }
@@ -259,8 +262,10 @@ export function openAdjustWeekModal(): void {
   let weekStart: Date | undefined;
   let weekEnd: Date | undefined;
   if (s.planStartDate) {
-    weekStart = new Date(s.planStartDate);
-    weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
+    // Local midnight boundaries: the current week by the athlete's local
+    // calendar, as the matcher files rows (weekIndexForDate). new Date(ymd)
+    // parsed UTC midnight, so a late-Sunday session west of UTC fell outside.
+    weekStart = localMidnightOfPlanWeek(s.planStartDate, s.w);
     weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
   }

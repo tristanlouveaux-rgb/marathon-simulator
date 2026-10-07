@@ -18,6 +18,7 @@ import {
 } from '@/calculations/fitness-model';
 import type { ReadinessLabel } from '@/calculations/readiness';
 import { getPlannedDayTSSContext } from './planned-day-tss';
+import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
@@ -66,7 +67,7 @@ function fmtDateShort(date: string, today: string): string {
   if (date === today) return 'Today';
   const yest = new Date(today + 'T12:00:00');
   yest.setDate(yest.getDate() - 1);
-  if (date === yest.toISOString().split('T')[0]) return 'Yesterday';
+  if (date === localDateKey(yest)) return 'Yesterday';
   return new Date(date + 'T12:00:00').toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric',
   });
@@ -94,7 +95,7 @@ export function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
   for (const wk of wks) {
     // Plan-matched actuals
     for (const a of Object.values(wk.garminActuals ?? {})) {
-      if (!a.startTime?.startsWith(date)) continue;
+      if (!isOnLocalDay(a.startTime, date)) continue;
       if (a.garminId) {
         if (seenGarminIds.has(a.garminId)) continue;
         seenGarminIds.add(a.garminId);
@@ -109,7 +110,7 @@ export function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
       const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
       if (!rawId) continue;
       const ts = (w as any).garminTimestamp as string | undefined;
-      if (!ts?.startsWith(date)) continue;
+      if (!isOnLocalDay(ts, date)) continue;
       if (seenGarminIds.has(rawId)) continue;
       seenGarminIds.add(rawId);
       out.push({
@@ -161,7 +162,7 @@ function getLast7Days(today: string, s: SimulatorState): DayData[] {
   for (let i = 6; i >= 0; i--) {
     const d = new Date(today + 'T12:00:00');
     d.setDate(d.getDate() - i);
-    days.push(getDayData(d.toISOString().split('T')[0], s));
+    days.push(getDayData(localDateKey(d), s));
   }
   return days;
 }
@@ -181,7 +182,7 @@ interface StrainForDate {
 }
 
 function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?: ReadinessLabel | null): StrainForDate {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateKey(new Date()); // local calendar day: activities and physiology are keyed locally
   const wks = s.wks ?? [];
   const wkIdx = resolveWkIdx(date, s);
   const wkForPlan = wks[wkIdx];
@@ -229,7 +230,7 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
   let matchedActivityDay = false;
   if (plannedDayTSS === 0 && wkForPlan) {
     for (const [, act] of Object.entries(wkForPlan.garminActuals ?? {})) {
-      if (!act.startTime?.startsWith(date)) continue;
+      if (!isOnLocalDay(act.startTime, date)) continue;
       matchedActivityDay = true;
       break;
     }
@@ -407,7 +408,7 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
   return dayLabels.map((label, i) => {
     const d = new Date(weekStartDate);
     d.setDate(weekStartDate.getDate() + i);
-    const date = d.toISOString().split('T')[0];
+    const date = localDateKey(d);
     const isFuture = date > today;
     const plannedTSS = plannedCtx.plannedTSSForDay(i);
     const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
@@ -463,7 +464,7 @@ function buildWeekBarsHTML(weekBarDays: WeekBarDay[]): string {
 }
 
 function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLabel?: ReadinessLabel | null): string {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateKey(new Date()); // local calendar day: activities and physiology are keyed locally
   const isToday = displayDate === today;
 
   const strain = getStrainForDate(displayDate, s, todayReadinessLabel);
@@ -835,7 +836,7 @@ export function renderStrainView(date?: string, readinessLabel?: ReadinessLabel 
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateKey(new Date()); // local calendar day: activities and physiology are keyed locally
   const displayDate = date ?? today;
   strainOnBack = onBack ?? strainOnBack;
   container.innerHTML = getStrainHTML(s, displayDate, readinessLabel);

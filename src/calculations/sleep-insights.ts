@@ -8,6 +8,7 @@
 import type { PhysiologyDayEntry } from '@/types/state';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { localDateKey } from '@/utils/local-date';
 
 export interface SleepInsightInput {
   /** Physiology history, chronological oldest-first. */
@@ -458,7 +459,7 @@ export function buildDailySignalBTSS(
       const a = actual as any;
       if (!a.startTime) continue;
       if (a.garminId && seenGarminIds.has(a.garminId)) continue;
-      const date = (a.startTime as string).split('T')[0];
+      const date = localDateKey(a.startTime as string); // local day, as sleep entries are keyed
       const tss = (a.iTrimp != null && a.iTrimp > 0)
         ? normalizeiTrimp(a.iTrimp as number)
         : 0;
@@ -474,7 +475,7 @@ export function buildDailySignalBTSS(
       const rawId = (wo.id as string).slice('garmin-'.length);
       if (rawId && seenGarminIds.has(rawId)) continue;
       if (rawId) seenGarminIds.add(rawId);
-      const date: string | null = wo.garminTimestamp ? (wo.garminTimestamp as string).split('T')[0] : null;
+      const date: string | null = wo.garminTimestamp ? localDateKey(wo.garminTimestamp as string) : null;
       if (!date) continue;
       const tss = (wo.iTrimp != null && wo.iTrimp > 0)
         ? normalizeiTrimp(wo.iTrimp as number)

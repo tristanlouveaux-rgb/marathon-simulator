@@ -38,6 +38,7 @@ import { openStandardSec, type WmaDistanceKey } from '@/data/wma-age-grading';
 import { HYROX_FORMAT_FINISHER_COUNTS } from '@/data/hyrox-population-distributions';
 import { poweredByStrava } from '@/ui/strava-brand';
 import { swapFadedText } from '@/ui/raster-safe-text';
+import { localDateKey } from '@/utils/local-date';
 
 /**
  * Page 4. "Here's what we found" magic-moment review.
@@ -725,7 +726,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
                 const metres = a.distanceKm * 1000;
                 const pacePer100m = a.durationSec / (metres / 100);
                 return {
-                  date: a.startTime?.slice(0, 10) ?? 'unknown',
+                  date: a.startTime ? localDateKey(a.startTime) : 'unknown',
                   distance: `${Math.round(metres)} m`,
                   duration: `${Math.round(a.durationSec / 60)} min`,
                   pace: fmtPace(pacePer100m),
@@ -1232,7 +1233,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
       const qualifiedCount = diag.filter(d => d.qualified).length;
       const fmtPace = (p: number | null) => (p && p > 0 ? `${Math.floor(p / 60)}:${String(Math.round(p % 60)).padStart(2, '0')}/km` : '—');
       const rows = diag.map(d => ({
-        date: d.startTime.slice(0, 10),
+        date: localDateKey(d.startTime),
         duration: `${d.durationMin}min`,
         pace: fmtPace(d.paceSecKm),
         hr: d.avgHR != null ? `${Math.round(d.avgHR)} (${d.hrPctMax}%)` : '—',

@@ -55,6 +55,7 @@ import { resolveSportForActivity } from '@/ui/sport-picker-modal';
 import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { formatKm } from '@/utils/format';
+import { localDateKey } from '@/utils/local-date';
 
 // Intro screen removed. Flow goes directly to matching screen
 
@@ -838,7 +839,7 @@ function renderByDay(
   const buckets: { dateKey: string; label: string; items: GarminPendingItem[] }[] = [];
   for (const item of sorted) {
     const d = new Date(item.startTime);
-    const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
+    const dateKey = localDateKey(item.startTime); // local calendar day, the day the label names
     let bucket = buckets.find(b => b.dateKey === dateKey);
     if (!bucket) {
       const label = d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -951,7 +952,7 @@ function populateUnspentLoadItems(items: GarminPendingItem[]): void {
       durationMin: Math.round(item.durationSec / 60),
       aerobic,
       anaerobic,
-      date:   item.startTime.slice(0, 10),
+      date:   localDateKey(item.startTime), // the athlete's local calendar day
       reason: 'overflow',
     } as UnspentLoadItem);
   }

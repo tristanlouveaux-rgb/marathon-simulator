@@ -9,6 +9,7 @@ import { clearAllGpsData } from '@/gps/persistence';
 import { getWeeklyExcess } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { computePlanPhases } from '@/workouts/phases';
+import { localMondayKey } from '@/utils/local-date';
 
 const STATE_KEY = 'marathonSimulatorState';
 const CROSS_KEY = 'marathonSimulatorCross';
@@ -235,7 +236,11 @@ function derivePlanStartDate(s: SimulatorState): string {
   }
 
   const anchor = earliestMs !== null ? new Date(earliestMs) : new Date();
-  const monday = getMondayOf(anchor);
+  // The Monday of the anchor's LOCAL calendar week: the week weekIndexForDate
+  // files the earliest activity under (a UTC Monday misplaced an early-Monday
+  // session east of UTC by a week).
+  const [y, m, d] = localMondayKey(anchor).split('-').map(Number);
+  const monday = new Date(Date.UTC(y, m - 1, d));
   // monday is the start of the plan week that contains the earliest activity.
   // planStartDate = start of week 1 = that monday − (w−1) weeks.
   monday.setUTCDate(monday.getUTCDate() - (s.w - 1) * 7);

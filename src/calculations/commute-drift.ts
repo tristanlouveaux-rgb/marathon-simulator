@@ -1,4 +1,5 @@
 import type { Week, CommuteConfig } from '@/types';
+import { localDateKey } from '@/utils/local-date';
 
 /**
  * End-of-week drift learning for the commute baseline.
@@ -93,7 +94,7 @@ export function detectCommuteDrift(
     const commuteDays = new Set(
       actuals
         .filter(a => a.commute === true && a.startTime)
-        .map(a => a.startTime!.slice(0, 10)),
+        .map(a => localDateKey(a.startTime!)), // local day: a morning commute east of UTC is the previous UTC day
     ).size;
     observed.push(commuteDays);
   }
