@@ -12,7 +12,7 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
@@ -951,15 +951,14 @@ export function buildReadinessRing(s: SimulatorState): string {
   // otherwise fall back to signalBBaseline ÷ 7 (typical daily average).
   // This means 100% = "you completed what was planned for today".
   const strainWk = (s.wks ?? [])[s.w - 1];
-  // Today's epoch data from Garmin (updated on launch + foreground resume)
-  const todayPhysio = (s.physiologyHistory ?? []).find(e => e.date === today);
-  const todaySteps = todayPhysio?.steps ?? null;
-  const todayActiveMin = todayPhysio?.activeMinutes ?? null;
   // The strain day is the athlete's local calendar day: synced activities are
-  // filed by their local start day (isOnLocalDay) and plan weekdays are local.
-  // Physiology lookups keep `today`.
+  // filed by their local start day (isOnLocalDay), physiology entries (steps,
+  // active minutes, updated on launch + foreground resume) are keyed by local
+  // day, and plan weekdays are local. computeDayStrainTSS reads the activities
+  // and that day's physiology entry together, the call the strain page this
+  // ring opens makes. Sleep and HRV lookups keep `today`.
   const strainDay = localDateKey(new Date());
-  const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, strainDay, todayPhysio, s.tssPerActiveMinute) : 0;
+  const todaySignalBTSS = strainWk ? computeDayStrainTSS(strainWk, strainDay, s.physiologyHistory, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(strainDay + 'T12:00:00').getDay() + 6) % 7;
   // Canonical mode-aware planned TSS (planned-day-tss.ts): reads the real plan
   // per mode (running resolver / tri-cycling-HYROX stored weeks) so the ring's

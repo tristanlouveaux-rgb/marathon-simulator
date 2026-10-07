@@ -841,6 +841,28 @@ export function computeTodayStrainTSS(
 }
 
 /**
+ * Strain TSS for the local calendar day `day`, read with that same day's
+ * physiology entry (steps, active minutes). Tracking side. The one call every
+ * strain surface makes: the Home ring, Readiness, capacity strain, and the
+ * strain view with its week bars, so the ring and its drill-down show one
+ * number. Synced activities are filed by their local start day (isOnLocalDay)
+ * and physiology entries are keyed by local day (Apple via localDateKey,
+ * Garmin calendarDate), so both halves of the number read the same day. Home
+ * used to look the entry up by the UTC day while its activities used the
+ * local one, so west of UTC every evening (east of UTC every morning) the ring
+ * and the strain page read different step counts.
+ */
+export function computeDayStrainTSS(
+  wk: Week,
+  day: string,
+  physiologyHistory: readonly PhysiologyDayEntry[] | null | undefined,
+  tssPerActiveMinute?: number | null,
+): number {
+  const physio = (physiologyHistory ?? []).find(e => e.date === day);
+  return computeTodayStrainTSS(wk, day, physio, tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN);
+}
+
+/**
  * Estimate duration in minutes for a planned workout.
  * Handles km-based descriptions (most common), interval formats, and min-based fallback.
  * Pace multipliers by workout type match the plan-view planned-TSS calculation exactly.

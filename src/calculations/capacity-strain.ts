@@ -25,7 +25,7 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import { computeTodayStrainTSS, computeLiveSameSignalTSB } from './fitness-model';
+import { computeDayStrainTSS, computeLiveSameSignalTSB } from './fitness-model';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 
@@ -52,14 +52,14 @@ export interface CapacityStrain {
 }
 
 export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
-  const today = new Date().toISOString().split('T')[0];
   const wk = (s.wks ?? [])[s.w - 1];
-  const todayPhysio = (s.physiologyHistory ?? []).find(e => e.date === today);
   // The strain day is the athlete's local calendar day: synced activities are
-  // filed by their local start day (isOnLocalDay) and plan weekdays are local.
-  // Physiology lookups keep `today`.
+  // filed by their local start day (isOnLocalDay), physiology entries are keyed
+  // by local day, and plan weekdays are local. computeDayStrainTSS reads the
+  // activities and that day's physiology entry together, the call the strain
+  // view makes.
   const strainDay = localDateKey(new Date());
-  const todayTSS = wk ? computeTodayStrainTSS(wk, strainDay, todayPhysio, s.tssPerActiveMinute) : 0;
+  const todayTSS = wk ? computeDayStrainTSS(wk, strainDay, s.physiologyHistory, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(strainDay + 'T12:00:00').getDay() + 6) % 7;
 
   const plannedCtx = getPlannedDayTSSContext(s, s.w);

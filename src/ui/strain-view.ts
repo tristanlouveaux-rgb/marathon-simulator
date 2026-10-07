@@ -8,7 +8,7 @@ import { getState } from '@/state';
 import type { SimulatorState, GarminActual, Week } from '@/types/state';
 import {
   computeTodaySignalBTSS,
-  computeTodayStrainTSS,
+  computeDayStrainTSS,
   computeDayTargetTSS,
   computePassiveTSS,
   PASSIVE_TSS_PER_ACTIVE_MIN,
@@ -168,7 +168,7 @@ function getLast7Days(today: string, s: SimulatorState): DayData[] {
 }
 
 
-interface StrainForDate {
+export interface StrainForDate {
   actualTSS: number;
   target: TargetTSSRange;
   plannedDayTSS: number;
@@ -181,19 +181,20 @@ interface StrainForDate {
   markerColor: string;
 }
 
-function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?: ReadinessLabel | null): StrainForDate {
+export function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?: ReadinessLabel | null): StrainForDate {
   const today = localDateKey(new Date()); // local calendar day: activities and physiology are keyed locally
   const wks = s.wks ?? [];
   const wkIdx = resolveWkIdx(date, s);
   const wkForPlan = wks[wkIdx];
 
   // ── Actual Signal B TSS (logged activities + passive excess) ──────────
-  // Uses computeTodayStrainTSS. Single source of truth shared with Home + Readiness.
+  // computeDayStrainTSS: the one call Home, Readiness and capacity strain make,
+  // with the same local day for the activities and the physiology entry.
   const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
   let actualTSS = 0;
   if (s.planStartDate) {
     const wk = wks[wkIdx];
-    if (wk) actualTSS = computeTodayStrainTSS(wk, date, physioEntry, s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN);
+    if (wk) actualTSS = computeDayStrainTSS(wk, date, s.physiologyHistory, s.tssPerActiveMinute);
   } else {
     const acts = activitiesForDate(date, wks);
     actualTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / getNormalizerFromState(s) : sum, 0);
@@ -411,8 +412,7 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
     const date = localDateKey(d);
     const isFuture = date > today;
     const plannedTSS = plannedCtx.plannedTSSForDay(i);
-    const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
-    const actualTSS = !isFuture ? computeTodayStrainTSS(wk, date, physioEntry, tssPerActiveMin) : 0;
+    const actualTSS = !isFuture ? computeDayStrainTSS(wk, date, s.physiologyHistory, tssPerActiveMin) : 0;
     return { date, label, plannedTSS, actualTSS, isToday: date === today, isFuture };
   });
 }
