@@ -454,7 +454,7 @@ async function launchApp(): Promise<void> {
   if (hasState && state.eventType === 'triathlon' && state.triConfig) {
     try {
       const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
-      const { deriveTriBenchmarksFromHistory } = await import('@/calculations/tri-benchmarks-from-history');
+      const { deriveTriBenchmarksFromHistory, withTriRatedRpe } = await import('@/calculations/tri-benchmarks-from-history');
       const { loadActivitiesFromDB } = await import('@/data/tri-activity-loader');
       const { appendFtpSample, appendCssSample } = await import('@/calculations/tri-benchmark-history');
       const mutable = getMutableState();
@@ -540,7 +540,12 @@ async function launchApp(): Promise<void> {
         console.log(`[tri] recentDisciplineActivity: persisted ${mutable.recentDisciplineActivity.length} activities (last ${READINESS_LONGEST_WINDOW_WEEKS}w) for sign-in-resilient readiness`);
       }
 
-      const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {
+      // Each synced activity carries the RPE the weekly / daily load numbers
+      // price it at without heart rate (the athlete's rating), so tri fitness
+      // values a heart-rate-less session on the same canonical table
+      // (triActivityTss). Benchmarks (CSS / FTP) ignore it.
+      const ratedActivityLog = withTriRatedRpe(activityLog, state.wks);
+      const derived = deriveTriBenchmarksFromHistory(ratedActivityLog, undefined, {
         swim400Sec: state.triConfig?.swim?.pbs?.m400,
         swim200Sec: state.triConfig?.swim?.pbs?.m200,
       }, state.triConfig?.swim?.defaultOwSwimEnvironment);
@@ -558,7 +563,7 @@ async function launchApp(): Promise<void> {
       // In-app GPS runs live only in wk.garminActuals (the DB log never holds
       // them) until a watch copy supersedes them in place.
       const inAppGpsRuns = inAppGpsRunActivities(state.wks);
-      const fitnessActivities = [...activityLog, ...manualDoneActs, ...inAppGpsRuns];
+      const fitnessActivities = [...ratedActivityLog, ...manualDoneActs, ...inAppGpsRuns];
       const fitnessRefISO = new Date().toISOString();
       const directFitness = estimateDirectPerDisciplineCTLFromActivities(fitnessActivities, fitnessRefISO);
       // Nothing recorded before plan start (no activity of any sport): readiness
