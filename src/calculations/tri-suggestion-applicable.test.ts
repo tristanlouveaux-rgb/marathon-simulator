@@ -301,7 +301,7 @@ describe('cross-training overload: off-ladder quality sessions take a downgrade 
     expect(reduce).toMatchObject({ action: 'downgrade_today' });
     expect(replace).toMatchObject({ action: 'downgrade_today' });
     expect(o.options.bike.replaceMods.find(a => a.action === 'swap_easy')).toMatchObject({ workoutId: 'thu-thr' });
-    // -N TSS = stored load minus sweet spot at 75 min (124 -> 113), not a flat 25% (31).
+    // -N TSS = stored load minus sweet spot at 75 min (124 -> 112 after rounding), not a flat 25% (31).
     const ss = loadForBike('sweet_spot', 75);
     const expected = ouLoad.aerobic + ouLoad.anaerobic - (ss.aerobic + ss.anaerobic);
     expect(reduce!.tssReduction).toBe(expected);
