@@ -54,8 +54,15 @@ function preferredDays(w: Workout): number[] {
  *
  * @param sessions - Sessions already generated (discipline + t set).
  * @param _band    - Ability band (reserved for future band-specific templates).
+ * @param allowedDays - Race week only (plan_engine.hyrox): the days each
+ *   session may take. A session with no free allowed day is left out of the
+ *   week instead of being stacked on Monday. Unset = every day.
  */
-export function scheduleHyroxWeek(sessions: Workout[], _band: AbilityBand): Workout[] {
+export function scheduleHyroxWeek(
+  sessions: Workout[],
+  _band: AbilityBand,
+  allowedDays?: (w: Workout) => readonly number[],
+): Workout[] {
   const usedDays = new Set<number>();
   const scheduled: Workout[] = [];
 
@@ -75,7 +82,8 @@ export function scheduleHyroxWeek(sessions: Workout[], _band: AbilityBand): Work
   const sorted = [...sessions].sort((a, b) => priority(a) - priority(b));
 
   for (const session of sorted) {
-    const preferred = preferredDays(session);
+    const allowed = allowedDays ? new Set(allowedDays(session)) : null;
+    const preferred = preferredDays(session).filter(d => !allowed || allowed.has(d));
     let assigned = -1;
 
     for (const day of preferred) {
@@ -95,15 +103,19 @@ export function scheduleHyroxWeek(sessions: Workout[], _band: AbilityBand): Work
     }
 
     // Fallback: find any free day that doesn't violate the same-day rule.
+    // With allowed days, a hard session still keeps its spacing.
     if (assigned === -1) {
       for (let d = 0; d <= 6; d++) {
-        if (!usedDays.has(d)) {
-          assigned = d;
-          break;
-        }
+        if (usedDays.has(d) || (allowed && !allowed.has(d))) continue;
+        if (allowed && isHighIntensity(session) && scheduled.some(
+          s => isHighIntensity(s) && s.dayOfWeek !== undefined && Math.abs(s.dayOfWeek - d) <= 1,
+        )) continue;
+        assigned = d;
+        break;
       }
     }
 
+    if (assigned === -1 && allowed) continue; // no allowed day left: not in this week
     if (assigned === -1) assigned = 0; // shouldn't happen with ≤7 sessions
 
     usedDays.add(assigned);

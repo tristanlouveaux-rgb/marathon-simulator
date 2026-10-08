@@ -170,9 +170,10 @@ describe('a Monday to Wednesday race trains like the Sunday before it', () => {
         expect(s.wks.slice(0, 6).map(w => w.ph)).toEqual(sundayWeeks.map(w => w.ph));
         // Weeks before race week are identical.
         expect(s.wks.slice(0, 5).map(w => w.triWorkouts)).toEqual(sundayWeeks.slice(0, 5).map(w => w.ws));
-        // Race week: the same sessions, plus any on the Sunday a Sunday race drops.
-        const raceWeek = (s.wks[5].triWorkouts ?? []).filter(w => w.dayOfWeek !== 6);
-        expect(raceWeek).toEqual(sundayWeeks[5].ws);
+        // Race week: the same sessions, each placed relative to its own race
+        // day by the race-day rules (so their days differ).
+        const content = (ws: Workout[] | undefined) => (ws ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
+        expect(content(s.wks[5].triWorkouts), `${mode} ${race}`).toEqual(content(sundayWeeks[5].ws));
       }
     });
   }
