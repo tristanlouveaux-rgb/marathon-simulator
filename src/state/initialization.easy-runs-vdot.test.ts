@@ -39,6 +39,8 @@ import { initializeSimulator } from './initialization';
 import { getMutableState, getState, resetState } from './store';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { abilityBandFromVdot, isDeloadWeek } from '@/workouts/plan_engine';
+import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { cv } from '@/calculations/vdot';
 import { localMondayKey } from '@/utils/local-date';
 import type { SimulatorState } from '@/types/state';
 
@@ -157,5 +159,96 @@ describe('easy synced runs do not lower the engine VDOT', () => {
     expect(getState().v).toBeLessThan(capacity - 1);
     refreshBlendedFitness(getMutableState());
     expect(getState().v).toBeLessThan(capacity - 1);
+  });
+});
+
+/** One run `daysAgo` days back: `km` in `sec` seconds. */
+function oneRun(daysAgo: number, km: number, sec: number): RunRow {
+  const d = new Date(Date.now() - daysAgo * DAY_MS);
+  d.setHours(9, 0, 0, 0);
+  return { startTime: d.toISOString(), distKm: km, durSec: sec, activityType: 'RUNNING' };
+}
+
+/** Engine VDOT at onboarding and after the first refresh. */
+function engineAfter(runs: RunRow[], over: Partial<OnboardingState> = {}): { onboard: number; refresh: number } {
+  seed({ onboardingRunHistory: runs });
+  expect(initializeSimulator(onboarding(over)).success).toBe(true);
+  const onboard = getState().v;
+  refreshBlendedFitness(getMutableState());
+  return { onboard, refresh: getState().v };
+}
+
+/**
+ * KNOWN LIMITATION, pinned 2026-10-08 (open question for Tristan). The race
+ * test is pace-only: a run more than 15% faster than the window's median pace.
+ * Among easy runs at about 5:50/km that line sits near 4:58/km, so a tempo or
+ * threshold session, a cruise-interval session that averages under it, or a
+ * parkrun run at tempo effort fills the recent-race slot. It projects to the
+ * race distance as a slower race and stands the §BZ engine floor down, the
+ * same mechanism the easy-run fix removed. Separating tempo from race needs a
+ * new rule (an HR threshold, a race flag, the activity name or the Strava
+ * workout type), which is Tristan's call. These tests record today's numbers
+ * so a change to the rule is deliberate: when the rule changes, rewrite them.
+ */
+describe('KNOWN LIMITATION: a tempo-paced training run counts as a race effort', () => {
+  let capacity = 0;
+  beforeEach(() => { capacity = noHistoryVdot(); });
+
+  it('a 5 km tempo at 4:45/km ten days ago lowers a 10K 45:00 runner from 45.3 to about 40', () => {
+    const tempo = oneRun(10, 5, 1425);
+    const runs = [tempo, ...history(6, EASY_WEEK)];
+    // The tempo is the window's newest run faster than median x 0.85.
+    expect(computePredictionInputs(runs).recentRun).toMatchObject({ d: 5, t: 1425 });
+    const v = engineAfter(runs);
+    expect(capacity).toBeCloseTo(45.3, 1);
+    expect(v.onboard).toBeCloseTo(39.1, 0);
+    expect(v.refresh).toBeCloseTo(40.3, 0);
+  });
+
+  it('a weekly parkrun in 23:20 (4:40/km) lowers a 10K 45:00 runner to about 40.5', () => {
+    const runs = [...history(6, [[0, 5, 1400 / 60]], undefined, 1), ...history(6, EASY_WEEK)];
+    expect(computePredictionInputs(runs).recentRun).toMatchObject({ d: 5, t: 1400 });
+    const v = engineAfter(runs);
+    expect(v.onboard).toBeLessThan(capacity - 4);
+    expect(v.refresh).toBeCloseTo(40.5, 0);
+  });
+
+  it('a 10K 46:30 runner with one 6 km session at 4:50/km three weeks ago drops into the novice band', () => {
+    const pb = engineAfter([], { pbs: { k10: 2790 } }).refresh;
+    expect(pb).toBeCloseTo(43.6, 1);
+    expect(abilityBandFromVdot(pb, 'intermediate')).toBe('intermediate');
+    const v = engineAfter([oneRun(21, 6, 1740), ...history(6, EASY_WEEK)], { pbs: { k10: 2790 } });
+    expect(v.refresh).toBeCloseTo(39.5, 0);
+    // Novice band: the 3-week deload cycle the easy-run fix removed for easy runs.
+    const band = abilityBandFromVdot(v.refresh, 'intermediate');
+    expect(band).toBe('novice');
+    expect(isDeloadWeek(3, band)).toBe(true);
+  });
+});
+
+/**
+ * KNOWN LIMITATION, pinned 2026-10-08 (SCIENCE_LOG §CY limitation 3). A window
+ * of one run is its own median, and two runs need a gap of about 26% to show
+ * a race, so a lone recent race is not recognised. Before the fix this athlete
+ * read about 36 (the newest run of any effort counted); a 10K in 48:20 is
+ * itself worth about 41.6.
+ */
+describe('KNOWN LIMITATION: a lone run is never a race effort, and two runs need a 26% pace gap', () => {
+  it('a lone recent 10K in 48:20 leaves a 10K 45:00 runner at the PB capacity', () => {
+    const capacity = noHistoryVdot();
+    const race = oneRun(5, 10, 2900);
+    expect(cv(10000, 2900)).toBeCloseTo(41.6, 0);
+    expect(computePredictionInputs([race]).recentRun).toBeNull();
+    const v = engineAfter([race]);
+    expect(v.onboard).toBeCloseTo(capacity, 6);
+    expect(v.refresh).toBeCloseTo(capacity, 6);
+  });
+
+  it('the same race beside one easy 10 km at 5:50/km is still not recognised', () => {
+    const capacity = noHistoryVdot();
+    const runs = [oneRun(5, 10, 2900), oneRun(8, 10, 3500)];
+    expect(computePredictionInputs(runs).recentRun).toBeNull();
+    const v = engineAfter(runs);
+    expect(v.refresh).toBeCloseTo(capacity, 6);
   });
 });
