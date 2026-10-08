@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planWeekSessions, type PlanContext, type PlanWeekNotes } from './plan_engine';
+import { planWeekSessions, planEngineStateInputs, type PlanContext, type PlanWeekNotes } from './plan_engine';
 import { computeRunningPlanPhases } from './phases';
 
 /**
@@ -108,5 +108,74 @@ describe('the binding ceiling', () => {
     });
     expect(rows[0].fit?.binding, rows[0].label).toBe('volume');
     expect(rows[9].fit?.binding, rows[9].label).toBe('hours');
+  });
+});
+
+describe('the live effort/CTL lever in a sharpening block', () => {
+  // Marathon 7 weeks out, 4 runs a week, 40 km a week, 3-hour target, longest
+  // run of the last 30 days 80 min. The lever (effort score above 0, or a CTL
+  // ratio below 1) scales the block's budget below the 3-hour target.
+  const MID: Ctx = { ...LOW, baselineKm: 40, weeklyHoursTarget: 3, sharpening: { startLongMin: 80, startSource: 'history-30d' } };
+
+  it('no lever: week 1 holds all 4 runs (180 min) and carries no note', () => {
+    const r = weeks(MID)[0];
+    expect(r.runs, r.label).toBe(4);
+    expect(r.fit, r.label).toBeUndefined();
+  });
+
+  it('effort score 1.5: week 1 holds 3 runs, but the 3-hour target fits 4, so no note (never "hours")', () => {
+    const r = weeks({ ...MID, effortScore: 1.5 })[0];
+    expect(r.runs, r.label).toBe(3);
+    expect(r.fit, r.label).toBeUndefined();
+  });
+
+  it('CTL ratio 0.8: week 1 holds 3 runs and carries no note', () => {
+    const r = weeks({ ...MID, ctlRatio: 0.8 })[0];
+    expect(r.runs, r.label).toBe(3);
+    expect(r.fit, r.label).toBeUndefined();
+  });
+
+  it('a lever week whose run count the target alone sets keeps the note (week 2: 3 runs with or without the lever)', () => {
+    const plain = weeks(MID)[1];
+    const levered = weeks({ ...MID, effortScore: 1.5 })[1];
+    expect(plain.runs, plain.label).toBe(3);
+    expect(levered.runs, levered.label).toBe(3);
+    expect(levered.fit, levered.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'hours', hoursTarget: 3, currentWeeklyKm: 40 });
+  });
+
+  it('2.5-hour target, 100-min longest: week 1 holds 3 runs without the lever (the target binds) and 2 with it (no note)', () => {
+    const B: Ctx = { ...MID, weeklyHoursTarget: 2.5, sharpening: { startLongMin: 100, startSource: 'history-30d' } };
+    const plain = weeks(B)[0];
+    expect(plain.runs, plain.label).toBe(3);
+    expect(plain.fit, plain.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'hours', hoursTarget: 2.5, currentWeeklyKm: 40 });
+    const levered = weeks({ ...B, effortScore: 1.5 })[0];
+    expect(levered.runs, levered.label).toBe(2);
+    expect(levered.fit, levered.label).toBeUndefined();
+  });
+
+  it('15 km a week: the lever leaves every loaded week at 2 runs, and the volume note stands', () => {
+    for (const r of weeks({ ...LOW, effortScore: 1.5 }).filter(r => [1, 2, 3, 5].includes(r.k))) {
+      expect(r.runs, r.label).toBe(2);
+      expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 2, binding: 'volume', hoursTarget: 2, currentWeeklyKm: 15 });
+    }
+  });
+});
+
+describe('an estimated baseline is never stated as current weekly running', () => {
+  it('block on the runs-a-week estimate (nothing synced): the note leaves out the km', () => {
+    const rows = weeks({ ...LOW, baselineKmIsEstimate: true });
+    for (const r of rows.filter(r => [1, 2, 3, 5].includes(r.k))) {
+      expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 2, binding: 'volume', hoursTarget: 2 });
+    }
+  });
+
+  it('planEngineStateInputs flags the s.wkm fallback as an estimate, a synced or entered volume as not', () => {
+    const block = { sharpenBlock: { v: 1 } as any, wkm: 17, continuousMode: false, athleteArchetype: undefined };
+    expect(planEngineStateInputs({ ...block, detectedWeeklyKm: undefined })).toEqual({ baselineKm: 17, archetype: 'unknown', baselineKmIsEstimate: true });
+    expect(planEngineStateInputs({ ...block, detectedWeeklyKm: 15 })).toEqual({ baselineKm: 15, archetype: 'unknown', baselineKmIsEstimate: false });
+    expect(planEngineStateInputs({ wkm: 17, continuousMode: true, detectedWeeklyKm: undefined, athleteArchetype: undefined }).baselineKmIsEstimate).toBe(true);
+    // A full race plan with nothing synced has no baseline at all.
+    expect(planEngineStateInputs({ wkm: 17, continuousMode: false, detectedWeeklyKm: undefined, athleteArchetype: undefined }))
+      .toEqual({ baselineKm: undefined, archetype: undefined, baselineKmIsEstimate: false });
   });
 });

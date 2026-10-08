@@ -1358,11 +1358,12 @@ function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number)
  * taper or race week. The resolver drops it when injury, illness, a holiday or
  * its bridge, or a partial first week shapes the week instead
  * (resolveWeekWorkouts planNotes). Current and future weeks only. Wording:
- * budgetRunFitLine.
+ * budgetRunFitLine. The top margin keeps it apart from the Time budget banner
+ * (buildBudgetBanner, no bottom margin), which can show in the same week.
  */
 function buildBudgetRunFitNote(s: SimulatorState, fit: BudgetRunFit | undefined, viewWeek: number): string {
   if (!fit || viewWeek < s.w) return '';
-  return `<div id="plan-budget-run-fit" style="margin:0 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:var(--c-muted);line-height:1.5">${budgetRunFitLine(fit, s.unitPref ?? 'km')}</div>`;
+  return `<div id="plan-budget-run-fit" style="margin:8px 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:var(--c-muted);line-height:1.5">${budgetRunFitLine(fit, s.unitPref ?? 'km')}</div>`;
 }
 
 /**

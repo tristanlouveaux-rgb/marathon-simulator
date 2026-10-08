@@ -126,7 +126,7 @@ export function generateWeekWorkouts(
     // jumping straight to the ability-driven peak. Falls back to legacy
     // behaviour when state is empty (no Strava history yet).
     const sNow = getState();
-    const { baselineKm, archetype } = planEngineStateInputs(sNow);
+    const { baselineKm, archetype, baselineKmIsEstimate } = planEngineStateInputs(sNow);
     // Continuous (endless) mode has no race date, so the legacy `weekIndex`
     // long-run/threshold ramps — which key off `totalWeeks` — give only a shallow
     // climb that the 4-week phase cycle swamps. The result is "ramps in circles":
@@ -162,6 +162,7 @@ export function generateWeekWorkouts(
       weeklyHoursTarget,
       excludedSlots,
       baselineKm,
+      baselineKmIsEstimate,
       archetype,
       easyPaceSecPerKm,
       ctlRatio,
