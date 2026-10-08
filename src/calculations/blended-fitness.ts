@@ -706,9 +706,11 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
   // (no triConfig.skillRating).
   const triRunSkill = s.triConfig?.skillRating?.run;
+  // A logged run counts whatever its effort. `inputs.recentRun` holds race
+  // efforts only, so the gate reads the window's run count instead.
   const hasRunSpecificSignal = capacityVdot != null
     || raceAnchor != null
-    || (inputs.recentRun != null && inputs.recentRun.t > 0)
+    || inputs.runsCounted > 0
     || (hrVdot?.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium'));
   if (triRunSkill && !hasRunSpecificSignal) {
     const skillMarathonPace = estimateRunPaceFromSkill(triRunSkill as 1 | 2 | 3 | 4 | 5, 'ironman');
