@@ -311,3 +311,49 @@ describe('triathlon cold-start skill cap: easy runs do not lift it', () => {
   });
 });
 
+/**
+ * KNOWN LIMITATION, pinned 2026-10-08 (open question for Tristan, SCIENCE_LOG
+ * §CY). A stale PB is not corrected by training data. The §BZ engine floor
+ * holds the engine at PB capacity unless a race effort (or a typed recent race,
+ * or a race anchor) projects below it. The floor never reads the HR-calibrated
+ * VDOT, and nothing applies PB age to the engine. A 10K 40:00 PB (51.9) with
+ * six weeks of easy running at about 6:30/km therefore keeps paces set by the
+ * 40:00 10K, with no heart rate and with a high-confidence HR fit that reads
+ * about 41.8. Before 57935d0 the newest easy run stood the floor down (39.8).
+ * When the rule changes, rewrite these tests.
+ */
+describe('KNOWN LIMITATION: training data does not correct a stale PB', () => {
+  /** Paces 6:15, 6:30 and 6:45/km, with average HR rising linearly with speed. */
+  const JOG_WEEK_HR: Array<[number, number, number, number]> = [[0, 10, 65, 138], [2, 8, 50, 145], [4, 6, 40.5, 132]];
+
+  function withHR(weeks: number): RunRow[] {
+    const rows: RunRow[] = [];
+    for (let k = 0; k < weeks; k++) {
+      for (const [off, km, min, avgHR] of JOG_WEEK_HR) {
+        const d = new Date(Date.now() - (2 + k * 7 + off) * DAY_MS);
+        d.setHours(8, 0, 0, 0);
+        rows.push({ startTime: d.toISOString(), distKm: km, durSec: Math.round(min * 60), activityType: 'RUNNING', avgHR });
+      }
+    }
+    return rows;
+  }
+
+  it('a 10K 40:00 PB with six weeks of easy runs at 6:15 to 6:45/km holds 51.9, with and without HR', () => {
+    const pb = { pbs: { k10: 2400 } };
+    expect(engineAfter([], pb).refresh).toBeCloseTo(51.9, 1);
+
+    const noHR = engineAfter(withHR(6).map(({ avgHR: _hr, ...r }) => r), pb);
+    expect(noHR.onboard).toBeCloseTo(51.9, 1);
+    expect(noHR.refresh).toBeCloseTo(51.9, 1);
+
+    seed({ ...HR, onboardingRunHistory: withHR(6) });
+    expect(initializeSimulator(onboarding(pb)).success).toBe(true);
+    expect(getState().v).toBeCloseTo(51.9, 1);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().v).toBeCloseTo(51.9, 1);
+    // The HR fit says the athlete is about 10 points slower; the engine ignores it.
+    const hr = getState().hrCalibratedVdot;
+    expect(hr?.confidence).toBe('high');
+    expect(hr?.vdot).toBeCloseTo(41.8, 0);
+  });
+});
