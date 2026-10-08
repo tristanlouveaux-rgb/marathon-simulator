@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   plannedSessionsPerWeekByDiscipline,
+  plannedHoursPerWeekByDiscipline,
   plannedBuildDoseByDiscipline,
   plannedPeakDoseByDiscipline,
   recentHoursByDiscipline,
@@ -206,6 +207,24 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
     const s = rampState([{ ph: 'peak', bike: 2, minPer: 60 }]);
     (s.wks[0] as any).raceWindowCut = [{ discipline: 'bike', estimatedDurationMin: 90 }];
     expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+  });
+
+  // Only taper weeks ahead (the week before race week labelled taper): build
+  // and peak dose fall back to the 4-week look-ahead, which reads the cut too.
+  it('with only taper weeks ahead, the build and peak fallback add the cut back', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 1, minPer: 60 }, // window removed 1 x 120-min bike session
+      { ph: 'taper', bike: 1, minPer: 30 },
+    ]);
+    (s.wks[0] as any).raceWindowCut = [{ discipline: 'bike', estimatedDurationMin: 120 }];
+    // (2 + 1) / 2 sessions, (3 + 0.5) / 2 hours.
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(1.5, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(1.75, 5);
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(1.5, 5);
+    expect(plannedPeakDoseByDiscipline(s).hours.bike).toBeCloseTo(1.75, 5);
+    // The public look-ahead still shows the plan as scheduled.
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(1, 5);
+    expect(plannedHoursPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(0.75, 5);
   });
 });
 

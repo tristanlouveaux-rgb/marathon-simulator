@@ -14,6 +14,12 @@
  * (Week.raceWindowCut) and the dose helpers add it back, so the forecast is
  * the same with or without the race window, as running's forecast reads
  * plan-engine targets rather than the race-day-rule output.
+ *
+ * The forecast is checked at plan creation and on the Monday of every plan
+ * week. Once only taper weeks remain ahead, the dose helpers fall back to a
+ * 4-week look-ahead, which reads the cut too: on f45244e it did not, and an
+ * Ironman on Thursday 17 Dec 2026 forecast 3.6 min slower with the window on
+ * Monday 30 Nov (s.w = 9).
  */
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 
@@ -84,6 +90,23 @@ function addDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * The forecast on the Monday of every plan week: the plan is built at `now`,
+ * then for week k = 1 to tw the clock is set to 12:00 on week k's Monday and
+ * s.w = k. Entry k-1 is week k's forecast (total seconds).
+ */
+function weeklyForecasts(distance: TriathlonDistance, race: string, now: string, windowOn: boolean): number[] {
+  vi.setSystemTime(new Date(now));
+  const { s } = build(distance, race, windowOn);
+  const out: number[] = [];
+  for (let k = 1; k <= s.tw; k++) {
+    vi.setSystemTime(new Date(`${addDays(s.planStartDate!.slice(0, 10), 7 * (k - 1))}T12:00:00`));
+    s.w = k;
+    out.push(predictTriathlonRace(s)?.totalSec ?? NaN);
+  }
+  return out;
+}
+
 /** Per-discipline sessions and minutes of a list of sessions. */
 function dose(ws: Array<{ discipline?: string; estimatedDurationMin?: number }>): Record<string, [number, number]> {
   const out: Record<string, [number, number]> = { swim: [0, 0], bike: [0, 0], run: [0, 0] };
@@ -144,6 +167,47 @@ describe('the race window does not move the triathlon forecast', () => {
             expectSameDose(on.peak, off.peak, `${label} peak`);
           }
         }
+      });
+    }
+  }
+
+  // Later in the plan. Once only taper weeks remain ahead (the week before
+  // race week of a Thursday to Saturday race is labelled taper), the planned
+  // dose falls back to the 4-week look-ahead, which must count the cut too.
+  // On f45244e an Ironman on Thursday 17 Dec 2026 (onboarding Sunday 11 Oct,
+  // 11 weeks, cut on week 10) forecast 3.6 min slower with the window on
+  // Monday 30 Nov (s.w = 9): 46138 s against 45920 s.
+  it('Ironman on Thursday 17 Dec: the forecast on Monday 30 Nov (s.w = 9) is the same with or without the race window', () => {
+    at('2026-10-11T12:00:00');
+    const on = weeklyForecasts('ironman', '2026-12-17', '2026-10-11T12:00:00', true);
+    const off = weeklyForecasts('ironman', '2026-12-17', '2026-10-11T12:00:00', false);
+    expect(on.length).toBe(11);
+    expect(on[8]).toBeGreaterThan(0);
+    expect(on[8]).toBeCloseTo(off[8], 6);
+    expect(on).toEqual(off);
+  });
+
+  for (const [onboardDay, now, firstSunday] of ONBOARDING) {
+    for (const distance of ['70.3', 'ironman'] as TriathlonDistance[]) {
+      it(`${distance}, ${onboardDay} onboarding: Thursday and Friday races forecast the same with or without the race window on every plan week`, () => {
+        at(now);
+        let weeksCompared = 0;
+        for (let weeksOut = 2; weeksOut <= 14; weeksOut++) {
+          const sunday = addDays(firstSunday, 7 * weeksOut);
+          for (const [day, offset] of LATER.slice(0, 2)) {
+            const race = addDays(sunday, offset);
+            const on = weeklyForecasts(distance, race, now, true);
+            const off = weeklyForecasts(distance, race, now, false);
+            expect(on.length, `${distance} ${day} ${race}`).toBe(off.length);
+            on.forEach((sec, i) => {
+              const label = `${distance} ${day} ${race}, week ${i + 1} of ${on.length}`;
+              expect(sec, label).toBeGreaterThan(0);
+              expect(sec, label).toBeCloseTo(off[i], 6);
+              weeksCompared += 1;
+            });
+          }
+        }
+        expect(weeksCompared).toBeGreaterThan(200);
       });
     }
   }
