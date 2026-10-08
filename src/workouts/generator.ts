@@ -387,7 +387,7 @@ export function generateWeekWorkouts(
       phase, gymSessionsPerWeek, fitnessLevel || 'intermediate',
       weekIndex, totalWeeks, vdot, injuryState,
       undefined, undefined, undefined, getState().plyoInGymEnabled !== false,
-      getState().bodyweightProgress,
+      getState().bodyweightProgress, !!sPlan.continuousMode,
     );
     workouts.push(...gymWorkouts);
   }

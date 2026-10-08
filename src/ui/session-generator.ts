@@ -1278,7 +1278,7 @@ export function openSessionGenerator(): void {
       const gymList = generateGymWorkouts(
         phase, 1, fitnessLevel, s.w ?? 1, s.tw ?? 18, s.v, s.injuryState ?? null,
         focus, selectedGymGoal ?? undefined, selectedGymRestStyle,
-        s.plyoInGymEnabled !== false, s.bodyweightProgress,
+        s.plyoInGymEnabled !== false, s.bodyweightProgress, !!s.continuousMode,
       );
       wo = gymList[0];
       if (wo && !injured) wo = tuneGymWorkout(wo, selectedGymMinutes, selectedGymIntensity);
@@ -1915,6 +1915,7 @@ export function openSessionGenerator(): void {
     const buildEasyGym = () => generateGymWorkouts(
       phaseNow, 2, fitLevel, s.w ?? 1, s.tw ?? 18, s.v, s.injuryState ?? null,
       'running', undefined, 'traditional', s.plyoInGymEnabled !== false, s.bodyweightProgress,
+      !!s.continuousMode,
     )[0];
 
     const slot = SUGGESTED_SLOT_BY_EFFORT[effort];
