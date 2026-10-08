@@ -627,14 +627,16 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   //
   // The engine is therefore floored at demonstrated cross-distance capacity
   // (`pbDerivedVdot`, a PB-median that is immune to the refresh feedback loop).
-  // The floor stands down ONLY on demonstrated recent slowness — a recent run
-  // that projects below capacity. Low TRAINING VOLUME is deliberately NOT
-  // engine-decay evidence here: it limits race readiness (already modelled on the
-  // prediction and the forecast), not aerobic capacity. This is the intended
-  // difference from `demonstratedPBFloor`, whose low-volume branch governs the
-  // same-distance race prediction. Volume thus moves the prediction and the
-  // forecast, never the capacity number — keeping the engine a pure function of
-  // demonstrated fitness (deterministic across refreshes).
+  // The floor stands down ONLY on demonstrated recent slowness — a recent race
+  // effort (`inputs.recentRun`, a run more than 15% faster than the window's
+  // median pace) that projects below capacity. Low TRAINING VOLUME is
+  // deliberately NOT engine-decay evidence here: it limits race readiness
+  // (already modelled on the prediction and the forecast), not aerobic
+  // capacity. This is the intended difference from `demonstratedPBFloor`, whose
+  // low-volume branch governs the same-distance race prediction. Volume thus
+  // moves the prediction and the forecast, never the capacity number — keeping
+  // the engine a pure function of demonstrated fitness (deterministic across
+  // refreshes).
   const penalisedVdot = cv(targetDistM, durabilityAdjustedBlend);
   const capacityVdot = pbDerivedVdot(s);
   let engineVdot = penalisedVdot;
