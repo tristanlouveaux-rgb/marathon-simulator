@@ -19,6 +19,7 @@ import { rate, skip, removeGarminActivity, unratePlanSlot, next, setOnWeekAdvanc
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { firstTrackedDow } from './workout-status';
+import { raceDayInWeek, renderRaceDayCard } from './race-day-card';
 import { clearIllness, openIllnessModal } from './illness-modal';
 import { buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal } from './holiday-modal';
 import { openSessionGenerator, openVibesScienceModal } from './session-generator';
@@ -829,6 +830,9 @@ function buildWorkoutCards(
   // Build one card per day (Mon–Sun), grouping workouts by dayOfWeek
   const cards: string[] = [];
   const dayFirstCardEmitted = new Set<number>(); // track which days have had their first card anchor
+  // Race day of this week, if any: a display-only card under the day's strip
+  // (race-day-card.ts). Not a workout, so it never enters `workouts`.
+  const raceDay = raceDayInWeek(s, viewWeek);
 
   for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
     const dayWorkouts = workouts.filter((w: any) => {
@@ -836,18 +840,24 @@ function buildWorkoutCards(
       const eff = effectiveDay.get(wId);
       return (eff != null ? eff : w.dayOfWeek) === dayIdx;
     });
+    // Emitted once, after the day's first strip (whichever branch draws it).
+    let raceCard = raceDay && raceDay.dayOfWeek === dayIdx ? renderRaceDayCard(raceDay) : '';
+    const takeRaceCard = (): string => { const c = raceCard; raceCard = ''; return c; };
+    const isDayToday = isCurrentWeek && todayInRange && dayIdx === actualToday;
 
     if (dayWorkouts.length === 0) {
       // Rest day. Same row shape as triathlon Plan: day label + horizontal
       // line + "Rest" tag. No outer card, no border-top. The day is just
-      // a header strip, matching the rhythm of workout days.
+      // a header strip, matching the rhythm of workout days. Race day keeps
+      // the strip without the "Rest" tag and shows the race-day card under it.
       dayFirstCardEmitted.add(dayIdx);
+      const raceDayCard = takeRaceCard();
       cards.push(`
         <div id="plan-day-${dayIdx}" class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;gap:10px;padding:${dayIdx === 0 ? '4' : '20'}px 4px 8px;transition:background 0.15s;border-radius:6px">
-          <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:36px">${DAY_SHORT[dayIdx]}</span>
+          <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:${raceDayCard ? (isDayToday ? TODAY_ACCENT : '#0F172A') : 'var(--c-muted)'};min-width:36px">${DAY_SHORT[dayIdx]}</span>
           <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
-          <span class="plan-drop-label" style="font-size:11px;color:var(--c-faint);font-weight:500;letter-spacing:0.02em">Rest</span>
-        </div>
+          ${raceDayCard ? '' : '<span class="plan-drop-label" style="font-size:11px;color:var(--c-faint);font-weight:500;letter-spacing:0.02em">Rest</span>'}
+        </div>${raceDayCard}
       `);
       continue;
     }
@@ -880,7 +890,7 @@ function buildWorkoutCards(
             <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:36px">${DAY_SHORT[dayIdx]}</span>
             <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
             <span class="plan-drop-label" style="font-size:11px;color:var(--c-faint);font-weight:500;letter-spacing:0.02em">Rest</span>
-          </div>
+          </div>${dayAnchorId ? takeRaceCard() : ''}
         `);
         continue;
       }
@@ -1030,7 +1040,7 @@ function buildWorkoutCards(
             <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:${dayHeaderColor};min-width:36px">${DAY_SHORT[dayIdx]}</span>
             <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
             ${nonRestCount > 1 ? `<span style="font-size:11px;color:var(--c-faint)">${nonRestCount} sessions</span>` : ''}
-          </div>
+          </div>${takeRaceCard()}
         `);
       }
       dayFirstCardEmitted.add(dayIdx);

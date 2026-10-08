@@ -74,6 +74,23 @@ describe('lowBaseMarathon (owner decision 2026-10-06)', () => {
     expect(low.text.startsWith('No runs in the last 30 days. 6 weeks cannot build marathon endurance.')).toBe(true);
   });
 
+  it('QA scenario lowbase-racepage: a projected long run under an hour reads in minutes, not 0:MM (2026-10-08)', () => {
+    // Runs 40 to 75 days ago, none in the last 30: the block restarts the long run
+    // at 30 min. Before: "Long runs reach about 0:36, short of the 2:45 ...".
+    const s = {
+      v: 45, pac: { e: 330, t: 280, i: 255, m: 300, r: 240 } as any, onboarding: {} as any,
+      athleteArchetype: { archetype: 'detrained-with-history' as any },
+      onboardingRunHistory: ([[40, 12, 66], [44, 6, 33], [47, 10, 55], [54, 8, 44], [61, 14, 78], [68, 7, 39], [75, 10, 56]] as const)
+        .map(([daysAgo, km, min]) => ({ startTime: iso(daysAgo), distKm: km, durSec: min * 60, activityType: 'RUNNING' })),
+    };
+    const race = inDays(32); // Sunday 8 November: 5 training weeks
+    const low = lowBaseMarathon('marathon', race, s, 'intermediate', NOW)!;
+    expect(low).not.toBeNull();
+    expect(low.peakLongMin).toBeLessThan(60);
+    expect(low.text).toBe(`No runs in the last 30 days. 5 weeks cannot build marathon endurance. Long runs reach about ${low.peakLongMin} minutes, short of the 2:45 marathon-readiness long run, so the forecast finish time is optimistic.`);
+    expect(low.text).not.toMatch(/about 0:/);
+  });
+
   it('a beginner always gets the warning', () => {
     expect(lowBaseMarathon('marathon', RACE_6WK, runner(18.2), 'beginner', NOW)).not.toBeNull();
   });

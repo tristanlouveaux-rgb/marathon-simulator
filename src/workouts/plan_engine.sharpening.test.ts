@@ -228,13 +228,26 @@ describe('sharpening block properties (grid through planWeekSessions)', () => {
     expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
   });
 
-  it('a taper week never carries a quality session when the week before the taper had none', () => {
+  it('a taper week before race week never carries a quality session when the week before the taper had none', () => {
     const bad: string[] = [];
     for (const s of samples) {
       const firstTaper = s.rows.findIndex(r => r.phase === 'taper');
       if (firstTaper < 1) continue;
       if (s.rows[firstTaper - 1].quality > 0) continue;
-      for (const r of s.rows.slice(firstTaper)) if (r.quality > 0) bad.push(`${s.label} ${fmt(r)}`);
+      for (const r of s.rows.slice(firstTaper, -1)) if (r.quality > 0) bad.push(`${s.label} ${fmt(r)}`);
+    }
+    expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
+  });
+
+  it('race week holds exactly one quality session, the primer, whenever it holds a run (2026-10-08)', () => {
+    // Before: a block whose reference week held no quality session (a binding hours
+    // target or a low budget unseated them) dropped the primer and kept easy runs.
+    const bad: string[] = [];
+    for (const s of samples) {
+      const r = s.rows[s.rows.length - 1];
+      const primers = r.xs.filter(i => i.notes === 'Race-week primer').length;
+      if (s.ctx.runsPerWeek >= 2 && (r.xs.length === 0 || primers !== 1 || r.quality !== 1)) bad.push(`${s.label} ${fmt(r)}`);
+      if (s.ctx.runsPerWeek <= 1 && r.xs.length > 0) bad.push(`${s.label} 1 run a week: ${fmt(r)}`);
     }
     expect(bad.slice(0, 5), `${bad.length} violations`).toEqual([]);
   });
@@ -383,8 +396,10 @@ describe('hours target: start at the target and hold; the long run still grows e
     // Before: the long run held at 107 from week 2 to keep marathon pace (100, 107, 107, 86, 107, 75).
     const rows = blockRows({ ...A, weeklyHoursTarget: 3 });
     expect(rows.map(r => r.long)).toEqual([100, 107, 114, 97, 121, 85, null]);
-    expect(rows.map(r => r.total)).toEqual([180, 180, 180, 153, 179, 135, 75]);
-    expect(rows.map(r => r.qualitySlots.length)).toEqual([1, 1, 0, 0, 0, 0, 0]);
+    // Race week: the primer (27 min) takes one 25-min easy run's place (2026-10-08).
+    expect(rows.map(r => r.total)).toEqual([180, 180, 180, 153, 179, 135, 77]);
+    expect(rows.map(r => r.qualitySlots.length)).toEqual([1, 1, 0, 0, 0, 0, 1]);
+    expect(rows[6].xs.filter(i => i.notes === 'Race-week primer')).toHaveLength(1);
   });
 
   it('2-hour target (example A): week 1 starts as close to the 100-min longest as the target allows and never halves it', () => {
@@ -392,7 +407,8 @@ describe('hours target: start at the target and hold; the long run still grows e
     // pace to the single-session cap and kept the held 49. Now 120 - one 25-min easy run = 95.
     const rows = blockRows({ ...A, weeklyHoursTarget: 2 });
     expect(rows.map(r => r.long)).toEqual([95, 95, 95, 77, 95, 67, null]);
-    expect(rows.map(r => r.total)).toEqual([120, 120, 120, 102, 120, 92, 75]);
+    expect(rows.map(r => r.total)).toEqual([120, 120, 120, 102, 120, 92, 77]);
+    expect(rows[6].xs.filter(i => i.notes === 'Race-week primer')).toHaveLength(1);
     for (const r of rows.filter(r => r.long != null && !r.deload && r.phase !== 'taper')) {
       expect(r.long! + EASY_FLOOR_MIN, fmt(r)).toBe(120);
     }
@@ -431,10 +447,13 @@ describe('hours target: start at the target and hold; the long run still grows e
 
 describe('no run in the last 30 days (case b)', () => {
   const B: Ctx = { ...A, baselineKm: 0, archetype: 'detrained-with-history', sharpening: { startLongMin: 30, startSource: 'history-no-recent-run' } };
-  it('restarts the long run at 30 min, grows it by the ramp, holds no hard session, stays inside the archetype floor budget', () => {
+  it('restarts the long run at 30 min, grows it by the ramp, holds no hard session before race week, stays inside the archetype floor budget', () => {
     const rows = blockRows(B);
     expect(rows.map(r => r.long)).toEqual([30, 33, 36, 31, 39, null, null]);
-    for (const r of rows) expect(r.quality, fmt(r)).toBe(0);
+    for (const r of rows.slice(0, -1)) expect(r.quality, fmt(r)).toBe(0);
+    // Race week keeps the §CE primer whenever it holds a run (2026-10-08).
+    expect(rows[6].xs.filter(i => i.notes === 'Race-week primer'), fmt(rows[6])).toHaveLength(1);
+    expect(rows[6].quality).toBe(1);
     // detrained floor 15 km/wk at 5:30 = 82.5 min, ramping 10% a week.
     expect(rows[0].total).toBeLessThanOrEqual(83);
   });

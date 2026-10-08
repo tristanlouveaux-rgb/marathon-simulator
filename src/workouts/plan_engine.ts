@@ -104,7 +104,16 @@ export const THRESH_VARIANTS = [
 // taper preserves fitness and sheds fatigue rather than building (Mujika & Padilla
 // 2003; Bosquet et al. 2007 meta-analysis: maintain intensity, cut volume). A full
 // build-phase block (3×8 = 24 min of threshold) 3 days out is training, not
-// sharpening; these replace it with ~4–6 min of quality. See SCIENCE_LOG §race-week.
+// sharpening; these replace it with ~4–6 min of quality. See SCIENCE_LOG §CE.
+//
+// Race week keeps its primer whenever it holds a run (2 or more runs a week: the
+// race takes the long-run slot), in full plans and sharpening blocks alike. On a
+// tight budget the primer takes an easy run's place rather than giving way to it.
+// Nothing that shapes other weeks removes it: not the deload quality cap, not the
+// ACWR-caution swap (race week is exempt from the high-ACWR ease-back for the same
+// reason, generator.ts), not a block reference week without a quality session.
+// Only a user-excluded workout type and the race-day rules (no race-week day 3 or
+// more days out on or after the first schedulable day) leave race week without it.
 export const TAPER_PRIMER_THRESHOLD = { id: 'thr_primer', reps: 3, repMin: 2, recMin: 2 } as const;
 export const TAPER_PRIMER_VO2 = { id: 'vo2_primer', reps: 4, repMin: 1, recMin: 2 } as const;
 
@@ -1204,10 +1213,13 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[], notes?: 
   // week-debrief preview — so the athlete can choose to keep ramping or ease back, and the cut is
   // sized to exactly the overshoot. Caution keeps the gentle one-quality-session swap (orthogonal
   // to the CTL-gap re-anchor above, which trims DURATION when chronic load fell LOW).
-  const acwrNote = acwrStatus === 'caution'
+  // Race week is exempt, as it is from the high-ACWR ease-back (generator.ts): see TAPER_PRIMER_THRESHOLD.
+  const acwrNote = acwrStatus === 'caution' && !raceWeek
     ? 'ACWR caution — one quality session replaced with easy'
     : '';
   if (acwrStatus === 'caution') maxQuality = Math.max(0, maxQuality - 1);
+  // Race week keeps its one quality session, the primer (TAPER_PRIMER_THRESHOLD).
+  if (raceWeek) maxQuality = 1;
 
   // For 1 run/week: single combined session. In a race week the race is that run.
   if (runsPerWeek <= 1) {
@@ -1388,7 +1400,7 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[], notes?: 
   // deload week then swaps quality sessions for easy runs one at a time (the
   // ACWR-caution move) until it is no heavier than the week before. Only here does
   // the volume-aware cap's floor of one quality session give way.
-  if (deload && prevWeek) {
+  if (deload && prevWeek && !raceWeek) {
     const totalOf = (xs: SessionIntent[]) => xs.reduce((s, i) => s + i.totalMinutes, 0);
     const qualityOf = (xs: SessionIntent[]) => xs.filter(i => QUALITY_SLOT_SET.has(i.slot)).length;
     for (let q = qualityOf(week) - 1; q >= 0 && totalOf(week) > prevWeek.totalMin; q--) {
@@ -1434,7 +1446,9 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[], notes?: 
 //     race week alone) of the last pre-taper loaded week, for the week
 //     ceiling, the long run and the easy-run length; one threshold session;
 //     race week holds the primer and no long run. Reduce-only: a taper week
-//     never adds a session type its reference week lacked.
+//     never adds a session type its reference week lacked, except the race-week
+//     primer, which race week keeps whenever it holds a run (§CE, Tristan
+//     2026-10-08: it replaces an easy run on a tight budget).
 //   - Live levers (effort, CTL gap) can only reduce a block week. Rows are
 //     ceilings set by the ramp and Frandsen caps; a +15% lift would break them.
 //     (Running full plans and triathlon keep their two-way lever.)
@@ -1738,8 +1752,13 @@ function assembleBlockLoadedWeek(
  *     week longer than the week before it (`prevTotalMin`, race week included),
  *     the count rounds down instead. Makeup room never passes that total either.
  *   - One threshold session (continuous, the existing taper work minutes) in a
- *     taper week, the primer in race week; neither when the reference week held
- *     no quality session. Single-session cap applies.
+ *     taper week, none when the reference week held no quality session or under
+ *     ACWR caution. Single-session cap applies.
+ *   - Race week (2 or more runs) always holds the primer (TAPER_PRIMER_THRESHOLD):
+ *     with a reference week that held no quality session too (a binding hours
+ *     target or a low budget that unseated every quality session), and under
+ *     ACWR caution. It takes an easy run's place: the easy runs fill what the
+ *     ceiling leaves after it, and the taper-never-rises rule still applies.
  */
 function assembleBlockTaperWeek(
   ctx: PlanContext, ability: AbilityBand, ref: PrescribedWeek, f: number, raceWeek: boolean,
@@ -1773,7 +1792,9 @@ function assembleBlockTaperWeek(
   const taperPriority = applyRunnerTypeBias(workoutPriority(raceDistance, 'taper'), runnerType)
     .filter(sl => !excluded.has(sl));
   const qSlot = taperPriority[0];
-  if (ref.qualityCount >= 1 && !acwrCaution && (qSlot === 'threshold' || qSlot === 'vo2')) {
+  // Race week keeps the primer whatever the reference week held (TAPER_PRIMER_THRESHOLD).
+  const seatQuality = raceWeek || (ref.qualityCount >= 1 && !acwrCaution);
+  if (seatQuality && (qSlot === 'threshold' || qSlot === 'vo2')) {
     if (raceWeek) {
       const v = qSlot === 'vo2' ? TAPER_PRIMER_VO2 : TAPER_PRIMER_THRESHOLD;
       const total = Math.round(v.reps * (v.repMin + v.recMin) + 15);
