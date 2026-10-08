@@ -56,3 +56,11 @@ build/
 .tmp-*.mjs
 grp*.yml
 addbuild.yml
+
+# Marketing media stays on disk, out of git (GitHub refuses files over 100 MB;
+# history was cleaned of these on 2026-10-08, see backup/*-with-media branches)
+marketing/clips/
+marketing/**/*.mov
+marketing/**/*.webm
+marketing/**/*.mp4
+marketing/**/*.zip
