@@ -701,18 +701,22 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // no running data predicts a sub-3:00 marathon for a self-described mid-pack
   // runner. Cap the engine at the athlete's own run skill-slider self-assessment
   // (a running-specific self-report) so it can't run away. The watch VO2max stays
-  // the displayed number and re-enters the blend the instant any real running
-  // signal lands (PB pulled from Strava/Apple, a logged run, a race). No new
+  // the displayed number and the cap lifts the instant a running signal that
+  // enters the blend lands: a PB (pulled from Strava/Apple or typed), a synced
+  // race effort, a race anchor, or a medium+ HR-vs-pace calibration. No new
   // constants — reuses estimateRunPaceFromSkill's existing per-level pace table.
   // The cap only bites when the watch exceeds the self-rating, so a genuinely fast
   // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
   // (no triConfig.skillRating).
   const triRunSkill = s.triConfig?.skillRating?.run;
-  // A logged run counts whatever its effort. `inputs.recentRun` holds race
-  // efforts only, so the gate reads the window's run count instead.
+  // `inputs.recentRun` is a race effort (a run more than 15% faster than the
+  // window's median pace, SCIENCE_LOG §CY). Easy runs never fill it, so they
+  // never enter the blend's recent-run slot and must not lift the cap either:
+  // with the cap off and no run in the blend, the engine falls back to the
+  // uncorroborated watch number the cap exists to contain.
   const hasRunSpecificSignal = capacityVdot != null
     || raceAnchor != null
-    || inputs.runsCounted > 0
+    || (inputs.recentRun != null && inputs.recentRun.t > 0)
     || (hrVdot?.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium'));
   if (triRunSkill && !hasRunSpecificSignal) {
     const skillMarathonPace = estimateRunPaceFromSkill(triRunSkill as 1 | 2 | 3 | 4 | 5, 'ironman');

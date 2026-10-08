@@ -36,6 +36,8 @@ vi.stubGlobal('localStorage', localStorageMock);
 vi.stubGlobal('alert', vi.fn());
 
 import { initializeSimulator } from './initialization';
+import { initializeTriathlonSimulator } from './initialization.triathlon';
+import { estimateRunPaceFromSkill } from '@/calculations/race-prediction.triathlon';
 import { getMutableState, getState, resetState } from './store';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { abilityBandFromVdot, isDeloadWeek } from '@/workouts/plan_engine';
@@ -252,3 +254,60 @@ describe('KNOWN LIMITATION: a lone run is never a race effort, and two runs need
     expect(v.refresh).toBeCloseTo(capacity, 6);
   });
 });
+
+/**
+ * Triathlon cold-start skill cap (refreshBlendedFitness). A triathlete with no
+ * running PB, no race anchor and no medium+ HR-vs-pace calibration is held at
+ * their run skill rating, so a watch VO2max inflated by cycling and swimming
+ * cannot set their run paces. Easy runs never enter the blend's recent-run
+ * slot (SCIENCE_LOG §CY), so they must not lift the cap either. In 57935d0 the
+ * gate read the window's run count: two weeks of easy jogging at 6:30/km
+ * switched the cap off and the engine fell back to the watch number, 44.3 to
+ * 51.1 at watch VO2max 62. The gate now reads a race effort again.
+ */
+describe('triathlon cold-start skill cap: easy runs do not lift it', () => {
+  /** Two easy runs a week at 6:30/km, no heart rate. */
+  const JOG_WEEK: Array<[number, number, number]> = [[0, 10, 65], [3, 8, 52]];
+
+  function triEngine(vo2: number, runs: RunRow[]): number {
+    resetState();
+    localStorageMock.clear();
+    Object.assign(getMutableState(), { vo2, onboardingRunHistory: runs });
+    expect(initializeTriathlonSimulator({
+      trainingMode: 'triathlon', triDistance: '70.3', experienceLevel: 'intermediate',
+      customRaceDate: planDay(20, 6), triSkillRating: { swim: 3, bike: 3, run: 3 },
+    } as OnboardingState).success).toBe(true);
+    refreshBlendedFitness(getMutableState());
+    return getState().v;
+  }
+
+  /** The cap: run skill 3's marathon pace, as refreshBlendedFitness computes it. */
+  const skillCap = cv(42195, estimateRunPaceFromSkill(3, 'ironman') * 42.195);
+
+  it('with no runs, a watch VO2max of 62 is held at the run skill cap', () => {
+    expect(skillCap).toBeCloseTo(44.3, 1);
+    expect(triEngine(62, [])).toBeCloseTo(skillCap, 6);
+  });
+
+  it('two weeks of easy runs without heart rate keep the no-run value', () => {
+    const noRuns = triEngine(62, []);
+    const runs = history(2, JOG_WEEK);
+    expect(computePredictionInputs(runs).recentRun).toBeNull();
+    expect(triEngine(62, runs)).toBeCloseTo(noRuns, 6);
+  });
+
+  it('six weeks of easy runs, and a watch VO2max of 56, keep it too', () => {
+    expect(triEngine(62, history(6, JOG_WEEK))).toBeCloseTo(skillCap, 6);
+    expect(triEngine(56, history(2, JOG_WEEK))).toBeCloseTo(skillCap, 6);
+    expect(triEngine(56, history(6, JOG_WEEK))).toBeCloseTo(skillCap, 6);
+  });
+
+  it('a synced race effort still lifts the cap', () => {
+    // A 10K in 48:20 five days ago is more than 15% faster than the 6:30/km
+    // median, so it is the race effort and enters the blend.
+    const runs = [oneRun(5, 10, 2900), ...history(2, JOG_WEEK)];
+    expect(computePredictionInputs(runs).recentRun).toMatchObject({ d: 10, t: 2900 });
+    expect(Math.abs(triEngine(62, runs) - skillCap)).toBeGreaterThan(1);
+  });
+});
+
