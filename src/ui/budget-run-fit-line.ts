@@ -12,8 +12,9 @@ import { formatKm, type UnitPref } from '@/utils/format';
  *   - Volume ramp binds: "Building from 15 km a week, this week's volume fits 2 of
  *     your 4 runs." (no km clause when current weekly running is unknown)
  *   - No ceiling named (the effort/CTL lever cost the run, the runs pass the hours
- *     target or leave room under it, or the target capped the ramp's destination;
- *     budgetRunFitOf): "This week's volume fits 2 of your 4 runs."
+ *     target or leave room under it, the target capped the ramp's destination, or
+ *     the target cost a run the ramp allows; budgetRunFitOf): "This week's volume
+ *     fits 2 of your 4 runs."
  * The closing "Each stays at a useful length." names no minute figure: the
  * engine keeps every run at EASY_FLOOR_MIN or longer, but the opt-in body-mass
  * swap (generator.ts) can shorten an easy run below it afterwards.

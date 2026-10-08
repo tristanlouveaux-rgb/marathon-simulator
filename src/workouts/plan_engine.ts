@@ -842,8 +842,10 @@ export interface PlanWeekNotes {
  *     for another run (a live lever shortened the sessions or the budget), the
  *     target did not cost the run. The volume ramp is not named either: the
  *     target was the lowest ceiling.
- *   - Neither flag: the hours target capped the plan's volume destination and the
- *     ramp toward it set the week below the target (effectiveWeeklyBudget), so no
+ *   - Neither flag: in a full plan, the hours target capped the plan's volume
+ *     destination and the ramp toward it set the week below the target
+ *     (effectiveWeeklyBudget); in a sharpening block, the ramp set the budget but
+ *     the same week without the target seats more runs (buildSharpeningWeek). No
  *     single ceiling holds the count.
  * Then the fit names no ceiling (binding 'volume', no currentWeeklyKm), which
  * words as "This week's volume fits N of your M runs.", true of the built week.
@@ -1973,11 +1975,29 @@ function buildSharpeningWeek(
     // when the levered week leaves no room under it for another run
     // (budgetRunFitOf). Full plans need no unlevered rebuild: there the lever
     // scales sessions, never the budget (buildWeekSessions).
-    // The block's volume ramp (archetype or chain) binds whenever it sits strictly
-    // below the hours target (loadedRow), so it is named exactly when the target is not.
+    // The block's volume ramp (archetype or chain) sets the budget whenever it sits
+    // strictly below the hours target (loadedRow). The target can still cost a run
+    // there, so the ramp is named only when the same week without the target seats
+    // no more runs:
+    //   - This week: step 5 of the block fit keeps the trimmed week with one
+    //     quality session only while it stays within the target
+    //     (assembleBlockLoadedWeek). The same finished row without the target
+    //     (budgetMin is the ramp, so only that overflow cap changes) tests it.
+    //   - Earlier weeks: the target shapes the plan so far (a week it kept from
+    //     trimming grew its long run instead), and the next week's long run builds
+    //     on it. The same week of the plan with no target tests that.
+    // When either seats more runs, the target cost a run the ramp allows, so the
+    // ramp alone does not hold the count. The target is not the week's budget
+    // either (the ramp sits below it), so the note names no ceiling.
+    let targetDropped = false;
+    if (!row.hoursBound && row.hoursCapMin != null && week.length < ctx.runsPerWeek) {
+      const noTarget: PlanContext = { ...ctx, weeklyHoursTarget: undefined };
+      targetDropped = assembleBlockLoadedWeek(ctx, ability, { ...row, hoursCapMin: undefined }).length > week.length
+        || buildSharpeningWeek(noTarget, nominalHistory(noTarget)).length > week.length;
+    }
     const leverDropped = lever < 1 && week.length < ctx.runsPerWeek
       && assembleBlockLoadedWeek(ctx, ability, finishRow({ ...loadedRow(k, history, phase), acwrNote })).length > week.length;
-    const fit = budgetRunFitOf(ctx, week, { hoursBound: !!row.hoursBound, rampBound: !row.hoursBound }, !leverDropped);
+    const fit = budgetRunFitOf(ctx, week, { hoursBound: !!row.hoursBound, rampBound: !row.hoursBound && !targetDropped }, !leverDropped);
     if (fit) out.budgetRunFit = fit;
   }
   return week;

@@ -217,6 +217,27 @@ describe('Plan tab: the line names the hours target only when the runs fit withi
     expect(runCount(resolveWeekWorkouts(open, 1))).toBe(5);
     expect(render(open)).toBe('');
   });
+
+  it('block 4 weeks out, 3 runs, beginner, 15 km a week, 2-hour target, week 2: the line names neither the target nor the 15 km', () => {
+    // The 15 km ramp sets the budget, but the target keeps out the trimmed week
+    // with one quality session: week 2 holds 2 runs (103 min). Without the target
+    // the same week holds all 3.
+    const novice = (over: Partial<SimulatorState> = {}): SimulatorState => lowVolumeBlock(2, {
+      rw: 3, tw: 4, v: 35, pac: { e: 400 } as any, wks: initializeWeeks(4, { raceDistance: 'marathon' }),
+      athleteArchetype: { archetype: 'sedentary-novice' } as any,
+      onboarding: { experienceLevel: 'beginner', weeklyTrainingHours: 2 } as any,
+      sharpenBlock: { v: 1, startLongMin: 60, startSource: 'history-30d', recentLongestMin: 60, noSignal: false, trainingWeeks: 4, builtISO: '2026-09-07' } as any,
+      ...over,
+    });
+    const s = novice();
+    setState(s);
+    expect(runCount(resolveWeekWorkouts(s, 2))).toBe(2);
+    expect(render(s)).toBe('This week\'s volume fits 2 of your 3 runs. Each stays at a useful length.');
+    const open = novice({ onboarding: { experienceLevel: 'beginner' } as any });
+    setState(open);
+    expect(runCount(resolveWeekWorkouts(open, 2))).toBe(3);
+    expect(render(open)).toBe('');
+  });
 });
 
 describe('resolver: weeks short of runs for another reason carry no note', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { planWeekSessions, planEngineStateInputs, EASY_FLOOR_MIN, type PlanContext, type PlanWeekNotes } from './plan_engine';
 import { computeRunningPlanPhases } from './phases';
 import { budgetRunFitLine } from '@/ui/budget-run-fit-line';
@@ -295,6 +295,111 @@ describe('the hours target is named only when the runs that fit fill it', () => 
       }
     }
     expect(named).toBeGreaterThan(0);
+  });
+});
+
+describe('sharpening block: the volume ramp is named only when the same week without the target seats no more runs', () => {
+  // Marathon 4 weeks out (build, peak, taper, race week), 3 runs a week, beginner
+  // (VDOT 35, easy 400 s/km), 15 km a week synced, sedentary novice, longest run
+  // of the last 30 days 60 min, 2-hour target.
+  const NOVICE: Ctx = {
+    runsPerWeek: 3, raceDistance: 'marathon', runnerType: 'Balanced', fitnessLevel: 'beginner',
+    vdot: 35, easyPaceSecPerKm: 400, totalWeeks: 4, baselineKm: 15, archetype: 'sedentary-novice',
+    weeklyHoursTarget: 2, sharpening: { startLongMin: 60, startSource: 'history-30d' },
+  };
+
+  it('week 2 (peak): the target keeps the trimmed 3-run week out, so the line names no ceiling', () => {
+    const rows = weeks(NOVICE);
+    const open = weeks({ ...NOVICE, weeklyHoursTarget: undefined });
+    const r = rows[1];
+    expect(r.phase).toBe('peak');
+    expect(r.label).toBe('wk2 peak [long:63 easy:40]');
+    expect(r.fit, r.label).toEqual({ chosenRuns: 3, fittedRuns: 2, binding: 'volume', hoursTarget: 2 });
+    expect(lineOf(r.fit), r.label).toBe(NAMES_NO_CEILING(2, 3));
+    // Without the target the same week holds all 3 runs (125 min) and carries no note.
+    expect(open[1].label).toBe('wk2 peak [long:60 marathon_pace:40 easy:25]');
+    expect(open[1].fit, open[1].label).toBeUndefined();
+    // Week 1 holds 2 runs with or without the target: the 15 km ramp sets the count and is named.
+    expect(rows[0].fit, rows[0].label).toEqual({ chosenRuns: 3, fittedRuns: 2, binding: 'volume', hoursTarget: 2, currentWeeklyKm: 15 });
+    expect(open[0].runs, open[0].label).toBe(2);
+  });
+
+  it('advanced, 25 km a week, 80-min longest, 2.5-hour target, 7 weeks out: week 3 names no ceiling, weeks 1 and 2 name the ramp', () => {
+    const ADV: Ctx = {
+      ...NOVICE, fitnessLevel: 'advanced', vdot: 55, easyPaceSecPerKm: 280, totalWeeks: 7, baselineKm: 25,
+      archetype: 'consistent-runner', weeklyHoursTarget: 2.5, sharpening: { startLongMin: 80, startSource: 'history-30d' },
+    };
+    const rows = weeks(ADV);
+    const open = weeks({ ...ADV, weeklyHoursTarget: undefined });
+    for (const k of [1, 2]) {
+      expect(rows[k - 1].fit, rows[k - 1].label).toEqual({ chosenRuns: 3, fittedRuns: 2, binding: 'volume', hoursTarget: 2.5, currentWeeklyKm: 25 });
+      expect(open[k - 1].runs, open[k - 1].label).toBe(2);
+    }
+    expect(rows[2].label).toBe('wk3 build [long:90 easy:50]');
+    expect(rows[2].fit, rows[2].label).toEqual({ chosenRuns: 3, fittedRuns: 2, binding: 'volume', hoursTarget: 2.5 });
+    expect(lineOf(rows[2].fit), rows[2].label).toBe(NAMES_NO_CEILING(2, 3));
+    expect(open[2].label).toBe('wk3 build [long:85 marathon_pace:54 easy:25]');
+    expect(open[2].fit, open[2].label).toBeUndefined();
+  });
+
+  it('a lever week whose long run builds on a week the target kept from trimming names no ceiling', () => {
+    // 5 weeks out, week 3 (peak). The plan as prescribed, which the next week's
+    // long run builds on, differs at week 2: the target keeps its trimmed 3-run
+    // week out, so the long run grows to 63 min (60 with no target). Under the
+    // lever, week 3 holds 2 runs with the target and 3 without it.
+    for (const lever of [{ effortScore: 3 }, { ctlRatio: 0.7 }]) {
+      const c: Ctx = { ...NOVICE, totalWeeks: 5, ...lever };
+      const r = weeks(c)[2];
+      const open = weeks({ ...c, weeklyHoursTarget: undefined })[2];
+      expect(r.phase).toBe('peak');
+      expect(r.runs, r.label).toBe(2);
+      expect(r.fit, r.label).toEqual({ chosenRuns: 3, fittedRuns: 2, binding: 'volume', hoursTarget: 2 });
+      expect(lineOf(r.fit), r.label).toBe(NAMES_NO_CEILING(2, 3));
+      expect(open.runs, open.label).toBe(3);
+    }
+    expect(weeks({ ...NOVICE, totalWeeks: 5 })[1].label).toBe('wk2 build [long:63 easy:40]');
+    expect(weeks({ ...NOVICE, totalWeeks: 5, weeklyHoursTarget: undefined })[1].label).toBe('wk2 build [long:60 marathon_pace:37 easy:25]');
+  });
+
+  it('every week of these plans that names the ramp under a target seats no more runs without the target', () => {
+    // Full plans warn when their quality sessions alone pass a small budget.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const abilities: [PlanContext['fitnessLevel'], number, number][] = [['beginner', 35, 400], ['intermediate', 45, 330], ['advanced', 55, 280]];
+    const baselines: [number, NonNullable<PlanContext['archetype']>][] = [
+      [15, 'sedentary-novice'], [25, 'consistent-runner'], [40, 'consistent-runner'], [25, 'detrained-with-history'],
+    ];
+    const levers: Partial<Ctx>[] = [{}, { effortScore: 3 }, { ctlRatio: 0.7 }];
+    // Marathon blocks of 3 to 7 weeks, half blocks of 2 and 3, and one full plan of each.
+    const plans: [Ctx['raceDistance'], number][] = [
+      ['marathon', 3], ['marathon', 4], ['marathon', 5], ['marathon', 6], ['marathon', 7], ['marathon', 9],
+      ['half', 2], ['half', 3], ['half', 6],
+    ];
+    let rampNamed = 0;
+    let blockRampNamed = 0;
+    const seatMore: string[] = [];
+    for (const [raceDistance, totalWeeks] of plans) for (let runsPerWeek = 2; runsPerWeek <= 5; runsPerWeek++)
+    for (const [fitnessLevel, vdot, easyPaceSecPerKm] of abilities) for (const [baselineKm, archetype] of baselines)
+    for (const startLongMin of [40, 60, 80]) for (const lever of levers) {
+      const c: Ctx = {
+        runsPerWeek, raceDistance, runnerType: 'Balanced', fitnessLevel, vdot, easyPaceSecPerKm, totalWeeks, baselineKm, archetype,
+        sharpening: { startLongMin, startSource: 'history-30d' }, ...lever,
+      };
+      const open = weeks(c);
+      for (const weeklyHoursTarget of [1.5, 2, 2.5, 3, 4]) {
+        const rows = weeks({ ...c, weeklyHoursTarget });
+        for (const r of rows) {
+          if (r.fit?.binding !== 'volume' || r.fit.currentWeeklyKm == null) continue;
+          rampNamed++;
+          if (totalWeeks < (raceDistance === 'marathon' ? 8 : 4)) blockRampNamed++;
+          const o = open[r.k - 1];
+          if (o.runs > r.runs) seatMore.push(`${JSON.stringify({ ...c, weeklyHoursTarget })} ${r.label} vs ${o.label}`);
+        }
+      }
+    }
+    warn.mockRestore();
+    expect(seatMore.slice(0, 10), `${seatMore.length} weeks`).toEqual([]);
+    expect(blockRampNamed).toBeGreaterThan(0);
+    expect(rampNamed).toBeGreaterThan(blockRampNamed);
   });
 });
 
