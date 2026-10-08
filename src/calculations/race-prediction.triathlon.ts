@@ -119,6 +119,7 @@ import {
 } from '@/constants/triathlon-course-factors';
 import type { InjuryState } from '@/types/injury';
 import { disciplineRecovery, recoveryDebitWeeks, type DisciplineRecovery } from './injury-recovery';
+import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
@@ -1477,6 +1478,12 @@ export function ftpToAbilityBand(ftpW: number): AbilityBand {
 // Weeks remaining + years of training
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Forecast horizon in weeks: from now to the end of race week
+ * (raceForecastHorizonISO). For a Monday to Wednesday race that is the Sunday
+ * before race day, since the closing week holds only the race, so the race
+ * forecasts like the Sunday before it (running parity, planTrainingWeeks).
+ */
 function computeWeeksRemaining(state: SimulatorState): number {
   const raceDate = state.triConfig?.raceDate;
   if (!raceDate) {
@@ -1486,7 +1493,7 @@ function computeWeeksRemaining(state: SimulatorState): number {
     return state.triConfig?.weeksToRace ?? 12;
   }
   const today = new Date();
-  const race = new Date(raceDate);
+  const race = new Date(raceForecastHorizonISO(state, raceDate));
   const diffMs = race.getTime() - today.getTime();
   const diffWeeks = diffMs / (1000 * 60 * 60 * 24 * 7);
   return Math.max(0, Math.round(diffWeeks * 10) / 10);

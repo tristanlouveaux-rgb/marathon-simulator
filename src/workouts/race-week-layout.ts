@@ -1,4 +1,4 @@
-import { calendarDayNumber, localDateKey, localMondayKey } from '@/utils/local-date';
+import { addCalendarDays, calendarDayNumber, localDateKey, localMondayKey } from '@/utils/local-date';
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
 
@@ -91,6 +91,36 @@ export function storedPlanRaceLayout(
   return layout;
 }
 
+/**
+ * The date a stored-plan race forecast (triathlon, cycling, HYROX) measures
+ * its weeks-to-race horizon to. Tracking side. With a closing week (a Monday
+ * to Wednesday race's own week, which holds only the race), the horizon ends
+ * with race week: the Sunday before race day. Otherwise race day itself.
+ * Mirrors running, whose forecast horizon reads planTrainingWeeks, so a
+ * Tuesday race forecasts exactly like the Sunday before it: the closing-week
+ * days before the race are not credited as training. Any time part of
+ * `raceISO` is kept, so the horizon parses as the predictors parse a race
+ * date. The plan's own weeks decide (wks[tw - 1].raceClosing); before they
+ * exist, the layout the generators use (storedPlanRaceLayout) does.
+ */
+export function raceForecastHorizonISO(
+  s: { tw?: number; planStartDate?: string; wks?: ReadonlyArray<{ raceClosing?: boolean } | null | undefined> },
+  raceISO: string,
+): string {
+  const day = raceISO.slice(0, 10);
+  const n = calendarDayNumber(day);
+  if (!Number.isFinite(n)) return raceISO;
+  const tw = s.tw ?? s.wks?.length ?? 0;
+  const closing = (s.wks?.length ?? 0) >= tw && tw > 0
+    ? planTrainingWeeks(s) < tw
+    : !!storedPlanRaceLayout(tw, s.planStartDate, day)?.closingWeek;
+  const dow = (((n + 3) % 7) + 7) % 7; // 1970-01-01 was a Thursday: 0 = Monday
+  // Only a Monday to Wednesday race has a closing week (raceWeekLayout); a
+  // flag left on another weekday's plan by a stale date keeps race day.
+  if (!closing || dow >= RACE_WEEK_ANCHOR_DAYS) return raceISO;
+  return addCalendarDays(day, -(dow + 1)) + raceISO.slice(10);
+}
+
 /** The running race date (YYYY-MM-DD) of a running race plan, or null: the
  *  selected event, else the custom date (the pair every running race reader
  *  uses, run-race-outcome.ts). Null for continuous, Just-Track, triathlon
@@ -112,7 +142,9 @@ export function runningRaceDateISO(s: {
  * Monday to Wednesday race's own week) holds only the race, so every input
  * that reads "weeks of training" or "weeks to race" (plan engine, phases,
  * forecast horizon and taper, race-day durability window) reads this, and a
- * Tuesday race forecasts exactly like the Sunday before it. Calendar consumers
+ * Tuesday race forecasts exactly like the Sunday before it. The triathlon,
+ * cycling and HYROX forecasts measure their horizon in calendar time, to the
+ * end of race week (raceForecastHorizonISO), for the same parity. Calendar consumers
  * (week navigation, "Week N of M", Plan complete, week advance) keep s.tw.
  */
 export function planTrainingWeeks(s: { tw?: number; wks?: ReadonlyArray<{ raceClosing?: boolean } | null | undefined> }): number {

@@ -39,6 +39,7 @@ import {
 import { applyTrainingHorizonAdjustment } from './training-horizon';
 import { bandFromVdot } from './hyrox-staleness';
 import { runInjuryBuildWeeks } from './hyrox-injury';
+import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 
 export interface HyroxProjectionFactor {
   /** Display name. */
@@ -100,15 +101,25 @@ function daysBetween(fromISO: string, toISO: string): number {
 }
 
 /**
- * Compute weeks remaining to the race. Returns 0 if no race date or race already past.
+ * Weeks of training remaining: to the end of race week (raceForecastHorizonISO;
+ * the Sunday before race day when a Monday to Wednesday race has a closing
+ * week, which holds only the race). Returns 0 if no race date or race week is
+ * over.
  */
 function computeWeeksRemaining(state: SimulatorState): number {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return 0;
   const today = new Date().toISOString().slice(0, 10);
-  const days = daysBetween(today, raceDate);
+  const days = daysBetween(today, raceForecastHorizonISO(state, raceDate));
   if (days <= 0) return 0;
   return days / 7;
+}
+
+/** True while race day is still ahead (calendar days, the closing week included). */
+function raceStillAhead(state: SimulatorState): boolean {
+  const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
+  if (!raceDate) return false;
+  return daysBetween(new Date().toISOString().slice(0, 10), raceDate) > 0;
 }
 
 /**
@@ -373,9 +384,11 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   // appropriate for run, generic for roxzone). No separate "Taper bonus"
   // factor. That would double-count what the horizon models already include.
 
-  // Factor: race-day readiness (HRV / sleep / RHR). Taper window only.
+  // Factor: race-day readiness (HRV / sleep / RHR). Taper window only. It
+  // reads recovery, not training, so it holds until race day: through a
+  // closing week too, where the training horizon is already 0.
   const taperWindowWeeks = HYROX_TAPER_DAYS[band] / 7;
-  if (weeksRemaining > 0 && weeksRemaining <= taperWindowWeeks * 1.5) {
+  if (raceStillAhead(state) && weeksRemaining <= taperWindowWeeks * 1.5) {
     const readinessScore = computeReadinessScore(state.physiologyHistory);
     if (readinessScore != null) {
       const readinessPct = (0.5 - readinessScore) * 0.04;  // poor readiness → slower

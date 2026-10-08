@@ -226,6 +226,19 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
     expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(1, 5);
     expect(plannedHoursPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(0.75, 5);
   });
+
+  // A Monday to Wednesday race's own week (raceClosing) holds only the race:
+  // the forecast fallback skips it rather than averaging in a 0-session week.
+  it('the taper-only fallback skips the closing week', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 2, minPer: 60 },
+      { ph: 'taper' }, // closing week: no sessions
+    ]);
+    (s.wks[1] as any).raceClosing = true;
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(2, 5);
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+  });
 });
 
 /**
