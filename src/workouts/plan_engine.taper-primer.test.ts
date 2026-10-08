@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { generateWeekWorkouts } from '@/workouts';
 import type { RaceDistance } from '@/types';
+import { planWeekSessions, type PlanContext } from './plan_engine';
+import { computeRunningPlanPhases } from './phases';
+import type { SessionIntent } from './intent_to_workout';
 
 /**
  * Race-week primer guard.
@@ -52,5 +55,44 @@ describe('Race-week primer (final taper week)', () => {
     const thr = ws.find(w => w.t === 'threshold');
     expect(thr, 'expected a threshold session in a build week').toBeDefined();
     expect(thr!.n).not.toBe('Threshold 3×2');
+  });
+});
+
+/**
+ * ACWR caution does not remove the primer (2026-10-08). Race week was already
+ * exempt from the high-ACWR ease-back (generator.ts) because the primer is a
+ * minimal session in a week whose volume is already cut; the caution swap (one
+ * quality session to easy) removed it anyway, in full plans and sharpening blocks.
+ * Build weeks keep the caution swap (contrast).
+ */
+describe('race-week primer under ACWR caution', () => {
+  const base = {
+    runsPerWeek: 4, raceDistance: 'marathon' as RaceDistance, runnerType: 'Balanced' as const,
+    fitnessLevel: 'intermediate', vdot: 45, easyPaceSecPerKm: 330,
+    baselineKm: 40, archetype: 'consistent-runner' as const,
+  };
+  const primerCount = (xs: SessionIntent[]) => xs.filter(i => i.notes === 'Race-week primer').length;
+
+  it('full 16-week plan: race week keeps the primer under caution', () => {
+    const planPhases = computeRunningPlanPhases(16, 'marathon').map(p => p.ph);
+    const ctx: PlanContext = { ...base, totalWeeks: 16, planPhases, weekIndex: 16, phase: 'taper', acwrStatus: 'caution' };
+    expect(primerCount(planWeekSessions(ctx))).toBe(1);
+  });
+
+  it('7-week sharpening block: race week keeps the primer under caution', () => {
+    const planPhases = computeRunningPlanPhases(7, 'marathon').map(p => p.ph);
+    const ctx: PlanContext = {
+      ...base, totalWeeks: 7, planPhases, weekIndex: 7, phase: 'taper', acwrStatus: 'caution',
+      sharpening: { startLongMin: 100, startSource: 'history-30d' },
+    };
+    expect(primerCount(planWeekSessions(ctx))).toBe(1);
+  });
+
+  it('contrast: a build week under caution still carries one quality session fewer', () => {
+    const planPhases = computeRunningPlanPhases(16, 'marathon').map(p => p.ph);
+    const k = planPhases.indexOf('build') + 2;
+    const q = (acwrStatus?: 'caution') => planWeekSessions({ ...base, totalWeeks: 16, planPhases, weekIndex: k, phase: planPhases[k - 1], acwrStatus })
+      .filter(i => ['threshold', 'vo2', 'marathon_pace', 'float'].includes(i.slot)).length;
+    expect(q('caution')).toBe(q() - 1);
   });
 });
