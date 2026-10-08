@@ -92,7 +92,9 @@ import { isLongRun } from './long-run';
 // Still v22 (unreleased): the primer is a 30-min ride on its duration-scaled
 // variant (a few minutes of quality, not a 2x20 min build set), the week's
 // only ride is the primer, and the primer takes running's primer day
-// (raceWeekPrimerDow).
+// (raceWeekPrimerDow). Race week never holds a discipline twice on one day,
+// and in the last 13 days no quality run sits next to the brick or the long
+// run (spaceStoredPlanQualityRuns).
 export const TRI_GENERATOR_VERSION = 22;
 
 /**
