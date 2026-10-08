@@ -240,11 +240,13 @@ export function fitTaperEasyMakeups<T extends { workout: Workout }>(
 /**
  * Rule 1 for the stored-plan modes (triathlon, cycling on the tri engine, and
  * HYROX): drop every session dated on or after race day. Their generators lay
- * race week out their own way (triathlon keeps Sunday free, scheduler
- * .triathlon) on the running layout (storedPlanRaceLayout); this only removes
- * sessions that would fall on or after the race, e.g. a Saturday race's
- * Saturday session. Weeks entirely before race day are returned unchanged.
- * Pure; `dayOfWeek` 0 = Monday.
+ * race week out their own way on the running layout (storedPlanRaceLayout):
+ * triathlon keeps Sunday free when race day is in race week and places the
+ * primer first (placeStoredPlanRaceWeekPrimer); HYROX schedules race week on
+ * the days before race day (plan_engine.hyrox raceWeekAllowedDays). This only
+ * removes sessions that still fall on or after the race, e.g. a Saturday
+ * race's Saturday session. Weeks entirely before race day are returned
+ * unchanged. Pure; `dayOfWeek` 0 = Monday.
  */
 export function dropSessionsOnOrAfterRaceDay<T extends { dayOfWeek?: number }>(
   workouts: T[], weekIndex: number, planStartISO: string | undefined | null, raceISO: string | undefined | null,
@@ -360,4 +362,63 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
   }
   return out.sort((a, b) =>
     ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
+}
+
+export interface StoredPlanPrimerInput<T> {
+  /** Plan week being generated (1-based). */
+  weekIndex: number;
+  layout: RaceWeekLayout;
+  /** The race week's primer (its one quality session). */
+  isPrimer: (w: T) => boolean;
+  /** Discipline key: the sessions of the primer's discipline on its new day
+   *  take its old day (a triathlon day can hold sessions of different
+   *  disciplines, so the others stay). */
+  discipline: (w: T) => string;
+  /** First schedulable weekday of this week (workout-status firstTrackedDow). */
+  firstScheduleDow?: number;
+  /** Day names in the engine's own format, indexed 0 = Monday. */
+  dayNames: readonly string[];
+}
+
+/**
+ * Rule 2 for the triathlon engine (cycling included), applied to race week
+ * before rule 1 drops what falls on or after race day: the primer (SCIENCE_LOG
+ * §CE) stays on its day when that is PRIMER_MIN_DAYS_OUT to PRIMER_MAX_DAYS_OUT
+ * days out; otherwise it moves to the latest race-week day in that window, on
+ * or after the first schedulable day, and the sessions of its discipline there
+ * take its old day (running rule 2's swap; they leave the week when that day
+ * is on or after race day). With no such day it is dropped, as running drops
+ * it. Other weeks come back unchanged (same array). Pure; `dayOfWeek` 0 = Monday.
+ */
+export function placeStoredPlanRaceWeekPrimer<T extends { dayOfWeek?: number; dayName?: string }>(
+  workouts: T[], inp: StoredPlanPrimerInput<T>,
+): T[] {
+  const { weekIndex, layout } = inp;
+  if (weekIndex !== layout.trainingWeeks) return workouts;
+  const primer = workouts.find(w => w.dayOfWeek != null && inp.isPrimer(w));
+  if (!primer) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
+  const firstDow = Math.max(0, Math.min(7, inp.firstScheduleDow ?? 0));
+  const inWindow = (dow: number) =>
+    dow >= firstDow && daysOut(dow) >= PRIMER_MIN_DAYS_OUT && daysOut(dow) <= PRIMER_MAX_DAYS_OUT;
+  const from = primer.dayOfWeek!;
+  if (inWindow(from)) return workouts;
+  let target: number | null = null;
+  for (let dow = 6; dow >= firstDow; dow--) {
+    if (inWindow(dow)) { target = dow; break; }
+  }
+  if (target == null) return workouts.filter(w => w !== primer);
+  const disc = inp.discipline(primer);
+  const out: T[] = [];
+  for (const w of workouts) {
+    if (w === primer) {
+      out.push({ ...w, dayOfWeek: target, dayName: inp.dayNames[target] });
+    } else if (w.dayOfWeek === target && inp.discipline(w) === disc) {
+      if (daysOut(from) > 0) out.push({ ...w, dayOfWeek: from, dayName: inp.dayNames[from] });
+    } else {
+      out.push(w);
+    }
+  }
+  return out.sort((a, b) => (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0));
 }

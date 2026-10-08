@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearStoredPlanRaceWindow, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
+import { clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
 import { raceWeekLayout, storedPlanRaceLayout } from './race-week-layout';
 
 /**
@@ -156,5 +156,55 @@ describe('storedPlanRaceLayout', () => {
     expect(storedPlanRaceLayout(7, START, undefined)).toBeNull();
     expect(storedPlanRaceLayout(7, undefined, '2026-11-16')).toBeNull();
     expect(storedPlanRaceLayout(undefined, START, '2026-11-16')).toBeNull();
+  });
+});
+
+describe('placeStoredPlanRaceWeekPrimer (running rule 2 for the triathlon engine)', () => {
+  interface P { n: string; t: string; disc: string; dayOfWeek?: number; dayName?: string }
+  const p = (n: string, t: string, disc: string, dayOfWeek: number): P => ({ n, t, disc, dayOfWeek, dayName: NAMES[dayOfWeek] });
+  const RACE_WEEK: P[] = [
+    p('Swim', 'swim_endurance', 'swim', 1),
+    p('Primer', 'bike_sweet_spot', 'bike', 1),
+    p('Easy run', 'easy', 'run', 2),
+    p('Ride', 'bike_endurance', 'bike', 3),
+    p('Long ride', 'bike_endurance', 'bike', 5),
+  ];
+  function place(race: string, week: number, ws: P[] = RACE_WEEK, firstScheduleDow?: number) {
+    const layout = raceWeekLayout(START, race)!;
+    return placeStoredPlanRaceWeekPrimer(ws, {
+      weekIndex: week, layout, isPrimer: w => w.t === 'bike_sweet_spot', discipline: w => w.disc, firstScheduleDow, dayNames: NAMES,
+    });
+  }
+  const show = (ws: P[]) => ws.map(w => `${NAMES[w.dayOfWeek!]}:${w.n}`);
+
+  it('Wednesday race (18 Nov, race week 6): the Tuesday primer (8 days out) moves to Sunday, 3 days out', () => {
+    expect(show(place('2026-11-18', 6))).toEqual(['Tue:Swim', 'Wed:Easy run', 'Thu:Ride', 'Sat:Long ride', 'Sun:Primer']);
+  });
+
+  it('swaps with the rides on the target day; other disciplines stay', () => {
+    // Tuesday race (17 Nov): window Thursday to Saturday; Saturday holds the long ride.
+    expect(show(place('2026-11-17', 6))).toEqual(['Tue:Swim', 'Tue:Long ride', 'Wed:Easy run', 'Thu:Ride', 'Sat:Primer']);
+  });
+
+  it('stays when already 3 to 5 days out (Sunday race 22 Nov: Tuesday is 5 days out)', () => {
+    expect(place('2026-11-22', 6)).toBe(RACE_WEEK);
+  });
+
+  it('a primer on race day moves before it; the ride it swaps with leaves the week', () => {
+    // Thursday race 19 Nov: race week 7, window Monday only (3 days out). The
+    // Monday ride would take race day, so it leaves the week.
+    const ws = [p('Ride', 'bike_endurance', 'bike', 0), p('Swim', 'swim_endurance', 'swim', 1), p('Primer', 'bike_sweet_spot', 'bike', 3)];
+    expect(show(place('2026-11-19', 7, ws))).toEqual(['Mon:Primer', 'Tue:Swim']);
+  });
+
+  it('no window day on or after the first schedulable day: the primer is dropped', () => {
+    // Thursday race 19 Nov, plan existing from Tuesday of race week only.
+    const ws = [p('Primer', 'bike_sweet_spot', 'bike', 3), p('Swim', 'swim_endurance', 'swim', 1)];
+    expect(show(place('2026-11-19', 7, ws, 1))).toEqual(['Tue:Swim']);
+  });
+
+  it('leaves weeks other than race week unchanged (same array)', () => {
+    expect(place('2026-11-18', 5)).toBe(RACE_WEEK);
+    expect(place('2026-11-18', 7)).toBe(RACE_WEEK);
   });
 });

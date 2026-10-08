@@ -50,7 +50,9 @@ export function scheduleTriathlonWeek(
    * sessions are pushed to the next-best day. Undefined = no cap. */
   minutesCapByDay?: Record<number, number>,
   /** Race week: Sunday is kept free for the race. The week has no long run
-   * (plan_engine isRaceWeek), and no other session spills onto Sunday. */
+   * (plan_engine isRaceWeek), and no other session spills onto Sunday. The
+   * generator passes false for a Monday to Wednesday race, whose race week
+   * ends before race day (its Sunday is 1 to 3 days out). */
   raceWeek: boolean = false,
 ): Workout[] {
   const weekendDays = raceWeek ? [5] : WEEKEND_INDEXES;

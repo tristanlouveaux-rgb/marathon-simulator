@@ -1,0 +1,171 @@
+/**
+ * Triathlon and cycling race week relative to race day (visual QA,
+ * 2026-10-08): the running race-day rules (SCIENCE_LOG §CE race-week primer,
+ * §CW race calendar and race-day placement) applied to the triathlon engine.
+ *   - frequency: race week keeps the week before's session count per
+ *     discipline (Bosquet et al. 2007, §CE update), the race taking the long
+ *     run; minutes stay at the 0.30 race-week budget with the 30-min floor;
+ *   - one quality session, the primer (the first ride, its distance's taper
+ *     flavour), 3 to 5 days out (PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT);
+ *   - a Monday to Wednesday race's Sunday (1 to 3 days out) is a race-week day;
+ *   - race-week rides take the steady endurance variant, never the "fasted
+ *     endurance (optional)" one;
+ *   - nothing on or after race day; never heavier than the week before.
+ *
+ * Before (scenario tri-wednesday: 70.3, Wednesday race 18 Nov 2026,
+ * onboarding Thursday 8 October): race week 6 held a Tuesday swim technique and
+ * a Saturday 40-min "fasted endurance (optional)" ride; Sunday, Monday, Tuesday
+ * and race day were empty. A 210-plan sweep (sprint, olympic, 70.3, Ironman,
+ * cycling; 4 to 15 h; every race weekday): 6 race weeks with no session, 30 of
+ * 90 Monday to Wednesday races with nothing in the 3 days before race day, race
+ * week a median 0.42 of its 0.30 budget.
+ */
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
+
+const localStorageMock = (() => {
+  let store: Record<string, string> = {};
+  return {
+    getItem: (k: string) => store[k] ?? null,
+    setItem: (k: string, v: string) => { store[k] = v; },
+    removeItem: (k: string) => { delete store[k]; },
+    clear: () => { store = {}; },
+    get length() { return Object.keys(store).length; },
+    key: (i: number) => Object.keys(store)[i] ?? null,
+  };
+})();
+vi.stubGlobal('localStorage', localStorageMock);
+vi.stubGlobal('alert', vi.fn());
+
+import { initializeTriathlonSimulator } from './initialization.triathlon';
+import { initializeCyclingSimulator } from './initialization.cycling';
+import { getState, resetState } from './store';
+import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
+import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from '@/workouts/race-day-rules';
+import { isLongRun } from '@/workouts/long-run';
+import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
+import type { SimulatorState, Week, Workout } from '@/types';
+
+const ORIGINAL_TZ = process.env.TZ;
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); localStorageMock.clear(); });
+afterAll(() => { if (ORIGINAL_TZ === undefined) delete process.env.TZ; else process.env.TZ = ORIGINAL_TZ; });
+
+function at(localIso: string): void {
+  process.env.TZ = 'Europe/London';
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(localIso));
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+}
+
+type Mode = 'sprint' | 'olympic' | '70.3' | 'ironman' | 'cycling';
+const MODES: Mode[] = ['sprint', 'olympic', '70.3', 'ironman', 'cycling'];
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function build(mode: Mode, race: string, hours?: number): SimulatorState {
+  resetState();
+  const ob = {
+    ...defaultOnboardingState, name: 'QA', currentStep: 'initializing', experienceLevel: 'intermediate',
+    customRaceDate: race, ...(hours != null ? { triTimeAvailableHoursPerWeek: hours } : {}),
+  };
+  if (mode === 'cycling') {
+    initializeCyclingSimulator({ ...ob, trainingMode: 'cycling', cyclingDistance: '160km' } as OnboardingState);
+  } else {
+    initializeTriathlonSimulator({ ...ob, trainingMode: 'triathlon', triDistance: mode } as OnboardingState);
+  }
+  return getState();
+}
+
+/** A quality session: a ride above endurance, a CSS or speed swim, a threshold or VO2 run. */
+function isQuality(w: Workout): boolean {
+  if (isLongRun(w) || w.t === 'brick') return false;
+  if (w.discipline === 'bike') return w.t !== 'bike_endurance';
+  if (w.discipline === 'swim') return w.t === 'swim_threshold' || w.t === 'swim_speed';
+  return w.t === 'threshold' || w.t === 'vo2';
+}
+const minutes = (wk: Week | undefined) => (wk?.triWorkouts ?? []).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+const count = (wk: Week | undefined, disc: string) => (wk?.triWorkouts ?? []).filter(w => (w.discipline ?? 'run') === disc).length;
+
+function raceWeekViolations(s: SimulatorState, race: string): string[] {
+  const layout = raceWeekLayout(s.planStartDate!, race)!;
+  const tw = planTrainingWeeks(s);
+  const wk = s.wks[tw - 1];
+  const before = s.wks[tw - 2];
+  const out: string[] = [];
+  const quality = (wk.triWorkouts ?? []).filter(isQuality);
+  if (quality.length > 1) out.push(`${quality.length} quality sessions: ${quality.map(w => w.n).join(', ')}`);
+  for (const w of wk.triWorkouts ?? []) {
+    const daysOut = layout.raceDayIndex - ((tw - 1) * 7 + (w.dayOfWeek ?? 0));
+    const at_ = `${DOW[w.dayOfWeek ?? 0]} ${w.n} (${daysOut} days out)`;
+    if (daysOut < 1) out.push(`on or after race day: ${at_}`);
+    if (isQuality(w) && (daysOut < PRIMER_MIN_DAYS_OUT || daysOut > PRIMER_MAX_DAYS_OUT)) out.push(`primer outside 3 to 5 days: ${at_}`);
+    if (/fasted/i.test(w.d ?? '')) out.push(`fasted ride: ${at_}`);
+    if (isLongRun(w) || w.t === 'brick') out.push(`long session: ${at_}`);
+  }
+  if (before && minutes(wk) > minutes(before)) out.push(`heavier than the week before: ${minutes(wk)} > ${minutes(before)}`);
+  // Frequency (a Monday to Wednesday or a Sunday race; a Thursday to Saturday
+  // race week is still cut at race day, ISSUE-364): no fewer swims or rides
+  // than the week before, and at most one run fewer (the race takes the long run).
+  if (before && (layout.closingWeek || layout.raceDayOfWeek === 6)) {
+    for (const disc of ['swim', 'bike']) {
+      if (count(wk, disc) < count(before, disc)) out.push(`fewer ${disc} sessions than the week before: ${count(wk, disc)} < ${count(before, disc)}`);
+    }
+    const runsBefore = (before.triWorkouts ?? []).filter(w => (w.discipline ?? 'run') === 'run').length;
+    if (count(wk, 'run') < runsBefore - 1) out.push(`runs ${count(wk, 'run')} < ${runsBefore} - 1`);
+  }
+  return out;
+}
+
+describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
+  it('race week has short sessions through the Sunday primer, 3 days out', () => {
+    at('2026-10-08T12:00:00');
+    const s = build('70.3', '2026-11-18');
+    expect(s.tw).toBe(7);
+    const raceWeek = s.wks[5].triWorkouts ?? [];
+    expect(raceWeek.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
+      'Tue swim_endurance',
+      'Wed swim_technique',
+      'Wed easy',
+      'Thu bike_endurance',
+      'Thu easy',
+      'Sat bike_endurance',
+      'Sun bike_sweet_spot',
+    ]);
+    expect(raceWeekViolations(s, '2026-11-18')).toEqual([]);
+    // The last session before the race is the primer, not a fasted ride.
+    const last = raceWeek[raceWeek.length - 1];
+    expect(isQuality(last)).toBe(true);
+    expect(last.estimatedDurationMin).toBeLessThanOrEqual(30);
+    // The closing week holds only the race.
+    expect(s.wks[6].raceClosing).toBe(true);
+    expect(s.wks[6].triWorkouts ?? []).toEqual([]);
+  });
+});
+
+describe('every distance, cycling, race weekday and hours budget', () => {
+  // Races Monday 16 to Sunday 22 November 2026; onboarding Sunday 4 and Wednesday 14 October.
+  const RACES = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22'];
+  for (const now of ['2026-10-04T12:00:00', '2026-10-14T12:00:00']) {
+    for (const mode of MODES) {
+      it(`${mode}, onboarding ${now.slice(0, 10)}`, () => {
+        at(now);
+        const found: string[] = [];
+        for (const race of RACES) {
+          for (const hours of [6, 8, 10, 12, 15]) {
+            const s = build(mode, race, hours);
+            for (const v of raceWeekViolations(s, race)) found.push(`${race} ${hours}h: ${v}`);
+            // A Monday to Wednesday race week with a ride besides its long ride
+            // has its primer 3 to 5 days out (raceWeekViolations checks the days).
+            // With one ride (a low budget) the week has no primer.
+            const layout = raceWeekLayout(s.planStartDate!, race)!;
+            const raceWeek = s.wks[planTrainingWeeks(s) - 1];
+            if (layout.closingWeek && count(raceWeek, 'bike') >= 2) {
+              const primer = (raceWeek.triWorkouts ?? []).filter(isQuality);
+              if (primer.length !== 1) found.push(`${race} ${hours}h: no primer`);
+            }
+          }
+        }
+        expect(found.slice(0, 5)).toEqual([]);
+      });
+    }
+  }
+});
