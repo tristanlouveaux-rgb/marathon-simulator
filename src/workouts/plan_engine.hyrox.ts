@@ -35,7 +35,7 @@ import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyr
 import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
-import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
+import { ctlGapMultiplier, isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 
 /**
@@ -208,9 +208,11 @@ function enforceMTLCap(sessions: Workout[], cap: number): Workout[] {
 
 // ─── Per-week generation ──────────────────────────────────────────────────────
 
-/** Race week of a plan with a race-day layout (hyroxWeekForRace). */
+/** Race week: the plan's final training week (isRaceWeek). Its content rules
+ *  apply with or without a race date; day placement needs the race-day
+ *  layout (hyroxWeekForRace). */
 interface HyroxRaceWeek {
-  layout: RaceWeekLayout;
+  layout: RaceWeekLayout | null;
   /** First schedulable weekday of the week (workout-status firstTrackedDow). */
   firstDow: number;
 }
@@ -224,7 +226,7 @@ interface HyroxRaceWeek {
  * last two days before the race hold easy runs only, as in running, where
  * nothing but easy running comes after the primer.
  */
-function raceWeekAllowedDays(rw: HyroxRaceWeek, weekIndex: number, w: Workout): number[] {
+function raceWeekAllowedDays(rw: HyroxRaceWeek & { layout: RaceWeekLayout }, weekIndex: number, w: Workout): number[] {
   const weekStart = (weekIndex - 1) * 7;
   const firstDow = Math.max(0, Math.min(7, rw.firstDow));
   const out: number[] = [];
@@ -482,9 +484,10 @@ function generateWeekSessions(
   // showed both done, and a second synced run found no free slot.
   // Race week: each session only on the days the race-day rules allow; one
   // that finds no free allowed day is left out (raceWeekAllowedDays).
+  const placed = raceWeek?.layout ? { ...raceWeek, layout: raceWeek.layout } : null;
   const scheduled = scheduleHyroxWeek(
     capped, band,
-    raceWeek ? (w) => raceWeekAllowedDays(raceWeek, weekIndex, w) : undefined,
+    placed ? (w) => raceWeekAllowedDays(placed, weekIndex, w) : undefined,
   );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;
@@ -630,7 +633,7 @@ function hyroxWeekForRace(
   phase: 'base' | 'build' | 'peak' | 'taper', layout: RaceWeekLayout | null,
 ): Workout[] {
   const firstDow = firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
-  const raceWeek = layout && weekIndex === layout.trainingWeeks ? { layout, firstDow } : undefined;
+  const raceWeek = isRaceWeek(weekIndex, trainingWeeks, state.continuousMode) ? { layout, firstDow } : undefined;
   const generated = dropSessionsOnOrAfterRaceDay(
     generateWeekSessions(state, weekIndex, trainingWeeks, phase, raceWeek), weekIndex, state.planStartDate, state.hyroxConfig?.raceDate,
   );

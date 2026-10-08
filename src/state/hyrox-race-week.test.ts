@@ -147,6 +147,21 @@ describe('scenario hyrox: Saturday race in week 12', () => {
   });
 });
 
+describe('a plan without a race date', () => {
+  it('its final week still takes the race-week content (no brick, light circuits, one hard session)', () => {
+    at('2026-10-08T12:00:00');
+    const s = build({ customRaceDate: null } as Partial<OnboardingState>);
+    expect(s.hyroxConfig?.raceDate ?? null).toBeNull();
+    const last = s.wks[s.tw - 1].triWorkouts ?? [];
+    expect(last.length).toBeGreaterThan(0);
+    expect(last.some(w => w.t === 'hyrox_brick' || w.t === 'hyrox_mini_brick')).toBe(false);
+    expect(last.filter(isHighIntensity)).toHaveLength(1);
+    for (const w of last) {
+      for (const c of w.hyroxComponents ?? []) expect(RACE_WEEK_EXCLUDED_STATIONS as string[]).not.toContain(c.type);
+    }
+  });
+});
+
 describe('every race weekday, band, format, hours budget and station access', () => {
   // Races Monday 16 to Sunday 22 November 2026; onboarding Sunday 4 October
   // (plan starts 28 September) and Wednesday 4 November (race week 1 or 3).
