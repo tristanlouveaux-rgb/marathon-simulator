@@ -45,7 +45,7 @@ import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
 import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { planTrainingWeeks, raceForecastHorizonISO } from '@/workouts/race-week-layout';
 import type { OnboardingState } from '@/types/onboarding';
-import type { SimulatorState, Workout } from '@/types';
+import type { SimulatorState } from '@/types';
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); localStorageMock.clear(); });
@@ -138,18 +138,17 @@ const ONBOARDING: Array<[string, string, string]> = [
 const EARLY: Array<[string, number]> = [['Monday', 1], ['Tuesday', 2], ['Wednesday', 3]];
 
 /**
- * Removes and returns the race week's Sunday sessions. A Monday to Wednesday
- * race's race week can keep a Sunday session (R-1) that the Sunday-before race
- * loses to race day: HYROX keeps its race-week easy run there. That is plan
- * content (planning), not forecast horizon, and the HYROX forecast's
- * next-4-week session count reads it (at most 2 s faster). Removing it leaves
- * exactly the Sunday-before plan's training weeks.
+ * Race week's sessions, day-free (type, name, minutes), sorted. The race-day
+ * rules place race week relative to race day (HYROX: plan_engine.hyrox
+ * raceWeekDays), so a Monday to Wednesday race seats the same race-week
+ * sessions as the Sunday before on different days, its Sunday (R-1 to R-3)
+ * included. Before the HYROX race-week rules (2026-10-08) the template kept a
+ * Sunday easy run (R-1) the Sunday-before race lost to race day, and the test
+ * removed it.
  */
-function takeRaceWeekSunday(s: SimulatorState): Workout[] {
+function raceWeekSessions(s: SimulatorState): string[] {
   const wk = s.wks[planTrainingWeeks(s) - 1];
-  const all = wk.triWorkouts ?? [];
-  wk.triWorkouts = all.filter(w => w.dayOfWeek !== 6);
-  return all.filter(w => w.dayOfWeek === 6);
+  return (wk.triWorkouts ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
 }
 
 describe('a Monday to Wednesday race forecasts like the Sunday before it', () => {
@@ -186,15 +185,9 @@ describe('a Monday to Wednesday race forecasts like the Sunday before it', () =>
           expect(sun.out[0], `${mode} ${sunday}`).not.toBeNull();
           for (const [day, offset] of EARLY) {
             const race = addDays(sunday, offset);
-            let sundayRaceWeek: Workout[] = [];
-            const early = forecasts(mode, race, now, sunWeeks, s => { sundayRaceWeek = takeRaceWeekSunday(s); });
-            // Triathlon and cycling race weeks hold nothing on the Sunday; HYROX at most its easy run.
-            if (mode === 'hyrox') {
-              expect(sundayRaceWeek.length, `${mode} ${day} ${race}`).toBeLessThanOrEqual(1);
-              for (const w of sundayRaceWeek) expect(w.n, `${mode} ${day} ${race}`).toMatch(/easy/i);
-            } else {
-              expect(sundayRaceWeek, `${mode} ${day} ${race}`).toEqual([]);
-            }
+            const early = forecasts(mode, race, now, sunWeeks);
+            // The same race-week sessions as the Sunday before, on its own days.
+            expect(raceWeekSessions(early.s), `${mode} ${day} ${race}`).toEqual(raceWeekSessions(sun.s));
             // Same training weeks, plus the closing week.
             expect(early.s.tw, `${mode} ${day} ${race}`).toBe(sunWeeks + 1);
             expect(early.s.wks[early.s.tw - 1].raceClosing, `${mode} ${day} ${race}`).toBe(true);

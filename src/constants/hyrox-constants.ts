@@ -346,6 +346,19 @@ export const ECCENTRIC_HEAVY_STATIONS: HyroxStation[] = [
   'wall_balls',
 ];
 
+/** Stations HYROX race week leaves out (planning side, SCIENCE_LOG §CE / §CW):
+ *  the eccentric-heavy stations above and the two sled stations, the heaviest
+ *  external loads (STATION_EXTERNAL_LOAD_KG). They are exactly the stations
+ *  whose per-minute MTL factor (modality × impact, STATION_MTL_FACTORS) is
+ *  above the farmer carry's 1.0. A race-week station circuit keeps the ergs
+ *  and the farmer carry: technique touch without the eccentric and sled load
+ *  the taper is meant to clear. */
+export const RACE_WEEK_EXCLUDED_STATIONS: HyroxStation[] = [
+  ...ECCENTRIC_HEAVY_STATIONS,
+  'sled_push',
+  'sled_pull',
+];
+
 // ─── Volume progression ──────────────────────────────────────────────────────
 
 /**

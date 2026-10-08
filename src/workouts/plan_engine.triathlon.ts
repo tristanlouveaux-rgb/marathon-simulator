@@ -15,7 +15,7 @@
  * marathon training).
  */
 
-import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow } from './race-day-rules';
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow, spaceStoredPlanQualityRuns } from './race-day-rules';
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
@@ -34,7 +34,7 @@ import {
   selectRunQualityKind,
   TRI_BRICK_POLICY,
 } from './tri-intensity-profile';
-import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES } from './scheduler.triathlon';
+import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES, TRI_BIKE_QUALITY_DOW } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
 import { gp } from '@/calculations/paces';
@@ -78,7 +78,26 @@ import { isLongRun } from './long-run';
 // longRide: true. Also in v21 (unreleased when added): the sessions the race
 // window removes are kept on the week as Week.raceWindowCut (forecast dose
 // only), so the forecast does not read the taper cut as lost training.
-export const TRI_GENERATOR_VERSION = 21;
+// v22: the scheduler never puts a second run on the long-run day or the brick
+// day (scheduler.triathlon.ts). When weekday capacity ran out its fallbacks
+// stacked an easy run or a commute beside the Sunday long run (a 70.3 build
+// week: an 80-min long run and a 50-min easy run on Sunday). Also in v22
+// (unreleased when added): race week placed relative to race day (SCIENCE_LOG
+// §CE, §CW). It keeps the week before's session count per discipline
+// (triRaceWeekCounts), holds one quality session, the primer (the first ride,
+// placed 3 to 5 days out by placeStoredPlanRaceWeekPrimer), rides the steady
+// endurance variant (never "fasted (optional)"), and a Monday to Wednesday
+// race's Sunday is a race-week day. Before, a Wednesday 70.3 race week held a
+// swim and a fasted optional ride, with the 4 days before the race empty.
+// Still v22 (unreleased): the primer is a 30-min ride on its duration-scaled
+// variant (a few minutes of quality, not a 2x20 min build set), the week's
+// only ride is the primer, and the primer takes running's primer day
+// (raceWeekPrimerDow). Race week never holds a discipline twice on one day,
+// and in the last 13 days no quality run sits next to the brick or the long
+// run (spaceStoredPlanQualityRuns). A run that fits no day within its cap
+// takes the day without a run it overshoots least (scheduler step 3b), so
+// closing the long-run and brick days no longer moves the double to a weekday.
+export const TRI_GENERATOR_VERSION = 22;
 
 /**
  * Representative average session length (hours) per discipline. The generator
@@ -101,6 +120,12 @@ export const TRI_AVG_SESSION_HOURS = { swim: 0.75, bike: 1.3, run: 0.9 } as cons
  */
 export const TRI_MAX_SESSIONS_PER_DISCIPLINE = 3;
 export const TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY = 5;
+
+/** The shortest solo swim, ride or run the generator prescribes, in minutes
+ *  (every session's minutes are floored here). Named 2026-10-08 for the
+ *  race-week primer, which takes this length (the shortest session, as
+ *  running's primer is a fixed minimal session, SCIENCE_LOG §CE). */
+const TRI_SESSION_FLOOR_MIN = 30;
 
 /**
  * Ironman long-run build (SCIENCE_LOG §CD). The IM marathon is run on
@@ -295,25 +320,96 @@ function triWeekForRace(
   layout: RaceWeekLayout | null,
 ): { workouts: Workout[]; raceWindowCut: TriRaceWindowCut } {
   const tri = state.triConfig!;
-  const generated = dropSessionsOnOrAfterRaceDay(
-    generateWeekForTriathlon(state, weekIndex, trainingWeeks, phase), weekIndex, state.planStartDate, tri.raceDate,
-  );
+  const firstDow = firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
+  const placement = layout && weekIndex === layout.trainingWeeks
+    ? triRaceWeekPlacement(layout, weekIndex, firstDow)
+    : undefined;
+  const week = generateWeekForTriathlon(state, weekIndex, trainingWeeks, phase, placement);
+  // Race week: the primer on running's primer day, 3 to 5 days out (running
+  // rule 2), placed before rule 1 drops what falls on or after race day.
+  const primed = layout
+    ? placeStoredPlanRaceWeekPrimer(week, {
+      weekIndex,
+      layout,
+      homeDow: TRI_BIKE_QUALITY_DOW,
+      isPrimer: isTriRaceWeekQuality,
+      discipline: w => w.discipline ?? 'run',
+      firstScheduleDow: firstDow,
+      dayNames: TRI_DAY_NAMES,
+    })
+    : week;
+  const generated = dropSessionsOnOrAfterRaceDay(primed, weekIndex, state.planStartDate, tri.raceDate);
   const raceWindowCut: TriRaceWindowCut = [];
   if (!layout) return { workouts: generated, raceWindowCut };
-  const workouts = clearStoredPlanRaceWindow(generated, {
+  const cleared = clearStoredPlanRaceWindow(generated, {
     weekIndex,
     layout,
     isLongSession: isTriLongSession,
-    firstScheduleDow: firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt),
+    firstScheduleDow: firstDow,
     dayNames: TRI_DAY_NAMES,
     // Tracking keeps the build prescription: the forecast's planned dose reads
     // these back (Week.raceWindowCut, tri-volume-by-discipline).
     onDrop: w => raceWindowCut.push({ discipline: w.discipline, estimatedDurationMin: w.estimatedDurationMin }),
   });
+  // Rule 4's spacing: no quality run next to the long run, the brick or
+  // another quality run in the last 13 days (running's rule; the brick and the
+  // long run keep their back-to-back days).
+  const workouts = spaceStoredPlanQualityRuns(cleared, {
+    weekIndex,
+    layout,
+    isQualityRun: isTriQualityRun,
+    isHardRun: w => isTriQualityRun(w) || isLongRun(w) || w.t === 'brick',
+    isRun: w => (w.discipline ?? 'run') === 'run',
+    firstScheduleDow: firstDow,
+    dayNames: TRI_DAY_NAMES,
+    toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
+  });
   return { workouts, raceWindowCut };
 }
 
+/** A threshold or VO2 run (the triathlon run quality kinds). */
+function isTriQualityRun(w: Workout): boolean {
+  return (w.discipline ?? 'run') === 'run' && !isLongRun(w) && (w.t === 'threshold' || w.t === 'vo2');
+}
+
+/** A quality run as an easy run of the same duration, at the week's easy pace. */
+function triEasedRun(state: SimulatorState, weekIndex: number, totalWeeks: number, phase: TrainingPhase, w: Workout): Workout {
+  const skill = (state.triConfig?.skillRating?.run ?? 3) as TriSkillSlider;
+  const pace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm ?? easyPaceSecPerKmFromSkill(skill);
+  const label = `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')}/km`;
+  return { ...w, ...triEasyRunFields(w.estimatedDurationMin ?? TRI_SESSION_FLOOR_MIN, label, Math.abs(weekIndex - 1)), r: 4 };
+}
+
 type TriRaceWindowCut = NonNullable<Week['raceWindowCut']>;
+
+/**
+ * Race-week placement relative to race day (planning side; the running
+ * race-day rules, SCIENCE_LOG §CE and §CW).
+ *   - `primerDow`: the primer's day (raceWeekPrimerDow from the bike quality
+ *     day, TRI_BIKE_QUALITY_DOW), on or after the first schedulable day. null:
+ *     the week has no primer (running drops it, rule 2). Placement is
+ *     placeStoredPlanRaceWeekPrimer's, after scheduling.
+ * The scheduler keeps race week's Sunday, the long-run slot the race takes
+ * (§CT), free whatever the race weekday; only the primer moves there (a
+ * Wednesday race's primer day). A Monday to Wednesday race week then holds the
+ * same sessions as the Sunday race before it, as in running.
+ */
+export interface TriRaceWeekPlacement {
+  primerDow: number | null;
+}
+
+function triRaceWeekPlacement(layout: RaceWeekLayout, weekIndex: number, firstDow: number): TriRaceWeekPlacement {
+  return { primerDow: raceWeekPrimerDow(layout, weekIndex, TRI_BIKE_QUALITY_DOW, firstDow) };
+}
+
+/** A race-week quality session (the primer): a bike session above endurance,
+ *  a CSS or speed swim, a threshold or VO2 run. Race week has at most one. */
+function isTriRaceWeekQuality(w: Workout): boolean {
+  if (isLongRun(w) || w.t === 'brick') return false;
+  if (w.discipline === 'bike') return w.t !== 'bike_endurance';
+  if (w.discipline === 'swim') return w.t === 'swim_threshold' || w.t === 'swim_speed';
+  return w.t === 'threshold' || w.t === 'vo2';
+}
 
 /** The long sessions of a triathlon or cycling week: long run, brick (the long
  *  ride with its transition run) and the solo long ride. */
@@ -325,35 +421,25 @@ export function isTriLongSession(w: Pick<Workout, 't' | 'longRun' | 'longRide'>)
 // Per-week workout generation
 // ───────────────────────────────────────────────────────────────────────────
 
-function generateWeekForTriathlon(
+/**
+ * A triathlon week's time budget and session counts (planning side): the
+ * user's hours x the phase ramp (deload x 0.7), less gym and commute time,
+ * shared between solo sessions and the brick's transition run, then split by
+ * discipline; each discipline's session count is its hours over
+ * TRI_AVG_SESSION_HOURS, capped. Shared by the week generator and the race
+ * week's frequency rule (the week before race week, triRaceWeekCounts).
+ */
+function triWeekSizing(
   state: SimulatorState,
   weekIndex: number,
   totalWeeks: number,
-  phase: TrainingPhase
-): Workout[] {
-  // Note (2026-05-26): the running-engine's clinical phase replacement
-  // (acute → "Complete Rest", rehab → cross-train) is NOT applied here.
-  // For tri/HYROX, the discipline gates are the correct mechanism: a
-  // shoulder injury at acute pain doesn't blanket-stop all training, it
-  // drops swim while keeping bike + run. The Session 1 "B1" wiring that
-  // routed phase workouts through tri was a misread of the running
-  // engine. Phase replacement is run-only because running is single-
-  // discipline. If the user has every gate set to 'no', the gate
-  // downmix below correctly produces an empty week and the empty-state
-  // card surfaces "Plan paused this week". The clinical "acute = 72h
-  // complete rest" prescription belongs in the user's hands via the
-  // discipline gates, not in the plan engine globally.
-
+  phase: TrainingPhase,
+) {
   const tri = state.triConfig!;
   const timeAvailable = tri.timeAvailableHoursPerWeek ?? 10;
   const split = tri.volumeSplit ?? { swim: 0.175, bike: 0.475, run: 0.35 };
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const gymSessions = state.gs ?? 0;
-
-  // Active disciplines. Defaults to full triathlon when undefined so existing
-  // tri behaviour is preserved. Single-discipline modes (V1 cycling) set
-  // disciplines=['bike']; swim/run loops below skip when the discipline is
-  // absent.
   const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
   const hasSwim = disciplines.includes('swim');
   const hasBike = disciplines.includes('bike');
@@ -417,7 +503,7 @@ function generateWeekForTriathlon(
   // Per-discipline hours
   const swimHours = weekHours * split.swim;
   const bikeHours = weekHours * split.bike;
-  let runHours    = weekHours * split.run;
+  const runHours    = weekHours * split.run;
 
   // Session counts by phase. Disciplines that aren't active produce zero
   // sessions so subsequent loops short-circuit to empty arrays. In single-
@@ -426,19 +512,132 @@ function generateWeekForTriathlon(
   const isCyclingOnly = disciplines.length === 1 && hasBike;
   const swimSessions = hasSwim ? countSessions(swimHours, TRI_AVG_SESSION_HOURS.swim, TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
   const bikeSessions = hasBike ? countSessions(bikeHours, TRI_AVG_SESSION_HOURS.bike, isCyclingOnly ? TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY : TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
-  let   runSessions  = hasRun  ? countSessions(runHours,  TRI_AVG_SESSION_HOURS.run,  TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
+  const runSessions  = hasRun  ? countSessions(runHours,  TRI_AVG_SESSION_HOURS.run,  TRI_MAX_SESSIONS_PER_DISCIPLINE) : 0;
+
+  return {
+    easyPaceSecPerKm, commuteDays, commuteSlotMin, brickPolicy, brickActive,
+    weekHours, swimHours, bikeHours, runHours, isCyclingOnly,
+    swimSessions, bikeSessions, runSessions,
+  };
+}
+
+/** Race-week rides take variant 0 of describeBikeSession, an index into its
+ *  existing descriptions, not a model constant. For an endurance ride it is the
+ *  steady Z2 ride (1 is rolling, 2 is "fasted endurance (optional)"). For the
+ *  tempo and sweet-spot primer it is the variant whose reps are sized from the
+ *  session's minutes; the other two are fixed build sets (3x10 min tempo, 4x8
+ *  or 2x20 min sweet spot) whatever the minutes. */
+const RACE_WEEK_BIKE_VARIANT = 0;
+
+/**
+ * Race week keeps the session frequency of the week before (planning side).
+ * Bosquet et al. (2007) found the best taper outcomes with volume cut by 41 to
+ * 60% while intensity and frequency were maintained, and no benefit from
+ * cutting frequency (SCIENCE_LOG §CE update, §CV.4: running keeps its runs in
+ * the taper and shortens them). Per discipline, the larger of race week's own
+ * count and the week before's. Minutes stay at race week's budget (the 0.30
+ * race-week multiplier), shared over the sessions with the existing 30-min
+ * session floor; the race then takes the long-run slot. Before, the counts came
+ * from race week's own hours, so a 70.3 race week held one swim and one ride
+ * (its only run was the long run, which the race takes).
+ */
+function triRaceWeekCounts(
+  state: SimulatorState,
+  weekIndex: number,
+  totalWeeks: number,
+  own: { swimSessions: number; bikeSessions: number; runSessions: number },
+): { swimSessions: number; bikeSessions: number; runSessions: number } {
+  if (weekIndex <= 1) return own;
+  const prevPhase = computeTriPlanPhases(state.triConfig!.distance, totalWeeks)[weekIndex - 2]?.ph;
+  if (!prevPhase) return own;
+  const prev = triWeekSizing(state, weekIndex - 1, totalWeeks, prevPhase);
+  return {
+    swimSessions: Math.max(own.swimSessions, prev.swimSessions),
+    bikeSessions: Math.max(own.bikeSessions, prev.bikeSessions),
+    runSessions: Math.max(own.runSessions, prev.runSessions),
+  };
+}
+
+function generateWeekForTriathlon(
+  state: SimulatorState,
+  weekIndex: number,
+  totalWeeks: number,
+  phase: TrainingPhase,
+  /** Race week of a plan with a race-day layout (triWeekForRace). */
+  placement?: TriRaceWeekPlacement,
+): Workout[] {
+  // Note (2026-05-26): the running-engine's clinical phase replacement
+  // (acute → "Complete Rest", rehab → cross-train) is NOT applied here.
+  // For tri/HYROX, the discipline gates are the correct mechanism: a
+  // shoulder injury at acute pain doesn't blanket-stop all training, it
+  // drops swim while keeping bike + run. The Session 1 "B1" wiring that
+  // routed phase workouts through tri was a misread of the running
+  // engine. Phase replacement is run-only because running is single-
+  // discipline. If the user has every gate set to 'no', the gate
+  // downmix below correctly produces an empty week and the empty-state
+  // card surfaces "Plan paused this week". The clinical "acute = 72h
+  // complete rest" prescription belongs in the user's hands via the
+  // discipline gates, not in the plan engine globally.
+
+  const tri = state.triConfig!;
+  const timeAvailable = tri.timeAvailableHoursPerWeek ?? 10;
+  const split = tri.volumeSplit ?? { swim: 0.175, bike: 0.475, run: 0.35 };
+  const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
+  const gymSessions = state.gs ?? 0;
+
+  // Active disciplines. Defaults to full triathlon when undefined so existing
+  // tri behaviour is preserved. Single-discipline modes (V1 cycling) set
+  // disciplines=['bike']; swim/run loops below skip when the discipline is
+  // absent.
+  const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
+  const hasSwim = disciplines.includes('swim');
+  const hasBike = disciplines.includes('bike');
+  const hasRun = disciplines.includes('run');
+
+  const sizing = triWeekSizing(state, weekIndex, totalWeeks, phase);
+  const {
+    easyPaceSecPerKm, commuteDays, commuteSlotMin, brickPolicy, brickActive,
+    weekHours, swimHours, bikeHours, runHours, isCyclingOnly,
+  } = sizing;
+  // Race week keeps the session frequency of the week before (triRaceWeekCounts).
+  const raceWeek = isRaceWeek(weekIndex, totalWeeks, state.continuousMode);
+  const counts = raceWeek ? triRaceWeekCounts(state, weekIndex, totalWeeks, sizing) : sizing;
+  const { swimSessions, bikeSessions } = counts;
+  const runSessions = counts.runSessions;
 
   // Generate swim sessions. Intensity distribution is race-distance-aware:
   // quality slots take the distance's flavour (short = speed/threshold, long =
   // threshold), aerobic slots stay endurance/technique. See tri-intensity-profile.
   const swim: Workout[] = [];
-  const swimQuality = triQualitySlotIndices(tri.distance, phase, 'swim', swimSessions, false);
+  // Race week holds one quality session, the primer (SCIENCE_LOG §CE: a few
+  // minutes of race-pace work 3 to 5 days out; running rule 4: no quality
+  // session other than the primer in the last 6 days). It is the first ride,
+  // at every distance (the taper table, TRI_QUALITY_SLOTS, gives Ironman none,
+  // which left an Ironman race week without a primer), and also when that ride
+  // is the week's only one (low hours). Its kind is the distance's taper
+  // flavour (sub-threshold, gateLowIntensity) whatever the week's phase label.
+  // Like running's fixed primer it is the shortest session (the session floor)
+  // on the variant whose structure scales with its minutes, so it holds a few
+  // minutes of quality (sweet spot 1x8 min, tempo 1x10 min). Before, it took
+  // the week's rotation variant at its ride length: 2x20 min sweet spot, 4x8
+  // min or 3x10 min under a 30-min label, the build session §CE removed from
+  // running. Every swim is aerobic: no CSS set is primer-sized (each holds at
+  // least 600 m at CSS). With no primer day there is no primer, as running
+  // drops it (rule 2).
+  const noPrimerDay = raceWeek && !!placement && placement.primerDow == null;
+  const raceWeekBikePrimer = raceWeek && !noPrimerDay && bikeSessions >= 1;
+  const bikeQuality = raceWeek
+    ? new Set<number>(raceWeekBikePrimer ? [0] : [])
+    : triQualitySlotIndices(tri.distance, phase, 'bike', bikeSessions, true);
+  const swimQuality = raceWeek
+    ? new Set<number>()
+    : triQualitySlotIndices(tri.distance, phase, 'swim', swimSessions, false);
   for (let i = 0; i < swimSessions; i++) {
     const kind: SwimSessionKind = swimQuality.has(i)
       ? selectSwimQualityKind(tri.distance, phase, i, weekIndex)
       // Aerobic slot: endurance, with a technique touch on the final slot (skill maintenance every phase).
       : (i === swimSessions - 1) ? 'technique' : 'endurance';
-    const minutes = Math.max(30, Math.round((swimHours * 60) / swimSessions));
+    const minutes = Math.max(TRI_SESSION_FLOOR_MIN, Math.round((swimHours * 60) / swimSessions));
     swim.push(generateSwimSession({
       phase,
       skill: rating.swim as TriSkillSlider,
@@ -459,21 +658,23 @@ function generateWeekForTriathlon(
   // the long ride drops to its maintenance floor; the minutes it frees fund the
   // longer long run below. null for every other distance/phase (share model).
   const triEmphasis = triWeekEmphasis(tri.distance, phase, weekIndex);
-  const raceWeek = isRaceWeek(weekIndex, totalWeeks, state.continuousMode);
   let bikeMinutesFreedForRun = 0;
   const bike: Workout[] = [];
-  const bikeQuality = triQualitySlotIndices(tri.distance, phase, 'bike', bikeSessions, true);
   for (let i = 0; i < bikeSessions; i++) {
     const excluded = new Set<string>(state.onboarding?.cyclingExcludedWorkouts ?? []);
+    // Race week's primer takes the taper flavour whatever the phase label.
     const kind: BikeSessionKind = bikeQuality.has(i)
-      ? substituteExcluded(selectBikeQualityKind(tri.distance, phase, i, weekIndex), excluded)
+      ? substituteExcluded(selectBikeQualityKind(tri.distance, raceWeek ? 'taper' : phase, i, weekIndex), excluded)
       : 'endurance';
     // Long ride gets bigger slice
     const isLongRide = i === bikeSessions - 1;
     const share = isLongRide ? 0.45 : (0.55 / Math.max(1, bikeSessions - 1));
-    let minutes = Math.max(30, Math.round(bikeHours * 60 * share));
-    if (isLongRide && triEmphasis === 'run') {
-      const reduced = Math.max(30, Math.round(minutes * TRI_KEY_SESSION_MAINTENANCE));
+    let minutes = Math.max(TRI_SESSION_FLOOR_MIN, Math.round(bikeHours * 60 * share));
+    // The race-week primer is the shortest session (see bikeQuality above).
+    if (raceWeek && bikeQuality.has(i) && kind !== 'endurance') {
+      minutes = TRI_SESSION_FLOOR_MIN;
+    } else if (isLongRide && triEmphasis === 'run') {
+      const reduced = Math.max(TRI_SESSION_FLOOR_MIN, Math.round(minutes * TRI_KEY_SESSION_MAINTENANCE));
       bikeMinutesFreedForRun += minutes - reduced;
       minutes = reduced;
     }
@@ -487,6 +688,10 @@ function generateWeekForTriathlon(
       ftp: tri.bike?.ftp,
       hasPowerMeter: tri.bike?.hasPowerMeter,
       slotIndex: i,
+      // Race week: the steady endurance ride (the rotation's "fasted endurance
+      // (optional)" ride could otherwise be the last session before the race,
+      // scenario tri-wednesday) and the primer whose reps follow its minutes.
+      ...(raceWeek ? { variantIndex: RACE_WEEK_BIKE_VARIANT } : {}),
     });
     // The long ride is a long session (race-window rule). In race week the race
     // is the week's long effort, so its last ride is not marked.
@@ -519,10 +724,10 @@ function generateWeekForTriathlon(
     const otherCount = Math.max(0, runSessions - 1);
     const runBudget = runHours * 60 + bikeMinutesFreedForRun;
     // Never starve the other runs below their 30-min floor to feed the long run.
-    const maxLong = runBudget - otherCount * 30;
-    imLongRunMin = Math.max(30, Math.min(target, Math.round(maxLong)));
+    const maxLong = runBudget - otherCount * TRI_SESSION_FLOOR_MIN;
+    imLongRunMin = Math.max(TRI_SESSION_FLOOR_MIN, Math.min(target, Math.round(maxLong)));
     const remaining = Math.max(0, runBudget - imLongRunMin);
-    imOtherRunMin = otherCount > 0 ? Math.max(30, Math.round(remaining / otherCount)) : 0;
+    imOtherRunMin = otherCount > 0 ? Math.max(TRI_SESSION_FLOOR_MIN, Math.round(remaining / otherCount)) : 0;
   }
   for (let i = 0; i < runSessions; i++) {
     const isLong = i === runSessions - 1;
@@ -531,7 +736,7 @@ function generateWeekForTriathlon(
       minutes = isLong ? imLongRunMin : imOtherRunMin;
     } else {
       const share = isLong ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
-      minutes = Math.max(30, Math.round(runHours * 60 * share));
+      minutes = Math.max(TRI_SESSION_FLOOR_MIN, Math.round(runHours * 60 * share));
     }
     run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
   }
@@ -895,6 +1100,22 @@ const VO2_RUN_VARIANTS = [
   (vo2: string, easy: string) => `15min warm up @ ${easy}. 4×4min @ ${vo2}, 3min jog recovery. 10min cool down.`,
 ];
 
+/** A tri easy run of `minutes`: generateRunSessionForTri's easy branch, also
+ *  the eased form of a quality run (spaceStoredPlanQualityRuns). */
+function triEasyRunFields(minutes: number, easyLabel: string, rotKey: number) {
+  const r = roundMin(minutes);
+  const total = r * plannedTssPerMin('easy');
+  return {
+    n: 'Easy run',
+    d: EASY_RUN_VARIANTS[rotKey % EASY_RUN_VARIANTS.length](fmtMin(r), easyLabel),
+    t: 'easy',
+    rpe: 4,
+    aerobic: Math.round(total * 0.95),
+    anaerobic: Math.round(total * 0.05),
+    estimatedDurationMin: Math.max(20, r),
+  };
+}
+
 function generateRunSessionForTri(
   phase: TrainingPhase,
   slotIndex: number,
@@ -974,15 +1195,7 @@ function generateRunSessionForTri(
     anaerobic = Math.round(total * 0.23);
   } else {
     durMin = minutes * easyVolumeKeep;  // body-mass swap trims easy aerobic volume only
-    const r = roundMin(durMin);
-    const idx = rotKey % EASY_RUN_VARIANTS.length;
-    name = 'Easy run';
-    desc = EASY_RUN_VARIANTS[idx](fmtMin(r), easyLabel);
-    t = 'easy';
-    rpe = 4;
-    const total = r * plannedTssPerMin('easy');
-    aerobic = Math.round(total * 0.95);
-    anaerobic = Math.round(total * 0.05);
+    ({ n: name, d: desc, t, rpe, aerobic, anaerobic } = triEasyRunFields(durMin, easyLabel, rotKey));
   }
 
   return {

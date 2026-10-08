@@ -240,11 +240,13 @@ export function fitTaperEasyMakeups<T extends { workout: Workout }>(
 /**
  * Rule 1 for the stored-plan modes (triathlon, cycling on the tri engine, and
  * HYROX): drop every session dated on or after race day. Their generators lay
- * race week out their own way (triathlon keeps Sunday free, scheduler
- * .triathlon) on the running layout (storedPlanRaceLayout); this only removes
- * sessions that would fall on or after the race, e.g. a Saturday race's
- * Saturday session. Weeks entirely before race day are returned unchanged.
- * Pure; `dayOfWeek` 0 = Monday.
+ * race week out their own way on the running layout (storedPlanRaceLayout):
+ * triathlon keeps Sunday free when race day is in race week and places the
+ * primer first (placeStoredPlanRaceWeekPrimer); HYROX schedules race week on
+ * the days before race day (plan_engine.hyrox raceWeekDays). This only
+ * removes sessions that still fall on or after the race, e.g. a Saturday
+ * race's Saturday session. Weeks entirely before race day are returned
+ * unchanged. Pure; `dayOfWeek` 0 = Monday.
  */
 export function dropSessionsOnOrAfterRaceDay<T extends { dayOfWeek?: number }>(
   workouts: T[], weekIndex: number, planStartISO: string | undefined | null, raceISO: string | undefined | null,
@@ -360,4 +362,167 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
   }
   return out.sort((a, b) =>
     ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
+}
+
+export interface StoredPlanSpacingInput<T> {
+  /** Plan week being generated (1-based). */
+  weekIndex: number;
+  layout: RaceWeekLayout;
+  /** A quality run: the session this rule moves or eases. */
+  isQualityRun: (w: T) => boolean;
+  /** A hard run session it may not sit next to: the long run, the brick (its
+   *  transition run), another quality run. */
+  isHardRun: (w: T) => boolean;
+  /** Any run: a moved quality run takes a day without one. */
+  isRun: (w: T) => boolean;
+  /** First schedulable weekday of this week (workout-status firstTrackedDow). */
+  firstScheduleDow?: number;
+  /** Day names in the engine's own format, indexed 0 = Monday. */
+  dayNames: readonly string[];
+  /** The same session as an easy run of the same duration. */
+  toEasy: (w: T) => T;
+}
+
+/**
+ * Rule 4's spacing for the triathlon engine (cycling has no runs): in the last
+ * RACE_DAY_HARD_SPACING_DAYS days before race day, a quality run never sits on
+ * the day before or after another hard run session (the long run, the brick
+ * with its transition run, another quality run), checked within the week. It
+ * moves to the nearest earlier day that holds no run and keeps the rule, on or
+ * after the first schedulable day; with none it becomes an easy run of the
+ * same duration (running steps it down the pace ladder until it is not a hard
+ * session, and every hard type sits above the easy rung). Long sessions do not
+ * move here: the triathlon brick and long run sit back to back by design, and
+ * rule 3 (clearStoredPlanRaceWindow) has already placed them. Rule 4's other
+ * half, no quality but the primer in the last 6 days, needs nothing: race week
+ * holds one quality session (the primer ride) and the race window clears the
+ * week before's last days. Weeks outside the last 13 days come back unchanged
+ * (same array). Pure; `dayOfWeek` 0 = Monday.
+ */
+export function spaceStoredPlanQualityRuns<T extends { dayOfWeek?: number; dayName?: string }>(
+  workouts: T[], inp: StoredPlanSpacingInput<T>,
+): T[] {
+  const { weekIndex, layout } = inp;
+  if (!raceDayRulesApply(weekIndex, layout)) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
+  const firstDow = Math.max(0, Math.min(7, inp.firstScheduleDow ?? 0));
+  let out = workouts.map(w => ({ ...w }));
+  const on = (dow: number, except: T, pred: (w: T) => boolean) =>
+    out.some(w => w !== except && w.dayOfWeek === dow && pred(w));
+  const breaks = (q: T, dow: number) =>
+    daysOut(dow) <= RACE_DAY_HARD_SPACING_DAYS && (on(dow - 1, q, inp.isHardRun) || on(dow + 1, q, inp.isHardRun));
+  let changed = false;
+  for (const q of out.filter(w => w.dayOfWeek != null && inp.isQualityRun(w))) {
+    if (!breaks(q, q.dayOfWeek!)) continue;
+    changed = true;
+    let target: number | null = null;
+    for (let dow = q.dayOfWeek! - 1; dow >= firstDow; dow--) {
+      if (!on(dow, q, inp.isRun) && !breaks(q, dow)) { target = dow; break; }
+    }
+    if (target != null) {
+      q.dayOfWeek = target;
+      q.dayName = inp.dayNames[target];
+      continue;
+    }
+    const eased = { ...inp.toEasy(q), dayOfWeek: q.dayOfWeek, dayName: q.dayName };
+    out = out.map(w => (w === q ? eased : w));
+  }
+  if (!changed) return workouts;
+  const order = new Map(out.map((w, i) => [w, i]));
+  return out.sort((a, b) => ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
+}
+
+/**
+ * The race-week primer's day for the stored-plan modes (triathlon, cycling on
+ * the tri engine, HYROX): the day running rule 2 gives the running primer.
+ * Each scheduler seats its race week's quality session on a home day (running
+ * and triathlon: Tuesday, the first quality day; HYROX: Tuesday, the tempo
+ * run's first day). Rule 2 keeps it there when that is PRIMER_MIN_DAYS_OUT to
+ * PRIMER_MAX_DAYS_OUT days out and otherwise moves it to the latest race-week
+ * day in that window. Every day is on or after the first schedulable day.
+ * `homeDow` null: the primer is not on a home day, and it takes the latest
+ * window day. null result: no window day, and the primer is dropped as
+ * running drops it.
+ *
+ * With Tuesday as home day the running engine gives, per race weekday: Monday
+ * race Friday (3 days out), Tuesday race Saturday (3), Wednesday race Sunday
+ * (3), Thursday race Monday (3), Friday race Tuesday (3), Saturday race Tuesday
+ * (4), Sunday race Tuesday (5). A Monday to Wednesday race's primer is then
+ * the last session before race day, and only the 2 days of its closing week
+ * stay empty, as in running.
+ */
+export function raceWeekPrimerDow(
+  layout: RaceWeekLayout, weekIndex: number, homeDow: number | null, firstScheduleDow?: number,
+): number | null {
+  const weekStart = (weekIndex - 1) * 7;
+  const firstDow = Math.max(0, Math.min(7, firstScheduleDow ?? 0));
+  const inWindow = (dow: number) => {
+    const d = layout.raceDayIndex - (weekStart + dow);
+    return dow >= firstDow && dow <= 6 && d >= PRIMER_MIN_DAYS_OUT && d <= PRIMER_MAX_DAYS_OUT;
+  };
+  if (homeDow != null && inWindow(homeDow)) return homeDow;
+  for (let dow = 6; dow >= firstDow; dow--) if (inWindow(dow)) return dow;
+  return null;
+}
+
+export interface StoredPlanPrimerInput<T> {
+  /** Plan week being generated (1-based). */
+  weekIndex: number;
+  layout: RaceWeekLayout;
+  /** The scheduler's home day for the primer (raceWeekPrimerDow). */
+  homeDow: number;
+  /** The race week's primer (its one quality session). */
+  isPrimer: (w: T) => boolean;
+  /** Discipline key: the sessions of the primer's discipline on its new day
+   *  take its old day (a triathlon day can hold sessions of different
+   *  disciplines, so the others stay). */
+  discipline: (w: T) => string;
+  /** First schedulable weekday of this week (workout-status firstTrackedDow). */
+  firstScheduleDow?: number;
+  /** Day names in the engine's own format, indexed 0 = Monday. */
+  dayNames: readonly string[];
+}
+
+/**
+ * Rule 2 for the triathlon engine (cycling included), applied to race week
+ * before rule 1 drops what falls on or after race day: the primer (SCIENCE_LOG
+ * §CE) takes the day running's primer takes (raceWeekPrimerDow): it stays on
+ * its home day when that is PRIMER_MIN_DAYS_OUT to PRIMER_MAX_DAYS_OUT days
+ * out, and otherwise takes the latest race-week day in that window, on or
+ * after the first schedulable day. The sessions of its discipline on that day
+ * take its old day (running rule 2's swap; they leave the week when that day
+ * is on or after race day). With no such day it is dropped, as running drops
+ * it. A primer off its home day is the week's only ride, which the scheduler
+ * seats on Saturday, the long-ride day the race takes in race week (§CT).
+ * Kept there 4 days out, a Wednesday race's 3 days before race day were empty;
+ * for every other race weekday rule 2 already moved it to the latest window
+ * day. Other weeks, and a primer already on its day, come back unchanged (same
+ * array). Pure; `dayOfWeek` 0 = Monday.
+ */
+export function placeStoredPlanRaceWeekPrimer<T extends { dayOfWeek?: number; dayName?: string }>(
+  workouts: T[], inp: StoredPlanPrimerInput<T>,
+): T[] {
+  const { weekIndex, layout } = inp;
+  if (weekIndex !== layout.trainingWeeks) return workouts;
+  const primer = workouts.find(w => w.dayOfWeek != null && inp.isPrimer(w));
+  if (!primer) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
+  const from = primer.dayOfWeek!;
+  const target = raceWeekPrimerDow(layout, weekIndex, from === inp.homeDow ? from : null, inp.firstScheduleDow);
+  if (target === from) return workouts;
+  if (target == null) return workouts.filter(w => w !== primer);
+  const disc = inp.discipline(primer);
+  const out: T[] = [];
+  for (const w of workouts) {
+    if (w === primer) {
+      out.push({ ...w, dayOfWeek: target, dayName: inp.dayNames[target] });
+    } else if (w.dayOfWeek === target && inp.discipline(w) === disc) {
+      if (daysOut(from) > 0) out.push({ ...w, dayOfWeek: from, dayName: inp.dayNames[from] });
+    } else {
+      out.push(w);
+    }
+  }
+  return out.sort((a, b) => (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0));
 }

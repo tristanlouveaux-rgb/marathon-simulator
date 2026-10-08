@@ -19,7 +19,7 @@ import type { Workout } from '@/types/state';
 import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, STATION_EXTERNAL_LOAD_KG } from '@/constants/hyrox-benchmarks';
-import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
+import { ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS } from '@/constants/hyrox-constants';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,8 @@ export interface StationParams {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  /** Race week (technique circuits only): leave out RACE_WEEK_EXCLUDED_STATIONS. */
+  raceWeek?: boolean;
 }
 
 export interface BrickParams {
@@ -77,10 +79,12 @@ function pickStations(
   access: HyroxConfig['stationAccess'],
   phase: 'base' | 'build' | 'peak' | 'taper',
   slotIndex: number,
-  count: number
+  count: number,
+  exclude: readonly HyroxStation[] = [],
 ): HyroxStation[] {
   let pool = availableStations(access);
   if (pool.length === 0) pool = ['row_erg', 'farmer_carry', 'wall_balls']; // safe fallback
+  if (exclude.length > 0) pool = pool.filter(s => !exclude.includes(s));
 
   // In base phase, push eccentric-heavy stations to back so early sessions
   // build habit without the soreness risk.
@@ -97,6 +101,20 @@ function pickStations(
   }
   return result;
 }
+
+/**
+ * Stations a race-week technique circuit can use: the athlete's stations minus
+ * RACE_WEEK_EXCLUDED_STATIONS, in rotation order. A circuit needs at least
+ * MIN_CIRCUIT_STATIONS of them; with fewer (no erg access) the race week has
+ * no station circuit and the slot becomes an easy run (plan_engine.hyrox).
+ */
+export function raceWeekCircuitStations(access: HyroxConfig['stationAccess']): HyroxStation[] {
+  return availableStations(access).filter(s => !RACE_WEEK_EXCLUDED_STATIONS.includes(s));
+}
+
+/** A station circuit has at least two stations; the beginner base-phase filter
+ *  (generateStationTechnique) uses the same floor. */
+export const MIN_CIRCUIT_STATIONS = 2;
 
 /** Get seed time (sec) for a station and band, using user benchmark if available. */
 function stationSeedSec(
@@ -244,7 +262,7 @@ export function generateHyroxStation(params: StationParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'station_technique') {
-    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
+    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek });
   }
   return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
 }
@@ -257,17 +275,19 @@ function generateStationTechnique(p: {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  raceWeek?: boolean;
 }): Workout {
   // Up to 4 stations at 65% of seed time (technique pace), 60s between stations
   // and 3 min between rounds. Round count fills the station-work budget (slot
   // minus the run finish), clamped to the band's coach range — controlled pace
   // sustains more volume than race-pace density. Duration follows the work.
-  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 4);
+  // Race week: no eccentric-heavy or sled station (RACE_WEEK_EXCLUDED_STATIONS).
+  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 4, p.raceWeek ? RACE_WEEK_EXCLUDED_STATIONS : []);
   // Beginners: remove eccentric-heavy stations entirely. Quad DOMS from burpees/lunges
   // on Week 1 kills adherence. Introduce progressively from build phase.
   if ((p.band === 'total_beginner' || p.band === 'beginner') && p.phase === 'base') {
     const safe = stations.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
-    if (safe.length >= 2) stations = safe;
+    if (safe.length >= MIN_CIRCUIT_STATIONS) stations = safe;
   }
 
   const INTER_STATION_REST = 60;

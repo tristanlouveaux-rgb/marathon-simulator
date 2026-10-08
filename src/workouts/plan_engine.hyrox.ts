@@ -15,7 +15,7 @@
  *   8. Wrap into Week[]
  */
 
-import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow } from './race-day-rules';
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, raceWeekPrimerDow, PRIMER_MIN_DAYS_OUT } from './race-day-rules';
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
@@ -31,11 +31,11 @@ import {
   hyroxBaseMultiplier,
   computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
-import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm } from './hyrox-generators';
-import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES } from './scheduler.hyrox';
+import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS } from './hyrox-generators';
+import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
-import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
+import { ctlGapMultiplier, isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 
 /**
@@ -60,7 +60,16 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // and fix/lane-s's v14/v15 above (taper-first short plans, nothing on or after
 // race day, race-week calendar layout). Both changes are in this generator, so
 // the version sits above both.
-export const HYROX_GENERATOR_VERSION = 16;
+// v17: race week is a taper placed relative to race day (the running race-day
+// rules, SCIENCE_LOG §CE and §CW): no brick or mini brick (the race is the
+// week's brick), the tempo primer 3 to 5 days out, technique circuits without
+// the eccentric-heavy or sled stations at least 3 days out, easy runs only in
+// the last 2 days, and no assessment. Before, a Saturday race week held two
+// 47-min full circuits 3 and 2 days out and a Mini Brick the day before.
+// Still v17 (unreleased): the tempo primer takes running's primer day
+// (raceWeekPrimerDow), easy runs the latest free days, and without ergs the
+// circuit slots are left out instead of becoming easy runs.
+export const HYROX_GENERATOR_VERSION = 17;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
@@ -202,11 +211,63 @@ function enforceMTLCap(sessions: Workout[], cap: number): Workout[] {
 
 // ─── Per-week generation ──────────────────────────────────────────────────────
 
+/** Race week: the plan's final training week (isRaceWeek). Its content rules
+ *  apply with or without a race date; day placement needs the race-day
+ *  layout (hyroxWeekForRace). */
+interface HyroxRaceWeek {
+  layout: RaceWeekLayout | null;
+  /** First schedulable weekday of the week (workout-status firstTrackedDow). */
+  firstDow: number;
+}
+
+/**
+ * Days a race-week session may take, in order of preference (the running
+ * race-day rules applied to HYROX, SCIENCE_LOG §CE and §CW). Every session
+ * sits before race day and on or after the first schedulable day.
+ *   - The primer, the week's one hard session (the taper tempo run), takes
+ *     running's primer day (raceWeekPrimerDow from the tempo's home day,
+ *     Tuesday): Tuesday when that is 3 to 5 days out, otherwise the latest
+ *     race-week day in that window. With none it is left out.
+ *   - A station circuit sits at least PRIMER_MIN_DAYS_OUT days out, on its
+ *     preferred days first, so the last two days before the race hold easy
+ *     runs only, as in running, where nothing but easy running comes after
+ *     the primer.
+ *   - Easy runs take the latest free days first, so race week runs up to the
+ *     race instead of bookending on Monday.
+ * Before (review 2026-10-08), the tempo took the first of its preferred days
+ * inside the window, 4 or 5 days out for every Monday to Wednesday race, and
+ * easy runs took Monday: a Wednesday race at 5 h held Mon easy, Tue and Wed
+ * circuits and a Friday tempo, then 4 empty days. Running's Wednesday race
+ * holds a Sunday primer with only the closing week's Monday and Tuesday empty.
+ */
+function raceWeekDays(rw: HyroxRaceWeek & { layout: RaceWeekLayout }, weekIndex: number, w: Workout): number[] {
+  const weekStart = (weekIndex - 1) * 7;
+  const firstDow = Math.max(0, Math.min(7, rw.firstDow));
+  if (isHyroxHardSession(w)) {
+    const dow = raceWeekPrimerDow(rw.layout, weekIndex, HYROX_TEMPO_HOME_DOW, firstDow);
+    return dow == null ? [] : [dow];
+  }
+  const open: number[] = [];
+  for (let dow = firstDow; dow <= 6; dow++) {
+    const daysOut = rw.layout.raceDayIndex - (weekStart + dow);
+    if (daysOut >= 1) open.push(dow);
+  }
+  if (isHyroxEasyRun(w)) return open.reverse();
+  const ok = open.filter(dow => rw.layout.raceDayIndex - (weekStart + dow) >= PRIMER_MIN_DAYS_OUT);
+  const preferred = hyroxPreferredDays(w).filter(d => ok.includes(d));
+  return [...preferred, ...ok.filter(d => !preferred.includes(d))];
+}
+
+function isHyroxEasyRun(w: Workout): boolean {
+  return w.t === 'hyrox_run_easy' || (w.t === 'easy' && w.commute === true);
+}
+
 function generateWeekSessions(
   state: SimulatorState,
   weekIndex: number,
   totalWeeks: number,
-  phase: 'base' | 'build' | 'peak' | 'taper'
+  phase: 'base' | 'build' | 'peak' | 'taper',
+  raceWeek?: HyroxRaceWeek,
 ): Workout[] {
   // Note (2026-05-26): clinical phase replacement removed for the same
   // reason as in plan_engine.triathlon.ts. The discipline gates are
@@ -281,8 +342,12 @@ function generateWeekSessions(
   ) ?? hx.stationBenchmarks as Partial<Record<HyroxStation, number>> | undefined;
   const workouts: Workout[] = [];
 
+  // Race week is sharpening, not training (SCIENCE_LOG §CE): its sessions take
+  // the taper kinds whatever the phase label (tempo primer, technique circuits).
+  const kindPhase = raceWeek ? 'taper' : phase;
+
   // Run sessions
-  const rKinds = runKinds(phase, sessions.runs, band);
+  const rKinds = runKinds(kindPhase, sessions.runs, band);
   for (let i = 0; i < sessions.runs; i++) {
     const kind = rKinds[i];
     workouts.push(generateHyroxRun({
@@ -298,14 +363,26 @@ function generateWeekSessions(
 
   // Station sessions. Week 1, first station slot is the assessment for everyone.
   // Users with existing benchmarks can skip/replace it like any other workout; taking
-  // it again refreshes their numbers.
-  const needsAssessment = weekIndex === 1;
-  const sKinds = stationKinds(phase, sessions.stations);
+  // it again refreshes their numbers. Race week has no assessment: it passes
+  // through every station, sleds included.
+  const needsAssessment = weekIndex === 1 && !raceWeek;
+  const sKinds = stationKinds(kindPhase, sessions.stations);
+  // Race week: technique circuits without the eccentric-heavy and sled stations
+  // (RACE_WEEK_EXCLUDED_STATIONS). Without enough of the remaining stations (no
+  // erg access) race week has no station circuit and the slot is left out.
+  // Before (review 2026-10-08) each slot became an easy run, a rule with no
+  // taper precedent that raised race-week running above the week before's in
+  // 363 of 648 no-erg plans (total_beginner: four 20-min runs against 48 min).
+  // Running's taper never adds a run (rule 5 carries an easy makeup only
+  // under the taper ceiling), and a slot that has no safe content is dropped,
+  // as a primer with no window day is.
+  const raceWeekCircuitOk = !raceWeek || raceWeekCircuitStations(hx.stationAccess).length >= MIN_CIRCUIT_STATIONS;
   for (let i = 0; i < sessions.stations; i++) {
     if (needsAssessment && i === 0) {
       workouts.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg }));
       continue;
     }
+    if (!raceWeekCircuitOk) continue;
     const kind = sKinds[i];
     workouts.push(generateHyroxStation({
       kind,
@@ -316,11 +393,13 @@ function generateWeekSessions(
       slotIndex: i + weekIndex,
       bodyWeightKg,
       stationBenchmarks,
+      raceWeek: !!raceWeek,
     }));
   }
 
-  // Brick sessions
-  if (sessions.bricks > 0 && (phase !== 'base' || band === 'beginner' || band === 'total_beginner')) {
+  // Brick sessions. Race week has none: the race is the week's brick, as it
+  // takes the long-run slot in running and triathlon (SCIENCE_LOG §CT).
+  if (!raceWeek && sessions.bricks > 0 && (phase !== 'base' || band === 'beginner' || band === 'total_beginner')) {
     // Bricks appear from week 1 for beginners (mini_brick), from build phase for others.
     const phaseAllowsBrick = phase !== 'base' || band === 'beginner' || band === 'total_beginner';
     for (let i = 0; i < sessions.bricks; i++) {
@@ -413,7 +492,13 @@ function generateWeekSessions(
   // station and run branches, the status chip). Without ids a week's two
   // 'Easy Run' or two 'Station Circuit' sessions shared one slot key: one done
   // showed both done, and a second synced run found no free slot.
-  const scheduled = scheduleHyroxWeek(capped, band);
+  // Race week: each session only on the days the race-day rules allow; one
+  // that finds no free allowed day is left out (raceWeekDays).
+  const placed = raceWeek?.layout ? { ...raceWeek, layout: raceWeek.layout } : null;
+  const scheduled = scheduleHyroxWeek(
+    capped, band,
+    placed ? (w) => raceWeekDays(placed, weekIndex, w) : undefined,
+  );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;
 }
@@ -545,6 +630,11 @@ export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): W
  * the triathlon triWeekForRace). `trainingWeeks` excludes a closing week, so
  * race week is week `trainingWeeks`.
  *   - Rule 1: nothing on or after race day (shared with running).
+ *   - Race week (rules 2 and 4): no brick (the race is the week's brick), the
+ *     tempo primer on running's primer day (3 to 5 days out), technique
+ *     circuits without the eccentric-heavy or sled stations at least 3 days
+ *     out, easy runs only in the last 2 days and on the latest free days
+ *     (raceWeekDays).
  *   - Rules 3 and 4: in the week before race week, nothing in the last 6 days
  *     before race day; its full brick moves to 7 or more days out, never next
  *     to another hard session (clearStoredPlanRaceWindow).
@@ -553,8 +643,10 @@ function hyroxWeekForRace(
   state: SimulatorState, weekIndex: number, trainingWeeks: number,
   phase: 'base' | 'build' | 'peak' | 'taper', layout: RaceWeekLayout | null,
 ): Workout[] {
+  const firstDow = firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
+  const raceWeek = isRaceWeek(weekIndex, trainingWeeks, state.continuousMode) ? { layout, firstDow } : undefined;
   const generated = dropSessionsOnOrAfterRaceDay(
-    generateWeekSessions(state, weekIndex, trainingWeeks, phase), weekIndex, state.planStartDate, state.hyroxConfig?.raceDate,
+    generateWeekSessions(state, weekIndex, trainingWeeks, phase, raceWeek), weekIndex, state.planStartDate, state.hyroxConfig?.raceDate,
   );
   if (!layout) return generated;
   return clearStoredPlanRaceWindow(generated, {
@@ -562,7 +654,7 @@ function hyroxWeekForRace(
     layout,
     isLongSession: (w) => w.t === 'hyrox_brick',
     isHard: isHyroxHardSession,
-    firstScheduleDow: firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt),
+    firstScheduleDow: firstDow,
     dayNames: HYROX_DAY_NAMES,
   });
 }
