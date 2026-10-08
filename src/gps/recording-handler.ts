@@ -3,6 +3,7 @@
  * Shows the completion modal and calls rate() when the user confirms.
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { GpsRecording, Week, Workout } from '@/types';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state';
@@ -233,7 +234,7 @@ function handleImpromptuRun(
     const _tier = ms.athleteTierOverride ?? ms.athleteTier;
     const _atlSeed = (ms.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (ms.gs ?? 0), 0.3));
     const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined, undefined, (ms as any).previousPlanWks, ms.adaptiveRecovery);
-    const _floorKm = computeRunningFloorKm(ms.pac?.m, ms.w, ms.tw ?? 16, week?.ph);
+    const _floorKm = computeRunningFloorKm(ms.pac?.m, ms.w, (planTrainingWeeks(ms) || 16), week?.ph);
     const popup = buildCrossTrainingPopup(
       {
         raceGoal: ms.rd,

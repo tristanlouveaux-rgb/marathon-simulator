@@ -1,6 +1,6 @@
 import type { Workout, TrainingPhase } from '@/types';
 import type { InjuryState } from '@/types/injury';
-import { isDeloadWeek, abilityBandFromVdot } from './plan_engine';
+import { isRunningDeloadWeek, abilityBandFromVdot } from './plan_engine';
 import { injuryStrengthDecision } from './injury-strength';
 import type { AbilityBand } from '@/types';
 import { buildPoolWorkout, type GymRestStyle, type GymIntensity } from './gym-pool';
@@ -54,6 +54,9 @@ export function generateGymWorkouts(
   restStyle?: GymRestStyle,
   plyoInGym = false,
   bodyweightProgress?: Record<string, BodyweightProgressEntry>,
+  /** Continuous (no-race) plan: strength deloads the block's Deload week, the
+   *  week the runs deload (isRunningDeloadWeek). */
+  continuousMode = false,
 ): Workout[] {
   if (gymSessionsPerWeek <= 0) return [];
 
@@ -88,9 +91,13 @@ export function generateGymWorkouts(
   let sessionCount = getPhaseSessionCount(phase, gymSessionsPerWeek);
 
   // ---- Deload handling ----
+  // Same week as the running engine (isRunningDeloadWeek): the ability cycle in
+  // a race plan, the block's Deload week ('taper') in a continuous plan. On the
+  // ability cycle a beginner's continuous plan cut strength in its Intensify
+  // week while the runs deloaded the week after.
   let isDeload = false;
   if (weekIndex != null && weekIndex > 0) {
-    isDeload = isDeloadWeek(weekIndex, ability);
+    isDeload = isRunningDeloadWeek(weekIndex, ability, phase, continuousMode);
     if (isDeload) {
       sessionCount = Math.max(0, sessionCount - 1);
     }

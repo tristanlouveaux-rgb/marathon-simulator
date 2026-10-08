@@ -15,9 +15,11 @@
  * neutral. No tinted cards, no decorative icons, no gradients (UX_PATTERNS).
  */
 
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { calculateLiveForecast } from '@/calculations/predictions';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { isGymSessionActual } from '@/cross-training/activities';
 import { STRENGTH_PR_THRESHOLD_KG } from '@/constants/strength-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
@@ -156,9 +158,9 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
   if (!s.gs || s.gs <= 0 || s.continuousMode || !s.rd || !(s.v && s.v > 0)) return null;
   const blended = s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined;
   if (!blended || blended <= 0) return null;
-  const weeksRemaining = Math.max(1, (s.tw ?? 16) - ((s.w ?? 1) - 1));
+  const weeksRemaining = Math.max(1, (planTrainingWeeks(s) || 16) - ((s.w ?? 1) - 1));
   const sessions = s.epw || s.rw || 4;
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd) ?? s.wkm;
+  const planMeanKm = planForecastWeeklyKm(s, sessions) ?? s.wkm;
   const base = {
     currentVdot: s.v,
     targetDistance: s.rd,
@@ -172,6 +174,8 @@ function strengthSecondsSaved(s: SimulatorState): number | null {
     ltPaceSecPerKm: s.lt || undefined,
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blended,
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   };
   const withStrength = calculateLiveForecast({ ...base, strengthSessionsPerWeek: s.gs }).forecastTime;
   const without = calculateLiveForecast({ ...base, strengthSessionsPerWeek: 0 }).forecastTime;

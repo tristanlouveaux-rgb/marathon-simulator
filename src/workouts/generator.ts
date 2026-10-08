@@ -10,14 +10,18 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from './plan_engine';
+import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, taperMakeupRoom, type PlanContext, type TaperMakeupRoom } from './plan_engine';
+import { liveSharpeningLongRunCapMin } from './sharpening-block';
+import { isClosingWeek, planTrainingWeeks, planRaceLayout } from './race-week-layout';
+import { applyRaceDayRules, raceDayRulesApply, filterTaperMakeups, fitTaperEasyMakeups } from './race-day-rules';
+import { firstTrackedDow } from '@/ui/workout-status';
 import { intentToWorkout } from './intent_to_workout';
 import { computeAcwrEaseBack } from '@/calculations/acwr-ease-back';
 import { getState } from '@/state';
 import { swapFractionForState } from '@/calculations/body-mass-adaptations';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
 import { generateGymWorkouts } from './gym';
-import { computePlanPhases } from './phases';
+import { computePlanPhases, computeRunningPlanPhases } from './phases';
 
 /**
  * Generate workouts for a week based on phase and runner profile
@@ -30,6 +34,30 @@ import { computePlanPhases } from './phases';
  * @param injuryState - Current injury state (optional)
  * @returns Array of workouts
  */
+/**
+ * The easy run a stepped-down session becomes (race-day rule 4): same duration.
+ * The duration is the session's own estimatedDurationMin (every plan-engine
+ * session carries one, intentToWorkout); else its own distance at easy pace for
+ * a plain "<n>km" description; else EASY_FLOOR_MIN, the shortest easy run the
+ * plan prescribes.
+ */
+export function steppedDownEasyRun(
+  w: Workout, raceDistance: RaceDistance, runnerType: RunnerType, easyPaceSecPerKm?: number,
+): Workout {
+  let mins = w.estimatedDurationMin != null && w.estimatedDurationMin > 0 ? w.estimatedDurationMin : null;
+  if (mins == null && easyPaceSecPerKm) {
+    const m = /^(\d+(?:\.\d+)?)km(\s*@.*)?$/.exec(w.d ?? '');
+    if (m) mins = Math.round((parseFloat(m[1]) * easyPaceSecPerKm) / 60);
+  }
+  const total = mins ?? EASY_FLOOR_MIN;
+  const easy = intentToWorkout(
+    { dayIndex: 0, slot: 'easy', totalMinutes: total, workMinutes: total, variantId: 'easy_steady', notes: '' },
+    raceDistance, runnerType, easyPaceSecPerKm,
+  );
+  const loads = calculateWorkoutLoad(easy.t, easy.d, (easy.rpe || easy.r || 3) * 10, easyPaceSecPerKm);
+  return { ...easy, n: `Easy Run (was ${w.n})`, aerobic: loads.aerobic, anaerobic: loads.anaerobic, hrTarget: w.hrTarget };
+}
+
 export function generateWeekWorkouts(
   phase: TrainingPhase,
   runsPerWeek: number,
@@ -54,7 +82,15 @@ export function generateWeekWorkouts(
   weekdayHoursTarget?: number,
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
-  // at the end of this function. No early return here.
+  // at the end of this function. No early return here, except the closing week.
+
+  // Closing week: the own week of a Monday to Wednesday race (race-week-layout.ts).
+  // It holds only the race, so nothing of any kind is generated. Planned adhoc
+  // sessions the user adds are kept by the resolver (week-resolve.ts).
+  const sPlan = getState();
+  if (weekIndex != null && !sPlan.continuousMode && isClosingWeek(sPlan, weekIndex)) return [];
+  // The plan engine's horizon: training weeks, without a closing week.
+  const engineTotalWeeks = totalWeeks != null ? planTrainingWeeks({ tw: totalWeeks, wks: sPlan.wks }) : undefined;
 
   // Commute-aware planning. `runsPerWeek` is the user's count of DEDICATED
   // (non-commute) runs. Commute runs are appended on top as extra easy
@@ -73,6 +109,11 @@ export function generateWeekWorkouts(
   const easySuffix = easyPaceSecPerKm
     ? ` @ ${Math.floor(easyPaceSecPerKm / 60)}:${String(Math.floor(easyPaceSecPerKm % 60)).padStart(2, '0')}/km`
     : '';
+
+  // Taper weeks of a running race plan: the room carried easy makeups may fill
+  // (plan_engine taperMakeupRoom) and the week's prescribed running minutes.
+  let taperRoom: TaperMakeupRoom | null = null;
+  let prescribedRunMin = 0;
 
   if (weekIndex != null && totalWeeks != null) {
     // Read archetype + baseline from state. Drives the ramp budget inside
@@ -101,14 +142,14 @@ export function generateWeekWorkouts(
     const ctlRatio = (sNow.wks?.[weekIndex - 1] as any)?.ctlRatio;
 
     // New plan engine path: time-based sessions with progression & deload
-    const intents = planWeekSessions({
+    const engineCtx: PlanContext = {
       runsPerWeek,
       raceDistance,
       runnerType,
       phase,
       fitnessLevel: fitnessLevel || 'intermediate',
       weekIndex,
-      totalWeeks,
+      totalWeeks: engineTotalWeeks ?? totalWeeks,
       vdot: vdot || 45,
       effortScore,
       acwrStatus,
@@ -119,18 +160,30 @@ export function generateWeekWorkouts(
       archetype,
       easyPaceSecPerKm,
       ctlRatio,
-    });
+      // Every week's phase, so the engine replays the long runs and week totals it
+      // prescribed before this week (10% long-run rule, deload guards). Ignored by
+      // the engine unless it covers the whole plan (length === totalWeeks).
+      planPhases: sNow.wks?.slice(0, engineTotalWeeks ?? totalWeeks).map(w => w.ph),
+      continuousMode: !!sNow.continuousMode,
+      // Sharpening block (phases.ts isSharpeningBlock): the start inputs frozen at
+      // build, and the live reduce-only long-run cap for weeks already reached.
+      sharpening: sharpeningInputsFromState(sNow),
+      liveLongRunCapMin: liveSharpeningLongRunCapMin(sNow, weekIndex),
+    };
+    const intents = planWeekSessions(engineCtx);
+    taperRoom = taperMakeupRoom(engineCtx);
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
     // long-run distance last). Default-until-chosen is eased — 'keep' is the only opt-out. Caution
-    // is handled inside planWeekSessions; safe/unknown weeks skip this entirely. The final taper
-    // (race) week is exempt: its single quality session is already a minimal primer (ISSUE-298) and
-    // its volume is already cut, so easing it would neuter the primer for no load benefit.
+    // is handled inside planWeekSessions; safe/unknown weeks skip this entirely. The race week
+    // (isRaceWeek: the final week of a race plan) is exempt: its single quality session is already
+    // a minimal primer (ISSUE-298) and its volume is already cut, so easing it would neuter the
+    // primer for no load benefit.
     const wkNow = sNow.wks?.[weekIndex - 1] as Week | undefined;
-    const isRaceWeek = phase === 'taper' && totalWeeks != null && weekIndex >= totalWeeks;
+    const raceWeek = isRaceWeek(weekIndex, engineTotalWeeks ?? totalWeeks, !!sNow.continuousMode);
     const easedIntents = (
       acwrStatus === 'high' &&
-      !isRaceWeek &&
+      !raceWeek &&
       (wkNow as any)?.acwrChoice !== 'keep' &&
       ((wkNow as any)?.scheduledChronicTSS ?? 0) >= 1 &&
       ((wkNow as any)?.scheduledSafeUpper ?? 0) > 0
@@ -145,6 +198,11 @@ export function generateWeekWorkouts(
     for (const intent of easedIntents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
     }
+    prescribedRunMin = easedIntents.reduce((a, i) => a + i.totalMinutes, 0);
+    // A makeup is never longer than the week's own easy runs as committed (the live
+    // long-run cap and the ACWR ease-back can shorten them below the taper length).
+    const ownEasy = easedIntents.filter(i => i.slot === 'easy').map(i => i.totalMinutes);
+    if (taperRoom && ownEasy.length) taperRoom = { ...taperRoom, easyMin: Math.min(taperRoom.easyMin, Math.max(...ownEasy)) };
   } else {
     // Fallback: existing rules engine (no week context)
     const { slots, warnings } = generateOrderedRunSlots({
@@ -252,8 +310,29 @@ export function generateWeekWorkouts(
     }
   }
 
-  // Add skipped workouts from previous week (prefix name to avoid collisions)
-  for (const skip of previousSkips) {
+  // Add skipped workouts from previous week (prefix name to avoid collisions).
+  // A taper week of a running race plan carries no makeup long run or quality
+  // session, and race week no makeup at all (race-day-rules.ts rule 5). An easy
+  // makeup is carried at the taper week's easy length, only while the week stays
+  // at or under its taper ceiling (fitTaperEasyMakeups, taperMakeupRoom).
+  const taperWeekOfRace = !sPlan.continuousMode && !sPlan.trackOnly && phase === 'taper'
+    && sPlan.eventType !== 'triathlon' && sPlan.eventType !== 'hyrox';
+  let carriedSkips = taperWeekOfRace
+    ? filterTaperMakeups(previousSkips, {
+        raceWeek: weekIndex != null && engineTotalWeeks != null && isRaceWeek(weekIndex, engineTotalWeeks, false),
+      })
+    : previousSkips;
+  if (taperWeekOfRace && taperRoom) {
+    const resizeEasy = (w: Workout, minutes: number): Workout => {
+      const easy = intentToWorkout(
+        { dayIndex: 0, slot: 'easy', totalMinutes: minutes, workMinutes: minutes, variantId: 'easy_steady', notes: '' },
+        raceDistance, runnerType, easyPaceSecPerKm,
+      );
+      return { ...w, t: 'easy', d: easy.d, estimatedDurationMin: minutes };
+    };
+    carriedSkips = fitTaperEasyMakeups(carriedSkips, prescribedRunMin, taperRoom, resizeEasy);
+  }
+  for (const skip of carriedSkips) {
     workouts.push({
       ...skip.workout,
       n: `[Makeup] ${skip.workout.n}`,
@@ -308,7 +387,7 @@ export function generateWeekWorkouts(
       phase, gymSessionsPerWeek, fitnessLevel || 'intermediate',
       weekIndex, totalWeeks, vdot, injuryState,
       undefined, undefined, undefined, getState().plyoInGymEnabled !== false,
-      getState().bodyweightProgress,
+      getState().bodyweightProgress, !!sPlan.continuousMode,
     );
     workouts.push(...gymWorkouts);
   }
@@ -379,6 +458,21 @@ export function generateWeekWorkouts(
   }
   let scheduledWorkouts = assignDefaultDays(workouts, weekdayBudgetMin, weekendBudgetMin);
 
+  // Race-day placement (race-day-rules.ts): nothing on or after race day, the
+  // primer 3 to 5 days out, no long run or quality session (except the primer)
+  // in the last 6 days, no back-to-back hard days in the last 13. Running race
+  // plans with a race date only.
+  const raceLayout = weekIndex != null ? planRaceLayout(sPlan) : null;
+  if (raceLayout && weekIndex != null) {
+    const toEasy = (w: Workout): Workout => steppedDownEasyRun(w, raceDistance, runnerType, easyPaceSecPerKm);
+    scheduledWorkouts = applyRaceDayRules(scheduledWorkouts, {
+      weekIndex,
+      layout: raceLayout,
+      firstScheduleDow: firstTrackedDow(sPlan.planStartDate, weekIndex, sPlan.planCreatedAt),
+      toEasy,
+    });
+  }
+
   // Apply injury adaptations if injury is active — but only to the current and
   // future weeks. A current injury must NEVER rewrite past weeks: doing so turns
   // already-trained sessions into rehab/rest, which orphans their matched actuals
@@ -431,6 +525,14 @@ export function generateWeekWorkouts(
     }
   }
 
+  // Rule 1 again after injury adaptation, which can emit sessions on any day.
+  if (raceLayout && weekIndex != null && raceDayRulesApply(weekIndex, raceLayout)) {
+    const weekStart = (weekIndex - 1) * 7;
+    scheduledWorkouts = scheduledWorkouts.filter(
+      w => w.dayOfWeek == null || weekStart + w.dayOfWeek < raceLayout.raceDayIndex,
+    );
+  }
+
   // Generate stable IDs for each workout (W{week}-{type}-{index})
   // Use weekIndex if available, otherwise default to 1
   const wk = weekIndex ?? 1;
@@ -445,30 +547,26 @@ export function generateWeekWorkouts(
   return scheduledWorkouts;
 }
 
-/**
- * The plan-engine inputs generateWeekWorkouts reads from state rather than from
- * its arguments: the ramp baseline (detected weekly km; in continuous mode the
- * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode
- * the neutral 'unknown'). Exported so a caller that runs planWeekSessions directly
- * (the week-debrief preview) feeds the engine exactly what the committed plan gets.
- */
-export function planEngineStateInputs(
-  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>,
-): { baselineKm: number | undefined; archetype: Archetype | undefined } {
-  const baselineKm = s.detectedWeeklyKm
-    ?? (s.continuousMode && s.wkm && s.wkm > 0 ? s.wkm : undefined);
-  const archetype = s.athleteArchetype?.archetype
-    ?? (s.continuousMode ? 'unknown' as const : undefined);
-  return { baselineKm, archetype };
-}
+/** Re-exported from plan_engine.ts, where the race-day forecast reads it too. */
+export { planEngineStateInputs };
 
 /**
- * Initialize weeks array for a training plan
+ * Initialize weeks array for a training plan.
  * @param totalWeeks - Total number of weeks
+ * @param opts.raceDistance - Running RACE plan: phases from computeRunningPlanPhases
+ *   (marathon 2-week taper floor, sharpening-block layout). Omit for continuous
+ *   mode and the legacy path, which keep the generic single arc.
+ * @param opts.noSignal - No real running fitness signal at build: a sharpening
+ *   block gets no peak week (computeRunningPlanPhases).
  * @returns Array of week objects
  */
-export function initializeWeeks(totalWeeks: number): Week[] {
-  const planPhases = computePlanPhases(totalWeeks);
+export function initializeWeeks(
+  totalWeeks: number,
+  opts: { raceDistance?: RaceDistance; noSignal?: boolean } = {},
+): Week[] {
+  const planPhases = opts.raceDistance
+    ? computeRunningPlanPhases(totalWeeks, opts.raceDistance, { noSignal: opts.noSignal })
+    : computePlanPhases(totalWeeks);
   return planPhases.map((p, i) => ({
     w: i + 1,
     ph: p.ph,

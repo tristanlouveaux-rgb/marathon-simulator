@@ -123,7 +123,7 @@ describe('computePlannedWeekTSS', () => {
     const at = (week: number, of: number) => computePlannedWeekTSS(hist, 195, 'taper', 'trained', undefined, week, of);
     expect([1, 2, 3].map(w => at(w, 3))).toEqual([150, 130, 110]); // 0.75 / 0.65 / 0.55
     expect([1, 2].map(w => at(w, 2))).toEqual([140, 110]);         // 0.70 / 0.55
-    expect(at(1, 1)).toBe(140);                                     // 1-week taper: 0.70 special case
+    expect(at(1, 1)).toBe(110);                                     // 1-week taper = race week: 0.55
   });
 
   it('falls back to ctlBaseline when history is thin', () => {

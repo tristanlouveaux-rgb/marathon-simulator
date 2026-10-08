@@ -26,6 +26,7 @@
  * distance, no VDOT, no plan weeks remaining).
  */
 
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance, AbilityBand, RunnerType } from '@/types';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { vt, rdKm } from './vdot';
@@ -103,7 +104,10 @@ export function runMarathonForecastSim(
   const currentVdot = s.blendedEffectiveVdot ?? s.v;
   if (!currentVdot || currentVdot <= 0) return null;
 
-  const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
+  // Training weeks (a closing week holds only the race): the cone and its
+  // trials are indexed by weeks to race, so a Tuesday race simulates exactly
+  // like the Sunday before it.
+  const totalWeeks = planTrainingWeeks(s) || (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
   const weeksRemaining = Math.max(0, totalWeeks - currentWeek);
   const distKm = rdKm(s.rd as RaceDistance);
@@ -125,7 +129,7 @@ export function runMarathonForecastSim(
     baselineKm: s.detectedWeeklyKm,
     archetype: s.athleteArchetype?.archetype,
     totalWeeks,
-    taperWeeks: (s.rd as RaceDistance) === 'marathon' ? 3 : 2,
+    taperWeeks: planTaperWeeks(s),
   }) ?? s.wkm;
   const abilityBand: AbilityBand = getAbilityBand(currentVdot);
   const runnerType: RunnerType = (s.typ ?? 'Balanced') as RunnerType;

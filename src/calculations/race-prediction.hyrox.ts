@@ -47,6 +47,7 @@ import { yearsOfTrainingToExperienceLevel } from '@/constants/triathlon-horizon-
 import { applyHyroxStationHorizon, applyHyroxRoxzoneHorizon } from './training-horizon.hyrox';
 import { plannedHyroxSessionsPerWeek } from './hyrox-volume';
 import { stationInjuryBuildWeeks } from './hyrox-injury';
+import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -547,12 +548,16 @@ function buildStationProjection(
   };
 }
 
-/** Weeks until the Hyrox race date. Returns 0 if no race or already past. */
+/**
+ * Weeks of training until the Hyrox race: to the end of race week
+ * (raceForecastHorizonISO; the Sunday before race day when a Monday to
+ * Wednesday race has a closing week). Returns 0 if no race or already past.
+ */
 function computeWeeksRemainingForHorizon(state: SimulatorState): number {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return 0;
   const today = new Date();
-  const race = new Date(raceDate);
+  const race = new Date(raceForecastHorizonISO(state, raceDate));
   if (Number.isNaN(race.getTime())) return 0;
   const diffMs = race.getTime() - today.getTime();
   if (diffMs <= 0) return 0;

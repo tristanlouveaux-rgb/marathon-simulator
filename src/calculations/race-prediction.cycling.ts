@@ -31,6 +31,7 @@ import {
   altitudeBikeMultiplier,
 } from '@/constants/triathlon-course-factors';
 import { getCyclingEventById } from '@/data/cycling-events';
+import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 
 export interface CyclingCourseFactor {
   kind: 'climate' | 'altitude';
@@ -233,9 +234,10 @@ function fallbackKph(watts: number, course: BikeCourseProfileExtended): number {
   return Math.max(10, base - (penalty[course] ?? 0));
 }
 
+/** Weeks to the end of race week (raceForecastHorizonISO): the range narrows as training ends. */
 function computeWeeksToRace(state: SimulatorState): number {
   const dateStr = state.onboarding?.customRaceDate ?? state.triConfig?.raceDate;
   if (!dateStr) return 12;
-  const diffMs = new Date(dateStr).getTime() - Date.now();
+  const diffMs = new Date(raceForecastHorizonISO(state, dateStr)).getTime() - Date.now();
   return Math.max(0, diffMs / (7 * 86400 * 1000));
 }

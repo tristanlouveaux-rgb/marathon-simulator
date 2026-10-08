@@ -1,6 +1,9 @@
 import type { OnboardingState, Marathon, TrainingFocus } from '@/types/onboarding';
 import type { RaceDistance } from '@/types/training';
-import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil, calculateDaysUntil, formatTimeUntil } from '@/data/marathons';
+import { getMarathonsByDistance, formatRaceDate, calculateDaysUntil, formatTimeUntil } from '@/data/marathons';
+import { FULL_BUILD_WEEKS } from '@/workouts/phases';
+import { getState } from '@/state';
+import { racePlanNote, lowBaseMarathon, trainingWeeksForRace, type LowBaseState } from './race-target-plan-note';
 import { ESTIMATED_DATE_NOTE } from '@/data/race-calendar';
 import { nextStep, updateOnboarding, getOnboardingState } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
@@ -25,20 +28,16 @@ import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'fitness';
 
-/** Minimum plan weeks by distance. Marathons need 8 weeks minimum for a meaningful
- * progression (shorter than that is a sharpening block, not a marathon build).
- * Shorter distances allow 4-week minimums. Locked 2026-04-22. */
-const MIN_PLAN_WEEKS_BY_DISTANCE: Record<RaceDistance, number> = {
-  '5k': 4,
-  '10k': 4,
-  'half': 4,
-  'marathon': 8,
-};
 /** Maximum plan weeks the stepper allows. */
 const MAX_PLAN_WEEKS = 52;
 
+/** Plan-length slider floor (5K/10K and the fitness Set-duration path): the full
+ *  build (FULL_BUILD_WEEKS, phases.ts; locked 2026-04-22). A half or marathon
+ *  closer than its full build is not refused: it gets a sharpening block
+ *  (Tristan, 2026-10-05), so the race list and the custom date accept any
+ *  date from tomorrow. */
 function minWeeksFor(distance: RaceDistance | null): number {
-  return distance ? MIN_PLAN_WEEKS_BY_DISTANCE[distance] : 4;
+  return distance ? FULL_BUILD_WEEKS[distance] : 4;
 }
 
 /** Local YYYY-MM-DD `days` from today. Built from local date parts so a DST
@@ -51,18 +50,14 @@ function isoInDays(days: number): string {
 
 /**
  * Earliest and latest custom race dates the date handler accepts, for the
- * picker's min / max. Found by walking `calculateWeeksUntil`, the same function
- * the handler and the race list use, so the picker never offers a date the
- * handler then refuses. A naive `today + N*7 days` lands a day off in some
- * timezones because `calculateWeeksUntil` ceils a UTC-parsed date.
+ * picker's min / max: tomorrow, and the last date whose plan stays within
+ * MAX_PLAN_WEEKS training weeks (trainingWeeksForRace, the calendar the plan
+ * is built on), so the picker never offers a date the handler then refuses.
  */
-function customDateBounds(distance: RaceDistance | null): { min: string; max: string } {
-  const minWeeks = minWeeksFor(distance);
-  let minDays = Math.max(0, (minWeeks - 1) * 7 - 1);
-  while (minDays < MAX_PLAN_WEEKS * 7 && calculateWeeksUntil(isoInDays(minDays)) < minWeeks) minDays++;
+function customDateBounds(): { min: string; max: string } {
   let maxDays = (MAX_PLAN_WEEKS + 1) * 7;
-  while (maxDays > minDays && calculateWeeksUntil(isoInDays(maxDays)) > MAX_PLAN_WEEKS) maxDays--;
-  return { min: isoInDays(minDays), max: isoInDays(maxDays) };
+  while (maxDays > 1 && (trainingWeeksForRace(isoInDays(maxDays)) ?? 0) > MAX_PLAN_WEEKS) maxDays--;
+  return { min: isoInDays(1), max: isoInDays(maxDays) };
 }
 
 type CustomDateCheck =
@@ -76,25 +71,16 @@ type CustomDateCheck =
  * for the page instead of a native validation bubble, which fades on desktop
  * and may never show in WKWebView.
  */
-function checkCustomDate(value: string, distance: RaceDistance | null): CustomDateCheck {
+function checkCustomDate(value: string): CustomDateCheck {
   if (!value) return { ok: false, reason: '', hint: 'Set your race date to continue.' };
-  const minWeeks = minWeeksFor(distance);
-  const weeks = calculateWeeksUntil(value);
   const days = calculateDaysUntil(value);
-  if (!Number.isFinite(weeks) || !Number.isFinite(days)) {
+  const weeks = trainingWeeksForRace(value) ?? NaN;
+  if (!Number.isFinite(days) || (days >= 1 && !Number.isFinite(weeks))) {
     return { ok: false, reason: 'Enter a full date: day, month and year.', hint: 'Set your race date to continue.' };
   }
-  const tooSoonHint = `Pick a date at least ${minWeeks} weeks away to continue.`;
-  if (days < 0) return { ok: false, reason: 'That date has passed.', hint: tooSoonHint };
-  if (weeks < minWeeks) {
-    const label = distance === 'marathon' ? 'Marathon' : distance === 'half' ? 'Half marathon' : 'Race';
-    const away = days === 0
-      ? 'This date is today.'
-      : days < 7
-        ? `This date is ${days} day${days === 1 ? '' : 's'} away.`
-        : `This date is ${weeks} week${weeks === 1 ? '' : 's'} away.`;
-    return { ok: false, reason: `${label} plans need at least ${minWeeks} weeks. ${away}`, hint: tooSoonHint };
-  }
+  const futureHint = 'Pick a date from tomorrow to continue.';
+  if (days < 0) return { ok: false, reason: 'That date has passed.', hint: futureHint };
+  if (days === 0) return { ok: false, reason: 'This date is today.', hint: futureHint };
   if (weeks > MAX_PLAN_WEEKS) {
     return {
       ok: false,
@@ -375,9 +361,36 @@ function renderWeeksSlider(state: OnboardingState, minWeeks: number): string {
   `;
 }
 
+/** Every listed race of the distance from tomorrow to MAX_PLAN_WEEKS out:
+ *  near races continue into a sharpening block instead of being hidden. */
+function listedRaces(distance: 'half' | 'marathon') {
+  return getMarathonsByDistance(distance, 0, MAX_PLAN_WEEKS);
+}
+
+/** The plan note and, for a marathon block that cannot build marathon
+ *  endurance, the plain statement plus a one-tap switch to a half on the same
+ *  date or to the first listed marathon far enough away for a full build. */
+function renderBlockNote(state: OnboardingState, raceISO: string | null): string {
+  if (!raceISO || (state.raceDistance !== 'marathon' && state.raceDistance !== 'half')) return '';
+  const note = racePlanNote(state.raceDistance, raceISO);
+  if (!note) return '';
+  const low = lowBaseMarathon(state.raceDistance, raceISO, getState() as unknown as LowBaseState, state.experienceLevel);
+  let lowHtml = '';
+  if (low) {
+    const later = listedRaces('marathon').find(r => (trainingWeeksForRace(r.date) ?? 0) >= FULL_BUILD_WEEKS.marathon);
+    lowHtml = `
+      <p class="rt-date-note" style="margin-top:6px">${low.text}</p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+        <button class="m-btn-glass" data-switch="half" data-date="${raceISO}" style="width:100%;font-size:14px">Half marathon on the same date</button>
+        ${later ? `<button class="m-btn-glass" data-switch="later" data-race="${later.id}" style="width:100%;font-size:14px">${later.name} · ${formatRaceDate(later.date)}</button>` : ''}
+      </div>`;
+  }
+  return `<p class="rt-date-note" id="rt-weeks-note">${note}</p>${lowHtml}`;
+}
+
 function renderEventPicker(state: OnboardingState): string {
   const distance = state.raceDistance === 'marathon' ? 'marathon' : 'half';
-  const races = getMarathonsByDistance(distance, minWeeksFor(state.raceDistance));
+  const races = listedRaces(distance);
   const usingCustomDate = state.customRaceDate !== null;
 
   if (usingCustomDate) {
@@ -387,7 +400,7 @@ function renderEventPicker(state: OnboardingState): string {
         <div class="shadow-ap rt-date-card">
           <input type="date" id="rt-custom-date" class="rt-date-input" value="${state.customRaceDate || ''}">
           <p class="rt-date-note" id="rt-date-error" aria-live="polite" style="display:none"></p>
-          <p class="rt-date-note" id="rt-weeks-note" style="display:${state.customRaceDate ? 'block' : 'none'}">${state.customRaceDate ? `${calculateWeeksUntil(state.customRaceDate)} weeks of training` : ''}</p>
+          <div id="rt-block-note">${renderBlockNote(state, state.customRaceDate || null)}</div>
         </div>
         <div style="text-align:center;margin-top:8px">
           <button id="rt-toggle-date" class="rt-toggle">Browse races instead</button>
@@ -410,6 +423,7 @@ function renderEventPicker(state: OnboardingState): string {
       </select>
       ${sel ? `<p class="rt-date-note" style="margin-top:8px">${[formatTimeUntil(sel.date), sel.city].filter(Boolean).join(' · ')}</p>` : ''}
       ${sel?.estimated ? `<p class="rt-date-note" style="margin-top:4px">${ESTIMATED_DATE_NOTE}</p>` : ''}
+      ${sel ? `<div id="rt-block-note" style="margin-top:4px">${renderBlockNote(state, sel.date)}</div>` : ''}
     </div>
   `;
 }
@@ -515,7 +529,7 @@ function resolveMode(state: OnboardingState): TrainingMode | null {
 
 function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
   const races = (state.raceDistance === 'half' || state.raceDistance === 'marathon')
-    ? getMarathonsByDistance(state.raceDistance === 'marathon' ? 'marathon' : 'half', minWeeksFor(state.raceDistance))
+    ? listedRaces(state.raceDistance === 'marathon' ? 'marathon' : 'half')
     : [];
 
   // Event Yes/No (running path).
@@ -569,10 +583,38 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
     const race = races.find((r: Marathon) => r.id === id);
     updateOnboarding({
       selectedRace: race ?? null,
-      planDurationWeeks: race?.weeksUntil ?? state.planDurationWeeks,
+      // Training weeks of the plan built for this date (the calendar layout the
+      // plan uses; initializeSimulator recomputes it from the date).
+      planDurationWeeks: (race ? trainingWeeksForRace(race.date) : null) ?? state.planDurationWeeks,
       customRaceDate: null,
     });
     rerender();
+  });
+
+  // One-tap switch offered when a marathon block cannot build marathon
+  // endurance: a half on the same date, or the first listed marathon far enough
+  // away for a full build. Delegated so the custom-date handler can replace the
+  // note in place.
+  document.querySelectorAll<HTMLElement>('#rt-block-note').forEach(box => {
+    box.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement | null)?.closest<HTMLElement>('[data-switch]');
+      if (!btn) return;
+      if (btn.dataset.switch === 'half' && btn.dataset.date) {
+        const date = btn.dataset.date;
+        updateOnboarding({
+          raceDistance: 'half', selectedRace: null, customRaceDate: date,
+          planDurationWeeks: trainingWeeksForRace(date) ?? state.planDurationWeeks,
+        });
+      } else if (btn.dataset.switch === 'later' && btn.dataset.race) {
+        const later = listedRaces('marathon').find(r => r.id === btn.dataset.race);
+        if (!later) return;
+        updateOnboarding({
+          selectedRace: later, customRaceDate: null,
+          planDurationWeeks: trainingWeeksForRace(later.date) ?? state.planDurationWeeks,
+        });
+      }
+      rerender();
+    });
   });
 
   // Toggle between race list and custom date (running half/marathon).
@@ -593,14 +635,14 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
   // tear down the iOS wheel picker mid-spin.
   const dateInput = document.getElementById('rt-custom-date') as HTMLInputElement | null;
   if (dateInput) {
-    const bounds = customDateBounds(state.raceDistance);
+    const bounds = customDateBounds();
     dateInput.min = bounds.min;
     dateInput.max = bounds.max;
     const errorEl = document.getElementById('rt-date-error');
-    const noteEl = document.getElementById('rt-weeks-note');
+    const noteEl = document.getElementById('rt-block-note');
     const onDateValue = () => {
       const v = dateInput.value;
-      const check = checkCustomDate(v, state.raceDistance);
+      const check = checkCustomDate(v);
       const cur = getOnboardingState() ?? state;
       if (!check.ok) {
         // Never leave a date in state that the field no longer shows. '' keeps
@@ -610,7 +652,7 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
           errorEl.textContent = check.reason;
           errorEl.style.display = check.reason ? 'block' : 'none';
         }
-        if (noteEl) noteEl.style.display = 'none';
+        if (noteEl) noteEl.innerHTML = '';
         syncContinueGate(mode, check.hint);
         return;
       }
@@ -618,10 +660,8 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
         updateOnboarding({ customRaceDate: v, planDurationWeeks: check.weeks, selectedRace: null });
       }
       if (errorEl) { errorEl.textContent = ''; errorEl.style.display = 'none'; }
-      if (noteEl) {
-        noteEl.textContent = `${check.weeks} weeks of training`;
-        noteEl.style.display = 'block';
-      }
+      // The plan note in place (a re-render would tear down the iOS picker).
+      if (noteEl) noteEl.innerHTML = renderBlockNote(getOnboardingState() ?? state, v);
       syncContinueGate(mode);
     };
     dateInput.addEventListener('input', onDateValue);

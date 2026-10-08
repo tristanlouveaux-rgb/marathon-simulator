@@ -12,6 +12,7 @@
  *   Tier 3 (>40 TSS or elevated ACWR): blocking modal fires instead.
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import type { Week, SimulatorState } from '@/types/state';
 import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import { getMutableState, saveState } from '@/state';
@@ -354,7 +355,7 @@ export function triggerExcessLoadAdjustment(): void {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
     runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
-    floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk?.ph),
+    floorKm: computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), wk?.ph),
     acwrStatus: _acwr.status,
   };
   // Pass overshoot TSS so the suggester caps the reduction budget to only what's needed.
@@ -443,7 +444,7 @@ function _triggerCarryoverToNextWeek(
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
     runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
-    floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, nextWk?.ph),
+    floorKm: computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), nextWk?.ph),
     acwrStatus: _acwr2.status,
   };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier);

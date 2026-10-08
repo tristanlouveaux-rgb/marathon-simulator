@@ -278,9 +278,11 @@ describe('Create a training plan, pick a mode, then Return to plan, keeps Just-T
       renderMainView();
       const modeViewCalls = () =>
         vi.mocked(renderHyroxPlanView).mock.calls.length + vi.mocked(renderTriathlonPlanView).mock.calls.length;
+      // renderMainView loads the plan view with a dynamic import; under full-suite
+      // load that exceeds vi.waitFor's 1 s default (passes in isolation).
       await vi.waitFor(() => {
         expect(modeViewCalls() > 0 || document.getElementById('track-generate-session') !== null).toBe(true);
-      });
+      }, { timeout: 10000 });
       expect(renderHyroxPlanView).not.toHaveBeenCalled();
       expect(renderTriathlonPlanView).not.toHaveBeenCalled();
       expect(document.getElementById('track-generate-session')).not.toBeNull();
@@ -300,7 +302,7 @@ describe('Create a training plan, pick a mode, then Return to plan, keeps Just-T
         selectedRace: null,
         customRaceDate: null,
       });
-    });
+    }, 20000); // walks the wizard and loads the plan view; see the waitFor note above
   }
 
   it('a user with a plan keeps their onboarding record on Return to plan', async () => {

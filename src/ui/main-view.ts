@@ -1,3 +1,4 @@
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import { getState, getMutableState } from '@/state/store';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import type { SimulatorState } from '@/types';
@@ -186,6 +187,8 @@ function getWeekDateLabel(s: any, weekNum: number): string | null {
 function getCurrentPhaseLabel(s: any, terse: boolean): string {
   const wk = s.wks?.[s.w - 1];
   if (wk?.checkpoint) return 'Checkpoint';
+  // The closing week of a Monday to Wednesday race is the week holding the race.
+  if (wk?.raceClosing) return 'Race week';
   return getPhaseLabel(wk?.ph, terse);
 }
 
@@ -2243,7 +2246,7 @@ export function triggerACWRReduction(): void {
   const _mvTier = s.athleteTierOverride ?? s.athleteTier;
   const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
-  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
+  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), wk.ph), acwrStatus: _mvAcwr.status };
   // When ACWR is barely above the ceiling (≤5%) OR below it, a single small
   // adjustment is enough. Matches the "A small adjustment is enough" copy in
   // the ACWR modal header exactly. Only applies when not in 'high' status.

@@ -1,3 +1,4 @@
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { OnboardingState, MilestoneTarget } from '@/types/onboarding';
 import { findNearestMilestone } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
@@ -6,7 +7,8 @@ import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft, fmtProbPct } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
+import { raceDayDurabilityMultiplier, raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -91,6 +93,10 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const showMilestonePopup = !!milestone && !state.acceptedMilestoneChallenge && state.targetMilestone === null;
 
   const shownTime = state.targetMilestone ? state.targetMilestone.time : forecastTime;
+  // The low-base marathon check (race-day-durability marathonEnduranceGap, the
+  // same check as the race page): the forecast above assumes endurance the plan
+  // does not build.
+  const enduranceGapText = noEvent ? null : raceDayEnduranceGapText(s.raceDayDurability, raceDistance, enduranceGapPlanContext(s));
 
   container.innerHTML = `
     <style>
@@ -220,6 +226,14 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             ` : ''}
           </div>
         `}
+
+        ${enduranceGapText ? `
+        <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.15s">
+          <div class="pp-note-card">
+            <p class="pp-note">${enduranceGapText}</p>
+          </div>
+        </div>
+        ` : ''}
 
         ${(s.ctlBaseline ?? 0) >= 20 ? `
         <div class="pp-rise" style="width:100%;max-width:480px;margin-top:16px;animation-delay:0.16s">
@@ -409,18 +423,20 @@ function fmtBenefitSec(sec: number): string {
 /**
  * Single source for the onboarding forecast at a given session count. The hero,
  * the milestone feasibility check, and the goal overlay all read from this one
- * call so the numbers can never diverge between surfaces.
+ * call so the numbers can never diverge between surfaces. Its volume is the
+ * Home forecast's (planForecastWeeklyKm, design v4 Q18), so the hero equals the
+ * forecast the built plan carries.
  */
-function forecastForSessions(
+export function forecastForSessions(
   s: ReturnType<typeof getState>,
   sessions: number,
   strengthSessions?: number,
 ): number {
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd);
+  const planMeanKm = planForecastWeeklyKm(s, sessions);
   return calculateLiveForecast({
     currentVdot: s.v || 50,
     targetDistance: s.rd,
-    weeksRemaining: s.tw || 16,
+    weeksRemaining: planTrainingWeeks(s) || 16, // training weeks: a closing week holds only the race
     sessionsPerWeek: sessions,
     runnerType: getRunnerType(s.b || 1.06),
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
@@ -432,6 +448,11 @@ function forecastForSessions(
     // pass 0 to compute the no-strength baseline for the benefit callout).
     strengthSessionsPerWeek: strengthSessions ?? s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0,
     blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    // Race-day durability from the long runs the plan prescribes. Read at the
+    // plan's runs per week (s.rw): a hypothetical extra session does not change
+    // the plan's long runs.
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   }).forecastTime;
 }
 

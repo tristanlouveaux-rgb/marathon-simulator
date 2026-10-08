@@ -1,3 +1,4 @@
+import { planTaperWeeks } from '@/workouts/race-week-layout';
 import type { PBs, RecentRun, RaceDistance, RunnerType } from '@/types';
 import type { OnboardingState } from '@/types/onboarding';
 import { rdKm, tv, cv } from './vdot';
@@ -411,6 +412,11 @@ export function calculateForecast(
 ): ForecastResult {
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
   const abilityBand = getAbilityBand(baselineVdot);
+  // The plan's taper (the split initializeWeeks builds for these weeks), so the
+  // forecast's taper is the plan's (planTaperWeeks before the weeks exist).
+  const taperWeeks = state.trainingForEvent === false
+    ? (TAPER_NOMINAL[targetDistStr] ?? 2)
+    : (planTaperWeeks({ tw: state.planDurationWeeks, rd: targetDistStr }) ?? TAPER_NOMINAL[targetDistStr] ?? 2);
 
   // Plan-prescribed mean weekly km. Sessions × ref-km × build-phase factor.
   // Represents what the periodised plan WILL deliver across its build phase,
@@ -422,7 +428,7 @@ export function calculateForecast(
     baselineKm: rampCtx?.baselineKm,
     archetype: rampCtx?.archetype,
     totalWeeks: state.planDurationWeeks,
-    taperWeeks: targetDistStr === 'marathon' ? 3 : 2,
+    taperWeeks,
   });
 
   const horizon = applyTrainingHorizonAdjustment({
@@ -432,7 +438,7 @@ export function calculateForecast(
     sessions_per_week: sessionsPerWeek,
     runner_type: runnerType,
     ability_band: abilityBand,
-    taper_weeks: targetDistStr === 'marathon' ? 3 : 2,
+    taper_weeks: taperWeeks,
     experience_level: state.experienceLevel || 'intermediate',
     cross_trained: state.crossTrainedBackground === true,
     weekly_volume_km: planMeanKm ?? undefined,
@@ -486,6 +492,16 @@ export interface LiveForecastParams {
    * downstream display does not compare against a blended baseline.
    */
   blendedAnchorSec?: number;
+  /**
+   * Race-day durability multiplier (>= 1) from the long runs the plan prescribes
+   * (`raceDayDurabilityMultiplier`, src/calculations/race-day-durability.ts). The
+   * forecast is end-of-plan fitness on the assumption that the plan is followed,
+   * so durability is judged on the plan's own long runs. Every running forecast
+   * caller passes it. Omitted = 1 (no running race plan).
+   */
+  raceDayDurabilityMultiplier?: number;
+  /** The plan's race-taper weeks (planTaperWeeks). Omitted = TAPER_NOMINAL. */
+  taperWeeks?: number;
   /** Race-day course profile (climate/altitude/elevation). When supplied,
    * the result includes `forecastTimeAdjusted` + `courseFactors`. */
   courseProfile?: import('@/types/onboarding').CourseProfile;
@@ -506,7 +522,7 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     sessions_per_week: p.sessionsPerWeek,
     runner_type: p.runnerType,
     ability_band: abilityBand,
-    taper_weeks: TAPER_NOMINAL[p.targetDistance] ?? Math.max(1, Math.ceil(wr * 0.15)),
+    taper_weeks: p.taperWeeks ?? TAPER_NOMINAL[p.targetDistance] ?? Math.max(1, Math.ceil(wr * 0.15)),
     experience_level: p.experienceLevel || 'intermediate',
     cross_trained: p.crossTrained === true,
     weekly_volume_km: p.weeklyVolumeKm,
@@ -538,6 +554,12 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     forecastTime = p.blendedAnchorSec - horizonDeltaSec;
   } else {
     forecastTime = bareForecastTime;
+  }
+
+  // Long-run durability on race day, from the plan's prescribed long runs.
+  const durabilityMult = p.raceDayDurabilityMultiplier;
+  if (durabilityMult != null && Number.isFinite(durabilityMult) && durabilityMult > 1) {
+    forecastTime *= durabilityMult;
   }
 
   if (p.courseProfile) {

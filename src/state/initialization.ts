@@ -4,21 +4,26 @@ import { STATE_SCHEMA_VERSION, type GarminActual } from '@/types/state';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { getMutableState } from '@/state/store';
 import { clearStaleGatesForMode } from '@/injury/engine';
-import { saveState, getMondayOf } from '@/state/persistence';
+import { saveState } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbMedianVdot } from '@/calculations/physiological-vdot';
-import { computePeakWeeklyKm } from '@/workouts/plan_engine';
-import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount } from '@/calculations/run-durability';
+import { pbMedianVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
+import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
+import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
 import { recomputeLT } from '@/data/ltSync';
 import { initializeWeeks } from '@/workouts';
+import { isSharpeningBlock } from '@/workouts/phases';
+import { buildSharpenBlockState } from '@/workouts/sharpening-block';
+import { raceWeekLayout } from '@/workouts/race-week-layout';
+import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
 import { initializeHyroxSimulator } from './initialization.hyrox';
@@ -308,8 +313,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.timp = 0;
       s.rpeAdj = 0;
       s.schemaVersion = STATE_SCHEMA_VERSION;
-      s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
-      s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+      // Local calendar dates (approved default Q10: every mode), as the race-plan path.
+      s.planStartDate = localMondayKey(new Date());
+      s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
       s.onboarding = state;
 
       // Persist whatever the user provided. PBs aren't required for trackOnly —
@@ -405,6 +411,23 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         : 'half')
       : (state.raceDistance || 'half');
     const targetDistMeters = rd(targetDistStr);
+
+    // Plan calendar (race-week-layout.ts). Weeks run Monday to Sunday from this
+    // local Monday. With a race date the plan runs through the week holding race
+    // day: race week is the week holding the day 3 days out, and a Monday to
+    // Wednesday race adds a closing week holding only the race. Training weeks
+    // (through race week) are the plan's horizon: phases, engine, forecast.
+    // Without a race date (5K/10K length slider, continuous) the wizard's week
+    // count stands.
+    const planStartISO = localMondayKey(new Date());
+    const raceDateForPlan = state.trainingForEvent === false
+      ? null
+      : (state.selectedRace?.date ?? state.customRaceDate ?? null);
+    const raceLayout = raceDateForPlan ? raceWeekLayout(planStartISO, raceDateForPlan) : null;
+    const trainingWeeks = raceLayout ? raceLayout.trainingWeeks : state.planDurationWeeks;
+    const calendarWeeks = raceLayout ? raceLayout.calendarWeeks : state.planDurationWeeks;
+    // Onboarding state with the plan's training weeks, for the forecast inputs.
+    const stateForForecast: OnboardingState = { ...state, planDurationWeeks: trainingWeeks };
 
     // Recent race for blending
     const rec = state.recentRace;
@@ -521,8 +544,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // refresher uses. Calibration bias (runRaceLog) is intentionally not
     // mirrored: onboarding users have no logged races against THIS plan
     // yet, and the first refresh applies it regardless.
-    const longestRunSec = getLongestRunSec(sCurrent, 12);
-    const durability = applyLongRunCap(longestRunSec, targetDistStr, getQualifyingLongRunCount(sCurrent, targetDistStr, 12));
+    const longestRunSec = getLongestRunSec(sCurrent, DURABILITY_WINDOW_WEEKS);
+    const durability = applyLongRunCap(longestRunSec, targetDistStr, getQualifyingLongRunCount(sCurrent, targetDistStr, DURABILITY_WINDOW_WEEKS));
     // The durability cap is a short-anchor-extrapolation penalty (e.g. a single
     // 5K Riegel-projected to a half with no endurance base). It must NOT push the
     // anchor slower than a time the athlete has actually run at the target
@@ -584,18 +607,18 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           runsPerWeek,
           raceDistance: targetDistStr,
           fitnessLevel: state.experienceLevel || 'intermediate',
-          totalWeeks: state.planDurationWeeks ?? 16,
+          totalWeeks: trainingWeeks ?? 16,
           vdot: engineVdot,
           easyPaceSecPerKm: pac.e,
         })
       : null;
-    const peakBlend = (peakKm != null && peakKm > 0)
+    const blendAtPeakKm = (km: number | null): number | null => (km != null && km > 0)
       ? blendPredictions(
           targetDistMeters, pbs, ltPace, vo2max, b,
           runnerType.toLowerCase(),
           blendInputs.recentRun ?? rec ?? null,
           undefined,
-          peakKm,
+          km,
           blendInputs.avgPaceSecPerKm ?? undefined,
           { weeksCovered: blendInputs.weeksCovered, paceConfidence: blendInputs.paceConfidence, isStale: blendInputs.isStale },
           undefined,
@@ -604,7 +627,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           effectiveCrossSessions,
         )
       : null;
-    const forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
+    const peakBlend = blendAtPeakKm(peakKm);
+    let forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
     // Publish the peak-volume anchor for the live-recomputing forecast surfaces
     // (renderer, plan-preview) so they credit the ramp instead of anchoring on
     // the penalised today-time (ISSUE-297 forecast-display facet).
@@ -631,7 +655,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.injuryState = clearStaleGatesForMode(s.injuryState, 'running');
     }
     s.w = 1;
-    s.tw = state.planDurationWeeks;
+    s.tw = calendarWeeks;
     s.v = curr;
     s.iv = curr;
     s.rpeAdj = 0;
@@ -692,7 +716,36 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // the refresher writes), so the drill-down can explain the cap from day 1.
     s.runDurability = durability;
     archiveCurrentWksIfPopulated();
-    s.wks = initializeWeeks(s.tw);
+    // A race plan takes the running race split (marathon 2-week taper floor;
+    // a sharpening block when the race is closer than a full build, phases.ts).
+    // A block built without a real running fitness signal gets no peak week.
+    const noRunningSignal = !hasRealRunningFitnessSignal(s);
+    s.wks = state.trainingForEvent === false
+      ? initializeWeeks(s.tw)
+      : initializeWeeks(trainingWeeks, { raceDistance: targetDistStr, noSignal: noRunningSignal });
+    if (raceLayout?.closingWeek) {
+      // The race's own week after race week: it holds only the race.
+      s.wks.push({
+        w: s.wks.length + 1, ph: 'taper', raceClosing: true,
+        rated: {}, skip: [], cross: [], wkGain: 0, workoutMods: [], adjustments: [], unspentLoad: 0, extraRunLoad: 0,
+      });
+    }
+    // Sharpening block: freeze the inputs that depend on today's 30-day run
+    // window (the first long run) so every later week replays the same block.
+    // Any other plan clears a stale block.
+    s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, trainingWeeks)
+      ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks, noSignal: noRunningSignal })
+      : undefined;
+    if (s.sharpenBlock && runsPerWeek > 0) {
+      // A block never reaches computePeakWeeklyKm: anchor the forecast on the
+      // block's own highest pre-taper week (plannedPeakWeeklyKm, the reader
+      // refreshBlendedFitness uses), now that its weeks and start exist.
+      const blockPeakBlend = blendAtPeakKm(plannedPeakWeeklyKm(runningPlanShapeInputs({ ...s, onboarding: state })));
+      if (blockPeakBlend != null && blockPeakBlend > 0) {
+        forecastAnchorSec = blockPeakBlend;
+        s.forecastBlendAnchorSec = blockPeakBlend;
+      }
+    }
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {
@@ -776,16 +829,31 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
       : 0;
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, forecastAnchorSec,
+      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, stateForForecast, runnerType, forecastAnchorSec,
       { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;
-    s.forecastTime = forecast.forecastTime;
+    // Race-day durability from the long runs the plan prescribes (race-day-durability),
+    // read with the inputs this plan is being built from: s.onboarding, the
+    // continuous flag and the plan start are assigned further down.
+    const raceDayDurability = raceDayPlanDurability({
+      ...s,
+      onboarding: state,
+      continuousMode: state.trainingForEvent === false,
+      planStartDate: planStartISO,
+    });
+    s.raceDayDurability = raceDayDurability ?? undefined;
+    s.forecastTime = forecast.forecastTime * (raceDayDurability?.multiplier ?? 1);
 
     // Store selected marathon (must be set BEFORE refreshing course factors,
     // since the helper reads s.selectedMarathon.profile)
     if (state.selectedRace) {
       s.selectedMarathon = state.selectedRace;
+    } else if (state.trainingForEvent !== false && state.customRaceDate) {
+      // A custom date replaces an earlier event pick: every running race-date
+      // reader takes the event first (runningRaceDateISO), so a stale one would
+      // move race day.
+      s.selectedMarathon = undefined;
     }
     refreshForecastCourseFactors(s);
 
@@ -795,8 +863,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // first full week landing the following Monday. We never anchor to a future Monday:
     // weekIndexForDate can't file pre-start activities and reconcilePlanAnchorToEarliestActivity
     // would pull the anchor back the moment a lead-in run is logged.
-    s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
-    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+    // Local calendar dates: the UTC Monday was the previous week's Monday in the
+    // first hours of a Monday east of UTC, which moved race day by a week.
+    s.planStartDate = planStartISO;
+    s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
 
     // Store onboarding reference
     s.onboarding = state;

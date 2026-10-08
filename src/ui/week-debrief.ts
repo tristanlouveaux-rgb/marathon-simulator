@@ -16,6 +16,10 @@
  * Internal names (ATL/CTL/TSB/rpeAdj) must NOT appear in user-facing copy.
  */
 
+import { planTrainingWeeks, planRaceLayout, isClosingWeek, runningRaceDateISO, planCompletionDue } from '@/workouts/race-week-layout';
+import { applyRaceDayRules, raceDayRulesApply } from '@/workouts/race-day-rules';
+import { assignDefaultDays } from '@/workouts/scheduler';
+import { firstTrackedDow } from './workout-status';
 import { getState, getMutableState, saveState } from '@/state';
 import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, computeACWR } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
@@ -25,7 +29,8 @@ import { next } from '@/ui/events';
 import { computePlanAdherence, detectChronicLowAdherence, CHRONIC_ADHERENCE_WINDOW_WEEKS } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
-import { planWeekSessions, effortMultiplier, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
+import { planWeekSessions, effortMultiplier, isRaceWeek, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN } from '@/workouts/plan_engine';
+import { liveSharpeningLongRunCapMin } from '@/workouts/sharpening-block';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts, planEngineStateInputs } from '@/workouts/generator';
 import { resolveCtlAdherence } from '@/ui/planned-day-tss';
@@ -120,14 +125,28 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
   if (!pendingDebrief && targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
 
   // End-of-plan: if the user is on the last planned week and the final complete debrief
-  // hasn't fired yet, trigger it unconditionally. No calendar maths required.
-  // This catches the case where planStartDate is absent (isWeekPendingDebrief returns false)
-  // and lastDebriefWeek already covers week tw-1 (shouldAutoDebrief returns false too).
+  // hasn't fired yet, trigger it. This catches the case where planStartDate is absent
+  // (isWeekPendingDebrief returns false) and lastDebriefWeek already covers week tw-1
+  // (shouldAutoDebrief returns false too). A running race plan's final week holds the
+  // race, so the completion debrief waits until race day is behind the local calendar
+  // (planCompletionDue); before that the normal review paths below run.
   const tw = s.tw as number | undefined;
   const lastComplete = (s.lastCompleteDebriefWeek ?? 0) as number;
-  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly) {
+  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly
+      && planCompletionDue(s)) {
     showWeekDebrief(s.w, 'complete');
     return;
+  }
+
+  // Before race day the final week of a running race plan is reviewed once. A
+  // calendar past the plan's last week (an anchor pulled back a week by
+  // reconcilePlanAnchorToEarliestActivity, or a plan built before plans ran on
+  // race day's calendar) keeps isWeekPendingDebrief true until race day, and the
+  // review records nothing that advances, so without this guard the same review
+  // reopened on every launch, twice on the same day included.
+  if (pendingDebrief && tw && (s.w ?? 0) >= tw && !planCompletionDue(s)) {
+    const today = new Date().toISOString().split('T')[0];
+    if ((s.lastDebriefWeek ?? 0) >= s.w || (s.lastDebriefShownDate ?? '') === today) return;
   }
 
   if (pendingDebrief && !s.trackOnly) {
@@ -172,6 +191,13 @@ export function showWeekDebrief(
   }
 
   const wk = s.wks[weekNum - 1];
+
+  // A running race plan's final week holds the race. Before race day has passed
+  // (planCompletionDue) its debrief reviews the week: no "View plan summary",
+  // no completion screen, nothing recorded as the plan's complete debrief. Every
+  // trigger (end-of-plan launch, Sunday auto-show, Wrap up week) lands here.
+  const finalWeek = weekNum >= (s.tw ?? Infinity);
+  if (mode === 'complete' && finalWeek && !planCompletionDue(s)) mode = 'review';
 
   // ── Compute metrics ──────────────────────────────────────────────────────
 
@@ -329,7 +355,7 @@ export function showWeekDebrief(
   }).join('');
 
   // CTA label depends on mode and whether this is the final plan week
-  const isLastWeek = weekNum >= ((s as any).tw ?? Infinity);
+  const isLastWeek = finalWeek;
   const ctaLabel = mode === 'complete'
     ? (isLastWeek ? 'View plan summary' : 'Generate next week')
     : 'Continue →';
@@ -531,9 +557,11 @@ function _showPlanPreview(
   if (!card) return;
   const s = getState() as any;
 
-  // Last week of the plan → show plan completion screen instead of next-week preview
+  // Last week of the plan → show plan completion screen instead of next-week preview,
+  // once race day has passed (planCompletionDue). Before that the week is reviewed only.
   if (weekNum >= (s.tw ?? Infinity)) {
-    _renderPlanComplete(card, weekNum, mode);
+    if (planCompletionDue(s)) _renderPlanComplete(card, weekNum, mode);
+    else _closeAndRecord(weekNum, 'review');
     return;
   }
 
@@ -784,6 +812,9 @@ export function debriefPreviewPlanInputs(
     weekIndex: number; totalWeeks: number; vdot: number; forceDeload?: boolean;
     weeklyHoursTarget?: number; excludedSlots?: string[]; easyPaceSecPerKm?: number;
     baselineKm?: number; archetype?: ReturnType<typeof planEngineStateInputs>['archetype'];
+    planPhases?: any[]; continuousMode?: boolean;
+    sharpening?: ReturnType<typeof sharpeningInputsFromState>;
+    liveLongRunCapMin?: number;
   };
   acwrStatus: 'safe' | 'caution' | 'high' | 'unknown';
 } {
@@ -797,7 +828,8 @@ export function debriefPreviewPlanInputs(
     phase: nextPhase,
     fitnessLevel: s.onboarding?.experienceLevel ?? 'intermediate',
     weekIndex: weekNum + 1,
-    totalWeeks: s.tw ?? 16,
+    // Training weeks, as the generator passes the engine (a closing week holds only the race).
+    totalWeeks: planTrainingWeeks(s) || 16,
     vdot: s.v ?? 45,
     forceDeload: nextWk?.forceDeload,
     weeklyHoursTarget: s.onboarding?.weeklyTrainingHours,
@@ -805,6 +837,14 @@ export function debriefPreviewPlanInputs(
     easyPaceSecPerKm: s.pac?.e,
     baselineKm,
     archetype,
+    // Same plan-history inputs the generator hands the engine (generator.ts).
+    planPhases: (s.wks ?? []).slice(0, planTrainingWeeks(s) || undefined).map((w: any) => w?.ph),
+    continuousMode: !!s.continuousMode,
+    // Sharpening block: the same stored start and live long-run cap the generator reads.
+    // Next week is about to be reached: in 'complete' mode s.w has not advanced yet, so
+    // the cap is read as the generator will read it for that week (nextWeekPreview).
+    sharpening: sharpeningInputsFromState(s),
+    liveLongRunCapMin: liveSharpeningLongRunCapMin(s, weekNum + 1, { nextWeekPreview: true }),
   };
 
   let acwrStatus: 'safe' | 'caution' | 'high' | 'unknown' = nextWk?.scheduledAcwrStatus ?? 'safe';
@@ -890,9 +930,10 @@ function _renderPlanPreview(
   // exact values the generator will read) and fall back to a live computeACWR only when the stamp
   // isn't present yet, so preview and commit agree. On a high-ACWR week the RECOMMENDED pane is the
   // eased plan, the ALTERNATIVE is "keep ramping" (the un-eased adjusted plan); the toggle persists
-  // to wk.acwrChoice and the generator honours it. The final taper (race) week is exempt — it
-  // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298).
-  const _raceWeek = nextPhase === 'taper' && nextWeekIdx >= (s.tw ?? nextWeekIdx);
+  // to wk.acwrChoice and the generator honours it. The race week (isRaceWeek) is exempt — it
+  // matches the generator's race-week carve-out (the primer is already minimal, ISSUE-298). Read
+  // from the same baseCtx the engine got, so the preview and the plan agree on which week it is.
+  const _raceWeek = isRaceWeek(baseCtx.weekIndex, baseCtx.totalWeeks, baseCtx.continuousMode);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = (acwrStatus === 'high' && !_raceWeek)
@@ -917,10 +958,23 @@ function _renderPlanPreview(
   const recommendedIntents = acwrEaseActive ? easeResult!.intents : adjustedIntents;
   const alternativeIntents = acwrEaseActive ? adjustedIntents : standardIntents;
 
-  // Convert intents to workouts for display
+  // Convert intents to workouts for display. Near race day the week also goes
+  // through the generator's race-day placement (race-day-rules.ts), so the
+  // preview lists exactly the sessions the week gets (nothing on or after race
+  // day, the primer dropped when no day 3 to 5 days out remains).
   const easyPace = s.pac?.e;
-  const adjustedWorkouts = recommendedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
-  const standardWorkouts = alternativeIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+  const raceLayout = planRaceLayout(s);
+  const withRaceDayRules = (ws: any[]): any[] => {
+    if (!raceLayout || !raceDayRulesApply(nextWeekIdx, raceLayout)) return ws;
+    const placed = applyRaceDayRules(assignDefaultDays(ws.map(w => ({ ...w }))), {
+      weekIndex: nextWeekIdx, layout: raceLayout,
+      firstScheduleDow: firstTrackedDow(s.planStartDate, nextWeekIdx, s.planCreatedAt),
+    });
+    return placed;
+  };
+  const closingWeek = isClosingWeek(s, nextWeekIdx);
+  const adjustedWorkouts = closingWeek ? [] : withRaceDayRules(recommendedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace)));
+  const standardWorkouts = closingWeek ? [] : withRaceDayRules(alternativeIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace)));
 
   // Build per-workout annotations first. They define what "visibly different" means
   const easyPaceSec = easyPace ?? 360; // fallback 6:00/km
@@ -965,7 +1019,11 @@ function _renderPlanPreview(
     </div>
   ` : '';
 
-  const workoutsHtml = _renderWorkoutList(adjustedWorkouts, perWorkoutAnnotations);
+  // Closing week (a Monday to Wednesday race's own week): no sessions before the race.
+  const raceDateIso = runningRaceDateISO(s);
+  const workoutsHtml = closingWeek
+    ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0;padding:8px 0">${raceDateIso ? `Race on ${_fmtRaceDay(raceDateIso)}. ` : ''}No sessions before it.</p>`
+    : _renderWorkoutList(adjustedWorkouts, adjustedWorkouts.length === recommendedIntents.length ? perWorkoutAnnotations : []);
   const standardWorkoutsHtml = _renderWorkoutList(standardWorkouts, []);
 
   // Behind-plan headline. Factual, no judgement (Tristan, 2026-06-09): lead with the number, state
@@ -1017,7 +1075,7 @@ function _renderPlanPreview(
   card.innerHTML = `
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:18px">
-      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase · Week ${nextWeekIdx}</span>
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${closingWeek ? 'Race week' : `${PHASE_LABEL[nextPhase] ?? nextPhase} Phase`} · Week ${nextWeekIdx}</span>
     </div>
 
     ${adherenceNote}
@@ -1050,6 +1108,12 @@ function _renderPlanPreview(
 
   _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent, acwrEaseActive ? nextWeekIdx : null,
     acwrInitial?.choice !== 'keep');
+}
+
+/** "Tuesday 14 October" from a YYYY-MM-DD key, read as a local calendar date. */
+function _fmtRaceDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
 function _renderWorkoutList(workouts: any[], annotations: string[]): string {

@@ -12,7 +12,8 @@ import {
   getTriDistanceLabel,
 } from '@/constants/triathlon-constants';
 import { getTriathlonsByDistance, getTriathlonById } from '@/data/triathlons';
-import { formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
+import { formatRaceDate, formatTimeUntil } from '@/data/marathons';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import { ESTIMATED_DATE_NOTE } from '@/data/race-calendar';
 import type { Triathlon } from '@/types/onboarding';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
@@ -401,13 +402,15 @@ function wireEventHandlers(): void {
       finalPatch.triWeekdayHoursPerWeek = Math.round(totalH * 0.4 * 2) / 2;
     }
     if (!current.triDistance) finalPatch.triDistance = '70.3';
-    // Plan length follows the actual race date when one is picked, so a race
-    // 6 weeks out produces a 6-week plan rather than the 20/24-week distance
-    // default. The default is only used when no date is set.
+    // Plan length follows the actual race date when one is picked: the
+    // calendar weeks from this local Monday (the plan's start) through the
+    // week holding race day, so the plan's final week holds race day
+    // (racePlanCalendarWeeks). The distance default is only used when no date
+    // is set.
     const distanceForDefault = current.triDistance ?? finalPatch.triDistance ?? '70.3';
     const raceDateIso = current.customRaceDate ?? null;
     finalPatch.planDurationWeeks = raceDateIso
-      ? Math.max(1, calculateWeeksUntil(raceDateIso))
+      ? (racePlanCalendarWeeks(raceDateIso) ?? 1)
       : PLAN_WEEKS_DEFAULT[distanceForDefault];
     // Anchor trainingForEvent = true. Triathlon is always race-mode (§18.10).
     finalPatch.trainingForEvent = true;

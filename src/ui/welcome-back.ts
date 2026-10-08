@@ -13,6 +13,8 @@
  * per calendar day (prevents re-showing on multiple app opens).
  */
 
+import { planTrainingWeeks, runningRaceDateISO } from '@/workouts/race-week-layout';
+import { isSharpeningBlock } from '@/workouts/phases';
 import { getState, getMutableState, saveState } from '@/state';
 import { weekIndexForDate } from '@/calculations/activity-matcher';
 import { localDateKey, localMondayKey, calendarDaysBetween } from '@/utils/local-date';
@@ -130,7 +132,14 @@ export function advanceWeekToToday(): void {
   // Triathlon users are exempt: there is no plan-preview debrief, so gating on it
   // would permanently freeze s.w at week 1.
   const lastComplete = (s as any).lastCompleteDebriefWeek ?? 0;
-  const debriefCap = (s as any).eventType === 'triathlon' ? Infinity : lastComplete + 1;
+  let debriefCap = (s as any).eventType === 'triathlon' ? Infinity : lastComplete + 1;
+  // Race week and a closing week always open, even after a skipped debrief: a
+  // held-back debrief must never keep a running race plan out of the week that
+  // holds the race (design v4 Q16, approved default).
+  const trainingWeeks = planTrainingWeeks(s);
+  if (!s.continuousMode && runningRaceDateISO(s) && targetWeek >= trainingWeeks) {
+    debriefCap = Math.max(debriefCap, targetWeek);
+  }
 
   // Clamp to the smaller of target, available weeks, and debrief cap
   const effectiveMax = Math.min(s.tw ?? s.wks?.length ?? s.w, s.wks?.length ?? s.w);
@@ -146,9 +155,14 @@ export function advanceWeekToToday(): void {
     if (loss > 0) s.v = Math.max(Math.round((s.v - loss) * 10) / 10, 20);
   }
 
-  // 3+ week gap: mark landing week as base (reduced volume)
-  if (gap >= 3 && s.wks?.[s.w - 1]) {
-    s.wks[s.w - 1].ph = 'base';
+  // 3+ week gap: mark landing week as base (reduced volume). A closing week
+  // keeps its label (it holds only the race), and so does a sharpening block's
+  // taper: relabelling a taper week would end the race taper early.
+  const landing = s.wks?.[s.w - 1];
+  const spareLabel = !!landing?.raceClosing
+    || (landing?.ph === 'taper' && !!s.sharpenBlock && isSharpeningBlock(s.rd, trainingWeeks));
+  if (gap >= 3 && landing && !spareLabel) {
+    landing.ph = 'base';
   }
 
   // Stamp the landing week so the CTL-gap re-anchor stands down for it. Two reasons converge here:

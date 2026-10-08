@@ -16,7 +16,7 @@
  * enough to catch consistent training, short enough to track current state.
  */
 
-import type { SimulatorState } from '@/types/state';
+import type { SimulatorState, Week, Workout } from '@/types/state';
 import { classifyActivity } from './tri-benchmarks-from-history';
 
 export interface VolumePerDiscipline {
@@ -126,15 +126,58 @@ export function sessionsPerWeekByDiscipline(
   };
 }
 
+/** A planned session as the planned-dose helpers read it. */
+type DoseSession = Pick<Workout, 'discipline' | 'estimatedDurationMin'>;
+
+/**
+ * Per-discipline sessions/wk and hours/wk averaged over the next `weeks` plan
+ * weeks from `state.w + startOffset`, reading each week through `sessionsOf`.
+ * The public look-ahead helpers read `triWorkouts` (the plan as scheduled);
+ * the forecast's fallback reads the planned dose (`forecastLookAheadDose`).
+ * A week without `triWorkouts` is skipped, and so is a closing week
+ * (raceClosing: a Monday to Wednesday race's own week, which holds only the
+ * race): it is not a training week (planTrainingWeeks), so it does not count
+ * toward `weeks` or dilute the average, and a Tuesday race reads like the
+ * Sunday before it.
+ */
+function lookAheadDose(
+  state: SimulatorState,
+  weeks: number,
+  startOffset: number,
+  sessionsOf: (wk: Week) => ReadonlyArray<DoseSession>,
+): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
+  const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const wks = state.wks ?? [];
+  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  let weeksCovered = 0;
+  for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
+    const wk = wks[w];
+    if (!wk?.triWorkouts || wk.raceClosing) continue;
+    weeksCovered += 1;
+    for (const workout of sessionsOf(wk)) {
+      const d = workout.discipline;
+      if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
+      counts[d] += 1;
+      totals[d] += (workout.estimatedDurationMin ?? 0) / 60;
+    }
+  }
+  const divisor = Math.max(1, weeksCovered);
+  return {
+    sessions: { swim: counts.swim / divisor, bike: counts.bike / divisor, run: counts.run / divisor },
+    hours:    { swim: totals.swim / divisor, bike: totals.bike / divisor, run: totals.run / divisor },
+  };
+}
+
 /**
  * Average sessions/week per discipline from the **planned** upcoming weeks
- * (`triWorkouts`), not historical activity. Used by the projection's horizon
- * adjuster: "if you stick with the plan, here's how many sessions you'll be
- * doing per week". Which is the right input for projecting race-day fitness.
+ * (`triWorkouts`), not historical activity: the plan as scheduled, which the
+ * Training chip fingerprint reads. The forecast's planned dose reads
+ * `plannedBuildDoseByDiscipline` / `plannedPeakDoseByDiscipline` instead.
  *
- * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) are
- * skipped; if fewer than 4 future weeks remain (race week, taper) we average
- * over what's available.
+ * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) and a
+ * closing week (raceClosing) are skipped; if fewer than 4 future weeks remain
+ * (race week, taper) we average over what's available.
  *
  * `startOffset` skips that many weeks ahead of the current week before
  * sampling. The injury-aware predictor uses it to sample the **recovered**
@@ -146,33 +189,15 @@ export function plannedSessionsPerWeekByDiscipline(
   weeks: number = 4,
   startOffset: number = 0,
 ): VolumePerDiscipline {
-  const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
-  const wks = state.wks ?? [];
-  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
-  let weeksCovered = 0;
-  for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
-    const wk = wks[w];
-    if (!wk?.triWorkouts) continue;
-    weeksCovered += 1;
-    for (const workout of wk.triWorkouts) {
-      const d = workout.discipline;
-      if (d === 'swim' || d === 'bike' || d === 'run') counts[d] += 1;
-    }
-  }
-  const divisor = Math.max(1, weeksCovered);
-  return {
-    swim: counts.swim / divisor,
-    bike: counts.bike / divisor,
-    run:  counts.run / divisor,
-  };
+  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? []).sessions;
 }
 
 /**
  * Average weekly hours per discipline from the **planned** upcoming weeks
- * (`triWorkouts`), summing each workout's `durationMin` per discipline.
- * Drives the race-readiness "dose" signal. Captures that 5 short bike
- * sessions/wk ≠ 5 long bike sessions/wk (same session count, very different
- * volume). Falls back to 0 for weeks with no `triWorkouts` entries.
+ * (`triWorkouts`), summing each workout's `durationMin` per discipline: the
+ * plan as scheduled. Captures that 5 short bike sessions/wk ≠ 5 long bike
+ * sessions/wk (same session count, very different volume). Falls back to 0
+ * for weeks with no `triWorkouts` entries.
  *
  * Defaults to a 4-week look-ahead window (matches `plannedSessionsPerWeekByDiscipline`).
  * `startOffset` behaves identically. Skips ahead to sample the recovered dose.
@@ -182,26 +207,40 @@ export function plannedHoursPerWeekByDiscipline(
   weeks: number = 4,
   startOffset: number = 0,
 ): VolumePerDiscipline {
-  const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
-  const wks = state.wks ?? [];
-  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
-  let weeksCovered = 0;
-  for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
-    const wk = wks[w];
-    if (!wk?.triWorkouts) continue;
-    weeksCovered += 1;
-    for (const workout of wk.triWorkouts) {
-      const d = workout.discipline;
-      const minutes = workout.estimatedDurationMin ?? 0;
-      if (d === 'swim' || d === 'bike' || d === 'run') totals[d] += minutes / 60;
-    }
-  }
-  const divisor = Math.max(1, weeksCovered);
-  return {
-    swim: totals.swim / divisor,
-    bike: totals.bike / divisor,
-    run:  totals.run / divisor,
-  };
+  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? []).hours;
+}
+
+/**
+ * The sessions a week contributes to the forecast's planned dose: its
+ * `triWorkouts` plus the sessions the race window removed from it
+ * (`Week.raceWindowCut`, the week before race week of a Thursday to Saturday
+ * race). The race window is taper placement (planning): its last days carry
+ * race-week sessions only. The forecast reads the plan's build prescription
+ * for that week, as running's forecast reads plan-engine targets
+ * (plannedPeakWeeklyKm) rather than the race-day-rule output, so a Thursday
+ * race never forecasts slower than the Sunday before it because its taper
+ * window cut the week before race week.
+ */
+function plannedDoseWorkouts(wk: Week): ReadonlyArray<DoseSession> {
+  const cut = wk.raceWindowCut;
+  return cut && cut.length > 0 ? [...(wk.triWorkouts ?? []), ...cut] : (wk.triWorkouts ?? []);
+}
+
+/**
+ * The 4-week look-ahead of the planned dose: the forecast's fallback when no
+ * build week remains (`plannedBuildDoseByDiscipline`, and through it
+ * `plannedPeakDoseByDiscipline`). Reads each week through
+ * `plannedDoseWorkouts`, so the race window's cut counts here too: the week
+ * before race week of a Thursday to Saturday race is often labelled taper, and
+ * from then on the fallback is all the forecast reads. The closing week is
+ * skipped (`lookAheadDose`), so a Tuesday race forecasts like the Sunday
+ * before it. The public look-ahead helpers keep showing the plan as scheduled.
+ */
+function forecastLookAheadDose(
+  state: SimulatorState,
+  startOffset: number,
+): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
+  return lookAheadDose(state, 4, startOffset, plannedDoseWorkouts);
 }
 
 /**
@@ -229,12 +268,18 @@ export function plannedHoursPerWeekByDiscipline(
  * (block-cycle deloads) and are likewise excluded — a deload isn't the build
  * commitment either. A week with no `ph` set is treated as build (counted).
  *
+ * The race window's cut (`Week.raceWindowCut`) counts as that week's build
+ * dose (`plannedDoseWorkouts`): the taper placement is not lost training.
+ *
  * `startOffset` skips that many weeks ahead before sampling (injury-recovery
  * dose sampling), matching `plannedSessions/HoursPerWeekByDiscipline`.
  *
- * Falls back to the 4-week look-ahead when no build weeks remain (deep in the
- * final taper) so the dose is never zero. Near taper the `executionFactor → 0`
- * collapses projected onto current regardless, so the fallback value is inert.
+ * Falls back to the 4-week look-ahead of the planned dose
+ * (`forecastLookAheadDose`) when no build weeks remain (only taper weeks
+ * ahead) so the dose is never zero. The fallback is not inert: from then on
+ * it is the dose the forecast reads (with the race window's cut left out of
+ * it, an Ironman on Thursday 17 Dec 2026 forecast 3.6 min slower on Monday
+ * 30 Nov), so it reads the cut like the build mean does.
  */
 export function plannedBuildDoseByDiscipline(
   state: SimulatorState,
@@ -250,7 +295,7 @@ export function plannedBuildDoseByDiscipline(
     if (!wk?.triWorkouts) continue;
     if (wk.ph === 'taper') continue; // freshness, not build dose (Mujika 2002)
     buildWeeks += 1;
-    for (const workout of wk.triWorkouts) {
+    for (const workout of plannedDoseWorkouts(wk)) {
       const d = workout.discipline;
       if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
       counts[d] += 1;
@@ -260,10 +305,7 @@ export function plannedBuildDoseByDiscipline(
   if (buildWeeks === 0) {
     // Deep in the final taper — no build weeks left to sample. Fall back to the
     // immediate look-ahead so the dose is never zero.
-    return {
-      sessions: plannedSessionsPerWeekByDiscipline(state, 4, startOffset),
-      hours: plannedHoursPerWeekByDiscipline(state, 4, startOffset),
-    };
+    return forecastLookAheadDose(state, startOffset);
   }
   return {
     sessions: { swim: counts.swim / buildWeeks, bike: counts.bike / buildWeeks, run: counts.run / buildWeeks },
@@ -288,8 +330,11 @@ export function plannedBuildDoseByDiscipline(
  *   1. The mean dose over `ph === 'peak'` weeks, when the plan labels a peak
  *      phase (robust to a single outlier week).
  *   2. Else the max single non-taper week (short plans with no labelled peak).
- *   3. Else the build-dose fallback (deep in the final taper — inert, since the
- *      predictor's executionFactor → 0 pins projected to current there anyway).
+ *   3. Else the build-dose fallback (only taper weeks ahead): the 4-week
+ *      look-ahead of the planned dose (`forecastLookAheadDose`).
+ *
+ * The race window's cut (`Week.raceWindowCut`) counts as that week's dose
+ * (`plannedDoseWorkouts`) on every path, as in the build dose.
  *
  * `startOffset` matches the other planned-dose helpers (injury-recovery sampling).
  */
@@ -313,7 +358,7 @@ export function plannedPeakDoseByDiscipline(
     sawBuildWeek = true;
     const sess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
     const hrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
-    for (const workout of wk.triWorkouts) {
+    for (const workout of plannedDoseWorkouts(wk)) {
       const d = workout.discipline;
       if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
       sess[d] += 1;

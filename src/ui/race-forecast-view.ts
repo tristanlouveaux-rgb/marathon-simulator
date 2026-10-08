@@ -11,6 +11,8 @@
  *   - Race-day pacing disclaimer footnote
  */
 
+import { raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
+import { extraRunAddsQualitySession, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import { tv, rdKm } from '@/calculations/vdot';
@@ -344,18 +346,33 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
     </div>
   ` : '';
 
+  // One more run a week only adds a quality session when the plan can seat it
+  // (quality cap, block budget); otherwise the button offers the run it is.
+  const addsQuality = showCTA && extraRunAddsQualitySession(runningPlanShapeInputs(s), currentWeek);
+  // Long-run endurance the plan does not build (the low-base marathon check,
+  // race-day-durability marathonEnduranceGap, the same check as the race page):
+  // said plainly, the forecast called optimistic.
+  const enduranceGapText = raceDayEnduranceGapText(s.raceDayDurability, s.rd, enduranceGapPlanContext(s));
+  const enduranceGapCard = enduranceGapText ? `
+    <div class="rfc-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
+      <div style="${CARD};padding:18px">
+        <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Long-run endurance</div>
+        <div style="font-size:14px;color:${TEXT_M};line-height:1.45">${enduranceGapText}</div>
+      </div>
+    </div>
+  ` : '';
   const ctaCard = showCTA ? `
     <div class="rfc-fade" style="animation-delay:0.20s;padding:0 16px;margin-bottom:14px">
       <div style="${CARD};padding:18px">
         <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Lagging the goal</div>
         <div style="font-size:14px;color:${TEXT_M};line-height:1.45;margin-bottom:14px">
-          Adding one quality session per week increases the training stimulus over the remaining ${Math.max(1, totalWeeks - currentWeek + 1)} weeks. Forecast updates immediately.
+          Adding ${addsQuality ? 'one quality session' : 'one run'} per week increases the training stimulus over the remaining ${Math.max(1, totalWeeks - currentWeek + 1)} weeks. Forecast updates immediately.
         </div>
         <button id="rfc-add-session" style="
           width:100%;padding:11px 16px;border-radius:100px;border:1px solid var(--c-border);
           background:transparent;color:${TEXT_M};font-family:var(--f);
           font-size:13px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;
-        ">Add a quality session</button>
+        ">${addsQuality ? 'Add a quality session' : 'Add a run a week'}</button>
       </div>
     </div>
   ` : '';
@@ -393,6 +410,8 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
         ${buildRunRaceOutcomeRetroCard(s)}
 
         ${renderForecastFingerprint(s, animate)}
+
+        ${enduranceGapCard}
 
         ${renderMarathonPopulationCard(s)}
 

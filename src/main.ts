@@ -762,6 +762,12 @@ async function launchApp(): Promise<void> {
             );
             mutable.wks[i].triWorkouts = [...freshWeeks[i].triWorkouts!, ...userAdded];
             mutable.wks[i].ph = freshWeeks[i].ph;
+            // The closing week (a Monday to Wednesday race's own week) is part of the layout.
+            if (freshWeeks[i].raceClosing) mutable.wks[i].raceClosing = true;
+            else delete mutable.wks[i].raceClosing;
+            // The race window's cut sessions (forecast dose only) follow the week.
+            if (freshWeeks[i].raceWindowCut) mutable.wks[i].raceWindowCut = freshWeeks[i].raceWindowCut;
+            else delete mutable.wks[i].raceWindowCut;
           }
           if (mutable.triConfig) mutable.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
           console.log(`[tri] plan regenerated (generator v${savedVersion} → v${TRI_GENERATOR_VERSION})`);

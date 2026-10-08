@@ -1096,6 +1096,9 @@ function regenerateTriPlan(ms: ReturnType<typeof getMutableState>): void {
     for (let i = 0; i < Math.min(ms.wks!.length, fresh.length); i++) {
       ms.wks![i].triWorkouts = fresh[i].triWorkouts;
       ms.wks![i].ph = fresh[i].ph;
+      // The race window's cut sessions (forecast dose only) follow the week.
+      if (fresh[i].raceWindowCut) ms.wks![i].raceWindowCut = fresh[i].raceWindowCut;
+      else delete ms.wks![i].raceWindowCut;
     }
     if (ms.triConfig) ms.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
   });

@@ -1,3 +1,4 @@
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { Workout, Week, GarminActual } from '@/types';
 import {
   getState, getMutableState, saveState
@@ -6,8 +7,9 @@ import {
   rdKm, tv, gp, getRunnerType,
   calculateLiveForecast
 } from '@/calculations';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { injuryAdjustedBuildWeeks } from '@/calculations/injury-recovery';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
 import {
   generateWeekWorkouts, parseWorkoutDescription,
@@ -206,13 +208,13 @@ export function render(): void {
   if (realW === 1 && s.rpeAdj === 0 && s.forecastTime) {
     forecast = s.forecastTime;
   } else {
-    const wr = s.tw - realW + 1;
+    const wr = planTrainingWeeks(s) - realW + 1; // training weeks: a closing week holds only the race
     // Injury-aware: a current run restriction debits its recovery weeks so the
     // forecast builds from the return date instead of crediting build during
     // weeks the athlete cannot run. Same helper as the s.forecastTime recompute.
     const effectiveWr = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', wr);
     const sessionsForHorizon = (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-    const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
+    const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon); // the volume s.forecastTime credits (design v4 Q18)
     const { forecastTime: rawForecast } = calculateLiveForecast({
       currentVdot: currentVDOT,
       targetDistance: s.rd,
@@ -227,6 +229,8 @@ export function render(): void {
       strengthSessionsPerWeek: s.gs,
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+      raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+      taperWeeks: planTaperWeeks(s),
     });
     forecast = rawForecast;
     if (s.timp > 0) forecast += s.timp;

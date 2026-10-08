@@ -206,6 +206,10 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
     const wk = s.wks[i];
     wk.triWorkouts = [...(freshWeeks[i].triWorkouts ?? []), ...carriedUserSessions(wk)];
     wk.ph = freshWeeks[i].ph;
+    // Race-week calendar layout (generator v15+): a Monday to Wednesday race's
+    // own week is a closing week with no sessions; the flag follows the fresh plan.
+    if (freshWeeks[i].raceClosing) wk.raceClosing = true;
+    else delete wk.raceClosing;
     rekeyNameKeyedHyroxSlots(wk);
   }
   hx.generatorVersion = HYROX_GENERATOR_VERSION;

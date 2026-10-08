@@ -128,6 +128,13 @@ export interface Workout extends WorkoutDefinition {
    *  `t:'progressive'`). Read it only through `isLongRun()` (workouts/long-run.ts),
    *  which also honours a plain `t:'long'`. Undefined = not the long-run slot. */
   longRun?: boolean;
+  /** Triathlon and cycling: set by the tri generator on the week's solo long
+   *  ride (the bike session the scheduler seats on Saturday when no brick
+   *  carries the long ride). Not set in race week, where the race is the long
+   *  effort. Read by the race-window rule (race-day-rules
+   *  clearStoredPlanRaceWindow), which keeps long sessions out of the last
+   *  days before race day. Undefined = not the long ride. */
+  longRide?: boolean;
   testType?: string; // For physio capacity tests
   /** Canonical session duration in minutes. Set by the plan engine at
    * generation time so downstream code (scheduler capacity, card chips,
@@ -607,6 +614,20 @@ export interface UnspentLoadItem {
 export interface Week {
   w: number;                            // Week number
   ph: TrainingPhase;                    // Training phase
+  /** Closing week: the own week of a Monday to Wednesday race, after race week
+   *  (race-week-layout.ts), in running, triathlon, cycling and HYROX race plans
+   *  (storedPlanRaceLayout). Holds only the race (no generated session), is
+   *  labelled 'taper' and counts in s.tw, but not in the training weeks every
+   *  weeks-to-race input reads (planTrainingWeeks). */
+  raceClosing?: boolean;
+  /** Triathlon and cycling: the sessions the race window removed from the week
+   *  before race week (race-day-rules clearStoredPlanRaceWindow, a Thursday to
+   *  Saturday race), as discipline and minutes only. Never scheduled or shown.
+   *  The forecast's planned-dose helpers (tri-volume-by-discipline) add them
+   *  back, so the taper cut is not read as lost training (tracking reads the
+   *  plan's build prescription, as running's forecast reads plan-engine
+   *  targets). Unset when the window removed nothing. */
+  raceWindowCut?: Array<Pick<Workout, 'discipline' | 'estimatedDurationMin'>>;
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
    *  the workout generator and Phase Timeline read this flag to swap content
@@ -1035,11 +1056,50 @@ export interface SimulatorState {
   /**
    * Long-run durability result. Multiplier applied to `blendedRaceTimeSec`
    * (today's prediction) when the user's longest recent run falls below the
-   * distance-specific threshold. NOT applied to `forecastTime`. The
-   * projection assumes the plan delivers long runs before race day. See
-   * `src/calculations/run-durability.ts`.
+   * distance-specific threshold. NOT applied to `forecastTime`, which reads
+   * `raceDayDurability` instead. See `src/calculations/run-durability.ts`.
    */
   runDurability?: import('@/calculations/run-durability').RunDurabilityResult;
+  /**
+   * Race-day durability: the same model evaluated on the runs of the 12 weeks
+   * that end with race week, i.e. the long runs the PLAN prescribes (plus logged
+   * runs for any pre-plan weeks inside that window). `raceDayPlanDurability` in
+   * `src/calculations/race-day-durability.ts`. Its multiplier is applied to
+   * `forecastTime`. Undefined when there is no running race plan. Read by the
+   * Durability drill-down so it shows the same result the forecast used.
+   */
+  raceDayDurability?: import('@/calculations/run-durability').RunDurabilityResult;
+
+  /**
+   * Sharpening block: a running marathon race plan with fewer than 8 training
+   * weeks, or a half with fewer than 4 (`isSharpeningBlock`, phases.ts). Written
+   * once at plan build (`buildSharpenBlockState`, workouts/sharpening-block.ts)
+   * and cleared on any other plan. Holds only the inputs that depend on the
+   * date the plan was built (the 30-day run window), so every later week
+   * replays the same block (plan_engine reads it through runningPlanShapeInputs
+   * and generateWeekWorkouts). Everything else (runs per week, paces, hours
+   * target, archetype) is read live like any running plan. Optional: absent
+   * for full plans and plans built before 2026-10-07 (the engine then starts
+   * the block from the no-data anchor).
+   */
+  sharpenBlock?: {
+    /** Block formula version. */
+    v: number;
+    /** Week-1 long run, minutes at easy pace (already within [30, ability ceiling]). */
+    startLongMin: number;
+    /** 'history-30d': longest run of the 30 days before build; 'history-no-recent-run':
+     *  synced history but no run in those 30 days (30-min restart); 'no-data': the
+     *  existing week-1 anchor (marathon 90, half 64 min). */
+    startSource: 'history-30d' | 'history-no-recent-run' | 'no-data';
+    /** Longest run of the 30 days before build, minutes at easy pace (null: none). */
+    recentLongestMin: number | null;
+    /** No real running fitness signal at build: the block has no peak week. */
+    noSignal: boolean;
+    /** Training weeks: calendar weeks up to and including race week. */
+    trainingWeeks: number;
+    /** ISO date the block was built (local). */
+    builtISO: string;
+  };
 
   // Athlete tier (for ACWR thresholds and plan ramp rate)
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';

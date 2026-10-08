@@ -29,7 +29,7 @@ import { HYROX_STATION_ORDER, STATION_DISPLAY, STATION_MIN_SEC, HYROX_RUN_PACE_M
 import { parseHyroxResultsText } from './hyrox-results-parse';
 import type { HyroxStation } from '@/types/triathlon';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
-import { calculateWeeksUntil } from '@/data/marathons';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 // Venue normally derives from the race-event selection. Manual venue picker
 // is shown as a fallback only when the user picks "Other / enter date manually".
 import { HYROX_VENUES } from '@/data/hyrox-venues';
@@ -986,16 +986,16 @@ function wireEventHandlers(): void {
     if (current.hyroxSledAccess === undefined) patch.hyroxSledAccess = 'always';
     if (current.hyroxHasSkiErg === undefined) patch.hyroxHasSkiErg = true;
     if (current.hyroxHasRowErg === undefined) patch.hyroxHasRowErg = true;
-    // Plan length follows the picked race date when available, falling back to
-    // the band default otherwise. Mirrors the triathlon setup pattern in
-    // `triathlon-setup.ts:408` so HYROX users see "Week 1 of N" matching the
-    // weeks-until-race countdown rather than a band default that can outrun
-    // the actual race.
+    // Plan length follows the picked race date when available: the calendar
+    // weeks from this local Monday through the week holding race day
+    // (racePlanCalendarWeeks), so the plan's final week holds race day. Falls
+    // back to the band default otherwise, which can outrun the actual race.
+    // Mirrors triathlon-setup.ts.
     const prevSec = current.previousHyroxTimeSec;
     const band = prevSec != null ? bandFromTime(prevSec) : 'novice';
     const raceDateIso = current.customRaceDate;
     patch.planDurationWeeks = raceDateIso
-      ? Math.max(1, calculateWeeksUntil(raceDateIso))
+      ? (racePlanCalendarWeeks(raceDateIso) ?? 1)
       : HYROX_DEFAULT_PLAN_WEEKS[band];
     patch.trainingForEvent = true;
     if (Object.keys(patch).length > 0) updateOnboarding(patch);

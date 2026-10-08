@@ -14,7 +14,9 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
-import { saveState, getMondayOf } from '@/state/persistence';
+import { saveState } from '@/state/persistence';
+import { localMondayKey, localDateKey } from '@/utils/local-date';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import {
   HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
@@ -176,7 +178,12 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     const sessions = state.hyroxWeeklySessionCount != null
       ? distributeSessionCount(state.hyroxWeeklySessionCount, band)
       : HYROX_WEEKLY_SESSIONS[band];
-    const weeks = state.planDurationWeeks || HYROX_DEFAULT_PLAN_WEEKS[band];
+    // Plan length: with a race date the plan runs through the calendar week
+    // holding race day (racePlanCalendarWeeks), computed from today's local
+    // Monday, the plan's anchor. Mirrors initializeSimulator and the triathlon
+    // path. Without a race date the wizard's week count stands.
+    const weeks = racePlanCalendarWeeks(state.customRaceDate)
+      ?? (state.planDurationWeeks || HYROX_DEFAULT_PLAN_WEEKS[band]);
 
     // Seed station benchmarks from historic race splits (entered during onboarding).
     // Store in the slot matching the PREVIOUS-RACE format. We only seed when the
@@ -329,9 +336,10 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
     // (dropPreOnboardSessions), a Sat/Sun onboard a chill 1–2 session lead-in week.
-    const planMonday = getMondayOf(new Date());
-    s.planStartDate = planMonday.toISOString().slice(0, 10);
-    s.planCreatedAt = new Date().toISOString().slice(0, 10); // days before today aren't "Missed"
+    // Local calendar dates (approved default Q10: every mode): the UTC Monday is the
+    // previous week's Monday in the first hours of a Monday east of UTC.
+    s.planStartDate = localMondayKey(new Date());
+    s.planCreatedAt = localDateKey(new Date()); // days before today aren't "Missed"
 
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;

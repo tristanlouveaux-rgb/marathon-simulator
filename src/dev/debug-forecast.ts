@@ -6,12 +6,12 @@
  * clamps).
  */
 
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import { getState } from '@/state';
 import { calculateLiveForecast } from '@/calculations/predictions';
-import {
-  getPlanPrescribedMeanWeeklyKm,
-  applyTrainingHorizonAdjustment,
-} from '@/calculations/training-horizon';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
+import { applyTrainingHorizonAdjustment } from '@/calculations/training-horizon';
+import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { applyRunningCourseFactors } from '@/calculations/course-factors-running';
 import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 import { getAbilityBand } from '@/calculations/fatigue';
@@ -32,10 +32,10 @@ export function installDebugForecast(): void {
       : s.rd === 'half' ? 21.0975
       : 42.195;
 
-    const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
+    const weeksRemaining = Math.max(1, planTrainingWeeks(s) - ((s.w ?? 1) - 1));
     const sessionsForHorizon = (s.epw || s.rw || 0)
       + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
-    const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
+    const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
     const abilityBand = getAbilityBand(s.v ?? 0);
 
     console.group('%c[debugForecast]', 'color:#2563eb;font-weight:bold');
@@ -64,7 +64,7 @@ export function installDebugForecast(): void {
       sessions_per_week: sessionsForHorizon,
       runner_type: getRunnerType(s.b ?? 0),
       ability_band: abilityBand,
-      taper_weeks: TAPER_NOMINAL[s.rd] ?? 2,
+      taper_weeks: planTaperWeeks(s) ?? TAPER_NOMINAL[s.rd] ?? 2,
       experience_level: s.onboarding?.experienceLevel || 'intermediate',
       weekly_volume_km: planMeanKm ?? s.wkm,
       hm_pb_seconds: s.pbs?.h || undefined,
@@ -93,6 +93,8 @@ export function installDebugForecast(): void {
       ltPaceSecPerKm: s.lt || undefined,
       adaptationRatio: s.adaptationRatio,
       blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+      raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+      taperWeeks: planTaperWeeks(s),
     });
 
     const profile = s.selectedMarathon?.profile

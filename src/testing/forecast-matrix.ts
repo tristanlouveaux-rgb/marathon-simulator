@@ -21,6 +21,7 @@
  * - applyTrainingHorizonAdjustment(): src/calculations/training-horizon.ts
  */
 
+import { planTaperWeeks } from '@/workouts/race-week-layout';
 import type { RaceDistance, RunnerType, AbilityBand } from '@/types';
 import {
   createSyntheticAthlete,
@@ -110,9 +111,9 @@ function runForecast(
 ): ForecastOutput {
   const abilityBand = getAbilityBand(startVdot);
 
-  // Taper weeks: 1 for 5k, 2 for 10k/half, 3 for marathon
-  const taperWeeks = targetDistance === '5k' ? 1 :
-                     targetDistance === 'marathon' ? 3 : 2;
+  // Taper weeks: the taper the running plan builds for this length
+  // (planTaperWeeks / computeRunningPlanPhases), as the app's forecasts read it.
+  const taperWeeks = planTaperWeeks({ tw: weeksRemaining, rd: targetDistance }) ?? 2;
 
   // Call the REAL engine function
   const result = applyTrainingHorizonAdjustment({

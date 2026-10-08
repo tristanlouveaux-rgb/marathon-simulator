@@ -16,6 +16,7 @@
 
 import type { Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
+import { isLongRun } from './long-run';
 
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -42,8 +43,12 @@ export function scheduleTriathlonWeek(
   gym: Workout[] = [],
   /** Per-day minute cap by day-of-week. When a day's budget is exhausted,
    * sessions are pushed to the next-best day. Undefined = no cap. */
-  minutesCapByDay?: Record<number, number>
+  minutesCapByDay?: Record<number, number>,
+  /** Race week: Sunday is kept free for the race. The week has no long run
+   * (plan_engine isRaceWeek), and no other session spills onto Sunday. */
+  raceWeek: boolean = false,
 ): Workout[] {
+  const weekendDays = raceWeek ? [5] : WEEKEND_INDEXES;
   const byDay: Record<number, Workout[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
   const minutesOnDay: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
 
@@ -80,9 +85,13 @@ export function scheduleTriathlonWeek(
     }
   }
 
-  // 2. Long run → Sunday (last run in the array by convention).
-  if (run.length > 0) {
-    const longRun = run.pop()!;
+  // 2. Long run → Sunday. Found by type, not array position: commute runs are
+  //    appended after the generated runs, so "last in the array" put a commute on
+  //    Sunday and the long run on a weekday, and a race week (no long run) would
+  //    have reserved race day for whatever run came last.
+  const longRunIdx = run.findIndex((w) => isLongRun(w) && !w.commute);
+  if (longRunIdx >= 0) {
+    const [longRun] = run.splice(longRunIdx, 1);
     place(6, longRun);
   }
 
@@ -98,14 +107,14 @@ export function scheduleTriathlonWeek(
     const q = swimsRemaining.splice(swimQualityIdx, 1)[0];
     place(2, q);
   }
-  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
+  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
 
   // 5. Bike quality → Tuesday (first remaining bike). Others distribute Thu, Fri.
-  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
+  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
 
   // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
   //    Thursday quality is the template. We spread by preference.
-  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
+  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
 
   // Flatten with dayOfWeek/dayName set
   const out: Workout[] = [];
@@ -133,7 +142,8 @@ function placeByPreference(
   byDay: Record<number, Workout[]>,
   occupied: Record<number, Set<string>>,
   hasCapacity: (day: number, w: Workout) => boolean,
-  place: (day: number, w: Workout) => void
+  place: (day: number, w: Workout) => void,
+  weekendDays: number[] = WEEKEND_INDEXES,
 ): void {
   for (const w of workouts) {
     const disc = w.discipline ?? 'run';
@@ -141,11 +151,11 @@ function placeByPreference(
     let dayIdx = preferredDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
     // 2. Weekend spill (no collision + capacity)
     if (dayIdx === undefined) {
-      dayIdx = WEEKEND_INDEXES.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
+      dayIdx = weekendDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
     }
     // 3. Weekend with capacity (collisions allowed. Two-a-day)
     if (dayIdx === undefined) {
-      dayIdx = WEEKEND_INDEXES.find((d) => hasCapacity(d, w));
+      dayIdx = weekendDays.find((d) => hasCapacity(d, w));
     }
     // 4. Preferred day with capacity (collisions allowed)
     if (dayIdx === undefined) {
@@ -156,7 +166,7 @@ function placeByPreference(
     //    sessions. This ensures a user who set 0h weekday never sees
     //    weekday workouts unless there's literally nowhere else to go.
     if (dayIdx === undefined) {
-      const allDays = [...WEEKEND_INDEXES, ...preferredDays];
+      const allDays = [...weekendDays, ...preferredDays];
       dayIdx = allDays.reduce((best, d) =>
         byDay[d].length < byDay[best].length ? d : best,
       allDays[0]);

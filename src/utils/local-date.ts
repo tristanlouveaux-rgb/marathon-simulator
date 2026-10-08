@@ -47,21 +47,6 @@ export function isOnLocalDay(startTime: string | null | undefined, day: string):
 }
 
 /**
- * YYYY-MM-DD of the Monday on or before the instant's local calendar day: the
- * calendar week an activity belongs to. Calendar arithmetic runs on the date
- * components at UTC midnight, so no DST shift can move it.
- */
-export function localMondayKey(input: Date | string): string {
-  const key = localDateKey(input);
-  if (!key) return '';
-  const [y, m, d] = key.split('-').map(Number);
-  const day = new Date(Date.UTC(y, m - 1, d));
-  const dow = day.getUTCDay(); // 0 = Sunday
-  day.setUTCDate(day.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
-  return day.toISOString().slice(0, 10);
-}
-
-/**
  * Whole calendar days from local day `fromKey` to local day `toKey`
  * (YYYY-MM-DD each), e.g. 7 from a Monday to the next Monday. NaN when either
  * key is malformed.
@@ -82,4 +67,38 @@ export function calendarDaysBetween(fromKey: string, toKey: string): number {
 export function localMidnightOfPlanWeek(planStartDate: string, weekNum: number): Date {
   const [y, m, d] = localDateKey(planStartDate).split('-').map(Number);
   return new Date(y, m - 1, d + (weekNum - 1) * 7, 0, 0, 0, 0);
+}
+
+/**
+ * Whole-day number of a YYYY-MM-DD calendar key (days since 1970-01-01), from
+ * its date parts alone. Differences between two keys are exact calendar days in
+ * every time zone and across DST changes (a timestamp difference is not: it can
+ * be 23 or 25 hours). NaN when the key is not a full date.
+ */
+export function calendarDayNumber(key: string): number {
+  if (!DATE_ONLY.test(key)) return NaN;
+  const [y, m, d] = key.split('-').map(Number);
+  return Math.round(Date.UTC(y, m - 1, d) / 86400000);
+}
+
+/** The YYYY-MM-DD key `days` calendar days after `key` (negative = before). */
+export function addCalendarDays(key: string, days: number): string {
+  const n = calendarDayNumber(key);
+  if (!Number.isFinite(n)) return '';
+  const d = new Date((n + days) * 86400000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * The local Monday on or before `input`, as a YYYY-MM-DD key. Weeks run Monday
+ * to Sunday. Built from local date parts: a UTC Monday (persistence getMondayOf)
+ * is the previous week's Monday between local midnight and the UTC offset on a
+ * Monday east of UTC, and can be a day off west of it.
+ */
+export function localMondayKey(input: Date | string = new Date()): string {
+  const key = localDateKey(input);
+  const n = calendarDayNumber(key);
+  if (!Number.isFinite(n)) return '';
+  const dow = (((n + 3) % 7) + 7) % 7; // 1970-01-01 was a Thursday: 0 = Monday
+  return addCalendarDays(key, -dow);
 }

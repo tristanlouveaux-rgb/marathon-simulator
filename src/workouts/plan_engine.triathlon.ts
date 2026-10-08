@@ -15,6 +15,9 @@
  * marathon training).
  */
 
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow } from './race-day-rules';
+import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
+import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider, TriathlonDistance } from '@/types/triathlon';
@@ -31,7 +34,7 @@ import {
   selectRunQualityKind,
   TRI_BRICK_POLICY,
 } from './tri-intensity-profile';
-import { scheduleTriathlonWeek } from './scheduler.triathlon';
+import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
 import { gp } from '@/calculations/paces';
@@ -40,7 +43,8 @@ import { gp } from '@/calculations/paces';
 import { easyPaceSecPerKmFromSkill } from './tri-run-pace';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
-import { isFourWeekCycleDeloadWeek } from './plan_engine';
+import { isFourWeekCycleDeloadWeek, isRaceWeek } from './plan_engine';
+import { isLongRun } from './long-run';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -52,7 +56,29 @@ import { isFourWeekCycleDeloadWeek } from './plan_engine';
 // ids. The bump forces a regen so PERSISTED weeks pick the ids up; without it,
 // pre-existing weeks keep id-less workouts and every `w.id ?? w.n` consumer
 // stays name-keyed (the duplicate-name collision the ids exist to fix).
-export const TRI_GENERATOR_VERSION = 18;
+// v19: race week has no long run (the race is that week's long effort, mirrors
+// running's isRaceWeek), and the scheduler finds the long run by type instead of
+// array position, so a commute run no longer lands on Sunday with the long run
+// pushed to a weekday. Race week is the plan's final week whatever its phase
+// label (1- and 2-week plans have no taper week). Both ship together in v19
+// (unreleased when the race-week definition was widened, so no second bump).
+// v20: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
+// a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
+// [build, peak]), so week 1 of a 2-week plan now runs peak sessions. Also in
+// v20 (unreleased when added): nothing is generated on or after race day
+// (race-day-rules dropSessionsOnOrAfterRaceDay), e.g. a Saturday race's
+// Saturday session.
+// v21: race week sits where running puts it (storedPlanRaceLayout): the week
+// holding the day 3 days before race day. A Monday to Wednesday race's own week
+// is a closing week with no sessions (raceClosing), and the plan is phased and
+// sized over the weeks before it, so the last days before a Monday race are
+// race week, not peak week. For a Thursday to Saturday race the week before race
+// week keeps nothing in the last 6 days before race day; its long sessions move
+// to 7 or more days out (clearStoredPlanRaceWindow). The solo long ride carries
+// longRide: true. Also in v21 (unreleased when added): the sessions the race
+// window removes are kept on the week as Week.raceWindowCut (forecast dose
+// only), so the forecast does not read the taper cut as lost training.
+export const TRI_GENERATOR_VERSION = 21;
 
 /**
  * Representative average session length (hours) per discipline. The generator
@@ -150,17 +176,27 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   if (!tri) return [];
 
   const totalWeeks = state.tw || 20;
-  const planPhases = computeTriPlanPhases(tri.distance, totalWeeks);
+  // Race week and the closing week follow the running layout. The plan is
+  // phased and sized over its training weeks (the closing week excluded), so
+  // race week is the week holding race day minus 3, as in running.
+  const layout = storedPlanRaceLayout(totalWeeks, state.planStartDate, tri.raceDate);
+  const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
+  const planPhases = computeTriPlanPhases(tri.distance, trainingWeeks);
   const weeks: Week[] = [];
 
   for (let w = 1; w <= totalWeeks; w++) {
-    const p = planPhases[w - 1];
+    const closing = w > trainingWeeks;
+    const p = closing ? { ph: 'taper' as TrainingPhase } : planPhases[w - 1];
     const phase = p.ph;
-    const weekWorkouts = generateWeekForTriathlon(state, w, totalWeeks, phase);
+    const built = closing ? null : triWeekForRace(state, w, trainingWeeks, phase, layout);
+    const weekWorkouts = built?.workouts ?? [];
+    const raceWindowCut = built?.raceWindowCut ?? [];
 
     weeks.push({
       w,
       ph: phase,
+      ...(closing ? { raceClosing: true } : {}),
+      ...(raceWindowCut.length > 0 ? { raceWindowCut } : {}),
       ...(p.checkpoint ? { checkpoint: true } : {}),
       triWorkouts: weekWorkouts,
       rated: {},
@@ -198,6 +234,8 @@ function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: We
       // so look it up by week number. (Effort reads from `state` directly, so it never had this issue.)
       const stamp = (state.wks?.[(wk.w ?? 1) - 1] as any)?.ctlRatioByDiscipline;
       applyTriEffortMultipliers(state, wk.triWorkouts, stamp);
+      // The race window's removed sessions scale with the week they came from.
+      if (wk.raceWindowCut) applyTriEffortMultipliers(state, wk.raceWindowCut, stamp);
     }
   }
 }
@@ -210,24 +248,77 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   if (!tri || !state.wks || weekIndex < 1 || weekIndex > state.wks.length) return null;
 
   const totalWeeks = state.tw;
-  const planPhases = computeTriPlanPhases(tri.distance, totalWeeks);
+  const layout = storedPlanRaceLayout(totalWeeks, state.planStartDate, tri.raceDate);
+  const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
+  const existing = state.wks[weekIndex - 1];
+  if (weekIndex > trainingWeeks) {
+    // Closing week: it holds only the race.
+    return { ...existing, ph: 'taper', raceClosing: true, triWorkouts: [] };
+  }
+  const planPhases = computeTriPlanPhases(tri.distance, trainingWeeks);
   const p = planPhases[weekIndex - 1];
   const phase = p.ph;
-  const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
+  const { workouts: weekWorkouts, raceWindowCut } = triWeekForRace(state, weekIndex, trainingWeeks, phase, layout);
 
   // Apply per-discipline effort multiplier + CTL-gap re-anchor when regenerating a future week.
   // For a same-week or past-week regen, skip. Preserves historical duration.
   if (weekIndex >= (state.w ?? 1)) {
-    applyTriEffortMultipliers(state, weekWorkouts, (state.wks[weekIndex - 1] as any)?.ctlRatioByDiscipline);
+    const stamp = (state.wks[weekIndex - 1] as any)?.ctlRatioByDiscipline;
+    applyTriEffortMultipliers(state, weekWorkouts, stamp);
+    applyTriEffortMultipliers(state, raceWindowCut, stamp);
   }
 
-  const existing = state.wks[weekIndex - 1];
-  return {
+  const week: Week = {
     ...existing,
     ph: phase,
     ...(p.checkpoint ? { checkpoint: true } : { checkpoint: existing.checkpoint }),
     triWorkouts: weekWorkouts,
+    raceWindowCut,
   };
+  if (raceWindowCut.length === 0) delete week.raceWindowCut;
+  return week;
+}
+
+/**
+ * One training week of a triathlon plan with the race-day rules applied.
+ * `trainingWeeks` is the plan's training horizon (the closing week excluded),
+ * so race week is week `trainingWeeks`.
+ *   - Rule 1: nothing on or after race day (shared with running).
+ *   - Rules 3 and 4: in the week before race week, nothing in the last 6 days
+ *     before race day; its long sessions move to 7 or more days out
+ *     (clearStoredPlanRaceWindow). The sessions it removes come back as
+ *     `raceWindowCut` (discipline and minutes), stored on the week for the
+ *     forecast's planned dose only.
+ */
+function triWeekForRace(
+  state: SimulatorState, weekIndex: number, trainingWeeks: number, phase: TrainingPhase,
+  layout: RaceWeekLayout | null,
+): { workouts: Workout[]; raceWindowCut: TriRaceWindowCut } {
+  const tri = state.triConfig!;
+  const generated = dropSessionsOnOrAfterRaceDay(
+    generateWeekForTriathlon(state, weekIndex, trainingWeeks, phase), weekIndex, state.planStartDate, tri.raceDate,
+  );
+  const raceWindowCut: TriRaceWindowCut = [];
+  if (!layout) return { workouts: generated, raceWindowCut };
+  const workouts = clearStoredPlanRaceWindow(generated, {
+    weekIndex,
+    layout,
+    isLongSession: isTriLongSession,
+    firstScheduleDow: firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt),
+    dayNames: TRI_DAY_NAMES,
+    // Tracking keeps the build prescription: the forecast's planned dose reads
+    // these back (Week.raceWindowCut, tri-volume-by-discipline).
+    onDrop: w => raceWindowCut.push({ discipline: w.discipline, estimatedDurationMin: w.estimatedDurationMin }),
+  });
+  return { workouts, raceWindowCut };
+}
+
+type TriRaceWindowCut = NonNullable<Week['raceWindowCut']>;
+
+/** The long sessions of a triathlon or cycling week: long run, brick (the long
+ *  ride with its transition run) and the solo long ride. */
+export function isTriLongSession(w: Pick<Workout, 't' | 'longRun' | 'longRide'>): boolean {
+  return isLongRun(w) || w.t === 'brick' || w.longRide === true;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -368,6 +459,7 @@ function generateWeekForTriathlon(
   // the long ride drops to its maintenance floor; the minutes it frees fund the
   // longer long run below. null for every other distance/phase (share model).
   const triEmphasis = triWeekEmphasis(tri.distance, phase, weekIndex);
+  const raceWeek = isRaceWeek(weekIndex, totalWeeks, state.continuousMode);
   let bikeMinutesFreedForRun = 0;
   const bike: Workout[] = [];
   const bikeQuality = triQualitySlotIndices(tri.distance, phase, 'bike', bikeSessions, true);
@@ -385,7 +477,7 @@ function generateWeekForTriathlon(
       bikeMinutesFreedForRun += minutes - reduced;
       minutes = reduced;
     }
-    bike.push(generateBikeSession({
+    const session = generateBikeSession({
       phase,
       skill: rating.bike as TriSkillSlider,
       weekIndex,
@@ -395,7 +487,10 @@ function generateWeekForTriathlon(
       ftp: tri.bike?.ftp,
       hasPowerMeter: tri.bike?.hasPowerMeter,
       slotIndex: i,
-    }));
+    });
+    // The long ride is a long session (race-window rule). In race week the race
+    // is the week's long effort, so its last ride is not marked.
+    bike.push(isLongRide && !raceWeek ? { ...session, longRide: true } : session);
   }
 
   // Run sessions (simple: 1 quality, 1 easy, 1 long). easyPaceSecPerKm resolved
@@ -439,6 +534,14 @@ function generateWeekForTriathlon(
       minutes = Math.max(30, Math.round(runHours * 60 * share));
     }
     run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, tri.distance, easyPaceSecPerKm, easyVolumeKeep));
+  }
+  // Race week: the race takes the long-run slot (mirrors running's isRaceWeek in
+  // plan_engine.ts). Before, every tri race week carried a "Long run" that the
+  // scheduler put on Sunday, race day for a Sunday race. The other runs keep the
+  // minutes they were given with the long run present.
+  if (raceWeek && run.length > 0
+      && isLongRun(run[run.length - 1])) {
+    run.pop();
   }
 
   // Brick = the long ride + a transition run off it (SCIENCE_LOG §CD). Pop the
@@ -573,7 +676,8 @@ function generateWeekForTriathlon(
     adapted.brick,
     phase,
     adapted.gym,
-    minutesCapByDay
+    minutesCapByDay,
+    raceWeek,
   );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;

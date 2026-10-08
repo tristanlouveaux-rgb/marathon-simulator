@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { setState, getMutableState } from '@/state/store';
-import { assertPlanAnchorConsistent, reconcilePlanAnchorToEarliestActivity, detrainingLossFraction, computeVdotLoss, DETRAINING_DEADZONE_DAYS } from './welcome-back';
+import { assertPlanAnchorConsistent, reconcilePlanAnchorToEarliestActivity, detrainingLossFraction, computeVdotLoss, DETRAINING_DEADZONE_DAYS, advanceWeekToToday } from './welcome-back';
 import type { SimulatorState } from '@/types/state';
 
 function buildState(overrides: Partial<SimulatorState> = {}): SimulatorState {
@@ -248,5 +248,40 @@ describe('computeVdotLoss — inherits the dead-zone', () => {
     const loss = computeVdotLoss(50, 3); // 21 days → ~1 week of detraining
     expect(loss).toBeGreaterThan(0);
     expect(loss).toBeLessThan(2); // small: a few tenths of a VDOT point, not a cliff
+  });
+});
+
+describe('advanceWeekToToday: race week and a closing week always open (design v4 Q16)', () => {
+  afterEach(() => vi.useRealTimers());
+  const raceState = (w: number, lastCompleteDebriefWeek: number): SimulatorState => {
+    const wks = Array.from({ length: 7 }, (_, i) => ({
+      w: i + 1, ph: i >= 4 ? 'taper' : 'build', ...(i === 6 ? { raceClosing: true } : {}),
+      rated: {}, skip: [], cross: [], wkGain: 0, workoutMods: [], adjustments: [], unspentLoad: 0, extraRunLoad: 0,
+    }));
+    return {
+      eventType: 'running', hasCompletedOnboarding: true, continuousMode: false,
+      planStartDate: '2026-10-05', w, tw: 7, wks, rd: 'marathon',
+      onboarding: { customRaceDate: '2026-11-17' }, lastCompleteDebriefWeek,
+    } as unknown as SimulatorState;
+  };
+
+  it('a skipped debrief no longer holds the runner out of race week or the closing week', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 11, 12)); // Wed 11 Nov: week 6 (race week)
+    setState(raceState(5, 4));
+    advanceWeekToToday();
+    expect(getMutableState().w).toBe(6);
+    vi.setSystemTime(new Date(2026, 10, 16, 12)); // Mon 16 Nov: week 7 (closing week, race Tuesday)
+    setState(raceState(5, 4));
+    advanceWeekToToday();
+    expect(getMutableState().w).toBe(7);
+  });
+
+  it('earlier weeks keep the debrief cap', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 4, 12)); // Wed 4 Nov: week 5
+    setState(raceState(3, 3));
+    advanceWeekToToday();
+    expect(getMutableState().w).toBe(4);
   });
 });

@@ -12,9 +12,11 @@
  * re-runs the blend on render.
  */
 
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
-import { computePeakWeeklyKm } from '@/workouts/plan_engine';
+import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
+import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
@@ -23,7 +25,7 @@ import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
-import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, type RunDurabilityResult } from './run-durability';
+import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
 import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
 import { estimateRunPaceFromSkill } from './race-prediction.triathlon';
 import { getDisciplineCapacity } from '@/injury/engine';
@@ -197,8 +199,8 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
       ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
       : undefined,
     calibration: computeRunCalibration(s.runRaceLog),
-    longestRunSec: getLongestRunSec(s, 12),
-    longRunDurationsSec: getRunDurationsSec(s, 12),
+    longestRunSec: getLongestRunSec(s, DURABILITY_WINDOW_WEEKS),
+    longRunDurationsSec: getRunDurationsSec(s, DURABILITY_WINDOW_WEEKS),
     fallbackVdot: resolveRunningVdot(s),
   };
 }
@@ -334,7 +336,7 @@ export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance)
   // Durability comes from the staged result when available (same longest-run
   // read), otherwise compute directly for the no-blend case so the UI still
   // has threshold context.
-  const durability = stages ? stages.durability : applyLongRunCap(getLongestRunSec(s, 12), dist, getQualifyingLongRunCount(s, dist, 12));
+  const durability = stages ? stages.durability : applyLongRunCap(getLongestRunSec(s, DURABILITY_WINDOW_WEEKS), dist, getQualifyingLongRunCount(s, dist, DURABILITY_WINDOW_WEEKS));
 
   const calibration = ctx ? ctx.calibration : computeRunCalibration(s.runRaceLog);
   const bias = calibration.perDistanceBiasSec?.[dist];
@@ -449,6 +451,28 @@ export function getStandardForecastProjection(
     out.push({ weeksAhead: w, value: tv(anchorVdot + totalGain * shape, distKm) });
   }
   return out;
+}
+
+/**
+ * The weekly volume the end-of-plan forecast credits for `sessionsPerWeek`:
+ * getPlanPrescribedMeanWeeklyKm integrated over the archetype-gated ramp from
+ * the runner's current volume (s.detectedWeeklyKm) across the plan's training
+ * weeks and taper. One source for the Home forecast (refreshBlendedFitness)
+ * and the onboarding preview hero (design v4 Q18): without the ramp context
+ * the preview read the flat full-plan peak (52.8 km for a 4-run marathon) and
+ * credited a 6-week block at 15 km a week with volume it never reaches.
+ * Planning side (what the plan prescribes), read by the tracking forecast.
+ */
+export function planForecastWeeklyKm(
+  s: Pick<SimulatorState, 'rd' | 'detectedWeeklyKm' | 'athleteArchetype' | 'tw' | 'wks' | 'continuousMode' | 'trackOnly' | 'eventType'>,
+  sessionsPerWeek: number,
+): number | null {
+  return getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, s.rd, {
+    baselineKm: s.detectedWeeklyKm,
+    archetype: s.athleteArchetype?.archetype,
+    totalWeeks: planTrainingWeeks(s),
+    taperWeeks: planTaperWeeks(s),
+  });
 }
 
 /**
@@ -569,8 +593,8 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // longest recent run is below the distance-specific threshold (orthogonal
   // to the volume-based marathon-specificity penalty inside blendPredictions
   //. Both can fire). Stored on state for the Durability chip drill-down.
-  const longestRunSec = getLongestRunSec(s, 12);
-  const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd, getQualifyingLongRunCount(s, s.rd, 12));
+  const longestRunSec = getLongestRunSec(s, DURABILITY_WINDOW_WEEKS);
+  const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd, getQualifyingLongRunCount(s, s.rd, DURABILITY_WINDOW_WEEKS));
   s.runDurability = durability;
   // Floor at any demonstrated same-distance PB after the cap (mirror of
   // initialization.ts): the cap and calibration bias must not push the anchor
@@ -720,7 +744,10 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
 
   // Recompute end-of-plan forecast from the fresh baseline so s.expectedFinal
   // tracks reality instead of being frozen at onboarding.
-  const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
+  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
+  const trainingWeeks = planTrainingWeeks(s);
+  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
   if (s.rd && s.typ && weeksRemaining > 0) {
     try {
       // Include commute days so the live forecast matches what the
@@ -732,12 +759,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         ? (s.commuteConfig.commuteDaysPerWeek ?? 0)
         : 0;
       const sessionsForHorizon = baseSessions + commuteSessions;
-      const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd, {
-        baselineKm: s.detectedWeeklyKm,
-        archetype: s.athleteArchetype?.archetype,
-        totalWeeks: s.tw,
-        taperWeeks: s.rd === 'marathon' ? 3 : 2,
-      });
+      const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
       // Injury-aware: build from the return date, not flat. A current run
       // restriction debits its recovery weeks so the forecast doesn't credit
       // build during weeks the athlete cannot run. Mirrors the tri predictor.
@@ -759,20 +781,15 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // and easy pace the plan uses, so the forecast credits precisely the mileage
       // the plan builds — no more (a thin beginner whose plan only reaches the
       // 20-30 km band keeps the residual penalty), no less.
-      const peakKm = (s.rw ?? 0) > 0
-        ? computePeakWeeklyKm({
-            runsPerWeek: s.rw!,
-            raceDistance: s.rd,
-            fitnessLevel: s.onboarding?.experienceLevel || 'intermediate',
-            totalWeeks: s.tw ?? 16,
-            vdot: s.v ?? engineVdot,
-            easyPaceSecPerKm: s.pac?.e,
-          })
-        : null;
+      // A sharpening block never reaches that destination: plannedPeakWeeklyKm
+      // reads the block's own highest pre-taper week instead (the volume the
+      // plan delivers); a full plan gets computePeakWeeklyKm unchanged.
+      const peakInputs = { ...runningPlanShapeInputs(s), vdot: s.v ?? engineVdot, totalWeeks: trainingWeeks || 16 };
+      const peakKm = (s.rw ?? 0) > 0 ? plannedPeakWeeklyKm(peakInputs) : null;
       // Re-run the SAME prediction pipeline at peak volume. Raw blend only:
-      // calibration is applied to forecastTime below, and the durability cap is
-      // intentionally omitted from the forecast (it assumes the plan delivers the
-      // long runs). `false` for the estimate flag: the planned peak is a
+      // calibration is applied to forecastTime below, and durability is applied
+      // from the plan's prescribed long runs (raceDayPlanDurability), not from
+      // the logged-run cap. `false` for the estimate flag: the planned peak is a
       // projection target, not an estimate of current training.
       const peakBlend = (peakKm != null && peakKm > 0)
         ? blendPredictions(
@@ -801,6 +818,10 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // the displayed forecast stays buried near today.
       s.forecastBlendAnchorSec = forecastAnchorSec;
 
+      // Race-day durability from the long runs the plan prescribes (stored for
+      // the Durability drill-down, which reads this same result).
+      const raceDayDurability = raceDayPlanDurability(s);
+      s.raceDayDurability = raceDayDurability ?? undefined;
       const { forecastVdot, forecastTime } = calculateLiveForecast({
         currentVdot: s.v,
         targetDistance: s.rd,
@@ -816,13 +837,16 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         strengthSessionsPerWeek: s.gs,
         adaptationRatio: s.adaptationRatio,
         blendedAnchorSec: forecastAnchorSec,
+        raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
+        taperWeeks: planTaperWeeks(s),
       });
       s.expectedFinal = forecastVdot;
       // Calibration bias applies to the projection (systematic prediction
-      // error doesn't disappear by race day). Durability cap does NOT —
-      // the forecast represents end-of-plan fitness, which assumes the
-      // plan delivers the required long runs before race day. Mirrors the
-      // tri engine's "execution factor" treatment (race-prediction.triathlon).
+      // error doesn't disappear by race day). Durability is judged on the long
+      // runs the PLAN prescribes by race day (raceDayDurabilityMultiplier
+      // above), not on the logged-run cap: the forecast represents end-of-plan
+      // fitness on the assumption that the plan is followed. Mirrors the tri
+      // engine's "execution factor" treatment (race-prediction.triathlon).
       const calibrated = applyRunCalibrationBias(forecastTime, s.rd, calibration);
       // Race-day footwear boost. Carbon-plated racing flats (Vaporfly,
       // Alphafly, Adios Pro, Endorphin Elite) deliver ~3% running-economy

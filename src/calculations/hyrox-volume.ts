@@ -18,7 +18,9 @@ import type { SimulatorState } from '@/types/state';
  * Average planned Hyrox sessions per week over the next `weeks` weeks of the
  * plan. Counts every `wk.triWorkouts` entry in the look-ahead window. Hyrox
  * mode stores all session types (run, station, brick) under the same field as
- * triathlon mode does.
+ * triathlon mode does. A closing week (raceClosing: a Monday to Wednesday
+ * race's own week, which holds only the race) is not a training week and is
+ * skipped, as every running weeks-of-training input reads planTrainingWeeks.
  *
  * Falls back to current and earlier weeks only when fewer future weeks remain
  * (race week, taper). Returns 0 if the plan has no upcoming workouts.
@@ -33,7 +35,7 @@ export function plannedHyroxSessionsPerWeek(
   let weeksCovered = 0;
   for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
     const wk = wks[w];
-    if (!wk?.triWorkouts) continue;
+    if (!wk?.triWorkouts || wk.raceClosing) continue;
     weeksCovered += 1;
     total += wk.triWorkouts.length;
   }

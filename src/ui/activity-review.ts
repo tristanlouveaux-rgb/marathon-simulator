@@ -12,6 +12,7 @@
  *   Modal dismiss → re-opens review with still-pending items (no intro repeat).
  */
 
+import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import { getMutableState, getState, saveState } from '@/state';
 import { render, log } from '@/ui/renderer';
 import {
@@ -1507,7 +1508,7 @@ function applyReview(
     plannedRunsPerWeek: s2.rw,
     injuryMode: !!(s2 as any).injuryState,
     easyPaceSecPerKm: s2.pac?.e,
-    floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph),
+    floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, (planTrainingWeeks(s2) || 16), wk2?.ph),
     acwrStatus: _arAcwr.status,
   };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
@@ -2196,7 +2197,7 @@ export function autoProcessActivities(
   const _arTier2 = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
   const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
-  const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph), acwrStatus: _arAcwr2.status };
+  const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, (planTrainingWeeks(s2) || 16), wk2?.ph), acwrStatus: _arAcwr2.status };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
   const sportLabel = overflow.length === 1

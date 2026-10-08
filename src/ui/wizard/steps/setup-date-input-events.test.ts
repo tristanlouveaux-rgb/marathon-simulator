@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { OnboardingState } from '@/types/onboarding';
-import { calculateWeeksUntil } from '@/data/marathons';
+import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 
 const h = vi.hoisted(() => {
   const store: { state: any } = { state: { onboarding: {} } };
@@ -71,6 +71,6 @@ describe('setup steps: race date commits on input', () => {
     (document.getElementById('cyc-continue') as HTMLButtonElement).click();
     expect(h.nextStep).toHaveBeenCalledTimes(1);
     expect(ob().customRaceDate).toBe('2027-06-13');
-    expect(ob().planDurationWeeks).toBe(calculateWeeksUntil('2027-06-13'));
+    expect(ob().planDurationWeeks).toBe(racePlanCalendarWeeks('2027-06-13'));
   });
 });

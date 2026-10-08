@@ -1,3 +1,5 @@
+import { isTaperCarryBlocked } from '@/workouts/race-day-rules';
+import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } from '@/types';
 import {
   getState, getMutableState, updateState,
@@ -28,9 +30,9 @@ import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
-import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
-import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { refreshBlendedFitness, planForecastWeeklyKm } from '@/calculations/blended-fitness';
+import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 import type { ActivityStream } from '@/calculations/stream-processor';
@@ -376,11 +378,11 @@ export function init(): void {
   // FROM the plan, so the dose input should reflect what the plan will deliver
   // (sessions × ref-km-per-session × build-phase factor), not the user's
   // pre-plan maintenance volume.
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(s.epw, s.rd);
+  const planMeanKm = planForecastWeeklyKm(s, s.epw);
   const { forecastVdot, forecastTime } = calculateLiveForecast({
     currentVdot: s.v,
     targetDistance: s.rd,
-    weeksRemaining: s.tw,
+    weeksRemaining: planTrainingWeeks(s),
     sessionsPerWeek: s.epw,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
@@ -391,6 +393,8 @@ export function init(): void {
     strengthSessionsPerWeek: s.gs,
     adaptationRatio: s.adaptationRatio,
     blendedAnchorSec: blendedTime,
+    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
+    taperWeeks: planTaperWeeks(s),
   });
   s.expectedFinal = forecastVdot;
   s.forecastTime = forecastTime;
@@ -617,12 +621,19 @@ export function rate(
   // Update Forecast (end-of-plan projection)
   const totalExpectedGain = s.expectedFinal - s.iv;
   const weeksCompleted = s.w - 1;
-  const remainingGain = totalExpectedGain > 0
-    ? totalExpectedGain * ((s.tw - weeksCompleted) / s.tw)
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds only the race.
+  const gainWeeks = planTrainingWeeks(s);
+  const remainingGain = totalExpectedGain > 0 && gainWeeks > 0
+    ? totalExpectedGain * (Math.max(0, gainWeeks - weeksCompleted) / gainWeeks)
     : 0;
   const bareForecast = tv(currentVDOT + remainingGain, raceDistKm);
   const horizonDeltaSec = bareToday - bareForecast;
-  s.forecastTime = anchor - horizonDeltaSec;
+  // Race-day durability from the long runs the plan prescribes (race-day-durability),
+  // applied to the published peak-volume forecast anchor like renderer.ts and the
+  // plan preview. Today's estimate (`anchor`) already carries today's logged-run
+  // durability cap, so anchoring the race-day term on it would count durability twice.
+  const forecastAnchor = s.forecastBlendAnchorSec ?? anchor;
+  s.forecastTime = (forecastAnchor - horizonDeltaSec) * (raceDayDurabilityMultiplier(s) ?? 1);
   refreshForecastCourseFactors(s);
 
   // Record VDOT snapshot whenever RPE changes VDOT
@@ -764,6 +775,17 @@ function skipInner(
     }
 
     wk.rated[workoutId] = 'skip';
+  } else if (isTaperCarryBlocked(s, s.w + 1, { t: workoutType, longRun: isLong })) {
+    // Next week is a taper week of the race plan (race-day-rules.ts rule 5): a
+    // long run or quality session is not carried into it. Dropped with the
+    // base penalty, the path sessions past the carry limit take in next().
+    wk.rated[workoutId] = 'skip';
+    const penaltyKey = isLong ? 'long' : workoutType;
+    const basePenalty = TIM[s.rd]?.[penaltyKey as keyof typeof TIM[typeof s.rd]] || 20;
+    s.timp += basePenalty;
+    wk.skipPenalty = wk.skipPenalty || {};
+    wk.skipPenalty[workoutId] = (wk.skipPenalty[workoutId] || 0) + basePenalty;
+    log(`${name} skipped: not carried into the taper (+${basePenalty}s)`);
   } else {
     // First skip - move to next week
     if (wk.rated[workoutId]) delete wk.rated[workoutId];
@@ -816,6 +838,9 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
     );
     s.wks[i].triWorkouts = [...(fresh[i].triWorkouts ?? []), ...userAdded];
     s.wks[i].ph = fresh[i].ph;
+    // The race window's cut sessions (forecast dose only) follow the week.
+    if (fresh[i].raceWindowCut) s.wks[i].raceWindowCut = fresh[i].raceWindowCut;
+    else delete s.wks[i].raceWindowCut;
   }
 }
 
@@ -879,9 +904,12 @@ export async function next(): Promise<void> {
       nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
     }
 
-    // Carry forward up to MAX_CARRY_FORWARD, penalize the rest
-    const toCarry = unrated.slice(0, MAX_CARRY_FORWARD);
-    const toPenalize = unrated.slice(MAX_CARRY_FORWARD);
+    // Carry forward up to MAX_CARRY_FORWARD, penalize the rest. A long run or
+    // quality session is never carried into a taper week of the race plan
+    // (race-day-rules.ts rule 5): it takes the past-the-limit path.
+    const carriable = unrated.filter(w => !isTaperCarryBlocked(s, s.w + 1, w));
+    const toCarry = carriable.slice(0, MAX_CARRY_FORWARD);
+    const toPenalize = unrated.filter(w => !toCarry.includes(w));
 
     let carriedHardCount = 0;
     for (const w of toCarry) {
@@ -962,7 +990,8 @@ export async function next(): Promise<void> {
   // Normal progression (no injury)
   // Calculate per-week VDOT gain from training horizon model instead of flat 0.06
   const totalExpectedVdotGain = (s.expectedFinal || s.iv) - s.iv;
-  const perWeekGain = s.tw > 0 ? totalExpectedVdotGain / s.tw : 0;
+  // Spread over training weeks: the closing week holds only the race.
+  const perWeekGain = planTrainingWeeks(s) > 0 ? totalExpectedVdotGain / planTrainingWeeks(s) : 0;
   // Apply adherence modifier: scale by what fraction of RUNNING workouts were completed.
   // Only running contributes to VDOT gain (Signal A). Cross-training/gym build systemic
   // fitness (Signal B) but not running-specific adaptation. Per PRINCIPLES.md.
@@ -1308,7 +1337,7 @@ export async function next(): Promise<void> {
       // for 2+ consecutive weeks, signal the plan-view card to show.
       // Never fires during taper (deliberately low volume) or when ACWR is elevated.
       if (acwr.status === 'safe' && nextWk.ph !== 'taper') {
-        const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, nextWk.ph);
+        const floorKm = computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), nextWk.ph);
 
         const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
         const consecutiveBelow = prevWeeks.length >= 1 &&
@@ -1927,7 +1956,7 @@ export function logActivity(): void {
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
-  const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, s.tw ?? 16, wk.ph);
+  const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, (planTrainingWeeks(s) || 16), wk.ph);
 
   // -----------------------------------------------------------------------
   // Cross-training slot matching: pair logged sport with planned slots
@@ -2918,7 +2947,7 @@ export function maybeInitKmNudge(): void {
   const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   if (acwr.status !== 'safe') return;
 
-  const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph);
+  const floorKm = computeRunningFloorKm(s.pac?.m, s.w, (planTrainingWeeks(s) || 16), wk.ph);
 
   const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
   const below = prevWeeks.length >= 1 &&

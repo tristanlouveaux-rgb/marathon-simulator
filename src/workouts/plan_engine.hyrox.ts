@@ -15,6 +15,9 @@
  *   8. Wrap into Week[]
  */
 
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow } from './race-day-rules';
+import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
+import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
@@ -29,7 +32,7 @@ import {
   computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm } from './hyrox-generators';
-import { scheduleHyroxWeek } from './scheduler.hyrox';
+import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { ctlGapMultiplier, isFourWeekCycleDeloadWeek } from './plan_engine';
@@ -41,7 +44,23 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
  * v14: per-slot session ids and commute run durations; the regen re-keys
  * name-keyed slot entries to the new ids (state/hyrox-plan-regen.ts).
  */
-export const HYROX_GENERATOR_VERSION = 14;
+// v14: 1- and 2-week plans allocate the taper first (phases.ts computeSingleArc):
+// a 1-week plan is [taper] (was [build]) and a 2-week plan [peak, taper] (was
+// [build, peak]). Also in v14 (unreleased when added): nothing is generated on
+// or after race day (race-day-rules dropSessionsOnOrAfterRaceDay).
+// v15: race week sits where running puts it (storedPlanRaceLayout): the week
+// holding the day 3 days before race day. A Monday to Wednesday race's own week
+// is a closing week with no sessions (raceClosing), and the plan is phased and
+// sized over the weeks before it, so the last days before a Wednesday race are
+// race week, not peak week. For a Thursday to Saturday race the week before race
+// week keeps nothing in the last 6 days before race day; its brick moves to 7 or
+// more days out (clearStoredPlanRaceWindow).
+// v16: merge of two independent bumps. fix/load-accounting's v14 (per-slot
+// session ids and commute run durations, re-keyed by state/hyrox-plan-regen.ts)
+// and fix/lane-s's v14/v15 above (taper-first short plans, nothing on or after
+// race day, race-week calendar layout). Both changes are in this generator, so
+// the version sits above both.
+export const HYROX_GENERATOR_VERSION = 16;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
@@ -502,11 +521,17 @@ function applyHyroxInjuryGates(
 export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): Week | null {
   if (!state.hyroxConfig || !state.wks || weekIndex < 1 || weekIndex > state.wks.length) return null;
   const totalWeeks = state.tw || 16;
-  const planPhases = computeHyroxPlanPhases(totalWeeks);
+  const layout = storedPlanRaceLayout(totalWeeks, state.planStartDate, state.hyroxConfig.raceDate);
+  const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
+  const existing = state.wks[weekIndex - 1];
+  if (weekIndex > trainingWeeks) {
+    // Closing week: it holds only the race.
+    return { ...existing, ph: 'taper', raceClosing: true, triWorkouts: [] };
+  }
+  const planPhases = computeHyroxPlanPhases(trainingWeeks);
   const p = planPhases[weekIndex - 1];
   if (!p) return null;
-  const workouts = generateWeekSessions(state, weekIndex, totalWeeks, p.ph);
-  const existing = state.wks[weekIndex - 1];
+  const workouts = hyroxWeekForRace(state, weekIndex, trainingWeeks, p.ph, layout);
   return {
     ...existing,
     ph: p.ph as any,
@@ -515,23 +540,57 @@ export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): W
   };
 }
 
+/**
+ * One training week of a HYROX plan with the race-day rules applied (mirror of
+ * the triathlon triWeekForRace). `trainingWeeks` excludes a closing week, so
+ * race week is week `trainingWeeks`.
+ *   - Rule 1: nothing on or after race day (shared with running).
+ *   - Rules 3 and 4: in the week before race week, nothing in the last 6 days
+ *     before race day; its full brick moves to 7 or more days out, never next
+ *     to another hard session (clearStoredPlanRaceWindow).
+ */
+function hyroxWeekForRace(
+  state: SimulatorState, weekIndex: number, trainingWeeks: number,
+  phase: 'base' | 'build' | 'peak' | 'taper', layout: RaceWeekLayout | null,
+): Workout[] {
+  const generated = dropSessionsOnOrAfterRaceDay(
+    generateWeekSessions(state, weekIndex, trainingWeeks, phase), weekIndex, state.planStartDate, state.hyroxConfig?.raceDate,
+  );
+  if (!layout) return generated;
+  return clearStoredPlanRaceWindow(generated, {
+    weekIndex,
+    layout,
+    isLongSession: (w) => w.t === 'hyrox_brick',
+    isHard: isHyroxHardSession,
+    firstScheduleDow: firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt),
+    dayNames: HYROX_DAY_NAMES,
+  });
+}
+
 // ─── Top-level plan generator ─────────────────────────────────────────────────
 
 export function generateHyroxPlan(state: SimulatorState): Week[] {
   if (!state.hyroxConfig) return [];
 
   const totalWeeks = state.tw || 16;
-  const planPhases = computeHyroxPlanPhases(totalWeeks);
+  // Race week and the closing week follow the running layout (mirror of
+  // generateTriathlonPlan): phases and the taper ramp run over the training
+  // weeks, so race week is the week holding race day minus 3.
+  const layout = storedPlanRaceLayout(totalWeeks, state.planStartDate, state.hyroxConfig.raceDate);
+  const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
+  const planPhases = computeHyroxPlanPhases(trainingWeeks);
   const weeks: Week[] = [];
 
   for (let w = 1; w <= totalWeeks; w++) {
-    const p = planPhases[w - 1];
+    const closing = w > trainingWeeks;
+    const p = closing ? { ph: 'taper' as const, checkpoint: false } : planPhases[w - 1];
     const phase = p.ph;
-    const workouts = generateWeekSessions(state, w, totalWeeks, phase);
+    const workouts = closing ? [] : hyroxWeekForRace(state, w, trainingWeeks, phase, layout);
 
     weeks.push({
       w,
       ph: phase as any,
+      ...(closing ? { raceClosing: true } : {}),
       ...(p.checkpoint ? { checkpoint: true } : {}),
       triWorkouts: workouts,
       rated: {},

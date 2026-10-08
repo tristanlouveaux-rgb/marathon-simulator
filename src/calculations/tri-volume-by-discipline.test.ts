@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   plannedSessionsPerWeekByDiscipline,
+  plannedHoursPerWeekByDiscipline,
   plannedBuildDoseByDiscipline,
   plannedPeakDoseByDiscipline,
   recentHoursByDiscipline,
@@ -177,6 +178,78 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
     const peak = plannedPeakDoseByDiscipline(s).sessions.bike;
     expect(peak).toBeGreaterThan(0);
     expect(peak).toBeCloseTo(plannedBuildDoseByDiscipline(s).sessions.bike, 5);
+  });
+
+  // ── Race-window cut (Week.raceWindowCut) ───────────────────────────────────
+  // The race window removes sessions from the week before race week of a
+  // Thursday to Saturday race (planning, taper placement). The dose helpers
+  // read the week as prescribed before the cut, so the forecast does not count
+  // the taper placement as lost training.
+  it('build and peak dose add the race window cut back to its week', () => {
+    const s = rampState([
+      { ph: 'build', bike: 3, minPer: 60 },
+      { ph: 'peak',  bike: 2, minPer: 60 }, // window removed 2 x 90-min bike sessions
+      { ph: 'taper', bike: 1, minPer: 30 },
+    ]);
+    (s.wks[1] as any).raceWindowCut = [
+      { discipline: 'bike', estimatedDurationMin: 90 },
+      { discipline: 'bike', estimatedDurationMin: 90 },
+    ];
+    // Peak week as prescribed: 4 sessions, 2h + 3h = 5h.
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(4, 5);
+    expect(plannedPeakDoseByDiscipline(s).hours.bike).toBeCloseTo(5, 5);
+    // Build mean over the two non-taper weeks: (3 + 4) / 2 sessions, (3 + 5) / 2 hours.
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(3.5, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(4, 5);
+  });
+
+  it('the next-4-week look-ahead shows the plan as scheduled (the cut stays out)', () => {
+    const s = rampState([{ ph: 'peak', bike: 2, minPer: 60 }]);
+    (s.wks[0] as any).raceWindowCut = [{ discipline: 'bike', estimatedDurationMin: 90 }];
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+  });
+
+  // Only taper weeks ahead (the week before race week labelled taper): build
+  // and peak dose fall back to the 4-week look-ahead, which reads the cut too.
+  it('with only taper weeks ahead, the build and peak fallback add the cut back', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 1, minPer: 60 }, // window removed 1 x 120-min bike session
+      { ph: 'taper', bike: 1, minPer: 30 },
+    ]);
+    (s.wks[0] as any).raceWindowCut = [{ discipline: 'bike', estimatedDurationMin: 120 }];
+    // (2 + 1) / 2 sessions, (3 + 0.5) / 2 hours.
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(1.5, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(1.75, 5);
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(1.5, 5);
+    expect(plannedPeakDoseByDiscipline(s).hours.bike).toBeCloseTo(1.75, 5);
+    // The public look-ahead still shows the plan as scheduled.
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(1, 5);
+    expect(plannedHoursPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(0.75, 5);
+  });
+
+  // A Monday to Wednesday race's own week (raceClosing) holds only the race:
+  // the forecast fallback skips it rather than averaging in a 0-session week.
+  it('the taper-only fallback skips the closing week', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 2, minPer: 60 },
+      { ph: 'taper' }, // closing week: no sessions
+    ]);
+    (s.wks[1] as any).raceClosing = true;
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(2, 5);
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+  });
+
+  // The Training chip's next-4-week look-ahead skips it too: the week before
+  // race week of a Wednesday race reads race week alone, like a Sunday race.
+  it('the public look-ahead skips the closing week', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 2, minPer: 60 },
+      { ph: 'taper' }, // closing week: no sessions
+    ]);
+    (s.wks[1] as any).raceClosing = true;
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+    expect(plannedHoursPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
   });
 });
 
