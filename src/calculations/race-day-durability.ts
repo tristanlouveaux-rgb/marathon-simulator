@@ -31,6 +31,7 @@ import {
   LONG_RUN_QUALIFYING_FRACTION, LONG_RUN_THRESHOLD_SEC,
   type RunDurabilityResult,
 } from './run-durability';
+import { fmtDurationMin } from '@/utils/format';
 
 /** State the race-day planned durability reads. */
 export type RaceDayPlanState = RunningPlanState
@@ -142,12 +143,6 @@ export function raceDayEnduranceBeyondModel(
   return !!marathonEnduranceGap({ rd, sharpeningBlock: false, longestRunMin: r.longestRunSec / 60 })?.shortLongRuns;
 }
 
-/** h:mm */
-function fmtHm(sec: number): string {
-  const m = Math.round(sec / 60);
-  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
-}
-
 /**
  * The plain statement every forecast surface shows when marathonEnduranceGap
  * holds for the plan (owner decision 2026-10-06: say plainly that the plan
@@ -165,5 +160,5 @@ export function raceDayEnduranceGapText(
     startSource: plan?.startSource, longestRunMin: r.longestRunSec / 60,
   });
   if (!gap) return null;
-  return `The longest run before race day is about ${fmtHm(r.longestRunSec)}, short of the ${fmtHm(LONG_RUN_THRESHOLD_SEC.marathon)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
+  return `The longest run before race day is about ${fmtDurationMin(r.longestRunSec / 60)}, short of the ${fmtDurationMin(LONG_RUN_THRESHOLD_SEC.marathon / 60)} marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.`;
 }

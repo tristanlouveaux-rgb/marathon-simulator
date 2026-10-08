@@ -52,6 +52,13 @@ describe('raceDayEnduranceGapText: no precise penalty outside the model\'s calib
     );
   });
 
+  it('a longest run under an hour reads in minutes, not 0:MM (visual QA 2026-10-08)', () => {
+    const r = applyLongRunCap(36 * 60, 'marathon', 0);
+    expect(raceDayEnduranceGapText(r, 'marathon')).toBe(
+      "The longest run before race day is about 36 minutes, short of the 2:45 marathon-readiness long run. The forecast assumes long-run endurance the plan does not build, so the finish time is optimistic.",
+    );
+  });
+
   it('example A (2:01 long run) and every half keep the precise penalty', () => {
     expect(raceDayEnduranceBeyondModel(applyLongRunCap(121 * 60, 'marathon', 1), 'marathon')).toBe(false);
     expect(raceDayEnduranceGapText(applyLongRunCap(40 * 60, 'half', 0), 'half')).toBeNull();

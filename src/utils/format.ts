@@ -136,3 +136,16 @@ export function fmtDateUK(dateStr: string): string {
   if (parts.length < 3) return dateStr;
   return `${parts[2]}/${parts[1]}`;
 }
+
+/**
+ * A duration in prose: whole minutes under an hour ("36 minutes", "1 minute"),
+ * h:mm from an hour ("1:05", "2:45"). Rounds to the minute first, so 59.6 min
+ * reads "1:00". For sentences such as "Long runs reach about 36 minutes, short
+ * of the 2:45 marathon-readiness long run": "0:36" reads as a clock time or a
+ * pace, not a duration.
+ */
+export function fmtDurationMin(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} ${m === 1 ? 'minute' : 'minutes'}`;
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+}

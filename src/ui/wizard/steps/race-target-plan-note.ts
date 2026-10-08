@@ -21,6 +21,7 @@ import { LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
 import { marathonEnduranceGap } from '@/calculations/race-day-durability';
 import { localMondayKey, localDateKey, calendarDayNumber } from '@/utils/local-date';
 import type { Archetype } from '@/calculations/athlete-archetype';
+import { fmtDurationMin } from '@/utils/format';
 
 /** Training weeks of a plan built today for a race on `raceISO` (null: no plan possible). */
 export function trainingWeeksForRace(raceISO: string, now: Date = new Date()): number | null {
@@ -49,12 +50,6 @@ export function racePlanNote(rd: RaceDistance, raceISO: string, now: Date = new 
     return `${n}-week plan, short of the ${FULL_BUILD_WEEKS.marathon}-week marathon build. ${plural(training, 'week')} of race-specific training from current fitness, then a ${taper}-week taper.`;
   }
   return `${n}-week plan, short of the ${FULL_BUILD_WEEKS.half}-week half marathon build. ${plural(training, 'week')} of race-specific training, then race week.`;
-}
-
-/** h:mm */
-function fmtHm(min: number): string {
-  const m = Math.round(min);
-  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
 }
 
 export interface LowBaseMarathon {
@@ -99,6 +94,6 @@ export function lowBaseMarathon(
   const lead = gap.noRecentRun ? 'No runs in the last 30 days. ' : '';
   return {
     peakLongMin,
-    text: `${lead}${plural(n, 'week')} cannot build marathon endurance. Long runs reach about ${fmtHm(peakLongMin)}, short of the ${fmtHm(thresholdMin)} marathon-readiness long run, so the forecast finish time is optimistic.`,
+    text: `${lead}${plural(n, 'week')} cannot build marathon endurance. Long runs reach about ${fmtDurationMin(peakLongMin)}, short of the ${fmtDurationMin(thresholdMin)} marathon-readiness long run, so the forecast finish time is optimistic.`,
   };
 }
