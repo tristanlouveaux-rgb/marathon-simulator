@@ -10,7 +10,7 @@ import { capitalize } from '@/utils';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
-import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, taperMakeupRoom, type PlanContext, type TaperMakeupRoom } from './plan_engine';
+import { planWeekSessions, isRaceWeek, planEngineStateInputs, sharpeningInputsFromState, EASY_FLOOR_MIN, LONG_SOFT_FLOOR_MIN, taperMakeupRoom, type PlanContext, type PlanWeekNotes, type TaperMakeupRoom } from './plan_engine';
 import { liveSharpeningLongRunCapMin } from './sharpening-block';
 import { isClosingWeek, planTrainingWeeks, planRaceLayout } from './race-week-layout';
 import { applyRaceDayRules, raceDayRulesApply, filterTaperMakeups, fitTaperEasyMakeups } from './race-day-rules';
@@ -80,9 +80,14 @@ export function generateWeekWorkouts(
   weeklyHoursTarget?: number,
   excludedSlots?: string[],
   weekdayHoursTarget?: number,
+  /** Receives what the plan engine reports about this week (planWeekSessions).
+   *  Cleared first; left empty when an active injury rewrites the week, since
+   *  the engine's account of it then no longer describes the sessions shown. */
+  planNotes?: PlanWeekNotes,
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here, except the closing week.
+  if (planNotes) delete planNotes.budgetRunFit;
 
   // Closing week: the own week of a Monday to Wednesday race (race-week-layout.ts).
   // It holds only the race, so nothing of any kind is generated. Planned adhoc
@@ -170,7 +175,7 @@ export function generateWeekWorkouts(
       sharpening: sharpeningInputsFromState(sNow),
       liveLongRunCapMin: liveSharpeningLongRunCapMin(sNow, weekIndex),
     };
-    const intents = planWeekSessions(engineCtx);
+    const intents = planWeekSessions(engineCtx, planNotes);
     taperRoom = taperMakeupRoom(engineCtx);
     // ACWR ease-back (ISSUE-295). On a high-ACWR week, unless the athlete chose to keep ramping,
     // shed exactly the overshoot via the intensity-first ladder (quality→easy, then easy volume,
@@ -480,6 +485,7 @@ export function generateWeekWorkouts(
   // injuryAppliesToWeek() so this and the tri display can't drift apart.
   const currentWeek = getState().w ?? 1;
   if (injuryState && injuryState.active && injuryAppliesToWeek(weekIndex, currentWeek)) {
+    if (planNotes) delete planNotes.budgetRunFit;
     scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState, easyPaceSecPerKm);
     // Acute / no-load phases collapse the week to "Complete Rest", but the
     // relative-rest model keeps the UNAFFECTED region training (Tristan

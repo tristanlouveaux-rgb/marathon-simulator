@@ -4,7 +4,8 @@
  * Complex interactions (rating, Garmin matching) delegate to renderMainView() for now.
  */
 
-import { extraRunAddsQualitySession, runningPlanShapeInputs } from '@/workouts/plan_engine';
+import { extraRunAddsQualitySession, runningPlanShapeInputs, type BudgetRunFit, type PlanWeekNotes } from '@/workouts/plan_engine';
+import { budgetRunFitLine } from './budget-run-fit-line';
 import { getState, getMutableState, saveState } from '@/state';
 import { AI_COACH_ENABLED } from '@/constants/feature-flags';
 import type { SimulatorState, Week, Workout } from '@/types';
@@ -1348,30 +1349,20 @@ function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number)
 }
 
 /**
- * Run-day ramp note. Surfaces the consolidation in `applyHoursBudget`: at low
- * weekly volume the engine drops easy run-days and lengthens the survivors
- * rather than slice the week into sub-25-min fragments (see plan_engine.ts).
- * The result is fewer run-days than the athlete's chosen frequency in early
- * weeks, climbing back as the volume budget ramps.
- *
- * Only fires on current/future base or build weeks. Suppressed when injury,
- * illness, holiday, or a commute config is the reason for the run count (each
- * has its own surface, and the "volume ramps" framing would be wrong).
+ * Run-count line (Tristan 2026-10-08). One line when the week holds fewer runs
+ * than the runner chose because its weekly budget consolidated easy runs: the
+ * fit keeps the fewest runs that each stay at a useful length rather than
+ * splitting the budget into short ones (applyHoursBudget in a full plan, the
+ * sharpening-block fit in a block). The plan engine decides when this applies
+ * and reports it (plan_engine BudgetRunFit): loaded weeks only, never a deload,
+ * taper or race week. The resolver drops it when injury, illness, a holiday or
+ * its bridge, or a partial first week shapes the week instead
+ * (resolveWeekWorkouts planNotes). Current and future weeks only. Wording:
+ * budgetRunFitLine.
  */
-function buildRunDayRampNote(s: SimulatorState, workouts: any[], wk: Week | undefined, viewWeek: number): string {
-  if (!wk || viewWeek < s.w) return '';
-  if (wk.ph !== 'base' && wk.ph !== 'build') return '';
-  if (s.commuteConfig || s.holidayState || s.illnessState?.active || isInjuryActive()) return '';
-  const chosen = s.rw ?? 0;
-  if (chosen <= 0) return '';
-  const RUN_TYPES = new Set(['easy', 'progressive', 'long', 'threshold', 'vo2', 'marathon_pace', 'float']);
-  const runCount = workouts.filter(w => RUN_TYPES.has((w as any).t)).length;
-  if (runCount >= chosen) return '';
-  return `
-    <div style="margin:0 16px 8px;padding:11px 14px;border-radius:12px;background:var(--c-surface);border:1px solid var(--c-border)">
-      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:2px">Fewer run days this week</div>
-      <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Week ${viewWeek} has ${runCount} runs rather than ${chosen}. At low weekly volume, a few longer runs deliver more aerobic stimulus than several short ones. Run days increase as your volume ramps.</div>
-    </div>`;
+function buildBudgetRunFitNote(s: SimulatorState, fit: BudgetRunFit | undefined, viewWeek: number): string {
+  if (!fit || viewWeek < s.w) return '';
+  return `<div id="plan-budget-run-fit" style="margin:0 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:var(--c-muted);line-height:1.5">${budgetRunFitLine(fit, s.unitPref ?? 'km')}</div>`;
 }
 
 /**
@@ -2259,8 +2250,8 @@ function _renderPills(pills: SignalPill[]): string {
 // Delegates to the canonical resolveWeekWorkouts (week-resolve.ts) so the Home
 // Today card reads the SAME plan — see CLAUDE.md "same source" rule. The only
 // thing this wrapper adds is populating the drag-and-drop _workoutLookup.
-function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
-  const workouts = resolveWeekWorkouts(s, viewWeek);
+function computeRenderedWorkouts(s: SimulatorState, viewWeek: number, planNotes?: PlanWeekNotes): any[] {
+  const workouts = resolveWeekWorkouts(s, viewWeek, { planNotes });
 
   _workoutLookup = new Map();
   for (const w of workouts) {
@@ -2314,7 +2305,8 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   const rated = wk?.rated ?? {};
   const isCurrentWeek = viewWeek === s.w;
 
-  const workouts = computeRenderedWorkouts(s, viewWeek);
+  const planNotes: PlanWeekNotes = {};
+  const workouts = computeRenderedWorkouts(s, viewWeek, planNotes);
 
   const dateRange = fmtWeekRange(s.planStartDate, viewWeek);
   const phase = wk?.ph ? phaseLabel(wk.ph) : '';
@@ -2601,7 +2593,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           ${buildAdjustWeekRow(wk, s)}
           ${buildGoalFeasibilityBanner(s)}
           ${buildBudgetBanner(s, workouts, viewWeek)}
-          ${buildRunDayRampNote(s, workouts, wk, viewWeek)}
+          ${buildBudgetRunFitNote(s, planNotes.budgetRunFit, viewWeek)}
           ${buildInjuryBanner()}
           ${buildIllnessBanner()}
           ${buildHolidayBannerPlan(s)}

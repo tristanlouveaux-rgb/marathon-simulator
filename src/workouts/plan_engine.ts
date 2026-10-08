@@ -621,22 +621,28 @@ const LONG_STD_FLOOR_MIN = 40;
 export const LONG_SOFT_FLOOR_MIN = 30;
 
 /**
- * The effective weekly minute budget = the tighter of the archetype ramp
+ * The effective weekly minute budget (`min`) = the tighter of the archetype ramp
  * budget (km anchored to the athlete's current volume) and the user's weekly
  * hours target. `Infinity` when neither is set (legacy generous behaviour).
  * Single source so the quality cap and `applyHoursBudget` agree.
+ *
+ * `hoursBound`: the week's budget is the weekly hours target itself (the legacy
+ * flat cap, or RC2 once the ramp has reached the capped destination). While the
+ * ramp is still climbing toward a capped destination the week sits below the
+ * target, so the volume ramp is what holds it (BudgetRunFit.binding).
  */
-function effectiveWeeklyBudgetMin(ctx: PlanContext): number {
+function effectiveWeeklyBudget(ctx: PlanContext): { min: number; hoursBound: boolean } {
   const hoursCapMin = (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0)
     ? ctx.weeklyHoursTarget * 60
     : Infinity;
+  const atTarget = (min: number) => ({ min, hoursBound: Number.isFinite(hoursCapMin) && min >= hoursCapMin - 0.5 });
 
   if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
     const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
     const peakKm = computePeakWeeklyKm(ctx);
     const weekKm = weekVolumeBudgetKm(ctx.weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
     const rampBudgetMin = Math.round((weekKm * easyPaceSecPerKm) / 60);
-    if (!Number.isFinite(hoursCapMin)) return rampBudgetMin;
+    if (!Number.isFinite(hoursCapMin)) return { min: rampBudgetMin, hoursBound: false };
 
     // RC2 — periodise WITHIN the hours cap. Previously the budget was
     // `min(rampBudgetMin, hoursCap)` per week, which pinned every week to the same
@@ -649,11 +655,11 @@ function effectiveWeeklyBudgetMin(ctx: PlanContext): number {
     const peakBudgetMin = Math.round((peakKm * easyPaceSecPerKm) / 60);
     const rampFraction = peakBudgetMin > 0 ? rampBudgetMin / peakBudgetMin : 1;
     const cappedPeakMin = Math.min(peakBudgetMin, hoursCapMin);
-    return Math.round(cappedPeakMin * rampFraction);
+    return atTarget(Math.round(cappedPeakMin * rampFraction));
   }
 
   // No archetype/baseline ramp info: flat hours cap (legacy) or no budget at all.
-  return hoursCapMin;
+  return atTarget(hoursCapMin);
 }
 
 // ---------------------------------------------------------------------------
@@ -771,8 +777,51 @@ function recentLongestLongRun(history: PrescribedWeek[], weekIndex: number): num
   return best;
 }
 
-export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
-  return buildWeekSessions(ctx, nominalHistory(ctx));
+/**
+ * Why a week holds fewer runs than the runner chose (planning side; Tristan
+ * 2026-10-08). Set only on a loaded week (base, build or peak; not a deload,
+ * the taper or race week) whose weekly budget consolidated easy runs: the fit
+ * keeps the fewest runs that each stay at least EASY_FLOOR_MIN rather than
+ * splitting the budget into shorter runs (applyHoursBudget in a full plan; the
+ * block fit, design 4.5 step 2, in a sharpening block). Weeks with fewer runs
+ * for any other reason (deload, taper, race week, a holiday's forced deload)
+ * never carry it.
+ */
+export interface BudgetRunFit {
+  /** Runs a week the runner chose (ctx.runsPerWeek). */
+  chosenRuns: number;
+  /** Runs the week holds after the budget fit. */
+  fittedRuns: number;
+  /** The ceiling that set the week's budget: the weekly hours target, or the
+   *  volume ramp that builds from current weekly running. */
+  binding: 'hours' | 'volume';
+  /** Weekly hours target (hours), when one is set. */
+  hoursTarget?: number;
+  /** Current weekly running (km) the volume ramp builds from (ctx.baselineKm), when known. */
+  currentWeeklyKm?: number;
+}
+
+/** What planWeekSessions reports about the week it built, beside its sessions. */
+export interface PlanWeekNotes {
+  budgetRunFit?: BudgetRunFit;
+}
+
+/** The BudgetRunFit for a built week, or undefined when the week holds every chosen run. */
+function budgetRunFitOf(ctx: PlanContext, week: SessionIntent[], hoursBound: boolean): BudgetRunFit | undefined {
+  if (ctx.runsPerWeek <= 1 || week.length >= ctx.runsPerWeek) return undefined;
+  const fit: BudgetRunFit = { chosenRuns: ctx.runsPerWeek, fittedRuns: week.length, binding: hoursBound ? 'hours' : 'volume' };
+  if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) fit.hoursTarget = ctx.weeklyHoursTarget;
+  if (ctx.baselineKm != null && ctx.baselineKm > 0) fit.currentWeeklyKm = ctx.baselineKm;
+  return fit;
+}
+
+/**
+ * One week's sessions. `notes`, when given, receives what the engine reports
+ * about the week (PlanWeekNotes); its fields are cleared first.
+ */
+export function planWeekSessions(ctx: PlanContext, notes?: PlanWeekNotes): SessionIntent[] {
+  if (notes) delete notes.budgetRunFit;
+  return buildWeekSessions(ctx, nominalHistory(ctx), notes);
 }
 
 /**
@@ -970,9 +1019,9 @@ export function runningPlanShapeInputs(s: RunningPlanState): PlanShapeInputs {
  * One week's sessions. `history[i]` is what the plan prescribed in week i + 1,
  * for every week before `ctx.weekIndex` (see nominalHistory).
  */
-function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): SessionIntent[] {
+function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[], notes?: PlanWeekNotes): SessionIntent[] {
   if (!ctx.continuousMode && isSharpeningBlock(ctx.raceDistance, ctx.totalWeeks)) {
-    return buildSharpeningWeek(ctx, history);
+    return buildSharpeningWeek(ctx, history, notes);
   }
   const {
     runsPerWeek, raceDistance, runnerType, fitnessLevel,
@@ -1063,7 +1112,8 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
   // reduced budget too. Before, the budget kept ramping through the deload, and a
   // week whose predecessor was budget-bound refilled the higher budget: the deload
   // came out heavier than the week before, sometimes with an extra quality session.
-  let weeklyBudgetMin = effectiveWeeklyBudgetMin(ctx) * (deload ? deloadMultiplier(ability) : 1);
+  const weekBudget = effectiveWeeklyBudget(ctx);
+  let weeklyBudgetMin = weekBudget.min * (deload ? deloadMultiplier(ability) : 1);
   if (deload && prevWeek) {
     // Backstop: a deload week is never heavier than the week before it.
     weeklyBudgetMin = Math.min(weeklyBudgetMin, prevWeek.totalMin);
@@ -1290,6 +1340,13 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
     }
   }
 
+  // Fewer runs than chosen in a loaded week: only the budget fit drops a run
+  // (applyHoursBudget consolidates easy runs; every slot is otherwise filled).
+  if (notes && !raceWeek && !deload && phase !== 'taper') {
+    const fit = budgetRunFitOf(ctx, week, weekBudget.hoursBound);
+    if (fit) notes.budgetRunFit = fit;
+  }
+
   return week;
 }
 
@@ -1313,7 +1370,7 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[]): Session
 //     current volume, and the weekly hours target. With an hours target below
 //     what the block would build, the block starts at the target and holds
 //     there (RC2's rule for an athlete already at the capped destination,
-//     plan_engine effectiveWeeklyBudgetMin; owner decision 2026-10-06).
+//     plan_engine effectiveWeeklyBudget; owner decision 2026-10-06).
 //   - Deload weeks (build weeks on the ability cycle) take deloadMultiplier of
 //     the last loaded week, with no more quality sessions than it had.
 //   - Taper weeks: taperFraction (0.70 / 0.55 for a 2-week taper, 0.55 for
@@ -1702,7 +1759,7 @@ function assembleBlockTaperWeek(
 
 /** One week of a sharpening block. `history[i]` = what the block prescribed in week i + 1. */
 function buildSharpeningWeek(
-  ctx: PlanContext, history: PrescribedWeek[], out?: { taperRoom?: TaperMakeupRoom },
+  ctx: PlanContext, history: PrescribedWeek[], out?: { taperRoom?: TaperMakeupRoom } & PlanWeekNotes,
 ): SessionIntent[] {
   const { raceDistance, weekIndex: k, totalWeeks: n, fitnessLevel, vdot } = ctx;
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
@@ -1841,7 +1898,14 @@ function buildSharpeningWeek(
     row.longTarget = Math.min(row.longTarget, Math.max(LONG_SOFT_FLOOR_MIN, Math.floor(ctx.liveLongRunCapMin)));
     if (row.longHold != null) row.longHold = Math.min(row.longHold, row.longTarget);
   }
-  return assembleBlockLoadedWeek(ctx, ability, row);
+  const week = assembleBlockLoadedWeek(ctx, ability, row);
+  // Fewer runs than chosen in a loaded week: only the block fit drops a run (easy
+  // runs consolidate, design 4.5 step 2; past every floor one easy run is kept).
+  if (out && !deload) {
+    const fit = budgetRunFitOf(ctx, week, !!row.hoursBound);
+    if (fit) out.budgetRunFit = fit;
+  }
+  return week;
 }
 
 /**
@@ -1909,7 +1973,7 @@ function capLongRun(week: SessionIntent[], capMin: number): SessionIntent[] {
  */
 /**
  * Peak weekly running km the plan ramps toward. This is the single source of
- * the plan's volume destination: `effectiveWeeklyBudgetMin` ramps every week
+ * the plan's volume destination: `effectiveWeeklyBudget` ramps every week
  * toward it (see line ~409). It is therefore also the correct volume to feed
  * the race-day FORECAST — by race day the athlete has been holding this peak
  * for weeks, so the marathon-specificity / low-volume penalties must be

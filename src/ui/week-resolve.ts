@@ -1,12 +1,13 @@
 import type { SimulatorState } from '@/types';
 import { generateWeekWorkouts } from '@/workouts';
+import type { PlanWeekNotes } from '@/workouts/plan_engine';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { findWorkoutForMod, modDisplayDescription } from '@/workouts/workout-scaling';
 import { applyIllnessMods } from '@/calculations/illness-rules';
 import { applyHolidayMods, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
 import { isTimingMod } from '@/cross-training/timing-mod-reason';
 import { calculateWorkoutLoad } from '@/workouts/load';
-import { dropPreOnboardSessions } from './workout-status';
+import { dropPreOnboardSessions, firstTrackedDow } from './workout-status';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { renderLayerOf } from '@/workouts/render-layer';
 
@@ -20,6 +21,15 @@ export interface ResolveWeekOptions {
    * resolveWeekForPlanChanges.
    */
   renderLayers?: boolean;
+  /**
+   * Receives what the plan engine reports about the week (PlanWeekNotes, via
+   * generateWeekWorkouts). Cleared first, and left empty whenever something
+   * other than the engine shapes the week's run count: an active injury
+   * (generator), illness, a holiday or its comeback bridge (the render layers),
+   * or a partial first week (sessions before the onboarding day are dropped).
+   * The Plan tab's run-count line reads it.
+   */
+  planNotes?: PlanWeekNotes;
 }
 
 /**
@@ -49,6 +59,8 @@ export interface ResolveWeekOptions {
 export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number, opts: ResolveWeekOptions = {}): any[] {
   const wk = s.wks?.[viewWeek - 1];
   const isCurrentWeek = viewWeek === s.w;
+  const notes = opts.planNotes;
+  if (notes) delete notes.budgetRunFit;
   // injuryState is threaded so an active running injury renders its adapted
   // week (acute/rehab/return-to-run) instead of the healthy plan. The generator
   // gates this forward-only via injuryAppliesToWeek (past weeks never rewritten),
@@ -62,6 +74,7 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number, opts: R
       s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
       getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus, (wk as any).forceDeload,
       s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
+      undefined, notes,
     )
     : [];
 
@@ -120,17 +133,24 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number, opts: R
     }
   }
 
+  let layered: boolean;
   if (opts.renderLayers === false) {
     // Plan layers only. The render layers run on a copy so each session records
     // which layer would adjust it, without taking that layer's values.
     const shadow = workouts.map((w: any) => ({ ...w }));
-    applyRenderLayers(s, viewWeek, isCurrentWeek, wk, shadow);
+    layered = applyRenderLayers(s, viewWeek, isCurrentWeek, wk, shadow);
     workouts.forEach((w: any, i: number) => {
       const layer = renderLayerOf(shadow[i]);
       if (layer) w.renderLayer = layer;
     });
   } else {
-    applyRenderLayers(s, viewWeek, isCurrentWeek, wk, workouts);
+    layered = applyRenderLayers(s, viewWeek, isCurrentWeek, wk, workouts);
+  }
+
+  // Illness, a holiday or its bridge, or a partial first week shape the run count
+  // themselves: the engine's budget note no longer explains it.
+  if (notes && (layered || firstTrackedDow(s.planStartDate, viewWeek, s.planCreatedAt) > 0)) {
+    delete notes.budgetRunFit;
   }
 
   // Reduced partial first week: drop sessions on days before the user onboarded
@@ -143,11 +163,14 @@ export function resolveWeekWorkouts(s: SimulatorState, viewWeek: number, opts: R
  * Steps 5 to 7: illness (current week only), holiday (weeks inside the holiday
  * window) and comeback-bridge scaling. These are recomputed from live state on
  * every render, so their output is display only and never persisted into a mod.
+ * Returns true when any of the three applies to this week.
  */
-function applyRenderLayers(s: SimulatorState, viewWeek: number, isCurrentWeek: boolean, wk: any, workouts: any[]): void {
+function applyRenderLayers(s: SimulatorState, viewWeek: number, isCurrentWeek: boolean, wk: any, workouts: any[]): boolean {
+  let applied = false;
   const _illness = (s as any).illnessState;
   if (_illness?.active && isCurrentWeek) {
     applyIllnessMods(workouts, _illness);
+    applied = true;
   }
 
   const _holiday = s.holidayState;
@@ -156,9 +179,14 @@ function applyRenderLayers(s: SimulatorState, viewWeek: number, isCurrentWeek: b
       && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, _holiday)) {
     const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, _holiday);
     applyHolidayMods(workouts, _holiday.canRun, holidayDays);
+    applied = true;
   }
 
-  if (wk) applyBridgeMods_renderTime(workouts, wk);
+  if (wk) {
+    applyBridgeMods_renderTime(workouts, wk);
+    if ((wk as any)._holidayBridgeScale) applied = true;
+  }
+  return applied;
 }
 
 /**
