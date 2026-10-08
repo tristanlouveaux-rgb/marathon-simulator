@@ -798,14 +798,16 @@ export interface BudgetRunFit {
   chosenRuns: number;
   /** Runs the week holds after the budget fit. */
   fittedRuns: number;
-  /** The ceiling that set the week's budget: the weekly hours target, or the
-   *  volume ramp that builds from current weekly running. */
+  /** 'hours': the weekly hours target set the week's budget and the runs that fit
+   *  stay within it. 'volume': the week's volume budget set the count. That is
+   *  the volume ramp from current weekly running when `currentWeeklyKm` is
+   *  present; with no `currentWeeklyKm` the fit names no ceiling (budgetRunFitOf). */
   binding: 'hours' | 'volume';
   /** Weekly hours target (hours), when one is set. */
   hoursTarget?: number;
   /** Current weekly running (km) the volume ramp builds from (ctx.baselineKm), when
    *  synced or entered; absent when the baseline is the plan's own estimate
-   *  (ctx.baselineKmIsEstimate). */
+   *  (ctx.baselineKmIsEstimate) or when the fit names no ceiling. */
   currentWeeklyKm?: number;
 }
 
@@ -814,12 +816,27 @@ export interface PlanWeekNotes {
   budgetRunFit?: BudgetRunFit;
 }
 
-/** The BudgetRunFit for a built week, or undefined when the week holds every chosen run. */
-function budgetRunFitOf(ctx: PlanContext, week: SessionIntent[], hoursBound: boolean): BudgetRunFit | undefined {
+/**
+ * The BudgetRunFit for a built week, or undefined when the week holds every
+ * chosen run. It names the ceiling that set the budget (`hoursBound`: the hours
+ * target, otherwise the volume ramp) unless naming one would be untrue:
+ *   - `nameCeiling` false: the caller found the week's budget below that ceiling
+ *     (the live effort/CTL lever in a sharpening block cost a run the ceiling
+ *     allows).
+ *   - Hours-bound, but the runs that fit already pass the target: each run keeps
+ *     its useful length, so the week overflows the budget, and the Time budget
+ *     banner (plan-view buildBudgetBanner) says so beside the line.
+ * Then the fit names no ceiling (binding 'volume', no currentWeeklyKm), which
+ * words as "This week's volume fits N of your M runs.", true of the built week.
+ */
+function budgetRunFitOf(ctx: PlanContext, week: SessionIntent[], hoursBound: boolean, nameCeiling = true): BudgetRunFit | undefined {
   if (ctx.runsPerWeek <= 1 || week.length >= ctx.runsPerWeek) return undefined;
-  const fit: BudgetRunFit = { chosenRuns: ctx.runsPerWeek, fittedRuns: week.length, binding: hoursBound ? 'hours' : 'volume' };
-  if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) fit.hoursTarget = ctx.weeklyHoursTarget;
-  if (ctx.baselineKm != null && ctx.baselineKm > 0 && !ctx.baselineKmIsEstimate) fit.currentWeeklyKm = ctx.baselineKm;
+  const hoursTarget = ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0 ? ctx.weeklyHoursTarget : undefined;
+  const overTarget = hoursTarget != null && week.reduce((sum, i) => sum + i.totalMinutes, 0) > hoursTarget * 60;
+  const named = nameCeiling && !(hoursBound && overTarget);
+  const fit: BudgetRunFit = { chosenRuns: ctx.runsPerWeek, fittedRuns: week.length, binding: named && hoursBound ? 'hours' : 'volume' };
+  if (hoursTarget != null) fit.hoursTarget = hoursTarget;
+  if (named && ctx.baselineKm != null && ctx.baselineKm > 0 && !ctx.baselineKmIsEstimate) fit.currentWeeklyKm = ctx.baselineKm;
   return fit;
 }
 
@@ -1917,19 +1934,20 @@ function buildSharpeningWeek(
   // Fewer runs than chosen in a loaded week: only the block fit drops a run (easy
   // runs consolidate, design 4.5 step 2; past every floor one easy run is kept).
   if (out && !deload) {
-    const fit = budgetRunFitOf(ctx, week, !!row.hoursBound);
     // The live effort/CTL lever (reduce-only here) scales this week's budget below
-    // the ceiling the line names: row.hoursBound and the volume ramp are read from
-    // the unscaled row. When the same week without the lever seats more runs, the
-    // lever dropped them and the named ceiling would be blamed for a count it
-    // allows ("The 3 h weekly target fits 3 of your 4 runs" on a week whose 3 h
-    // fits 4), so the week carries no note: the line explains a budget
-    // consolidation only. When it seats the same runs, the named ceiling alone
-    // holds the count and the note stands. Full plans need no such check: there
-    // the lever scales sessions, never the budget (buildWeekSessions).
-    const leverDropped = fit != null && lever < 1
+    // the ceiling the line would name: row.hoursBound and the volume ramp are read
+    // from the unscaled row. When the same week without the lever seats more runs,
+    // the lever cost a run the ceiling allows, so the note names no ceiling
+    // ("This week's volume fits 3 of your 4 runs."): the lowered budget still
+    // consolidated the runs, but "The 3 h weekly target fits 3 of your 4 runs" on a
+    // week whose 3 h fits 4 would be untrue. When it seats the same runs, the
+    // named ceiling alone holds the count and the note names it. Full plans need
+    // no such check: there the lever scales sessions, never the budget
+    // (buildWeekSessions).
+    const leverDropped = lever < 1 && week.length < ctx.runsPerWeek
       && assembleBlockLoadedWeek(ctx, ability, finishRow({ ...loadedRow(k, history, phase), acwrNote })).length > week.length;
-    if (fit && !leverDropped) out.budgetRunFit = fit;
+    const fit = budgetRunFitOf(ctx, week, !!row.hoursBound, !leverDropped);
+    if (fit) out.budgetRunFit = fit;
   }
   return week;
 }

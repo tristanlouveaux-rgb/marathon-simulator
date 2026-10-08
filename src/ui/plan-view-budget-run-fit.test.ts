@@ -131,7 +131,7 @@ describe('Plan tab: the run-count line', () => {
     expect(render(s)).toBe('This week\'s volume fits 2 of your 4 runs. Each stays at a useful length.');
   });
 
-  it('a CTL-gap week whose 3-hour target fits all 4 runs: the lever drops one and the line does not blame the target', () => {
+  it('a CTL-gap week whose 3-hour target fits all 4 runs: the lever drops one and the line names neither the target nor the ramp', () => {
     // 40 km a week, 80-min longest, 3-hour target: week 1 holds 4 runs (180 min).
     // A CTL ratio of 0.8 scales the block budget down and week 1 holds 3.
     const mid = (): SimulatorState => lowVolumeBlock(1, {
@@ -147,24 +147,56 @@ describe('Plan tab: the run-count line', () => {
     (gap.wks[0] as any).ctlRatio = 0.8;
     setState(gap);
     expect(runCount(resolveWeekWorkouts(gap, 1))).toBe(3);
-    expect(render(gap)).toBe('');
+    expect(render(gap)).toBe('This week\'s volume fits 3 of your 4 runs. Each stays at a useful length.');
   });
 
-  it('with the Time budget banner above it, the line sits apart from the banner card', () => {
+  it('no target, 25 km a week, 5 runs: a CTL-gap week whose lowered budget merges one more run keeps a line naming no ceiling', () => {
+    // Marathon 6 weeks out, longest run of the last 30 days 60 min, week 3 (build).
+    // The budget alone seats 4 of 5 runs; a CTL ratio of 0.8 lowers it to 3.
+    const noTarget = (): SimulatorState => lowVolumeBlock(3, {
+      rw: 5, tw: 6, wks: initializeWeeks(6, { raceDistance: 'marathon' }), detectedWeeklyKm: 25,
+      onboarding: { experienceLevel: 'intermediate' } as any,
+      sharpenBlock: { v: 1, startLongMin: 60, startSource: 'history-30d', recentLongestMin: 60, noSignal: false, trainingWeeks: 6, builtISO: '2026-09-07' } as any,
+    });
+    const plain = noTarget();
+    setState(plain);
+    expect(runCount(resolveWeekWorkouts(plain, 3))).toBe(4);
+    expect(render(plain)).toBe('Building from 25 km a week, this week\'s volume fits 4 of your 5 runs. Each stays at a useful length.');
+    const gap = noTarget();
+    (gap.wks[2] as any).ctlRatio = 0.8;
+    setState(gap);
+    expect(runCount(resolveWeekWorkouts(gap, 3))).toBe(3);
+    expect(render(gap)).toBe('This week\'s volume fits 3 of your 5 runs. Each stays at a useful length.');
+  });
+
+  it('with the Time budget banner above it, the line never says the target fits the runs and sits apart from the banner card', () => {
     // 12-week half, 4 runs, 1-hour target: the week totals 88 min (banner) and holds 3 runs (line).
     const s = lowVolumeBlock(1, {
       tw: 12, rd: 'half', wks: initializeWeeks(12, { raceDistance: 'half' }),
       sharpenBlock: undefined, detectedWeeklyKm: undefined, athleteArchetype: undefined,
       onboarding: { experienceLevel: 'intermediate', weeklyTrainingHours: 1 } as any,
     });
-    expect(render(s)).toBe('The 1 h weekly target fits 3 of your 4 runs this week. Each stays at a useful length.');
+    expect(render(s)).toBe('This week\'s volume fits 3 of your 4 runs. Each stays at a useful length.');
     const banner = document.getElementById('budget-banner-card')!;
     const line = document.getElementById('plan-budget-run-fit')!;
     expect(banner).not.toBeNull();
+    expect(banner.textContent).toContain('This week\'s plan totals about 1.5 h, 28 min over your 1 h target.');
     expect(banner.nextElementSibling).toBe(line);
     // Vertical margins between the two block siblings collapse to the larger one.
     const gapPx = Math.max(parseFloat(banner.style.marginBottom) || 0, parseFloat(line.style.marginTop) || 0);
     expect(gapPx).toBeGreaterThan(0);
+  });
+});
+
+describe('Plan tab: the line names the hours target only when the runs fit within it', () => {
+  it('block, 40 km a week, 100-min longest, 2-hour target: the line names the target and no Time budget banner shows', () => {
+    // Long run 95 min + one 25-min easy run = 120 min, the 2-hour target exactly.
+    const s = lowVolumeBlock(1, {
+      detectedWeeklyKm: 40,
+      sharpenBlock: { v: 1, startLongMin: 100, startSource: 'history-30d', recentLongestMin: 100, noSignal: false, trainingWeeks: 7, builtISO: '2026-09-07' } as any,
+    });
+    expect(render(s)).toBe('The 2 h weekly target fits 2 of your 4 runs this week. Each stays at a useful length.');
+    expect(document.getElementById('budget-banner-card')).toBeNull();
   });
 });
 

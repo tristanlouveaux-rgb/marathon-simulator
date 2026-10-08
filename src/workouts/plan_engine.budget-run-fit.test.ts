@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { planWeekSessions, planEngineStateInputs, type PlanContext, type PlanWeekNotes } from './plan_engine';
 import { computeRunningPlanPhases } from './phases';
+import { budgetRunFitLine } from '@/ui/budget-run-fit-line';
 
 /**
  * The engine reports why a week holds fewer runs than the runner chose
@@ -111,6 +112,11 @@ describe('the binding ceiling', () => {
   });
 });
 
+/** The line a fit words to; on a week where the lever cost a run it names neither
+ *  the hours target nor the volume ramp. */
+const lineOf = (fit: PlanWeekNotes['budgetRunFit']) => (fit ? budgetRunFitLine(fit, 'km') : '');
+const NAMES_NO_CEILING = (fitted: number, chosen: number) => `This week's volume fits ${fitted} of your ${chosen} runs. Each stays at a useful length.`;
+
 describe('the live effort/CTL lever in a sharpening block', () => {
   // Marathon 7 weeks out, 4 runs a week, 40 km a week, 3-hour target, longest
   // run of the last 30 days 80 min. The lever (effort score above 0, or a CTL
@@ -123,16 +129,18 @@ describe('the live effort/CTL lever in a sharpening block', () => {
     expect(r.fit, r.label).toBeUndefined();
   });
 
-  it('effort score 1.5: week 1 holds 3 runs, but the 3-hour target fits 4, so no note (never "hours")', () => {
+  it('effort score 1.5: week 1 holds 3 runs; the 3-hour target fits 4, so the note names neither the target nor the ramp', () => {
     const r = weeks({ ...MID, effortScore: 1.5 })[0];
     expect(r.runs, r.label).toBe(3);
-    expect(r.fit, r.label).toBeUndefined();
+    expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'volume', hoursTarget: 3 });
+    expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 4));
   });
 
-  it('CTL ratio 0.8: week 1 holds 3 runs and carries no note', () => {
+  it('CTL ratio 0.8: week 1 holds 3 runs and the note names no ceiling', () => {
     const r = weeks({ ...MID, ctlRatio: 0.8 })[0];
     expect(r.runs, r.label).toBe(3);
-    expect(r.fit, r.label).toBeUndefined();
+    expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'volume', hoursTarget: 3 });
+    expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 4));
   });
 
   it('a lever week whose run count the target alone sets keeps the note (week 2: 3 runs with or without the lever)', () => {
@@ -143,14 +151,47 @@ describe('the live effort/CTL lever in a sharpening block', () => {
     expect(levered.fit, levered.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'hours', hoursTarget: 3, currentWeeklyKm: 40 });
   });
 
-  it('2.5-hour target, 100-min longest: week 1 holds 3 runs without the lever (the target binds) and 2 with it (no note)', () => {
+  it('2.5-hour target, 100-min longest: week 1 holds 3 runs without the lever (the target binds) and 2 with it (no ceiling named)', () => {
     const B: Ctx = { ...MID, weeklyHoursTarget: 2.5, sharpening: { startLongMin: 100, startSource: 'history-30d' } };
     const plain = weeks(B)[0];
     expect(plain.runs, plain.label).toBe(3);
     expect(plain.fit, plain.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'hours', hoursTarget: 2.5, currentWeeklyKm: 40 });
+    expect(lineOf(plain.fit)).toBe('The 2.5 h weekly target fits 3 of your 4 runs this week. Each stays at a useful length.');
     const levered = weeks({ ...B, effortScore: 1.5 })[0];
     expect(levered.runs, levered.label).toBe(2);
-    expect(levered.fit, levered.label).toBeUndefined();
+    expect(levered.fit, levered.label).toEqual({ chosenRuns: 4, fittedRuns: 2, binding: 'volume', hoursTarget: 2.5 });
+    expect(lineOf(levered.fit)).toBe(NAMES_NO_CEILING(2, 4));
+  });
+
+  // Marathon 6 weeks out, 25 km a week synced, consistent runner, longest run of
+  // the last 30 days 60 min, no hours target (main.ts clears weeklyTrainingHours
+  // at launch, so this is the usual case). Week 3 (build).
+  const NO_TARGET: Ctx = {
+    runsPerWeek: 5, raceDistance: 'marathon', runnerType: 'Balanced', fitnessLevel: 'intermediate',
+    vdot: 45, easyPaceSecPerKm: 330, totalWeeks: 6, baselineKm: 25, archetype: 'consistent-runner',
+    sharpening: { startLongMin: 60, startSource: 'history-30d' },
+  };
+
+  it('no target, 5 runs: the budget alone merges runs (4 of 5); the lowered budget merges one more and the week keeps a line naming no ceiling', () => {
+    const plain = weeks(NO_TARGET)[2];
+    expect(plain.runs, plain.label).toBe(4);
+    expect(lineOf(plain.fit)).toBe('Building from 25 km a week, this week\'s volume fits 4 of your 5 runs. Each stays at a useful length.');
+    for (const lever of [{ effortScore: 1.5 }, { ctlRatio: 0.8 }]) {
+      const r = weeks({ ...NO_TARGET, ...lever })[2];
+      expect(r.runs, r.label).toBe(3);
+      expect(r.fit, r.label).toEqual({ chosenRuns: 5, fittedRuns: 3, binding: 'volume' });
+      expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 5));
+    }
+  });
+
+  it('no target, 4 runs: the week holds every run without the lever and 3 with it; the line names no ceiling', () => {
+    const plain = weeks({ ...NO_TARGET, runsPerWeek: 4 })[2];
+    expect(plain.runs, plain.label).toBe(4);
+    expect(plain.fit, plain.label).toBeUndefined();
+    const r = weeks({ ...NO_TARGET, runsPerWeek: 4, effortScore: 1.5 })[2];
+    expect(r.runs, r.label).toBe(3);
+    expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'volume' });
+    expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 4));
   });
 
   it('15 km a week: the lever leaves every loaded week at 2 runs, and the volume note stands', () => {
@@ -158,6 +199,49 @@ describe('the live effort/CTL lever in a sharpening block', () => {
       expect(r.runs, r.label).toBe(2);
       expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 2, binding: 'volume', hoursTarget: 2, currentWeeklyKm: 15 });
     }
+  });
+});
+
+describe('the hours target is named only when the runs that fit stay within it', () => {
+  const HALF: Ctx = {
+    runsPerWeek: 4, raceDistance: 'half', runnerType: 'Balanced', fitnessLevel: 'intermediate',
+    vdot: 45, easyPaceSecPerKm: 330, totalWeeks: 12, weeklyHoursTarget: 1,
+  };
+  const total = (label: string) => [...label.matchAll(/:(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+
+  it('12-week half, 1-hour target: the 3 runs that fit total 88 min, so the note names no ceiling', () => {
+    const r = weeks(HALF)[0];
+    expect(r.runs, r.label).toBe(3);
+    expect(total(r.label), r.label).toBe(88);
+    expect(r.fit, r.label).toEqual({ chosenRuns: 4, fittedRuns: 3, binding: 'volume', hoursTarget: 1 });
+    expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 4));
+  });
+
+  it('with 40 km a week synced, once the capped ramp reaches the 1-hour target the note names neither the target nor the ramp', () => {
+    const rows = weeks({ ...HALF, runsPerWeek: 5, baselineKm: 40, archetype: 'consistent-runner' });
+    const r = rows[5]; // week 6: the budget is the 1-hour target, the runs total more
+    expect(total(r.label), r.label).toBeGreaterThan(60);
+    expect(r.fit, r.label).toEqual({ chosenRuns: 5, fittedRuns: 3, binding: 'volume', hoursTarget: 1 });
+    expect(lineOf(r.fit)).toBe(NAMES_NO_CEILING(3, 5));
+  });
+
+  it('every week of these plans that names the target totals no more than it', () => {
+    const cases: Ctx[] = [
+      HALF, { ...HALF, weeklyHoursTarget: 1.5 }, { ...HALF, weeklyHoursTarget: 2 },
+      { ...HALF, runsPerWeek: 5, baselineKm: 40, archetype: 'consistent-runner' },
+      { ...LOW, baselineKm: 40, weeklyHoursTarget: 1, sharpening: { startLongMin: 100, startSource: 'history-30d' } },
+      { ...LOW, baselineKm: 40, weeklyHoursTarget: 1.5, sharpening: { startLongMin: 100, startSource: 'history-30d' } },
+      { ...LOW, baselineKm: 40, weeklyHoursTarget: 2, sharpening: { startLongMin: 100, startSource: 'history-30d' } },
+    ];
+    let named = 0;
+    for (const c of cases) {
+      for (const r of weeks(c)) {
+        if (r.fit?.binding !== 'hours') continue;
+        named++;
+        expect(total(r.label), r.label).toBeLessThanOrEqual(c.weeklyHoursTarget! * 60);
+      }
+    }
+    expect(named).toBeGreaterThan(0);
   });
 });
 
