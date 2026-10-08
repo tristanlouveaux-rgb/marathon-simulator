@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
+import { clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow, spaceStoredPlanQualityRuns, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
 import { raceWeekLayout, storedPlanRaceLayout } from './race-week-layout';
 
 /**
@@ -250,5 +250,60 @@ describe('raceWeekPrimerDow: the running primer day for every race weekday', () 
     expect(raceWeekPrimerDow(layout, 7, 1, 1)).toBeNull();
     // From Saturday a Sunday race's window (Tuesday to Thursday) is past.
     expect(raceWeekPrimerDow(raceWeekLayout(START, '2026-11-22')!, 7, 1, 5)).toBeNull();
+  });
+});
+
+describe('spaceStoredPlanQualityRuns (running rule 4 spacing for the triathlon engine)', () => {
+  interface Q { n: string; t: string; disc: string; dayOfWeek?: number; dayName?: string }
+  const q = (n: string, t: string, disc: string, dayOfWeek: number): Q => ({ n, t, disc, dayOfWeek, dayName: NAMES[dayOfWeek] });
+  const isQ = (w: Q) => w.disc === 'run' && (w.t === 'threshold' || w.t === 'vo2');
+  function space(race: string, week: number, ws: Q[], firstScheduleDow?: number) {
+    return spaceStoredPlanQualityRuns(ws, {
+      weekIndex: week, layout: raceWeekLayout(START, race)!, firstScheduleDow, dayNames: NAMES,
+      isQualityRun: isQ,
+      isHardRun: w => isQ(w) || w.t === 'long' || w.t === 'brick',
+      isRun: w => w.disc === 'run',
+      toEasy: w => ({ ...w, n: 'Easy run', t: 'easy' }),
+    });
+  }
+  const show = (ws: Q[]) => ws.map(w => `${NAMES[w.dayOfWeek!]}:${w.n}`);
+  // Saturday race 21 Nov (race week 7): the week before after the race window
+  // moved its brick to Friday and its long run to Saturday (review example:
+  // sprint, 6 h, three hard days in a row 7 to 9 days out).
+  const WEEK_BEFORE: Q[] = [
+    q('Bike over-unders', 'bike_over_under', 'bike', 1),
+    q('CSS swim', 'swim_threshold', 'swim', 2),
+    q('Threshold run', 'threshold', 'run', 3),
+    q('Brick', 'brick', 'bike', 4),
+    q('Long run', 'long', 'run', 5),
+  ];
+
+  it('a quality run next to the brick moves to the nearest earlier day without a run', () => {
+    expect(show(space('2026-11-21', 6, WEEK_BEFORE))).toEqual([
+      'Tue:Bike over-unders', 'Wed:CSS swim', 'Wed:Threshold run', 'Fri:Brick', 'Sat:Long run',
+    ]);
+  });
+
+  it('skips a day that holds a run (a ride there is no obstacle)', () => {
+    const ws = [...WEEK_BEFORE, q('Easy run', 'easy', 'run', 2)];
+    expect(show(space('2026-11-21', 6, ws))).toEqual([
+      'Tue:Bike over-unders', 'Tue:Threshold run', 'Wed:CSS swim', 'Wed:Easy run', 'Fri:Brick', 'Sat:Long run',
+    ]);
+  });
+
+  it('with no earlier day it becomes an easy run on its day', () => {
+    // Plan existing from Thursday of that week only.
+    expect(show(space('2026-11-21', 6, WEEK_BEFORE, 3))).toEqual([
+      'Tue:Bike over-unders', 'Wed:CSS swim', 'Thu:Easy run', 'Fri:Brick', 'Sat:Long run',
+    ]);
+  });
+
+  it('the brick and the long run keep their back-to-back days; a spaced week is unchanged', () => {
+    const ws = WEEK_BEFORE.filter(w => w.t !== 'threshold');
+    expect(space('2026-11-21', 6, ws)).toBe(ws);
+  });
+
+  it('weeks outside the last 13 days are unchanged (same array)', () => {
+    expect(space('2026-11-21', 5, WEEK_BEFORE)).toBe(WEEK_BEFORE);
   });
 });

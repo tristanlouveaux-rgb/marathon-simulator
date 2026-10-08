@@ -50,7 +50,7 @@ import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
 import { getState, resetState } from './store';
 import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
-import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from '@/workouts/race-day-rules';
+import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT, RACE_DAY_HARD_SPACING_DAYS } from '@/workouts/race-day-rules';
 import { isLongRun } from '@/workouts/long-run';
 import { describeBikeSession, type BikeSessionKind } from '@/workouts/bike';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
@@ -108,6 +108,26 @@ const count = (wk: Week | undefined, disc: string) => (wk?.triWorkouts ?? []).fi
 /** Days holding the discipline, up to weekday `lastDow`. */
 const daysWith = (wk: Week | undefined, disc: string, lastDow = 6) => new Set((wk?.triWorkouts ?? [])
   .filter(w => (w.discipline ?? 'run') === disc && (w.dayOfWeek ?? 0) <= lastDow).map(w => w.dayOfWeek)).size;
+
+/** Running rule 4's spacing in the last 13 days (RACE_DAY_HARD_SPACING_DAYS):
+ *  no threshold or VO2 run on the day before or after the long run, the brick
+ *  or another quality run, within the week. */
+function spacingViolations(s: SimulatorState, race: string): string[] {
+  const layout = raceWeekLayout(s.planStartDate!, race)!;
+  const out: string[] = [];
+  const isQRun = (w: Workout) => (w.discipline ?? 'run') === 'run' && (w.t === 'threshold' || w.t === 'vo2');
+  const isHardRun = (w: Workout) => isQRun(w) || isLongRun(w) || w.t === 'brick';
+  s.wks.forEach((wk, i) => {
+    const ws = wk.triWorkouts ?? [];
+    for (const q of ws.filter(isQRun)) {
+      const d = q.dayOfWeek ?? 0;
+      if (layout.raceDayIndex - (i * 7 + d) > RACE_DAY_HARD_SPACING_DAYS) continue;
+      const next = ws.filter(w => w !== q && isHardRun(w) && Math.abs((w.dayOfWeek ?? 0) - d) === 1);
+      if (next.length > 0) out.push(`week ${i + 1} ${DOW[d]} ${q.n} next to ${next.map(w => `${DOW[w.dayOfWeek ?? 0]} ${w.n}`).join(', ')}`);
+    }
+  });
+  return out;
+}
 
 function raceWeekViolations(s: SimulatorState, race: string): string[] {
   const layout = raceWeekLayout(s.planStartDate!, race)!;
@@ -204,6 +224,27 @@ describe('no discipline twice on one day in race week', () => {
   });
 });
 
+describe('the week before race week: no quality run next to the brick or the long run', () => {
+  // Review 2026-10-08: for a Friday or Saturday race the race window moves the
+  // brick and the long run to 8 and 7 days out; a threshold run the scheduler
+  // put on Thursday then sat beside them, three hard days in a row 7 to 9 days
+  // out (72 plans in a 2,160-plan sweep). Running rule 4 moves a quality run
+  // that sits next to a hard day to the nearest earlier day without a run.
+  it('sprint, 6 h, Saturday race 21 November: the threshold run moves from Thursday to Wednesday', () => {
+    at('2026-10-04T12:00:00');
+    const s = build('sprint', '2026-11-21', 6);
+    const before = s.wks[planTrainingWeeks(s) - 2].triWorkouts ?? [];
+    expect(before.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
+      'Tue bike_over_under',
+      'Wed swim_threshold',
+      'Wed threshold',
+      'Fri brick',
+      'Sat long',
+    ]);
+    expect(spacingViolations(s, '2026-11-21')).toEqual([]);
+  });
+});
+
 describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
   it('race week has short sessions through the Sunday primer, 3 days out', () => {
     at('2026-10-08T12:00:00');
@@ -244,6 +285,7 @@ describe('every distance (T100 included), cycling, race weekday and hours budget
           for (const hours of [4, 6, 8, 10, 12, 15]) {
             const s = build(mode, race, hours);
             for (const v of raceWeekViolations(s, race)) found.push(`${race} ${hours}h: ${v}`);
+            for (const v of spacingViolations(s, race)) found.push(`${race} ${hours}h: ${v}`);
             // A Monday to Wednesday race week with a ride has its primer 3 to 5
             // days out (raceWeekViolations checks the days), including a low
             // budget whose only ride is the primer.

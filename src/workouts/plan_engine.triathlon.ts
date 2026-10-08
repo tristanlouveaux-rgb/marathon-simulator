@@ -15,7 +15,7 @@
  * marathon training).
  */
 
-import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow } from './race-day-rules';
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow, spaceStoredPlanQualityRuns } from './race-day-rules';
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
@@ -337,7 +337,7 @@ function triWeekForRace(
   const generated = dropSessionsOnOrAfterRaceDay(primed, weekIndex, state.planStartDate, tri.raceDate);
   const raceWindowCut: TriRaceWindowCut = [];
   if (!layout) return { workouts: generated, raceWindowCut };
-  const workouts = clearStoredPlanRaceWindow(generated, {
+  const cleared = clearStoredPlanRaceWindow(generated, {
     weekIndex,
     layout,
     isLongSession: isTriLongSession,
@@ -347,7 +347,33 @@ function triWeekForRace(
     // these back (Week.raceWindowCut, tri-volume-by-discipline).
     onDrop: w => raceWindowCut.push({ discipline: w.discipline, estimatedDurationMin: w.estimatedDurationMin }),
   });
+  // Rule 4's spacing: no quality run next to the long run, the brick or
+  // another quality run in the last 13 days (running's rule; the brick and the
+  // long run keep their back-to-back days).
+  const workouts = spaceStoredPlanQualityRuns(cleared, {
+    weekIndex,
+    layout,
+    isQualityRun: isTriQualityRun,
+    isHardRun: w => isTriQualityRun(w) || isLongRun(w) || w.t === 'brick',
+    isRun: w => (w.discipline ?? 'run') === 'run',
+    firstScheduleDow: firstDow,
+    dayNames: TRI_DAY_NAMES,
+    toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
+  });
   return { workouts, raceWindowCut };
+}
+
+/** A threshold or VO2 run (the triathlon run quality kinds). */
+function isTriQualityRun(w: Workout): boolean {
+  return (w.discipline ?? 'run') === 'run' && !isLongRun(w) && (w.t === 'threshold' || w.t === 'vo2');
+}
+
+/** A quality run as an easy run of the same duration, at the week's easy pace. */
+function triEasedRun(state: SimulatorState, weekIndex: number, totalWeeks: number, phase: TrainingPhase, w: Workout): Workout {
+  const skill = (state.triConfig?.skillRating?.run ?? 3) as TriSkillSlider;
+  const pace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm ?? easyPaceSecPerKmFromSkill(skill);
+  const label = `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')}/km`;
+  return { ...w, ...triEasyRunFields(w.estimatedDurationMin ?? TRI_SESSION_FLOOR_MIN, label, Math.abs(weekIndex - 1)), r: 4 };
 }
 
 type TriRaceWindowCut = NonNullable<Week['raceWindowCut']>;
@@ -1070,6 +1096,22 @@ const VO2_RUN_VARIANTS = [
   (vo2: string, easy: string) => `15min warm up @ ${easy}. 4×4min @ ${vo2}, 3min jog recovery. 10min cool down.`,
 ];
 
+/** A tri easy run of `minutes`: generateRunSessionForTri's easy branch, also
+ *  the eased form of a quality run (spaceStoredPlanQualityRuns). */
+function triEasyRunFields(minutes: number, easyLabel: string, rotKey: number) {
+  const r = roundMin(minutes);
+  const total = r * plannedTssPerMin('easy');
+  return {
+    n: 'Easy run',
+    d: EASY_RUN_VARIANTS[rotKey % EASY_RUN_VARIANTS.length](fmtMin(r), easyLabel),
+    t: 'easy',
+    rpe: 4,
+    aerobic: Math.round(total * 0.95),
+    anaerobic: Math.round(total * 0.05),
+    estimatedDurationMin: Math.max(20, r),
+  };
+}
+
 function generateRunSessionForTri(
   phase: TrainingPhase,
   slotIndex: number,
@@ -1149,15 +1191,7 @@ function generateRunSessionForTri(
     anaerobic = Math.round(total * 0.23);
   } else {
     durMin = minutes * easyVolumeKeep;  // body-mass swap trims easy aerobic volume only
-    const r = roundMin(durMin);
-    const idx = rotKey % EASY_RUN_VARIANTS.length;
-    name = 'Easy run';
-    desc = EASY_RUN_VARIANTS[idx](fmtMin(r), easyLabel);
-    t = 'easy';
-    rpe = 4;
-    const total = r * plannedTssPerMin('easy');
-    aerobic = Math.round(total * 0.95);
-    anaerobic = Math.round(total * 0.05);
+    ({ n: name, d: desc, t, rpe, aerobic, anaerobic } = triEasyRunFields(durMin, easyLabel, rotKey));
   }
 
   return {

@@ -364,6 +364,75 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
     ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
 }
 
+export interface StoredPlanSpacingInput<T> {
+  /** Plan week being generated (1-based). */
+  weekIndex: number;
+  layout: RaceWeekLayout;
+  /** A quality run: the session this rule moves or eases. */
+  isQualityRun: (w: T) => boolean;
+  /** A hard run session it may not sit next to: the long run, the brick (its
+   *  transition run), another quality run. */
+  isHardRun: (w: T) => boolean;
+  /** Any run: a moved quality run takes a day without one. */
+  isRun: (w: T) => boolean;
+  /** First schedulable weekday of this week (workout-status firstTrackedDow). */
+  firstScheduleDow?: number;
+  /** Day names in the engine's own format, indexed 0 = Monday. */
+  dayNames: readonly string[];
+  /** The same session as an easy run of the same duration. */
+  toEasy: (w: T) => T;
+}
+
+/**
+ * Rule 4's spacing for the triathlon engine (cycling has no runs): in the last
+ * RACE_DAY_HARD_SPACING_DAYS days before race day, a quality run never sits on
+ * the day before or after another hard run session (the long run, the brick
+ * with its transition run, another quality run), checked within the week. It
+ * moves to the nearest earlier day that holds no run and keeps the rule, on or
+ * after the first schedulable day; with none it becomes an easy run of the
+ * same duration (running steps it down the pace ladder until it is not a hard
+ * session, and every hard type sits above the easy rung). Long sessions do not
+ * move here: the triathlon brick and long run sit back to back by design, and
+ * rule 3 (clearStoredPlanRaceWindow) has already placed them. Rule 4's other
+ * half, no quality but the primer in the last 6 days, needs nothing: race week
+ * holds one quality session (the primer ride) and the race window clears the
+ * week before's last days. Weeks outside the last 13 days come back unchanged
+ * (same array). Pure; `dayOfWeek` 0 = Monday.
+ */
+export function spaceStoredPlanQualityRuns<T extends { dayOfWeek?: number; dayName?: string }>(
+  workouts: T[], inp: StoredPlanSpacingInput<T>,
+): T[] {
+  const { weekIndex, layout } = inp;
+  if (!raceDayRulesApply(weekIndex, layout)) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
+  const firstDow = Math.max(0, Math.min(7, inp.firstScheduleDow ?? 0));
+  let out = workouts.map(w => ({ ...w }));
+  const on = (dow: number, except: T, pred: (w: T) => boolean) =>
+    out.some(w => w !== except && w.dayOfWeek === dow && pred(w));
+  const breaks = (q: T, dow: number) =>
+    daysOut(dow) <= RACE_DAY_HARD_SPACING_DAYS && (on(dow - 1, q, inp.isHardRun) || on(dow + 1, q, inp.isHardRun));
+  let changed = false;
+  for (const q of out.filter(w => w.dayOfWeek != null && inp.isQualityRun(w))) {
+    if (!breaks(q, q.dayOfWeek!)) continue;
+    changed = true;
+    let target: number | null = null;
+    for (let dow = q.dayOfWeek! - 1; dow >= firstDow; dow--) {
+      if (!on(dow, q, inp.isRun) && !breaks(q, dow)) { target = dow; break; }
+    }
+    if (target != null) {
+      q.dayOfWeek = target;
+      q.dayName = inp.dayNames[target];
+      continue;
+    }
+    const eased = { ...inp.toEasy(q), dayOfWeek: q.dayOfWeek, dayName: q.dayName };
+    out = out.map(w => (w === q ? eased : w));
+  }
+  if (!changed) return workouts;
+  const order = new Map(out.map((w, i) => [w, i]));
+  return out.sort((a, b) => ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
+}
+
 /**
  * The race-week primer's day for the stored-plan modes (triathlon, cycling on
  * the tri engine, HYROX): the day running rule 2 gives the running primer.
