@@ -7,12 +7,13 @@ import { formatKm, type UnitPref } from '@/utils/format';
  * (plan_engine BudgetRunFit). States the runs chosen, the runs that fit and the
  * ceiling that set the budget. The engine decides when it applies; this only
  * words it.
- *   - Hours target binds and the runs fit within it: "The 2 h weekly target fits
- *     2 of your 4 runs this week."
+ *   - Hours target binds and the runs fill it, with no room under it for another
+ *     run: "The 2 h weekly target fits 2 of your 4 runs this week."
  *   - Volume ramp binds: "Building from 15 km a week, this week's volume fits 2 of
  *     your 4 runs." (no km clause when current weekly running is unknown)
- *   - No ceiling named (the effort/CTL lever cost the run, or the runs pass the
- *     hours target; budgetRunFitOf): "This week's volume fits 2 of your 4 runs."
+ *   - No ceiling named (the effort/CTL lever cost the run, the runs pass the hours
+ *     target or leave room under it, or the target capped the ramp's destination;
+ *     budgetRunFitOf): "This week's volume fits 2 of your 4 runs."
  * The closing "Each stays at a useful length." names no minute figure: the
  * engine keeps every run at EASY_FLOOR_MIN or longer, but the opt-in body-mass
  * swap (generator.ts) can shorten an easy run below it afterwards.

@@ -198,6 +198,25 @@ describe('Plan tab: the line names the hours target only when the runs fit withi
     expect(render(s)).toBe('The 2 h weekly target fits 2 of your 4 runs this week. Each stays at a useful length.');
     expect(document.getElementById('budget-banner-card')).toBeNull();
   });
+
+  it('full plan, 12-week half, 5 runs, 40 km a week, 2.5-hour target, week 1: the line names neither the target nor the 40 km', () => {
+    // The target caps the plan's volume destination and week 1 climbs toward it
+    // (3 runs, 111 min). Without the target the same week seats all 5 runs.
+    const capped = (over: Partial<SimulatorState> = {}): SimulatorState => lowVolumeBlock(1, {
+      rw: 5, tw: 12, rd: 'half', wks: initializeWeeks(12, { raceDistance: 'half' }),
+      sharpenBlock: undefined, detectedWeeklyKm: 40,
+      onboarding: { experienceLevel: 'intermediate', weeklyTrainingHours: 2.5 } as any,
+      ...over,
+    });
+    const s = capped();
+    setState(s);
+    expect(runCount(resolveWeekWorkouts(s, 1))).toBe(3);
+    expect(render(s)).toBe('This week\'s volume fits 3 of your 5 runs. Each stays at a useful length.');
+    const open = capped({ onboarding: { experienceLevel: 'intermediate' } as any });
+    setState(open);
+    expect(runCount(resolveWeekWorkouts(open, 1))).toBe(5);
+    expect(render(open)).toBe('');
+  });
 });
 
 describe('resolver: weeks short of runs for another reason carry no note', () => {

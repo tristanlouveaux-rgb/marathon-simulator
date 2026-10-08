@@ -633,22 +633,30 @@ export const LONG_SOFT_FLOOR_MIN = 30;
  * Single source so the quality cap and `applyHoursBudget` agree.
  *
  * `hoursBound`: the week's budget is the weekly hours target itself (the legacy
- * flat cap, or RC2 once the ramp has reached the capped destination). While the
- * ramp is still climbing toward a capped destination the week sits below the
- * target, so the volume ramp is what holds it (BudgetRunFit.binding).
+ * flat cap, or RC2 once the ramp has reached the capped destination).
+ *
+ * `rampBound`: the volume ramp from current weekly running alone sets the week's
+ * budget (BudgetRunFit.currentWeeklyKm): no hours target, or one at or above the
+ * plan's uncapped volume destination. While the ramp climbs toward a destination
+ * the target caps, the week sits below the target but its budget is the target's
+ * capped destination scaled down, so neither ceiling alone holds it and both
+ * flags are false.
  */
-function effectiveWeeklyBudget(ctx: PlanContext): { min: number; hoursBound: boolean } {
+function effectiveWeeklyBudget(ctx: PlanContext): { min: number; hoursBound: boolean; rampBound: boolean } {
   const hoursCapMin = (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0)
     ? ctx.weeklyHoursTarget * 60
     : Infinity;
-  const atTarget = (min: number) => ({ min, hoursBound: Number.isFinite(hoursCapMin) && min >= hoursCapMin - 0.5 });
+  const atTarget = (min: number, uncappedRamp = false) => {
+    const hoursBound = Number.isFinite(hoursCapMin) && min >= hoursCapMin - 0.5;
+    return { min, hoursBound, rampBound: uncappedRamp && !hoursBound };
+  };
 
   if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
     const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
     const peakKm = computePeakWeeklyKm(ctx);
     const weekKm = weekVolumeBudgetKm(ctx.weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
     const rampBudgetMin = Math.round((weekKm * easyPaceSecPerKm) / 60);
-    if (!Number.isFinite(hoursCapMin)) return { min: rampBudgetMin, hoursBound: false };
+    if (!Number.isFinite(hoursCapMin)) return { min: rampBudgetMin, hoursBound: false, rampBound: true };
 
     // RC2 — periodise WITHIN the hours cap. Previously the budget was
     // `min(rampBudgetMin, hoursCap)` per week, which pinned every week to the same
@@ -661,10 +669,11 @@ function effectiveWeeklyBudget(ctx: PlanContext): { min: number; hoursBound: boo
     const peakBudgetMin = Math.round((peakKm * easyPaceSecPerKm) / 60);
     const rampFraction = peakBudgetMin > 0 ? rampBudgetMin / peakBudgetMin : 1;
     const cappedPeakMin = Math.min(peakBudgetMin, hoursCapMin);
-    return atTarget(Math.round(cappedPeakMin * rampFraction));
+    return atTarget(Math.round(cappedPeakMin * rampFraction), hoursCapMin >= peakBudgetMin);
   }
 
   // No archetype/baseline ramp info: flat hours cap (legacy) or no budget at all.
+  // There is no ramp to name.
   return atTarget(hoursCapMin);
 }
 
@@ -799,9 +808,10 @@ export interface BudgetRunFit {
   /** Runs the week holds after the budget fit. */
   fittedRuns: number;
   /** 'hours': the weekly hours target set the week's budget and the runs that fit
-   *  stay within it. 'volume': the week's volume budget set the count. That is
-   *  the volume ramp from current weekly running when `currentWeeklyKm` is
-   *  present; with no `currentWeeklyKm` the fit names no ceiling (budgetRunFitOf). */
+   *  fill it (no room under it for another run). 'volume': the week's volume
+   *  budget set the count. That is the volume ramp from current weekly running
+   *  when `currentWeeklyKm` is present; with no `currentWeeklyKm` the fit names
+   *  no ceiling (budgetRunFitOf). */
   binding: 'hours' | 'volume';
   /** Weekly hours target (hours), when one is set. */
   hoursTarget?: number;
@@ -818,25 +828,43 @@ export interface PlanWeekNotes {
 
 /**
  * The BudgetRunFit for a built week, or undefined when the week holds every
- * chosen run. It names the ceiling that set the budget (`hoursBound`: the hours
- * target, otherwise the volume ramp) unless naming one would be untrue:
+ * chosen run. It names the ceiling that set the budget (`ceiling.hoursBound`: the
+ * hours target; `ceiling.rampBound`: the volume ramp) unless naming one would be
+ * untrue:
  *   - `nameCeiling` false: the caller found the week's budget below that ceiling
  *     (the live effort/CTL lever in a sharpening block cost a run the ceiling
  *     allows).
- *   - Hours-bound, but the runs that fit already pass the target: each run keeps
- *     its useful length, so the week overflows the budget, and the Time budget
- *     banner (plan-view buildBudgetBanner) says so beside the line.
+ *   - Hours-bound, but the runs that fit do not fill the target: the target is
+ *     named only when the built week totals no more than it and one more run at
+ *     EASY_FLOOR_MIN would pass it. Past the target, each run keeps its useful
+ *     length, so the week overflows the budget and the Time budget banner
+ *     (plan-view buildBudgetBanner) says so beside the line. With room under it
+ *     for another run (a live lever shortened the sessions or the budget), the
+ *     target did not cost the run. The volume ramp is not named either: the
+ *     target was the lowest ceiling.
+ *   - Neither flag: the hours target capped the plan's volume destination and the
+ *     ramp toward it set the week below the target (effectiveWeeklyBudget), so no
+ *     single ceiling holds the count.
  * Then the fit names no ceiling (binding 'volume', no currentWeeklyKm), which
  * words as "This week's volume fits N of your M runs.", true of the built week.
  */
-function budgetRunFitOf(ctx: PlanContext, week: SessionIntent[], hoursBound: boolean, nameCeiling = true): BudgetRunFit | undefined {
+function budgetRunFitOf(
+  ctx: PlanContext,
+  week: SessionIntent[],
+  ceiling: { hoursBound: boolean; rampBound: boolean },
+  nameCeiling = true,
+): BudgetRunFit | undefined {
   if (ctx.runsPerWeek <= 1 || week.length >= ctx.runsPerWeek) return undefined;
   const hoursTarget = ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0 ? ctx.weeklyHoursTarget : undefined;
-  const overTarget = hoursTarget != null && week.reduce((sum, i) => sum + i.totalMinutes, 0) > hoursTarget * 60;
-  const named = nameCeiling && !(hoursBound && overTarget);
-  const fit: BudgetRunFit = { chosenRuns: ctx.runsPerWeek, fittedRuns: week.length, binding: named && hoursBound ? 'hours' : 'volume' };
+  const totalMin = week.reduce((sum, i) => sum + i.totalMinutes, 0);
+  const fillsTarget = hoursTarget != null && totalMin <= hoursTarget * 60 && totalMin + EASY_FLOOR_MIN > hoursTarget * 60;
+  const namesTarget = nameCeiling && ceiling.hoursBound && fillsTarget;
+  const namesRamp = nameCeiling && !ceiling.hoursBound && ceiling.rampBound;
+  const fit: BudgetRunFit = { chosenRuns: ctx.runsPerWeek, fittedRuns: week.length, binding: namesTarget ? 'hours' : 'volume' };
   if (hoursTarget != null) fit.hoursTarget = hoursTarget;
-  if (named && ctx.baselineKm != null && ctx.baselineKm > 0 && !ctx.baselineKmIsEstimate) fit.currentWeeklyKm = ctx.baselineKm;
+  if ((namesTarget || namesRamp) && ctx.baselineKm != null && ctx.baselineKm > 0 && !ctx.baselineKmIsEstimate) {
+    fit.currentWeeklyKm = ctx.baselineKm;
+  }
   return fit;
 }
 
@@ -1370,7 +1398,7 @@ function buildWeekSessions(ctx: PlanContext, history: PrescribedWeek[], notes?: 
   // Fewer runs than chosen in a loaded week: only the budget fit drops a run
   // (applyHoursBudget consolidates easy runs; every slot is otherwise filled).
   if (notes && !raceWeek && !deload && phase !== 'taper') {
-    const fit = budgetRunFitOf(ctx, week, weekBudget.hoursBound);
+    const fit = budgetRunFitOf(ctx, week, weekBudget);
     if (fit) notes.budgetRunFit = fit;
   }
 
@@ -1941,12 +1969,15 @@ function buildSharpeningWeek(
     // ("This week's volume fits 3 of your 4 runs."): the lowered budget still
     // consolidated the runs, but "The 3 h weekly target fits 3 of your 4 runs" on a
     // week whose 3 h fits 4 would be untrue. When it seats the same runs, the
-    // named ceiling alone holds the count and the note names it. Full plans need
-    // no such check: there the lever scales sessions, never the budget
-    // (buildWeekSessions).
+    // named ceiling holds the count and the note names it, the hours target only
+    // when the levered week leaves no room under it for another run
+    // (budgetRunFitOf). Full plans need no unlevered rebuild: there the lever
+    // scales sessions, never the budget (buildWeekSessions).
+    // The block's volume ramp (archetype or chain) binds whenever it sits strictly
+    // below the hours target (loadedRow), so it is named exactly when the target is not.
     const leverDropped = lever < 1 && week.length < ctx.runsPerWeek
       && assembleBlockLoadedWeek(ctx, ability, finishRow({ ...loadedRow(k, history, phase), acwrNote })).length > week.length;
-    const fit = budgetRunFitOf(ctx, week, !!row.hoursBound, !leverDropped);
+    const fit = budgetRunFitOf(ctx, week, { hoursBound: !!row.hoursBound, rampBound: !row.hoursBound }, !leverDropped);
     if (fit) out.budgetRunFit = fit;
   }
   return week;
