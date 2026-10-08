@@ -1,10 +1,10 @@
 /**
- * Units behind the HYROX race-week rules (plan_engine.hyrox raceWeekAllowedDays;
+ * Units behind the HYROX race-week rules (plan_engine.hyrox raceWeekDays;
  * the plan-level properties are in state/hyrox-race-week.test.ts).
  */
 import { describe, it, expect } from 'vitest';
 import { generateHyroxStation, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS } from './hyrox-generators';
-import { scheduleHyroxWeek } from './scheduler.hyrox';
+import { scheduleHyroxWeek, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays } from './scheduler.hyrox';
 import { RACE_WEEK_EXCLUDED_STATIONS, ECCENTRIC_HEAVY_STATIONS, STATION_MTL_FACTORS } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { Workout } from '@/types/state';
@@ -54,6 +54,20 @@ describe('scheduleHyroxWeek with allowed days', () => {
     );
     // Tempo Monday; one circuit Tuesday; one easy run Wednesday; the rest has no day.
     expect(out.map(w => `${w.dayOfWeek}:${w.t}`)).toEqual(['0:hyrox_run_tempo', '1:hyrox_station_technique', '2:hyrox_run_easy']);
+  });
+
+  it('takes the allowed days in the order given: easy runs latest first', () => {
+    const out = scheduleHyroxWeek(
+      [s('hyrox_run_easy'), s('hyrox_run_easy'), s('hyrox_run_tempo')],
+      'intermediate',
+      (w) => w.t === 'hyrox_run_tempo' ? [HYROX_TEMPO_HOME_DOW] : [4, 3, 2, 1, 0],
+    );
+    expect(out.map(w => `${w.dayOfWeek}:${w.t}`)).toEqual(['1:hyrox_run_tempo', '3:hyrox_run_easy', '4:hyrox_run_easy']);
+  });
+
+  it('the tempo run\'s home day is Tuesday, its first preferred day', () => {
+    expect(HYROX_TEMPO_HOME_DOW).toBe(1);
+    expect(hyroxPreferredDays({ t: 'hyrox_run_tempo' })[0]).toBe(HYROX_TEMPO_HOME_DOW);
   });
 
   it('without allowed days nothing changes (every session placed)', () => {

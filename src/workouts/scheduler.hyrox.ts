@@ -33,17 +33,23 @@ export function isHighIntensity(w: Workout): boolean {
     w.t === 'hyrox_station_density';
 }
 
+const TEMPO_DAYS = [1, 3, 4, 2];   // Tue/Thu
+
+/** The tempo run's first day: race week's primer home day (race-day-rules
+ *  raceWeekPrimerDow). */
+export const HYROX_TEMPO_HOME_DOW = TEMPO_DAYS[0];
+
 /**
  * Preferred day ordering per session type, from most-preferred to least.
  * The first free day in the list that satisfies spacing constraints is used.
  */
-function preferredDays(w: Workout): number[] {
+export function hyroxPreferredDays(w: Pick<Workout, 't'>): number[] {
   if (w.t === 'hyrox_assessment') return [0, 1, 2];      // Assessment: Mon first (needs to be early in week)
   if (w.t === 'hyrox_brick') return [5, 3, 6, 4];       // Sat primary, Thu secondary
   if (w.t === 'hyrox_mini_brick') return [4, 5, 2, 3];  // Fri primary
   if (w.t === 'hyrox_station_density') return [1, 3, 2, 4];   // Tue/Thu
   if (w.t === 'hyrox_station_technique') return [2, 4, 1, 3]; // Wed/Fri
-  if (w.t === 'hyrox_run_tempo') return [1, 3, 4, 2];   // Tue/Thu
+  if (w.t === 'hyrox_run_tempo') return [...TEMPO_DAYS];
   if (w.t === 'hyrox_run_intervals') return [3, 1, 4, 2]; // Thu/Tue
   // easy run: bookend
   return [0, 6, 2, 4, 5];
@@ -54,8 +60,9 @@ function preferredDays(w: Workout): number[] {
  *
  * @param sessions - Sessions already generated (discipline + t set).
  * @param _band    - Ability band (reserved for future band-specific templates).
- * @param allowedDays - Race week only (plan_engine.hyrox): the days each
- *   session may take. A session with no free allowed day is left out of the
+ * @param allowedDays - Race week only (plan_engine.hyrox raceWeekDays): the
+ *   days each session may take, in order of preference (they replace its
+ *   preferred days). A session with no free allowed day is left out of the
  *   week instead of being stacked on Monday. Unset = every day.
  */
 export function scheduleHyroxWeek(
@@ -82,8 +89,9 @@ export function scheduleHyroxWeek(
   const sorted = [...sessions].sort((a, b) => priority(a) - priority(b));
 
   for (const session of sorted) {
-    const allowed = allowedDays ? new Set(allowedDays(session)) : null;
-    const preferred = preferredDays(session).filter(d => !allowed || allowed.has(d));
+    const allowedOrder = allowedDays ? [...allowedDays(session)] : null;
+    const allowed = allowedOrder ? new Set(allowedOrder) : null;
+    const preferred = allowedOrder ?? hyroxPreferredDays(session);
     let assigned = -1;
 
     for (const day of preferred) {
