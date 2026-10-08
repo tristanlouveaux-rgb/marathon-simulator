@@ -8,6 +8,15 @@
  *     brick or long ride, nothing from a peak (or any non-race) week;
  *   - nothing on or after race day, and the plan's final week holds race day.
  *
+ * "The 7 days before race day" is read as the 7-day week ending on race day:
+ * the 6 days R-6 to R-1 (RACE_DAY_CLEAR_DAYS) carry no peak-phase or long
+ * session. R-7 may still hold the last long session, as running rule 3 puts
+ * it (latest long-run day 7 days out, race-day-rules.ts): every Sunday race
+ * keeps its last long run on the Sunday before, and a Thursday to Saturday
+ * race gets its long run moved to R-7 and its brick to R-8. The literal
+ * R-7 to R-1 reading would move every Sunday race's last long run and needs
+ * running rule 3 to change with it (open for Tristan, 2026-10-08).
+ *
  * Before (13ae3b2): the final calendar week was race week whatever the race
  * weekday, so a Monday race got the full peak week (a 166-min brick on the
  * Saturday, an 85-min long run on the Sunday) in the 2 days before race day and
