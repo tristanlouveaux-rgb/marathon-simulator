@@ -102,7 +102,12 @@ Triathlon, cycling and HYROX initializers write the same local anchors and set `
 render()
   → compute currentVDOT = s.v + cumulative wkGain + s.rpeAdj
   → gp(currentVDOT, s.lt) → update paces (with s.lt set every zone is a ratio of LT
-    and VDOT is not read; recomputeLT derives s.lt from getPhysiologicalVdot, not s.v)
+    and VDOT is not read; recomputeLT sets s.lt from an LT override, a Garmin LT reading
+    or a blend of sustained-effort, PB critical-speed and Daniels estimates, and
+    getPhysiologicalVdot supplies only the Daniels input. With no VO2max override, PB,
+    fresh watch reading, medium+ HR fit, race anchor, Mosaic estimate or observed LT,
+    that input falls back to s.v ('tanda-fallback'), so s.lt then follows s.v one
+    refresh behind)
   → generateWeekWorkouts(phase, runsPerWeek, raceDistance, runnerType, ...)
     → closing week (isClosingWeek, race plans only) → return []
     → engine horizon = planTrainingWeeks (s.tw without a closing week)
@@ -601,7 +606,7 @@ Planning side, except where noted. SCIENCE_LOG §CT to §CX, and §CZ for the st
 
 ### Recent race effort and the engine floor (`prediction-inputs.ts`, `blended-fitness.ts`, 2026-10-08)
 
-Tracking side. SCIENCE_LOG §CY. `computePredictionInputs(runs).recentRun` is the newest run in the 8-week window whose pace is below median × `RACE_FILTER_RATIO` (0.85, `prediction-inputs.ts:76`), the same test that removes races from Tanda's P; null when the window holds only training runs. Consumers: `blendPredictions` (`predictFromRecent`), the §BZ engine floor in `initializeSimulator` and `refreshBlendedFitness`, `demonstratedPBFloor`, the triathlon run-leg blend (`race-prediction.triathlon.ts:1382`), the Stats `liveRec` and the forecast breakdown, each falling back to `s.rec` when it is null. The triathlon cold-start cap (`blended-fitness.ts:717`) reads `recentRun` without the `s.rec` fallback and lifts only on `pbDerivedVdot`, a race anchor, a non-null `recentRun` or a medium-or-better HR fit. The engine VDOT (`s.v`) feeds the ability band, plan volume, long runs and the forecast; paces read `s.lt` when it is set (`gp(vdot, lt)`), and `recomputeLT` derives `s.lt` from `getPhysiologicalVdot`, so the triathlete cap does not reach paces (ISSUE-372).
+Tracking side. SCIENCE_LOG §CY. `computePredictionInputs(runs).recentRun` is the newest run in the 8-week window whose pace is below median × `RACE_FILTER_RATIO` (0.85, `prediction-inputs.ts:76`), the same test that removes races from Tanda's P; null when the window holds only training runs. Consumers: `blendPredictions` (`predictFromRecent`), the §BZ engine floor in `initializeSimulator` and `refreshBlendedFitness`, `demonstratedPBFloor`, the triathlon run-leg blend (`race-prediction.triathlon.ts:1382`), the Stats `liveRec` and the forecast breakdown, each falling back to `s.rec` when it is null. The triathlon cold-start cap (`blended-fitness.ts:717`) reads `recentRun` without the `s.rec` fallback and lifts only on `pbDerivedVdot`, a race anchor, a non-null `recentRun` or a medium-or-better HR fit. The engine VDOT (`s.v`) feeds the ability band, plan volume, long runs and the forecast. Paces read `s.lt` when it is set (`gp(vdot, lt)`). `recomputeLT` (`ltSync.ts:173`) sets `s.lt` from an LT override, a Garmin LT reading or a weighted blend of sustained-effort, PB critical-speed and Daniels estimates (`lt-derivation.ts:622-645`); `getPhysiologicalVdot` (`physiological-vdot.ts:385`) supplies only the Daniels input (`ltSync.ts:189`). Its last tier is `s.v` ('tanda-fallback', `:523-533`), reached only with no VO2max override, PB, fresh watch reading, medium-or-better HR fit, race anchor, Mosaic estimate or observed LT; for that runner `s.lt` and the paces follow the engine VDOT one refresh behind, unless a Garmin LT reading or an LT override sets `s.lt` (`recomputeLT` runs at `blended-fitness.ts:519`, the `s.v` write at `:750`). The triathlete cold-start cap holds `s.v`, so it does not reach the paces of a triathlete whose watch sets the Daniels input. The device tier (`physiological-vdot.ts:465-478`) has no triathlon check; the triathlete ceiling at `:369-381` is `effectiveVo2max`, the blend's VO2 input, and never reaches `s.lt` (ISSUE-372).
 
 ### Scheduler (`src/workouts/scheduler.ts`)
 
