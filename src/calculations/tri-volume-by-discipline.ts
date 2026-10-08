@@ -131,16 +131,20 @@ type DoseSession = Pick<Workout, 'discipline' | 'estimatedDurationMin'>;
 
 /**
  * Per-discipline sessions/wk and hours/wk averaged over the next `weeks` plan
- * weeks from `state.w + startOffset`. `sessionsOf` gives a week's sessions, or
- * null to skip the week (it does not count toward `weeks`). The public
- * look-ahead helpers read `triWorkouts` (the plan as scheduled); the forecast's
- * fallback reads the planned dose (`forecastLookAheadDose`).
+ * weeks from `state.w + startOffset`, reading each week through `sessionsOf`.
+ * The public look-ahead helpers read `triWorkouts` (the plan as scheduled);
+ * the forecast's fallback reads the planned dose (`forecastLookAheadDose`).
+ * A week without `triWorkouts` is skipped, and so is a closing week
+ * (raceClosing: a Monday to Wednesday race's own week, which holds only the
+ * race): it is not a training week (planTrainingWeeks), so it does not count
+ * toward `weeks` or dilute the average, and a Tuesday race reads like the
+ * Sunday before it.
  */
 function lookAheadDose(
   state: SimulatorState,
   weeks: number,
   startOffset: number,
-  sessionsOf: (wk: Week) => ReadonlyArray<DoseSession> | null,
+  sessionsOf: (wk: Week) => ReadonlyArray<DoseSession>,
 ): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
   const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
@@ -149,10 +153,9 @@ function lookAheadDose(
   let weeksCovered = 0;
   for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
     const wk = wks[w];
-    const sessions = wk ? sessionsOf(wk) : null;
-    if (!sessions) continue;
+    if (!wk?.triWorkouts || wk.raceClosing) continue;
     weeksCovered += 1;
-    for (const workout of sessions) {
+    for (const workout of sessionsOf(wk)) {
       const d = workout.discipline;
       if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
       counts[d] += 1;
@@ -172,9 +175,9 @@ function lookAheadDose(
  * Training chip fingerprint reads. The forecast's planned dose reads
  * `plannedBuildDoseByDiscipline` / `plannedPeakDoseByDiscipline` instead.
  *
- * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) are
- * skipped; if fewer than 4 future weeks remain (race week, taper) we average
- * over what's available.
+ * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) and a
+ * closing week (raceClosing) are skipped; if fewer than 4 future weeks remain
+ * (race week, taper) we average over what's available.
  *
  * `startOffset` skips that many weeks ahead of the current week before
  * sampling. The injury-aware predictor uses it to sample the **recovered**
@@ -186,7 +189,7 @@ export function plannedSessionsPerWeekByDiscipline(
   weeks: number = 4,
   startOffset: number = 0,
 ): VolumePerDiscipline {
-  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? null).sessions;
+  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? []).sessions;
 }
 
 /**
@@ -204,7 +207,7 @@ export function plannedHoursPerWeekByDiscipline(
   weeks: number = 4,
   startOffset: number = 0,
 ): VolumePerDiscipline {
-  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? null).hours;
+  return lookAheadDose(state, weeks, startOffset, wk => wk.triWorkouts ?? []).hours;
 }
 
 /**
@@ -229,17 +232,15 @@ function plannedDoseWorkouts(wk: Week): ReadonlyArray<DoseSession> {
  * `plannedPeakDoseByDiscipline`). Reads each week through
  * `plannedDoseWorkouts`, so the race window's cut counts here too: the week
  * before race week of a Thursday to Saturday race is often labelled taper, and
- * from then on the fallback is all the forecast reads. A closing week
- * (raceClosing: a Monday to Wednesday race's own week, which holds only the
- * race) is not a training week and is skipped, so a Tuesday race forecasts
- * like the Sunday before it (planTrainingWeeks). The public look-ahead helpers
- * keep showing the plan as scheduled.
+ * from then on the fallback is all the forecast reads. The closing week is
+ * skipped (`lookAheadDose`), so a Tuesday race forecasts like the Sunday
+ * before it. The public look-ahead helpers keep showing the plan as scheduled.
  */
 function forecastLookAheadDose(
   state: SimulatorState,
   startOffset: number,
 ): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
-  return lookAheadDose(state, 4, startOffset, wk => (wk.triWorkouts && !wk.raceClosing ? plannedDoseWorkouts(wk) : null));
+  return lookAheadDose(state, 4, startOffset, plannedDoseWorkouts);
 }
 
 /**

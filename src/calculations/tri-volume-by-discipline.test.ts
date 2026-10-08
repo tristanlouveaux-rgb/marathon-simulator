@@ -239,6 +239,18 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
     expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(2, 5);
     expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
   });
+
+  // The Training chip's next-4-week look-ahead skips it too: the week before
+  // race week of a Wednesday race reads race week alone, like a Sunday race.
+  it('the public look-ahead skips the closing week', () => {
+    const s = rampState([
+      { ph: 'taper', bike: 2, minPer: 60 },
+      { ph: 'taper' }, // closing week: no sessions
+    ]);
+    (s.wks[1] as any).raceClosing = true;
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+    expect(plannedHoursPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+  });
 });
 
 /**
