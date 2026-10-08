@@ -355,26 +355,21 @@ type TriRaceWindowCut = NonNullable<Week['raceWindowCut']>;
 /**
  * Race-week placement relative to race day (planning side; the running
  * race-day rules, SCIENCE_LOG §CE and §CW).
- *   - `sundayFree`: Sunday stays free only when it is on or after race day (a
- *     Thursday to Sunday race). A Monday to Wednesday race's race week is the
- *     week before its closing week, so its Sunday (1 to 3 days out) is a
- *     race-week day like the others.
  *   - `primerDow`: the primer's day (raceWeekPrimerDow from the bike quality
  *     day, TRI_BIKE_QUALITY_DOW), on or after the first schedulable day. null:
  *     the week has no primer (running drops it, rule 2). Placement is
  *     placeStoredPlanRaceWeekPrimer's, after scheduling.
+ * The scheduler keeps race week's Sunday, the long-run slot the race takes
+ * (§CT), free whatever the race weekday; only the primer moves there (a
+ * Wednesday race's primer day). A Monday to Wednesday race week then holds the
+ * same sessions as the Sunday race before it, as in running.
  */
 export interface TriRaceWeekPlacement {
-  sundayFree: boolean;
   primerDow: number | null;
 }
 
 function triRaceWeekPlacement(layout: RaceWeekLayout, weekIndex: number, firstDow: number): TriRaceWeekPlacement {
-  const weekStart = (weekIndex - 1) * 7;
-  return {
-    sundayFree: layout.raceDayIndex <= weekStart + 6,
-    primerDow: raceWeekPrimerDow(layout, weekIndex, TRI_BIKE_QUALITY_DOW, firstDow),
-  };
+  return { primerDow: raceWeekPrimerDow(layout, weekIndex, TRI_BIKE_QUALITY_DOW, firstDow) };
 }
 
 /** A race-week quality session (the primer): a bike session above endurance,
@@ -857,7 +852,7 @@ function generateWeekForTriathlon(
     phase,
     adapted.gym,
     minutesCapByDay,
-    raceWeek && (placement?.sundayFree ?? true),
+    raceWeek,
   );
   stampTriWorkoutIds(scheduled, weekIndex);
   return scheduled;

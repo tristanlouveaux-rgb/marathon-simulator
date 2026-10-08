@@ -72,11 +72,12 @@ type Mode = 'sprint' | 'olympic' | 't100' | '70.3' | 'ironman' | 'cycling';
 const MODES: Mode[] = ['sprint', 'olympic', 't100', '70.3', 'ironman', 'cycling'];
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function build(mode: Mode, race: string, hours?: number): SimulatorState {
+function build(mode: Mode, race: string, hours?: number, weekdayHours?: number): SimulatorState {
   resetState();
   const ob = {
     ...defaultOnboardingState, name: 'QA', currentStep: 'initializing', experienceLevel: 'intermediate',
     customRaceDate: race, ...(hours != null ? { triTimeAvailableHoursPerWeek: hours } : {}),
+    ...(weekdayHours != null ? { triWeekdayHoursPerWeek: weekdayHours } : {}),
   };
   if (mode === 'cycling') {
     initializeCyclingSimulator({ ...ob, trainingMode: 'cycling', cyclingDistance: '160km' } as OnboardingState);
@@ -104,6 +105,9 @@ function expectedPrimerText(s: SimulatorState, w: Workout, week: number): string
 }
 const minutes = (wk: Week | undefined) => (wk?.triWorkouts ?? []).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
 const count = (wk: Week | undefined, disc: string) => (wk?.triWorkouts ?? []).filter(w => (w.discipline ?? 'run') === disc).length;
+/** Days holding the discipline, up to weekday `lastDow`. */
+const daysWith = (wk: Week | undefined, disc: string, lastDow = 6) => new Set((wk?.triWorkouts ?? [])
+  .filter(w => (w.discipline ?? 'run') === disc && (w.dayOfWeek ?? 0) <= lastDow).map(w => w.dayOfWeek)).size;
 
 function raceWeekViolations(s: SimulatorState, race: string): string[] {
   const layout = raceWeekLayout(s.planStartDate!, race)!;
@@ -133,18 +137,72 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   // The last session before race day is at most 3 days out (the latest primer day).
   const daysOut = (wk.triWorkouts ?? []).map(w => layout.raceDayIndex - ((tw - 1) * 7 + (w.dayOfWeek ?? 0)));
   if (daysOut.length > 0 && Math.min(...daysOut) > PRIMER_MIN_DAYS_OUT) out.push(`${Math.min(...daysOut) - 1} empty days before race day`);
-  // Frequency (a Monday to Wednesday or a Sunday race; a Thursday to Saturday
-  // race week is still cut at race day, ISSUE-364): no fewer swims or rides
-  // than the week before, and at most one run fewer (the race takes the long run).
-  if (before && (layout.closingWeek || layout.raceDayOfWeek === 6)) {
-    for (const disc of ['swim', 'bike']) {
-      if (count(wk, disc) < count(before, disc)) out.push(`fewer ${disc} sessions than the week before: ${count(wk, disc)} < ${count(before, disc)}`);
+  // No discipline twice on one day (review 2026-10-08): two rides on one day
+  // give the stimulus of one with more fatigue, so they keep no frequency.
+  for (let d = 0; d < 7; d++) {
+    for (const disc of ['swim', 'bike', 'run']) {
+      const same = (wk.triWorkouts ?? []).filter(w => w.dayOfWeek === d && (w.discipline ?? 'run') === disc);
+      if (same.length > 1) out.push(`two ${disc} sessions on ${DOW[d]}: ${same.map(w => `${w.t} ${w.estimatedDurationMin}`).join(', ')}`);
     }
-    const runsBefore = (before.triWorkouts ?? []).filter(w => (w.discipline ?? 'run') === 'run').length;
-    if (count(wk, 'run') < runsBefore - 1) out.push(`runs ${count(wk, 'run')} < ${runsBefore} - 1`);
+  }
+  // Frequency (a Monday to Wednesday or a Sunday race; a Thursday to Saturday
+  // race week is still cut at race day, ISSUE-364), counted in days because a
+  // double is no frequency: no fewer swim or ride days than the week before
+  // held Monday to Saturday, and at most one run day fewer (the race takes the
+  // long run). Race week's Sunday is the race's slot (§CT), holding at most the
+  // primer of a Wednesday race.
+  if (before && (layout.closingWeek || layout.raceDayOfWeek === 6)) {
+    const lastDow = 5;
+    for (const disc of ['swim', 'bike']) {
+      if (daysWith(wk, disc) < daysWith(before, disc, lastDow)) {
+        out.push(`fewer ${disc} days than the week before: ${daysWith(wk, disc)} < ${daysWith(before, disc, lastDow)}`);
+      }
+    }
+    if (daysWith(wk, 'run') < daysWith(before, 'run', lastDow) - 1) {
+      out.push(`run days ${daysWith(wk, 'run')} < ${daysWith(before, 'run', lastDow)} - 1`);
+    }
   }
   return out;
 }
+
+describe('no discipline twice on one day in race week', () => {
+  // Before (review sweep): 157 race-week days held two sessions of one
+  // discipline, 126 of 360 cycling race weeks two rides on one day. Cycling,
+  // 6 h, Sunday race: Saturday held a 49-min and a 30-min endurance ride, the
+  // day before the race. Cause: race week keeps the week before's 5 rides
+  // (triRaceWeekCounts), the race takes the Sunday slot, the ride days are
+  // Tuesday, Thursday, Friday and Saturday, and the capacity fallback stacked
+  // the fifth. A Monday race got two 30-min rides on one Tuesday (race week's
+  // weekend cap is 0 when the user's weekday hours exceed race week's hours).
+  // Now the fifth ride is left out.
+  it('scenario: cycling, 6 h, Sunday race 22 November', () => {
+    at('2026-10-04T12:00:00');
+    const s = build('cycling', '2026-11-22', 6);
+    const rw = s.wks[planTrainingWeeks(s) - 1].triWorkouts ?? [];
+    expect(rw.filter(w => w.dayOfWeek === 5).map(w => w.t)).toEqual(['bike_endurance']);
+    expect(raceWeekViolations(s, '2026-11-22')).toEqual([]);
+  });
+
+  it('weekday hours set to 0: still no double, every race weekday', () => {
+    at('2026-10-04T12:00:00');
+    const found: string[] = [];
+    for (const mode of MODES) {
+      for (const race of ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']) {
+        for (const hours of [6, 10]) {
+          const s = build(mode, race, hours, 0);
+          const rw = s.wks[planTrainingWeeks(s) - 1].triWorkouts ?? [];
+          for (let d = 0; d < 7; d++) {
+            for (const disc of ['swim', 'bike', 'run']) {
+              const n = rw.filter(w => w.dayOfWeek === d && (w.discipline ?? 'run') === disc).length;
+              if (n > 1) found.push(`${mode} ${race} ${hours}h: ${n} ${disc} on ${DOW[d]}`);
+            }
+          }
+        }
+      }
+    }
+    expect(found).toEqual([]);
+  });
+});
 
 describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
   it('race week has short sessions through the Sunday primer, 3 days out', () => {

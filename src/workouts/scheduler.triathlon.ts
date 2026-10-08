@@ -10,6 +10,8 @@
  *   - Swim threshold mid-week (Wed) to separate from bike/run quality
  *   - Never double up the SAME discipline on the same day unless it's an
  *     explicit two-a-day (e.g. PM swim after AM run in peak phases)
+ *   - Race week: never the same discipline twice on one day; a session
+ *     with no free day for its discipline is left out.
  *   - No second run on the day of the long run or the brick (whose
  *     transition run is a run). The capacity fallbacks used to stack a run
  *     there when weekday capacity ran out (a 70.3 build week: an 80-min long
@@ -54,10 +56,15 @@ export function scheduleTriathlonWeek(
   /** Per-day minute cap by day-of-week. When a day's budget is exhausted,
    * sessions are pushed to the next-best day. Undefined = no cap. */
   minutesCapByDay?: Record<number, number>,
-  /** Race week: Sunday is kept free for the race. The week has no long run
-   * (plan_engine isRaceWeek), and no other session spills onto Sunday. The
-   * generator passes false for a Monday to Wednesday race, whose race week
-   * ends before race day (its Sunday is 1 to 3 days out). */
+  /** Race week (plan_engine isRaceWeek). The week has no long run, and:
+   *   - Sunday, the long-run slot the race takes (SCIENCE_LOG §CT), is kept
+   *     free, whatever the race weekday. A Monday to Wednesday race's primer
+   *     may still move there afterwards (race-day-rules
+   *     placeStoredPlanRaceWeekPrimer);
+   *   - no discipline twice on one day: a session with no day free of its
+   *     discipline is left out of the week. Two rides on one day give the
+   *     stimulus of one with more fatigue, so they keep no frequency (the
+   *     reason race week keeps the week before's count, triRaceWeekCounts). */
   raceWeek: boolean = false,
 ): Workout[] {
   const weekendDays = raceWeek ? [5] : WEEKEND_INDEXES;
@@ -124,14 +131,14 @@ export function scheduleTriathlonWeek(
     const q = swimsRemaining.splice(swimQualityIdx, 1)[0];
     place(2, q);
   }
-  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
+  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed, raceWeek);
 
   // 5. Bike quality → Tuesday (first remaining bike). Others distribute Thu, Fri.
-  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
+  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed, raceWeek);
 
   // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
   //    Thursday quality is the template. We spread by preference.
-  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
+  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed, raceWeek);
 
   // Flatten with dayOfWeek/dayName set
   const out: Workout[] = [];
@@ -164,10 +171,14 @@ function placeByPreference(
   /** Days this workout may take at all (every step). Runs never take the
    *  long-run or brick day. */
   allowed: (day: number, w: Workout) => boolean = () => true,
+  /** Race week: never a day already holding this discipline (steps 3 and 4
+   *  skipped, step 5 limited to such days); with none, the session is left
+   *  out of the week. */
+  noDoubles: boolean = false,
 ): void {
   for (const w of workouts) {
     const disc = w.discipline ?? 'run';
-    const ok = (d: number) => allowed(d, w);
+    const ok = (d: number) => allowed(d, w) && (!noDoubles || !occupied[d].has(disc));
     // 1. Preferred day with capacity + no same-discipline collision
     let dayIdx = preferredDays.find((d) => ok(d) && !occupied[d].has(disc) && hasCapacity(d, w));
     // 2. Weekend spill (no collision + capacity)
@@ -188,6 +199,7 @@ function placeByPreference(
     //    weekday workouts unless there's literally nowhere else to go.
     if (dayIdx === undefined) {
       const open = [...weekendDays, ...preferredDays].filter(ok);
+      if (open.length === 0 && noDoubles) continue; // race week: no day free of this discipline
       const allDays = open.length > 0 ? open : [...weekendDays, ...preferredDays];
       dayIdx = allDays.reduce((best, d) =>
         byDay[d].length < byDay[best].length ? d : best,

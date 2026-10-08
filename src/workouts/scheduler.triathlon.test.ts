@@ -15,6 +15,9 @@
  * The scheduler header allows a same-discipline double only as an explicit
  * two-a-day; no rule allows a second run beside the long run or the brick's
  * transition run. A run that fits nowhere else takes another day.
+ *
+ * Race week (review, 2026-10-08): no discipline twice on one day; a session
+ * with no free day for its discipline is left out. The sweep covers T100.
  */
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 
@@ -112,6 +115,31 @@ describe('scheduleTriathlonWeek keeps the long-run and brick days free of other 
   });
 });
 
+describe('scheduleTriathlonWeek in race week: no discipline twice on one day', () => {
+  const rides = () => [1, 2, 3, 4, 5].map(i => mk(`Ride ${i}`, 'bike_endurance', 'bike', 30));
+  const show = (ws: Workout[]) => ws.map(w => `${DOW[w.dayOfWeek!]}:${w.n}`);
+
+  it('five rides take Tuesday, Thursday, Friday and Saturday; the fifth is left out (Sunday is the race\'s slot)', () => {
+    // Before: the capacity fallback stacked the fifth ride on Saturday, the day before a Sunday race.
+    const out = scheduleTriathlonWeek([], rides(), [], null, 'taper', [], undefined, true);
+    expect(show(out)).toEqual(['Tue:Ride 1', 'Thu:Ride 2', 'Fri:Ride 3', 'Sat:Ride 5']);
+  });
+
+  it('a weekend cap of 0 (race week\'s hours under the weekday hours): no second ride on Tuesday', () => {
+    // Before: two 30-min rides on one Tuesday (a Monday race in the review sweep).
+    const caps = { 0: 90, 1: 90, 2: 90, 3: 90, 4: 90, 5: 0, 6: 0 };
+    const out = scheduleTriathlonWeek([], rides(), [], null, 'taper', [], caps, true);
+    const days = out.map(w => w.dayOfWeek);
+    expect(new Set(days).size).toBe(days.length);
+    expect(days).not.toContain(6);
+  });
+
+  it('outside race week the capacity fallback is unchanged', () => {
+    const out = scheduleTriathlonWeek([], rides(), [], null, 'build', [], { 0: 0, 1: 30, 2: 0, 3: 30, 4: 30, 5: 30, 6: 0 });
+    expect(out).toHaveLength(5);
+  });
+});
+
 describe('real plans: no second run on the long-run or brick day', () => {
   it('scenario tri-wednesday: week 3 Sunday holds only the long run', () => {
     at('2026-10-08T12:00:00');
@@ -132,7 +160,7 @@ describe('real plans: no second run on the long-run or brick day', () => {
     at('2026-10-04T12:00:00');
     const found: string[] = [];
     let weeks = 0;
-    for (const dist of ['sprint', 'olympic', '70.3', 'ironman'] as const) {
+    for (const dist of ['sprint', 'olympic', 't100', '70.3', 'ironman'] as const) {
       for (const lvl of ['beginner', 'intermediate', 'advanced']) {
         for (const hrs of [4, 6, 8, 10, 12, 15]) {
           for (const weekdayFrac of [0.2, 0.4, 0.6]) {
