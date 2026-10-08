@@ -151,7 +151,7 @@ export function triEffortMultiplier(state: SimulatorState, discipline: Disciplin
  */
 export function applyTriEffortMultipliers(
   state: SimulatorState,
-  workouts: Workout[],
+  workouts: Array<Pick<Workout, 'discipline' | 'estimatedDurationMin'>>,
   ctlRatioByDiscipline?: { swim?: number; bike?: number; run?: number },
 ): void {
   const disciplines: Discipline[] = ['swim', 'bike', 'run'];

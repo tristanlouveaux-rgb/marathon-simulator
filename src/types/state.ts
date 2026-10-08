@@ -620,6 +620,14 @@ export interface Week {
    *  labelled 'taper' and counts in s.tw, but not in the training weeks every
    *  weeks-to-race input reads (planTrainingWeeks). */
   raceClosing?: boolean;
+  /** Triathlon and cycling: the sessions the race window removed from the week
+   *  before race week (race-day-rules clearStoredPlanRaceWindow, a Thursday to
+   *  Saturday race), as discipline and minutes only. Never scheduled or shown.
+   *  The forecast's planned-dose helpers (tri-volume-by-discipline) add them
+   *  back, so the taper cut is not read as lost training (tracking reads the
+   *  plan's build prescription, as running's forecast reads plan-engine
+   *  targets). Unset when the window removed nothing. */
+  raceWindowCut?: Array<Pick<Workout, 'discipline' | 'estimatedDurationMin'>>;
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
    *  the workout generator and Phase Timeline read this flag to swap content

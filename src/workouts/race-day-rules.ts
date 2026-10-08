@@ -272,6 +272,11 @@ export interface StoredPlanRaceWindowInput<T> {
   firstScheduleDow?: number;
   /** Day names in the engine's own format, indexed 0 = Monday. */
   dayNames: readonly string[];
+  /** Called with each session the window removes (dropped there, displaced by
+   *  a moved long session, or a long session with no day to move to). The
+   *  triathlon generator keeps their dose for the forecast (Week.raceWindowCut).
+   *  Moved sessions are not reported: they stay in the week. */
+  onDrop?: (w: T) => void;
 }
 
 /**
@@ -308,8 +313,10 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
   const order = new Map<T, number>();
   const isPlacedLong = (w: T) => w.dayOfWeek != null && isLongSession(w);
   let out: T[] = [];
+  const drop = (w: T) => inp.onDrop?.(w);
   workouts.forEach((w, i) => {
-    if (isPlacedLong(w) || inWindow(w.dayOfWeek)) return;
+    if (isPlacedLong(w)) return;
+    if (inWindow(w.dayOfWeek)) { drop(w); return; }
     const copy = { ...w };
     order.set(copy, i);
     out.push(copy);
@@ -340,8 +347,12 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
       target = dow;
       break;
     }
-    if (target == null) continue;
-    out = out.filter(w => w.dayOfWeek !== target);
+    if (target == null) { drop(long); continue; }
+    out = out.filter(w => {
+      if (w.dayOfWeek !== target) return true;
+      drop(w);
+      return false;
+    });
     const moved = { ...long, dayOfWeek: target, dayName: inp.dayNames[target] };
     order.set(moved, -1); // first on its day, where the scheduler seats a long session
     out.push(moved);

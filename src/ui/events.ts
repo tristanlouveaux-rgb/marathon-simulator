@@ -838,6 +838,9 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
     );
     s.wks[i].triWorkouts = [...(fresh[i].triWorkouts ?? []), ...userAdded];
     s.wks[i].ph = fresh[i].ph;
+    // The race window's cut sessions (forecast dose only) follow the week.
+    if (fresh[i].raceWindowCut) s.wks[i].raceWindowCut = fresh[i].raceWindowCut;
+    else delete s.wks[i].raceWindowCut;
   }
 }
 

@@ -178,6 +178,35 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
     expect(peak).toBeGreaterThan(0);
     expect(peak).toBeCloseTo(plannedBuildDoseByDiscipline(s).sessions.bike, 5);
   });
+
+  // ── Race-window cut (Week.raceWindowCut) ───────────────────────────────────
+  // The race window removes sessions from the week before race week of a
+  // Thursday to Saturday race (planning, taper placement). The dose helpers
+  // read the week as prescribed before the cut, so the forecast does not count
+  // the taper placement as lost training.
+  it('build and peak dose add the race window cut back to its week', () => {
+    const s = rampState([
+      { ph: 'build', bike: 3, minPer: 60 },
+      { ph: 'peak',  bike: 2, minPer: 60 }, // window removed 2 x 90-min bike sessions
+      { ph: 'taper', bike: 1, minPer: 30 },
+    ]);
+    (s.wks[1] as any).raceWindowCut = [
+      { discipline: 'bike', estimatedDurationMin: 90 },
+      { discipline: 'bike', estimatedDurationMin: 90 },
+    ];
+    // Peak week as prescribed: 4 sessions, 2h + 3h = 5h.
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(4, 5);
+    expect(plannedPeakDoseByDiscipline(s).hours.bike).toBeCloseTo(5, 5);
+    // Build mean over the two non-taper weeks: (3 + 4) / 2 sessions, (3 + 5) / 2 hours.
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(3.5, 5);
+    expect(plannedBuildDoseByDiscipline(s).hours.bike).toBeCloseTo(4, 5);
+  });
+
+  it('the next-4-week look-ahead shows the plan as scheduled (the cut stays out)', () => {
+    const s = rampState([{ ph: 'peak', bike: 2, minPer: 60 }]);
+    (s.wks[0] as any).raceWindowCut = [{ discipline: 'bike', estimatedDurationMin: 90 }];
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo(2, 5);
+  });
 });
 
 /**

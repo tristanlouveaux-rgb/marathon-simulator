@@ -16,7 +16,7 @@
  * enough to catch consistent training, short enough to track current state.
  */
 
-import type { SimulatorState } from '@/types/state';
+import type { SimulatorState, Week } from '@/types/state';
 import { classifyActivity } from './tri-benchmarks-from-history';
 
 export interface VolumePerDiscipline {
@@ -205,6 +205,22 @@ export function plannedHoursPerWeekByDiscipline(
 }
 
 /**
+ * The sessions a week contributes to the forecast's planned dose: its
+ * `triWorkouts` plus the sessions the race window removed from it
+ * (`Week.raceWindowCut`, the week before race week of a Thursday to Saturday
+ * race). The race window is taper placement (planning): its last days carry
+ * race-week sessions only. The forecast reads the plan's build prescription
+ * for that week, as running's forecast reads plan-engine targets
+ * (plannedPeakWeeklyKm) rather than the race-day-rule output, so a Thursday
+ * race never forecasts slower than the Sunday before it because its taper
+ * window cut the week before race week.
+ */
+function plannedDoseWorkouts(wk: Week): Array<{ discipline?: string; estimatedDurationMin?: number }> {
+  const cut = wk.raceWindowCut;
+  return cut && cut.length > 0 ? [...(wk.triWorkouts ?? []), ...cut] : (wk.triWorkouts ?? []);
+}
+
+/**
  * Planned per-discipline dose (sessions/wk AND hours/wk) averaged across every
  * remaining BUILD week of the plan — each upcoming week whose phase is not
  * `'taper'`. This is the dose the race-day projection should gain fitness at:
@@ -229,6 +245,9 @@ export function plannedHoursPerWeekByDiscipline(
  * (block-cycle deloads) and are likewise excluded — a deload isn't the build
  * commitment either. A week with no `ph` set is treated as build (counted).
  *
+ * The race window's cut (`Week.raceWindowCut`) counts as that week's build
+ * dose (`plannedDoseWorkouts`): the taper placement is not lost training.
+ *
  * `startOffset` skips that many weeks ahead before sampling (injury-recovery
  * dose sampling), matching `plannedSessions/HoursPerWeekByDiscipline`.
  *
@@ -250,7 +269,7 @@ export function plannedBuildDoseByDiscipline(
     if (!wk?.triWorkouts) continue;
     if (wk.ph === 'taper') continue; // freshness, not build dose (Mujika 2002)
     buildWeeks += 1;
-    for (const workout of wk.triWorkouts) {
+    for (const workout of plannedDoseWorkouts(wk)) {
       const d = workout.discipline;
       if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
       counts[d] += 1;
@@ -291,6 +310,9 @@ export function plannedBuildDoseByDiscipline(
  *   3. Else the build-dose fallback (deep in the final taper — inert, since the
  *      predictor's executionFactor → 0 pins projected to current there anyway).
  *
+ * The race window's cut (`Week.raceWindowCut`) counts as that week's dose
+ * (`plannedDoseWorkouts`), as in the build dose.
+ *
  * `startOffset` matches the other planned-dose helpers (injury-recovery sampling).
  */
 export function plannedPeakDoseByDiscipline(
@@ -313,7 +335,7 @@ export function plannedPeakDoseByDiscipline(
     sawBuildWeek = true;
     const sess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
     const hrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
-    for (const workout of wk.triWorkouts) {
+    for (const workout of plannedDoseWorkouts(wk)) {
       const d = workout.discipline;
       if (d !== 'swim' && d !== 'bike' && d !== 'run') continue;
       sess[d] += 1;

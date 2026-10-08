@@ -116,6 +116,33 @@ describe('clearStoredPlanRaceWindow', () => {
     apply('2026-11-19', 6, PEAK_WEEK);
     expect(PEAK_WEEK).toEqual(copy);
   });
+
+  it('reports every session it removes, once, and never a moved one (onDrop)', () => {
+    const layoutFor = (race: string) => raceWeekLayout(START, race)!;
+    const cases: Array<[string, number, { firstScheduleDow?: number }]> = [
+      ['2026-11-19', 6, {}], ['2026-11-20', 6, {}], ['2026-11-21', 6, {}],
+      ['2026-11-19', 6, { firstScheduleDow: 4 }], // the long sessions have no day: both dropped
+      ['2026-11-22', 5, {}], // nothing in the window
+    ];
+    for (const [race, week, extra] of cases) {
+      const dropped: S[] = [];
+      const out = clearStoredPlanRaceWindow(PEAK_WEEK, {
+        weekIndex: week, layout: layoutFor(race), isLongSession: isLong, dayNames: NAMES, ...extra,
+        onDrop: w => dropped.push(w),
+      });
+      const label = `${race} w${week} ${JSON.stringify(extra)}`;
+      // Kept + dropped = the input, each session exactly once.
+      expect([...out, ...dropped].map(w => w.n).sort(), label).toEqual(PEAK_WEEK.map(w => w.n).sort());
+    }
+    // Thursday race: Friday to Sunday sessions leave, and Wednesday's and
+    // Thursday's are displaced by the moved brick and long run.
+    const dropped: string[] = [];
+    clearStoredPlanRaceWindow(PEAK_WEEK, {
+      weekIndex: 6, layout: layoutFor('2026-11-19'), isLongSession: isLong, dayNames: NAMES,
+      onDrop: w => dropped.push(w.t),
+    });
+    expect(dropped.sort()).toEqual(['bike_over_under', 'bike_sweet_spot', 'easy', 'swim_speed']);
+  });
 });
 
 describe('storedPlanRaceLayout', () => {
