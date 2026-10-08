@@ -319,7 +319,9 @@ describe('triathlon cold-start skill cap: easy runs do not lift it', () => {
  * VDOT, and nothing applies PB age to the engine. A 10K 40:00 PB (51.9) with
  * six weeks of easy running at about 6:30/km therefore keeps paces set by the
  * 40:00 10K, with no heart rate and with a high-confidence HR fit that reads
- * about 41.8. Before 57935d0 the newest easy run stood the floor down (39.8).
+ * about 41.8. Before 57935d0 the newest easy run stood the floor down: this
+ * seed read 34.0 at onboarding, then 39.3 (no HR) or 35.9 (with HR) after the
+ * first refresh. The HR fit sits between the old answer and the new one.
  * When the rule changes, rewrite these tests.
  */
 describe('KNOWN LIMITATION: training data does not correct a stale PB', () => {
