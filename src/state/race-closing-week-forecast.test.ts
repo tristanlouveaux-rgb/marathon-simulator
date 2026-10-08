@@ -140,7 +140,7 @@ const EARLY: Array<[string, number]> = [['Monday', 1], ['Tuesday', 2], ['Wednesd
 /**
  * Race week's sessions, day-free (type, name, minutes), sorted. The race-day
  * rules place race week relative to race day (HYROX: plan_engine.hyrox
- * raceWeekAllowedDays), so a Monday to Wednesday race seats the same race-week
+ * raceWeekDays), so a Monday to Wednesday race seats the same race-week
  * sessions as the Sunday before on different days, its Sunday (R-1 to R-3)
  * included. Before the HYROX race-week rules (2026-10-08) the template kept a
  * Sunday easy run (R-1) the Sunday-before race lost to race day, and the test

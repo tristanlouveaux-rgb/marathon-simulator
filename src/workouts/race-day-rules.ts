@@ -243,7 +243,7 @@ export function fitTaperEasyMakeups<T extends { workout: Workout }>(
  * race week out their own way on the running layout (storedPlanRaceLayout):
  * triathlon keeps Sunday free when race day is in race week and places the
  * primer first (placeStoredPlanRaceWeekPrimer); HYROX schedules race week on
- * the days before race day (plan_engine.hyrox raceWeekAllowedDays). This only
+ * the days before race day (plan_engine.hyrox raceWeekDays). This only
  * removes sessions that still fall on or after the race, e.g. a Saturday
  * race's Saturday session. Weeks entirely before race day are returned
  * unchanged. Pure; `dayOfWeek` 0 = Monday.
