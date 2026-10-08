@@ -31,6 +31,11 @@ const SWIM_DAYS = [1, 2, 4, 0, 3];        // Tue, Wed, Fri, Mon, Thu
 const BIKE_DAYS = [1, 3, 4];              // Tue, Thu, Fri (Saturday reserved for long bike / brick)
 const RUN_DAYS  = [2, 3, 1, 4, 0];        // Wed, Thu, Tue, Fri, Mon (Sunday reserved for long run)
 
+/** The day the first remaining ride, the week's bike quality session, takes
+ *  (step 5 below). The race-week primer's home day (race-day-rules
+ *  raceWeekPrimerDow). */
+export const TRI_BIKE_QUALITY_DOW = BIKE_DAYS[0];
+
 export const WEEKDAY_INDEXES = [0, 1, 2, 3, 4];  // Mon–Fri
 export const WEEKEND_INDEXES = [5, 6];           // Sat–Sun
 

@@ -364,10 +364,45 @@ export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayNam
     ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
 }
 
+/**
+ * The race-week primer's day for the stored-plan modes (triathlon, cycling on
+ * the tri engine, HYROX): the day running rule 2 gives the running primer.
+ * Each scheduler seats its race week's quality session on a home day (running
+ * and triathlon: Tuesday, the first quality day; HYROX: Tuesday, the tempo
+ * run's first day). Rule 2 keeps it there when that is PRIMER_MIN_DAYS_OUT to
+ * PRIMER_MAX_DAYS_OUT days out and otherwise moves it to the latest race-week
+ * day in that window. Every day is on or after the first schedulable day.
+ * `homeDow` null: the primer is not on a home day, and it takes the latest
+ * window day. null result: no window day, and the primer is dropped as
+ * running drops it.
+ *
+ * With Tuesday as home day the running engine gives, per race weekday: Monday
+ * race Friday (3 days out), Tuesday race Saturday (3), Wednesday race Sunday
+ * (3), Thursday race Monday (3), Friday race Tuesday (3), Saturday race Tuesday
+ * (4), Sunday race Tuesday (5). A Monday to Wednesday race's primer is then
+ * the last session before race day, and only the 2 days of its closing week
+ * stay empty, as in running.
+ */
+export function raceWeekPrimerDow(
+  layout: RaceWeekLayout, weekIndex: number, homeDow: number | null, firstScheduleDow?: number,
+): number | null {
+  const weekStart = (weekIndex - 1) * 7;
+  const firstDow = Math.max(0, Math.min(7, firstScheduleDow ?? 0));
+  const inWindow = (dow: number) => {
+    const d = layout.raceDayIndex - (weekStart + dow);
+    return dow >= firstDow && dow <= 6 && d >= PRIMER_MIN_DAYS_OUT && d <= PRIMER_MAX_DAYS_OUT;
+  };
+  if (homeDow != null && inWindow(homeDow)) return homeDow;
+  for (let dow = 6; dow >= firstDow; dow--) if (inWindow(dow)) return dow;
+  return null;
+}
+
 export interface StoredPlanPrimerInput<T> {
   /** Plan week being generated (1-based). */
   weekIndex: number;
   layout: RaceWeekLayout;
+  /** The scheduler's home day for the primer (raceWeekPrimerDow). */
+  homeDow: number;
   /** The race week's primer (its one quality session). */
   isPrimer: (w: T) => boolean;
   /** Discipline key: the sessions of the primer's discipline on its new day
@@ -383,12 +418,18 @@ export interface StoredPlanPrimerInput<T> {
 /**
  * Rule 2 for the triathlon engine (cycling included), applied to race week
  * before rule 1 drops what falls on or after race day: the primer (SCIENCE_LOG
- * §CE) stays on its day when that is PRIMER_MIN_DAYS_OUT to PRIMER_MAX_DAYS_OUT
- * days out; otherwise it moves to the latest race-week day in that window, on
- * or after the first schedulable day, and the sessions of its discipline there
+ * §CE) takes the day running's primer takes (raceWeekPrimerDow): it stays on
+ * its home day when that is PRIMER_MIN_DAYS_OUT to PRIMER_MAX_DAYS_OUT days
+ * out, and otherwise takes the latest race-week day in that window, on or
+ * after the first schedulable day. The sessions of its discipline on that day
  * take its old day (running rule 2's swap; they leave the week when that day
  * is on or after race day). With no such day it is dropped, as running drops
- * it. Other weeks come back unchanged (same array). Pure; `dayOfWeek` 0 = Monday.
+ * it. A primer off its home day is the week's only ride, which the scheduler
+ * seats on Saturday, the long-ride day the race takes in race week (§CT).
+ * Kept there 4 days out, a Wednesday race's 3 days before race day were empty;
+ * for every other race weekday rule 2 already moved it to the latest window
+ * day. Other weeks, and a primer already on its day, come back unchanged (same
+ * array). Pure; `dayOfWeek` 0 = Monday.
  */
 export function placeStoredPlanRaceWeekPrimer<T extends { dayOfWeek?: number; dayName?: string }>(
   workouts: T[], inp: StoredPlanPrimerInput<T>,
@@ -399,15 +440,9 @@ export function placeStoredPlanRaceWeekPrimer<T extends { dayOfWeek?: number; da
   if (!primer) return workouts;
   const weekStart = (weekIndex - 1) * 7;
   const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
-  const firstDow = Math.max(0, Math.min(7, inp.firstScheduleDow ?? 0));
-  const inWindow = (dow: number) =>
-    dow >= firstDow && daysOut(dow) >= PRIMER_MIN_DAYS_OUT && daysOut(dow) <= PRIMER_MAX_DAYS_OUT;
   const from = primer.dayOfWeek!;
-  if (inWindow(from)) return workouts;
-  let target: number | null = null;
-  for (let dow = 6; dow >= firstDow; dow--) {
-    if (inWindow(dow)) { target = dow; break; }
-  }
+  const target = raceWeekPrimerDow(layout, weekIndex, from === inp.homeDow ? from : null, inp.firstScheduleDow);
+  if (target === from) return workouts;
   if (target == null) return workouts.filter(w => w !== primer);
   const disc = inp.discipline(primer);
   const out: T[] = [];

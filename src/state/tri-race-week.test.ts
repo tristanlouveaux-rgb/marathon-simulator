@@ -11,6 +11,16 @@
  *   - race-week rides take the steady endurance variant, never the "fasted
  *     endurance (optional)" one;
  *   - nothing on or after race day; never heavier than the week before.
+ *   - the primer is a short ride (review 2026-10-08): the 30-min session floor
+ *     on the variant whose reps follow its minutes, so it holds a few minutes
+ *     of quality (sweet spot 1x8 min, tempo 1x10 min). Before, it read the
+ *     week's rotation variant: 885 of 1,776 race-week primers in a review
+ *     sweep were full build sets (2x20 min sweet spot, 4x8 min, 3x10 min tempo)
+ *     under a 30-min label, the root cause §CE fixed for running;
+ *   - it takes running's primer day (raceWeekPrimerDow), so the last session
+ *     before race day is at most 3 days out. Before, a 4 or 6 h 70.3, T100 or
+ *     Ironman Wednesday race held a Tuesday swim and a Saturday ride, with
+ *     Sunday, Monday and Tuesday empty (54 plans in the review sweep).
  *
  * Before (scenario tri-wednesday: 70.3, Wednesday race 18 Nov 2026,
  * onboarding Thursday 8 October): race week 6 held a Tuesday swim technique and
@@ -42,6 +52,7 @@ import { getState, resetState } from './store';
 import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
 import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from '@/workouts/race-day-rules';
 import { isLongRun } from '@/workouts/long-run';
+import { describeBikeSession, type BikeSessionKind } from '@/workouts/bike';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
 
@@ -57,8 +68,8 @@ function at(localIso: string): void {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 }
 
-type Mode = 'sprint' | 'olympic' | '70.3' | 'ironman' | 'cycling';
-const MODES: Mode[] = ['sprint', 'olympic', '70.3', 'ironman', 'cycling'];
+type Mode = 'sprint' | 'olympic' | 't100' | '70.3' | 'ironman' | 'cycling';
+const MODES: Mode[] = ['sprint', 'olympic', 't100', '70.3', 'ironman', 'cycling'];
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function build(mode: Mode, race: string, hours?: number): SimulatorState {
@@ -82,6 +93,15 @@ function isQuality(w: Workout): boolean {
   if (w.discipline === 'swim') return w.t === 'swim_threshold' || w.t === 'swim_speed';
   return w.t === 'threshold' || w.t === 'vo2';
 }
+/** Minutes of quality in a bike description's main set ("Main: 1×8min @ ..."). */
+function mainSetMinutes(d: string): number {
+  const m = /Main: (\d+)×(\d+)min/.exec(d);
+  return m ? Number(m[1]) * Number(m[2]) : Infinity;
+}
+/** The primer the generator should seat: the 30-min floor on variant 0. */
+function expectedPrimerText(s: SimulatorState, w: Workout, week: number): string {
+  return describeBikeSession(w.t.replace('bike_', '') as BikeSessionKind, 30, s.triConfig?.bike?.ftp, s.triConfig?.bike?.hasPowerMeter, week, 0, 0);
+}
 const minutes = (wk: Week | undefined) => (wk?.triWorkouts ?? []).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
 const count = (wk: Week | undefined, disc: string) => (wk?.triWorkouts ?? []).filter(w => (w.discipline ?? 'run') === disc).length;
 
@@ -102,6 +122,17 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
     if (isLongRun(w) || w.t === 'brick') out.push(`long session: ${at_}`);
   }
   if (before && minutes(wk) > minutes(before)) out.push(`heavier than the week before: ${minutes(wk)} > ${minutes(before)}`);
+  // The primer is a ride at the session floor holding a few minutes of
+  // quality: at most the 10 min of the tempo variant at 30 min (sweet spot 8).
+  for (const w of quality) {
+    if (w.discipline !== 'bike') out.push(`primer is not a ride: ${w.n}`);
+    if (w.estimatedDurationMin !== 30) out.push(`primer ${w.estimatedDurationMin} min`);
+    if (mainSetMinutes(w.d ?? '') > 10) out.push(`primer main set over 10 min: ${w.d}`);
+    if (w.discipline === 'bike' && w.d !== expectedPrimerText(s, w, tw)) out.push(`primer text: ${w.d}`);
+  }
+  // The last session before race day is at most 3 days out (the latest primer day).
+  const daysOut = (wk.triWorkouts ?? []).map(w => layout.raceDayIndex - ((tw - 1) * 7 + (w.dayOfWeek ?? 0)));
+  if (daysOut.length > 0 && Math.min(...daysOut) > PRIMER_MIN_DAYS_OUT) out.push(`${Math.min(...daysOut) - 1} empty days before race day`);
   // Frequency (a Monday to Wednesday or a Sunday race; a Thursday to Saturday
   // race week is still cut at race day, ISSUE-364): no fewer swims or rides
   // than the week before, and at most one run fewer (the race takes the long run).
@@ -131,17 +162,19 @@ describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
       'Sun bike_sweet_spot',
     ]);
     expect(raceWeekViolations(s, '2026-11-18')).toEqual([]);
-    // The last session before the race is the primer, not a fasted ride.
+    // The last session before the race is the primer, not a fasted ride: a
+    // 30-min ride with 8 min of sweet spot, not a build session.
     const last = raceWeek[raceWeek.length - 1];
     expect(isQuality(last)).toBe(true);
-    expect(last.estimatedDurationMin).toBeLessThanOrEqual(30);
+    expect(last.estimatedDurationMin).toBe(30);
+    expect(last.d).toBe('15min Warm up. Main: 1×8min @ Z4 threshold (≈90% FTP), 5min recovery. 5min Cool down.');
     // The closing week holds only the race.
     expect(s.wks[6].raceClosing).toBe(true);
     expect(s.wks[6].triWorkouts ?? []).toEqual([]);
   });
 });
 
-describe('every distance, cycling, race weekday and hours budget', () => {
+describe('every distance (T100 included), cycling, race weekday and hours budget', () => {
   // Races Monday 16 to Sunday 22 November 2026; onboarding Sunday 4 and Wednesday 14 October.
   const RACES = ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22'];
   for (const now of ['2026-10-04T12:00:00', '2026-10-14T12:00:00']) {
@@ -150,15 +183,15 @@ describe('every distance, cycling, race weekday and hours budget', () => {
         at(now);
         const found: string[] = [];
         for (const race of RACES) {
-          for (const hours of [6, 8, 10, 12, 15]) {
+          for (const hours of [4, 6, 8, 10, 12, 15]) {
             const s = build(mode, race, hours);
             for (const v of raceWeekViolations(s, race)) found.push(`${race} ${hours}h: ${v}`);
-            // A Monday to Wednesday race week with a ride besides its long ride
-            // has its primer 3 to 5 days out (raceWeekViolations checks the days).
-            // With one ride (a low budget) the week has no primer.
+            // A Monday to Wednesday race week with a ride has its primer 3 to 5
+            // days out (raceWeekViolations checks the days), including a low
+            // budget whose only ride is the primer.
             const layout = raceWeekLayout(s.planStartDate!, race)!;
             const raceWeek = s.wks[planTrainingWeeks(s) - 1];
-            if (layout.closingWeek && count(raceWeek, 'bike') >= 2) {
+            if (layout.closingWeek && count(raceWeek, 'bike') >= 1) {
               const primer = (raceWeek.triWorkouts ?? []).filter(isQuality);
               if (primer.length !== 1) found.push(`${race} ${hours}h: no primer`);
             }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
+import { clearStoredPlanRaceWindow, placeStoredPlanRaceWeekPrimer, raceWeekPrimerDow, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
 import { raceWeekLayout, storedPlanRaceLayout } from './race-week-layout';
 
 /**
@@ -172,7 +172,7 @@ describe('placeStoredPlanRaceWeekPrimer (running rule 2 for the triathlon engine
   function place(race: string, week: number, ws: P[] = RACE_WEEK, firstScheduleDow?: number) {
     const layout = raceWeekLayout(START, race)!;
     return placeStoredPlanRaceWeekPrimer(ws, {
-      weekIndex: week, layout, isPrimer: w => w.t === 'bike_sweet_spot', discipline: w => w.disc, firstScheduleDow, dayNames: NAMES,
+      weekIndex: week, layout, homeDow: 1, isPrimer: w => w.t === 'bike_sweet_spot', discipline: w => w.disc, firstScheduleDow, dayNames: NAMES,
     });
   }
   const show = (ws: P[]) => ws.map(w => `${NAMES[w.dayOfWeek!]}:${w.n}`);
@@ -186,8 +186,18 @@ describe('placeStoredPlanRaceWeekPrimer (running rule 2 for the triathlon engine
     expect(show(place('2026-11-17', 6))).toEqual(['Tue:Swim', 'Tue:Long ride', 'Wed:Easy run', 'Thu:Ride', 'Sat:Primer']);
   });
 
-  it('stays when already 3 to 5 days out (Sunday race 22 Nov: Tuesday is 5 days out)', () => {
+  it('stays on its home day when that is 3 to 5 days out (Sunday race 22 Nov: Tuesday is 5 days out)', () => {
     expect(place('2026-11-22', 6)).toBe(RACE_WEEK);
+  });
+
+  it('a primer off its home day takes the latest window day: the only ride, on Saturday, moves to Sunday for a Wednesday race', () => {
+    // Low hours: the week's only ride is the primer, and the scheduler seats a
+    // last ride on Saturday (4 days out). Running's primer for a Wednesday race
+    // sits on Sunday, 3 days out, leaving only the closing week's 2 days empty.
+    const ws = [p('Swim', 'swim_technique', 'swim', 1), p('Primer', 'bike_sweet_spot', 'bike', 5)];
+    expect(show(place('2026-11-18', 6, ws))).toEqual(['Tue:Swim', 'Sun:Primer']);
+    // Sunday race: Saturday is 1 day out; the latest window day is Thursday, 3 days out.
+    expect(show(place('2026-11-22', 7, ws))).toEqual(['Tue:Swim', 'Thu:Primer']);
   });
 
   it('a primer on race day moves before it; the ride it swaps with leaves the week', () => {
@@ -206,5 +216,39 @@ describe('placeStoredPlanRaceWeekPrimer (running rule 2 for the triathlon engine
   it('leaves weeks other than race week unchanged (same array)', () => {
     expect(place('2026-11-18', 5)).toBe(RACE_WEEK);
     expect(place('2026-11-18', 7)).toBe(RACE_WEEK);
+  });
+});
+
+describe('raceWeekPrimerDow: the running primer day for every race weekday', () => {
+  // The running engine (Tuesday quality day) puts the race-week primer on these
+  // days (probe of initializeSimulator plans, 2026-10-08): Monday race Friday,
+  // Tuesday race Saturday, Wednesday race Sunday, Thursday race Monday, Friday,
+  // Saturday and Sunday races Tuesday.
+  const CASES: Array<[string, number, string]> = [
+    ['2026-11-16', 6, 'Fri'], ['2026-11-17', 6, 'Sat'], ['2026-11-18', 6, 'Sun'],
+    ['2026-11-19', 7, 'Mon'], ['2026-11-20', 7, 'Tue'], ['2026-11-21', 7, 'Tue'], ['2026-11-22', 7, 'Tue'],
+  ];
+  for (const [race, week, day] of CASES) {
+    it(`race ${race}: ${day}`, () => {
+      const layout = raceWeekLayout(START, race)!;
+      expect(layout.trainingWeeks).toBe(week);
+      const dow = raceWeekPrimerDow(layout, week, 1);
+      expect(dow == null ? null : NAMES[dow]).toBe(day);
+      const daysOut = layout.raceDayIndex - ((week - 1) * 7 + dow!);
+      expect(daysOut).toBeGreaterThanOrEqual(3);
+      expect(daysOut).toBeLessThanOrEqual(5);
+    });
+  }
+
+  it('off its home day: the latest window day, 3 days out', () => {
+    expect(NAMES[raceWeekPrimerDow(raceWeekLayout(START, '2026-11-22')!, 7, null)!]).toBe('Thu');
+    expect(NAMES[raceWeekPrimerDow(raceWeekLayout(START, '2026-11-18')!, 6, null)!]).toBe('Sun');
+  });
+
+  it('none on or after the first schedulable day: null (the primer is dropped)', () => {
+    const layout = raceWeekLayout(START, '2026-11-19')!; // Thursday race, window Monday only
+    expect(raceWeekPrimerDow(layout, 7, 1, 1)).toBeNull();
+    // From Saturday a Sunday race's window (Tuesday to Thursday) is past.
+    expect(raceWeekPrimerDow(raceWeekLayout(START, '2026-11-22')!, 7, 1, 5)).toBeNull();
   });
 });
