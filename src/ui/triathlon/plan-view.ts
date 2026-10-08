@@ -35,6 +35,7 @@ import { recordMorningPain, injuryAppliesToWeek, getDisciplineCapacity } from '@
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import type { InjuryState } from '@/types/injury';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { raceDayCardHtml } from '../race-day-card';
 
 // ─── Module-level navigation state ───────────────────────────────────────────
 // null = show the live current week (s.w). Non-null = preview another week
@@ -1306,7 +1307,9 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
     }
     return parts.join(' · ');
   };
-  if (list.length === 0) {
+  // Race day: a display-only card under the day's strip (race-day-card.ts).
+  const raceCard = statusCtx ? raceDayCardHtml(getState(), statusCtx.ctx.viewWeek, d) : '';
+  if (list.length === 0 && !raceCard) {
     // Empty rest day: the row itself is the drop zone (mirrors running's
     // single `.plan-drop-zone`). No inner `.tri-day-header`, so the row's
     // drop handler isn't suppressed by the header-exclusion guard at the top
@@ -1353,7 +1356,7 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
         <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
         <span class="tri-day-stack-label" style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length > 1 ? `${list.length} sessions` : ''}</span>
       </div>
-      ${renderedCards}
+      ${raceCard}${renderedCards}
     </div>
   `;
 }

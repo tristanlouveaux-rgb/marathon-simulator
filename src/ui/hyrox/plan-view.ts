@@ -23,6 +23,7 @@ import { resolveTriWeekWorkouts, estimateTriWorkoutMin as estimateMinutes } from
 import { formatKm } from '@/utils/format';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { fireSelectionHaptic } from '@/utils/platform';
+import { raceDayCardHtml } from '../race-day-card';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -537,7 +538,9 @@ function renderDay(d: number, list: Workout[], isFutureWeek: boolean, daysToRace
   // Done / Logged / Missed / Today flag, mirroring the running plan-view card.
   const chipFor = (w: Workout): string =>
     statusCtx ? renderWorkoutStatusChip(deriveWorkoutStatus(w, statusCtx.wk, statusCtx.ctx)) : '';
-  if (list.length === 0) {
+  // Race day: a display-only card under the day's strip (race-day-card.ts).
+  const raceCard = statusCtx ? raceDayCardHtml(getState(), statusCtx.ctx.viewWeek, d) : '';
+  if (list.length === 0 && !raceCard) {
     return `
       <div class="hx-day-row" data-hx-day-drop="${d}" style="margin-bottom:14px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
         <div style="display:flex;align-items:center;gap:12px;border-radius:6px">
@@ -555,7 +558,7 @@ function renderDay(d: number, list: Workout[], isFutureWeek: boolean, daysToRace
         <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
         <span style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length > 1 ? `${list.length} sessions` : ''}</span>
       </div>
-      ${list.map((w) => renderHyroxWorkoutCard(w, { interactive: !isFutureWeek, daysToRace, statusChip: chipFor(w) })).join('')}
+      ${raceCard}${list.map((w) => renderHyroxWorkoutCard(w, { interactive: !isFutureWeek, daysToRace, statusChip: chipFor(w) })).join('')}
     </div>
   `;
 }

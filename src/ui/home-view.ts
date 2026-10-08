@@ -52,6 +52,7 @@ import { getCyclingEventLabel } from '@/calculations/cycling-mode';
 import { getTriathlonById } from '@/data/triathlons';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { raceDayToday } from './race-day-card';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -1944,7 +1945,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
   `;
 }
 
-function buildTodayWorkout(s: SimulatorState): string {
+export function buildTodayWorkout(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   if (!wk) {
     return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your training plan.', false);
@@ -1978,7 +1979,7 @@ function buildTodayWorkout(s: SimulatorState): string {
     if (todayActivity) {
       return buildCompletedActivityHero(todayActivity, ourDay, s);
     }
-    return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+    return buildRestOrRaceDayHero(s);
   }
 
   // Strength = any gym / strength-typed session (running S&C, tri/cycling/HYROX
@@ -2093,7 +2094,18 @@ function buildTodayWorkout(s: SimulatorState): string {
   `;
 }
 
-function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?: SimulatorState): string {
+/**
+ * Today's card when nothing is scheduled: on race day the race (race-day-card.ts:
+ * display only, not a workout), else Rest Day. Every mode's Today builder
+ * (buildTodayWorkout, buildTodayWorkoutTriathlon, buildTodayWorkoutHyrox).
+ */
+function buildRestOrRaceDayHero(s: SimulatorState): string {
+  const race = raceDayToday(s);
+  if (race) return buildNoWorkoutHero(escapeAttr(race.title), `Race day · ${escapeAttr(race.detail)}`, false, s, { faded: false });
+  return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+}
+
+function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?: SimulatorState, opts: { faded?: boolean } = {}): string {
   const ourDay = jsToOurDay(new Date().getDay());
   // Find next upcoming workout
   let nextLabel = '';
@@ -2137,7 +2149,7 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
           <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
         </div>
-        <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;opacity:0.45;margin-bottom:5px">${title}</div>
+        <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;opacity:${opts.faded === false ? '1' : '0.45'};margin-bottom:5px">${title}</div>
         <div style="font-size:11px;color:var(--c-muted);line-height:1.4;margin-bottom:16px">${subtitle}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09)">
           <span style="font-size:12px;color:var(--c-muted)">${nextLabel}</span>
@@ -2933,7 +2945,7 @@ export function buildTodayWorkoutTriathlon(s: SimulatorState): string {
     return true;
   });
   if (todayList.length === 0) {
-    return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+    return buildRestOrRaceDayHero(s);
   }
 
   return todayList.map((w, i) => buildTriathlonSessionBlock(w, i === 0, ourDay)).join('');
@@ -2989,7 +3001,7 @@ function buildTriathlonSessionBlock(w: any, isFirst: boolean, ourDay: number): s
 
 // ─── HYROX today's workout ────────────────────────────────────────────────────
 
-function buildTodayWorkoutHyrox(s: SimulatorState): string {
+export function buildTodayWorkoutHyrox(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
   if (!wk) return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your HYROX plan.', false);
 
@@ -3000,7 +3012,7 @@ function buildTodayWorkoutHyrox(s: SimulatorState): string {
   // today's suggestions show on the home card, not just `triWorkouts`.
   const todayList = [...(wk.triWorkouts ?? []), ...(wk.adhocWorkouts ?? [])].filter((w: any) => w.dayOfWeek === ourDay);
   if (todayList.length === 0) {
-    return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+    return buildRestOrRaceDayHero(s);
   }
 
   return todayList.map((w: any, i: number) => buildHyroxSessionBlock(w, i === 0, ourDay)).join('');
