@@ -78,7 +78,11 @@ import { isLongRun } from './long-run';
 // longRide: true. Also in v21 (unreleased when added): the sessions the race
 // window removes are kept on the week as Week.raceWindowCut (forecast dose
 // only), so the forecast does not read the taper cut as lost training.
-export const TRI_GENERATOR_VERSION = 21;
+// v22: the scheduler never puts a second run on the long-run day or the brick
+// day (scheduler.triathlon.ts). When weekday capacity ran out its fallbacks
+// stacked an easy run or a commute beside the Sunday long run (a 70.3 build
+// week: an 80-min long run and a 50-min easy run on Sunday).
+export const TRI_GENERATOR_VERSION = 22;
 
 /**
  * Representative average session length (hours) per discipline. The generator

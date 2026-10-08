@@ -10,6 +10,11 @@
  *   - Swim threshold mid-week (Wed) to separate from bike/run quality
  *   - Never double up the SAME discipline on the same day unless it's an
  *     explicit two-a-day (e.g. PM swim after AM run in peak phases)
+ *   - No second run on the day of the long run or the brick (whose
+ *     transition run is a run). The capacity fallbacks used to stack a run
+ *     there when weekday capacity ran out (a 70.3 build week: an 80-min long
+ *     run and a 50-min easy run on Sunday). A run that fits nowhere else now
+ *     takes a day without a run, as a cross-discipline two-a-day.
  *
  * Output: sets `dayOfWeek` (0=Mon..6=Sun) and `dayName` on every workout.
  */
@@ -58,11 +63,16 @@ export function scheduleTriathlonWeek(
     0: new Set(), 1: new Set(), 2: new Set(), 3: new Set(),
     4: new Set(), 5: new Set(), 6: new Set(),
   };
+  // Days holding the long run or the brick: no other run is placed there.
+  const runAnchoredDays = new Set<number>();
   const place = (day: number, w: Workout) => {
     byDay[day].push(w);
     minutesOnDay[day] += workoutMinutes(w);
     occupiedDisciplines[day].add(w.discipline ?? 'run');
+    if (w.t === 'brick' || isLongRun(w)) runAnchoredDays.add(day);
   };
+  const allowed = (day: number, w: Workout): boolean =>
+    (w.discipline ?? 'run') !== 'run' || !runAnchoredDays.has(day);
 
   const hasCapacity = (day: number, w: Workout): boolean => {
     if (!minutesCapByDay) return true;
@@ -107,14 +117,14 @@ export function scheduleTriathlonWeek(
     const q = swimsRemaining.splice(swimQualityIdx, 1)[0];
     place(2, q);
   }
-  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
+  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
 
   // 5. Bike quality → Tuesday (first remaining bike). Others distribute Thu, Fri.
-  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
+  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
 
   // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
   //    Thursday quality is the template. We spread by preference.
-  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays);
+  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place, weekendDays, allowed);
 
   // Flatten with dayOfWeek/dayName set
   const out: Workout[] = [];
@@ -144,29 +154,34 @@ function placeByPreference(
   hasCapacity: (day: number, w: Workout) => boolean,
   place: (day: number, w: Workout) => void,
   weekendDays: number[] = WEEKEND_INDEXES,
+  /** Days this workout may take at all (every step). Runs never take the
+   *  long-run or brick day. */
+  allowed: (day: number, w: Workout) => boolean = () => true,
 ): void {
   for (const w of workouts) {
     const disc = w.discipline ?? 'run';
+    const ok = (d: number) => allowed(d, w);
     // 1. Preferred day with capacity + no same-discipline collision
-    let dayIdx = preferredDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
+    let dayIdx = preferredDays.find((d) => ok(d) && !occupied[d].has(disc) && hasCapacity(d, w));
     // 2. Weekend spill (no collision + capacity)
     if (dayIdx === undefined) {
-      dayIdx = weekendDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
+      dayIdx = weekendDays.find((d) => ok(d) && !occupied[d].has(disc) && hasCapacity(d, w));
     }
     // 3. Weekend with capacity (collisions allowed. Two-a-day)
     if (dayIdx === undefined) {
-      dayIdx = weekendDays.find((d) => hasCapacity(d, w));
+      dayIdx = weekendDays.find((d) => ok(d) && hasCapacity(d, w));
     }
     // 4. Preferred day with capacity (collisions allowed)
     if (dayIdx === undefined) {
-      dayIdx = preferredDays.find((d) => hasCapacity(d, w));
+      dayIdx = preferredDays.find((d) => ok(d) && hasCapacity(d, w));
     }
     // 5. Last-resort: pick the day with the least cap pressure. We pick
     //    across weekend FIRST then weekdays, and break ties by fewest
     //    sessions. This ensures a user who set 0h weekday never sees
     //    weekday workouts unless there's literally nowhere else to go.
     if (dayIdx === undefined) {
-      const allDays = [...weekendDays, ...preferredDays];
+      const open = [...weekendDays, ...preferredDays].filter(ok);
+      const allDays = open.length > 0 ? open : [...weekendDays, ...preferredDays];
       dayIdx = allDays.reduce((best, d) =>
         byDay[d].length < byDay[best].length ? d : best,
       allDays[0]);
