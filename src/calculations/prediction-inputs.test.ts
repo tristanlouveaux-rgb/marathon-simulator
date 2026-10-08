@@ -163,12 +163,30 @@ describe('computePredictionInputs', () => {
     expect(r.runsCounted).toBe(3);
   });
 
-  it('populates recentRun with newest qualifying activity', () => {
-    const runs = [run(5, 10, 300), run(10, 8, 320), run(15, 8, 320)];
+  it('populates recentRun with the newest race effort, not a newer training run', () => {
+    // Median 340 s/km; the 10 km at 270 s/km is more than 15% faster (a race),
+    // the newer runs are training.
+    const runs = [run(2, 12, 345), run(5, 8, 340), run(12, 10, 270), run(15, 8, 335), run(20, 10, 350)];
     const r = computePredictionInputs(runs, NOW);
     expect(r.recentRun).not.toBeNull();
     expect(r.recentRun!.d).toBe(10);
-    expect(r.recentRun!.weeksAgo).toBeLessThanOrEqual(1);
+    expect(r.recentRun!.t).toBe(2700);
+    expect(r.recentRun!.weeksAgo).toBe(2);
+    // The race stays out of P.
+    expect(r.paceRunsCounted).toBe(4);
+  });
+
+  it('a window of training runs has no recent run, with or without heart rate', () => {
+    // A 10K 45:00 runner's easy weeks (about 5:50/km). Pre-fix the newest easy
+    // run filled the race slot and projected as a much slower race.
+    const easy = [run(2, 16, 352), run(4, 8, 345), run(6, 6, 350), run(9, 16, 352), run(11, 8, 345), run(13, 6, 350)];
+    expect(computePredictionInputs(easy, NOW).recentRun).toBeNull();
+    const zone2 = easy.map(r => ({ ...r, avgHR: 140 }));
+    expect(computePredictionInputs(zone2, NOW).recentRun).toBeNull();
+    // Training runs still feed volume and P.
+    const r = computePredictionInputs(easy, NOW);
+    expect(r.runsCounted).toBe(6);
+    expect(r.avgPaceSecPerKm).not.toBeNull();
   });
 });
 

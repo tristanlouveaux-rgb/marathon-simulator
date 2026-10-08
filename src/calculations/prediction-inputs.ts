@@ -11,6 +11,9 @@
  *   - P: unweighted arithmetic mean of per-session pace across training runs
  *   - K: mean weekly running km across the window
  *   - Races filtered from P (15% faster than median = race effort) but kept in K
+ *   - Recent run = the newest race effort (same pace test). Easy runs never
+ *     pass it; a tempo-paced training run can (known limitation, pinned in
+ *     initialization.easy-runs-vdot.test.ts)
  *
  * See `docs/SCIENCE_LOG.md` for the Tanda entry and the rationale behind each
  * filter / guard.
@@ -41,7 +44,15 @@ export interface PredictionInputs {
   /** Unweighted mean of per-session pace (sec/km) across training runs. Null
    *  when insufficient data or window is stale. */
   avgPaceSecPerKm: number | null;
-  /** Most recent qualifying run (≥2 km, sane pace). Null if none found. */
+  /** Most recent RACE EFFORT in the window: a qualifying run at least 15%
+   *  faster than the window's median pace (RACE_FILTER_RATIO, the same test
+   *  that removes races from P). Null when the window holds only training
+   *  runs. Every consumer treats this as a race or time trial (blend
+   *  `predictFromRecent`, the engine-floor slowness gate, the demonstrated-PB
+   *  floor), so an easy run must never fill it. The test is pace-only: a
+   *  tempo or threshold session, or a parkrun at tempo effort, passes it and
+   *  is read as a race (known limitation, pinned in
+   *  initialization.easy-runs-vdot.test.ts). */
   recentRun: { d: number; t: number; weeksAgo: number } | null;
   /** Number of weeks in the analysis window (up to 8). */
   weeksCovered: number;
@@ -169,14 +180,31 @@ export function computePredictionInputs(
 
   if (inWindow.length === 0) return { ...empty, isStale };
 
-  // ── Recent run (the newest qualifying run in the window) ─────────────────
-  const newest = inWindow[0];
-  const weeksAgoFloat = (now.getTime() - newest.startMs) / (7 * DAY_MS);
-  const recentRun = {
-    d: newest.distKm,
-    t: newest.durSec,
-    weeksAgo: Math.max(0, Math.round(weeksAgoFloat)),
-  };
+  // One race-effort test for the window, shared by the recent run and P: a run
+  // more than 15% faster than the median pace is a race or time trial
+  // (RACE_FILTER_RATIO). SCIENCE_LOG "Effort-Calibrated VDOT from HR" defines
+  // the hard-effort signal the same way.
+  const medianPace = median(inWindow.map(q => q.paceSecPerKm));
+  const isRaceEffort = (pace: number): boolean => pace < medianPace * RACE_FILTER_RATIO;
+
+  // ── Recent run (the newest race effort in the window) ────────────────────
+  // Consumers project this run to the target distance as a race performance
+  // (predictFromRecent) and read a slower projection as demonstrated loss of
+  // fitness (the engine floor in refreshBlendedFitness / initialization, the
+  // demonstrated-PB floor). An easy run projected that way reads as a much
+  // slower race: a 10K 45:00 runner's 16 km easy run at 5:52/km projected the
+  // engine VDOT from 45.3 down to about 37, the same with or without a zone-2
+  // heart rate. Easy runs feed P (Tanda) and the HR calibration instead.
+  // Pace-only: a tempo-paced training run still passes the race test (known
+  // limitation, pinned in initialization.easy-runs-vdot.test.ts).
+  const newest = inWindow.find(q => isRaceEffort(q.paceSecPerKm));
+  const recentRun = newest
+    ? {
+      d: newest.distKm,
+      t: newest.durSec,
+      weeksAgo: Math.max(0, Math.round((now.getTime() - newest.startMs) / (7 * DAY_MS))),
+    }
+    : null;
 
   // ── K: weekly km ─────────────────────────────────────────────────────────
   // Sum km per week-offset (0 = week of latest run, 1 = week prior, etc.),
@@ -208,9 +236,7 @@ export function computePredictionInputs(
   // Tanda's paper uses unweighted mean across training sessions. We filter
   // race efforts by detecting runs meaningfully faster than median. Those
   // are not "training pace" and would skew P fast.
-  const paces = inWindow.map(q => q.paceSecPerKm);
-  const medianPace = median(paces);
-  const trainingPaces = paces.filter(p => p >= medianPace * RACE_FILTER_RATIO);
+  const trainingPaces = inWindow.map(q => q.paceSecPerKm).filter(p => !isRaceEffort(p));
 
   let avgPaceSecPerKm: number | null = null;
   let paceConfidence: PredictionInputs['paceConfidence'] = 'none';

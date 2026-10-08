@@ -570,9 +570,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // deriving the GLOBAL engine VDOT from it buries demonstrated capacity (a
     // 20:00 5K → VDOT ~50 collapses to ~40 off 8 km/wk), then feeds paces, plan
     // generation and the forecast. The engine is floored at PB-median capacity
-    // (`pbMedianVdot`) unless a recent run demonstrates real slowness. Low
-    // training volume is deliberately NOT engine-decay evidence: it limits
-    // readiness (modelled on the prediction + forecast), not aerobic capacity.
+    // (`pbMedianVdot`) unless a recent race effort (`recentRun`, a run more
+    // than 15% faster than the window's median pace) demonstrates real
+    // slowness. Low training volume is deliberately NOT engine-decay
+    // evidence: it limits readiness (modelled on the prediction + forecast),
+    // not aerobic capacity.
     const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
     const capacityVdot = pbMedianVdot(pbs);
     let engineVdot = penalisedVdot;

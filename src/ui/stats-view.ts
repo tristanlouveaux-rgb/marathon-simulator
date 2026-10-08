@@ -116,12 +116,6 @@ function computeCurrentVDOT(s: SimulatorState): number {
 }
 
 /**
- * Find the most recent running garminActual and return it as a RecentRun.
- * Keeps s.rec fresh from actual Strava/Garmin data rather than stale onboarding
- * input. No HR scaling. The blend engine already handles sub-race efforts via
- * its PB/LT/VO2 weighting and recency decay.
- */
-/**
  * Extract all running activities from garminActuals across the available plan
  * weeks, normalised to the shape `computePredictionInputs` expects. Filters
  * non-running types here so the pure module doesn't need to know about our
@@ -3289,7 +3283,9 @@ function buildForecastTimesCard(s: SimulatorState): string {
   };
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-  // Use HR-scaled recent run from garminActuals instead of stale onboarding rec
+  // Recent race effort from garminActuals (computePredictionInputs recentRun:
+  // a run more than 15% faster than the window's median pace), else the
+  // onboarding s.rec.
   const inputs = computePredictionInputs(collectRunActivities(s));
   const liveRec = inputs.recentRun ?? s.rec ?? null;
   const liveKmPerWeek = inputs.weeklyKm;

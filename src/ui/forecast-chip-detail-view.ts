@@ -231,10 +231,11 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
   const targetDistM = TARGET_DIST_M[(s.rd ?? 'marathon') as string];
   if (!targetDistM) return null;
 
-  // Mirror refreshBlendedFitness (blended-fitness.ts:138-145): derive the most
-  // recent qualifying run from garminActuals and fall back to s.rec only if
-  // no derived run exists. Without this, the drill-down read "no signal" while
-  // the live blend was happily firing on activity-derived recent runs.
+  // Mirror refreshBlendedFitness: derive the most recent race effort from
+  // garminActuals (computePredictionInputs recentRun, a run more than 15%
+  // faster than the window's median pace) and fall back to s.rec only if none
+  // exists. Without this, the drill-down read "no signal" while the live blend
+  // was firing on activity-derived recent runs.
   const runs = collectRunsFromState(s);
   const blendInputs = computePredictionInputs(runs);
   const recentRun = blendInputs.recentRun ?? s.rec ?? null;
@@ -293,7 +294,7 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
 
   const rows: BlendPredictorRow[] = [
     { key: 'pb',     label: 'Personal best',  description: 'Fatigue-exponent extrapolation from closest PB', baseWeightPct: pb * 100,     outputSec: tPB,     fired: tPB != null,     reason: tPB != null ? 'PB on file' : 'No PB at relevant distance' },
-    { key: 'recent', label: 'Recent run',     description: 'Time-decayed weight from latest race or TT',     baseWeightPct: recent * 100, outputSec: tRecent, fired: tRecent != null, reason: hasRecent ? `${recentRun!.weeksAgo ?? '—'}w ago${recentIsDerived ? ' (from latest activity)' : ''}` : 'No recent race/TT logged' },
+    { key: 'recent', label: 'Recent run',     description: 'Time-decayed weight from latest race or TT',     baseWeightPct: recent * 100, outputSec: tRecent, fired: tRecent != null, reason: hasRecent ? `${recentRun!.weeksAgo ?? '—'}w ago${recentIsDerived ? ' (from latest race effort)' : ''}` : 'No recent race/TT logged' },
     { key: 'lt',    label: 'Lactate threshold', description: 'LT pace scaled by runner type and tier',       baseWeightPct: lt * 100,     outputSec: tLT,     fired: tLT != null,     reason: tLT != null ? `LT ${formatLtPace(s.lt!, s.unitPref ?? 'km')}` : 'No LT pace yet' },
     { key: 'vo2',   label: 'VO2max',         description: 'Daniels VDOT inversion',                          baseWeightPct: vo2 * 100,    outputSec: tVO2,    fired: tVO2 != null,    reason: tVO2 != null ? `VDOT ${s.vo2!.toFixed(1)}` : 'No VO2max signal' },
     { key: 'hr',    label: 'HR-calibrated',  description: 'Swain regression on HR-tagged runs (8w)',         baseWeightPct: hr * 100,     outputSec: tHR,     fired: tHR != null,     reason: tHR != null ? `${s.hrCalibratedVdot!.confidence ?? 'medium'} confidence (n=${s.hrCalibratedVdot!.n ?? 0})` : 'No HR-tagged runs yet' },
