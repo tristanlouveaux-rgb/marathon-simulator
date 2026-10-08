@@ -988,7 +988,7 @@ function wireEventHandlers(): void {
     if (current.hyroxHasRowErg === undefined) patch.hyroxHasRowErg = true;
     // Plan length follows the picked race date when available: the calendar
     // weeks from this local Monday through the week holding race day
-    // (racePlanCalendarWeeks), so the plan's final week is race week. Falls
+    // (racePlanCalendarWeeks), so the plan's final week holds race day. Falls
     // back to the band default otherwise, which can outrun the actual race.
     // Mirrors triathlon-setup.ts.
     const prevSec = current.previousHyroxTimeSec;

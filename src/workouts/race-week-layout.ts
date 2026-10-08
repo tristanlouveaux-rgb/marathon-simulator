@@ -57,17 +57,38 @@ export function raceWeekLayout(planStartISO: string, raceDateISO: string): RaceW
 /**
  * Plan length in calendar weeks for a race plan built on `now`: weeks from the
  * local Monday of `now` (the plan's planStartDate) through the week holding
- * race day (raceWeekLayout calendarWeeks). The length of every stored-plan mode
- * with a race date (triathlon, cycling, HYROX): these plans have no closing
- * week, so the plan's final week must hold race day for isRaceWeek and
- * dropSessionsOnOrAfterRaceDay to act on it. A weeks-until count from today
- * (calculateWeeksUntil) ends a week early whenever the race weekday is on or
- * before today's weekday. Running builds the same layout in
- * initializeSimulator. Null without a race date on or after that Monday.
+ * race day (raceWeekLayout calendarWeeks). The length (s.tw) of every
+ * stored-plan mode with a race date (triathlon, cycling, HYROX), the closing
+ * week included, as for running (initializeSimulator). The generators read
+ * the race week and the closing week from the same layout
+ * (storedPlanRaceLayout). A weeks-until count from today (calculateWeeksUntil)
+ * ends a week early whenever the race weekday is on or before today's
+ * weekday. Null without a race date on or after that Monday.
  */
 export function racePlanCalendarWeeks(raceDateISO: string | null | undefined, now: Date = new Date()): number | null {
   if (!raceDateISO) return null;
   return raceWeekLayout(localMondayKey(now), raceDateISO.slice(0, 10))?.calendarWeeks ?? null;
+}
+
+/**
+ * Race-week layout of a stored-plan race (triathlon, cycling on the tri
+ * engine, HYROX): the running layout (raceWeekLayout) from the plan start and
+ * the race date, so these modes place race week and the closing week exactly
+ * as running does. Race week is the week holding the day 3 days before race
+ * day; a Monday to Wednesday race's own week is a closing week that holds only
+ * the race. The generators phase and size the plan over `trainingWeeks` and
+ * emit the closing week empty (raceClosing). Null without a plan start or race
+ * date, or when the layout does not match the plan's calendar length `tw` (a
+ * plan whose length came from a weeks-until count): the generators then keep
+ * the final week as race week.
+ */
+export function storedPlanRaceLayout(
+  tw: number | null | undefined, planStartISO: string | null | undefined, raceISO: string | null | undefined,
+): RaceWeekLayout | null {
+  if (!tw || !planStartISO || !raceISO) return null;
+  const layout = raceWeekLayout(planStartISO.slice(0, 10), raceISO.slice(0, 10));
+  if (!layout || layout.calendarWeeks !== tw) return null;
+  return layout;
 }
 
 /** The running race date (YYYY-MM-DD) of a running race plan, or null: the
@@ -86,7 +107,8 @@ export function runningRaceDateISO(s: {
 }
 
 /**
- * Training weeks of a plan: s.tw without a closing week. The closing week (a
+ * Training weeks of a plan: s.tw without a closing week (running, triathlon,
+ * cycling and HYROX race plans). The closing week (a
  * Monday to Wednesday race's own week) holds only the race, so every input
  * that reads "weeks of training" or "weeks to race" (plan engine, phases,
  * forecast horizon and taper, race-day durability window) reads this, and a

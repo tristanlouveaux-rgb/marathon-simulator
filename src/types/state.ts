@@ -128,6 +128,13 @@ export interface Workout extends WorkoutDefinition {
    *  `t:'progressive'`). Read it only through `isLongRun()` (workouts/long-run.ts),
    *  which also honours a plain `t:'long'`. Undefined = not the long-run slot. */
   longRun?: boolean;
+  /** Triathlon and cycling: set by the tri generator on the week's solo long
+   *  ride (the bike session the scheduler seats on Saturday when no brick
+   *  carries the long ride). Not set in race week, where the race is the long
+   *  effort. Read by the race-window rule (race-day-rules
+   *  clearStoredPlanRaceWindow), which keeps long sessions out of the last
+   *  days before race day. Undefined = not the long ride. */
+  longRide?: boolean;
   testType?: string; // For physio capacity tests
   /** Canonical session duration in minutes. Set by the plan engine at
    * generation time so downstream code (scheduler capacity, card chips,
@@ -608,7 +615,8 @@ export interface Week {
   w: number;                            // Week number
   ph: TrainingPhase;                    // Training phase
   /** Closing week: the own week of a Monday to Wednesday race, after race week
-   *  (race-week-layout.ts). Holds only the race (no generated session), is
+   *  (race-week-layout.ts), in running, triathlon, cycling and HYROX race plans
+   *  (storedPlanRaceLayout). Holds only the race (no generated session), is
    *  labelled 'taper' and counts in s.tw, but not in the training weeks every
    *  weeks-to-race input reads (planTrainingWeeks). */
   raceClosing?: boolean;

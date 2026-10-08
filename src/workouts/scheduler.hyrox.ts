@@ -19,10 +19,13 @@
 import type { Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+export const HYROX_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_NAMES = HYROX_DAY_NAMES;
 
-/** Returns true for sessions that count as "high intensity". */
-function isHighIntensity(w: Workout): boolean {
+/** Returns true for sessions that count as "high intensity". Also read by the
+ *  race-window rule (race-day-rules clearStoredPlanRaceWindow), so a moved
+ *  brick keeps this spacing. */
+export function isHighIntensity(w: Workout): boolean {
   return w.t === 'hyrox_brick' ||
     w.t === 'hyrox_mini_brick' ||
     w.t === 'hyrox_run_intervals' ||

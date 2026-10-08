@@ -241,9 +241,10 @@ export function fitTaperEasyMakeups<T extends { workout: Workout }>(
  * Rule 1 for the stored-plan modes (triathlon, cycling on the tri engine, and
  * HYROX): drop every session dated on or after race day. Their generators lay
  * race week out their own way (triathlon keeps Sunday free, scheduler
- * .triathlon); this only removes sessions that would fall on or after the
- * race, e.g. a Saturday race's Saturday session. Weeks entirely before race
- * day are returned unchanged. Pure; `dayOfWeek` 0 = Monday.
+ * .triathlon) on the running layout (storedPlanRaceLayout); this only removes
+ * sessions that would fall on or after the race, e.g. a Saturday race's
+ * Saturday session. Weeks entirely before race day are returned unchanged.
+ * Pure; `dayOfWeek` 0 = Monday.
  */
 export function dropSessionsOnOrAfterRaceDay<T extends { dayOfWeek?: number }>(
   workouts: T[], weekIndex: number, planStartISO: string | undefined | null, raceISO: string | undefined | null,
@@ -254,4 +255,98 @@ export function dropSessionsOnOrAfterRaceDay<T extends { dayOfWeek?: number }>(
   const weekStart = (weekIndex - 1) * 7;
   if (weekStart + 6 < layout.raceDayIndex) return workouts;
   return workouts.filter(w => w.dayOfWeek == null || weekStart + w.dayOfWeek < layout.raceDayIndex);
+}
+
+export interface StoredPlanRaceWindowInput<T> {
+  /** Plan week being generated (1-based). */
+  weekIndex: number;
+  layout: RaceWeekLayout;
+  /** The week's long sessions (triathlon: long run, brick, solo long ride;
+   *  HYROX: full brick). These move instead of being dropped. */
+  isLongSession: (w: T) => boolean;
+  /** HYROX: the scheduler's hard sessions, which never sit on adjacent days
+   *  (scheduler.hyrox.ts). A moved long session does not land next to one.
+   *  Unset for triathlon, whose brick and long run sit back to back by design. */
+  isHard?: (w: T) => boolean;
+  /** First schedulable weekday of this week (workout-status firstTrackedDow). */
+  firstScheduleDow?: number;
+  /** Day names in the engine's own format, indexed 0 = Monday. */
+  dayNames: readonly string[];
+}
+
+/**
+ * Rules 3 and 4 for the stored-plan modes (triathlon, cycling on the tri
+ * engine, HYROX), applied to a training week before race week. The running
+ * layout puts race week in the week holding the day 3 days before race day,
+ * so for a Thursday to Saturday race the last 1 to 3 days of the week before
+ * race week (its weekend, where these schedulers seat the brick, long ride
+ * and long run) fall inside the last RACE_DAY_CLEAR_DAYS days before race
+ * day. Those days carry race-week sessions only:
+ *   - a long session dated there moves to the latest day of its week at least
+ *     RACE_DAY_CLEAR_DAYS + 1 days out, on or after the first schedulable day
+ *     (running rule 3). The sessions on that day would take its old day, which
+ *     is inside the window, so they leave the week. A later long session that
+ *     the move displaces shifts one day earlier in turn, so the week's long
+ *     sessions keep their order (a brick stays the day before the long run).
+ *     With no such day a long session is dropped;
+ *   - every other session dated there is dropped.
+ * Weeks with no session inside the window, race week and the closing week
+ * come back unchanged. Pure; `dayOfWeek` 0 = Monday.
+ */
+export function clearStoredPlanRaceWindow<T extends { dayOfWeek?: number; dayName?: string }>(
+  workouts: T[], inp: StoredPlanRaceWindowInput<T>,
+): T[] {
+  const { weekIndex, layout, isLongSession, isHard } = inp;
+  if (weekIndex >= layout.trainingWeeks) return workouts;
+  const weekStart = (weekIndex - 1) * 7;
+  const daysOut = (dow: number) => layout.raceDayIndex - (weekStart + dow);
+  const inWindow = (dow: number | undefined) =>
+    dow != null && daysOut(dow) >= 1 && daysOut(dow) <= RACE_DAY_CLEAR_DAYS;
+  if (!workouts.some(w => inWindow(w.dayOfWeek))) return workouts;
+  const firstDow = Math.max(0, Math.min(7, inp.firstScheduleDow ?? 0));
+
+  const order = new Map<T, number>();
+  const isPlacedLong = (w: T) => w.dayOfWeek != null && isLongSession(w);
+  let out: T[] = [];
+  workouts.forEach((w, i) => {
+    if (isPlacedLong(w) || inWindow(w.dayOfWeek)) return;
+    const copy = { ...w };
+    order.set(copy, i);
+    out.push(copy);
+  });
+
+  // Latest day at least RACE_DAY_CLEAR_DAYS + 1 days out; long sessions are
+  // placed from the latest down, each strictly before the one placed after it.
+  let limit = 6;
+  while (limit >= 0 && daysOut(limit) <= RACE_DAY_CLEAR_DAYS) limit--;
+  const hardNextTo = (dow: number) => !!isHard
+    && out.some(w => (w.dayOfWeek === dow - 1 || w.dayOfWeek === dow + 1) && isHard(w));
+  const longs = workouts
+    .map((w, i) => ({ w, i }))
+    .filter(({ w }) => isPlacedLong(w))
+    .sort((a, b) => (b.w.dayOfWeek! - a.w.dayOfWeek!) || (b.i - a.i));
+  for (const { w: long, i } of longs) {
+    const own = long.dayOfWeek!;
+    if (own <= limit) {
+      const copy = { ...long };
+      order.set(copy, i);
+      out.push(copy);
+      limit = own - 1;
+      continue;
+    }
+    let target: number | null = null;
+    for (let dow = limit; dow >= firstDow; dow--) {
+      if (hardNextTo(dow)) continue;
+      target = dow;
+      break;
+    }
+    if (target == null) continue;
+    out = out.filter(w => w.dayOfWeek !== target);
+    const moved = { ...long, dayOfWeek: target, dayName: inp.dayNames[target] };
+    order.set(moved, -1); // first on its day, where the scheduler seats a long session
+    out.push(moved);
+    limit = target - 1;
+  }
+  return out.sort((a, b) =>
+    ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
 }

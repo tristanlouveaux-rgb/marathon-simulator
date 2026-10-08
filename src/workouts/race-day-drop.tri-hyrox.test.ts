@@ -56,7 +56,7 @@ describe('dropSessionsOnOrAfterRaceDay', () => {
 });
 
 describe('triathlon and HYROX: nothing generated on or after race day', () => {
-  it('a Saturday triathlon: no session on race day; earlier weeks unchanged', () => {
+  it('a Saturday triathlon: no session on race day; weeks before the last 13 days unchanged', () => {
     const withRace = generateTriathlonPlan(triState(6, '2026-11-14'));
     const raceDay = dayIndex(6, 5);
     for (const wk of withRace) {
@@ -65,7 +65,11 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
       }
     }
     const noRace = generateTriathlonPlan(triState(6, ''));
-    expect(withRace.slice(0, 5).map(w => w.triWorkouts?.length)).toEqual(noRace.slice(0, 5).map(w => w.triWorkouts?.length));
+    expect(withRace.slice(0, 4).map(w => w.triWorkouts?.length)).toEqual(noRace.slice(0, 4).map(w => w.triWorkouts?.length));
+    // Week 5's Sunday is 6 days out (race-window rule): its long run moves to a
+    // day 7 or more days out instead.
+    expect((withRace[4].triWorkouts ?? []).some(w => w.dayOfWeek === 6)).toBe(false);
+    expect((noRace[4].triWorkouts ?? []).some(w => w.dayOfWeek === 6)).toBe(true);
     // Without the race date the scheduler puts a session on that Saturday.
     expect((noRace[5].triWorkouts ?? []).some(w => w.dayOfWeek === 5)).toBe(true);
   });
@@ -75,7 +79,12 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
     const raceWeek = weeks[5].triWorkouts ?? [];
     for (const w of raceWeek) expect(w.dayOfWeek ?? 0, w.n).toBeLessThan(3);
     const noRace = generateHyroxPlan(hyroxState(6, ''));
-    expect(weeks.slice(0, 5).map(w => w.triWorkouts?.length)).toEqual(noRace.slice(0, 5).map(w => w.triWorkouts?.length));
+    expect(weeks.slice(0, 4).map(w => w.triWorkouts?.length)).toEqual(noRace.slice(0, 4).map(w => w.triWorkouts?.length));
+    // Week 5's Friday to Sunday are 6 to 4 days out (race-window rule): its
+    // brick moves to Thursday, 7 days out.
+    const weekBefore = weeks[4].triWorkouts ?? [];
+    for (const w of weekBefore) expect(w.dayOfWeek ?? 0, w.n).toBeLessThan(4);
+    expect(weekBefore.find(w => w.t === 'hyrox_brick')?.dayOfWeek).toBe(3);
     expect((noRace[5].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 3)).toBe(true);
   });
 });

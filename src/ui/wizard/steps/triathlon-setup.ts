@@ -404,7 +404,7 @@ function wireEventHandlers(): void {
     if (!current.triDistance) finalPatch.triDistance = '70.3';
     // Plan length follows the actual race date when one is picked: the
     // calendar weeks from this local Monday (the plan's start) through the
-    // week holding race day, so the plan's final week is race week
+    // week holding race day, so the plan's final week holds race day
     // (racePlanCalendarWeeks). The distance default is only used when no date
     // is set.
     const distanceForDefault = current.triDistance ?? finalPatch.triDistance ?? '70.3';
