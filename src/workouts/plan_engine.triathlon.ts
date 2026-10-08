@@ -94,7 +94,9 @@ import { isLongRun } from './long-run';
 // only ride is the primer, and the primer takes running's primer day
 // (raceWeekPrimerDow). Race week never holds a discipline twice on one day,
 // and in the last 13 days no quality run sits next to the brick or the long
-// run (spaceStoredPlanQualityRuns).
+// run (spaceStoredPlanQualityRuns). A run that fits no day within its cap
+// takes the day without a run it overshoots least (scheduler step 3b), so
+// closing the long-run and brick days no longer moves the double to a weekday.
 export const TRI_GENERATOR_VERSION = 22;
 
 /**

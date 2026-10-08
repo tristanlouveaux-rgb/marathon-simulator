@@ -18,6 +18,15 @@
  *
  * Race week (review, 2026-10-08): no discipline twice on one day; a session
  * with no free day for its discipline is left out. The sweep covers T100.
+ *
+ * Second review (2026-10-08): closing the long-run and brick days to runs
+ * moved the double to a weekday. Step 4 (preferred day with capacity,
+ * collisions allowed) ran before any day without a run was tried, so an easy
+ * run that fit no run-free weekday within its cap joined the weekday threshold
+ * or VO2 run (Ironman 10 h peak week: Monday held both). Base 23bbbfc: 0 such
+ * weeks; after the first fix: 33 in this file's sweep (T100 included) and 9
+ * with the default weekday split. Step 3b now gives such a run the day without
+ * a run it overshoots least. Commutes are not covered (open question).
  */
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 
@@ -77,6 +86,19 @@ function runDoublesOnAnchorDays(weeks: Week[]): string[] {
   return out;
 }
 
+/** Weekdays holding two or more runs other than commutes, as "w3 Mon: ...". */
+function weekdayRunDoubles(weeks: Week[]): string[] {
+  const out: string[] = [];
+  for (const wk of weeks) {
+    const ws = wk.triWorkouts ?? [];
+    for (let d = 0; d < 5; d++) {
+      const runs = ws.filter(w => w.dayOfWeek === d && isRun(w) && !w.commute);
+      if (runs.length > 1) out.push(`w${wk.w} ${DOW[d]}: ${runs.map(w => w.n).join(' + ')}`);
+    }
+  }
+  return out;
+}
+
 const mk = (n: string, t: string, discipline: Workout['discipline'], min: number, extra: Partial<Workout> = {}): Workout =>
   ({ n, t, d: '', r: 5, rpe: 5, discipline, estimatedDurationMin: min, ...extra } as Workout);
 
@@ -99,6 +121,30 @@ describe('scheduleTriathlonWeek keeps the long-run and brick days free of other 
     expect([5, 6]).not.toContain(day('Threshold run'));
     // Never two runs on one day here: a cross-discipline two-a-day instead.
     expect(day('Easy run')).not.toBe(day('Threshold run'));
+  });
+
+  it('a run that fits no day within its cap takes a day without a run, not the weekday threshold run\'s day', () => {
+    // Ironman 10 h peak week, default weekday split: weekday cap 72 min (87
+    // with the 15-min tolerance). The threshold run takes Monday; the easy run
+    // fits no run-free weekday within its cap (Tuesday's swim plus the run is
+    // 88 min). Before: step 4 put it on Monday beside the threshold run.
+    const caps = { 0: 72, 1: 72, 2: 72, 3: 72, 4: 72, 5: 210, 6: 210 };
+    const out = scheduleTriathlonWeek(
+      [mk('Swim technique', 'swim_technique', 'swim', 48), mk('CSS intervals', 'swim_threshold', 'swim', 48)],
+      [mk('Sweet spot', 'bike_sweet_spot', 'bike', 71), mk('Endurance ride', 'bike_endurance', 'bike', 71)],
+      [mk('Threshold run', 'threshold', 'run', 40), mk('Easy run', 'easy', 'run', 40), mk('Long run', 'long', 'run', 115)],
+      mk('Brick', 'brick', 'bike', 173),
+      'peak', [], caps,
+    );
+    const day = (n: string) => out.find(w => w.n === n)!.dayOfWeek;
+    expect(day('Threshold run')).toBe(0);
+    expect(day('Easy run')).not.toBe(0);
+    expect([5, 6]).not.toContain(day('Easy run'));
+    for (let d = 0; d < 7; d++) {
+      expect(out.filter(w => w.dayOfWeek === d && isRun(w)).length, DOW[d]).toBeLessThanOrEqual(1);
+    }
+    // Every session is still in the week.
+    expect(out).toHaveLength(8);
   });
 
   it('commute runs never land beside the long run', () => {
@@ -159,18 +205,22 @@ describe('real plans: no second run on the long-run or brick day', () => {
   it('every distance, ability, hours budget, weekday split and commute set-up', () => {
     at('2026-10-04T12:00:00');
     const found: string[] = [];
+    const weekdayDoubles: string[] = [];
     let weeks = 0;
     for (const dist of ['sprint', 'olympic', 't100', '70.3', 'ironman'] as const) {
       for (const lvl of ['beginner', 'intermediate', 'advanced']) {
         for (const hrs of [4, 6, 8, 10, 12, 15]) {
-          for (const weekdayFrac of [0.2, 0.4, 0.6]) {
+          // null: the default weekday split (plan_engine: 40% of the hours).
+          for (const weekdayFrac of [0, 0.2, 0.4, 0.6, null]) {
             for (const commute of ['none', 'one-way', 'both'] as const) {
-              for (const race of ['2027-01-24', '2027-03-14']) {
+              // Sundays, plus a Wednesday race.
+              for (const race of ['2027-01-24', '2027-03-14', '2027-03-10']) {
                 resetState();
                 initializeTriathlonSimulator({
                   ...defaultOnboardingState, name: 'QA', currentStep: 'initializing',
                   trainingMode: 'triathlon', triDistance: dist, experienceLevel: lvl, customRaceDate: race,
-                  triTimeAvailableHoursPerWeek: hrs, triWeekdayHoursPerWeek: Math.round(hrs * weekdayFrac * 2) / 2,
+                  triTimeAvailableHoursPerWeek: hrs,
+                  ...(weekdayFrac == null ? {} : { triWeekdayHoursPerWeek: Math.round(hrs * weekdayFrac * 2) / 2 }),
                 } as unknown as OnboardingState);
                 const s = getMutableState();
                 if (commute !== 'none') {
@@ -178,17 +228,35 @@ describe('real plans: no second run on the long-run or brick day', () => {
                   s.wks = generateTriathlonPlan(s);
                 }
                 weeks += s.wks.length;
-                for (const hit of runDoublesOnAnchorDays(s.wks)) {
-                  found.push(`${dist} ${lvl} ${hrs}h weekday ${weekdayFrac} ${commute} ${race} ${hit}`);
-                }
+                const tag = `${dist} ${lvl} ${hrs}h weekday ${weekdayFrac ?? 'default'} ${commute} ${race}`;
+                for (const hit of runDoublesOnAnchorDays(s.wks)) found.push(`${tag} ${hit}`);
+                for (const hit of weekdayRunDoubles(s.wks)) weekdayDoubles.push(`${tag} ${hit}`);
               }
             }
           }
         }
       }
     }
-    expect(weeks).toBeGreaterThan(20000);
+    expect(weeks).toBeGreaterThan(80000);
     expect(found.slice(0, 5)).toEqual([]);
+    // No weekday holds two runs other than commutes (33 + 9 weeks of the
+    // narrower first sweep before step 3b).
+    expect(weekdayDoubles.slice(0, 5)).toEqual([]);
+  });
+
+  it('Ironman 10 h, default weekday split, every ability: no weekday holds two runs', () => {
+    at('2026-10-04T12:00:00');
+    for (const lvl of ['beginner', 'intermediate', 'advanced']) {
+      resetState();
+      initializeTriathlonSimulator({
+        ...defaultOnboardingState, name: 'QA', currentStep: 'initializing',
+        trainingMode: 'triathlon', triDistance: 'ironman', experienceLevel: lvl, customRaceDate: '2027-03-14',
+        triTimeAvailableHoursPerWeek: 10,
+      } as unknown as OnboardingState);
+      const s = getState();
+      expect(weekdayRunDoubles(s.wks), lvl).toEqual([]);
+      expect(runDoublesOnAnchorDays(s.wks), lvl).toEqual([]);
+    }
   });
 
   it('cycling (tri engine, no runs) still schedules every ride', () => {
