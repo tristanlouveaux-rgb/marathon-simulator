@@ -211,7 +211,7 @@ export function renderTriathlonPlanView(): void {
         <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
           <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${escapeHtml(raceName)}</div>
           ${phase ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:10px;letter-spacing:-0.01em">${phase}</div>` : ''}
-          ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`}</div>` : ''}
+          ${viewWeek && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${viewWeek > s.tw ? 'Plan complete' : `Week ${viewWeek} of ${s.tw}`}</div>` : ''}
 
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
             ${AI_COACH_ENABLED ? `<button id="tri-coach-btn" class="m-btn-glass">Coach</button>` : ''}
