@@ -188,13 +188,13 @@ describe('the race window does not move the triathlon forecast', () => {
   });
 
   for (const [onboardDay, now, firstSunday] of ONBOARDING) {
-    for (const distance of ['70.3', 'ironman'] as TriathlonDistance[]) {
-      it(`${distance}, ${onboardDay} onboarding: Thursday and Friday races forecast the same with or without the race window on every plan week`, () => {
+    for (const distance of DISTANCES) {
+      it(`${distance}, ${onboardDay} onboarding: Thursday to Saturday races forecast the same with or without the race window on every plan week`, () => {
         at(now);
         let weeksCompared = 0;
         for (let weeksOut = 2; weeksOut <= 14; weeksOut++) {
           const sunday = addDays(firstSunday, 7 * weeksOut);
-          for (const [day, offset] of LATER.slice(0, 2)) {
+          for (const [day, offset] of LATER) {
             const race = addDays(sunday, offset);
             const on = weeklyForecasts(distance, race, now, true);
             const off = weeklyForecasts(distance, race, now, false);
@@ -207,7 +207,7 @@ describe('the race window does not move the triathlon forecast', () => {
             });
           }
         }
-        expect(weeksCompared).toBeGreaterThan(200);
+        expect(weeksCompared).toBeGreaterThan(300);
       });
     }
   }
