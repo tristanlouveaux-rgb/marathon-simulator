@@ -294,19 +294,25 @@ export function typedWeeklyKm(s: Pick<State, 'detectedWeeklyKm' | 'weeklyVolumeC
  * (Tristan, 2026-10-09: typed weekly km shapes the plan). Runs the same
  * classifier a sync runs (gatherEvidence + classify) on the typed km.
  *
- * A typed number supplies the current weekly km only. For the classifier's
- * other inputs, each missing one lands on its most conservative existing reading:
- *  - Week-to-week variability (weeklyKmCV): no history reads as 0, so 50 km or
- *    more classifies high-mileage (x1.00 start, 3% ramp), the slowest ramp in
- *    ARCHETYPE_PARAMS, not consistent-runner (x1.05, 7%).
- *  - Recency of a 20 km week (weeksSinceConsistent): detrained-with-history
- *    (x1.10 + 5 km start, 15 km floor, 10% ramp) needs a layoff of 3+ weeks
- *    (classify), which a typed number cannot show. Typed km below 20 with a
- *    marathon PB therefore classifies as consistent-runner, the classifier's own
- *    fallback ("conservative enough to be safe if wrong").
- *  - Cross-training (sportBaselineByType) and the longest run
- *    (onboardingRunHistory): read from state as the classifier does; a sync
- *    writes both, so with typed km alone they are absent and claim nothing.
+ * A typed number supplies the current weekly km only. A classifier branch whose
+ * deciding input a typed number cannot supply does not fire, and the athlete
+ * falls through to the next branch, ending at the classifier's own fallback
+ * (consistent-runner, "conservative enough to be safe if wrong"):
+ *  - Week-to-week variability (weeklyKmCV) is unknown, so high-mileage
+ *    (>= 50 km AND CV < 0.35) never fires: typed 50 km or more is
+ *    consistent-runner (x1.05 start, 7% ramp), the same as typed 20 to 50 km.
+ *    Reading the missing CV as 0 instead made typing more km buy a slower ramp
+ *    (3%), which shortened a sharpening block's long-run build (review,
+ *    2026-10-09).
+ *  - Recency of a 20 km week (weeksSinceConsistent) is unknown, so neither
+ *    history branch fires: detrained-with-history (needs a 3+ week layoff) and
+ *    "consistent at their level" (needs a 20 km week in the last 2). The
+ *    history evidence (marathon PB, peak week, longest run) decides only those
+ *    two branches, so a typed km is classified as it would be without it: a PB
+ *    never lowers the start (typed 5 km with or without a marathon PB is
+ *    sedentary-novice, 10 km floor).
+ *  - Cross-training (sportBaselineByType) is read from state as the classifier
+ *    does; a sync writes it, so with typed km alone it is absent and claims nothing.
  * Runs per week is not a classifier input.
  *
  * Undefined when nothing was typed, or when synced weekly history exists: that
@@ -316,8 +322,15 @@ export function typedWeeklyKm(s: Pick<State, 'detectedWeeklyKm' | 'weeklyVolumeC
 export function typedVolumeArchetype(s: TypedVolumeState): Archetype | undefined {
   if (typedWeeklyKm(s) == null) return undefined;
   if ((s.historicWeeklyKm?.length ?? 0) > 0 || (s.extendedHistoryKm?.length ?? 0) > 0) return undefined;
-  const archetype = classify(gatherEvidence(s));
-  return archetype === 'detrained-with-history' ? 'consistent-runner' : archetype;
+  return classify({
+    ...gatherEvidence(s),
+    // Unknown, not steady: NaN fails the high-mileage CV < 0.35 test.
+    weeklyKmCV: Number.NaN,
+    // Only the two recency-gated history branches read these; recency is unknown.
+    peakWeeklyKmPast52: 0,
+    longestRunPast12moKm: 0,
+    hasCompletedMarathon: false,
+  });
 }
 
 /**

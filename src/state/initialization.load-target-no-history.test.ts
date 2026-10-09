@@ -53,6 +53,7 @@ import { resolveWeekWorkouts } from '@/ui/week-resolve';
 import { planEngineStateInputs, plannedRunMinutesByWeek, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { detectArchetype, startingWeeklyKm } from '@/calculations/athlete-archetype';
 import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
+import { lowBaseMarathon } from '@/ui/wizard/steps/race-target-plan-note';
 import { TL_PER_MIN } from '@/constants';
 import { localMondayKey } from '@/utils/local-date';
 import type { SimulatorState } from '@/types/state';
@@ -150,12 +151,12 @@ describe('new running plan: weekly load target baseline', () => {
  * full-week replay (plannedRunMinutesByWeek), so a mid-week start, which makes
  * the calendar week 1 partial, does not enter.
  */
-function buildManual(km: number, runsPerWeek: number, over: Partial<SimulatorState> = {}): void {
+function buildManual(km: number, runsPerWeek: number, over: Partial<SimulatorState> = {}, weeks = 16): void {
   resetState();
   localStorageMock.clear();
   Object.assign(getMutableState(), { unitPref: 'km', detectedWeeklyKm: km, weeklyVolumeConfirmed: true, ...over });
   expect(initializeSimulator(onboarding({
-    customRaceDate: planDay(16, 6), planDurationWeeks: 16, runsPerWeek, hasSmartwatch: false,
+    customRaceDate: planDay(weeks, 6), planDurationWeeks: weeks, runsPerWeek, hasSmartwatch: false,
   })).success).toBe(true);
 }
 
@@ -195,18 +196,27 @@ function typedTSS(km: number): number {
 describe('typed weekly km (no sync) shapes the plan and the weekly target', () => {
   beforeEach(() => { resetState(); localStorageMock.clear(); });
 
-  it('typed 50 km: the ramp starts from the typed km and the target is the typed km priced as easy running', () => {
+  it('typed 50 km: week 1 is capped by the typed km and otherwise set by the race-target week; the target follows the typed km', () => {
     buildManual(50, 4);
     const s = getState();
     expect(s.athleteArchetype).toBeUndefined();
-    expect(planEngineStateInputs(s)).toEqual({ baselineKm: 50, archetype: 'high-mileage', baselineKmIsEstimate: false });
-    // High-mileage starts at the typed km itself (x1.00); week 1 stays within it.
-    expect(startingWeeklyKm(50, 'high-mileage')).toBe(50);
-    expect(weekMinutes()[0]).toBeLessThanOrEqual(Math.round(50 * s.pac.e / 60));
+    expect(planEngineStateInputs(s)).toEqual({ baselineKm: 50, archetype: 'consistent-runner', baselineKmIsEstimate: false });
+    // The ramp can only lower a week: week 1 is capped at the consistent-runner
+    // start (50 x 1.05 km at easy pace).
+    const week1 = weekMinutes()[0];
+    const typedEasyMin = Math.round(50 * s.pac.e / 60);
+    expect(week1).toBeLessThanOrEqual(Math.round(startingWeeklyKm(50, 'consistent-runner') * s.pac.e / 60));
     // Base weeks: x 0.97 (recreational base row); week 4 is a deload (x 0.70).
     expect([1, 2, 3, 4].map(w => computePlannedWeekTarget(s, w))).toEqual([
       Math.round(typedTSS(50) * 0.97), Math.round(typedTSS(50) * 0.97), Math.round(typedTSS(50) * 0.97), Math.round(typedTSS(50) * 0.70),
     ]);
+    // Under that cap the race-target week sets week 1, so week 1 does not rise to
+    // the typed km: typed 60 km and no typed km at all build the same week 1.
+    buildManual(60, 4);
+    expect(weekMinutes()[0]).toBe(week1);
+    buildManual(0, 4, { detectedWeeklyKm: undefined, weeklyVolumeConfirmed: undefined });
+    expect(weekMinutes()[0]).toBe(week1);
+    expect(week1).toBeLessThan(typedEasyMin);
   });
 
   it('typed 15 km starts lower than typed 50 km, in volume and in target', () => {
@@ -268,5 +278,40 @@ describe('typed weekly km (no sync) shapes the plan and the weekly target', () =
     // With only the EMA (under 3 weeks of history), the EMA still wins.
     buildManual(15, 4, { historicWeeklyTSS: [120], ctlBaseline: 120 });
     expect(computePlannedWeekTarget(getState(), 2)).toBe(Math.round(120 * 0.97));
+  });
+});
+
+/**
+ * A typed km says nothing about how steady the athlete's weeks are, so typing
+ * more km must never buy a slower ramp. Review finding (2026-10-09): reading the
+ * missing week-to-week variability as 0 classified typed 50 km and more as
+ * high-mileage (3% a week) while typed 45 km stayed consistent-runner (7%), so in
+ * a 6-week marathon block (no logged runs, the 90 min no-data long-run start) the
+ * long run peaked at 96 min for typed 50 and 60 km against 109 min for typed 45
+ * km, and the forecast was slower.
+ */
+describe('typed weekly km in a marathon sharpening block: more km never shortens the build', () => {
+  beforeEach(() => { resetState(); localStorageMock.clear(); });
+
+  it('typed 45, 50 and 60 km: the long-run peak, the low-base note peak and the forecast never get worse as the km rise', () => {
+    const read = (km: number) => {
+      buildManual(km, 4, {}, 6);
+      const s = getState();
+      expect(s.sharpenBlock).toBeDefined();
+      expect(s.forecastTime).toBeGreaterThan(0);
+      const note = lowBaseMarathon('marathon', planDay(6, 6), s, 'intermediate');
+      return {
+        peakLongMin: Math.max(...plannedRunMinutesByWeek(runningPlanShapeInputs(s)).flat()),
+        // No note: the block's long runs reach the marathon-readiness bar.
+        notePeakMin: note ? note.peakLongMin : Number.POSITIVE_INFINITY,
+        forecastSec: s.forecastTime as number,
+      };
+    };
+    const rows = [45, 50, 60].map(read);
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i].peakLongMin).toBeGreaterThanOrEqual(rows[i - 1].peakLongMin);
+      expect(rows[i].notePeakMin).toBeGreaterThanOrEqual(rows[i - 1].notePeakMin);
+      expect(rows[i].forecastSec).toBeLessThanOrEqual(rows[i - 1].forecastSec);
+    }
   });
 });

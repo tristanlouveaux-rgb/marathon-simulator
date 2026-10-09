@@ -1015,10 +1015,11 @@ export function plannedPeakWeeklyKm(inputs: PlanShapeInputs): number {
 
 /**
  * The plan-engine inputs generateWeekWorkouts reads from state rather than from
- * its arguments: the ramp baseline (detected or typed weekly km; in continuous
- * mode the plan's own starting volume s.wkm) and the athlete archetype (synced,
- * else classified from the typed km, planRampArchetype; in continuous mode the
- * neutral 'unknown'). Lives here so the generator, the week-debrief preview
+ * its arguments: the ramp baseline (detected or typed weekly km; without one,
+ * continuous mode and a sharpening block take the plan's own starting volume
+ * s.wkm) and the athlete archetype (synced, else classified from the typed km,
+ * planRampArchetype; with neither, continuous mode and a sharpening block take
+ * the neutral 'unknown'). Lives here so the generator, the week-debrief preview
  * and the race-day forecast read one definition (re-exported by generator.ts).
  */
 export function planEngineStateInputs(

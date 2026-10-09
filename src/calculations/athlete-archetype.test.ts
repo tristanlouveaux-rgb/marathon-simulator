@@ -349,18 +349,45 @@ describe('gatherEvidence', () => {
 describe('typedVolumeArchetype (weekly km typed in onboarding, no sync)', () => {
   const typed = (km: number, overrides: Partial<SimulatorState> = {}) =>
     emptyState({ detectedWeeklyKm: km, weeklyVolumeConfirmed: true, ...overrides });
+  const marathonPB = { onboarding: { pbs: { m: 14400 } } as SimulatorState['onboarding'] };
 
   it('runs the sync classifier on the typed km', () => {
-    expect(typedVolumeArchetype(typed(50))).toBe('high-mileage');      // no history reads as steady (CV 0): slowest ramp
+    // Steadiness is unknown, so 50 km or more never reads as high-mileage: it takes
+    // the classifier's own fallback, consistent-runner.
+    expect(typedVolumeArchetype(typed(50))).toBe('consistent-runner');
+    expect(typedVolumeArchetype(typed(60))).toBe('consistent-runner');
     expect(typedVolumeArchetype(typed(30))).toBe('consistent-runner');
     expect(typedVolumeArchetype(typed(15))).toBe('consistent-runner'); // classifier fallback, 10 to 20 km
     expect(typedVolumeArchetype(typed(5))).toBe('sedentary-novice');
   });
 
-  it('never reads a typed km as a layoff: under 20 km with a marathon PB is consistent, not detrained', () => {
-    const s = typed(15, { onboarding: { pbs: { m: 14400 } } as SimulatorState['onboarding'] });
+  it('never reads a typed km as a layoff: under 20 km with a marathon PB is classified as without it', () => {
+    const s = typed(15, marathonPB);
     expect(classify(gatherEvidence(s))).toBe('detrained-with-history');
     expect(typedVolumeArchetype(s)).toBe('consistent-runner');
+    // Below 10 km the PB does not take the athlete out of the 10 km novice floor.
+    expect(typedVolumeArchetype(typed(5, marathonPB))).toBe('sedentary-novice');
+  });
+
+  it('experience never lowers the start, and more typed km never lowers it', () => {
+    const start = (km: number, over: Partial<SimulatorState> = {}) => {
+      const s = typed(km, over);
+      return startingWeeklyKm(km, typedVolumeArchetype(s)!);
+    };
+    const kms = [3, 5, 8, 10, 12, 15, 19, 20, 30, 45, 50, 60, 80];
+    for (const km of kms) expect(start(km, marathonPB)).toBeGreaterThanOrEqual(start(km));
+    for (let i = 1; i < kms.length; i++) {
+      expect(start(kms[i])).toBeGreaterThanOrEqual(start(kms[i - 1]));
+      expect(start(kms[i], marathonPB)).toBeGreaterThanOrEqual(start(kms[i - 1], marathonPB));
+    }
+  });
+
+  it('more typed km never slows the weekly ramp below the 50 km reading', () => {
+    // The fault this guards: CV read as 0 made 50 km high-mileage (3%) while 45 km
+    // ramped at 7%, so typing more km shortened a sharpening block's long-run build.
+    const ramp = (km: number) => ARCHETYPE_PARAMS[typedVolumeArchetype(typed(km))!].weeklyRampPct;
+    expect(ramp(50)).toBe(ramp(45));
+    expect(ramp(60)).toBe(ramp(45));
   });
 
   it('is undefined without a typed or confirmed km, or once synced weekly history exists', () => {
@@ -372,8 +399,11 @@ describe('typedVolumeArchetype (weekly km typed in onboarding, no sync)', () => 
   });
 
   it('planRampArchetype prefers the synced classification over the typed one', () => {
-    expect(planRampArchetype(typed(50))).toBe('high-mileage');
+    expect(planRampArchetype(typed(50))).toBe('consistent-runner');
     expect(planRampArchetype(typed(50, {
+      athleteArchetype: { archetype: 'high-mileage' } as SimulatorState['athleteArchetype'],
+    }))).toBe('high-mileage');
+    expect(planRampArchetype(typed(15, {
       athleteArchetype: { archetype: 'detrained-with-history' } as SimulatorState['athleteArchetype'],
     }))).toBe('detrained-with-history');
     expect(planRampArchetype(emptyState())).toBeUndefined();
