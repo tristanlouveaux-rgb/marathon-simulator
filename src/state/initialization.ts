@@ -10,7 +10,7 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbCapacity, pbAgeWeightsFor, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbCapacity, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { computeHRCalibratedVdot } from '@/calculations/effort-calibrated-vdot';
 import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
@@ -592,7 +592,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // deliberately NOT engine-decay evidence: it limits readiness (modelled on
     // the prediction + forecast), not aerobic capacity.
     const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
-    // PB capacity: age-weighted median (pbCapacity). The floor is
+    // PB capacity: age-weighted median (pbCapacity) on the same gated weights
+    // as the blend (pbAgeWeights), as pbCapacityForState in the refresh. The floor is
     // pbEngineFloorVdot, shared with refreshBlendedFitness: PB capacity for a
     // fresh or undated median PB; for an aged one, with a measured volume, the
     // age-weighted mean of capacity and a medium+ HR fit. The HR fit is the
@@ -600,7 +601,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // runs and HR profile), so onboarding and the refresh give an aged PB the
     // same engine. The onboarding blend has no HR-fit or PB-derived LT
     // predictor, so a pull toward the penalised blend could not agree.
-    const capacity = pbCapacity(pbs, pbAgeWeightsFor(pbs, { onboarding: state }, new Date()));
+    const capacity = pbCapacity(pbs, pbAgeWeights);
     const capacityVdot = capacity?.vdot ?? null;
     const onboardingHrFit = computeHRCalibratedVdot(
       sCurrent.onboardingRunHistory ?? [],

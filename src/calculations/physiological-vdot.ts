@@ -270,18 +270,16 @@ export function modelPbAgeWeights(s: SimulatorState, now: Date = new Date()): Pb
 }
 
 /**
- * PB age weights for the model's volume-gated uses (the blend's PB weight, the
- * same-distance PB floor, the §BZ engine floor), or undefined when there is no
- * measured weekly volume (`measuredWeeklyKm`, prediction-inputs.ts: a synced
- * window or a typed weekly km). With no running data an old PB keeps full
- * weight (§BV). Single gate for every caller: the refresh, onboarding, the
- * standard forecast, the triathlon run-leg blend and the Stats race-estimates
- * card, so a typed weekly km ages PBs on every surface or on none.
- *
- * The age-weighted PB median (`pbCapacity`) is NOT gated: when PBs differ in
- * age, the fresher one is itself current evidence, so it outweighs older ones
- * with or without a weekly volume. When every PB has the same age the median
- * is the plain median.
+ * PB age weights for every model use (the age-weighted PB median, the blend's
+ * PB weight, the same-distance PB floor, the §BZ engine floor, the LT's PB
+ * weights), or undefined when there is no measured weekly volume
+ * (`measuredWeeklyKm`, prediction-inputs.ts: a synced window or a typed weekly
+ * km). With no running data an old PB keeps full weight (§BV), and a PB's
+ * anniversary moves nothing. Single gate for every caller: the refresh,
+ * onboarding, the physiology chain (`pbCapacityForState`), the standard
+ * forecast, the triathlon run-leg blend, the LT derivation and the Stats
+ * race-estimates card, so a typed weekly km ages PBs on every surface or on
+ * none.
  */
 export function modelPbAgeWeightsIfMeasured(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
@@ -297,11 +295,11 @@ export function modelPbAgeWeightsIfMeasured(
 
 /**
  * Whether PB age currently changes the model for these PBs: a volume-gated
- * weight below 1 (`modelPbAgeWeightsIfMeasured`), or an age-weighted median
- * that differs from the plain one (`pbCapacity`). Drives the inline caption on
- * the Stats race estimates (feature-reveal order: inline caption first), so
- * the caption shows exactly when the estimates rely less on an old PB than
- * its displayed time suggests.
+ * weight below 1 (`modelPbAgeWeightsIfMeasured`). Every age use, the weighted
+ * PB median included, reads those gated weights, so this is the one test.
+ * Drives the inline caption on the Stats race estimates (feature-reveal order:
+ * inline caption first), so the caption shows exactly when the estimates rely
+ * less on an old PB than its displayed time suggests.
  */
 export function pbAgeingActive(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
@@ -313,10 +311,7 @@ export function pbAgeingActive(
   now: Date = new Date(),
 ): boolean {
   const gated = modelPbAgeWeightsIfMeasured(pbs, s, inputs, now);
-  if (gated && Object.values(gated).some(w => w != null && w < 1)) return true;
-  const weighted = pbCapacity(pbs, pbAgeWeightsFor(pbs, s, now));
-  const plain = pbCapacity(pbs);
-  return weighted != null && plain != null && weighted.vdot !== plain.vdot;
+  return gated != null && Object.values(gated).some(w => w != null && w < 1);
 }
 
 /**
@@ -348,25 +343,27 @@ export function pbEngineFloorVdot(
 
 /**
  * PB capacity: the age-weighted median VDOT across the race-distance PBs, and
- * the age weight of the PB(s) it lands on.
+ * the age weight at that median.
  *
  * Median (not max) because PB profiles are often imbalanced. A fast 5K
  * specialist with weak endurance shouldn't have their 5K alone drive the
  * estimate, and a marathoner with a slow 5K shouldn't lose theirs to it.
  * The median collapses both biases.
  *
- * With age weights the median is weighted: a fresh PB outweighs an old one, so
- * a set with a fresh slower 5K and two old faster times lands on the fresh 5K.
- * When every PB has the same weight (the common case, and always without PB
- * dates) it is the plain median, computed exactly as before. `weight` is the
- * age weight of the median PB, or the mean of the two middle PBs' weights when
- * the median falls between them; the §BZ engine floor uses it
- * (`pbEngineFloorVdot`).
- *
- * The weighting needs no measured weekly volume (unlike the blend's PB weight,
- * the same-distance floor, the engine floor and the LT weights, which go
- * through `modelPbAgeWeightsIfMeasured`): it only moves the median when PBs
- * differ in age, and then the fresher PB is itself current evidence.
+ * With age weights (`modelPbAgeWeightsIfMeasured`, on the measured-volume
+ * gate) the median is the weighted median with linear interpolation, the
+ * weighted percentile at 0.5: each PB sits at the midpoint of its own weight
+ * on the cumulative-weight scale, and the median is read where that scale
+ * reaches half the total weight, interpolating linearly between neighbouring
+ * PBs. With equal weights it is the plain median (Hyndman & Fan 1996,
+ * definition 5, at p = 0.5), and the plain branch below computes it exactly as
+ * before. It is continuous in the weights, so a PB weighted w keeps a share of
+ * the say in proportion to w, and a PB's anniversary moves the median by a
+ * bounded step. For two PBs it is their weight-weighted mean. With two or more
+ * distinct PBs it stays strictly inside their range, so ageing never turns it
+ * into the max (or the min). `weight` is the age weight interpolated at the
+ * same point (the mean of the two middle weights when the plain median falls
+ * between them); the §BZ engine floor uses it (`pbEngineFloorVdot`).
  */
 export function pbCapacity(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
@@ -391,26 +388,41 @@ export function pbCapacity(
       ? { vdot: (items[mid - 1].v + items[mid].v) / 2, weight: items[0].w }
       : { vdot: items[mid].v, weight: items[0].w };
   }
-  // Weighted median: the first PB whose cumulative weight passes half the
-  // total; exactly half averages it with the next, as the plain median does.
+  // Weighted median with linear interpolation between PB midpoints.
   const total = items.reduce((acc, it) => acc + it.w, 0);
   const half = total / 2;
   let cum = 0;
-  for (let i = 0; i < items.length; i++) {
-    cum += items[i].w;
-    if (Math.abs(cum - half) <= 1e-9 * total && i + 1 < items.length) {
-      return { vdot: (items[i].v + items[i + 1].v) / 2, weight: (items[i].w + items[i + 1].w) / 2 };
+  const pos = items.map(it => {
+    const p = cum + it.w / 2;
+    cum += it.w;
+    return p;
+  });
+  if (half <= pos[0]) return { vdot: items[0].v, weight: items[0].w };
+  for (let i = 0; i + 1 < items.length; i++) {
+    if (half <= pos[i + 1]) {
+      const f = (half - pos[i]) / (pos[i + 1] - pos[i]);
+      return {
+        vdot: items[i].v + f * (items[i + 1].v - items[i].v),
+        weight: items[i].w + f * (items[i + 1].w - items[i].w),
+      };
     }
-    if (cum > half) return { vdot: items[i].v, weight: items[i].w };
   }
   const last = items[items.length - 1];
   return { vdot: last.v, weight: last.w };
 }
 
-/** `pbCapacity` for the PBs the physiology chain reads, with their age weights. */
+/**
+ * `pbCapacity` for the PBs the physiology chain reads, with their age weights
+ * on the measured-volume gate (`modelPbAgeWeightsIfMeasured`, over the same
+ * runs as the refresh: `collectRunsFromState`). With no measured weekly volume
+ * it is the plain median. The volume is read only when some PB is aged.
+ */
 export function pbCapacityForState(s: SimulatorState, now: Date = new Date()): { vdot: number; weight: number } | null {
   const pbs = effectivePhysiologyPbs(s);
-  return pbCapacity(pbs, pbAgeWeightsFor(pbs, s, now));
+  const weights = pbAgeWeightsFor(pbs, s, now);
+  if (!Object.values(weights).some(w => w != null && w < 1)) return pbCapacity(pbs);
+  const inputs = computePredictionInputs(collectRunsFromState(s), now, raceEffortHrFloorForState(s));
+  return pbCapacity(pbs, modelPbAgeWeightsIfMeasured(pbs, s, inputs, now));
 }
 
 /**
