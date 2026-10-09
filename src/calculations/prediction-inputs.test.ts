@@ -223,10 +223,25 @@ describe('computePredictionInputs: race test with heart rate', () => {
     const tempo = fast(165);  // Z4, 82% of reserve
     const r = computePredictionInputs([tempo, ...easy], NOW, FLOOR);
     expect(r.recentRun).toBeNull();
-    // It stays in Tanda's training pace P (Tanda excludes races, not tempo runs).
-    expect(r.paceRunsCounted).toBe(7);
     // Pre-fix (pace-only) it was the recent race.
     expect(computePredictionInputs([tempo, ...easy], NOW).recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
+  it("the HR test never changes Tanda's P: hard efforts stay out of it by pace", () => {
+    // Review 2026-10-09: with the HR test on P, the tempo moved into P (7 runs)
+    // and pulled P faster. P is pace-filtered, as at 81d38f7.
+    for (const avgHR of [165, 168, 180]) {
+      const r = computePredictionInputs([fast(avgHR), ...easy], NOW, FLOOR);
+      const paceOnly = computePredictionInputs([fast(avgHR), ...easy], NOW);
+      expect(r.paceRunsCounted).toBe(6);
+      expect(r.avgPaceSecPerKm).toBe(paceOnly.avgPaceSecPerKm);
+    }
+    // One weekly 8 km tempo at 4:50/km among easy runs at 6:00/km: P is the easy pace.
+    const weeks: RunActivityInput[] = [];
+    for (let k = 0; k < 4; k++) {
+      weeks.push({ ...run(1 + 7 * k, 8, 290), avgHR: 168 }, { ...run(3 + 7 * k, 10, 360), avgHR: 138 }, { ...run(5 + 7 * k, 8, 360), avgHR: 138 });
+    }
+    expect(computePredictionInputs(weeks, NOW, FLOOR).avgPaceSecPerKm).toBe(360);
   });
 
   it('the tempo at the HR §CY measured (168, 84% of reserve) is still a training run', () => {
@@ -248,6 +263,29 @@ describe('computePredictionInputs: race test with heart rate', () => {
 
   it('without HR zones the test is pace-only even when the run has HR', () => {
     expect(computePredictionInputs([fast(165), ...easy], NOW, null).recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
+  it('KNOWN FALSE NEGATIVE: a 10K race averaging inside Z4 is not the recent race, and stays out of P', () => {
+    // Four weeks of easy runs at 6:30/km and HR 138, then a 10K race in 44:00
+    // at HR 174 (91.6% of max HR, 89% of reserve). Karvonen puts the floor at
+    // 176, so the HR test reads the race as a threshold effort. It is still
+    // out of P (pace-filtered): P is the easy pace, as with the pace-only test.
+    const jogs: RunActivityInput[] = [];
+    for (let k = 0; k < 4; k++) jogs.push({ ...run(2 + 7 * k, 10, 390), avgHR: 138 }, { ...run(5 + 7 * k, 8, 390), avgHR: 138 });
+    const race = { ...run(1, 10, 264), avgHR: 174 };
+    const withHr = computePredictionInputs([race, ...jogs], NOW, FLOOR);
+    const paceOnly = computePredictionInputs([race, ...jogs], NOW);
+    expect(withHr.recentRun).toBeNull();
+    expect(paceOnly.recentRun).toMatchObject({ d: 10, t: 2640 });
+    expect(withHr.avgPaceSecPerKm).toBe(390);
+    expect(paceOnly.avgPaceSecPerKm).toBe(390);
+    // With max HR only (no resting HR) the floor is 171 and the same race counts.
+    const maxOnly = raceEffortHrFloorBpm({ maxHR: 190 });
+    expect(computePredictionInputs([race, ...jogs], NOW, maxOnly).recentRun).toMatchObject({ d: 10, t: 2640 });
+    // A half marathon in 1:38 at HR 168 is not a race either.
+    const half = { ...run(1, 21.0975, 5880 / 21.0975), avgHR: 168 };
+    expect(computePredictionInputs([half, ...jogs], NOW, FLOOR).recentRun).toBeNull();
+    expect(computePredictionInputs([half, ...jogs], NOW).recentRun).toMatchObject({ d: 21.0975 });
   });
 
   it('a slow run with a high HR is not a race (the pace test still applies)', () => {

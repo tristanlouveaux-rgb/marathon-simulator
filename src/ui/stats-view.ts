@@ -22,7 +22,7 @@ import { renderPlanShapeCard } from './plan-shape-chart';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { blendPredictions } from '@/calculations/predictions';
-import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { computePredictionInputs, collectRunsFromState } from '@/calculations/prediction-inputs';
 import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
@@ -114,35 +114,6 @@ function chartGridLines(
 
 function computeCurrentVDOT(s: SimulatorState): number {
   return getEffectiveVdot(s);
-}
-
-/**
- * Extract all running activities from garminActuals across the available plan
- * weeks, normalised to the shape `computePredictionInputs` expects. Filters
- * non-running types here so the pure module doesn't need to know about our
- * internal activityType strings.
- */
-function collectRunActivities(s: SimulatorState): Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> {
-  const runs: Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> = [];
-  const weeks = s.wks ?? [];
-  for (const wk of weeks) {
-    const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
-    if (!actuals) continue;
-    for (const val of Object.values(actuals)) {
-      const a = val as any;
-      const aType = (a.activityType || '').toUpperCase();
-      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
-      runs.push({
-        startTime: a.startTime,
-        distKm: a.distanceKm,
-        durSec: a.durationSec,
-        activityName: a.activityName,
-        activityType: a.activityType,
-      });
-    }
-  }
-  return runs;
 }
 
 function last7(
@@ -3284,11 +3255,13 @@ function buildForecastTimesCard(s: SimulatorState): string {
   };
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-  // Recent race effort from garminActuals (computePredictionInputs recentRun:
-  // a run more than 15% faster than the window's median pace and, when it has
-  // an average HR, at race level on the HR effort scale), else the onboarding
-  // s.rec. Same race HR floor as refreshBlendedFitness.
-  const inputs = computePredictionInputs(collectRunActivities(s), undefined, raceEffortHrFloorForState(s));
+  // Recent race effort (computePredictionInputs recentRun: a run more than 15%
+  // faster than the window's median pace and, when it has an average HR, at
+  // race level on the HR effort scale), else the onboarding s.rec. Same runs
+  // (collectRunsFromState, which carries avgHR) and race HR floor as
+  // refreshBlendedFitness. The local run collector this card used dropped
+  // avgHR, so the HR race test never acted here.
+  const inputs = computePredictionInputs(collectRunsFromState(s), undefined, raceEffortHrFloorForState(s));
   const liveRec = inputs.recentRun ?? s.rec ?? null;
   const liveKmPerWeek = inputs.weeklyKm;
   const liveAvgPace = inputs.avgPaceSecPerKm ?? null;
