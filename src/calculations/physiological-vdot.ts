@@ -25,6 +25,8 @@ import type { SimulatorState } from '@/types';
 import { cv } from './vdot';
 import { deriveVdotFromLT } from './lt-derivation';
 import { getEffectiveVdot } from './effective-vdot';
+import { runSkillVdot } from './tri-run-skill';
+import { computePredictionInputs, collectRunsFromState } from './prediction-inputs';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -366,20 +368,115 @@ export function effectiveVo2max(s: SimulatorState, now: Date = new Date()): numb
   // runner is never trapped — PBs aren't a ceiling, only an uncorroborated
   // cross-trained watch is capped. Running mode (no triConfig) is untouched: there
   // the watch is run-specific and trusted as-is.
-  if (s.triConfig != null) {
-    const ceilings: number[] = [];
-    const race = raceAnchorVdot(s, now);
-    if (race != null) ceilings.push(race.vdot);
-    const pb = pbDerivedVdot(s);
-    if (pb != null) ceilings.push(pb);
-    const hr = s.hrCalibratedVdot;
-    if (hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium')) ceilings.push(hr.vdot);
-    if (ceilings.length > 0) {
-      const ceiling = Math.max(...ceilings);
-      if (device > ceiling) return ceiling;  // watch exceeds running evidence → cap to it
-    }
-  }
+  const ceiling = triathleteRunEvidenceCeiling(s, now);
+  if (ceiling != null && device > ceiling) return ceiling;  // watch exceeds running evidence → cap to it
   return device;
+}
+
+/** True when the HR-vs-pace calibration is usable as running evidence (medium+). */
+function isUsableHrFit(hr: SimulatorState['hrCalibratedVdot']): hr is NonNullable<SimulatorState['hrCalibratedVdot']> & { vdot: number } {
+  return hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium');
+}
+
+/**
+ * The running-specific evidence ceiling on a triathlete's watch VO2max: the max
+ * of a recent race run leg (`raceAnchorVdot`), the race-PB median
+ * (`pbDerivedVdot`) and a medium+ HR-vs-pace calibration. Null outside
+ * triathlon (`s.triConfig` unset; running mode trusts the watch as
+ * run-specific) or when no such evidence exists. Single source for the
+ * ceiling in `effectiveVo2max` (the blend's VO2 predictor) and in
+ * `ltDanielsInputVdot` (the LT derivation's Daniels input), so the blend and
+ * the training paces hold the watch to the same figure.
+ */
+export function triathleteRunEvidenceCeiling(s: SimulatorState, now: Date = new Date()): number | null {
+  if (s.triConfig == null) return null;
+  const ceilings: number[] = [];
+  const race = raceAnchorVdot(s, now);
+  if (race != null) ceilings.push(race.vdot);
+  const pb = pbDerivedVdot(s);
+  if (pb != null) ceilings.push(pb);
+  if (isUsableHrFit(s.hrCalibratedVdot)) ceilings.push(s.hrCalibratedVdot.vdot);
+  return ceilings.length > 0 ? Math.max(...ceilings) : null;
+}
+
+/**
+ * Triathlon cold-start run cap (SCIENCE_LOG §CY "Triathlon cold-start cap").
+ *
+ * A triathlete with no running-specific signal that enters the blend (no race
+ * PB, no race anchor, no synced race effort, no medium+ HR-vs-pace
+ * calibration) has only a watch VO2max, which cycling and swimming build too,
+ * so it overstates RUNNING fitness. Such an athlete is held at their own run
+ * skill-slider self-assessment (`runSkillVdot`, 44.3 at run skill 3) until real
+ * running evidence lands. Returns that VDOT when the cap applies, else null
+ * (running mode and cycling-only mode have no `triConfig.skillRating.run`).
+ *
+ * Single source for the cap on the engine VDOT (`refreshBlendedFitness`) and on
+ * the LT derivation's Daniels input (`ltDanielsInputVdot`). `recentRaceEffort`
+ * is whether the synced window holds a race effort
+ * (`computePredictionInputs(...).recentRun`); the HR fit is read from
+ * `s.hrCalibratedVdot`, which `refreshBlendedFitness` writes before both reads.
+ */
+export function triColdStartRunCapVdot(
+  s: SimulatorState,
+  opts: { recentRaceEffort: boolean; now?: Date },
+): number | null {
+  const skill = s.triConfig?.skillRating?.run;
+  if (!skill) return null;
+  const now = opts.now ?? new Date();
+  const hasRunSpecificSignal = pbDerivedVdot(s) != null
+    || raceAnchorVdot(s, now) != null
+    || opts.recentRaceEffort
+    || isUsableHrFit(s.hrCalibratedVdot);
+  if (hasRunSpecificSignal) return null;
+  return runSkillVdot(skill as 1 | 2 | 3 | 4 | 5);
+}
+
+/**
+ * The VDOT the LT derivation's Daniels method reads (`buildLTInputs`,
+ * `recomputeLT` in ltSync.ts). Training paces come from `s.lt` whenever it is
+ * set (`gp`, paces.ts), so this input decides a triathlete's run paces.
+ *
+ * It is `getPhysiologicalVdot(s).vdot`, except for a triathlete whose value
+ * comes from the watch ('device') or the engine fallback ('tanda-fallback'):
+ * the same figures that already hold the blend and the engine apply here.
+ *   1. Running evidence exists (race anchor, race PB, medium+ HR fit): the
+ *      watch is capped at `triathleteRunEvidenceCeiling`, as `effectiveVo2max`
+ *      caps the blend's VO2 predictor.
+ *   2. No running-specific signal (cold start, `triColdStartRunCapVdot`): the
+ *      watch is capped at the run skill-slider VDOT, as `refreshBlendedFitness`
+ *      caps `s.v`. With no fresh watch the chain falls to 'tanda-fallback',
+ *      which is `s.v` itself; the input is then the run skill-slider VDOT. `s.v`
+ *      is not running evidence there: it is the blend of the previous `s.lt`
+ *      (the LT predictor) under the readiness penalties, so feeding it back
+ *      compounds those penalties every refresh. Measured at 81d38f7 (70.3, run
+ *      skill 3, no watch, PB or runs): `s.v` 44.3, 39.1, 34.0, 29.3, then 25.0
+ *      (the Daniels floor), `s.lt` 261 to 402 s/km.
+ * A synced race effort lifts the cold-start cap with no ceiling of its own,
+ * matching `effectiveVo2max` (SCIENCE_LOG §CY limitation 7).
+ *
+ * The displayed VO2max (`getPhysiologicalVdot`, the Stats card) still shows the
+ * watch. Running and HYROX (no `triConfig`) read `getPhysiologicalVdot`
+ * unchanged. Cycling-only mode has a `triConfig` but no run skill rating, so
+ * only step 1 can apply there, as it already does in `effectiveVo2max`;
+ * cycling plans prescribe no runs.
+ */
+export function ltDanielsInputVdot(
+  s: SimulatorState,
+  opts: { now?: string | Date } = {},
+): number | null {
+  const now = opts.now
+    ? (opts.now instanceof Date ? opts.now : new Date(opts.now))
+    : new Date();
+  const resolved = getPhysiologicalVdot(s, { now });
+  const v = resolved.vdot;
+  if (v == null || s.triConfig == null) return v;
+  if (resolved.source !== 'device' && resolved.source !== 'tanda-fallback') return v;
+  const ceiling = triathleteRunEvidenceCeiling(s, now);
+  if (ceiling != null) return Math.min(v, ceiling);
+  const recentRun = computePredictionInputs(collectRunsFromState(s), now).recentRun;
+  const cap = triColdStartRunCapVdot(s, { recentRaceEffort: recentRun != null && recentRun.t > 0, now });
+  if (cap == null) return v;
+  return resolved.source === 'device' ? Math.min(v, cap) : cap;
 }
 
 export function getPhysiologicalVdot(

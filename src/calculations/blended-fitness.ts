@@ -20,14 +20,13 @@ import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
-import { computePredictionInputs, resolveWeeklyKmSignal, type RunActivityInput } from './prediction-inputs';
+import { computePredictionInputs, resolveWeeklyKmSignal, collectRunsFromState } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
-import { estimateRunPaceFromSkill } from './race-prediction.triathlon';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot, triColdStartRunCapVdot, ltDanielsInputVdot } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -38,44 +37,9 @@ const DIST_M: Record<RaceDistance, number> = {
   'marathon': 42195,
 };
 
-/**
- * Assemble `RunActivityInput[]` from whichever sources are available in the
- * current state. Preference order:
- *   - `s.wks[].garminActuals` (live sync. Authoritative for returning users)
- *   - `s.onboardingRunHistory` (seeded by backfill response. First-session data)
- * Both may coexist for a user mid-onboarding; we merge and let the dedup in
- * `computePredictionInputs` collapse overlaps.
- */
-export function collectRunsFromState(s: SimulatorState): RunActivityInput[] {
-  const runs: RunActivityInput[] = [];
-  const weeks = s.wks ?? [];
-  for (const wk of weeks) {
-    const actuals = (wk as { garminActuals?: Record<string, unknown> }).garminActuals;
-    if (!actuals) continue;
-    for (const val of Object.values(actuals)) {
-      const a = val as {
-        activityType?: string; startTime?: string; distanceKm?: number; durationSec?: number;
-        activityName?: string; avgHR?: number | null; hrDrift?: number | null;
-      };
-      const aType = (a.activityType || '').toUpperCase();
-      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
-      runs.push({
-        startTime: a.startTime,
-        distKm: a.distanceKm,
-        durSec: a.durationSec,
-        activityName: a.activityName,
-        activityType: a.activityType,
-        avgHR: a.avgHR ?? null,
-        hrDrift: a.hrDrift ?? null,
-      });
-    }
-  }
-  if (s.onboardingRunHistory && s.onboardingRunHistory.length > 0) {
-    for (const r of s.onboardingRunHistory) runs.push(r);
-  }
-  return runs;
-}
+// collectRunsFromState lives in prediction-inputs.ts (no runtime imports, so the
+// physiology chain can read it without a cycle); re-exported for callers.
+export { collectRunsFromState };
 
 const STANDARD_DISTANCES: RaceDistance[] = ['5k', '10k', 'half', 'marathon'];
 
@@ -708,22 +672,39 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // The cap only bites when the watch exceeds the self-rating, so a genuinely fast
   // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
   // (no triConfig.skillRating).
-  const triRunSkill = s.triConfig?.skillRating?.run;
   // `inputs.recentRun` is a race effort (a run more than 15% faster than the
   // window's median pace, SCIENCE_LOG §CY). Easy runs never fill it, so they
   // never enter the blend's recent-run slot and must not lift the cap either:
   // with the cap off and no run in the blend, the engine falls back to the
-  // uncorroborated watch number the cap exists to contain.
-  const hasRunSpecificSignal = capacityVdot != null
-    || raceAnchor != null
-    || (inputs.recentRun != null && inputs.recentRun.t > 0)
-    || (hrVdot?.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium'));
-  if (triRunSkill && !hasRunSpecificSignal) {
-    const skillMarathonPace = estimateRunPaceFromSkill(triRunSkill as 1 | 2 | 3 | 4 | 5, 'ironman');
-    const skillVdot = cv(42195, skillMarathonPace * 42.195);
-    if (skillVdot > 0 && engineVdot > skillVdot) {
-      console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
-      engineVdot = skillVdot;
+  // uncorroborated watch number the cap exists to contain. The gate and the
+  // cap value live in triColdStartRunCapVdot (physiological-vdot.ts), shared
+  // with the LT derivation's Daniels input (ltDanielsInputVdot) so the run
+  // paces from s.lt are held to the same figure. It reads the HR fit from
+  // s.hrCalibratedVdot, written from hrVdot at the top of this function.
+  const skillVdot = triColdStartRunCapVdot(s, {
+    recentRaceEffort: inputs.recentRun != null && inputs.recentRun.t > 0,
+  });
+  if (skillVdot != null && engineVdot > skillVdot) {
+    console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
+    engineVdot = skillVdot;
+  } else if (skillVdot != null) {
+    // Cold-start hold (2026-10-09). The training paces read s.lt, whose Daniels
+    // input in cold start is the capped figure: min(watch, run skill VDOT), or
+    // the run skill VDOT with no fresh watch (ltDanielsInputVdot). The engine is
+    // held at that same figure, so s.v and the paces describe one number. The
+    // blend under it holds no running data: its LT predictor reads that figure,
+    // its VO2 predictor the cross-trained watch, and the readiness penalties
+    // against the marathon placeholder (the no-data durability cap, low-volume
+    // marathon specificity) would otherwise reach the engine. Those penalties
+    // are race readiness, not capacity (§BZ, the reason PB holders are floored at
+    // PB capacity above), and easy runs would lower the engine through them (the
+    // §CY guarantee). Before the LT input was capped, the watch-inflated LT
+    // propped the blend above the skill cap, so the cap alone held s.v there.
+    const figure = ltDanielsInputVdot(s);
+    const hold = figure != null ? Math.min(figure, skillVdot) : null;
+    if (hold != null && engineVdot < hold) {
+      console.log(`[refreshBlendedFitness] cold-start: engine held at the LT input figure ${hold.toFixed(1)} (blend under readiness penalties ${engineVdot.toFixed(1)}, no running data).`);
+      engineVdot = hold;
     }
   }
 

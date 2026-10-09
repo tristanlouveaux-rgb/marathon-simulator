@@ -19,6 +19,8 @@
  * filter / guard.
  */
 
+import type { SimulatorState } from '@/types';
+
 export interface RunActivityInput {
   /** ISO string or Date. Used for ordering and window selection. */
   startTime: string | Date;
@@ -288,4 +290,43 @@ export function resolveWeeklyKmSignal(
   if (inputs.weeksCovered > 0) return inputs.weeklyKm;
   if (detectedWeeklyKm != null && detectedWeeklyKm > 0) return detectedWeeklyKm;
   return inputs.weeklyKm;
+}
+
+/**
+ * Assemble `RunActivityInput[]` from whichever sources are available in the
+ * current state. Preference order:
+ *   - `s.wks[].garminActuals` (live sync. Authoritative for returning users)
+ *   - `s.onboardingRunHistory` (seeded by backfill response. First-session data)
+ * Both may coexist for a user mid-onboarding; we merge and let the dedup in
+ * `computePredictionInputs` collapse overlaps.
+ */
+export function collectRunsFromState(s: SimulatorState): RunActivityInput[] {
+  const runs: RunActivityInput[] = [];
+  const weeks = s.wks ?? [];
+  for (const wk of weeks) {
+    const actuals = (wk as { garminActuals?: Record<string, unknown> }).garminActuals;
+    if (!actuals) continue;
+    for (const val of Object.values(actuals)) {
+      const a = val as {
+        activityType?: string; startTime?: string; distanceKm?: number; durationSec?: number;
+        activityName?: string; avgHR?: number | null; hrDrift?: number | null;
+      };
+      const aType = (a.activityType || '').toUpperCase();
+      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
+      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
+      runs.push({
+        startTime: a.startTime,
+        distKm: a.distanceKm,
+        durSec: a.durationSec,
+        activityName: a.activityName,
+        activityType: a.activityType,
+        avgHR: a.avgHR ?? null,
+        hrDrift: a.hrDrift ?? null,
+      });
+    }
+  }
+  if (s.onboardingRunHistory && s.onboardingRunHistory.length > 0) {
+    for (const r of s.onboardingRunHistory) runs.push(r);
+  }
+  return runs;
 }

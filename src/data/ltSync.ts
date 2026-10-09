@@ -17,7 +17,7 @@
  */
 
 import { resolveLT, deriveLT, diagnoseSustainedEfforts, type BestEffortInput, type SustainedEffortInput, type DeriveLTInput, type LTDerivationResult, type SustainedEffortDiagnostic } from '@/calculations/lt-derivation';
-import { getPhysiologicalVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
+import { ltDanielsInputVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
 import type { SimulatorState } from '@/types';
 
 /** Meaningful-change threshold — an applied LT shift of at least this many
@@ -123,14 +123,16 @@ function collectSustainedEfforts(s: SimulatorState): SustainedEffortInput[] {
 }
 
 /** Build the full DeriveLTInput from current state — used by both the sync flow
- *  and the LT detail page (so it can show the same methods/provenance). The
- *  Daniels VDOT input comes from `getPhysiologicalVdot` so every surface that
- *  shows a VDOT or VO2 number resolves to the same value via the same priority
- *  chain. See `src/calculations/physiological-vdot.ts`. */
+ *  (`recomputeLT`) and the LT detail page (so it can show the same methods and
+ *  provenance). The Daniels VDOT input is `ltDanielsInputVdot`: the unified
+ *  physiological-VDOT chain (`getPhysiologicalVdot`), with the triathlete run
+ *  caps applied to a watch or engine-fallback value so a triathlete's run paces
+ *  follow the same capped figure as the engine VDOT and the blend. See
+ *  `src/calculations/physiological-vdot.ts`. */
 export function buildLTInputs(s: SimulatorState, opts: { now?: string; garmin?: { ltPaceSecKm: number; ltHR?: number | null; asOf: string } | null } = {}): DeriveLTInput {
   const garmin = opts.garmin === undefined ? (s.garminLT ?? null) : opts.garmin;
   return {
-    vdot: getPhysiologicalVdot(s, { now: opts.now }).vdot,
+    vdot: ltDanielsInputVdot(s, { now: opts.now }),
     maxHR: s.maxHR ?? null,
     bestEfforts: pbsToBestEfforts(s),
     sustainedEfforts: collectSustainedEfforts(s),
@@ -183,17 +185,9 @@ export function recomputeLT(
     s.garminLT = { ...opts.garmin };
   }
 
-  const inputs = {
-    // Daniels VDOT input comes from the unified physiological-VDOT resolver.
-    // See `src/calculations/physiological-vdot.ts` for the priority chain.
-    vdot: getPhysiologicalVdot(s, { now }).vdot,
-    maxHR: s.maxHR ?? null,
-    bestEfforts: pbsToBestEfforts(s),
-    sustainedEfforts: collectSustainedEfforts(s),
-    garmin,
-    override: s.ltOverride ?? null,
-    now,
-  };
+  // Same inputs as the LT detail page (buildLTInputs): one construction, so
+  // the applied s.lt and the displayed derivation cannot diverge.
+  const inputs = buildLTInputs(s, { now, garmin });
 
   // Derived-only result (ignores Garmin). Used for the conflict check.
   const derivedOnly = deriveLT({ ...inputs, garmin: null });

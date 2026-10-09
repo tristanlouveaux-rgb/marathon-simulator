@@ -258,10 +258,10 @@ describe('KNOWN LIMITATION: a lone run is never a race effort, and two runs need
 /**
  * Triathlon cold-start skill cap (refreshBlendedFitness). A triathlete with no
  * running PB, no race anchor and no medium+ HR-vs-pace calibration has the
- * engine VDOT (s.v) and the forecast held at their run skill rating. It does
- * not hold run paces: those come from s.lt, which recomputeLT derives from
- * getPhysiologicalVdot's device branch, so an inflated watch VO2max still sets
- * them (pre-existing, logged for Tristan). Easy runs never enter the blend's recent-run
+ * engine VDOT (s.v) and the forecast held at their run skill rating. Since
+ * 2026-10-09 the run paces follow the same figure: s.lt's Daniels input is
+ * capped too (ltDanielsInputVdot, tri-run-lt-cap.test.ts), and the engine is
+ * held at that input. Easy runs never enter the blend's recent-run
  * slot (SCIENCE_LOG §CY), so they must not lift the cap either. In 57935d0 the
  * gate read the window's run count: two weeks of easy jogging at 6:30/km
  * switched the cap off and the engine fell back to the watch number, 44.3 to

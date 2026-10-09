@@ -73,6 +73,7 @@ import {
 import { getTriathlonById } from '@/data/triathlons';
 import { getAbilityBand } from './fatigue';
 import { cv, vt } from './vdot';
+import { estimateRunPaceFromSkill } from './tri-run-skill';
 import { blendPredictions } from './predictions';
 import { effectiveVo2max } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
@@ -1315,16 +1316,9 @@ function estimateBikeSpeed(
   return byLevel[skill] * intensityFactor;
 }
 
-export function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {
-  // byLevel is the reference run-leg pace at Ironman (marathon) distance. Scale to
-  // the actual run-leg distance via Riegel's power law (T ∝ d^1.06, so pace ∝ d^0.06;
-  // Riegel 1981) — shorter legs are run faster. Replaces the old flat 70.3 −15s
-  // offset with a principled, distance-general law. Deepest fallback (skill only).
-  const byLevel: Record<TriSkillSlider, number> = { 1: 420, 2: 360, 3: 300, 4: 260, 5: 225 };
-  const runKm = RACE_LEG_DISTANCES[distance].runKm;
-  const IM_RUN_KM = RACE_LEG_DISTANCES.ironman.runKm;
-  return byLevel[skill] * Math.pow(runKm / IM_RUN_KM, 0.06);
-}
+// estimateRunPaceFromSkill lives in tri-run-skill.ts (a light module the
+// physiology chain can import without a cycle); re-exported here for callers.
+export { estimateRunPaceFromSkill };
 
 /**
  * Open-race time prediction at the run leg's distance, blending all available
