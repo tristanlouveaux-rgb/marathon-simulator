@@ -171,7 +171,8 @@ export function computePlannedWeekTarget(
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const ctl = s.ctlBaseline ?? undefined;
   // No synced history: the typed weekly km priced as easy running is the baseline
-  // (Tristan, 2026-10-09). History and the EMA still win when a sync wrote them.
+  // of a running plan (Tristan, 2026-10-09; triathlon and HYROX keep runs/week x 50).
+  // History and the EMA still win when a sync wrote them.
   const typed = typedVolumeWeeklyTSS(s);
   const at = (phase: string, weekInPhase?: number, totalPhaseWeeks?: number): number => (
     signal === 'A'

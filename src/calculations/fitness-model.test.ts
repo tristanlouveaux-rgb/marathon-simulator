@@ -281,6 +281,13 @@ describe('typedVolumeWeeklyTSS', () => {
     expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 10, weeklyVolumeConfirmed: true })).toBeCloseTo(10 * 5.5 * TL_PER_MIN[4], 6);
   });
 
+  it('is a running-plan baseline only: triathlon (cycling included) and HYROX weeks get none', () => {
+    const typed = { detectedWeeklyKm: 20, weeklyVolumeConfirmed: true, pac: { e: 330 } };
+    expect(typedVolumeWeeklyTSS({ ...typed, eventType: 'running' })).toBeCloseTo(20 * 5.5 * TL_PER_MIN[4], 6);
+    expect(typedVolumeWeeklyTSS({ ...typed, eventType: 'triathlon' })).toBeUndefined();
+    expect(typedVolumeWeeklyTSS({ ...typed, eventType: 'hyrox' })).toBeUndefined();
+  });
+
   it('is undefined unless the weekly km was typed or confirmed', () => {
     expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 50, pac: { e: 300 } })).toBeUndefined();
     expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 0, weeklyVolumeConfirmed: true, pac: { e: 300 } })).toBeUndefined();
