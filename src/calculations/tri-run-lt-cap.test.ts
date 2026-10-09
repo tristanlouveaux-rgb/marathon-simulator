@@ -26,7 +26,7 @@ vi.stubGlobal('localStorage', {
 vi.stubGlobal('alert', vi.fn());
 
 import {
-  ltDanielsInputVdot, getPhysiologicalVdot, triColdStartRunCapVdot, effectiveVo2max, pbMedianVdot,
+  ltDanielsInputVdot, resolveLtDanielsInput, getPhysiologicalVdot, triColdStartRunCapVdot, effectiveVo2max, pbMedianVdot,
 } from './physiological-vdot';
 import { runSkillVdot, estimateRunPaceFromSkill } from './tri-run-skill';
 import { deriveLTFromVdot } from './lt-derivation';
@@ -76,6 +76,20 @@ describe('ltDanielsInputVdot: the triathlete run caps reach the LT input', () =>
   it('a watch below the skill rating is used as it is', () => {
     const s = tri({ vo2: 40 });
     expect(ltDanielsInputVdot(s, { now: NOW })).toBe(40);
+  });
+
+  it('coldStartCapped is true only where the cap replaced the input', () => {
+    // Watch above the skill rating: replaced by the skill VDOT.
+    expect(resolveLtDanielsInput(tri({ vo2: 62 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true });
+    // Watch at or below it: used as it is, not capped.
+    expect(resolveLtDanielsInput(tri({ vo2: 40 }), { now: NOW })).toEqual({ vdot: 40, coldStartCapped: false });
+    expect(resolveLtDanielsInput(tri({ vo2: SKILL3 }), { now: NOW }).coldStartCapped).toBe(false);
+    // No fresh watch (engine fallback): replaced by the skill VDOT.
+    expect(resolveLtDanielsInput(tri({ v: 30 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true });
+    // Running evidence: the ceiling applies, which is not the cold-start cap.
+    expect(resolveLtDanielsInput(tri({ vo2: 62, pbs: { k10: 3000 } }), { now: NOW }).coldStartCapped).toBe(false);
+    // Running mode: never.
+    expect(resolveLtDanielsInput({ ...getDefaultState(), vo2: 62 } as SimulatorState, { now: NOW }).coldStartCapped).toBe(false);
   });
 
   it('with a race PB the watch is capped at the PB median, as effectiveVo2max caps the blend', () => {
@@ -202,12 +216,24 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
     expect(getState().lt).toBe(288);
   });
 
-  it('a watch below the skill rating sets the paces and holds the engine at the watch', () => {
+  it('a watch below the skill rating sets the paces and leaves the engine to the blend, as before', () => {
+    // The watch is not capped (it reads below the skill rating), so the LT
+    // input and the engine are what they were at 81d38f7: no cold-start hold.
+    // A hold here raised the engine to the watch (35.1 to 40.0 in 85c1ea4) and
+    // sped up the 70.3 run leg by 13 min with no change to the paces (review
+    // 2026-10-09).
     initTri({ vo2: 40 });
     refreshBlendedFitness(getMutableState());
     expect(getState().lt).toBe(Math.round(deriveLTFromVdot(40)!));
-    // Pre-fix the engine read the blend under the readiness penalties, 35.1.
-    expect(getState().v).toBeCloseTo(40, 9);
+    expect(resolveLtDanielsInput(getState(), {}).coldStartCapped).toBe(false);
+    expect(getState().v).toBeCloseTo(35.1, 1);
+    // Watches 36 and 43 (both below 44.3) also read the blend, not the watch
+    // (85c1ea4 held them at exactly 36.00 and 43.00).
+    for (const [vo2, v] of [[36, 31.4], [43, 38.1]] as const) {
+      initTri({ vo2 });
+      refreshBlendedFitness(getMutableState());
+      expect(getState().v).toBeCloseTo(v, 1);
+    }
   });
 
   it('KNOWN LIMITATION (ISSUE-376): a synced race effort lifts the cap and the raw watch returns', () => {

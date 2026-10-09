@@ -578,19 +578,40 @@ export function ltDanielsInputVdot(
   s: SimulatorState,
   opts: { now?: string | Date } = {},
 ): number | null {
+  return resolveLtDanielsInput(s, opts).vdot;
+}
+
+/**
+ * `ltDanielsInputVdot` with whether the triathlon cold-start cap lowered it.
+ * `coldStartCapped` is true only when the input was replaced by the run skill
+ * VDOT: a watch reading ABOVE the skill rating ('device'), or the engine
+ * fallback ('tanda-fallback', which is `s.v` itself). A watch at or below the
+ * skill rating is used as it is and reports false. `refreshBlendedFitness`
+ * holds the engine at the skill VDOT only when this is true (review
+ * 2026-10-09: a hold for a watch below the skill rating would raise the engine
+ * and the forecast with no change to the LT input).
+ */
+export function resolveLtDanielsInput(
+  s: SimulatorState,
+  opts: { now?: string | Date } = {},
+): { vdot: number | null; coldStartCapped: boolean } {
   const now = opts.now
     ? (opts.now instanceof Date ? opts.now : new Date(opts.now))
     : new Date();
   const resolved = getPhysiologicalVdot(s, { now });
   const v = resolved.vdot;
-  if (v == null || s.triConfig == null) return v;
-  if (resolved.source !== 'device' && resolved.source !== 'tanda-fallback') return v;
+  const uncapped = { vdot: v, coldStartCapped: false };
+  if (v == null || s.triConfig == null) return uncapped;
+  if (resolved.source !== 'device' && resolved.source !== 'tanda-fallback') return uncapped;
   const ceiling = triathleteRunEvidenceCeiling(s, now);
-  if (ceiling != null) return Math.min(v, ceiling);
+  if (ceiling != null) return { vdot: Math.min(v, ceiling), coldStartCapped: false };
   const recentRun = computePredictionInputs(collectRunsFromState(s), now, raceEffortHrFloorForState(s)).recentRun;
   const cap = triColdStartRunCapVdot(s, { recentRaceEffort: recentRun != null && recentRun.t > 0, now });
-  if (cap == null) return v;
-  return resolved.source === 'device' ? Math.min(v, cap) : cap;
+  if (cap == null) return uncapped;
+  if (resolved.source === 'device') {
+    return v > cap ? { vdot: cap, coldStartCapped: true } : uncapped;
+  }
+  return { vdot: cap, coldStartCapped: true };
 }
 
 export function getPhysiologicalVdot(

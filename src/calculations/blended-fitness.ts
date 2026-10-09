@@ -27,7 +27,7 @@ import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, pbAgeWeightsFor, raceAnchorVdot, triColdStartRunCapVdot, ltDanielsInputVdot } from './physiological-vdot';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, pbAgeWeightsFor, raceAnchorVdot, triColdStartRunCapVdot, resolveLtDanielsInput } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -709,24 +709,28 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   if (skillVdot != null && engineVdot > skillVdot) {
     console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
     engineVdot = skillVdot;
-  } else if (skillVdot != null) {
-    // Cold-start hold (2026-10-09). The training paces read s.lt, whose Daniels
-    // input in cold start is the capped figure: min(watch, run skill VDOT), or
-    // the run skill VDOT with no fresh watch (ltDanielsInputVdot). The engine is
-    // held at that same figure, so s.v and the paces describe one number. The
-    // blend under it holds no running data: its LT predictor reads that figure,
-    // its VO2 predictor the cross-trained watch, and the readiness penalties
-    // against the marathon placeholder (the no-data durability cap, low-volume
-    // marathon specificity) would otherwise reach the engine. Those penalties
-    // are race readiness, not capacity (§BZ, the reason PB holders are floored at
-    // PB capacity above), and easy runs would lower the engine through them (the
-    // §CY guarantee). Before the LT input was capped, the watch-inflated LT
-    // propped the blend above the skill cap, so the cap alone held s.v there.
-    const figure = ltDanielsInputVdot(s);
-    const hold = figure != null ? Math.min(figure, skillVdot) : null;
-    if (hold != null && engineVdot < hold) {
-      console.log(`[refreshBlendedFitness] cold-start: engine held at the LT input figure ${hold.toFixed(1)} (blend under readiness penalties ${engineVdot.toFixed(1)}, no running data).`);
-      engineVdot = hold;
+  } else if (skillVdot != null && resolveLtDanielsInput(s).coldStartCapped) {
+    // Cold-start hold (2026-10-09), only where the cap lowered the LT input:
+    // a watch reading above the run skill rating, or no fresh watch (the
+    // engine fallback). There the training paces read s.lt from the run skill
+    // VDOT (resolveLtDanielsInput), and the engine is held at that same figure,
+    // so s.v and the paces describe one number. The blend under it holds no
+    // running data: its LT predictor reads that figure, its VO2 predictor the
+    // cross-trained watch, and the readiness penalties against the marathon
+    // placeholder (the no-data durability cap, low-volume marathon
+    // specificity) would otherwise reach the engine. Those penalties are race
+    // readiness, not capacity (§BZ), and easy runs would lower the engine
+    // through them (the §CY guarantee, da23c2d). Before the LT input was
+    // capped, the watch-inflated LT propped the blend above the skill cap, so
+    // the cap alone held s.v there.
+    // A watch at or below the skill rating is not capped: the LT input is the
+    // watch as before, and the engine stays the blend as before (no hold).
+    // Holding it there would raise the engine and the forecast (watch 40:
+    // 35.1 to 40.0, 70.3 run leg 2:01:45 to 1:48:16) with no change to the
+    // paces, against the premise that the watch overstates running fitness.
+    if (engineVdot < skillVdot) {
+      console.log(`[refreshBlendedFitness] cold-start: engine held at the capped LT input ${skillVdot.toFixed(1)} (blend under readiness penalties ${engineVdot.toFixed(1)}, no running data).`);
+      engineVdot = skillVdot;
     }
   }
 
