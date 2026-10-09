@@ -36,6 +36,7 @@ import { initializeTriathlonSimulator } from '@/state/initialization.triathlon';
 import { getDefaultState, getMutableState, getState, resetState } from '@/state/store';
 import { refreshBlendedFitness } from './blended-fitness';
 import { triRunEasyPaceSec } from '@/workouts/tri-run-pace';
+import { predictTriathlonRace } from './race-prediction.triathlon';
 import { localMondayKey } from '@/utils/local-date';
 
 const NOW = '2026-10-09T08:00:00Z';
@@ -80,12 +81,12 @@ describe('ltDanielsInputVdot: the triathlete run caps reach the LT input', () =>
 
   it('coldStartCapped is true only where the cap replaced the input', () => {
     // Watch above the skill rating: replaced by the skill VDOT.
-    expect(resolveLtDanielsInput(tri({ vo2: 62 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true });
+    expect(resolveLtDanielsInput(tri({ vo2: 62 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true, source: 'device', uncappedVdot: 62 });
     // Watch at or below it: used as it is, not capped.
-    expect(resolveLtDanielsInput(tri({ vo2: 40 }), { now: NOW })).toEqual({ vdot: 40, coldStartCapped: false });
+    expect(resolveLtDanielsInput(tri({ vo2: 40 }), { now: NOW })).toEqual({ vdot: 40, coldStartCapped: false, source: 'device', uncappedVdot: 40 });
     expect(resolveLtDanielsInput(tri({ vo2: SKILL3 }), { now: NOW }).coldStartCapped).toBe(false);
     // No fresh watch (engine fallback): replaced by the skill VDOT.
-    expect(resolveLtDanielsInput(tri({ v: 30 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true });
+    expect(resolveLtDanielsInput(tri({ v: 30 }), { now: NOW })).toEqual({ vdot: SKILL3, coldStartCapped: true, source: 'tanda-fallback', uncappedVdot: 30 });
     // Running evidence: the ceiling applies, which is not the cold-start cap.
     expect(resolveLtDanielsInput(tri({ vo2: 62, pbs: { k10: 3000 } }), { now: NOW }).coldStartCapped).toBe(false);
     // Running mode: never.
@@ -157,12 +158,12 @@ function run(daysAgo: number, km: number, sec: number): RunRow {
   return { startTime: d.toISOString(), distKm: km, durSec: sec, activityType: 'RUNNING' };
 }
 
-function initTri(seed: Partial<SimulatorState>): void {
+function initTri(seed: Partial<SimulatorState>, runSkill: 1 | 2 | 3 | 4 | 5 = 3): void {
   resetState();
   Object.assign(getMutableState(), seed);
   expect(initializeTriathlonSimulator({
     trainingMode: 'triathlon', triDistance: '70.3', experienceLevel: 'intermediate',
-    customRaceDate: planDay(20, 6), triSkillRating: { swim: 3, bike: 3, run: 3 },
+    customRaceDate: planDay(20, 6), triSkillRating: { swim: 3, bike: 3, run: runSkill },
   } as OnboardingState).success).toBe(true);
 }
 
@@ -233,6 +234,46 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
       initTri({ vo2 });
       refreshBlendedFitness(getMutableState());
       expect(getState().v).toBeCloseTo(v, 1);
+    }
+  });
+
+  it('a watch just above the skill rating keeps the 81d38f7 engine: no step at the boundary', () => {
+    // Where the cap lowers a watch-derived LT input, the engine is what the
+    // blend gives with the LT from the uncapped watch, capped at the skill
+    // VDOT: the 81d38f7 engine. Run skill 5 (55.8) caps nothing below 55.8,
+    // so its engine is the uncapped blend, which is 81d38f7's figure before
+    // its skill cap. 5a255db held every watch above 44.3 at 44.3: watch 44.3
+    // read 39.35 and 44.4 read 44.31, a 4.96 VDOT step for 0.1 on the watch,
+    // with the 70.3 run leg 12.5 min faster (review 2026-10-09).
+    const engine: Record<number, number> = {};
+    const runLeg: Record<number, number> = {};
+    for (const vo2 of [44.3, 44.4, 46, 48, 50, 62]) {
+      initTri({ vo2 });
+      refreshBlendedFitness(getMutableState());
+      engine[vo2] = getState().v!;
+      runLeg[vo2] = predictTriathlonRace(getMutableState())!.runSec;
+      // The paces follow the capped figure whatever the engine reads.
+      expect(getState().lt).toBe(288);
+      if (vo2 >= 50) continue;
+      initTri({ vo2 }, 5);
+      refreshBlendedFitness(getMutableState());
+      expect(engine[vo2]).toBeCloseTo(getState().v!, 6);
+    }
+    expect(engine[44.3]).toBeCloseTo(39.35, 2);
+    expect(engine[44.4]).toBeCloseTo(39.37, 2);
+    expect(engine[46]).toBeCloseTo(40.91, 2);
+    expect(engine[48]).toBeCloseTo(42.97, 2);
+    // Continuity across the boundary, in the engine and in the run leg.
+    expect(Math.abs(engine[44.4] - engine[44.3])).toBeLessThan(0.05);
+    expect(Math.abs(runLeg[44.4] - runLeg[44.3])).toBeLessThan(10);
+    // A watch far above the rating still reads the skill VDOT, as at 81d38f7.
+    expect(engine[50]).toBeCloseTo(SKILL3, 9);
+    expect(engine[62]).toBeCloseTo(SKILL3, 9);
+    // The engine rises with the watch and never passes the skill VDOT.
+    const seq = [44.3, 44.4, 46, 48, 50, 62].map(v => engine[v]);
+    for (let i = 1; i < seq.length; i++) {
+      expect(seq[i]).toBeGreaterThanOrEqual(seq[i - 1]);
+      expect(seq[i]).toBeLessThanOrEqual(SKILL3 + 1e-9);
     }
   });
 

@@ -304,9 +304,10 @@ describe('KNOWN LIMITATION: a lone run is never a race effort, and two runs need
  * running PB, no race anchor and no medium+ HR-vs-pace calibration has the
  * engine VDOT (s.v) and the forecast held at their run skill rating. Since
  * 2026-10-09 the run paces follow the same figure: s.lt's Daniels input is
- * capped too (ltDanielsInputVdot, tri-run-lt-cap.test.ts), and the engine is
- * held at that input wherever the cap lowered it (a watch above the skill
- * rating, or no fresh watch). Easy runs never enter the blend's recent-run
+ * capped too (ltDanielsInputVdot, tri-run-lt-cap.test.ts). Where the cap
+ * lowered a watch, the engine stays what the blend gives with the LT from the
+ * uncapped watch, capped at the skill rating (the 81d38f7 engine); with no
+ * fresh watch it is held at the skill rating. Easy runs never enter the blend's recent-run
  * slot (SCIENCE_LOG §CY), so they must not lift the cap either. In 57935d0 the
  * gate read the window's run count: two weeks of easy jogging at 6:30/km
  * switched the cap off and the engine fell back to the watch number, 44.3 to

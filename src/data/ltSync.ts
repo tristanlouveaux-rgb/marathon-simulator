@@ -197,35 +197,19 @@ export function recomputeLT(
   // Same inputs as the LT detail page (buildLTInputs): one construction, so
   // the applied s.lt and the displayed derivation cannot diverge.
   const inputs = buildLTInputs(s, { now, garmin });
-
-  // Derived-only result (ignores Garmin). Used for the conflict check.
-  const derivedOnly = deriveLT({ ...inputs, garmin: null });
-
-  // Resolved result (priority chain applied).
-  const resolved = resolveLT(inputs);
+  const decision = decideLT(s, inputs);
 
   // If user has overridden, normally apply it. Per CLAUDE.md "Manually-set
   // Benchmarks Yield to Improvements": auto-clear the override when the derived
-  // estimate clearly beats it (faster pace, ≥3 s/km gap, derived confidence
-  // 'medium' or 'high'). The paired LTHR comes along. It's a single
-  // physiological calibration, not a separable axis.
+  // estimate clearly beats it (decideLT).
   if (s.ltOverride) {
-    const ovrPace = s.ltOverride.ltPaceSecKm;
-    const dPace = derivedOnly.ltPaceSecKm;
-    const dConf = derivedOnly.confidence;
-    const beats =
-      dPace != null &&
-      ovrPace - dPace >= LT_AUTO_IMPROVE_GAP_SEC_KM &&
-      (dConf === 'high' || dConf === 'medium');
-    if (beats) {
-      console.log(`[lt] override auto-improved: user ${ovrPace}s/km → derived ${Math.round(dPace!)}s/km (${dConf} conf)`);
+    if (decision.overrideBeaten) {
+      console.log(`[lt] override auto-improved: user ${s.ltOverride.ltPaceSecKm}s/km → derived ${Math.round(decision.derivedPaceSecKm!)}s/km (${decision.derivedConfidence} conf)`);
       delete s.ltOverride;
-      // Recompute resolved without the override so we apply the derived path.
-      const resolvedNoOverride = resolveLT({ ...inputs, override: null });
-      applyResolved(s, resolvedNoOverride, now);
-      return resolvedNoOverride.source === 'garmin' ? 'garmin' : 'derived';
+      applyResolved(s, decision.resolved, now);
+      return decision.resolved.source === 'garmin' ? 'garmin' : 'derived';
     }
-    applyResolved(s, resolved, now);
+    applyResolved(s, decision.resolved, now);
     return 'override';
   }
 
@@ -236,9 +220,56 @@ export function recomputeLT(
   // clearly better (faster ≥3s/km at medium+ confidence). Clear any pending
   // suggestion from the old flow so stale cards don't linger.
   if (s.ltSuggestion) delete s.ltSuggestion;
-  if (!resolved.ltPaceSecKm) return 'none';
-  applyResolved(s, resolved, now);
-  return resolved.source === 'garmin' ? 'garmin' : 'derived';
+  if (!decision.resolved.ltPaceSecKm) return 'none';
+  applyResolved(s, decision.resolved, now);
+  return decision.resolved.source === 'garmin' ? 'garmin' : 'derived';
+}
+
+/**
+ * The LT `recomputeLT` applies for `inputs`. Pure: reads `s.ltOverride` and
+ * writes nothing. A user override applies unless the derived-only estimate
+ * (no Garmin) clearly beats it: faster by at least LT_AUTO_IMPROVE_GAP_SEC_KM
+ * at 'medium' or 'high' confidence. The paired LTHR comes along; it is a
+ * single physiological calibration, not a separable axis. Then
+ * `overrideBeaten` is true and `resolved` is the chain without the override.
+ */
+function decideLT(
+  s: SimulatorState,
+  inputs: DeriveLTInput,
+): { resolved: ReturnType<typeof resolveLT>; overrideBeaten: boolean; derivedPaceSecKm: number | null; derivedConfidence: string | null } {
+  const resolved = resolveLT(inputs);
+  if (!s.ltOverride) return { resolved, overrideBeaten: false, derivedPaceSecKm: null, derivedConfidence: null };
+  // Derived-only result (ignores Garmin), for the override check.
+  const derivedOnly = deriveLT({ ...inputs, garmin: null });
+  const dPace = derivedOnly.ltPaceSecKm;
+  const dConf = derivedOnly.confidence;
+  const beats =
+    dPace != null &&
+    s.ltOverride.ltPaceSecKm - dPace >= LT_AUTO_IMPROVE_GAP_SEC_KM &&
+    (dConf === 'high' || dConf === 'medium');
+  if (!beats) return { resolved, overrideBeaten: false, derivedPaceSecKm: dPace ?? null, derivedConfidence: dConf ?? null };
+  return { resolved: resolveLT({ ...inputs, override: null }), overrideBeaten: true, derivedPaceSecKm: dPace, derivedConfidence: dConf };
+}
+
+/**
+ * The LT pace (s/km, rounded as `recomputeLT` stores it) that `recomputeLT`
+ * would apply now if the Daniels input were `danielsVdot` instead of
+ * `ltDanielsInputVdot(s)`. Every other input is `buildLTInputs(s)`. Pure:
+ * writes nothing. When the chain resolves no pace, `recomputeLT` leaves s.lt
+ * as it is, so this returns s.lt.
+ *
+ * Used by the triathlon cold-start engine hold (`refreshBlendedFitness`): where
+ * the cap lowered a watch-derived LT input, the engine stays what the blend
+ * gives with the LT from the uncapped watch, capped at the run skill VDOT.
+ */
+export function ltPaceForDanielsInput(
+  s: SimulatorState,
+  danielsVdot: number | null,
+  opts: { now?: string } = {},
+): number | null {
+  const now = opts.now ?? new Date().toISOString();
+  const { resolved } = decideLT(s, { ...buildLTInputs(s, { now }), vdot: danielsVdot });
+  return resolved.ltPaceSecKm != null ? Math.round(resolved.ltPaceSecKm) : (s.lt ?? null);
 }
 
 function applyResolved(s: SimulatorState, resolved: ReturnType<typeof resolveLT>, now: string): void {

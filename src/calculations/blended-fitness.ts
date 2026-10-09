@@ -24,7 +24,7 @@ import { computePredictionInputs, measuredWeeklyKm, collectRunsFromState } from 
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
-import { recomputeLT } from '@/data/ltSync';
+import { recomputeLT, ltPaceForDanielsInput } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
 import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, raceAnchorVdot, triColdStartRunCapVdot, resolveLtDanielsInput } from './physiological-vdot';
@@ -533,12 +533,18 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // an old PB keeps full weight (§BV). Stored and displayed PBs never change;
   // only their weight in the model does.
   const pbAgeWeights = modelPbAgeWeightsIfMeasured(s.pbs, s, inputs, new Date());
-  const blended = blendPredictions(
+  const pbs = s.pbs;
+  const b = s.b;
+  const rd = s.rd;
+  // The blend as a function of its LT predictor: the refresh reads s.lt; the
+  // triathlon cold-start hold below also reads it at the LT from the uncapped
+  // watch. Every other input is the same.
+  const blendForLt = (ltPace: number | null) => blendPredictions(
     targetDistM,
-    s.pbs,
-    s.lt ?? null,
+    pbs,
+    ltPace,
     effectiveVo2max(s),
-    s.b,
+    b,
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
     s.athleteTier ?? undefined,
@@ -551,6 +557,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
     pbAgeWeights,
   );
+  const blended = blendForLt(s.lt ?? null);
 
   if (!blended || blended <= 0 || !isFinite(blended)) return false;
 
@@ -560,7 +567,6 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // predicted to keep one outlier from skewing future predictions.
   const calibration = computeRunCalibration(s.runRaceLog);
   s.runCalibration = calibration;
-  const calibratedBlend = applyRunCalibrationBias(blended, s.rd, calibration);
 
   // Long-run durability cap. Applies a multiplicative penalty when the
   // longest recent run is below the distance-specific threshold (orthogonal
@@ -572,19 +578,22 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Floor at any demonstrated same-distance PB after the cap (mirror of
   // initialization.ts): the cap and calibration bias must not push the anchor
   // slower than a proven time absent detraining evidence. Estimated volume does
-  // not count as evidence (see demonstratedPBFloor).
-  const durabilityAdjustedBlend = demonstratedPBFloor(
-    calibratedBlend * durability.multiplier,
+  // not count as evidence (see demonstratedPBFloor). Calibration bias, the
+  // durability cap and this floor, as a function of the blend (the cold-start
+  // hold below runs a second blend through the same steps).
+  const readinessTimeFor = (blendedTime: number): number => demonstratedPBFloor(
+    applyRunCalibrationBias(blendedTime, rd, calibration) * durability.multiplier,
     targetDistM,
-    s.pbs,
+    pbs,
     {
       weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
       weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
       recentRun: inputs.recentRun ?? s.rec ?? null,
-      b: s.b,
+      b,
       pbAgeWeights,
     },
   );
+  const durabilityAdjustedBlend = readinessTimeFor(blended);
 
   s.blendedRaceTimeSec = durabilityAdjustedBlend;
 
@@ -709,28 +718,41 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   if (skillVdot != null && engineVdot > skillVdot) {
     console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
     engineVdot = skillVdot;
-  } else if (skillVdot != null && resolveLtDanielsInput(s).coldStartCapped) {
-    // Cold-start hold (2026-10-09), only where the cap lowered the LT input:
-    // a watch reading above the run skill rating, or no fresh watch (the
-    // engine fallback). There the training paces read s.lt from the run skill
-    // VDOT (resolveLtDanielsInput), and the engine is held at that same figure,
-    // so s.v and the paces describe one number. The blend under it holds no
-    // running data: its LT predictor reads that figure, its VO2 predictor the
-    // cross-trained watch, and the readiness penalties against the marathon
-    // placeholder (the no-data durability cap, low-volume marathon
-    // specificity) would otherwise reach the engine. Those penalties are race
-    // readiness, not capacity (§BZ), and easy runs would lower the engine
-    // through them (the §CY guarantee, da23c2d). Before the LT input was
-    // capped, the watch-inflated LT propped the blend above the skill cap, so
-    // the cap alone held s.v there.
+  } else if (skillVdot != null) {
+    // Cold-start hold (2026-10-09), only where the cap lowered the LT input
+    // (resolveLtDanielsInput): a watch reading above the run skill rating, or
+    // no fresh watch (the engine fallback). The training paces then read s.lt
+    // from the run skill VDOT, and the blend under the engine reads that
+    // capped LT too. The paces were the only change asked for, so the engine
+    // stays what it was when s.lt came from the watch (81d38f7):
+    //   - Watch above the rating: the engine of the same blend with the LT
+    //     from the uncapped watch (ltPaceForDanielsInput), capped at the skill
+    //     VDOT. It meets the uncapped engine at watch = skill VDOT, so there
+    //     is no step, and a watch far above the rating (62) still reads the
+    //     skill VDOT. Holding at the skill VDOT for every watch above it
+    //     raised the engine by up to 4.9 VDOT just above the rating, with a
+    //     5 VDOT step at the boundary (review 2026-10-09).
+    //   - No fresh watch: the skill VDOT. The fallback LT input was s.v
+    //     itself, which slid 44.3 to 25.0 over five refreshes at 81d38f7.
+    // The readiness penalties against the marathon placeholder (no-data
+    // durability cap, low-volume marathon specificity) stay off the engine
+    // as they did at 81d38f7 (§BZ, the §CY guarantee from da23c2d): with the
+    // watch-derived LT the blend sat above the skill cap.
     // A watch at or below the skill rating is not capped: the LT input is the
-    // watch as before, and the engine stays the blend as before (no hold).
-    // Holding it there would raise the engine and the forecast (watch 40:
-    // 35.1 to 40.0, 70.3 run leg 2:01:45 to 1:48:16) with no change to the
-    // paces, against the premise that the watch overstates running fitness.
-    if (engineVdot < skillVdot) {
-      console.log(`[refreshBlendedFitness] cold-start: engine held at the capped LT input ${skillVdot.toFixed(1)} (blend under readiness penalties ${engineVdot.toFixed(1)}, no running data).`);
-      engineVdot = skillVdot;
+    // watch, and the engine is the blend, as before.
+    const ltInput = resolveLtDanielsInput(s);
+    if (ltInput.coldStartCapped) {
+      let held = skillVdot;
+      if (ltInput.source === 'device' && ltInput.uncappedVdot != null) {
+        const blendedUncapped = blendForLt(ltPaceForDanielsInput(s, ltInput.uncappedVdot));
+        if (blendedUncapped && blendedUncapped > 0 && isFinite(blendedUncapped)) {
+          held = Math.min(skillVdot, cv(targetDistM, readinessTimeFor(blendedUncapped)));
+        }
+      }
+      if (held > engineVdot) {
+        console.log(`[refreshBlendedFitness] cold-start: engine held at ${held.toFixed(1)} (${ltInput.source === 'device' ? 'blend with the uncapped watch LT, capped at the run skill VDOT' : 'run skill VDOT, no fresh watch'}; blend on the capped LT ${engineVdot.toFixed(1)}).`);
+        engineVdot = held;
+      }
     }
   }
 
