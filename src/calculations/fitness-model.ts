@@ -13,7 +13,7 @@
  * Safe upper bound varies by athlete tier (see TIER_ACWR_CONFIG).
  */
 
-import type { Week, Workout, PhysiologyDayEntry, SportKey } from '@/types';
+import type { Week, Workout, PhysiologyDayEntry, SportKey, SimulatorState } from '@/types';
 import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB, plannedTssPerMin } from '@/constants';
 import { taperFraction } from '@/workouts/phases';
@@ -27,6 +27,7 @@ import { plausibleLtHR } from '@/calculations/lt-derivation';
 import { getBeta, resolveBiologicalSex, type BiologicalSex, type BiologicalSexSource } from '@/calculations/trimp';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
+import { typedWeeklyKm } from '@/calculations/athlete-archetype';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -1140,12 +1141,35 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
 const taperMultiplier = taperFraction;
 
 /**
+ * Weekly TSS of the athlete's typed weekly running km (manual entry or the
+ * review-step slider; typedWeeklyKm), priced the way the Plan card prices an
+ * easy run: km x easy pace (planCardBaseMinPerKm: s.pac.e, the card's 5.5 min/km
+ * when unset) x plannedTssPerMin('easy') (the RPE-4 row of TL_PER_MIN, 0.92
+ * TSS/min). Undefined when no weekly km was typed.
+ *
+ * PLANNING side: the weekly load target baseline for an athlete with no synced
+ * history (computePlannedWeekTSS, between ctlBaseline and runs/week x 50).
+ * Every typed km is valued as easy running: a typed number says nothing about
+ * intensity, and easy running is the bulk of a recreational week (limitation,
+ * SCIENCE_LOG). Runs per week does not enter: the minutes at easy pace are the
+ * same however the km are split.
+ */
+export function typedVolumeWeeklyTSS(
+  s: Pick<SimulatorState, 'detectedWeeklyKm' | 'weeklyVolumeConfirmed'> & { pac?: { e?: number } | null },
+): number | undefined {
+  const km = typedWeeklyKm(s);
+  if (km == null) return undefined;
+  return km * planCardBaseMinPerKm(s) * plannedTssPerMin('easy');
+}
+
+/**
  * Compute the planned weekly TSS target for a given phase.
  *
  * Uses the MEDIAN of historicWeeklyTSS as baseline (not the EMA).
  * Median reflects "what you normally do" without being dragged down by rest
  * weeks or up by outlier peaks. Falls back to ctlBaseline (EMA) if no
- * weekly history, then to runs/week × 50 as last resort.
+ * weekly history, then to the typed weekly km priced as easy running
+ * (typedVolumeWeeklyTSS), then to runs/week × 50 as last resort.
  *
  * @param historicWeeklyTSS - Array of recent weekly Signal A TSS values
  * @param ctlBaseline - 42-day EMA of Signal A (fallback)
@@ -1154,6 +1178,7 @@ const taperMultiplier = taperFraction;
  * @param runsPerWeek - Fallback when no history at all
  * @param weekInPhase - For taper: which week within taper (1-indexed; totalPhaseWeeks = race week)
  * @param totalPhaseWeeks - For taper: total taper weeks
+ * @param typedWeeklyTSS - typedVolumeWeeklyTSS: the typed weekly km's TSS, used when no history or EMA exists
  */
 export function computePlannedWeekTSS(
   historicWeeklyTSS: number[] | undefined,
@@ -1163,8 +1188,9 @@ export function computePlannedWeekTSS(
   runsPerWeek?: number,
   weekInPhase?: number,
   totalPhaseWeeks?: number,
+  typedWeeklyTSS?: number,
 ): number {
-  // 1. Determine baseline: median of history > EMA > fallback
+  // 1. Determine baseline: median of history > EMA > typed km > fallback
   let baseline: number;
   const hist = historicWeeklyTSS?.filter(v => v > 0) ?? [];
   if (hist.length >= 3) {
@@ -1175,6 +1201,8 @@ export function computePlannedWeekTSS(
       : sorted[mid];
   } else if (ctlBaseline && ctlBaseline > 0) {
     baseline = ctlBaseline;
+  } else if (typedWeeklyTSS != null && typedWeeklyTSS > 0) {
+    baseline = typedWeeklyTSS;
   } else {
     baseline = (runsPerWeek ?? 3) * 50; // last resort
   }
@@ -1215,6 +1243,7 @@ export function computePlannedSignalB(
   weekInPhase?: number,
   totalPhaseWeeks?: number,
   sportBaselineByType?: Record<string, { avgSessionRawTSS: number; sessionsPerWeek: number }>,
+  typedWeeklyTSS?: number,
 ): number {
   // historicWeeklyTSS is Signal A. It includes cross-training at runSpec-discounted weight.
   // We need the running-only baseline so we can add the full Signal B cross-training budget
@@ -1241,8 +1270,9 @@ export function computePlannedSignalB(
     ? Math.max(0, ctlBaseline - discountedCrossTraining)
     : undefined;
 
+  // The typed weekly km is running only, so it needs no cross-training correction.
   const runningTSS = computePlannedWeekTSS(
-    runningOnlyTSS, runningOnlyCTL, phase, athleteTier, runsPerWeek, weekInPhase, totalPhaseWeeks,
+    runningOnlyTSS, runningOnlyCTL, phase, athleteTier, runsPerWeek, weekInPhase, totalPhaseWeeks, typedWeeklyTSS,
   );
 
   return Math.round(runningTSS + crossTrainingBudget);

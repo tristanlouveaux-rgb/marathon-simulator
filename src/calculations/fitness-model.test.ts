@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeSameSignalTSB, CTL_DECAY, ATL_DECAY, computePlannedWeekTSS, computeStrengthRpeTSS } from './fitness-model';
+import { computeSameSignalTSB, CTL_DECAY, ATL_DECAY, computePlannedWeekTSS, computePlannedSignalB, computeStrengthRpeTSS, typedVolumeWeeklyTSS } from './fitness-model';
+import { TL_PER_MIN } from '@/constants';
 import type { Week } from '@/types';
 
 // Minimal Week factory. Only fields needed for computeWeekRawTSS
@@ -138,6 +139,16 @@ describe('computePlannedWeekTSS', () => {
     expect(result).toBe(194);
   });
 
+  it('typed weekly km TSS sits between the EMA and rw × 50 in the baseline chain', () => {
+    // No history, no EMA: the typed km's TSS (230) replaces 4 × 50.
+    expect(computePlannedWeekTSS(undefined, undefined, 'base', undefined, 4, undefined, undefined, 230)).toBe(223); // 230 × 0.97
+    // Synced history and the EMA still win over the typed km.
+    expect(computePlannedWeekTSS([100, 100, 100], undefined, 'base', undefined, 4, undefined, undefined, 230)).toBe(97);
+    expect(computePlannedWeekTSS([100], 120, 'base', undefined, 4, undefined, undefined, 230)).toBe(116);
+    // Signal B carries it through unchanged (typed km is running only).
+    expect(computePlannedSignalB(undefined, undefined, 'base', undefined, 4, undefined, undefined, undefined, 230)).toBe(223);
+  });
+
   it('higher tier athletes get bigger build ramps', () => {
     const hist = [200, 200, 200, 200, 200];
     const beginner = computePlannedWeekTSS(hist, 195, 'build', 'beginner');
@@ -251,5 +262,28 @@ describe('computeStrengthRpeTSS', () => {
       { activityType: 'STRENGTH_TRAINING', durationSec: 0, rpe: 7 },
       true,
     )).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// typedVolumeWeeklyTSS
+// ---------------------------------------------------------------------------
+
+describe('typedVolumeWeeklyTSS', () => {
+  it('prices the typed weekly km as easy running at the athlete\'s easy pace', () => {
+    // 50 km at 5:00/km = 250 min x 0.92 TSS/min (TL_PER_MIN[4], the easy-run row).
+    const tss = typedVolumeWeeklyTSS({ detectedWeeklyKm: 50, weeklyVolumeConfirmed: true, pac: { e: 300 } });
+    expect(tss).toBeCloseTo(250 * TL_PER_MIN[4], 6);
+    expect(tss).toBeCloseTo(230, 6);
+  });
+
+  it('uses the Plan card easy pace (5.5 min/km) when no paces are set', () => {
+    expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 10, weeklyVolumeConfirmed: true })).toBeCloseTo(10 * 5.5 * TL_PER_MIN[4], 6);
+  });
+
+  it('is undefined unless the weekly km was typed or confirmed', () => {
+    expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 50, pac: { e: 300 } })).toBeUndefined();
+    expect(typedVolumeWeeklyTSS({ detectedWeeklyKm: 0, weeklyVolumeConfirmed: true, pac: { e: 300 } })).toBeUndefined();
+    expect(typedVolumeWeeklyTSS({ weeklyVolumeConfirmed: true, pac: { e: 300 } })).toBeUndefined();
   });
 });
