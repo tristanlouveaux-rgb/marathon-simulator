@@ -15,6 +15,7 @@ import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { planRampArchetype } from '@/calculations/athlete-archetype';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
@@ -832,7 +833,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       : 0;
     const forecast = calculateForecast(
       curr, runsPerWeek + effectiveCrossSessions + commuteSessions, stateForForecast, runnerType, forecastAnchorSec,
-      { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
+      // planRampArchetype: the archetype the plan engine ramps with (synced, else
+      // typed). s.onboarding is assigned further down, so read this build's.
+      { baselineKm: s.detectedWeeklyKm, archetype: planRampArchetype({ ...s, onboarding: state }) },
     );
     s.expectedFinal = forecast.forecastVdot;
     // Race-day durability from the long runs the plan prescribes (race-day-durability),

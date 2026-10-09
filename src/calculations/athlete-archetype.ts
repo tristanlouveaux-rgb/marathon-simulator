@@ -109,10 +109,17 @@ function yearsBetween(isoFrom: string | null | undefined, isoTo: Date): number |
   return (isoTo.getTime() - from.getTime()) / (365.25 * 24 * 3600 * 1000);
 }
 
+/** The state fields gatherEvidence reads. */
+export type ArchetypeEvidenceState = Pick<
+  State,
+  | 'detectedWeeklyKm' | 'extendedHistoryKm' | 'historicWeeklyKm' | 'onboardingRunHistory'
+  | 'sportBaselineByType' | 'onboarding' | 'firstStravaActivityISO'
+>;
+
 /**
  * Build the evidence object from state. Pure. No side effects.
  */
-export function gatherEvidence(s: State, now: Date = new Date()): ArchetypeEvidence {
+export function gatherEvidence(s: ArchetypeEvidenceState, now: Date = new Date()): ArchetypeEvidence {
   const currentWeeklyKm = s.detectedWeeklyKm ?? 0;
   const weeklyKmHistory: number[] = s.extendedHistoryKm?.length
     ? s.extendedHistoryKm
@@ -258,6 +265,73 @@ export function detectArchetype(s: State, now: Date = new Date()): ArchetypeResu
     evidence,
     computedAt: now.toISOString(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Typed weekly volume (no sync): the same classifier, fed the typed km
+// ---------------------------------------------------------------------------
+
+/** The state fields the typed-volume archetype reads. */
+export type TypedVolumeState = ArchetypeEvidenceState & Pick<State, 'weeklyVolumeConfirmed'>;
+
+/**
+ * The weekly running km the athlete typed (manual entry or the review-step
+ * slider: both write s.detectedWeeklyKm and set s.weeklyVolumeConfirmed), or
+ * undefined when none was typed or confirmed. A sync that aggregates history
+ * overwrites detectedWeeklyKm with its own 4-week mean, so after a sync this
+ * returns the synced km; every caller reads synced fields (athleteArchetype,
+ * historicWeeklyTSS, ctlBaseline) first, so the typed reading only applies
+ * while no sync has written them.
+ */
+export function typedWeeklyKm(s: Pick<State, 'detectedWeeklyKm' | 'weeklyVolumeConfirmed'>): number | undefined {
+  if (!s.weeklyVolumeConfirmed) return undefined;
+  const km = s.detectedWeeklyKm;
+  return km != null && km > 0 ? km : undefined;
+}
+
+/**
+ * Archetype for an athlete whose only volume signal is a typed weekly km
+ * (Tristan, 2026-10-09: typed weekly km shapes the plan). Runs the same
+ * classifier a sync runs (gatherEvidence + classify) on the typed km.
+ *
+ * A typed number supplies the current weekly km only. For the classifier's
+ * other inputs, each missing one lands on its most conservative existing reading:
+ *  - Week-to-week variability (weeklyKmCV): no history reads as 0, so 50 km or
+ *    more classifies high-mileage (x1.00 start, 3% ramp), the slowest ramp in
+ *    ARCHETYPE_PARAMS, not consistent-runner (x1.05, 7%).
+ *  - Recency of a 20 km week (weeksSinceConsistent): detrained-with-history
+ *    (x1.10 + 5 km start, 15 km floor, 10% ramp) needs a layoff of 3+ weeks
+ *    (classify), which a typed number cannot show. Typed km below 20 with a
+ *    marathon PB therefore classifies as consistent-runner, the classifier's own
+ *    fallback ("conservative enough to be safe if wrong").
+ *  - Cross-training (sportBaselineByType) and the longest run
+ *    (onboardingRunHistory): read from state as the classifier does; a sync
+ *    writes both, so with typed km alone they are absent and claim nothing.
+ * Runs per week is not a classifier input.
+ *
+ * Undefined when nothing was typed, or when synced weekly history exists: that
+ * athlete is classified from the history (detectArchetype in the sync paths,
+ * the main.ts launch back-fill).
+ */
+export function typedVolumeArchetype(s: TypedVolumeState): Archetype | undefined {
+  if (typedWeeklyKm(s) == null) return undefined;
+  if ((s.historicWeeklyKm?.length ?? 0) > 0 || (s.extendedHistoryKm?.length ?? 0) > 0) return undefined;
+  const archetype = classify(gatherEvidence(s));
+  return archetype === 'detrained-with-history' ? 'consistent-runner' : archetype;
+}
+
+/**
+ * The archetype every reader of the volume ramp uses: the synced
+ * classification (s.athleteArchetype, written by the Strava and Apple Health
+ * syncs) when present, else the typed-volume classification. One source for
+ * the plan engine (planEngineStateInputs) and the race forecasts that
+ * integrate the same ramp (planForecastWeeklyKm, race-forecast-simulation,
+ * the onboarding forecast), so a forecast credits the ramp the plan builds.
+ */
+export function planRampArchetype(
+  s: TypedVolumeState & { athleteArchetype?: { archetype?: Archetype } | null },
+): Archetype | undefined {
+  return s.athleteArchetype?.archetype ?? typedVolumeArchetype(s);
 }
 
 // ---------------------------------------------------------------------------

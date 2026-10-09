@@ -2,7 +2,7 @@ import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/typ
 import type { SimulatorState } from '@/types/state';
 import type { SessionIntent, SlotType } from './intent_to_workout';
 import { RUN_PACE_FACTOR_VS_EASY } from './intent_to_workout';
-import { weekVolumeBudgetKm, ARCHETYPE_PARAMS, type Archetype } from '@/calculations/athlete-archetype';
+import { weekVolumeBudgetKm, ARCHETYPE_PARAMS, planRampArchetype, type Archetype, type TypedVolumeState } from '@/calculations/athlete-archetype';
 import { computePlanPhases, computeRunningPlanPhases, isSharpeningBlock, taperFraction } from './phases';
 import { planTrainingWeeks } from './race-week-layout';
 
@@ -30,7 +30,8 @@ export interface PlanContext {
   /** Slot types the user opted out of on the workout-preview step. Filtered from
    *  the quality priority list before slot allocation. */
   excludedSlots?: string[];
-  /** Current baseline weekly running km (s.detectedWeeklyKm). When present together
+  /** Current baseline weekly running km (s.detectedWeeklyKm: synced, or typed in
+   *  onboarding). When present together
    *  with `archetype`, week-1 volume is anchored to baseline and ramps toward
    *  ability-driven peak per the archetype-specific slope. Omit to keep legacy
    *  ability-driven behaviour (consistent runner at race-target volume). */
@@ -41,7 +42,8 @@ export interface PlanContext {
    *  BudgetRunFit leaves it out (currentWeeklyKm), so the Plan tab never states an
    *  estimate as the runner's current weekly running. */
   baselineKmIsEstimate?: boolean;
-  /** Athlete archetype (s.athleteArchetype.archetype). Gates the ramp slope —
+  /** Athlete archetype (planRampArchetype: s.athleteArchetype.archetype, else the
+   *  typed-volume classification). Gates the ramp slope —
    *  detrained-with-history ramps faster than cross-trained-no-impact. Required
    *  alongside `baselineKm` for the ramp to fire. */
   archetype?: Archetype;
@@ -1013,24 +1015,29 @@ export function plannedPeakWeeklyKm(inputs: PlanShapeInputs): number {
 
 /**
  * The plan-engine inputs generateWeekWorkouts reads from state rather than from
- * its arguments: the ramp baseline (detected weekly km; in continuous mode the
- * plan's own starting volume s.wkm) and the athlete archetype (in continuous mode
- * the neutral 'unknown'). Lives here so the generator, the week-debrief preview
+ * its arguments: the ramp baseline (detected or typed weekly km; in continuous
+ * mode the plan's own starting volume s.wkm) and the athlete archetype (synced,
+ * else classified from the typed km, planRampArchetype; in continuous mode the
+ * neutral 'unknown'). Lives here so the generator, the week-debrief preview
  * and the race-day forecast read one definition (re-exported by generator.ts).
  */
 export function planEngineStateInputs(
   s: Pick<SimulatorState, 'detectedWeeklyKm' | 'continuousMode' | 'wkm' | 'athleteArchetype'>
-    & Partial<Pick<SimulatorState, 'sharpenBlock'>>,
+    & Partial<Pick<SimulatorState, 'sharpenBlock'>>
+    & Partial<TypedVolumeState>,
 ): { baselineKm: number | undefined; archetype: Archetype | undefined; baselineKmIsEstimate: boolean } {
   // A sharpening block needs a weekly volume too (its budgets ramp from current
   // volume), so it takes the continuous-mode fallback when nothing is synced:
   // the plan's own starting volume s.wkm and the neutral 'unknown' archetype.
   // With no synced or entered volume, s.wkm is the runs-a-week estimate
   // (initialization.ts freqVolumeEstimate or the beginner cap): baselineKmIsEstimate.
+  // A typed weekly km (s.detectedWeeklyKm with s.weeklyVolumeConfirmed) ramps
+  // like a synced one: its archetype comes from the same classifier
+  // (typedVolumeArchetype), so the ramp fires without a sync.
   const fallback = !!s.continuousMode || !!s.sharpenBlock;
   const baselineKm = s.detectedWeeklyKm
     ?? (fallback && s.wkm && s.wkm > 0 ? s.wkm : undefined);
-  const archetype = s.athleteArchetype?.archetype
+  const archetype = planRampArchetype(s)
     ?? (fallback ? 'unknown' as const : undefined);
   return { baselineKm, archetype, baselineKmIsEstimate: baselineKm != null && s.detectedWeeklyKm == null };
 }
@@ -1040,7 +1047,7 @@ export type RunningPlanState = Pick<
   SimulatorState,
   'rw' | 'rd' | 'typ' | 'tw' | 'v' | 'pac' | 'wks' | 'onboarding' | 'continuousMode'
   | 'detectedWeeklyKm' | 'wkm' | 'athleteArchetype'
-> & Partial<Pick<SimulatorState, 'sharpenBlock'>>;
+> & Partial<Pick<SimulatorState, 'sharpenBlock'>> & Partial<TypedVolumeState>;
 
 /** The sharpening-block engine inputs stored on state (s.sharpenBlock), or undefined. */
 export function sharpeningInputsFromState(

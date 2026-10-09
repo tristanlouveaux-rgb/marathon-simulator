@@ -6,6 +6,9 @@ import {
   startingWeeklyKm,
   weekVolumeBudgetKm,
   ARCHETYPE_PARAMS,
+  typedWeeklyKm,
+  typedVolumeArchetype,
+  planRampArchetype,
   type ArchetypeEvidence,
 } from './athlete-archetype';
 import type { SimulatorState } from '@/types/state';
@@ -340,5 +343,39 @@ describe('gatherEvidence', () => {
     }));
     expect(eBike.impactSportPresent).toBe(false);
     expect(eBike.crossTrainingHoursPerWeek).toBeGreaterThan(0);
+  });
+});
+
+describe('typedVolumeArchetype (weekly km typed in onboarding, no sync)', () => {
+  const typed = (km: number, overrides: Partial<SimulatorState> = {}) =>
+    emptyState({ detectedWeeklyKm: km, weeklyVolumeConfirmed: true, ...overrides });
+
+  it('runs the sync classifier on the typed km', () => {
+    expect(typedVolumeArchetype(typed(50))).toBe('high-mileage');      // no history reads as steady (CV 0): slowest ramp
+    expect(typedVolumeArchetype(typed(30))).toBe('consistent-runner');
+    expect(typedVolumeArchetype(typed(15))).toBe('consistent-runner'); // classifier fallback, 10 to 20 km
+    expect(typedVolumeArchetype(typed(5))).toBe('sedentary-novice');
+  });
+
+  it('never reads a typed km as a layoff: under 20 km with a marathon PB is consistent, not detrained', () => {
+    const s = typed(15, { onboarding: { pbs: { m: 14400 } } as SimulatorState['onboarding'] });
+    expect(classify(gatherEvidence(s))).toBe('detrained-with-history');
+    expect(typedVolumeArchetype(s)).toBe('consistent-runner');
+  });
+
+  it('is undefined without a typed or confirmed km, or once synced weekly history exists', () => {
+    expect(typedVolumeArchetype(emptyState({ detectedWeeklyKm: 30 }))).toBeUndefined();
+    expect(typedVolumeArchetype(typed(0))).toBeUndefined();
+    expect(typedVolumeArchetype(typed(30, { historicWeeklyKm: [30, 30, 30] }))).toBeUndefined();
+    expect(typedWeeklyKm(emptyState({ detectedWeeklyKm: 30 }))).toBeUndefined();
+    expect(typedWeeklyKm(typed(30))).toBe(30);
+  });
+
+  it('planRampArchetype prefers the synced classification over the typed one', () => {
+    expect(planRampArchetype(typed(50))).toBe('high-mileage');
+    expect(planRampArchetype(typed(50, {
+      athleteArchetype: { archetype: 'detrained-with-history' } as SimulatorState['athleteArchetype'],
+    }))).toBe('detrained-with-history');
+    expect(planRampArchetype(emptyState())).toBeUndefined();
   });
 });
