@@ -21,6 +21,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
 import { crossTrainingPredictionCredit } from '@/calculations/predictions';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbAgeCaptionText } from './pb-age-caption';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
 import { formatKm, formatPace } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
@@ -275,6 +276,10 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
   // applied). Falls back to the raw VDOT forecast when no race profile.
   const forecastSec = s.forecastTimeAdjusted ?? rawForecastSec;
   const courseFactors = s.forecastCourseFactors ?? [];
+  // PB age caption under the header (pbAgeCaptionText, shared with the Stats
+  // race estimates): the forecast gives an old PB less weight than its
+  // displayed time suggests.
+  const pbAgeText = pbAgeCaptionText(s, 'this forecast');
 
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
@@ -405,6 +410,7 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
           <div style="font-size:32px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${distLabel} forecast</div>
           <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine}. Week ${currentWeek} of ${totalWeeks}</div>
           ${s.blendedFromEstimate ? `<div style="font-size:12px;color:${TEXT_S};margin-top:6px;font-weight:500;line-height:1.4">Estimated from your training profile. Refines as your runs sync.</div>` : ''}
+          ${pbAgeText ? `<div style="font-size:12px;color:${TEXT_S};margin-top:6px;font-weight:500;line-height:1.4">${pbAgeText}</div>` : ''}
         </div>
 
         ${buildRunRaceOutcomeRetroCard(s)}
@@ -604,13 +610,15 @@ function getStandardForecastHTML(s: SimulatorState, animate: boolean): string {
   // (`predictStandardDistances`) will still produce times off the fallback, but
   // we don't show them until a PB / device VO2 / HR / observed LT lands.
   const hasAny = hasRealRunningFitnessSignal(s);
+  // PB age caption (pbAgeCaptionText), appended to the footnote.
+  const stdPbAgeText = hasAny ? pbAgeCaptionText(s, 'these predictions') : null;
 
   const body = hasAny
     ? `
       ${buildStdShoesCard(s)}
       ${buildStdGrid(s)}
       <div style="font-size:11px;color:${TEXT_L};line-height:1.5;margin-top:14px;padding:0 4px">
-        Tap a distance for its trend and the factors behind it. Predictions come from your current fitness, not a target race, and move as your training does.
+        Tap a distance for its trend and the factors behind it. Predictions come from your current fitness, not a target race, and move as your training does.${stdPbAgeText ? ` ${stdPbAgeText}` : ''}
       </div>`
     : `
       <div style="${GLASS_CARD};padding:22px;text-align:center">
