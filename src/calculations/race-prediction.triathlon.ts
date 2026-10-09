@@ -75,7 +75,7 @@ import { getAbilityBand } from './fatigue';
 import { cv, vt } from './vdot';
 import { estimateRunPaceFromSkill } from './tri-run-skill';
 import { blendPredictions } from './predictions';
-import { effectiveVo2max } from './physiological-vdot';
+import { effectiveVo2max, pbAgeWeight, pbAgeWeightsFor } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
@@ -1380,6 +1380,12 @@ function blendOpenRunRaceTime(
     inputs.avgPaceSecPerKm ?? undefined,
     { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot,
+    undefined,
+    undefined,
+    undefined,
+    // PB age weights only with measured run volume (mirror of
+    // refreshBlendedFitness; with no running data an old PB keeps full weight).
+    inputs.weeksCovered > 0 && inputs.weeklyKm > 0 ? pbAgeWeightsFor(state.pbs, state, new Date()) : undefined,
   );
 }
 
@@ -1661,14 +1667,10 @@ function computeMarathonDepthMultiplier(state: SimulatorState): number {
   // No credit for slow PBs (≥ 4:30) or missing PBs.
   if (marathonPbSec >= MARATHON_CREDIT_ONSET_SEC) return 1.0;
 
-  // Recency: PB < 2 years = 1.0, 2–4 years = 0.6, > 4 years = 0.3.
-  let recencyFactor = 1.0;
-  const pbDateISO = state.onboarding?.pbDates?.m;
-  if (pbDateISO) {
-    const ageDays = (Date.now() - Date.parse(pbDateISO)) / (1000 * 60 * 60 * 24);
-    if      (ageDays > 4 * 365) recencyFactor = 0.3;
-    else if (ageDays > 2 * 365) recencyFactor = 0.6;
-  }
+  // Recency: PB < 2 years = 1.0, 2–4 years = 0.6, > 4 years = 0.3. The bands
+  // live in pbAgeWeight (physiological-vdot.ts), which also ages PBs in the
+  // run fitness model (SCIENCE_LOG §T5 and the 2026-10-09 PB-age entry).
+  const recencyFactor = pbAgeWeight(state.onboarding?.pbDates?.m, new Date());
 
   // Smooth linear from 0 at onset (4:30) to 1 at max (2:45).
   const depthRaw = Math.min(1, (MARATHON_CREDIT_ONSET_SEC - marathonPbSec) /

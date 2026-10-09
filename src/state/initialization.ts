@@ -10,7 +10,7 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbMedianVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbCapacity, pbAgeWeightsFor, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
@@ -516,6 +516,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       : state.runsPerWeek === 6 ? 60 : 70;
     const weeklyKmSignal = measuredKm != null ? measuredKm : freqVolumeEstimate;
     const weeklyKmIsEstimate = measuredKm == null;
+    // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands), applied only with a
+    // measured volume: with no running data an old PB keeps full weight (§BV).
+    // Dates belong to the onboarding PBs (state.pbDates with state.pbs); a seeded
+    // or typed PB has none and weighs 1. Stored PBs never change.
+    const pbAgeWeights = weeklyKmIsEstimate ? undefined : pbAgeWeightsFor(pbs, { onboarding: state }, new Date());
 
     // Note: blendPredictions uses runnerType.toLowerCase() internally
     const blendedTime = blendPredictions(
@@ -534,6 +539,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       marathonPbAgeDays,
       weeklyKmIsEstimate,
       effectiveCrossSessions,
+      pbAgeWeights,
     );
 
     if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
@@ -568,6 +574,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         weeklyRunKmIsEstimate: weeklyKmIsEstimate,
         recentRun: blendInputs.recentRun ?? rec ?? null,
         b,
+        pbAgeWeights,
       },
     );
 
@@ -577,13 +584,19 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // deriving the GLOBAL engine VDOT from it buries demonstrated capacity (a
     // 20:00 5K → VDOT ~50 collapses to ~40 off 8 km/wk), then feeds paces, plan
     // generation and the forecast. The engine is floored at PB-median capacity
-    // (`pbMedianVdot`) unless a recent race effort (`recentRun`, a run more
-    // than 15% faster than the window's median pace) demonstrates real
-    // slowness. Low training volume is deliberately NOT engine-decay
-    // evidence: it limits readiness (modelled on the prediction + forecast),
-    // not aerobic capacity.
+    // (`pbCapacity`, age-weighted) unless a recent race effort (`recentRun`, a
+    // run more than 15% faster than the window's median pace and, with HR, at
+    // race level) demonstrates real slowness. Low training volume is
+    // deliberately NOT engine-decay evidence: it limits readiness (modelled on
+    // the prediction + forecast), not aerobic capacity.
     const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
-    const capacityVdot = pbMedianVdot(pbs);
+    // PB capacity: age-weighted median (pbCapacity). The floor's pull is the
+    // median PB's age weight when a measured volume exists (mirror of
+    // refreshBlendedFitness): an old PB holds the engine less firmly against
+    // current running data; with no data it holds fully (§BV).
+    const capacity = pbCapacity(pbs, pbAgeWeightsFor(pbs, { onboarding: state }, new Date()));
+    const capacityVdot = capacity?.vdot ?? null;
+    const capacityPull = weeklyKmIsEstimate ? 1 : (capacity?.weight ?? 1);
     let engineVdot = penalisedVdot;
     if (capacityVdot != null && capacityVdot > penalisedVdot) {
       const recentForEngine = blendInputs.recentRun ?? rec ?? null;
@@ -595,8 +608,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         : null;
       const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
       if (!recentDemonstratesSlowness) {
-        engineVdot = capacityVdot;
-        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at capacity (low volume is readiness, not engine; ISSUE-297)`);
+        engineVdot = penalisedVdot + capacityPull * (capacityVdot - penalisedVdot);
+        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at ${engineVdot.toFixed(1)} (PB age pull ${capacityPull}; low volume is readiness, not engine; ISSUE-297)`);
       }
     }
     // `curr` is now the ENGINE (capacity), so paces, s.v and the anchor agree on
@@ -634,6 +647,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
           marathonPbAgeDays,
           false,
           effectiveCrossSessions,
+          pbAgeWeights,
         )
       : null;
     const peakBlend = blendAtPeakKm(peakKm);

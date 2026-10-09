@@ -17,7 +17,7 @@
  */
 
 import { resolveLT, deriveLT, diagnoseSustainedEfforts, type BestEffortInput, type SustainedEffortInput, type DeriveLTInput, type LTDerivationResult, type SustainedEffortDiagnostic } from '@/calculations/lt-derivation';
-import { ltDanielsInputVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
+import { ltDanielsInputVdot, effectivePhysiologyPbs, pbAgeWeightsFor } from '@/calculations/physiological-vdot';
 import type { SimulatorState } from '@/types';
 
 /** Meaningful-change threshold — an applied LT shift of at least this many
@@ -35,13 +35,16 @@ const LT_AUTO_IMPROVE_GAP_SEC_KM = 3;
  *  Reads via `effectivePhysiologyPbs` so freshly-typed wizard PBs are visible
  *  to LT derivation BEFORE finalize commits them to `s.pbs` (the review
  *  screen's LT row previously derived against the previous plan's PBs). */
-function pbsToBestEfforts(s: SimulatorState): BestEffortInput[] {
+function pbsToBestEfforts(s: SimulatorState, now?: string): BestEffortInput[] {
   const efforts: BestEffortInput[] = [];
   const pbs = effectivePhysiologyPbs(s);
-  if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5 });
-  if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10 });
-  if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h });
-  if (pbs.m && pbs.m > 0) efforts.push({ distanceM: 42195, elapsedSec: pbs.m });
+  // PB age weights (pbAgeWeight): an old PB weighs less in critical speed and
+  // in the long-race LT bound. The PB times themselves are unchanged.
+  const w = pbAgeWeightsFor(pbs, s, now ? new Date(now) : new Date());
+  if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5, ageWeight: w.k5 ?? 1 });
+  if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10, ageWeight: w.k10 ?? 1 });
+  if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h, ageWeight: w.h ?? 1 });
+  if (pbs.m && pbs.m > 0) efforts.push({ distanceM: 42195, elapsedSec: pbs.m, ageWeight: w.m ?? 1 });
   return efforts;
 }
 
@@ -134,7 +137,7 @@ export function buildLTInputs(s: SimulatorState, opts: { now?: string; garmin?: 
   return {
     vdot: ltDanielsInputVdot(s, { now: opts.now }),
     maxHR: s.maxHR ?? null,
-    bestEfforts: pbsToBestEfforts(s),
+    bestEfforts: pbsToBestEfforts(s, opts.now),
     sustainedEfforts: collectSustainedEfforts(s),
     garmin,
     override: s.ltOverride ?? null,

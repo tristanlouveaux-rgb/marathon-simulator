@@ -175,39 +175,152 @@ export function clearPbTombstone(s: SimulatorState, key: keyof NonNullable<Simul
   }
 }
 
+// ─── PB age (model weight only; stored and displayed PBs never change) ───
+
+export type PbKey = 'k5' | 'k10' | 'h' | 'm';
+/** Per-distance model weight of each PB by its age (`pbAgeWeight`). A missing
+ *  key weighs 1. */
+export type PbAgeWeights = Partial<Record<PbKey, number>>;
+
+const PB_KEYS: readonly PbKey[] = ['k5', 'k10', 'h', 'm'];
+
 /**
- * Median VDOT across the user's race-distance PBs (5K / 10K / HM / marathon).
+ * The model weight of a PB by its age (decided by Tristan, 2026-10-09: PBs are
+ * displayed as entered or synced, and aged internally). Reuses the existing PB
+ * recency bands of the marathon-depth credit (SCIENCE_LOG §T5,
+ * `computeMarathonDepthMultiplier` in race-prediction.triathlon.ts, which now
+ * reads this function): up to 2 years 1.0, 2 to 4 years 0.6, over 4 years 0.3.
+ * "Old PBs represent past capacity": the weight says how much a PB still speaks
+ * for current capacity. It never reaches 0, so an old PB keeps some say.
+ *
+ * No date, an unparseable one or a future one: 1.0, the §T5 default ("if
+ * absent, full recency is assumed"). PB dates exist for PBs auto-filled from
+ * Strava or Apple history; a typed PB drops its date, so a manual PB never ages.
+ * `dateISO` may be `YYYY-MM` or a full ISO date.
+ */
+export function pbAgeWeight(dateISO: string | null | undefined, now: Date = new Date()): number {
+  if (!dateISO) return 1;
+  const ts = Date.parse(dateISO.length === 7 ? dateISO + '-01' : dateISO);
+  if (!Number.isFinite(ts)) return 1;
+  const ageDays = (now.getTime() - ts) / DAY_MS;
+  if (ageDays > 4 * 365) return 0.3;
+  if (ageDays > 2 * 365) return 0.6;
+  return 1;
+}
+
+/**
+ * Age weights for the PBs in `pbs`. PB dates are stored beside the onboarding
+ * PBs (`onboarding.pbDates` with `onboarding.pbs`), so a date belongs to a PB
+ * only while that PB's time equals the onboarding time it was stored with. A
+ * PB from elsewhere (a faster time in `s.pbs`, a legacy form) has no known date
+ * and weighs 1.
+ */
+export function pbAgeWeightsFor(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: { onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null },
+  now: Date = new Date(),
+): PbAgeWeights {
+  const out: PbAgeWeights = {};
+  if (!pbs) return out;
+  const datedPbs = s.onboarding?.pbs ?? {};
+  const dates = s.onboarding?.pbDates ?? {};
+  for (const k of PB_KEYS) {
+    const t = pbs[k];
+    if (!(t != null && t > 0)) continue;
+    const date = datedPbs[k] === t ? dates[k] : undefined;
+    out[k] = pbAgeWeight(date, now);
+  }
+  return out;
+}
+
+/** Age weights for the PBs the physiology chain reads (`effectivePhysiologyPbs`). */
+export function modelPbAgeWeights(s: SimulatorState, now: Date = new Date()): PbAgeWeights {
+  return pbAgeWeightsFor(effectivePhysiologyPbs(s), s, now);
+}
+
+/**
+ * PB capacity: the age-weighted median VDOT across the race-distance PBs, and
+ * the age weight of the PB(s) it lands on.
  *
  * Median (not max) because PB profiles are often imbalanced. A fast 5K
  * specialist with weak endurance shouldn't have their 5K alone drive the
  * estimate, and a marathoner with a slow 5K shouldn't lose theirs to it.
  * The median collapses both biases.
+ *
+ * With age weights the median is weighted: a fresh PB outweighs an old one, so
+ * a set with a fresh slower 5K and two old faster times lands on the fresh 5K.
+ * When every PB has the same weight (the common case, and always without PB
+ * dates) it is the plain median, computed exactly as before. `weight` is the
+ * age weight of the median PB, or the mean of the two middle PBs' weights when
+ * the median falls between them; the §BZ engine floor uses it.
  */
-export function pbDerivedVdot(s: SimulatorState): number | null {
-  return pbMedianVdot(effectivePhysiologyPbs(s));
+export function pbCapacity(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  weights?: PbAgeWeights,
+): { vdot: number; weight: number } | null {
+  if (!pbs) return null;
+  const items: Array<{ v: number; w: number }> = [];
+  const push = (k: PbKey, distM: number) => {
+    const t = pbs[k];
+    if (t && t > 0) items.push({ v: cv(distM, t), w: weights?.[k] ?? 1 });
+  };
+  push('k5', 5000);
+  push('k10', 10000);
+  push('h', 21097.5);
+  push('m', 42195);
+  if (items.length === 0) return null;
+  items.sort((a, b) => a.v - b.v);
+  const mid = Math.floor(items.length / 2);
+  if (items.every(it => it.w === items[0].w)) {
+    // Plain median (identical to the pre-ageing computation).
+    return items.length % 2 === 0
+      ? { vdot: (items[mid - 1].v + items[mid].v) / 2, weight: items[0].w }
+      : { vdot: items[mid].v, weight: items[0].w };
+  }
+  // Weighted median: the first PB whose cumulative weight passes half the
+  // total; exactly half averages it with the next, as the plain median does.
+  const total = items.reduce((acc, it) => acc + it.w, 0);
+  const half = total / 2;
+  let cum = 0;
+  for (let i = 0; i < items.length; i++) {
+    cum += items[i].w;
+    if (Math.abs(cum - half) <= 1e-9 * total && i + 1 < items.length) {
+      return { vdot: (items[i].v + items[i + 1].v) / 2, weight: (items[i].w + items[i + 1].w) / 2 };
+    }
+    if (cum > half) return { vdot: items[i].v, weight: items[i].w };
+  }
+  const last = items[items.length - 1];
+  return { vdot: last.v, weight: last.w };
+}
+
+/** `pbCapacity` for the PBs the physiology chain reads, with their age weights. */
+export function pbCapacityForState(s: SimulatorState, now: Date = new Date()): { vdot: number; weight: number } | null {
+  const pbs = effectivePhysiologyPbs(s);
+  return pbCapacity(pbs, pbAgeWeightsFor(pbs, s, now));
 }
 
 /**
- * Median VDOT from a raw PBs object. Split out from `pbDerivedVdot` so callers
- * that hold a PBs object directly — e.g. `initializeSimulator`, where `s.pbs`
- * is not committed to state yet — can compute the same demonstrated-capacity
- * number without going through `SimulatorState`. Single source for the median.
+ * PB capacity VDOT for the state (`pbCapacityForState`): the age-weighted
+ * median across race-distance PBs. Drives the pb-median tier of
+ * `getPhysiologicalVdot` (and so the LT input), the §BZ engine floor and the
+ * triathlete running-evidence ceiling.
+ */
+export function pbDerivedVdot(s: SimulatorState, now: Date = new Date()): number | null {
+  return pbCapacityForState(s, now)?.vdot ?? null;
+}
+
+/**
+ * PB capacity VDOT from a raw PBs object (optionally age-weighted). Split out
+ * from `pbDerivedVdot` so callers that hold a PBs object directly — e.g.
+ * `initializeSimulator`, where `s.pbs` is not committed to state yet — can
+ * compute the same demonstrated-capacity number without going through
+ * `SimulatorState`. Single source for the median (`pbCapacity`).
  */
 export function pbMedianVdot(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  weights?: PbAgeWeights,
 ): number | null {
-  if (!pbs) return null;
-  const candidates: number[] = [];
-  if (pbs.k5 && pbs.k5 > 0) candidates.push(cv(5000, pbs.k5));
-  if (pbs.k10 && pbs.k10 > 0) candidates.push(cv(10000, pbs.k10));
-  if (pbs.h && pbs.h > 0) candidates.push(cv(21097.5, pbs.h));
-  if (pbs.m && pbs.m > 0) candidates.push(cv(42195, pbs.m));
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => a - b);
-  const mid = Math.floor(candidates.length / 2);
-  return candidates.length % 2 === 0
-    ? (candidates[mid - 1] + candidates[mid]) / 2
-    : candidates[mid];
+  return pbCapacity(pbs, weights)?.vdot ?? null;
 }
 
 /**
@@ -394,7 +507,7 @@ export function triathleteRunEvidenceCeiling(s: SimulatorState, now: Date = new 
   const ceilings: number[] = [];
   const race = raceAnchorVdot(s, now);
   if (race != null) ceilings.push(race.vdot);
-  const pb = pbDerivedVdot(s);
+  const pb = pbDerivedVdot(s, now);
   if (pb != null) ceilings.push(pb);
   if (isUsableHrFit(s.hrCalibratedVdot)) ceilings.push(s.hrCalibratedVdot.vdot);
   return ceilings.length > 0 ? Math.max(...ceilings) : null;
@@ -424,7 +537,7 @@ export function triColdStartRunCapVdot(
   const skill = s.triConfig?.skillRating?.run;
   if (!skill) return null;
   const now = opts.now ?? new Date();
-  const hasRunSpecificSignal = pbDerivedVdot(s) != null
+  const hasRunSpecificSignal = pbDerivedVdot(s, now) != null
     || raceAnchorVdot(s, now) != null
     || opts.recentRaceEffort
     || isUsableHrFit(s.hrCalibratedVdot);
@@ -605,8 +718,8 @@ export function getPhysiologicalVdot(
     }
   }
 
-  // 4. PB-median across race PBs.
-  const pbVdot = pbDerivedVdot(s);
+  // 4. PB-median across race PBs (age-weighted median, pbCapacity).
+  const pbVdot = pbDerivedVdot(s, now);
   if (pbVdot != null) {
     return {
       vdot: pbVdot,
