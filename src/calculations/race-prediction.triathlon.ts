@@ -75,7 +75,7 @@ import { getAbilityBand } from './fatigue';
 import { cv, vt } from './vdot';
 import { estimateRunPaceFromSkill } from './tri-run-skill';
 import { blendPredictions } from './predictions';
-import { effectiveVo2max, pbAgeWeight, pbAgeWeightsFor } from './physiological-vdot';
+import { effectiveVo2max, pbAgeWeight, modelPbAgeWeightsIfMeasured } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
@@ -1383,9 +1383,9 @@ function blendOpenRunRaceTime(
     undefined,
     undefined,
     undefined,
-    // PB age weights only with measured run volume (mirror of
+    // PB age weights on the shared measured-volume gate (mirror of
     // refreshBlendedFitness; with no running data an old PB keeps full weight).
-    inputs.weeksCovered > 0 && inputs.weeklyKm > 0 ? pbAgeWeightsFor(state.pbs, state, new Date()) : undefined,
+    modelPbAgeWeightsIfMeasured(state.pbs, state, inputs, new Date()),
   );
 }
 

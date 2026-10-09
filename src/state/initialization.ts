@@ -10,12 +10,13 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbCapacity, pbAgeWeightsFor, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbCapacity, pbAgeWeightsFor, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { computeHRCalibratedVdot } from '@/calculations/effort-calibrated-vdot';
 import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
+import { computePredictionInputs, measuredWeeklyKm } from '@/calculations/prediction-inputs';
 import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
@@ -508,19 +509,20 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     //     (the demonstratedPBFloor ignores estimated volume — see below).
     // The old "explicit zero = max detraining" overload is gone: a brand-new
     // user is now sized from their stated frequency, not from a phantom zero.
-    const measuredKm = blendInputs.weeksCovered > 0
-      ? resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm)
-      : ((sCurrent.detectedWeeklyKm ?? 0) > 0 ? sCurrent.detectedWeeklyKm! : null);
+    const measuredKm = measuredWeeklyKm(blendInputs, sCurrent.detectedWeeklyKm);
     const freqVolumeEstimate = state.runsPerWeek <= 3 ? state.runsPerWeek * 10
       : state.runsPerWeek === 4 ? 40 : state.runsPerWeek === 5 ? 50
       : state.runsPerWeek === 6 ? 60 : 70;
     const weeklyKmSignal = measuredKm != null ? measuredKm : freqVolumeEstimate;
     const weeklyKmIsEstimate = measuredKm == null;
-    // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands), applied only with a
-    // measured volume: with no running data an old PB keeps full weight (§BV).
-    // Dates belong to the onboarding PBs (state.pbDates with state.pbs); a seeded
-    // or typed PB has none and weighs 1. Stored PBs never change.
-    const pbAgeWeights = weeklyKmIsEstimate ? undefined : pbAgeWeightsFor(pbs, { onboarding: state }, new Date());
+    // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands) on the shared
+    // measured-volume gate (modelPbAgeWeightsIfMeasured, as the refresh): with
+    // no running data an old PB keeps full weight (§BV). Dates belong to the
+    // onboarding PBs (state.pbDates with state.pbs); a seeded or typed PB has
+    // none and weighs 1. Stored PBs never change.
+    const pbAgeWeights = modelPbAgeWeightsIfMeasured(
+      pbs, { onboarding: state, detectedWeeklyKm: sCurrent.detectedWeeklyKm }, blendInputs, new Date(),
+    );
 
     // Note: blendPredictions uses runnerType.toLowerCase() internally
     const blendedTime = blendPredictions(
@@ -590,15 +592,23 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // deliberately NOT engine-decay evidence: it limits readiness (modelled on
     // the prediction + forecast), not aerobic capacity.
     const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
-    // PB capacity: age-weighted median (pbCapacity). The floor's pull is the
-    // median PB's age weight when a measured volume exists (mirror of
-    // refreshBlendedFitness): an old PB holds the engine less firmly against
-    // current running data; with no data it holds fully (§BV).
+    // PB capacity: age-weighted median (pbCapacity). The floor is
+    // pbEngineFloorVdot, shared with refreshBlendedFitness: PB capacity for a
+    // fresh or undated median PB; for an aged one, with a measured volume, the
+    // age-weighted mean of capacity and a medium+ HR fit. The HR fit is the
+    // one the first refresh computes (computeHRCalibratedVdot over the same
+    // runs and HR profile), so onboarding and the refresh give an aged PB the
+    // same engine. The onboarding blend has no HR-fit or PB-derived LT
+    // predictor, so a pull toward the penalised blend could not agree.
     const capacity = pbCapacity(pbs, pbAgeWeightsFor(pbs, { onboarding: state }, new Date()));
     const capacityVdot = capacity?.vdot ?? null;
-    const capacityPull = weeklyKmIsEstimate ? 1 : (capacity?.weight ?? 1);
+    const onboardingHrFit = computeHRCalibratedVdot(
+      sCurrent.onboardingRunHistory ?? [],
+      state.restingHR || sCurrent.restingHR || null,
+      state.maxHR || sCurrent.maxHR || null,
+    );
     let engineVdot = penalisedVdot;
-    if (capacityVdot != null && capacityVdot > penalisedVdot) {
+    if (capacity != null && capacityVdot != null && capacityVdot > penalisedVdot) {
       const recentForEngine = blendInputs.recentRun ?? rec ?? null;
       const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
         ? predictFromRecent(targetDistMeters, recentForEngine, pbs, b)
@@ -608,8 +618,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         : null;
       const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
       if (!recentDemonstratesSlowness) {
-        engineVdot = penalisedVdot + capacityPull * (capacityVdot - penalisedVdot);
-        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at ${engineVdot.toFixed(1)} (PB age pull ${capacityPull}; low volume is readiness, not engine; ISSUE-297)`);
+        const floor = pbEngineFloorVdot(capacity, { ageWeightsApply: pbAgeWeights != null, hrFit: onboardingHrFit });
+        engineVdot = Math.max(penalisedVdot, floor);
+        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at ${engineVdot.toFixed(1)} (median PB age weight ${capacity.weight}; low volume is readiness, not engine; ISSUE-297)`);
       }
     }
     // `curr` is now the ENGINE (capacity), so paces, s.v and the anchor agree on

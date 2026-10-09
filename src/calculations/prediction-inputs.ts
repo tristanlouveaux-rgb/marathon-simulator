@@ -333,6 +333,23 @@ export function resolveWeeklyKmSignal(
 }
 
 /**
+ * The MEASURED weekly running km, or null when there is none: the synced
+ * window's km when it covers any week (an explicit 0 included, see
+ * resolveWeeklyKmSignal), else a typed weekly km (`detectedWeeklyKm` above 0).
+ * A runs-per-week estimate is not measured. Single definition of "measured
+ * volume" for the volume signal's provenance (refresh, onboarding, standard
+ * forecast) and for the PB-age gate (`modelPbAgeWeightsIfMeasured`,
+ * physiological-vdot.ts), so every surface ages PBs on the same condition.
+ */
+export function measuredWeeklyKm(
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  detectedWeeklyKm: number | null | undefined,
+): number | null {
+  if (inputs.weeksCovered > 0) return resolveWeeklyKmSignal(inputs, detectedWeeklyKm);
+  return detectedWeeklyKm != null && detectedWeeklyKm > 0 ? detectedWeeklyKm : null;
+}
+
+/**
  * Assemble `RunActivityInput[]` from whichever sources are available in the
  * current state. Preference order:
  *   - `s.wks[].garminActuals` (live sync. Authoritative for returning users)

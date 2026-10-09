@@ -26,7 +26,7 @@ import { cv } from './vdot';
 import { deriveVdotFromLT } from './lt-derivation';
 import { getEffectiveVdot } from './effective-vdot';
 import { runSkillVdot } from './tri-run-skill';
-import { computePredictionInputs, collectRunsFromState } from './prediction-inputs';
+import { computePredictionInputs, collectRunsFromState, measuredWeeklyKm, type PredictionInputs } from './prediction-inputs';
 import { raceEffortHrFloorForState } from './heart-rate';
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -239,6 +239,59 @@ export function modelPbAgeWeights(s: SimulatorState, now: Date = new Date()): Pb
 }
 
 /**
+ * PB age weights for the model's volume-gated uses (the blend's PB weight, the
+ * same-distance PB floor, the §BZ engine floor), or undefined when there is no
+ * measured weekly volume (`measuredWeeklyKm`, prediction-inputs.ts: a synced
+ * window or a typed weekly km). With no running data an old PB keeps full
+ * weight (§BV). Single gate for every caller: the refresh, onboarding, the
+ * standard forecast, the triathlon run-leg blend and the Stats race-estimates
+ * card, so a typed weekly km ages PBs on every surface or on none.
+ *
+ * The age-weighted PB median (`pbCapacity`) is NOT gated: when PBs differ in
+ * age, the fresher one is itself current evidence, so it outweighs older ones
+ * with or without a weekly volume. When every PB has the same age the median
+ * is the plain median.
+ */
+export function modelPbAgeWeightsIfMeasured(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: {
+    onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null;
+    detectedWeeklyKm?: number | null;
+  },
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  now: Date = new Date(),
+): PbAgeWeights | undefined {
+  return measuredWeeklyKm(inputs, s.detectedWeeklyKm) != null ? pbAgeWeightsFor(pbs, s, now) : undefined;
+}
+
+/**
+ * The §BZ engine floor for PB capacity, with PB age (SCIENCE_LOG §DC).
+ *
+ * A fresh or undated median PB (weight 1), or no measured volume
+ * (`ageWeightsApply` false), floors the engine at PB capacity exactly as
+ * before. An aged median PB (weight w below 1) floors it at the w-weighted
+ * mean of PB capacity and the current capacity evidence, a medium+ HR-vs-pace
+ * fit, capped at PB capacity: w x capacity + (1 - w) x min(HR fit, capacity).
+ * With no such evidence the PB is the only capacity figure and the floor stays
+ * at capacity. Easy-run paces and the race-readiness penalties on the blend
+ * (durability, marathon specificity, low volume) are not capacity evidence
+ * (§BZ, §CY), so the floor never pulls toward the penalised blend. That also
+ * makes the floor the same at onboarding and after a refresh: both compute
+ * the HR fit from the same runs, while their penalised blends differ (the
+ * refresh has a PB-derived LT predictor and the HR fit in the blend).
+ */
+export function pbEngineFloorVdot(
+  capacity: { vdot: number; weight: number },
+  opts: { ageWeightsApply: boolean; hrFit: { vdot: number | null; confidence: string } | null | undefined },
+): number {
+  const w = capacity.weight;
+  if (!opts.ageWeightsApply || !(w < 1)) return capacity.vdot;
+  if (!isUsableHrFit(opts.hrFit)) return capacity.vdot;
+  const current = Math.min(opts.hrFit.vdot, capacity.vdot);
+  return w * capacity.vdot + (1 - w) * current;
+}
+
+/**
  * PB capacity: the age-weighted median VDOT across the race-distance PBs, and
  * the age weight of the PB(s) it lands on.
  *
@@ -252,7 +305,13 @@ export function modelPbAgeWeights(s: SimulatorState, now: Date = new Date()): Pb
  * When every PB has the same weight (the common case, and always without PB
  * dates) it is the plain median, computed exactly as before. `weight` is the
  * age weight of the median PB, or the mean of the two middle PBs' weights when
- * the median falls between them; the §BZ engine floor uses it.
+ * the median falls between them; the §BZ engine floor uses it
+ * (`pbEngineFloorVdot`).
+ *
+ * The weighting needs no measured weekly volume (unlike the blend's PB weight,
+ * the same-distance floor, the engine floor and the LT weights, which go
+ * through `modelPbAgeWeightsIfMeasured`): it only moves the median when PBs
+ * differ in age, and then the fresher PB is itself current evidence.
  */
 export function pbCapacity(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
@@ -488,7 +547,7 @@ export function effectiveVo2max(s: SimulatorState, now: Date = new Date()): numb
 }
 
 /** True when the HR-vs-pace calibration is usable as running evidence (medium+). */
-function isUsableHrFit(hr: SimulatorState['hrCalibratedVdot']): hr is NonNullable<SimulatorState['hrCalibratedVdot']> & { vdot: number } {
+function isUsableHrFit<T extends { vdot: number | null; confidence: string }>(hr: T | null | undefined): hr is T & { vdot: number } {
   return hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium');
 }
 

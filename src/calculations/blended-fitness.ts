@@ -20,14 +20,14 @@ import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
-import { computePredictionInputs, resolveWeeklyKmSignal, collectRunsFromState } from './prediction-inputs';
+import { computePredictionInputs, measuredWeeklyKm, collectRunsFromState } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, pbAgeWeightsFor, raceAnchorVdot, triColdStartRunCapVdot, resolveLtDanielsInput } from './physiological-vdot';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, raceAnchorVdot, triColdStartRunCapVdot, resolveLtDanielsInput } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -142,17 +142,15 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     // runs/week (same `freqVolumeEstimate` family the plan uses), which sizes the
     // soft penalty but must not override a demonstrated PB (see demonstratedPBFloor).
     ...(() => {
-      const measuredKm = inputs.weeksCovered > 0
-        ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
-        : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+      const measuredKm = measuredWeeklyKm(inputs, s.detectedWeeklyKm);
       const rpw = s.rw ?? 0;
       const freqEstimate = rpw <= 0 ? null
         : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
       return {
         weeklyKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
         weeklyKmIsEstimate: measuredKm == null && freqEstimate != null,
-        // PB age weights only with a measured volume, as refreshBlendedFitness.
-        pbAgeWeights: measuredKm != null ? pbAgeWeightsFor(s.pbs ?? {}, s, new Date()) : undefined,
+        // PB age weights on the shared measured-volume gate, as refreshBlendedFitness.
+        pbAgeWeights: modelPbAgeWeightsIfMeasured(s.pbs ?? {}, s, inputs, new Date()),
       };
     })(),
     // Effective aerobic cross-training sessions/week, derived from persisted
@@ -526,16 +524,15 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // no-data fix by passing a phantom 0. MEASURED = history (weeksCovered>0) or a
   // typed weekly km; otherwise ESTIMATE from runs/week (sizes the soft penalty,
   // never overrides a demonstrated PB). Cross-training from epw−rw.
-  const measuredKm = inputs.weeksCovered > 0
-    ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
-    : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+  const measuredKm = measuredWeeklyKm(inputs, s.detectedWeeklyKm);
   const rpw = s.rw ?? 0;
   const freqEstimate = rpw <= 0 ? null
     : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
-  // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands) only with a measured
-  // volume: with no running data an old PB keeps full weight (§BV). Stored and
-  // displayed PBs never change; only their weight in the model does.
-  const pbAgeWeights = measuredKm != null ? pbAgeWeightsFor(s.pbs, s, new Date()) : undefined;
+  // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands) on the shared
+  // measured-volume gate (modelPbAgeWeightsIfMeasured): with no running data
+  // an old PB keeps full weight (§BV). Stored and displayed PBs never change;
+  // only their weight in the model does.
+  const pbAgeWeights = modelPbAgeWeightsIfMeasured(s.pbs, s, inputs, new Date());
   const blended = blendPredictions(
     targetDistM,
     s.pbs,
@@ -607,8 +604,9 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // refresh feedback loop). The floor stands down ONLY on demonstrated recent
   // slowness — a recent race effort (`inputs.recentRun`, a run more than 15%
   // faster than the window's median pace and, with HR, at race level) that
-  // projects below capacity. An old PB (pbAgeWeight below 1) pulls the engine
-  // only part of the way to capacity when current running data exists. Low TRAINING VOLUME is
+  // projects below capacity. An old median PB (pbAgeWeight below 1) is weighed
+  // against current capacity evidence, a medium+ HR fit (pbEngineFloorVdot).
+  // Low TRAINING VOLUME is
   // deliberately NOT engine-decay evidence here: it limits race readiness
   // (already modelled on the prediction and the forecast), not aerobic
   // capacity. This is the intended difference from `demonstratedPBFloor`, whose
@@ -617,16 +615,17 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // the engine a pure function of demonstrated fitness (deterministic across
   // refreshes).
   const penalisedVdot = cv(targetDistM, durabilityAdjustedBlend);
-  // PB capacity is the age-weighted median (pbCapacity). With a measured volume
-  // the floor pulls the engine toward it by the median PB's age weight (§T5
-  // bands): an old PB holds the engine less firmly against current running
-  // data. With no data it holds fully (§BV). Fresh or undated PBs weigh 1, so
-  // the floor is unchanged for them.
+  // PB capacity is the age-weighted median (pbCapacity). The floor
+  // (pbEngineFloorVdot, shared with initializeSimulator) is PB capacity for a
+  // fresh or undated median PB. For an aged one, with a measured volume, it is
+  // the age-weighted mean of PB capacity and a medium+ HR fit (capped at
+  // capacity); with no such fit, PB capacity. It never pulls toward the
+  // penalised blend, whose readiness penalties stay off the engine (§BZ) and
+  // which differs between onboarding and the refresh.
   const capacity = pbCapacityForState(s);
   const capacityVdot = capacity?.vdot ?? null;
-  const capacityPull = measuredKm != null ? (capacity?.weight ?? 1) : 1;
   let engineVdot = penalisedVdot;
-  if (capacityVdot != null && capacityVdot > penalisedVdot) {
+  if (capacity != null && capacityVdot != null && capacityVdot > penalisedVdot) {
     const recentForEngine = inputs.recentRun ?? s.rec ?? null;
     const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
       ? predictFromRecent(targetDistM, recentForEngine, s.pbs, s.b)
@@ -636,8 +635,9 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       : null;
     const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
     if (!recentDemonstratesSlowness) {
-      engineVdot = penalisedVdot + capacityPull * (capacityVdot - penalisedVdot);
-      console.log(`[refreshBlendedFitness] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence of slowness → engine held at ${engineVdot.toFixed(1)} (PB age pull ${capacityPull}; readiness penalty stays on blendedRaceTimeSec/forecast only)`);
+      const floor = pbEngineFloorVdot(capacity, { ageWeightsApply: pbAgeWeights != null, hrFit: hrVdot });
+      engineVdot = Math.max(penalisedVdot, floor);
+      console.log(`[refreshBlendedFitness] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence of slowness → engine held at ${engineVdot.toFixed(1)} (median PB age weight ${capacity.weight}; readiness penalty stays on blendedRaceTimeSec/forecast only)`);
     }
   }
 

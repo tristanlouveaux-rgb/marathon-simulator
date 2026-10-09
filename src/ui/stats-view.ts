@@ -32,7 +32,7 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal, pbAgeWeightsFor } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal, modelPbAgeWeightsIfMeasured } from '@/calculations/physiological-vdot';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
@@ -3282,8 +3282,8 @@ function buildForecastTimesCard(s: SimulatorState): string {
         s.athleteTier ?? undefined, liveKmPerWeek, liveAvgPace ?? undefined,
         { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
         undefined, undefined, undefined, undefined,
-        // PB age weights with measured run volume, as refreshBlendedFitness.
-        inputs.weeksCovered > 0 ? pbAgeWeightsFor(s.pbs ?? {}, s, new Date()) : undefined,
+        // PB age weights on the shared measured-volume gate, as refreshBlendedFitness.
+        modelPbAgeWeightsIfMeasured(s.pbs ?? {}, s, inputs, new Date()),
       );
       timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
     } else {

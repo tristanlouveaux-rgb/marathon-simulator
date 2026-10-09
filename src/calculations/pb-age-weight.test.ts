@@ -24,7 +24,8 @@ vi.stubGlobal('localStorage', {
 vi.stubGlobal('alert', vi.fn());
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
-import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot } from './physiological-vdot';
+import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot } from './physiological-vdot';
+import { measuredWeeklyKm } from './prediction-inputs';
 import { blendPredictions, demonstratedPBFloor } from './predictions';
 import { deriveLT } from './lt-derivation';
 import { cv } from './vdot';
@@ -215,6 +216,51 @@ function engine(seed: Partial<SimulatorState>, pbDateYearsAgo?: number): { onboa
   return { onboard, refresh: getState().v };
 }
 
+describe('one measured-volume gate and one engine floor', () => {
+  const inputs = (weeksCovered: number, weeklyKm: number) => ({ weeksCovered, weeklyKm });
+
+  it('measuredWeeklyKm: a synced window (an explicit 0 included) or a typed weekly km', () => {
+    expect(measuredWeeklyKm(inputs(4, 30), 50)).toBe(30);
+    expect(measuredWeeklyKm(inputs(4, 0), 50)).toBe(0);
+    expect(measuredWeeklyKm(inputs(0, 0), 35)).toBe(35);
+    expect(measuredWeeklyKm(inputs(0, 0), undefined)).toBeNull();
+    expect(measuredWeeklyKm(inputs(0, 0), 0)).toBeNull();
+  });
+
+  it('modelPbAgeWeightsIfMeasured: weights with a measured volume, a typed km included; none without', () => {
+    const s = { onboarding: { pbs: { k10: 2400 }, pbDates: { k10: ago(5 * 365) } } };
+    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, { ...s, detectedWeeklyKm: 35 }, inputs(0, 0), NOW)).toEqual({ k10: 0.3 });
+    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, s, inputs(3, 20), NOW)).toEqual({ k10: 0.3 });
+    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, s, inputs(0, 0), NOW)).toBeUndefined();
+  });
+
+  it('the age-weighted median is not volume-gated: a fresher PB is itself current evidence', () => {
+    // 5K 22:00 one year old, 10K 40:00 and half 1:28 five years old, no runs.
+    resetState();
+    const st = getMutableState();
+    st.pbs = { k5: 1320, k10: 2400, h: 5280 };
+    st.onboarding = {
+      ...defaultOnboardingState, pbs: { k5: 1320, k10: 2400, h: 5280 },
+      pbDates: { k5: ago(365), k10: ago(5 * 365), h: ago(5 * 365) },
+    } as OnboardingState;
+    expect(pbDerivedVdot(getState(), NOW)).toBeCloseTo(cv(5000, 1320), 9);
+    expect(pbMedianVdot({ k5: 1320, k10: 2400, h: 5280 })).toBeCloseTo(cv(10000, 2400), 9);
+  });
+
+  it('pbEngineFloorVdot: capacity unless the median PB is aged and a medium+ HR fit exists', () => {
+    const hrFit = (vdot: number, confidence = 'high') => ({ vdot, confidence });
+    const cap = (w: number) => ({ vdot: 52, weight: w });
+    expect(pbEngineFloorVdot(cap(1), { ageWeightsApply: true, hrFit: hrFit(42) })).toBe(52);
+    expect(pbEngineFloorVdot(cap(0.3), { ageWeightsApply: false, hrFit: hrFit(42) })).toBe(52);
+    expect(pbEngineFloorVdot(cap(0.3), { ageWeightsApply: true, hrFit: null })).toBe(52);
+    expect(pbEngineFloorVdot(cap(0.3), { ageWeightsApply: true, hrFit: hrFit(42, 'low') })).toBe(52);
+    expect(pbEngineFloorVdot(cap(0.3), { ageWeightsApply: true, hrFit: hrFit(42) })).toBeCloseTo(0.3 * 52 + 0.7 * 42, 9);
+    expect(pbEngineFloorVdot(cap(0.6), { ageWeightsApply: true, hrFit: hrFit(42, 'medium') })).toBeCloseTo(0.6 * 52 + 0.4 * 42, 9);
+    // An HR fit above capacity never lifts the floor above it.
+    expect(pbEngineFloorVdot(cap(0.3), { ageWeightsApply: true, hrFit: hrFit(58) })).toBe(52);
+  });
+});
+
 describe('real initializers: a stale PB loses weight against current running data', () => {
   const HR = { maxHR: 190, restingHR: 50 };
   const PB = cv(10000, 2400);
@@ -228,15 +274,32 @@ describe('real initializers: a stale PB loses weight against current running dat
     }
   });
 
-  it('a 5-year-old PB with six weeks of easy runs and HR moves to the HR fit', () => {
+  it('a 5-year-old PB with six weeks of easy runs and HR is weighed against the HR fit', () => {
     const e = engine({ ...HR, onboardingRunHistory: jogs(true) }, 5);
-    // Pre-fix 51.9 at both. The HR fit reads about 41.8.
-    expect(getState().hrCalibratedVdot?.vdot).toBeCloseTo(41.8, 0);
-    expect(e.onboard).toBeCloseTo(40.5, 0);
-    expect(e.refresh).toBeCloseTo(41.7, 0);
+    // Pre-ageing 51.9 at both. The HR fit reads about 41.8 (high confidence).
+    const hr = getState().hrCalibratedVdot!;
+    expect(hr.confidence).toBe('high');
+    expect(hr.vdot).toBeCloseTo(41.8, 1);
+    // Floor: 0.3 x PB capacity + 0.7 x HR fit (pbEngineFloorVdot), the same
+    // at onboarding and after the refresh.
+    expect(e.onboard).toBeCloseTo(0.3 * PB + 0.7 * hr.vdot!, 9);
+    expect(e.refresh).toBeCloseTo(e.onboard, 9);
+    expect(e.refresh).toBeCloseTo(44.8, 1);
     // Displayed PB unchanged: the stored time and date are as entered.
     expect(getState().pbs).toEqual({ k10: 2400 });
     expect(getState().onboarding?.pbs).toEqual({ k10: 2400 });
+  });
+
+  it('onboarding and the first refresh give an aged PB the same engine, with and without HR', () => {
+    // Review 2026-10-09: the floor used to pull toward the penalised blend,
+    // which differs between the two paths (2.02 years: 45.59 vs 48.15; 4.02
+    // years: 40.29 vs 45.20; no HR, 5 years: 40.5 vs 45.3).
+    for (const yrs of [2.02, 3, 4.02, 5]) {
+      const withHr = engine({ ...HR, onboardingRunHistory: jogs(true) }, yrs);
+      expect(withHr.refresh).toBeCloseTo(withHr.onboard, 9);
+      const noHr = engine({ onboardingRunHistory: jogs(false) }, yrs);
+      expect(noHr.refresh).toBeCloseTo(noHr.onboard, 9);
+    }
   });
 
   it('a 3-year-old PB moves less than a 5-year-old one', () => {
@@ -246,9 +309,16 @@ describe('real initializers: a stale PB loses weight against current running dat
     expect(three).toBeGreaterThan(five + 2);
   });
 
-  it('without HR the old PB still loses weight to the training data', () => {
-    const e = engine({ onboardingRunHistory: jogs(false) }, 5);
-    expect(e.refresh).toBeLessThan(PB - 5);
+  it('without HR there is no current capacity evidence: the engine holds at PB capacity, the readiness blend ages', () => {
+    // Easy-run paces say nothing about capacity (§CY) and the readiness
+    // penalties are not capacity (§BZ), so the PB stays the only capacity
+    // figure. The race-readiness time still gives the old PB less weight.
+    const old = engine({ onboardingRunHistory: jogs(false) }, 5);
+    expect(old.onboard).toBeCloseTo(PB, 9);
+    expect(old.refresh).toBeCloseTo(PB, 9);
+    const oldReadiness = getState().blendedRaceTimeSec!;
+    engine({ onboardingRunHistory: jogs(false) }, 1);
+    expect(oldReadiness).toBeGreaterThan(getState().blendedRaceTimeSec!);
   });
 
   it('with no running data an old PB keeps full weight (§BV)', () => {

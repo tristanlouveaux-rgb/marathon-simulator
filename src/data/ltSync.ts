@@ -17,7 +17,9 @@
  */
 
 import { resolveLT, deriveLT, diagnoseSustainedEfforts, type BestEffortInput, type SustainedEffortInput, type DeriveLTInput, type LTDerivationResult, type SustainedEffortDiagnostic } from '@/calculations/lt-derivation';
-import { ltDanielsInputVdot, effectivePhysiologyPbs, pbAgeWeightsFor } from '@/calculations/physiological-vdot';
+import { ltDanielsInputVdot, effectivePhysiologyPbs, modelPbAgeWeightsIfMeasured } from '@/calculations/physiological-vdot';
+import { computePredictionInputs, collectRunsFromState } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import type { SimulatorState } from '@/types';
 
 /** Meaningful-change threshold — an applied LT shift of at least this many
@@ -39,8 +41,12 @@ function pbsToBestEfforts(s: SimulatorState, now?: string): BestEffortInput[] {
   const efforts: BestEffortInput[] = [];
   const pbs = effectivePhysiologyPbs(s);
   // PB age weights (pbAgeWeight): an old PB weighs less in critical speed and
-  // in the long-race LT bound. The PB times themselves are unchanged.
-  const w = pbAgeWeightsFor(pbs, s, now ? new Date(now) : new Date());
+  // in the long-race LT bound, on the same measured-volume gate as the blend
+  // and the engine floor (modelPbAgeWeightsIfMeasured): with no running data
+  // an old PB keeps full weight (§BV). The PB times themselves are unchanged.
+  const at = now ? new Date(now) : new Date();
+  const inputs = computePredictionInputs(collectRunsFromState(s), at, raceEffortHrFloorForState(s));
+  const w = modelPbAgeWeightsIfMeasured(pbs, s, inputs, at) ?? {};
   if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5, ageWeight: w.k5 ?? 1 });
   if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10, ageWeight: w.k10 ?? 1 });
   if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h, ageWeight: w.h ?? 1 });
