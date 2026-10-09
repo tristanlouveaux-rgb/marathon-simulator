@@ -105,6 +105,41 @@ function maxHRZones(maxHR: number): HRZones {
 }
 
 /**
+ * The HR profile behind the app's HR effort scale: measured max and resting HR,
+ * age as the last resort. Single source for `getHREffort` (activity-matcher.ts,
+ * the per-activity HR effort score) and the race-effort HR test
+ * (`raceEffortHrFloorForState`), so "how hard was this run" reads the same zones
+ * in both places.
+ */
+export function hrEffortProfile(
+  s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } | null },
+): HRProfile {
+  return {
+    maxHR: s.maxHR ?? undefined,
+    restingHR: s.restingHR ?? undefined,
+    age: s.onboarding?.age,
+  };
+}
+
+/**
+ * The lowest average HR that reads as a race effort on the HR effort scale: the
+ * top of the threshold zone (Z4), where Z5 ("VO2max+") begins. Threshold and
+ * tempo sessions target Z4 (`getWorkoutHRTarget`); a 5K to 10K race is run above
+ * threshold (SCIENCE_LOG §CY update). Null when no zones can be computed.
+ */
+export function raceEffortHrFloorBpm(profile: HRProfile): number | null {
+  const zones = calculateZones(profile);
+  return zones ? zones.z5.min : null;
+}
+
+/** `raceEffortHrFloorBpm` for the athlete's HR effort profile (`hrEffortProfile`). */
+export function raceEffortHrFloorForState(
+  s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } | null },
+): number | null {
+  return raceEffortHrFloorBpm(hrEffortProfile(s));
+}
+
+/**
  * Get HR target for a workout type.
  * Returns undefined if zones are not available.
  */

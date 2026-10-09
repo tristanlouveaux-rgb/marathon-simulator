@@ -16,6 +16,7 @@ import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILIT
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
 import { recomputeLT } from '@/data/ltSync';
@@ -453,7 +454,13 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       activityType: r.activityType,
       avgHR: r.avgHR ?? null,
     }));
-    const blendInputs = computePredictionInputs(runsForBlend);
+    // Race-effort HR test on the same HR effort profile the plan will hold
+    // (state.maxHR / restingHR win over synced values, as committed below).
+    const blendInputs = computePredictionInputs(runsForBlend, undefined, raceEffortHrFloorForState({
+      maxHR: state.maxHR || sCurrent.maxHR,
+      restingHR: state.restingHR || sCurrent.restingHR,
+      onboarding: { age: state.age },
+    }));
 
     // Marathon PB age (days) for the marathon-specificity penalty's PB-recency
     // scaling. A recent marathon PB demonstrates current capability and lightens

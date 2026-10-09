@@ -78,6 +78,7 @@ import { blendPredictions } from './predictions';
 import { effectiveVo2max } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
+import { raceEffortHrFloorForState } from './heart-rate';
 import {
   applyTriHorizonSwim,
   applyTriHorizonBike,
@@ -1363,7 +1364,7 @@ function blendOpenRunRaceTime(
   }
   for (const r of state.onboardingRunHistory ?? []) runs.push(r);
 
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(state));
   const hrVdot = computeHRCalibratedVdot(runs, state.restingHR ?? null, state.maxHR ?? null);
 
   return blendPredictions(

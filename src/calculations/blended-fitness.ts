@@ -22,6 +22,7 @@ import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
 import { computePredictionInputs, resolveWeeklyKmSignal, collectRunsFromState } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
+import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
@@ -123,7 +124,7 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
   if (!hasRunningFitnessSignal(s)) return null;
 
   const runs = collectRunsFromState(s);
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
   return {
     pbs: s.pbs ?? {},
@@ -294,7 +295,7 @@ export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance)
   const stages = ctx ? predictDistanceStaged(ctx, dist) : null;
   const predictedSec = stages ? stages.finalSec : null;
 
-  const inputs = computePredictionInputs(collectRunsFromState(s));
+  const inputs = computePredictionInputs(collectRunsFromState(s), undefined, raceEffortHrFloorForState(s));
   const weeklyKm = inputs.weeklyKm > 0 ? inputs.weeklyKm : (s.detectedWeeklyKm ?? null);
 
   // Durability comes from the staged result when available (same longest-run
@@ -501,7 +502,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   if (!targetDistM) return false;
 
   const runs = runsAll;
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
 
   // Pass the resolved weekly-km signal: history-derived when the 8-week
   // window has any coverage (including an explicit 0 — a user with 145

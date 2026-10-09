@@ -40,6 +40,7 @@ import {
 } from '@/calculations/predictions';
 import { collectRunsFromState } from '@/calculations/blended-fitness';
 import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { buildInfoIcon, mountInfoPopovers } from './info-popover';
 
 export type ChipKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration' | 'shoes';
@@ -233,11 +234,12 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
 
   // Mirror refreshBlendedFitness: derive the most recent race effort from
   // garminActuals (computePredictionInputs recentRun, a run more than 15%
-  // faster than the window's median pace) and fall back to s.rec only if none
+  // faster than the window's median pace and, when it has an average HR, at
+  // race level on the HR effort scale) and fall back to s.rec only if none
   // exists. Without this, the drill-down read "no signal" while the live blend
   // was firing on activity-derived recent runs.
   const runs = collectRunsFromState(s);
-  const blendInputs = computePredictionInputs(runs);
+  const blendInputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
   const recentRun = blendInputs.recentRun ?? s.rec ?? null;
   const recentIsDerived = blendInputs.recentRun != null;
   const hasRecent = !!(recentRun && recentRun.t && recentRun.t > 0);
@@ -461,7 +463,7 @@ function buildPenalties(s: SimulatorState): PenaltyRow[] {
 
   // Tanda eligibility (drives marathon-specificity gate)
   const runs = isMarathon ? collectRunsFromState(s) : [];
-  const inputs = isMarathon ? computePredictionInputs(runs) : null;
+  const inputs = isMarathon ? computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s)) : null;
   const tandaTrusted = inputs
     ? inputs.weeksCovered >= 4
       && (inputs.paceConfidence === 'high' || inputs.paceConfidence === 'medium')
@@ -908,7 +910,7 @@ function renderTandaCard(s: SimulatorState): string {
   if (!isMarathon) return '';
 
   const runs = collectRunsFromState(s);
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
 
   const trusted = inputs.weeksCovered >= 4
     && (inputs.paceConfidence === 'high' || inputs.paceConfidence === 'medium')

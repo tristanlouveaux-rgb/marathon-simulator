@@ -27,6 +27,7 @@ import { deriveVdotFromLT } from './lt-derivation';
 import { getEffectiveVdot } from './effective-vdot';
 import { runSkillVdot } from './tri-run-skill';
 import { computePredictionInputs, collectRunsFromState } from './prediction-inputs';
+import { raceEffortHrFloorForState } from './heart-rate';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -473,7 +474,7 @@ export function ltDanielsInputVdot(
   if (resolved.source !== 'device' && resolved.source !== 'tanda-fallback') return v;
   const ceiling = triathleteRunEvidenceCeiling(s, now);
   if (ceiling != null) return Math.min(v, ceiling);
-  const recentRun = computePredictionInputs(collectRunsFromState(s), now).recentRun;
+  const recentRun = computePredictionInputs(collectRunsFromState(s), now, raceEffortHrFloorForState(s)).recentRun;
   const cap = triColdStartRunCapVdot(s, { recentRaceEffort: recentRun != null && recentRun.t > 0, now });
   if (cap == null) return v;
   return resolved.source === 'device' ? Math.min(v, cap) : cap;

@@ -23,6 +23,7 @@ import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { blendPredictions } from '@/calculations/predictions';
 import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
@@ -3284,9 +3285,10 @@ function buildForecastTimesCard(s: SimulatorState): string {
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
   // Recent race effort from garminActuals (computePredictionInputs recentRun:
-  // a run more than 15% faster than the window's median pace), else the
-  // onboarding s.rec.
-  const inputs = computePredictionInputs(collectRunActivities(s));
+  // a run more than 15% faster than the window's median pace and, when it has
+  // an average HR, at race level on the HR effort scale), else the onboarding
+  // s.rec. Same race HR floor as refreshBlendedFitness.
+  const inputs = computePredictionInputs(collectRunActivities(s), undefined, raceEffortHrFloorForState(s));
   const liveRec = inputs.recentRun ?? s.rec ?? null;
   const liveKmPerWeek = inputs.weeklyKm;
   const liveAvgPace = inputs.avgPaceSecPerKm ?? null;

@@ -10,9 +10,14 @@
  *   - Window: up to 8 weeks anchored on the most recent activity
  *   - P: unweighted arithmetic mean of per-session pace across training runs
  *   - K: mean weekly running km across the window
- *   - Races filtered from P (15% faster than median = race effort) but kept in K
- *   - Recent run = the newest race effort (same pace test). Easy runs never
- *     pass it; a tempo-paced training run can (known limitation, pinned in
+ *   - Races filtered from P (race effort, below) but kept in K
+ *   - Recent run = the newest race effort. Race effort: more than 15% faster
+ *     than the window's median pace AND, when the run has an average HR and the
+ *     athlete's HR zones are known, an average HR at race level on the HR
+ *     effort scale (at or above the top of the threshold zone, Z5). Easy runs
+ *     never pass the pace test; a tempo run with a tempo-level HR now fails the
+ *     HR test. Without HR the test is pace-only, so a tempo-paced run with no
+ *     HR still counts (known limitation, pinned in
  *     initialization.easy-runs-vdot.test.ts)
  *
  * See `docs/SCIENCE_LOG.md` for the Tanda entry and the rationale behind each
@@ -48,12 +53,13 @@ export interface PredictionInputs {
   avgPaceSecPerKm: number | null;
   /** Most recent RACE EFFORT in the window: a qualifying run at least 15%
    *  faster than the window's median pace (RACE_FILTER_RATIO, the same test
-   *  that removes races from P). Null when the window holds only training
-   *  runs. Every consumer treats this as a race or time trial (blend
-   *  `predictFromRecent`, the engine-floor slowness gate, the demonstrated-PB
-   *  floor), so an easy run must never fill it. The test is pace-only: a
-   *  tempo or threshold session, or a parkrun at tempo effort, passes it and
-   *  is read as a race (known limitation, pinned in
+   *  that removes races from P) whose average HR, when the run has one and
+   *  `raceHrFloorBpm` is known, is at race level (at or above the floor). Null
+   *  when the window holds only training runs. Every consumer treats this as a
+   *  race or time trial (blend `predictFromRecent`, the engine-floor slowness
+   *  gate, the demonstrated-PB floor), so an easy run must never fill it. With
+   *  no HR the test is pace-only: a tempo or threshold session, or a parkrun at
+   *  tempo effort, passes it and is read as a race (known limitation, pinned in
    *  initialization.easy-runs-vdot.test.ts). */
   recentRun: { d: number; t: number; weeksAgo: number } | null;
   /** Number of weeks in the analysis window (up to 8). */
@@ -112,10 +118,18 @@ function median(xs: number[]): number {
  *              outside 3:00–7:30 /km are filtered out.
  * @param now   Anchor time for the 8-week window. Defaults to current time;
  *              pass explicitly in tests for determinism.
+ * @param raceHrFloorBpm  The lowest average HR that reads as a race effort on
+ *              the athlete's HR effort scale (`raceEffortHrFloorForState`,
+ *              heart-rate.ts: the top of the threshold zone). When set, a run
+ *              that has an average HR must reach it to count as a race effort.
+ *              Null or omitted: pace-only, as before. Every caller that has the
+ *              athlete's state passes it, so the recent run and Tanda's P are
+ *              the same on every surface.
  */
 export function computePredictionInputs(
   runs: RunActivityInput[],
   now: Date = new Date(),
+  raceHrFloorBpm?: number | null,
 ): PredictionInputs {
   const empty: PredictionInputs = {
     weeklyKm: 0,
@@ -132,7 +146,7 @@ export function computePredictionInputs(
 
   // ── Sanitise + dedup ─────────────────────────────────────────────────────
   const seen = new Set<string>();
-  const qualifying: Array<{ startMs: number; distKm: number; durSec: number; paceSecPerKm: number }> = [];
+  const qualifying: Array<{ startMs: number; distKm: number; durSec: number; paceSecPerKm: number; avgHR: number | null }> = [];
   for (const r of runs) {
     if (!r.distKm || r.distKm < MIN_DIST_KM || !r.durSec || r.durSec <= 0) continue;
     const pace = r.durSec / r.distKm;
@@ -150,6 +164,7 @@ export function computePredictionInputs(
       distKm: r.distKm,
       durSec: r.durSec,
       paceSecPerKm: pace,
+      avgHR: r.avgHR != null && r.avgHR > 0 ? r.avgHR : null,
     });
   }
   if (qualifying.length === 0) return empty;
@@ -185,9 +200,18 @@ export function computePredictionInputs(
   // One race-effort test for the window, shared by the recent run and P: a run
   // more than 15% faster than the median pace is a race or time trial
   // (RACE_FILTER_RATIO). SCIENCE_LOG "Effort-Calibrated VDOT from HR" defines
-  // the hard-effort signal the same way.
+  // the hard-effort signal the same way. Pace alone cannot tell a race from a
+  // tempo or threshold session, so a run that carries an average HR must also
+  // be at race level on the HR effort scale: at or above the top of the
+  // threshold zone (raceHrFloorBpm). A tempo run averages inside the threshold
+  // zone (Z4, the zone threshold and tempo sessions target); a 5K to 10K race
+  // averages above it. A run without HR, or an athlete without HR zones, keeps
+  // the pace-only test.
   const medianPace = median(inWindow.map(q => q.paceSecPerKm));
-  const isRaceEffort = (pace: number): boolean => pace < medianPace * RACE_FILTER_RATIO;
+  const hrFloor = raceHrFloorBpm != null && raceHrFloorBpm > 0 ? raceHrFloorBpm : null;
+  const isRaceEffort = (q: { paceSecPerKm: number; avgHR: number | null }): boolean =>
+    q.paceSecPerKm < medianPace * RACE_FILTER_RATIO
+    && (hrFloor == null || q.avgHR == null || q.avgHR >= hrFloor);
 
   // ── Recent run (the newest race effort in the window) ────────────────────
   // Consumers project this run to the target distance as a race performance
@@ -197,9 +221,10 @@ export function computePredictionInputs(
   // slower race: a 10K 45:00 runner's 16 km easy run at 5:52/km projected the
   // engine VDOT from 45.3 down to about 37, the same with or without a zone-2
   // heart rate. Easy runs feed P (Tanda) and the HR calibration instead.
-  // Pace-only: a tempo-paced training run still passes the race test (known
-  // limitation, pinned in initialization.easy-runs-vdot.test.ts).
-  const newest = inWindow.find(q => isRaceEffort(q.paceSecPerKm));
+  // With HR, a tempo run at a tempo-level HR is a training run. Without HR a
+  // tempo-paced training run still passes the race test (known limitation,
+  // pinned in initialization.easy-runs-vdot.test.ts).
+  const newest = inWindow.find(q => isRaceEffort(q));
   const recentRun = newest
     ? {
       d: newest.distKm,
@@ -238,7 +263,7 @@ export function computePredictionInputs(
   // Tanda's paper uses unweighted mean across training sessions. We filter
   // race efforts by detecting runs meaningfully faster than median. Those
   // are not "training pace" and would skew P fast.
-  const trainingPaces = inWindow.map(q => q.paceSecPerKm).filter(p => !isRaceEffort(p));
+  const trainingPaces = inWindow.filter(q => !isRaceEffort(q)).map(q => q.paceSecPerKm);
 
   let avgPaceSecPerKm: number | null = null;
   let paceConfidence: PredictionInputs['paceConfidence'] = 'none';

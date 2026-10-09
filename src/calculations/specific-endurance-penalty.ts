@@ -46,6 +46,7 @@ import type { TriathlonDistance } from '@/types/triathlon';
 import type { AbilityBand } from '@/types/training';
 import { recentHoursByDiscipline, longestSessionByDiscipline } from './tri-volume-by-discipline';
 import { computePredictionInputs } from './prediction-inputs';
+import { raceEffortHrFloorForState } from './heart-rate';
 import { collectRunsFromState } from './blended-fitness';
 import { getLongestRunSec } from './run-durability';
 import { getAbilityBand as getRunAbilityBandFromVdot } from './fatigue';
@@ -293,7 +294,7 @@ function readWeeklyVolume(
 ): { actual: number; unit: 'km' | 'hours' } {
   if (discipline === 'run') {
     const runs = collectRunsFromState(state);
-    const inputs = computePredictionInputs(runs);
+    const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(state));
     return { actual: inputs.weeklyKm ?? 0, unit: 'km' };
   }
   // Swim/bike: hours/week from the 8-week window. recentHoursByDiscipline

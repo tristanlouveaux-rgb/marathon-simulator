@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computePredictionInputs, resolveWeeklyKmSignal, type RunActivityInput } from './prediction-inputs';
+import { calculateZones, raceEffortHrFloorBpm, raceEffortHrFloorForState, hrEffortProfile } from './heart-rate';
 
 /**
  * Build a deterministic run N days before `anchor`, with given distance and
@@ -187,6 +188,71 @@ describe('computePredictionInputs', () => {
     const r = computePredictionInputs(easy, NOW);
     expect(r.runsCounted).toBe(6);
     expect(r.avgPaceSecPerKm).not.toBeNull();
+  });
+});
+
+/**
+ * Race test with heart rate (Tristan, 2026-10-09). Pace alone reads a tempo run
+ * or a parkrun at tempo effort as a race. With an average HR and known HR zones,
+ * a run counts as a race only at race level on the HR effort scale: at or above
+ * the top of the threshold zone (Z4), where Z5 begins (raceEffortHrFloorBpm).
+ */
+describe('computePredictionInputs: race test with heart rate', () => {
+  const NOW = new Date('2026-04-15T12:00:00Z');
+  // maxHR 190, resting 50 (Karvonen): Z4 threshold 162-176, Z5 from 176.
+  const PROFILE = { maxHR: 190, restingHR: 50 };
+  const FLOOR = raceEffortHrFloorBpm(PROFILE)!;
+  // Easy weeks at about 5:50/km plus one 5 km at 4:45/km ten days ago.
+  const easy = [run(2, 16, 352), run(4, 8, 345), run(6, 6, 350), run(9, 16, 352), run(11, 8, 345), run(13, 6, 350)];
+  const fast = (avgHR?: number): RunActivityInput => ({ ...run(10, 5, 285), ...(avgHR != null ? { avgHR } : {}) });
+
+  it('the race floor is the top of the threshold zone on the HR effort scale', () => {
+    const zones = calculateZones(PROFILE)!;
+    expect(FLOOR).toBe(176);
+    expect(FLOOR).toBe(zones.z4.max);
+    expect(FLOOR).toBe(zones.z5.min);
+    // Max HR only: 90% of max. No profile: no floor.
+    expect(raceEffortHrFloorBpm({ maxHR: 190 })).toBe(171);
+    expect(raceEffortHrFloorBpm({})).toBeNull();
+    // The state helper reads the same profile as the per-activity HR effort score.
+    expect(hrEffortProfile({ maxHR: 190, restingHR: 50, onboarding: { age: 40 } })).toEqual({ maxHR: 190, restingHR: 50, age: 40 });
+    expect(raceEffortHrFloorForState({ maxHR: 190, restingHR: 50 })).toBe(176);
+  });
+
+  it('a tempo run at a tempo-level HR is a training run, not a race', () => {
+    const tempo = fast(165);  // Z4, 82% of reserve
+    const r = computePredictionInputs([tempo, ...easy], NOW, FLOOR);
+    expect(r.recentRun).toBeNull();
+    // It stays in Tanda's training pace P (Tanda excludes races, not tempo runs).
+    expect(r.paceRunsCounted).toBe(7);
+    // Pre-fix (pace-only) it was the recent race.
+    expect(computePredictionInputs([tempo, ...easy], NOW).recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
+  it('the tempo at the HR §CY measured (168, 84% of reserve) is still a training run', () => {
+    expect(computePredictionInputs([fast(168), ...easy], NOW, FLOOR).recentRun).toBeNull();
+  });
+
+  it('a race at a race-level HR still counts', () => {
+    const r = computePredictionInputs([fast(180), ...easy], NOW, FLOOR);
+    expect(r.recentRun).toMatchObject({ d: 5, t: 1425, weeksAgo: 1 });
+    expect(r.paceRunsCounted).toBe(6);
+    // Exactly at the floor counts.
+    expect(computePredictionInputs([fast(FLOOR), ...easy], NOW, FLOOR).recentRun).not.toBeNull();
+  });
+
+  it('a fast run without HR keeps the pace-only test', () => {
+    const r = computePredictionInputs([fast(), ...easy.map(e => ({ ...e, avgHR: 140 }))], NOW, FLOOR);
+    expect(r.recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
+  it('without HR zones the test is pace-only even when the run has HR', () => {
+    expect(computePredictionInputs([fast(165), ...easy], NOW, null).recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
+  it('a slow run with a high HR is not a race (the pace test still applies)', () => {
+    const hot = { ...run(3, 10, 350), avgHR: 182 };
+    expect(computePredictionInputs([hot, ...easy], NOW, FLOOR).recentRun).toBeNull();
   });
 });
 

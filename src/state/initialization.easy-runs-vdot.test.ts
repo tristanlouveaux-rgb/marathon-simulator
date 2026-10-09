@@ -181,18 +181,62 @@ function engineAfter(runs: RunRow[], over: Partial<OnboardingState> = {}): { onb
 }
 
 /**
- * KNOWN LIMITATION, pinned 2026-10-08 (open question for Tristan). The race
- * test is pace-only: a run more than 15% faster than the window's median pace.
- * Among easy runs at about 5:50/km that line sits near 4:58/km, so a tempo or
- * threshold session, a cruise-interval session that averages under it, or a
- * parkrun run at tempo effort fills the recent-race slot. It projects to the
- * race distance as a slower race and stands the §BZ engine floor down, the
- * same mechanism the easy-run fix removed. Separating tempo from race needs a
- * new rule (an HR threshold, a race flag, the activity name or the Strava
- * workout type), which is Tristan's call. These tests record today's numbers
- * so a change to the rule is deliberate: when the rule changes, rewrite them.
+ * Race test with heart rate (Tristan, 2026-10-09). With an average HR and HR
+ * zones, a run more than 15% faster than the window's median pace counts as a
+ * race only at race level on the HR effort scale: at or above the top of the
+ * threshold zone (raceEffortHrFloorBpm, heart-rate.ts). maxHR 190 and resting
+ * 50 put the threshold zone (Z4) at 162-176 bpm.
  */
-describe('KNOWN LIMITATION: a tempo-paced training run counts as a race effort', () => {
+describe('race test reads heart rate when the run has it', () => {
+  let capacity = 0;
+  beforeEach(() => { capacity = noHistoryVdot(); });
+
+  function withHR(avgHR: number): RunRow {
+    return { ...oneRun(10, 5, 1425), avgHR };
+  }
+
+  it('a 5 km tempo at 4:45/km with a tempo-level HR leaves a 10K 45:00 runner at 45.3', () => {
+    // Pace-only (no HR, pinned below) this run read 39.1 at onboarding and 40.3
+    // after a refresh.
+    for (const avgHR of [165, 168]) {
+      seed({ ...HR, onboardingRunHistory: [withHR(avgHR), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+      expect(initializeSimulator(onboarding()).success).toBe(true);
+      expect(getState().v).toBeCloseTo(capacity, 6);
+      refreshBlendedFitness(getMutableState());
+      expect(getState().v).toBeCloseTo(capacity, 6);
+    }
+  });
+
+  it('the same run at a race-level HR still counts as a race and lowers the engine', () => {
+    seed({ ...HR, onboardingRunHistory: [withHR(180), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    expect(getState().v).toBeLessThan(capacity - 4);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().v).toBeLessThan(capacity - 4);
+  });
+
+  it('a weekly parkrun in 23:20 at a tempo-level HR is a training run', () => {
+    // Pace-only this read about 40.5 (pinned below).
+    const parkruns = history(6, [[0, 5, 1400 / 60]], 170, 1);
+    seed({ ...HR, onboardingRunHistory: [...parkruns, ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().v).toBeCloseTo(capacity, 6);
+  });
+});
+
+/**
+ * KNOWN LIMITATION, pinned 2026-10-08, narrowed 2026-10-09. Without heart rate
+ * the race test is pace-only: a run more than 15% faster than the window's
+ * median pace. Among easy runs at about 5:50/km that line sits near 4:58/km,
+ * so a tempo or threshold session, a cruise-interval session that averages
+ * under it, or a parkrun run at tempo effort fills the recent-race slot. It
+ * projects to the race distance as a slower race and stands the §BZ engine
+ * floor down. With an average HR the run must also be at race level
+ * (describe block above). These tests (no HR) record today's numbers so a
+ * change to the rule is deliberate: when the rule changes, rewrite them.
+ */
+describe('KNOWN LIMITATION: without HR a tempo-paced training run counts as a race effort', () => {
   let capacity = 0;
   beforeEach(() => { capacity = noHistoryVdot(); });
 
