@@ -199,13 +199,44 @@ const PB_KEYS: readonly PbKey[] = ['k5', 'k10', 'h', 'm'];
  * `dateISO` may be `YYYY-MM` or a full ISO date.
  */
 export function pbAgeWeight(dateISO: string | null | undefined, now: Date = new Date()): number {
-  if (!dateISO) return 1;
+  return pbAgeBand(dateISO, now).weight;
+}
+
+/**
+ * The §T5 PB recency bands as data, oldest first: a PB more than `overYears`
+ * years old (365-day years) weighs `weight`; a younger one weighs 1. Single
+ * source for `pbAgeWeight`, the triathlon marathon-depth recency label and the
+ * Stats race-estimates caption, so a label can never drift from the model.
+ */
+export const PB_AGE_BANDS: ReadonlyArray<{ readonly overYears: number; readonly weight: number }> = [
+  { overYears: 4, weight: 0.3 },
+  { overYears: 2, weight: 0.6 },
+];
+
+/** Age (years) below which a PB keeps full weight: the youngest band's start. */
+export const PB_FULL_WEIGHT_YEARS = PB_AGE_BANDS[PB_AGE_BANDS.length - 1].overYears;
+
+/**
+ * The §T5 band a PB date falls in: its weight and the band's age range in
+ * years (`maxYears` null for the oldest band). No date, an unparseable or a
+ * future one: the full-weight band (§T5 default).
+ */
+export function pbAgeBand(
+  dateISO: string | null | undefined,
+  now: Date = new Date(),
+): { weight: number; minYears: number; maxYears: number | null } {
+  const full = { weight: 1, minYears: 0, maxYears: PB_FULL_WEIGHT_YEARS };
+  if (!dateISO) return full;
   const ts = Date.parse(dateISO.length === 7 ? dateISO + '-01' : dateISO);
-  if (!Number.isFinite(ts)) return 1;
+  if (!Number.isFinite(ts)) return full;
   const ageDays = (now.getTime() - ts) / DAY_MS;
-  if (ageDays > 4 * 365) return 0.3;
-  if (ageDays > 2 * 365) return 0.6;
-  return 1;
+  for (let i = 0; i < PB_AGE_BANDS.length; i++) {
+    const band = PB_AGE_BANDS[i];
+    if (ageDays > band.overYears * 365) {
+      return { weight: band.weight, minYears: band.overYears, maxYears: i === 0 ? null : PB_AGE_BANDS[i - 1].overYears };
+    }
+  }
+  return full;
 }
 
 /**
@@ -262,6 +293,30 @@ export function modelPbAgeWeightsIfMeasured(
   now: Date = new Date(),
 ): PbAgeWeights | undefined {
   return measuredWeeklyKm(inputs, s.detectedWeeklyKm) != null ? pbAgeWeightsFor(pbs, s, now) : undefined;
+}
+
+/**
+ * Whether PB age currently changes the model for these PBs: a volume-gated
+ * weight below 1 (`modelPbAgeWeightsIfMeasured`), or an age-weighted median
+ * that differs from the plain one (`pbCapacity`). Drives the inline caption on
+ * the Stats race estimates (feature-reveal order: inline caption first), so
+ * the caption shows exactly when the estimates rely less on an old PB than
+ * its displayed time suggests.
+ */
+export function pbAgeingActive(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: {
+    onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null;
+    detectedWeeklyKm?: number | null;
+  },
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  now: Date = new Date(),
+): boolean {
+  const gated = modelPbAgeWeightsIfMeasured(pbs, s, inputs, now);
+  if (gated && Object.values(gated).some(w => w != null && w < 1)) return true;
+  const weighted = pbCapacity(pbs, pbAgeWeightsFor(pbs, s, now));
+  const plain = pbCapacity(pbs);
+  return weighted != null && plain != null && weighted.vdot !== plain.vdot;
 }
 
 /**

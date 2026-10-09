@@ -32,7 +32,7 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal, modelPbAgeWeightsIfMeasured } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal, modelPbAgeWeightsIfMeasured, pbAgeingActive, PB_FULL_WEIGHT_YEARS } from '@/calculations/physiological-vdot';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
@@ -3314,11 +3314,21 @@ function buildForecastTimesCard(s: SimulatorState): string {
       </div>`;
   }).join('');
 
+  // PB age caption (feature-reveal order: inline caption first). The PB list
+  // shows each PB exactly as entered or synced, while these estimates give a
+  // PB older than PB_FULL_WEIGHT_YEARS less weight; say so where the numbers
+  // are, and only when ageing changes them (pbAgeingActive, the same gate and
+  // weights as the blend above).
+  const pbAgeCaption = hasBlendInputs && pbAgeingActive(s.pbs ?? {}, s, inputs, new Date())
+    ? `<div style="font-size:11px;color:var(--c-muted);margin-top:8px">PBs older than ${PB_FULL_WEIGHT_YEARS} years carry less weight in these estimates.</div>`
+    : '';
+
   return `
     <div class="m-card" style="padding:14px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:2px">Current Race Estimates</div>
       <div style="font-size:10px;color:var(--c-faint);margin-bottom:8px">Estimated finish times if racing today</div>
       ${rows}
+      ${pbAgeCaption}
     </div>`;
 }
 

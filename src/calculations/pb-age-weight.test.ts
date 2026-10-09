@@ -24,7 +24,7 @@ vi.stubGlobal('localStorage', {
 vi.stubGlobal('alert', vi.fn());
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
-import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot } from './physiological-vdot';
+import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, pbAgeBand, pbAgeingActive, PB_AGE_BANDS, PB_FULL_WEIGHT_YEARS } from './physiological-vdot';
 import { measuredWeeklyKm } from './prediction-inputs';
 import { blendPredictions, demonstratedPBFloor } from './predictions';
 import { deriveLT } from './lt-derivation';
@@ -65,6 +65,40 @@ describe('pbAgeWeight reuses the §T5 recency bands', () => {
     expect(pbAgeWeightsFor({ k10: 2350, h: 5400 }, s, NOW)).toEqual({ k10: 1, h: 0.6 });
     // No dates at all: every PB weighs 1.
     expect(pbAgeWeightsFor({ k5: 1200 }, {}, NOW)).toEqual({ k5: 1 });
+  });
+});
+
+describe('PB age bands are one table (labels and captions read it)', () => {
+  it('pbAgeBand gives the weight and age range pbAgeWeight uses', () => {
+    expect(PB_AGE_BANDS).toEqual([{ overYears: 4, weight: 0.3 }, { overYears: 2, weight: 0.6 }]);
+    expect(PB_FULL_WEIGHT_YEARS).toBe(2);
+    expect(pbAgeBand(ago(30), NOW)).toEqual({ weight: 1, minYears: 0, maxYears: 2 });
+    expect(pbAgeBand(ago(3 * 365), NOW)).toEqual({ weight: 0.6, minYears: 2, maxYears: 4 });
+    expect(pbAgeBand(ago(5 * 365), NOW)).toEqual({ weight: 0.3, minYears: 4, maxYears: null });
+    expect(pbAgeBand(undefined, NOW)).toEqual({ weight: 1, minYears: 0, maxYears: 2 });
+    for (const d of [ago(30), ago(2 * 365 + 2), ago(4 * 365 + 2), '2021-03', 'bad', undefined]) {
+      expect(pbAgeWeight(d, NOW)).toBe(pbAgeBand(d, NOW).weight);
+    }
+  });
+
+  it('pbAgeingActive: an aged PB with a measured volume, or a weighted median that moved', () => {
+    const dated = (k10Years: number, k5Years?: number) => ({
+      onboarding: {
+        pbs: { k5: 1320, k10: 2400 },
+        pbDates: { k10: ago(k10Years * 365), ...(k5Years != null ? { k5: ago(k5Years * 365) } : {}) },
+      },
+    });
+    const measured = { weeksCovered: 4, weeklyKm: 30 };
+    const none = { weeksCovered: 0, weeklyKm: 0 };
+    // Old 10K with a measured volume: the blend weighs it less.
+    expect(pbAgeingActive({ k10: 2400 }, dated(5), measured, NOW)).toBe(true);
+    // Same PB, no running data: no gated use, single PB so the median is the PB.
+    expect(pbAgeingActive({ k10: 2400 }, dated(5), none, NOW)).toBe(false);
+    // Fresh 5K beside an old 10K, no data: the weighted median moves.
+    expect(pbAgeingActive({ k5: 1320, k10: 2400 }, dated(5, 1), none, NOW)).toBe(true);
+    // Fresh or undated PBs: never.
+    expect(pbAgeingActive({ k10: 2400 }, dated(1), measured, NOW)).toBe(false);
+    expect(pbAgeingActive({ k10: 2400 }, {}, measured, NOW)).toBe(false);
   });
 });
 

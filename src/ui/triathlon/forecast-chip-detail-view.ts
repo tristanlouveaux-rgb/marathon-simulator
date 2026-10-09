@@ -24,6 +24,7 @@ import {
   longestSessionByDiscipline,
 } from '@/calculations/tri-volume-by-discipline';
 import { computeTriDisciplineConfidence } from '@/calculations/tri-discipline-confidence';
+import { pbAgeBand } from '@/calculations/physiological-vdot';
 import { DURABILITY_THRESHOLDS } from '@/calculations/durability-cap';
 import { CLIMATE_ANCHOR_TEMP_C } from '@/constants/triathlon-course-factors';
 import { ft, fp } from '@/utils/format';
@@ -1118,10 +1119,14 @@ function pageMarathonDepth(s: SimulatorState): PageContent {
   const pbDateISO = s.onboarding?.pbDates?.m;
   let recencyLabel = '';
   if (pbDateISO) {
-    const ageDays = (Date.now() - Date.parse(pbDateISO)) / 86400000;
-    recencyLabel = ageDays > 4 * 365 ? '> 4 years ago (30% credit weighting)'
-      : ageDays > 2 * 365 ? '2 to 4 years ago (60% credit weighting)'
-      : 'Within 2 years (full credit weighting)';
+    // Derived from the model's own bands (pbAgeBand, the weight
+    // computeMarathonDepthMultiplier applies), so the label cannot drift.
+    const band = pbAgeBand(pbDateISO);
+    const when = band.maxYears == null ? `> ${band.minYears} years ago`
+      : band.minYears === 0 ? `Within ${band.maxYears} years`
+      : `${band.minYears} to ${band.maxYears} years ago`;
+    const weighting = band.weight >= 1 ? 'full credit weighting' : `${Math.round(band.weight * 100)}% credit weighting`;
+    recencyLabel = `${when} (${weighting})`;
   }
 
   return {
