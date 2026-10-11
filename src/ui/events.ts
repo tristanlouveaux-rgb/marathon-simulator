@@ -14,6 +14,7 @@ import {
 } from '@/calculations';
 import { IMP, TIM, EXPECTED_GAINS, plannedTssPerMin } from '@/constants';
 import { TL_PER_MIN } from '@/constants/sports';
+import type { HRProfile } from '@/calculations/heart-rate';
 import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
@@ -441,6 +442,26 @@ export function init(): void {
  * @param name - Display name for logging
  */
 /**
+ * The HR zone profile for scoring a rated session (the RPE + HR flow, the
+ * threshold-run LT estimate and the Z2 efficiency points): the lactate
+ * threshold HEART RATE (s.ltHR, bpm) when known, as the Plan card's HR target
+ * reads it, then max and resting HR (synced, else onboarding), then age.
+ * s.lt is the LT PACE in s/km: passed as lthr (as all three sites did before
+ * 2026-10-11) it exceeded calculateZones' 100 bpm gate, so a 300 s/km LT made
+ * an LTHR of 300 bpm and a Zone 2 of 240 to 267 bpm.
+ */
+export function ratingHrProfile(
+  s: Pick<SimulatorState, 'ltHR' | 'maxHR' | 'restingHR' | 'onboarding'>,
+): HRProfile {
+  return {
+    lthr: s.ltHR || undefined,
+    maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
+    restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
+    age: s.onboarding?.age || undefined,
+  };
+}
+
+/**
  * Rate a workout with combined RPE and optional HR data
  */
 export function rate(
@@ -485,12 +506,7 @@ export function rate(
   // Joint RPE + HR logic
   let efficiencyShift = 0;
   if (avgHR && avgHR > 0) {
-    const zones = calculateZones({
-      lthr: s.lt || undefined,
-      maxHR: s.onboarding?.maxHR || undefined,
-      restingHR: s.onboarding?.restingHR || undefined,
-      age: s.onboarding?.age || undefined
-    });
+    const zones = calculateZones(ratingHrProfile(s));
     const target = getWorkoutHRTarget(workoutType, zones);
     if (target) {
       const intensity = calculateIntensityScore(avgHR, target);
@@ -547,12 +563,7 @@ export function rate(
     const stream = getWorkoutStream(workoutId);
     if (stream) {
       const analysis = analyzeStream(stream);
-      const zones = calculateZones({
-        lthr: s.lt || undefined,
-        maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
-        restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
-        age: s.onboarding?.age || undefined,
-      });
+      const zones = calculateZones(ratingHrProfile(s));
       if (zones) {
         const ltEst = estimateFromThresholdRun(analysis, zones);
         if (ltEst) {
@@ -585,12 +596,7 @@ export function rate(
   // produce outlier CEI values and pollute the trend. We require known HR zones
   // to validate the data point. Without them CEI comparisons are meaningless.
   if ((workoutType === 'easy' || workoutType === 'long') && avgHR && avgHR > 0) {
-    const effZones = calculateZones({
-      lthr: s.lt || undefined,
-      maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
-      restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
-      age: s.onboarding?.age || undefined,
-    });
+    const effZones = calculateZones(ratingHrProfile(s));
     const inZ2 = effZones && avgHR >= effZones.z2.min && avgHR <= effZones.z2.max * 1.05;
     if (inZ2) {
       const stream = getWorkoutStream(workoutId);
