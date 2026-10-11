@@ -7,16 +7,14 @@ import { clearStaleGatesForMode } from '@/injury/engine';
 import { saveState } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
-  gp, blendPredictions
+  gp
 } from '@/calculations';
-import { calculateForecast, blendPredictionsPreFloor, demonstratedPBFloorThrough, predictFromRecent } from '@/calculations/predictions';
+import { blendPredictionsPreFloor, demonstratedPBFloorThrough, predictFromRecent } from '@/calculations/predictions';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { pbCapacity, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { computeHRCalibratedVdot } from '@/calculations/effort-calibrated-vdot';
-import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
-import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { planRampArchetype } from '@/calculations/athlete-archetype';
 import { computePredictionInputs, measuredWeeklyKm } from '@/calculations/prediction-inputs';
 import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
@@ -429,8 +427,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const raceLayout = raceDateForPlan ? raceWeekLayout(planStartISO, raceDateForPlan) : null;
     const trainingWeeks = raceLayout ? raceLayout.trainingWeeks : state.planDurationWeeks;
     const calendarWeeks = raceLayout ? raceLayout.calendarWeeks : state.planDurationWeeks;
-    // Onboarding state with the plan's training weeks, for the forecast inputs.
-    const stateForForecast: OnboardingState = { ...state, planDurationWeeks: trainingWeeks };
 
     // Recent race for blending
     const rec = state.recentRace;
@@ -633,46 +629,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const curr = engineVdot;
     const pac = gp(curr, ltPace);
 
-    // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ───
-    // The forecast must credit the volume the plan builds the athlete up to, not
-    // today's pre-plan volume. `computePeakWeeklyKm` is the exact destination the
-    // plan engine ramps toward; re-blending at that volume lifts the low-volume /
-    // specificity penalties in proportion to the mileage the plan actually
-    // delivers (full relief once it reaches ≥30 km/wk, partial in the 20-30 band
-    // so a thin-data beginner is never over-credited to bare capacity).
-    const peakKm = runsPerWeek > 0
-      ? computePeakWeeklyKm({
-          runsPerWeek,
-          raceDistance: targetDistStr,
-          fitnessLevel: state.experienceLevel || 'intermediate',
-          totalWeeks: trainingWeeks ?? 16,
-          vdot: engineVdot,
-          easyPaceSecPerKm: pac.e,
-        })
-      : null;
-    const blendAtPeakKm = (km: number | null): number | null => (km != null && km > 0)
-      ? blendPredictions(
-          targetDistMeters, pbs, ltPace, vo2max, b,
-          runnerType.toLowerCase(),
-          blendInputs.recentRun ?? rec ?? null,
-          undefined,
-          km,
-          blendInputs.avgPaceSecPerKm ?? undefined,
-          { weeksCovered: blendInputs.weeksCovered, paceConfidence: blendInputs.paceConfidence, isStale: blendInputs.isStale },
-          undefined,
-          marathonPbAgeDays,
-          false,
-          effectiveCrossSessions,
-          pbAgeWeights,
-        )
-      : null;
-    const peakBlend = blendAtPeakKm(peakKm);
-    let forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
-    // Publish the peak-volume anchor for the live-recomputing forecast surfaces
-    // (renderer, plan-preview) so they credit the ramp instead of anchoring on
-    // the penalised today-time (ISSUE-297 forecast-display facet).
-    s.forecastBlendAnchorSec = forecastAnchorSec;
-
     // `runsPerWeek` + `effectiveCrossSessions` were computed above (before the
     // blend, so cross-training could soften the short-distance discount).
     const effectiveSessions = runsPerWeek + effectiveCrossSessions;
@@ -745,8 +701,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       recomputeLT(s);
       s.pac = gp(curr, s.lt ?? null);
     }
-    // Seed blended-fitness cache with wizard-only blend. Backfill will refresh
-    // this with Tanda inputs once per-run history lands.
+    // Seed blended-fitness cache with wizard-only blend. The launch refresh at
+    // the end of this function (refreshBlendedFitness, "one forecast")
+    // overwrites it on the committed plan.
     s.blendedRaceTimeSec = cappedBlendedTime;
     s.blendedEffectiveVdot = curr;
     s.blendedLastRefreshedISO = new Date().toISOString();
@@ -775,16 +732,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, trainingWeeks)
       ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks, noSignal: noRunningSignal })
       : undefined;
-    if (s.sharpenBlock && runsPerWeek > 0) {
-      // A block never reaches computePeakWeeklyKm: anchor the forecast on the
-      // block's own highest pre-taper week (plannedPeakWeeklyKm, the reader
-      // refreshBlendedFitness uses), now that its weeks and start exist.
-      const blockPeakBlend = blendAtPeakKm(plannedPeakWeeklyKm(runningPlanShapeInputs({ ...s, onboarding: state })));
-      if (blockPeakBlend != null && blockPeakBlend > 0) {
-        forecastAnchorSec = blockPeakBlend;
-        s.forecastBlendAnchorSec = blockPeakBlend;
-      }
-    }
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {
@@ -858,34 +805,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
     if (state.heightCm) s.heightCm = state.heightCm;
 
-    // Calculate expected final via shared forecast function. Anchor to the
-    // blended race-time so the projected end-of-plan finish stays on the same
-    // scale as the live "Current Race Estimate" surfaces (single canonical
-    // prediction model. See calculateForecast). Commute days are folded in
-    // here so the onboarding forecast matches the Training chip displayed on
-    // the forecast page (see race-forecast-fingerprint.ts:123 for the mirror).
-    const commuteSessions = state.runsToWork && state.commuteConfig?.enabled
-      ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
-      : 0;
-    const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, stateForForecast, runnerType, forecastAnchorSec,
-      // planRampArchetype: the archetype the plan engine ramps with (synced, else
-      // typed). s.onboarding is assigned further down, so read this build's.
-      { baselineKm: s.detectedWeeklyKm, archetype: planRampArchetype({ ...s, onboarding: state }) },
-    );
-    s.expectedFinal = forecast.forecastVdot;
-    // Race-day durability from the long runs the plan prescribes (race-day-durability),
-    // read with the inputs this plan is being built from: s.onboarding, the
-    // continuous flag and the plan start are assigned further down.
-    const raceDayDurability = raceDayPlanDurability({
-      ...s,
-      onboarding: state,
-      continuousMode: state.trainingForEvent === false,
-      planStartDate: planStartISO,
-    });
-    s.raceDayDurability = raceDayDurability ?? undefined;
-    s.forecastTime = forecast.forecastTime * (raceDayDurability?.multiplier ?? 1);
-
     // Store selected marathon (must be set BEFORE refreshing course factors,
     // since the helper reads s.selectedMarathon.profile)
     if (state.selectedRace) {
@@ -896,7 +815,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       // move race day.
       s.selectedMarathon = undefined;
     }
-    refreshForecastCourseFactors(s);
 
     // Anchor week date ranges to this Monday. A mid-week onboard yields a reduced
     // partial week 1 (pre-onboard days dropped, starts today — dropPreOnboardSessions);
@@ -924,6 +842,28 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     }
 
     redistributeArchivedActivitiesToNewPlan();
+
+    // ── One forecast (Tristan, 2026-10-11) ─────────────────────────────────
+    // The plan preview and Home read the same computation. The launch refresh
+    // (refreshBlendedFitness) runs here on the committed plan, after the
+    // archived activities move into it, so the race-readiness time, the engine,
+    // s.lt, the peak-volume forecast anchor, s.forecastTime and s.expectedFinal
+    // the preview shows are the ones the first launch computes. The wizard-only
+    // blend above (onboarding LT, no HR fit) sizes the plan's starting volume
+    // and engine seed only. Before, the preview's forecast came from that
+    // blend, so with an aged PB and a typed volume it differed from Home
+    // (review 3: marathon 3:09:36 vs 3:16:25). The initial values the progress
+    // views compare against are then taken from the refreshed state.
+    refreshBlendedFitness(s);
+    s.iv = s.v;
+    s.pac = gp(s.v, s.lt ?? null);
+    s.initialLT = s.lt ?? ltPace;
+    if (s.blendedRaceTimeSec != null) {
+      s.initialBaseline = s.blendedRaceTimeSec;
+      s.currentFitness = s.blendedRaceTimeSec;
+    }
+    // Course factors read s.forecastTime (and s.selectedMarathon, set above).
+    refreshForecastCourseFactors(s);
     saveState();
 
     return { success: true, runnerType: effectiveRunnerType, calculatedRunnerType };

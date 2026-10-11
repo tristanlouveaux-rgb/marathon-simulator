@@ -255,8 +255,10 @@ describe('KNOWN LIMITATION: without HR a tempo-paced training run counts as a ra
     expect(computePredictionInputs(runs).recentRun).toMatchObject({ d: 5, t: 1425 });
     const v = engineAfter(runs);
     expect(capacity).toBeCloseTo(45.3, 1);
-    expect(v.onboard).toBeCloseTo(39.1, 0);
-    expect(v.refresh).toBeCloseTo(40.3, 0);
+    // Onboarding read 39.1 before it ran the launch refresh (one forecast,
+    // 2026-10-11); it now reads the refresh's 40.3.
+    expect(v.onboard).toBeCloseTo(40.3, 0);
+    expect(v.refresh).toBeCloseTo(v.onboard, 9);
   });
 
   it('a weekly parkrun in 23:20 (4:40/km) lowers a 10K 45:00 runner to about 40.5', () => {

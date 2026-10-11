@@ -33,6 +33,7 @@ vi.stubGlobal('alert', vi.fn());
 
 import { initializeSimulator } from './initialization';
 import { getMutableState, getState } from './store';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 
 const TRISTAN_PBS = { k5: 1058, k10: 2360, h: 5490, m: 11382 };
 
@@ -91,10 +92,19 @@ describe('initializeSimulator — LT consistency at finalize', () => {
     expect(s.initialLT).toBe(s.lt);
   });
 
-  it('keeps a measured wizard LT untouched', () => {
+  it('a wizard-supplied LT goes through the same LT chain the first launch applies (one forecast)', () => {
+    // initializeSimulator ends with the launch refresh (2026-10-11), so the
+    // plan preview and Home read one s.lt. A wizard ltPace (only the demo path
+    // sets one; the real wizard writes s.ltOverride) has no override or watch
+    // provenance, so recomputeLT resolves the derived LT, as the first launch
+    // refresh already did before.
     const result = initializeSimulator(buildOnboarding({ ltPace: 238 } as Partial<OnboardingState>));
     expect(result.success).toBe(true);
-    expect(getState().lt).toBe(238);
+    const atInit = getState().lt;
+    expect(atInit).not.toBeNull();
+    expect(getState().initialLT).toBe(atInit);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().lt).toBe(atInit);
   });
 });
 

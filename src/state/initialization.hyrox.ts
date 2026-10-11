@@ -15,6 +15,7 @@ import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import {
@@ -368,6 +369,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     s.forecastTime = null;
 
     redistributeArchivedActivitiesToNewPlan();
+    // One forecast (Tristan, 2026-10-11; mirror of initializeSimulator): run
+    // the launch refresh on the committed plan, after the archived activities
+    // move into it, so the VDOT-derived run pace the onboarding preview reads
+    // is the one the first launch shows.
+    refreshBlendedFitness(s);
     saveState();
 
     const seededStations = Object.keys(stationBenchmarks).length;

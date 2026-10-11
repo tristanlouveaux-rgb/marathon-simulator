@@ -456,6 +456,70 @@ export function planForecastWeeklyKm(
 }
 
 /**
+ * The running end-of-plan forecast at a session count, from the state the
+ * refresh writes (s.v, s.forecastBlendAnchorSec, s.lt): calculateLiveForecast
+ * with the plan's ramp volume (planForecastWeeklyKm), race-day durability from
+ * the plan's long runs (raceDayPlanDurability), then calibration bias and the
+ * race-day shoe boost. Single source for s.forecastTime / s.expectedFinal
+ * (refreshBlendedFitness) and the onboarding plan preview
+ * (forecastForSessions, plan-preview-v2.ts), so the preview hero and Home read
+ * one number (Tristan, 2026-10-11: "one forecast"). Null without a race
+ * distance or an engine VDOT.
+ *
+ * `strengthSessionsPerWeek` overrides s.gs (the preview's strength callout
+ * reads the forecast without strength). Read-only.
+ */
+export function runningForecastForSessions(
+  s: SimulatorState,
+  sessionsForHorizon: number,
+  opts: { strengthSessionsPerWeek?: number } = {},
+): { forecastVdot: number; forecastTime: number; raceDayDurability: RunDurabilityResult | null } | null {
+  if (!s.rd || !(s.v > 0)) return null;
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
+  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
+  const trainingWeeks = planTrainingWeeks(s);
+  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
+  // Injury-aware: build from the return date, not flat. A current run
+  // restriction debits its recovery weeks so the forecast doesn't credit
+  // build during weeks the athlete cannot run. Mirrors the tri predictor.
+  const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
+  const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
+  // Race-day durability from the long runs the plan prescribes.
+  const raceDayDurability = raceDayPlanDurability(s);
+  const { forecastVdot, forecastTime } = calculateLiveForecast({
+    currentVdot: s.v,
+    targetDistance: s.rd,
+    weeksRemaining: effectiveWeeksRemaining,
+    sessionsPerWeek: sessionsForHorizon,
+    runnerType: (s.typ ?? 'Balanced') as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
+    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    crossTrained: s.onboarding?.crossTrainedBackground === true,
+    weeklyVolumeKm: planMeanKm ?? s.wkm,
+    weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
+    hmPbSeconds: s.pbs?.h || undefined,
+    ltPaceSecPerKm: s.lt || undefined,
+    strengthSessionsPerWeek: opts.strengthSessionsPerWeek ?? s.gs,
+    adaptationRatio: s.adaptationRatio,
+    blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
+    taperWeeks: planTaperWeeks(s),
+  });
+  // Calibration bias applies to the projection (systematic prediction error
+  // doesn't disappear by race day). Durability is judged on the long runs the
+  // PLAN prescribes by race day (above), not on the logged-run cap: the
+  // forecast represents end-of-plan fitness on the assumption that the plan is
+  // followed. Mirrors the tri engine's "execution factor" treatment.
+  const calibrated = applyRunCalibrationBias(forecastTime, s.rd, computeRunCalibration(s.runRaceLog));
+  // Race-day footwear boost. Carbon-plated racing flats (Vaporfly, Alphafly,
+  // Adios Pro, Endorphin Elite) deliver ~3% running-economy improvement at
+  // marathon pace (Hoogkamer 2018, mean 2.7–4.2%, taken here as a flat 3%).
+  // Applied last so any downstream course-factors pass picks up the boosted
+  // forecastTime and propagates it to forecastTimeAdjusted automatically.
+  const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
+  return { forecastVdot, forecastTime: calibrated * shoeMul, raceDayDurability };
+}
+
+/**
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
  * Idempotent. Safe to call any time. Does nothing and returns false if
  * required inputs are missing.
@@ -801,11 +865,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
 
   // Recompute end-of-plan forecast from the fresh baseline so s.expectedFinal
   // tracks reality instead of being frozen at onboarding.
-  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
-  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
-  const trainingWeeks = planTrainingWeeks(s);
-  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
-  if (s.rd && s.typ && weeksRemaining > 0) {
+  if (s.rd && s.typ) {
     try {
       // Include commute days so the live forecast matches what the
       // Training chip on the forecast page displays. `s.epw` is built
@@ -816,11 +876,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         ? (s.commuteConfig.commuteDaysPerWeek ?? 0)
         : 0;
       const sessionsForHorizon = baseSessions + commuteSessions;
-      const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
-      // Injury-aware: build from the return date, not flat. A current run
-      // restriction debits its recovery weeks so the forecast doesn't credit
-      // build during weeks the athlete cannot run. Mirrors the tri predictor.
-      const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
+      const trainingWeeks = planTrainingWeeks(s);
 
       // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ──
       // The forecast answers "what can you run when the plan has built you up?",
@@ -876,44 +932,15 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // the displayed forecast stays buried near today.
       s.forecastBlendAnchorSec = forecastAnchorSec;
 
-      // Race-day durability from the long runs the plan prescribes (stored for
-      // the Durability drill-down, which reads this same result).
-      const raceDayDurability = raceDayPlanDurability(s);
-      s.raceDayDurability = raceDayDurability ?? undefined;
-      const { forecastVdot, forecastTime } = calculateLiveForecast({
-        currentVdot: s.v,
-        targetDistance: s.rd,
-        weeksRemaining: effectiveWeeksRemaining,
-        sessionsPerWeek: sessionsForHorizon,
-        runnerType: s.typ as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
-        experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-        crossTrained: s.onboarding?.crossTrainedBackground === true,
-        weeklyVolumeKm: planMeanKm ?? s.wkm,
-        weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
-        hmPbSeconds: s.pbs?.h || undefined,
-        ltPaceSecPerKm: s.lt || undefined,
-        strengthSessionsPerWeek: s.gs,
-        adaptationRatio: s.adaptationRatio,
-        blendedAnchorSec: forecastAnchorSec,
-        raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
-        taperWeeks: planTaperWeeks(s),
-      });
-      s.expectedFinal = forecastVdot;
-      // Calibration bias applies to the projection (systematic prediction
-      // error doesn't disappear by race day). Durability is judged on the long
-      // runs the PLAN prescribes by race day (raceDayDurabilityMultiplier
-      // above), not on the logged-run cap: the forecast represents end-of-plan
-      // fitness on the assumption that the plan is followed. Mirrors the tri
-      // engine's "execution factor" treatment (race-prediction.triathlon).
-      const calibrated = applyRunCalibrationBias(forecastTime, s.rd, calibration);
-      // Race-day footwear boost. Carbon-plated racing flats (Vaporfly,
-      // Alphafly, Adios Pro, Endorphin Elite) deliver ~3% running-economy
-      // improvement at marathon pace (Hoogkamer 2018, mean 2.7–4.2%, taken
-      // here as a flat 3%). Applied last so any downstream course-factors
-      // pass picks up the boosted forecastTime and propagates it to
-      // forecastTimeAdjusted automatically.
-      const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
-      s.forecastTime = calibrated * shoeMul;
+      // The forecast itself (runningForecastForSessions), the one computation
+      // the onboarding plan preview reads too. Stores race-day durability for
+      // the Durability drill-down, which reads this same result.
+      const forecast = runningForecastForSessions(s, sessionsForHorizon);
+      if (forecast) {
+        s.raceDayDurability = forecast.raceDayDurability ?? undefined;
+        s.expectedFinal = forecast.forecastVdot;
+        s.forecastTime = forecast.forecastTime;
+      }
     } catch {
       // Leave expectedFinal untouched on any forecast failure.
     }

@@ -28,7 +28,7 @@ vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
 import { initializeSimulator } from '@/state/initialization';
 import { getMutableState, getState, resetState } from '@/state/store';
-import { refreshBlendedFitness, predictStandardDistances } from './blended-fitness';
+import { refreshBlendedFitness, predictStandardDistances, runningForecastForSessions } from './blended-fitness';
 import { localMondayKey } from '@/utils/local-date';
 
 const DAY_MS = 86400000;
@@ -55,8 +55,8 @@ function syncedWeeks(): RunRow[] {
 }
 
 interface Snapshot {
-  onboard: { brt: number; ft: number; v: number };
-  refresh: { brt: number; ft: number; v: number; std: Record<string, number | null> };
+  onboard: { brt: number; ft: number; v: number; lt: number | null; preview: number };
+  refresh: { brt: number; ft: number; v: number; lt: number | null; std: Record<string, number | null> };
 }
 
 type Case = {
@@ -89,12 +89,16 @@ function run(c: Case, ageDays: number): Snapshot {
   getMutableState().onboarding = ob;
   expect(initializeSimulator(ob).success).toBe(true);
   const s0 = getState();
-  const onboard = { brt: s0.blendedRaceTimeSec!, ft: s0.forecastTime!, v: s0.v };
+  // The plan preview hero (forecastForSessions reads runningForecastForSessions
+  // at the plan's sessions).
+  const sessions = (s0.epw || s0.rw || 4) + (s0.commuteConfig?.enabled ? (s0.commuteConfig.commuteDaysPerWeek ?? 0) : 0);
+  const preview = runningForecastForSessions(getMutableState(), sessions)!.forecastTime;
+  const onboard = { brt: s0.blendedRaceTimeSec!, ft: s0.forecastTime!, v: s0.v, lt: s0.lt ?? null, preview };
   refreshBlendedFitness(getMutableState());
   const s1 = getState();
   return {
     onboard,
-    refresh: { brt: s1.blendedRaceTimeSec!, ft: s1.forecastTime!, v: s1.v, std: predictStandardDistances(getMutableState()) },
+    refresh: { brt: s1.blendedRaceTimeSec!, ft: s1.forecastTime!, v: s1.v, lt: s1.lt ?? null, std: predictStandardDistances(getMutableState()) },
   };
 }
 
@@ -150,4 +154,31 @@ describe('real initializers: PB-age forecasts move by small steps day to day acr
     refreshBlendedFitness(getMutableState());
     expect(getState().blendedRaceTimeSec).toBe(11700);
   });
+});
+
+describe('one forecast: the plan preview equals Home (Tristan, 2026-10-11)', () => {
+  // Review 3: with an aged PB and a typed volume the onboarding forecast took
+  // the wizard LT (state.ltPace, usually none) while the first refresh used the
+  // derived s.lt. Marathon PB 3:15 at 2.02 years, typed 40 km: 3:09:36 at
+  // onboarding vs 3:16:25 after the first refresh; half 1:27:20 vs 1:31:15.
+  // An undated marathon PB with a typed 20 km read 3:34:59 vs 3:42:10 today.
+  const TYPED_20 = { detectedWeeklyKm: 20, weeklyVolumeConfirmed: true };
+  const ONE: Array<{ c: Case; ages: number[] }> = [
+    { c: CASES[0], ages: [0, 365, 2 * 365 + 7, 5 * 365] },
+    { c: CASES[1], ages: [0, 2 * 365 + 7] },
+    { c: CASES[2], ages: [0, 2 * 365 + 7, 5 * 365] },
+    { c: { label: 'marathon PB 3:15, typed 20 km a week', rd: 'marathon', pbs: { m: 11700 }, key: 'm', seed: TYPED_20 }, ages: [0, 2 * 365 + 7] },
+  ];
+  for (const { c, ages } of ONE) {
+    it(c.label, () => {
+      for (const days of ages) {
+        const r = run(c, days);
+        expect(r.onboard.preview).toBeCloseTo(r.refresh.ft, 6);
+        expect(r.onboard.ft).toBeCloseTo(r.refresh.ft, 6);
+        expect(r.onboard.brt).toBeCloseTo(r.refresh.brt, 6);
+        expect(r.onboard.v).toBeCloseTo(r.refresh.v, 9);
+        expect(r.onboard.lt).toBe(r.refresh.lt);
+      }
+    });
+  }
 });

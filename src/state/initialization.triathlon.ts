@@ -18,6 +18,7 @@ import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
@@ -276,6 +277,14 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     s.forecastTime = null;
 
     redistributeArchivedActivitiesToNewPlan();
+    // One forecast (Tristan, 2026-10-11; mirror of initializeSimulator): run
+    // the launch refresh on the committed plan, after the archived activities
+    // move into it, so the onboarding forecast (tri-plan-forecast reads
+    // predictTriathlonRace on this state) is the one the first launch shows.
+    // Before, s.v stayed at the wizard's value (the default 50) until launch:
+    // a 70.3 cold start at run skill 3 with a watch of 62 previewed a run leg
+    // of 1:28:17 against 1:39:37 on Home.
+    refreshBlendedFitness(s);
     saveState();
     return { success: true };
   } catch (err) {

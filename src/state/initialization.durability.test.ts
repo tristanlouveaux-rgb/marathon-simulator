@@ -36,7 +36,7 @@ vi.stubGlobal('alert', vi.fn());
 import { initializeSimulator } from './initialization';
 import { getMutableState, getState } from './store';
 import { cv, rd } from '@/calculations';
-import { predictFromPB } from '@/calculations/predictions';
+import { predictFromPB, blendPredictions } from '@/calculations/predictions';
 import { LONG_RUN_MAX_PENALTY, LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
 import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 
@@ -79,9 +79,18 @@ describe('initializeSimulator — durability cap on the onboarding anchor', () =
     expect(result.success).toBe(true);
 
     const s = getState();
-    // Raw blend for a single-5K-PB athlete is predictFromPB alone (b=1.06
-    // default, internal ≥1.10 short-anchor floor). ~5160s = 1:26:00.
-    const rawBlend = predictFromPB(rd('half'), { k5: 1059 }, 1.06)!;
+    // The anchor is the launch refresh's (initializeSimulator ends with
+    // refreshBlendedFitness: one forecast, 2026-10-11). Its raw blend for a
+    // single-5K-PB athlete is the PB predictor (b=1.06 default, internal
+    // ≥1.10 short-anchor floor, ~5160s = 1:26:00) beside the LT the refresh
+    // derives from that PB, at the runs/week volume estimate (4 runs: 40 km).
+    const pbOnly = predictFromPB(rd('half'), { k5: 1059 }, 1.06)!;
+    const rawBlend = blendPredictions(
+      rd('half'), { k5: 1059 }, s.lt ?? null, null, s.b, (s.typ ?? 'Balanced').toLowerCase(), null, undefined,
+      40, undefined, { weeksCovered: 0, paceConfidence: 'none', isStale: false }, null, undefined, true, 0, undefined,
+    )!;
+    expect(s.lt).not.toBeNull();
+    expect(Math.abs(rawBlend - pbOnly)).toBeLessThan(60);
     const maxMult = 1 + LONG_RUN_MAX_PENALTY.half; // 1.04
 
     expect(s.runDurability).toBeDefined();
