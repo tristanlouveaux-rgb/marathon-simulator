@@ -15,10 +15,10 @@
  *     tempo run is out of P with or without HR
  *   - Recent run = the newest race effort: a hard effort that, when the run
  *     has an average HR and the athlete's HR zones are known, also averages at
- *     race level on the HR effort scale (at or above the top of the threshold
- *     zone, where Z5 begins). Easy runs never pass the pace test; a tempo run
- *     with a tempo-level HR fails the HR test. Without HR the test is
- *     pace-only, so a tempo-paced run with no HR still counts (known
+ *     race level on the HR effort scale (at or above the midpoint of the
+ *     threshold zone, Z4). Easy runs never pass the pace test; a steady tempo
+ *     with an HR in the lower half of Z4 fails the HR test. Without HR the
+ *     test is pace-only, so a tempo-paced run with no HR still counts (known
  *     limitation, pinned in initialization.easy-runs-vdot.test.ts)
  *
  * See `docs/SCIENCE_LOG.md` for the Tanda entry and the rationale behind each
@@ -62,7 +62,7 @@ export interface PredictionInputs {
    *  no HR the test is pace-only: a tempo or threshold session, or a parkrun at
    *  tempo effort, passes it and is read as a race (known limitation, pinned in
    *  initialization.easy-runs-vdot.test.ts). With HR, a race averaging below
-   *  the floor (often a 10K, nearly always a half marathon) does not fill it
+   *  the floor (a half marathon in the lower half of Z4) does not fill it
    *  either (known false negative, pinned in prediction-inputs.test.ts). */
   recentRun: { d: number; t: number; weeksAgo: number } | null;
   /** Number of weeks in the analysis window (up to 8). */
@@ -123,7 +123,7 @@ function median(xs: number[]): number {
  *              pass explicitly in tests for determinism.
  * @param raceHrFloorBpm  The lowest average HR that reads as a race effort on
  *              the athlete's HR effort scale (`raceEffortHrFloorForState`,
- *              heart-rate.ts: the top of the threshold zone). When set, a run
+ *              heart-rate.ts: the midpoint of the threshold zone). When set, a run
  *              that has an average HR must reach it to fill the recent-run
  *              slot. Null or omitted: pace-only, as before. Tanda's P is
  *              pace-filtered either way. Every caller that has the athlete's
@@ -208,17 +208,18 @@ export function computePredictionInputs(
   // Race effort (the recent-run slot): a hard effort that is also at race
   // level on the HR effort scale when the run carries an average HR. Pace
   // alone cannot tell a race from a tempo or threshold session, so such a run
-  // must average at or above the top of the threshold zone (raceHrFloorBpm).
-  // A tempo run averages inside the threshold zone (Z4, the zone threshold and
-  // tempo sessions target); a 5K race averages above it. A run without HR, or
-  // an athlete without HR zones, keeps the pace-only test.
+  // must average at or above the midpoint of the threshold zone
+  // (raceHrFloorBpm, Tristan 2026-10-11). A steady tempo averages in the lower
+  // half of the threshold zone (Z4, the zone threshold and tempo sessions
+  // target); a 5K or 10K race averages in its upper half or above. A run
+  // without HR, or an athlete without HR zones, keeps the pace-only test.
   //
   // The HR test acts on the recent-run slot only (review 2026-10-09). Using it
   // for P too moved tempo sessions into Tanda's P: one weekly 8 km tempo at
   // 4:50/km among 6:00/km easy runs moved P about 14.5 s/km faster, about
   // 5.6 min on Tanda's marathon term, a change nobody asked for. It also sent
-  // races the HR test misses (a 10K at about 89% of HR reserve) into P as
-  // training pace. With a pace-only P filter, a run the HR test rejects falls
+  // races the HR test misses (with the 2026-10-09 floor at the top of Z4, a
+  // 10K at about 89% of HR reserve) into P as training pace. With a pace-only P filter, a run the HR test rejects falls
   // out of both the recent-run slot and P, as a race would.
   const medianPace = median(inWindow.map(q => q.paceSecPerKm));
   const hrFloor = raceHrFloorBpm != null && raceHrFloorBpm > 0 ? raceHrFloorBpm : null;

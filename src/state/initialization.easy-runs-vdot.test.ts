@@ -181,11 +181,12 @@ function engineAfter(runs: RunRow[], over: Partial<OnboardingState> = {}): { onb
 }
 
 /**
- * Race test with heart rate (Tristan, 2026-10-09). With an average HR and HR
- * zones, a run more than 15% faster than the window's median pace counts as a
- * race only at race level on the HR effort scale: at or above the top of the
- * threshold zone (raceEffortHrFloorBpm, heart-rate.ts). maxHR 190 and resting
- * 50 put the threshold zone (Z4) at 162-176 bpm.
+ * Race test with heart rate (Tristan, 2026-10-09; floor moved 2026-10-11). With
+ * an average HR and HR zones, a run more than 15% faster than the window's
+ * median pace counts as a race only at race level on the HR effort scale: at
+ * or above the midpoint of the threshold zone (raceEffortHrFloorBpm,
+ * heart-rate.ts). maxHR 190 and resting 50 put the threshold zone (Z4) at
+ * 162-176 bpm and the floor at 169.
  */
 describe('race test reads heart rate when the run has it', () => {
   let capacity = 0;
@@ -195,7 +196,7 @@ describe('race test reads heart rate when the run has it', () => {
     return { ...oneRun(10, 5, 1425), avgHR };
   }
 
-  it('a 5 km tempo at 4:45/km with a tempo-level HR leaves a 10K 45:00 runner at 45.3', () => {
+  it('a 5 km tempo at 4:45/km with a steady-tempo HR leaves a 10K 45:00 runner at 45.3', () => {
     // Pace-only (no HR, pinned below) this run read 39.1 at onboarding and 40.3
     // after a refresh.
     for (const avgHR of [165, 168]) {
@@ -215,13 +216,20 @@ describe('race test reads heart rate when the run has it', () => {
     expect(getState().v).toBeLessThan(capacity - 4);
   });
 
-  it('a weekly parkrun in 23:20 at a tempo-level HR is a training run', () => {
-    // Pace-only this read about 40.5 (pinned below).
-    const parkruns = history(6, [[0, 5, 1400 / 60]], 170, 1);
-    seed({ ...HR, onboardingRunHistory: [...parkruns, ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+  it('a weekly parkrun in 23:20 at a steady-tempo HR is a training run; at an upper-Z4 HR it is a race', () => {
+    // Pace-only this read about 40.5 (pinned below). At 166 (lower half of
+    // Z4) it is a training run; at 170 (upper half, above the 169 floor) the
+    // runner raced it.
+    const parkruns = (avgHR: number) => history(6, [[0, 5, 1400 / 60]], avgHR, 1);
+    seed({ ...HR, onboardingRunHistory: [...parkruns(166), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
     expect(initializeSimulator(onboarding()).success).toBe(true);
     refreshBlendedFitness(getMutableState());
     expect(getState().v).toBeCloseTo(capacity, 6);
+    seed({ ...HR, onboardingRunHistory: [...parkruns(170), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    refreshBlendedFitness(getMutableState());
+    // About 41.7: the parkrun (VDOT about 42) is the recent race.
+    expect(getState().v).toBeLessThan(capacity - 3);
   });
 });
 

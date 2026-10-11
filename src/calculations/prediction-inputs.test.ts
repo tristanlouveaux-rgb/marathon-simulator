@@ -192,35 +192,37 @@ describe('computePredictionInputs', () => {
 });
 
 /**
- * Race test with heart rate (Tristan, 2026-10-09). Pace alone reads a tempo run
- * or a parkrun at tempo effort as a race. With an average HR and known HR zones,
- * a run counts as a race only at race level on the HR effort scale: at or above
- * the top of the threshold zone (Z4), where Z5 begins (raceEffortHrFloorBpm).
+ * Race test with heart rate (Tristan, 2026-10-09; floor moved 2026-10-11). Pace
+ * alone reads a tempo run or a parkrun at tempo effort as a race. With an
+ * average HR and known HR zones, a run counts as a race only at race level on
+ * the HR effort scale: at or above the midpoint of the threshold zone (Z4),
+ * above steady tempo effort (raceEffortHrFloorBpm). The top of Z4, the
+ * 2026-10-09 floor, missed a 10K raced at 174 bpm.
  */
 describe('computePredictionInputs: race test with heart rate', () => {
   const NOW = new Date('2026-04-15T12:00:00Z');
-  // maxHR 190, resting 50 (Karvonen): Z4 threshold 162-176, Z5 from 176.
+  // maxHR 190, resting 50 (Karvonen): Z4 threshold 162-176, midpoint 169.
   const PROFILE = { maxHR: 190, restingHR: 50 };
   const FLOOR = raceEffortHrFloorBpm(PROFILE)!;
   // Easy weeks at about 5:50/km plus one 5 km at 4:45/km ten days ago.
   const easy = [run(2, 16, 352), run(4, 8, 345), run(6, 6, 350), run(9, 16, 352), run(11, 8, 345), run(13, 6, 350)];
   const fast = (avgHR?: number): RunActivityInput => ({ ...run(10, 5, 285), ...(avgHR != null ? { avgHR } : {}) });
 
-  it('the race floor is the top of the threshold zone on the HR effort scale', () => {
+  it('the race floor is the midpoint of the threshold zone on the HR effort scale', () => {
     const zones = calculateZones(PROFILE)!;
-    expect(FLOOR).toBe(176);
-    expect(FLOOR).toBe(zones.z4.max);
-    expect(FLOOR).toBe(zones.z5.min);
-    // Max HR only: 90% of max. No profile: no floor.
-    expect(raceEffortHrFloorBpm({ maxHR: 190 })).toBe(171);
+    expect(FLOOR).toBe(169);
+    expect(FLOOR).toBe((zones.z4.min + zones.z4.max) / 2);
+    expect(FLOOR).toBeLessThan(zones.z5.min);
+    // Max HR only: Z4 152 to 171, midpoint 161.5. No profile: no floor.
+    expect(raceEffortHrFloorBpm({ maxHR: 190 })).toBe(161.5);
     expect(raceEffortHrFloorBpm({})).toBeNull();
     // The state helper reads the same profile as the per-activity HR effort score.
     expect(hrEffortProfile({ maxHR: 190, restingHR: 50, onboarding: { age: 40 } })).toEqual({ maxHR: 190, restingHR: 50, age: 40 });
-    expect(raceEffortHrFloorForState({ maxHR: 190, restingHR: 50 })).toBe(176);
+    expect(raceEffortHrFloorForState({ maxHR: 190, restingHR: 50 })).toBe(169);
   });
 
-  it('a tempo run at a tempo-level HR is a training run, not a race', () => {
-    const tempo = fast(165);  // Z4, 82% of reserve
+  it('a tempo run at a steady-tempo HR is a training run, not a race', () => {
+    const tempo = fast(165);  // lower half of Z4, 82% of reserve
     const r = computePredictionInputs([tempo, ...easy], NOW, FLOOR);
     expect(r.recentRun).toBeNull();
     // Pre-fix (pace-only) it was the recent race.
@@ -248,6 +250,10 @@ describe('computePredictionInputs: race test with heart rate', () => {
     expect(computePredictionInputs([fast(168), ...easy], NOW, FLOOR).recentRun).toBeNull();
   });
 
+  it('a hard tempo at the middle of Z4 (169) counts: at or above the floor', () => {
+    expect(computePredictionInputs([fast(169), ...easy], NOW, FLOOR).recentRun).toMatchObject({ d: 5, t: 1425 });
+  });
+
   it('a race at a race-level HR still counts', () => {
     const r = computePredictionInputs([fast(180), ...easy], NOW, FLOOR);
     expect(r.recentRun).toMatchObject({ d: 5, t: 1425, weeksAgo: 1 });
@@ -265,26 +271,24 @@ describe('computePredictionInputs: race test with heart rate', () => {
     expect(computePredictionInputs([fast(165), ...easy], NOW, null).recentRun).toMatchObject({ d: 5, t: 1425 });
   });
 
-  it('KNOWN FALSE NEGATIVE: a 10K race averaging inside Z4 is not the recent race, and stays out of P', () => {
+  it('a 10K race at HR 174 counts (review 2); a half at 168 is a KNOWN FALSE NEGATIVE', () => {
     // Four weeks of easy runs at 6:30/km and HR 138, then a 10K race in 44:00
-    // at HR 174 (91.6% of max HR, 89% of reserve). Karvonen puts the floor at
-    // 176, so the HR test reads the race as a threshold effort. It is still
-    // out of P (pace-filtered): P is the easy pace, as with the pace-only test.
+    // at HR 174 (91.6% of max HR, 89% of reserve). The 2026-10-09 floor (top
+    // of Z4, 176) read it as a threshold effort; the midpoint (169) counts it.
     const jogs: RunActivityInput[] = [];
     for (let k = 0; k < 4; k++) jogs.push({ ...run(2 + 7 * k, 10, 390), avgHR: 138 }, { ...run(5 + 7 * k, 8, 390), avgHR: 138 });
     const race = { ...run(1, 10, 264), avgHR: 174 };
     const withHr = computePredictionInputs([race, ...jogs], NOW, FLOOR);
-    const paceOnly = computePredictionInputs([race, ...jogs], NOW);
-    expect(withHr.recentRun).toBeNull();
-    expect(paceOnly.recentRun).toMatchObject({ d: 10, t: 2640 });
+    expect(withHr.recentRun).toMatchObject({ d: 10, t: 2640 });
+    // P stays the easy pace either way (pace-filtered).
     expect(withHr.avgPaceSecPerKm).toBe(390);
-    expect(paceOnly.avgPaceSecPerKm).toBe(390);
-    // With max HR only (no resting HR) the floor is 171 and the same race counts.
-    const maxOnly = raceEffortHrFloorBpm({ maxHR: 190 });
-    expect(computePredictionInputs([race, ...jogs], NOW, maxOnly).recentRun).toMatchObject({ d: 10, t: 2640 });
-    // A half marathon in 1:38 at HR 168 is not a race either.
+    expect(computePredictionInputs([race, ...jogs], NOW).avgPaceSecPerKm).toBe(390);
+    // KNOWN FALSE NEGATIVE: a half marathon in 1:38 at HR 168 (84% of reserve,
+    // the lower half of Z4) is not a race. It stays out of P (pace-filtered).
     const half = { ...run(1, 21.0975, 5880 / 21.0975), avgHR: 168 };
-    expect(computePredictionInputs([half, ...jogs], NOW, FLOOR).recentRun).toBeNull();
+    const halfHr = computePredictionInputs([half, ...jogs], NOW, FLOOR);
+    expect(halfHr.recentRun).toBeNull();
+    expect(halfHr.avgPaceSecPerKm).toBe(390);
     expect(computePredictionInputs([half, ...jogs], NOW).recentRun).toMatchObject({ d: 21.0975 });
   });
 

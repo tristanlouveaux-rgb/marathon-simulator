@@ -123,13 +123,18 @@ export function hrEffortProfile(
 
 /**
  * The lowest average HR that reads as a race effort on the HR effort scale: the
- * top of the threshold zone (Z4), where Z5 ("VO2max+") begins. Threshold and
- * tempo sessions target Z4 (`getWorkoutHRTarget`); a 5K to 10K race is run above
- * threshold (SCIENCE_LOG §CY update). Null when no zones can be computed.
+ * midpoint of the threshold zone (Z4), (z4.min + z4.max) / 2 (Tristan,
+ * 2026-10-11). Threshold and tempo sessions target Z4 (`getWorkoutHRTarget`)
+ * and a steady tempo sits in its lower half; a 5K or 10K race averages in the
+ * upper half or above (SCIENCE_LOG §CY update). The top of Z4 (where Z5
+ * begins), the 2026-10-09 floor, missed real races: a 10K in 44:00 at HR 174
+ * on a 190 / 50 profile (floor 176) left the forecast faster than the race.
+ * Derived from the existing zone boundaries, no new constant: Karvonen 190 / 50
+ * gives Z4 162 to 176 and a floor of 169. Null when no zones can be computed.
  */
 export function raceEffortHrFloorBpm(profile: HRProfile): number | null {
   const zones = calculateZones(profile);
-  return zones ? zones.z5.min : null;
+  return zones ? (zones.z4.min + zones.z4.max) / 2 : null;
 }
 
 /** `raceEffortHrFloorBpm` for the athlete's HR effort profile (`hrEffortProfile`). */
