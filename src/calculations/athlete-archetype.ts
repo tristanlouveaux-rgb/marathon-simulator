@@ -272,7 +272,22 @@ export function detectArchetype(s: State, now: Date = new Date()): ArchetypeResu
 // ---------------------------------------------------------------------------
 
 /** The state fields the typed-volume archetype reads. */
-export type TypedVolumeState = ArchetypeEvidenceState & Pick<State, 'weeklyVolumeConfirmed'>;
+export type TypedVolumeState = ArchetypeEvidenceState & Pick<State, 'weeklyVolumeConfirmed'>
+  & Partial<Pick<State, 'eventType' | 'trackOnly'>>;
+
+/**
+ * Whether a typed weekly km may shape a plan: a running plan only (Tristan,
+ * 2026-10-09 and 2026-10-11). A triathlon (cycling included) or HYROX week is
+ * multi-sport, so one discipline's km must not size its ramp or its weekly
+ * load target; a typed km reaches those modes only from the triathlon review
+ * row or a stale running onboarding. Just-Track has no plan, so a typed km
+ * creates no ramp and no weekly target there. Single gate for the typed-volume
+ * archetype (the ramp, typedVolumeArchetype) and the typed weekly load target
+ * (typedVolumeWeeklyTSS, fitness-model.ts).
+ */
+export function typedVolumeShapesPlan(s: Partial<Pick<State, 'eventType' | 'trackOnly'>>): boolean {
+  return s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly;
+}
 
 /**
  * The weekly running km the athlete typed (manual entry or the review-step
@@ -317,9 +332,13 @@ export function typedWeeklyKm(s: Pick<State, 'detectedWeeklyKm' | 'weeklyVolumeC
  *
  * Undefined when nothing was typed, or when synced weekly history exists: that
  * athlete is classified from the history (detectArchetype in the sync paths,
- * the main.ts launch back-fill).
+ * the main.ts launch back-fill). Undefined outside a running plan
+ * (typedVolumeShapesPlan: triathlon, cycling, HYROX, Just-Track), so a typed
+ * km cannot reach the shared refresh's ramp volume (planForecastWeeklyKm) in
+ * those modes.
  */
 export function typedVolumeArchetype(s: TypedVolumeState): Archetype | undefined {
+  if (!typedVolumeShapesPlan(s)) return undefined;
   if (typedWeeklyKm(s) == null) return undefined;
   if ((s.historicWeeklyKm?.length ?? 0) > 0 || (s.extendedHistoryKm?.length ?? 0) > 0) return undefined;
   return classify({
