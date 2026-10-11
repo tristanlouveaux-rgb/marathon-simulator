@@ -135,11 +135,15 @@ export function generateWeekWorkouts(
     // engage the geometric volume-budget ramp (`weekVolumeBudgetKm`, slope from the
     // archetype `weeklyRampPct` — Reilly's 10% guideline / Gabbett ACWR safe zone),
     // which climbs toward the readiness-capped peak and then plateaus there. That
-    // ramp needs a baseline + archetype; a continuous user who hasn't synced has
-    // neither, so fall back to the plan's own starting volume (`s.wkm`, the same
-    // freq-derived estimate the prediction uses — not an invented number) and the
-    // neutral `'unknown'` archetype (7% ramp). Event plans are unaffected: they
-    // keep reading detected values only. (planEngineStateInputs)
+    // ramp needs a baseline + archetype. The baseline is the synced or typed
+    // weekly km (`s.detectedWeeklyKm`), else the plan's own starting volume
+    // (`s.wkm`, the same freq-derived estimate the prediction uses — not an
+    // invented number). The archetype comes from planRampArchetype: the synced
+    // classification, else the one classified from a typed weekly km
+    // (typedVolumeArchetype); only a user with neither gets the neutral
+    // `'unknown'` archetype (7% ramp). Full race plans (not a sharpening block)
+    // take no `s.wkm` / `'unknown'` fallback: they ramp only from a synced or
+    // typed km. (planEngineStateInputs)
     // CTL-gap re-anchor for this week. Stamped on the week at rollover (events.next()); read live
     // here — exactly like baselineKm/archetype — so every resolver call applies the same reduction
     // the debrief previewed. A stored scalar, so reading it here never re-enters the adherence

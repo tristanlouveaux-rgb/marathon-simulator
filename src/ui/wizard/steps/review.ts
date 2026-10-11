@@ -2825,6 +2825,10 @@ function applyEditingDraft(state: OnboardingState): boolean {
       const km = unitPref === 'mi' ? raw * 1.609 : raw;
       const s = getMutableState();
       s.detectedWeeklyKm = km;
+      // A saved edit is a typed volume, the same as manual entry and the
+      // no-data slider: it seeds the plan's starting volume (initialization.ts
+      // wkm gate), the volume ramp and the weekly load target (typedWeeklyKm).
+      s.weeklyVolumeConfirmed = true;
       saveState();
     }
     return true;

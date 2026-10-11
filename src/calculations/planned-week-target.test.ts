@@ -14,6 +14,7 @@ import {
   resolvePlannedWeekPhase,
 } from './planned-week-target';
 import { computePlanPhases, computeRunningPlanPhases } from '@/workouts/phases';
+import { TL_PER_MIN } from '@/constants';
 import { buildCoachContext } from '@/coach/coach-context-builder';
 
 // Median 400, so every multiplier reads straight off the target.
@@ -415,5 +416,32 @@ describe('sharpening block (marathon under 8 weeks, half under 4): target deload
     const s = makeState({ phases: blockPhases(6), rd: 'marathon', v: 45, onboarding: { experienceLevel: 'intermediate' } as any });
     (s.wks[4] as Week & { forceDeload?: boolean }).forceDeload = true;
     expect(resolvePlannedWeekPhase(s, 5)).toMatchObject({ phase: 'taper', weekInTaper: 1, alsoDeload: false });
+  });
+});
+
+describe('typed weekly km baseline (no synced history)', () => {
+  // No history and no EMA: the baseline is the typed km priced as easy running
+  // for a running plan, and the runs/week x 50 last resort otherwise.
+  const typed = { historicWeeklyTSS: undefined, ctlBaseline: undefined, detectedWeeklyKm: 20, weeklyVolumeConfirmed: true };
+
+  it('a running plan prices the typed km as easy running', () => {
+    const s = makeState({ phases: racePhases(12), ...typed });
+    // 20 km x 5.5 min/km (pac.e 330) x 0.92 TSS/min (TL_PER_MIN[4]) x 0.97 (recreational base row).
+    expect(computePlannedWeekTarget(s, 1)).toBe(Math.round(20 * 5.5 * TL_PER_MIN[4] * 0.97));
+    expect(computePlannedWeekTarget(s, 1, 'A')).toBe(Math.round(20 * 5.5 * TL_PER_MIN[4] * 0.97));
+  });
+
+  it('triathlon and HYROX keep runs/week x 50: a running km is not a multi-sport week', () => {
+    for (const eventType of ['triathlon', 'hyrox'] as const) {
+      const s = makeState({ phases: racePhases(12), eventType, ...typed });
+      const untyped = makeState({ phases: racePhases(12), eventType, ...typed, weeklyVolumeConfirmed: undefined });
+      // 4 runs x 50 x 0.97 (recreational base row).
+      expect(computePlannedWeekTarget(s, 1)).toBe(194);
+      expect(computePlannedWeekTarget(s, 1, 'A')).toBe(194);
+      for (const w of [1, 2, 3, 4, 5]) {
+        expect(computePlannedWeekTarget(s, w)).toBe(computePlannedWeekTarget(untyped, w));
+        expect(computePlannedWeekTarget(s, w, 'A')).toBe(computePlannedWeekTarget(untyped, w, 'A'));
+      }
+    }
   });
 });

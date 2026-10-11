@@ -58,7 +58,7 @@
  */
 
 import type { SimulatorState, TrainingPhase, Week } from '@/types';
-import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry } from './fitness-model';
+import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry, typedVolumeWeeklyTSS } from './fitness-model';
 import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
 import { isSharpeningBlock } from '@/workouts/phases';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
@@ -69,7 +69,7 @@ export type PlannedTargetState = Pick<
   | 'wks' | 'w' | 'v' | 'rw' | 'onboarding' | 'eventType' | 'continuousMode' | 'trackOnly'
   | 'historicWeeklyTSS' | 'ctlBaseline' | 'athleteTier' | 'athleteTierOverride'
   | 'sportBaselineByType' | 'planStartDate'
-> & Partial<Pick<SimulatorState, 'rd'>>;
+> & Partial<Pick<SimulatorState, 'rd' | 'detectedWeeklyKm' | 'weeklyVolumeConfirmed' | 'pac'>>;
 
 /** True when the running plan is a sharpening block (phases.ts isSharpeningBlock). */
 function isRunningBlock(s: PlannedTargetState): boolean {
@@ -170,11 +170,15 @@ export function computePlannedWeekTarget(
   const r = resolvePlannedWeekPhase(s, weekNum);
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const ctl = s.ctlBaseline ?? undefined;
+  // No synced history: the typed weekly km priced as easy running is the baseline
+  // of a running plan (Tristan, 2026-10-09; triathlon and HYROX keep runs/week x 50).
+  // History and the EMA still win when a sync wrote them.
+  const typed = typedVolumeWeeklyTSS(s);
   const at = (phase: string, weekInPhase?: number, totalPhaseWeeks?: number): number => (
     signal === 'A'
-      ? computePlannedWeekTSS(s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks)
+      ? computePlannedWeekTSS(s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, typed)
       : computePlannedSignalB(
-        s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, s.sportBaselineByType,
+        s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, s.sportBaselineByType, typed,
       )
   );
   if (r.phase !== 'taper') return at(r.phase);
