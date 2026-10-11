@@ -2,7 +2,8 @@
  * PB age caption: one copy for every surface whose numbers PB ageing changes
  * (Stats race estimates, the running Forecast tab and its no-race variant, the
  * triathlon Forecast tab). Shown only when ageing changes the model:
- * pbAgeingActive on the shared measured-volume gate (SCIENCE_LOG §DC).
+ * pbAgeingActive on the shared measured-volume gate (SCIENCE_LOG §DC). The
+ * weight is a smooth 3-year half-life, so the copy names no age cut-off.
  */
 import { describe, it, expect } from 'vitest';
 import type { SimulatorState } from '@/types';
@@ -24,13 +25,15 @@ function state(pbYears: number | undefined, detectedWeeklyKm?: number): Simulato
 
 describe('pbAgeCaptionText', () => {
   it('an aged PB with a measured weekly volume gets the caption, naming the surface', () => {
-    expect(pbAgeCaptionText(state(3, 35), 'this forecast', NOW)).toBe('PBs older than 2 years carry less weight in this forecast.');
-    expect(pbAgeCaptionText(state(5, 35), 'these estimates', NOW)).toBe('PBs older than 2 years carry less weight in these estimates.');
+    expect(pbAgeCaptionText(state(3, 35), 'this forecast', NOW)).toBe('Older PBs carry less weight in this forecast.');
+    expect(pbAgeCaptionText(state(5, 35), 'these estimates', NOW)).toBe('Older PBs carry less weight in these estimates.');
+    // The weight is continuous (a 3-year half-life), so a 1-year-old PB is
+    // weighed too, and the copy names no age cut-off.
+    expect(pbAgeCaptionText(state(1, 35), 'this forecast', NOW)).toBe('Older PBs carry less weight in this forecast.');
   });
 
-  it('no caption without a measured volume (the PB keeps full weight, §BV), for a fresh or undated PB, or with no PBs', () => {
+  it('no caption without a measured volume (the PB keeps full weight, §BV), for an undated PB, or with no PBs', () => {
     expect(pbAgeCaptionText(state(5), 'this forecast', NOW)).toBeNull();
-    expect(pbAgeCaptionText(state(1, 35), 'this forecast', NOW)).toBeNull();
     expect(pbAgeCaptionText(state(undefined, 35), 'this forecast', NOW)).toBeNull();
     expect(pbAgeCaptionText({ ...state(5, 35), pbs: {} } as SimulatorState, 'this forecast', NOW)).toBeNull();
   });

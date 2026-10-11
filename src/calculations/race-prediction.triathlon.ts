@@ -1667,9 +1667,10 @@ function computeMarathonDepthMultiplier(state: SimulatorState): number {
   // No credit for slow PBs (≥ 4:30) or missing PBs.
   if (marathonPbSec >= MARATHON_CREDIT_ONSET_SEC) return 1.0;
 
-  // Recency: PB < 2 years = 1.0, 2–4 years = 0.6, > 4 years = 0.3. The bands
-  // live in pbAgeWeight (physiological-vdot.ts), which also ages PBs in the
-  // run fitness model (SCIENCE_LOG §T5 and the 2026-10-09 PB-age entry).
+  // Recency: the PB age weight (pbAgeWeight, physiological-vdot.ts), a smooth
+  // 3-year half-life: 1 year 0.79, 2 years 0.63, 4 years 0.40. The same weight
+  // ages PBs in the run fitness model (Tristan 2026-10-11, replacing the §T5
+  // step bands; SCIENCE_LOG 2026-04-24 pbAgeDecay and the PB-age entry).
   const recencyFactor = pbAgeWeight(state.onboarding?.pbDates?.m, new Date());
 
   // Smooth linear from 0 at onset (4:30) to 1 at max (2:45).

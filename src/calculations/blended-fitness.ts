@@ -531,7 +531,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const rpw = s.rw ?? 0;
   const freqEstimate = rpw <= 0 ? null
     : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
-  // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands) on the shared
+  // PB age weights (pbAgeWeight, a smooth 3-year half-life) on the shared
   // measured-volume gate (modelPbAgeWeightsIfMeasured): with no running data
   // an old PB keeps full weight (§BV). Stored and displayed PBs never change;
   // only their weight in the model does.

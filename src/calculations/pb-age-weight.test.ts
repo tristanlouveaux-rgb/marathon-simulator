@@ -3,8 +3,9 @@
  * "externally we can display them their PBs but we can age them internally").
  *
  * A PB keeps its stored time. Its weight in the run fitness model falls with its
- * age on the existing §T5 bands (pbAgeWeight: up to 2 years 1.0, 2 to 4 years
- * 0.6, over 4 years 0.3), and only when current running data exists (a measured
+ * age on a smooth 3-year half-life (pbAgeWeight = exp(-years x ln 2 / 3),
+ * SCIENCE_LOG 2026-04-24, Tanaka & Seals 2008; Tristan 2026-10-11, replacing
+ * the §T5 step bands), and only when current running data exists (a measured
  * weekly volume): with no data an old PB still holds (§BV). TRACKING side.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -24,7 +25,7 @@ vi.stubGlobal('localStorage', {
 vi.stubGlobal('alert', vi.fn());
 vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
-import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, pbAgeBand, pbAgeingActive, PB_AGE_BANDS, PB_FULL_WEIGHT_YEARS } from './physiological-vdot';
+import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, pbAgeingActive, pbAgeYears, PB_AGE_HALF_LIFE_YEARS } from './physiological-vdot';
 import { measuredWeeklyKm } from './prediction-inputs';
 import { blendPredictions, demonstratedPBFloor } from './predictions';
 import { deriveLT } from './lt-derivation';
@@ -39,67 +40,76 @@ const DAY_MS = 86400000;
 const NOW = new Date('2026-10-09T08:00:00Z');
 const ago = (days: number, from = NOW) => new Date(from.getTime() - days * DAY_MS).toISOString().slice(0, 10);
 
-describe('pbAgeWeight reuses the §T5 recency bands', () => {
-  it('up to 2 years 1.0, 2 to 4 years 0.6, over 4 years 0.3', () => {
-    expect(pbAgeWeight(ago(30), NOW)).toBe(1);
-    // ago() truncates to the date, so ago(n) is n days plus 8 hours old at NOW.
-    expect(pbAgeWeight(ago(2 * 365 - 1), NOW)).toBe(1);
-    expect(pbAgeWeight(ago(2 * 365 + 2), NOW)).toBe(0.6);
-    expect(pbAgeWeight(ago(4 * 365 - 1), NOW)).toBe(0.6);
-    expect(pbAgeWeight(ago(4 * 365 + 2), NOW)).toBe(0.3);
-    expect(pbAgeWeight(ago(15 * 365), NOW)).toBe(0.3);
+/** A date `years` (365.25-day years) before NOW, to the millisecond. */
+const yrs = (years: number, from = NOW) => new Date(from.getTime() - years * 365.25 * DAY_MS).toISOString();
+/** The SCIENCE_LOG 2026-04-24 PB decay, written out. */
+const halfLife = (years: number) => Math.exp(-years * Math.LN2 / 3);
+
+describe('pbAgeWeight is a smooth 3-year half-life (Tanaka & Seals 2008)', () => {
+  it('1 year 0.79, 2 years 0.63, 3 years 0.50, 4 years 0.40, 5 years 0.31', () => {
+    expect(PB_AGE_HALF_LIFE_YEARS).toBe(3);
+    expect(pbAgeWeight(yrs(1), NOW)).toBeCloseTo(0.794, 3);
+    expect(pbAgeWeight(yrs(2), NOW)).toBeCloseTo(0.630, 3);
+    expect(pbAgeWeight(yrs(3), NOW)).toBeCloseTo(0.5, 9);
+    expect(pbAgeWeight(yrs(4), NOW)).toBeCloseTo(0.397, 3);
+    expect(pbAgeWeight(yrs(5), NOW)).toBeCloseTo(0.315, 3);
+    for (const y of [0.1, 0.5, 1.98, 2.02, 7, 15]) expect(pbAgeWeight(yrs(y), NOW)).toBeCloseTo(halfLife(y), 9);
+    expect(pbAgeYears(yrs(2.5), NOW)).toBeCloseTo(2.5, 9);
+  });
+
+  it('no anniversary step: a day moves the weight by at most ln 2 / 3 per year, at every age', () => {
+    // The step bands moved 1.0 to 0.6 overnight at 2 years and 0.6 to 0.3 at 4.
+    const perDay = Math.LN2 / 3 / 365.25;
+    let prev = pbAgeWeight(yrs(0), NOW);
+    for (let day = 1; day <= 6 * 365; day++) {
+      const w = pbAgeWeight(new Date(NOW.getTime() - day * DAY_MS).toISOString(), NOW);
+      expect(w).toBeLessThan(prev);
+      expect(prev - w).toBeLessThanOrEqual(perDay + 1e-12);
+      prev = w;
+    }
   });
 
   it('no date, an unparseable one or a future one weigh 1 (§T5 default)', () => {
     expect(pbAgeWeight(undefined, NOW)).toBe(1);
     expect(pbAgeWeight('not a date', NOW)).toBe(1);
     expect(pbAgeWeight('2027-01-01', NOW)).toBe(1);
-    // Onboarding month format.
-    expect(pbAgeWeight('2021-03', NOW)).toBe(0.3);
+    // Onboarding month format: the first of the month.
+    expect(pbAgeWeight('2021-03', NOW)).toBeCloseTo(halfLife(pbAgeYears('2021-03-01', NOW)!), 9);
   });
 
   it('a date belongs to a PB only while its time is the onboarding time stored with it', () => {
-    const s = { onboarding: { pbs: { k10: 2400, h: 5400 }, pbDates: { k10: ago(5 * 365), h: ago(3 * 365) } } };
-    expect(pbAgeWeightsFor({ k10: 2400, h: 5400 }, s, NOW)).toEqual({ k10: 0.3, h: 0.6 });
+    const s = { onboarding: { pbs: { k10: 2400, h: 5400 }, pbDates: { k10: yrs(5), h: yrs(3) } } };
+    const w = pbAgeWeightsFor({ k10: 2400, h: 5400 }, s, NOW);
+    expect(w.k10).toBeCloseTo(halfLife(5), 9);
+    expect(w.h).toBeCloseTo(0.5, 9);
     // A faster 10K from elsewhere (s.pbs) has no known date.
-    expect(pbAgeWeightsFor({ k10: 2350, h: 5400 }, s, NOW)).toEqual({ k10: 1, h: 0.6 });
+    const faster = pbAgeWeightsFor({ k10: 2350, h: 5400 }, s, NOW);
+    expect(faster.k10).toBe(1);
+    expect(faster.h).toBeCloseTo(0.5, 9);
     // No dates at all: every PB weighs 1.
     expect(pbAgeWeightsFor({ k5: 1200 }, {}, NOW)).toEqual({ k5: 1 });
   });
 });
 
-describe('PB age bands are one table (labels and captions read it)', () => {
-  it('pbAgeBand gives the weight and age range pbAgeWeight uses', () => {
-    expect(PB_AGE_BANDS).toEqual([{ overYears: 4, weight: 0.3 }, { overYears: 2, weight: 0.6 }]);
-    expect(PB_FULL_WEIGHT_YEARS).toBe(2);
-    expect(pbAgeBand(ago(30), NOW)).toEqual({ weight: 1, minYears: 0, maxYears: 2 });
-    expect(pbAgeBand(ago(3 * 365), NOW)).toEqual({ weight: 0.6, minYears: 2, maxYears: 4 });
-    expect(pbAgeBand(ago(5 * 365), NOW)).toEqual({ weight: 0.3, minYears: 4, maxYears: null });
-    expect(pbAgeBand(undefined, NOW)).toEqual({ weight: 1, minYears: 0, maxYears: 2 });
-    for (const d of [ago(30), ago(2 * 365 + 2), ago(4 * 365 + 2), '2021-03', 'bad', undefined]) {
-      expect(pbAgeWeight(d, NOW)).toBe(pbAgeBand(d, NOW).weight);
-    }
-  });
-
-  it('pbAgeingActive: an aged PB with a measured volume, and never without one', () => {
+describe('pbAgeingActive drives the PB-age caption', () => {
+  it('any dated PB with a measured volume, and never without one or for an undated PB', () => {
     const dated = (k10Years: number, k5Years?: number) => ({
       onboarding: {
         pbs: { k5: 1320, k10: 2400 },
-        pbDates: { k10: ago(k10Years * 365), ...(k5Years != null ? { k5: ago(k5Years * 365) } : {}) },
+        pbDates: { k10: yrs(k10Years), ...(k5Years != null ? { k5: yrs(k5Years) } : {}) },
       },
     });
     const measured = { weeksCovered: 4, weeklyKm: 30 };
     const none = { weeksCovered: 0, weeklyKm: 0 };
-    // Old 10K with a measured volume: the blend weighs it less.
+    // A dated 10K with a measured volume: the model weighs it by its age.
     expect(pbAgeingActive({ k10: 2400 }, dated(5), measured, NOW)).toBe(true);
-    // Same PB, no running data: no gated use, single PB so the median is the PB.
+    expect(pbAgeingActive({ k10: 2400 }, dated(1), measured, NOW)).toBe(true);
+    // Same PB, no running data: no gated use.
     expect(pbAgeingActive({ k10: 2400 }, dated(5), none, NOW)).toBe(false);
-    // Fresh 5K beside an old 10K: the weighted median is on the same gate, so
-    // it moves only with a measured volume.
+    // A dated 5K beside a dated 10K: the weighted median is on the same gate.
     expect(pbAgeingActive({ k5: 1320, k10: 2400 }, dated(5, 1), none, NOW)).toBe(false);
     expect(pbAgeingActive({ k5: 1320, k10: 2400 }, dated(5, 1), measured, NOW)).toBe(true);
-    // Fresh or undated PBs: never.
-    expect(pbAgeingActive({ k10: 2400 }, dated(1), measured, NOW)).toBe(false);
+    // Undated PBs: never.
     expect(pbAgeingActive({ k10: 2400 }, {}, measured, NOW)).toBe(false);
   });
 });
@@ -320,9 +330,9 @@ describe('one measured-volume gate and one engine floor', () => {
   });
 
   it('modelPbAgeWeightsIfMeasured: weights with a measured volume, a typed km included; none without', () => {
-    const s = { onboarding: { pbs: { k10: 2400 }, pbDates: { k10: ago(5 * 365) } } };
-    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, { ...s, detectedWeeklyKm: 35 }, inputs(0, 0), NOW)).toEqual({ k10: 0.3 });
-    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, s, inputs(3, 20), NOW)).toEqual({ k10: 0.3 });
+    const s = { onboarding: { pbs: { k10: 2400 }, pbDates: { k10: yrs(5) } } };
+    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, { ...s, detectedWeeklyKm: 35 }, inputs(0, 0), NOW)!.k10).toBeCloseTo(halfLife(5), 9);
+    expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, s, inputs(3, 20), NOW)!.k10).toBeCloseTo(halfLife(5), 9);
     expect(modelPbAgeWeightsIfMeasured({ k10: 2400 }, s, inputs(0, 0), NOW)).toBeUndefined();
   });
 
@@ -333,16 +343,16 @@ describe('one measured-volume gate and one engine floor', () => {
     st.pbs = { k5: 1320, k10: 2400, h: 5280 };
     st.onboarding = {
       ...defaultOnboardingState, pbs: { k5: 1320, k10: 2400, h: 5280 },
-      pbDates: { k5: ago(365), k10: ago(5 * 365), h: ago(5 * 365) },
+      pbDates: { k5: yrs(1), k10: yrs(5), h: yrs(5) },
     } as OnboardingState;
     const plain = pbMedianVdot({ k5: 1320, k10: 2400, h: 5280 })!;
     expect(plain).toBeCloseTo(cv(10000, 2400), 9);
     // No running data: the plain median (§BV), so an anniversary moves nothing.
     expect(pbDerivedVdot(getState(), NOW)).toBeCloseTo(plain, 9);
-    // A typed weekly volume: the weighted median, between the fresh 5K and the
-    // plain median (the selector form returned the 5K itself, 44.54).
+    // A typed weekly volume: the weighted median, between the fresher 5K and
+    // the plain median (the selector form returned the 5K itself, 44.54).
     st.detectedWeeklyKm = 35;
-    const weighted = pbCapacity({ k5: 1320, k10: 2400, h: 5280 }, { k5: 1, k10: 0.3, h: 0.3 })!.vdot;
+    const weighted = pbCapacity({ k5: 1320, k10: 2400, h: 5280 }, { k5: halfLife(1), k10: halfLife(5), h: halfLife(5) })!.vdot;
     expect(pbDerivedVdot(getState(), NOW)).toBeCloseTo(weighted, 9);
     expect(weighted).toBeLessThan(plain);
     expect(weighted).toBeGreaterThan(cv(5000, 1320));
@@ -366,29 +376,33 @@ describe('real initializers: a stale PB loses weight against current running dat
   const HR = { maxHR: 190, restingHR: 50 };
   const PB = cv(10000, 2400);
 
-  it('an undated PB, or one under two years old, holds the engine as before', () => {
+  /** The stored 10K PB's age weight, at the dates the initializer stored. */
+  const w10 = () => pbAgeWeight(getState().onboarding?.pbDates?.k10, new Date());
+
+  it('an undated PB holds the engine as before', () => {
     expect(PB).toBeCloseTo(51.9, 1);
-    for (const yrs of [undefined, 1]) {
-      const e = engine({ ...HR, onboardingRunHistory: jogs(true) }, yrs);
-      expect(e.onboard).toBeCloseTo(PB, 6);
-      expect(e.refresh).toBeCloseTo(PB, 6);
-    }
+    const e = engine({ ...HR, onboardingRunHistory: jogs(true) });
+    expect(e.onboard).toBeCloseTo(PB, 6);
+    expect(e.refresh).toBeCloseTo(PB, 6);
   });
 
-  it('a 5-year-old PB with six weeks of easy runs and HR is weighed against the HR fit', () => {
-    const e = engine({ ...HR, onboardingRunHistory: jogs(true) }, 5);
-    // Pre-ageing 51.9 at both. The HR fit reads about 41.8 (high confidence).
-    const hr = getState().hrCalibratedVdot!;
-    expect(hr.confidence).toBe('high');
-    expect(hr.vdot).toBeCloseTo(41.8, 1);
-    // Floor: 0.3 x PB capacity + 0.7 x HR fit (pbEngineFloorVdot), the same
-    // at onboarding and after the refresh.
-    expect(e.onboard).toBeCloseTo(0.3 * PB + 0.7 * hr.vdot!, 9);
-    expect(e.refresh).toBeCloseTo(e.onboard, 9);
-    expect(e.refresh).toBeCloseTo(44.8, 1);
-    // Displayed PB unchanged: the stored time and date are as entered.
-    expect(getState().pbs).toEqual({ k10: 2400 });
-    expect(getState().onboarding?.pbs).toEqual({ k10: 2400 });
+  it('a dated PB with six weeks of easy runs and HR is weighed against the HR fit by its age weight', () => {
+    for (const years of [1, 5]) {
+      const e = engine({ ...HR, onboardingRunHistory: jogs(true) }, years);
+      // The HR fit reads about 41.8 (high confidence).
+      const hr = getState().hrCalibratedVdot!;
+      expect(hr.confidence).toBe('high');
+      expect(hr.vdot).toBeCloseTo(41.8, 1);
+      // Floor: w x PB capacity + (1 - w) x HR fit (pbEngineFloorVdot), the
+      // same at onboarding and after the refresh. 1 year: w 0.79; 5 years: 0.31.
+      const w = w10();
+      expect(w).toBeCloseTo(halfLife(years), 2);
+      expect(e.onboard).toBeCloseTo(w * PB + (1 - w) * hr.vdot!, 6);
+      expect(e.refresh).toBeCloseTo(e.onboard, 9);
+      // Displayed PB unchanged: the stored time and date are as entered.
+      expect(getState().pbs).toEqual({ k10: 2400 });
+      expect(getState().onboarding?.pbs).toEqual({ k10: 2400 });
+    }
   });
 
   it('onboarding and the first refresh give an aged PB the same engine, with and without HR', () => {
@@ -403,11 +417,15 @@ describe('real initializers: a stale PB loses weight against current running dat
     }
   });
 
-  it('a 3-year-old PB moves less than a 5-year-old one', () => {
+  it('a 3-year-old PB moves less than a 5-year-old one, in proportion to the weights', () => {
     const three = engine({ ...HR, onboardingRunHistory: jogs(true) }, 3).refresh;
+    const wThree = w10();
     const five = engine({ ...HR, onboardingRunHistory: jogs(true) }, 5).refresh;
+    const wFive = w10();
+    const hr = getState().hrCalibratedVdot!.vdot!;
     expect(three).toBeLessThan(PB - 3);
-    expect(three).toBeGreaterThan(five + 2);
+    expect(three - five).toBeCloseTo((wThree - wFive) * (PB - hr), 6);
+    expect(three).toBeGreaterThan(five + 1.5);
   });
 
   it('without HR there is no current capacity evidence: the engine holds at PB capacity, the readiness blend ages', () => {
@@ -438,7 +456,7 @@ function engineMulti(
   pbs: { k5?: number; k10?: number; h?: number; m?: number },
   datesYearsAgo: Partial<Record<'k5' | 'k10' | 'h' | 'm', number>>,
   seed: Partial<SimulatorState> = {},
-): { onboard: { v: number; lt: number | null }; refresh: { v: number; lt: number | null } } {
+): { onboard: { v: number; lt: number | null }; refresh: { v: number; lt: number | null }; w: ReturnType<typeof pbAgeWeightsFor> } {
   resetState();
   Object.assign(getMutableState(), { unitPref: 'km', ...seed });
   const ob = {
@@ -453,14 +471,15 @@ function engineMulti(
   expect(initializeSimulator(ob).success).toBe(true);
   const onboard = { v: getState().v, lt: getState().lt ?? null };
   refreshBlendedFitness(getMutableState());
-  return { onboard, refresh: { v: getState().v, lt: getState().lt ?? null } };
+  return { onboard, refresh: { v: getState().v, lt: getState().lt ?? null }, w: pbAgeWeightsFor(pbs, getState(), new Date()) };
 }
 
-describe('real initializers: two PBs across a 2-year anniversary move s.v and s.lt by a bounded step', () => {
+describe('real initializers: two PBs across a 2-year anniversary move s.v and s.lt continuously', () => {
   // 5K 19:00 (VDOT 52.9) one year old, marathon 3:30 (44.6) either side of its
   // 2nd anniversary. Review 2026-10-09: the selector median returned the 5K
   // outright at 2.02 years, so s.v went 48.72 to 52.88 and s.lt 267 to 250
-  // s/km overnight, with no running data at all.
+  // s/km overnight, with no running data at all. The §T5 bands then still
+  // stepped the weighted median by 1.04 VDOT (0.125 of the PB gap).
   const PBS = { k5: 1140, m: 12600 };
   const V5 = cv(5000, 1140);
   const VM = cv(42195, 12600);
@@ -478,34 +497,33 @@ describe('real initializers: two PBs across a 2-year anniversary move s.v and s.
     expect(reverse.refresh.lt).toBe(before.refresh.lt);
   });
 
-  it('with a measured volume the aged PB keeps 0.6 of a say: the step is a weighted mean, not a switch', () => {
+  it('with a measured volume each PB keeps a say in proportion to its age weight, with no step at 2 years', () => {
     const before = engineMulti(PBS, { k5: 1, m: 1.98 }, TYPED);
     const after = engineMulti(PBS, { k5: 1, m: 2.02 }, TYPED);
-    expect(before.refresh.v).toBeCloseTo((V5 + VM) / 2, 6);
-    expect(after.refresh.v).toBeCloseTo((V5 + 0.6 * VM) / 1.6, 6);
-    // The step is (1/1.6 - 1/2) of the PB gap: 1.04 VDOT here, against 4.16.
-    expect(after.refresh.v - before.refresh.v).toBeCloseTo(0.125 * (V5 - VM), 6);
-    expect(after.refresh.v).toBeLessThan(V5 - 2);
-    expect(Math.abs(after.refresh.lt! - before.refresh.lt!)).toBeLessThanOrEqual(6);
-    // Onboarding and the first refresh agree on both.
     for (const e of [before, after]) {
+      expect(e.refresh.v).toBeCloseTo((e.w.k5! * V5 + e.w.m! * VM) / (e.w.k5! + e.w.m!), 6);
+      // Onboarding and the first refresh agree on both.
       expect(e.onboard.v).toBeCloseTo(e.refresh.v, 9);
       expect(e.onboard.lt).toBe(e.refresh.lt);
     }
-    // The other way round (the 5K ages): the mirror step.
+    // 0.04 years apart: a few hundredths of a VDOT, not the 1.04 band step.
+    expect(after.refresh.v - before.refresh.v).toBeGreaterThan(0);
+    expect(after.refresh.v - before.refresh.v).toBeLessThan(0.05);
+    expect(Math.abs(after.refresh.lt! - before.refresh.lt!)).toBeLessThanOrEqual(1);
+    expect(after.refresh.v).toBeLessThan(V5 - 2);
+    // The other way round (the 5K ages): the mirror weighting.
     const rev = engineMulti(PBS, { k5: 2.02, m: 1 }, TYPED);
-    expect(rev.refresh.v).toBeCloseTo((0.6 * V5 + VM) / 1.6, 6);
-    expect(Math.abs(rev.refresh.lt! - before.refresh.lt!)).toBeLessThanOrEqual(6);
+    expect(rev.refresh.v).toBeCloseTo((rev.w.k5! * V5 + rev.w.m! * VM) / (rev.w.k5! + rev.w.m!), 6);
   });
 
-  it('a fresh 5K beside two old times stays below the max (median, not max)', () => {
+  it('a fresher 5K beside two old times stays below the max (median, not max)', () => {
     // 5K 19:00 one year old, 10K 41:00 and half 1:32 over four years old.
     const three = { k5: 1140, k10: 2460, h: 5520 };
     const plain = pbMedianVdot(three)!;
     const noData = engineMulti(three, { k5: 1, k10: 4.02, h: 4.02 });
     expect(noData.refresh.v).toBeCloseTo(plain, 6);
     const typed = engineMulti(three, { k5: 1, k10: 4.02, h: 4.02 }, TYPED);
-    const weighted = pbCapacity(three, { k5: 1, k10: 0.3, h: 0.3 })!.vdot;
+    const weighted = pbCapacity(three, typed.w)!.vdot;
     expect(typed.refresh.v).toBeCloseTo(weighted, 6);
     expect(typed.refresh.v).toBeLessThan(V5 - 0.5);
     expect(typed.refresh.v).toBeGreaterThan(plain);

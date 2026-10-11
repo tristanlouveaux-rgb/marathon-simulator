@@ -87,7 +87,7 @@ function exactDistancePB(targetDist: number, pbs: PBs): { key: PbKey; t: number 
  * When either holds, the floor stands down and the penalised blend is trusted.
  *
  * PB age (2026-10-09): `ctx.pbAgeWeights` carries the age weight of each PB
- * (`pbAgeWeight`, SCIENCE_LOG §T5 bands). Callers pass
+ * (`pbAgeWeight`, a smooth 3-year half-life). Callers pass
  * `modelPbAgeWeightsIfMeasured`, which is set only when they hold current
  * running data (a measured weekly volume); with no data an old PB still
  * floors (§BV). A same-distance PB whose age weight is below 1 (older than two
@@ -726,8 +726,8 @@ export function blendPredictions(
    */
   crossTrainingSessions?: number,
   /**
-   * Age weight of each PB (`pbAgeWeight`, physiological-vdot.ts; SCIENCE_LOG §T5
-   * bands: up to 2 years 1.0, 2 to 4 years 0.6, over 4 years 0.3). Callers pass
+   * Age weight of each PB (`pbAgeWeight`, physiological-vdot.ts: a smooth
+   * 3-year half-life, 1 year 0.79, 2 years 0.63, 4 years 0.40). Callers pass
    * `modelPbAgeWeightsIfMeasured`, which is set only when they hold current
    * running data (a measured weekly volume), so with no data an old PB keeps
    * full weight (§BV). It scales the PB

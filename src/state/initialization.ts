@@ -516,7 +516,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       : state.runsPerWeek === 6 ? 60 : 70;
     const weeklyKmSignal = measuredKm != null ? measuredKm : freqVolumeEstimate;
     const weeklyKmIsEstimate = measuredKm == null;
-    // PB age weights (pbAgeWeight, SCIENCE_LOG §T5 bands) on the shared
+    // PB age weights (pbAgeWeight, a smooth 3-year half-life) on the shared
     // measured-volume gate (modelPbAgeWeightsIfMeasured, as the refresh): with
     // no running data an old PB keeps full weight (§BV). Dates belong to the
     // onboarding PBs (state.pbDates with state.pbs); a seeded or typed PB has

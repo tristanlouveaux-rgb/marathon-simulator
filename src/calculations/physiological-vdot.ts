@@ -185,58 +185,47 @@ export type PbAgeWeights = Partial<Record<PbKey, number>>;
 const PB_KEYS: readonly PbKey[] = ['k5', 'k10', 'h', 'm'];
 
 /**
- * The model weight of a PB by its age (decided by Tristan, 2026-10-09: PBs are
- * displayed as entered or synced, and aged internally). Reuses the existing PB
- * recency bands of the marathon-depth credit (SCIENCE_LOG §T5,
- * `computeMarathonDepthMultiplier` in race-prediction.triathlon.ts, which now
- * reads this function): up to 2 years 1.0, 2 to 4 years 0.6, over 4 years 0.3.
- * "Old PBs represent past capacity": the weight says how much a PB still speaks
- * for current capacity. It never reaches 0, so an old PB keeps some say.
+ * Half-life (years) of a PB's model weight (`pbAgeWeight`): SCIENCE_LOG
+ * 2026-04-24 (pbAgeDecay), Tanaka & Seals 2008. Single source for the model
+ * weight and every label that names it.
+ */
+export const PB_AGE_HALF_LIFE_YEARS = 3;
+
+/**
+ * The model weight of a PB by its age: a smooth half-life (decided by Tristan,
+ * 2026-10-11, replacing the 2026-10-09 step bands of SCIENCE_LOG §T5):
  *
- * No date, an unparseable one or a future one: 1.0, the §T5 default ("if
- * absent, full recency is assumed"). PB dates exist for PBs auto-filled from
- * Strava or Apple history; a typed PB drops its date, so a manual PB never ages.
- * `dateISO` may be `YYYY-MM` or a full ISO date.
+ *   weight = exp(-years x ln 2 / PB_AGE_HALF_LIFE_YEARS)
+ *
+ * with a 3-year half-life, the PB decay already in SCIENCE_LOG (2026-04-24,
+ * "Effort-Calibrated VDOT from HR": pbAgeDecay), from the masters VO2max
+ * decline literature (Tanaka & Seals 2008; Fitzgerald et al. 1997 for the
+ * exponential rather than linear shape). 1 year 0.79, 2 years 0.63, 3 years
+ * 0.50, 4 years 0.40, 5 years 0.31. PBs are displayed as entered or synced and
+ * aged internally; the weight says how much a PB still speaks for current
+ * capacity. It is continuous in the PB's age, so no model number steps on a
+ * PB's anniversary, and it never reaches 0, so an old PB keeps some say.
+ *
+ * No date, an unparseable one or a future one: 1.0 ("if absent, full recency
+ * is assumed", §T5). PB dates exist for PBs auto-filled from Strava or Apple
+ * history; a typed PB drops its date, so a manual PB never ages. `dateISO` may
+ * be `YYYY-MM` or a full ISO date. Ages are in 365.25-day years.
  */
 export function pbAgeWeight(dateISO: string | null | undefined, now: Date = new Date()): number {
-  return pbAgeBand(dateISO, now).weight;
+  const years = pbAgeYears(dateISO, now);
+  if (years == null || years <= 0) return 1;
+  return Math.exp(-years * Math.LN2 / PB_AGE_HALF_LIFE_YEARS);
 }
 
 /**
- * The §T5 PB recency bands as data, oldest first: a PB more than `overYears`
- * years old (365-day years) weighs `weight`; a younger one weighs 1. Single
- * source for `pbAgeWeight`, the triathlon marathon-depth recency label and the
- * Stats race-estimates caption, so a label can never drift from the model.
+ * Age of a PB in years (365.25-day years) from its date, or null without a
+ * usable date. A future date reads as age 0 or less (callers treat it as fresh).
  */
-export const PB_AGE_BANDS: ReadonlyArray<{ readonly overYears: number; readonly weight: number }> = [
-  { overYears: 4, weight: 0.3 },
-  { overYears: 2, weight: 0.6 },
-];
-
-/** Age (years) below which a PB keeps full weight: the youngest band's start. */
-export const PB_FULL_WEIGHT_YEARS = PB_AGE_BANDS[PB_AGE_BANDS.length - 1].overYears;
-
-/**
- * The §T5 band a PB date falls in: its weight and the band's age range in
- * years (`maxYears` null for the oldest band). No date, an unparseable or a
- * future one: the full-weight band (§T5 default).
- */
-export function pbAgeBand(
-  dateISO: string | null | undefined,
-  now: Date = new Date(),
-): { weight: number; minYears: number; maxYears: number | null } {
-  const full = { weight: 1, minYears: 0, maxYears: PB_FULL_WEIGHT_YEARS };
-  if (!dateISO) return full;
+export function pbAgeYears(dateISO: string | null | undefined, now: Date = new Date()): number | null {
+  if (!dateISO) return null;
   const ts = Date.parse(dateISO.length === 7 ? dateISO + '-01' : dateISO);
-  if (!Number.isFinite(ts)) return full;
-  const ageDays = (now.getTime() - ts) / DAY_MS;
-  for (let i = 0; i < PB_AGE_BANDS.length; i++) {
-    const band = PB_AGE_BANDS[i];
-    if (ageDays > band.overYears * 365) {
-      return { weight: band.weight, minYears: band.overYears, maxYears: i === 0 ? null : PB_AGE_BANDS[i - 1].overYears };
-    }
-  }
-  return full;
+  if (!Number.isFinite(ts)) return null;
+  return (now.getTime() - ts) / (365.25 * DAY_MS);
 }
 
 /**

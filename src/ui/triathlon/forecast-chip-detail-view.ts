@@ -24,7 +24,7 @@ import {
   longestSessionByDiscipline,
 } from '@/calculations/tri-volume-by-discipline';
 import { computeTriDisciplineConfidence } from '@/calculations/tri-discipline-confidence';
-import { pbAgeBand } from '@/calculations/physiological-vdot';
+import { pbAgeWeight, pbAgeYears } from '@/calculations/physiological-vdot';
 import { DURABILITY_THRESHOLDS } from '@/calculations/durability-cap';
 import { CLIMATE_ANCHOR_TEMP_C } from '@/constants/triathlon-course-factors';
 import { ft, fp } from '@/utils/format';
@@ -1119,13 +1119,12 @@ function pageMarathonDepth(s: SimulatorState): PageContent {
   const pbDateISO = s.onboarding?.pbDates?.m;
   let recencyLabel = '';
   if (pbDateISO) {
-    // Derived from the model's own bands (pbAgeBand, the weight
+    // The model's own weight (pbAgeWeight, the weight
     // computeMarathonDepthMultiplier applies), so the label cannot drift.
-    const band = pbAgeBand(pbDateISO);
-    const when = band.maxYears == null ? `> ${band.minYears} years ago`
-      : band.minYears === 0 ? `Within ${band.maxYears} years`
-      : `${band.minYears} to ${band.maxYears} years ago`;
-    const weighting = band.weight >= 1 ? 'full credit weighting' : `${Math.round(band.weight * 100)}% credit weighting`;
+    const years = pbAgeYears(pbDateISO);
+    const weight = pbAgeWeight(pbDateISO);
+    const when = years == null || years < 1 ? 'Under a year ago' : `${years.toFixed(1)} years ago`;
+    const weighting = weight >= 1 ? 'full credit weighting' : `${Math.round(weight * 100)}% credit weighting`;
     recencyLabel = `${when} (${weighting})`;
   }
 

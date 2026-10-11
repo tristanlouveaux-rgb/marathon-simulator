@@ -63,8 +63,8 @@ export interface BestEffortInput {
   elapsedSec: number;
   /** ISO date string — used to time-decay older efforts. */
   date?: string;
-  /** PB age weight (`pbAgeWeight`, physiological-vdot.ts; SCIENCE_LOG §T5
-   *  bands), 1 when absent. Scales the critical-speed method's weight by the
+  /** PB age weight (`pbAgeWeight`, physiological-vdot.ts: a smooth 3-year
+   *  half-life), 1 when absent. Scales the critical-speed method's weight by the
    *  mean over the efforts it fits, and how far a long-race PB pulls the LT
    *  bound. Distinct from `date`, which drops efforts older than
    *  CS_MAX_AGE_DAYS from the fit. */
@@ -730,9 +730,9 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   // is 4:30/km), clamp to the tightest such PB pace and downgrade
   // confidence: the methods contradicted demonstrated performance, so
   // "high" would be dishonest. The bound IS the PB pace — no tuned margin.
-  // PB age (2026-10-09): a long-race PB older than two years (age weight below
-  // 1) is past capacity, so it pulls LT only that fraction of the way to its
-  // pace. A full-weight PB is the hard bound, as before.
+  // PB age (2026-10-09; smooth weight 2026-10-11): a dated long-race PB is
+  // weighed by its age (pbAgeWeight below 1), so it pulls LT only that fraction
+  // of the way to its pace. An undated PB (weight 1) is the hard bound, as before.
   const longRaces = (input.bestEfforts ?? [])
     .filter(e => e.elapsedSec >= 3600 && e.distanceM > 0)
     .map(e => ({ pace: e.elapsedSec / (e.distanceM / 1000), w: e.ageWeight ?? 1 }));
