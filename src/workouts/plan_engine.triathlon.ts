@@ -97,7 +97,14 @@ import { isLongRun } from './long-run';
 // run (spaceStoredPlanQualityRuns). A run that fits no day within its cap
 // takes the day without a run it overshoots least (scheduler step 3b), so
 // closing the long-run and brick days no longer moves the double to a weekday.
-export const TRI_GENERATOR_VERSION = 22;
+// v23: run paces follow the capped run figure. The generator writes run paces
+// from gp(s.v, s.lt); s.lt now reads the triathlete run caps (the run skill
+// rating in cold start, 2026-10-09; a synced race effort in the evidence
+// ceiling, 2026-10-11, ISSUE-376), and main.ts regenerates after the launch
+// refresh (applyTriGeneratorRegen). The bump makes stored plans built from an
+// uncapped watch s.lt (easy 4:24/km at watch 62, run skill 3) regenerate at
+// the capped paces (5:45/km).
+export const TRI_GENERATOR_VERSION = 23;
 
 /**
  * Representative average session length (hours) per discipline. The generator

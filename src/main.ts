@@ -446,14 +446,13 @@ async function launchApp(): Promise<void> {
     saveState();
   }
 
-  // Triathlon: regenerate the plan if the generator version has bumped since
-  // the plan was last built, AND refresh benchmarks (CSS / FTP / per-
-  // discipline CTL) from the latest activity history so predictions track
-  // fitness as it evolves. Never overwrites user-entered CSS/FTP. Only
-  // fills blanks.
+  // Triathlon: refresh benchmarks (CSS / FTP / per-discipline CTL) from the
+  // latest activity history so predictions track fitness as it evolves. Never
+  // overwrites user-entered CSS/FTP. Only fills blanks. The plan regeneration
+  // on a generator-version bump runs later, after the launch refresh
+  // (applyTriGeneratorRegen), so it reads the refreshed s.lt.
   if (hasState && state.eventType === 'triathlon' && state.triConfig) {
     try {
-      const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
       const { deriveTriBenchmarksFromHistory, withTriRatedRpe } = await import('@/calculations/tri-benchmarks-from-history');
       const { loadActivitiesFromDB } = await import('@/data/tri-activity-loader');
       const { appendFtpSample, appendCssSample } = await import('@/calculations/tri-benchmark-history');
@@ -746,33 +745,9 @@ async function launchApp(): Promise<void> {
         }
       }
 
-      // Plan regeneration when the generator version bumps.
-      const savedVersion = state.triConfig.generatorVersion ?? 0;
-      if (savedVersion < TRI_GENERATOR_VERSION) {
-        const freshWeeks = generateTriathlonPlan(mutable);
-        if (freshWeeks.length > 0) {
-          for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
-            // Replacing the array wholesale drops USER-ADDED sessions (session
-            // generator / accepted suggestions / holiday bridges live in the
-            // same triWorkouts array with adhoc-/holiday- ids). Real incident
-            // 2026-06-03: the v18 regen wiped an added Tuesday gym session.
-            // Carry them over; only generator-owned slots are replaced.
-            const userAdded = (mutable.wks[i].triWorkouts ?? []).filter(
-              (w: any) => typeof w.id === 'string' && (w.id.startsWith('adhoc-') || w.id.startsWith('holiday-')),
-            );
-            mutable.wks[i].triWorkouts = [...freshWeeks[i].triWorkouts!, ...userAdded];
-            mutable.wks[i].ph = freshWeeks[i].ph;
-            // The closing week (a Monday to Wednesday race's own week) is part of the layout.
-            if (freshWeeks[i].raceClosing) mutable.wks[i].raceClosing = true;
-            else delete mutable.wks[i].raceClosing;
-            // The race window's cut sessions (forecast dose only) follow the week.
-            if (freshWeeks[i].raceWindowCut) mutable.wks[i].raceWindowCut = freshWeeks[i].raceWindowCut;
-            else delete mutable.wks[i].raceWindowCut;
-          }
-          if (mutable.triConfig) mutable.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
-          console.log(`[tri] plan regenerated (generator v${savedVersion} → v${TRI_GENERATOR_VERSION})`);
-        }
-      }
+      // Plan regeneration on a generator-version bump runs after the launch
+      // refresh below (applyTriGeneratorRegen, src/state/tri-plan-regen.ts):
+      // the generator bakes run paces from s.lt, which the refresh recomputes.
 
       saveState();
 
@@ -1034,6 +1009,18 @@ async function launchApp(): Promise<void> {
       const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
       refreshBlendedFitness(getMutableState());
     } catch {}
+
+    // Triathlon plan regeneration when the generator version bumps. After the
+    // refresh: the generator writes run paces from gp(s.v, s.lt), so a regen
+    // reads this launch's s.lt (the triathlete run caps, 2026-10-09 and
+    // ISSUE-376). It ran in the triathlon block above before 2026-10-11, so a
+    // stored plan kept the previous launch's, uncapped, run paces.
+    try {
+      const { applyTriGeneratorRegen } = await import('@/state/tri-plan-regen');
+      if (applyTriGeneratorRegen(getMutableState())) saveState();
+    } catch (err) {
+      console.warn('[tri] plan regeneration failed', err);
+    }
 
     // Boot-time: refresh course-factor adjusted forecast so users who picked
     // a race before this feature shipped see the new adjustment immediately.
