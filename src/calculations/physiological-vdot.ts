@@ -203,8 +203,11 @@ export const PB_AGE_HALF_LIFE_YEARS = 3;
  * exponential rather than linear shape). 1 year 0.79, 2 years 0.63, 3 years
  * 0.50, 4 years 0.40, 5 years 0.31. PBs are displayed as entered or synced and
  * aged internally; the weight says how much a PB still speaks for current
- * capacity. It is continuous in the PB's age, so no model number steps on a
- * PB's anniversary, and it never reaches 0, so an old PB keeps some say.
+ * capacity. It is continuous in the PB's age, so the weight adds no step on a
+ * PB's anniversary, and it never reaches 0, so an old PB keeps some say. (The
+ * low-volume PB-recency bands, RUN_PB_RECENCY_BANDS and the marathon-specificity
+ * recency in blendPredictions, still step at 1 and 2 years: open question,
+ * pinned in pb-age-continuity.test.ts.)
  *
  * No date, an unparseable one or a future one: 1.0 ("if absent, full recency
  * is assumed", §T5). PB dates exist for PBs auto-filled from Strava or Apple

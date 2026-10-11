@@ -136,7 +136,7 @@ export function pbFloorWeight(targetDist: number, pbs: PBs, pbAgeWeights?: PbAge
  * the same weighted mean the age-weighted PB median and the engine floor use,
  * with no new constant. w = 1 (undated, or no measured volume) is the floor as
  * before; a weight that falls continuously with the PB's age moves the floored
- * time continuously, so no forecast steps on an anniversary (the 2026-10-09
+ * time continuously, so the floor adds no step on an anniversary (the 2026-10-09
  * version stood the floor down outright below weight 1: a 7 to 9 min overnight
  * marathon step at 2 years, review 3).
  *
@@ -1008,6 +1008,10 @@ export function blendPredictionsPreFloor(
     // *excess* (the part above 1.0) by a recency factor. This keeps the
     // direction right while reducing magnitude for athletes who have proven
     // recent capability. Step bands at 1y / 2y boundaries.
+    // KNOWN LIMITATION (2026-10-11): these bands step today's marathon time
+    // at 365 and 730 days (about 2:39 each, PB 3:15 with a typed 20 km). The
+    // continuous rule is an open question for Tristan; the same bands are in
+    // RUN_PB_RECENCY_BANDS. Pinned in pb-age-continuity.test.ts.
     let recencyFactor = 1.0;
     if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null) {
       if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year. Demonstrated current capability

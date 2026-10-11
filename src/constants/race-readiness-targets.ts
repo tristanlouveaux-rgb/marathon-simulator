@@ -238,6 +238,11 @@ export const READINESS_BANDS = [
  * (see SCIENCE_LOG entry "PB-recency scaling for marathon-specificity penalty
  * 2026-05-05") so users with recent run PBs aren't penalised harder by the
  * new framework than by the old.
+ *
+ * KNOWN LIMITATION (2026-10-11): the bands step the triathlon run leg at 365
+ * and 730 days (Ironman, marathon PB 3:15, typed 30 km: about 72 s each). The
+ * continuous rule is an open question for Tristan, shared with the inline copy
+ * in blendPredictions. Pinned in pb-age-continuity.test.ts.
  */
 export const RUN_PB_RECENCY_BANDS = [
   { maxAgeDays: 365,  factor: 0.5  },  // Within 1y → halve penalty
