@@ -29,6 +29,7 @@
 import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance, AbilityBand, RunnerType } from '@/types';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
+import { planRampArchetype } from './athlete-archetype';
 import { vt, rdKm } from './vdot';
 import { getAbilityBand } from './fatigue';
 
@@ -127,7 +128,7 @@ export function runMarathonForecastSim(
   const sessions = baseSessions + commuteSessions;
   const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessions, s.rd as RaceDistance, {
     baselineKm: s.detectedWeeklyKm,
-    archetype: s.athleteArchetype?.archetype,
+    archetype: planRampArchetype(s),
     totalWeeks,
     taperWeeks: planTaperWeeks(s),
   }) ?? s.wkm;

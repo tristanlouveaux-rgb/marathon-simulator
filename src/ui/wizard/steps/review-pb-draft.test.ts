@@ -181,3 +181,24 @@ describe('review: a typed PB counts without tapping Save', () => {
     expect(ob().pbDates?.k5).toBe('2026-05-01T08:00:00Z');
   }, 20000);
 });
+
+describe('review: a saved weekly volume edit is a typed volume', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    (Element.prototype as any).scrollIntoView = vi.fn();
+    ({ renderReview } = await import('./review'));
+  });
+
+  it('Save writes the km and confirms it, so it seeds the plan volume, the ramp and the load target', async () => {
+    await mount();
+    expect(h.store.state.weeklyVolumeConfirmed).toBeUndefined();
+    (document.querySelector('[data-row="volume"]') as HTMLElement).click();
+    await waitFor(() => !!document.getElementById('r-volume-input'));
+    typeKeys(document.getElementById('r-volume-input') as HTMLInputElement, '45');
+    (document.querySelector('[data-action="save"]') as HTMLElement).click();
+    await waitFor(() => !document.getElementById('r-volume-input'));
+
+    expect(h.store.state.detectedWeeklyKm).toBe(45);
+    expect(h.store.state.weeklyVolumeConfirmed).toBe(true);
+  }, 20000);
+});

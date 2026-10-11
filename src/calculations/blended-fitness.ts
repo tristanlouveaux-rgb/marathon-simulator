@@ -18,6 +18,7 @@ import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPB
 import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
+import { planRampArchetype, type TypedVolumeState } from './athlete-archetype';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
 import { computePredictionInputs, measuredWeeklyKm, collectRunsFromState } from './prediction-inputs';
@@ -425,7 +426,8 @@ export function getStandardForecastProjection(
 /**
  * The weekly volume the end-of-plan forecast credits for `sessionsPerWeek`:
  * getPlanPrescribedMeanWeeklyKm integrated over the archetype-gated ramp from
- * the runner's current volume (s.detectedWeeklyKm) across the plan's training
+ * the runner's current volume (s.detectedWeeklyKm, synced or typed; archetype
+ * from planRampArchetype, the plan engine's) across the plan's training
  * weeks and taper. One source for the Home forecast (refreshBlendedFitness)
  * and the onboarding preview hero (design v4 Q18): without the ramp context
  * the preview read the flat full-plan peak (52.8 km for a 4-run marathon) and
@@ -433,12 +435,13 @@ export function getStandardForecastProjection(
  * Planning side (what the plan prescribes), read by the tracking forecast.
  */
 export function planForecastWeeklyKm(
-  s: Pick<SimulatorState, 'rd' | 'detectedWeeklyKm' | 'athleteArchetype' | 'tw' | 'wks' | 'continuousMode' | 'trackOnly' | 'eventType'>,
+  s: Pick<SimulatorState, 'rd' | 'detectedWeeklyKm' | 'athleteArchetype' | 'tw' | 'wks' | 'continuousMode' | 'trackOnly' | 'eventType'>
+    & Partial<TypedVolumeState>,
   sessionsPerWeek: number,
 ): number | null {
   return getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, s.rd, {
     baselineKm: s.detectedWeeklyKm,
-    archetype: s.athleteArchetype?.archetype,
+    archetype: planRampArchetype(s),
     totalWeeks: planTrainingWeeks(s),
     taperWeeks: planTaperWeeks(s),
   });

@@ -20,7 +20,7 @@ import { buildSharpenBlockState, type SharpenBuildState } from '@/workouts/sharp
 import { LONG_RUN_THRESHOLD_SEC } from '@/calculations/run-durability';
 import { marathonEnduranceGap } from '@/calculations/race-day-durability';
 import { localMondayKey, localDateKey, calendarDayNumber } from '@/utils/local-date';
-import type { Archetype } from '@/calculations/athlete-archetype';
+import { planRampArchetype, type Archetype, type TypedVolumeState } from '@/calculations/athlete-archetype';
 import { fmtDurationMin } from '@/utils/format';
 
 /** Training weeks of a plan built today for a race on `raceISO` (null: no plan possible). */
@@ -59,8 +59,9 @@ export interface LowBaseMarathon {
   peakLongMin: number;
 }
 
-/** State the low-base check reads (logged runs, paces, archetype, fitness). */
-export type LowBaseState = SharpenBuildState & { athleteArchetype?: { archetype?: Archetype } | null };
+/** State the low-base check reads (logged runs, paces, archetype, typed weekly km, fitness). */
+export type LowBaseState = SharpenBuildState & { athleteArchetype?: { archetype?: Archetype } | null }
+  & Partial<TypedVolumeState>;
 
 /**
  * A marathon block that cannot build marathon endurance in time (owner
@@ -85,7 +86,7 @@ export function lowBaseMarathon(
   );
   const ability = abilityBandFromVdot(s.v || 45, experienceLevel || 'intermediate');
   const phases = computeRunningPlanPhases(n, 'marathon').map(p => p.ph);
-  const peakLongMin = projectedSharpeningPeakLongMin(start.startLongMin, phases, ability, s.athleteArchetype?.archetype, 'marathon');
+  const peakLongMin = projectedSharpeningPeakLongMin(start.startLongMin, phases, ability, planRampArchetype(s), 'marathon');
   const thresholdMin = LONG_RUN_THRESHOLD_SEC.marathon / 60;
   const gap = marathonEnduranceGap({
     rd, sharpeningBlock: true, experienceLevel, startSource: start.startSource, longestRunMin: peakLongMin,
