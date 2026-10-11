@@ -9,7 +9,7 @@ import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
 } from '@/calculations';
-import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
+import { calculateForecast, blendPredictionsPreFloor, demonstratedPBFloorThrough, predictFromRecent } from '@/calculations/predictions';
 import { pbCapacity, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { computeHRCalibratedVdot } from '@/calculations/effort-calibrated-vdot';
 import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
@@ -525,8 +525,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       pbs, { onboarding: state, detectedWeeklyKm: sCurrent.detectedWeeklyKm }, blendInputs, new Date(),
     );
 
-    // Note: blendPredictions uses runnerType.toLowerCase() internally
-    const blendedTime = blendPredictions(
+    // Note: blendPredictions uses runnerType.toLowerCase() internally. The
+    // blend before the demonstrated-PB floor: the floor runs once below, after
+    // the durability cap (demonstratedPBFloorThrough), at the PB's age weight.
+    const blendedTime = blendPredictionsPreFloor(
       targetDistMeters, pbs, ltPace, vo2max, b,
       runnerType.toLowerCase(),
       blendInputs.recentRun ?? rec ?? null,
@@ -566,10 +568,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // 5K Riegel-projected to a half with no endurance base). It must NOT push the
     // anchor slower than a time the athlete has actually run at the target
     // distance, absent detraining evidence — so floor at any same-distance PB
-    // after the cap. blendPredictions already floors its own output; this catches
-    // the cap's multiplicative overshoot on top. See demonstratedPBFloor.
-    const cappedBlendedTime = demonstratedPBFloor(
-      blendedTime * durability.multiplier,
+    // before and after the cap, once per pipeline at the PB's age weight
+    // (demonstratedPBFloorThrough, as refreshBlendedFitness). See demonstratedPBFloor.
+    const cappedBlendedTime = demonstratedPBFloorThrough(
+      blendedTime,
       targetDistMeters,
       pbs,
       {
@@ -579,6 +581,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         b,
         pbAgeWeights,
       },
+      (t) => t * durability.multiplier,
     );
 
     // ── Engine vs race-readiness separation (ISSUE-297, RC1) ────────────────

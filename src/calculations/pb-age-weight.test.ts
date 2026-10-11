@@ -27,7 +27,7 @@ vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
 import { pbAgeWeight, pbAgeWeightsFor, pbCapacity, pbMedianVdot, pbDerivedVdot, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, pbAgeingActive, pbAgeYears, PB_AGE_HALF_LIFE_YEARS } from './physiological-vdot';
 import { measuredWeeklyKm } from './prediction-inputs';
-import { blendPredictions, demonstratedPBFloor } from './predictions';
+import { blendPredictions, demonstratedPBFloor, demonstratedPBFloorThrough } from './predictions';
 import { deriveLT } from './lt-derivation';
 import { cv } from './vdot';
 import { initializeSimulator } from '@/state/initialization';
@@ -222,19 +222,47 @@ describe('blendPredictions and demonstratedPBFloor take PB age weights', () => {
   it('an old PB moves the prediction toward the other predictors', () => {
     const fresh = args({ k10: 1 })!;
     const old = args({ k10: 0.3 })!;
-    // LT 5:00/km predicts a slower 10K than the 40:00 PB; the floor no longer
-    // holds the old PB, and its weight drops.
+    // LT 5:00/km predicts a slower 10K than the 40:00 PB; the old PB keeps 0.3
+    // of its floor, and its predictor weight drops.
     expect(fresh).toBe(2400);
     expect(old).toBeGreaterThan(2400);
   });
 
-  it('the same-distance floor stands down for a PB older than two years', () => {
+  it('the same-distance floor keeps w of its strength for a PB of age weight w', () => {
+    // Tristan 2026-10-11: the floor follows the PB's continuous weight. The
+    // 2026-10-09 version stood it down outright below weight 1.
     const ctx = { weeklyRunKm: 40, weeklyRunKmIsEstimate: false, recentRun: null, b: 1.06 };
     expect(demonstratedPBFloor(2600, 10000, pbs, ctx)).toBe(2400);
     expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 1 } })).toBe(2400);
-    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.6 } })).toBe(2600);
-    // Idempotent either way.
-    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.6 } })).toBe(2600);
+    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.6 } })).toBeCloseTo(0.6 * 2400 + 0.4 * 2600, 9);
+    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.3 } })).toBeCloseTo(0.3 * 2400 + 0.7 * 2600, 9);
+    // Faster than the PB: untouched at any weight.
+    expect(demonstratedPBFloor(2300, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.6 } })).toBe(2300);
+    // Detraining evidence (measured volume under 30 km) stands it down at any weight.
+    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, weeklyRunKm: 20, pbAgeWeights: { k10: 0.6 } })).toBe(2600);
+    // Continuous in the weight: no jump just below 1.
+    expect(demonstratedPBFloor(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 1 - 1e-9 } })).toBeCloseTo(2400, 6);
+  });
+
+  it('a two-step pipeline applies the weight once (demonstratedPBFloorThrough)', () => {
+    const ctx = { weeklyRunKm: 40, weeklyRunKmIsEstimate: false, recentRun: null, b: 1.06 };
+    const full = (t: number) => demonstratedPBFloor(t, 10000, pbs, ctx);
+    for (const adjust of [(t: number) => t * 1.04, (t: number) => t * 0.97, (t: number) => t]) {
+      for (const pre of [2300, 2390, 2450, 2600]) {
+        // Full strength: exactly the two projections callers applied before.
+        expect(demonstratedPBFloorThrough(pre, 10000, pbs, ctx, adjust)).toBe(full(adjust(full(pre))));
+        expect(demonstratedPBFloorThrough(pre, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 1 } }, adjust)).toBe(full(adjust(full(pre))));
+        // Weight w: w of the floored pipeline, (1 - w) of the unfloored one.
+        for (const w of [0.79, 0.5, 0.3]) {
+          expect(demonstratedPBFloorThrough(pre, 10000, pbs, { ...ctx, pbAgeWeights: { k10: w } }, adjust))
+            .toBeCloseTo(w * full(adjust(full(pre))) + (1 - w) * adjust(pre), 9);
+        }
+      }
+    }
+    // Applying the single step twice would compound it (0.84 of the floor at
+    // w 0.6); the pipeline keeps 0.6.
+    const id = (t: number) => t;
+    expect(demonstratedPBFloorThrough(2600, 10000, pbs, { ...ctx, pbAgeWeights: { k10: 0.6 } }, id)).toBeCloseTo(0.6 * 2400 + 0.4 * 2600, 9);
   });
 });
 

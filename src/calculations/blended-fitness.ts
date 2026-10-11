@@ -14,7 +14,7 @@
 
 import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
-import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
+import { blendPredictions, blendPredictionsPreFloor, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, demonstratedPBFloorThrough, predictFromRecent } from './predictions';
 import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
@@ -176,7 +176,9 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
 /** Run one distance through the full staged pipeline. Returns null when the
  *  blend cannot produce a usable estimate. */
 function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistance): StandardPredictionStages | null {
-  let blended = blendPredictions(
+  // The blend before the demonstrated-PB floor: the floor is applied once per
+  // pipeline below (demonstratedPBFloorThrough), at the PB's age weight.
+  let preFloor = blendPredictionsPreFloor(
     DIST_M[dist],
     ctx.pbs,
     ctx.lt,
@@ -201,10 +203,20 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
   // VDOT). This only fires when the blend is empty, so it never double-counts a
   // signal already in the blend. Keeps the Forecast in lock-step with the Stats
   // VO2 bar, which shows from the same resolved VDOT.
-  if ((!blended || blended <= 0 || !isFinite(blended)) && ctx.fallbackVdot != null) {
-    blended = predictFromVO2(DIST_M[dist], ctx.fallbackVdot);
+  if ((!preFloor || preFloor <= 0 || !isFinite(preFloor)) && ctx.fallbackVdot != null) {
+    preFloor = predictFromVO2(DIST_M[dist], ctx.fallbackVdot);
   }
-  if (!blended || blended <= 0 || !isFinite(blended)) return null;
+  if (!preFloor || preFloor <= 0 || !isFinite(preFloor)) return null;
+  const pre = preFloor;
+  const floorCtx = {
+    weeklyRunKm: ctx.weeklyKm ?? undefined,
+    weeklyRunKmIsEstimate: ctx.weeklyKmIsEstimate,
+    recentRun: ctx.recentRun,
+    b: ctx.b,
+    pbAgeWeights: ctx.pbAgeWeights,
+  };
+  // The capacity-blend stage as blendPredictions reports it (one floor step).
+  const blended = demonstratedPBFloor(pre, DIST_M[dist], ctx.pbs, floorCtx);
   const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
   const durability = applyLongRunCap(
     ctx.longestRunSec,
@@ -212,18 +224,14 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
     countQualifyingLongRuns(ctx.longRunDurationsSec, dist),
   );
   // Floor each distance at its demonstrated same-distance PB after cap + shoe
-  // adjustment (parity with the headline refresh and initialization).
-  const finalSec = demonstratedPBFloor(
-    calibratedSec * durability.multiplier * ctx.shoeMul,
+  // adjustment (parity with the headline refresh and initialization), once
+  // per pipeline at the PB's age weight (demonstratedPBFloorThrough).
+  const finalSec = demonstratedPBFloorThrough(
+    pre,
     DIST_M[dist],
     ctx.pbs,
-    {
-      weeklyRunKm: ctx.weeklyKm ?? undefined,
-      weeklyRunKmIsEstimate: ctx.weeklyKmIsEstimate,
-      recentRun: ctx.recentRun,
-      b: ctx.b,
-      pbAgeWeights: ctx.pbAgeWeights,
-    },
+    floorCtx,
+    (t) => applyRunCalibrationBias(t, dist, ctx.calibration) * durability.multiplier * ctx.shoeMul,
   );
   return {
     blendedSec: blended,
@@ -539,10 +547,11 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const pbs = s.pbs;
   const b = s.b;
   const rd = s.rd;
-  // The blend as a function of its LT predictor: the refresh reads s.lt; the
-  // triathlon cold-start hold below also reads it at the LT from the uncapped
-  // watch. Every other input is the same.
-  const blendForLt = (ltPace: number | null) => blendPredictions(
+  // The blend (before the demonstrated-PB floor) as a function of its LT
+  // predictor: the refresh reads s.lt; the triathlon cold-start hold below also
+  // reads it at the LT from the uncapped watch. Every other input is the same.
+  // The floor is applied once per pipeline (readinessTimeFor).
+  const preFloorForLt = (ltPace: number | null) => blendPredictionsPreFloor(
     targetDistM,
     pbs,
     ltPace,
@@ -560,9 +569,9 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
     pbAgeWeights,
   );
-  const blended = blendForLt(s.lt ?? null);
+  const preFloorBlend = preFloorForLt(s.lt ?? null);
 
-  if (!blended || blended <= 0 || !isFinite(blended)) return false;
+  if (!preFloorBlend || preFloorBlend <= 0 || !isFinite(preFloorBlend)) return false;
 
   // Apply per-user calibration bias (tier 1: per-distance additive bias from
   // ≥2 logged races at the same distance). Computed fresh on every refresh
@@ -584,19 +593,27 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // not count as evidence (see demonstratedPBFloor). Calibration bias, the
   // durability cap and this floor, as a function of the blend (the cold-start
   // hold below runs a second blend through the same steps).
-  const readinessTimeFor = (blendedTime: number): number => demonstratedPBFloor(
-    applyRunCalibrationBias(blendedTime, rd, calibration) * durability.multiplier,
+  // The floor runs once per pipeline at the same-distance PB's age weight
+  // (demonstratedPBFloorThrough): at full strength it is the blend's own floor
+  // then this one, as before; a PB of weight w keeps w of it.
+  const floorCtx = {
+    weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
+    weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
+    recentRun: inputs.recentRun ?? s.rec ?? null,
+    b,
+    pbAgeWeights,
+  };
+  const readinessTimeFor = (preFloorTime: number): number => demonstratedPBFloorThrough(
+    preFloorTime,
     targetDistM,
     pbs,
-    {
-      weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
-      weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
-      recentRun: inputs.recentRun ?? s.rec ?? null,
-      b,
-      pbAgeWeights,
-    },
+    floorCtx,
+    (t) => applyRunCalibrationBias(t, rd, calibration) * durability.multiplier,
   );
-  const durabilityAdjustedBlend = readinessTimeFor(blended);
+  // The blend with its own floor (what blendPredictions returns): the forecast
+  // anchor when no planned peak volume exists.
+  const blended = demonstratedPBFloor(preFloorBlend, targetDistM, pbs, floorCtx);
+  const durabilityAdjustedBlend = readinessTimeFor(preFloorBlend);
 
   s.blendedRaceTimeSec = durabilityAdjustedBlend;
 
@@ -747,7 +764,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     if (ltInput.coldStartCapped) {
       let held = skillVdot;
       if (ltInput.source === 'device' && ltInput.uncappedVdot != null) {
-        const blendedUncapped = blendForLt(ltPaceForDanielsInput(s, ltInput.uncappedVdot));
+        const blendedUncapped = preFloorForLt(ltPaceForDanielsInput(s, ltInput.uncappedVdot));
         if (blendedUncapped && blendedUncapped > 0 && isFinite(blendedUncapped)) {
           held = Math.min(skillVdot, cv(targetDistM, readinessTimeFor(blendedUncapped)));
         }
