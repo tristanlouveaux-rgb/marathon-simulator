@@ -9,7 +9,7 @@
  */
 
 import { getState } from '@/state';
-import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary } from '@/types';
+import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary, RaceDistance } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
@@ -21,9 +21,6 @@ import { plannedWeekKm } from '@/calculations/plan-shape';
 import { renderPlanShapeCard } from './plan-shape-chart';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
-import { blendPredictions } from '@/calculations/predictions';
-import { computePredictionInputs, collectRunsFromState } from '@/calculations/prediction-inputs';
-import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
@@ -32,9 +29,9 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal, modelPbAgeWeightsIfMeasured } from '@/calculations/physiological-vdot';
+import { getPhysiologicalVdot, resolveRunningVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { pbAgeCaptionText } from './pb-age-caption';
-import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { refreshBlendedFitness, predictStandardDistances } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
 import { gp } from '@/calculations/paces';
@@ -3241,9 +3238,11 @@ function computeMarathonFadeRisk(
   return { level, avgDrift: avg };
 }
 
-/** Forecast times card (standalone). Uses blendPredictions (LT, VO2, PB, recent
- *  run) when available; falls back to pure VDOT-to-time when no watch data. */
-function buildForecastTimesCard(s: SimulatorState): string {
+/** Forecast times card (standalone). The four standard-distance predictions
+ *  (predictStandardDistances, the Forecast tab's figures and the Time Trial
+ *  step's) when available; falls back to pure VDOT-to-time otherwise.
+ *  Exported for tests (pb-age-surfaces.test.ts). */
+export function buildForecastTimesCard(s: SimulatorState): string {
   const vdot = computeCurrentVDOT(s);
   if (!vdot || vdot < 20) return '';
 
@@ -3256,40 +3255,25 @@ function buildForecastTimesCard(s: SimulatorState): string {
   };
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-  // Recent race effort (computePredictionInputs recentRun: a run more than 15%
-  // faster than the window's median pace and, when it has an average HR, at
-  // race level on the HR effort scale), else the onboarding s.rec. Same runs
-  // (collectRunsFromState, which carries avgHR) and race HR floor as
-  // refreshBlendedFitness. The local run collector this card used dropped
-  // avgHR, so the HR race test never acted here.
-  const inputs = computePredictionInputs(collectRunsFromState(s), undefined, raceEffortHrFloorForState(s));
-  const liveRec = inputs.recentRun ?? s.rec ?? null;
-  const liveKmPerWeek = inputs.weeklyKm;
-  const liveAvgPace = inputs.avgPaceSecPerKm ?? null;
+  // One computation for the four race estimates (2026-10-11):
+  // predictStandardDistances, which the Forecast tab and the Time Trial step
+  // read. This card ran its own blend: the synced window's weekly km (0 with a
+  // typed weekly km and no synced runs, which fired the marathon-specificity
+  // penalty at its maximum), no HR fit, no calibration and no durability cap,
+  // so it disagreed with the Forecast (a half PB 1:32 with a typed 40 km:
+  // marathon 3:40:14 here against 3:21:49 there).
+  const standard = hasBlendInputs ? predictStandardDistances(s) : null;
 
-  const distances = [
-    { label: 'Marathon', dist: 42195, km: 42.195 },
-    { label: 'Half',     dist: 21097, km: 21.0975 },
-    { label: '10K',      dist: 10000, km: 10 },
-    { label: '5K',       dist: 5000,  km: 5 },
+  const distances: Array<{ label: string; key: RaceDistance; km: number }> = [
+    { label: 'Marathon', key: 'marathon', km: 42.195 },
+    { label: 'Half',     key: 'half',     km: 21.0975 },
+    { label: '10K',      key: '10k',      km: 10 },
+    { label: '5K',       key: '5k',       km: 5 },
   ];
 
   const rows = distances.map((d, i) => {
-    let timeSec: number;
-    if (hasBlendInputs) {
-      const blended = blendPredictions(
-        d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
-        s.b ?? 1.06, s.typ ?? 'Balanced', liveRec,
-        s.athleteTier ?? undefined, liveKmPerWeek, liveAvgPace ?? undefined,
-        { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
-        undefined, undefined, undefined, undefined,
-        // PB age weights on the shared measured-volume gate, as refreshBlendedFitness.
-        modelPbAgeWeightsIfMeasured(s.pbs ?? {}, s, inputs, new Date()),
-      );
-      timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
-    } else {
-      timeSec = vt(d.km, vdot);
-    }
+    const predicted = standard?.[d.key];
+    const timeSec = predicted != null && predicted > 0 ? predicted : vt(d.km, vdot);
     const isLast = i === distances.length - 1;
 
     // Fade-risk badge. Marathon only, based on long-run drift at goal MP

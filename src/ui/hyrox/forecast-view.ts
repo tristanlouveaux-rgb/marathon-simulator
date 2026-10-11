@@ -25,6 +25,7 @@ import { applyHyroxPrevFormatChange } from '@/state/hyrox-prev-format-fix';
 import { isInjuryActive } from '@/ui/injury/modal';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
+import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -594,6 +595,21 @@ function renderHyroxInjuryNote(s: SimulatorState): string {
  * Confidence badge top-right toggles the detail panel with calibration,
  * staleness, cross-format conversion, and previous-race notes.
  */
+/**
+ * The run-pace provenance line in the HYROX forecast's confidence detail. A
+ * VDOT-derived run pace reads s.v and s.lt (derivePopulationRunPace), which PB
+ * ageing moves, so the shared PB-age caption follows it (pbAgeCaptionText).
+ * Exported for tests.
+ */
+export function hyroxRunPaceSourceNote(s: SimulatorState, source: HyroxPrediction['runPaceSource']): string {
+  if (source === 'derived') {
+    const pbAge = pbAgeCaptionText(s, 'the run pace');
+    return `Run pace updated from your VDOT.${pbAge ? ` ${pbAge}` : ''}`;
+  }
+  if (source === 'seed') return 'Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.';
+  return '';
+}
+
 function buildHyroxHero(
   s: SimulatorState,
   prediction: HyroxPrediction,
@@ -754,11 +770,7 @@ function buildHyroxHero(
   const equivalentNote = (prevEvent && prevTimeSec && hx.venueId && prevVenueId && prevVenueId !== hx.venueId)
     ? `Your ${fmtMmSs(prevTimeSec)} from ${prevEvent.city} ≈ ${fmtMmSs(rescaleTimeAcrossVenues(prevTimeSec, prevVenueId, hx.venueId))} at ${venue?.city ?? 'this venue'}.`
     : '';
-  const runPaceSourceNote = prediction.runPaceSource === 'derived'
-    ? `Run pace updated from your VDOT.`
-    : prediction.runPaceSource === 'seed'
-    ? `Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.`
-    : '';
+  const runPaceSourceNote = hyroxRunPaceSourceNote(s, prediction.runPaceSource);
 
   const targetLine = hx.targetFinishTimeSec
     ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Edit ›`

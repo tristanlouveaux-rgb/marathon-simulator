@@ -6,7 +6,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import type { Workout } from '@/types';
+import type { Workout, RaceDistance } from '@/types';
 import { intentToWorkout } from '@/workouts/intent_to_workout';
 import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 import { generateSwimSession, describeSwimSession, estimateDistanceMetres, SWIM_VARIANT_COUNT, type SwimSessionKind } from '@/workouts/swim';
@@ -24,8 +24,7 @@ import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 import { formatKm, formatPace } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
-import { blendPredictions } from '@/calculations/predictions';
-import { effectiveVo2max } from '@/calculations/physiological-vdot';
+import { predictStandardDistances } from '@/calculations/blended-fitness';
 import { buildSessionRecommendation } from '@/calculations/session-recommendation';
 import type { TrainingPhase } from '@/types/training';
 
@@ -33,12 +32,26 @@ const MODAL_ID = 'session-generator-modal';
 
 type EffortKey = 'easy' | 'steady' | 'hard';
 
-const TIME_TRIAL_DISTANCES = [
-  { label: '5K',       dist: 5000,  km: 5 },
-  { label: '10K',      dist: 10000, km: 10 },
-  { label: 'Half',     dist: 21097, km: 21.097 },
-  { label: 'Marathon', dist: 42195, km: 42.195 },
+const TIME_TRIAL_DISTANCES: ReadonlyArray<{ label: string; key: RaceDistance; dist: number; km: number }> = [
+  { label: '5K',       key: '5k',       dist: 5000,  km: 5 },
+  { label: '10K',      key: '10k',      dist: 10000, km: 10 },
+  { label: 'Half',     key: 'half',     dist: 21097, km: 21.097 },
+  { label: 'Marathon', key: 'marathon', dist: 42195, km: 42.195 },
 ];
+
+/**
+ * The Time Trial step's predicted times: the four standard-distance
+ * predictions the Forecast tab shows (predictStandardDistances: PB age
+ * weights, the HR-tested recent race, the measured weekly km, calibration and
+ * the durability cap), so they cannot disagree with it. The local blend this
+ * step ran passed none of those (2026-10-11). Null where no prediction exists.
+ */
+export function timeTrialPredictions(
+  s: Parameters<typeof predictStandardDistances>[0],
+): Array<(typeof TIME_TRIAL_DISTANCES)[number] & { predictedSec: number | null }> {
+  const standard = predictStandardDistances(s);
+  return TIME_TRIAL_DISTANCES.map(d => ({ ...d, predictedSec: standard[d.key] }));
+}
 
 function fmtTimeSec(totalSec: number): string {
   const h = Math.floor(totalSec / 3600);
@@ -1642,17 +1655,7 @@ export function openSessionGenerator(): void {
   // ── Time Trial step ────────────────────────────────────────────────────────
 
   function renderTimeTrial() {
-    const vdot = s.v ?? 50;
-    const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-
-    const predictions = TIME_TRIAL_DISTANCES.map(d => {
-      const sec = hasBlendInputs
-        ? blendPredictions(d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
-            s.b ?? 1.06, s.typ ?? 'Balanced', s.rec ?? null,
-            s.athleteTier ?? undefined)
-        : null;
-      return { ...d, predictedSec: sec };
-    });
+    const predictions = timeTrialPredictions(s);
 
     let selectedDist = predictions[0];
 
