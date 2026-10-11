@@ -267,6 +267,18 @@ describe('computePredictionInputs: race test with heart rate', () => {
     expect(r.recentRun).toMatchObject({ d: 5, t: 1425 });
   });
 
+  it('requireHr (the triathlete evidence test): a fast run without HR does not count where HR zones exist', () => {
+    const others = easy.map(e => ({ ...e, avgHR: 140 }));
+    expect(computePredictionInputs([fast(), ...others], NOW, FLOOR, { requireHr: true }).recentRun).toBeNull();
+    expect(computePredictionInputs([fast(180), ...others], NOW, FLOOR, { requireHr: true }).recentRun).toMatchObject({ d: 5, t: 1425 });
+    expect(computePredictionInputs([fast(165), ...others], NOW, FLOOR, { requireHr: true }).recentRun).toBeNull();
+    // No HR zones: no HR rules, so the pace test stands alone.
+    expect(computePredictionInputs([fast(), ...others], NOW, null, { requireHr: true }).recentRun).toMatchObject({ d: 5, t: 1425 });
+    // P never changes.
+    expect(computePredictionInputs([fast(), ...others], NOW, FLOOR, { requireHr: true }).avgPaceSecPerKm)
+      .toBe(computePredictionInputs([fast(), ...others], NOW, FLOOR).avgPaceSecPerKm);
+  });
+
   it('without HR zones the test is pace-only even when the run has HR', () => {
     expect(computePredictionInputs([fast(165), ...easy], NOW, null).recentRun).toMatchObject({ d: 5, t: 1425 });
   });

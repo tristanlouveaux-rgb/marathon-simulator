@@ -27,6 +27,7 @@ vi.stubGlobal('alert', vi.fn());
 
 import {
   ltDanielsInputVdot, resolveLtDanielsInput, getPhysiologicalVdot, triColdStartRunCapVdot, effectiveVo2max, pbMedianVdot,
+  triathleteRunEvidenceCeiling, triRunEvidenceRaceEffort,
 } from './physiological-vdot';
 import { runSkillVdot, estimateRunPaceFromSkill } from './tri-run-skill';
 import { deriveLTFromVdot } from './lt-derivation';
@@ -61,7 +62,7 @@ describe('ltDanielsInputVdot: the triathlete run caps reach the LT input', () =>
     const s = tri({ vo2: 62 });
     expect(getPhysiologicalVdot(s, { now: NOW }).source).toBe('device');
     expect(getPhysiologicalVdot(s, { now: NOW }).vdot).toBe(62);
-    expect(triColdStartRunCapVdot(s, { recentRaceEffort: false })).toBeCloseTo(SKILL3, 9);
+    expect(triColdStartRunCapVdot(s)).toBeCloseTo(SKILL3, 9);
     expect(ltDanielsInputVdot(s, { now: NOW })).toBeCloseTo(SKILL3, 9);
   });
 
@@ -105,7 +106,7 @@ describe('ltDanielsInputVdot: the triathlete run caps reach the LT input', () =>
 
   it('a medium HR fit above the skill rating sets the ceiling instead of the skill rating', () => {
     const s = tri({ vo2: 62, hrCalibratedVdot: { vdot: 48, confidence: 'medium', n: 6, r2: 0.6 } as SimulatorState['hrCalibratedVdot'] });
-    expect(triColdStartRunCapVdot(s, { recentRaceEffort: false })).toBeNull();
+    expect(triColdStartRunCapVdot(s)).toBeNull();
     expect(ltDanielsInputVdot(s, { now: NOW })).toBe(48);
   });
 
@@ -277,15 +278,90 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
     }
   });
 
-  it('KNOWN LIMITATION (ISSUE-376): a synced race effort lifts the cap and the raw watch returns', () => {
+  it('ISSUE-376: a synced race effort lifts the cap and the watch is held at the race, not the raw 62', () => {
     // A 10K in 48:20 (worth about 41.6) beside easy runs at 6:30/km is a race
-    // effort. It lifts the cold-start cap, and a race effort is not one of the
-    // running-evidence ceilings, so the LT input is the watch again. Pinned so
-    // a change to the ceiling (Tristan's call) is deliberate.
+    // effort (no HR zones here, so the pace test stands). It lifts the
+    // cold-start cap and, since 2026-10-11, is one of the running-evidence
+    // ceilings. Before, the LT input was the watch again (s.lt 220).
     const jogs: RunRow[] = [];
     for (let k = 0; k < 2; k++) jogs.push(run(2 + 7 * k, 10, 3900), run(5 + 7 * k, 8, 3120));
     initTri({ vo2: 62, onboardingRunHistory: [run(5, 10, 2900), ...jogs] });
     refreshBlendedFitness(getMutableState());
-    expect(getState().lt).toBe(220);
+    expect(ltDanielsInputVdot(getState())).toBeCloseTo(cv(10000, 2900), 9);
+    expect(getState().lt).toBe(Math.round(deriveLTFromVdot(cv(10000, 2900))!));
+    expect(getState().lt).not.toBe(220);
+  });
+});
+
+/**
+ * ISSUE-376 (Tristan, 2026-10-11): a synced race effort lifts the cold-start
+ * cap, and it was not in the running-evidence ceiling, so the raw watch came
+ * back into s.lt (70.3, watch 62, run skill 3, three weeks of jogs plus an
+ * 8 km run at 5:00/km with no HR: s.lt 288 to 220, the run leg 17 min faster).
+ * The race effort's own VDOT is now in the ceiling, and where HR rules exist a
+ * run with no HR is not evidence at all.
+ */
+describe('real initializers: a synced race effort is running evidence the watch is held to', () => {
+  const HR = { maxHR: 190, restingHR: 50 };
+  const jogs = (): RunRow[] => {
+    const rows: RunRow[] = [];
+    for (let k = 0; k < 3; k++) rows.push(run(2 + 7 * k, 10, 3900), run(5 + 7 * k, 8, 3120));
+    return rows;
+  };
+  const effort = (avgHR?: number): RunRow => ({ ...run(1, 8, 2400), ...(avgHR != null ? { avgHR } : {}) });
+  const EFFORT_VDOT = cv(8000, 2400);
+
+  it('an 8 km run at 5:00/km at a race-level HR lifts the cap and holds the watch at its own VDOT', () => {
+    initTri({ vo2: 62, ...HR, onboardingRunHistory: [effort(175), ...jogs()] });
+    refreshBlendedFitness(getMutableState());
+    const s = getState();
+    expect(triRunEvidenceRaceEffort(s)).toMatchObject({ d: 8, t: 2400 });
+    expect(triColdStartRunCapVdot(s)).toBeNull();
+    expect(triathleteRunEvidenceCeiling(s)).toBeCloseTo(EFFORT_VDOT, 9);
+    // The LT input and the blend's VO2 predictor: the watch at the run's VDOT,
+    // not the raw 62 (s.lt 220 before).
+    expect(ltDanielsInputVdot(s)).toBeCloseTo(EFFORT_VDOT, 9);
+    expect(effectiveVo2max(s)).toBeCloseTo(EFFORT_VDOT, 9);
+    expect(s.lt).toBe(Math.round(deriveLTFromVdot(EFFORT_VDOT)!));
+    expect(s.lt).toBeGreaterThan(288);
+  });
+
+  it('the same run with no HR is not evidence where HR rules exist: the cold-start cap holds', () => {
+    initTri({ vo2: 62, ...HR, onboardingRunHistory: [effort(), ...jogs()] });
+    refreshBlendedFitness(getMutableState());
+    const s = getState();
+    expect(triRunEvidenceRaceEffort(s)).toBeNull();
+    expect(triColdStartRunCapVdot(s)).toBeCloseTo(SKILL3, 9);
+    expect(s.lt).toBe(288);
+    expect(s.v).toBeCloseTo(SKILL3, 9);
+  });
+
+  it('a tempo at a steady-tempo HR is not evidence either', () => {
+    initTri({ vo2: 62, ...HR, onboardingRunHistory: [effort(165), ...jogs()] });
+    refreshBlendedFitness(getMutableState());
+    const s = getState();
+    expect(triRunEvidenceRaceEffort(s)).toBeNull();
+    expect(triColdStartRunCapVdot(s)).toBeCloseTo(SKILL3, 9);
+    // The Daniels input stays at the skill rating. (s.lt also reads the
+    // empirical method: this 40-min run with HR is a sustained effort.)
+    expect(ltDanielsInputVdot(s)).toBeCloseTo(SKILL3, 9);
+    expect(s.v).toBeLessThanOrEqual(SKILL3 + 1e-9);
+  });
+
+  it('with no HR zones at all the pace test stands alone, and the watch is held at the run', () => {
+    initTri({ vo2: 62, onboardingRunHistory: [effort(), ...jogs()] });
+    refreshBlendedFitness(getMutableState());
+    const s = getState();
+    expect(triRunEvidenceRaceEffort(s)).toMatchObject({ d: 8, t: 2400 });
+    expect(triColdStartRunCapVdot(s)).toBeNull();
+    expect(ltDanielsInputVdot(s)).toBeCloseTo(EFFORT_VDOT, 9);
+    expect(s.lt).toBe(Math.round(deriveLTFromVdot(EFFORT_VDOT)!));
+    expect(s.lt).not.toBe(220);
+  });
+
+  it('running mode: a race effort never sets a ceiling (no triConfig)', () => {
+    const s = { ...getDefaultState(), vo2: 62, ...HR, onboardingRunHistory: [effort(175), ...jogs()] } as SimulatorState;
+    expect(triathleteRunEvidenceCeiling(s)).toBeNull();
+    expect(effectiveVo2max(s)).toBe(62);
   });
 });

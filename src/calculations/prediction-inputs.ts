@@ -128,11 +128,18 @@ function median(xs: number[]): number {
  *              slot. Null or omitted: pace-only, as before. Tanda's P is
  *              pace-filtered either way. Every caller that has the athlete's
  *              state passes it, so the recent run is the same on every surface.
+ * @param opts.requireHr  When the floor is known, a run without an average HR
+ *              does not fill the recent-run slot (no pace-only fallback). For
+ *              the triathlete running-evidence test only
+ *              (`triRunEvidenceRaceEffort`, physiological-vdot.ts): a tempo with
+ *              no HR must not lift the cold-start cap or set the watch ceiling
+ *              where HR rules exist (Tristan, 2026-10-11, ISSUE-376).
  */
 export function computePredictionInputs(
   runs: RunActivityInput[],
   now: Date = new Date(),
   raceHrFloorBpm?: number | null,
+  opts: { requireHr?: boolean } = {},
 ): PredictionInputs {
   const empty: PredictionInputs = {
     weeklyKm: 0,
@@ -212,21 +219,24 @@ export function computePredictionInputs(
   // (raceHrFloorBpm, Tristan 2026-10-11). A steady tempo averages in the lower
   // half of the threshold zone (Z4, the zone threshold and tempo sessions
   // target); a 5K or 10K race averages in its upper half or above. A run
-  // without HR, or an athlete without HR zones, keeps the pace-only test.
+  // without HR, or an athlete without HR zones, keeps the pace-only test,
+  // except under `opts.requireHr` (the triathlete running-evidence test).
   //
   // The HR test acts on the recent-run slot only (review 2026-10-09). Using it
   // for P too moved tempo sessions into Tanda's P: one weekly 8 km tempo at
   // 4:50/km among 6:00/km easy runs moved P about 14.5 s/km faster, about
   // 5.6 min on Tanda's marathon term, a change nobody asked for. It also sent
   // races the HR test misses (with the 2026-10-09 floor at the top of Z4, a
-  // 10K at about 89% of HR reserve) into P as training pace. With a pace-only P filter, a run the HR test rejects falls
-  // out of both the recent-run slot and P, as a race would.
+  // 10K at about 89% of HR reserve) into P as training pace. With a pace-only
+  // P filter, a run the HR test rejects falls out of both the recent-run slot
+  // and P, as a race would.
   const medianPace = median(inWindow.map(q => q.paceSecPerKm));
   const hrFloor = raceHrFloorBpm != null && raceHrFloorBpm > 0 ? raceHrFloorBpm : null;
   const isHardEffort = (q: { paceSecPerKm: number }): boolean =>
     q.paceSecPerKm < medianPace * RACE_FILTER_RATIO;
   const isRaceEffort = (q: { paceSecPerKm: number; avgHR: number | null }): boolean =>
-    isHardEffort(q) && (hrFloor == null || q.avgHR == null || q.avgHR >= hrFloor);
+    isHardEffort(q) && (hrFloor == null
+      || (q.avgHR == null ? !opts.requireHr : q.avgHR >= hrFloor));
 
   // ── Recent run (the newest race effort in the window) ────────────────────
   // Consumers project this run to the target distance as a race performance

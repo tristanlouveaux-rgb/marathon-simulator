@@ -787,18 +787,18 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // The cap only bites when the watch exceeds the self-rating, so a genuinely fast
   // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
   // (no triConfig.skillRating).
-  // `inputs.recentRun` is a race effort (a run more than 15% faster than the
-  // window's median pace, SCIENCE_LOG §CY). Easy runs never fill it, so they
-  // never enter the blend's recent-run slot and must not lift the cap either:
-  // with the cap off and no run in the blend, the engine falls back to the
-  // uncorroborated watch number the cap exists to contain. The gate and the
-  // cap value live in triColdStartRunCapVdot (physiological-vdot.ts), shared
-  // with the LT derivation's Daniels input (ltDanielsInputVdot) so the run
-  // paces from s.lt are held to the same figure. It reads the HR fit from
-  // s.hrCalibratedVdot, written from hrVdot at the top of this function.
-  const skillVdot = triColdStartRunCapVdot(s, {
-    recentRaceEffort: inputs.recentRun != null && inputs.recentRun.t > 0,
-  });
+  // The synced race effort that lifts the cap is triRunEvidenceRaceEffort: a
+  // run more than 15% faster than the window's median pace (SCIENCE_LOG §CY)
+  // and, where HR rules exist, one that carries an average HR at race level
+  // (a tempo with no HR is not evidence, 2026-10-11, ISSUE-376). Easy runs
+  // never fill it, so they must not lift the cap either: with the cap off and
+  // no run in the blend, the engine falls back to the uncorroborated watch
+  // number the cap exists to contain. The gate and the cap value live in
+  // triColdStartRunCapVdot (physiological-vdot.ts), shared with the LT
+  // derivation's Daniels input (ltDanielsInputVdot) so the run paces from s.lt
+  // are held to the same figure. It reads the HR fit from s.hrCalibratedVdot,
+  // written from hrVdot at the top of this function.
+  const skillVdot = triColdStartRunCapVdot(s);
   if (skillVdot != null && engineVdot > skillVdot) {
     console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
     engineVdot = skillVdot;
