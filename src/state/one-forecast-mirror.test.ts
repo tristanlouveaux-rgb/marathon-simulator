@@ -10,7 +10,7 @@
  * wizard's default 50 until launch: the preview's run leg read 1:28:17 against
  * 1:39:37 on Home.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import type { OnboardingState } from '@/types/onboarding';
 import type { SimulatorState } from '@/types';
 
@@ -33,6 +33,14 @@ import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { localMondayKey } from '@/utils/local-date';
+
+// One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
+// continuous in time, so two computations a few milliseconds apart differ in
+// the last bits. Date is frozen at the real current time; timers stay real.
+const FROZEN_NOW = new Date();
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(FROZEN_NOW);
+afterAll(() => { vi.useRealTimers(); });
 
 const DAY_MS = 86400000;
 function planDay(week: number, dow: number): string {

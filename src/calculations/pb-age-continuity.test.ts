@@ -9,7 +9,7 @@
  * 3:16:25 overnight. Real initializers, day by day across 1, 2, 3 and 4 years.
  * TRACKING side (race-time prediction).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import type { OnboardingState } from '@/types/onboarding';
 import { defaultOnboardingState } from '@/types/onboarding';
 import type { SimulatorState } from '@/types';
@@ -30,6 +30,14 @@ import { initializeSimulator } from '@/state/initialization';
 import { getMutableState, getState, resetState } from '@/state/store';
 import { refreshBlendedFitness, predictStandardDistances, runningForecastForSessions } from './blended-fitness';
 import { localMondayKey } from '@/utils/local-date';
+
+// One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
+// continuous in time, so two computations a few milliseconds apart differ in
+// the last bits. Date is frozen at the real current time; timers stay real.
+const FROZEN_NOW = new Date();
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(FROZEN_NOW);
+afterAll(() => { vi.useRealTimers(); });
 
 const DAY_MS = 86400000;
 

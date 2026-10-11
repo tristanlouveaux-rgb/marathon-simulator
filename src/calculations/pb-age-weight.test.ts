@@ -8,7 +8,7 @@
  * the §T5 step bands), and only when current running data exists (a measured
  * weekly volume): with no data an old PB still holds (§BV). TRACKING side.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import type { OnboardingState } from '@/types/onboarding';
 import { defaultOnboardingState } from '@/types/onboarding';
 import type { SimulatorState } from '@/types';
@@ -35,6 +35,14 @@ import { getMutableState, getState, resetState } from '@/state/store';
 import { refreshBlendedFitness } from './blended-fitness';
 import { localMondayKey } from '@/utils/local-date';
 import { applyPBsFromRows } from '@/data/appleHealthSync';
+
+// One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
+// continuous in time, so two computations a few milliseconds apart differ in
+// the last bits. Date is frozen at the real current time; timers stay real.
+const FROZEN_NOW = new Date();
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(FROZEN_NOW);
+afterAll(() => { vi.useRealTimers(); });
 
 const DAY_MS = 86400000;
 const NOW = new Date('2026-10-09T08:00:00Z');

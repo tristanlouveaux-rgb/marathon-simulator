@@ -12,7 +12,7 @@
  * - The running Home forecast card carries the PB-age caption.
  * - The HYROX run pace "From VDOT" (s.v and s.lt) carries it too.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 
 vi.mock('@/data/supabaseClient', () => ({
   supabase: { auth: { getUser: async () => ({ data: { user: null } }), getSession: async () => ({ data: { session: null } }) } },
@@ -34,6 +34,15 @@ import { buildRaceForecastCard } from './home-view';
 import { hyroxRunPaceSourceNote } from './hyrox/forecast-view';
 import { buildForecastTimesCard } from './stats-view';
 import { localMondayKey } from '@/utils/local-date';
+
+// One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
+// continuous in time, so two surfaces computed a few milliseconds apart differ
+// in the last bits (1153.0206901157746 vs 1153.0206901153929). Date is frozen
+// at the real current time; timers stay real.
+const FROZEN_NOW = new Date();
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(FROZEN_NOW);
+afterAll(() => { vi.useRealTimers(); });
 
 const DAY_MS = 86400000;
 const CAPTION = 'Older PBs carry less weight';

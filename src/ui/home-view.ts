@@ -836,7 +836,7 @@ const RACE_DIST_LABEL: Record<string, string> = {
   'marathon': 'Marathon',
 };
 
-/** Exported for tests (home-forecast-pb-age.test.ts). */
+/** Exported for tests (pb-age-surfaces.test.ts). */
 export function buildRaceForecastCard(s: SimulatorState): string {
   if (s.continuousMode || !s.rd || !s.initialBaseline) return '';
 
