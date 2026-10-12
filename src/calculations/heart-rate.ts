@@ -195,11 +195,6 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
         min: zones.z3.min,
         max: zones.z4.max,
       }, 'Hills (session avg)');
-    case 'recovery':
-      return makeTarget('Z1-2', {
-        min: zones.z1.min,
-        max: zones.z2.max,
-      }, 'Recovery');
     case 'test_run':
     case 'steady':
       return makeTarget('Z3', zones.z3, 'Steady');
