@@ -12,6 +12,7 @@
  * - The HYROX run pace "From VDOT" (s.v and s.lt) carries it too.
  */
 import { describe, it, expect, vi, afterAll } from 'vitest';
+import { ft } from '@/utils/format';
 
 vi.mock('@/data/supabaseClient', () => ({
   supabase: { auth: { getUser: async () => ({ data: { user: null } }), getSession: async () => ({ data: { session: null } }) } },
@@ -103,12 +104,9 @@ describe('Stats race estimates are the Forecast tab\'s', () => {
     const std = predictStandardDistances(s);
     const html = buildForecastTimesCard(s);
     for (const k of ['marathon', 'half', '10k', '5k'] as const) {
-      const sec = std[k]!;
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const sc = Math.round(sec % 60);
-      const shown = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}` : `${m}:${String(sc).padStart(2, '0')}`;
-      expect(html).toContain(`>${shown}</span>`);
+      // ft, the Forecast tiles' formatter (buildStdDistanceTile): the same
+      // seconds read the same on both screens, never ':60'.
+      expect(html).toContain(`>${ft(std[k]!)}</span>`);
     }
     expect(html).toContain(`${CAPTION} in these estimates.`);
   });

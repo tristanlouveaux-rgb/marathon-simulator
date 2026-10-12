@@ -538,8 +538,8 @@ export function runningForecastForSessions(
  *
  * On every exit, including the early ones (no race distance, no PBs), the
  * training-pace cache follows the s.lt and s.v this refresh leaves
- * (syncTrainingPaces): every initializer and the launch end here, so the
- * training paces read the same LT as the LT headline.
+ * (syncTrainingPaces): every initializer except cycling's, and the launch,
+ * end here, so the training paces read the same LT as the LT headline.
  */
 export function refreshBlendedFitness(s: SimulatorState): boolean {
   const refreshed = refreshBlendedFitnessCore(s);

@@ -206,7 +206,7 @@ export const PB_AGE_HALF_LIFE_YEARS = 3;
  * capacity. It is continuous in the PB's age, so the weight adds no step on a
  * PB's anniversary, and it never reaches 0, so an old PB keeps some say. (The
  * low-volume PB-recency factor on the specificity penalties,
- * pbRecencyPenaltyFactor, is a separate rule, fully stale at two years, and is
+ * pbRecencyPenaltyFactor, is a separate rule, fully stale at three years, and is
  * continuous too: pb-age-continuity.test.ts.)
  *
  * No date, an unparseable one or a future one: 1.0 ("if absent, full recency

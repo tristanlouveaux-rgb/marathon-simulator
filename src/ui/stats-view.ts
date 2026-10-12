@@ -3249,14 +3249,8 @@ export function buildForecastTimesCard(s: SimulatorState): string {
   const vdot = computeCurrentVDOT(s);
   if (!vdot || vdot < 20) return '';
 
-  const fmtTime = (secs: number): string => {
-    const h = Math.floor(secs / 3600);
-    const m = Math.floor((secs % 3600) / 60);
-    const sc = Math.round(secs % 60);
-    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}`;
-    return `${m}:${String(sc).padStart(2,'0')}`;
-  };
-
+  // ft, the Forecast tiles' formatter: the same predictStandardDistances
+  // seconds read the same here, and a minute always carries (never ':60').
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
   // One computation for the four race estimates (2026-10-11):
   // predictStandardDistances, which the Forecast tab and the Time Trial step
@@ -3298,7 +3292,7 @@ export function buildForecastTimesCard(s: SimulatorState): string {
     return `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${isLast ? '' : 'border-bottom:1px solid var(--c-border)'}">
         <span style="font-size:13px;color:var(--c-muted)">${d.label}</span>
-        <span style="display:flex;align-items:center">${fadeBadge}<span style="font-size:16px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span></span>
+        <span style="display:flex;align-items:center">${fadeBadge}<span style="font-size:16px;font-weight:600;color:var(--c-black)">${ft(timeSec)}</span></span>
       </div>`;
   }).join('');
 

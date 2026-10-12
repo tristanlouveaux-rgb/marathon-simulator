@@ -782,7 +782,7 @@ export function blendPredictionsPreFloor(
    * volume), the penalty severity scales with PB recency: a recent PB is
    * *demonstrated current capability*, so the penalty (which assumes PB might
    * be stale) is reduced by pbRecencyPenaltyFactor: ×0.5 through 365 days,
-   * then linear to full at 730 days (continuous).
+   * then linear through 0.75 at 730 days to full at 1095 days (continuous).
    */
   marathonPbAgeDays?: number,
   /**
@@ -1011,8 +1011,8 @@ export function blendPredictionsPreFloor(
     // *excess* (the part above 1.0) by a recency factor. This keeps the
     // direction right while reducing magnitude for athletes who have proven
     // recent capability. The factor is continuous in the PB's age
-    // (pbRecencyPenaltyFactor: 0.5 through one year, then linear to 1.0 at
-    // two years), the same rule as the triathlon legs'
+    // (pbRecencyPenaltyFactor: 0.5 through one year, 0.75 at two, 1.0 at
+    // three), the same rule as the triathlon legs'
     // specificity penalty, so today's marathon time does not step on the PB's
     // anniversary (pb-age-continuity.test.ts).
     let recencyFactor = 1.0;

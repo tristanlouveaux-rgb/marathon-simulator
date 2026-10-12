@@ -40,8 +40,10 @@ export function gp(vdot: number, ltPace?: number | null): Paces {
  * fixed multiples of it (the threshold pace IS the LT); without one they come
  * from the effective VDOT. This is the one computation of that cache, and it
  * runs wherever s.lt or the engine moves: recomputeLT (ltSync), the end of
- * refreshBlendedFitness (every initializer and the launch run it, after
- * refreshVO2Estimates), refreshVO2Estimates and the LT update handlers. So the
+ * refreshBlendedFitness (every initializer except cycling's, and the launch,
+ * run it), refreshVO2Estimates and the LT update handlers. Cycling onboarding
+ * keeps the store default until its first launch refresh; no cycling surface
+ * shows it. So the
  * LT page headline (s.lt) and its Training Paces Threshold card (s.pac.t) read
  * one number. Before 2026-10-12, s.pac was set only by the running
  * initializer and refreshVO2Estimates: triathlon, HYROX and Just-Track

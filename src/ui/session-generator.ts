@@ -21,7 +21,7 @@ import { buildRunningStrengthWorkout, buildPlyometricsWorkout } from '@/workouts
 /** Gym Focus options in the generator, plus the HYROX brick (its own path). */
 type GymFocusChoice = GymFocus | 'hyrox';
 import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
-import { formatKm, fpModel, fmtModelPaceKm } from '@/utils/format';
+import { formatKm, fpModel, fmtModelPaceKm, ft } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
 import { predictStandardDistances } from '@/calculations/blended-fitness';
@@ -53,19 +53,11 @@ export function timeTrialPredictions(
   return TIME_TRIAL_DISTANCES.map(d => ({ ...d, predictedSec: standard[d.key] }));
 }
 
-function fmtTimeSec(totalSec: number): string {
-  // Round once, before splitting, so 1379.6 s reads 23:00, never 22:60.
-  const t = Math.round(totalSec);
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const s = t % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 function formatSwimPace(secPer100m: number): string {
-  const m = Math.floor(secPer100m / 60);
-  const s = Math.round(secPer100m % 60);
+  // Round once, before splitting, so 119.6 s reads 2:00, never 1:60.
+  const t = Math.round(secPer100m);
+  const m = Math.floor(t / 60);
+  const s = t % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
@@ -1670,7 +1662,7 @@ export function openSessionGenerator(): void {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
             ${predictions.map(d => {
               const sel = d.label === selectedDist.label;
-              const timeStr = d.predictedSec ? fmtTimeSec(d.predictedSec) : '—';
+              const timeStr = d.predictedSec ? ft(d.predictedSec) : '—';
               return `
                 <button class="sg-tt-btn" data-label="${d.label}"
                   style="display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;cursor:pointer;font-family:var(--f);transition:transform 120ms ease, box-shadow 120ms ease;
@@ -1718,7 +1710,7 @@ export function openSessionGenerator(): void {
           id: `adhoc-${Date.now()}`,
           t: 'threshold',
           n: `${selectedDist.label} Time Trial`,
-          d: `${selectedDist.km}km race effort${selectedDist.predictedSec ? `. Target: ${fmtTimeSec(selectedDist.predictedSec)}` : ''}`,
+          d: `${selectedDist.km}km race effort${selectedDist.predictedSec ? `. Target: ${ft(selectedDist.predictedSec)}` : ''}`,
           r: 9,
           rpe: 9,
           dayOfWeek: ourDay,

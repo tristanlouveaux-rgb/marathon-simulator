@@ -864,7 +864,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // (review 3: marathon 3:09:36 vs 3:16:25). The initial values the progress
     // views compare against are then taken from the refreshed state.
     // The refresh also brings s.pac in line with the s.lt and s.v it leaves
-    // (syncTrainingPaces), as it does for every initializer and the launch.
+    // (syncTrainingPaces), as it does for the other initializers (cycling's
+    // aside) and the launch.
     refreshBlendedFitness(s);
     s.iv = s.v;
     s.initialLT = s.lt ?? ltPace;
