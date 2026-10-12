@@ -13,6 +13,7 @@ import {
   hyroxLoadTierForState,
   hyroxDivisionLabel,
   hyroxLoadsSentence,
+  hyroxStationRaceStandard,
   HYROX_DEFAULT_LOAD_TIER,
 } from './hyrox-division';
 import { HYROX_LOAD_TIER_KG, stationExternalLoadKg, STATION_DISPLAY, WALL_BALL_TARGET_M } from '@/constants/hyrox-benchmarks';
@@ -163,5 +164,20 @@ describe('state helpers and copy', () => {
   it('the Men Pro load sentence', () => {
     const line = hyroxLoadsSentence(hyroxLoadTier('pro_singles', 'male'), hyroxWallBallTargetM('male'));
     expect(line).toBe('sled push 202 kg, sled pull 153 kg, farmers carry 2 × 32 kg, sandbag 30 kg, wall ball 9 kg to 3.00 m');
+  });
+});
+
+describe('hyroxStationRaceStandard (26/27 Singles rulebook s8)', () => {
+  it('ergs at damper 6 in every division', () => {
+    expect(hyroxStationRaceStandard('ski_erg', 'W-Open', 2.70)).toBe('1000m, damper 6');
+    expect(hyroxStationRaceStandard('row_erg', 'M-Pro', 3.00)).toBe('1000m, damper 6');
+  });
+  it('sleds as 4 lanes of 12.5 m with the tier sled weight', () => {
+    expect(hyroxStationRaceStandard('sled_push', 'W-Open', 2.70)).toBe('4 × 12.5m lanes, 102 kg incl. sled');
+    expect(hyroxStationRaceStandard('sled_pull', 'M-Pro', 3.00)).toBe('4 × 12.5m lanes, 153 kg incl. sled');
+  });
+  it('wall balls: 100 reps, the tier ball, the thrower\'s target', () => {
+    expect(hyroxStationRaceStandard('wall_balls', 'M-Open', 2.70)).toBe('100 reps, 6 kg to 2.70 m');
+    expect(hyroxStationRaceStandard('wall_balls', 'M-Open', null)).toBe('100 reps, 6 kg to 2.70 m (women) or 3.00 m (men)');
   });
 });

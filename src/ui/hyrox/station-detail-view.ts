@@ -21,6 +21,7 @@ import type { HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { predictHyroxRace, stationSinglesEquivalentSec } from '@/calculations/race-prediction.hyrox';
 import { getStationPercentile } from '@/calculations/hyrox-population';
+import { hyroxStationRaceStandard, hyroxLoadTierForState, hyroxWallBallTargetM, hyroxDivisionLabel } from '@/calculations/hyrox-division';
 import {
   getStationHistory,
   bestStationTime,
@@ -181,6 +182,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
       ${best ? statRow('Best', fmtMmSs(best.sec), fmtDate(best.dateISO)) : ''}
       ${latest ? statRow('Latest', fmtMmSs(latest.sec), fmtDate(latest.dateISO)) : ''}
       ${statRow('Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
+      ${statRow('Race standard', hyroxStationRaceStandard(station, hyroxLoadTierForState(s), hyroxWallBallTargetM(s.biologicalSex, hx.division)), hyroxDivisionLabel(hx.format, s.biologicalSex, hx.division) ?? undefined)}
       ${first && history.length > 1 ? statRow('Since first test', improvementText, fmtDate(first.dateISO)) : ''}
       ${raceDaySec != null && latest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
     </div>

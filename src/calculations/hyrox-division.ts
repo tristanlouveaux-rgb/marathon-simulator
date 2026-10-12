@@ -23,7 +23,7 @@
  * pick wins and biological sex only supplies the default.
  */
 
-import type { HyroxConfig, HyroxDivision, HyroxLoadTier } from '@/types/triathlon';
+import type { HyroxConfig, HyroxDivision, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import { HYROX_LOAD_TIER_KG, WALL_BALL_TARGET_M } from '@/constants/hyrox-benchmarks';
 
 type HyroxFormat = HyroxConfig['format'];
@@ -166,4 +166,34 @@ export function hyroxLoadsSentence(tier: HyroxLoadTier, wallBallTargetM: number 
     ? `to ${wallBallTargetM.toFixed(2)} m`
     : `to ${WALL_BALL_TARGET_M.female.toFixed(2)} m (women) or ${WALL_BALL_TARGET_M.male.toFixed(2)} m (men)`;
   return `sled push ${t.sledPush} kg, sled pull ${t.sledPull} kg, farmers carry 2 × ${t.farmerPerHand} kg, sandbag ${t.sandbag} kg, wall ball ${t.wallBall} kg ${target}`;
+}
+
+/**
+ * One station's race standard for the athlete's tier, for copy (26/27 Singles
+ * rulebook s8.1, s8.2, s8.5, s8.8; no change from 25/26): SkiErg and row at
+ * damper 6 in every division, sleds as 4 × 12.5 m lanes with the sled weight
+ * included, wall balls to the thrower's target. Distances in metres, as the
+ * rulebook and STATION_DISPLAY state them.
+ */
+export function hyroxStationRaceStandard(
+  station: HyroxStation,
+  tier: HyroxLoadTier,
+  wallBallTargetM: number | null,
+): string {
+  const t = HYROX_LOAD_TIER_KG[tier];
+  switch (station) {
+    case 'ski_erg':            return '1000m, damper 6';
+    case 'row_erg':            return '1000m, damper 6';
+    case 'sled_push':          return `4 × 12.5m lanes, ${t.sledPush} kg incl. sled`;
+    case 'sled_pull':          return `4 × 12.5m lanes, ${t.sledPull} kg incl. sled`;
+    case 'burpee_broad_jumps': return '80m';
+    case 'farmer_carry':       return `200m, 2 × ${t.farmerPerHand} kg`;
+    case 'sandbag_lunges':     return `100m, ${t.sandbag} kg sandbag`;
+    case 'wall_balls': {
+      const target = wallBallTargetM != null
+        ? `to ${wallBallTargetM.toFixed(2)} m`
+        : `to ${WALL_BALL_TARGET_M.female.toFixed(2)} m (women) or ${WALL_BALL_TARGET_M.male.toFixed(2)} m (men)`;
+      return `100 reps, ${t.wallBall} kg ${target}`;
+    }
+  }
 }
