@@ -525,9 +525,9 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     olympicTotalSec,
     raceReadiness,
     rawProjectedPerLeg: {
-      swim: projected.swimSec,
-      bike: projected.bikeSec,
-      run:  projected.runSec,
+      swim: Math.round(projected.swimSec),
+      bike: Math.round(projected.bikeSec),
+      run:  Math.round(projected.runSec),
     },
     // Only attach when an injury actually debited a discipline, so the UI can
     // show the explanatory caption. maxRecovery > 0 ⟺ at least one restricted
@@ -744,6 +744,7 @@ interface ComputeRaceTimeArgs {
   trainingTempC: number | null;
 }
 
+/** Leg and total times are unrounded seconds; predictTriathlonRace rounds once. */
 interface ComputeRaceTimeResult {
   totalSec: number;
   swimSec: number;
@@ -1003,15 +1004,18 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
       : undefined,
   };
 
-  const totalSec = Math.round(swimSec + t1Sec + bikeSec + t2Sec + runSec);
+  // Unrounded: predictTriathlonRace scales each leg by the readiness penalty
+  // and rounds once at its output. Rounding here as well made a smooth daily
+  // drift tick by up to 3 whole seconds (review round 5, 2026-10-12).
+  const totalSec = swimSec + t1Sec + bikeSec + t2Sec + runSec;
 
   return {
     totalSec,
-    swimSec: Math.round(swimSec),
+    swimSec,
     t1Sec,
-    bikeSec: Math.round(bikeSec),
+    bikeSec,
     t2Sec,
-    runSec: Math.round(runSec),
+    runSec,
     bikeAvgKph,
     bikeAvgWatts,
     baseRunPaceSecPerKm,

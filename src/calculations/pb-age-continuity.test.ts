@@ -221,12 +221,19 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
    * Walk day by day across 365 and 730 days. Every value: never faster with
    * age, and each day under 2 s (the old band edge moved the marathon about
    * 159 s and the Ironman run leg 72 s). `wholeSecond` keys are race times
-   * the triathlon predictor rounds twice (computeRaceTime rounds each leg,
-   * then predictTriathlonRace scales it by the readiness penalty and rounds
-   * again), so a smooth drift under 2 s a day can tick by up to 3 whole
-   * seconds; their unrounded counterparts carry the under-2-s check.
+   * the triathlon predictor rounds once, at its output (since review round 5:
+   * computeRaceTime used to round each leg before the readiness penalty, and
+   * predictTriathlonRace rounded again, so a smooth drift ticked by up to 3
+   * whole seconds). A drift under 2 s a day then ticks by at most 2 whole
+   * seconds; their unrounded counterparts carry the under-2-s check. A
+   * whole-second key may carry its own bound (`wholeSecondMax`), stated
+   * where it is used.
    */
-  function walk(read: (ageDays: number) => Record<string, number>, wholeSecond: string[] = []): void {
+  function walk(
+    read: (ageDays: number) => Record<string, number>,
+    wholeSecond: string[] = [],
+    wholeSecondMax: Record<string, number> = {},
+  ): void {
     for (const edge of [365, 730]) {
       const days = [-3, -2, -1, 0, 1, 2, 3].map(d => edge + d);
       const snaps = days.map(read);
@@ -235,7 +242,7 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
           const step = snaps[i][k] - snaps[i - 1][k];
           // Older PB: never faster.
           expect(step).toBeGreaterThanOrEqual(-1e-6);
-          if (wholeSecond.includes(k)) expect(step).toBeLessThanOrEqual(3);
+          if (wholeSecond.includes(k)) expect(step).toBeLessThanOrEqual(wholeSecondMax[k] ?? 2);
           else expect(step).toBeLessThan(2);
         }
       }
@@ -276,10 +283,18 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
       refreshBlendedFitness(getMutableState());
       const p = predictTriathlonRace(getState())!;
       const runSteps = p.legWaterfall!.run;
+      // The waterfall's last step is the race-day run leg before the single
+      // output rounding (computeRaceTime no longer rounds the leg first).
+      const runLegUnrounded = runSteps[runSteps.length - 1].toSec;
+      expect(p.runSec).toBe(Math.round(runLegUnrounded));
+      for (const leg of ['swim', 'bike'] as const) {
+        const steps = p.legWaterfall![leg];
+        expect(p[`${leg}Sec`]).toBe(Math.round(steps[steps.length - 1].toSec));
+      }
       return {
         p,
         runPenalty: computeTriRaceReadiness(getState(), 'ironman').run.penaltyMultiplier,
-        runLegUnrounded: runSteps[runSteps.length - 1].toSec,
+        runLegUnrounded,
       };
     };
     walk(ageDays => {
@@ -292,7 +307,15 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
         currentRunSec: r.p.currentRunSec!,
         currentTotalSec: r.p.currentTotalSec!,
       };
-    }, ['runSec', 'totalSec', 'currentRunSec', 'currentTotalSec']);
+    }, ['runSec', 'totalSec', 'currentRunSec', 'currentTotalSec'], {
+      // Today's run leg carries the full readiness penalty, whose PB-recency
+      // factor rises at 0.5 / 365 a day in the second year (0.5 through the
+      // first, orchestrator default 2026-10-12): about 0.147 x 0.5 / 365 of
+      // this Ironman run leg, roughly 2.6 s a day, so it ticks by up to 3
+      // whole seconds. Smooth: the old band edge moved it about 490 s.
+      currentRunSec: 3,
+      currentTotalSec: 3,
+    });
     // The run readiness penalty: one day moves it by at most the factor's
     // daily slope (0.5 / 365 in the second year, 0 in the first) times the
     // largest excess it scales (Ironman 0.15, MAX_PENALTY_BY_DISTANCE),
@@ -304,6 +327,16 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
         expect(pens[i] - pens[i - 1]).toBeGreaterThanOrEqual(0);
         expect(pens[i] - pens[i - 1]).toBeLessThanOrEqual(0.15 * 0.5 / 365 + 1e-12);
       }
+    }
+    // One rounding, at the output (review round 5): inside the second year the
+    // race-day run leg before that rounding moves by a steady amount a day.
+    // With computeRaceTime rounding the leg first, the readiness step scaled a
+    // whole-second leg, so it moved by about a second on some days and not on
+    // others (the reviewer saw 1.21 s against 0.19 s on the days around).
+    const legs = Array.from({ length: 12 }, (_, i) => readIm(420 + i).runLegUnrounded);
+    const daily = legs.slice(1).map((v, i) => v - legs[i]);
+    for (let i = 1; i < daily.length; i++) {
+      expect(Math.abs(daily[i] - daily[i - 1])).toBeLessThan(0.05);
     }
   });
 });
