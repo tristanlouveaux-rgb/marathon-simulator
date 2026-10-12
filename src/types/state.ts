@@ -174,6 +174,11 @@ export interface Workout extends WorkoutDefinition {
   /** HYROX mode: prescribed rest in seconds BETWEEN rounds (inter-round rest),
    *  distinct from per-component inter-station rest. Absent = 0. */
   hyroxRoundRestSec?: number;
+  /** HYROX mode: a brick that is not a hard session (the advanced peak
+   *  secondary brick, parameter sheet 2026-10-12 bricks.structure). The
+   *  scheduler's hard-day rule (scheduler.hyrox isHighIntensity) skips it.
+   *  Undefined = an ordinary session. */
+  hyroxLight?: boolean;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
