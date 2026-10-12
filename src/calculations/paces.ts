@@ -1,5 +1,6 @@
-import type { Paces } from '@/types';
+import type { Paces, SimulatorState } from '@/types';
 import { vt } from './vdot';
+import { getEffectiveVdot } from './effective-vdot';
 
 /**
  * Get pace zones from VDOT or LT pace
@@ -30,6 +31,31 @@ export function gp(vdot: number, ltPace?: number | null): Paces {
     i: t5 / 5,                 // Interval: 5K pace
     r: (t5 / 5) * 0.97         // Repetition: 3% faster than 5K pace
   };
+}
+
+/**
+ * Keep the training-pace cache (s.pac) in step with the LT and the engine.
+ *
+ * s.pac is a cache of gp(getEffectiveVdot(s), s.lt). With an LT the paces are
+ * fixed multiples of it (the threshold pace IS the LT); without one they come
+ * from the effective VDOT. This is the one computation of that cache, and it
+ * runs wherever s.lt or the engine moves: recomputeLT (ltSync), the end of
+ * refreshBlendedFitness (every initializer and the launch run it, after
+ * refreshVO2Estimates), refreshVO2Estimates and the LT update handlers. So the
+ * LT page headline (s.lt) and its Training Paces Threshold card (s.pac.t) read
+ * one number. Before 2026-10-12, s.pac was set only by the running
+ * initializer and refreshVO2Estimates: triathlon, HYROX and Just-Track
+ * onboarding left the store default (Threshold 5:00/km beside an LT headline
+ * of 4:43), and a launch where the refresh moved s.lt across a half second
+ * showed a headline of 4:17/km beside a 4:16/km card.
+ *
+ * With neither an LT nor a usable VDOT it leaves s.pac as it is.
+ */
+export function syncTrainingPaces(s: SimulatorState): void {
+  const lt = s.lt != null && s.lt > 0 ? s.lt : null;
+  const vdot = getEffectiveVdot(s);
+  if (lt == null && !(Number.isFinite(vdot) && vdot > 0)) return;
+  s.pac = gp(vdot, lt);
 }
 
 /**

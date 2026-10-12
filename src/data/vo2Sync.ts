@@ -8,7 +8,7 @@
 
 import { getMutableState, saveState } from '@/state';
 import { computeVO2Estimates, type OrchestratorActivity } from '@/calculations/vo2-orchestrator';
-import { gp } from '@/calculations/paces';
+import { syncTrainingPaces } from '@/calculations/paces';
 
 /**
  * "Clearly improves" gap (ml/kg/min) for auto-clearing a VO2max override.
@@ -43,8 +43,9 @@ export function refreshVO2Estimates(extra: OrchestratorActivity[] = []): void {
     }
 
     // Keep s.pac in sync with the current LT and VDOT so pace zone displays
-    // reflect any LT update without needing a plan regeneration.
-    s.pac = gp(s.v ?? s.vo2 ?? 45, s.lt ?? null);
+    // reflect any LT update without needing a plan regeneration. One
+    // computation (syncTrainingPaces), shared with the refresh and recomputeLT.
+    syncTrainingPaces(s);
     saveState();
     // One-line diagnostic so we can verify the orchestrator ran and what it
     // produced. The `runSrc` field shows which estimator carried the running

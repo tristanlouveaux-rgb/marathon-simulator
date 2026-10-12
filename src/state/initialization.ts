@@ -863,9 +863,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // blend, so with an aged PB and a typed volume it differed from Home
     // (review 3: marathon 3:09:36 vs 3:16:25). The initial values the progress
     // views compare against are then taken from the refreshed state.
+    // The refresh also brings s.pac in line with the s.lt and s.v it leaves
+    // (syncTrainingPaces), as it does for every initializer and the launch.
     refreshBlendedFitness(s);
     s.iv = s.v;
-    s.pac = gp(s.v, s.lt ?? null);
     s.initialLT = s.lt ?? ltPace;
     if (s.blendedRaceTimeSec != null) {
       s.initialBaseline = s.blendedRaceTimeSec;

@@ -21,6 +21,7 @@ import { ltDanielsInputVdot, effectivePhysiologyPbs, modelPbAgeWeightsIfMeasured
 import { computePredictionInputs, collectRunsFromState } from '@/calculations/prediction-inputs';
 import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import type { SimulatorState } from '@/types';
+import { syncTrainingPaces } from '@/calculations/paces';
 
 /** Meaningful-change threshold — an applied LT shift of at least this many
  *  s/km is surfaced to the user (small toast, per the adaptation-transparency
@@ -283,12 +284,15 @@ export function ltPaceForDanielsInput(
  * the display boundary (displayPaceSec / fpModel, src/utils/format.ts), for
  * the LT and for every pace derived from it (s.pac: the threshold pace IS the
  * LT), so every surface reads the same whole second. `s.ltHR` stays a whole
- * bpm: it is a zone anchor, not a race-time input.
+ * bpm: it is a zone anchor, not a race-time input. The training-pace cache
+ * follows the new LT here (syncTrainingPaces), so a watch or activity-sync LT
+ * change reaches the paces without waiting for the next refresh.
  */
 function applyResolved(s: SimulatorState, resolved: ReturnType<typeof resolveLT>, now: string): void {
   if (resolved.ltPaceSecKm == null) return;
   s.lt = resolved.ltPaceSecKm;
   s.ltPace = s.lt;
+  syncTrainingPaces(s);
   if (resolved.ltHR != null) s.ltHR = Math.round(resolved.ltHR);
   s.ltUpdatedAt = now;
   s.ltSource = resolved.source;

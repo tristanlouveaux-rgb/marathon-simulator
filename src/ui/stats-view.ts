@@ -4473,14 +4473,12 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     const pace = parseInt(paceSlider.value, 10);
     const hr = parseInt(hrSlider.value, 10);
     const { getMutableState, saveState } = await import('@/state');
-    const { gp } = await import('@/calculations/paces');
     const m = getMutableState();
     m.ltOverride = { ltPaceSecKm: pace, ltHR: hr, setAt: new Date().toISOString() };
     if (m.ltSuggestion) delete m.ltSuggestion;
+    // recomputeLT and the refresh both bring the cached pace zones (s.pac) in
+    // line with the new LT (syncTrainingPaces).
     recomputeLT(m);
-    // Refresh cached pace zones so threshold/easy/marathon paces and any view
-    // reading s.pac immediately use the new LT.
-    m.pac = gp(getEffectiveVdot(m), m.lt);
     // Flow the LT change through to the cached race prediction (the forecast
     // surfaces read s.forecastTime / s.blendedRaceTimeSec, not s.lt directly).
     refreshBlendedFitness(m);
@@ -4498,11 +4496,9 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
   });
   resetBtn?.addEventListener('click', async () => {
     const { getMutableState, saveState } = await import('@/state');
-    const { gp } = await import('@/calculations/paces');
     const m = getMutableState();
     delete m.ltOverride;
     recomputeLT(m);
-    m.pac = gp(getEffectiveVdot(m), m.lt);
     refreshBlendedFitness(m);
     saveState();
     const container = document.getElementById('app-root');
@@ -4521,7 +4517,6 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     el.addEventListener('click', async () => {
       const choice = el.dataset.ltPick;
       const { getMutableState, saveState } = await import('@/state');
-      const { gp } = await import('@/calculations/paces');
       const m = getMutableState();
       const sug = m.ltSuggestion;
       if (!sug) return;
@@ -4543,7 +4538,6 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
       }
       clearLTSuggestion(m);
       recomputeLT(m);
-      m.pac = gp(getEffectiveVdot(m), m.lt);
       refreshBlendedFitness(m);
       saveState();
       const container = document.getElementById('app-root');

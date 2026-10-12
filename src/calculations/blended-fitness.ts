@@ -25,6 +25,7 @@ import { computePredictionInputs, measuredWeeklyKm, collectRunsFromState } from 
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
+import { syncTrainingPaces } from './paces';
 import { recomputeLT, ltPaceForDanielsInput } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
@@ -534,8 +535,20 @@ export function runningForecastForSessions(
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
  * Idempotent. Safe to call any time. Does nothing and returns false if
  * required inputs are missing.
+ *
+ * On every exit, including the early ones (no race distance, no PBs), the
+ * training-pace cache follows the s.lt and s.v this refresh leaves
+ * (syncTrainingPaces): every initializer and the launch end here, so the
+ * training paces read the same LT as the LT headline.
  */
 export function refreshBlendedFitness(s: SimulatorState): boolean {
+  const refreshed = refreshBlendedFitnessCore(s);
+  syncTrainingPaces(s);
+  return refreshed;
+}
+
+/** The refresh itself, without the pace-cache sync (refreshBlendedFitness). */
+function refreshBlendedFitnessCore(s: SimulatorState): boolean {
   // Compute + cache HR-calibrated VDOT first, independent of the full blend.
   // The onboarding review screen needs this even before race distance is set,
   // so we pre-cache before the early-return guards below. This write is

@@ -35,6 +35,7 @@ import { refreshForecastCourseFactors } from '@/calculations/course-factors-runn
 import { refreshBlendedFitness, planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
+import { syncTrainingPaces } from '@/calculations/paces';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 import type { ActivityStream } from '@/calculations/stream-processor';
 import { analyzeStream, computeCardiacEfficiency } from '@/calculations/stream-processor';
@@ -155,7 +156,7 @@ function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
   }
 
   // 4. Recalculate paces
-  s.pac = gp(getEffectiveVdot(s), s.lt);
+  syncTrainingPaces(s);
 
   // 4b. Record VDOT history entry
   recordVdotHistory(s);
@@ -610,7 +611,7 @@ export function rate(
 
   // Update paces and predictions
   const currentVDOT = getEffectiveVdot(s);
-  s.pac = gp(currentVDOT, s.lt);
+  syncTrainingPaces(s);
 
   // Anchor "current fitness" and "forecast" to the blended race-prediction time
   // (single canonical model). The horizon gain is converted to a seconds delta
@@ -1808,7 +1809,10 @@ export function updateFitness(): void {
   }
   recordVdotHistory(s);
 
-  s.pac = gp(getEffectiveVdot(s), newLT);
+  // The paces follow s.lt (set to newLT above when one was entered). With
+  // only a VO2max entered, s.lt and the threshold pace stay as they were.
+  // Building them from newLT gave a VDOT threshold pace beside the old LT.
+  syncTrainingPaces(s);
 
   // Display status with color based on assessment status
   const statusEl = document.getElementById('fitStatus');
