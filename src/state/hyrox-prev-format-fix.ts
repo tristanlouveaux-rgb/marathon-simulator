@@ -19,8 +19,6 @@
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES,
-  SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES,
   HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
   computeDoublesCap,
@@ -28,6 +26,8 @@ import {
 import type { AbilityBand } from '@/types/triathlon';
 import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
+import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { isHyroxProFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -89,29 +89,40 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
         hx.stationBenchmarkHistory[station] = entries.map(e => {
           const eWasDoubles = e.format === 'open_doubles' || e.format === 'pro_doubles';
           if (eWasDoubles === wasDoubles) {
-            return { ...e, format: newFormat };
+            // A race split takes the corrected race's weights too.
+            return e.source === 'race'
+              ? { ...e, format: newFormat, proWeights: isHyroxProFormat(newFormat) }
+              : { ...e, format: newFormat };
           }
           return e;
         });
       }
     }
+  } else if (oldFormat != null && hx.stationBenchmarkHistory) {
+    // Open ↔ Pro on the same axis: the previous race's split entries carry the
+    // corrected format and weights, so the predictor reads their weight regime
+    // right (race-prediction.hyrox.ts reads a race split's proWeights).
+    for (const k of Object.keys(hx.stationBenchmarkHistory)) {
+      const station = k as keyof typeof hx.stationBenchmarkHistory;
+      const entries = hx.stationBenchmarkHistory[station];
+      if (!entries) continue;
+      hx.stationBenchmarkHistory[station] = entries.map(e =>
+        e.source === 'race' && e.format === oldFormat
+          ? { ...e, format: newFormat, proWeights: isHyroxProFormat(newFormat) }
+          : e,
+      );
+    }
   }
 
-  // Re-derive the band against the cross-format factor. The previous time is
+  // Re-derive the band on the previous time in singles terms
+  // (hyroxBandingTimeSec, the same rule as onboarding). The previous time is
   // physiologically the same effort regardless of which slot it lives in, but
-  // its banding meaning differs across formats. A 60-min doubles is a 73-min
-  // singles. Apply the factor before banding when the previous race format
-  // disagrees with the *target* format.
+  // its banding meaning differs across formats.
   let rebanded = false;
   const prevTimeSec = hx.previousHyroxTimeSec;
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-    const adjusted = isDoubles && !targetIsDoubles
-      ? Math.round(prevTimeSec * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES)
-      : !isDoubles && targetIsDoubles
-      ? Math.round(prevTimeSec * SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES)
-      : prevTimeSec;
-    const newBand = bandFromTime(adjusted);
+    const newBand = bandFromTime(hyroxBandingTimeSec(prevTimeSec, newFormat, hx.format));
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];

@@ -12,7 +12,7 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import type { HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.44;
 
@@ -117,4 +117,42 @@ export function latestImprovementSec(
   const latest = hist[hist.length - 1];
   const prev = hist[hist.length - 2];
   return latest.sec - prev.sec;
+}
+
+/** A benchmark slot: `stationBenchmarksSingles` or `stationBenchmarksDoubles`. */
+export type BenchmarkSlot = 'singles' | 'doubles';
+
+function slotOfFormat(format: HyroxFormat): BenchmarkSlot {
+  return format === 'open_doubles' || format === 'pro_doubles' ? 'doubles' : 'singles';
+}
+
+/** True for sources that record a race split: the logged race's own splits
+ *  ('race'), and 'manual', the boot migration's label for the onboarding seed,
+ *  which only ever held race splits. */
+export function isRaceSplitSource(source: StationTestSource): boolean {
+  return source === 'race' || source === 'manual';
+}
+
+/**
+ * The history entry that describes a benchmark slot's current value: the
+ * newest entry in the slot's format family (singles or doubles) whose time
+ * equals the value. Null when none matches, which means the value was written
+ * by a path that kept no history (race splits logged before 2026-10-12, or the
+ * legacy pooled benchmarks).
+ *
+ * Matching on the value, not taking the newest entry, keeps provenance right
+ * when an older race is logged after a newer test: the race split overwrites
+ * the slot but its entry is dated on race day, before the test.
+ */
+export function benchmarkEntryForSlotValue(
+  hx: Pick<HyroxConfig, 'stationBenchmarkHistory'>,
+  station: HyroxStation,
+  slot: BenchmarkSlot,
+  sec: number,
+): StationTestEntry | null {
+  const entries = (hx.stationBenchmarkHistory?.[station] ?? [])
+    .filter(e => slotOfFormat(e.format) === slot && Math.abs(e.sec - sec) < 0.5)
+    .slice()
+    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  return entries[entries.length - 1] ?? null;
 }

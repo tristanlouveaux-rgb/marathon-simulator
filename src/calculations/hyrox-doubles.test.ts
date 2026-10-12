@@ -17,7 +17,9 @@ import {
   doublesStationRatio,
   seedRoxzoneSecForFormat,
   doublesBenchmarkIsTeamTime,
+  hyroxBandingTimeSec,
 } from './hyrox-doubles';
+import { SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES } from '@/constants/hyrox-constants';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import { derivePopulationRunPace } from './hyrox-run-pace';
 import { getFinishTimePercentile } from './hyrox-population';
@@ -128,19 +130,53 @@ describe('seed Roxzone and the race back-computation in doubles', () => {
 });
 
 describe('doubles benchmark provenance', () => {
-  const entry = (source: 'half_test' | 'race' | 'manual' | 'session' | 'full_test', format: HyroxConfig['format'] = 'open_doubles') =>
-    ({ dateISO: '2026-09-01', sec: 250, source, format });
-  it('a race split (or the onboarding seed, which has no history) is the pair\'s time', () => {
-    expect(doublesBenchmarkIsTeamTime({}, 'ski_erg')).toBe(true);
-    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('race')] } }, 'ski_erg')).toBe(true);
-    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('manual')] } }, 'ski_erg')).toBe(true);
+  const entry = (
+    source: 'half_test' | 'race' | 'manual' | 'session' | 'full_test',
+    format: HyroxConfig['format'] = 'open_doubles',
+    sec = 250,
+    dateISO = '2026-09-01',
+  ) => ({ dateISO, sec, source, format });
+  it('a race split (or a value no history entry describes) is the pair\'s time', () => {
+    expect(doublesBenchmarkIsTeamTime({}, 'ski_erg', 250)).toBe(true);
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('race')] } }, 'ski_erg', 250)).toBe(true);
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('manual')] } }, 'ski_erg', 250)).toBe(true);
   });
   it('a test or session best is one athlete\'s solo time', () => {
-    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('half_test')] } }, 'ski_erg')).toBe(false);
-    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('session')] } }, 'ski_erg')).toBe(false);
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('half_test')] } }, 'ski_erg', 250)).toBe(false);
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('session')] } }, 'ski_erg', 250)).toBe(false);
   });
   it('only doubles-format entries count', () => {
-    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('half_test', 'open_singles')] } }, 'ski_erg')).toBe(true);
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('half_test', 'open_singles')] } }, 'ski_erg', 250)).toBe(true);
+  });
+  it('reads the entry that describes the slot value, not the newest entry', () => {
+    // A race (dated race day) logged after a newer half test overwrote the slot.
+    const hx = { stationBenchmarkHistory: { ski_erg: [
+      entry('race', 'open_doubles', 280, '2026-06-01'),
+      entry('half_test', 'open_doubles', 300, '2026-09-01'),
+    ] } };
+    expect(doublesBenchmarkIsTeamTime(hx, 'ski_erg', 280)).toBe(true);
+    expect(doublesBenchmarkIsTeamTime(hx, 'ski_erg', 300)).toBe(false);
+    // A race split written before race entries existed: no entry matches.
+    expect(doublesBenchmarkIsTeamTime({ stationBenchmarkHistory: { ski_erg: [entry('half_test', 'open_doubles', 300)] } }, 'ski_erg', 280)).toBe(true);
+  });
+});
+
+describe('hyroxBandingTimeSec', () => {
+  const totals = HYROX_TOTAL_PERCENTILE_TABLES;
+  it('a doubles target bands a doubles previous time on singles terms (the data ratio)', () => {
+    // The doubles median maps to the singles median: the inverse of the
+    // forecast's quantile mapping, read from the tables.
+    expect(hyroxBandingTimeSec(at(totals.open_doubles, 50), 'open_doubles', 'open_doubles'))
+      .toBeCloseTo(at(totals.open_singles, 50), -1);
+    expect(hyroxBandingTimeSec(at(totals.open_doubles, 25), 'pro_doubles', 'open_doubles'))
+      .toBeCloseTo(at(totals.open_singles, 25), -1);
+  });
+  it('a singles previous time stays as is for any target', () => {
+    expect(hyroxBandingTimeSec(5338, 'open_singles', 'open_doubles')).toBe(5338);
+    expect(hyroxBandingTimeSec(5338, 'pro_singles', 'open_singles')).toBe(5338);
+  });
+  it('a singles target expands a doubles previous time by the same-athlete factor', () => {
+    expect(hyroxBandingTimeSec(3600, 'open_doubles', 'open_singles')).toBe(Math.round(3600 * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES));
   });
 });
 

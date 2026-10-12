@@ -38,7 +38,9 @@ import {
   HYROX_TOTAL_PERCENTILE_TABLES,
 } from '@/data/hyrox-population-distributions';
 import { SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import { SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES } from '@/constants/hyrox-constants';
 import { isHyroxDoublesFormat } from './hyrox-division';
+import { benchmarkEntryForSlotValue, isRaceSplitSource } from './hyrox-station-history';
 
 type HyroxFormat = HyroxConfig['format'];
 type Breakpoints = Array<[number, number]>;
@@ -137,17 +139,49 @@ export function seedRoxzoneSecForFormat(band: AbilityBand, format: HyroxFormat):
 /**
  * True when the doubles benchmark slot's value for a station is the pair's
  * time (a split from a doubles race), false when it is one athlete's solo time
- * (a half or full test, or a session best). Reads the newest doubles-format
- * entry in stationBenchmarkHistory. No doubles entry: the onboarding seed,
- * which only fills the doubles slot from a doubles race's splits, so a team
- * time. 'manual' entries are the boot migration's label for those same seeds.
+ * (a half or full test, or a session best). Reads the history entry that
+ * describes the slot value (benchmarkEntryForSlotValue): a race split ('race',
+ * or 'manual', the boot migration's label for the onboarding seed) is a team
+ * time, a test or session best is solo. No matching entry: the value came from
+ * a race-split path that kept no history before 2026-10-12, so a team time.
  */
-export function doublesBenchmarkIsTeamTime(hx: Pick<HyroxConfig, 'stationBenchmarkHistory'>, station: HyroxStation): boolean {
-  const entries = (hx.stationBenchmarkHistory?.[station] ?? [])
-    .filter(e => isHyroxDoublesFormat(e.format))
-    .slice()
-    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
-  const latest = entries[entries.length - 1];
-  if (!latest) return true;
-  return latest.source === 'race' || latest.source === 'manual';
+export function doublesBenchmarkIsTeamTime(
+  hx: Pick<HyroxConfig, 'stationBenchmarkHistory'>,
+  station: HyroxStation,
+  slotSec: number,
+): boolean {
+  const entry = benchmarkEntryForSlotValue(hx, station, 'doubles', slotSec);
+  return entry ? isRaceSplitSource(entry.source) : true;
+}
+
+/**
+ * A previous HYROX finish time in the terms the band thresholds use, for
+ * banding. Side: planning input (the band sets the MTL cap, sessions and
+ * hours) and tracking (the band's seed times feed the forecast).
+ *
+ * The band thresholds (HYROX_TIME_TO_BAND_THRESHOLDS) and the band seed times
+ * are singles times. The doubles forecast multiplies the band's singles seeds
+ * by the doubles ratios, so a doubles target is banded on a singles-terms time:
+ *  - a doubles previous time ÷ the percentile-matched total ratio, read on the
+ *    doubles side (doublesRatioAtTeamTime), the inverse of the forecast's own
+ *    mapping;
+ *  - a singles previous time as is.
+ * Banding a doubles target on the doubles time itself (a singles time × 0.85,
+ * a doubles time unconverted) applied the doubles conversion twice: review
+ * 2026-10-12 measured a doubles-median athlete banded advanced, stations 13%
+ * and Roxzone 35% faster than the doubles median.
+ *
+ * A singles target is unchanged: a doubles previous time ×
+ * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES, a singles previous time as is.
+ */
+export function hyroxBandingTimeSec(
+  prevTimeSec: number,
+  prevFormat: HyroxFormat,
+  targetFormat: HyroxFormat,
+): number {
+  if (!isHyroxDoublesFormat(prevFormat)) return prevTimeSec;
+  if (isHyroxDoublesFormat(targetFormat)) {
+    return Math.round(prevTimeSec / doublesRatioAtTeamTime('total', prevTimeSec).ratio);
+  }
+  return Math.round(prevTimeSec * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES);
 }

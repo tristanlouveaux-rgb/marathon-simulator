@@ -49,6 +49,7 @@ import { plannedHyroxSessionsPerWeek } from './hyrox-volume';
 import { stationInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 import { doublesRatioAt, doublesStationRatio, doublesBenchmarkIsTeamTime } from './hyrox-doubles';
+import { benchmarkEntryForSlotValue, type BenchmarkSlot } from './hyrox-station-history';
 import { availableStations } from '@/workouts/hyrox-generators';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
@@ -77,6 +78,9 @@ export interface HyroxStationLine {
    *  references (band seeds, station percentiles) divides by it first
    *  (stationSinglesEquivalentSec). */
   teamRatio?: number;
+  /** Doubles only: true when baseSec comes from a doubles race split, which is
+   *  already the pair's time and is not scaled by teamRatio. */
+  teamTimeSplit?: boolean;
 }
 
 /** A station line's time in singles terms: the pair's time ÷ the doubles
@@ -196,17 +200,19 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   const isPro     = hx.format === 'pro_singles'  || hx.format === 'pro_doubles';
 
   // ── Format-aware benchmark resolution ────────────────────────────────────
-  // Use only same-format benchmarks. Cross-format per-station inference is not
-  // defensible from current data (4 vs 8 stations, asymmetric rest pattern,
-  // cohort selection bias), so when the only available benchmarks are in the
-  // OTHER format we fall back to seed times for the target format and surface
-  // the gap as a confidence drop in the UI. Same-athlete cross-format
-  // adjustment happens at band derivation only (see initialization.hyrox.ts).
+  // Singles target: the singles slot. With only doubles benchmarks it falls
+  // back to seed times and surfaces the gap as a confidence drop in the UI
+  // (doubles splits are the pair's time; turning them into one athlete's
+  // singles capacity per station is not attempted).
+  // Doubles target: the doubles slot when it has values, else the singles
+  // slot, which feeds the doubles model directly (singles station time × the
+  // percentile-matched doubles ratio, hyrox-doubles.ts).
   // Legacy stationBenchmarks (pre-slot-migration) are treated as same-format
   // for backwards compatibility.
   let userBenchmarks: Partial<Record<HyroxStation, number>>;
   let crossFormatConversion: HyroxPrediction['crossFormatConversion'];
-  let doublesSlotInUse = false;
+  /** Which slot userBenchmarks came from; null for the legacy pooled field. */
+  let benchmarkSlot: BenchmarkSlot | null = null;
 
   const hasSingles = hx.stationBenchmarksSingles != null && Object.keys(hx.stationBenchmarksSingles).length > 0;
   const hasDoubles = hx.stationBenchmarksDoubles != null && Object.keys(hx.stationBenchmarksDoubles).length > 0;
@@ -216,10 +222,11 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     // Predicting singles
     if (hasSingles) {
       userBenchmarks = hx.stationBenchmarksSingles!;
+      benchmarkSlot = 'singles';
     } else if (hasDoubles) {
-      // Doubles per-station times include partner-rest and only cover 4 of 8
-      // stations. Neither maps reliably to fresh singles capacity. Fall back
-      // to seeds for the target format; UI drops confidence to 'low'.
+      // Doubles race splits are the pair's time, with the partner's share and
+      // rest inside every station. Not mapped to fresh singles capacity: fall
+      // back to seeds for the target format; UI drops confidence to 'low'.
       userBenchmarks = {};
       crossFormatConversion = 'doubles_to_singles';
     } else {
@@ -233,9 +240,10 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     // split) or one athlete's solo time (a test), see doublesBenchmarkIsTeamTime.
     if (hasDoubles) {
       userBenchmarks = hx.stationBenchmarksDoubles!;
-      doublesSlotInUse = true;
+      benchmarkSlot = 'doubles';
     } else if (hasSingles) {
       userBenchmarks = hx.stationBenchmarksSingles!;
+      benchmarkSlot = 'singles';
     } else {
       userBenchmarks = hx.stationBenchmarks ?? {};
     }
@@ -314,6 +322,10 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   //   - Same regime: identity
   // Erg / bodyweight stations have a multiplier of 1.0 (weight regime doesn't
   // change rep time), so the conversion is a no-op there.
+  //
+  // Weight regime per station: a race split carries its race's weights (the
+  // history entry that describes the slot value, proWeights); a station test
+  // or session best follows benchmarksAtProWeights, the athlete's toggle.
   const benchmarksArePro = !!hx.benchmarksAtProWeights;
   const rawRunSec = runPaceSecKm * 8;
 
@@ -323,13 +335,19 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     const calibrated = userBenchmarks[station];
     const seedTime = effectiveSeeds[station]; // always Open weights
     const fMult = HYROX_PRO_STATION_MULTIPLIER[station] ?? 1.0;
+    const entry = calibrated != null && benchmarkSlot
+      ? benchmarkEntryForSlotValue(hx, station, benchmarkSlot, calibrated)
+      : null;
+    const sourceIsPro = entry?.source === 'race' && entry.proWeights != null
+      ? entry.proWeights
+      : benchmarksArePro;
 
     // Convert calibrated benchmark to TARGET format.
     let calibratedAtTarget: number | undefined;
     if (calibrated != null) {
-      if (isPro && !benchmarksArePro) {
+      if (isPro && !sourceIsPro) {
         calibratedAtTarget = calibrated * fMult;       // Open → Pro: slower
-      } else if (!isPro && benchmarksArePro) {
+      } else if (!isPro && sourceIsPro) {
         calibratedAtTarget = calibrated / fMult;       // Pro → Open: faster
       } else {
         calibratedAtTarget = calibrated;               // identity
@@ -337,8 +355,8 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     }
     // Seeds are at Open weights; only multiply when target is Pro.
     const seedAtTarget = isPro ? seedTime * fMult : seedTime;
-    const isTeamTime = isDoubles && doublesSlotInUse && calibratedAtTarget != null
-      && doublesBenchmarkIsTeamTime(hx, station);
+    const isTeamTime = isDoubles && benchmarkSlot === 'doubles' && calibrated != null
+      && doublesBenchmarkIsTeamTime(hx, station, calibrated);
     // Open-weight equivalent, for reading the athlete's place in the Open
     // results tables (the only doubles data there is).
     const toOpen = (sec: number) => (isPro ? sec / fMult : sec);
@@ -390,6 +408,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
       adjustedSec: baseSec, // mutated below for venue factors
       source: p.calibrated != null ? ('calibrated' as const) : ('seed' as const),
       ...(isDoubles ? { teamRatio: stationRatio } : {}),
+      ...(p.isTeamTime ? { teamTimeSplit: true } : {}),
     };
   });
   const rawStationsSec = stationLines.reduce((sum, l) => sum + l.baseSec, 0);

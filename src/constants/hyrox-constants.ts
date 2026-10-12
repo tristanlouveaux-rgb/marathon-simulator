@@ -16,28 +16,22 @@ import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/worko
 /** Same-athlete cross-format TOTAL time multiplier — DOUBLES → SINGLES.
  *  In singles, the athlete completes all 8 stations continuously without the
  *  partner-rest pattern doubles offers. Population-data lower bound: 1.125
- *  (P50 cohort comparison, S4–S6, 89,868 finishers. See
- *  src/data/hyrox-population-distributions.ts where open_singles P50 total =
- *  5338 s vs open_doubles P50 total = 4747 s; ratio is cohort-comparison so
- *  it understates the same-athlete gap). Coaching consensus (Hyrox Hub,
- *  Roxzone pacing analyses) puts same-athlete doubles → singles total
- *  expansion at 1.20–1.25. We use the midpoint 1.22.
+ *  (P50 cohort comparison, S4–S6. See src/data/hyrox-population-distributions.ts
+ *  where open_singles P50 total = 5338 s vs open_doubles P50 total = 4747 s;
+ *  ratio is cohort-comparison so it understates the same-athlete gap).
+ *  Coaching consensus (Hyrox Hub, Roxzone pacing analyses) puts same-athlete
+ *  doubles → singles total expansion at 1.20–1.25. We use the midpoint 1.22.
  *
- *  Used ONLY for band derivation (initialization.hyrox.ts). Per-station
- *  cross-format inference is not defensible from current data and is not
- *  attempted. Predictions of a different-format target fall back to seed
- *  station times and surface a confidence drop in the UI.
+ *  Used ONLY for banding a SINGLES target on a doubles previous time
+ *  (hyroxBandingTimeSec in src/calculations/hyrox-doubles.ts). A doubles
+ *  target is banded on the data ratio instead, the inverse of the doubles
+ *  forecast's own quantile mapping, so the two directions use different
+ *  conversions (open question for Tristan). A singles target with only doubles
+ *  station benchmarks falls back to seed station times with a confidence drop.
  *
  *  Recalibrate when matched-athlete cross-format records become available
  *  (e.g. Strava ingest of users who race both formats). See SCIENCE_LOG §T. */
 export const SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22;
-/** Inverse direction, used ONLY for band derivation. Doubles partners split
- *  the work inside every station (26/27 Doubles rulebook s7.2), so a singles
- *  athlete's doubles total is faster than their singles total. 0.85 is an
- *  unsourced estimate; the cohort ratio in the results tables at P50 is
- *  4747 / 5338 = 0.89 (src/data/hyrox-population-distributions.ts). The doubles
- *  forecast does not use this constant (src/calculations/hyrox-doubles.ts). */
-export const SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85;
 
 /**
  * Station-time multiplier for Pro division vs Open.
