@@ -34,6 +34,7 @@ vi.mock('@/ui/renderer', () => ({ render: () => {}, log: () => {} }));
 
 import { initializeHyroxSimulator } from './initialization.hyrox';
 import { applyHyroxPrevTimeUpdate } from './hyrox-prev-time-update';
+import { applyHyroxPrevFormatChange } from './hyrox-prev-format-fix';
 import { getMutableState, resetState } from './store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { appendStationTest } from '@/calculations/hyrox-station-history';
@@ -188,5 +189,29 @@ describe('a logged race does not change the weight regime of station tests', () 
     applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_singles', raceDateISO: ago(30), stationSplits: { sled_push: 200 } });
     expect(predictHyroxRace(open)!.stations.find(l => l.station === 'sled_push')!.baseSec)
       .toBeCloseTo(200 * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+  });
+});
+
+describe('correcting the previous race format', () => {
+  it('Open → Pro on the same axis: the race entries take Pro weights, so a Pro target applies no second multiplier', () => {
+    const s = init({
+      hyroxFormat: 'pro_singles', previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_singles',
+      hyroxPreviousRaceDate: ago(30), hyroxPreviousStationSplits: { sled_push: 260 },
+    });
+    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!.baseSec)
+      .toBeCloseTo(260 * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+    applyHyroxPrevFormatChange('pro_singles');
+    expect(s.hyroxConfig!.stationBenchmarkHistory?.sled_push?.[0]).toMatchObject({ source: 'race', format: 'pro_singles', proWeights: true });
+    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!.baseSec).toBeCloseTo(260, 6);
+  });
+
+  it('singles → doubles for a doubles target bands the doubles time on singles terms', () => {
+    const doublesMedian = p50(HYROX_TOTAL_PERCENTILE_TABLES.open_doubles);
+    const s = init({ previousHyroxTimeSec: doublesMedian, hyroxPreviousTimeFormat: 'open_singles' });
+    // As a singles time, the doubles median (79 min) bands advanced.
+    expect(s.hyroxConfig!.athleteBand).toBe('advanced');
+    applyHyroxPrevFormatChange('open_doubles');
+    const singles = init({ hyroxFormat: 'open_singles', previousHyroxTimeSec: p50(HYROX_TOTAL_PERCENTILE_TABLES.open_singles), hyroxPreviousTimeFormat: 'open_singles' });
+    expect(s.hyroxConfig!.athleteBand).toBe(singles.hyroxConfig!.athleteBand);
   });
 });
