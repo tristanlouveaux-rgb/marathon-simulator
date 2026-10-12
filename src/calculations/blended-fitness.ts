@@ -129,10 +129,21 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
   const runs = collectRunsFromState(s);
   const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
+  // Triathlon cold start (no running-specific evidence): the watch VO2max is
+  // held at the run skill-slider VDOT, the figure that caps the engine
+  // (refreshBlendedFitness) and the LT derivation's Daniels input
+  // (resolveLtDanielsInput). Without it the uncapped watch entered this blend
+  // while the engine, s.lt and the run leg were capped: the session
+  // generator's run Time Trial (70.3, watch 62, run skill 2) predicted a
+  // 23:28 5K against 26:39 at the engine (modes review, 2026-10-12). Null in
+  // running mode and whenever running evidence exists, so nothing else moves.
+  const triCap = triColdStartRunCapVdot(s);
+  const vo2Raw = effectiveVo2max(s);
+  const fallbackRaw = resolveRunningVdot(s);
   return {
     pbs: s.pbs ?? {},
     lt: s.lt ?? null,
-    vo2: effectiveVo2max(s),
+    vo2: triCap != null && vo2Raw != null ? Math.min(vo2Raw, triCap) : vo2Raw,
     b: s.b ?? 0,
     typ: (s.typ ?? 'Balanced').toLowerCase(),
     recentRun: inputs.recentRun ?? s.rec ?? null,
@@ -169,7 +180,7 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     calibration: computeRunCalibration(s.runRaceLog),
     longestRunSec: getLongestRunSec(s, DURABILITY_WINDOW_WEEKS),
     longRunDurationsSec: getRunDurationsSec(s, DURABILITY_WINDOW_WEEKS),
-    fallbackVdot: resolveRunningVdot(s),
+    fallbackVdot: triCap != null ? Math.min(fallbackRaw ?? triCap, triCap) : fallbackRaw,
   };
 }
 
