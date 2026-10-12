@@ -248,26 +248,26 @@ export const READINESS_BANDS = [
  * says how much an old PB still speaks for aerobic capacity and never reaches
  * 0; this factor says whether a race still proves distance-specific endurance
  * (fractional utilisation at the distance, which detrains in weeks: Coyle 1984,
- * Mujika & Padilla 2000) and is fully stale at two years.
+ * Mujika & Padilla 2000) and is fully stale at three years.
  *
  * Continuous since 2026-10-12 (Tristan 2026-10-11: no forecast jumps on a PB's
  * anniversary). The first year keeps the old calibration: 0.5 through 365
- * days, as the first band did. From there the factor rises linearly to the
- * rule's full penalty at two years (1.0 at 730 days), so it passes the second
- * band's 0.75 at the middle of the second year (547.5 days) and the second
- * year's mean factor is the band's 0.75. No new constant: the ages (365, 730)
- * and factors (0.5, 1.0) are the rule's own. Orchestrator default 2026-10-12
- * (Tristan delegated the call), the lenient option over the straight line
- * from 0.5 today: never harsher than that line, equal to the old bands
- * through the first year, and the rule's "fully stale at two years" kept.
- * Inside the second year it sits below the old 0.75 band until 547.5 days
- * and above it after (open question: a later full-stale age, which would
- * keep it at or below the bands, needs Tristan's number).
+ * days, as the first band did. Each of the old rule's two steps (0.5 to 0.75,
+ * then 0.75 to 1.0) is then spread linearly across one band width (365 days)
+ * after the band where it used to fire: 0.75 at two years, full penalty at
+ * three (1095 days). No new constant: the ages are the rule's own 365-day band
+ * width and the factors are its own. The factor never exceeds the old bands at
+ * any age, and the daily slope stays at 0.25 / 365, half the 0.5 / 365 a
+ * two-year full-stale age needs (that version moved the low-volume marathon
+ * forecast over 1 s a day for the whole second year). Three years also matches
+ * the PB age weight's half-life, though the two rules stay distinct.
+ * Orchestrator call 2026-10-12 (Tristan delegated it).
  */
 export const RUN_PB_RECENCY_ANCHORS: ReadonlyArray<{ ageDays: number; factor: number }> = [
-  { ageDays: 0,   factor: 0.5  },  // race run today: halves the penalty's excess
-  { ageDays: 365, factor: 0.5  },  // first year: the first band's 0.5 throughout
-  { ageDays: 730, factor: 1.0  },  // two years and beyond: full penalty
+  { ageDays: 0,    factor: 0.5  },  // race run today: halves the penalty's excess
+  { ageDays: 365,  factor: 0.5  },  // first year: the first band's 0.5 throughout
+  { ageDays: 730,  factor: 0.75 },  // two years: the second band's 0.75
+  { ageDays: 1095, factor: 1.0  },  // three years and beyond: full penalty
 ];
 
 /**

@@ -252,38 +252,41 @@ describe('geometric mean composition', () => {
 // ───────────────────────────────────────────────────────────────────────────
 // PB-recency factor: continuous in age (Tristan 2026-10-11, no step on a PB's
 // anniversary). Orchestrator default 2026-10-12 (option B, the lenient one):
-// the first band's 0.5 through 365 days, then linear to the rule's full
-// penalty at 730 days.
+// the first band's 0.5 through 365 days, linear to the second band's 0.75 at
+// 730 days, then linear to the full penalty at 1095 days.
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('pbRecencyPenaltyFactor', () => {
-  it('keeps the first year at 0.5 and reaches the full penalty at two years', () => {
-    expect(RUN_PB_RECENCY_ANCHORS.map(a => [a.ageDays, a.factor])).toEqual([[0, 0.5], [365, 0.5], [730, 1.0]]);
+  it('keeps the first year at 0.5, reaches 0.75 at two years and the full penalty at three', () => {
+    expect(RUN_PB_RECENCY_ANCHORS.map(a => [a.ageDays, a.factor])).toEqual([[0, 0.5], [365, 0.5], [730, 0.75], [1095, 1.0]]);
     expect(pbRecencyPenaltyFactor(0)).toBe(0.5);
     expect(pbRecencyPenaltyFactor(300)).toBe(0.5);
     expect(pbRecencyPenaltyFactor(364)).toBe(0.5);
     expect(pbRecencyPenaltyFactor(365)).toBe(0.5);
-    expect(pbRecencyPenaltyFactor(730)).toBe(1.0);
+    expect(pbRecencyPenaltyFactor(730)).toBe(0.75);
+    expect(pbRecencyPenaltyFactor(1095)).toBe(1.0);
     expect(pbRecencyPenaltyFactor(5 * 365)).toBe(1.0);
     expect(pbRecencyPenaltyFactor(Infinity)).toBe(1.0);
   });
 
-  it('is linear in the second year and passes the old 0.75 band at its middle', () => {
-    expect(pbRecencyPenaltyFactor(547.5)).toBeCloseTo(0.75, 12);
-    expect(pbRecencyPenaltyFactor(400)).toBeCloseTo(0.5 + 0.5 * 35 / 365, 12);
+  it('is linear in the second and third years', () => {
+    expect(pbRecencyPenaltyFactor(547.5)).toBeCloseTo(0.625, 12);
+    expect(pbRecencyPenaltyFactor(400)).toBeCloseTo(0.5 + 0.25 * 35 / 365, 12);
+    expect(pbRecencyPenaltyFactor(912.5)).toBeCloseTo(0.875, 12);
   });
 
-  it('is never harsher than the straight line from 0.5 today to 1.0 at two years', () => {
-    for (let d = 0; d <= 800; d++) {
-      expect(pbRecencyPenaltyFactor(d)).toBeLessThanOrEqual(Math.min(1, 0.5 + 0.5 * d / 730) + 1e-12);
+  it('is never harsher than the old step bands at any age', () => {
+    const band = (d: number) => (d < 365 ? 0.5 : d < 730 ? 0.75 : 1.0);
+    for (let d = 0; d <= 1200; d++) {
+      expect(pbRecencyPenaltyFactor(d)).toBeLessThanOrEqual(band(d) + 1e-12);
     }
   });
 
-  it('never steps: one day older moves it by 0.5 / 365 at most, and never down', () => {
-    for (let d = 0; d <= 800; d++) {
+  it('never steps: one day older moves it by 0.25 / 365 at most, and never down', () => {
+    for (let d = 0; d <= 1200; d++) {
       const step = pbRecencyPenaltyFactor(d + 1) - pbRecencyPenaltyFactor(d);
       expect(step).toBeGreaterThanOrEqual(0);
-      expect(step).toBeLessThanOrEqual(0.5 / 365 + 1e-12);
+      expect(step).toBeLessThanOrEqual(0.25 / 365 + 1e-12);
     }
   });
 

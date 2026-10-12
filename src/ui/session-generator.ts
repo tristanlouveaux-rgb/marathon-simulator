@@ -54,9 +54,11 @@ export function timeTrialPredictions(
 }
 
 function fmtTimeSec(totalSec: number): string {
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = Math.round(totalSec % 60);
+  // Round once, before splitting, so 1379.6 s reads 23:00, never 22:60.
+  const t = Math.round(totalSec);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
