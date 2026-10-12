@@ -9,7 +9,6 @@
  *   weekly km; the Stats card read the synced window's weekly km (0 with a
  *   typed km), no HR fit, calibration or durability cap. Both disagreed with
  *   the Forecast.
- * - The running Home forecast card carries the PB-age caption.
  * - The HYROX run pace "From VDOT" (s.v and s.lt) carries it too.
  */
 import { describe, it, expect, vi, afterAll } from 'vitest';
@@ -30,7 +29,6 @@ import { predictStandardDistances } from '@/calculations/blended-fitness';
 import { blendPredictions } from '@/calculations/predictions';
 import { effectiveVo2max } from '@/calculations/physiological-vdot';
 import { timeTrialPredictions } from './session-generator';
-import { buildRaceForecastCard } from './home-view';
 import { hyroxRunPaceSourceNote } from './hyrox/forecast-view';
 import { buildForecastTimesCard } from './stats-view';
 import { localMondayKey } from '@/utils/local-date';
@@ -112,13 +110,6 @@ describe('Stats race estimates are the Forecast tab\'s', () => {
       expect(html).toContain(`>${shown}</span>`);
     }
     expect(html).toContain(`${CAPTION} in these estimates.`);
-  });
-});
-
-describe('running Home forecast card: the PB-age caption', () => {
-  it('shows with a dated PB and a measured weekly volume, and not without the volume', () => {
-    expect(buildRaceForecastCard(runner(40))).toContain(`${CAPTION} in this forecast.`);
-    expect(buildRaceForecastCard(runner(undefined))).not.toContain(CAPTION);
   });
 });
 

@@ -53,7 +53,6 @@ import { getTriathlonById } from '@/data/triathlons';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { raceDayToday } from './race-day-card';
-import { pbAgeCaptionText } from './pb-age-caption';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -836,8 +835,7 @@ const RACE_DIST_LABEL: Record<string, string> = {
   'marathon': 'Marathon',
 };
 
-/** Exported for tests (pb-age-surfaces.test.ts). */
-export function buildRaceForecastCard(s: SimulatorState): string {
+function buildRaceForecastCard(s: SimulatorState): string {
   if (s.continuousMode || !s.rd || !s.initialBaseline) return '';
 
   // Prefer course-adjusted forecast (climate/altitude/elevation) when available
@@ -873,13 +871,6 @@ export function buildRaceForecastCard(s: SimulatorState): string {
   const adjustmentCaption = showAdjustmentCaption
     ? `<div style="font-size:11px;color:#94A3B8;margin-top:8px;line-height:1.4">Athletes tend to run ${pctStr} ${slowerOrFaster} here (${factorWords}). Tap for breakdown.</div>`
     : '';
-  // PB age caption (pbAgeCaptionText, shared with Stats and the Forecast tabs):
-  // the forecast gives a dated PB less weight than its displayed time
-  // suggests. Shown only when ageing changes it.
-  const pbAgeText = pbAgeCaptionText(s, 'this forecast');
-  const pbAgeCaption = pbAgeText
-    ? `<div style="font-size:11px;color:#94A3B8;margin-top:8px;line-height:1.4">${pbAgeText}</div>`
-    : '';
 
   return `
     <div style="padding:0 16px;margin-bottom:10px" class="hf" data-delay="0.16">
@@ -896,7 +887,6 @@ export function buildRaceForecastCard(s: SimulatorState): string {
           </div>
         </div>
         ${adjustmentCaption}
-        ${pbAgeCaption}
       </div>
     </div>
   `;
