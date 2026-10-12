@@ -42,6 +42,7 @@ import {
 } from '@/calculations/hyrox-division';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
+import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
 // Venue normally derives from the race-event selection. Manual venue picker
 // is shown as a fallback only when the user picks "Other / enter date manually".
 import { HYROX_VENUES } from '@/data/hyrox-venues';
@@ -54,6 +55,17 @@ function bandFromTime(sec: number): AbilityBand {
     if (sec < maxSec) return band;
   }
   return 'beginner';
+}
+
+/** Band for this step's defaults (hours range, sessions, plan weeks), on the
+ *  same rule as onboarding once the previous race's format is known: the
+ *  previous time in singles terms (hyroxBandingTimeSec). Before the format is
+ *  picked, the time as entered. */
+export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat' | 'hyroxFormat'>): AbilityBand | null {
+  const sec = ob.previousHyroxTimeSec;
+  if (sec == null) return null;
+  const prevFmt = ob.hyroxPreviousTimeFormat;
+  return bandFromTime(prevFmt ? hyroxBandingTimeSec(sec, prevFmt, ob.hyroxFormat ?? 'open_singles') : sec);
 }
 
 /** User-friendly target finish time message derived from ability band. */
@@ -155,7 +167,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
   const activeDivision = resolveHyroxDivision(format, state.biologicalSex, state.hyroxDivision);
   const prevTimeSec = state.previousHyroxTimeSec;
   const prevTimeStr = prevTimeSec != null ? fmtMmSs(prevTimeSec) : '';
-  const derivedBand: AbilityBand | null = prevTimeSec != null ? bandFromTime(prevTimeSec) : null;
+  const derivedBand: AbilityBand | null = setupBand(state);
   const hoursRange = HYROX_HOURS_RANGE[derivedBand ?? 'novice'];
   // Slider initial position lands at the midpoint of (min, default) so users
   // opt-in to more rather than dragging down from an anchored-high default.
@@ -545,8 +557,8 @@ function wireEventHandlers(): void {
     if (read != null && 'sec' in read) {
       const sec = read.sec;
       setTimeError('');
-      const band = bandFromTime(sec);
       updateOnboarding({ previousHyroxTimeSec: sec });
+      const band = setupBand(getOnboarding()) ?? bandFromTime(sec);
       if (splitsSection) splitsSection.style.display = 'block';
       if (prevFormatRow) prevFormatRow.style.display = 'block';
       // Reveal the date picker if no event ID is currently selected.
@@ -1042,8 +1054,7 @@ function wireEventHandlers(): void {
     const patch: Partial<OnboardingState> = {};
     if (!current.hyroxFormat) patch.hyroxFormat = 'open_singles';
     if (current.triTimeAvailableHoursPerWeek === undefined) {
-      const prevSec = current.previousHyroxTimeSec;
-      const band = prevSec != null ? bandFromTime(prevSec) : 'novice';
+      const band = setupBand(current) ?? 'novice';
       patch.triTimeAvailableHoursPerWeek = HYROX_HOURS_RANGE[band].default;
     }
     if (current.hyroxSledAccess === undefined) patch.hyroxSledAccess = 'always';
@@ -1054,8 +1065,7 @@ function wireEventHandlers(): void {
     // (racePlanCalendarWeeks), so the plan's final week holds race day. Falls
     // back to the band default otherwise, which can outrun the actual race.
     // Mirrors triathlon-setup.ts.
-    const prevSec = current.previousHyroxTimeSec;
-    const band = prevSec != null ? bandFromTime(prevSec) : 'novice';
+    const band = setupBand(current) ?? 'novice';
     const raceDateIso = current.customRaceDate;
     patch.planDurationWeeks = raceDateIso
       ? (racePlanCalendarWeeks(raceDateIso) ?? 1)

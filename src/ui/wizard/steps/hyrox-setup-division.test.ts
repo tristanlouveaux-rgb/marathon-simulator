@@ -32,7 +32,8 @@ vi.mock('@/ui/page-flair', () => ({
   buildRingBackground: () => '', buildSunGlint: () => '', buildAtmosphereBase: () => '',
 }));
 
-import { renderHyroxSetup } from './hyrox-setup';
+import { renderHyroxSetup, setupBand } from './hyrox-setup';
+import { HYROX_TOTAL_PERCENTILE_TABLES } from '@/data/hyrox-population-distributions';
 
 function mount(onboarding: Partial<OnboardingState> = {}): void {
   h.store.state = {
@@ -121,5 +122,17 @@ describe('hyrox-setup: Pro note gives the athlete\'s own division loads', () => 
   it('no copy shows the unofficial doubles 10-second rule', () => {
     mount({ hyroxFormat: 'open_doubles', biologicalSex: 'female' });
     expect(document.body.textContent ?? '').not.toMatch(/10.?second/i);
+  });
+});
+
+describe('hyrox-setup: band-driven defaults use the onboarding banding rule', () => {
+  const p50 = (f: 'open_singles' | 'open_doubles') => HYROX_TOTAL_PERCENTILE_TABLES[f].find(([, p]) => p === 50)![0];
+  it('a doubles-median time for a doubles target bands like the singles median', () => {
+    expect(setupBand({ previousHyroxTimeSec: p50('open_doubles'), hyroxPreviousTimeFormat: 'open_doubles', hyroxFormat: 'open_doubles' }))
+      .toBe(setupBand({ previousHyroxTimeSec: p50('open_singles'), hyroxPreviousTimeFormat: 'open_singles', hyroxFormat: 'open_singles' }));
+  });
+  it('before the previous format is picked, the time as entered', () => {
+    expect(setupBand({ previousHyroxTimeSec: 75 * 60, hyroxFormat: 'open_doubles' })).toBe('advanced');
+    expect(setupBand({ hyroxFormat: 'open_doubles' })).toBeNull();
   });
 });
