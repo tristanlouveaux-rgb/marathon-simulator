@@ -17,7 +17,7 @@ import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
-import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT } from '@/calculations/hyrox-population';
+import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption } from '@/calculations/hyrox-population';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
 import { computeStationPotential } from '@/calculations/hyrox-station-potential';
@@ -363,13 +363,21 @@ function renderStationOrderRow(
   `;
 }
 
-/** Caption for the doubles "Your stations" card: the times are the pair's,
- *  scaled from singles by the percentile-matched ratio from the results data. */
-function doublesStationsCaption(prediction: HyroxPrediction): string {
+/** Caption for the doubles "Your stations" card: the times are the pair's.
+ *  Stations from tests or seed times are scaled from singles by the
+ *  percentile-matched ratio from the results data; splits from a doubles race
+ *  are already the pair's time and are used unscaled (teamTimeSplit). */
+export function doublesStationsCaption(prediction: Pick<HyroxPrediction, 'doubles' | 'stations'>): string {
   const ratio = prediction.doubles?.stationRatio;
-  const ratioClause = ratio != null
-    ? ` Each is your singles station time × ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data.`
-    : '';
+  const splitCount = prediction.stations.filter(l => l.teamTimeSplit).length;
+  let ratioClause = '';
+  if (ratio != null && splitCount === prediction.stations.length) {
+    ratioClause = ' Each is a split from your doubles race, used as is.';
+  } else if (ratio != null) {
+    const scaled = ` Stations from tests or seed times are your singles time × ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data.`;
+    const splits = splitCount > 0 ? ' Splits from your doubles race are already the pair\'s time and stay as they are.' : '';
+    ratioClause = scaled + splits;
+  }
   return `The pair's time at each station. Partners enter every station together and split the work inside it.${ratioClause} ${HYROX_DOUBLES_POOLING_NOTE}`;
 }
 
@@ -829,7 +837,7 @@ function buildHyroxHero(
             ${stalenessNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${stalenessNote}</div>` : ''}
             ${runPaceSourceNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${runPaceSourceNote}</div>` : ''}
             ${equivalentNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${equivalentNote}</div>` : ''}
-            <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">Calibrated against 89,868 real HYROX finishers from Seasons 4–6.</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">${hyroxForecastProvenanceCaption(hx.format as HyroxFormat)}</div>
           </div>
         </div>
       </div>

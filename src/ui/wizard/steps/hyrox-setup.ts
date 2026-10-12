@@ -269,7 +269,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
               </div>
               <p id="hx-division-hint" class="hx-hint">${divisionHintText(format, state.biologicalSex, state.hyroxDivision)}</p>
             </div>
-            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You run all 8 legs together and split the work inside every station. Training covers all 8 stations at half the weekly station volume.</p>
+            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You run all 8 legs together and split the work inside every station. Training covers all 8 stations.</p>
             <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">${proNoteText(format, state.biologicalSex, state.hyroxDivision)}</p>
             <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional: base first, race-specific second.</p>
           </div>

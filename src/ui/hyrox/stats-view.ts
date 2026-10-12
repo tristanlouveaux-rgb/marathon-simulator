@@ -270,7 +270,7 @@ export function renderHyroxStatsView(): void {
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
                 <div>
                   <div style="font-size:13px;color:var(--c-black)">Calibrated at Pro weights</div>
-                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your benchmarks were set at Pro-division weights. Default off. We'll add the heavier-weight slowdown on top of your times.</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your station tests were done at Pro-division weights. Off adds the heavier-weight slowdown on top of your test times. Splits from a logged race follow that race's weights.</div>
                 </div>
                 <button id="hx-pro-weights-toggle" data-on="${hx.benchmarksAtProWeights ? 'true' : 'false'}" style="flex-shrink:0;padding:7px 12px;border-radius:100px;border:1px solid ${hx.benchmarksAtProWeights ? 'var(--c-black)' : 'rgba(0,0,0,0.18)'};background:${hx.benchmarksAtProWeights ? 'var(--c-black)' : '#fff'};color:${hx.benchmarksAtProWeights ? '#FDFCF7' : 'var(--c-black)'};font-size:12px;cursor:pointer">${hx.benchmarksAtProWeights ? 'On' : 'Off'}</button>
               </div>

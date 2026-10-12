@@ -1,4 +1,5 @@
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
+import { hyroxMethodologyCaption } from '@/calculations/hyrox-population';
 
 // ─── Navigation ─────────────────────────────────────────────────────────────
 
@@ -87,7 +88,7 @@ const readinessSection = (): string => card('Readiness', `
 
 const hyroxSection = (): string => card('HYROX specifics', `
   ${para('HYROX time is the sum of eight 1 km run legs and eight stations. Run legs predict from your running VDOT, with a load-carry penalty applied if commute-run mode is active.')}
-  ${paraLast('Station times are calibrated against a 89,868-finisher results dataset (HYROX Seasons 4 to 6), scaled by your fitness tier and adjusted by recent strength-station session history.')}
+  ${paraLast(hyroxMethodologyCaption())}
 `);
 
 const limitationsSection = (): string => card('Limitations', `

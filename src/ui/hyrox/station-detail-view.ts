@@ -19,6 +19,7 @@ import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '@/ui/page-flair';
 import type { HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
+import { HYROX_PRO_STATION_MULTIPLIER } from '@/constants/hyrox-constants';
 import { predictHyroxRace, stationSinglesEquivalentSec } from '@/calculations/race-prediction.hyrox';
 import { getStationPercentile } from '@/calculations/hyrox-population';
 import { hyroxStationRaceStandard, hyroxLoadTierForState, hyroxWallBallTargetM, hyroxDivisionLabel } from '@/calculations/hyrox-division';
@@ -38,8 +39,11 @@ const SOURCE_LABEL: Record<StationTestEntry['source'], string> = {
 };
 
 function fmtMmSs(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60).toString().padStart(2, '0');
+  // Round first: doubles and Pro times are fractional, and rounding only the
+  // seconds part printed 119.6 s as "1:60".
+  const t = Math.round(sec);
+  const m = Math.floor(t / 60);
+  const s = (t % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
 }
 
@@ -109,7 +113,13 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
 
   const latest = history[history.length - 1] ?? null;
   const best = bestStationTime(s, station, fmt);
-  const seedSec = STATION_SEED_TIMES_SEC[hx.athleteBand][station];
+  // The band seed at the target's weights, as the predictor uses it (seeds
+  // are Open-weight; a Pro target gets the Pro multiplier). Singles terms: a
+  // doubles page labels it as the singles estimate, since the hero shows the
+  // pair's time.
+  const isProTarget = fmt === 'pro_singles' || fmt === 'pro_doubles';
+  const seedSec = STATION_SEED_TIMES_SEC[hx.athleteBand][station]
+    * (isProTarget ? (HYROX_PRO_STATION_MULTIPLIER[station] ?? 1) : 1);
   // Doubles lines are the pair's time; the seed-anchored percentile and the
   // fresh-test fade are singles comparisons.
   const isDoubles = fmt === 'open_doubles' || fmt === 'pro_doubles';
@@ -181,7 +191,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Stats</div>
       ${best ? statRow('Best', fmtMmSs(best.sec), fmtDate(best.dateISO)) : ''}
       ${latest ? statRow('Latest', fmtMmSs(latest.sec), fmtDate(latest.dateISO)) : ''}
-      ${statRow('Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
+      ${statRow(isDoubles ? 'Singles population estimate' : 'Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
       ${statRow('Race standard', hyroxStationRaceStandard(station, hyroxLoadTierForState(s), hyroxWallBallTargetM(s.biologicalSex, hx.division)), hyroxDivisionLabel(hx.format, s.biologicalSex, hx.division) ?? undefined)}
       ${first && history.length > 1 ? statRow('Since first test', improvementText, fmtDate(first.dateISO)) : ''}
       ${raceDaySec != null && latest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}

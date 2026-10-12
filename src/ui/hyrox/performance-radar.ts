@@ -175,7 +175,7 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
   // Provenance subtitle. These percentiles are estimates placed on the band
   // seed times; the results data has no per-station splits, so the radar must
   // not claim a results-data comparison (audit 2026-10-12).
-  const subtitle = 'Each spoke places your station time on the ability-band seed times. Estimates, not race results: the results data has no per-station splits. Further out is faster.';
+  const subtitle = 'Each spoke places your station time on the ability-band seed times. The results data has no per-station splits, so these are estimates. Further out is faster.';
 
   // Build the user polygon as a closed `<path>` so we can normalise its length
   // to 1 via `pathLength="1"` and animate stroke-dashoffset to draw it on. The

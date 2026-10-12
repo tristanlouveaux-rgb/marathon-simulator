@@ -129,6 +129,36 @@ export function hyroxPopulationCaption(format: HyroxFormat): string {
   return `HYROX results: ${n.toLocaleString('en-US')} ${hyroxFormatLabel(format)} finishers, women and men together, ${HYROX_POPULATION_SEASONS_LABEL}. ${HYROX_POPULATION_ERA_NOTE}${pooling}`;
 }
 
+/** Total finisher rows across every ingested format, for captions that
+ *  describe the whole dataset (sum of HYROX_FORMAT_FINISHER_COUNTS). */
+export function hyroxPopulationTotalFinishers(): number {
+  return Object.values(HYROX_FORMAT_FINISHER_COUNTS).reduce((a, n) => a + n, 0);
+}
+
+/**
+ * Provenance for a HYROX forecast: which parts come from the results data and
+ * which do not. Station times come from the athlete's benchmarks or the
+ * ability-band seed times, and run legs from running fitness; the results data
+ * supplies the finish percentiles and, for doubles, the doubles ratios
+ * (hyrox-doubles.ts). Count, seasons and era come from hyroxPopulationCaption.
+ */
+export function hyroxForecastProvenanceCaption(format: HyroxFormat): string {
+  const base = 'Station times use your benchmarks, or the ability-band seed times where a station is untested. Run legs follow your running fitness.';
+  if (format === 'pro_doubles') {
+    return `${base} The doubles station, Roxzone and run ratios come from the Open Doubles results. ${hyroxPopulationCaption('open_doubles')} ${hyroxPopulationCaption('pro_doubles')}`;
+  }
+  const fromData = format === 'open_doubles'
+    ? 'The doubles station, Roxzone and run ratios and the finish percentiles come from the results data.'
+    : 'Finish percentiles are placed on the results data.';
+  return `${base} ${fromData} ${hyroxPopulationCaption(format)}`;
+}
+
+/** Methodology-page summary of the HYROX forecast's sources, across formats. */
+export function hyroxMethodologyCaption(): string {
+  const n = hyroxPopulationTotalFinishers().toLocaleString('en-US');
+  return `Station times come from your station tests and race splits, or the ability-band seed times where a station is untested, and update from recent strength-station sessions. The HYROX results data (${n} finishers, ${HYROX_POPULATION_SEASONS_LABEL}) sets the finish percentiles and the doubles-to-singles ratios. It has no per-station splits, so station percentiles are estimates. ${HYROX_POPULATION_ERA_NOTE}`;
+}
+
 /** Human-readable label from a "faster than" percentile (0-100).
  *  Mirrors the headline precisely: "Faster than 99%" → "Top 1% globally".
  *  Falls back to descriptive text below the top-of-field range. */
