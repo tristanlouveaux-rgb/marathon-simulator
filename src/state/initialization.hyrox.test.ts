@@ -171,3 +171,28 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
     expect(getState().hyroxConfig!.athleteBand).toBe('intermediate');
   });
 });
+
+describe('initializeHyroxSimulator: Pro-weight splits and division', () => {
+  beforeEach(() => resetState());
+
+  it('splits from a Pro race are flagged as Pro-weight times (no second Pro multiplier)', () => {
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'pro_singles',
+      hyroxPreviousTimeFormat: 'pro_singles',
+    }));
+    expect(getState().hyroxConfig!.benchmarksAtProWeights).toBe(true);
+  });
+
+  it('splits from an Open race leave the flag unset', () => {
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'pro_singles',
+      hyroxPreviousTimeFormat: 'open_singles',
+    }));
+    expect(getState().hyroxConfig!.benchmarksAtProWeights).toBeUndefined();
+  });
+
+  it('copies the division pick to hyroxConfig.division', () => {
+    initializeHyroxSimulator(buildOnboarding({ hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' }));
+    expect(getState().hyroxConfig!.division).toBe('mixed');
+  });
+});

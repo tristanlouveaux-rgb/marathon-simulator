@@ -49,6 +49,7 @@ import { plannedHyroxSessionsPerWeek } from './hyrox-volume';
 import { stationInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 import { doublesRatioAt, doublesStationRatio, doublesBenchmarkIsTeamTime } from './hyrox-doubles';
+import { availableStations } from '@/workouts/hyrox-generators';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -591,11 +592,18 @@ function buildStationProjection(
     // will plug in here.
   };
 
+  // Stations the plan programmes: without the equipment (no sled track, no
+  // SkiErg / RowErg) the generators never schedule the station, so it banks
+  // no training gain (audit 2026-10-12: it used to project full gains).
+  const access = state.hyroxConfig?.stationAccess;
+  const programmed = access ? new Set(availableStations(access)) : null;
   const stationProjections: HyroxStationProjection[] = stationLines.map(line => {
     // Injury debit: a station only banks build time for the weeks its loaded
     // region(s) can train. Blocked region → 0 build weeks → no projected gain.
     // Unchanged when there is no active injury (returns full weeksRemaining).
-    const stationWeeks = stationInjuryBuildWeeks(state.injuryState, line.station, weeksRemaining);
+    const stationWeeks = programmed && !programmed.has(line.station)
+      ? 0
+      : stationInjuryBuildWeeks(state.injuryState, line.station, weeksRemaining);
     const result = applyHyroxStationHorizon(line.station, {
       ...horizonInput,
       weeks_remaining: stationWeeks,

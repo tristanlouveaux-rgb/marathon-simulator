@@ -312,3 +312,14 @@ describe('predictHyroxRace', () => {
     });
   });
 });
+
+describe('predictHyroxRace: Pro race splits are not multiplied twice', () => {
+  it('splits flagged at Pro weights are used as is for a Pro target', () => {
+    const p = predictHyroxRace(buildState({
+      format: 'pro_singles',
+      stationBenchmarksSingles: { sled_push: 260 },
+      benchmarksAtProWeights: true,
+    }))!;
+    expect(p.stations.find(l => l.station === 'sled_push')!.baseSec).toBe(260);
+  });
+});
