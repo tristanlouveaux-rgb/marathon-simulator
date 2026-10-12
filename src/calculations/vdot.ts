@@ -20,6 +20,14 @@ export function cv(meters: number, seconds: number): number {
 /**
  * Calculate race time from VDOT and distance
  * Uses bisection method for reliable convergence at all VDOT levels (including 70+)
+ *
+ * The bisection runs to its iteration cap: 50 halvings of the 2:30 to 15:00/km
+ * bracket leave an interval under 1e-10 s at the marathon, so vt is
+ * continuous in VDOT. Until 2026-10-12 it stopped once the VDOT error was
+ * under 0.05, which made vt a step function: 11644.83 s for every marathon
+ * VDOT from 49.000 to 49.004, then 11629.38 s from 49.005 (a 15 s step). A
+ * VDOT that drifts slightly day to day (PB ageing) then jumped forecasts.
+ * Numerical precision only; the Daniels model is unchanged.
  * @param km - Distance in kilometers
  * @param vdot - VDOT value
  * @returns Time in seconds
@@ -29,14 +37,11 @@ export function vt(km: number, vdot: number): number {
   let tLow = km * 2.5 * 60;   // 2:30/km pace (fast bound)
   let tHigh = km * 15 * 60;   // 15:00/km pace (slow bound)
 
-  const tolerance = 0.05;
   const maxIterations = 50;
 
   for (let i = 0; i < maxIterations; i++) {
     const tMid = (tLow + tHigh) / 2;
     const vdotMid = cv(meters, tMid);
-
-    if (Math.abs(vdot - vdotMid) < tolerance) return tMid;
 
     if (vdotMid < vdot) {
       tHigh = tMid;  // Need faster time

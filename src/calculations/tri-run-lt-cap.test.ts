@@ -260,7 +260,9 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
       refreshBlendedFitness(getMutableState());
       expect(engine[vo2]).toBeCloseTo(getState().v!, 6);
     }
-    expect(engine[44.3]).toBeCloseTo(39.35, 2);
+    // Watch 44.3 read 39.35 while vt stopped at a 0.05 VDOT error; it
+    // converges in time since 2026-10-12.
+    expect(engine[44.3]).toBeCloseTo(39.356, 2);
     expect(engine[44.4]).toBeCloseTo(39.37, 2);
     expect(engine[46]).toBeCloseTo(40.91, 2);
     expect(engine[48]).toBeCloseTo(42.97, 2);

@@ -421,10 +421,11 @@ export function predictFromVO2(targetDist: number, targetVDOT: number | null): n
   let lo = (targetDist / 500) * 60;
   let hi = (targetDist / 50) * 60;
 
+  // To the iteration cap, as vt (vdot.ts): an early stop at a VDOT error
+  // under 0.01 made this a step function of the VDOT (2026-10-12).
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
     const calc = vdot(mid);
-    if (Math.abs(calc - targetVDOT) < 0.01) return mid;
     calc < targetVDOT ? hi = mid : lo = mid;
   }
 

@@ -84,6 +84,34 @@ describe('VDOT Calculations', () => {
     });
   });
 
+  describe('vt converges in time: no steps in VDOT (2026-10-12)', () => {
+    // vt used to stop its bisection once the VDOT error was under 0.05, so it
+    // was a step function: 11644.83 s for every marathon VDOT from 49.000 to
+    // 49.004, then 11629.38 s from 49.005. A VDOT drifting a little day to day
+    // (PB ageing) then jumped the forecast's horizon delta by up to 15 s.
+    it('inverts cv to well under a millisecond at every race distance', () => {
+      for (const km of [5, 10, 21.0975, 42.195]) {
+        for (const v of [30, 38.7, 45, 49.004, 49.005, 55.2, 70, 82]) {
+          const t = vt(km, v);
+          expect(cv(km * 1000, t)).toBeCloseTo(v, 9);
+        }
+      }
+    });
+
+    it('a 0.001 VDOT step moves the marathon by a fraction of a second, every time', () => {
+      let prev = vt(42.195, 49);
+      for (let i = 1; i <= 40; i++) {
+        const t = vt(42.195, 49 + i * 0.001);
+        // Strictly faster for a higher VDOT, and about 0.2 s per 0.001.
+        expect(t).toBeLessThan(prev);
+        expect(prev - t).toBeLessThan(0.5);
+        prev = t;
+      }
+      // The old 15 s step between 49.004 and 49.005 is gone.
+      expect(vt(42.195, 49.004) - vt(42.195, 49.005)).toBeLessThan(0.5);
+    });
+  });
+
   describe('tv - Alias for vt with swapped args', () => {
     it('should return same result as vt', () => {
       const fromVt = vt(10, 50);
