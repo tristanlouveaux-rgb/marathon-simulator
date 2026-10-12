@@ -1,9 +1,11 @@
 /**
  * HYROX Performance Radar. 8-axis station percentile chart.
  *
- * Renders an octagon (one axis per HYROX station). Each axis represents the
- * percentile (0..100) the user beats vs the population: centre = bottom of
- * the field, outer ring = top 1%. The user's polygon is drawn over the grid.
+ * Renders an octagon (one axis per HYROX station). Each axis plots the
+ * ESTIMATED station percentile (getStationPercentile, 3..97): placed on the
+ * ability-band seed times, not on race results, because the results data has
+ * no per-station splits. Centre = slowest, outer ring = 100. The subtitle says
+ * so. The user's polygon is drawn over the grid.
  *
  * **Layout**: SVG holds the geometry (rings, axis spokes, user polygon, dots).
  * Station labels are HTML <span> elements absolutely-positioned via left%/top%
@@ -17,17 +19,13 @@
 
 import { HYROX_STATION_ORDER, STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
-import {
-  POPULATION_DATA_AVAILABLE,
-  LAST_VERIFIED_SEASON,
-} from '@/data/hyrox-population-distributions';
 import type { HyroxStation } from '@/types/triathlon';
-import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { stationSinglesEquivalentSec, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 
 interface RadarOpts {
   /** Per-station benchmark lines from the prediction. */
   stations: HyroxStationLine[];
-  /** Subset of stations to plot (pass active stations for doubles to get 4 axes). */
+  /** Subset of stations to plot (defaults to all 8). */
   axisOrder?: HyroxStation[];
 }
 
@@ -75,7 +73,8 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
   type AxisPoint = { station: HyroxStation; pct: number; label: string; calibrated: boolean };
   const points: AxisPoint[] = axes.map(st => {
     const line = opts.stations.find(l => l.station === st);
-    const pct = line ? getStationPercentile(st, line.baseSec) : 0;
+    // Seed anchors are singles times: doubles lines convert back first.
+    const pct = line ? getStationPercentile(st, stationSinglesEquivalentSec(line)) : 0;
     return {
       station: st,
       pct,
@@ -173,10 +172,10 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
     `;
   }
 
-  // Lead-with-data subtitle (when real population data is available).
-  const subtitle = POPULATION_DATA_AVAILABLE
-    ? `Each spoke shows where you sit on that station vs ${LAST_VERIFIED_SEASON.replace(/\s*\(.*\)\s*/, '').trim()} field. Outer ring is top 1%.`
-    : 'Each spoke shows where you sit on that station vs the population. Outer ring is top 1%.';
+  // Provenance subtitle. These percentiles are estimates placed on the band
+  // seed times; the results data has no per-station splits, so the radar must
+  // not claim a results-data comparison (audit 2026-10-12).
+  const subtitle = 'Each spoke places your station time on the ability-band seed times. Estimates, not race results: the results data has no per-station splits. Further out is faster.';
 
   // Build the user polygon as a closed `<path>` so we can normalise its length
   // to 1 via `pathLength="1"` and animate stroke-dashoffset to draw it on. The

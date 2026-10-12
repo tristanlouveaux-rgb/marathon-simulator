@@ -49,7 +49,8 @@ export interface StationSessionResult {
   benchmarkSec: number | null;
   /** benchmarkSec − bestSec (positive = faster than the benchmark). Null when no benchmark. */
   deltaSec: number | null;
-  /** "Faster than X%" of the field; null for non-race-pace sessions (not comparable). */
+  /** Estimated station percentile (getStationPercentile: seed-anchored, not
+   *  results data); null for non-race-pace sessions (not comparable). */
   percentile: number | null;
   /** Race-pace session AND time passes the sanity floor — may write the benchmark. */
   eligible: boolean;
