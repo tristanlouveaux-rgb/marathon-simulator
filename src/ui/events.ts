@@ -437,11 +437,6 @@ export function init(): void {
 }
 
 /**
- * Rate a workout
- * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
- * @param name - Display name for logging
- */
-/**
  * The HR zone profile for scoring a rated session (the RPE + HR flow, the
  * threshold-run LT estimate and the Z2 efficiency points): the lactate
  * threshold HEART RATE (s.ltHR, bpm) when known, as the Plan card's HR target
@@ -463,6 +458,8 @@ export function ratingHrProfile(
 
 /**
  * Rate a workout with combined RPE and optional HR data
+ * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
+ * @param name - Display name for logging
  */
 export function rate(
   workoutId: string,
