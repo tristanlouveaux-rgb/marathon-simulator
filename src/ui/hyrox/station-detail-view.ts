@@ -26,6 +26,7 @@ import { hyroxStationRaceStandard, hyroxLoadTierForState, hyroxWallBallTargetM, 
 import {
   getStationHistory,
   bestStationTime,
+  isRaceSplitSource,
   type HyroxFormat,
   type StationTestEntry,
 } from '@/calculations/hyrox-station-history';
@@ -135,7 +136,9 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
 
   // Race-day fade: how much slower the predicted race-day time is vs the latest
   // fresh test. ISSUE-195 Phase 1. Purely informational, no new math.
-  const fadePct = (latest && raceDaySec != null && latest.sec > 0)
+  // Only against a fresh test: a race split is already a race-day time.
+  const latestIsFreshTest = latest != null && !isRaceSplitSource(latest.source);
+  const fadePct = (latest && latestIsFreshTest && raceDaySec != null && latest.sec > 0)
     ? ((raceDaySec - latest.sec) / latest.sec) * 100
     : null;
 
@@ -194,7 +197,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
       ${statRow(isDoubles ? 'Singles population estimate' : 'Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
       ${statRow('Race standard', hyroxStationRaceStandard(station, hyroxLoadTierForState(s), hyroxWallBallTargetM(s.biologicalSex, hx.division)), hyroxDivisionLabel(hx.format, s.biologicalSex, hx.division) ?? undefined)}
       ${first && history.length > 1 ? statRow('Since first test', improvementText, fmtDate(first.dateISO)) : ''}
-      ${raceDaySec != null && latest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
+      ${raceDaySec != null && latest && latestIsFreshTest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
     </div>
   `;
 
