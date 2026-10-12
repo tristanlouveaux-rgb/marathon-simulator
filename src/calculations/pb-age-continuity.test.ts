@@ -1,7 +1,7 @@
 /**
- * The PB age weight and the PB floor move no forecast number in a step on a
- * PB's anniversary (Tristan, 2026-10-11). The low-volume PB-recency bands still
- * step at 1 and 2 years (KNOWN LIMITATION block below, open question).
+ * No forecast number steps on a PB's anniversary (Tristan, 2026-10-11): the PB
+ * age weight, the PB floor and the low-volume PB-recency factor are all
+ * continuous in the PB's age.
  *
  * The PB age weight is a smooth 3-year half-life (pbAgeWeight), and the
  * same-distance PB floor keeps w of its strength for a PB of weight w
@@ -33,6 +33,7 @@ import { getMutableState, getState, resetState } from '@/state/store';
 import { refreshBlendedFitness, predictStandardDistances, runningForecastForSessions } from './blended-fitness';
 import { initializeTriathlonSimulator } from '@/state/initialization.triathlon';
 import { predictTriathlonRace } from './race-prediction.triathlon';
+import { computeTriRaceReadiness } from './race-readiness';
 import { localMondayKey } from '@/utils/local-date';
 
 // One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
@@ -196,24 +197,30 @@ describe('one forecast: the plan preview equals Home (Tristan, 2026-10-11)', () 
 });
 
 /**
- * KNOWN LIMITATION, open question for Tristan (follow-up review 1, 2026-10-11).
- * Under 30 km a week the marathon-specificity penalty fires, and its PB-recency
- * scaling still uses step bands: the penalty's excess is scaled by 0.5 under
- * 365 days, 0.75 to 730 days, then 1.0 (inline in blendPredictions,
- * predictions.ts; RUN_PB_RECENCY_BANDS, race-readiness-targets.ts, for the
- * triathlon run leg). Measured with real initializers: marathon PB 3:15 with a
- * typed 20 km, today's time 13022.65 to 13181.49 s at 1 year and 13189.73 to
- * 13348.66 s at 2 years (the standard marathon prediction moves the same;
- * forecastTime does not). Ironman run leg with a typed 30 km: 12306 to 12378 s
- * and 12422 to 12495 s. Every other day moves under 2 s. The continuous rule is
- * a modelling decision; when it lands, the band-crossing pin below becomes the
- * same under-2-s check as every other day.
+ * The low-volume PB-recency factor is continuous (2026-10-12). Under 30 km a
+ * week the marathon-specificity penalty fires, and its PB-recency scaling used
+ * step bands until 2026-10-11: the penalty's excess scaled by 0.5 under 365
+ * days, 0.75 to 730 days, then 1.0 (inline in blendPredictions and
+ * RUN_PB_RECENCY_BANDS for the triathlon legs). Measured with real
+ * initializers before the fix: marathon PB 3:15 with a typed 20 km, today's
+ * time 13022.65 to 13181.49 s at 1 year and 13189.73 to 13348.66 s at 2 years
+ * (the standard marathon prediction moved the same; forecastTime did not).
+ * Ironman run leg with a typed 30 km: 12306 to 12378 s and 12422 to 12495 s.
+ * The factor is now the line through the rule's values at 0, 365 and 730 days
+ * (pbRecencyPenaltyFactor, one function for every site), so each day across
+ * both edges moves under 2 s, and never faster with age.
  */
-describe('KNOWN LIMITATION: the low-volume PB-recency bands step at 1 and 2 years', () => {
-  /** True when one day older crosses a recency band edge (365 or 730 days). */
-  const crossesBand = (a: number, b: number) => [365, 730].some(edge => a < edge && b >= edge);
-
-  function walk(read: (ageDays: number) => Record<string, number>, stepped: string[]): void {
+describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 years', () => {
+  /**
+   * Walk day by day across 365 and 730 days. Every value: never faster with
+   * age, and each day under 2 s (the old band edge moved the marathon about
+   * 159 s and the Ironman run leg 72 s). `wholeSecond` keys are race times
+   * the triathlon predictor rounds twice (computeRaceTime rounds each leg,
+   * then predictTriathlonRace scales it by the readiness penalty and rounds
+   * again), so a smooth drift under 2 s a day can tick by up to 3 whole
+   * seconds; their unrounded counterparts carry the under-2-s check.
+   */
+  function walk(read: (ageDays: number) => Record<string, number>, wholeSecond: string[] = []): void {
     for (const edge of [365, 730]) {
       const days = [-3, -2, -1, 0, 1, 2, 3].map(d => edge + d);
       const snaps = days.map(read);
@@ -222,28 +229,37 @@ describe('KNOWN LIMITATION: the low-volume PB-recency bands step at 1 and 2 year
           const step = snaps[i][k] - snaps[i - 1][k];
           // Older PB: never faster.
           expect(step).toBeGreaterThanOrEqual(-1e-6);
-          if (stepped.includes(k) && crossesBand(days[i - 1], days[i])) {
-            // Pinned step (about 159 s for the marathon, 72 s for the Ironman
-            // run leg). Flip to toBeLessThan(2) once the rule is decided.
-            expect(step).toBeGreaterThan(30);
-          } else {
-            expect(step).toBeLessThan(2);
-          }
+          if (wholeSecond.includes(k)) expect(step).toBeLessThanOrEqual(3);
+          else expect(step).toBeLessThan(2);
         }
       }
     }
   }
 
-  it('marathon PB 3:15, typed 20 km a week: today\'s time and the standard marathon step; the forecast does not', () => {
+  it('marathon PB 3:15, typed 20 km a week: today\'s time, the standard marathon and the forecast', () => {
     const c: Case = { label: 'marathon PB 3:15, typed 20 km a week', rd: 'marathon', pbs: { m: 11700 }, key: 'm', seed: TYPED_20 };
     walk(ageDays => {
       const r = run(c, ageDays);
       return { brt: r.refresh.brt, stdMarathon: r.refresh.std.marathon!, ft: r.refresh.ft, onboardBrt: r.onboard.brt };
-    }, ['brt', 'stdMarathon', 'onboardBrt']);
+    });
   });
 
-  it('Ironman run leg, marathon PB 3:15, typed 30 km a week: the run leg steps', () => {
-    walk(ageDays => {
+  it('the penalty still eases with a recent PB: a PB a year old reads faster than one two years old', () => {
+    // The factor keeps the rule's direction and its anchors (0.5 today, 0.75
+    // at a year, full penalty from two years), so the low-volume marathon time
+    // rises with the PB's age; after two years only the PB age weight moves it.
+    const c: Case = { label: 'marathon PB 3:15, typed 20 km a week', rd: 'marathon', pbs: { m: 11700 }, key: 'm', seed: TYPED_20 };
+    const at = (d: number) => run(c, d).refresh.brt;
+    const [d0, d1, d2, d3] = [30, 365, 730, 1100].map(at);
+    expect(d1).toBeGreaterThan(d0);
+    expect(d2).toBeGreaterThan(d1);
+    expect(d3).toBeGreaterThanOrEqual(d2);
+  });
+
+  it('Ironman, marathon PB 3:15, typed 30 km a week: the run penalty, the run leg, today\'s run leg and the totals', () => {
+    // Before 2026-10-12 the race-day run leg stepped 72 s at each edge and
+    // today's run leg (the full readiness penalty) about 490 s.
+    const readIm = (ageDays: number) => {
       resetState();
       Object.assign(getMutableState(), { detectedWeeklyKm: 30, weeklyVolumeConfirmed: true });
       expect(initializeTriathlonSimulator({
@@ -253,7 +269,34 @@ describe('KNOWN LIMITATION: the low-volume PB-recency bands step at 1 and 2 year
       } as OnboardingState).success).toBe(true);
       refreshBlendedFitness(getMutableState());
       const p = predictTriathlonRace(getState())!;
-      return { runSec: p.runSec, totalSec: p.totalSec };
-    }, ['runSec', 'totalSec']);
+      const runSteps = p.legWaterfall!.run;
+      return {
+        p,
+        runPenalty: computeTriRaceReadiness(getState(), 'ironman').run.penaltyMultiplier,
+        runLegUnrounded: runSteps[runSteps.length - 1].toSec,
+      };
+    };
+    walk(ageDays => {
+      const r = readIm(ageDays);
+      expect(r.p.currentRunSec).toBeGreaterThan(r.p.runSec);
+      return {
+        runLegUnrounded: r.runLegUnrounded,
+        runSec: r.p.runSec,
+        totalSec: r.p.totalSec,
+        currentRunSec: r.p.currentRunSec!,
+        currentTotalSec: r.p.currentTotalSec!,
+      };
+    }, ['runSec', 'totalSec', 'currentRunSec', 'currentTotalSec']);
+    // The run readiness penalty: one day moves it by at most the factor's
+    // daily slope (0.5 / 730) times the largest excess it scales (Ironman
+    // 0.15, MAX_PENALTY_BY_DISTANCE), across both old edges.
+    for (const edge of [365, 730]) {
+      const pens = [-3, -2, -1, 0, 1, 2, 3].map(d => readIm(edge + d).runPenalty);
+      expect(pens[0]).toBeGreaterThan(1);
+      for (let i = 1; i < pens.length; i++) {
+        expect(pens[i] - pens[i - 1]).toBeGreaterThanOrEqual(0);
+        expect(pens[i] - pens[i - 1]).toBeLessThanOrEqual(0.15 * 0.5 / 730 + 1e-12);
+      }
+    }
   });
 });
