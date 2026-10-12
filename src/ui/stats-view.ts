@@ -30,7 +30,7 @@ import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
 import { getPhysiologicalVdot, resolveRunningVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
-import { pbAgeCaptionText } from './pb-age-caption';
+import { pbAgeCaptionText, standardDistancesDisplayed } from './pb-age-caption';
 import { refreshBlendedFitness, predictStandardDistances } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
@@ -3304,8 +3304,9 @@ export function buildForecastTimesCard(s: SimulatorState): string {
 
   // PB age caption (pbAgeCaptionText, shared with the Forecast tabs): the PB
   // list shows each PB exactly as entered or synced, while these estimates
-  // give an old PB less weight. Shown only when ageing changes them.
-  const pbAgeText = hasBlendInputs ? pbAgeCaptionText(s, 'these estimates') : null;
+  // give an old PB less weight. Shown only when ageing moves one of them by
+  // at least a second.
+  const pbAgeText = hasBlendInputs ? pbAgeCaptionText(s, 'these estimates', standardDistancesDisplayed) : null;
   const pbAgeCaption = pbAgeText
     ? `<div style="font-size:11px;color:var(--c-muted);margin-top:8px">${pbAgeText}</div>`
     : '';

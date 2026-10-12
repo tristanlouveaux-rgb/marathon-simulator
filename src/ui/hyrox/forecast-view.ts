@@ -27,6 +27,7 @@ import { isInjuryActive } from '@/ui/injury/modal';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -604,7 +605,8 @@ function renderHyroxInjuryNote(s: SimulatorState): string {
  */
 export function hyroxRunPaceSourceNote(s: SimulatorState, source: HyroxPrediction['runPaceSource']): string {
   if (source === 'derived') {
-    const pbAge = pbAgeCaptionText(s, 'the run pace');
+    // Only when ageing moves the run pace (whole s/km) by at least a second.
+    const pbAge = pbAgeCaptionText(s, 'the run pace', st => [deriveHyroxRunPace(st).paceSecKm]);
     return `Run pace updated from your VDOT.${pbAge ? ` ${pbAge}` : ''}`;
   }
   if (source === 'seed') return 'Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.';

@@ -24,6 +24,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { defaultOnboardingState } from '@/types/onboarding';
 import type { SimulatorState } from '@/types';
 import { initializeSimulator } from '@/state/initialization';
+import { initializeHyroxSimulator } from '@/state/initialization.hyrox';
 import { getMutableState, getState, resetState } from '@/state/store';
 import { predictStandardDistances } from '@/calculations/blended-fitness';
 import { blendPredictions } from '@/calculations/predictions';
@@ -113,13 +114,37 @@ describe('Stats race estimates are the Forecast tab\'s', () => {
   });
 });
 
+/** HYROX athlete, 5K 19:00 one year old and half 1:32 three years old. */
+function hyroxAthlete(typedKm: number | undefined): SimulatorState {
+  resetState();
+  Object.assign(getMutableState(), {
+    unitPref: 'km',
+    ...(typedKm != null ? { detectedWeeklyKm: typedKm, weeklyVolumeConfirmed: true } : {}),
+  });
+  expect(initializeHyroxSimulator({
+    trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
+    triTimeAvailableHoursPerWeek: 8, pbs: { k5: 1140, h: 5520 },
+    pbDates: {
+      k5: new Date(Date.now() - 365 * DAY_MS).toISOString(),
+      h: new Date(Date.now() - 3 * 365 * DAY_MS).toISOString(),
+    },
+  } as unknown as OnboardingState).success).toBe(true);
+  return getState();
+}
+
 describe('HYROX run pace from VDOT: the PB-age caption', () => {
-  it('a derived run pace carries it under the volume gate; a population seed or no volume does not', () => {
-    const aged = { ...runner(40), eventType: 'hyrox' } as SimulatorState;
+  it('a derived run pace carries it when ageing moves the pace a second; a population seed or no volume does not', () => {
+    const aged = hyroxAthlete(40);
     expect(hyroxRunPaceSourceNote(aged, 'derived')).toBe(`Run pace updated from your VDOT. ${CAPTION} in the run pace.`);
     expect(hyroxRunPaceSourceNote(aged, 'seed')).not.toContain(CAPTION);
     expect(hyroxRunPaceSourceNote(aged, 'user')).toBe('');
-    const noVolume = { ...runner(undefined), eventType: 'hyrox' } as SimulatorState;
-    expect(hyroxRunPaceSourceNote(noVolume, 'derived')).toBe('Run pace updated from your VDOT.');
+    expect(hyroxRunPaceSourceNote(hyroxAthlete(undefined), 'derived')).toBe('Run pace updated from your VDOT.');
+  });
+
+  it('no caption when the run pace does not come from the HYROX config (it reads the population seed)', () => {
+    // A running state carries no hyroxConfig, so deriveHyroxRunPace returns the
+    // seed whatever the PBs' age: ageing moves nothing this note speaks for.
+    const noConfig = { ...runner(40), eventType: 'hyrox' } as SimulatorState;
+    expect(hyroxRunPaceSourceNote(noConfig, 'derived')).toBe('Run pace updated from your VDOT.');
   });
 });

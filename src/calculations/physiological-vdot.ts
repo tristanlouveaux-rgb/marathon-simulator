@@ -231,6 +231,9 @@ export function pbAgeYears(dateISO: string | null | undefined, now: Date = new D
   return (now.getTime() - ts) / (365.25 * DAY_MS);
 }
 
+/** Set only inside withPbAgeingSuspended (below). */
+let pbAgeingSuspended = false;
+
 /**
  * Age weights for the PBs in `pbs`. PB dates are stored beside the onboarding
  * PBs (`onboarding.pbDates` with `onboarding.pbs`), so a date belongs to a PB
@@ -250,10 +253,29 @@ export function pbAgeWeightsFor(
   for (const k of PB_KEYS) {
     const t = pbs[k];
     if (!(t != null && t > 0)) continue;
-    const date = datedPbs[k] === t ? dates[k] : undefined;
+    const date = !pbAgeingSuspended && datedPbs[k] === t ? dates[k] : undefined;
     out[k] = pbAgeWeight(date, now);
   }
   return out;
+}
+
+/**
+ * Run `fn` as if no PB had aged: every PB weighs 1 in pbAgeWeightsFor, as an
+ * undated PB does. pbAgeWeightsFor is the one source of PB age weights (the
+ * gated model weights, PB capacity, the LT derivation, the blend, the floors),
+ * so `fn` sees the unaged model and nothing else changes: the PB-recency
+ * factor reads the dates itself and still applies. For the PB-age caption's
+ * counterfactual (does ageing change a displayed number?, pb-age-caption.ts).
+ * Synchronous; the previous setting is restored when `fn` returns or throws.
+ */
+export function withPbAgeingSuspended<T>(fn: () => T): T {
+  const prev = pbAgeingSuspended;
+  pbAgeingSuspended = true;
+  try {
+    return fn();
+  } finally {
+    pbAgeingSuspended = prev;
+  }
 }
 
 /** Age weights for the PBs the physiology chain reads (`effectivePhysiologyPbs`). */

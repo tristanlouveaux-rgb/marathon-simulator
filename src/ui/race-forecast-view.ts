@@ -21,7 +21,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
 import { crossTrainingPredictionCredit } from '@/calculations/predictions';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
-import { pbAgeCaptionText } from './pb-age-caption';
+import { pbAgeCaptionText, standardDistancesDisplayed } from './pb-age-caption';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
 import { formatKm, formatPace, fpModel } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
@@ -278,8 +278,14 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
   const courseFactors = s.forecastCourseFactors ?? [];
   // PB age caption under the header (pbAgeCaptionText, shared with the Stats
   // race estimates): the forecast gives an old PB less weight than its
-  // displayed time suggests.
-  const pbAgeText = pbAgeCaptionText(s, 'this forecast');
+  // displayed time suggests. Shown only when ageing moves a number this tab
+  // displays by at least a second: the header forecast (course-adjusted by a
+  // fixed ratio when a race profile exists) or today's time on the chart.
+  const adjustRatio = s.forecastTimeAdjusted && s.forecastTime ? s.forecastTimeAdjusted / s.forecastTime : 1;
+  const pbAgeText = pbAgeCaptionText(s, 'this forecast', st => [
+    st.forecastTime != null ? st.forecastTime * adjustRatio : null,
+    st.blendedRaceTimeSec,
+  ]);
 
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
@@ -610,8 +616,9 @@ function getStandardForecastHTML(s: SimulatorState, animate: boolean): string {
   // (`predictStandardDistances`) will still produce times off the fallback, but
   // we don't show them until a PB / device VO2 / HR / observed LT lands.
   const hasAny = hasRealRunningFitnessSignal(s);
-  // PB age caption (pbAgeCaptionText), appended to the footnote.
-  const stdPbAgeText = hasAny ? pbAgeCaptionText(s, 'these predictions') : null;
+  // PB age caption (pbAgeCaptionText), appended to the footnote when ageing
+  // moves one of the four predictions by at least a second.
+  const stdPbAgeText = hasAny ? pbAgeCaptionText(s, 'these predictions', standardDistancesDisplayed) : null;
 
   const body = hasAny
     ? `
