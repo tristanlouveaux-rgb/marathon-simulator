@@ -70,9 +70,11 @@ describe('HYROX Tempo Run auto-matches its synced run', () => {
   });
 
   it('a 36-minute / 6.5 km run on the Tempo Run day completes the Tempo Run slot', () => {
+    // Intermediate band from a previous finish time: since 2026-10-12 a
+    // first-timer without running data is banded beginner (no tempo in base).
     initializeHyroxSimulator({
       trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
-      triTimeAvailableHoursPerWeek: 8,
+      triTimeAvailableHoursPerWeek: 8, previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles',
     } as any);
     const s = getMutableState();
     expect(s.eventType).toBe('hyrox');

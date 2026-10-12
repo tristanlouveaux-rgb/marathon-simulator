@@ -27,6 +27,8 @@ vi.stubGlobal('localStorage', localStorageMock);
 vi.stubGlobal('alert', vi.fn());
 
 import { initializeHyroxSimulator } from './initialization.hyrox';
+import { hasRealRunningFitnessSignal, resolveRunningVdot } from '@/calculations/physiological-vdot';
+import { bandFromVdot } from '@/calculations/hyrox-staleness';
 import { getMutableState, getState } from './store';
 
 const SAMPLE_SPLITS = {
@@ -160,14 +162,46 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
-  it('missing prevFmt → falls back to experience-level band', () => {
+  it('missing prevFmt → first-timer placement (beginner tier without running data)', () => {
     initializeHyroxSimulator(buildOnboarding({
       hyroxFormat: 'open_singles',
       hyroxPreviousTimeFormat: undefined,
       previousHyroxTimeSec: 4500,
       hyroxPreviousStationSplits: undefined,
     }));
-    // prevFormatKnown=false → adjustedPrevTimeSec=null → bandFromExperience('intermediate')
-    expect(getState().hyroxConfig!.athleteBand).toBe('intermediate');
+    // prevFormatKnown=false → adjustedPrevTimeSec=null → firstTimerBand. The
+    // onboarding experienceLevel ('intermediate') is not read: the HYROX flow
+    // never asks it. Before 2026-10-12 this read 'intermediate'.
+    expect(getState().hyroxConfig!.athleteBand).toBe('total_beginner');
+  });
+});
+
+describe('initializeHyroxSimulator — first-timer placement (parameter sheet levels.mapping, 2026-10-12)', () => {
+  beforeEach(() => resetState());
+
+  it('no previous race and no running data → total_beginner (beginner tier), whatever experienceLevel says', () => {
+    for (const experienceLevel of ['intermediate', 'advanced', 'competitive'] as const) {
+      resetState();
+      initializeHyroxSimulator(buildOnboarding({
+        previousHyroxTimeSec: undefined,
+        hyroxPreviousTimeFormat: undefined,
+        hyroxPreviousStationSplits: undefined,
+        experienceLevel,
+      }));
+      expect(getState().hyroxConfig!.athleteBand).toBe('total_beginner');
+    }
+  });
+
+  it('no previous race, a real running-fitness signal (10K PB) → the VDOT band (bandFromVdot)', () => {
+    initializeHyroxSimulator(buildOnboarding({
+      previousHyroxTimeSec: undefined,
+      hyroxPreviousTimeFormat: undefined,
+      hyroxPreviousStationSplits: undefined,
+      pbs: { k10: 2700 }, // 45:00
+    } as Partial<OnboardingState>));
+    const s = getState();
+    expect(hasRealRunningFitnessSignal(s)).toBe(true);
+    expect(s.hyroxConfig!.athleteBand).toBe(bandFromVdot(resolveRunningVdot(s)));
+    expect(s.hyroxConfig!.athleteBand).not.toBe('total_beginner');
   });
 });

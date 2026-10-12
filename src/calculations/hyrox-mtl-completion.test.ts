@@ -93,7 +93,9 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
   it('three sessions matched by matchAndAutoComplete sum to their planned MTL', () => {
     setState(hyroxState());
     const wk = getMutableState().wks[0];
-    const picks = ['Tempo Run', 'Station Circuit', 'Easy Run'].map(n => wk.triWorkouts!.find(w => w.n === n)!);
+    // Week 1 since generator v18: the assessment (the week's station session),
+    // the tempo run and the long run.
+    const picks = ['Tempo Run', 'HYROX Assessment', 'Long Run'].map(n => wk.triWorkouts!.find(w => w.n === n)!);
     expect(picks.every(w => (w.musculoTendonLoad ?? 0) > 0)).toBe(true);
 
     matchAndAutoComplete(picks.map((w, i) => rowFor(w, `strava-${i}`)));
@@ -121,8 +123,8 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
 
     const week2 = advanceAndRegenerateWeek2(s);
     expect(s.wks[1].ctlRatio).toBeUndefined();
-    expect(plannedMinutes(week2)).toBe(fullWeek2); // 220 min; was cut to 172
-    expect(fullWeek2).toBe(220);
+    expect(plannedMinutes(week2)).toBe(fullWeek2); // 170 min (generator v18); a stamped ratio would cut it
+    expect(fullWeek2).toBe(170);
   });
 
   it('a week with nothing done still reads 0 and still re-anchors next week down', () => {
@@ -140,7 +142,7 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     setState(hyroxState());
     const st = getMutableState();
     const wk = st.wks[0];
-    const circuit = wk.triWorkouts!.find(w => w.n === 'Station Circuit')!;
+    const circuit = wk.triWorkouts!.find(w => w.n === 'HYROX Assessment')!; // week 1's station session
 
     matchAndAutoComplete([rowFor(circuit, 'strava-st')]);
 
@@ -153,7 +155,7 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
   it('a session rated done with no activity record stays uncounted', () => {
     const s = hyroxState();
     const wk = s.wks[0];
-    const easy = wk.triWorkouts!.find(w => w.n === 'Easy Run')!;
+    const easy = wk.triWorkouts!.find(w => w.n === 'Long Run')!; // week 1's easy run since generator v18
     wk.rated[easy.id!] = 4;
     expect(computeWeekActualMTL(wk)).toBe(0);
   });

@@ -9,9 +9,10 @@
  *   - technique circuits without the eccentric-heavy or sled stations
  *     (RACE_WEEK_EXCLUDED_STATIONS), at least 3 days out;
  *   - easy runs only in the last 2 days; nothing on or after race day;
- *   - race-week volume within the existing taper multiplier (0.30 of the
- *     weekly hours) unless the existing session floors hold it above, and then
- *     never above the week before.
+ *   - race-week volume within the taper (since 2026-10-12: taperFraction,
+ *     0.55 of the reference week's planned minutes, the last loaded week)
+ *     unless the session floors hold it above, and then never above the week
+ *     before.
  *   - review 2026-10-08: the primer takes running's primer day (Tuesday when 3
  *     to 5 days out, else the latest window day: 3 days out for every Monday
  *     to Wednesday race) and easy runs the latest free days, so the last
@@ -57,6 +58,8 @@ import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
 import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from '@/workouts/race-day-rules';
 import { firstTrackedDow } from '@/ui/workout-status';
 import { RACE_WEEK_EXCLUDED_STATIONS, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
+import { taperFraction } from '@/workouts/phases';
+import { isFourWeekCycleDeloadWeek } from '@/workouts/plan_engine';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
 import type { AbilityBand } from '@/types/triathlon';
@@ -75,12 +78,22 @@ function at(localIso: string): void {
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+/** Previous open-singles finish time that bands an athlete (HYROX_TIME_TO_BAND_THRESHOLDS);
+ *  a first-timer without running data is total_beginner (generator v18). */
+const BAND_PREV_SEC: Record<AbilityBand, number | null> = {
+  total_beginner: null, beginner: 7800, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
+};
+function bandOnboarding(band: AbilityBand): Partial<OnboardingState> {
+  const sec = BAND_PREV_SEC[band];
+  return sec == null ? {} : { previousHyroxTimeSec: sec, hyroxPreviousTimeFormat: 'open_singles' } as Partial<OnboardingState>;
+}
+
 function build(over: Partial<OnboardingState>): SimulatorState {
   resetState();
   initializeHyroxSimulator({
     ...defaultOnboardingState, name: 'QA', currentStep: 'initializing',
     trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
-    triTimeAvailableHoursPerWeek: 8, ...over,
+    triTimeAvailableHoursPerWeek: 8, ...bandOnboarding('intermediate'), ...over,
   } as OnboardingState);
   return getState();
 }
@@ -146,49 +159,60 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   }
   const days = (wk.triWorkouts ?? []).map(w => w.dayOfWeek);
   if (new Set(days).size !== days.length) out.push('two sessions on one day');
-  // Race-week volume: the existing taper multiplier (0.30 of the weekly hours,
-  // plan_engine.hyrox phaseMultiplier). Where the existing session floors
-  // (20-min runs, 35-min and 2-round circuits) hold a low-hours week above it,
-  // never above the week before either.
-  const budget = (s.hyroxConfig?.weeklyHoursAvailable ?? 0) * 0.30 * 60;
+  // Race-week volume: the taper fraction of the reference week (the last
+  // loaded week: not a taper or deload week; taperFraction, 0.55 for race
+  // week). Where the session floors (20-min runs, 35-min and 2-round
+  // circuits) hold a low-hours week above it, never above the week before.
+  let taperStart = tw;
+  while (taperStart > 1 && s.wks[taperStart - 2].ph === 'taper') taperStart--;
+  let refMin = (s.hyroxConfig?.weeklyHoursAvailable ?? 0) * 60;
+  for (let i = taperStart - 2; i >= 0; i--) {
+    if (s.wks[i].ph !== 'taper' && !isFourWeekCycleDeloadWeek(i + 1, s.wks[i].ph)) { refMin = minutes(s.wks[i]); break; }
+  }
+  const budget = Math.round(taperFraction(tw - taperStart + 1, tw - taperStart + 1) * refMin);
   const before = tw > 1 ? minutes(s.wks[tw - 2]) : Infinity;
   if (minutes(wk) > Math.max(budget, before)) out.push(`race week ${minutes(wk)} min above the ${budget}-min budget and the week before (${before})`);
+  if (minutes(wk) > before) out.push(`race week ${minutes(wk)} min above the week before (${before})`);
   return out;
 }
 
 describe('scenario hyrox: Saturday race in week 12', () => {
-  it('race week is the tempo primer, two light circuits and two easy runs', () => {
+  // Generator v18 (2026-10-12): intermediate tier (1:30:00 open singles), one
+  // station session a week, a 2-week taper at 0.70 / 0.55 of the reference
+  // week. Race week keeps the reference week's two runs (the tempo primer and
+  // an easy run) and its one station session as a light circuit.
+  it('race week is the tempo primer, a light circuit and an easy run the day before', () => {
     at('2026-10-08T12:00:00');
     const s = build({ customRaceDate: '2026-12-26' });
     expect(s.tw).toBe(12);
     const race = s.wks[11].triWorkouts ?? [];
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
-      'Mon hyrox_station_technique',
       'Tue hyrox_run_tempo',
       'Wed hyrox_station_technique',
-      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
-    // The light circuits keep the ergs and the farmer carry.
+    // The light circuit keeps the ergs and the farmer carry.
     for (const w of race.filter(isStation)) {
       expect((w.hyroxComponents ?? []).map(c => c.type).sort()).toEqual(['farmer_carry', 'row_erg', 'ski_erg']);
     }
-    // Race-week volume within the existing taper multiplier (0.30 x 8 h).
-    expect(minutes(s.wks[11])).toBeLessThanOrEqual(0.30 * 8 * 60);
-    // The week before is unchanged: its Mini Brick stays (8 days out).
-    expect((s.wks[10].triWorkouts ?? []).some(w => w.t === 'hyrox_mini_brick')).toBe(true);
+    // The run the day before the race is an easy jog of 20 min or less.
+    expect(race.find(w => w.dayOfWeek === 4)!.estimatedDurationMin).toBeLessThanOrEqual(20);
+    // Race-week volume within 0.55 of the reference week (week 10, peak).
+    expect(minutes(s.wks[11])).toBeLessThanOrEqual(0.55 * minutes(s.wks[9]));
+    // The week before keeps its Mini Brick (8 days out) and its long run (7 days out).
+    expect((s.wks[10].triWorkouts ?? []).some(w => w.t === 'hyrox_mini_brick' && w.dayOfWeek === 4)).toBe(true);
+    expect((s.wks[10].triWorkouts ?? []).find(w => w.n === 'Long Run')?.dayOfWeek).toBe(5);
   });
 
   it('without ergs the race week has no station circuit; the circuit slots are left out', () => {
     at('2026-10-08T12:00:00');
     const s = build({ customRaceDate: '2026-12-26', hyroxHasSkiErg: false, hyroxHasRowErg: false } as Partial<OnboardingState>);
     const race = s.wks[11].triWorkouts ?? [];
-    // Before: Mon easy, Tue tempo, Wed easy, Thu easy, Fri easy (the two
-    // circuit slots as easy runs), 5 runs on 5 days in a row.
+    // Before (2026-10-08): Mon easy, Tue tempo, Wed easy, Thu easy, Fri easy
+    // (the two circuit slots as easy runs), 5 runs on 5 days in a row.
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Tue hyrox_run_tempo',
-      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
     expect(runMinutes(s.wks[11])).toBeLessThanOrEqual(runMinutes(s.wks[10]));
@@ -197,15 +221,14 @@ describe('scenario hyrox: Saturday race in week 12', () => {
 });
 
 describe('a Monday to Wednesday race: the primer 3 days out, the last session at most 3 days out', () => {
-  it('beginner, 5 h, Wednesday race 18 November: circuits, an easy run, then the Sunday primer', () => {
+  it('beginner, 5 h, Wednesday race 18 November: a circuit, an easy run, then the Sunday primer', () => {
     at('2026-10-04T12:00:00');
-    const s = build({ customRaceDate: '2026-11-18', experienceLevel: 'beginner', triTimeAvailableHoursPerWeek: 5 });
+    const s = build({ customRaceDate: '2026-11-18', experienceLevel: 'beginner', triTimeAvailableHoursPerWeek: 5, ...bandOnboarding('beginner') });
     const tw = planTrainingWeeks(s);
     // Before: Mon easy, Tue circuit, Wed circuit, Fri tempo (5 days out); Sat
     // to Tue empty. Running's Wednesday race holds a Sunday primer.
     expect((s.wks[tw - 1].triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Wed hyrox_station_technique',
-      'Fri hyrox_station_technique',
       'Sat hyrox_run_easy',
       'Sun hyrox_run_tempo',
     ]);
@@ -249,6 +272,7 @@ describe('every race weekday, band, format, hours budget and station access', ()
                 const s = build({
                   customRaceDate: race, experienceLevel: band, triTimeAvailableHoursPerWeek: hrs, hyroxFormat: fmt,
                   hyroxHasSkiErg: ergs, hyroxHasRowErg: ergs,
+                  previousHyroxTimeSec: undefined, hyroxPreviousTimeFormat: undefined, ...bandOnboarding(band),
                 } as Partial<OnboardingState>);
                 plans++;
                 for (const v of raceWeekViolations(s, race)) found.push(`${race} ${band} ${hrs}h ${fmt} ergs=${ergs}: ${v}`);

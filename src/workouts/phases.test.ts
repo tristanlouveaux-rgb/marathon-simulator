@@ -156,7 +156,13 @@ describe('taper-first allocation for plans shorter than one week of each phase',
       expect(computeTriPlanPhases(d, 2).map(w => w.ph), d).toEqual(['peak', 'taper']);
     }
     expect(computeHyroxPlanPhases(1).map(w => w.ph)).toEqual(['taper']);
-    expect(computeHyroxPlanPhases(2).map(w => w.ph)).toEqual(['peak', 'taper']);
+    // HYROX tapers 2 weeks at every length that holds them (HYROX_TAPER_WEEKS_MIN,
+    // 2026-10-12), as the running marathon's 2-week block does.
+    expect(computeHyroxPlanPhases(2).map(w => w.ph)).toEqual(['taper', 'taper']);
+    expect(computeHyroxPlanPhases(3).map(w => w.ph)).toEqual(['peak', 'taper', 'taper']);
+    for (let n = 3; n <= 24; n++) {
+      expect(computeHyroxPlanPhases(n).filter(w => w.ph === 'taper'), `${n} weeks`).toHaveLength(2);
+    }
   });
 
   it('plans of 3 or more weeks are unchanged in every format', () => {
