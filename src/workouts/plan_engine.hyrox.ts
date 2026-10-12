@@ -32,6 +32,7 @@ import {
   computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS } from './hyrox-generators';
+import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
 import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
@@ -284,6 +285,8 @@ function generateWeekSessions(
     bricks:   hx.bricksPerWeek   ?? HYROX_WEEKLY_SESSIONS[band].bricks,
   };
   const bodyWeightKg = state.bodyWeightKg;
+  // Station loads for MTL follow the athlete's division (hyrox-division.ts).
+  const loadTier = hyroxLoadTierForState(state);
 
   // Hours available this week
   const mult = phaseMultiplier(phase, weekIndex, totalWeeks);
@@ -379,7 +382,7 @@ function generateWeekSessions(
   const raceWeekCircuitOk = !raceWeek || raceWeekCircuitStations(hx.stationAccess).length >= MIN_CIRCUIT_STATIONS;
   for (let i = 0; i < sessions.stations; i++) {
     if (needsAssessment && i === 0) {
-      workouts.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg }));
+      workouts.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier }));
       continue;
     }
     if (!raceWeekCircuitOk) continue;
@@ -394,6 +397,7 @@ function generateWeekSessions(
       bodyWeightKg,
       stationBenchmarks,
       raceWeek: !!raceWeek,
+      loadTier,
     }));
   }
 
@@ -414,6 +418,7 @@ function generateWeekSessions(
         slotIndex: i + weekIndex,
         bodyWeightKg,
         stationBenchmarks,
+        loadTier,
       }));
     }
   }

@@ -21,6 +21,7 @@ import {
 } from '@/workouts/hyrox-generators';
 import { scheduleHyroxWeek } from '@/workouts/scheduler.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
+import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
 import type { Workout } from '@/types/state';
 
 type SessionKind =
@@ -70,11 +71,13 @@ function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefine
     draft = generateHyroxStation({
       kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
+      loadTier: hyroxLoadTierForState(getState()),
     });
   } else {
     draft = generateHyroxBrick({
       kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
+      loadTier: hyroxLoadTierForState(getState()),
     });
   }
   return draft.musculoTendonLoad ?? 0;
@@ -250,6 +253,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       slotIndex,
       bodyWeightKg: ms.bodyWeightKg,
       stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
+      loadTier: hyroxLoadTierForState(ms),
     });
   } else {
     workout = generateHyroxBrick({
@@ -261,6 +265,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       slotIndex,
       bodyWeightKg: ms.bodyWeightKg,
       stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
+      loadTier: hyroxLoadTierForState(ms),
     });
   }
 

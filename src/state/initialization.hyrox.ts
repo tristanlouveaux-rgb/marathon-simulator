@@ -203,8 +203,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     }
 
     const baseMtlCap = HYROX_MTL_CAP[band];
-    // Doubles: all 8 runs (full eccentric load) + 4 stations (half). Run portion
-    // of the cap stays full; station portion halves. See computeDoublesCap docs.
+    // Doubles: all 8 runs (full eccentric load) + half of each station (the
+    // partner does the other half). Run portion of the cap stays full; station
+    // portion halves. See computeDoublesCap docs.
     const mtlCap = isTargetDoubles ? computeDoublesCap(baseMtlCap) : baseMtlCap;
     const sessions = state.hyroxWeeklySessionCount != null
       ? distributeSessionCount(state.hyroxWeeklySessionCount, band)
@@ -229,6 +230,12 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     const slotIsSingles = prevFmt === 'open_singles' || prevFmt === 'pro_singles';
     const benchmarkSingles = hasBenchmarks &&  slotIsSingles ? stationBenchmarks as any : undefined;
     const benchmarkDoubles = hasBenchmarks && !slotIsSingles ? stationBenchmarks as any : undefined;
+    // Splits from a Pro race were recorded at Pro weights. Without the flag the
+    // predictor read them as Open-weight and applied the Pro multiplier a second
+    // time when predicting Pro (audit 2026-10-12: Pro sled push 260 s became 299 s).
+    const benchmarksAtProWeights = hasBenchmarks && (prevFmt === 'pro_singles' || prevFmt === 'pro_doubles')
+      ? true
+      : undefined;
 
     // Persist prev format only when it's a known value. Storing `undefined` is
     // preferable to defaulting to the target format. The forecast view nudge
@@ -316,6 +323,10 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     const hyroxConfig: HyroxConfig = {
       format,
+      // Division (load tier with format + biological sex; hyrox-division.ts).
+      // Unset when the setup screen did not ask or the athlete kept the
+      // sex-derived default, which resolves the same way.
+      division: state.hyroxDivision,
       targetFinishTimeSec: carriedTargetFinishSec,
       athleteBand: band,
       hyroxPhase: 'base',
@@ -347,6 +358,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       weeklyHoursAvailable: state.triTimeAvailableHoursPerWeek ?? HYROX_HOURS_RANGE[band].default,
       stationBenchmarksSingles: benchmarkSingles,
       stationBenchmarksDoubles: benchmarkDoubles,
+      benchmarksAtProWeights,
       raceEventId: state.hyroxRaceEventId,
       venueId: state.hyroxVenueId ?? (state.hyroxRaceEventId ? getVenueIdForEvent(state.hyroxRaceEventId) : undefined),
       generatorVersion: HYROX_GENERATOR_VERSION,

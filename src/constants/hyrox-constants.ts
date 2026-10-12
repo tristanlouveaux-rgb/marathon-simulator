@@ -31,17 +31,29 @@ import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/worko
  *  Recalibrate when matched-athlete cross-format records become available
  *  (e.g. Strava ingest of users who race both formats). See SCIENCE_LOG §T. */
 export const SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22;
-/** Inverse direction. The 4-station-only doubles structure means a singles
- *  athlete's per-rep capacity is a ceiling; their realistic doubles total is
- *  faster than 1/1.22 implies once partner rest is factored in. We use 0.85. */
+/** Inverse direction, used ONLY for band derivation. Doubles partners split
+ *  the work inside every station (26/27 Doubles rulebook s7.2), so a singles
+ *  athlete's doubles total is faster than their singles total. 0.85 is an
+ *  unsourced estimate; the cohort ratio in the results tables at P50 is
+ *  4747 / 5338 = 0.89 (src/data/hyrox-population-distributions.ts). The doubles
+ *  forecast does not use this constant (src/calculations/hyrox-doubles.ts). */
 export const SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85;
 
 /**
  * Station-time multiplier for Pro division vs Open.
- * Pro weights are heavier (sled push 202 kg vs 152 kg; sandbag 30 kg vs 20 kg;
- * wall balls 9 kg vs 6 kg), which slows rep completion.
+ * Pro weights are heavier, which slows rep completion. The values were set from
+ * the men's Open-to-Pro jump (sled push 152 to 202 kg, sandbag 20 to 30 kg, wall
+ * ball 6 to 9 kg); the women's jump is larger in relative terms (sled push 102
+ * to 152 kg, sandbag 10 to 20 kg, ball 4 to 6 kg; HYROX_LOAD_TIER_KG).
  * Sled stations: ~15% slower. Other loaded stations: ~8% slower.
  * Erg and bodyweight stations (ski_erg, row_erg, burpee_broad_jumps): unaffected by weight change.
+ *
+ * UNSOURCED, and one set for both sexes. The ingested results
+ * (hyrox-population-distributions.ts) hold only the 8-station total per format,
+ * pooled across sexes, and Pro and Open are different cohorts (pro_singles
+ * station P50 2222 s vs open_singles 2208 s: fitter athletes at heavier loads),
+ * so per-station or per-sex Open-to-Pro ratios cannot be derived from them.
+ * Needs a per-station, per-sex re-ingest before it can be replaced.
  */
 export const HYROX_PRO_STATION_MULTIPLIER: Partial<Record<HyroxStation, number>> = {
   sled_push:      1.15,
@@ -186,8 +198,10 @@ export const HYROX_MTL_CAP: Record<AbilityBand, number> = {
  * Doubles MTL cap.
  *
  * Doubles athletes still run all 8 × 1km legs (full eccentric load on tendons)
- * but share the 4 of 8 stations with their partner. So the cap should reflect:
- * full run-load + half station-load.
+ * but share the work inside each station with their partner: each does half of
+ * each station (26/27 Doubles rulebook s7.2 sets no minimum share; the plan
+ * trains a 50/50 split). So the cap should reflect: full run-load + half
+ * station-load.
  *
  * Run vs station MTL share is approximately 30 / 70 in our model. Stations
  * carry heavier per-minute eccentric weight than runs (see STATION_MTL_FACTORS
@@ -317,8 +331,12 @@ export const HYROX_HOURS_RANGE: Record<AbilityBand, { default: number; min: numb
  * (HyroxDataLab): top-pro run splits are within ~2–4% across all 8 legs, while
  * age-group beginners show 8–12% slip by run 7–8.
  *
- * Doubles format halves the effective rate (athletes alternate stations, sharing
- * the eccentric load. But still accumulate metabolic cost from waiting partner).
+ * Doubles uses the same rate. The old doubles halving assumed each partner
+ * did 4 whole stations; partners actually split the work inside every station
+ * and run together (26/27 Doubles rulebook s7.2, s7.3), and no per-leg doubles
+ * data exists to set a different rate. The rate only shapes the per-leg split:
+ * legs are normalised to the run total, which comes from the run pace
+ * (doubles: hyrox-doubles.ts run ratio).
  */
 export const PER_STATION_FATIGUE_RATE_BY_BAND: Record<AbilityBand, number> = {
   competitive:    0.004,
@@ -348,7 +366,7 @@ export const ECCENTRIC_HEAVY_STATIONS: HyroxStation[] = [
 
 /** Stations HYROX race week leaves out (planning side, SCIENCE_LOG §CE / §CW):
  *  the eccentric-heavy stations above and the two sled stations, the heaviest
- *  external loads (STATION_EXTERNAL_LOAD_KG). They are exactly the stations
+ *  external loads (stationExternalLoadKg, any tier). They are exactly the stations
  *  whose per-minute MTL factor (modality × impact, STATION_MTL_FACTORS) is
  *  above the farmer carry's 1.0. A race-week station circuit keeps the ergs
  *  and the farmer carry: technique touch without the eccentric and sled load

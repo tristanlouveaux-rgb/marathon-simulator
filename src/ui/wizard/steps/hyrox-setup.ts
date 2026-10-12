@@ -2,7 +2,9 @@
  * HYROX setup. Onboarding step.
  *
  * Collects:
- *   - Competition format (Open / Pro)
+ *   - Competition format (Open / Pro × Singles / Doubles)
+ *   - Division (doubles: Women / Men / Mixed; singles only when biological sex
+ *     is unknown). Sets the station load tier (hyrox-division.ts).
  *   - Previous HYROX finish time (optional → shows derived ability band live)
  *   - Race date (optional)
  *   - Weekly hours available (slider)
@@ -27,7 +29,17 @@ import { HYROX_STATION_ORDER, STATION_DISPLAY, STATION_MIN_SEC, HYROX_RUN_PACE_M
 // Pure, DOM-free results parser. Re-exported below for back-compat with the
 // existing '@/ui/wizard/steps/hyrox-setup' import in log-prev-time-modal.
 import { parseHyroxResultsText } from './hyrox-results-parse';
-import type { HyroxStation } from '@/types/triathlon';
+import type { HyroxDivision, HyroxStation } from '@/types/triathlon';
+import {
+  hyroxDivisionOptions,
+  resolveHyroxDivision,
+  hyroxDivisionLabel,
+  hyroxLoadTier,
+  hyroxWallBallTargetM,
+  hyroxLoadsSentence,
+  isHyroxDoublesFormat,
+  isHyroxProFormat,
+} from '@/calculations/hyrox-division';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 // Venue normally derives from the race-event selection. Manual venue picker
@@ -107,12 +119,40 @@ function readPrevFinish(raw: string): null | { sec: number } | { error: string }
 }
 
 const PREV_FORMAT_PROMPT_TODO = 'Pick the format your time was set in. Doubles times scale differently to singles. Getting this right matters.';
+
+type HyroxFormatValue = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+type BioSex = OnboardingState['biologicalSex'];
+
+/** Pro note: the athlete's own division loads (26/27 Singles rulebook s4.1).
+ *  Women Pro races the Men Open tier, so a single "Pro weights" line was wrong
+ *  for half the field. */
+function proNoteText(format: HyroxFormatValue, sex: BioSex, division: HyroxDivision | undefined): string {
+  const label = hyroxDivisionLabel(format, sex, division);
+  if (!label) return 'Pro loads depend on division. Pick Women or Men above.';
+  const tier = hyroxLoadTier(format, sex, division);
+  return `${label} loads: ${hyroxLoadsSentence(tier, hyroxWallBallTargetM(sex, division))}.`;
+}
+
+/** Hint under the Division row. Mixed spells out the shared Men Open loads and
+ *  both wall-ball targets (26/27 Doubles rulebook s4.1, s8.8). */
+function divisionHintText(format: HyroxFormatValue, sex: BioSex, division: HyroxDivision | undefined): string {
+  if (!isHyroxDoublesFormat(format)) return 'Division sets the race loads. Women and men race different weights.';
+  if (isHyroxProFormat(format)) return 'Division sets the race loads. There is no Pro Mixed division.';
+  if (resolveHyroxDivision(format, sex, division) === 'mixed') {
+    return `A Mixed pair races Men Open loads for both partners: ${hyroxLoadsSentence('M-Open', null)}.`;
+  }
+  return 'Division sets the race loads. A Mixed pair races Men Open loads for both partners.';
+}
 const PREV_FORMAT_PROMPT_DONE = 'Which format was that time in?';
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 export function renderHyroxSetup(container: HTMLElement, state: OnboardingState): void {
   const format = state.hyroxFormat ?? 'open_singles';
+  // Division row: doubles always (Women / Men / Mixed, no Pro Mixed); singles
+  // only when biological sex is unknown. Prefilled from biological sex.
+  const divisionOptions = hyroxDivisionOptions(format, state.biologicalSex);
+  const activeDivision = resolveHyroxDivision(format, state.biologicalSex, state.hyroxDivision);
   const prevTimeSec = state.previousHyroxTimeSec;
   const prevTimeStr = prevTimeSec != null ? fmtMmSs(prevTimeSec) : '';
   const derivedBand: AbilityBand | null = prevTimeSec != null ? bandFromTime(prevTimeSec) : null;
@@ -220,8 +260,17 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 Pro Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro 2-person</span>
               </button>
             </div>
-            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You each run all 8 legs. Stations are split: training covers all 8 for flexibility, but at half the weekly station volume.</p>
-            <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">Pro division uses heavier weights: sled push 202 kg, sandbag 30 kg, wall balls 9 kg.</p>
+            <div id="hx-division-row" style="margin-top:12px;display:${divisionOptions ? 'block' : 'none'}">
+              <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px">Division</div>
+              <div class="hx-toggle-row">
+                <button class="hx-toggle ${activeDivision === 'women' ? 'active' : ''}" data-division="women">Women</button>
+                <button class="hx-toggle ${activeDivision === 'men' ? 'active' : ''}" data-division="men">Men</button>
+                <button class="hx-toggle ${activeDivision === 'mixed' ? 'active' : ''}" data-division="mixed" style="display:${divisionOptions?.includes('mixed') ? 'block' : 'none'}">Mixed</button>
+              </div>
+              <p id="hx-division-hint" class="hx-hint">${divisionHintText(format, state.biologicalSex, state.hyroxDivision)}</p>
+            </div>
+            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You run all 8 legs together and split the work inside every station. Training covers all 8 stations at half the weekly station volume.</p>
+            <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">${proNoteText(format, state.biologicalSex, state.hyroxDivision)}</p>
             <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional: base first, race-specific second.</p>
           </div>
 
@@ -409,10 +458,24 @@ function wireEventHandlers(): void {
       });
       const isDoubles = value === 'open_doubles' || value === 'pro_doubles';
       const isPro = value === 'pro_singles' || value === 'pro_doubles';
+      // No Pro Mixed: a Mixed pick does not survive a switch to Pro Doubles.
+      if (getOnboarding().hyroxDivision === 'mixed' && value === 'pro_doubles') {
+        updateOnboarding({ hyroxDivision: undefined });
+      }
       const doublesNote = document.getElementById('hx-doubles-note');
-      const proNote = document.getElementById('hx-pro-note');
       if (doublesNote) doublesNote.style.display = isDoubles ? 'block' : 'none';
+      const proNote = document.getElementById('hx-pro-note');
       if (proNote) proNote.style.display = isPro ? 'block' : 'none';
+      refreshDivisionUi();
+    });
+  });
+
+  // Division toggle (doubles, or singles with unknown biological sex).
+  document.querySelectorAll<HTMLButtonElement>('[data-division]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const value = btn.getAttribute('data-division') as HyroxDivision;
+      updateOnboarding({ hyroxDivision: value });
+      refreshDivisionUi();
     });
   });
 
@@ -1004,6 +1067,26 @@ function wireEventHandlers(): void {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Sync the Division row, its hint and the Pro note with the current format,
+ *  biological sex and division pick, in place (no re-render). */
+function refreshDivisionUi(): void {
+  const ob = getOnboarding();
+  const format = ob.hyroxFormat ?? 'open_singles';
+  const options = hyroxDivisionOptions(format, ob.biologicalSex);
+  const active = resolveHyroxDivision(format, ob.biologicalSex, ob.hyroxDivision);
+  const row = document.getElementById('hx-division-row');
+  if (row) row.style.display = options ? 'block' : 'none';
+  document.querySelectorAll<HTMLButtonElement>('[data-division]').forEach(b => {
+    const d = b.getAttribute('data-division') as HyroxDivision;
+    b.classList.toggle('active', d === active);
+    if (d === 'mixed') b.style.display = options?.includes('mixed') ? 'block' : 'none';
+  });
+  const hint = document.getElementById('hx-division-hint');
+  if (hint) hint.textContent = divisionHintText(format, ob.biologicalSex, ob.hyroxDivision);
+  const proNote = document.getElementById('hx-pro-note');
+  if (proNote) proNote.textContent = proNoteText(format, ob.biologicalSex, ob.hyroxDivision);
+}
 
 function getOnboarding(): OnboardingState {
   return getState().onboarding as OnboardingState;

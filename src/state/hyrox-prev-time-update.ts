@@ -62,6 +62,10 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
       ...update.stationSplits,
     };
     const isPrevDoubles = update.format === 'open_doubles' || update.format === 'pro_doubles';
+    // Splits carry the race's weights: Pro race splits are Pro-weight times, so
+    // the predictor must not apply the Pro multiplier on top (and Open race
+    // splits are Open-weight). Same rule as the onboarding seed.
+    hx.benchmarksAtProWeights = update.format === 'pro_singles' || update.format === 'pro_doubles';
     if (isPrevDoubles) {
       hx.stationBenchmarksDoubles = {
         ...(hx.stationBenchmarksDoubles ?? {}),
