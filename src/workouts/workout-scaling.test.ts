@@ -187,8 +187,9 @@ describe('retargetDescriptionPace', () => {
     expect(retargetDescriptionPace('6km', 'vo2', EASY)).toBe('6km @ 4:59/km');
   });
   it('uses the MP wrapper when retargeting to marathon', () => {
-    // 370 * 0.913 = 337.8 → 5:37/km
-    expect(retargetDescriptionPace('7km @ 6:10/km', 'marathon', EASY)).toBe('7km @ MP (5:37/km)');
+    // 370 * 0.913 = 337.8 → 5:38/km (model paces display as the nearest
+    // whole second, displayPaceSec, since 2026-10-12; was floored to 5:37)
+    expect(retargetDescriptionPace('7km @ 6:10/km', 'marathon', EASY)).toBe('7km @ MP (5:38/km)');
   });
   it('unwraps MP when stepping away from marathon pace', () => {
     expect(retargetDescriptionPace('22min @ MP (5:37/km)', 'threshold', EASY)).toBe('22min @ 5:08/km');
@@ -205,7 +206,7 @@ describe('retargetDescriptionPace', () => {
     // Tri run legs write "15min warm up @ <easy>/km" (plan_engine.triathlon.ts).
     const desc = '15min warm up @ 6:10/km. 3×8min @ 5:08/km, 2min jog recovery. 10min cool down.';
     const out = retargetDescriptionPace(desc, 'marathon_pace', EASY);
-    expect(out).toBe('15min warm up @ 6:10/km. 3×8min @ MP (5:37/km), 2min jog recovery. 10min cool down.');
+    expect(out).toBe('15min warm up @ 6:10/km. 3×8min @ MP (5:38/km), 2min jog recovery. 10min cool down.');
   });
   it('leaves warm-up/cool-down easy anchors untouched', () => {
     const desc = '2km warm up (6:10/km+)\n13min @ 5:08/km (~2.5km)\n2km cool down (6:10/km+)';

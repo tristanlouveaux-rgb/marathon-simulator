@@ -13,7 +13,7 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import { ft } from '@/utils/format';
+import { ft, fpModel, displayPaceSec } from '@/utils/format';
 import { applyRunningCourseFactors } from '@/calculations/course-factors-running';
 import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 
@@ -59,11 +59,11 @@ function buildYou(s: SimulatorState): Cluster {
 
 function buildCapacity(s: SimulatorState): Cluster {
   const vdot = s.blendedEffectiveVdot ?? s.v;
-  const lt = s.lt != null ? Math.round(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
+  const lt = s.lt != null ? displayPaceSec(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   if (!vdot || vdot <= 0) {
     return { key: 'capacity', label: 'Capacity', headline: 'No data', detail: '', present: false, addCta: 'Sync runs' };
   }
-  const ltLabel = lt && lt > 0 ? `LT ${Math.floor(lt / 60)}:${String(Math.round(lt % 60)).padStart(2, '0')}/km` : 'From PBs';
+  const ltLabel = lt && lt > 0 ? `LT ${fpModel(lt, s.unitPref ?? 'km')}` : 'From PBs';
   return { key: 'capacity', label: 'Capacity', headline: `VDOT ${vdot.toFixed(1)}`, detail: ltLabel, present: true };
 }
 

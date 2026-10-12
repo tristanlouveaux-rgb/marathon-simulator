@@ -17,6 +17,7 @@ import { completeStrengthSession } from '@/guided/strength-complete';
 import { recordPlannedSessionDone, dropInAppActual, plannedSessionRecordSport } from '@/calculations/in-app-activity';
 import { estimateWorkoutDurMin, planCardBaseMinPerKm } from '@/calculations/fitness-model';
 import { estimateTriWorkoutMin, readTriWorkoutMin } from './week-resolve.triathlon';
+import { fmtModelPaceKm } from '@/utils/format';
 
 export function openTriWorkoutDetail(workout: Workout, weekIdx?: number): void {
   // HYROX sessions (station/brick) carry `hyroxComponents`; only the guided
@@ -390,7 +391,7 @@ function formatTarget(t: import('@/types/triathlon').DisciplineTarget): string {
   if (t.targetWattsLow && t.targetWattsHigh) return `${t.targetWattsLow}–${t.targetWattsHigh}W`;
   if (t.targetWatts) return `${t.targetWatts}W`;
   if (t.targetPctFtp) return `${Math.round(t.targetPctFtp * 100)}% FTP`;
-  if (t.targetPaceSecPerKm) return `${Math.floor(t.targetPaceSecPerKm / 60)}:${String(Math.round(t.targetPaceSecPerKm % 60)).padStart(2, '0')}/km`;
+  if (t.targetPaceSecPerKm) return `${fmtModelPaceKm(t.targetPaceSecPerKm)}/km`; // whole second, minute carried
   if (t.targetPaceSecPer100m) return `${Math.floor(t.targetPaceSecPer100m / 60)}:${String(Math.round(t.targetPaceSecPer100m % 60)).padStart(2, '0')}/100m`;
   if (t.rpe) return `RPE ${t.rpe}`;
   return t.targetHrZone ? `HR Z${t.targetHrZone}` : 'steady';

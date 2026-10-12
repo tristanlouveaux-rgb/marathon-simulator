@@ -21,7 +21,7 @@ import { buildRunningStrengthWorkout, buildPlyometricsWorkout } from '@/workouts
 /** Gym Focus options in the generator, plus the HYROX brick (its own path). */
 type GymFocusChoice = GymFocus | 'hyrox';
 import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
-import { formatKm, formatPace } from '@/utils/format';
+import { formatKm, fpModel, fmtModelPaceKm } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
 import { predictStandardDistances } from '@/calculations/blended-fitness';
@@ -1431,11 +1431,11 @@ export function openSessionGenerator(): void {
     // Fixed pace label for structured sessions
     function structuredPaceLabel(): string {
       switch (selectedType!.slot) {
-        case 'threshold':     return formatPace(s.pac.t, up);
-        case 'vo2':           return formatPace(s.pac.i, up);
-        case 'marathon_pace': return formatPace(s.pac.m, up);
-        case 'progressive':   return `${formatPace(s.pac.e, up)} to ${formatPace(s.pac.m, up)}`;
-        default:              return formatPace(easyPace, up);
+        case 'threshold':     return fpModel(s.pac.t, up);
+        case 'vo2':           return fpModel(s.pac.i, up);
+        case 'marathon_pace': return fpModel(s.pac.m, up);
+        case 'progressive':   return `${fpModel(s.pac.e, up)} to ${fpModel(s.pac.m, up)}`;
+        default:              return fpModel(easyPace, up);
       }
     }
 
@@ -1448,7 +1448,7 @@ export function openSessionGenerator(): void {
 
       // Structured sessions already show target pace above the slider. Don't repeat it here.
       const secondaryInfo = hasEffortPicker
-        ? (isDistance ? `~${estMinutes} min at ${formatPace(effortPace, up)}` : `~${formatKm(estKm, up)} at ${formatPace(effortPace, up)}`)
+        ? (isDistance ? `~${estMinutes} min at ${fpModel(effortPace, up)}` : `~${formatKm(estKm, up)} at ${fpModel(effortPace, up)}`)
         : (isDistance ? `~${estMinutes} min` : `~${formatKm(estKm, up)}`);
 
       const inner = modal.querySelector('#sg-step2-inner');
@@ -1469,7 +1469,7 @@ export function openSessionGenerator(): void {
                            background:${sel ? '#0A0A0A' : 'rgba(255,255,255,0.95)'};
                            box-shadow:${sel ? '0 0 0 1px rgba(0,0,0,0.9), 0 4px 12px rgba(0,0,0,0.10)' : '0 1px 2px rgba(0,0,0,0.04), 0 4px 10px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.4)'}">
                     <div style="font-size:12px;font-weight:600;color:${sel ? '#FDFCF7' : 'var(--c-black)'};margin-bottom:1px">${opt.label}</div>
-                    <div style="font-size:11px;color:${sel ? 'rgba(253,252,247,0.65)' : 'var(--c-muted)'}">${formatPace(opt.pace, up)}</div>
+                    <div style="font-size:11px;color:${sel ? 'rgba(253,252,247,0.65)' : 'var(--c-muted)'}">${fpModel(opt.pace, up)}</div>
                     <div style="font-size:9px;font-weight:500;margin-top:3px;color:${sel ? 'rgba(253,252,247,0.5)' : 'var(--c-faint)'}">
                       ${isRec ? 'Suggested' : ' '}
                     </div>
@@ -1566,7 +1566,7 @@ export function openSessionGenerator(): void {
           const estM = isDistance ? Math.round(distanceKm * pace / 60) : timeMin;
           const estK = isDistance ? distanceKm : Math.round(timeMin * 60 / pace);
           info.textContent = hasEffortPicker
-            ? (isDistance ? `~${estM} min at ${formatPace(pace, up)}` : `~${formatKm(estK, up)} at ${formatPace(pace, up)}`)
+            ? (isDistance ? `~${estM} min at ${fpModel(pace, up)}` : `~${formatKm(estK, up)} at ${fpModel(pace, up)}`)
             : (isDistance ? `~${estM} min` : `~${formatKm(estK, up)}`);
         }
       });
@@ -1625,7 +1625,7 @@ export function openSessionGenerator(): void {
         // Persisted objects never regenerate, so the chosen effort pace is
         // embedded in the description (the card's Target row dedupes on it).
         d: correctedKm !== null
-          ? `${correctedKm}km @ ${Math.floor(effortPace / 60)}:${String(Math.floor(effortPace % 60)).padStart(2, '0')}/km`
+          ? `${correctedKm}km @ ${fmtModelPaceKm(effortPace)}/km` // the whole second, as the picker label shows it
           : workout.d,
         r: workout.r,
         rpe: rpeOverride ?? workout.rpe ?? workout.r,

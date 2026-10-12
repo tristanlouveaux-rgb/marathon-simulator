@@ -9,7 +9,7 @@ import { openBenchmarkOverlay } from './benchmark-overlay';
 import { connectWithStravaButton } from './strava-brand';
 import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
-import { ft, fp, fmtDateUK, formatKm } from '@/utils/format';
+import { ft, fp, fpModel, displayPaceSec, fmtDateUK, formatKm } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { recordMorningPain, getReturnToRunLevelLabel } from '@/injury/engine';
 import type { MorningPainResponse } from '@/types/injury';
@@ -645,10 +645,10 @@ function renderContinuousProgressPanel(s: any): string {
   // LT and VO2 stats
   // s.lt is unrounded (a model input); display reads the whole second.
   const ltRaw = s.lt || s.ltPace;
-  const ltCurrent = ltRaw ? Math.round(ltRaw) : ltRaw;
+  const ltCurrent = ltRaw ? displayPaceSec(ltRaw) : ltRaw;
   const ltInitial = s.initialLT;
   const ltPct = (ltCurrent && ltInitial) ? ((ltInitial - ltCurrent) / ltInitial) * 100 : 0;
-  const ltPaceStr = ltCurrent ? fp(ltCurrent, s.unitPref ?? 'km') : '—';
+  const ltPaceStr = ltCurrent ? fpModel(ltCurrent, s.unitPref ?? 'km') : '—';
 
   const vo2Current = s.vo2;
   const vo2Initial = s.initialVO2;
@@ -898,12 +898,12 @@ function renderPhysiologyCard(s: any): string {
   const maxHR = rollPeak(history.map(h => h.maxHR)) ?? null;
   const hrv = rollAvg(history.map(h => h.hrvRmssd));
   const vo2 = latest?.vo2max ?? s.vo2;
-  const ltPace = latest?.ltPace ?? (s.lt != null ? Math.round(s.lt) : s.lt);
+  const ltPace = latest?.ltPace ?? (s.lt != null ? displayPaceSec(s.lt) : s.lt);
   const ltHR = latest?.ltHR ?? s.ltHR;
 
   if (!rhr && !maxHR && hrv == null && !vo2 && !ltPace && !ltHR) return '';
 
-  const fmtPace = (sec: number) => fp(sec, s.unitPref ?? 'km');
+  const fmtPace = (sec: number) => fpModel(sec, s.unitPref ?? 'km'); // LT pace: the whole second, as every LT display
 
   // Compare latest vs prev-N average; returns coloured arrow or empty string
   const trendArrow = (vals: (number | undefined)[], higherIsBetter: boolean): string => {

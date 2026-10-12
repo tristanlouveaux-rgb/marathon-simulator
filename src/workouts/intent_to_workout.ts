@@ -1,4 +1,5 @@
 import type { Workout, RaceDistance, RunnerType } from '@/types';
+import { fmtModelPaceKm } from '@/utils/format';
 
 /** Workout slot type for plan engine */
 export type SlotType = 'easy' | 'long' | 'threshold' | 'vo2' | 'marathon_pace' | 'progressive' | 'float' | 'vibes';
@@ -60,7 +61,9 @@ export function intentToWorkout(
 
   // Derive actual paces from easy pace for readable descriptions.
   // Factors come from the canonical RUN_PACE_FACTOR_VS_EASY map above.
-  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  // Easy pace is s.pac.e, a model pace (unrounded): written as the whole
+  // second (displayPaceSec), the rule every pace display uses.
+  const fmtPace = (sec: number) => fmtModelPaceKm(sec);
   const vo2PaceSec = paceSecPerKmForRunType('vo2', easyPaceSecPerKm) ?? 0;
   const thresholdPaceSec = paceSecPerKmForRunType('threshold', easyPaceSecPerKm) ?? 0;
   const vo2Pace = vo2PaceSec ? fmtPace(vo2PaceSec) : null;   // ~VO2max/5K pace

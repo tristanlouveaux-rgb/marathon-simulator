@@ -23,7 +23,7 @@ import type { Week, Workout } from '@/types';
  * no RPE for any downgrade.
  */
 
-const EASY = 330; // s/km. MP 5:01, threshold 4:35, vo2 4:26, recovery 6:09.
+const EASY = 330; // s/km. MP 5:01, threshold 4:35, vo2 4:27, recovery 6:10 (369.6, nearest whole second: displayPaceSec).
 
 /** A session exactly as the plan generator writes it, priced the way it prices it. */
 function gen(slot: SessionIntent['slot'], extra: Partial<SessionIntent> = {}, dayOfWeek = 6): Workout {
@@ -116,7 +116,7 @@ describe('day-after timing check: one pace category down for every session type'
     const [mod] = timing(60, SESSIONS.steadyLong, EASY);
     expect(mod.newType).toBe('recovery');
     expect(mod.newRpe).toBe(3);
-    expect(mod.newDistance).toBe('22km @ 6:09/km');
+    expect(mod.newDistance).toBe('22km @ 6:10/km');
     expect((mod as { suggestionLabel?: string }).suggestionLabel).toBe('recovery pace');
   });
 
@@ -132,7 +132,7 @@ describe('day-after timing check: one pace category down for every session type'
   it('a 75–99 TSS day keeps the 10% cut on top of the one-step change', () => {
     const [mod] = timing(80, SESSIONS.steadyLong, EASY);
     expect(mod.newType).toBe('recovery');
-    expect(mod.newDistance).toBe('19.8km @ 6:09/km');
+    expect(mod.newDistance).toBe('19.8km @ 6:10/km');
   });
 });
 

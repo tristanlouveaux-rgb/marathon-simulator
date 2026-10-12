@@ -6,6 +6,7 @@
 
 import { getState, getMutableState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
+import { fmtModelPaceKm } from '@/utils/format';
 import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '@/ui/page-flair';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
@@ -45,10 +46,10 @@ function fmtShortDelta(sec: number): string {
   return s === 0 ? `${m}m` : `${m}m ${s}s`;
 }
 
+/** HYROX run paces (LT-derived, can be fractional): the whole second with
+ *  the minute carried (fmtModelPaceKm), never "4:60/km". */
 function fmtPace(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+  return `${fmtModelPaceKm(secPerKm)}/km`;
 }
 
 function daysUntil(isoDate: string): number {

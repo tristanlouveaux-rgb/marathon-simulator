@@ -5,7 +5,7 @@
  */
 
 import type { GpsRecording, GpsSplit, Workout } from '@/types';
-import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
+import { formatPace, fpModel, formatWorkoutTime, formatKm } from '@/utils';
 import { parseDistanceKm } from '@/calculations/matching';
 import { getState } from '@/state';
 import { summariseAdherence, type AdherenceSummary } from '@/guided/adherence';
@@ -300,7 +300,7 @@ function renderSplitsSection(splits: GpsSplit[], unitPref: 'km' | 'mi' = 'km'): 
 
   for (const split of splits) {
     const paceStr = split.pace > 0 && split.pace < 1800 ? formatPace(split.pace, unitPref) : '--';
-    const targetStr = split.targetPace ? formatPace(split.targetPace, unitPref) : '--';
+    const targetStr = split.targetPace ? fpModel(split.targetPace, unitPref) : '--'; // target: model pace, whole second
     const diff = split.targetPace ? split.pace - split.targetPace : 0;
     const paceStyle = diff > 10 ? `color:var(--c-warn)` : diff < -10 ? `color:var(--c-ok)` : `color:var(--c-black)`;
 

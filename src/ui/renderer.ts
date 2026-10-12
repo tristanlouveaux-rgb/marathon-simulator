@@ -17,7 +17,7 @@ import {
 } from '@/workouts';
 // applyCrossTrainingToWorkouts is intentionally NOT used here.
 // Plan modifications must only happen via explicit user confirmation in events.ts.
-import { ft, fp, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
+import { ft, fpModel, displayPaceSec, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
 import { computeACWR, getTrailingEffortScore, normalizeiTrimp} from '@/calculations/fitness-model';
 import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
@@ -498,8 +498,8 @@ export function render(): void {
   if (ltEl) {
     if (s.lt) {
       // s.lt is unrounded (a model input); display reads the whole second.
-      const ltShown = Math.round(s.lt);
-      ltEl.textContent = fp(ltShown, (s as any).unitPref ?? 'km');
+      const ltShown = displayPaceSec(s.lt);
+      ltEl.textContent = fpModel(ltShown, (s as any).unitPref ?? 'km');
       const initialLT = s.onboarding?.ltPace; // sec/km
       if (ltDeltaEl && initialLT && Math.abs(ltShown - initialLT) >= 1) {
         const delta = initialLT - ltShown; // Positive = faster (improvement)
@@ -549,7 +549,8 @@ export function render(): void {
   // LT pending confirmation banner
   if (s.ltEstimation?.pendingConfirmation) {
     const pc = s.ltEstimation.pendingConfirmation;
-    const fmtP = (sec: number) => fp(sec, (s as any).unitPref ?? 'km');
+    // LT paces (copies of the unrounded s.lt): the whole second (fpModel).
+    const fmtP = (sec: number) => fpModel(sec, (s as any).unitPref ?? 'km');
     h += `<div class="p-3 rounded mb-3 text-xs border" style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35)">`;
     h += `<div class="font-bold mb-1" style="color:var(--c-caution)">LT Change Detected (${pc.deviationPct.toFixed(1)}%)</div>`;
     h += `<div class="mb-2" style="color:var(--c-muted)">Estimated LT: ${fmtP(pc.estimate.ltPaceSecPerKm)} (current: ${fmtP(pc.currentLT)})</div>`;
@@ -632,7 +633,8 @@ export function render(): void {
   if (wk.ltAutoUpdate) {
     const ltu = wk.ltAutoUpdate;
     const ltBannerUnitPref = (s as any).unitPref ?? 'km';
-    const fmtP = (sec: number) => fp(sec, ltBannerUnitPref);
+    // LT paces (copies of the unrounded s.lt): the whole second (fpModel).
+    const fmtP = (sec: number) => fpModel(sec, ltBannerUnitPref);
     const bannerStyle = ltu.confidence === 'high'
       ? 'background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25);color:var(--c-ok)'
       : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.25);color:var(--c-accent)';
@@ -678,10 +680,10 @@ export function render(): void {
   // Paces
   h += `<div class="mt-3 text-xs mb-1" style="color:var(--c-muted)">Your current paces</div>`;
   h += `<div class="grid grid-cols-2 gap-1 text-xs">`;
-  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Easy: <strong style="color:var(--c-black)">${fp(s.pac.e)} – ${fp(Math.round(s.pac.e * 13 / 12))}</strong><span style="color:var(--c-faint);font-size:10px;margin-left:4px">slower is fine</span></div>`;
-  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Threshold: <strong style="color:var(--c-black)">${fp(s.pac.t)}</strong></div>`;
-  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">VO2 Builder: <strong style="color:var(--c-black)">${fp(s.pac.i)}</strong></div>`;
-  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Marathon: <strong style="color:var(--c-black)">${fp(s.pac.m)}</strong></div></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Easy: <strong style="color:var(--c-black)">${fpModel(s.pac.e)} – ${fpModel(s.pac.e * 13 / 12)}</strong><span style="color:var(--c-faint);font-size:10px;margin-left:4px">slower is fine</span></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Threshold: <strong style="color:var(--c-black)">${fpModel(s.pac.t)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">VO2 Builder: <strong style="color:var(--c-black)">${fpModel(s.pac.i)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Marathon: <strong style="color:var(--c-black)">${fpModel(s.pac.m)}</strong></div></div>`;
 
   // Garmin synced activities section (separate from plan, below paces)
   h += renderGarminSyncedSection(wk);
@@ -1120,7 +1122,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     if (workoutInfo.avgPace) {
       const paceLabel = w.t === 'easy' ? 'No faster than' : 'Pace';
       h += `<div class="text-xs mb-1 p-1 rounded" style="color:var(--c-accent);background:rgba(78,159,229,0.06)">`;
-      h += `${paceLabel}: ${formatPace(workoutInfo.avgPace)}`;
+      h += `${paceLabel}: ${fpModel(workoutInfo.avgPace)}`; // planned pace (s.pac or the description's): model pace
       h += `</div>`;
     }
 
@@ -1697,6 +1699,8 @@ function fmtTimeRange(totalSec: number, workoutType: string): string {
  */
 function injectPaces(description: string, paces: any): string {
   if (!paces) return description;
+  // Model paces (s.pac, unrounded): the whole second, as every pace display.
+  const formatPace = (sec: number) => fpModel(sec);
 
   // First, handle progressive/fast-finish format: "Xkm: last Y @ pace"
   // Convert to "Xkm: first Z @ easy (pace) + last Y @ pace (pace)"

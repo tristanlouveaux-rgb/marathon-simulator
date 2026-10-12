@@ -4,7 +4,7 @@ import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { ft, fmtProbPct } from '@/utils/format';
+import { ft, fmtProbPct, fpModel } from '@/utils/format';
 import { runningForecastForSessions } from '@/calculations/blended-fitness';
 import { raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
@@ -280,7 +280,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             </div>
             ${renderVdotMethodSubline(s)}
             ${s.initialLT ? `
-              <div class="pp-row"><span class="pp-row-k">Threshold pace</span><span class="pp-row-v">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span></div>
+              <div class="pp-row"><span class="pp-row-k">Threshold pace</span><span class="pp-row-v">${fpModel(s.initialLT, s.unitPref ?? 'km')}</span></div>
             ` : ''}
           </div>
         </div>
@@ -400,12 +400,6 @@ function formatImprovement(initial: number, forecast: number): string {
   const seconds = Math.floor(diff % 60);
   if (minutes > 0) return `↓ ${minutes}m ${seconds}s`;
   return `↓ ${seconds}s`;
-}
-
-function formatLTPace(secPerKm: number): string {
-  const min = Math.floor(secPerKm / 60);
-  const sec = Math.floor(secPerKm % 60);
-  return `${min}:${sec.toString().padStart(2, '0')}`;
 }
 
 /** Human delta for the strength callout: "2 min 14 s", "3 min", or "40 s". */

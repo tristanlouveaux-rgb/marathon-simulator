@@ -29,7 +29,7 @@ import {
   latestImprovementSec,
 } from '@/calculations/hyrox-station-history';
 import { buildBenchmarkTrendChart } from '@/ui/triathlon/benchmark-charts';
-import { fp } from '@/utils/format';
+import { fp, fmtModelPaceKm } from '@/utils/format';
 import { classifyHyroxSessionKind, type HyroxSessionKind } from '@/calculations/hyrox-session-classifier';
 import type { Workout } from '@/types/state';
 import {
@@ -64,10 +64,10 @@ function fmtMmSs(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/** HYROX run paces (LT-derived, can be fractional): the whole second with
+ *  the minute carried (fmtModelPaceKm), never "4:60/km". */
 function fmtPace(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+  return `${fmtModelPaceKm(secPerKm)}/km`;
 }
 
 function statRow(label: string, value: string): string {

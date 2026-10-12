@@ -5,7 +5,7 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { formatKm, fp } from '@/utils/format';
+import { formatKm, fpModel, displayPaceSec } from '@/utils/format';
 import { hasPhysiologySource } from '@/data/sources';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import {
@@ -2042,18 +2042,19 @@ function renderVdotRow(_vdot: number | undefined): string {
 
 function renderLtRow(unitPref: 'km' | 'mi'): string {
   const s = getState();
-  const lt = s.lt != null ? Math.round(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
+  const lt = s.lt != null ? displayPaceSec(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   if (!lt || lt <= 0) return '';
   const conf = s.ltConfidence;
   const src = s.ltSource;
-  const value = fp(lt, unitPref);
+  const value = fpModel(lt, unitPref);
 
   // Inline editor. Manual entry sets `s.ltOverride` and recomputes paces. Like
   // VO2max, the launch-time refresh auto-clears it when a derived estimate
   // clearly beats it (CLAUDE.md benchmark-improvement rule).
   if (editing === 'lt') {
-    const secForUnit = unitPref === 'mi' ? lt * 1.60934 : lt;
-    const cur = `${Math.floor(secForUnit / 60)}:${String(Math.round(secForUnit % 60)).padStart(2, '0')}`;
+    // Same whole second as the row (fpModel), minute carried; unit suffix
+    // stripped because the editor shows it beside the input.
+    const cur = fpModel(lt, unitPref).replace(/\/(?:km|mi)$/, '');
     const unitLabel = unitPref === 'mi' ? '/ mi' : '/ km';
     return `
       <div class="r-row shadow-ap editing" data-row="lt">

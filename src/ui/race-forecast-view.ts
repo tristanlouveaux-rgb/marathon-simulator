@@ -23,7 +23,7 @@ import { crossTrainingPredictionCredit } from '@/calculations/predictions';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import { pbAgeCaptionText } from './pb-age-caption';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
-import { formatKm, formatPace } from '@/utils/format';
+import { formatKm, formatPace, fpModel } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
 import { renderForecastFingerprint } from './race-forecast-fingerprint';
@@ -904,7 +904,7 @@ function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean)
     <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">What feeds your capacity</div>
       ${detail.vdot != null ? stdStatRow('Aerobic capacity', `VDOT ${detail.vdot.toFixed(1)}`) : ''}
-      ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', formatPace(detail.ltSecPerKm, unit)) : ''}
+      ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', fpModel(detail.ltSecPerKm, unit)) : ''}
       ${detail.weeklyKm != null ? stdStatRow('Training volume', `${formatKm(detail.weeklyKm, unit)}/wk`) : ''}
       ${stdStatRow('Race calibration', calibrationVal)}
     </div>`;

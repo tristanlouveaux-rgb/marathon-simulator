@@ -280,8 +280,9 @@ export function ltPaceForDanielsInput(
  * a little every day. Stored as a whole second, it ticked by 1 s/km on one
  * night and moved the marathon prediction by about 50 s (review 2026-10-12:
  * half PB 1:30, typed 40 km, s.lt 256 to 257 at 755 days). Display rounds at
- * the display boundary (`Math.round(s.lt)` into the pace formatters), so the
- * LT the user reads is the whole second it was before. `s.ltHR` stays a whole
+ * the display boundary (displayPaceSec / fpModel, src/utils/format.ts), for
+ * the LT and for every pace derived from it (s.pac: the threshold pace IS the
+ * LT), so every surface reads the same whole second. `s.ltHR` stays a whole
  * bpm: it is a zone anchor, not a race-time input.
  */
 function applyResolved(s: SimulatorState, resolved: ReturnType<typeof resolveLT>, now: string): void {

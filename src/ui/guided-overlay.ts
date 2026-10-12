@@ -10,7 +10,7 @@ import type { Step } from '@/guided/timeline';
 import type { CueEvent } from '@/guided/engine';
 import type { GuideController } from '@/guided/controller';
 import { getState } from '@/state';
-import type { UnitPref } from '@/utils/format';
+import { fpModel, type UnitPref } from '@/utils/format';
 
 const OVERLAY_ID = 'guided-rest-overlay';
 
@@ -21,12 +21,11 @@ function formatCountdown(sec: number): string {
   return m > 0 ? `${m}:${String(rem).padStart(2, '0')}` : `${rem}s`;
 }
 
+/** Step target pace (a model pace when it comes from s.pac): the whole
+ *  second, as the session description shows it (fpModel). */
 function formatPace(secPerKm: number | undefined, pref: UnitPref): string {
   if (secPerKm == null || secPerKm <= 0) return '';
-  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}${pref === 'mi' ? '/mi' : '/km'}`;
+  return fpModel(secPerKm, pref);
 }
 
 function nextStepSummary(step: Step, pref: UnitPref): string {

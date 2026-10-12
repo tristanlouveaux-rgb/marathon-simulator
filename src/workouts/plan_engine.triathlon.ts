@@ -38,6 +38,7 @@ import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES, TRI_BIKE_QUALITY_DOW
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
 import { gp } from '@/calculations/paces';
+import { fmtModelPaceKm } from '@/utils/format';
 // Moved verbatim to tri-run-pace.ts so accepted suggestions retarget run paces
 // from the same easy pace the generator writes (triRunEasyPaceSec).
 import { easyPaceSecPerKmFromSkill } from './tri-run-pace';
@@ -383,7 +384,7 @@ function isTriQualityRun(w: Workout): boolean {
 function triEasedRun(state: SimulatorState, weekIndex: number, totalWeeks: number, phase: TrainingPhase, w: Workout): Workout {
   const skill = (state.triConfig?.skillRating?.run ?? 3) as TriSkillSlider;
   const pace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm ?? easyPaceSecPerKmFromSkill(skill);
-  const label = `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')}/km`;
+  const label = `${fmtModelPaceKm(pace)}/km`; // model pace: the whole second
   return { ...w, ...triEasyRunFields(w.estimatedDurationMin ?? TRI_SESSION_FLOOR_MIN, label, Math.abs(weekIndex - 1)), r: 4 };
 }
 
@@ -1142,8 +1143,9 @@ function generateRunSessionForTri(
     ? selectRunQualityKind(distance, phase, slotIndex, weekIndex)
     : null;
 
-  // Derive pace labels. Mirrors intent_to_workout.ts logic exactly.
-  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  // Derive pace labels. Mirrors intent_to_workout.ts logic exactly: model
+  // paces (gp(s.v, s.lt), unrounded) are written as the whole second.
+  const fmtPace = (sec: number) => fmtModelPaceKm(sec);
   const pace = easyPaceSec ?? easyPaceSecPerKmFromSkill(skill);
   const thresholdSec = pace / 1.15;
   const vo2Sec = pace * 0.809;

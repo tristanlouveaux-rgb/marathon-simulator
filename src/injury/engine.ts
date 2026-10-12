@@ -28,6 +28,7 @@ import type {
   MorningPainResponse,
 } from '@/types/injury';
 import type { Workout } from '@/types';
+import { fmtModelPaceKm } from '@/utils/format';
 import { isLongRun } from '@/workouts/long-run';
 import {
   INJURY_PROTOCOLS,
@@ -1585,7 +1586,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
       // VO2/threshold/race_pace/intervals/mixed → marathon pace
       // marathon_pace/progressive → steady pace (halfway between easy & MP)
       // long → easy + 20% distance reduction
-      const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}/km`;
+      const fmtPace = (sec: number) => `${fmtModelPaceKm(sec)}/km`; // model pace: the whole second
       const easyStr = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm) : 'easy pace';
       const mpSec = easyPaceSecPerKm ? easyPaceSecPerKm * 0.913 : 0;
       const mpStr = mpSec ? fmtPace(mpSec) : 'marathon pace';

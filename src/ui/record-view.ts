@@ -27,7 +27,7 @@ import {
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getState } from '@/state';
-import { formatKm, type UnitPref } from '@/utils/format';
+import { formatKm, fpModel, type UnitPref } from '@/utils/format';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 
 function navigateTab(tab: TabId): void {
@@ -195,7 +195,7 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
         <span class="w-3 h-3 rounded-full animate-pulse" style="background:var(--c-warn)"></span>
         <span class="text-sm" style="color:var(--c-muted)">${workoutName ?? 'Run'}</span>
       </div>
-      ${targetPace ? `<p class="text-xs mb-4" style="color:var(--c-accent)">Target: ${formatPace(targetPace, unitPref)}${paceUnit(unitPref)}</p>` : '<div class="mb-4"></div>'}
+      ${targetPace ? `<p class="text-xs mb-4" style="color:var(--c-accent)">Target: ${fpModel(targetPace, unitPref)}</p>` : '<div class="mb-4"></div>'}
       <p id="rec-elapsed" class="text-6xl font-bold font-mono mb-6" style="color:var(--c-black)">${elapsed}</p>
       ${progressSection}
       <div class="grid grid-cols-2 gap-6 mb-8 w-full max-w-xs mt-4">
@@ -327,7 +327,7 @@ function buildPhasedUI(data: GpsLiveData, workoutName: string | null): string {
       <div class="m-card mx-4 p-4 mb-4">
         <p class="text-sm mb-1" style="color:var(--c-muted)">${currentSeg?.label ?? 'Complete'}</p>
         <p id="rec-current-seg-remaining" class="text-4xl font-bold mb-1" style="color:var(--c-black)">${fmtMeters(remaining, unitPref)}</p>
-        ${currentSeg?.targetPace ? `<p class="text-sm" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace, unitPref)}${paceUnit(unitPref)}</p>` : ''}
+        ${currentSeg?.targetPace ? `<p class="text-sm" style="color:var(--c-accent)">${fpModel(currentSeg.targetPace, unitPref)}</p>` : ''}
       </div>
       ${statsRow(elapsed, dist, pace, avg, unitPref)}
       ${controlButtons()}
@@ -403,7 +403,7 @@ function buildSegmentListHTML(data: GpsLiveData, scheme: SplitScheme, unitPref: 
 
   return segments.map((seg, i) => {
     const distStr = seg.durationSeconds != null ? fmtCountdown(seg.durationSeconds) : fmtMeters(seg.distance, unitPref);
-    const paceStr = seg.targetPace ? `${formatPace(seg.targetPace, unitPref)}${paceUnit(unitPref)}` : 'recovery';
+    const paceStr = seg.targetPace ? `${fpModel(seg.targetPace, unitPref)}` : 'recovery';
     const isCompleted = i < currentIdx;
     const isCurrent = i === currentIdx;
     const isUpcoming = i > currentIdx;
@@ -477,7 +477,7 @@ function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string 
           <p id="rec-current-seg-remaining" class="shrink-0">${remainingDisplay}</p>
         </div>
         ${currentSeg?.targetPace
-          ? `<p class="text-xs mt-0.5" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace, unitPref)}${paceUnit(unitPref)}</p>`
+          ? `<p class="text-xs mt-0.5" style="color:var(--c-accent)">${fpModel(currentSeg.targetPace, unitPref)}</p>`
           : `<p class="text-xs mt-0.5" style="color:var(--c-faint)">Walk or light jog</p>`}
       </div>
 
