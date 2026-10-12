@@ -252,7 +252,7 @@ function decideLT(
 }
 
 /**
- * The LT pace (s/km, rounded as `recomputeLT` stores it) that `recomputeLT`
+ * The LT pace (s/km, unrounded as `recomputeLT` stores it) that `recomputeLT`
  * would apply now if the Daniels input were `danielsVdot` instead of
  * `ltDanielsInputVdot(s)`. Every other input is `buildLTInputs(s)`. Pure:
  * writes nothing. When the chain resolves no pace, `recomputeLT` leaves s.lt
@@ -269,12 +269,24 @@ export function ltPaceForDanielsInput(
 ): number | null {
   const now = opts.now ?? new Date().toISOString();
   const { resolved } = decideLT(s, { ...buildLTInputs(s, { now }), vdot: danielsVdot });
-  return resolved.ltPaceSecKm != null ? Math.round(resolved.ltPaceSecKm) : (s.lt ?? null);
+  return resolved.ltPaceSecKm != null ? resolved.ltPaceSecKm : (s.lt ?? null);
 }
 
+/**
+ * Write the resolved LT to state. `s.lt` keeps the resolved pace UNROUNDED:
+ * it is a model input (the blend's LT predictor, the forecast, the standard
+ * distance predictions, the triathlon run leg, training paces), and since the
+ * PB age weight feeds the derivation (pbsToBestEfforts) the derived pace drifts
+ * a little every day. Stored as a whole second, it ticked by 1 s/km on one
+ * night and moved the marathon prediction by about 50 s (review 2026-10-12:
+ * half PB 1:30, typed 40 km, s.lt 256 to 257 at 755 days). Display rounds at
+ * the display boundary (`Math.round(s.lt)` into the pace formatters), so the
+ * LT the user reads is the whole second it was before. `s.ltHR` stays a whole
+ * bpm: it is a zone anchor, not a race-time input.
+ */
 function applyResolved(s: SimulatorState, resolved: ReturnType<typeof resolveLT>, now: string): void {
   if (resolved.ltPaceSecKm == null) return;
-  s.lt = Math.round(resolved.ltPaceSecKm);
+  s.lt = resolved.ltPaceSecKm;
   s.ltPace = s.lt;
   if (resolved.ltHR != null) s.ltHR = Math.round(resolved.ltHR);
   s.ltUpdatedAt = now;

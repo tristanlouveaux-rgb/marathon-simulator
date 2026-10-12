@@ -72,11 +72,14 @@ interface Snapshot {
   refresh: { brt: number; ft: number; v: number; lt: number | null; std: Record<string, number | null> };
 }
 
+type PbKey = 'k5' | 'k10' | 'h' | 'm';
 type Case = {
   label: string;
   rd: 'marathon' | 'half';
-  pbs: { h?: number; m?: number };
-  key: 'h' | 'm';
+  pbs: Partial<Record<PbKey, number>>;
+  /** The one dated PB (the others undated), or `dated` for several. */
+  key?: PbKey;
+  dated?: PbKey[];
   seed: Partial<SimulatorState>;
 };
 
@@ -88,8 +91,10 @@ const CASES: Case[] = [
   { label: 'half PB 1:30, typed 40 km a week', rd: 'half', pbs: { h: 5400 }, key: 'h', seed: TYPED_40 },
 ];
 
-/** Onboard with the PB dated `ageDays` before now, then run the launch refresh. */
+/** Onboard with the dated PBs `ageDays` before now, then run the launch refresh. */
 function run(c: Case, ageDays: number): Snapshot {
+  const at = new Date(Date.now() - ageDays * DAY_MS).toISOString();
+  const pbDates = Object.fromEntries((c.dated ?? (c.key ? [c.key] : [])).map(k => [k, at]));
   resetState();
   Object.assign(getMutableState(), { unitPref: 'km', ...c.seed });
   const ob = {
@@ -97,8 +102,7 @@ function run(c: Case, ageDays: number): Snapshot {
     name: 'QA', currentStep: 'initializing', trainingMode: 'running', trainingForEvent: true,
     raceDistance: c.rd, selectedRace: null, hasSmartwatch: true,
     customRaceDate: planDay(16, 6), planDurationWeeks: 16, runsPerWeek: 4,
-    experienceLevel: 'intermediate', pbs: c.pbs,
-    pbDates: { [c.key]: new Date(Date.now() - ageDays * DAY_MS).toISOString() },
+    experienceLevel: 'intermediate', pbs: c.pbs, pbDates,
   } as OnboardingState;
   getMutableState().onboarding = ob;
   expect(initializeSimulator(ob).success).toBe(true);
@@ -299,4 +303,85 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
       }
     }
   });
+});
+
+/**
+ * Every day from 300 to 800 days (review 2026-10-12). Two rounding steps made
+ * forecasts jump overnight as a PB aged, between the anniversaries the tests
+ * above sample:
+ *  - s.lt was stored as a whole second. PB age weights feed the LT derivation
+ *    (pbsToBestEfforts), so the derived LT drifts a little every day, and the
+ *    blend's LT predictor (up to about 0.8 of the marathon weight) ticked by
+ *    1 s/km on one night: half PB 1:30 dated, typed 40 km, s.lt 256 to 257 at
+ *    755 days, blendedRaceTimeSec +7.8 s and the standard marathon +50.7 s;
+ *    all four PBs dated, typed 25 km, +52.4 s and +53.5 s at 466 and 729 days.
+ *    s.lt now keeps the resolved pace unrounded (applyResolved, ltSync.ts).
+ *  - vt stopped its bisection at a 0.05 VDOT error, a step function of the
+ *    VDOT. A dated 10K beside an undated marathon PB drifts s.v a little every
+ *    day, and the forecast's horizon delta jumped 15.45 s on two days (once
+ *    faster). vt now converges in time.
+ * Each case checks every forecast number the app shows for it, every day.
+ */
+describe('every day from 300 to 800 days: no forecast number steps (review 2026-10-12)', () => {
+  const TYPED_25 = { detectedWeeklyKm: 25, weeklyVolumeConfirmed: true };
+  const WALK: Array<{ c: Case; note: string }> = [
+    {
+      c: { label: 'half PB 1:30 dated, typed 40 km, half target', rd: 'half', pbs: { h: 5400 }, key: 'h', seed: TYPED_40 },
+      note: 's.lt ticked 256 to 257 at 755 days',
+    },
+    {
+      c: {
+        label: 'all four PBs dated, typed 25 km, marathon target', rd: 'marathon',
+        pbs: { k5: 1200, k10: 2500, h: 5500, m: 11700 }, dated: ['k5', 'k10', 'h', 'm'], seed: TYPED_25,
+      },
+      note: 's.lt ticked at 466 and 729 days',
+    },
+    {
+      c: {
+        label: 'drifting engine: 10K dated, marathon PB undated, typed 40 km, marathon target', rd: 'marathon',
+        pbs: { k10: 2500, m: 11700 }, key: 'k10', seed: TYPED_40,
+      },
+      note: 'vt stepped the forecast 15.45 s on two days',
+    },
+  ];
+
+  const read = (r: Snapshot): Record<string, number> => ({
+    blendedRaceTimeSec: r.refresh.brt,
+    forecastTime: r.refresh.ft,
+    preview: r.onboard.preview,
+    std5k: r.refresh.std['5k']!,
+    std10k: r.refresh.std['10k']!,
+    stdHalf: r.refresh.std.half!,
+    stdMarathon: r.refresh.std.marathon!,
+  });
+
+  for (const { c, note } of WALK) {
+    it(`${c.label} (${note})`, () => {
+      const drifting = c.key === 'k10';
+      let prev = run(c, 300);
+      for (let day = 301; day <= 800; day++) {
+        const cur = run(c, day);
+        // The derived LT drifts continuously: hundredths of a second per km a
+        // day, never the whole-second tick.
+        expect(Math.abs(cur.refresh.lt! - prev.refresh.lt!)).toBeLessThan(0.05);
+        const a = read(prev);
+        const b = read(cur);
+        for (const k of Object.keys(b)) {
+          const step = b[k] - a[k];
+          // Smooth drift measures under 0.75 s a day here; the ticks were
+          // 7.4 to 53.5 s.
+          expect(Math.abs(step), `${k} at ${day} days`).toBeLessThan(1);
+          // Older PB: never faster. One exception, the drifting-engine
+          // forecast: today's time stays on the undated marathon PB while the
+          // engine falls 0.00013 VDOT a day with the 10K's age, and the
+          // horizon delta tv(v) - tv(v + gain) grows a little as v falls (a
+          // lower baseline gains more seconds per VDOT). About 0.0007 s a
+          // day, 1.5 s over 8 years.
+          const floor = drifting && (k === 'forecastTime' || k === 'preview') ? -0.01 : -1e-6;
+          expect(step, `${k} at ${day} days`).toBeGreaterThanOrEqual(floor);
+        }
+        prev = cur;
+      }
+    });
+  }
 });

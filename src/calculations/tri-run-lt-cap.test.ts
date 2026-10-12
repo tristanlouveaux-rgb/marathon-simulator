@@ -42,6 +42,9 @@ import { localMondayKey } from '@/utils/local-date';
 
 const NOW = '2026-10-09T08:00:00Z';
 const SKILL3 = cv(42195, estimateRunPaceFromSkill(3, 'ironman') * 42.195);
+/** s.lt at run skill 3: Daniels LT from SKILL3, 288.37 s/km. s.lt is stored
+ *  unrounded since 2026-10-12 (a model input; display rounds it to 288). */
+const LT_SKILL3 = deriveLTFromVdot(SKILL3)!;
 
 function tri(overrides: Partial<SimulatorState> = {}): SimulatorState {
   return {
@@ -69,8 +72,8 @@ describe('ltDanielsInputVdot: the triathlete run caps reach the LT input', () =>
   it('recomputeLT derives s.lt from the capped figure, not the watch', () => {
     const s = tri({ vo2: 62 });
     recomputeLT(s, { now: NOW, garmin: null });
-    expect(s.lt).toBe(Math.round(deriveLTFromVdot(SKILL3)!));
-    expect(s.lt).toBe(288);
+    expect(s.lt).toBeCloseTo(LT_SKILL3, 9);
+    expect(Math.round(s.lt!)).toBe(288);
     // Pre-fix: Daniels from the raw watch.
     expect(Math.round(deriveLTFromVdot(62)!)).toBe(220);
   });
@@ -173,25 +176,29 @@ function storedRunTexts(): string[] {
 }
 
 describe('real initializers: a cold-start triathlete runs at the skill-rating paces', () => {
-  it('watch 62, run skill 3: s.lt 288 and easy 5:45/km, in the stored plan and after refreshes', () => {
+  it('watch 62, run skill 3: s.lt 288.4 and easy 5:46/km, in the stored plan and after refreshes', () => {
     initTri({ vo2: 62 });
-    expect(getState().lt).toBe(288);
+    expect(getState().lt).toBeCloseTo(LT_SKILL3, 9);
     // The stored plan is written after the init's LT recompute. Pre-fix it read
     // the default s.v 50 (easy 4:59/km); live paces read s.lt 220 (4:24/km).
+    // Easy = 1.2 x s.lt = 346.05 s/km, shown 5:46/km (5:45 while s.lt was
+    // stored as the whole second 288).
     const texts = storedRunTexts().filter(t => /@ \d+:\d\d\/km/.test(t));
     expect(texts.length).toBeGreaterThan(0);
-    expect(texts.some(t => t.includes('@ 5:45/km'))).toBe(true);
+    expect(texts.some(t => t.includes('@ 5:46/km'))).toBe(true);
     expect(texts.some(t => t.includes('4:59/km') || t.includes('4:24/km'))).toBe(false);
     for (let i = 0; i < 3; i++) {
       refreshBlendedFitness(getMutableState());
-      expect(getState().lt).toBe(288);
-      expect(triRunEasyPaceSec(getState())).toBeCloseTo(345.6, 6);
+      expect(getState().lt).toBeCloseTo(LT_SKILL3, 9);
+      expect(triRunEasyPaceSec(getState())).toBeCloseTo(LT_SKILL3 * 1.2, 6);
     }
-    // The skill-3 easy pace the generator uses without a VDOT is 5:45/km too.
+    // The skill-3 easy pace the generator uses without a VDOT is 5:45/km,
+    // within a second of it.
     expect(420 - (3 - 1) * 37.5).toBe(345);
+    expect(Math.abs(LT_SKILL3 * 1.2 - 345)).toBeLessThan(1.1);
   });
 
-  it('no watch, PB or runs: s.lt holds at 288 instead of sliding to 402 s/km', () => {
+  it('no watch, PB or runs: s.lt holds at 288.4 instead of sliding to 402 s/km', () => {
     initTri({});
     const seq: number[] = [];
     for (let i = 0; i < 5; i++) {
@@ -199,7 +206,7 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
       seq.push(getState().lt!);
     }
     // Pre-fix (81d38f7): 261, 288, 319, 357, 402 as s.v fell 44.3 to 25.0.
-    expect(seq).toEqual([288, 288, 288, 288, 288]);
+    for (const lt of seq) expect(lt).toBeCloseTo(LT_SKILL3, 9);
     // The engine is held at the same figure as the LT input.
     expect(getState().v).toBeCloseTo(SKILL3, 9);
   });
@@ -215,7 +222,7 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
     initTri({ vo2: 62, onboardingRunHistory: jogs });
     refreshBlendedFitness(getMutableState());
     expect(getState().v).toBeCloseTo(SKILL3, 9);
-    expect(getState().lt).toBe(288);
+    expect(getState().lt).toBeCloseTo(LT_SKILL3, 9);
   });
 
   it('a watch below the skill rating sets the paces and leaves the engine to the blend, as before', () => {
@@ -226,12 +233,13 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
     // 2026-10-09).
     initTri({ vo2: 40 });
     refreshBlendedFitness(getMutableState());
-    expect(getState().lt).toBe(Math.round(deriveLTFromVdot(40)!));
+    expect(getState().lt).toBeCloseTo(deriveLTFromVdot(40)!, 9);
     expect(resolveLtDanielsInput(getState(), {}).coldStartCapped).toBe(false);
     expect(getState().v).toBeCloseTo(35.1, 1);
     // Watches 36 and 43 (both below 44.3) also read the blend, not the watch
-    // (85c1ea4 held them at exactly 36.00 and 43.00).
-    for (const [vo2, v] of [[36, 31.4], [43, 38.1]] as const) {
+    // (85c1ea4 held them at exactly 36.00 and 43.00). Watch 43 read 38.1 while
+    // s.lt was stored as a whole second; the unrounded LT (2026-10-12) reads 38.0.
+    for (const [vo2, v] of [[36, 31.4], [43, 38.0]] as const) {
       initTri({ vo2 });
       refreshBlendedFitness(getMutableState());
       expect(getState().v).toBeCloseTo(v, 1);
@@ -253,22 +261,29 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
       refreshBlendedFitness(getMutableState());
       engine[vo2] = getState().v!;
       runLeg[vo2] = predictTriathlonRace(getMutableState())!.runSec;
-      // The paces follow the capped figure whatever the engine reads.
-      expect(getState().lt).toBe(288);
+      // The paces follow the capped figure whatever the engine reads (the
+      // watch itself where it reads below the skill rating, as 44.3 does).
+      expect(getState().lt).toBeCloseTo(deriveLTFromVdot(Math.min(vo2, SKILL3))!, 9);
+      expect(Math.round(getState().lt!)).toBe(288);
       if (vo2 >= 50) continue;
       initTri({ vo2 }, 5);
       refreshBlendedFitness(getMutableState());
       expect(engine[vo2]).toBeCloseTo(getState().v!, 6);
     }
-    // Watch 44.3 read 39.35 while vt stopped at a 0.05 VDOT error; it
-    // converges in time since 2026-10-12.
-    expect(engine[44.3]).toBeCloseTo(39.356, 2);
-    expect(engine[44.4]).toBeCloseTo(39.37, 2);
-    expect(engine[46]).toBeCloseTo(40.91, 2);
-    expect(engine[48]).toBeCloseTo(42.97, 2);
-    // Continuity across the boundary, in the engine and in the run leg.
-    expect(Math.abs(engine[44.4] - engine[44.3])).toBeLessThan(0.05);
-    expect(Math.abs(runLeg[44.4] - runLeg[44.3])).toBeLessThan(10);
+    // Engines with s.lt unrounded (2026-10-12). They read 39.356, 39.37,
+    // 40.91 and 42.97 while s.lt was stored as a whole second (288 for every
+    // watch here, so the LT predictor did not move with the watch).
+    expect(engine[44.3]).toBeCloseTo(39.288, 2);
+    expect(engine[44.4]).toBeCloseTo(39.386, 2);
+    expect(engine[46]).toBeCloseTo(40.951, 2);
+    expect(engine[48]).toBeCloseTo(42.917, 2);
+    // Continuity across the boundary, in the engine and in the run leg. Every
+    // signal here is the watch, so the engine follows it at about one for one
+    // (slope 0.98 on both sides of the boundary): 0.1 on the watch moves it at
+    // most 0.1. The 70.3 run leg moves about 15 s per 0.1 VDOT on both sides
+    // (5a255db's step was 12.5 min).
+    expect(Math.abs(engine[44.4] - engine[44.3])).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(runLeg[44.4] - runLeg[44.3])).toBeLessThan(20);
     // A watch far above the rating still reads the skill VDOT, as at 81d38f7.
     expect(engine[50]).toBeCloseTo(SKILL3, 9);
     expect(engine[62]).toBeCloseTo(SKILL3, 9);
@@ -290,7 +305,7 @@ describe('real initializers: a cold-start triathlete runs at the skill-rating pa
     initTri({ vo2: 62, onboardingRunHistory: [run(5, 10, 2900), ...jogs] });
     refreshBlendedFitness(getMutableState());
     expect(ltDanielsInputVdot(getState())).toBeCloseTo(cv(10000, 2900), 9);
-    expect(getState().lt).toBe(Math.round(deriveLTFromVdot(cv(10000, 2900))!));
+    expect(getState().lt).toBeCloseTo(deriveLTFromVdot(cv(10000, 2900))!, 9);
     expect(getState().lt).not.toBe(220);
   });
 });
@@ -324,7 +339,7 @@ describe('real initializers: a synced race effort is running evidence the watch 
     // not the raw 62 (s.lt 220 before).
     expect(ltDanielsInputVdot(s)).toBeCloseTo(EFFORT_VDOT, 9);
     expect(effectiveVo2max(s)).toBeCloseTo(EFFORT_VDOT, 9);
-    expect(s.lt).toBe(Math.round(deriveLTFromVdot(EFFORT_VDOT)!));
+    expect(s.lt).toBeCloseTo(deriveLTFromVdot(EFFORT_VDOT)!, 9);
     expect(s.lt).toBeGreaterThan(288);
   });
 
@@ -334,7 +349,7 @@ describe('real initializers: a synced race effort is running evidence the watch 
     const s = getState();
     expect(triRunEvidenceRaceEffort(s)).toBeNull();
     expect(triColdStartRunCapVdot(s)).toBeCloseTo(SKILL3, 9);
-    expect(s.lt).toBe(288);
+    expect(s.lt).toBeCloseTo(LT_SKILL3, 9);
     expect(s.v).toBeCloseTo(SKILL3, 9);
   });
 
@@ -357,7 +372,7 @@ describe('real initializers: a synced race effort is running evidence the watch 
     expect(triRunEvidenceRaceEffort(s)).toMatchObject({ d: 8, t: 2400 });
     expect(triColdStartRunCapVdot(s)).toBeNull();
     expect(ltDanielsInputVdot(s)).toBeCloseTo(EFFORT_VDOT, 9);
-    expect(s.lt).toBe(Math.round(deriveLTFromVdot(EFFORT_VDOT)!));
+    expect(s.lt).toBeCloseTo(deriveLTFromVdot(EFFORT_VDOT)!, 9);
     expect(s.lt).not.toBe(220);
   });
 

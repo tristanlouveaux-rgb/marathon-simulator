@@ -658,8 +658,9 @@ function buildRunningNumbersCard(s: SimulatorState): string {
     subtitle: aerSubtitle,
   }) : '';
 
-  // Lactate Threshold.
-  const ltPace = s.lt ?? 0;
+  // Lactate Threshold. s.lt is unrounded (a model input); display reads the
+  // whole second.
+  const ltPace = Math.round(s.lt ?? 0);
   const ltSlower = isFemale ? 380 : 360;
   const ltFaster = isFemale ? 180 : 160;
   const ltScore = ltPace > 0
@@ -2351,8 +2352,8 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     subtitle: aerSubtitle,
   }) : '';
 
-  // Bar 3: Lactate Threshold
-  const ltPace = s.lt ?? 0;
+  // Bar 3: Lactate Threshold (s.lt unrounded; display reads the whole second)
+  const ltPace = Math.round(s.lt ?? 0);
   const ltSlower = isFemale ? 380 : 360;
   const ltFaster = isFemale ? 180 : 160;
   const ltScore = ltPace > 0
@@ -2828,7 +2829,8 @@ function buildVDOTMetricPage(s: SimulatorState): string {
 
 export function buildLTMetricPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
-  const currentLT = s.lt ?? 0;
+  // s.lt is unrounded (a model input); this page displays the whole second.
+  const currentLT = Math.round(s.lt ?? 0);
   const currentHR = s.ltHR ?? null;
   const ltLabel = currentLT > 0 ? fp(currentLT, unitPref) : '—';
 

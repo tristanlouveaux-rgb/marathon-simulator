@@ -855,7 +855,7 @@ export interface SimulatorState {
   rec: RecentRun | null;  // Recent race/time trial
 
   // Physiology
-  lt: number | null;      // Current LT pace (sec/km). Resolved via resolveLT(). Override > Garmin (fresh) > derived.
+  lt: number | null;      // Current LT pace (sec/km). Resolved via resolveLT(). Override > Garmin (fresh) > derived. Unrounded (a model input); display sites round it (Math.round) before formatting.
   ltPace?: number | null; // LT pace alias
   ltHR?: number;          // LT heart rate (bpm). Resolved same as lt
   /** User-entered LT override. When present, wins over Garmin and derived values. */

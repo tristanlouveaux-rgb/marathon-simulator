@@ -643,7 +643,9 @@ function renderContinuousProgressPanel(s: any): string {
   const vdotPct = (s.iv || s.v) ? (vdotChange / (s.iv || s.v)) * 100 : 0;
 
   // LT and VO2 stats
-  const ltCurrent = s.lt || s.ltPace;
+  // s.lt is unrounded (a model input); display reads the whole second.
+  const ltRaw = s.lt || s.ltPace;
+  const ltCurrent = ltRaw ? Math.round(ltRaw) : ltRaw;
   const ltInitial = s.initialLT;
   const ltPct = (ltCurrent && ltInitial) ? ((ltInitial - ltCurrent) / ltInitial) * 100 : 0;
   const ltPaceStr = ltCurrent ? fp(ltCurrent, s.unitPref ?? 'km') : '—';
@@ -896,7 +898,7 @@ function renderPhysiologyCard(s: any): string {
   const maxHR = rollPeak(history.map(h => h.maxHR)) ?? null;
   const hrv = rollAvg(history.map(h => h.hrvRmssd));
   const vo2 = latest?.vo2max ?? s.vo2;
-  const ltPace = latest?.ltPace ?? s.lt;
+  const ltPace = latest?.ltPace ?? (s.lt != null ? Math.round(s.lt) : s.lt);
   const ltHR = latest?.ltHR ?? s.ltHR;
 
   if (!rhr && !maxHR && hrv == null && !vo2 && !ltPace && !ltHR) return '';

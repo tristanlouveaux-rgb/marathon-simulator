@@ -267,7 +267,7 @@ export function buildRunningCoachContext(state: SimulatorState): object {
     today: new Date().toISOString().slice(0, 10),
     athlete: {
       vdot: roundTo(s.v, 1),
-      lt_pace: fmtPace(s.lt),
+      lt_pace: fmtPace(s.lt != null ? Math.round(s.lt) : s.lt),
       lt_confidence: s.ltConfidence ?? null,
       vo2max: roundTo(s.vo2, 1),
       race: s.rd,
@@ -449,7 +449,7 @@ export function buildTriathlonCoachContext(state: SimulatorState): object {
       },
       run: {
         vdot: roundTo(s.v, 1),
-        lt_pace: fmtPace(s.lt),
+        lt_pace: fmtPace(s.lt != null ? Math.round(s.lt) : s.lt),
         lt_confidence: s.ltConfidence ?? null,
       },
     },

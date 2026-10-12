@@ -297,7 +297,7 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
   const rows: BlendPredictorRow[] = [
     { key: 'pb',     label: 'Personal best',  description: 'Fatigue-exponent extrapolation from closest PB', baseWeightPct: pb * 100,     outputSec: tPB,     fired: tPB != null,     reason: tPB != null ? 'PB on file' : 'No PB at relevant distance' },
     { key: 'recent', label: 'Recent run',     description: 'Time-decayed weight from latest race or TT',     baseWeightPct: recent * 100, outputSec: tRecent, fired: tRecent != null, reason: hasRecent ? `${recentRun!.weeksAgo ?? '—'}w ago${recentIsDerived ? ' (from latest race effort)' : ''}` : 'No recent race/TT logged' },
-    { key: 'lt',    label: 'Lactate threshold', description: 'LT pace scaled by runner type and tier',       baseWeightPct: lt * 100,     outputSec: tLT,     fired: tLT != null,     reason: tLT != null ? `LT ${formatLtPace(s.lt!, s.unitPref ?? 'km')}` : 'No LT pace yet' },
+    { key: 'lt',    label: 'Lactate threshold', description: 'LT pace scaled by runner type and tier',       baseWeightPct: lt * 100,     outputSec: tLT,     fired: tLT != null,     reason: tLT != null ? `LT ${formatLtPace(Math.round(s.lt!), s.unitPref ?? 'km')}` : 'No LT pace yet' },
     { key: 'vo2',   label: 'VO2max',         description: 'Daniels VDOT inversion',                          baseWeightPct: vo2 * 100,    outputSec: tVO2,    fired: tVO2 != null,    reason: tVO2 != null ? `VDOT ${s.vo2!.toFixed(1)}` : 'No VO2max signal' },
     { key: 'hr',    label: 'HR-calibrated',  description: 'Swain regression on HR-tagged runs (8w)',         baseWeightPct: hr * 100,     outputSec: tHR,     fired: tHR != null,     reason: tHR != null ? `${s.hrCalibratedVdot!.confidence ?? 'medium'} confidence (n=${s.hrCalibratedVdot!.n ?? 0})` : 'No HR-tagged runs yet' },
   ];
@@ -359,7 +359,7 @@ function pageCapacity(s: SimulatorState): { title: string; subhead: string; body
   const projectedVdot = forecastTime > 0 && raceKm > 0
     ? cv(raceKm * 1000, forecastTime)
     : null;
-  const lt = s.lt;
+  const lt = s.lt != null ? Math.round(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   const unitPref = s.unitPref ?? 'km';
 
   // Weeks remaining to race day. `tw` = total weeks, `w` = current week.

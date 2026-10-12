@@ -317,7 +317,7 @@ export function buildYourNumbersCard(s: SimulatorState): string {
 
   const cssSec = tri.swim?.cssSecPer100m ?? null;
   const ftpW = tri.bike?.ftp ?? null;
-  const ltSec = s.lt ?? null;
+  const ltSec = s.lt != null ? Math.round(s.lt) : null; // s.lt unrounded; display reads the whole second
   const deviceVal = (s.vo2 != null && s.vo2 > 0) ? s.vo2 : null;
   const { value: vo2, isDevice: vo2FromDevice } = resolveVO2Value(s);
   const cs = cssScore(cssSec);
@@ -425,13 +425,14 @@ export function buildTrendCards(s: SimulatorState): string {
   const ltSamples = (s.vdotHistory ?? [])
     .filter(h => h.date != null && h.vdot > 0)
     .map(h => ({ date: h.date as string, value: gp(h.vdot).t }));
-  if (s.lt != null && s.lt > 0) {
+  const ltShown = s.lt != null ? Math.round(s.lt) : null; // s.lt unrounded; display reads the whole second
+  if (ltShown != null && ltShown > 0) {
     const today = new Date().toISOString().slice(0, 10);
     const lastIdx = ltSamples.length - 1;
     if (lastIdx >= 0 && ltSamples[lastIdx].date === today) {
-      ltSamples[lastIdx] = { date: today, value: s.lt };
+      ltSamples[lastIdx] = { date: today, value: ltShown };
     } else {
-      ltSamples.push({ date: today, value: s.lt });
+      ltSamples.push({ date: today, value: ltShown });
     }
   }
 

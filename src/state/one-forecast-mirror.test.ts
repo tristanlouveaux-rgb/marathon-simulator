@@ -33,6 +33,8 @@ import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { localMondayKey } from '@/utils/local-date';
+import { deriveLTFromVdot } from '@/calculations/lt-derivation';
+import { runSkillVdot } from '@/calculations/tri-run-skill';
 
 // One clock for the whole file (follow-up review 1, 2026-10-11). pbAgeWeight is
 // continuous in time, so two computations a few milliseconds apart differ in
@@ -84,7 +86,8 @@ describe('triathlon: the onboarding forecast is the first launch\'s', () => {
   it('the cold-start case previews the capped engine, not the wizard default', () => {
     initTri({ vo2: 62 });
     expect(getState().v).toBeLessThan(45);
-    expect(getState().lt).toBe(288);
+    // The skill-3 LT, 288.37 s/km (unrounded since 2026-10-12; shown 4:48/km).
+    expect(getState().lt).toBeCloseTo(deriveLTFromVdot(runSkillVdot(3))!, 9);
   });
 });
 

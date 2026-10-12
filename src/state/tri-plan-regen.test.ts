@@ -33,6 +33,13 @@ import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { applyTriGeneratorRegen } from './tri-plan-regen';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import { localMondayKey } from '@/utils/local-date';
+import { deriveLTFromVdot } from '@/calculations/lt-derivation';
+import { runSkillVdot } from '@/calculations/tri-run-skill';
+
+/** s.lt at run skill 3 (288.37 s/km, shown 4:48/km). Unrounded since
+ *  2026-10-12; easy = 1.2 x s.lt = 346.05 s/km, written 5:46/km (5:45 while
+ *  s.lt was stored as the whole second 288). */
+const LT_SKILL3 = deriveLTFromVdot(runSkillVdot(3))!;
 
 function planDay(week: number, dow: number): string {
   const [y, m, d] = localMondayKey(new Date()).split('-').map(Number);
@@ -55,7 +62,7 @@ function staleTriPlan(): SimulatorState {
     customRaceDate: planDay(20, 6), triSkillRating: { swim: 3, bike: 3, run: 3 },
   } as OnboardingState).success).toBe(true);
   const s = getMutableState();
-  expect(s.lt).toBe(288);
+  expect(s.lt).toBeCloseTo(LT_SKILL3, 9);
   // The previous launch's stored s.lt, from the uncapped watch, and the plan
   // the v22 generator wrote from it.
   s.lt = 220;
@@ -74,11 +81,11 @@ describe('applyTriGeneratorRegen after the launch refresh', () => {
     const s = staleTriPlan();
     expect(runTexts(s).some(t => t.includes('@ 4:24/km'))).toBe(true);
     refreshBlendedFitness(s);
-    expect(s.lt).toBe(288);
+    expect(s.lt).toBeCloseTo(LT_SKILL3, 9);
     expect(applyTriGeneratorRegen(s)).toBe(true);
     const texts = runTexts(getState());
     expect(texts.length).toBeGreaterThan(0);
-    expect(texts.some(t => t.includes('@ 5:45/km'))).toBe(true);
+    expect(texts.some(t => t.includes('@ 5:46/km'))).toBe(true);
     expect(texts.some(t => t.includes('@ 4:24/km'))).toBe(false);
     expect(getState().triConfig!.generatorVersion).toBe(TRI_GENERATOR_VERSION);
     // Idempotent: the current version does not regenerate again.

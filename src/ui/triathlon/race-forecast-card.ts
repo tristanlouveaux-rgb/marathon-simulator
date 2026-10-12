@@ -650,7 +650,7 @@ function renderProjectedMarkers(p: TriRacePrediction, state: SimulatorState): st
     const vdotCurrentLT = gp(run.current).t;
     const vdotProjectedLT = run.projected != null ? gp(run.projected).t : vdotCurrentLT;
     const ltDelta = vdotCurrentLT - vdotProjectedLT; // positive = getting faster
-    const anchoredCurrentLT = state.lt ?? vdotCurrentLT;
+    const anchoredCurrentLT = state.lt != null ? Math.round(state.lt) : vdotCurrentLT; // s.lt unrounded; display reads the whole second
     const anchoredProjectedLT = anchoredCurrentLT - ltDelta;
     const ltMoved = ltDelta >= 1;
     rows.push(row('LT pace', ltMoved

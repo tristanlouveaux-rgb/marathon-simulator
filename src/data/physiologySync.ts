@@ -218,7 +218,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       const unitPref = s.unitPref ?? 'km';
       import('@/ui/toast').then(({ showAssignmentToast }) => {
         showAssignmentToast([
-          `Lactate threshold updated from your watch: ${formatPace(prevLtPace, unitPref)} → ${formatPace(s.lt!, unitPref)}.`,
+          `Lactate threshold updated from your watch: ${formatPace(Math.round(prevLtPace), unitPref)} → ${formatPace(Math.round(s.lt!), unitPref)}.`,
         ]);
       }).catch(() => {});
       console.log(`[PhysiologySync] LT updated from Garmin: ${prevLtPace}s/km → ${s.lt}s/km`);

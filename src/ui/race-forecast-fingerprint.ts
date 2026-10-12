@@ -59,7 +59,7 @@ function buildYou(s: SimulatorState): Cluster {
 
 function buildCapacity(s: SimulatorState): Cluster {
   const vdot = s.blendedEffectiveVdot ?? s.v;
-  const lt = s.lt;
+  const lt = s.lt != null ? Math.round(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   if (!vdot || vdot <= 0) {
     return { key: 'capacity', label: 'Capacity', headline: 'No data', detail: '', present: false, addCta: 'Sync runs' };
   }

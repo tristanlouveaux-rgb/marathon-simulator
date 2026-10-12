@@ -497,10 +497,12 @@ export function render(): void {
   const ltDeltaEl = document.getElementById('stat-lt-delta');
   if (ltEl) {
     if (s.lt) {
-      ltEl.textContent = fp(s.lt, (s as any).unitPref ?? 'km');
+      // s.lt is unrounded (a model input); display reads the whole second.
+      const ltShown = Math.round(s.lt);
+      ltEl.textContent = fp(ltShown, (s as any).unitPref ?? 'km');
       const initialLT = s.onboarding?.ltPace; // sec/km
-      if (ltDeltaEl && initialLT && Math.abs(s.lt - initialLT) >= 1) {
-        const delta = initialLT - s.lt; // Positive = faster (improvement)
+      if (ltDeltaEl && initialLT && Math.abs(ltShown - initialLT) >= 1) {
+        const delta = initialLT - ltShown; // Positive = faster (improvement)
         const dSec = Math.round(delta);
         ltDeltaEl.textContent = `${dSec >= 0 ? '-' : '+'}${Math.abs(dSec)}s`;
         ltDeltaEl.className = `text-xs`;

@@ -2042,7 +2042,7 @@ function renderVdotRow(_vdot: number | undefined): string {
 
 function renderLtRow(unitPref: 'km' | 'mi'): string {
   const s = getState();
-  const lt = s.lt;
+  const lt = s.lt != null ? Math.round(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   if (!lt || lt <= 0) return '';
   const conf = s.ltConfidence;
   const src = s.ltSource;
