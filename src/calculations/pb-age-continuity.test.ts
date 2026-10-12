@@ -210,9 +210,11 @@ describe('one forecast: the plan preview equals Home (Tristan, 2026-10-11)', () 
  * time 13022.65 to 13181.49 s at 1 year and 13189.73 to 13348.66 s at 2 years
  * (the standard marathon prediction moved the same; forecastTime did not).
  * Ironman run leg with a typed 30 km: 12306 to 12378 s and 12422 to 12495 s.
- * The factor is now the line through the rule's values at 0, 365 and 730 days
- * (pbRecencyPenaltyFactor, one function for every site), so each day across
- * both edges moves under 2 s, and never faster with age.
+ * The factor is now continuous (pbRecencyPenaltyFactor, one function for
+ * every site): 0.5 through the first year, as the first band was, then linear
+ * to the full penalty at two years (orchestrator default 2026-10-12, the
+ * lenient option over the straight line from 0.5 today). Each day across both
+ * edges moves under 2 s, and never faster with age.
  */
 describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 years', () => {
   /**
@@ -249,9 +251,9 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
   });
 
   it('the penalty still eases with a recent PB: a PB a year old reads faster than one two years old', () => {
-    // The factor keeps the rule's direction and its anchors (0.5 today, 0.75
-    // at a year, full penalty from two years), so the low-volume marathon time
-    // rises with the PB's age; after two years only the PB age weight moves it.
+    // The factor keeps the rule's direction (0.5 through a year, full penalty
+    // from two years), so the low-volume marathon time rises with the PB's
+    // age; after two years only the PB age weight moves it.
     const c: Case = { label: 'marathon PB 3:15, typed 20 km a week', rd: 'marathon', pbs: { m: 11700 }, key: 'm', seed: TYPED_20 };
     const at = (d: number) => run(c, d).refresh.brt;
     const [d0, d1, d2, d3] = [30, 365, 730, 1100].map(at);
@@ -292,14 +294,15 @@ describe('the low-volume PB-recency factor moves no number in a step at 1 or 2 y
       };
     }, ['runSec', 'totalSec', 'currentRunSec', 'currentTotalSec']);
     // The run readiness penalty: one day moves it by at most the factor's
-    // daily slope (0.5 / 730) times the largest excess it scales (Ironman
-    // 0.15, MAX_PENALTY_BY_DISTANCE), across both old edges.
+    // daily slope (0.5 / 365 in the second year, 0 in the first) times the
+    // largest excess it scales (Ironman 0.15, MAX_PENALTY_BY_DISTANCE),
+    // across both old edges.
     for (const edge of [365, 730]) {
       const pens = [-3, -2, -1, 0, 1, 2, 3].map(d => readIm(edge + d).runPenalty);
       expect(pens[0]).toBeGreaterThan(1);
       for (let i = 1; i < pens.length; i++) {
         expect(pens[i] - pens[i - 1]).toBeGreaterThanOrEqual(0);
-        expect(pens[i] - pens[i - 1]).toBeLessThanOrEqual(0.15 * 0.5 / 730 + 1e-12);
+        expect(pens[i] - pens[i - 1]).toBeLessThanOrEqual(0.15 * 0.5 / 365 + 1e-12);
       }
     }
   });
@@ -368,9 +371,13 @@ describe('every day from 300 to 800 days: no forecast number steps (review 2026-
         const b = read(cur);
         for (const k of Object.keys(b)) {
           const step = b[k] - a[k];
-          // Smooth drift measures under 0.75 s a day here; the ticks were
-          // 7.4 to 53.5 s.
-          expect(Math.abs(step), `${k} at ${day} days`).toBeLessThan(1);
+          // Smooth drift; the ticks were 7.4 to 53.5 s. The largest daily
+          // move is 1.13 s, in the four-PB case's second year (365 to 730
+          // days): its 25 km a week fires the marathon-specificity penalty,
+          // and the PB-recency factor rises at 0.5 / 365 a day there (held
+          // at 0.5 through the first year, orchestrator default 2026-10-12).
+          // Every other day and case moves under 0.75 s.
+          expect(Math.abs(step), `${k} at ${day} days`).toBeLessThan(1.5);
           // Older PB: never faster. One exception, the drifting-engine
           // forecast: today's time stays on the undated marathon PB while the
           // engine falls 0.00013 VDOT a day with the 10K's age, and the

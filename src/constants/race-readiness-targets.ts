@@ -251,16 +251,22 @@ export const READINESS_BANDS = [
  * Mujika & Padilla 2000) and is fully stale at two years.
  *
  * Continuous since 2026-10-12 (Tristan 2026-10-11: no forecast jumps on a PB's
- * anniversary). The factor is the straight line through the rule's own values
- * at 0, 365 and 730 days (0.5, 0.75, 1.0, which are collinear): the credit of
- * 0.5 for a race run today falls linearly to 0 at two years. No new constant.
- * It meets the old bands at the start of each band and sits above them inside
- * one (a PB at 300 days reads about 0.71, was 0.5), so the penalty a recent PB
- * leaves is at most 0.25 of its excess larger than before, and never smaller.
+ * anniversary). The first year keeps the old calibration: 0.5 through 365
+ * days, as the first band did. From there the factor rises linearly to the
+ * rule's full penalty at two years (1.0 at 730 days), so it passes the second
+ * band's 0.75 at the middle of the second year (547.5 days) and the second
+ * year's mean factor is the band's 0.75. No new constant: the ages (365, 730)
+ * and factors (0.5, 1.0) are the rule's own. Orchestrator default 2026-10-12
+ * (Tristan delegated the call), the lenient option over the straight line
+ * from 0.5 today: never harsher than that line, equal to the old bands
+ * through the first year, and the rule's "fully stale at two years" kept.
+ * Inside the second year it sits below the old 0.75 band until 547.5 days
+ * and above it after (open question: a later full-stale age, which would
+ * keep it at or below the bands, needs Tristan's number).
  */
 export const RUN_PB_RECENCY_ANCHORS: ReadonlyArray<{ ageDays: number; factor: number }> = [
   { ageDays: 0,   factor: 0.5  },  // race run today: halves the penalty's excess
-  { ageDays: 365, factor: 0.75 },  // one year: 75% of the excess
+  { ageDays: 365, factor: 0.5  },  // first year: the first band's 0.5 throughout
   { ageDays: 730, factor: 1.0  },  // two years and beyond: full penalty
 ];
 
