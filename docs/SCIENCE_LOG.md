@@ -8073,3 +8073,80 @@ penalty'  = 1 + (penalty - 1) x effective
 **Guards.** `race-readiness.test.ts` (anchors, 0.5 through 365 days, never above the old bands, daily slope, defaults, bike and swim continuity), `pb-age-continuity.test.ts`. Not device-verified.
 
 ---
+
+## §DF — A typed weekly km sets a running plan's volume ramp and weekly load target (2026-10-09, lane k; mode gate 2026-10-11)
+
+**Side.** Planning: the plan's weekly volume budget and the weekly load target. The forecasts that integrate the plan's ramp (`planForecastWeeklyKm`, `runMarathonForecastSim`) and the race page's low-base marathon note read the same archetype, so tracking credits the ramp the plan builds.
+
+**Decision.** Tristan, 2026-10-09: a weekly km the athlete types at onboarding shapes the plan and the weekly target (ISSUE-375). Merged in `5a58cf2` (commits `a50eec7`, `0a695a2`, `fb4d226`, `e3b6155`, `a4a72cb`); `4991e58` (lane v, 2026-10-11) moved both halves behind one running-plan gate. Before, only a Strava or Apple Health sync wrote `s.athleteArchetype`, so a typed km never engaged the §AK ramp, and the target fell to runs/week × 50.
+
+**Where.** `typedWeeklyKm` (`athlete-archetype.ts:301`), `typedVolumeShapesPlan` (`:288`), `typedVolumeArchetype` (`:340`), `planRampArchetype` (`:363`, read by `planEngineStateInputs`, `plan_engine.ts:1041`, `planForecastWeeklyKm`, `runMarathonForecastSim` and `lowBaseMarathon`); `typedVolumeWeeklyTSS` (`fitness-model.ts:1165`), the baseline chain in `computePlannedWeekTSS` (`:1215`) and `computePlannedSignalB` (`:1286`), read through `computePlannedWeekTarget` (`planned-week-target.ts:176`).
+
+**Formula.**
+
+```
+typedKm         = s.detectedWeeklyKm when s.weeklyVolumeConfirmed and > 0, else none
+                  (manual entry, the review-step volume row once saved, the review no-data slider)
+shapesPlan      = eventType not 'triathlon' (cycling included), not 'hyrox', and not trackOnly
+
+ramp archetype  = s.athleteArchetype.archetype                                  (a sync wrote it)
+                → classify(gatherEvidence(s) with weeklyKmCV = NaN,
+                           peakWeeklyKmPast52 = 0, longestRunPast12moKm = 0,
+                           hasCompletedMarathon = false)                        (typedKm, shapesPlan,
+                                                                                 no historicWeeklyKm or
+                                                                                 extendedHistoryKm)
+                → none (full race plan: no ramp; continuous or sharpening block: s.wkm and 'unknown')
+
+typedWeeklyTSS  = typedKm × easy pace (s.pac.e / 60 min/km, else 5.5) × plannedTssPerMin('easy')
+                = typedKm × easy min/km × 0.92                                  (shapesPlan only)
+
+target baseline = median(historicWeeklyTSS, ≥ 3 non-zero weeks) → ctlBaseline → typedWeeklyTSS → runs/week × 50
+target(week)    = baseline × m(week) (+ the cross-training budget in Signal B; §CH, unchanged)
+```
+
+What the typed classification gives with no cross-training baseline on state (`sportBaselineByType`, which only the Strava history sync writes, `stravaSync.ts:543`), through the unchanged §AK table and `startingWeeklyKm`:
+
+| Typed km | Archetype | Week-1 start | Ramp |
+|---|---|---|---|
+| under 10 | sedentary-novice | 10 km floor | 5% a week |
+| 10 or more | consistent-runner (the classifier's fallback) | 1.05 × typed km | 7% a week |
+
+A typed 5 km starts at 10 km with or without a marathon PB; a typed 15 km and a typed 60 km are both consistent-runner. The ramp is a ceiling on each week's budget (`effectiveWeeklyBudget`, `plan_engine.ts:656`): it lowers a week the race-target volume would make heavier and never raises one.
+
+**Constants.** No new constant.
+- 0.92 TSS/min is `TL_PER_MIN[4]`, the row that values a planned easy run (`TSS_RPE_BY_TYPE.easy = 4`, `sports.ts:48`; Load Currency Law, §BP). The weekly target stays in canonical TSS.
+- Easy pace is the Plan card's (`planCardBaseMinPerKm`, `fitness-model.ts:873`): `s.pac.e`, else the card's existing 5.5 min/km.
+- Start multipliers, floors and ramps are the §AK `ARCHETYPE_PARAMS` rows, unchanged.
+
+**Why defensible.**
+- *One classifier.* The typed athlete goes through the same `classify` a sync runs, so a typed 30 km and 8 synced weeks at 30 km build the same plan (`initialization.load-target-no-history.test.ts`).
+- *Missing evidence never fires a branch.* A typed number supplies the current weekly km only. The high-mileage branch (≥ 50 km and CV < 0.35) needs week-to-week steadiness, so CV is unknown (NaN fails the test). The first version (`a50eec7`) read the missing CV as 0, which classified typed 50 km and above as high-mileage (3% ramp) while typed 45 km was consistent-runner (7%): typing more km bought a slower ramp. In a 6-week marathon block the long run then peaked at 96 min for typed 50 and 60 km against 109 min for 45 km, with a slower forecast (`e3b6155` commit measurement). The two history branches (detrained-with-history, which needs a layoff of 3 or more weeks under 20 km, and "consistent at their level", which needs a 20 km week in the last 2) turn on recency a typed number cannot show. The history evidence they read (marathon PB, peak week, longest run) is zeroed, so it never changes a typed classification. The first version mapped detrained-with-history to consistent-runner after the fact, which let a marathon PB lift a typed 5 km athlete out of sedentary-novice and start them at 5.25 km, under the 10 km floor.
+- *Easy pricing for the target.* A typed number carries no intensity. Easy running is the bulk of a recreational week, and pricing every typed km at the easy row values the week the way the Plan card values an easy run. Runs per week does not enter: the minutes at easy pace are the same however the km are split.
+- *Measured load wins.* The typed baseline sits after the history median and the CTL baseline, and the typed archetype applies only with no synced weekly history, so the first sync replaces both (the sync re-detects the archetype).
+- *Running plans only.* A triathlon (cycling included) or HYROX week is multi-sport, so one discipline's km must not size its ramp or its target: before the gate a triathlon typed 20 km set a baseline of 101 where runs/week × 50 gave 146 (`a4a72cb`), and a triathlon typed 15 km moved `planForecastWeeklyKm` from 118.8 to 29.7 km (`4991e58`). Just-Track has no plan, so a typed km sets no ramp and no target there (a typed 15 km had set the target to 80 against 243, which the AI Coach reads as `planned_week_tss`).
+
+**Effect.** Measured at `d0a1dc5` with the real initializer: 16-week marathon, 10K PB 45:00 (easy 5:40/km), recreational tier, no sync. "No typed km" is what a typed km also got before lane k. Planned TSS is the Plan card pricing of weeks 2, 3, 5 and 6 (week 4 is a deload).
+
+| Athlete | Base-week target | Planned TSS, weeks 2, 3, 5, 6 |
+|---|---|---|
+| No typed km, 3 runs | 146 | 214, 214, 225, 236 |
+| Typed 50 km, 3 runs | 253 | 214, 214, 225, 236 |
+| No typed km, 4 runs | 194 | 256, 256, 267, 278 |
+| Typed 50 km, 4 runs | 253 | 256, 256, 267, 278 |
+| Typed 30 km, 4 runs | 152 | 209, 224, 257, 256 |
+| Typed 15 km, 4 runs | 76 | 118, 128, 140, 145 |
+
+At 50 km the race-target week sits under the ramp, so the plan is unchanged and only the target moves; at 15 and 30 km the ramp lowers the plan. A 6-week marathon sharpening block (4 runs, no logged runs) builds long runs of 90, 96, 102 and 109 min for typed 45, 50 and 60 km alike; the forecast is 13127, 13120 and 13120 s, never slower for more km.
+
+**Limitations.**
+1. Target and plan still disagree for a low typed km. The target is the typed km's current load × the phase multiplier (0.97 in base for the recreational tier), while the plan starts at 1.05 × the typed km, ramps 7% a week and carries quality sessions priced above the easy row. A plan done exactly reads over target on every surface that compares load with it: typed 15 km on 4 runs by 55 to 91% (118 to 145 against 76), typed 30 km by 38 to 69% (209 to 257 against 152), typed 50 km on 4 runs by 1 to 10%; typed 50 km on 3 runs sits at 85 to 93% of target. Before lane k the 15 km athlete read 32 to 43% over (256 to 278 against 194), on a plan about twice as heavy. ISSUE-375 option (3), the target as the sum of the generated week's priced sessions, would close this; it is not built.
+2. Easy pricing undervalues a typed week that includes quality running, and overvalues one walked or run slower than the Plan card's easy pace.
+3. A typed km is self-report. Until the first sync nothing checks it, and an error moves the week-1 ceiling, the ramp and the target together.
+4. A steady typed 50 km or more runner gets consistent-runner (start 1.05 × the typed km, 7% ramp), not the 3% high-mileage ramp a synced steady runner gets. Monotonicity in typed km was chosen over the slower ramp; 7% is the classifier's own fallback ("conservative enough to be safe if wrong"), and at these volumes the race-target week usually sits under the ramp anyway.
+5. Running history in a typed athlete's PBs is ignored, so a returning marathoner who types 15 km ramps as consistent-runner (7%), not detrained-with-history (start 1.10 × the km + 5 km, 15 km floor, 10% ramp): the slower path.
+6. `weeklyVolumeConfirmed` stays set after a sync, so `typedWeeklyKm` then returns the sync's 4-week mean. The target reads it only when the sync left fewer than 3 non-zero history weeks and no CTL baseline; the archetype never does (synced history switches the typed classification off).
+7. Triathlon, cycling and HYROX keep runs/week × 50 as the last resort even with a typed km.
+
+**Guards.** `athlete-archetype.test.ts` (`typedVolumeArchetype`: the classifier on the typed km, a PB never changes the classification, start and ramp monotonic in typed km, synced classification first), `fitness-model.test.ts` (`typedVolumeWeeklyTSS` pricing, the 5.5 min/km fallback, the chain order, undefined for triathlon and HYROX), `planned-week-target.test.ts` (a running target prices the typed km; triathlon and HYROX targets equal the untyped ones), `state/initialization.load-target-no-history.test.ts` (typed 50 and 15 km week-1 volume and target, typed equals synced plan, the forecast ramp, synced history wins, the sharpening-block monotonic check), `ui/wizard/steps/review-pb-draft.test.ts` (a saved volume edit sets the flag), `state/typed-km-mode-gates.test.ts` (no typed ramp or target in triathlon, cycling, HYROX or Just-Track). Not device-verified.
+
+---
