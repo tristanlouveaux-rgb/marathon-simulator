@@ -363,6 +363,15 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       }
 
       redistributeArchivedActivitiesToNewPlan();
+      // One forecast (review round 5, 2026-10-12; mirror of the running,
+      // triathlon and HYROX initializers). The wizard lands Just-Track on Home
+      // without launchApp, so without this the store defaults (s.v 50, s.lt
+      // null) stood until the next app open, and the Stats race estimates
+      // (predictStandardDistances) changed after the first relaunch (10K 45:00:
+      // marathon 3:52:33 at onboarding, 3:49:58 after). The launch refresh runs
+      // recomputeLT and, with PBs, the blend; without PBs it returns before the
+      // blend (the trackOnly guard), as at launch. One call converges.
+      refreshBlendedFitness(s);
       saveState();
       return { success: true };
     }
