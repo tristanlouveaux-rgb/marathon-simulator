@@ -28,6 +28,7 @@
  */
 
 import { paceSecPerKmForRunType, fmtDist } from './intent_to_workout';
+import { fmtModelPaceKm } from '@/utils/format';
 
 /** Ascending intensity ladder for the user's Adjust control (index 0 = easiest).
  *  Long runs step through their own sub-ladder below. Plan-change downgrades
@@ -155,7 +156,9 @@ export function canStepIntensity(type: string, dir: 'easier' | 'harder'): boolea
 // generation uses. Bike watts scale by the intensity-ladder %FTP ratio; swim
 // paces shift by the ladder's CSS-offset delta. No new constants.
 
-const fmtPaceMSS = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+// Model pace (from s.pac.e, unrounded): the whole second, as generation
+// writes it (intent_to_workout), so an adjusted session reads the same pace.
+const fmtPaceMSS = (sec: number) => fmtModelPaceKm(sec);
 
 /**
  * Rewrite the work-pace targets in a running description for a new run type.

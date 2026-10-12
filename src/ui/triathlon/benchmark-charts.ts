@@ -6,6 +6,8 @@
  * pulling in the whole Progress module.
  */
 
+import { fmtModelPaceKm } from '@/utils/format';
+
 export interface BenchmarkSample { date: string; value: number }
 
 /** Render a 320×50 sparkline + headline number for a benchmark history.
@@ -104,10 +106,10 @@ export function buildCssTrendChart(samples: BenchmarkSample[]): string {
   return inner;
 }
 
+/** LT and critical pace (model paces, unrounded): the whole second
+ *  (displayPaceSec), minute carried, so 299.6 reads 5:00, never 4:60. */
 function fmtLtPace(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  return fmtModelPaceKm(secPerKm);
 }
 
 /** LT-specific wrapper that pace-formats the headline and delta. */

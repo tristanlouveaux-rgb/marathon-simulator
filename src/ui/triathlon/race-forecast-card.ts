@@ -18,6 +18,7 @@ import type { SimulatorState } from '@/types/state';
 import type { CourseFactorEntry, LimitingFactor, TriRacePrediction, TriathlonDistance } from '@/types/triathlon';
 import type { CourseProfile } from '@/types/onboarding';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
+import { fpModel } from '@/utils/format';
 import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { validateAgainstDistribution, type DistributionTable } from '@/validation/distribution';
 import splitDistJson from '@/constants/empirical-split-distributions.json';
@@ -650,7 +651,7 @@ function renderProjectedMarkers(p: TriRacePrediction, state: SimulatorState): st
     const vdotCurrentLT = gp(run.current).t;
     const vdotProjectedLT = run.projected != null ? gp(run.projected).t : vdotCurrentLT;
     const ltDelta = vdotCurrentLT - vdotProjectedLT; // positive = getting faster
-    const anchoredCurrentLT = state.lt ?? vdotCurrentLT;
+    const anchoredCurrentLT = state.lt != null ? state.lt : vdotCurrentLT; // s.lt unrounded; fmtLtPace reads the whole second
     const anchoredProjectedLT = anchoredCurrentLT - ltDelta;
     const ltMoved = ltDelta >= 1;
     rows.push(row('LT pace', ltMoved
@@ -699,12 +700,10 @@ function bikeLowConfidenceFlag(state: SimulatorState): string | undefined {
   return 'no test';
 }
 
+/** LT paces (model paces, unrounded): the whole second with the minute
+ *  carried (fpModel), as every LT display; never "4:60". */
 function fmtLtPace(secPerKm: number, unitPref?: string | null): string {
-  const sec = unitPref === 'mi' ? secPerKm * 1.60934 : secPerKm;
-  const unit = unitPref === 'mi' ? '/mi' : '/km';
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}${unit}`;
+  return fpModel(secPerKm, unitPref === 'mi' ? 'mi' : 'km');
 }
 
 function fmtCss(secPer100m: number): string {

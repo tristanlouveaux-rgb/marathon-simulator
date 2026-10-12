@@ -37,7 +37,7 @@ import {
   READINESS_VOLUME_WINDOW_WEEKS,
   READINESS_LONGEST_WINDOW_WEEKS,
   READINESS_BANDS,
-  RUN_PB_RECENCY_BANDS,
+  pbRecencyPenaltyFactor,
   TRI_DISTANCE_CROSS_CREDIT,
   SCORE_TO_PENALTY_SIGMOID_K,
 } from '@/constants/race-readiness-targets';
@@ -46,6 +46,7 @@ import type { TriathlonDistance } from '@/types/triathlon';
 import type { AbilityBand } from '@/types/training';
 import { recentHoursByDiscipline, longestSessionByDiscipline } from './tri-volume-by-discipline';
 import { computePredictionInputs } from './prediction-inputs';
+import { raceEffortHrFloorForState } from './heart-rate';
 import { collectRunsFromState } from './blended-fitness';
 import { getLongestRunSec } from './run-durability';
 import { getAbilityBand as getRunAbilityBandFromVdot } from './fatigue';
@@ -238,11 +239,13 @@ export function computeDisciplineReadiness(
     }
     pbAgeDays = ageDays;
     if (ageDays != null) {
-      const recencyBand = RUN_PB_RECENCY_BANDS.find(b => ageDays! < b.maxAgeDays);
-      const bandFactor = recencyBand?.factor ?? 1.0;
-      // effectiveFactor: scale band reduction by cross-credit weight so a
+      // Continuous in age (RUN_PB_RECENCY_ANCHORS): no step on the result's
+      // anniversary. The same factor as the running marathon-specificity
+      // penalty in blendPredictionsPreFloor.
+      const recencyFactor = pbRecencyPenaltyFactor(ageDays);
+      // effectiveFactor: scale the recency reduction by cross-credit weight so a
       // shorter-than-target race delivers partial (not full) penalty reduction.
-      const effectiveFactor = 1 - (1 - bandFactor) * crossCreditWeight;
+      const effectiveFactor = 1 - (1 - recencyFactor) * crossCreditWeight;
       if (effectiveFactor < 1.0) {
         const excess = penaltyMultiplier - 1.0;
         penaltyMultiplier = 1.0 + excess * effectiveFactor;
@@ -293,7 +296,7 @@ function readWeeklyVolume(
 ): { actual: number; unit: 'km' | 'hours' } {
   if (discipline === 'run') {
     const runs = collectRunsFromState(state);
-    const inputs = computePredictionInputs(runs);
+    const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(state));
     return { actual: inputs.weeklyKm ?? 0, unit: 'km' };
   }
   // Swim/bike: hours/week from the 8-week window. recentHoursByDiscipline

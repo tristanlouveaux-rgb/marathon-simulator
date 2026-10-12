@@ -23,6 +23,7 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { cpRatioForVdot } from '@/calculations/hyrox-run-pace';
 import { gp } from '@/calculations/paces';
 import { buildCpTrendChart, type BenchmarkSample, animateChartDrawOn } from '@/ui/triathlon/benchmark-charts';
+import { fmtModelPaceKm } from '@/utils/format';
 
 // ── Design tokens (mirror forecast-chip-detail-view.ts) ──────────────────────
 
@@ -30,11 +31,12 @@ const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
 const CARD = 'background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:18px 20px';
 
+/** Threshold and critical pace are model paces (gp(v, s.lt).t, unrounded):
+ *  the whole second with the minute carried (fmtModelPaceKm), so 299.6 reads
+ *  5:00/km, never 4:60/km. */
 function fmtPace(secPerKm: number): string {
   if (!Number.isFinite(secPerKm) || secPerKm <= 0) return '—';
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+  return `${fmtModelPaceKm(secPerKm)}/km`;
 }
 
 function statRow(label: string, value: string, strong = false): string {

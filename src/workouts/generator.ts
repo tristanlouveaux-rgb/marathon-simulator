@@ -7,6 +7,7 @@ import { SPORT_LABELS } from '@/constants/sports';
 import { calculateWorkoutLoad } from './load';
 import { assignDefaultDays } from './scheduler';
 import { capitalize } from '@/utils';
+import { fmtModelPaceKm } from '@/utils/format';
 import { applyInjuryAdaptations, injuryAppliesToWeek } from '@/injury/engine';
 import { injuryStrengthDecision } from './injury-strength';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
@@ -112,7 +113,7 @@ export function generateWeekWorkouts(
   // Easy-pace target appended to plain distance runs (legacy path + commutes),
   // mirroring the plan-engine path (intentToWorkout's easyLabel format).
   const easySuffix = easyPaceSecPerKm
-    ? ` @ ${Math.floor(easyPaceSecPerKm / 60)}:${String(Math.floor(easyPaceSecPerKm % 60)).padStart(2, '0')}/km`
+    ? ` @ ${fmtModelPaceKm(easyPaceSecPerKm)}/km` // model pace: the whole second
     : '';
 
   // Taper weeks of a running race plan: the room carried easy makeups may fill

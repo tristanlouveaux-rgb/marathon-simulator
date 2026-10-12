@@ -15,6 +15,7 @@ import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import {
@@ -144,6 +145,36 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     const timeBasedBand: AbilityBand = adjustedPrevTimeSec != null
       ? bandFromTime(adjustedPrevTimeSec)
       : bandFromExperience(state.experienceLevel as string | undefined);
+
+    // Resolve fitness before the band (review round 5, 2026-10-12). The
+    // staleness re-band and the personal run-pace offset below read s.v and
+    // s.lt. No wizard step writes s.v, so for a fresh user they were the store
+    // defaults (s.v 50, s.lt null), and the launch refresh then moved them
+    // (10K 38:00: engine 55.2, re-banded competitive to intermediate "at VDOT
+    // 50"). The band sets mtlCap, sessions and plan weeks, and the offset is
+    // frozen once set (refreshHyroxPersonalRunPaceOffset skips a set offset),
+    // so both stayed anchored on a placeholder. Commit the inputs the refresh
+    // reads and run it here, the way initializeSimulator resolves the engine
+    // before it builds a plan. Runs per week are provisional (the time band's
+    // sessions; the band below rarely differs); the end-of-init refresh still
+    // runs on the committed plan.
+    s.eventType = 'hyrox';
+    s.triConfig = undefined;
+    s.trackOnly = false;
+    s.continuousMode = false;
+    s.w = 1;
+    s.rd = 'marathon';  // Placeholder. HYROX views ignore this.
+    s.pbs = state.pbs || {};
+    s.rec = state.recentRace ?? null;
+    if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
+    if (state.bodyWeightKg)  s.bodyWeightKg = state.bodyWeightKg;
+    s.onboarding = state;
+    const provisionalSessions = state.hyroxWeeklySessionCount != null
+      ? distributeSessionCount(state.hyroxWeeklySessionCount, timeBasedBand)
+      : HYROX_WEEKLY_SESSIONS[timeBasedBand];
+    s.rw = provisionalSessions.runs;
+    s.epw = provisionalSessions.runs + provisionalSessions.stations + provisionalSessions.bricks;
+    refreshBlendedFitness(s);
 
     // Staleness-aware band: when the previous race is old enough that we
     // partially distrust it AND the user's current VDOT implies a different
@@ -321,17 +352,12 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       generatorVersion: HYROX_GENERATOR_VERSION,
     };
 
-    s.eventType = 'hyrox';
     s.hyroxConfig = hyroxConfig;
-    s.triConfig = undefined;
     // Clear stale tri injury gates so canSwim/canBike from a prior tri mode
     // don't linger as silent no-ops on the new HYROX plan.
     if (s.injuryState?.active) {
       s.injuryState = clearStaleGatesForMode(s.injuryState, 'hyrox');
     }
-    s.trackOnly = false;
-    s.continuousMode = false;
-    s.w = 1;
     s.tw = weeks;
 
     // Anchor to this Monday; a mid-week onboard yields a reduced partial week 1
@@ -344,18 +370,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
 
-    s.rd = 'marathon';  // Placeholder. HYROX views ignore this.
     s.rw = sessions.runs;
     s.epw = sessions.runs + sessions.stations + sessions.bricks;
     s.gs = 0;
     s.wkm = 0;
-    s.pbs = state.pbs || {};
-    s.rec = state.recentRace ?? null;
     s.schemaVersion = STATE_SCHEMA_VERSION;
-
-    if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
-    if (state.bodyWeightKg)  s.bodyWeightKg = state.bodyWeightKg;
-    s.onboarding = state;
     s.selectedMarathon = undefined;
 
     archiveCurrentWksIfPopulated();
@@ -368,6 +387,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     s.forecastTime = null;
 
     redistributeArchivedActivitiesToNewPlan();
+    // One forecast (Tristan, 2026-10-11; mirror of initializeSimulator): run
+    // the launch refresh on the committed plan, after the archived activities
+    // move into it, so the VDOT-derived run pace the onboarding preview reads
+    // is the one the first launch shows.
+    refreshBlendedFitness(s);
     saveState();
 
     const seededStations = Object.keys(stationBenchmarks).length;

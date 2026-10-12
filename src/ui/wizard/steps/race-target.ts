@@ -374,7 +374,14 @@ function renderBlockNote(state: OnboardingState, raceISO: string | null): string
   if (!raceISO || (state.raceDistance !== 'marathon' && state.raceDistance !== 'half')) return '';
   const note = racePlanNote(state.raceDistance, raceISO);
   if (!note) return '';
-  const low = lowBaseMarathon(state.raceDistance, raceISO, getState() as unknown as LowBaseState, state.experienceLevel);
+  // A running race plan is being built: read the store as a running plan, so a
+  // mode left over from an earlier plan (triathlon, HYROX, Just-Track) does not
+  // switch the typed-volume ramp off (typedVolumeShapesPlan).
+  const low = lowBaseMarathon(
+    state.raceDistance, raceISO,
+    { ...getState(), eventType: 'running', trackOnly: false } as unknown as LowBaseState,
+    state.experienceLevel,
+  );
   let lowHtml = '';
   if (low) {
     const later = listedRaces('marathon').find(r => (trainingWeeksForRace(r.date) ?? 0) >= FULL_BUILD_WEEKS.marathon);

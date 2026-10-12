@@ -17,6 +17,7 @@ import { getTrailingEffortScore, computeWeekActualTSS } from '@/calculations/fit
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { sanitizeField } from './prompt-sanitizer';
 import { localDateKey } from '@/utils/local-date';
+import { fmtModelPaceKm } from '@/utils/format';
 
 // Max activities to include per week (keeps context bounded)
 const MAX_ACTIVITIES_PER_WEEK = 5;
@@ -24,11 +25,12 @@ const WEEKS_OF_HISTORY = 4;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** A pace as "m:ss min/km": the whole second with the minute carried
+ *  (fmtModelPaceKm), so s.lt and s.pac (model paces, unrounded) read as every
+ *  pace display does, and 299.6 reads 5:00, never 4:60. */
 function fmtPace(secKm: number | null | undefined): string | null {
   if (!secKm || !isFinite(secKm)) return null;
-  const m = Math.floor(secKm / 60);
-  const s = Math.round(secKm % 60);
-  return `${m}:${s.toString().padStart(2, '0')} min/km`;
+  return `${fmtModelPaceKm(secKm)} min/km`;
 }
 
 function fmtTime(sec: number | null | undefined): string | null {

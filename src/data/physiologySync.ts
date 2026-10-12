@@ -12,7 +12,7 @@ import type { PhysiologyDayEntry } from '@/types';
 import { rmssdToHrvStatus } from '@/recovery/engine';
 import type { RecoveryEntry } from '@/recovery/engine';
 import { recomputeLT, LT_NOTIFY_THRESHOLD_SEC_KM } from './ltSync';
-import { formatPace } from '@/utils/format';
+import { fpModel } from '@/utils/format';
 import { applyCorroboratedMaxHR } from '@/calculations/max-hr-estimator';
 import { releaseAppleOwnership } from './physiology-provenance';
 
@@ -218,7 +218,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       const unitPref = s.unitPref ?? 'km';
       import('@/ui/toast').then(({ showAssignmentToast }) => {
         showAssignmentToast([
-          `Lactate threshold updated from your watch: ${formatPace(prevLtPace, unitPref)} → ${formatPace(s.lt!, unitPref)}.`,
+          `Lactate threshold updated from your watch: ${fpModel(prevLtPace, unitPref)} → ${fpModel(s.lt!, unitPref)}.`,
         ]);
       }).catch(() => {});
       console.log(`[PhysiologySync] LT updated from Garmin: ${prevLtPace}s/km → ${s.lt}s/km`);

@@ -24,6 +24,7 @@ import {
   longestSessionByDiscipline,
 } from '@/calculations/tri-volume-by-discipline';
 import { computeTriDisciplineConfidence } from '@/calculations/tri-discipline-confidence';
+import { pbAgeWeight, pbAgeYears } from '@/calculations/physiological-vdot';
 import { DURABILITY_THRESHOLDS } from '@/calculations/durability-cap';
 import { CLIMATE_ANCHOR_TEMP_C } from '@/constants/triathlon-course-factors';
 import { ft, fp } from '@/utils/format';
@@ -1118,10 +1119,13 @@ function pageMarathonDepth(s: SimulatorState): PageContent {
   const pbDateISO = s.onboarding?.pbDates?.m;
   let recencyLabel = '';
   if (pbDateISO) {
-    const ageDays = (Date.now() - Date.parse(pbDateISO)) / 86400000;
-    recencyLabel = ageDays > 4 * 365 ? '> 4 years ago (30% credit weighting)'
-      : ageDays > 2 * 365 ? '2 to 4 years ago (60% credit weighting)'
-      : 'Within 2 years (full credit weighting)';
+    // The model's own weight (pbAgeWeight, the weight
+    // computeMarathonDepthMultiplier applies), so the label cannot drift.
+    const years = pbAgeYears(pbDateISO);
+    const weight = pbAgeWeight(pbDateISO);
+    const when = years == null || years < 1 ? 'Under a year ago' : `${years.toFixed(1)} years ago`;
+    const weighting = weight >= 1 ? 'full credit weighting' : `${Math.round(weight * 100)}% credit weighting`;
+    recencyLabel = `${when} (${weighting})`;
   }
 
   return {

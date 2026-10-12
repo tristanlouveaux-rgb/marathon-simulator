@@ -63,6 +63,12 @@ export interface BestEffortInput {
   elapsedSec: number;
   /** ISO date string — used to time-decay older efforts. */
   date?: string;
+  /** PB age weight (`pbAgeWeight`, physiological-vdot.ts: a smooth 3-year
+   *  half-life), 1 when absent. Scales the critical-speed method's weight by the
+   *  mean over the efforts it fits, and how far a long-race PB pulls the LT
+   *  bound. Distinct from `date`, which drops efforts older than
+   *  CS_MAX_AGE_DAYS from the fit. */
+  ageWeight?: number;
 }
 
 export interface SustainedEffortInput {
@@ -245,7 +251,7 @@ export function deriveVdotFromLT(ltSecPerKm: number | null): number | null {
 export function deriveLTFromCriticalSpeed(
   bestEfforts: BestEffortInput[] | null | undefined,
   now: Date,
-): { ltPaceSecKm: number; csMetersPerSec: number; dPrime: number; nEfforts: number } | null {
+): { ltPaceSecKm: number; csMetersPerSec: number; dPrime: number; nEfforts: number; ageWeight: number } | null {
   if (!bestEfforts || bestEfforts.length < CS_MIN_EFFORTS) return null;
 
   // Filter by age, valid distance/time, and drop obvious cross-training.
@@ -295,8 +301,10 @@ export function deriveLTFromCriticalSpeed(
 
   const ltMetersPerSec = cs * CS_TO_LT_RATIO;
   const ltPaceSecKm = 1000 / ltMetersPerSec;
+  // Mean PB age weight over the fitted efforts (1 without age weights).
+  const ageWeight = points.reduce((acc, p) => acc + (p.ageWeight ?? 1), 0) / n;
 
-  return { ltPaceSecKm, csMetersPerSec: cs, dPrime, nEfforts: n };
+  return { ltPaceSecKm, csMetersPerSec: cs, dPrime, nEfforts: n, ageWeight };
 }
 
 // ─── Method 3: Empirical detection from sustained efforts ─────────────────
@@ -643,6 +651,11 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   } else if (hasDaniels) {
     wDan = 1;
   }
+  // PB age (2026-10-09): critical speed is fitted from race PBs, so its weight
+  // scales with their mean age weight. The blend divides by the sum of method
+  // weights, so the shed share moves to the empirical and Daniels methods when
+  // they exist; CS alone still sets LT (no other evidence, §BV).
+  if (cs && wCS > 0) wCS = wCS * cs.ageWeight;
 
   if (wEmp > 0 && emp) {
     methods.push({
@@ -717,12 +730,20 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   // is 4:30/km), clamp to the tightest such PB pace and downgrade
   // confidence: the methods contradicted demonstrated performance, so
   // "high" would be dishonest. The bound IS the PB pace — no tuned margin.
-  const longRacePaces = (input.bestEfforts ?? [])
+  // PB age (2026-10-09; smooth weight 2026-10-11): a dated long-race PB is
+  // weighed by its age (pbAgeWeight below 1), so it pulls LT only that fraction
+  // of the way to its pace. An undated PB (weight 1) is the hard bound, as before.
+  const longRaces = (input.bestEfforts ?? [])
     .filter(e => e.elapsedSec >= 3600 && e.distanceM > 0)
-    .map(e => e.elapsedSec / (e.distanceM / 1000));
-  const ltUpperBoundSecKm = longRacePaces.length > 0 ? Math.min(...longRacePaces) : null;
-  const capped = ltUpperBoundSecKm != null && blendedPace > ltUpperBoundSecKm;
-  const finalPace = capped ? ltUpperBoundSecKm! : blendedPace;
+    .map(e => ({ pace: e.elapsedSec / (e.distanceM / 1000), w: e.ageWeight ?? 1 }));
+  let finalPace = blendedPace;
+  let boundWeight = 1;
+  for (const r of longRaces) {
+    if (blendedPace <= r.pace) continue;
+    const candidate = blendedPace - r.w * (blendedPace - r.pace);
+    if (candidate < finalPace) { finalPace = candidate; boundWeight = r.w; }
+  }
+  const capped = finalPace < blendedPace;
 
   // LTHR: prefer empirical; else 0.88 × HRmax; else null.
   const ltHR = emp ? Math.round(emp.ltHR) : deriveLTHRFromMaxHR(input.maxHR);
@@ -752,7 +773,7 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
     methods.length === 1
       ? `Derived from ${parts[0]}`
       : `Blended: ${parts.join(' + ')}`;
-  if (capped) provenance += '. Capped at your race-PB pace';
+  if (capped) provenance += boundWeight < 1 ? '. Moved toward an older race-PB pace' : '. Capped at your race-PB pace';
 
   return {
     ltPaceSecKm: finalPace,

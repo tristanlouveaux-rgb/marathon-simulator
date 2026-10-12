@@ -6,7 +6,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import type { Workout } from '@/types';
+import type { Workout, RaceDistance } from '@/types';
 import { intentToWorkout } from '@/workouts/intent_to_workout';
 import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 import { generateSwimSession, describeSwimSession, estimateDistanceMetres, SWIM_VARIANT_COUNT, type SwimSessionKind } from '@/workouts/swim';
@@ -21,11 +21,10 @@ import { buildRunningStrengthWorkout, buildPlyometricsWorkout } from '@/workouts
 /** Gym Focus options in the generator, plus the HYROX brick (its own path). */
 type GymFocusChoice = GymFocus | 'hyrox';
 import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
-import { formatKm, formatPace } from '@/utils/format';
+import { formatKm, fpModel, fmtModelPaceKm } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
-import { blendPredictions } from '@/calculations/predictions';
-import { effectiveVo2max } from '@/calculations/physiological-vdot';
+import { predictStandardDistances } from '@/calculations/blended-fitness';
 import { buildSessionRecommendation } from '@/calculations/session-recommendation';
 import type { TrainingPhase } from '@/types/training';
 
@@ -33,17 +32,33 @@ const MODAL_ID = 'session-generator-modal';
 
 type EffortKey = 'easy' | 'steady' | 'hard';
 
-const TIME_TRIAL_DISTANCES = [
-  { label: '5K',       dist: 5000,  km: 5 },
-  { label: '10K',      dist: 10000, km: 10 },
-  { label: 'Half',     dist: 21097, km: 21.097 },
-  { label: 'Marathon', dist: 42195, km: 42.195 },
+const TIME_TRIAL_DISTANCES: ReadonlyArray<{ label: string; key: RaceDistance; dist: number; km: number }> = [
+  { label: '5K',       key: '5k',       dist: 5000,  km: 5 },
+  { label: '10K',      key: '10k',      dist: 10000, km: 10 },
+  { label: 'Half',     key: 'half',     dist: 21097, km: 21.097 },
+  { label: 'Marathon', key: 'marathon', dist: 42195, km: 42.195 },
 ];
 
+/**
+ * The Time Trial step's predicted times: the four standard-distance
+ * predictions the Forecast tab shows (predictStandardDistances: PB age
+ * weights, the HR-tested recent race, the measured weekly km, calibration and
+ * the durability cap), so they cannot disagree with it. The local blend this
+ * step ran passed none of those (2026-10-11). Null where no prediction exists.
+ */
+export function timeTrialPredictions(
+  s: Parameters<typeof predictStandardDistances>[0],
+): Array<(typeof TIME_TRIAL_DISTANCES)[number] & { predictedSec: number | null }> {
+  const standard = predictStandardDistances(s);
+  return TIME_TRIAL_DISTANCES.map(d => ({ ...d, predictedSec: standard[d.key] }));
+}
+
 function fmtTimeSec(totalSec: number): string {
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = Math.round(totalSec % 60);
+  // Round once, before splitting, so 1379.6 s reads 23:00, never 22:60.
+  const t = Math.round(totalSec);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
@@ -1418,11 +1433,11 @@ export function openSessionGenerator(): void {
     // Fixed pace label for structured sessions
     function structuredPaceLabel(): string {
       switch (selectedType!.slot) {
-        case 'threshold':     return formatPace(s.pac.t, up);
-        case 'vo2':           return formatPace(s.pac.i, up);
-        case 'marathon_pace': return formatPace(s.pac.m, up);
-        case 'progressive':   return `${formatPace(s.pac.e, up)} to ${formatPace(s.pac.m, up)}`;
-        default:              return formatPace(easyPace, up);
+        case 'threshold':     return fpModel(s.pac.t, up);
+        case 'vo2':           return fpModel(s.pac.i, up);
+        case 'marathon_pace': return fpModel(s.pac.m, up);
+        case 'progressive':   return `${fpModel(s.pac.e, up)} to ${fpModel(s.pac.m, up)}`;
+        default:              return fpModel(easyPace, up);
       }
     }
 
@@ -1435,7 +1450,7 @@ export function openSessionGenerator(): void {
 
       // Structured sessions already show target pace above the slider. Don't repeat it here.
       const secondaryInfo = hasEffortPicker
-        ? (isDistance ? `~${estMinutes} min at ${formatPace(effortPace, up)}` : `~${formatKm(estKm, up)} at ${formatPace(effortPace, up)}`)
+        ? (isDistance ? `~${estMinutes} min at ${fpModel(effortPace, up)}` : `~${formatKm(estKm, up)} at ${fpModel(effortPace, up)}`)
         : (isDistance ? `~${estMinutes} min` : `~${formatKm(estKm, up)}`);
 
       const inner = modal.querySelector('#sg-step2-inner');
@@ -1456,7 +1471,7 @@ export function openSessionGenerator(): void {
                            background:${sel ? '#0A0A0A' : 'rgba(255,255,255,0.95)'};
                            box-shadow:${sel ? '0 0 0 1px rgba(0,0,0,0.9), 0 4px 12px rgba(0,0,0,0.10)' : '0 1px 2px rgba(0,0,0,0.04), 0 4px 10px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.4)'}">
                     <div style="font-size:12px;font-weight:600;color:${sel ? '#FDFCF7' : 'var(--c-black)'};margin-bottom:1px">${opt.label}</div>
-                    <div style="font-size:11px;color:${sel ? 'rgba(253,252,247,0.65)' : 'var(--c-muted)'}">${formatPace(opt.pace, up)}</div>
+                    <div style="font-size:11px;color:${sel ? 'rgba(253,252,247,0.65)' : 'var(--c-muted)'}">${fpModel(opt.pace, up)}</div>
                     <div style="font-size:9px;font-weight:500;margin-top:3px;color:${sel ? 'rgba(253,252,247,0.5)' : 'var(--c-faint)'}">
                       ${isRec ? 'Suggested' : ' '}
                     </div>
@@ -1553,7 +1568,7 @@ export function openSessionGenerator(): void {
           const estM = isDistance ? Math.round(distanceKm * pace / 60) : timeMin;
           const estK = isDistance ? distanceKm : Math.round(timeMin * 60 / pace);
           info.textContent = hasEffortPicker
-            ? (isDistance ? `~${estM} min at ${formatPace(pace, up)}` : `~${formatKm(estK, up)} at ${formatPace(pace, up)}`)
+            ? (isDistance ? `~${estM} min at ${fpModel(pace, up)}` : `~${formatKm(estK, up)} at ${fpModel(pace, up)}`)
             : (isDistance ? `~${estM} min` : `~${formatKm(estK, up)}`);
         }
       });
@@ -1612,7 +1627,7 @@ export function openSessionGenerator(): void {
         // Persisted objects never regenerate, so the chosen effort pace is
         // embedded in the description (the card's Target row dedupes on it).
         d: correctedKm !== null
-          ? `${correctedKm}km @ ${Math.floor(effortPace / 60)}:${String(Math.floor(effortPace % 60)).padStart(2, '0')}/km`
+          ? `${correctedKm}km @ ${fmtModelPaceKm(effortPace)}/km` // the whole second, as the picker label shows it
           : workout.d,
         r: workout.r,
         rpe: rpeOverride ?? workout.rpe ?? workout.r,
@@ -1642,17 +1657,7 @@ export function openSessionGenerator(): void {
   // ── Time Trial step ────────────────────────────────────────────────────────
 
   function renderTimeTrial() {
-    const vdot = s.v ?? 50;
-    const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-
-    const predictions = TIME_TRIAL_DISTANCES.map(d => {
-      const sec = hasBlendInputs
-        ? blendPredictions(d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
-            s.b ?? 1.06, s.typ ?? 'Balanced', s.rec ?? null,
-            s.athleteTier ?? undefined)
-        : null;
-      return { ...d, predictedSec: sec };
-    });
+    const predictions = timeTrialPredictions(s);
 
     let selectedDist = predictions[0];
 

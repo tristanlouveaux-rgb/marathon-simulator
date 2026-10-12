@@ -17,8 +17,11 @@
  */
 
 import { resolveLT, deriveLT, diagnoseSustainedEfforts, type BestEffortInput, type SustainedEffortInput, type DeriveLTInput, type LTDerivationResult, type SustainedEffortDiagnostic } from '@/calculations/lt-derivation';
-import { getPhysiologicalVdot, effectivePhysiologyPbs } from '@/calculations/physiological-vdot';
+import { ltDanielsInputVdot, effectivePhysiologyPbs, modelPbAgeWeightsIfMeasured } from '@/calculations/physiological-vdot';
+import { computePredictionInputs, collectRunsFromState } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import type { SimulatorState } from '@/types';
+import { syncTrainingPaces } from '@/calculations/paces';
 
 /** Meaningful-change threshold — an applied LT shift of at least this many
  *  s/km is surfaced to the user (small toast, per the adaptation-transparency
@@ -35,13 +38,20 @@ const LT_AUTO_IMPROVE_GAP_SEC_KM = 3;
  *  Reads via `effectivePhysiologyPbs` so freshly-typed wizard PBs are visible
  *  to LT derivation BEFORE finalize commits them to `s.pbs` (the review
  *  screen's LT row previously derived against the previous plan's PBs). */
-function pbsToBestEfforts(s: SimulatorState): BestEffortInput[] {
+function pbsToBestEfforts(s: SimulatorState, now?: string): BestEffortInput[] {
   const efforts: BestEffortInput[] = [];
   const pbs = effectivePhysiologyPbs(s);
-  if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5 });
-  if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10 });
-  if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h });
-  if (pbs.m && pbs.m > 0) efforts.push({ distanceM: 42195, elapsedSec: pbs.m });
+  // PB age weights (pbAgeWeight): an old PB weighs less in critical speed and
+  // in the long-race LT bound, on the same measured-volume gate as the blend
+  // and the engine floor (modelPbAgeWeightsIfMeasured): with no running data
+  // an old PB keeps full weight (§BV). The PB times themselves are unchanged.
+  const at = now ? new Date(now) : new Date();
+  const inputs = computePredictionInputs(collectRunsFromState(s), at, raceEffortHrFloorForState(s));
+  const w = modelPbAgeWeightsIfMeasured(pbs, s, inputs, at) ?? {};
+  if (pbs.k5 && pbs.k5 > 0) efforts.push({ distanceM: 5000, elapsedSec: pbs.k5, ageWeight: w.k5 ?? 1 });
+  if (pbs.k10 && pbs.k10 > 0) efforts.push({ distanceM: 10000, elapsedSec: pbs.k10, ageWeight: w.k10 ?? 1 });
+  if (pbs.h && pbs.h > 0) efforts.push({ distanceM: 21097.5, elapsedSec: pbs.h, ageWeight: w.h ?? 1 });
+  if (pbs.m && pbs.m > 0) efforts.push({ distanceM: 42195, elapsedSec: pbs.m, ageWeight: w.m ?? 1 });
   return efforts;
 }
 
@@ -123,16 +133,18 @@ function collectSustainedEfforts(s: SimulatorState): SustainedEffortInput[] {
 }
 
 /** Build the full DeriveLTInput from current state — used by both the sync flow
- *  and the LT detail page (so it can show the same methods/provenance). The
- *  Daniels VDOT input comes from `getPhysiologicalVdot` so every surface that
- *  shows a VDOT or VO2 number resolves to the same value via the same priority
- *  chain. See `src/calculations/physiological-vdot.ts`. */
+ *  (`recomputeLT`) and the LT detail page (so it can show the same methods and
+ *  provenance). The Daniels VDOT input is `ltDanielsInputVdot`: the unified
+ *  physiological-VDOT chain (`getPhysiologicalVdot`), with the triathlete run
+ *  caps applied to a watch or engine-fallback value so a triathlete's run paces
+ *  follow the same capped figure as the engine VDOT and the blend. See
+ *  `src/calculations/physiological-vdot.ts`. */
 export function buildLTInputs(s: SimulatorState, opts: { now?: string; garmin?: { ltPaceSecKm: number; ltHR?: number | null; asOf: string } | null } = {}): DeriveLTInput {
   const garmin = opts.garmin === undefined ? (s.garminLT ?? null) : opts.garmin;
   return {
-    vdot: getPhysiologicalVdot(s, { now: opts.now }).vdot,
+    vdot: ltDanielsInputVdot(s, { now: opts.now }),
     maxHR: s.maxHR ?? null,
-    bestEfforts: pbsToBestEfforts(s),
+    bestEfforts: pbsToBestEfforts(s, opts.now),
     sustainedEfforts: collectSustainedEfforts(s),
     garmin,
     override: s.ltOverride ?? null,
@@ -183,46 +195,22 @@ export function recomputeLT(
     s.garminLT = { ...opts.garmin };
   }
 
-  const inputs = {
-    // Daniels VDOT input comes from the unified physiological-VDOT resolver.
-    // See `src/calculations/physiological-vdot.ts` for the priority chain.
-    vdot: getPhysiologicalVdot(s, { now }).vdot,
-    maxHR: s.maxHR ?? null,
-    bestEfforts: pbsToBestEfforts(s),
-    sustainedEfforts: collectSustainedEfforts(s),
-    garmin,
-    override: s.ltOverride ?? null,
-    now,
-  };
-
-  // Derived-only result (ignores Garmin). Used for the conflict check.
-  const derivedOnly = deriveLT({ ...inputs, garmin: null });
-
-  // Resolved result (priority chain applied).
-  const resolved = resolveLT(inputs);
+  // Same inputs as the LT detail page (buildLTInputs): one construction, so
+  // the applied s.lt and the displayed derivation cannot diverge.
+  const inputs = buildLTInputs(s, { now, garmin });
+  const decision = decideLT(s, inputs);
 
   // If user has overridden, normally apply it. Per CLAUDE.md "Manually-set
   // Benchmarks Yield to Improvements": auto-clear the override when the derived
-  // estimate clearly beats it (faster pace, ≥3 s/km gap, derived confidence
-  // 'medium' or 'high'). The paired LTHR comes along. It's a single
-  // physiological calibration, not a separable axis.
+  // estimate clearly beats it (decideLT).
   if (s.ltOverride) {
-    const ovrPace = s.ltOverride.ltPaceSecKm;
-    const dPace = derivedOnly.ltPaceSecKm;
-    const dConf = derivedOnly.confidence;
-    const beats =
-      dPace != null &&
-      ovrPace - dPace >= LT_AUTO_IMPROVE_GAP_SEC_KM &&
-      (dConf === 'high' || dConf === 'medium');
-    if (beats) {
-      console.log(`[lt] override auto-improved: user ${ovrPace}s/km → derived ${Math.round(dPace!)}s/km (${dConf} conf)`);
+    if (decision.overrideBeaten) {
+      console.log(`[lt] override auto-improved: user ${s.ltOverride.ltPaceSecKm}s/km → derived ${Math.round(decision.derivedPaceSecKm!)}s/km (${decision.derivedConfidence} conf)`);
       delete s.ltOverride;
-      // Recompute resolved without the override so we apply the derived path.
-      const resolvedNoOverride = resolveLT({ ...inputs, override: null });
-      applyResolved(s, resolvedNoOverride, now);
-      return resolvedNoOverride.source === 'garmin' ? 'garmin' : 'derived';
+      applyResolved(s, decision.resolved, now);
+      return decision.resolved.source === 'garmin' ? 'garmin' : 'derived';
     }
-    applyResolved(s, resolved, now);
+    applyResolved(s, decision.resolved, now);
     return 'override';
   }
 
@@ -233,15 +221,78 @@ export function recomputeLT(
   // clearly better (faster ≥3s/km at medium+ confidence). Clear any pending
   // suggestion from the old flow so stale cards don't linger.
   if (s.ltSuggestion) delete s.ltSuggestion;
-  if (!resolved.ltPaceSecKm) return 'none';
-  applyResolved(s, resolved, now);
-  return resolved.source === 'garmin' ? 'garmin' : 'derived';
+  if (!decision.resolved.ltPaceSecKm) return 'none';
+  applyResolved(s, decision.resolved, now);
+  return decision.resolved.source === 'garmin' ? 'garmin' : 'derived';
 }
 
+/**
+ * The LT `recomputeLT` applies for `inputs`. Pure: reads `s.ltOverride` and
+ * writes nothing. A user override applies unless the derived-only estimate
+ * (no Garmin) clearly beats it: faster by at least LT_AUTO_IMPROVE_GAP_SEC_KM
+ * at 'medium' or 'high' confidence. The paired LTHR comes along; it is a
+ * single physiological calibration, not a separable axis. Then
+ * `overrideBeaten` is true and `resolved` is the chain without the override.
+ */
+function decideLT(
+  s: SimulatorState,
+  inputs: DeriveLTInput,
+): { resolved: ReturnType<typeof resolveLT>; overrideBeaten: boolean; derivedPaceSecKm: number | null; derivedConfidence: string | null } {
+  const resolved = resolveLT(inputs);
+  if (!s.ltOverride) return { resolved, overrideBeaten: false, derivedPaceSecKm: null, derivedConfidence: null };
+  // Derived-only result (ignores Garmin), for the override check.
+  const derivedOnly = deriveLT({ ...inputs, garmin: null });
+  const dPace = derivedOnly.ltPaceSecKm;
+  const dConf = derivedOnly.confidence;
+  const beats =
+    dPace != null &&
+    s.ltOverride.ltPaceSecKm - dPace >= LT_AUTO_IMPROVE_GAP_SEC_KM &&
+    (dConf === 'high' || dConf === 'medium');
+  if (!beats) return { resolved, overrideBeaten: false, derivedPaceSecKm: dPace ?? null, derivedConfidence: dConf ?? null };
+  return { resolved: resolveLT({ ...inputs, override: null }), overrideBeaten: true, derivedPaceSecKm: dPace, derivedConfidence: dConf };
+}
+
+/**
+ * The LT pace (s/km, unrounded as `recomputeLT` stores it) that `recomputeLT`
+ * would apply now if the Daniels input were `danielsVdot` instead of
+ * `ltDanielsInputVdot(s)`. Every other input is `buildLTInputs(s)`. Pure:
+ * writes nothing. When the chain resolves no pace, `recomputeLT` leaves s.lt
+ * as it is, so this returns s.lt.
+ *
+ * Used by the triathlon cold-start engine hold (`refreshBlendedFitness`): where
+ * the cap lowered a watch-derived LT input, the engine stays what the blend
+ * gives with the LT from the uncapped watch, capped at the run skill VDOT.
+ */
+export function ltPaceForDanielsInput(
+  s: SimulatorState,
+  danielsVdot: number | null,
+  opts: { now?: string } = {},
+): number | null {
+  const now = opts.now ?? new Date().toISOString();
+  const { resolved } = decideLT(s, { ...buildLTInputs(s, { now }), vdot: danielsVdot });
+  return resolved.ltPaceSecKm != null ? resolved.ltPaceSecKm : (s.lt ?? null);
+}
+
+/**
+ * Write the resolved LT to state. `s.lt` keeps the resolved pace UNROUNDED:
+ * it is a model input (the blend's LT predictor, the forecast, the standard
+ * distance predictions, the triathlon run leg, training paces), and since the
+ * PB age weight feeds the derivation (pbsToBestEfforts) the derived pace drifts
+ * a little every day. Stored as a whole second, it ticked by 1 s/km on one
+ * night and moved the marathon prediction by about 50 s (review 2026-10-12:
+ * half PB 1:30, typed 40 km, s.lt 256 to 257 at 755 days). Display rounds at
+ * the display boundary (displayPaceSec / fpModel, src/utils/format.ts), for
+ * the LT and for every pace derived from it (s.pac: the threshold pace IS the
+ * LT), so every surface reads the same whole second. `s.ltHR` stays a whole
+ * bpm: it is a zone anchor, not a race-time input. The training-pace cache
+ * follows the new LT here (syncTrainingPaces), so a watch or activity-sync LT
+ * change reaches the paces without waiting for the next refresh.
+ */
 function applyResolved(s: SimulatorState, resolved: ReturnType<typeof resolveLT>, now: string): void {
   if (resolved.ltPaceSecKm == null) return;
-  s.lt = Math.round(resolved.ltPaceSecKm);
+  s.lt = resolved.ltPaceSecKm;
   s.ltPace = s.lt;
+  syncTrainingPaces(s);
   if (resolved.ltHR != null) s.ltHR = Math.round(resolved.ltHR);
   s.ltUpdatedAt = now;
   s.ltSource = resolved.source;

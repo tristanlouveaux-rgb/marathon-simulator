@@ -14,7 +14,7 @@
 import { raceDayEnduranceGapText, raceDayEnduranceBeyondModel, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { getState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
-import { ft, fp, formatKm } from '@/utils/format';
+import { ft, fpModel, displayPaceSec, formatKm } from '@/utils/format';
 import { cv, rdKm } from '@/calculations/vdot';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from './page-flair';
@@ -40,6 +40,7 @@ import {
 } from '@/calculations/predictions';
 import { collectRunsFromState } from '@/calculations/blended-fitness';
 import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { buildInfoIcon, mountInfoPopovers } from './info-popover';
 
 export type ChipKey = 'you' | 'capacity' | 'response' | 'training' | 'venue' | 'durability' | 'heat' | 'calibration' | 'shoes';
@@ -233,11 +234,12 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
 
   // Mirror refreshBlendedFitness: derive the most recent race effort from
   // garminActuals (computePredictionInputs recentRun, a run more than 15%
-  // faster than the window's median pace) and fall back to s.rec only if none
+  // faster than the window's median pace and, when it has an average HR, at
+  // race level on the HR effort scale) and fall back to s.rec only if none
   // exists. Without this, the drill-down read "no signal" while the live blend
   // was firing on activity-derived recent runs.
   const runs = collectRunsFromState(s);
-  const blendInputs = computePredictionInputs(runs);
+  const blendInputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
   const recentRun = blendInputs.recentRun ?? s.rec ?? null;
   const recentIsDerived = blendInputs.recentRun != null;
   const hasRecent = !!(recentRun && recentRun.t && recentRun.t > 0);
@@ -306,11 +308,11 @@ function buildBlendBreakdown(s: SimulatorState): { targetDistM: number; rows: Bl
   return { targetDistM, rows };
 }
 
+/** A pace as the whole second with the minute carried (fpModel): s.lt is a
+ *  model pace (unrounded) and reads as every LT display does; 299.6 reads
+ *  5:00/km, never 4:60/km. */
 function formatLtPace(secPerKm: number, unitPref: string): string {
-  const sec = unitPref === 'mi' ? secPerKm * 1.60934 : secPerKm;
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}${unitPref === 'mi' ? '/mi' : '/km'}`;
+  return fpModel(secPerKm, unitPref === 'mi' ? 'mi' : 'km');
 }
 
 function renderBlendCard(s: SimulatorState): string {
@@ -357,7 +359,7 @@ function pageCapacity(s: SimulatorState): { title: string; subhead: string; body
   const projectedVdot = forecastTime > 0 && raceKm > 0
     ? cv(raceKm * 1000, forecastTime)
     : null;
-  const lt = s.lt;
+  const lt = s.lt != null ? displayPaceSec(s.lt) : s.lt; // s.lt unrounded; display reads the whole second
   const unitPref = s.unitPref ?? 'km';
 
   // Weeks remaining to race day. `tw` = total weeks, `w` = current week.
@@ -414,7 +416,7 @@ function pageCapacity(s: SimulatorState): { title: string; subhead: string; body
         <span style="font-size:11px;color:${TEXT_L}">${weeksRemaining > 0 ? `${weeksRemaining}w to race day` : 'Race date pending'}</span>
       </div>
       ${markerRow('VDOT', '#16A34A', currentVdot, projectedVdot, (v) => v.toFixed(1), /*inverted*/ false)}
-      ${lt && lt > 0 ? markerRow('LT pace', '#14B8A6', lt, null, (v) => fp(v, unitPref), /*inverted*/ true) : ''}
+      ${lt && lt > 0 ? markerRow('LT pace', '#14B8A6', lt, null, (v) => fpModel(v, unitPref), /*inverted*/ true) : ''}
     </div>
   `;
 
@@ -461,7 +463,7 @@ function buildPenalties(s: SimulatorState): PenaltyRow[] {
 
   // Tanda eligibility (drives marathon-specificity gate)
   const runs = isMarathon ? collectRunsFromState(s) : [];
-  const inputs = isMarathon ? computePredictionInputs(runs) : null;
+  const inputs = isMarathon ? computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s)) : null;
   const tandaTrusted = inputs
     ? inputs.weeksCovered >= 4
       && (inputs.paceConfidence === 'high' || inputs.paceConfidence === 'medium')
@@ -908,7 +910,7 @@ function renderTandaCard(s: SimulatorState): string {
   if (!isMarathon) return '';
 
   const runs = collectRunsFromState(s);
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
 
   const trusted = inputs.weeksCovered >= 4
     && (inputs.paceConfidence === 'high' || inputs.paceConfidence === 'medium')

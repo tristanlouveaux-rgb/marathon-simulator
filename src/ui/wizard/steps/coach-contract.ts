@@ -8,7 +8,7 @@ import type { SportKey } from '@/types';
 import { getRunnerType } from '@/calculations';
 import { derivePlanShape, deriveDisciplineLoad, type PlanShape, type PhaseSegment, type DiscShape } from '@/calculations/plan-shape';
 import { computeUniversalLoad } from '@/cross-training/universalLoad';
-import { fp } from '@/utils/format';
+import { fpModel, displayPaceSec } from '@/utils/format';
 import { readinessColorStops, type ReadinessLabel } from '@/calculations/readiness';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
@@ -461,7 +461,7 @@ function renderEngines(s: ReturnType<typeof getState>, state: OnboardingState): 
   const rows: string[] = [];
   if (ftp && ftp > 0) rows.push(row('bike', 'FTP', `${Math.round(ftp)} W`));
   if (css && css > 0) rows.push(row('swim', 'CSS', `${fmtPer100(css)} /100m`));
-  if (runThr && runThr > 0) rows.push(row('run', 'threshold', `${fp(runThr, pref)}`));
+  if (runThr && runThr > 0) rows.push(row('run', 'threshold', `${fpModel(runThr, pref)}`));
   if (rows.length < 2) return '';
 
   return `
@@ -810,8 +810,10 @@ function showcaseDataForMode(
   sport: SportLoad | null,
 ): ShowcaseData {
   const pref = s.unitPref ?? 'km';
-  const easyPaceSec = s.pac?.e ?? 0;
-  const easyPace = easyPaceSec ? fp(easyPaceSec, pref) : '';
+  // s.pac.e is a model pace (unrounded); the showcase reads the whole second,
+  // so the static "@ pace" and the slider readout (data-pace) agree.
+  const easyPaceSec = s.pac?.e ? displayPaceSec(s.pac.e) : 0;
+  const easyPace = easyPaceSec ? fpModel(easyPaceSec, pref) : '';
   const sessionWord = mode === 'running' ? 'runs' : 'sessions';
   const logged = sport && sport.tss > 0
     ? { tag: `${cap(sport.label)} +${sport.tss} TSS`, note: `next session eased to balance the week` }

@@ -14,6 +14,7 @@ import { renderTriConeCard, wireTriConeCard } from './race-forecast-cone-card';
 import { renderTriForecastMarquee } from './race-forecast-marquee';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
+import { pbAgeCaptionText } from '../pb-age-caption';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { getCyclingEventById } from '@/data/cycling-events';
 import { getTriathlonById } from '@/data/triathlons';
@@ -83,6 +84,15 @@ export function renderTriathlonForecastView(): void {
   const fingerprintPrediction = isCyclingOnlyMode(s)
     ? null
     : (tri.prediction ?? predictTriathlonRace(s));
+  // PB age caption (pbAgeCaptionText, shared with the running Forecast and the
+  // Stats race estimates): the run leg's blend gives an old run PB less weight.
+  // Shown only when ageing moves the run leg by at least a second. Cycling-only
+  // mode has no run leg. For an Ironman, the marathon-depth credit ages the
+  // marathon PB outside that comparison (pbAgeWeight directly, open item), so
+  // both sides carry the credit's ageing.
+  const runPbAgeText = isCyclingOnlyMode(s)
+    ? null
+    : pbAgeCaptionText(s, 'the run forecast', st => [predictTriathlonRace(st)?.runSec]);
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -129,6 +139,7 @@ export function renderTriathlonForecastView(): void {
             <div class="hf" data-delay="0.12">${renderTriForecastFingerprint(s, fingerprintPrediction)}</div>
             ${renderTriConeCard(s)}
             <div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:6px 16px 0">${calibrationDatasetCaption(fingerprintPrediction?.courseFactors ?? [])}</div>
+            ${runPbAgeText ? `<div class="hf" data-delay="0.13" style="font-size:11px;color:var(--c-faint);line-height:1.5;text-align:center;padding:4px 16px 0">${runPbAgeText}</div>` : ''}
           `}
           <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
             <button id="tri-fc-methodology-btn" type="button" style="font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">How this is calculated →</button>

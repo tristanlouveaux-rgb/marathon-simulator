@@ -1,5 +1,5 @@
 import type { GpsLiveData, GpsSplit, GpsRecording } from '@/types';
-import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
+import { formatPace, fpModel, formatWorkoutTime, formatKm } from '@/utils';
 import { getWeekRecordings, deleteGpsRecording } from '@/gps/persistence';
 import { getState } from '@/state';
 
@@ -154,7 +154,7 @@ function renderSplitsTable(completed: GpsSplit[], current: GpsSplit | null): str
 
   for (const split of completed) {
     const paceStr = split.pace < 1800 ? formatPace(split.pace) : '--:--';
-    const targetStr = split.targetPace ? formatPace(split.targetPace) : '--';
+    const targetStr = split.targetPace ? fpModel(split.targetPace) : '--'; // target: model pace, whole second
     const diff = split.targetPace ? split.pace - split.targetPace : 0;
     const diffColor = diff > 10 ? 'color:var(--c-warn)' : diff < -10 ? 'color:var(--c-ok)' : 'color:var(--c-muted)';
 
@@ -171,7 +171,7 @@ function renderSplitsTable(completed: GpsSplit[], current: GpsSplit | null): str
     h += `<td class="py-0.5 font-bold">${current.label}</td>`;
     h += `<td class="text-right">${(current.distance / 1000).toFixed(2)}</td>`;
     h += `<td class="text-right font-mono">...</td>`;
-    h += `<td class="text-right" style="color:var(--c-faint)">${current.targetPace ? formatPace(current.targetPace) : '--'}</td>`;
+    h += `<td class="text-right" style="color:var(--c-faint)">${current.targetPace ? fpModel(current.targetPace) : '--'}</td>`;
     h += `</tr>`;
   }
 

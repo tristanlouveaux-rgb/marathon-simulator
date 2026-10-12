@@ -27,7 +27,7 @@ import { plausibleLtHR } from '@/calculations/lt-derivation';
 import { getBeta, resolveBiologicalSex, type BiologicalSex, type BiologicalSexSource } from '@/calculations/trimp';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
-import { typedWeeklyKm } from '@/calculations/athlete-archetype';
+import { typedWeeklyKm, typedVolumeShapesPlan } from '@/calculations/athlete-archetype';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -1145,8 +1145,8 @@ const taperMultiplier = taperFraction;
  * review-step slider; typedWeeklyKm), priced the way the Plan card prices an
  * easy run: km x easy pace (planCardBaseMinPerKm: s.pac.e, the card's 5.5 min/km
  * when unset) x plannedTssPerMin('easy') (the RPE-4 row of TL_PER_MIN, 0.92
- * TSS/min). Undefined when no weekly km was typed, and for triathlon (cycling
- * included) and HYROX plans.
+ * TSS/min). Undefined when no weekly km was typed, and outside a running plan
+ * (typedVolumeShapesPlan: triathlon, cycling, HYROX and Just-Track).
  *
  * PLANNING side: the weekly load target baseline for a running plan with no
  * synced history (computePlannedWeekTSS, between ctlBaseline and runs/week x
@@ -1154,7 +1154,9 @@ const taperMultiplier = taperFraction;
  * running km would size the baseline the AI Coach planned_week_tss and the
  * settle and carry bookkeeping read from one discipline. Those modes keep
  * runs/week x 50 (review, 2026-10-09); a typed km reaches them only from the
- * tri review row or a stale running onboarding.
+ * tri review row or a stale running onboarding. Just-Track has no plan, so a
+ * typed km creates no weekly target there either (2026-10-11): the AI Coach
+ * planned_week_tss and the carry / excess bookkeeping keep runs/week x 50.
  * Every typed km is valued as easy running: a typed number says nothing about
  * intensity, and easy running is the bulk of a recreational week (limitation,
  * SCIENCE_LOG). Runs per week does not enter: the minutes at easy pace are the
@@ -1162,10 +1164,10 @@ const taperMultiplier = taperFraction;
  */
 export function typedVolumeWeeklyTSS(
   s: Pick<SimulatorState, 'detectedWeeklyKm' | 'weeklyVolumeConfirmed'>
-    & Partial<Pick<SimulatorState, 'eventType'>>
+    & Partial<Pick<SimulatorState, 'eventType' | 'trackOnly'>>
     & { pac?: { e?: number } | null },
 ): number | undefined {
-  if (s.eventType === 'triathlon' || s.eventType === 'hyrox') return undefined;
+  if (!typedVolumeShapesPlan(s)) return undefined;
   const km = typedWeeklyKm(s);
   if (km == null) return undefined;
   return km * planCardBaseMinPerKm(s) * plannedTssPerMin('easy');

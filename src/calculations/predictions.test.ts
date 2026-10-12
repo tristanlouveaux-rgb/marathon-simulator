@@ -7,6 +7,7 @@ import {
   blendPredictions,
 } from './predictions';
 import type { PBs, RecentRun } from '@/types';
+import { vt } from './vdot';
 
 describe('Predictions', () => {
   describe('predictFromPB', () => {
@@ -182,6 +183,18 @@ describe('Predictions', () => {
       // Should be a reasonable marathon time (2:30-4:30)
       expect(predicted).toBeGreaterThan(150 * 60);
       expect(predicted).toBeLessThan(270 * 60);
+    });
+
+    it('converges in time: continuous and strictly monotonic in the VDOT (2026-10-12)', () => {
+      // It stopped at a VDOT error under 0.01, a step function of the VDOT.
+      let prev = predictFromVO2(42195, 49)!;
+      for (let i = 1; i <= 40; i++) {
+        const t = predictFromVO2(42195, 49 + i * 0.001)!;
+        expect(t).toBeLessThan(prev);
+        expect(prev - t).toBeLessThan(0.5);
+        prev = t;
+      }
+      expect(predictFromVO2(42195, 49.004)!).toBeCloseTo(vt(42.195, 49.004), 6);
     });
 
     it('should predict longer times for lower VDOT', () => {

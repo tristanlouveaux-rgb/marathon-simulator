@@ -2189,25 +2189,24 @@ export function aggregateHistoryFromRows(
  *  the Apple aggregator and the file-import pipeline. */
 export function applyPBsFromRows(rows: GarminActivityRow[]): void {
   const fastest: { k5?: number; k10?: number; h?: number; m?: number } = {};
+  // The date of each fastest effort, so onboarding.pbDates stays attached to
+  // the PB time it describes (the run fitness model ages PBs by it).
+  const fastestDate: { k5?: string; k10?: string; h?: string; m?: string } = {};
+  const take = (k: 'k5' | 'k10' | 'h' | 'm', t: number, date: string | undefined) => {
+    if (fastest[k] == null || t < fastest[k]!) { fastest[k] = t; fastestDate[k] = date; }
+  };
   for (const row of rows) {
     const efforts = (row as any).best_efforts as SyntheticBestEffort[] | undefined;
     if (!efforts || efforts.length === 0) continue;
     for (const e of efforts) {
       const t = e.elapsed_time;
       if (!Number.isFinite(t) || t <= 0) continue;
+      const date = e.start_date || (row as any).start_time || undefined;
       switch (e.name) {
-        case '5K':
-          if (fastest.k5 == null || t < fastest.k5) fastest.k5 = t;
-          break;
-        case '10K':
-          if (fastest.k10 == null || t < fastest.k10) fastest.k10 = t;
-          break;
-        case 'Half Marathon':
-          if (fastest.h == null || t < fastest.h) fastest.h = t;
-          break;
-        case 'Marathon':
-          if (fastest.m == null || t < fastest.m) fastest.m = t;
-          break;
+        case '5K': take('k5', t, date); break;
+        case '10K': take('k10', t, date); break;
+        case 'Half Marathon': take('h', t, date); break;
+        case 'Marathon': take('m', t, date); break;
       }
     }
   }
@@ -2228,13 +2227,19 @@ export function applyPBsFromRows(rows: GarminActivityRow[]): void {
   s.pbs = next as any;
 
   // Mirror into onboarding.pbs so the review-step Continue gate sees them.
+  // A replaced onboarding PB takes its effort's date (or loses the old one when
+  // the effort has none): a date left from the slower time would age the new PB.
   if (s.onboarding) {
     const nextOnb = { ...(s.onboarding.pbs ?? {}) } as Record<string, number>;
-    if (allow('k5', nextOnb.k5)) nextOnb.k5 = fastest.k5!;
-    if (allow('k10', nextOnb.k10)) nextOnb.k10 = fastest.k10!;
-    if (allow('h', nextOnb.h)) nextOnb.h = fastest.h!;
-    if (allow('m', nextOnb.m)) nextOnb.m = fastest.m!;
+    const nextDates = { ...(s.onboarding.pbDates ?? {}) } as Record<string, string | undefined>;
+    for (const k of ['k5', 'k10', 'h', 'm'] as const) {
+      if (!allow(k, nextOnb[k])) continue;
+      nextOnb[k] = fastest[k]!;
+      if (fastestDate[k]) nextDates[k] = fastestDate[k];
+      else delete nextDates[k];
+    }
     s.onboarding.pbs = nextOnb as any;
+    s.onboarding.pbDates = nextDates as any;
   }
 
   console.log(`[AppleHealthSync] PB auto-fill — k5=${fastest.k5 ?? '-'}, k10=${fastest.k10 ?? '-'}, h=${fastest.h ?? '-'}, m=${fastest.m ?? '-'}`);

@@ -14,21 +14,22 @@
 
 import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { SimulatorState, RaceDistance } from '@/types';
-import { blendPredictions, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, predictFromRecent } from './predictions';
+import { blendPredictions, blendPredictionsPreFloor, calculateLiveForecast, predictFromVO2, demonstratedPBFloor, demonstratedPBFloorThrough, predictFromRecent } from './predictions';
 import { plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
 import { raceDayPlanDurability } from './race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm, applyTrainingHorizonAdjustment } from './training-horizon';
 import { planRampArchetype, type TypedVolumeState } from './athlete-archetype';
 import { getAbilityBand } from './fatigue';
 import type { RunnerType } from '@/types/training';
-import { computePredictionInputs, resolveWeeklyKmSignal, type RunActivityInput } from './prediction-inputs';
+import { computePredictionInputs, measuredWeeklyKm, collectRunsFromState } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
+import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
-import { recomputeLT } from '@/data/ltSync';
+import { syncTrainingPaces } from './paces';
+import { recomputeLT, ltPaceForDanielsInput } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
-import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbDerivedVdot, raceAnchorVdot } from './physiological-vdot';
-import { estimateRunPaceFromSkill } from './race-prediction.triathlon';
+import { effectiveVo2max, resolveRunningVdot, hasRunningFitnessSignal, pbCapacityForState, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, raceAnchorVdot, triColdStartRunCapVdot, resolveLtDanielsInput } from './physiological-vdot';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
@@ -39,44 +40,9 @@ const DIST_M: Record<RaceDistance, number> = {
   'marathon': 42195,
 };
 
-/**
- * Assemble `RunActivityInput[]` from whichever sources are available in the
- * current state. Preference order:
- *   - `s.wks[].garminActuals` (live sync. Authoritative for returning users)
- *   - `s.onboardingRunHistory` (seeded by backfill response. First-session data)
- * Both may coexist for a user mid-onboarding; we merge and let the dedup in
- * `computePredictionInputs` collapse overlaps.
- */
-export function collectRunsFromState(s: SimulatorState): RunActivityInput[] {
-  const runs: RunActivityInput[] = [];
-  const weeks = s.wks ?? [];
-  for (const wk of weeks) {
-    const actuals = (wk as { garminActuals?: Record<string, unknown> }).garminActuals;
-    if (!actuals) continue;
-    for (const val of Object.values(actuals)) {
-      const a = val as {
-        activityType?: string; startTime?: string; distanceKm?: number; durationSec?: number;
-        activityName?: string; avgHR?: number | null; hrDrift?: number | null;
-      };
-      const aType = (a.activityType || '').toUpperCase();
-      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
-      runs.push({
-        startTime: a.startTime,
-        distKm: a.distanceKm,
-        durSec: a.durationSec,
-        activityName: a.activityName,
-        activityType: a.activityType,
-        avgHR: a.avgHR ?? null,
-        hrDrift: a.hrDrift ?? null,
-      });
-    }
-  }
-  if (s.onboardingRunHistory && s.onboardingRunHistory.length > 0) {
-    for (const r of s.onboardingRunHistory) runs.push(r);
-  }
-  return runs;
-}
+// collectRunsFromState lives in prediction-inputs.ts (no runtime imports, so the
+// physiology chain can read it without a cycle); re-exported for callers.
+export { collectRunsFromState };
 
 const STANDARD_DISTANCES: RaceDistance[] = ['5k', '10k', 'half', 'marathon'];
 
@@ -117,6 +83,8 @@ interface StandardPredictionContext {
   marathonPbAgeDays: BlendArgs[12];
   weeklyKmIsEstimate: BlendArgs[13];
   crossTrainingSessions: BlendArgs[14];
+  /** PB age weights, set only with a measured weekly volume (§BV). */
+  pbAgeWeights: BlendArgs[15];
   calibration: ReturnType<typeof computeRunCalibration>;
   longestRunSec: number;
   /** All run durations in the window — qualifying long-run count is per-distance. */
@@ -160,12 +128,23 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
   if (!hasRunningFitnessSignal(s)) return null;
 
   const runs = collectRunsFromState(s);
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
   const marathonPbDateISO = s.onboarding?.pbDates?.m;
+  // Triathlon cold start (no running-specific evidence): the watch VO2max is
+  // held at the run skill-slider VDOT, the figure that caps the engine
+  // (refreshBlendedFitness) and the LT derivation's Daniels input
+  // (resolveLtDanielsInput). Without it the uncapped watch entered this blend
+  // while the engine, s.lt and the run leg were capped: the session
+  // generator's run Time Trial (70.3, watch 62, run skill 2) predicted a
+  // 23:28 5K against 26:39 at the engine (modes review, 2026-10-12). Null in
+  // running mode and whenever running evidence exists, so nothing else moves.
+  const triCap = triColdStartRunCapVdot(s);
+  const vo2Raw = effectiveVo2max(s);
+  const fallbackRaw = resolveRunningVdot(s);
   return {
     pbs: s.pbs ?? {},
     lt: s.lt ?? null,
-    vo2: effectiveVo2max(s),
+    vo2: triCap != null && vo2Raw != null ? Math.min(vo2Raw, triCap) : vo2Raw,
     b: s.b ?? 0,
     typ: (s.typ ?? 'Balanced').toLowerCase(),
     recentRun: inputs.recentRun ?? s.rec ?? null,
@@ -176,15 +155,15 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     // runs/week (same `freqVolumeEstimate` family the plan uses), which sizes the
     // soft penalty but must not override a demonstrated PB (see demonstratedPBFloor).
     ...(() => {
-      const measuredKm = inputs.weeksCovered > 0
-        ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
-        : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+      const measuredKm = measuredWeeklyKm(inputs, s.detectedWeeklyKm);
       const rpw = s.rw ?? 0;
       const freqEstimate = rpw <= 0 ? null
         : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
       return {
         weeklyKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
         weeklyKmIsEstimate: measuredKm == null && freqEstimate != null,
+        // PB age weights on the shared measured-volume gate, as refreshBlendedFitness.
+        pbAgeWeights: modelPbAgeWeightsIfMeasured(s.pbs ?? {}, s, inputs, new Date()),
       };
     })(),
     // Effective aerobic cross-training sessions/week, derived from persisted
@@ -202,14 +181,16 @@ function buildStandardPredictionContext(s: SimulatorState): StandardPredictionCo
     calibration: computeRunCalibration(s.runRaceLog),
     longestRunSec: getLongestRunSec(s, DURABILITY_WINDOW_WEEKS),
     longRunDurationsSec: getRunDurationsSec(s, DURABILITY_WINDOW_WEEKS),
-    fallbackVdot: resolveRunningVdot(s),
+    fallbackVdot: triCap != null ? Math.min(fallbackRaw ?? triCap, triCap) : fallbackRaw,
   };
 }
 
 /** Run one distance through the full staged pipeline. Returns null when the
  *  blend cannot produce a usable estimate. */
 function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistance): StandardPredictionStages | null {
-  let blended = blendPredictions(
+  // The blend before the demonstrated-PB floor: the floor is applied once per
+  // pipeline below (demonstratedPBFloorThrough), at the PB's age weight.
+  let preFloor = blendPredictionsPreFloor(
     DIST_M[dist],
     ctx.pbs,
     ctx.lt,
@@ -225,6 +206,7 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
     ctx.marathonPbAgeDays,
     ctx.weeklyKmIsEstimate,
     ctx.crossTrainingSessions,
+    ctx.pbAgeWeights,
   );
   // Last-resort: the weighted blend found no usable predictor (no PB, LT, recent
   // run, device VO2, or HR-calibrated signal) but the athlete still has a
@@ -233,10 +215,20 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
   // VDOT). This only fires when the blend is empty, so it never double-counts a
   // signal already in the blend. Keeps the Forecast in lock-step with the Stats
   // VO2 bar, which shows from the same resolved VDOT.
-  if ((!blended || blended <= 0 || !isFinite(blended)) && ctx.fallbackVdot != null) {
-    blended = predictFromVO2(DIST_M[dist], ctx.fallbackVdot);
+  if ((!preFloor || preFloor <= 0 || !isFinite(preFloor)) && ctx.fallbackVdot != null) {
+    preFloor = predictFromVO2(DIST_M[dist], ctx.fallbackVdot);
   }
-  if (!blended || blended <= 0 || !isFinite(blended)) return null;
+  if (!preFloor || preFloor <= 0 || !isFinite(preFloor)) return null;
+  const pre = preFloor;
+  const floorCtx = {
+    weeklyRunKm: ctx.weeklyKm ?? undefined,
+    weeklyRunKmIsEstimate: ctx.weeklyKmIsEstimate,
+    recentRun: ctx.recentRun,
+    b: ctx.b,
+    pbAgeWeights: ctx.pbAgeWeights,
+  };
+  // The capacity-blend stage as blendPredictions reports it (one floor step).
+  const blended = demonstratedPBFloor(pre, DIST_M[dist], ctx.pbs, floorCtx);
   const calibratedSec = applyRunCalibrationBias(blended, dist, ctx.calibration);
   const durability = applyLongRunCap(
     ctx.longestRunSec,
@@ -244,17 +236,14 @@ function predictDistanceStaged(ctx: StandardPredictionContext, dist: RaceDistanc
     countQualifyingLongRuns(ctx.longRunDurationsSec, dist),
   );
   // Floor each distance at its demonstrated same-distance PB after cap + shoe
-  // adjustment (parity with the headline refresh and initialization).
-  const finalSec = demonstratedPBFloor(
-    calibratedSec * durability.multiplier * ctx.shoeMul,
+  // adjustment (parity with the headline refresh and initialization), once
+  // per pipeline at the PB's age weight (demonstratedPBFloorThrough).
+  const finalSec = demonstratedPBFloorThrough(
+    pre,
     DIST_M[dist],
     ctx.pbs,
-    {
-      weeklyRunKm: ctx.weeklyKm ?? undefined,
-      weeklyRunKmIsEstimate: ctx.weeklyKmIsEstimate,
-      recentRun: ctx.recentRun,
-      b: ctx.b,
-    },
+    floorCtx,
+    (t) => applyRunCalibrationBias(t, dist, ctx.calibration) * durability.multiplier * ctx.shoeMul,
   );
   return {
     blendedSec: blended,
@@ -331,7 +320,7 @@ export function getStandardForecastDetail(s: SimulatorState, dist: RaceDistance)
   const stages = ctx ? predictDistanceStaged(ctx, dist) : null;
   const predictedSec = stages ? stages.finalSec : null;
 
-  const inputs = computePredictionInputs(collectRunsFromState(s));
+  const inputs = computePredictionInputs(collectRunsFromState(s), undefined, raceEffortHrFloorForState(s));
   const weeklyKm = inputs.weeklyKm > 0 ? inputs.weeklyKm : (s.detectedWeeklyKm ?? null);
 
   // Durability comes from the staged result when available (same longest-run
@@ -479,11 +468,87 @@ export function planForecastWeeklyKm(
 }
 
 /**
+ * The running end-of-plan forecast at a session count, from the state the
+ * refresh writes (s.v, s.forecastBlendAnchorSec, s.lt): calculateLiveForecast
+ * with the plan's ramp volume (planForecastWeeklyKm), race-day durability from
+ * the plan's long runs (raceDayPlanDurability), then calibration bias and the
+ * race-day shoe boost. Single source for s.forecastTime / s.expectedFinal
+ * (refreshBlendedFitness) and the onboarding plan preview
+ * (forecastForSessions, plan-preview-v2.ts), so the preview hero and Home read
+ * one number (Tristan, 2026-10-11: "one forecast"). Null without a race
+ * distance or an engine VDOT.
+ *
+ * `strengthSessionsPerWeek` overrides s.gs (the preview's strength callout
+ * reads the forecast without strength). Read-only.
+ */
+export function runningForecastForSessions(
+  s: SimulatorState,
+  sessionsForHorizon: number,
+  opts: { strengthSessionsPerWeek?: number } = {},
+): { forecastVdot: number; forecastTime: number; raceDayDurability: RunDurabilityResult | null } | null {
+  if (!s.rd || !(s.v > 0)) return null;
+  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
+  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
+  const trainingWeeks = planTrainingWeeks(s);
+  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
+  // Injury-aware: build from the return date, not flat. A current run
+  // restriction debits its recovery weeks so the forecast doesn't credit
+  // build during weeks the athlete cannot run. Mirrors the tri predictor.
+  const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
+  const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
+  // Race-day durability from the long runs the plan prescribes.
+  const raceDayDurability = raceDayPlanDurability(s);
+  const { forecastVdot, forecastTime } = calculateLiveForecast({
+    currentVdot: s.v,
+    targetDistance: s.rd,
+    weeksRemaining: effectiveWeeksRemaining,
+    sessionsPerWeek: sessionsForHorizon,
+    runnerType: (s.typ ?? 'Balanced') as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
+    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    crossTrained: s.onboarding?.crossTrainedBackground === true,
+    weeklyVolumeKm: planMeanKm ?? s.wkm,
+    weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
+    hmPbSeconds: s.pbs?.h || undefined,
+    ltPaceSecPerKm: s.lt || undefined,
+    strengthSessionsPerWeek: opts.strengthSessionsPerWeek ?? s.gs,
+    adaptationRatio: s.adaptationRatio,
+    blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
+    taperWeeks: planTaperWeeks(s),
+  });
+  // Calibration bias applies to the projection (systematic prediction error
+  // doesn't disappear by race day). Durability is judged on the long runs the
+  // PLAN prescribes by race day (above), not on the logged-run cap: the
+  // forecast represents end-of-plan fitness on the assumption that the plan is
+  // followed. Mirrors the tri engine's "execution factor" treatment.
+  const calibrated = applyRunCalibrationBias(forecastTime, s.rd, computeRunCalibration(s.runRaceLog));
+  // Race-day footwear boost. Carbon-plated racing flats (Vaporfly, Alphafly,
+  // Adios Pro, Endorphin Elite) deliver ~3% running-economy improvement at
+  // marathon pace (Hoogkamer 2018, mean 2.7–4.2%, taken here as a flat 3%).
+  // Applied last so any downstream course-factors pass picks up the boosted
+  // forecastTime and propagates it to forecastTimeAdjusted automatically.
+  const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
+  return { forecastVdot, forecastTime: calibrated * shoeMul, raceDayDurability };
+}
+
+/**
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
  * Idempotent. Safe to call any time. Does nothing and returns false if
  * required inputs are missing.
+ *
+ * On every exit, including the early ones (no race distance, no PBs), the
+ * training-pace cache follows the s.lt and s.v this refresh leaves
+ * (syncTrainingPaces): every initializer and the launch end here, so the
+ * training paces read the same LT as the LT headline.
  */
 export function refreshBlendedFitness(s: SimulatorState): boolean {
+  const refreshed = refreshBlendedFitnessCore(s);
+  syncTrainingPaces(s);
+  return refreshed;
+}
+
+/** The refresh itself, without the pace-cache sync (refreshBlendedFitness). */
+function refreshBlendedFitnessCore(s: SimulatorState): boolean {
   // Compute + cache HR-calibrated VDOT first, independent of the full blend.
   // The onboarding review screen needs this even before race distance is set,
   // so we pre-cache before the early-return guards below. This write is
@@ -540,7 +605,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   if (!targetDistM) return false;
 
   const runs = runsAll;
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(s));
 
   // Pass the resolved weekly-km signal: history-derived when the 8-week
   // window has any coverage (including an explicit 0 — a user with 145
@@ -558,18 +623,28 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // no-data fix by passing a phantom 0. MEASURED = history (weeksCovered>0) or a
   // typed weekly km; otherwise ESTIMATE from runs/week (sizes the soft penalty,
   // never overrides a demonstrated PB). Cross-training from epw−rw.
-  const measuredKm = inputs.weeksCovered > 0
-    ? resolveWeeklyKmSignal(inputs, s.detectedWeeklyKm)
-    : ((s.detectedWeeklyKm ?? 0) > 0 ? s.detectedWeeklyKm! : null);
+  const measuredKm = measuredWeeklyKm(inputs, s.detectedWeeklyKm);
   const rpw = s.rw ?? 0;
   const freqEstimate = rpw <= 0 ? null
     : rpw <= 3 ? rpw * 10 : rpw === 4 ? 40 : rpw === 5 ? 50 : rpw === 6 ? 60 : 70;
-  const blended = blendPredictions(
+  // PB age weights (pbAgeWeight, a smooth 3-year half-life) on the shared
+  // measured-volume gate (modelPbAgeWeightsIfMeasured): with no running data
+  // an old PB keeps full weight (§BV). Stored and displayed PBs never change;
+  // only their weight in the model does.
+  const pbAgeWeights = modelPbAgeWeightsIfMeasured(s.pbs, s, inputs, new Date());
+  const pbs = s.pbs;
+  const b = s.b;
+  const rd = s.rd;
+  // The blend (before the demonstrated-PB floor) as a function of its LT
+  // predictor: the refresh reads s.lt; the triathlon cold-start hold below also
+  // reads it at the LT from the uncapped watch. Every other input is the same.
+  // The floor is applied once per pipeline (readinessTimeFor).
+  const preFloorForLt = (ltPace: number | null) => blendPredictionsPreFloor(
     targetDistM,
-    s.pbs,
-    s.lt ?? null,
+    pbs,
+    ltPace,
     effectiveVo2max(s),
-    s.b,
+    b,
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
     s.athleteTier ?? undefined,
@@ -580,9 +655,11 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     marathonPbAgeDays,
     measuredKm == null && freqEstimate != null,
     Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
+    pbAgeWeights,
   );
+  const preFloorBlend = preFloorForLt(s.lt ?? null);
 
-  if (!blended || blended <= 0 || !isFinite(blended)) return false;
+  if (!preFloorBlend || preFloorBlend <= 0 || !isFinite(preFloorBlend)) return false;
 
   // Apply per-user calibration bias (tier 1: per-distance additive bias from
   // ≥2 logged races at the same distance). Computed fresh on every refresh
@@ -590,7 +667,6 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // predicted to keep one outlier from skewing future predictions.
   const calibration = computeRunCalibration(s.runRaceLog);
   s.runCalibration = calibration;
-  const calibratedBlend = applyRunCalibrationBias(blended, s.rd, calibration);
 
   // Long-run durability cap. Applies a multiplicative penalty when the
   // longest recent run is below the distance-specific threshold (orthogonal
@@ -602,18 +678,30 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Floor at any demonstrated same-distance PB after the cap (mirror of
   // initialization.ts): the cap and calibration bias must not push the anchor
   // slower than a proven time absent detraining evidence. Estimated volume does
-  // not count as evidence (see demonstratedPBFloor).
-  const durabilityAdjustedBlend = demonstratedPBFloor(
-    calibratedBlend * durability.multiplier,
+  // not count as evidence (see demonstratedPBFloor). Calibration bias, the
+  // durability cap and this floor, as a function of the blend (the cold-start
+  // hold below runs a second blend through the same steps).
+  // The floor runs once per pipeline at the same-distance PB's age weight
+  // (demonstratedPBFloorThrough): at full strength it is the blend's own floor
+  // then this one, as before; a PB of weight w keeps w of it.
+  const floorCtx = {
+    weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
+    weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
+    recentRun: inputs.recentRun ?? s.rec ?? null,
+    b,
+    pbAgeWeights,
+  };
+  const readinessTimeFor = (preFloorTime: number): number => demonstratedPBFloorThrough(
+    preFloorTime,
     targetDistM,
-    s.pbs,
-    {
-      weeklyRunKm: (measuredKm != null ? measuredKm : freqEstimate) ?? undefined,
-      weeklyRunKmIsEstimate: measuredKm == null && freqEstimate != null,
-      recentRun: inputs.recentRun ?? s.rec ?? null,
-      b: s.b,
-    },
+    pbs,
+    floorCtx,
+    (t) => applyRunCalibrationBias(t, rd, calibration) * durability.multiplier,
   );
+  // The blend with its own floor (what blendPredictions returns): the forecast
+  // anchor when no planned peak volume exists.
+  const blended = demonstratedPBFloor(preFloorBlend, targetDistM, pbs, floorCtx);
+  const durabilityAdjustedBlend = readinessTimeFor(preFloorBlend);
 
   s.blendedRaceTimeSec = durabilityAdjustedBlend;
 
@@ -629,10 +717,13 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // predictions in ISSUE-297.
   //
   // The engine is therefore floored at demonstrated cross-distance capacity
-  // (`pbDerivedVdot`, a PB-median that is immune to the refresh feedback loop).
-  // The floor stands down ONLY on demonstrated recent slowness — a recent race
-  // effort (`inputs.recentRun`, a run more than 15% faster than the window's
-  // median pace) that projects below capacity. Low TRAINING VOLUME is
+  // (`pbCapacityForState`, an age-weighted PB median that is immune to the
+  // refresh feedback loop). The floor stands down ONLY on demonstrated recent
+  // slowness — a recent race effort (`inputs.recentRun`, a run more than 15%
+  // faster than the window's median pace and, with HR, at race level) that
+  // projects below capacity. An old median PB (pbAgeWeight below 1) is weighed
+  // against current capacity evidence, a medium+ HR fit (pbEngineFloorVdot).
+  // Low TRAINING VOLUME is
   // deliberately NOT engine-decay evidence here: it limits race readiness
   // (already modelled on the prediction and the forecast), not aerobic
   // capacity. This is the intended difference from `demonstratedPBFloor`, whose
@@ -641,9 +732,17 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // the engine a pure function of demonstrated fitness (deterministic across
   // refreshes).
   const penalisedVdot = cv(targetDistM, durabilityAdjustedBlend);
-  const capacityVdot = pbDerivedVdot(s);
+  // PB capacity is the age-weighted median (pbCapacity). The floor
+  // (pbEngineFloorVdot, shared with initializeSimulator) is PB capacity for a
+  // fresh or undated median PB. For an aged one, with a measured volume, it is
+  // the age-weighted mean of PB capacity and a medium+ HR fit (capped at
+  // capacity); with no such fit, PB capacity. It never pulls toward the
+  // penalised blend, whose readiness penalties stay off the engine (§BZ) and
+  // which differs between onboarding and the refresh.
+  const capacity = pbCapacityForState(s);
+  const capacityVdot = capacity?.vdot ?? null;
   let engineVdot = penalisedVdot;
-  if (capacityVdot != null && capacityVdot > penalisedVdot) {
+  if (capacity != null && capacityVdot != null && capacityVdot > penalisedVdot) {
     const recentForEngine = inputs.recentRun ?? s.rec ?? null;
     const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
       ? predictFromRecent(targetDistM, recentForEngine, s.pbs, s.b)
@@ -653,8 +752,9 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       : null;
     const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
     if (!recentDemonstratesSlowness) {
-      engineVdot = capacityVdot;
-      console.log(`[refreshBlendedFitness] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence of slowness → engine held at capacity (readiness penalty stays on blendedRaceTimeSec/forecast only)`);
+      const floor = pbEngineFloorVdot(capacity, { ageWeightsApply: pbAgeWeights != null, hrFit: hrVdot });
+      engineVdot = Math.max(penalisedVdot, floor);
+      console.log(`[refreshBlendedFitness] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence of slowness → engine held at ${engineVdot.toFixed(1)} (median PB age weight ${capacity.weight}; readiness penalty stays on blendedRaceTimeSec/forecast only)`);
     }
   }
 
@@ -711,22 +811,56 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // The cap only bites when the watch exceeds the self-rating, so a genuinely fast
   // self-rated triathlete (skill 5) is not pulled down. Running mode is untouched
   // (no triConfig.skillRating).
-  const triRunSkill = s.triConfig?.skillRating?.run;
-  // `inputs.recentRun` is a race effort (a run more than 15% faster than the
-  // window's median pace, SCIENCE_LOG §CY). Easy runs never fill it, so they
-  // never enter the blend's recent-run slot and must not lift the cap either:
-  // with the cap off and no run in the blend, the engine falls back to the
-  // uncorroborated watch number the cap exists to contain.
-  const hasRunSpecificSignal = capacityVdot != null
-    || raceAnchor != null
-    || (inputs.recentRun != null && inputs.recentRun.t > 0)
-    || (hrVdot?.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium'));
-  if (triRunSkill && !hasRunSpecificSignal) {
-    const skillMarathonPace = estimateRunPaceFromSkill(triRunSkill as 1 | 2 | 3 | 4 | 5, 'ironman');
-    const skillVdot = cv(42195, skillMarathonPace * 42.195);
-    if (skillVdot > 0 && engineVdot > skillVdot) {
-      console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
-      engineVdot = skillVdot;
+  // The synced race effort that lifts the cap is triRunEvidenceRaceEffort: a
+  // run more than 15% faster than the window's median pace (SCIENCE_LOG §CY)
+  // and, where HR rules exist, one that carries an average HR at race level
+  // (a tempo with no HR is not evidence, 2026-10-11, ISSUE-376). Easy runs
+  // never fill it, so they must not lift the cap either: with the cap off and
+  // no run in the blend, the engine falls back to the uncorroborated watch
+  // number the cap exists to contain. The gate and the cap value live in
+  // triColdStartRunCapVdot (physiological-vdot.ts), shared with the LT
+  // derivation's Daniels input (ltDanielsInputVdot) so the run paces from s.lt
+  // are held to the same figure. It reads the HR fit from s.hrCalibratedVdot,
+  // written from hrVdot at the top of this function.
+  const skillVdot = triColdStartRunCapVdot(s);
+  if (skillVdot != null && engineVdot > skillVdot) {
+    console.log(`[refreshBlendedFitness] cold-start: no running-specific signal → engine capped at run skill-slider VDOT ${skillVdot.toFixed(1)} (was ${engineVdot.toFixed(1)}, uncorroborated watch). Provisional until real running data lands.`);
+    engineVdot = skillVdot;
+  } else if (skillVdot != null) {
+    // Cold-start hold (2026-10-09), only where the cap lowered the LT input
+    // (resolveLtDanielsInput): a watch reading above the run skill rating, or
+    // no fresh watch (the engine fallback). The training paces then read s.lt
+    // from the run skill VDOT, and the blend under the engine reads that
+    // capped LT too. The paces were the only change asked for, so the engine
+    // stays what it was when s.lt came from the watch (81d38f7):
+    //   - Watch above the rating: the engine of the same blend with the LT
+    //     from the uncapped watch (ltPaceForDanielsInput), capped at the skill
+    //     VDOT. It meets the uncapped engine at watch = skill VDOT, so there
+    //     is no step, and a watch far above the rating (62) still reads the
+    //     skill VDOT. Holding at the skill VDOT for every watch above it
+    //     raised the engine by up to 4.9 VDOT just above the rating, with a
+    //     5 VDOT step at the boundary (review 2026-10-09).
+    //   - No fresh watch: the skill VDOT. The fallback LT input was s.v
+    //     itself, which slid 44.3 to 25.0 over five refreshes at 81d38f7.
+    // The readiness penalties against the marathon placeholder (no-data
+    // durability cap, low-volume marathon specificity) stay off the engine
+    // as they did at 81d38f7 (§BZ, the §CY guarantee from da23c2d): with the
+    // watch-derived LT the blend sat above the skill cap.
+    // A watch at or below the skill rating is not capped: the LT input is the
+    // watch, and the engine is the blend, as before.
+    const ltInput = resolveLtDanielsInput(s);
+    if (ltInput.coldStartCapped) {
+      let held = skillVdot;
+      if (ltInput.source === 'device' && ltInput.uncappedVdot != null) {
+        const blendedUncapped = preFloorForLt(ltPaceForDanielsInput(s, ltInput.uncappedVdot));
+        if (blendedUncapped && blendedUncapped > 0 && isFinite(blendedUncapped)) {
+          held = Math.min(skillVdot, cv(targetDistM, readinessTimeFor(blendedUncapped)));
+        }
+      }
+      if (held > engineVdot) {
+        console.log(`[refreshBlendedFitness] cold-start: engine held at ${held.toFixed(1)} (${ltInput.source === 'device' ? 'blend with the uncapped watch LT, capped at the run skill VDOT' : 'run skill VDOT, no fresh watch'}; blend on the capped LT ${engineVdot.toFixed(1)}).`);
+        engineVdot = held;
+      }
     }
   }
 
@@ -755,11 +889,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
 
   // Recompute end-of-plan forecast from the fresh baseline so s.expectedFinal
   // tracks reality instead of being frozen at onboarding.
-  // Training weeks: a closing week (a Monday to Wednesday race's own week) holds
-  // only the race, so a Tuesday race forecasts exactly like the Sunday before it.
-  const trainingWeeks = planTrainingWeeks(s);
-  const weeksRemaining = Math.max(1, trainingWeeks - ((s.w ?? 1) - 1));
-  if (s.rd && s.typ && weeksRemaining > 0) {
+  if (s.rd && s.typ) {
     try {
       // Include commute days so the live forecast matches what the
       // Training chip on the forecast page displays. `s.epw` is built
@@ -770,11 +900,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         ? (s.commuteConfig.commuteDaysPerWeek ?? 0)
         : 0;
       const sessionsForHorizon = baseSessions + commuteSessions;
-      const planMeanKm = planForecastWeeklyKm(s, sessionsForHorizon);
-      // Injury-aware: build from the return date, not flat. A current run
-      // restriction debits its recovery weeks so the forecast doesn't credit
-      // build during weeks the athlete cannot run. Mirrors the tri predictor.
-      const effectiveWeeksRemaining = injuryAdjustedBuildWeeks((s as any).injuryState, 'run', weeksRemaining);
+      const trainingWeeks = planTrainingWeeks(s);
 
       // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ──
       // The forecast answers "what can you run when the plan has built you up?",
@@ -819,6 +945,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
             marathonPbAgeDays,
             false,
             Math.max(0, (s.epw ?? 0) - (s.rw ?? 0)),
+            pbAgeWeights,
           )
         : null;
       const forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : blended;
@@ -829,44 +956,15 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
       // the displayed forecast stays buried near today.
       s.forecastBlendAnchorSec = forecastAnchorSec;
 
-      // Race-day durability from the long runs the plan prescribes (stored for
-      // the Durability drill-down, which reads this same result).
-      const raceDayDurability = raceDayPlanDurability(s);
-      s.raceDayDurability = raceDayDurability ?? undefined;
-      const { forecastVdot, forecastTime } = calculateLiveForecast({
-        currentVdot: s.v,
-        targetDistance: s.rd,
-        weeksRemaining: effectiveWeeksRemaining,
-        sessionsPerWeek: sessionsForHorizon,
-        runnerType: s.typ as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
-        experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-        crossTrained: s.onboarding?.crossTrainedBackground === true,
-        weeklyVolumeKm: planMeanKm ?? s.wkm,
-        weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
-        hmPbSeconds: s.pbs?.h || undefined,
-        ltPaceSecPerKm: s.lt || undefined,
-        strengthSessionsPerWeek: s.gs,
-        adaptationRatio: s.adaptationRatio,
-        blendedAnchorSec: forecastAnchorSec,
-        raceDayDurabilityMultiplier: raceDayDurability?.multiplier,
-        taperWeeks: planTaperWeeks(s),
-      });
-      s.expectedFinal = forecastVdot;
-      // Calibration bias applies to the projection (systematic prediction
-      // error doesn't disappear by race day). Durability is judged on the long
-      // runs the PLAN prescribes by race day (raceDayDurabilityMultiplier
-      // above), not on the logged-run cap: the forecast represents end-of-plan
-      // fitness on the assumption that the plan is followed. Mirrors the tri
-      // engine's "execution factor" treatment (race-prediction.triathlon).
-      const calibrated = applyRunCalibrationBias(forecastTime, s.rd, calibration);
-      // Race-day footwear boost. Carbon-plated racing flats (Vaporfly,
-      // Alphafly, Adios Pro, Endorphin Elite) deliver ~3% running-economy
-      // improvement at marathon pace (Hoogkamer 2018, mean 2.7–4.2%, taken
-      // here as a flat 3%). Applied last so any downstream course-factors
-      // pass picks up the boosted forecastTime and propagates it to
-      // forecastTimeAdjusted automatically.
-      const shoeMul = s.shoeKind === 'supershoes' ? 0.97 : 1.0;
-      s.forecastTime = calibrated * shoeMul;
+      // The forecast itself (runningForecastForSessions), the one computation
+      // the onboarding plan preview reads too. Stores race-day durability for
+      // the Durability drill-down, which reads this same result.
+      const forecast = runningForecastForSessions(s, sessionsForHorizon);
+      if (forecast) {
+        s.raceDayDurability = forecast.raceDayDurability ?? undefined;
+        s.expectedFinal = forecast.forecastVdot;
+        s.forecastTime = forecast.forecastTime;
+      }
     } catch {
       // Leave expectedFinal untouched on any forecast failure.
     }

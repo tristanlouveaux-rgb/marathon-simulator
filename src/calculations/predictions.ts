@@ -5,7 +5,9 @@ import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { TAPER_NOMINAL } from '@/constants/training-params';
+import { pbRecencyPenaltyFactor } from '@/constants/race-readiness-targets';
 import type { HRVdotResult } from './effort-calibrated-vdot';
+import type { PbAgeWeights, PbKey } from './physiological-vdot';
 import { applyRunningCourseFactors } from './course-factors-running';
 
 /** Skip adherence summary for penalty calculation */
@@ -49,17 +51,55 @@ export function calculateAdherencePenalty(summary: SkipSummary): number {
  * evidence of detraining. A marathon PB does NOT floor a half prediction (and
  * vice versa) — only same-distance PBs qualify.
  */
-function exactDistancePB(targetDist: number, pbs: PBs): number | null {
-  const candidates: { d: number; t: number | undefined }[] = [
-    { d: 5000, t: pbs.k5 },
-    { d: 10000, t: pbs.k10 },
-    { d: 21097, t: pbs.h },
-    { d: 42195, t: pbs.m },
+function exactDistancePB(targetDist: number, pbs: PBs): { key: PbKey; t: number } | null {
+  const candidates: { key: PbKey; d: number; t: number | undefined }[] = [
+    { key: 'k5', d: 5000, t: pbs.k5 },
+    { key: 'k10', d: 10000, t: pbs.k10 },
+    { key: 'h', d: 21097, t: pbs.h },
+    { key: 'm', d: 42195, t: pbs.m },
   ];
-  for (const { d, t } of candidates) {
-    if (t && t > 0 && Math.abs(d - targetDist) / d < 0.01) return t;
+  for (const { key, d, t } of candidates) {
+    if (t && t > 0 && Math.abs(d - targetDist) / d < 0.01) return { key, t };
   }
   return null;
+}
+
+/** Context the demonstrated-PB floor reads (the same fields every caller has). */
+export interface PbFloorCtx {
+  weeklyRunKm?: number;
+  weeklyRunKmIsEstimate?: boolean;
+  recentRun?: RecentRun | null;
+  b: number;
+  pbAgeWeights?: PbAgeWeights;
+}
+
+/**
+ * The floor at full strength: the same-distance PB when the floor stands, else
+ * the input. A projection (idempotent).
+ */
+function fullStrengthPBFloor(timeSec: number, targetDist: number, pbs: PBs, ctx: PbFloorCtx): number {
+  const exact = exactDistancePB(targetDist, pbs);
+  if (exact == null || timeSec <= exact.t) return timeSec;
+  const exactPb = exact.t;
+
+  const lowVolumeEvidence =
+    ctx.weeklyRunKm != null && ctx.weeklyRunKm < 30 && !ctx.weeklyRunKmIsEstimate;
+  const tRecent = ctx.recentRun && ctx.recentRun.t > 0
+    ? predictFromRecent(targetDist, ctx.recentRun, pbs, ctx.b)
+    : null;
+  const recentContradictsPb = tRecent != null && tRecent > exactPb;
+
+  if (lowVolumeEvidence || recentContradictsPb) return timeSec;
+  return exactPb;
+}
+
+/** Age weight of the same-distance PB the floor reads: 1 with none, undated,
+ *  or no gated weights. */
+export function pbFloorWeight(targetDist: number, pbs: PBs, pbAgeWeights?: PbAgeWeights): number {
+  const exact = exactDistancePB(targetDist, pbs);
+  if (exact == null) return 1;
+  const w = pbAgeWeights?.[exact.key] ?? 1;
+  return w < 1 ? Math.max(0, w) : 1;
 }
 
 /**
@@ -84,32 +124,89 @@ function exactDistancePB(targetDist: number, pbs: PBs): number | null {
  *      runner whose 1:28 half PB is contradicted by a recent 24:00 5K).
  *
  * When either holds, the floor stands down and the penalised blend is trusted.
+ *
+ * PB age (2026-10-11, Tristan: the floor's strength follows the PB's age
+ * weight): `ctx.pbAgeWeights` carries the age weight of each PB
+ * (`pbAgeWeight`, a smooth 3-year half-life). Callers pass
+ * `modelPbAgeWeightsIfMeasured`, which is set only when they hold current
+ * running data (a measured weekly volume); with no data a PB floors at full
+ * strength (§BV). A same-distance PB of weight w keeps w of its floor:
+ *
+ *   floored = w x fullStrengthFloor(t) + (1 - w) x t
+ *
+ * the same weighted mean the age-weighted PB median and the engine floor use,
+ * with no new constant. w = 1 (undated, or no measured volume) is the floor as
+ * before; a weight that falls continuously with the PB's age moves the floored
+ * time continuously, so the floor adds no step on an anniversary (the 2026-10-09
+ * version stood the floor down outright below weight 1: a 7 to 9 min overnight
+ * marathon step at 2 years, review 3).
+ *
+ * For w = 1 this is a projection (idempotent). For w below 1 it is not:
+ * applying it twice compounds the floor. A pipeline that floors the blend and
+ * floors again after its own adjustments (calibration, the durability cap,
+ * shoes) must use `demonstratedPBFloorThrough`, which applies the weight once
+ * per pipeline.
  * Limitation: a genuinely stale PB with no measured volume and no recent run is
  * still trusted as the floor — we prefer optimism over telling an athlete they
- * are slower than a proven time with zero supporting evidence.
+ * are slower than a proven time with zero supporting evidence. A typed PB has
+ * no date and never ages.
  *
- * Pure function. Idempotent: flooring an already-floored value is a no-op, so it
- * is safe to call again after an externally-applied penalty (e.g. the durability
- * cap that callers multiply on after blendPredictions).
+ * Pure function.
  */
 export function demonstratedPBFloor(
   timeSec: number,
   targetDist: number,
   pbs: PBs,
-  ctx: { weeklyRunKm?: number; weeklyRunKmIsEstimate?: boolean; recentRun?: RecentRun | null; b: number },
+  ctx: PbFloorCtx,
 ): number {
-  const exactPb = exactDistancePB(targetDist, pbs);
-  if (exactPb == null || timeSec <= exactPb) return timeSec;
+  const full = fullStrengthPBFloor(timeSec, targetDist, pbs, ctx);
+  const w = pbFloorWeight(targetDist, pbs, ctx.pbAgeWeights);
+  return w >= 1 ? full : w * full + (1 - w) * timeSec;
+}
 
-  const lowVolumeEvidence =
-    ctx.weeklyRunKm != null && ctx.weeklyRunKm < 30 && !ctx.weeklyRunKmIsEstimate;
-  const tRecent = ctx.recentRun && ctx.recentRun.t > 0
-    ? predictFromRecent(targetDist, ctx.recentRun, pbs, ctx.b)
-    : null;
-  const recentContradictsPb = tRecent != null && tRecent > exactPb;
+/**
+ * The demonstrated-PB floor through a pipeline that floors the blend and then
+ * floors again after its own adjustments (`adjust`: calibration bias, the
+ * long-run durability cap, the shoe multiplier). `preFloorSec` is the blend
+ * before any floor (`blendPredictionsPreFloor`).
+ *
+ * At full strength the pipeline is fullFloor(adjust(fullFloor(pre))), exactly
+ * the two-step floor callers applied before (both steps are projections). A
+ * same-distance PB of age weight w keeps w of that floor once per pipeline:
+ *
+ *   w x fullFloor(adjust(fullFloor(pre))) + (1 - w) x adjust(pre)
+ *
+ * so the floored and unfloored pipelines are weighed exactly as
+ * `demonstratedPBFloor` weighs a single step, and the result is continuous in
+ * w. Single source for the race-readiness time (refreshBlendedFitness,
+ * initializeSimulator) and the standard-distance predictions.
+ */
+export function demonstratedPBFloorThrough(
+  preFloorSec: number,
+  targetDist: number,
+  pbs: PBs,
+  ctx: PbFloorCtx,
+  adjust: (sec: number) => number,
+): number {
+  const floored = fullStrengthPBFloor(adjust(fullStrengthPBFloor(preFloorSec, targetDist, pbs, ctx)), targetDist, pbs, ctx);
+  const w = pbFloorWeight(targetDist, pbs, ctx.pbAgeWeights);
+  return w >= 1 ? floored : w * floored + (1 - w) * adjust(preFloorSec);
+}
 
-  if (lowVolumeEvidence || recentContradictsPb) return timeSec;
-  return exactPb;
+/** The PB `predictFromPB` extrapolates from: the one closest in distance to
+ *  the target (ties keep 5K, 10K, half, marathon order). Null without PBs. */
+function pbAnchor(targetDist: number, pbs: PBs): { key: PbKey; d: number; t: number } | null {
+  const avail: { key: PbKey; d: number; t: number }[] = [];
+  if (pbs.k5) avail.push({ key: 'k5', d: 5000, t: pbs.k5 });
+  if (pbs.k10) avail.push({ key: 'k10', d: 10000, t: pbs.k10 });
+  if (pbs.h) avail.push({ key: 'h', d: 21097, t: pbs.h });
+  if (pbs.m) avail.push({ key: 'm', d: 42195, t: pbs.m });
+
+  if (avail.length === 0) return null;
+
+  // Find closest distance
+  avail.sort((a, c) => Math.abs(a.d - targetDist) - Math.abs(c.d - targetDist));
+  return avail[0];
 }
 
 /**
@@ -120,17 +217,8 @@ export function demonstratedPBFloor(
  * @returns Predicted time in seconds, or null
  */
 export function predictFromPB(targetDist: number, pbs: PBs, b: number): number | null {
-  const avail: { d: number; t: number }[] = [];
-  if (pbs.k5) avail.push({ d: 5000, t: pbs.k5 });
-  if (pbs.k10) avail.push({ d: 10000, t: pbs.k10 });
-  if (pbs.h) avail.push({ d: 21097, t: pbs.h });
-  if (pbs.m) avail.push({ d: 42195, t: pbs.m });
-
-  if (avail.length === 0) return null;
-
-  // Find closest distance
-  avail.sort((a, c) => Math.abs(a.d - targetDist) - Math.abs(c.d - targetDist));
-  const anchor = avail[0];
+  const anchor = pbAnchor(targetDist, pbs);
+  if (anchor == null) return null;
 
   // Cap extreme fatigue exponents at 1.15 (ceiling. Prevents over-penalising
   // extreme endurance profiles).
@@ -333,10 +421,11 @@ export function predictFromVO2(targetDist: number, targetVDOT: number | null): n
   let lo = (targetDist / 500) * 60;
   let hi = (targetDist / 50) * 60;
 
+  // To the iteration cap, as vt (vdot.ts): an early stop at a VDOT error
+  // under 0.01 made this a step function of the VDOT (2026-10-12).
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
     const calc = vdot(mid);
-    if (Math.abs(calc - targetVDOT) < 0.01) return mid;
     calc < targetVDOT ? hi = mid : lo = mid;
   }
 
@@ -667,7 +756,14 @@ export function crossTrainingPredictionCredit(
   return Math.max(0, withCross - withoutCross);
 }
 
-export function blendPredictions(
+/**
+ * The weighted predictor blend with its race-readiness penalties (marathon
+ * specificity, no long-race PB), before the demonstrated-PB floor. Null when no
+ * predictor is usable. `blendPredictions` is this plus the floor; a pipeline
+ * that floors again after its own adjustments reads this and floors through
+ * `demonstratedPBFloorThrough`, so the PB's age weight applies once.
+ */
+export function blendPredictionsPreFloor(
   targetDist: number,
   pbs: PBs,
   ltPace: number | null,
@@ -685,7 +781,8 @@ export function blendPredictions(
    * and the marathon-specificity penalty fires (Tanda gated out, low recent
    * volume), the penalty severity scales with PB recency: a recent PB is
    * *demonstrated current capability*, so the penalty (which assumes PB might
-   * be stale) is reduced. Bands: <365d → ×0.5, 365-730d → ×0.75, >730d → full.
+   * be stale) is reduced by pbRecencyPenaltyFactor: ×0.5 through 365 days,
+   * then linear to full at 730 days (continuous).
    */
   marathonPbAgeDays?: number,
   /**
@@ -703,6 +800,18 @@ export function blendPredictions(
    * lowVolumeDiscount.
    */
   crossTrainingSessions?: number,
+  /**
+   * Age weight of each PB (`pbAgeWeight`, physiological-vdot.ts: a smooth
+   * 3-year half-life, 1 year 0.79, 2 years 0.63, 4 years 0.40). Callers pass
+   * `modelPbAgeWeightsIfMeasured`, which is set only when they hold current
+   * running data (a measured weekly volume), so with no data an old PB keeps
+   * full weight (§BV). It scales the PB
+   * predictor's weight (the anchor PB's age; the other predictors renormalise
+   * in proportion) and, in `blendPredictions`, the strength of the
+   * same-distance PB floor (demonstratedPBFloor: a PB of weight w keeps w of
+   * its floor). Stored and displayed PBs never change.
+   */
+  pbAgeWeights?: PbAgeWeights,
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
@@ -812,6 +921,19 @@ export function blendPredictions(
     w.tanda = 0;
   }
 
+  // PB age (2026-10-09). An old PB speaks less for current capacity: scale the
+  // PB predictor's weight by the anchor PB's age weight, applied after every
+  // other redistribution so it acts on the PB's final share. The shed weight is
+  // not handed to one predictor: the weighted mean renormalises over the rest
+  // in proportion. (LT, the usual destination of a shed, is often derived from
+  // the same PBs through critical speed or the PB-median Daniels input, and
+  // would hand the PB its weight back.)
+  if (pbAgeWeights && tPB != null) {
+    const anchor = pbAnchor(targetDist, pbs);
+    const ageW = anchor ? (pbAgeWeights[anchor.key] ?? 1) : 1;
+    if (ageW < 1) w.pb = w.pb * ageW;
+  }
+
   const wRecent = tRecent && hasRecent ? (w.recent || 0) : 0;
   const wPB = tPB ? w.pb : 0;
   const wLT = tLT ? w.lt : 0;
@@ -888,12 +1010,14 @@ export function blendPredictions(
     // 1984's full-detraining curves) over-corrects. Scale the penalty's
     // *excess* (the part above 1.0) by a recency factor. This keeps the
     // direction right while reducing magnitude for athletes who have proven
-    // recent capability. Step bands at 1y / 2y boundaries.
+    // recent capability. The factor is continuous in the PB's age
+    // (pbRecencyPenaltyFactor: 0.5 through one year, then linear to 1.0 at
+    // two years), the same rule as the triathlon legs'
+    // specificity penalty, so today's marathon time does not step on the PB's
+    // anniversary (pb-age-continuity.test.ts).
     let recencyFactor = 1.0;
     if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null) {
-      if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year. Demonstrated current capability
-      else if (marathonPbAgeDays < 730) recencyFactor = 0.75;  // PB 1-2 years. Partial demonstration
-      // >2 years: full penalty (recencyFactor stays at 1.0)
+      recencyFactor = pbRecencyPenaltyFactor(marathonPbAgeDays);
     }
     if (recencyFactor < 1.0) {
       const excess = marathonSpecificityPenalty - 1.0;
@@ -901,7 +1025,7 @@ export function blendPredictions(
     }
 
     if (marathonSpecificityPenalty > 1.0) {
-      console.log(`[blendPredictions] marathon-specificity penalty fired: weeklyKm=${weeklyRunKm.toFixed(1)}, pbAgeDays=${marathonPbAgeDays ?? 'unknown'}, recencyFactor=${recencyFactor.toFixed(2)} → penalty ${marathonSpecificityPenalty.toFixed(3)}× (Tanda gated out)`);
+      console.log(`[blendPredictions] marathon-specificity penalty fired: weeklyKm=${weeklyRunKm.toFixed(1)}, pbAgeDays=${marathonPbAgeDays ?? 'unknown'}, recencyFactor=${recencyFactor.toFixed(3)} → penalty ${marathonSpecificityPenalty.toFixed(3)}× (Tanda gated out)`);
     }
   }
 
@@ -942,14 +1066,23 @@ export function blendPredictions(
     console.log(`[blendPredictions] no-long-race-PB penalty fired: runnerType=${runnerType}, hasHmPb=${pbs.h != null}, hasMPb=${pbs.m != null}, tTanda=${tTanda != null} → penalty ${noLongRacePenalty.toFixed(3)}× (no demonstrated marathon endurance)`);
   }
 
-  const penalised = (sum / totW) * marathonSpecificityPenalty * noLongRacePenalty;
+  return (sum / totW) * marathonSpecificityPenalty * noLongRacePenalty;
+}
 
-  // Never predict slower than a demonstrated same-distance PB without positive
-  // detraining evidence. See demonstratedPBFloor for the full rationale.
-  const result = demonstratedPBFloor(penalised, targetDist, pbs, { weeklyRunKm, weeklyRunKmIsEstimate, recentRun, b });
+/**
+ * The race-time blend (`blendPredictionsPreFloor`) with the demonstrated-PB
+ * floor: never slower than a demonstrated same-distance PB without positive
+ * detraining evidence, at the strength of that PB's age weight. See
+ * demonstratedPBFloor for the full rationale. Same arguments as
+ * `blendPredictionsPreFloor`.
+ */
+export function blendPredictions(...args: Parameters<typeof blendPredictionsPreFloor>): number | null {
+  const penalised = blendPredictionsPreFloor(...args);
+  if (penalised == null) return null;
+  const [targetDist, pbs, , , b, , recentRun, , weeklyRunKm, , , , , weeklyRunKmIsEstimate, , pbAgeWeights] = args;
+  const result = demonstratedPBFloor(penalised, targetDist, pbs, { weeklyRunKm, weeklyRunKmIsEstimate, recentRun, b, pbAgeWeights });
   if (result !== penalised) {
-    console.log(`[blendPredictions] demonstrated-PB floor: penalised blend ${penalised.toFixed(0)}s slower than same-distance PB ${result.toFixed(0)}s with no detraining evidence → floored to PB`);
+    console.log(`[blendPredictions] demonstrated-PB floor: penalised blend ${penalised.toFixed(0)}s slower than same-distance PB, floored to ${result.toFixed(0)}s (PB age weight ${pbFloorWeight(targetDist, pbs, pbAgeWeights).toFixed(2)}) with no detraining evidence`);
   }
-
   return result;
 }

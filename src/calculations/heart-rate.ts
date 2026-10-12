@@ -105,6 +105,48 @@ function maxHRZones(maxHR: number): HRZones {
 }
 
 /**
+ * The HR profile behind the app's HR effort scale: measured max and resting HR,
+ * age as the last resort. Single source for `getHREffort` (activity-matcher.ts,
+ * the per-activity HR effort score) and the race-effort HR test
+ * (`raceEffortHrFloorForState`), so "how hard was this run" reads the same zones
+ * in both places.
+ */
+export function hrEffortProfile(
+  s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } | null },
+): HRProfile {
+  return {
+    maxHR: s.maxHR ?? undefined,
+    restingHR: s.restingHR ?? undefined,
+    age: s.onboarding?.age,
+  };
+}
+
+/**
+ * The lowest average HR that reads as a race effort on the HR effort scale: the
+ * midpoint of the threshold zone (Z4), (z4.min + z4.max) / 2 (Tristan,
+ * 2026-10-11). Threshold and tempo sessions target Z4 (`getWorkoutHRTarget`)
+ * and a steady tempo sits in its lower half; a 5K or 10K race averages in the
+ * upper half or above (SCIENCE_LOG §CY update). The top of Z4 (where Z5
+ * begins), the 2026-10-09 floor, missed real races: a 10K in 44:00 at HR 174
+ * on a 190 / 50 profile (floor 176) did not count. Counting it does not by
+ * itself pull today's estimate to the race: the race point also enters the HR
+ * fit (computeHRCalibratedVdot), which can cancel it (open question).
+ * Derived from the existing zone boundaries, no new constant: Karvonen 190 / 50
+ * gives Z4 162 to 176 and a floor of 169. Null when no zones can be computed.
+ */
+export function raceEffortHrFloorBpm(profile: HRProfile): number | null {
+  const zones = calculateZones(profile);
+  return zones ? (zones.z4.min + zones.z4.max) / 2 : null;
+}
+
+/** `raceEffortHrFloorBpm` for the athlete's HR effort profile (`hrEffortProfile`). */
+export function raceEffortHrFloorForState(
+  s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } | null },
+): number | null {
+  return raceEffortHrFloorBpm(hrEffortProfile(s));
+}
+
+/**
  * Get HR target for a workout type.
  * Returns undefined if zones are not available.
  */

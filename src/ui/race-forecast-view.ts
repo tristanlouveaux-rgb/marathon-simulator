@@ -21,8 +21,9 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { predictStandardDistances, getStandardForecastDetail, getStandardForecastProjection } from '@/calculations/blended-fitness';
 import { crossTrainingPredictionCredit } from '@/calculations/predictions';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbAgeCaptionText, standardDistancesDisplayed } from './pb-age-caption';
 import { buildPredictedTimeTrendChart, buildForecastTrajectoryChart } from './triathlon/benchmark-charts';
-import { formatKm, formatPace } from '@/utils/format';
+import { formatKm, formatPace, fpModel } from '@/utils/format';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
 import { renderForecastFingerprint } from './race-forecast-fingerprint';
@@ -275,6 +276,16 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
   // applied). Falls back to the raw VDOT forecast when no race profile.
   const forecastSec = s.forecastTimeAdjusted ?? rawForecastSec;
   const courseFactors = s.forecastCourseFactors ?? [];
+  // PB age caption under the header (pbAgeCaptionText, shared with the Stats
+  // race estimates): the forecast gives an old PB less weight than its
+  // displayed time suggests. Shown only when ageing moves a number this tab
+  // displays by at least a second: the header forecast (course-adjusted by a
+  // fixed ratio when a race profile exists) or today's time on the chart.
+  const adjustRatio = s.forecastTimeAdjusted && s.forecastTime ? s.forecastTimeAdjusted / s.forecastTime : 1;
+  const pbAgeText = pbAgeCaptionText(s, 'this forecast', st => [
+    st.forecastTime != null ? st.forecastTime * adjustRatio : null,
+    st.blendedRaceTimeSec,
+  ]);
 
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
@@ -405,6 +416,7 @@ function getRaceForecastHTML(s: SimulatorState, animate: boolean): string {
           <div style="font-size:32px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${distLabel} forecast</div>
           <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine}. Week ${currentWeek} of ${totalWeeks}</div>
           ${s.blendedFromEstimate ? `<div style="font-size:12px;color:${TEXT_S};margin-top:6px;font-weight:500;line-height:1.4">Estimated from your training profile. Refines as your runs sync.</div>` : ''}
+          ${pbAgeText ? `<div style="font-size:12px;color:${TEXT_S};margin-top:6px;font-weight:500;line-height:1.4">${pbAgeText}</div>` : ''}
         </div>
 
         ${buildRunRaceOutcomeRetroCard(s)}
@@ -604,13 +616,16 @@ function getStandardForecastHTML(s: SimulatorState, animate: boolean): string {
   // (`predictStandardDistances`) will still produce times off the fallback, but
   // we don't show them until a PB / device VO2 / HR / observed LT lands.
   const hasAny = hasRealRunningFitnessSignal(s);
+  // PB age caption (pbAgeCaptionText), appended to the footnote when ageing
+  // moves one of the four predictions by at least a second.
+  const stdPbAgeText = hasAny ? pbAgeCaptionText(s, 'these predictions', standardDistancesDisplayed) : null;
 
   const body = hasAny
     ? `
       ${buildStdShoesCard(s)}
       ${buildStdGrid(s)}
       <div style="font-size:11px;color:${TEXT_L};line-height:1.5;margin-top:14px;padding:0 4px">
-        Tap a distance for its trend and the factors behind it. Predictions come from your current fitness, not a target race, and move as your training does.
+        Tap a distance for its trend and the factors behind it. Predictions come from your current fitness, not a target race, and move as your training does.${stdPbAgeText ? ` ${stdPbAgeText}` : ''}
       </div>`
     : `
       <div style="${GLASS_CARD};padding:22px;text-align:center">
@@ -896,7 +911,7 @@ function buildStdDetailInner(s: SimulatorState, dist: StdDist, animate: boolean)
     <div style="${GLASS_CARD};padding:18px;margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_M};font-weight:600;margin-bottom:4px">What feeds your capacity</div>
       ${detail.vdot != null ? stdStatRow('Aerobic capacity', `VDOT ${detail.vdot.toFixed(1)}`) : ''}
-      ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', formatPace(detail.ltSecPerKm, unit)) : ''}
+      ${detail.ltSecPerKm != null ? stdStatRow('Lactate threshold pace', fpModel(detail.ltSecPerKm, unit)) : ''}
       ${detail.weeklyKm != null ? stdStatRow('Training volume', `${formatKm(detail.weeklyKm, unit)}/wk`) : ''}
       ${stdStatRow('Race calibration', calibrationVal)}
     </div>`;

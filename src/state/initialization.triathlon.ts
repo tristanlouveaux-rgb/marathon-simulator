@@ -18,6 +18,7 @@ import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
@@ -33,6 +34,7 @@ import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-fr
 import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import type { GarminActual } from '@/types/state';
 import { raceRunLegToVdot } from '@/calculations/physiological-vdot';
+import { recomputeLT } from '@/data/ltSync';
 
 /**
  * Initialize the store for triathlon mode.
@@ -215,20 +217,9 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // marathon-mode race data (title, countdown caption).
     s.selectedMarathon = undefined;
 
-    // Archive existing wks (running plan, track-only buckets, or a previous
-    // triathlon plan) so daily history survives mode switches.
-    archiveCurrentWksIfPopulated();
-    // Plan generation. Replaces any previously-stored running weeks.
-    s.wks = generateTriathlonPlan(s);
-
-    // Seed run VDOT from past race when no other signal is available.
-    if (!s.v && pastRaceBench.vdot) {
-      s.v = pastRaceBench.vdot;
-      console.log(`[TriInit] VDOT seeded from past race run leg: ${s.v.toFixed(1)}`);
-    }
-
-    // Persist the race-validated run-VDOT anchor. Unlike the s.v seed above (a
-    // last-resort fallback the watch-driven blend overwrites every launch), this
+    // Persist the race-validated run-VDOT anchor. Unlike the s.v seed after plan
+    // generation (a last-resort fallback the watch-driven blend overwrites every
+    // launch), this
     // anchor is ranked ABOVE the watch VO2max in getPhysiologicalVdot and pins
     // s.v in refreshBlendedFitness while recent. A triathlete's watch VO2max is
     // inflated by cycling/swimming, so a real race run leg must win.
@@ -254,12 +245,46 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       console.log(`[TriInit] race bike-speed anchor set: ${pastRaceBench.bikeKph.toFixed(1)} km/h (${state.triPastRace.distance} ${state.triPastRace.dateISO})`);
     }
 
+    // Derive s.lt now that triConfig (run skill rating) and the race anchor are
+    // set, before the plan writes its run paces from gp(s.v, s.lt). Mirrors the
+    // running initializer (initialization.ts, recomputeLT before building the
+    // weeks). The LT's Daniels input applies the triathlete run caps
+    // (ltDanielsInputVdot): a watch VO2max that cycling and swimming inflate is
+    // held at running evidence, or at the run skill rating when there is none.
+    // Without this the plan's run paces came from whatever s.lt the wizard left
+    // behind, computed before triConfig existed and so never capped.
+    try {
+      recomputeLT(s);
+    } catch (e) {
+      console.warn('[TriInit] recomputeLT failed:', e);
+    }
+
+    // Archive existing wks (running plan, track-only buckets, or a previous
+    // triathlon plan) so daily history survives mode switches.
+    archiveCurrentWksIfPopulated();
+    // Plan generation. Replaces any previously-stored running weeks.
+    s.wks = generateTriathlonPlan(s);
+
+    // Seed run VDOT from past race when no other signal is available.
+    if (!s.v && pastRaceBench.vdot) {
+      s.v = pastRaceBench.vdot;
+      console.log(`[TriInit] VDOT seeded from past race run leg: ${s.v.toFixed(1)}`);
+    }
+
     // Seed prediction caches. Phase 4 computes real values.
     s.initialBaseline = null;
     s.currentFitness = null;
     s.forecastTime = null;
 
     redistributeArchivedActivitiesToNewPlan();
+    // One forecast (Tristan, 2026-10-11; mirror of initializeSimulator): run
+    // the launch refresh on the committed plan, after the archived activities
+    // move into it, so the onboarding forecast (tri-plan-forecast reads
+    // predictTriathlonRace on this state) is the one the first launch shows.
+    // Before, s.v stayed at the wizard's value (the default 50) until launch:
+    // a 70.3 cold start at run skill 3 with a watch of 62 previewed a run leg
+    // of 1:28:17 against 1:39:37 on Home.
+    refreshBlendedFitness(s);
     saveState();
     return { success: true };
   } catch (err) {

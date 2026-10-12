@@ -21,6 +21,7 @@
 
 import type { Workout, RaceDistance, WorkoutType, SportKey, CrossActivity, Paces } from '@/types';
 import { SPORTS_DB, ANAEROBIC_WEIGHT } from '@/constants';
+import { fmtModelPaceKm } from '@/utils/format';
 import { normalizeSport } from './activities';
 import { computeUniversalLoad, classifyWorkoutType } from './universalLoad';
 import { EASY_LOAD_PER_KM } from './universal-load-constants';
@@ -1237,7 +1238,7 @@ export function applyAdjustments(
   const modified = workouts.map(w => ({ ...w }));
 
   // Format sec/km to "X:XX"
-  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  const fmtPace = (sec: number) => fmtModelPaceKm(sec); // s.pac: model pace, the whole second
 
   // Steady pace: halfway between easy and threshold (used for threshold downgrades)
   const steadyPaceSec = paces ? Math.round((paces.e + paces.t) / 2) : 0;

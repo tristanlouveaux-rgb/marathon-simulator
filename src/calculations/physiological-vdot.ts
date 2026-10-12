@@ -25,6 +25,9 @@ import type { SimulatorState } from '@/types';
 import { cv } from './vdot';
 import { deriveVdotFromLT } from './lt-derivation';
 import { getEffectiveVdot } from './effective-vdot';
+import { runSkillVdot } from './tri-run-skill';
+import { computePredictionInputs, collectRunsFromState, measuredWeeklyKm, type PredictionInputs } from './prediction-inputs';
+import { raceEffortHrFloorForState } from './heart-rate';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -68,9 +71,9 @@ const DEVICE_FRESHNESS_DAYS = 90;
 
 /** Recency window for the race-validated run-VDOT anchor. A real race run leg
  *  demonstrates running capability directly, so it outranks the watch VO2max
- *  while recent. We reuse the "strong" PB-recency band (365 days) already used
- *  by the marathon-specificity penalty to credit recent full-distance capability
- *  (see RUN_PB_RECENCY_BANDS / SCIENCE_LOG "PB-recency scaling"). Beyond a year,
+ *  while recent. We reuse the one-year anchor (365 days) of the PB-recency rule
+ *  the marathon-specificity penalty uses to credit recent full-distance capability
+ *  (see RUN_PB_RECENCY_ANCHORS / SCIENCE_LOG "PB-recency scaling"). Beyond a year,
  *  the race is no longer fresher evidence than a current watch reading, so the
  *  anchor stands down and the normal chain (device → derived) resumes. */
 const RACE_VDOT_ANCHOR_MAX_AGE_DAYS = 365;
@@ -172,39 +175,297 @@ export function clearPbTombstone(s: SimulatorState, key: keyof NonNullable<Simul
   }
 }
 
+// ─── PB age (model weight only; stored and displayed PBs never change) ───
+
+export type PbKey = 'k5' | 'k10' | 'h' | 'm';
+/** Per-distance model weight of each PB by its age (`pbAgeWeight`). A missing
+ *  key weighs 1. */
+export type PbAgeWeights = Partial<Record<PbKey, number>>;
+
+const PB_KEYS: readonly PbKey[] = ['k5', 'k10', 'h', 'm'];
+
 /**
- * Median VDOT across the user's race-distance PBs (5K / 10K / HM / marathon).
+ * Half-life (years) of a PB's model weight (`pbAgeWeight`): SCIENCE_LOG
+ * 2026-04-24 (pbAgeDecay), Tanaka & Seals 2008. Single source for the model
+ * weight and every label that names it.
+ */
+export const PB_AGE_HALF_LIFE_YEARS = 3;
+
+/**
+ * The model weight of a PB by its age: a smooth half-life (decided by Tristan,
+ * 2026-10-11, replacing the 2026-10-09 step bands of SCIENCE_LOG §T5):
+ *
+ *   weight = exp(-years x ln 2 / PB_AGE_HALF_LIFE_YEARS)
+ *
+ * with a 3-year half-life, the PB decay already in SCIENCE_LOG (2026-04-24,
+ * "Effort-Calibrated VDOT from HR": pbAgeDecay), from the masters VO2max
+ * decline literature (Tanaka & Seals 2008; Fitzgerald et al. 1997 for the
+ * exponential rather than linear shape). 1 year 0.79, 2 years 0.63, 3 years
+ * 0.50, 4 years 0.40, 5 years 0.31. PBs are displayed as entered or synced and
+ * aged internally; the weight says how much a PB still speaks for current
+ * capacity. It is continuous in the PB's age, so the weight adds no step on a
+ * PB's anniversary, and it never reaches 0, so an old PB keeps some say. (The
+ * low-volume PB-recency factor on the specificity penalties,
+ * pbRecencyPenaltyFactor, is a separate rule, fully stale at two years, and is
+ * continuous too: pb-age-continuity.test.ts.)
+ *
+ * No date, an unparseable one or a future one: 1.0 ("if absent, full recency
+ * is assumed", §T5). PB dates exist for PBs auto-filled from Strava or Apple
+ * history; a typed PB drops its date, so a manual PB never ages. `dateISO` may
+ * be `YYYY-MM` or a full ISO date. Ages are in 365.25-day years.
+ */
+export function pbAgeWeight(dateISO: string | null | undefined, now: Date = new Date()): number {
+  const years = pbAgeYears(dateISO, now);
+  if (years == null || years <= 0) return 1;
+  return Math.exp(-years * Math.LN2 / PB_AGE_HALF_LIFE_YEARS);
+}
+
+/**
+ * Age of a PB in years (365.25-day years) from its date, or null without a
+ * usable date. A future date reads as age 0 or less (callers treat it as fresh).
+ */
+export function pbAgeYears(dateISO: string | null | undefined, now: Date = new Date()): number | null {
+  if (!dateISO) return null;
+  const ts = Date.parse(dateISO.length === 7 ? dateISO + '-01' : dateISO);
+  if (!Number.isFinite(ts)) return null;
+  return (now.getTime() - ts) / (365.25 * DAY_MS);
+}
+
+/** Set only inside withPbAgeingSuspended (below). */
+let pbAgeingSuspended = false;
+
+/**
+ * Age weights for the PBs in `pbs`. PB dates are stored beside the onboarding
+ * PBs (`onboarding.pbDates` with `onboarding.pbs`), so a date belongs to a PB
+ * only while that PB's time equals the onboarding time it was stored with. A
+ * PB from elsewhere (a faster time in `s.pbs`, a legacy form) has no known date
+ * and weighs 1.
+ */
+export function pbAgeWeightsFor(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: { onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null },
+  now: Date = new Date(),
+): PbAgeWeights {
+  const out: PbAgeWeights = {};
+  if (!pbs) return out;
+  const datedPbs = s.onboarding?.pbs ?? {};
+  const dates = s.onboarding?.pbDates ?? {};
+  for (const k of PB_KEYS) {
+    const t = pbs[k];
+    if (!(t != null && t > 0)) continue;
+    const date = !pbAgeingSuspended && datedPbs[k] === t ? dates[k] : undefined;
+    out[k] = pbAgeWeight(date, now);
+  }
+  return out;
+}
+
+/**
+ * Run `fn` as if no PB had aged: every PB weighs 1 in pbAgeWeightsFor, as an
+ * undated PB does. pbAgeWeightsFor is the source of PB age weights for the
+ * run fitness model (the gated model weights, PB capacity, the LT derivation,
+ * the blend, the floors), so there `fn` sees the unaged model. Two readers of
+ * PB dates sit outside it and still age inside `fn`: the PB-recency factor
+ * (pbRecencyPenaltyFactor reads the dates itself, by design) and the Ironman
+ * marathon-depth credit (computeMarathonDepthMultiplier,
+ * race-prediction.triathlon.ts, and its drill-down label call pbAgeWeight
+ * directly). So for an Ironman with a dated marathon PB the counterfactual
+ * still carries the depth credit's ageing. For the PB-age caption's
+ * counterfactual (does ageing change a displayed number?, pb-age-caption.ts).
+ * Synchronous; the previous setting is restored when `fn` returns or throws.
+ */
+export function withPbAgeingSuspended<T>(fn: () => T): T {
+  const prev = pbAgeingSuspended;
+  pbAgeingSuspended = true;
+  try {
+    return fn();
+  } finally {
+    pbAgeingSuspended = prev;
+  }
+}
+
+/** Age weights for the PBs the physiology chain reads (`effectivePhysiologyPbs`). */
+export function modelPbAgeWeights(s: SimulatorState, now: Date = new Date()): PbAgeWeights {
+  return pbAgeWeightsFor(effectivePhysiologyPbs(s), s, now);
+}
+
+/**
+ * PB age weights for every model use (the age-weighted PB median, the blend's
+ * PB weight, the same-distance PB floor, the §BZ engine floor, the LT's PB
+ * weights), or undefined when there is no measured weekly volume
+ * (`measuredWeeklyKm`, prediction-inputs.ts: a synced window or a typed weekly
+ * km). With no running data an old PB keeps full weight (§BV), and a PB's
+ * anniversary moves nothing. Single gate for every caller: the refresh,
+ * onboarding, the physiology chain (`pbCapacityForState`), the standard
+ * forecast, the triathlon run-leg blend, the LT derivation and the Stats
+ * race-estimates card, so a typed weekly km ages PBs on every surface or on
+ * none.
+ */
+export function modelPbAgeWeightsIfMeasured(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: {
+    onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null;
+    detectedWeeklyKm?: number | null;
+  },
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  now: Date = new Date(),
+): PbAgeWeights | undefined {
+  return measuredWeeklyKm(inputs, s.detectedWeeklyKm) != null ? pbAgeWeightsFor(pbs, s, now) : undefined;
+}
+
+/**
+ * Whether PB age currently changes the model for these PBs: a volume-gated
+ * weight below 1 (`modelPbAgeWeightsIfMeasured`). Every age use, the weighted
+ * PB median included, reads those gated weights, so this is the one test.
+ * Drives the inline caption on the Stats race estimates (feature-reveal order:
+ * inline caption first), so the caption shows exactly when the estimates rely
+ * less on an old PB than its displayed time suggests.
+ */
+export function pbAgeingActive(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  s: {
+    onboarding?: { pbs?: { k5?: number; k10?: number; h?: number; m?: number }; pbDates?: Partial<Record<PbKey, string>> } | null;
+    detectedWeeklyKm?: number | null;
+  },
+  inputs: Pick<PredictionInputs, 'weeklyKm' | 'weeksCovered'>,
+  now: Date = new Date(),
+): boolean {
+  const gated = modelPbAgeWeightsIfMeasured(pbs, s, inputs, now);
+  return gated != null && Object.values(gated).some(w => w != null && w < 1);
+}
+
+/**
+ * The §BZ engine floor for PB capacity, with PB age (SCIENCE_LOG §DC).
+ *
+ * A fresh or undated median PB (weight 1), or no measured volume
+ * (`ageWeightsApply` false), floors the engine at PB capacity exactly as
+ * before. An aged median PB (weight w below 1) floors it at the w-weighted
+ * mean of PB capacity and the current capacity evidence, a medium+ HR-vs-pace
+ * fit, capped at PB capacity: w x capacity + (1 - w) x min(HR fit, capacity).
+ * With no such evidence the PB is the only capacity figure and the floor stays
+ * at capacity. Easy-run paces and the race-readiness penalties on the blend
+ * (durability, marathon specificity, low volume) are not capacity evidence
+ * (§BZ, §CY), so the floor never pulls toward the penalised blend. That also
+ * makes the floor the same at onboarding and after a refresh: both compute
+ * the HR fit from the same runs, while their penalised blends differ (the
+ * refresh has a PB-derived LT predictor and the HR fit in the blend).
+ */
+export function pbEngineFloorVdot(
+  capacity: { vdot: number; weight: number },
+  opts: { ageWeightsApply: boolean; hrFit: { vdot: number | null; confidence: string } | null | undefined },
+): number {
+  const w = capacity.weight;
+  if (!opts.ageWeightsApply || !(w < 1)) return capacity.vdot;
+  if (!isUsableHrFit(opts.hrFit)) return capacity.vdot;
+  const current = Math.min(opts.hrFit.vdot, capacity.vdot);
+  return w * capacity.vdot + (1 - w) * current;
+}
+
+/**
+ * PB capacity: the age-weighted median VDOT across the race-distance PBs, and
+ * the age weight at that median.
  *
  * Median (not max) because PB profiles are often imbalanced. A fast 5K
  * specialist with weak endurance shouldn't have their 5K alone drive the
  * estimate, and a marathoner with a slow 5K shouldn't lose theirs to it.
  * The median collapses both biases.
+ *
+ * With age weights (`modelPbAgeWeightsIfMeasured`, on the measured-volume
+ * gate) the median is the weighted median with linear interpolation, the
+ * weighted percentile at 0.5: each PB sits at the midpoint of its own weight
+ * on the cumulative-weight scale, and the median is read where that scale
+ * reaches half the total weight, interpolating linearly between neighbouring
+ * PBs. With equal weights it is the plain median (Hyndman & Fan 1996,
+ * definition 5, at p = 0.5), and the plain branch below computes it exactly as
+ * before. It is continuous in the weights, so a PB weighted w keeps a share of
+ * the say in proportion to w, and a PB's anniversary moves the median by a
+ * bounded step. For two PBs it is their weight-weighted mean. With two or more
+ * distinct PBs it stays strictly inside their range, so ageing never turns it
+ * into the max (or the min). `weight` is the age weight interpolated at the
+ * same point (the mean of the two middle weights when the plain median falls
+ * between them); the §BZ engine floor uses it (`pbEngineFloorVdot`).
  */
-export function pbDerivedVdot(s: SimulatorState): number | null {
-  return pbMedianVdot(effectivePhysiologyPbs(s));
+export function pbCapacity(
+  pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  weights?: PbAgeWeights,
+): { vdot: number; weight: number } | null {
+  if (!pbs) return null;
+  const items: Array<{ v: number; w: number }> = [];
+  const push = (k: PbKey, distM: number) => {
+    const t = pbs[k];
+    if (t && t > 0) items.push({ v: cv(distM, t), w: weights?.[k] ?? 1 });
+  };
+  push('k5', 5000);
+  push('k10', 10000);
+  push('h', 21097.5);
+  push('m', 42195);
+  if (items.length === 0) return null;
+  items.sort((a, b) => a.v - b.v);
+  const mid = Math.floor(items.length / 2);
+  if (items.every(it => it.w === items[0].w)) {
+    // Plain median (identical to the pre-ageing computation).
+    return items.length % 2 === 0
+      ? { vdot: (items[mid - 1].v + items[mid].v) / 2, weight: items[0].w }
+      : { vdot: items[mid].v, weight: items[0].w };
+  }
+  // Weighted median with linear interpolation between PB midpoints.
+  const total = items.reduce((acc, it) => acc + it.w, 0);
+  const half = total / 2;
+  let cum = 0;
+  const pos = items.map(it => {
+    const p = cum + it.w / 2;
+    cum += it.w;
+    return p;
+  });
+  if (half <= pos[0]) return { vdot: items[0].v, weight: items[0].w };
+  for (let i = 0; i + 1 < items.length; i++) {
+    if (half <= pos[i + 1]) {
+      const f = (half - pos[i]) / (pos[i + 1] - pos[i]);
+      return {
+        vdot: items[i].v + f * (items[i + 1].v - items[i].v),
+        weight: items[i].w + f * (items[i + 1].w - items[i].w),
+      };
+    }
+  }
+  const last = items[items.length - 1];
+  return { vdot: last.v, weight: last.w };
 }
 
 /**
- * Median VDOT from a raw PBs object. Split out from `pbDerivedVdot` so callers
- * that hold a PBs object directly — e.g. `initializeSimulator`, where `s.pbs`
- * is not committed to state yet — can compute the same demonstrated-capacity
- * number without going through `SimulatorState`. Single source for the median.
+ * `pbCapacity` for the PBs the physiology chain reads, with their age weights
+ * on the measured-volume gate (`modelPbAgeWeightsIfMeasured`, over the same
+ * runs as the refresh: `collectRunsFromState`). With no measured weekly volume
+ * it is the plain median. The volume is read only when some PB is aged.
+ */
+export function pbCapacityForState(s: SimulatorState, now: Date = new Date()): { vdot: number; weight: number } | null {
+  const pbs = effectivePhysiologyPbs(s);
+  const weights = pbAgeWeightsFor(pbs, s, now);
+  if (!Object.values(weights).some(w => w != null && w < 1)) return pbCapacity(pbs);
+  const inputs = computePredictionInputs(collectRunsFromState(s), now, raceEffortHrFloorForState(s));
+  return pbCapacity(pbs, modelPbAgeWeightsIfMeasured(pbs, s, inputs, now));
+}
+
+/**
+ * PB capacity VDOT for the state (`pbCapacityForState`): the age-weighted
+ * median across race-distance PBs. Drives the pb-median tier of
+ * `getPhysiologicalVdot` (and so the LT input), the §BZ engine floor and the
+ * triathlete running-evidence ceiling.
+ */
+export function pbDerivedVdot(s: SimulatorState, now: Date = new Date()): number | null {
+  return pbCapacityForState(s, now)?.vdot ?? null;
+}
+
+/**
+ * PB capacity VDOT from a raw PBs object (optionally age-weighted). Split out
+ * from `pbDerivedVdot` so callers that hold a PBs object directly — e.g.
+ * `initializeSimulator`, where `s.pbs` is not committed to state yet — can
+ * compute the same demonstrated-capacity number without going through
+ * `SimulatorState`. Single source for the median (`pbCapacity`).
  */
 export function pbMedianVdot(
   pbs: { k5?: number; k10?: number; h?: number; m?: number } | null | undefined,
+  weights?: PbAgeWeights,
 ): number | null {
-  if (!pbs) return null;
-  const candidates: number[] = [];
-  if (pbs.k5 && pbs.k5 > 0) candidates.push(cv(5000, pbs.k5));
-  if (pbs.k10 && pbs.k10 > 0) candidates.push(cv(10000, pbs.k10));
-  if (pbs.h && pbs.h > 0) candidates.push(cv(21097.5, pbs.h));
-  if (pbs.m && pbs.m > 0) candidates.push(cv(42195, pbs.m));
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => a - b);
-  const mid = Math.floor(candidates.length / 2);
-  return candidates.length % 2 === 0
-    ? (candidates[mid - 1] + candidates[mid]) / 2
-    : candidates[mid];
+  return pbCapacity(pbs, weights)?.vdot ?? null;
 }
 
 /**
@@ -366,20 +627,166 @@ export function effectiveVo2max(s: SimulatorState, now: Date = new Date()): numb
   // runner is never trapped — PBs aren't a ceiling, only an uncorroborated
   // cross-trained watch is capped. Running mode (no triConfig) is untouched: there
   // the watch is run-specific and trusted as-is.
-  if (s.triConfig != null) {
-    const ceilings: number[] = [];
-    const race = raceAnchorVdot(s, now);
-    if (race != null) ceilings.push(race.vdot);
-    const pb = pbDerivedVdot(s);
-    if (pb != null) ceilings.push(pb);
-    const hr = s.hrCalibratedVdot;
-    if (hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium')) ceilings.push(hr.vdot);
-    if (ceilings.length > 0) {
-      const ceiling = Math.max(...ceilings);
-      if (device > ceiling) return ceiling;  // watch exceeds running evidence → cap to it
-    }
-  }
+  const ceiling = triathleteRunEvidenceCeiling(s, now);
+  if (ceiling != null && device > ceiling) return ceiling;  // watch exceeds running evidence → cap to it
   return device;
+}
+
+/** True when the HR-vs-pace calibration is usable as running evidence (medium+). */
+function isUsableHrFit<T extends { vdot: number | null; confidence: string }>(hr: T | null | undefined): hr is T & { vdot: number } {
+  return hr?.vdot != null && (hr.confidence === 'high' || hr.confidence === 'medium');
+}
+
+/**
+ * The synced race effort that counts as a triathlete's running evidence: the
+ * newest run in the 8-week window that passes the race test
+ * (`computePredictionInputs` recentRun: more than 15% faster than the window's
+ * median pace and, with HR, at or above the middle of Z4). Where HR rules
+ * exist (the athlete has HR zones: `raceEffortHrFloorForState` is set), the run
+ * must carry an average HR: a tempo-paced run with no HR passes the pace test
+ * but says nothing about effort, so it must not lift the cold-start cap or set
+ * the watch ceiling (Tristan, 2026-10-11, ISSUE-376). With no HR zones at all
+ * the pace test stands alone. Null when no such run exists.
+ */
+export function triRunEvidenceRaceEffort(
+  s: SimulatorState,
+  now: Date = new Date(),
+): { d: number; t: number; weeksAgo: number } | null {
+  const recent = computePredictionInputs(
+    collectRunsFromState(s), now, raceEffortHrFloorForState(s), { requireHr: true },
+  ).recentRun;
+  return recent != null && recent.t > 0 && recent.d > 0 ? recent : null;
+}
+
+/**
+ * The running-specific evidence ceiling on a triathlete's watch VO2max: the max
+ * of a recent race run leg (`raceAnchorVdot`), the race-PB median
+ * (`pbDerivedVdot`), a medium+ HR-vs-pace calibration and a synced race effort
+ * (`triRunEvidenceRaceEffort`, at its own distance: cv(d, t)). Null outside
+ * triathlon (`s.triConfig` unset; running mode trusts the watch as
+ * run-specific) or when no such evidence exists. Single source for the
+ * ceiling in `effectiveVo2max` (the blend's VO2 predictor), in
+ * `ltDanielsInputVdot` (the LT derivation's Daniels input) and for the
+ * cold-start gate (`triColdStartRunCapVdot`: the cap applies exactly when this
+ * is null), so the blend and the training paces hold the watch to the same
+ * figure.
+ *
+ * The race effort (Tristan, 2026-10-11, ISSUE-376, approved as the natural
+ * reading of "cap until real running evidence exists"): a synced race effort
+ * lifts the cold-start cap, and before it was not in this ceiling, so the raw
+ * watch returned to s.lt (70.3, watch 62, run skill 3: s.lt 288 to 220 after
+ * one tempo). The watch is now held at the run that lifted the cap.
+ */
+export function triathleteRunEvidenceCeiling(s: SimulatorState, now: Date = new Date()): number | null {
+  if (s.triConfig == null) return null;
+  const ceilings: number[] = [];
+  const race = raceAnchorVdot(s, now);
+  if (race != null) ceilings.push(race.vdot);
+  const pb = pbDerivedVdot(s, now);
+  if (pb != null) ceilings.push(pb);
+  if (isUsableHrFit(s.hrCalibratedVdot)) ceilings.push(s.hrCalibratedVdot.vdot);
+  const effort = triRunEvidenceRaceEffort(s, now);
+  if (effort != null) ceilings.push(cv(effort.d * 1000, effort.t));
+  return ceilings.length > 0 ? Math.max(...ceilings) : null;
+}
+
+/**
+ * Triathlon cold-start run cap (SCIENCE_LOG §CY "Triathlon cold-start cap").
+ *
+ * A triathlete with no running-specific evidence (no race PB, no race anchor,
+ * no synced race effort, no medium+ HR-vs-pace calibration: exactly when
+ * `triathleteRunEvidenceCeiling` is null) has only a watch VO2max, which
+ * cycling and swimming build too, so it overstates RUNNING fitness. Such an
+ * athlete is held at their own run skill-slider self-assessment
+ * (`runSkillVdot`, 44.3 at run skill 3) until real running evidence lands.
+ * Returns that VDOT when the cap applies, else null (running mode and
+ * cycling-only mode have no `triConfig.skillRating.run`).
+ *
+ * Single source for the cap on the engine VDOT (`refreshBlendedFitness`) and on
+ * the LT derivation's Daniels input (`ltDanielsInputVdot`). The synced race
+ * effort is `triRunEvidenceRaceEffort`: where HR rules exist, a run without HR
+ * is not evidence (2026-10-11). The HR fit is read from `s.hrCalibratedVdot`,
+ * which `refreshBlendedFitness` writes before both reads.
+ */
+export function triColdStartRunCapVdot(
+  s: SimulatorState,
+  opts: { now?: Date } = {},
+): number | null {
+  const skill = s.triConfig?.skillRating?.run;
+  if (!skill) return null;
+  if (triathleteRunEvidenceCeiling(s, opts.now ?? new Date()) != null) return null;
+  return runSkillVdot(skill as 1 | 2 | 3 | 4 | 5);
+}
+
+/**
+ * The VDOT the LT derivation's Daniels method reads (`buildLTInputs`,
+ * `recomputeLT` in ltSync.ts). Training paces come from `s.lt` whenever it is
+ * set (`gp`, paces.ts), so this input decides a triathlete's run paces.
+ *
+ * It is `getPhysiologicalVdot(s).vdot`, except for a triathlete whose value
+ * comes from the watch ('device') or the engine fallback ('tanda-fallback'):
+ * the same figures that already hold the blend and the engine apply here.
+ *   1. Running evidence exists (race anchor, race PB, medium+ HR fit): the
+ *      watch is capped at `triathleteRunEvidenceCeiling`, as `effectiveVo2max`
+ *      caps the blend's VO2 predictor.
+ *   2. No running-specific signal (cold start, `triColdStartRunCapVdot`): the
+ *      watch is capped at the run skill-slider VDOT, as `refreshBlendedFitness`
+ *      caps `s.v`. With no fresh watch the chain falls to 'tanda-fallback',
+ *      which is `s.v` itself; the input is then the run skill-slider VDOT. `s.v`
+ *      is not running evidence there: it is the blend of the previous `s.lt`
+ *      (the LT predictor) under the readiness penalties, so feeding it back
+ *      compounds those penalties every refresh. Measured at 81d38f7 (70.3, run
+ *      skill 3, no watch, PB or runs): `s.v` 44.3, 39.1, 34.0, 29.3, then 25.0
+ *      (the Daniels floor), `s.lt` 261 to 402 s/km.
+ * A synced race effort lifts the cold-start cap and is in the ceiling itself
+ * (2026-10-11, ISSUE-376), so the watch is held at the run that lifted it.
+ *
+ * The displayed VO2max (`getPhysiologicalVdot`, the Stats card) still shows the
+ * watch. Running and HYROX (no `triConfig`) read `getPhysiologicalVdot`
+ * unchanged. Cycling-only mode has a `triConfig` but no run skill rating, so
+ * only step 1 can apply there, as it already does in `effectiveVo2max`;
+ * cycling plans prescribe no runs.
+ */
+export function ltDanielsInputVdot(
+  s: SimulatorState,
+  opts: { now?: string | Date } = {},
+): number | null {
+  return resolveLtDanielsInput(s, opts).vdot;
+}
+
+/**
+ * `ltDanielsInputVdot` with whether the triathlon cold-start cap lowered it.
+ * `coldStartCapped` is true only when the input was replaced by the run skill
+ * VDOT: a watch reading ABOVE the skill rating ('device'), or the engine
+ * fallback ('tanda-fallback', which is `s.v` itself). A watch at or below the
+ * skill rating is used as it is and reports false. `source` is the chain tier
+ * (`getPhysiologicalVdot`) and `uncappedVdot` its value before any triathlete
+ * cap. `refreshBlendedFitness` reads all three for the cold-start engine hold:
+ * where a watch was capped, the engine stays what the blend gives with the
+ * uncapped LT input, capped at the skill VDOT; where the engine fallback was
+ * replaced, the engine is held at the skill VDOT.
+ */
+export function resolveLtDanielsInput(
+  s: SimulatorState,
+  opts: { now?: string | Date } = {},
+): { vdot: number | null; coldStartCapped: boolean; source: PhysiologicalVdotSource; uncappedVdot: number | null } {
+  const now = opts.now
+    ? (opts.now instanceof Date ? opts.now : new Date(opts.now))
+    : new Date();
+  const resolved = getPhysiologicalVdot(s, { now });
+  const v = resolved.vdot;
+  const base = { source: resolved.source, uncappedVdot: v };
+  const uncapped = { vdot: v, coldStartCapped: false, ...base };
+  if (v == null || s.triConfig == null) return uncapped;
+  if (resolved.source !== 'device' && resolved.source !== 'tanda-fallback') return uncapped;
+  const ceiling = triathleteRunEvidenceCeiling(s, now);
+  if (ceiling != null) return { vdot: Math.min(v, ceiling), coldStartCapped: false, ...base };
+  const cap = triColdStartRunCapVdot(s, { now });
+  if (cap == null) return uncapped;
+  if (resolved.source === 'device') {
+    return v > cap ? { vdot: cap, coldStartCapped: true, ...base } : uncapped;
+  }
+  return { vdot: cap, coldStartCapped: true, ...base };
 }
 
 export function getPhysiologicalVdot(
@@ -507,8 +914,8 @@ export function getPhysiologicalVdot(
     }
   }
 
-  // 4. PB-median across race PBs.
-  const pbVdot = pbDerivedVdot(s);
+  // 4. PB-median across race PBs (age-weighted median, pbCapacity).
+  const pbVdot = pbDerivedVdot(s, now);
   if (pbVdot != null) {
     return {
       vdot: pbVdot,

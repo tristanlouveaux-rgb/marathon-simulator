@@ -34,7 +34,7 @@ import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
 import { collectWeekActivities } from '@/calculations/week-activity-log';
-import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
+import { formatKm, fmtDesc, formatPace, fpModel, ft } from '@/utils/format';
 import { isTouchPrimary, fireSelectionHaptic } from '@/utils/platform';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet } from './home-view';
@@ -322,10 +322,11 @@ function escapeHtml(str: string): string {
 }
 
 function fmtPacePlan(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
-  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
+  // Round the whole pace, then split, so the minute carries (never "4:60").
+  const sec = Math.round(pref === 'mi' ? secPerKm * 1.60934 : secPerKm);
   const unit = pref === 'mi' ? '/mi' : '/km';
   const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
+  const s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}${unit}`;
 }
 
@@ -1135,7 +1136,7 @@ function buildWorkoutCards(
       // Target pace note (below name). Suppressed when the description already
       // carries a pace — two targets on one card is the duplicate-surface fail.
       const targetPaceRow = !isDone && !isSkipped && (w as any).targetPaceSecKm && !/@/.test(descText)
-        ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fmtPacePlan((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>`
+        ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fpModel((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>`
         : '';
 
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);

@@ -13,7 +13,7 @@ import { vt } from '@/calculations/vdot';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { fp } from '@/utils/format';
+import { fp, fpModel } from '@/utils/format';
 import { syncAppleHealth, syncAppleHealthPhysiology, getLastAppleWorkoutDiag } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { showSimpleToast } from './toast';
@@ -740,7 +740,7 @@ function renderProfileGroup(): string {
       <div style="padding:14px 16px">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          ${card('Run pace', fp(runPace.paceSecKm, pref), runPaceHint)}
+          ${card('Run pace', fpModel(runPace.paceSecKm, pref), runPaceHint)}
           ${card(finishLabel, finishValue, finishHint)}
           ${card('Stations', `${calibratedCount}/${calibratable.length}`, 'calibrated')}
         </div>

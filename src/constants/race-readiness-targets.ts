@@ -231,19 +231,65 @@ export const READINESS_BANDS = [
 ];
 
 /**
- * PB-recency scaling for run discipline only. A recent marathon/half/10K/5K
- * PB demonstrates current full-distance capability beyond what training-only
- * data shows; reduces the penalty's *excess* (the part above 1.0) by the
- * recency factor. Carried over from the existing `marathonSpecificityPenalty`
- * (see SCIENCE_LOG entry "PB-recency scaling for marathon-specificity penalty
- * 2026-05-05") so users with recent run PBs aren't penalised harder by the
- * new framework than by the old.
+ * PB-recency scaling of a specificity penalty. A recent race result
+ * demonstrates current full-distance capability beyond what training-only data
+ * shows, so it reduces the penalty's *excess* (the part above 1.0) by the
+ * recency factor. One rule for every site: the running marathon-specificity
+ * penalty (blendPredictionsPreFloor), the triathlon run leg (from the race PB)
+ * and the triathlon bike and swim legs (from a completed triathlon in raceLog,
+ * scaled by its cross-credit weight), all through `pbRecencyPenaltyFactor`.
+ * Source: SCIENCE_LOG "PB-recency scaling for marathon-specificity penalty
+ * (2026-05-05)": 0.5 for a PB inside a year (the current training era), 0.75
+ * at one to two years (one peak ago), 1.0 (full penalty) from two years (an old
+ * peak, fully stale).
+ *
+ * This is a distinct rule from the PB age weight (pbAgeWeight, a 3-year
+ * half-life from the masters VO2max decline, Tanaka & Seals 2008). That weight
+ * says how much an old PB still speaks for aerobic capacity and never reaches
+ * 0; this factor says whether a race still proves distance-specific endurance
+ * (fractional utilisation at the distance, which detrains in weeks: Coyle 1984,
+ * Mujika & Padilla 2000) and is fully stale at three years.
+ *
+ * Continuous since 2026-10-12 (Tristan 2026-10-11: no forecast jumps on a PB's
+ * anniversary). The first year keeps the old calibration: 0.5 through 365
+ * days, as the first band did. Each of the old rule's two steps (0.5 to 0.75,
+ * then 0.75 to 1.0) is then spread linearly across one band width (365 days)
+ * after the band where it used to fire: 0.75 at two years, full penalty at
+ * three (1095 days). No new constant: the ages are the rule's own 365-day band
+ * width and the factors are its own. The factor never exceeds the old bands at
+ * any age, and the daily slope stays at 0.25 / 365, half the 0.5 / 365 a
+ * two-year full-stale age needs (that version moved the low-volume marathon
+ * forecast over 1 s a day for the whole second year). Three years also matches
+ * the PB age weight's half-life, though the two rules stay distinct.
+ * Orchestrator call 2026-10-12 (Tristan delegated it).
  */
-export const RUN_PB_RECENCY_BANDS = [
-  { maxAgeDays: 365,  factor: 0.5  },  // Within 1y → halve penalty
-  { maxAgeDays: 730,  factor: 0.75 },  // 1-2y → 75%
-  { maxAgeDays: Infinity, factor: 1.0 }, // > 2y → full penalty
+export const RUN_PB_RECENCY_ANCHORS: ReadonlyArray<{ ageDays: number; factor: number }> = [
+  { ageDays: 0,    factor: 0.5  },  // race run today: halves the penalty's excess
+  { ageDays: 365,  factor: 0.5  },  // first year: the first band's 0.5 throughout
+  { ageDays: 730,  factor: 0.75 },  // two years: the second band's 0.75
+  { ageDays: 1095, factor: 1.0  },  // three years and beyond: full penalty
 ];
+
+/**
+ * The PB-recency factor (RUN_PB_RECENCY_ANCHORS) for a result `ageDays` old:
+ * linear between the anchors, the first anchor's factor at age 0 or less, the
+ * last anchor's beyond it. No age (NaN) reads as the last anchor, full penalty,
+ * the rule's safe default for an undated PB. TRACKING side (today's
+ * race-time prediction).
+ */
+export function pbRecencyPenaltyFactor(ageDays: number): number {
+  const a = RUN_PB_RECENCY_ANCHORS;
+  const last = a[a.length - 1];
+  if (Number.isNaN(ageDays)) return last.factor;
+  if (ageDays <= a[0].ageDays) return a[0].factor;
+  for (let i = 1; i < a.length; i++) {
+    if (ageDays < a[i].ageDays) {
+      const t = (ageDays - a[i - 1].ageDays) / (a[i].ageDays - a[i - 1].ageDays);
+      return a[i - 1].factor + t * (a[i].factor - a[i - 1].factor);
+    }
+  }
+  return last.factor;
+}
 
 /**
  * Cross-distance credit weights for triathlon bike/swim PB-recency reduction.

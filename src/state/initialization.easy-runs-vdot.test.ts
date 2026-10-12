@@ -181,18 +181,70 @@ function engineAfter(runs: RunRow[], over: Partial<OnboardingState> = {}): { onb
 }
 
 /**
- * KNOWN LIMITATION, pinned 2026-10-08 (open question for Tristan). The race
- * test is pace-only: a run more than 15% faster than the window's median pace.
- * Among easy runs at about 5:50/km that line sits near 4:58/km, so a tempo or
- * threshold session, a cruise-interval session that averages under it, or a
- * parkrun run at tempo effort fills the recent-race slot. It projects to the
- * race distance as a slower race and stands the §BZ engine floor down, the
- * same mechanism the easy-run fix removed. Separating tempo from race needs a
- * new rule (an HR threshold, a race flag, the activity name or the Strava
- * workout type), which is Tristan's call. These tests record today's numbers
- * so a change to the rule is deliberate: when the rule changes, rewrite them.
+ * Race test with heart rate (Tristan, 2026-10-09; floor moved 2026-10-11). With
+ * an average HR and HR zones, a run more than 15% faster than the window's
+ * median pace counts as a race only at race level on the HR effort scale: at
+ * or above the midpoint of the threshold zone (raceEffortHrFloorBpm,
+ * heart-rate.ts). maxHR 190 and resting 50 put the threshold zone (Z4) at
+ * 162-176 bpm and the floor at 169.
  */
-describe('KNOWN LIMITATION: a tempo-paced training run counts as a race effort', () => {
+describe('race test reads heart rate when the run has it', () => {
+  let capacity = 0;
+  beforeEach(() => { capacity = noHistoryVdot(); });
+
+  function withHR(avgHR: number): RunRow {
+    return { ...oneRun(10, 5, 1425), avgHR };
+  }
+
+  it('a 5 km tempo at 4:45/km with a steady-tempo HR leaves a 10K 45:00 runner at 45.3', () => {
+    // Pace-only (no HR, pinned below) this run read 39.1 at onboarding and 40.3
+    // after a refresh.
+    for (const avgHR of [165, 168]) {
+      seed({ ...HR, onboardingRunHistory: [withHR(avgHR), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+      expect(initializeSimulator(onboarding()).success).toBe(true);
+      expect(getState().v).toBeCloseTo(capacity, 6);
+      refreshBlendedFitness(getMutableState());
+      expect(getState().v).toBeCloseTo(capacity, 6);
+    }
+  });
+
+  it('the same run at a race-level HR still counts as a race and lowers the engine', () => {
+    seed({ ...HR, onboardingRunHistory: [withHR(180), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    expect(getState().v).toBeLessThan(capacity - 4);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().v).toBeLessThan(capacity - 4);
+  });
+
+  it('a weekly parkrun in 23:20 at a steady-tempo HR is a training run; at an upper-Z4 HR it is a race', () => {
+    // Pace-only this read about 40.5 (pinned below). At 166 (lower half of
+    // Z4) it is a training run; at 170 (upper half, above the 169 floor) the
+    // runner raced it.
+    const parkruns = (avgHR: number) => history(6, [[0, 5, 1400 / 60]], avgHR, 1);
+    seed({ ...HR, onboardingRunHistory: [...parkruns(166), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    refreshBlendedFitness(getMutableState());
+    expect(getState().v).toBeCloseTo(capacity, 6);
+    seed({ ...HR, onboardingRunHistory: [...parkruns(170), ...history(6, EASY_WEEK, ZONE2_AVG_HR)] });
+    expect(initializeSimulator(onboarding()).success).toBe(true);
+    refreshBlendedFitness(getMutableState());
+    // About 41.7: the parkrun (VDOT about 42) is the recent race.
+    expect(getState().v).toBeLessThan(capacity - 3);
+  });
+});
+
+/**
+ * KNOWN LIMITATION, pinned 2026-10-08, narrowed 2026-10-09. Without heart rate
+ * the race test is pace-only: a run more than 15% faster than the window's
+ * median pace. Among easy runs at about 5:50/km that line sits near 4:58/km,
+ * so a tempo or threshold session, a cruise-interval session that averages
+ * under it, or a parkrun run at tempo effort fills the recent-race slot. It
+ * projects to the race distance as a slower race and stands the §BZ engine
+ * floor down. With an average HR the run must also be at race level
+ * (describe block above). These tests (no HR) record today's numbers so a
+ * change to the rule is deliberate: when the rule changes, rewrite them.
+ */
+describe('KNOWN LIMITATION: without HR a tempo-paced training run counts as a race effort', () => {
   let capacity = 0;
   beforeEach(() => { capacity = noHistoryVdot(); });
 
@@ -203,8 +255,10 @@ describe('KNOWN LIMITATION: a tempo-paced training run counts as a race effort',
     expect(computePredictionInputs(runs).recentRun).toMatchObject({ d: 5, t: 1425 });
     const v = engineAfter(runs);
     expect(capacity).toBeCloseTo(45.3, 1);
-    expect(v.onboard).toBeCloseTo(39.1, 0);
-    expect(v.refresh).toBeCloseTo(40.3, 0);
+    // Onboarding read 39.1 before it ran the launch refresh (one forecast,
+    // 2026-10-11); it now reads the refresh's 40.3.
+    expect(v.onboard).toBeCloseTo(40.3, 0);
+    expect(v.refresh).toBeCloseTo(v.onboard, 9);
   });
 
   it('a weekly parkrun in 23:20 (4:40/km) lowers a 10K 45:00 runner to about 40.5', () => {
@@ -258,10 +312,12 @@ describe('KNOWN LIMITATION: a lone run is never a race effort, and two runs need
 /**
  * Triathlon cold-start skill cap (refreshBlendedFitness). A triathlete with no
  * running PB, no race anchor and no medium+ HR-vs-pace calibration has the
- * engine VDOT (s.v) and the forecast held at their run skill rating. It does
- * not hold run paces: those come from s.lt, which recomputeLT derives from
- * getPhysiologicalVdot's device branch, so an inflated watch VO2max still sets
- * them (pre-existing, logged for Tristan). Easy runs never enter the blend's recent-run
+ * engine VDOT (s.v) and the forecast held at their run skill rating. Since
+ * 2026-10-09 the run paces follow the same figure: s.lt's Daniels input is
+ * capped too (ltDanielsInputVdot, tri-run-lt-cap.test.ts). Where the cap
+ * lowered a watch, the engine stays what the blend gives with the LT from the
+ * uncapped watch, capped at the skill rating (the 81d38f7 engine); with no
+ * fresh watch it is held at the skill rating. Easy runs never enter the blend's recent-run
  * slot (SCIENCE_LOG §CY), so they must not lift the cap either. In 57935d0 the
  * gate read the window's run count: two weeks of easy jogging at 6:30/km
  * switched the cap off and the engine fell back to the watch number, 44.3 to

@@ -16,6 +16,7 @@
  */
 
 import type { Workout } from '@/types/state';
+import { fmtModelPaceKm } from '@/utils/format';
 import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, STATION_EXTERNAL_LOAD_KG } from '@/constants/hyrox-benchmarks';
@@ -132,11 +133,10 @@ function fmtSec(sec: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-/** Format pace (sec/km) as "m:ss". */
+/** Format pace (sec/km) as "m:ss": the whole second with the minute carried
+ *  (fmtModelPaceKm), so 299.6 reads 5:00, never 4:60. */
 function fmtPace(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = String(Math.round(secPerKm % 60)).padStart(2, '0');
-  return `${m}:${s}`;
+  return fmtModelPaceKm(secPerKm);
 }
 
 /**

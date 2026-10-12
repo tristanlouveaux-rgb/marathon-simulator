@@ -7,16 +7,16 @@ import { clearStaleGatesForMode } from '@/injury/engine';
 import { saveState } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
-  gp, blendPredictions
+  gp
 } from '@/calculations';
-import { calculateForecast, demonstratedPBFloor, predictFromRecent } from '@/calculations/predictions';
-import { pbMedianVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
-import { computePeakWeeklyKm, plannedPeakWeeklyKm, runningPlanShapeInputs } from '@/workouts/plan_engine';
+import { blendPredictionsPreFloor, demonstratedPBFloorThrough, predictFromRecent } from '@/calculations/predictions';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { pbCapacity, modelPbAgeWeightsIfMeasured, pbEngineFloorVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { computeHRCalibratedVdot } from '@/calculations/effort-calibrated-vdot';
 import { applyLongRunCap, getLongestRunSec, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS } from '@/calculations/run-durability';
-import { raceDayPlanDurability } from '@/calculations/race-day-durability';
 import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
-import { planRampArchetype } from '@/calculations/athlete-archetype';
-import { computePredictionInputs, resolveWeeklyKmSignal } from '@/calculations/prediction-inputs';
+import { computePredictionInputs, measuredWeeklyKm } from '@/calculations/prediction-inputs';
+import { raceEffortHrFloorForState } from '@/calculations/heart-rate';
 import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { seedStartingPbs, cappedBeginnerStartWeeklyKm } from '@/calculations/beginner-fitness';
 import { recomputeLT } from '@/data/ltSync';
@@ -363,6 +363,15 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       }
 
       redistributeArchivedActivitiesToNewPlan();
+      // One forecast (review round 5, 2026-10-12; mirror of the running,
+      // triathlon and HYROX initializers). The wizard lands Just-Track on Home
+      // without launchApp, so without this the store defaults (s.v 50, s.lt
+      // null) stood until the next app open, and the Stats race estimates
+      // (predictStandardDistances) changed after the first relaunch (10K 45:00:
+      // marathon 3:52:33 at onboarding, 3:49:58 after). The launch refresh runs
+      // recomputeLT and, with PBs, the blend; without PBs it returns before the
+      // blend (the trackOnly guard), as at launch. One call converges.
+      refreshBlendedFitness(s);
       saveState();
       return { success: true };
     }
@@ -427,8 +436,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const raceLayout = raceDateForPlan ? raceWeekLayout(planStartISO, raceDateForPlan) : null;
     const trainingWeeks = raceLayout ? raceLayout.trainingWeeks : state.planDurationWeeks;
     const calendarWeeks = raceLayout ? raceLayout.calendarWeeks : state.planDurationWeeks;
-    // Onboarding state with the plan's training weeks, for the forecast inputs.
-    const stateForForecast: OnboardingState = { ...state, planDurationWeeks: trainingWeeks };
 
     // Recent race for blending
     const rec = state.recentRace;
@@ -454,7 +461,13 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       activityType: r.activityType,
       avgHR: r.avgHR ?? null,
     }));
-    const blendInputs = computePredictionInputs(runsForBlend);
+    // Race-effort HR test on the same HR effort profile the plan will hold
+    // (state.maxHR / restingHR win over synced values, as committed below).
+    const blendInputs = computePredictionInputs(runsForBlend, undefined, raceEffortHrFloorForState({
+      maxHR: state.maxHR || sCurrent.maxHR,
+      restingHR: state.restingHR || sCurrent.restingHR,
+      onboarding: { age: state.age },
+    }));
 
     // Marathon PB age (days) for the marathon-specificity penalty's PB-recency
     // scaling. A recent marathon PB demonstrates current capability and lightens
@@ -502,17 +515,25 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     //     (the demonstratedPBFloor ignores estimated volume — see below).
     // The old "explicit zero = max detraining" overload is gone: a brand-new
     // user is now sized from their stated frequency, not from a phantom zero.
-    const measuredKm = blendInputs.weeksCovered > 0
-      ? resolveWeeklyKmSignal(blendInputs, sCurrent.detectedWeeklyKm)
-      : ((sCurrent.detectedWeeklyKm ?? 0) > 0 ? sCurrent.detectedWeeklyKm! : null);
+    const measuredKm = measuredWeeklyKm(blendInputs, sCurrent.detectedWeeklyKm);
     const freqVolumeEstimate = state.runsPerWeek <= 3 ? state.runsPerWeek * 10
       : state.runsPerWeek === 4 ? 40 : state.runsPerWeek === 5 ? 50
       : state.runsPerWeek === 6 ? 60 : 70;
     const weeklyKmSignal = measuredKm != null ? measuredKm : freqVolumeEstimate;
     const weeklyKmIsEstimate = measuredKm == null;
+    // PB age weights (pbAgeWeight, a smooth 3-year half-life) on the shared
+    // measured-volume gate (modelPbAgeWeightsIfMeasured, as the refresh): with
+    // no running data an old PB keeps full weight (§BV). Dates belong to the
+    // onboarding PBs (state.pbDates with state.pbs); a seeded or typed PB has
+    // none and weighs 1. Stored PBs never change.
+    const pbAgeWeights = modelPbAgeWeightsIfMeasured(
+      pbs, { onboarding: state, detectedWeeklyKm: sCurrent.detectedWeeklyKm }, blendInputs, new Date(),
+    );
 
-    // Note: blendPredictions uses runnerType.toLowerCase() internally
-    const blendedTime = blendPredictions(
+    // Note: blendPredictions uses runnerType.toLowerCase() internally. The
+    // blend before the demonstrated-PB floor: the floor runs once below, after
+    // the durability cap (demonstratedPBFloorThrough), at the PB's age weight.
+    const blendedTime = blendPredictionsPreFloor(
       targetDistMeters, pbs, ltPace, vo2max, b,
       runnerType.toLowerCase(),
       blendInputs.recentRun ?? rec ?? null,
@@ -528,6 +549,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       marathonPbAgeDays,
       weeklyKmIsEstimate,
       effectiveCrossSessions,
+      pbAgeWeights,
     );
 
     if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
@@ -551,10 +573,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // 5K Riegel-projected to a half with no endurance base). It must NOT push the
     // anchor slower than a time the athlete has actually run at the target
     // distance, absent detraining evidence — so floor at any same-distance PB
-    // after the cap. blendPredictions already floors its own output; this catches
-    // the cap's multiplicative overshoot on top. See demonstratedPBFloor.
-    const cappedBlendedTime = demonstratedPBFloor(
-      blendedTime * durability.multiplier,
+    // before and after the cap, once per pipeline at the PB's age weight
+    // (demonstratedPBFloorThrough, as refreshBlendedFitness). See demonstratedPBFloor.
+    const cappedBlendedTime = demonstratedPBFloorThrough(
+      blendedTime,
       targetDistMeters,
       pbs,
       {
@@ -562,7 +584,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         weeklyRunKmIsEstimate: weeklyKmIsEstimate,
         recentRun: blendInputs.recentRun ?? rec ?? null,
         b,
+        pbAgeWeights,
       },
+      (t) => t * durability.multiplier,
     );
 
     // ── Engine vs race-readiness separation (ISSUE-297, RC1) ────────────────
@@ -571,15 +595,30 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // deriving the GLOBAL engine VDOT from it buries demonstrated capacity (a
     // 20:00 5K → VDOT ~50 collapses to ~40 off 8 km/wk), then feeds paces, plan
     // generation and the forecast. The engine is floored at PB-median capacity
-    // (`pbMedianVdot`) unless a recent race effort (`recentRun`, a run more
-    // than 15% faster than the window's median pace) demonstrates real
-    // slowness. Low training volume is deliberately NOT engine-decay
-    // evidence: it limits readiness (modelled on the prediction + forecast),
-    // not aerobic capacity.
+    // (`pbCapacity`, age-weighted) unless a recent race effort (`recentRun`, a
+    // run more than 15% faster than the window's median pace and, with HR, at
+    // race level) demonstrates real slowness. Low training volume is
+    // deliberately NOT engine-decay evidence: it limits readiness (modelled on
+    // the prediction + forecast), not aerobic capacity.
     const penalisedVdot = cv(targetDistMeters, cappedBlendedTime);
-    const capacityVdot = pbMedianVdot(pbs);
+    // PB capacity: age-weighted median (pbCapacity) on the same gated weights
+    // as the blend (pbAgeWeights), as pbCapacityForState in the refresh. The floor is
+    // pbEngineFloorVdot, shared with refreshBlendedFitness: PB capacity for a
+    // fresh or undated median PB; for an aged one, with a measured volume, the
+    // age-weighted mean of capacity and a medium+ HR fit. The HR fit is the
+    // one the first refresh computes (computeHRCalibratedVdot over the same
+    // runs and HR profile), so onboarding and the refresh give an aged PB the
+    // same engine. The onboarding blend has no HR-fit or PB-derived LT
+    // predictor, so a pull toward the penalised blend could not agree.
+    const capacity = pbCapacity(pbs, pbAgeWeights);
+    const capacityVdot = capacity?.vdot ?? null;
+    const onboardingHrFit = computeHRCalibratedVdot(
+      sCurrent.onboardingRunHistory ?? [],
+      state.restingHR || sCurrent.restingHR || null,
+      state.maxHR || sCurrent.maxHR || null,
+    );
     let engineVdot = penalisedVdot;
-    if (capacityVdot != null && capacityVdot > penalisedVdot) {
+    if (capacity != null && capacityVdot != null && capacityVdot > penalisedVdot) {
       const recentForEngine = blendInputs.recentRun ?? rec ?? null;
       const tRecentAtTarget = recentForEngine && recentForEngine.t > 0
         ? predictFromRecent(targetDistMeters, recentForEngine, pbs, b)
@@ -589,53 +628,15 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         : null;
       const recentDemonstratesSlowness = recentVdot != null && recentVdot < capacityVdot;
       if (!recentDemonstratesSlowness) {
-        engineVdot = capacityVdot;
-        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at capacity (low volume is readiness, not engine; ISSUE-297)`);
+        const floor = pbEngineFloorVdot(capacity, { ageWeightsApply: pbAgeWeights != null, hrFit: onboardingHrFit });
+        engineVdot = Math.max(penalisedVdot, floor);
+        console.log(`[init] engine floored at PB capacity: penalised VDOT ${penalisedVdot.toFixed(1)} buried below demonstrated capacity ${capacityVdot.toFixed(1)} with no recent-run evidence → engine held at ${engineVdot.toFixed(1)} (median PB age weight ${capacity.weight}; low volume is readiness, not engine; ISSUE-297)`);
       }
     }
     // `curr` is now the ENGINE (capacity), so paces, s.v and the anchor agree on
     // capacity rather than the penalised readiness number.
     const curr = engineVdot;
     const pac = gp(curr, ltPace);
-
-    // ── Forecast anchor = race time at the PLANNED PEAK volume (ISSUE-297) ───
-    // The forecast must credit the volume the plan builds the athlete up to, not
-    // today's pre-plan volume. `computePeakWeeklyKm` is the exact destination the
-    // plan engine ramps toward; re-blending at that volume lifts the low-volume /
-    // specificity penalties in proportion to the mileage the plan actually
-    // delivers (full relief once it reaches ≥30 km/wk, partial in the 20-30 band
-    // so a thin-data beginner is never over-credited to bare capacity).
-    const peakKm = runsPerWeek > 0
-      ? computePeakWeeklyKm({
-          runsPerWeek,
-          raceDistance: targetDistStr,
-          fitnessLevel: state.experienceLevel || 'intermediate',
-          totalWeeks: trainingWeeks ?? 16,
-          vdot: engineVdot,
-          easyPaceSecPerKm: pac.e,
-        })
-      : null;
-    const blendAtPeakKm = (km: number | null): number | null => (km != null && km > 0)
-      ? blendPredictions(
-          targetDistMeters, pbs, ltPace, vo2max, b,
-          runnerType.toLowerCase(),
-          blendInputs.recentRun ?? rec ?? null,
-          undefined,
-          km,
-          blendInputs.avgPaceSecPerKm ?? undefined,
-          { weeksCovered: blendInputs.weeksCovered, paceConfidence: blendInputs.paceConfidence, isStale: blendInputs.isStale },
-          undefined,
-          marathonPbAgeDays,
-          false,
-          effectiveCrossSessions,
-        )
-      : null;
-    const peakBlend = blendAtPeakKm(peakKm);
-    let forecastAnchorSec = (peakBlend != null && peakBlend > 0) ? peakBlend : cappedBlendedTime;
-    // Publish the peak-volume anchor for the live-recomputing forecast surfaces
-    // (renderer, plan-preview) so they credit the ramp instead of anchoring on
-    // the penalised today-time (ISSUE-297 forecast-display facet).
-    s.forecastBlendAnchorSec = forecastAnchorSec;
 
     // `runsPerWeek` + `effectiveCrossSessions` were computed above (before the
     // blend, so cross-training could soften the short-distance discount).
@@ -709,8 +710,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       recomputeLT(s);
       s.pac = gp(curr, s.lt ?? null);
     }
-    // Seed blended-fitness cache with wizard-only blend. Backfill will refresh
-    // this with Tanda inputs once per-run history lands.
+    // Seed blended-fitness cache with wizard-only blend. The launch refresh at
+    // the end of this function (refreshBlendedFitness, "one forecast")
+    // overwrites it on the committed plan.
     s.blendedRaceTimeSec = cappedBlendedTime;
     s.blendedEffectiveVdot = curr;
     s.blendedLastRefreshedISO = new Date().toISOString();
@@ -739,16 +741,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.sharpenBlock = state.trainingForEvent !== false && isSharpeningBlock(targetDistStr, trainingWeeks)
       ? buildSharpenBlockState({ ...s, onboarding: state }, { raceDistance: targetDistStr, trainingWeeks, noSignal: noRunningSignal })
       : undefined;
-    if (s.sharpenBlock && runsPerWeek > 0) {
-      // A block never reaches computePeakWeeklyKm: anchor the forecast on the
-      // block's own highest pre-taper week (plannedPeakWeeklyKm, the reader
-      // refreshBlendedFitness uses), now that its weeks and start exist.
-      const blockPeakBlend = blendAtPeakKm(plannedPeakWeeklyKm(runningPlanShapeInputs({ ...s, onboarding: state })));
-      if (blockPeakBlend != null && blockPeakBlend > 0) {
-        forecastAnchorSec = blockPeakBlend;
-        s.forecastBlendAnchorSec = blockPeakBlend;
-      }
-    }
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
     if (state.trainingForEvent === false) {
@@ -822,34 +814,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
     if (state.heightCm) s.heightCm = state.heightCm;
 
-    // Calculate expected final via shared forecast function. Anchor to the
-    // blended race-time so the projected end-of-plan finish stays on the same
-    // scale as the live "Current Race Estimate" surfaces (single canonical
-    // prediction model. See calculateForecast). Commute days are folded in
-    // here so the onboarding forecast matches the Training chip displayed on
-    // the forecast page (see race-forecast-fingerprint.ts:123 for the mirror).
-    const commuteSessions = state.runsToWork && state.commuteConfig?.enabled
-      ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
-      : 0;
-    const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, stateForForecast, runnerType, forecastAnchorSec,
-      // planRampArchetype: the archetype the plan engine ramps with (synced, else
-      // typed). s.onboarding is assigned further down, so read this build's.
-      { baselineKm: s.detectedWeeklyKm, archetype: planRampArchetype({ ...s, onboarding: state }) },
-    );
-    s.expectedFinal = forecast.forecastVdot;
-    // Race-day durability from the long runs the plan prescribes (race-day-durability),
-    // read with the inputs this plan is being built from: s.onboarding, the
-    // continuous flag and the plan start are assigned further down.
-    const raceDayDurability = raceDayPlanDurability({
-      ...s,
-      onboarding: state,
-      continuousMode: state.trainingForEvent === false,
-      planStartDate: planStartISO,
-    });
-    s.raceDayDurability = raceDayDurability ?? undefined;
-    s.forecastTime = forecast.forecastTime * (raceDayDurability?.multiplier ?? 1);
-
     // Store selected marathon (must be set BEFORE refreshing course factors,
     // since the helper reads s.selectedMarathon.profile)
     if (state.selectedRace) {
@@ -860,7 +824,6 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       // move race day.
       s.selectedMarathon = undefined;
     }
-    refreshForecastCourseFactors(s);
 
     // Anchor week date ranges to this Monday. A mid-week onboard yields a reduced
     // partial week 1 (pre-onboard days dropped, starts today — dropPreOnboardSessions);
@@ -888,6 +851,29 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     }
 
     redistributeArchivedActivitiesToNewPlan();
+
+    // ── One forecast (Tristan, 2026-10-11) ─────────────────────────────────
+    // The plan preview and Home read the same computation. The launch refresh
+    // (refreshBlendedFitness) runs here on the committed plan, after the
+    // archived activities move into it, so the race-readiness time, the engine,
+    // s.lt, the peak-volume forecast anchor, s.forecastTime and s.expectedFinal
+    // the preview shows are the ones the first launch computes. The wizard-only
+    // blend above (onboarding LT, no HR fit) sizes the plan's starting volume
+    // and engine seed only. Before, the preview's forecast came from that
+    // blend, so with an aged PB and a typed volume it differed from Home
+    // (review 3: marathon 3:09:36 vs 3:16:25). The initial values the progress
+    // views compare against are then taken from the refreshed state.
+    // The refresh also brings s.pac in line with the s.lt and s.v it leaves
+    // (syncTrainingPaces), as it does for every initializer and the launch.
+    refreshBlendedFitness(s);
+    s.iv = s.v;
+    s.initialLT = s.lt ?? ltPace;
+    if (s.blendedRaceTimeSec != null) {
+      s.initialBaseline = s.blendedRaceTimeSec;
+      s.currentFitness = s.blendedRaceTimeSec;
+    }
+    // Course factors read s.forecastTime (and s.selectedMarathon, set above).
+    refreshForecastCourseFactors(s);
     saveState();
 
     return { success: true, runnerType: effectiveRunnerType, calculatedRunnerType };

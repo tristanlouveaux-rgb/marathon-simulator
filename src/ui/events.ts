@@ -14,6 +14,7 @@ import {
 } from '@/calculations';
 import { IMP, TIM, EXPECTED_GAINS, plannedTssPerMin } from '@/constants';
 import { TL_PER_MIN } from '@/constants/sports';
+import type { HRProfile } from '@/calculations/heart-rate';
 import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
@@ -34,6 +35,7 @@ import { refreshForecastCourseFactors } from '@/calculations/course-factors-runn
 import { refreshBlendedFitness, planForecastWeeklyKm } from '@/calculations/blended-fitness';
 import { raceDayDurabilityMultiplier } from '@/calculations/race-day-durability';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
+import { syncTrainingPaces } from '@/calculations/paces';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 import type { ActivityStream } from '@/calculations/stream-processor';
 import { analyzeStream, computeCardiacEfficiency } from '@/calculations/stream-processor';
@@ -154,7 +156,7 @@ function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
   }
 
   // 4. Recalculate paces
-  s.pac = gp(getEffectiveVdot(s), s.lt);
+  syncTrainingPaces(s);
 
   // 4b. Record VDOT history entry
   recordVdotHistory(s);
@@ -436,12 +438,29 @@ export function init(): void {
 }
 
 /**
- * Rate a workout
- * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
- * @param name - Display name for logging
+ * The HR zone profile for scoring a rated session (the RPE + HR flow, the
+ * threshold-run LT estimate and the Z2 efficiency points): the lactate
+ * threshold HEART RATE (s.ltHR, bpm) when known, as the Plan card's HR target
+ * reads it, then max and resting HR (synced, else onboarding), then age.
+ * s.lt is the LT PACE in s/km: passed as lthr (as all three sites did before
+ * 2026-10-11) it exceeded calculateZones' 100 bpm gate, so a 300 s/km LT made
+ * an LTHR of 300 bpm and a Zone 2 of 240 to 267 bpm.
  */
+export function ratingHrProfile(
+  s: Pick<SimulatorState, 'ltHR' | 'maxHR' | 'restingHR' | 'onboarding'>,
+): HRProfile {
+  return {
+    lthr: s.ltHR || undefined,
+    maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
+    restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
+    age: s.onboarding?.age || undefined,
+  };
+}
+
 /**
  * Rate a workout with combined RPE and optional HR data
+ * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
+ * @param name - Display name for logging
  */
 export function rate(
   workoutId: string,
@@ -485,12 +504,7 @@ export function rate(
   // Joint RPE + HR logic
   let efficiencyShift = 0;
   if (avgHR && avgHR > 0) {
-    const zones = calculateZones({
-      lthr: s.lt || undefined,
-      maxHR: s.onboarding?.maxHR || undefined,
-      restingHR: s.onboarding?.restingHR || undefined,
-      age: s.onboarding?.age || undefined
-    });
+    const zones = calculateZones(ratingHrProfile(s));
     const target = getWorkoutHRTarget(workoutType, zones);
     if (target) {
       const intensity = calculateIntensityScore(avgHR, target);
@@ -547,12 +561,7 @@ export function rate(
     const stream = getWorkoutStream(workoutId);
     if (stream) {
       const analysis = analyzeStream(stream);
-      const zones = calculateZones({
-        lthr: s.lt || undefined,
-        maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
-        restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
-        age: s.onboarding?.age || undefined,
-      });
+      const zones = calculateZones(ratingHrProfile(s));
       if (zones) {
         const ltEst = estimateFromThresholdRun(analysis, zones);
         if (ltEst) {
@@ -585,12 +594,7 @@ export function rate(
   // produce outlier CEI values and pollute the trend. We require known HR zones
   // to validate the data point. Without them CEI comparisons are meaningless.
   if ((workoutType === 'easy' || workoutType === 'long') && avgHR && avgHR > 0) {
-    const effZones = calculateZones({
-      lthr: s.lt || undefined,
-      maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
-      restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
-      age: s.onboarding?.age || undefined,
-    });
+    const effZones = calculateZones(ratingHrProfile(s));
     const inZ2 = effZones && avgHR >= effZones.z2.min && avgHR <= effZones.z2.max * 1.05;
     if (inZ2) {
       const stream = getWorkoutStream(workoutId);
@@ -607,7 +611,7 @@ export function rate(
 
   // Update paces and predictions
   const currentVDOT = getEffectiveVdot(s);
-  s.pac = gp(currentVDOT, s.lt);
+  syncTrainingPaces(s);
 
   // Anchor "current fitness" and "forecast" to the blended race-prediction time
   // (single canonical model). The horizon gain is converted to a seconds delta
@@ -1805,7 +1809,10 @@ export function updateFitness(): void {
   }
   recordVdotHistory(s);
 
-  s.pac = gp(getEffectiveVdot(s), newLT);
+  // The paces follow s.lt (set to newLT above when one was entered). With
+  // only a VO2max entered, s.lt and the threshold pace stay as they were.
+  // Building them from newLT gave a VDOT threshold pace beside the old LT.
+  syncTrainingPaces(s);
 
   // Display status with color based on assessment status
   const statusEl = document.getElementById('fitStatus');

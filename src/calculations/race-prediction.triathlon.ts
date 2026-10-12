@@ -73,10 +73,12 @@ import {
 import { getTriathlonById } from '@/data/triathlons';
 import { getAbilityBand } from './fatigue';
 import { cv, vt } from './vdot';
+import { estimateRunPaceFromSkill } from './tri-run-skill';
 import { blendPredictions } from './predictions';
-import { effectiveVo2max } from './physiological-vdot';
+import { effectiveVo2max, pbAgeWeight, modelPbAgeWeightsIfMeasured } from './physiological-vdot';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
+import { raceEffortHrFloorForState } from './heart-rate';
 import {
   applyTriHorizonSwim,
   applyTriHorizonBike,
@@ -523,9 +525,9 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     olympicTotalSec,
     raceReadiness,
     rawProjectedPerLeg: {
-      swim: projected.swimSec,
-      bike: projected.bikeSec,
-      run:  projected.runSec,
+      swim: Math.round(projected.swimSec),
+      bike: Math.round(projected.bikeSec),
+      run:  Math.round(projected.runSec),
     },
     // Only attach when an injury actually debited a discipline, so the UI can
     // show the explanatory caption. maxRecovery > 0 ⟺ at least one restricted
@@ -742,6 +744,7 @@ interface ComputeRaceTimeArgs {
   trainingTempC: number | null;
 }
 
+/** Leg and total times are unrounded seconds; predictTriathlonRace rounds once. */
 interface ComputeRaceTimeResult {
   totalSec: number;
   swimSec: number;
@@ -1001,15 +1004,18 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
       : undefined,
   };
 
-  const totalSec = Math.round(swimSec + t1Sec + bikeSec + t2Sec + runSec);
+  // Unrounded: predictTriathlonRace scales each leg by the readiness penalty
+  // and rounds once at its output. Rounding here as well made a smooth daily
+  // drift tick by up to 3 whole seconds (review round 5, 2026-10-12).
+  const totalSec = swimSec + t1Sec + bikeSec + t2Sec + runSec;
 
   return {
     totalSec,
-    swimSec: Math.round(swimSec),
+    swimSec,
     t1Sec,
-    bikeSec: Math.round(bikeSec),
+    bikeSec,
     t2Sec,
-    runSec: Math.round(runSec),
+    runSec,
     bikeAvgKph,
     bikeAvgWatts,
     baseRunPaceSecPerKm,
@@ -1221,7 +1227,7 @@ function estimateCSSFromSkill(slider: TriSkillSlider): number {
 
 /**
  * The recency-gated demonstrated bike speed from a real race, or null. Reuses the
- * 365-day "strong" band (RUN_PB_RECENCY_BANDS) the run anchor uses — beyond a year
+ * one-year anchor (365 days, RUN_PB_RECENCY_ANCHORS) the run anchor uses — beyond a year
  * the split is no longer fresher evidence than current fitness. Returns the speed
  * plus the intensity factor it was ridden at, so the caller can scale to a target
  * leg. `dateISO` may be 'YYYY-MM' (onboarding) or 'YYYY-MM-DD'.
@@ -1315,16 +1321,9 @@ function estimateBikeSpeed(
   return byLevel[skill] * intensityFactor;
 }
 
-export function estimateRunPaceFromSkill(skill: TriSkillSlider, distance: TriathlonDistance): number {
-  // byLevel is the reference run-leg pace at Ironman (marathon) distance. Scale to
-  // the actual run-leg distance via Riegel's power law (T ∝ d^1.06, so pace ∝ d^0.06;
-  // Riegel 1981) — shorter legs are run faster. Replaces the old flat 70.3 −15s
-  // offset with a principled, distance-general law. Deepest fallback (skill only).
-  const byLevel: Record<TriSkillSlider, number> = { 1: 420, 2: 360, 3: 300, 4: 260, 5: 225 };
-  const runKm = RACE_LEG_DISTANCES[distance].runKm;
-  const IM_RUN_KM = RACE_LEG_DISTANCES.ironman.runKm;
-  return byLevel[skill] * Math.pow(runKm / IM_RUN_KM, 0.06);
-}
+// estimateRunPaceFromSkill lives in tri-run-skill.ts (a light module the
+// physiology chain can import without a cycle); re-exported here for callers.
+export { estimateRunPaceFromSkill };
 
 /**
  * Open-race time prediction at the run leg's distance, blending all available
@@ -1369,7 +1368,7 @@ function blendOpenRunRaceTime(
   }
   for (const r of state.onboardingRunHistory ?? []) runs.push(r);
 
-  const inputs = computePredictionInputs(runs);
+  const inputs = computePredictionInputs(runs, undefined, raceEffortHrFloorForState(state));
   const hrVdot = computeHRCalibratedVdot(runs, state.restingHR ?? null, state.maxHR ?? null);
 
   return blendPredictions(
@@ -1385,6 +1384,12 @@ function blendOpenRunRaceTime(
     inputs.avgPaceSecPerKm ?? undefined,
     { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot,
+    undefined,
+    undefined,
+    undefined,
+    // PB age weights on the shared measured-volume gate (mirror of
+    // refreshBlendedFitness; with no running data an old PB keeps full weight).
+    modelPbAgeWeightsIfMeasured(state.pbs, state, inputs, new Date()),
   );
 }
 
@@ -1666,14 +1671,11 @@ function computeMarathonDepthMultiplier(state: SimulatorState): number {
   // No credit for slow PBs (≥ 4:30) or missing PBs.
   if (marathonPbSec >= MARATHON_CREDIT_ONSET_SEC) return 1.0;
 
-  // Recency: PB < 2 years = 1.0, 2–4 years = 0.6, > 4 years = 0.3.
-  let recencyFactor = 1.0;
-  const pbDateISO = state.onboarding?.pbDates?.m;
-  if (pbDateISO) {
-    const ageDays = (Date.now() - Date.parse(pbDateISO)) / (1000 * 60 * 60 * 24);
-    if      (ageDays > 4 * 365) recencyFactor = 0.3;
-    else if (ageDays > 2 * 365) recencyFactor = 0.6;
-  }
+  // Recency: the PB age weight (pbAgeWeight, physiological-vdot.ts), a smooth
+  // 3-year half-life: 1 year 0.79, 2 years 0.63, 4 years 0.40. The same weight
+  // ages PBs in the run fitness model (Tristan 2026-10-11, replacing the §T5
+  // step bands; SCIENCE_LOG 2026-04-24 pbAgeDecay and the PB-age entry).
+  const recencyFactor = pbAgeWeight(state.onboarding?.pbDates?.m, new Date());
 
   // Smooth linear from 0 at onset (4:30) to 1 at max (2:45).
   const depthRaw = Math.min(1, (MARATHON_CREDIT_ONSET_SEC - marathonPbSec) /

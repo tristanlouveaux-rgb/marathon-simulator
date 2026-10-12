@@ -1,14 +1,12 @@
-import { planTrainingWeeks, planTaperWeeks } from '@/workouts/race-week-layout';
 import type { OnboardingState, MilestoneTarget } from '@/types/onboarding';
 import { findNearestMilestone } from '@/types/onboarding';
 import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { updateOnboarding, goToStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { ft, fmtProbPct } from '@/utils/format';
-import { getRunnerType, calculateLiveForecast } from '@/calculations';
-import { planForecastWeeklyKm } from '@/calculations/blended-fitness';
-import { raceDayDurabilityMultiplier, raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
+import { ft, fmtProbPct, fpModel } from '@/utils/format';
+import { runningForecastForSessions } from '@/calculations/blended-fitness';
+import { raceDayEnduranceGapText, enduranceGapPlanContext } from '@/calculations/race-day-durability';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import { runMarathonForecastSim } from '@/calculations/race-forecast-simulation';
 import { liveTone, liveLabel, deriveBounds } from '@/ui/goal-time-overlay';
@@ -18,7 +16,7 @@ import { initializeSimulator } from '@/state/initialization';
  * Page 7. Plan Preview (v2).
  *
  * Visual-consistency rewrite of legacy `plan-preview.ts`. Structure is preserved:
- *  - Recalculate forecast via `calculateLiveForecast` (single source of truth)
+ *  - Recalculate forecast via `runningForecastForSessions` (the Home forecast's computation)
  *  - Detect nearby milestone with `findNearestMilestone` (5% default, experience-scaled)
  *  - Show predicted finish, plan summary card, adaptive-prediction note
  *  - "See your sessions" CTA → hands off to the post-plan workout demonstration
@@ -282,7 +280,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             </div>
             ${renderVdotMethodSubline(s)}
             ${s.initialLT ? `
-              <div class="pp-row"><span class="pp-row-k">Threshold pace</span><span class="pp-row-v">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span></div>
+              <div class="pp-row"><span class="pp-row-k">Threshold pace</span><span class="pp-row-v">${fpModel(s.initialLT, s.unitPref ?? 'km')}</span></div>
             ` : ''}
           </div>
         </div>
@@ -404,12 +402,6 @@ function formatImprovement(initial: number, forecast: number): string {
   return `↓ ${seconds}s`;
 }
 
-function formatLTPace(secPerKm: number): string {
-  const min = Math.floor(secPerKm / 60);
-  const sec = Math.floor(secPerKm % 60);
-  return `${min}:${sec.toString().padStart(2, '0')}`;
-}
-
 /** Human delta for the strength callout: "2 min 14 s", "3 min", or "40 s". */
 function fmtBenefitSec(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -423,37 +415,21 @@ function fmtBenefitSec(sec: number): string {
 /**
  * Single source for the onboarding forecast at a given session count. The hero,
  * the milestone feasibility check, and the goal overlay all read from this one
- * call so the numbers can never diverge between surfaces. Its volume is the
- * Home forecast's (planForecastWeeklyKm, design v4 Q18), so the hero equals the
- * forecast the built plan carries.
+ * call so the numbers can never diverge between surfaces. It is the Home
+ * forecast's own computation (runningForecastForSessions, the one
+ * refreshBlendedFitness stores as s.forecastTime; Tristan 2026-10-11: one
+ * forecast), so the hero equals the forecast the built plan carries.
  */
 export function forecastForSessions(
   s: ReturnType<typeof getState>,
   sessions: number,
   strengthSessions?: number,
 ): number {
-  const planMeanKm = planForecastWeeklyKm(s, sessions);
-  return calculateLiveForecast({
-    currentVdot: s.v || 50,
-    targetDistance: s.rd,
-    weeksRemaining: planTrainingWeeks(s) || 16, // training weeks: a closing week holds only the race
-    sessionsPerWeek: sessions,
-    runnerType: getRunnerType(s.b || 1.06),
-    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-    crossTrained: s.onboarding?.crossTrainedBackground === true,
-    weeklyVolumeKm: planMeanKm ?? s.wkm,
-    hmPbSeconds: s.pbs?.h || undefined,
-    ltPaceSecPerKm: s.lt || undefined,
-    // Default to the plan's planned strength count; callers can override (e.g.
-    // pass 0 to compute the no-strength baseline for the benefit callout).
+  // Default to the plan's planned strength count; callers can override (e.g.
+  // pass 0 to compute the no-strength baseline for the benefit callout).
+  return runningForecastForSessions(s, sessions, {
     strengthSessionsPerWeek: strengthSessions ?? s.gs ?? s.onboarding?.gymSessionsPerWeek ?? 0,
-    blendedAnchorSec: s.forecastBlendAnchorSec ?? s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
-    // Race-day durability from the long runs the plan prescribes. Read at the
-    // plan's runs per week (s.rw): a hypothetical extra session does not change
-    // the plan's long runs.
-    raceDayDurabilityMultiplier: raceDayDurabilityMultiplier(s),
-    taperWeeks: planTaperWeeks(s),
-  }).forecastTime;
+  })?.forecastTime ?? 0;
 }
 
 /**

@@ -9,11 +9,11 @@
  */
 
 import { getState } from '@/state';
-import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary } from '@/types';
+import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary, RaceDistance } from '@/types';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
+import { fp, fpModel, displayPaceSec, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
@@ -21,8 +21,6 @@ import { plannedWeekKm } from '@/calculations/plan-shape';
 import { renderPlanShapeCard } from './plan-shape-chart';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
-import { blendPredictions } from '@/calculations/predictions';
-import { computePredictionInputs } from '@/calculations/prediction-inputs';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
@@ -31,8 +29,9 @@ import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
-import { getPhysiologicalVdot, effectiveVo2max, resolveRunningVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
-import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { getPhysiologicalVdot, resolveRunningVdot, hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
+import { pbAgeCaptionText, standardDistancesDisplayed } from './pb-age-caption';
+import { refreshBlendedFitness, predictStandardDistances } from '@/calculations/blended-fitness';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from './page-flair';
 import { buildBenchmarkTrendChart } from './triathlon/benchmark-charts';
 import { gp } from '@/calculations/paces';
@@ -113,35 +112,6 @@ function chartGridLines(
 
 function computeCurrentVDOT(s: SimulatorState): number {
   return getEffectiveVdot(s);
-}
-
-/**
- * Extract all running activities from garminActuals across the available plan
- * weeks, normalised to the shape `computePredictionInputs` expects. Filters
- * non-running types here so the pure module doesn't need to know about our
- * internal activityType strings.
- */
-function collectRunActivities(s: SimulatorState): Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> {
-  const runs: Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> = [];
-  const weeks = s.wks ?? [];
-  for (const wk of weeks) {
-    const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
-    if (!actuals) continue;
-    for (const val of Object.values(actuals)) {
-      const a = val as any;
-      const aType = (a.activityType || '').toUpperCase();
-      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
-      runs.push({
-        startTime: a.startTime,
-        distKm: a.distanceKm,
-        durSec: a.durationSec,
-        activityName: a.activityName,
-        activityType: a.activityType,
-      });
-    }
-  }
-  return runs;
 }
 
 function last7(
@@ -688,8 +658,9 @@ function buildRunningNumbersCard(s: SimulatorState): string {
     subtitle: aerSubtitle,
   }) : '';
 
-  // Lactate Threshold.
-  const ltPace = s.lt ?? 0;
+  // Lactate Threshold. s.lt is unrounded (a model input); display reads the
+  // whole second (displayPaceSec).
+  const ltPace = displayPaceSec(s.lt ?? 0);
   const ltSlower = isFemale ? 380 : 360;
   const ltFaster = isFemale ? 180 : 160;
   const ltScore = ltPace > 0
@@ -699,7 +670,7 @@ function buildRunningNumbersCard(s: SimulatorState): string {
   const ltZoneIdx = ltScore != null ? ltBreaks.findIndex(b => ltScore < b) : -1;
   const ltZoneName = ltScore != null ? zoneLabels[ltZoneIdx === -1 ? 5 : ltZoneIdx] : '—';
   const ltUnitPref = s.unitPref ?? 'km';
-  const ltLabel = ltPace > 0 ? fp(ltPace, ltUnitPref) : '—';
+  const ltLabel = ltPace > 0 ? fpModel(ltPace, ltUnitPref) : '—';
   let ltSubtitle: string | undefined;
   if (s.ltHR && s.ltHR > 0) {
     const pct = s.maxHR ? Math.round((s.ltHR / s.maxHR) * 100) : null;
@@ -2381,8 +2352,8 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     subtitle: aerSubtitle,
   }) : '';
 
-  // Bar 3: Lactate Threshold
-  const ltPace = s.lt ?? 0;
+  // Bar 3: Lactate Threshold (s.lt unrounded; display reads the whole second)
+  const ltPace = displayPaceSec(s.lt ?? 0);
   const ltSlower = isFemale ? 380 : 360;
   const ltFaster = isFemale ? 180 : 160;
   const ltScore = ltPace > 0
@@ -2392,11 +2363,9 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
   const ltZoneIdx = ltScore != null ? ltBreaks.findIndex(b => ltScore < b) : -1;
   const ltZoneName = ltScore != null ? zoneLabels[ltZoneIdx === -1 ? 5 : ltZoneIdx] : '—';
   const ltUnitPref = s.unitPref ?? 'km';
-  const ltPaceSec = ltUnitPref === 'mi' ? ltPace * 1.60934 : ltPace;
-  const ltPaceUnit = ltUnitPref === 'mi' ? '/mi' : '/km';
-  const ltLabel = ltPace > 0
-    ? `${Math.floor(ltPaceSec / 60)}:${String(Math.round(ltPaceSec % 60)).padStart(2, '0')}${ltPaceUnit}`
-    : '—';
+  // fpModel: the mile pace rounds with the minute carried (the hand-rolled
+  // label rounded the seconds alone and could read 7:60/mi).
+  const ltLabel = ltPace > 0 ? fpModel(ltPace, ltUnitPref) : '—';
   let ltSubtitle: string | undefined;
   if (s.ltHR && s.ltHR > 0) {
     const pct = s.maxHR ? Math.round((s.ltHR / s.maxHR) * 100) : null;
@@ -2858,9 +2827,11 @@ function buildVDOTMetricPage(s: SimulatorState): string {
 
 export function buildLTMetricPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
-  const currentLT = s.lt ?? 0;
+  // s.lt is unrounded (a model input); this page displays the whole second
+  // (displayPaceSec), as does its Training Paces card (s.pac.t is the LT).
+  const currentLT = displayPaceSec(s.lt ?? 0);
   const currentHR = s.ltHR ?? null;
-  const ltLabel = currentLT > 0 ? fp(currentLT, unitPref) : '—';
+  const ltLabel = currentLT > 0 ? fpModel(currentLT, unitPref) : '—';
 
   // Diagnostic dump. Explains which recent runs qualified for the empirical
   // LT path and why others didn't. Read-only, fires once per page render.
@@ -2952,20 +2923,20 @@ export function buildLTMetricPage(s: SimulatorState): string {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
               <div class="m-card" style="padding:12px 14px">
                 <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Easy</div>
-                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.e, unitPref)} – ${fp(Math.round(s.pac.e * 13 / 12), unitPref)}</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fpModel(s.pac.e, unitPref)} – ${fpModel(s.pac.e * 13 / 12, unitPref)}</div>
                 <div style="font-size:10px;color:var(--c-faint);margin-top:2px">slower is fine</div>
               </div>
               <div class="m-card" style="padding:12px 14px">
                 <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Marathon</div>
-                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.m, unitPref)}</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fpModel(s.pac.m, unitPref)}</div>
               </div>
               <div class="m-card" style="padding:12px 14px">
                 <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Threshold</div>
-                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.t, unitPref)}</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fpModel(s.pac.t, unitPref)}</div>
               </div>
               <div class="m-card" style="padding:12px 14px">
                 <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">VO2max</div>
-                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.i, unitPref)}</div>
+                <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fpModel(s.pac.i, unitPref)}</div>
               </div>
             </div>
           </div>` : ''}
@@ -3035,7 +3006,9 @@ function buildLTTrendCard(s: SimulatorState, currentLT: number, unitPref: UnitPr
     const better = delta < 0;
     const col = Math.abs(delta) < 0.5 ? 'var(--c-muted)' : (better ? '#5a8050' : '#c06a50');
     const sign = delta >= 0 ? '+' : '';
-    const mss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    // Whole second with the minute carried (a model pace: displayPaceSec; in
+    // miles the converted value rounds the same way fpModel does).
+    const mss = (sec: number) => { const r = displayPaceSec(sec); return `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`; };
     // Pace-format the headline and delta (buildBenchmarkTrendChart renders raw
     // numbers; LT is a pace, not a scalar).
     chart = chart
@@ -3078,7 +3051,7 @@ function buildLTMethodsCard(derived: import('@/calculations/lt-derivation').LTDe
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0;margin-left:12px">
-          <div style="font-size:13px;color:var(--c-black);font-weight:600">${fp(m.ltPaceSecKm, unitPref)}</div>
+          <div style="font-size:13px;color:var(--c-black);font-weight:600">${fpModel(m.ltPaceSecKm, unitPref)}</div>
           ${derived.methods.length > 1 ? `<div style="font-size:10px;color:var(--c-faint)">${Math.round(m.weight * 100)}% weight</div>` : ''}
         </div>
       </div>
@@ -3097,8 +3070,8 @@ function buildLTConflictCard(
   sug: NonNullable<SimulatorState['ltSuggestion']>,
   unitPref: UnitPref,
 ): string {
-  const garminPace = fp(sug.garmin.ltPaceSecKm, unitPref);
-  const derivedPace = fp(sug.derived.ltPaceSecKm, unitPref);
+  const garminPace = fpModel(sug.garmin.ltPaceSecKm, unitPref);
+  const derivedPace = fpModel(sug.derived.ltPaceSecKm, unitPref);
   const gap = Math.round(Math.abs(sug.garmin.ltPaceSecKm - sug.derived.ltPaceSecKm));
   return `
     <div class="m-card" style="padding:14px 16px;margin-bottom:12px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.06)">
@@ -3141,12 +3114,12 @@ function buildLTOverrideCard(
       <div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
           <span style="font-size:11px;color:var(--c-muted)">LT pace</span>
-          <span id="lt-override-pace-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${fp(seedPace, unitPref)}</span>
+          <span id="lt-override-pace-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${fpModel(seedPace, unitPref)}</span>
         </div>
         <input type="range" id="lt-override-pace" class="m-slider-glass" min="${minPace}" max="${maxPace}" step="1" value="${seedPace}">
         <div style="display:flex;justify-content:space-between;margin-top:2px">
-          <span style="font-size:10px;color:var(--c-faint)">${fp(minPace, unitPref)}</span>
-          <span style="font-size:10px;color:var(--c-faint)">${fp(maxPace, unitPref)}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${fpModel(minPace, unitPref)}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${fpModel(maxPace, unitPref)}</span>
         </div>
       </div>
       <div style="margin-bottom:14px">
@@ -3268,9 +3241,11 @@ function computeMarathonFadeRisk(
   return { level, avgDrift: avg };
 }
 
-/** Forecast times card (standalone). Uses blendPredictions (LT, VO2, PB, recent
- *  run) when available; falls back to pure VDOT-to-time when no watch data. */
-function buildForecastTimesCard(s: SimulatorState): string {
+/** Forecast times card (standalone). The four standard-distance predictions
+ *  (predictStandardDistances, the Forecast tab's figures and the Time Trial
+ *  step's) when available; falls back to pure VDOT-to-time otherwise.
+ *  Exported for tests (pb-age-surfaces.test.ts). */
+export function buildForecastTimesCard(s: SimulatorState): string {
   const vdot = computeCurrentVDOT(s);
   if (!vdot || vdot < 20) return '';
 
@@ -3283,34 +3258,25 @@ function buildForecastTimesCard(s: SimulatorState): string {
   };
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-  // Recent race effort from garminActuals (computePredictionInputs recentRun:
-  // a run more than 15% faster than the window's median pace), else the
-  // onboarding s.rec.
-  const inputs = computePredictionInputs(collectRunActivities(s));
-  const liveRec = inputs.recentRun ?? s.rec ?? null;
-  const liveKmPerWeek = inputs.weeklyKm;
-  const liveAvgPace = inputs.avgPaceSecPerKm ?? null;
+  // One computation for the four race estimates (2026-10-11):
+  // predictStandardDistances, which the Forecast tab and the Time Trial step
+  // read. This card ran its own blend: the synced window's weekly km (0 with a
+  // typed weekly km and no synced runs, which fired the marathon-specificity
+  // penalty at its maximum), no HR fit, no calibration and no durability cap,
+  // so it disagreed with the Forecast (a half PB 1:32 with a typed 40 km:
+  // marathon 3:40:14 here against 3:21:49 there).
+  const standard = hasBlendInputs ? predictStandardDistances(s) : null;
 
-  const distances = [
-    { label: 'Marathon', dist: 42195, km: 42.195 },
-    { label: 'Half',     dist: 21097, km: 21.0975 },
-    { label: '10K',      dist: 10000, km: 10 },
-    { label: '5K',       dist: 5000,  km: 5 },
+  const distances: Array<{ label: string; key: RaceDistance; km: number }> = [
+    { label: 'Marathon', key: 'marathon', km: 42.195 },
+    { label: 'Half',     key: 'half',     km: 21.0975 },
+    { label: '10K',      key: '10k',      km: 10 },
+    { label: '5K',       key: '5k',       km: 5 },
   ];
 
   const rows = distances.map((d, i) => {
-    let timeSec: number;
-    if (hasBlendInputs) {
-      const blended = blendPredictions(
-        d.dist, s.pbs ?? {}, s.lt ?? null, effectiveVo2max(s) ?? vdot,
-        s.b ?? 1.06, s.typ ?? 'Balanced', liveRec,
-        s.athleteTier ?? undefined, liveKmPerWeek, liveAvgPace ?? undefined,
-        { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
-      );
-      timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
-    } else {
-      timeSec = vt(d.km, vdot);
-    }
+    const predicted = standard?.[d.key];
+    const timeSec = predicted != null && predicted > 0 ? predicted : vt(d.km, vdot);
     const isLast = i === distances.length - 1;
 
     // Fade-risk badge. Marathon only, based on long-run drift at goal MP
@@ -3336,11 +3302,21 @@ function buildForecastTimesCard(s: SimulatorState): string {
       </div>`;
   }).join('');
 
+  // PB age caption (pbAgeCaptionText, shared with the Forecast tabs): the PB
+  // list shows each PB exactly as entered or synced, while these estimates
+  // give an old PB less weight. Shown only when ageing moves one of them by
+  // at least a second.
+  const pbAgeText = hasBlendInputs ? pbAgeCaptionText(s, 'these estimates', standardDistancesDisplayed) : null;
+  const pbAgeCaption = pbAgeText
+    ? `<div style="font-size:11px;color:var(--c-muted);margin-top:8px">${pbAgeText}</div>`
+    : '';
+
   return `
     <div class="m-card" style="padding:14px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:2px">Current Race Estimates</div>
       <div style="font-size:10px;color:var(--c-faint);margin-bottom:8px">Estimated finish times if racing today</div>
       ${rows}
+      ${pbAgeCaption}
     </div>`;
 }
 
@@ -3348,12 +3324,12 @@ function buildForecastTimesCard(s: SimulatorState): string {
 function buildPacesCard(s: SimulatorState, unitPref: UnitPref): string {
   if (!s.pac) return '';
   const easyLo = s.pac.e;
-  const easyHi = Math.round(s.pac.e * 13 / 12); // LT × 1.30
+  const easyHi = s.pac.e * 13 / 12; // LT × 1.30
   const rows = [
-    { label: 'Easy',      value: `${fp(easyLo, unitPref)} – ${fp(easyHi, unitPref)}`, sub: 'slower is fine' },
-    { label: 'Marathon',  value: fp(s.pac.m, unitPref), sub: null },
-    { label: 'Threshold', value: fp(s.pac.t, unitPref), sub: null },
-    { label: 'VO2max',    value: fp(s.pac.i, unitPref), sub: null },
+    { label: 'Easy',      value: `${fpModel(easyLo, unitPref)} – ${fpModel(easyHi, unitPref)}`, sub: 'slower is fine' },
+    { label: 'Marathon',  value: fpModel(s.pac.m, unitPref), sub: null },
+    { label: 'Threshold', value: fpModel(s.pac.t, unitPref), sub: null },
+    { label: 'VO2max',    value: fpModel(s.pac.i, unitPref), sub: null },
   ].filter(r => r.value && r.value !== '—');
 
   if (!rows.length) return '';
@@ -4484,7 +4460,7 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
 
   if (paceSlider && paceLabel) {
     paceSlider.addEventListener('input', () => {
-      paceLabel.textContent = fp(parseInt(paceSlider.value, 10), unitPref);
+      paceLabel.textContent = fpModel(parseInt(paceSlider.value, 10), unitPref);
     });
   }
   if (hrSlider && hrLabel) {
@@ -4497,14 +4473,12 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     const pace = parseInt(paceSlider.value, 10);
     const hr = parseInt(hrSlider.value, 10);
     const { getMutableState, saveState } = await import('@/state');
-    const { gp } = await import('@/calculations/paces');
     const m = getMutableState();
     m.ltOverride = { ltPaceSecKm: pace, ltHR: hr, setAt: new Date().toISOString() };
     if (m.ltSuggestion) delete m.ltSuggestion;
+    // recomputeLT and the refresh both bring the cached pace zones (s.pac) in
+    // line with the new LT (syncTrainingPaces).
     recomputeLT(m);
-    // Refresh cached pace zones so threshold/easy/marathon paces and any view
-    // reading s.pac immediately use the new LT.
-    m.pac = gp(getEffectiveVdot(m), m.lt);
     // Flow the LT change through to the cached race prediction (the forecast
     // surfaces read s.forecastTime / s.blendedRaceTimeSec, not s.lt directly).
     refreshBlendedFitness(m);
@@ -4522,11 +4496,9 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
   });
   resetBtn?.addEventListener('click', async () => {
     const { getMutableState, saveState } = await import('@/state');
-    const { gp } = await import('@/calculations/paces');
     const m = getMutableState();
     delete m.ltOverride;
     recomputeLT(m);
-    m.pac = gp(getEffectiveVdot(m), m.lt);
     refreshBlendedFitness(m);
     saveState();
     const container = document.getElementById('app-root');
@@ -4545,7 +4517,6 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
     el.addEventListener('click', async () => {
       const choice = el.dataset.ltPick;
       const { getMutableState, saveState } = await import('@/state');
-      const { gp } = await import('@/calculations/paces');
       const m = getMutableState();
       const sug = m.ltSuggestion;
       if (!sug) return;
@@ -4567,7 +4538,6 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
       }
       clearLTSuggestion(m);
       recomputeLT(m);
-      m.pac = gp(getEffectiveVdot(m), m.lt);
       refreshBlendedFitness(m);
       saveState();
       const container = document.getElementById('app-root');

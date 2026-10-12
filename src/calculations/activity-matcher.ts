@@ -9,7 +9,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary, resolveTrimpSex, type BiologicalSex } from './trimp';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
-import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
+import { calculateZones, computeHREffortScore, hrEffortProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
 import { log } from '@/ui/renderer';
 import { IMPACT_PER_KM } from '@/constants';
@@ -238,12 +238,7 @@ export function getHREffort(
   plannedType: string | null | undefined,
   s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } },
 ): number | null {
-  const profile: HRProfile = {
-    maxHR: s.maxHR ?? undefined,
-    restingHR: s.restingHR ?? undefined,
-    age: s.onboarding?.age,
-  };
-  const zones = calculateZones(profile);
+  const zones = calculateZones(hrEffortProfile(s));
   return computeHREffortScore(avgHR, plannedType, zones);
 }
 

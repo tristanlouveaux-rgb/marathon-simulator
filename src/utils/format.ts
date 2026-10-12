@@ -50,6 +50,43 @@ export function formatPace(secPerKm: number, pref: UnitPref = 'km'): string {
 }
 
 /**
+ * The display value of a model pace: the whole second, rounded to nearest.
+ * Model paces are s.lt, s.pac (gp(v, lt): the threshold pace IS the LT, and
+ * easy, marathon, interval and repetition are fixed multiples of it), every
+ * pace derived from them (workout description paces, HYROX run pace, the
+ * triathlon run paces) and gp(vdot) paces. They stay unrounded in the model:
+ * the PB age weight moves the derived LT a little every day, and rounding a
+ * model input turns that drift into overnight jumps (2026-10-12). Display
+ * rounds once, here, so the LT headline and the Threshold pace (one number)
+ * always read the same whole second, and no formatter is handed a fraction
+ * (no "4:60" from formatters that round the seconds, no fractional seconds).
+ */
+export function displayPaceSec(secPerKm: number): number {
+  return Math.round(secPerKm);
+}
+
+/**
+ * A model pace (displayPaceSec) as "m:ss/km" or "m:ss/mi". The mile pace
+ * converts the whole-second km pace and rounds to the whole second with the
+ * minute carried, which is what fmtDesc does to the km paces written into
+ * workout descriptions, so a pace card and a session description agree in
+ * either unit.
+ */
+export function fpModel(secPerKm: number, pref: UnitPref = 'km'): string {
+  if (!secPerKm || isNaN(secPerKm)) return '--';
+  const km = displayPaceSec(secPerKm);
+  const sec = pref === 'mi' ? Math.round(km * KM_TO_MI_PACE) : km;
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}${pref === 'mi' ? '/mi' : '/km'}`;
+}
+
+/** Model pace (displayPaceSec) as "m:ss", no unit: for workout descriptions
+ *  and other km strings that carry their own "/km" suffix. */
+export function fmtModelPaceKm(secPerKm: number): string {
+  const sec = displayPaceSec(secPerKm);
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+/**
  * Format workout time as h:mm:ss or mm:ss
  * @param seconds - Time in seconds
  * @returns Formatted time string
@@ -117,9 +154,11 @@ export function fmtDesc(desc: string, pref: UnitPref): string {
   // Convert pace strings first: "4:49/km" → "7:45/mi" (before km→mi so "km" in "/km" isn't caught)
   let result = desc.replace(/(\d+):(\d+)\/km/g, (_, m, s) => {
     const secPerKm = parseInt(m) * 60 + parseInt(s);
-    const secPerMi = secPerKm * KM_TO_MI_PACE;
+    // Round the whole mile pace, then split, so the minute carries (a pace
+    // of 7:59.6/mi reads 8:00/mi, never 7:60/mi). Same rule as fpModel.
+    const secPerMi = Math.round(secPerKm * KM_TO_MI_PACE);
     const mOut = Math.floor(secPerMi / 60);
-    const sOut = Math.round(secPerMi % 60);
+    const sOut = secPerMi % 60;
     return `${mOut}:${String(sOut).padStart(2, '0')}/mi`;
   });
   // Convert distance values: "4.8km" → "3.0 mi"
