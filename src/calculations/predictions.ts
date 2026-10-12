@@ -5,6 +5,7 @@ import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { TAPER_NOMINAL } from '@/constants/training-params';
+import { pbRecencyPenaltyFactor } from '@/constants/race-readiness-targets';
 import type { HRVdotResult } from './effort-calibrated-vdot';
 import type { PbAgeWeights, PbKey } from './physiological-vdot';
 import { applyRunningCourseFactors } from './course-factors-running';
@@ -779,7 +780,8 @@ export function blendPredictionsPreFloor(
    * and the marathon-specificity penalty fires (Tanda gated out, low recent
    * volume), the penalty severity scales with PB recency: a recent PB is
    * *demonstrated current capability*, so the penalty (which assumes PB might
-   * be stale) is reduced. Bands: <365d → ×0.5, 365-730d → ×0.75, >730d → full.
+   * be stale) is reduced by pbRecencyPenaltyFactor: ×0.5 for a PB run today,
+   * ×0.75 at 365 days, full from 730 days, linear between (continuous).
    */
   marathonPbAgeDays?: number,
   /**
@@ -1007,16 +1009,14 @@ export function blendPredictionsPreFloor(
     // 1984's full-detraining curves) over-corrects. Scale the penalty's
     // *excess* (the part above 1.0) by a recency factor. This keeps the
     // direction right while reducing magnitude for athletes who have proven
-    // recent capability. Step bands at 1y / 2y boundaries.
-    // KNOWN LIMITATION (2026-10-11): these bands step today's marathon time
-    // at 365 and 730 days (about 2:39 each, PB 3:15 with a typed 20 km). The
-    // continuous rule is an open question for Tristan; the same bands are in
-    // RUN_PB_RECENCY_BANDS. Pinned in pb-age-continuity.test.ts.
+    // recent capability. The factor is continuous in the PB's age
+    // (pbRecencyPenaltyFactor: 0.5 today, 0.75 at one year, 1.0 from two
+    // years, linear between), the same rule as the triathlon legs'
+    // specificity penalty, so today's marathon time does not step on the PB's
+    // anniversary (pb-age-continuity.test.ts).
     let recencyFactor = 1.0;
     if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null) {
-      if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year. Demonstrated current capability
-      else if (marathonPbAgeDays < 730) recencyFactor = 0.75;  // PB 1-2 years. Partial demonstration
-      // >2 years: full penalty (recencyFactor stays at 1.0)
+      recencyFactor = pbRecencyPenaltyFactor(marathonPbAgeDays);
     }
     if (recencyFactor < 1.0) {
       const excess = marathonSpecificityPenalty - 1.0;
@@ -1024,7 +1024,7 @@ export function blendPredictionsPreFloor(
     }
 
     if (marathonSpecificityPenalty > 1.0) {
-      console.log(`[blendPredictions] marathon-specificity penalty fired: weeklyKm=${weeklyRunKm.toFixed(1)}, pbAgeDays=${marathonPbAgeDays ?? 'unknown'}, recencyFactor=${recencyFactor.toFixed(2)} → penalty ${marathonSpecificityPenalty.toFixed(3)}× (Tanda gated out)`);
+      console.log(`[blendPredictions] marathon-specificity penalty fired: weeklyKm=${weeklyRunKm.toFixed(1)}, pbAgeDays=${marathonPbAgeDays ?? 'unknown'}, recencyFactor=${recencyFactor.toFixed(3)} → penalty ${marathonSpecificityPenalty.toFixed(3)}× (Tanda gated out)`);
     }
   }
 

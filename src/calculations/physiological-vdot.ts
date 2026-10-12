@@ -71,9 +71,9 @@ const DEVICE_FRESHNESS_DAYS = 90;
 
 /** Recency window for the race-validated run-VDOT anchor. A real race run leg
  *  demonstrates running capability directly, so it outranks the watch VO2max
- *  while recent. We reuse the "strong" PB-recency band (365 days) already used
- *  by the marathon-specificity penalty to credit recent full-distance capability
- *  (see RUN_PB_RECENCY_BANDS / SCIENCE_LOG "PB-recency scaling"). Beyond a year,
+ *  while recent. We reuse the one-year anchor (365 days) of the PB-recency rule
+ *  the marathon-specificity penalty uses to credit recent full-distance capability
+ *  (see RUN_PB_RECENCY_ANCHORS / SCIENCE_LOG "PB-recency scaling"). Beyond a year,
  *  the race is no longer fresher evidence than a current watch reading, so the
  *  anchor stands down and the normal chain (device → derived) resumes. */
 const RACE_VDOT_ANCHOR_MAX_AGE_DAYS = 365;
@@ -205,9 +205,9 @@ export const PB_AGE_HALF_LIFE_YEARS = 3;
  * aged internally; the weight says how much a PB still speaks for current
  * capacity. It is continuous in the PB's age, so the weight adds no step on a
  * PB's anniversary, and it never reaches 0, so an old PB keeps some say. (The
- * low-volume PB-recency bands, RUN_PB_RECENCY_BANDS and the marathon-specificity
- * recency in blendPredictions, still step at 1 and 2 years: open question,
- * pinned in pb-age-continuity.test.ts.)
+ * low-volume PB-recency factor on the specificity penalties,
+ * pbRecencyPenaltyFactor, is a separate rule, fully stale at two years, and is
+ * continuous too: pb-age-continuity.test.ts.)
  *
  * No date, an unparseable one or a future one: 1.0 ("if absent, full recency
  * is assumed", §T5). PB dates exist for PBs auto-filled from Strava or Apple

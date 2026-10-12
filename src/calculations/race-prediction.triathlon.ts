@@ -1223,7 +1223,7 @@ function estimateCSSFromSkill(slider: TriSkillSlider): number {
 
 /**
  * The recency-gated demonstrated bike speed from a real race, or null. Reuses the
- * 365-day "strong" band (RUN_PB_RECENCY_BANDS) the run anchor uses — beyond a year
+ * one-year anchor (365 days, RUN_PB_RECENCY_ANCHORS) the run anchor uses — beyond a year
  * the split is no longer fresher evidence than current fitness. Returns the speed
  * plus the intensity factor it was ridden at, so the caller can scale to a target
  * leg. `dateISO` may be 'YYYY-MM' (onboarding) or 'YYYY-MM-DD'.

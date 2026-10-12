@@ -2,7 +2,8 @@
  * Tests for race-readiness math:
  *   - Geometric mean composition
  *   - Penalty multiplier bands per distance
- *   - PB-recency factor for run discipline (regression of marathon-specificity)
+ *   - PB-recency factor (continuous since 2026-10-12, shared with the running
+ *     marathon-specificity penalty via pbRecencyPenaltyFactor)
  *   - Score → label / tone mapping
  *
  * Uses minimal SimulatorState shapes. Only the fields the readiness math
@@ -12,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeDisciplineReadiness } from './specific-endurance-penalty';
 import { computeTriRaceReadiness, computeProjectionPenaltyShare } from './race-readiness';
+import { pbRecencyPenaltyFactor, RUN_PB_RECENCY_ANCHORS } from '@/constants/race-readiness-targets';
 import type { SimulatorState } from '@/types/state';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -248,11 +250,87 @@ describe('geometric mean composition', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Run PB-recency factor (regression of existing marathonSpecificityPenalty)
+// PB-recency factor: continuous in age (Tristan 2026-10-11, no step on a PB's
+// anniversary). The line through the 2026-05-05 rule's values at 0, 365 and
+// 730 days (0.5, 0.75, 1.0).
 // ───────────────────────────────────────────────────────────────────────────
 
+describe('pbRecencyPenaltyFactor', () => {
+  it('meets the rule at its anchors: 0.5 today, 0.75 at one year, 1.0 from two years', () => {
+    expect(RUN_PB_RECENCY_ANCHORS.map(a => [a.ageDays, a.factor])).toEqual([[0, 0.5], [365, 0.75], [730, 1.0]]);
+    expect(pbRecencyPenaltyFactor(0)).toBe(0.5);
+    expect(pbRecencyPenaltyFactor(365)).toBe(0.75);
+    expect(pbRecencyPenaltyFactor(730)).toBe(1.0);
+    expect(pbRecencyPenaltyFactor(5 * 365)).toBe(1.0);
+    expect(pbRecencyPenaltyFactor(Infinity)).toBe(1.0);
+  });
+
+  it('is linear between the anchors (the three anchors are collinear)', () => {
+    expect(pbRecencyPenaltyFactor(180)).toBeCloseTo(0.5 + 0.5 * 180 / 730, 12);
+    expect(pbRecencyPenaltyFactor(300)).toBeCloseTo(0.70548, 5);
+    expect(pbRecencyPenaltyFactor(547.5)).toBeCloseTo(0.875, 12);
+  });
+
+  it('never steps: one day older moves it by 0.5 / 730 at most, and never down', () => {
+    for (let d = 0; d <= 800; d++) {
+      const step = pbRecencyPenaltyFactor(d + 1) - pbRecencyPenaltyFactor(d);
+      expect(step).toBeGreaterThanOrEqual(0);
+      expect(step).toBeLessThanOrEqual(0.5 / 730 + 1e-12);
+    }
+  });
+
+  it('a future date reads as today; no age reads as full penalty (the undated default)', () => {
+    expect(pbRecencyPenaltyFactor(-10)).toBe(0.5);
+    expect(pbRecencyPenaltyFactor(NaN)).toBe(1.0);
+  });
+});
+
+describe('bike and swim race-recency factor (completed triathlon in raceLog)', () => {
+  // The same continuous factor, scaled by the cross-credit weight. Before
+  // 2026-10-12 the bands stepped the bike and swim penalties at 365 and 730 days.
+  const withRace = (ageDays: number, distance: 'ironman' | '70.3') => ({
+    ...makeState({ swimHoursPerWeek: 0, bikeHoursPerWeek: 0 }),
+    triConfig: {
+      raceLog: [{
+        dateISO: new Date(Date.now() - ageDays * 86400 * 1000 - 3600 * 1000).toISOString(),
+        distance,
+        predictedTotalSec: 0,
+        predictedPerLeg: { swim: 0, bike: 0, run: 0 },
+        actualTotalSec: 40000,
+        actualPerLeg: { swim: 4200, bike: 21000, run: 14800 },
+      }],
+    },
+  } as unknown as SimulatorState);
+
+  it('a completed Ironman eases the Ironman bike and swim penalties continuously across 1 and 2 years', () => {
+    for (const discipline of ['bike', 'swim'] as const) {
+      const full = computeDisciplineReadiness(makeState({ swimHoursPerWeek: 0, bikeHoursPerWeek: 0 }), discipline, 'ironman').penaltyMultiplier;
+      for (const edge of [365, 730]) {
+        const pens = [-2, -1, 0, 1, 2].map(d => computeDisciplineReadiness(withRace(edge + d, 'ironman'), discipline, 'ironman'));
+        for (let i = 0; i < pens.length; i++) {
+          // Cross-credit Ironman → Ironman is 1.0: the factor applies in full.
+          expect(pens[i].penaltyMultiplier).toBeCloseTo(1 + (full - 1) * pbRecencyPenaltyFactor(pens[i].pbAgeDays!), 12);
+          if (i > 0) {
+            const step = pens[i].penaltyMultiplier - pens[i - 1].penaltyMultiplier;
+            expect(step).toBeGreaterThanOrEqual(0);
+            expect(step).toBeLessThanOrEqual((full - 1) * 0.5 / 730 + 1e-12);
+          }
+        }
+      }
+    }
+  });
+
+  it('a 70.3 credits an Ironman bike leg at its cross-credit weight (0.6)', () => {
+    const full = computeDisciplineReadiness(makeState({ bikeHoursPerWeek: 0 }), 'bike', 'ironman').penaltyMultiplier;
+    const r = computeDisciplineReadiness(withRace(200, '70.3'), 'bike', 'ironman');
+    const f = 1 - (1 - pbRecencyPenaltyFactor(r.pbAgeDays!)) * 0.6;
+    expect(r.pbRecencyApplied).toBe(true);
+    expect(r.penaltyMultiplier).toBeCloseTo(1 + (full - 1) * f, 12);
+  });
+});
+
 describe('run PB-recency factor', () => {
-  it('marathon target with low volume + recent (< 1y) PB → penalty halved', () => {
+  it('marathon target with low volume + recent (< 1y) PB → penalty excess scaled by the recency factor', () => {
     const recentPbISO = new Date(Date.now() - 180 * 86400 * 1000).toISOString(); // 6mo ago
     const state = makeState({
       runKmPerWeek: 0,              // zero recent volume
@@ -262,9 +340,12 @@ describe('run PB-recency factor', () => {
     expect(result.pbRecencyApplied).toBe(true);
     expect(result.pbAgeDays).toBeGreaterThan(150);
     expect(result.pbAgeDays).toBeLessThan(200);
-    // Without recency: penalty 1.15 (max for marathon).
-    // With recency × 0.5: penalty = 1 + 0.15 × 0.5 = 1.075
-    expect(result.penaltyMultiplier).toBeCloseTo(1.075, 2);
+    // Without recency: penalty about 1.15 (max for marathon).
+    // 180 days: factor 0.5 + 0.5 × 180/730 = 0.623, penalty 1 + 0.15 × 0.623 = 1.09
+    // (the 2026-05-05 step bands gave 1.075 anywhere under a year).
+    const full = computeDisciplineReadiness(makeState({ runKmPerWeek: 0 }), 'run', 'marathon').penaltyMultiplier;
+    expect(result.penaltyMultiplier).toBeCloseTo(1 + (full - 1) * pbRecencyPenaltyFactor(result.pbAgeDays!), 12);
+    expect(result.penaltyMultiplier).toBeCloseTo(1.09, 2);
   });
 
   it('marathon target with same low volume + 3y old PB → full penalty', () => {
@@ -275,7 +356,7 @@ describe('run PB-recency factor', () => {
     });
     const result = computeDisciplineReadiness(state, 'run', 'marathon');
     expect(result.pbAgeDays).toBeGreaterThan(2 * 365);
-    // pbAgeDays > 730 → recencyFactor 1.0 → no reduction
+    // pbAgeDays ≥ 730 → recencyFactor 1.0 → no reduction
     expect(result.penaltyMultiplier).toBeCloseTo(1.15, 2);
   });
 
@@ -306,8 +387,10 @@ describe('run PB-recency factor', () => {
     });
     const result = computeDisciplineReadiness(state, 'run', 'ironman');
     expect(result.pbRecencyApplied).toBe(true);
-    // IM max penalty 0.15, halved = 0.075
-    expect(result.penaltyMultiplier).toBeCloseTo(1.075, 2);
+    // IM max penalty 0.15; 100 days: factor 0.5 + 0.5 × 100/730 = 0.568 → about 1.085
+    const full = computeDisciplineReadiness(makeState({ runKmPerWeek: 0 }), 'run', 'ironman').penaltyMultiplier;
+    expect(result.penaltyMultiplier).toBeCloseTo(1 + (full - 1) * pbRecencyPenaltyFactor(result.pbAgeDays!), 12);
+    expect(result.penaltyMultiplier).toBeCloseTo(1.085, 2);
   });
 
   it('70.3 run leg uses half-marathon PB date (run leg = half distance)', () => {
@@ -318,8 +401,10 @@ describe('run PB-recency factor', () => {
     });
     const result = computeDisciplineReadiness(state, 'run', '70.3');
     expect(result.pbRecencyApplied).toBe(true);
-    // 70.3 max penalty 0.10, halved = 0.05
-    expect(result.penaltyMultiplier).toBeCloseTo(1.05, 2);
+    // 70.3 max penalty 0.10; 100 days: factor 0.568 → about 1.057
+    const full = computeDisciplineReadiness(makeState({ runKmPerWeek: 0 }), 'run', '70.3').penaltyMultiplier;
+    expect(result.penaltyMultiplier).toBeCloseTo(1 + (full - 1) * pbRecencyPenaltyFactor(result.pbAgeDays!), 12);
+    expect(result.penaltyMultiplier).toBeCloseTo(1.057, 2);
   });
 });
 
