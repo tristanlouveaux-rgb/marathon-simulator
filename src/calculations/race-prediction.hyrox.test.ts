@@ -96,17 +96,19 @@ describe('predictHyroxRace', () => {
     expect(calibrated.confidence).toBe('low');
   });
 
-  it('cross-format: singles-only benchmarks predicting doubles also falls back to seeds + low confidence', () => {
+  it('singles benchmarks feed a doubles prediction through the doubles station ratio', () => {
+    // The doubles model is singles station time × the percentile-matched
+    // ratio (hyrox-doubles.ts), so singles times are its input: no seed
+    // fallback, no cross-format flag.
     const singlesSki = 250;
     const calibrated = predictHyroxRace(buildState({
       format: 'open_doubles',
       stationBenchmarksSingles: { ski_erg: singlesSki },
     }))!;
-    expect(calibrated.crossFormatConversion).toBe('singles_to_doubles');
-    expect(calibrated.confidence).toBe('low');
-    // No singles benchmarks should leak into doubles per-station.
-    const skiLine = calibrated.stations.find(l => l.station === 'ski_erg');
-    if (skiLine) expect(skiLine.source).toBe('seed');
+    expect(calibrated.crossFormatConversion).toBeUndefined();
+    const skiLine = calibrated.stations.find(l => l.station === 'ski_erg')!;
+    expect(skiLine.source).toBe('calibrated');
+    expect(skiLine.baseSec).toBeCloseTo(singlesSki * calibrated.doubles!.stationRatio, 6);
   });
 
   it('same-format: doubles target with doubles benchmarks uses them directly', () => {

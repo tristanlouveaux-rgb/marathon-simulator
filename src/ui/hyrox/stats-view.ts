@@ -16,7 +16,7 @@ import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
 import { computeWeekActualMTL, computeWeekMTL, hyroxMtlAcwr } from '@/calculations/mtl';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
-import { getFinishTimePercentile, percentileLabel, percentileHeadline } from '@/calculations/hyrox-population';
+import { getFinishTimePercentile, percentileLabel, percentileHeadline, hyroxPopulationCaption, hyroxFormatLabel } from '@/calculations/hyrox-population';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
@@ -159,7 +159,7 @@ export function renderHyroxStatsView(): void {
               </div>
               <div>
                 <div style="font-size:16px;font-weight:600;color:#0F172A">${percentileHeadline(fasterThanPct)}</div>
-                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">${percentileLabel(fasterThanPct)} · ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro division' : 'Open division'}</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">${percentileLabel(fasterThanPct)} · ${hyroxFormatLabel(hx.format ?? 'open_singles')}</div>
               </div>
             </div>
             <div style="margin-top:14px;position:relative;height:8px;background:linear-gradient(to right, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.20) 100%);border-radius:4px">
@@ -169,7 +169,7 @@ export function renderHyroxStatsView(): void {
               <div style="font-size:10px;color:var(--c-faint)">Slowest</div>
               <div style="font-size:10px;color:var(--c-faint)">Fastest</div>
             </div>
-            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. Calibrated against 89,868 real HYROX finishers (Seasons 4–6): all global ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro' : 'Open'} division.</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. ${hyroxPopulationCaption(hx.format ?? 'open_singles')}</div>
           </div>
         </div>
         ` : ''}
@@ -227,7 +227,7 @@ export function renderHyroxStatsView(): void {
           const cpRatio = cpComponents.cpRatio;
           const formatFactor = cpComponents.formatFactor;
           const personalOffset = cpComponents.personalOffsetSec;
-          const isDoubles = formatFactor < 1.0;
+          const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
           const offsetLabel = personalOffset === 0
             ? 'no race history yet'
             : `${personalOffset > 0 ? '+' : ''}${personalOffset} s/km from your race history`;
@@ -249,7 +249,7 @@ export function renderHyroxStatsView(): void {
                   </div>
                 </div>
                 <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
-                  Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles factor ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
+                  Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles run ratio ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
                 </div>
                 <div style="font-size:10px;color:var(--c-faint);padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);margin-top:10px">${offsetLabel} · tap for the trend and science</div>
               </div>

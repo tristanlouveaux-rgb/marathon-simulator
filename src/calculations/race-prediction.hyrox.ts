@@ -48,6 +48,7 @@ import { applyHyroxStationHorizon, applyHyroxRoxzoneHorizon } from './training-h
 import { plannedHyroxSessionsPerWeek } from './hyrox-volume';
 import { stationInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { doublesRatioAt, doublesStationRatio, doublesBenchmarkIsTeamTime } from './hyrox-doubles';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -65,9 +66,23 @@ export interface HyroxCourseFactor {
 
 export interface HyroxStationLine {
   station: HyroxStation;
+  /** Pre-venue station time at the target format. Doubles: the pair's time. */
   baseSec: number;
   adjustedSec: number;
   source: 'calibrated' | 'seed';
+  /** Doubles only: the percentile-matched doubles/singles station ratio that
+   *  turned singles station time into the pair's time (hyrox-doubles.ts).
+   *  Absent for singles. Anything that compares a line with singles-anchored
+   *  references (band seeds, station percentiles) divides by it first
+   *  (stationSinglesEquivalentSec). */
+  teamRatio?: number;
+}
+
+/** A station line's time in singles terms: the pair's time ÷ the doubles
+ *  ratio for doubles, baseSec unchanged for singles. For comparisons against
+ *  singles-anchored references (band seeds, station percentiles). */
+export function stationSinglesEquivalentSec(line: Pick<HyroxStationLine, 'baseSec' | 'teamRatio'>): number {
+  return line.baseSec / (line.teamRatio ?? 1);
 }
 
 /** Per-run-leg prediction with fatigue multiplier applied. */
@@ -133,8 +148,19 @@ export interface HyroxPrediction {
   confidence: 'high' | 'medium' | 'low';
   /** Number of calibrated stations (vs seed). */
   calibratedCount: number;
-  /** Whether cross-format conversion was applied (doubles→singles or vice-versa). */
-  crossFormatConversion?: 'doubles_to_singles' | 'singles_to_doubles';
+  /** Set when predicting singles from doubles-only benchmarks (seed fallback).
+   *  Singles benchmarks feed a doubles prediction directly through the
+   *  doubles ratios, so the reverse case no longer exists. */
+  crossFormatConversion?: 'doubles_to_singles';
+  /** Doubles only: the percentile-matched ratios applied (hyrox-doubles.ts). */
+  doubles?: {
+    /** Pair's station time ÷ singles station time. */
+    stationRatio: number;
+    /** Pair's Roxzone ÷ singles Roxzone. */
+    roxzoneRatio: number;
+    /** Athlete's cumulative percentile in the open_singles stations table. */
+    stationsSinglesPercentile: number;
+  };
   /** Provenance of the run pace used in this prediction. */
   runPaceSource: 'user' | 'derived' | 'seed';
   /** Race-time staleness summary, surfaced in the UI for transparency. */
@@ -179,6 +205,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   // for backwards compatibility.
   let userBenchmarks: Partial<Record<HyroxStation, number>>;
   let crossFormatConversion: HyroxPrediction['crossFormatConversion'];
+  let doublesSlotInUse = false;
 
   const hasSingles = hx.stationBenchmarksSingles != null && Object.keys(hx.stationBenchmarksSingles).length > 0;
   const hasDoubles = hx.stationBenchmarksDoubles != null && Object.keys(hx.stationBenchmarksDoubles).length > 0;
@@ -198,25 +225,25 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
       userBenchmarks = hx.stationBenchmarks ?? {};
     }
   } else {
-    // Predicting doubles
+    // Predicting doubles. The doubles model is singles station time × the
+    // percentile-matched doubles ratio (below), so singles benchmarks are its
+    // natural input: they feed it directly. The doubles slot wins when it has
+    // values; per station it holds either the pair's time (a doubles race
+    // split) or one athlete's solo time (a test), see doublesBenchmarkIsTeamTime.
     if (hasDoubles) {
       userBenchmarks = hx.stationBenchmarksDoubles!;
+      doublesSlotInUse = true;
     } else if (hasSingles) {
-      // Singles per-station times are a fresh-rep ceiling but real doubles
-      // pacing benefits from rest patterns we don't model. Fall back to seeds.
-      userBenchmarks = {};
-      crossFormatConversion = 'singles_to_doubles';
+      userBenchmarks = hx.stationBenchmarksSingles!;
     } else {
       userBenchmarks = hx.stationBenchmarks ?? {};
     }
   }
 
-  // In doubles format each athlete runs all 8 legs but only completes 4 stations.
-  // Convention: athlete covers odd-indexed stations (0,2,4,6 in HYROX_STATION_ORDER).
-  const activeStations = isDoubles
-    ? HYROX_STATION_ORDER.filter((_, i) => i % 2 === 0)
-    : HYROX_STATION_ORDER;
-  const stationCount = activeStations.length; // 4 for doubles, 8 for singles
+  // Every format covers all 8 stations. Doubles partners enter every station
+  // together and split the work inside it (26/27 Doubles rulebook s7.2); the
+  // old model gave each partner 4 whole stations at singles time.
+  const activeStations = HYROX_STATION_ORDER;
 
   // ── Run-leg fatigue model ─────────────────────────────────────────────────
   // Each completed station adds eccentric + metabolic fatigue that slows
@@ -226,10 +253,11 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   // - Runs 7–8: heaviest fatigue; magnitude scales with ability band
   // Rate is band-scaled (PER_STATION_FATIGUE_RATE_BY_BAND in hyrox-constants.ts):
   // elite/competitive: ~0.4%/station (hold pace); beginner: ~1.1%/station.
-  // For doubles: halve the rate (athlete completes every other station;
-  // waiting partner still accumulates metabolic cost, so not zero).
-  const baseRate = PER_STATION_FATIGUE_RATE_BY_BAND[band] ?? 0.007;
-  const PER_STATION_FATIGUE_RATE = isDoubles ? baseRate * 0.5 : baseRate;
+  // Doubles uses the same rate: the old 0.5 doubles factor had no source and
+  // assumed alternate whole stations. The rate only shapes the per-leg split;
+  // legs are normalised below so the run total comes from the run pace (for
+  // doubles, the percentile-matched run ratio in deriveHyroxRunPace).
+  const PER_STATION_FATIGUE_RATE = PER_STATION_FATIGUE_RATE_BY_BAND[band] ?? 0.007;
 
   function runLegFatigueMultiplier(legIndex: number): number {
     // legIndex 0 = first run (before any stations), 7 = last run (after 7 stations)
@@ -287,7 +315,10 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   // change rep time), so the conversion is a no-op there.
   const benchmarksArePro = !!hx.benchmarksAtProWeights;
   const rawRunSec = runPaceSecKm * 8;
-  const stationLines: HyroxStationLine[] = activeStations.map(station => {
+
+  // Per station, at TARGET weights: the seed, the calibrated value, and
+  // whether that value is already the pair's time (doubles race split).
+  const perStation = activeStations.map(station => {
     const calibrated = userBenchmarks[station];
     const seedTime = effectiveSeeds[station]; // always Open weights
     const fMult = HYROX_PRO_STATION_MULTIPLIER[station] ?? 1.0;
@@ -305,22 +336,67 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     }
     // Seeds are at Open weights; only multiply when target is Pro.
     const seedAtTarget = isPro ? seedTime * fMult : seedTime;
+    const isTeamTime = isDoubles && doublesSlotInUse && calibratedAtTarget != null
+      && doublesBenchmarkIsTeamTime(hx, station);
+    // Open-weight equivalent, for reading the athlete's place in the Open
+    // results tables (the only doubles data there is).
+    const toOpen = (sec: number) => (isPro ? sec / fMult : sec);
+    return { station, calibrated, calibratedAtTarget, seedAtTarget, isTeamTime, toOpen };
+  });
 
+  // Doubles: one percentile-matched station ratio from the results tables at
+  // the athlete's singles station total (hyrox-doubles.ts). Team-time splits
+  // are converted back to singles terms for the lookup.
+  let stationRatio = 1;
+  let stationsSinglesPercentile: number | undefined;
+  if (isDoubles) {
+    const solo: number[] = [];
+    const team: number[] = [];
+    const teamSeedSolo: number[] = [];
+    for (const p of perStation) {
+      if (p.isTeamTime) {
+        team.push(p.toOpen(p.calibratedAtTarget!));
+        teamSeedSolo.push(p.toOpen(p.seedAtTarget));
+      } else {
+        const singlesSec = p.calibratedAtTarget != null
+          ? stale.splitsWeight * p.calibratedAtTarget + (1 - stale.splitsWeight) * p.seedAtTarget
+          : p.seedAtTarget;
+        solo.push(p.toOpen(singlesSec));
+      }
+    }
+    const r = doublesStationRatio(solo, team, teamSeedSolo);
+    stationRatio = r.ratio;
+    stationsSinglesPercentile = r.singlesPercentile;
+  }
+
+  const stationLines: HyroxStationLine[] = perStation.map(p => {
     // splitsWeight blend at TARGET format. fresh race → splitsWeight=1 →
     // calibrated wins. very_stale + weak physio → ≈0.6 → 60/40 blend.
-    const baseSec = calibratedAtTarget != null
-      ? stale.splitsWeight * calibratedAtTarget + (1 - stale.splitsWeight) * seedAtTarget
-      : seedAtTarget;
+    // Doubles: blended in the pair's terms (a team-time split as is, singles
+    // values × the station ratio).
+    let baseSec: number;
+    if (p.isTeamTime) {
+      baseSec = stale.splitsWeight * p.calibratedAtTarget! + (1 - stale.splitsWeight) * p.seedAtTarget * stationRatio;
+    } else {
+      const singlesSec = p.calibratedAtTarget != null
+        ? stale.splitsWeight * p.calibratedAtTarget + (1 - stale.splitsWeight) * p.seedAtTarget
+        : p.seedAtTarget;
+      baseSec = singlesSec * stationRatio;
+    }
     return {
-      station,
+      station: p.station,
       baseSec,
       adjustedSec: baseSec, // mutated below for venue factors
-      source: calibrated != null ? ('calibrated' as const) : ('seed' as const),
+      source: p.calibrated != null ? ('calibrated' as const) : ('seed' as const),
+      ...(isDoubles ? { teamRatio: stationRatio } : {}),
     };
   });
   const rawStationsSec = stationLines.reduce((sum, l) => sum + l.baseSec, 0);
+  // Doubles Roxzone: partners pass through all 8 transitions together, so it
+  // is not halved; the percentile-matched Roxzone ratio applies.
+  const roxzoneRatio = isDoubles ? doublesRatioAt('roxzone', effectiveSeedRoxzone).ratio : 1;
   const roxzoneSeed = isDoubles
-    ? Math.round(effectiveSeedRoxzone * stationCount / 8)
+    ? Math.round(effectiveSeedRoxzone * roxzoneRatio)
     : effectiveSeedRoxzone;
   const rawSec = Math.round(rawRunSec + rawStationsSec + roxzoneSeed);
 
@@ -475,6 +551,9 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     confidence,
     calibratedCount,
     crossFormatConversion,
+    doubles: isDoubles
+      ? { stationRatio, roxzoneRatio, stationsSinglesPercentile: stationsSinglesPercentile ?? 0 }
+      : undefined,
     runPaceSource,
     staleness: stale.ageMonths != null
       ? { ageMonths: stale.ageMonths, category: stale.category, physiologyMitigation: stale.physiologyMitigation }

@@ -35,7 +35,7 @@ import { getPhysiologicalVdot, effectivePhysiologyPbs, isPbTombstoned, recordPbD
 import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, wmaKeyForRaceDist, runnerFieldPlacement } from '@/calculations/fitness-placement';
 import { vo2BandAnchors } from '@/data/vo2max-norms';
 import { openStandardSec, type WmaDistanceKey } from '@/data/wma-age-grading';
-import { HYROX_FORMAT_FINISHER_COUNTS } from '@/data/hyrox-population-distributions';
+import { hyroxPopulationCaption } from '@/calculations/hyrox-population';
 import { poweredByStrava } from '@/ui/strava-brand';
 import { swapFadedText } from '@/ui/raster-safe-text';
 import { localDateKey } from '@/utils/local-date';
@@ -1411,7 +1411,6 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
               // Field position against the real per-format finisher table.
               // Null for pro_doubles (no ingested data) or no previous time.
               const hyroxPlace = prevTime != null ? hyroxPlacement(fmt, prevTime) : null;
-              const hyroxFinishers = HYROX_FORMAT_FINISHER_COUNTS[fmt] ?? 0;
               return `
                 ${renderSectionLabel('HYROX setup')}
                 <div class="r-row readonly" style="cursor:default">
@@ -1426,7 +1425,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
                   <div class="r-row-body">
                     <p class="r-row-label">Field position</p>
                     <p class="r-row-value">Faster than ${hyroxPlace.fasterThanPct}% of ${fmtLabel} finishers</p>
-                    <p class="r-row-sub">Live HYROX field. ${hyroxFinishers.toLocaleString('en-US')} finishers across seasons 4 to 6.</p>
+                    <p class="r-row-sub">${hyroxPopulationCaption(fmt)}</p>
                     ${placementScaleBar(
                       ((hyroxPlace.scale.slowSec - (prevTime ?? 0)) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,
                       ((hyroxPlace.scale.slowSec - hyroxPlace.scale.medianSec) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,

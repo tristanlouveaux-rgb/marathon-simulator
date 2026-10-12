@@ -75,4 +75,15 @@ describe('computeStationPotential', () => {
     ]);
     expect(r.totalSavingSec).toBe(20 + 45 + 100 + 30);
   });
+
+  it('doubles: a pair-time line is compared with the seed scaled by the same doubles ratio', () => {
+    // Pair's ski time 0.7 × 267 against the advanced seed × 0.7: the same
+    // 7 s gap in singles terms becomes 0.7 × 7 in the pair's terms. Without
+    // the scaling every doubles station read as already past target.
+    const line: HyroxStationLine = { station: 'ski_erg', baseSec: 267 * 0.7, adjustedSec: 267 * 0.7, source: 'calibrated', teamRatio: 0.7 };
+    const r = computeStationPotential('intermediate', [line]);
+    expect(r.stations[0].targetSec).toBe(Math.round(260 * 0.7));
+    expect(r.stations[0].alreadyAhead).toBe(false);
+    expect(r.stations[0].savingSec).toBe(Math.round(267 * 0.7 - Math.round(260 * 0.7)));
+  });
 });

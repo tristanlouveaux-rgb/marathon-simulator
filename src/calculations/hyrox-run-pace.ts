@@ -22,9 +22,11 @@
  *
  * - `cpRatio(vdot)`: continuous linear interp between band anchor points
  *   (no more discrete buckets).
- * - `formatFactor`: doubles run pace ≈ singles × 1/factor. Partner-rest in
- *   doubles allows running closer to CP. v1 gut-anchored; flagged for
- *   empirical calibration from Kaggle same-athlete cross-format pairs.
+ * - `formatFactor`: 1.0 for singles. Doubles: the percentile-matched
+ *   doubles/singles run ratio from the ingested results (hyrox-doubles.ts),
+ *   read at the athlete's singles run total. Partners run every leg together
+ *   and the finish is the later chip (26/27 Doubles rulebook s4.3, s7.3), so
+ *   the pair runs at the slower partner's pace: about 1.02 at P50.
  * - `personalOffsetSec`: Bayesian update from logged-race observations.
  *   Decays to zero over 12 months without new evidence. See
  *   `hyrox-personal-pace.ts`.
@@ -39,7 +41,8 @@
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { gp } from './paces';
-import { SEED_RUN_PACE_SEC_KM, SEED_ROXZONE_SEC, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { SEED_RUN_PACE_SEC_KM, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { doublesRatioAt, seedRoxzoneSecForFormat } from './hyrox-doubles';
 import {
   computePersonalRunPaceOffset,
   blendPersonalRunPaceOffset,
@@ -97,43 +100,15 @@ export function cpRatioForVdot(vdot: number): number {
 }
 
 /**
- * Doubles → singles pace conversion factor by tier (1km HYROX run pace).
- *
- * In doubles each athlete completes 4 of 8 stations; the partner-rest
- * during the other 4 stations means significantly less cumulative leg
- * fatigue when running. Singles forces solo on every station, accumulating
- * eccentric + metabolic load that slows subsequent runs.
- *
- * Differential grows for less-trained athletes whose station-to-run
- * recovery is poor. They "feel" the partner-rest gap more than elites
- * who can run hard regardless.
- *
- * **v1: gut-anchored from elite split comparisons and interval-recovery
- * literature.** Flagged for empirical calibration from the Kaggle
- * 89k-finisher dataset (same-athlete cross-format pairs). Once calibrated,
- * these constants will move into `hyrox-population-distributions.ts`.
+ * Doubles run-pace factor: the percentile-matched doubles/singles run ratio
+ * (hyrox-doubles.ts) at the athlete's singles run total (8 × singles pace).
+ * Replaces the gut-anchored DOUBLES_TO_SINGLES_PACE_FACTOR (1.05 to 1.10, i.e.
+ * doubles 5 to 9% faster), which assumed partner rest from alternate whole
+ * stations. The results tables show the opposite: open_doubles run P50 2762 s
+ * against open_singles 2695 s.
  */
-export const DOUBLES_TO_SINGLES_PACE_FACTOR: Record<AbilityBand, number> = {
-  competitive:    1.05,
-  advanced:       1.06,
-  intermediate:   1.07,
-  novice:         1.08,
-  beginner:       1.09,
-  total_beginner: 1.10,
-};
-
-/** Convert a HYROX run pace between formats for the same athlete. */
-export function convertHyroxRunPaceFormat(
-  paceSecKm: number,
-  fromFormat: 'singles' | 'doubles',
-  toFormat: 'singles' | 'doubles',
-  band: AbilityBand,
-): number {
-  if (fromFormat === toFormat) return paceSecKm;
-  const factor = DOUBLES_TO_SINGLES_PACE_FACTOR[band];
-  return fromFormat === 'doubles' && toFormat === 'singles'
-    ? paceSecKm * factor                  // doubles is faster → singles is slower
-    : paceSecKm / factor;                 // singles is slower → doubles is faster
+export function doublesRunPaceFactor(singlesPaceSecKm: number): number {
+  return doublesRatioAt('run', singlesPaceSecKm * 8).ratio;
 }
 
 export type HyroxRunPaceSource = 'user' | 'derived' | 'seed';
@@ -143,7 +118,8 @@ export interface HyroxRunPaceComponents {
   thresholdSecKm: number;
   /** CP-anchored ratio for user's VDOT (continuous interp). */
   cpRatio: number;
-  /** Format adjustment applied (1.0 for singles, <1.0 for doubles). */
+  /** Format adjustment applied: 1.0 for singles; for doubles the
+   *  percentile-matched run ratio (doublesRunPaceFactor, about 1.02 at P50). */
   formatFactor: number;
   /** Personalisation offset from logged-race observations (sec/km). */
   personalOffsetSec: number;
@@ -180,10 +156,7 @@ export function derivePopulationRunPace(
   const thresholdSecKm = gp(vdot, ltPace).t;
   const cpRatio = cpRatioForVdot(vdot);
   const criticalPaceSecKm = thresholdSecKm * cpRatio;
-  let formatFactor = 1.0;
-  if (targetFormat === 'doubles') {
-    formatFactor = 1 / DOUBLES_TO_SINGLES_PACE_FACTOR[hx.athleteBand];
-  }
+  const formatFactor = targetFormat === 'doubles' ? doublesRunPaceFactor(criticalPaceSecKm) : 1.0;
   const paceSecKm = Math.max(
     HYROX_RUN_PACE_MIN_SEC_KM,
     Math.round(criticalPaceSecKm * formatFactor),
@@ -208,10 +181,14 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
   if (!hx) return { paceSecKm: SEED_RUN_PACE_SEC_KM.intermediate, source: 'seed', derivedSecKm: null };
 
   const band = hx.athleteBand;
-  const seed = SEED_RUN_PACE_SEC_KM[band];
-
   const targetFormat: 'singles' | 'doubles' =
     (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
+  // The band seed is a singles pace; doubles applies the same run ratio as
+  // the derived path so both sources mean the same thing.
+  const singlesSeed = SEED_RUN_PACE_SEC_KM[band];
+  const seed = targetFormat === 'doubles'
+    ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed))
+    : singlesSeed;
 
   // Population model (no offset).
   const pop = derivePopulationRunPace(state, targetFormat);
@@ -303,7 +280,9 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
       (sum, st) => sum + ((splits as Record<string, number>)[st as HyroxStation] ?? 0),
       0,
     );
-    roxzoneSec = SEED_ROXZONE_SEC[band] ?? 0;
+    // Splits give the stations; Roxzone is the band seed in the race's
+    // format (doubles: × the percentile-matched Roxzone ratio).
+    roxzoneSec = seedRoxzoneSecForFormat(band, prevFmt as HyroxRaceObservation['format']);
     stationsFromSplits = true;
   } else {
     const est = estimateStationsAndRoxzoneFromBand(band, prevFmt as HyroxRaceObservation['format']);

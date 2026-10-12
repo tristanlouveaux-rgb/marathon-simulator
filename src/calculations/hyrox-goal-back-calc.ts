@@ -84,7 +84,9 @@ export function computeGoalBackCalc(
       kind: 'station' as const,
       station: line.station,
       currentSec: line.adjustedSec,
-      floorSec: STATION_SEED_TIMES_SEC.competitive[line.station],
+      // Floors are singles seed times; a doubles line is the pair's time, so
+      // its floor scales by the same doubles ratio (teamRatio, absent = 1).
+      floorSec: STATION_SEED_TIMES_SEC.competitive[line.station] * (line.teamRatio ?? 1),
     })),
   ];
 

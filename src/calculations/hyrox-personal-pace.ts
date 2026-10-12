@@ -29,7 +29,8 @@
 
 import type { SimulatorState } from '@/types/state';
 import type { HyroxStation, AbilityBand } from '@/types/triathlon';
-import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
+import { doublesRatioAt, seedRoxzoneSecForFormat } from './hyrox-doubles';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.44;
 /** Months after which the personalised offset decays fully to 0. */
@@ -68,20 +69,27 @@ export function backComputeRunPaceFromRace(obs: HyroxRaceObservation): number | 
 
 /** Estimate `stationsTotalSec` and `roxzoneSec` from band seeds when actual
  *  per-station splits aren't available. Caller can use this to construct a
- *  HyroxRaceObservation from a finish time alone. */
+ *  HyroxRaceObservation from a finish time alone.
+ *
+ *  Doubles: the pair's clock time, i.e. the singles seed totals × the
+ *  percentile-matched doubles ratios (hyrox-doubles.ts), the same model the
+ *  forecast uses. Without it a doubles finish minus singles station time left
+ *  too little run time, and the personal offset read the athlete as faster
+ *  than they run. */
 export function estimateStationsAndRoxzoneFromBand(
   band: AbilityBand,
   format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles',
 ): { stationsTotalSec: number; roxzoneSec: number } {
   const seeds = STATION_SEED_TIMES_SEC[band];
-  const stationsTotalSec = HYROX_STATION_ORDER.reduce(
+  const singlesStationsSec = HYROX_STATION_ORDER.reduce(
     (sum, st) => sum + (seeds[st as HyroxStation] ?? 0),
     0,
   );
-  // Doubles RoxZone seed scales with active-station count, but TOTAL race
-  // time still has all 8 stations on the clock. Use the full seed.
-  const roxzoneSec = SEED_ROXZONE_SEC[band] ?? 0;
-  void format;
+  const isDoubles = format === 'open_doubles' || format === 'pro_doubles';
+  const stationsTotalSec = isDoubles
+    ? Math.round(singlesStationsSec * doublesRatioAt('stations', singlesStationsSec).ratio)
+    : singlesStationsSec;
+  const roxzoneSec = seedRoxzoneSecForFormat(band, format);
   return { stationsTotalSec, roxzoneSec };
 }
 

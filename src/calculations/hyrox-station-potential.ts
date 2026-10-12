@@ -65,7 +65,9 @@ export function computeStationPotential(
 
   const calibrated = stations.filter(l => l.source === 'calibrated');
   const result: StationPotential[] = calibrated.map(line => {
-    const targetSec = targetSeeds[line.station];
+    // Seeds are singles times. A doubles line is the pair's time, so the
+    // target is scaled by the same doubles ratio (teamRatio, absent = 1).
+    const targetSec = Math.round(targetSeeds[line.station] * (line.teamRatio ?? 1));
     const savingSec = Math.max(0, line.baseSec - targetSec);
     return {
       station: line.station,

@@ -32,7 +32,8 @@ import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engi
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
-import { HYROX_STATION_ORDER, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { seedRoxzoneSecForFormat } from '@/calculations/hyrox-doubles';
 import { derivePopulationRunPace } from '@/calculations/hyrox-run-pace';
 import {
   backComputeRunPaceFromRace,
@@ -267,7 +268,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
           (sum, st) => sum + ((splits as Record<string, number>)[st] ?? 0),
           0,
         );
-        roxzoneSec = SEED_ROXZONE_SEC[band] ?? 0;
+        // Splits give the stations; Roxzone is the band seed in the race's
+        // format (doubles: × the percentile-matched Roxzone ratio).
+        roxzoneSec = seedRoxzoneSecForFormat(band, prevFormat);
         stationsFromSplits = true;
       } else {
         const est = estimateStationsAndRoxzoneFromBand(band, prevFormat);

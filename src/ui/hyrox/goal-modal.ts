@@ -82,8 +82,10 @@ export function parseHhMmSs(input: string, minPlausibleSec: number): number | nu
  * parse-disambiguation threshold and (implicitly) the back-calc floor.
  */
 function populationFloorSec(prediction: HyroxPrediction): number {
+  // Same floor as the back-calc: singles seeds, × the doubles ratio on a
+  // doubles line (the pair's time).
   const stationFloor = prediction.stations.reduce(
-    (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0),
+    (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0) * (l.teamRatio ?? 1),
     0,
   );
   return HYROX_RUN_PACE_MIN_SEC_KM * 8 + stationFloor + prediction.roxzoneSec;

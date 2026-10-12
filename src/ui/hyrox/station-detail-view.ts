@@ -19,7 +19,7 @@ import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '@/ui/page-flair';
 import type { HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
-import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, stationSinglesEquivalentSec } from '@/calculations/race-prediction.hyrox';
 import { getStationPercentile } from '@/calculations/hyrox-population';
 import {
   getStationHistory,
@@ -109,8 +109,11 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const latest = history[history.length - 1] ?? null;
   const best = bestStationTime(s, station, fmt);
   const seedSec = STATION_SEED_TIMES_SEC[hx.athleteBand][station];
-  const pct = baseSec != null && stationLine?.source === 'calibrated'
-    ? getStationPercentile(station, baseSec)
+  // Doubles lines are the pair's time; the seed-anchored percentile and the
+  // fresh-test fade are singles comparisons.
+  const isDoubles = fmt === 'open_doubles' || fmt === 'pro_doubles';
+  const pct = stationLine != null && stationLine.source === 'calibrated'
+    ? getStationPercentile(station, stationSinglesEquivalentSec(stationLine))
     : null;
 
   // Improvement since FIRST test (chronologically). Anchored at oldest, not best.
@@ -127,8 +130,11 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
 
   // ── Hero ────────────────────────────────────────────────────────────────
   const heroTime = baseSec != null ? fmtMmSs(baseSec) : '—';
-  const sourceLabel = stationLine?.source === 'calibrated' ? 'Your latest test' : 'Population estimate';
-  const pctText = pct != null ? `· p${pct} in your band` : '';
+  const sourceLabel = isDoubles
+    ? (stationLine?.source === 'calibrated' ? "Pair's time from your benchmark" : "Population estimate for the pair")
+    : (stationLine?.source === 'calibrated' ? 'Your latest test' : 'Population estimate');
+  // Estimated: placed on the band seed times, not race results.
+  const pctText = pct != null ? `· est. p${pct}` : '';
 
   const hero = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:24px 22px 20px;margin-bottom:14px">
@@ -176,7 +182,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
       ${latest ? statRow('Latest', fmtMmSs(latest.sec), fmtDate(latest.dateISO)) : ''}
       ${statRow('Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
       ${first && history.length > 1 ? statRow('Since first test', improvementText, fmtDate(first.dateISO)) : ''}
-      ${raceDaySec != null && latest ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
+      ${raceDaySec != null && latest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
     </div>
   `;
 

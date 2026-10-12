@@ -110,4 +110,18 @@ describe('computeGoalBackCalc', () => {
     const r = computeGoalBackCalc(p, p.totalSec - 100);
     expect(r.runPaceTarget.targetSecKm).toBeGreaterThanOrEqual(HYROX_RUN_PACE_MIN_SEC_KM);
   });
+
+  it('doubles: station floors scale by the line\'s doubles ratio (pair\'s times)', () => {
+    const ratio = 0.7;
+    const stations = buildStations().map(l => ({
+      ...l, baseSec: l.baseSec * ratio, adjustedSec: l.adjustedSec * ratio, teamRatio: ratio,
+    }));
+    const p = buildPrediction({ stations });
+    const r = computeGoalBackCalc(p, p.totalSec - 600);
+    for (const t of r.stationTargets) {
+      expect(t.targetSec).toBeGreaterThanOrEqual(STATION_SEED_TIMES_SEC.competitive[t.station] * ratio - 0.5);
+    }
+    // Stations still contribute: the pair's times sit above the scaled floors.
+    expect(r.stationTargets.some(t => t.deltaSec < 0)).toBe(true);
+  });
 });
