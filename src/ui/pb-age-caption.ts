@@ -35,7 +35,10 @@ const MIN_DISPLAYED_CHANGE = 1;
  * ageing. The copy is shallow: refreshBlendedFitness reassigns top-level
  * fields, and the one nested value it mutates in place (vdotHistory, in
  * recordVdotHistoryPoint) is copied, so the live state is never touched.
- * Both sides refresh, so only ageing separates them.
+ * Both sides refresh, so only the ageing that withPbAgeingSuspended switches
+ * off separates them: every weight from pbAgeWeightsFor. The Ironman
+ * marathon-depth credit ages the marathon PB through pbAgeWeight directly, so
+ * the unaged side of an Ironman run leg still carries that credit's ageing.
  */
 function displayedAfterRefresh(s: SimulatorState, displayed: PbAgeDisplayed, unaged: boolean): ReadonlyArray<number | null | undefined> {
   const compute = () => {

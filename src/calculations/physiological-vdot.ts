@@ -261,10 +261,15 @@ export function pbAgeWeightsFor(
 
 /**
  * Run `fn` as if no PB had aged: every PB weighs 1 in pbAgeWeightsFor, as an
- * undated PB does. pbAgeWeightsFor is the one source of PB age weights (the
- * gated model weights, PB capacity, the LT derivation, the blend, the floors),
- * so `fn` sees the unaged model and nothing else changes: the PB-recency
- * factor reads the dates itself and still applies. For the PB-age caption's
+ * undated PB does. pbAgeWeightsFor is the source of PB age weights for the
+ * run fitness model (the gated model weights, PB capacity, the LT derivation,
+ * the blend, the floors), so there `fn` sees the unaged model. Two readers of
+ * PB dates sit outside it and still age inside `fn`: the PB-recency factor
+ * (pbRecencyPenaltyFactor reads the dates itself, by design) and the Ironman
+ * marathon-depth credit (computeMarathonDepthMultiplier,
+ * race-prediction.triathlon.ts, and its drill-down label call pbAgeWeight
+ * directly). So for an Ironman with a dated marathon PB the counterfactual
+ * still carries the depth credit's ageing. For the PB-age caption's
  * counterfactual (does ageing change a displayed number?, pb-age-caption.ts).
  * Synchronous; the previous setting is restored when `fn` returns or throws.
  */

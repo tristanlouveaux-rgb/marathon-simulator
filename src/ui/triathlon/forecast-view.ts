@@ -87,7 +87,9 @@ export function renderTriathlonForecastView(): void {
   // PB age caption (pbAgeCaptionText, shared with the running Forecast and the
   // Stats race estimates): the run leg's blend gives an old run PB less weight.
   // Shown only when ageing moves the run leg by at least a second. Cycling-only
-  // mode has no run leg.
+  // mode has no run leg. For an Ironman, the marathon-depth credit ages the
+  // marathon PB outside that comparison (pbAgeWeight directly, open item), so
+  // both sides carry the credit's ageing.
   const runPbAgeText = isCyclingOnlyMode(s)
     ? null
     : pbAgeCaptionText(s, 'the run forecast', st => [predictTriathlonRace(st)?.runSec]);
