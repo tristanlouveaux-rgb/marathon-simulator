@@ -10,16 +10,15 @@
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import type { AbilityBand, HyroxConfig, HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
-import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
 import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
@@ -38,13 +37,6 @@ export interface HyroxPrevTimeUpdate {
 export interface HyroxPrevTimeUpdateResult {
   rebanded: boolean;
   planRegenerated: boolean;
-}
-
-function bandFromTime(sec: number): AbilityBand {
-  for (const { maxSec, band } of HYROX_TIME_TO_BAND_THRESHOLDS) {
-    if (sec < maxSec) return band;
-  }
-  return 'beginner';
 }
 
 export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrevTimeUpdateResult {
@@ -101,9 +93,9 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   }
 
   const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  // Band on the previous time in singles terms (hyroxBandingTimeSec), the
-  // same rule as onboarding.
-  const newBand = bandFromTime(hyroxBandingTimeSec(update.timeSec, update.format));
+  // Band in the field the race was raced in (hyroxBandForPreviousTime:
+  // field-relative thresholds of the format x sex, or doubles division, table).
+  const newBand = hyroxBandForPreviousTime(update.timeSec, update.format, s.biologicalSex, hx.division);
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;

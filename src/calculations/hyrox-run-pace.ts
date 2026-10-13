@@ -42,7 +42,8 @@ import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { gp } from './paces';
 import { SEED_RUN_PACE_SEC_KM, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { doublesRatioAt, seedRoxzoneSecForFormat } from './hyrox-doubles';
+import { doublesRatioAt, seedRoxzoneSecForFormat, hyroxDoublesTables, hyroxDoublesTablesForState, type HyroxDoublesTables } from './hyrox-doubles';
+import { hyroxSeedRunPaceSecKm } from './hyrox-results';
 import {
   computePersonalRunPaceOffset,
   blendPersonalRunPaceOffset,
@@ -101,14 +102,16 @@ export function cpRatioForVdot(vdot: number): number {
 
 /**
  * Doubles run-pace factor: the percentile-matched doubles/singles run ratio
- * (hyrox-doubles.ts) at the athlete's singles run total (8 × singles pace).
- * Replaces the gut-anchored DOUBLES_TO_SINGLES_PACE_FACTOR (1.05 to 1.10, i.e.
- * doubles 5 to 9% faster), which assumed partner rest from alternate whole
- * stations. The results tables show the opposite: open_doubles run P50 2762 s
- * against open_singles 2695 s.
+ * (hyrox-doubles.ts) at the athlete's singles run total (8 × singles pace),
+ * on the athlete's doubles tables when given (the pair's division against
+ * the athlete's own singles field; default Open, pooled). Replaces the
+ * gut-anchored DOUBLES_TO_SINGLES_PACE_FACTOR (1.05 to 1.10, i.e. doubles 5
+ * to 9% faster), which assumed partner rest from alternate whole stations.
+ * The results show the opposite: the pair runs at about the slower
+ * partner's pace (run ratio about 1.02 to 1.06 at the median).
  */
-export function doublesRunPaceFactor(singlesPaceSecKm: number): number {
-  return doublesRatioAt('run', singlesPaceSecKm * 8).ratio;
+export function doublesRunPaceFactor(singlesPaceSecKm: number, tables?: HyroxDoublesTables): number {
+  return doublesRatioAt('run', singlesPaceSecKm * 8, tables).ratio;
 }
 
 export type HyroxRunPaceSource = 'user' | 'derived' | 'seed';
@@ -156,7 +159,9 @@ export function derivePopulationRunPace(
   const thresholdSecKm = gp(vdot, ltPace).t;
   const cpRatio = cpRatioForVdot(vdot);
   const criticalPaceSecKm = thresholdSecKm * cpRatio;
-  const formatFactor = targetFormat === 'doubles' ? doublesRunPaceFactor(criticalPaceSecKm) : 1.0;
+  const formatFactor = targetFormat === 'doubles'
+    ? doublesRunPaceFactor(criticalPaceSecKm, hyroxDoublesTablesForState(state))
+    : 1.0;
   const paceSecKm = Math.max(
     HYROX_RUN_PACE_MIN_SEC_KM,
     Math.round(criticalPaceSecKm * formatFactor),
@@ -183,11 +188,12 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
   const band = hx.athleteBand;
   const targetFormat: 'singles' | 'doubles' =
     (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
-  // The band seed is a singles pace; doubles applies the same run ratio as
-  // the derived path so both sources mean the same thing.
-  const singlesSeed = SEED_RUN_PACE_SEC_KM[band];
+  // The band seed is a singles pace: the band's median run total / 8 in the
+  // field the band was read in (hyroxSeedRunPaceSecKm). Doubles applies the
+  // same run ratio as the derived path so both sources mean the same thing.
+  const singlesSeed = hyroxSeedRunPaceSecKm(state, band);
   const seed = targetFormat === 'doubles'
-    ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed))
+    ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed, hyroxDoublesTablesForState(state)))
     : singlesSeed;
 
   // Population model (no offset).
@@ -271,6 +277,9 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
   const splitCount = splits ? Object.keys(splits).length : 0;
   const hasSplits = splitCount >= 6;
   const band = hx.athleteBand;
+  // The previous race's own field: its weight family, the pair's division
+  // (else sex) for doubles, the athlete's sex for singles.
+  const prevTables = hyroxDoublesTables(prevFmt, state.biologicalSex, hx.division);
 
   let stationsTotalSec: number;
   let roxzoneSec: number;
@@ -282,10 +291,10 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
     );
     // Splits give the stations; Roxzone is the band seed in the race's
     // format (doubles: × the percentile-matched Roxzone ratio).
-    roxzoneSec = seedRoxzoneSecForFormat(band, prevFmt as HyroxRaceObservation['format']);
+    roxzoneSec = seedRoxzoneSecForFormat(band, prevFmt as HyroxRaceObservation['format'], prevTables);
     stationsFromSplits = true;
   } else {
-    const est = estimateStationsAndRoxzoneFromBand(band, prevFmt as HyroxRaceObservation['format']);
+    const est = estimateStationsAndRoxzoneFromBand(band, prevFmt as HyroxRaceObservation['format'], prevTables);
     stationsTotalSec = est.stationsTotalSec;
     roxzoneSec = est.roxzoneSec;
   }

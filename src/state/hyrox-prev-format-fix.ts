@@ -19,24 +19,15 @@
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import type { AbilityBand } from '@/types/triathlon';
 import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
-import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
-
-function bandFromTime(sec: number): AbilityBand {
-  for (const { maxSec, band } of HYROX_TIME_TO_BAND_THRESHOLDS) {
-    if (sec < maxSec) return band;
-  }
-  return 'beginner';
-}
 
 export interface PrevFormatChangeResult {
   /** Whether anything changed. False when the new format equals the existing one. */
@@ -114,15 +105,16 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
     }
   }
 
-  // Re-derive the band on the previous time in singles terms
-  // (hyroxBandingTimeSec, the same rule as onboarding). The previous time is
-  // physiologically the same effort regardless of which slot it lives in, but
-  // its banding meaning differs across formats.
+  // Re-derive the band in the field the previous race was raced in
+  // (hyroxBandForPreviousTime: the format x sex, or doubles division, table's
+  // field-relative thresholds). The previous time is physiologically the same
+  // effort regardless of which slot it lives in, but its place in the field
+  // differs across formats.
   let rebanded = false;
   const prevTimeSec = hx.previousHyroxTimeSec;
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-    const newBand = bandFromTime(hyroxBandingTimeSec(prevTimeSec, newFormat));
+    const newBand = hyroxBandForPreviousTime(prevTimeSec, newFormat, s.biologicalSex, hx.division);
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];

@@ -190,6 +190,17 @@ export const HYROX_S79_TOTAL_FENCES_SEC: Record<HyroxResultsFormat, Partial<Reco
   pro_doubles: { female: { lo: 2332, hi: 10007, rowsTested: 20816, droppedBelow: 0, aboveFence: 29, keptAboveCorroborated: 27, maxSegmentShare: 0.204 }, male: { lo: 2039, hi: 8788, rowsTested: 35570, droppedBelow: 0, aboveFence: 43, keptAboveCorroborated: 40, maxSegmentShare: 0.197 }, mixed: { lo: 2372, hi: 8655, rowsTested: 39, droppedBelow: 0, aboveFence: 0, keptAboveCorroborated: 0, maxSegmentShare: 0.228 } },
 };
 
+/** Station split lower fences (seconds) per published format x sex cell: the
+ *  log-scale Tukey far-out lower fence of rule 6, below which a split is a timing
+ *  slip (time credited to a neighbour). The floor a guided-session round must clear
+ *  before it may write a benchmark. Suppressed cells are left out. */
+export const HYROX_S79_STATION_LOWER_FENCES_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxStation, number>>>> = {
+  open_singles: { female: { ski_erg: 209, sled_push: 54, sled_pull: 104, burpee_broad_jumps: 95, row_erg: 214, farmer_carry: 49, sandbag_lunges: 88, wall_balls: 87 }, male: { ski_erg: 187, sled_push: 54, sled_pull: 86, burpee_broad_jumps: 79, row_erg: 190, farmer_carry: 40, sandbag_lunges: 87, wall_balls: 86 } },
+  pro_singles: { female: { ski_erg: 208, sled_push: 66, sled_pull: 97, burpee_broad_jumps: 83, row_erg: 212, farmer_carry: 39, sandbag_lunges: 90, wall_balls: 88 }, male: { ski_erg: 189, sled_push: 63, sled_pull: 78, burpee_broad_jumps: 65, row_erg: 189, farmer_carry: 31, sandbag_lunges: 84, wall_balls: 89 } },
+  open_doubles: { female: { ski_erg: 199, sled_push: 46, sled_pull: 97, burpee_broad_jumps: 77, row_erg: 215, farmer_carry: 55, sandbag_lunges: 82, wall_balls: 114 }, male: { ski_erg: 172, sled_push: 43, sled_pull: 69, burpee_broad_jumps: 59, row_erg: 184, farmer_carry: 45, sandbag_lunges: 76, wall_balls: 116 }, mixed: { ski_erg: 180, sled_push: 46, sled_pull: 81, burpee_broad_jumps: 62, row_erg: 186, farmer_carry: 50, sandbag_lunges: 78, wall_balls: 97 } },
+  pro_doubles: { female: { ski_erg: 193, sled_push: 54, sled_pull: 98, burpee_broad_jumps: 71, row_erg: 203, farmer_carry: 59, sandbag_lunges: 84, wall_balls: 107 }, male: { ski_erg: 169, sled_push: 47, sled_pull: 84, burpee_broad_jumps: 54, row_erg: 180, farmer_carry: 52, sandbag_lunges: 77, wall_balls: 113 } },
+};
+
 /** Finishers behind each pooled S7-S9 table (format x sex x metric). */
 export const HYROX_S79_FINISHER_COUNTS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, number>>>> = {
   open_singles: {

@@ -54,6 +54,7 @@ import {
   HYROX_S79_SEASONS_LABEL,
   HYROX_S89_ATTRIBUTION,
   HYROX_RESULTS_VIA,
+  HYROX_S79_STATION_LOWER_FENCES_SEC,
   type HyroxPercentileTable,
   type HyroxResultsFormat,
   type HyroxResultsMetric,
@@ -405,6 +406,25 @@ describe('HYROX S8-S9 pooled-by-format tables and season labels (lane H3b)', () 
     expect(HYROX_S79_SEASONS_LABEL).toMatch(/^seasons 7 to 9 \(\d{4} to \d{4}\)$/);
     expect(HYROX_S89_ATTRIBUTION).toBe(`HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${HYROX_RESULTS_VIA}`);
     expect(HYROX_S79_ATTRIBUTION).toBe(`HYROX results, ${HYROX_S79_SEASONS_LABEL}, ${HYROX_RESULTS_VIA}`);
+  });
+});
+
+describe('HYROX station lower fences (lane H3b)', () => {
+  it('cover every published cell and station, below the cell\'s fastest published split', () => {
+    const stations = METRICS.filter(m => !['total', 'run_total', 'work_total', 'roxzone'].includes(m));
+    for (const format of FORMATS) {
+      for (const sex of SEXES) {
+        const table = HYROX_S79_PERCENTILES[format][sex];
+        const fences = HYROX_S79_STATION_LOWER_FENCES_SEC[format][sex];
+        expect(!!fences, `${format}/${sex}`).toBe(!!table);
+        if (!table) continue;
+        for (const st of stations) {
+          const f = fences![st as 'ski_erg'];
+          expect(f, `${format}/${sex}/${st}`).toBeGreaterThan(0);
+          expect(f).toBeLessThan(table[st][0][0]);
+        }
+      }
+    }
   });
 });
 

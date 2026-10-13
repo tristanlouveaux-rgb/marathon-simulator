@@ -16,7 +16,7 @@ import {
   CP_RATIO_ANCHORS,
 } from './hyrox-run-pace';
 import { SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
-import { HYROX_RUN_PERCENTILE_TABLES } from '@/data/hyrox-population-distributions';
+import { HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 
@@ -84,9 +84,11 @@ describe('cpRatioForVdot — continuous interpolation', () => {
 });
 
 describe('doublesRunPaceFactor — percentile-matched run ratio from the results tables', () => {
-  const singlesRun = HYROX_RUN_PERCENTILE_TABLES.open_singles;
-  const doublesRun = HYROX_RUN_PERCENTILE_TABLES.open_doubles;
-  const atPct = (t: Array<[number, number]>, p: number) => t.find(([, q]) => q === p)![0];
+  // Real results, seasons 8 and 9, Open Doubles against Open Singles pooled
+  // (the default mapping when no cohort is passed).
+  const singlesRun = HYROX_S89_POOLED_PERCENTILES.open_singles!.run_total;
+  const doublesRun = HYROX_S89_POOLED_PERCENTILES.open_doubles!.run_total;
+  const atPct = (t: HyroxPercentileTable, p: number) => t.find(([, q]) => q === p)![0];
 
   it('at the singles median run the factor is doubles P50 ÷ singles P50', () => {
     const singlesPace = atPct(singlesRun, 50) / 8;

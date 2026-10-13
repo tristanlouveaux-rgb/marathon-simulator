@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { computeStationPotential } from './hyrox-station-potential';
-import { STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
+import { STATION_SEED_TIMES_SEC, stationSeedTimesFor } from '@/constants/hyrox-benchmarks';
+import { doublesStationTeamSec, HYROX_DEFAULT_DOUBLES_TABLES } from './hyrox-doubles';
 import type { HyroxStationLine } from './race-prediction.hyrox';
 
 function calibratedLine(station: keyof typeof STATION_SEED_TIMES_SEC['intermediate'], baseSec: number): HyroxStationLine {
@@ -22,25 +23,24 @@ describe('computeStationPotential', () => {
     expect(result.totalSavingSec).toBe(0);
   });
 
+  const INT = STATION_SEED_TIMES_SEC.intermediate;
+  const ADV = STATION_SEED_TIMES_SEC.advanced;
+
   it('uses next-band-up seed as the target', () => {
-    // Intermediate user; next band = advanced.
-    // Intermediate seed for ski_erg = 267, advanced = 260.
+    // Intermediate user; next band = advanced (real band medians, lane H3b).
     const r = computeStationPotential('intermediate', [
-      calibratedLine('ski_erg', 267),  // exactly intermediate seed
+      calibratedLine('ski_erg', INT.ski_erg),  // exactly the intermediate seed
     ]);
     expect(r.stations[0].targetBand).toBe('advanced');
-    expect(r.stations[0].targetSec).toBe(260);
-    expect(r.stations[0].savingSec).toBe(7);
+    expect(r.stations[0].targetSec).toBe(ADV.ski_erg);
+    expect(r.stations[0].savingSec).toBe(INT.ski_erg - ADV.ski_erg);
   });
 
   it('top targets sorted descending by savings', () => {
-    // Intermediate user. Ski_erg current 280 (target 260, save 20).
-    // Sled_push current 235 (target 190, save 45).
-    // Wall_balls current 415 (target 315, save 100).
     const r = computeStationPotential('intermediate', [
-      calibratedLine('ski_erg', 280),
-      calibratedLine('sled_push', 235),
-      calibratedLine('wall_balls', 415),
+      calibratedLine('ski_erg', ADV.ski_erg + 10),
+      calibratedLine('sled_push', ADV.sled_push + 40),
+      calibratedLine('wall_balls', ADV.wall_balls + 100),
     ]);
     expect(r.topTargets).toHaveLength(3);
     expect(r.topTargets[0].station).toBe('wall_balls');
@@ -49,9 +49,8 @@ describe('computeStationPotential', () => {
   });
 
   it('flags alreadyAhead when user is faster than next-band seed', () => {
-    // Intermediate user with a sled_push at 180 (faster than advanced seed 190).
     const r = computeStationPotential('intermediate', [
-      calibratedLine('sled_push', 180),
+      calibratedLine('sled_push', ADV.sled_push - 10),
     ]);
     expect(r.stations[0].alreadyAhead).toBe(true);
     expect(r.stations[0].savingSec).toBe(0);
@@ -68,22 +67,32 @@ describe('computeStationPotential', () => {
 
   it('totalSavingSec sums all calibrated stations (including non-top-3)', () => {
     const r = computeStationPotential('intermediate', [
-      calibratedLine('ski_erg', 280),       // save 20
-      calibratedLine('sled_push', 235),     // save 45
-      calibratedLine('wall_balls', 415),    // save 100
-      calibratedLine('row_erg', 290),       // save 30
+      calibratedLine('ski_erg', ADV.ski_erg + 20),
+      calibratedLine('sled_push', ADV.sled_push + 45),
+      calibratedLine('wall_balls', ADV.wall_balls + 100),
+      calibratedLine('row_erg', ADV.row_erg + 30),
     ]);
     expect(r.totalSavingSec).toBe(20 + 45 + 100 + 30);
   });
 
+  it('reads the seed cohort it is given (a Pro target reads Pro Singles band medians)', () => {
+    const pro = stationSeedTimesFor('advanced', 'pro_singles', 'female');
+    const r = computeStationPotential('intermediate', [calibratedLine('sled_push', pro.sled_push + 30)], { seedFormat: 'pro_singles', seedSex: 'female' });
+    expect(r.stations[0].targetSec).toBe(pro.sled_push);
+  });
+
   it('doubles: a pair-time line is compared with the seed scaled by the same doubles ratio', () => {
-    // Pair's ski time 0.7 × 267 against the advanced seed × 0.7: the same
-    // 7 s gap in singles terms becomes 0.7 × 7 in the pair's terms. Without
-    // the scaling every doubles station read as already past target.
-    const line: HyroxStationLine = { station: 'ski_erg', baseSec: 267 * 0.7, adjustedSec: 267 * 0.7, source: 'calibrated', teamRatio: 0.7 };
+    // Without the scaling every doubles station read as already past target.
+    const line: HyroxStationLine = { station: 'ski_erg', baseSec: INT.ski_erg * 0.9, adjustedSec: INT.ski_erg * 0.9, source: 'calibrated', teamRatio: 0.9 };
     const r = computeStationPotential('intermediate', [line]);
-    expect(r.stations[0].targetSec).toBe(Math.round(260 * 0.7));
+    expect(r.stations[0].targetSec).toBe(Math.round(ADV.ski_erg * 0.9));
     expect(r.stations[0].alreadyAhead).toBe(false);
-    expect(r.stations[0].savingSec).toBe(Math.round(267 * 0.7 - Math.round(260 * 0.7)));
+    expect(r.stations[0].savingSec).toBe(Math.round(INT.ski_erg * 0.9 - Math.round(ADV.ski_erg * 0.9)));
+  });
+
+  it('doubles with the athlete\'s tables: the target maps to a pair\'s time per station', () => {
+    const line: HyroxStationLine = { station: 'wall_balls', baseSec: 400, adjustedSec: 400, source: 'calibrated', teamRatio: 0.7 };
+    const r = computeStationPotential('intermediate', [line], { doublesTables: HYROX_DEFAULT_DOUBLES_TABLES });
+    expect(r.stations[0].targetSec).toBe(Math.round(doublesStationTeamSec('wall_balls', ADV.wall_balls)));
   });
 });

@@ -20,20 +20,22 @@ import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/worko
 // forecast share one conversion.
 
 /**
- * Station-time multiplier for Pro division vs Open.
- * Pro weights are heavier, which slows rep completion. The values were set from
- * the men's Open-to-Pro jump (sled push 152 to 202 kg, sandbag 20 to 30 kg, wall
- * ball 6 to 9 kg); the women's jump is larger in relative terms (sled push 102
- * to 152 kg, sandbag 10 to 20 kg, ball 4 to 6 kg; HYROX_LOAD_TIER_KG).
- * Sled stations: ~15% slower. Other loaded stations: ~8% slower.
- * Erg and bodyweight stations (ski_erg, row_erg, burpee_broad_jumps): unaffected by weight change.
+ * Station-time multiplier for Pro division vs Open. FALLBACK ONLY since lane
+ * H3b (2026-10-13).
  *
- * UNSOURCED, and one set for both sexes. The ingested results
- * (hyrox-population-distributions.ts) hold only the 8-station total per format,
- * pooled across sexes, and Pro and Open are different cohorts (pro_singles
- * station P50 2222 s vs open_singles 2208 s: fitter athletes at heavier loads),
- * so per-station or per-sex Open-to-Pro ratios cannot be derived from them.
- * Needs a per-station, per-sex re-ingest before it can be replaced.
+ * The Open-to-Pro station conversion is now derived from the results per
+ * station and sex (hyroxProConversionAt in src/calculations/hyrox-results.ts:
+ * a difference in differences on the S8-S9 Pro and Open singles tables, the
+ * loaded station's Pro/Open ratio at a matched percentile divided by the
+ * Pro/Open ratio of the unloaded segments). This table stands in only for a
+ * station where that method fails its sanity check (adjusted ratio below 1);
+ * on the current tables none does.
+ *
+ * The values were set by hand from the men's Open-to-Pro jump (sled push 152
+ * to 202 kg, sandbag 20 to 30 kg, wall ball 6 to 9 kg), one set for both
+ * sexes, unsourced. Sled stations: ~15% slower. Other loaded stations: ~8%.
+ * Erg and bodyweight stations (ski_erg, row_erg, burpee_broad_jumps):
+ * unaffected by weight change.
  */
 export const HYROX_PRO_STATION_MULTIPLIER: Partial<Record<HyroxStation, number>> = {
   sled_push:      1.15,

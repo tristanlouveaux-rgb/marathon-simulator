@@ -121,8 +121,10 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
 
     const week2 = advanceAndRegenerateWeek2(s);
     expect(s.wks[1].ctlRatio).toBeUndefined();
-    expect(plannedMinutes(week2)).toBe(fullWeek2); // 220 min; was cut to 172
-    expect(fullWeek2).toBe(220);
+    // 223 min since lane H3b (station seeds are real band medians); 220
+    // before, and cut to 172 before the completion fix.
+    expect(plannedMinutes(week2)).toBe(fullWeek2);
+    expect(fullWeek2).toBe(223);
   });
 
   it('a week with nothing done still reads 0 and still re-anchors next week down', () => {

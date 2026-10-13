@@ -36,8 +36,9 @@
  *    true for a Pro target (the generators load stations at the target's
  *    tier), and the forecast reads a session entry's proWeights the way it
  *    reads a race split's.
- *  - A **sanity floor** (the elite / competitive seed time) rejects implausibly
- *    fast times that are almost certainly a timing slip.
+ *  - A **sanity floor** (the station split's timing-slip fence in the
+ *    results, hyroxStationLowerFenceSec) rejects implausibly fast times that
+ *    are almost certainly a timing slip.
  *
  * Mirrors the canonical benchmark write in `benchmark-card.ts`: scalar slot
  * (`hyroxConfig.stationBenchmarksSingles` / `…Doubles`) is authoritative for
@@ -49,8 +50,9 @@ import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import type { SetRecord } from '@/guided/strength-controller';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
+import { hyroxSinglesCohortForState, hyroxCohortLabel, hyroxStationLowerFenceSec, type HyroxResultsCohort } from '@/calculations/hyrox-results';
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
 import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
@@ -73,9 +75,14 @@ export interface StationSessionResult {
   benchmarkSec: number | null;
   /** benchmarkSec − bestSec (positive = faster than the benchmark). Null when no benchmark. */
   deltaSec: number | null;
-  /** Estimated station percentile (getStationPercentile: seed-anchored, not
-   *  results data); null for non-race-pace sessions (not comparable). */
+  /** "Faster than X%" of the field's race splits at this station
+   *  (getStationPercentile on the athlete's singles cohort: own sex, the
+   *  target's weight family; a best round is one athlete's time at the
+   *  target's weights). Null for non-race-pace sessions (not comparable). */
   percentile: number | null;
+  /** Who the percentile compares against, e.g. "Open Singles women"; null
+   *  with no percentile. */
+  percentileCohort: string | null;
   /** Race-pace session AND time passes the sanity floor — may write the benchmark. */
   eligible: boolean;
   /** eligible AND (no benchmark yet, or best round beats the stored benchmark). */
@@ -112,11 +119,16 @@ function soloBenchmarks(s: SimulatorState): Map<HyroxStation, number> {
   return out;
 }
 
-/** A time below the elite (competitive) seed for a station is almost certainly a
- *  timing slip, not a real result — reject it as a benchmark candidate. Sourced
- *  bound (no invented number): the fastest band's seed time. */
-function passesSanityFloor(station: HyroxStation, sec: number): boolean {
-  const floor = STATION_SEED_TIMES_SEC.competitive[station];
+/** A round below the station's timing-slip fence in the results is almost
+ *  certainly a timing slip (e.g. h:mm:ss read as mm:ss), not a real result:
+ *  reject it as a benchmark candidate. Sourced bound (no invented number):
+ *  the station split's far-out lower fence in the athlete's singles cohort,
+ *  the rule the results ingest uses to drop slipped splits
+ *  (hyroxStationLowerFenceSec). Until lane H3b the floor was the
+ *  competitive band's seed, which became the real median of the top 1% and
+ *  would have rejected half of that 1%. */
+function passesSanityFloor(station: HyroxStation, sec: number, cohort: HyroxResultsCohort): boolean {
+  const floor = hyroxStationLowerFenceSec(station, cohort);
   return floor == null || sec >= floor;
 }
 
@@ -199,11 +211,12 @@ export function summariseHyroxSession(
   const racePace = isRacePaceHyroxSession(workout.t);
   const best = bestRoundPerStation(components, records);
   const benchmarks = soloBenchmarks(state);
+  const cohort = hyroxSinglesCohortForState(state);
 
   const results: StationSessionResult[] = [];
   for (const [station, bestSec] of best) {
     const benchmarkSec = benchmarks.get(station) ?? null;
-    const eligible = racePace && passesSanityFloor(station, bestSec);
+    const eligible = racePace && passesSanityFloor(station, bestSec, cohort);
     const isImprovement = eligible && (benchmarkSec == null || bestSec < benchmarkSec);
     results.push({
       station,
@@ -211,7 +224,8 @@ export function summariseHyroxSession(
       bestSec,
       benchmarkSec,
       deltaSec: benchmarkSec == null ? null : benchmarkSec - bestSec,
-      percentile: racePace ? getStationPercentile(station, bestSec) : null,
+      percentile: racePace ? getStationPercentile(station, bestSec, cohort) : null,
+      percentileCohort: racePace ? hyroxCohortLabel(cohort) : null,
       eligible,
       isImprovement,
     });

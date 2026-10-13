@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { predictHyroxRace } from './race-prediction.hyrox';
+import { predictHyroxRace, hyroxStationSeedsForState } from './race-prediction.hyrox';
+import { doublesStationSoloSec, doublesStationTeamSec } from './hyrox-doubles';
+import { hyroxOpenToProSec, hyroxProToOpenSec } from './hyrox-results';
 import type { SimulatorState } from '@/types/state';
 
 const DAY_MS = 1000 * 60 * 60 * 24;
@@ -94,17 +96,20 @@ describe('predictHyroxRace', () => {
     expect(skiLine.teamTimeSplit).toBe(true);
     expect(skiLine.teamRatio).toBeUndefined();
     expect(calibrated.crossFormatConversion).toBe('doubles_to_singles');
-    expect(calibrated.crossFormatStationRatio).toBeGreaterThan(0.6);
-    expect(calibrated.crossFormatStationRatio).toBeLessThan(0.8);
-    expect(skiLine.baseSec).toBeCloseTo(doublesSki / calibrated.crossFormatStationRatio!, 6);
+    // Per station: the solo time at the same percentile of the SkiErg results
+    // (one erg, alternated, so the pair gains little: ratio about 0.9).
+    expect(skiLine.baseSec).toBeCloseTo(doublesStationSoloSec('ski_erg', doublesSki), 6);
+    expect(calibrated.crossFormatStationRatio).toBeCloseTo(doublesSki / skiLine.baseSec, 6);
+    expect(calibrated.crossFormatStationRatio).toBeGreaterThan(0.8);
+    expect(calibrated.crossFormatStationRatio).toBeLessThan(1);
     // One calibrated station: low by count, not by a cross-format cap.
     expect(calibrated.confidence).toBe('low');
   });
 
-  it('singles benchmarks feed a doubles prediction through the doubles station ratio', () => {
-    // The doubles model is singles station time × the percentile-matched
-    // ratio (hyrox-doubles.ts), so singles times are its input: no seed
-    // fallback. The station is flagged as converted from the other format.
+  it('singles benchmarks feed a doubles prediction through the per-station doubles mapping', () => {
+    // The doubles model maps each solo station time to the pair's time at
+    // its own percentile (hyrox-doubles.ts), so singles times are its input:
+    // no seed fallback. The station is flagged as converted from the other format.
     const singlesSki = 250;
     const calibrated = predictHyroxRace(buildState({
       format: 'open_doubles',
@@ -115,7 +120,7 @@ describe('predictHyroxRace', () => {
     const skiLine = calibrated.stations.find(l => l.station === 'ski_erg')!;
     expect(skiLine.source).toBe('calibrated');
     expect(skiLine.crossFormat).toBe(true);
-    expect(skiLine.baseSec).toBeCloseTo(singlesSki * calibrated.doubles!.stationRatio, 6);
+    expect(skiLine.baseSec).toBeCloseTo(doublesStationTeamSec('ski_erg', singlesSki), 6);
   });
 
   it('same-format: doubles target with doubles benchmarks uses them directly', () => {
@@ -136,6 +141,13 @@ describe('predictHyroxRace', () => {
     const open = predictHyroxRace(buildState({ format: 'open_singles' }))!;
     const pro  = predictHyroxRace(buildState({ format: 'pro_singles' }))!;
     expect(pro.stationsSec).toBeGreaterThan(open.stationsSec);
+  });
+
+  it('a Pro-raced band seeds from the Pro field\'s own band medians (real Pro-weight times)', () => {
+    const st = buildState({ format: 'pro_singles', hyroxPreviousTimeFormat: 'pro_singles' }, { biologicalSex: 'female' } as Partial<SimulatorState>);
+    const p = predictHyroxRace(st)!;
+    const seeds = hyroxStationSeedsForState(st);
+    for (const line of p.stations) expect(line.baseSec).toBeCloseTo(seeds[line.station], 6);
   });
 
   it('confidence is high when ≥6 stations calibrated and venue is set', () => {
@@ -169,9 +181,10 @@ describe('predictHyroxRace', () => {
   // Pro→Open divides by it. Pre-fix only the Open→Pro direction was wired.
 
   describe('Pro ↔ Open conversion', () => {
+    // Per station and sex from the Pro and Open results (hyroxOpenToProSec,
+    // a difference in differences); unknown sex reads the pooled tables.
     const SLED_PUSH_OPEN = 130;       // representative seconds at Open weights
-    const PRO_MULT_SLED  = 1.15;      // from HYROX_PRO_STATION_MULTIPLIER
-    const SLED_PUSH_PRO  = SLED_PUSH_OPEN * PRO_MULT_SLED; // ≈149.5
+    const SLED_PUSH_PRO  = hyroxOpenToProSec('sled_push', SLED_PUSH_OPEN, 'pooled');
 
     it('Open benchmarks predicting Pro: applies Pro multiplier', () => {
       const open = predictHyroxRace(buildState({
@@ -185,7 +198,8 @@ describe('predictHyroxRace', () => {
       const sledOpen = open.stations.find(l => l.station === 'sled_push')!;
       const sledPro  = pro.stations.find(l => l.station === 'sled_push')!;
       expect(sledOpen.baseSec).toBeCloseTo(SLED_PUSH_OPEN, 0);
-      expect(sledPro.baseSec).toBeCloseTo(SLED_PUSH_OPEN * PRO_MULT_SLED, 0);
+      expect(sledPro.baseSec).toBeCloseTo(SLED_PUSH_PRO, 6);
+      expect(sledPro.baseSec).toBeGreaterThan(SLED_PUSH_OPEN);
     });
 
     it('Pro benchmarks predicting Pro (benchmarksAtProWeights): used as-is', () => {
@@ -205,8 +219,9 @@ describe('predictHyroxRace', () => {
         benchmarksAtProWeights: true,
       }))!;
       const sled = open.stations.find(l => l.station === 'sled_push')!;
-      // Pre-fix: sled.baseSec === SLED_PUSH_PRO (149.5). Wrong (Open should be faster).
-      // Post-fix: sled.baseSec ≈ 130 (Pro time / 1.15).
+      // Pre-fix: sled.baseSec === SLED_PUSH_PRO. Wrong (Open should be faster).
+      // Post-fix: the inverse conversion gives back the Open time.
+      expect(sled.baseSec).toBeCloseTo(hyroxProToOpenSec('sled_push', SLED_PUSH_PRO, 'pooled'), 6);
       expect(sled.baseSec).toBeCloseTo(SLED_PUSH_OPEN, 0);
       expect(sled.baseSec).toBeLessThan(SLED_PUSH_PRO);
     });
@@ -244,9 +259,9 @@ describe('predictHyroxRace', () => {
   // Fresh race → no blend. Very stale → meaningful blend toward seed.
 
   describe('staleness blend', () => {
-    // Intermediate seed for ski_erg is 267s. Calibrated value 200 is much faster.
+    // Calibrated value 200 is much faster than the intermediate seed.
     const FAST_SKI = 200;
-    const SKI_SEED_INTERMEDIATE = 267;
+    const SKI_SEED_INTERMEDIATE = hyroxStationSeedsForState(buildState()).ski_erg;
 
     it('fresh race (3 months ago) → no staleness blend, calibrated value used in full', () => {
       const fresh = predictHyroxRace(buildState({
@@ -265,34 +280,33 @@ describe('predictHyroxRace', () => {
       }))!;
       const skiLine = veryStale.stations.find(l => l.station === 'ski_erg')!;
       // splitsWeight at very_stale w/o physio mitigation = 0.6.
-      // Expected: 0.6 × 200 + 0.4 × 267 = 226.8.
+      // Expected: 0.6 × 200 + 0.4 × seed.
       expect(skiLine.baseSec).toBeGreaterThan(FAST_SKI);
       expect(skiLine.baseSec).toBeLessThan(SKI_SEED_INTERMEDIATE);
-      expect(skiLine.baseSec).toBeCloseTo(226.8, 0);
+      expect(skiLine.baseSec).toBeCloseTo(0.6 * FAST_SKI + 0.4 * SKI_SEED_INTERMEDIATE, 0);
       expect(veryStale.staleness?.category).toBe('very_stale');
     });
 
     it('band blend shifts seeds when VDOT crosses a threshold and mitigation is partial', () => {
-      // Stored band 'total_beginner' (implied VDOT 28). VDOT 30 crosses into
-      // 'beginner' but the ratio (30-28)/5=0.4 keeps signal f≈0.82. Partial
-      // mitigation, not full. So bandWeight stays below 1.0 and the seed
-      // blends between total_beginner and beginner. The prediction with the
-      // stale race + slight VDOT lift should be FASTER than a fresh prediction
-      // anchored entirely at total_beginner seeds.
+      // Stored band 'novice' (implied VDOT 38). VDOT 37 falls into 'beginner'
+      // and the ratio (37-38)/5=-0.2 gives signal f=0.64: partial mitigation.
+      // bandWeight stays below 1.0 and the seed blends from novice toward
+      // beginner (total_beginner shares the beginner cell since lane H3b, so
+      // the old total_beginner to beginner case no longer moves the seeds).
       const stale = predictHyroxRace(buildState({
-        athleteBand: 'total_beginner',
+        athleteBand: 'novice',
         hyroxPreviousRaceDate: dateNDaysAgo(30 * 30.44),
       }, {
-        v: 30,
+        v: 37,
       }))!;
       const fresh = predictHyroxRace(buildState({
-        athleteBand: 'total_beginner',
+        athleteBand: 'novice',
       }, {
-        v: 30,
+        v: 37,
       }))!;
-      // Both no-calibration paths. Fresh stays at total_beginner seeds; stale
-      // blends toward beginner seeds (faster). Total time should be lower.
-      expect(stale.totalSec).toBeLessThan(fresh.totalSec);
+      // Both no-calibration paths. Fresh stays at novice seeds; stale blends
+      // toward beginner seeds (slower stations).
+      expect(stale.stationsSec).toBeGreaterThan(fresh.stationsSec);
     });
 
     it('strong physiology mitigation pulls splitsWeight back toward 1.0 (less blend)', () => {
@@ -338,18 +352,18 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
     { dateISO: dateNDaysAgo(30), sec: doublesSplits[st], source: 'race' as const, format: 'open_doubles' as const, proWeights: false },
   ]]));
 
-  it('8 doubles race splits: singles lines × the ratio give back the splits, with the doubles forecast\'s own ratio', () => {
+  it('8 doubles race splits: each singles line maps back to its split at its own station ratio, the doubles forecast\'s own', () => {
     const cfg = { stationBenchmarksDoubles: doublesSplits, stationBenchmarkHistory: raceHistory } as Partial<SimulatorState['hyroxConfig']>;
     const singles = predictHyroxRace(buildState({ ...cfg, format: 'open_singles' }))!;
     const doubles = predictHyroxRace(buildState({ ...cfg, format: 'open_doubles' }))!;
-    const r = singles.crossFormatStationRatio!;
-    expect(r).toBeCloseTo(doubles.doubles!.stationRatio, 9);
+    expect(singles.crossFormatStationRatio!).toBeCloseTo(doubles.doubles!.stationRatio, 9);
     for (const st of STATIONS) {
       const s1 = singles.stations.find(l => l.station === st)!;
       const d1 = doubles.stations.find(l => l.station === st)!;
       expect(s1.source).toBe('calibrated');
-      expect(s1.baseSec * r).toBeCloseTo(doublesSplits[st], 6);
+      expect(s1.baseSec).toBeCloseTo(doublesStationSoloSec(st, doublesSplits[st]), 6);
       expect(d1.baseSec).toBeCloseTo(doublesSplits[st], 6);
+      expect(d1.teamRatio! * s1.baseSec).toBeCloseTo(doublesSplits[st], 6);
     }
     // Fully calibrated, but every station is a cross-format estimate:
     // confidence caps at medium even with a venue (high needs it otherwise).
@@ -387,11 +401,10 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
     const row = singles.stations.find(l => l.station === 'row_erg')!;
     expect(row.baseSec).toBe(260);
     expect(row.teamTimeSplit).toBeUndefined();
-    const r = singles.crossFormatStationRatio!;
     for (const st of STATIONS.filter(x => x !== 'row_erg')) {
       const line = singles.stations.find(l => l.station === st)!;
       expect(line.teamTimeSplit).toBe(true);
-      expect(line.baseSec * r).toBeCloseTo(doublesSplits[st], 6);
+      expect(line.baseSec).toBeCloseTo(doublesStationSoloSec(st, doublesSplits[st]), 6);
     }
   });
 
@@ -431,7 +444,7 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
     expect(ski.teamTimeSplit).toBe(true);
     expect(ski.baseSec).toBe(200);
     const row = p.stations.find(l => l.station === 'row_erg')!;
-    expect(row.baseSec).toBeCloseTo(290 * p.doubles!.stationRatio, 6);
+    expect(row.baseSec).toBeCloseTo(doublesStationTeamSec('row_erg', 290), 6);
   });
 
   it('a Pro singles target reads a Pro doubles split at Pro weights, with no second Pro multiplier', () => {
@@ -471,16 +484,26 @@ describe('predictHyroxRace: converted stations cap confidence at medium, in both
     expect(three.crossFormatCapped).toBeUndefined();
   });
 
-  it('the same times in the target format\'s own slot reach high with a venue', () => {
+  it('singles times in the singles slot reach high with a venue; a doubles target reaches high only on doubles race splits', () => {
     const singles = predictHyroxRace(buildState({ format: 'open_singles', stationBenchmarksSingles: singlesTimes, venueId: 'london-excel' }))!;
     expect(singles.crossFormatConversion).toBeUndefined();
     expect(singles.confidence).toBe('high');
     expect(singles.crossFormatCapped).toBeUndefined();
     const doubles = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
-      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
+      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'race' as const, format: 'open_doubles' as const }]])),
     }))!;
     expect(doubles.stations.some(l => l.crossFormat)).toBe(false);
     expect(doubles.confidence).toBe('high');
+  });
+
+  it('option A: solo tests in the doubles slot are scaled by the ratio too, so they cap a doubles target at medium', () => {
+    const doubles = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
+      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
+    }))!;
+    expect(doubles.stations.every(l => l.crossFormat)).toBe(true);
+    expect(doubles.crossFormatConversion).toBe('singles_to_doubles');
+    expect(doubles.confidence).toBe('medium');
+    expect(doubles.crossFormatCapped).toBe(true);
   });
 
   it('one converted station is enough to cap', () => {
@@ -488,7 +511,7 @@ describe('predictHyroxRace: converted stations cap confidence at medium, in both
       format: 'open_doubles',
       stationBenchmarksDoubles: { ...singlesTimes, ski_erg: undefined } as any,
       stationBenchmarksSingles: { ski_erg: 270 },
-      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).filter(([st]) => st !== 'ski_erg').map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
+      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).filter(([st]) => st !== 'ski_erg').map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'race' as const, format: 'open_doubles' as const }]])),
       venueId: 'london-excel',
     }))!;
     expect(p.stations.filter(l => l.crossFormat).map(l => l.station)).toEqual(['ski_erg']);

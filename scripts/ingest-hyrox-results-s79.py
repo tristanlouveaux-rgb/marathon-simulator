@@ -654,7 +654,13 @@ def ingest(results_path):
         fences_out[cell] = {'totalLoSec': rnd(lo), 'totalHiSec': rnd(hi), 'rowsTested': cell_n[cell],
                             'droppedBelow': cell_below[cell], 'aboveFence': cell_above[cell],
                             'keptAboveCorroborated': cell_kept_above[cell],
-                            'maxSegmentShare': round(share_hi[cell], 3) if cell in share_hi else None}
+                            'maxSegmentShare': round(share_hi[cell], 3) if cell in share_hi else None,
+                            # Station split lower fences (rule 6): a station
+                            # split below its far-out lower fence is a timing
+                            # slip. Lane H3b exports them as the floor a
+                            # guided-session round must clear.
+                            'stationLoSec': {k: rnd(split_lo[(cell, 2 * j + 1)])
+                                             for j, k in enumerate(STATION_KEYS) if (cell, 2 * j + 1) in split_lo}}
     return final, report, fences_out, total_fences, resolutions
 
 
@@ -1414,6 +1420,21 @@ def emit(out_path, refresh_date, x):
                 parts.append(f'{sex}: {{ lo: {f["totalLoSec"]}, hi: {f["totalHiSec"]}, rowsTested: {f["rowsTested"]}, '
                              f'droppedBelow: {f["droppedBelow"]}, aboveFence: {f["aboveFence"]}, '
                              f'keptAboveCorroborated: {f["keptAboveCorroborated"]}, maxSegmentShare: {ts_val(f["maxSegmentShare"])} }}')
+        w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
+    w('};')
+    w('')
+
+    w('/** Station split lower fences (seconds) per published format x sex cell: the')
+    w(' *  log-scale Tukey far-out lower fence of rule 6, below which a split is a timing')
+    w(' *  slip (time credited to a neighbour). The floor a guided-session round must clear')
+    w(' *  before it may write a benchmark. Suppressed cells are left out. */')
+    w('export const HYROX_S79_STATION_LOWER_FENCES_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxStation, number>>>> = {')
+    for fmt in FORMATS:
+        parts = []
+        for sex in SEXES:
+            f = fences.get((fmt, sex))
+            if f and (fmt, sex) in published_cells and f.get('stationLoSec'):
+                parts.append(f'{sex}: {ts_obj_inline(f["stationLoSec"])}')
         w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
     w('};')
     w('')
