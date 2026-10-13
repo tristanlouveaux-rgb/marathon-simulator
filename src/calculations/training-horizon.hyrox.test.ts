@@ -93,7 +93,8 @@ describe('applyHyroxStationHorizon — saturation & dose response', () => {
 
 describe('applyHyroxStationHorizon — taper bonus', () => {
   it('full taper window adds the full taper bonus', () => {
-    // Default HYROX_TAPER_WEEKS = 1.5; horizon ≥ taper window → full bonus.
+    // HYROX_TAPER_WEEKS = 2 (the plan's 2-week taper since 2026-10-12, was 1.5);
+    // horizon ≥ taper window → full bonus.
     const r = applyHyroxStationHorizon('row_erg', baseInput({
       weeks_remaining: 12,
     }));
@@ -104,7 +105,8 @@ describe('applyHyroxStationHorizon — taper bonus', () => {
     const r = applyHyroxStationHorizon('row_erg', baseInput({
       weeks_remaining: 0.5,
     }));
-    // 0.5 / 1.5 = 0.333 → taper_bonus = 3.0 * 0.333 ≈ 1.0
+    // 0.5 / 2 = 0.25 → taper_bonus = 3.0 * 0.25 ≈ 0.75 (0.333 when the taper
+    // window was 1.5 weeks)
     expect(r.components.taper_bonus).toBeLessThan(CARDIO_ERG_HORIZON_PARAMS.taper_bonus_pct.intermediate);
     expect(r.components.taper_bonus).toBeGreaterThan(0);
   });
@@ -121,7 +123,7 @@ describe('applyHyroxStationHorizon — taper bonus', () => {
   // bonus alone (no sneaky additional contributions).
   it('race inside the taper window yields meaningfully less gain than a build-phase race', () => {
     const taperRace = applyHyroxStationHorizon('row_erg', baseInput({
-      weeks_remaining: 1.0,                  // inside HYROX_TAPER_WEEKS = 1.5
+      weeks_remaining: 1.0,                  // inside HYROX_TAPER_WEEKS = 2
       sessions_per_week: 3.5,
     }));
     const buildRace = applyHyroxStationHorizon('row_erg', baseInput({
