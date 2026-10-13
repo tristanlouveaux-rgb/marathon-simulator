@@ -14,6 +14,11 @@
  *   - user_plan_settings.deleted_at  = now()
  *   - strava_tokens.deleted_at       = now()
  *   - garmin_tokens.deleted_at       = now()
+ *   - HYROX Doubles partner rows deleted at once (not soft-deleted): the
+ *     user's link (the mirror row cascades and the link trigger deletes both
+ *     snapshots), their snapshot and their invite code. A linked partner stops
+ *     reading this account's race numbers immediately. Not restored on cancel;
+ *     the two athletes link again with a new code.
  *   - Strava OAuth revoke (synchronous, 5s timeout; result surfaced in
  *     response.strava_revoke; not fatal if it fails — cron purges row in 30d)
  *
@@ -196,6 +201,23 @@ Deno.serve(async (req: Request) => {
     if (upsertErr) {
       return jsonResponse({ error: 'internal_error' }, 500, cors)
     }
+  }
+
+  // HYROX Doubles partner: hard-delete now, link first (its trigger removes
+  // both snapshots and both users' codes), then the user's own snapshot and
+  // invite. A direct service-role delete, not unlink_hyrox_partner (which
+  // reads auth.uid()): if the partner unlinks in the same instant one of the
+  // two deletes can fail once on a deadlock (logged here, or 'retry' on the
+  // partner's side) and the link still ends. Non-fatal: the auth.users purge
+  // cascades every partner row in 30 days regardless.
+  const partnerCleanup: Array<[string, string]> = [
+    ['hyrox_partner_links', 'user_id'],
+    ['hyrox_partner_snapshots', 'user_id'],
+    ['hyrox_partner_invites', 'owner_id'],
+  ]
+  for (const [table, key] of partnerCleanup) {
+    const { error } = await admin.from(table).delete().eq(key, userId)
+    if (error) console.warn('[delete-account] partner cleanup failed', JSON.stringify({ userId, table, error: error.message }))
   }
 
   // Synchronous Strava revoke with 5s timeout. Errors here are non-fatal —
