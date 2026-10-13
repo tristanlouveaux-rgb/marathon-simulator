@@ -25,6 +25,8 @@ import { generateHyroxPlan, regenerateHyroxWeek, HYROX_GENERATOR_VERSION } from 
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { matchAndAutoComplete, type GarminActivityRow } from './activity-matcher';
 import { computeWeekActualMTL, computeWeekActualMTLByDiscipline, computeWeekMTL, resolveMtlAdherence } from './mtl';
+import { recordPlannedSessionDone } from './in-app-activity';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 
 const PLAN_START = '2026-09-28'; // a Monday
@@ -113,7 +115,15 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     const s = getMutableState();
     const wk1 = s.wks[0];
     const fullWeek2 = plannedMinutes(s.wks[1]);
-    matchAndAutoComplete(wk1.triWorkouts!.map((w, i) => rowFor(w, `strava-W1-${i}`)));
+    // Synced recordings for the sessions a watch records as runs or HIIT;
+    // easy erg work completes through Mark as Done, a rowing record (a HIIT
+    // never fills an easy erg slot).
+    const ergs = wk1.triWorkouts!.filter(isHyroxEasyErg);
+    matchAndAutoComplete(wk1.triWorkouts!.filter(w => !isHyroxEasyErg(w)).map((w, i) => rowFor(w, `strava-W1-${i}`)));
+    for (const e of ergs) {
+      (wk1.rated ??= {})[e.id!] = e.rpe!;
+      recordPlannedSessionDone(wk1, e.id!, e, { rpe: e.rpe!, durationMin: e.estimatedDurationMin!, planStartDate: PLAN_START, weekNum: 1, currentWeek: 1 });
+    }
     expect(wk1.triWorkouts!.every(w => wk1.garminActuals?.[w.id!])).toBe(true);
     expect(computeWeekActualMTL(wk1)).toBeCloseTo(computeWeekMTL(wk1), 6);
 

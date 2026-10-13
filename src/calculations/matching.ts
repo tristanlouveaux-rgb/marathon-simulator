@@ -7,6 +7,7 @@
 
 import type { Workout } from '@/types';
 import { isLongRun } from '@/workouts/long-run';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 /** Incoming activity from an external source */
 export interface ExternalActivity {
@@ -73,7 +74,8 @@ const EXTRA_RUN_SLOT_TYPES = new Set(['run', 'steady', 'float']);
  *
  *  - run   → any run slot (incl. the fast-finish long run and HYROX run
  *            sessions), a generic cross slot, or a tri brick.
- *  - gym   → a gym slot, or a HYROX station / brick session.
+ *  - gym   → a gym slot, or a HYROX station / brick session (not an easy
+ *            erg slot: a gym session is not easy erg work).
  *  - ride  → a cross slot, a tri brick or any tri bike slot.
  *  - swim  → a cross slot or any tri swim slot.
  *  - walk, other → a cross slot only. Never a run slot (audit D3).
@@ -86,7 +88,7 @@ export function isActivityCompatibleWithSlot(
   if (isRunClassActivity(appType)) {
     return isRunSlot(workout) || isLongRun(workout) || EXTRA_RUN_SLOT_TYPES.has(wt) || wt === 'cross' || wt === 'brick';
   }
-  if (appType === 'gym') return wt === 'gym' || workout.discipline === 'station' || workout.discipline === 'brick';
+  if (appType === 'gym') return wt === 'gym' || ((workout.discipline === 'station' || workout.discipline === 'brick') && !isHyroxEasyErg(workout));
   if (appType === 'ride') return wt === 'cross' || wt === 'brick' || wt.startsWith('bike_');
   if (appType === 'swim') return wt === 'cross' || wt.startsWith('swim_');
   return wt === 'cross';

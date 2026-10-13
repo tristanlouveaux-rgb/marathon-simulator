@@ -39,6 +39,10 @@ import { isManualInAppActual } from '@/calculations/in-app-activity';
 import { computeWeekRawTSS, computeWeekTSS } from '@/calculations/fitness-model';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { isActivityCompatibleWithSlot } from '@/calculations/matching';
+import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
+import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import type { SimulatorState, Workout } from '@/types/state';
 
 const OFFER_MIN = 40;
@@ -188,5 +192,105 @@ describe('a ticked HYROX cross session counts like a recorded one', () => {
     expect(isManualInAppActual(rec)).toBe(true);
     expect(rec.manualSport).toBeUndefined();
     expect(rec.durationSec).toBe(run.estimatedDurationMin! * 60);
+  });
+});
+
+/**
+ * Easy erg work (plan generator v18, D1) completes through the same Mark as
+ * Done (review 2026-10-13: it recorded nothing, so a done erg was missing
+ * from every load surface and the HYROX forecast's adherence factor read an
+ * athlete who did everything as 80% adherent). Mark as Done now writes a
+ * rowing record at the session's planned duration and rated RPE.
+ */
+describe('a ticked HYROX easy erg session counts like a recorded one', () => {
+  function markDoneIn(w: Workout, weekIdx: number): void {
+    vi.setSystemTime(Date.now() + 1000);
+    openHyroxWorkoutDetail(w, weekIdx);
+    (document.querySelector('#hx-detail-mark-done') as HTMLButtonElement).click();
+  }
+  const firstErgWeek = (s: SimulatorState) => s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(isHyroxEasyErg));
+
+  it('Mark as Done writes one rowing record at the planned duration, which the MTL sums count as done', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    expect(i).toBeGreaterThanOrEqual(0);
+    s.w = i + 1;
+    const wk = s.wks[i];
+    const erg = (wk.triWorkouts ?? []).find(isHyroxEasyErg)!;
+    expect(isMtlSessionCompleted(wk, erg)).toBe(false);
+    const before = Object.keys(wk.garminActuals ?? {}).length;
+
+    markDoneIn(erg, i);
+
+    expect(Object.keys(wk.garminActuals ?? {}).length).toBe(before + 1);
+    const rec = wk.garminActuals![erg.id!];
+    expect(isManualInAppActual(rec)).toBe(true);
+    expect(rec.manualSport).toBe('rowing');
+    expect(rec.durationSec).toBe(erg.estimatedDurationMin! * 60);
+    expect(rec.rpe).toBe(erg.rpe);
+    expect(isMtlSessionCompleted(wk, erg)).toBe(true);
+  });
+
+  it('a plan done in full, easy erg sessions ticked, reads as fully adherent in the HYROX forecast', () => {
+    const s = hyroxState();
+    const first = firstErgWeek(s);
+    expect(first).toBeGreaterThanOrEqual(0);
+    // Three completed weeks that hold easy erg work, the current week after them.
+    const current = first + 4;
+    s.w = current;
+    const past = s.wks.slice(current - 4, current - 1);
+    expect(past.some(wk => (wk.triWorkouts ?? []).some(isHyroxEasyErg))).toBe(true);
+    // Every other session carries the record its own completion writes.
+    for (const wk of past) {
+      wk.garminActuals ??= {};
+      for (const w of wk.triWorkouts ?? []) {
+        if (isHyroxEasyErg(w)) continue;
+        wk.garminActuals[w.id!] = {
+          garminId: `guided-manual-${w.id}`, startTime: null, distanceKm: 0, durationSec: (w.estimatedDurationMin ?? 0) * 60,
+          avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null,
+        };
+      }
+    }
+    const adherenceFactor = () => buildHyroxProjection(s, predictHyroxRace(s)!).factors.find(f => f.name === 'Plan adherence');
+    // The ergs not yet ticked: the forecast reads the plan as partly done.
+    expect(adherenceFactor()).toBeDefined();
+    past.forEach((wk) => {
+      for (const erg of (wk.triWorkouts ?? []).filter(isHyroxEasyErg)) markDoneIn(erg, s.wks.indexOf(wk));
+    });
+    expect(adherenceFactor()).toBeUndefined();
+  });
+
+  it('a synced row on the erg\'s day supersedes its rowing record', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 1;
+    vi.setSystemTime(new Date(2026, 8, 28 + i * 7 + 6, 20, 0, 0)); // Sunday evening of that week
+    const wk = s.wks[i];
+    const erg = (wk.triWorkouts ?? []).find(isHyroxEasyErg)!;
+    markDoneIn(erg, i);
+    expect(wk.garminActuals![erg.id!].manualSport).toBe('rowing');
+    matchAndAutoComplete([{
+      garmin_id: 'strava-ERG', activity_type: 'ROWING', start_time: new Date(2026, 8, 28 + i * 7 + erg.dayOfWeek!, 8, 0, 0).toISOString(),
+      duration_sec: erg.estimatedDurationMin! * 60, distance_m: 8000, avg_pace_sec_km: null, avg_hr: null, max_hr: null,
+      calories: null, aerobic_effect: null, anaerobic_effect: null, iTrimp: null, hrZones: null,
+    }]);
+    expect(wk.garminActuals![erg.id!].garminId).toBe('strava-ERG');
+  });
+
+  it('a gym or HIIT activity never fills an easy erg slot', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 1;
+    vi.setSystemTime(new Date(2026, 8, 28 + i * 7 + 6, 20, 0, 0));
+    const wk = s.wks[i];
+    const erg = (wk.triWorkouts ?? []).find(isHyroxEasyErg)!;
+    expect(isActivityCompatibleWithSlot('gym', erg)).toBe(false);
+    expect(isActivityCompatibleWithSlot('gym', { t: 'hyrox_station_technique', discipline: 'station' })).toBe(true);
+    matchAndAutoComplete([{
+      garmin_id: 'strava-HIIT', activity_type: 'HIIT', start_time: new Date(2026, 8, 28 + i * 7 + erg.dayOfWeek!, 18, 0, 0).toISOString(),
+      duration_sec: erg.estimatedDurationMin! * 60, distance_m: 0, avg_pace_sec_km: null, avg_hr: null, max_hr: null,
+      calories: null, aerobic_effect: null, anaerobic_effect: null, iTrimp: null, hrZones: null,
+    }]);
+    expect(wk.garminActuals?.[erg.id!]).toBeUndefined();
   });
 });

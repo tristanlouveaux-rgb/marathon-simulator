@@ -26,6 +26,7 @@ import { dropAppleRowsWithStravaTwin, collapseAppleStravaTwins } from './cross-s
 import { resolveWeekWorkouts } from '@/ui/week-resolve';
 import { addUnspentItemOnce } from './excess-records';
 import { localDateKey, calendarDaysBetween } from '@/utils/local-date';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -1401,11 +1402,15 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         // 'guided-') is an UPGRADE candidate: this synced recording replaces the
         // in-app one with richer data (HR, GPS), mirroring the Strava-beats-Garmin
         // rule, instead of landing as a duplicate adhoc activity.
+        // Easy erg work is not station work: a HIIT or a HYROX-named session
+        // never fills its slot (review 2026-10-13: one done on the erg's day
+        // claimed the erg slot before the real station session).
         const stationWorkouts = (wk.triWorkouts ?? []).filter((w: Workout) => {
           const wid = w.id || w.n;
           const existing = wk.garminActuals?.[wid];
           const isGuidedActual = !!existing && String(existing.garminId).startsWith('guided-');
           if (wk.rated![wid] !== undefined && !isGuidedActual) return false;
+          if (isHyroxEasyErg(w)) return false;
           const disc = (w as any).discipline as string | undefined;
           return disc === 'station' || disc === 'brick';
         });

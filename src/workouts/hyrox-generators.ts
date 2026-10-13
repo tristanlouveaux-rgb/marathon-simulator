@@ -19,6 +19,7 @@ import type { Workout } from '@/types/state';
 import { fmtModelPaceKm } from '@/utils/format';
 import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
+import { HYROX_EASY_ERG_TYPE } from './hyrox-easy-erg';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, STATION_EXTERNAL_LOAD_KG } from '@/constants/hyrox-benchmarks';
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
@@ -401,19 +402,7 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
 
 // ─── Easy erg session ─────────────────────────────────────────────────────────
 
-/** Session type of easy erg work. */
-export const HYROX_EASY_ERG_TYPE = 'hyrox_erg_easy';
-
-/** True for an easy erg session (generateHyroxEasyErg). It carries discipline
- *  'station' (the SkiErg and the row erg are HYROX stations: the injury gates
- *  scale it with the station capacity, the MTL split counts it as station
- *  load, and a logged gym session can fill its slot), but it is not station
- *  work for the plan's rules: not a station session, not HYROX-specific work,
- *  not a hard session, no eccentric load. The HYROX cards show it as a
- *  time-defined cross-training session (Mark as Done, Adjust, Skip). */
-export function isHyroxEasyErg(w: Pick<Workout, 't'>): boolean {
-  return w.t === HYROX_EASY_ERG_TYPE;
-}
+export { HYROX_EASY_ERG_TYPE, isHyroxEasyErg } from './hyrox-easy-erg';
 
 /** The ergs an athlete can use for easy erg work, in alternation order. */
 function easyErgStations(access: HyroxConfig['stationAccess']): HyroxStation[] {

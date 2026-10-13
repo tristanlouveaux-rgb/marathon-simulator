@@ -100,6 +100,7 @@ import {
 } from '@/cross-training/activities';
 import { localDateKey } from '@/utils/local-date';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 /** garminId prefix of every in-app record (strength-complete.ts convention). */
 export const IN_APP_GARMIN_ID_PREFIX = 'guided-';
@@ -538,12 +539,19 @@ export function recordPlannedRunDone(
  * offer, capability-substitution buildAerobicOffer: "Row erg: aerobic
  * maintenance") takes its sport from its label, by the canonical label rule
  * (deriveSportFromLabel): 'rowing' for the erg. Its bike and swim offers carry
- * a discipline. Anything else (gym and strength complete through
- * completeStrengthSession, HYROX station / brick, rest) gets no record.
+ * a discipline. A HYROX easy erg session (SkiErg or row erg, discipline
+ * 'station') records as 'rowing' (review 2026-10-13: it recorded nothing, so
+ * a done erg was missing from every load surface and from the HYROX forecast's
+ * adherence count). Rowing is the nearest sport the load model holds for
+ * either erg (SPORTS_DB has no SkiErg entry; its runSpec and leg load are
+ * rowing's, an open question). Anything else (gym and strength complete
+ * through completeStrengthSession, HYROX station / brick, rest) gets no
+ * record.
  */
 export function plannedSessionRecordSport(
   w: Pick<Workout, 't' | 'discipline'> & Partial<Pick<Workout, 'n'>>,
 ): 'run' | 'cycling' | 'swimming' | 'rowing' | null {
+  if (isHyroxEasyErg(w)) return 'rowing';
   if (!w.discipline && w.t === 'cross_training') {
     const sport = deriveSportFromLabel(w.n);
     return sport === 'cycling' || sport === 'swimming' || sport === 'rowing' ? sport : null;
