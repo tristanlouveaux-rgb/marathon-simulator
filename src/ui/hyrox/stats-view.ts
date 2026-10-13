@@ -172,7 +172,7 @@ export function renderHyroxStatsView(): void {
               </div>
             </div>
             <div style="margin-top:14px;position:relative;height:8px;background:linear-gradient(to right, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.20) 100%);border-radius:4px">
-              <div style="position:absolute;top:-3px;left:${fasterThanPct}%;transform:translateX(-50%);width:14px;height:14px;background:#0F172A;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>
+              ${fieldRankMarkerHtml(rank!)}
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:4px">
               <div style="font-size:10px;color:var(--c-faint)">Slowest</div>
@@ -391,6 +391,27 @@ function renderRunPaceRow(
   `;
 }
 
+/**
+ * The Field rank bar's marker. Inside the table: a dot at "faster than X%".
+ * Past a coarse table's end (placement.beyond) the share is a bound, so the
+ * bar shows the range it can be in (from the bar's end to the bound) and a
+ * hollow marker at the bound, matching the circle's "<25%" and the headline's
+ * "Slower than 75%" (review 2026-10-13: the dot sat at 25% as a point).
+ */
+export function fieldRankMarkerHtml(rank: Pick<HyroxCohortPlacement, 'fasterThanPct' | 'beyond' | 'tableRange'>): string {
+  if (!rank.beyond) {
+    return `<div data-hx-rank-marker="point" style="position:absolute;top:-3px;left:${rank.fasterThanPct}%;transform:translateX(-50%);width:14px;height:14px;background:#0F172A;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>`;
+  }
+  const bound = rank.beyond === 'slow' ? 100 - rank.tableRange[1] : 100 - rank.tableRange[0];
+  const span = rank.beyond === 'slow'
+    ? `left:0;width:${bound}%`
+    : `left:${bound}%;width:${100 - bound}%`;
+  return `
+    <div data-hx-rank-range="${rank.beyond}" style="position:absolute;top:0;${span};height:100%;border-radius:4px;background:rgba(15,23,42,0.35)"></div>
+    <div data-hx-rank-marker="bound" style="position:absolute;top:-3px;left:${bound}%;transform:translateX(-50%);width:14px;height:14px;background:#fff;border-radius:50%;border:2px solid #0F172A;box-sizing:border-box"></div>
+  `;
+}
+
 /** Where a Benchmarks-ledger value comes from (hyroxBenchmarkLedger). */
 export type HyroxBenchmarkBasis =
   /** No athlete time: the row shows the band's population estimate. */
@@ -425,7 +446,15 @@ export interface HyroxBenchmarkLedgerRow {
    *  uses the population seed. */
   sec?: number;
   basis: HyroxBenchmarkBasis;
+  /** `sec` is the stored time converted to the race's weights (an Open test
+   *  for a Pro target, a Women Open test for a Mixed Doubles woman, a Pro
+   *  race split for an Open target): the row carries a load note. */
+  loadsConverted?: boolean;
 }
+
+/** The load note under a ledger row whose time was converted to the race's
+ *  weights (HyroxBenchmarkLedgerRow.loadsConverted). */
+export const HYROX_LEDGER_LOAD_NOTE = 'Converted to race weights';
 
 /**
  * The Stats Benchmarks ledger: one row per raced station (all 8) and the
@@ -469,7 +498,7 @@ export function hyroxBenchmarkLedger(
     const basis: HyroxBenchmarkBasis = b.teamTimeSplit
       ? (doublesTarget ? 'solo_of_doubles_race' : 'converted_from_doubles_race')
       : (doublesTarget && b.slot === 'singles' ? 'from_singles' : 'calibrated');
-    return { station: b.station, sec: b.sec, basis };
+    return { station: b.station, sec: b.sec, basis, ...(b.loadsConverted ? { loadsConverted: true } : {}) };
   });
   return { rows, calibratedCount: resolved.coverage.calibrated.length, total: resolved.coverage.total };
 }
@@ -502,6 +531,7 @@ function renderBenchmarkRow(
     calibratedRightCol = `
       <div style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums;text-align:right">${fmtSec(userSec!)}</div>
       <div style="font-size:10px;color:var(--c-muted);text-align:right">${ageCaption}</div>
+      ${row.loadsConverted ? `<div style="font-size:10px;color:var(--c-faint);text-align:right">${HYROX_LEDGER_LOAD_NOTE}</div>` : ''}
     `;
   }
 

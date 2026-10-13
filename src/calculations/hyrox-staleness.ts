@@ -16,6 +16,14 @@
  *
  * Thresholds (6 / 12 / 24 months) are directional, not precise. Recalibrate
  * once race-outcome data lands. See SCIENCE_LOG §V.
+ *
+ * Per-entry splits decay (lane H3c): a station value decays by its OWN date.
+ * A race split (or the boot migration's 'manual' seed of one) is the race,
+ * so it reads the race-age splitsWeight below. A station test or a guided
+ * session best reads hyroxEntrySplitsWeight at the entry's date, with the
+ * same curve and the same physiology mitigation, so last week's test is not
+ * pulled toward the seed because the race was 9 months ago, and a test 15
+ * months old decays even when the race was recent or undated.
  */
 
 import type { SimulatorState } from '@/types/state';
@@ -61,7 +69,7 @@ export function bandFromVdot(v: number | null | undefined): AbilityBand | null {
  *  Mirrors the readiness-score blend in race-projection.hyrox.ts but adapted
  *  to a "have you held fitness?" question rather than a "are you race-ready
  *  today?" question. */
-function computePhysiologyMitigation(state: SimulatorState): number {
+export function computePhysiologyMitigation(state: SimulatorState): number {
   const hx = state.hyroxConfig;
   if (!hx) return 0.5;
 
@@ -117,6 +125,52 @@ function applyMitigation(baseWeight: number, mitigation: number): number {
   return baseWeight + (1.0 - baseWeight) * (mitigation - 0.5) * 2;
 }
 
+interface BaseDecay {
+  category: Exclude<HyroxStalenessCategory, 'unknown'>;
+  baseBandWeight: number;
+  baseSplitsWeight: number;
+  confidenceCap: 'low' | 'medium' | null;
+}
+
+/** The time-decay curve at an age in months, before physiology mitigation. */
+function baseDecayAt(monthsAgo: number): BaseDecay {
+  if (monthsAgo < FRESH_MO) {
+    return { category: 'fresh', baseBandWeight: 1.0, baseSplitsWeight: 1.0, confidenceCap: null };
+  }
+  if (monthsAgo < STALE_MO) {
+    const t = (monthsAgo - FRESH_MO) / (STALE_MO - FRESH_MO);
+    return { category: 'aging', baseBandWeight: 1.0 - 0.6 * t, baseSplitsWeight: 1.0 - 0.2 * t, confidenceCap: 'medium' };
+  }
+  if (monthsAgo < VERY_STALE_MO) {
+    const t = (monthsAgo - STALE_MO) / (VERY_STALE_MO - STALE_MO);
+    return { category: 'stale', baseBandWeight: 0.4 - 0.2 * t, baseSplitsWeight: 0.8 - 0.2 * t, confidenceCap: 'low' };
+  }
+  return { category: 'very_stale', baseBandWeight: 0.2, baseSplitsWeight: 0.6, confidenceCap: 'low' };
+}
+
+/** Months between an ISO date and now; null when missing, unparseable or in
+ *  the future. */
+function monthsSince(dateStr: string | undefined): number | null {
+  if (!dateStr) return null;
+  const ms = new Date(dateStr).getTime();
+  if (Number.isNaN(ms)) return null;
+  const months = (Date.now() - ms) / MS_PER_MONTH;
+  return months < 0 ? null : months;
+}
+
+/**
+ * The splits weight for one station value by its own date (a station test or
+ * a guided session best): the race splits' curve read at the entry's age,
+ * physiology-mitigated the same way. 1 when the date is missing, unparseable
+ * or in the future (the race model's 'unknown'). `mitigation` is
+ * computePhysiologyMitigation(state), computed once per forecast.
+ */
+export function hyroxEntrySplitsWeight(dateISO: string | undefined, mitigation: number): number {
+  const months = monthsSince(dateISO);
+  if (months == null) return 1;
+  return applyMitigation(baseDecayAt(months).baseSplitsWeight, mitigation);
+}
+
 export function computeHyroxStaleness(state: SimulatorState): HyroxStalenessResult {
   const hx = state.hyroxConfig;
   const dateStr = hx?.hyroxPreviousRaceDate
@@ -125,47 +179,18 @@ export function computeHyroxStaleness(state: SimulatorState): HyroxStalenessResu
     ageMonths: null, category: 'unknown',
     bandWeight: 1, splitsWeight: 1, confidenceCap: null, physiologyMitigation: 1,
   };
-  if (!dateStr) return unknown;
-
-  const raceMs = new Date(dateStr).getTime();
-  if (Number.isNaN(raceMs)) return unknown;
-  const monthsAgo = (Date.now() - raceMs) / MS_PER_MONTH;
-  if (monthsAgo < 0) return unknown; // future-dated nonsense, treat as unknown
+  const monthsAgo = monthsSince(dateStr);
+  if (monthsAgo == null) return unknown; // no date, unparseable, or future-dated
 
   const mitigation = computePhysiologyMitigation(state);
-
-  let baseBandWeight = 1.0;
-  let baseSplitsWeight = 1.0;
-  let category: HyroxStalenessCategory = 'fresh';
-  let confidenceCap: 'low' | 'medium' | null = null;
-
-  if (monthsAgo < FRESH_MO) {
-    // No decay.
-  } else if (monthsAgo < STALE_MO) {
-    category = 'aging';
-    const t = (monthsAgo - FRESH_MO) / (STALE_MO - FRESH_MO);
-    baseBandWeight = 1.0 - 0.6 * t;
-    baseSplitsWeight = 1.0 - 0.2 * t;
-    confidenceCap = 'medium';
-  } else if (monthsAgo < VERY_STALE_MO) {
-    category = 'stale';
-    const t = (monthsAgo - STALE_MO) / (VERY_STALE_MO - STALE_MO);
-    baseBandWeight = 0.4 - 0.2 * t;
-    baseSplitsWeight = 0.8 - 0.2 * t;
-    confidenceCap = 'low';
-  } else {
-    category = 'very_stale';
-    baseBandWeight = 0.2;
-    baseSplitsWeight = 0.6;
-    confidenceCap = 'low';
-  }
+  const d = baseDecayAt(monthsAgo);
 
   return {
     ageMonths: monthsAgo,
-    category,
-    bandWeight: applyMitigation(baseBandWeight, mitigation),
-    splitsWeight: applyMitigation(baseSplitsWeight, mitigation),
-    confidenceCap,
+    category: d.category,
+    bandWeight: applyMitigation(d.baseBandWeight, mitigation),
+    splitsWeight: applyMitigation(d.baseSplitsWeight, mitigation),
+    confidenceCap: d.confidenceCap,
     physiologyMitigation: mitigation,
   };
 }

@@ -205,12 +205,12 @@ describe('correcting the previous race format', () => {
     expect(predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!.baseSec).toBeCloseTo(260, 6);
   });
 
-  it('singles → doubles for a doubles target re-bands the time in the doubles field (field-relative, lane H3b)', () => {
+  it('singles → doubles for a doubles target re-bands the time in Open Singles terms (planning band, lane H3c)', () => {
     const doublesMedian = p50(OD.total);
     const s = init({ previousHyroxTimeSec: doublesMedian, hyroxPreviousTimeFormat: 'open_singles' });
     applyHyroxPrevFormatChange('open_doubles');
-    // Read in the doubles field it holds the median: the same band as the
-    // singles median in the singles field.
+    // The doubles median maps to about the singles median in Open Singles
+    // terms (hyroxPlanningBandFor): the same band as the singles median.
     expect(s.hyroxConfig!.athleteBand).toBe('intermediate');
     const singles = init({ hyroxFormat: 'open_singles', previousHyroxTimeSec: p50(OS.total), hyroxPreviousTimeFormat: 'open_singles' });
     expect(s.hyroxConfig!.athleteBand).toBe(singles.hyroxConfig!.athleteBand);

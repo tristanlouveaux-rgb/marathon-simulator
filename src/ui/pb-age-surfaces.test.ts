@@ -135,6 +135,8 @@ describe('HYROX run pace from VDOT: the PB-age caption', () => {
     const aged = hyroxAthlete(40);
     expect(hyroxRunPaceSourceNote(aged, 'derived')).toBe(`Run pace updated from your VDOT. ${CAPTION} in the run pace.`);
     expect(hyroxRunPaceSourceNote(aged, 'seed')).not.toContain(CAPTION);
+    // The seed names its provenance (lane H3c), never "population data".
+    expect(hyroxRunPaceSourceNote(aged, 'seed')).toBe('Run pace is the median of your ability band in the HYROX results. Add a recent run for a VDOT-anchored prediction.');
     expect(hyroxRunPaceSourceNote(aged, 'user')).toBe('');
     expect(hyroxRunPaceSourceNote(hyroxAthlete(undefined), 'derived')).toBe('Run pace updated from your VDOT.');
   });

@@ -18,7 +18,7 @@ import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
-import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
@@ -93,9 +93,10 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   }
 
   const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  // Band in the field the race was raced in (hyroxBandForPreviousTime:
-  // field-relative thresholds of the format x sex, or doubles division, table).
-  const newBand = hyroxBandForPreviousTime(update.timeSec, update.format, s.biologicalSex, hx.division);
+  // The planning band (hyroxPlanningBandFor): the finish in Open Singles
+  // terms, banded on the Open Singles field of the athlete's sex, so a Pro or
+  // Doubles race never lowers the plan for its heavier weights or partner.
+  const newBand = hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division);
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;

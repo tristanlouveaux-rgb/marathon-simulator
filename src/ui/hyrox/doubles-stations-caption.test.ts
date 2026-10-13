@@ -15,7 +15,7 @@ vi.mock('@/data/supabaseClient', () => ({
   SUPABASE_FUNCTIONS_BASE: undefined,
 }));
 
-import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody, hyroxConfidenceCaption } from './forecast-view';
+import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody, hyroxConfidenceCaption, calibrationBannerCtaLabel } from './forecast-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { predictHyroxRace, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 import type { SimulatorState } from '@/types/state';
@@ -307,5 +307,38 @@ describe('hyroxConfidenceCaption: a cross-format cap says so', () => {
     expect(p.calibratedCount).toBe(8);
     expect(p.confidence).toBe('medium');
     expect(hyroxConfidenceCaption(p, true)).toMatch(/^8\/8 stations calibrated\. The race is (8|9) months old, so confidence is medium\.$/);
+  });
+});
+
+describe('calibration banner CTA (lane H3c)', () => {
+  const lines = (converted: number, calibrated: number): HyroxStationLine[] =>
+    HYROX_STATION_ORDER.map((station, i) => ({
+      station, baseSec: 200, adjustedSec: 200,
+      source: i < calibrated ? 'calibrated' : 'seed',
+      ...(i < converted ? { crossFormat: true } : {}),
+    }));
+  it('every station converted from the other format: "Test your stations"', () => {
+    expect(calibrationBannerCtaLabel({ stations: lines(8, 8), confidence: 'medium' })).toBe('Test your stations');
+  });
+  it('a provisional forecast: "Test your stations"', () => {
+    expect(calibrationBannerCtaLabel({ stations: lines(0, 1), confidence: 'low' })).toBe('Test your stations');
+  });
+  it('some stations still on the seed or own times: "Calibrate the rest"', () => {
+    expect(calibrationBannerCtaLabel({ stations: lines(3, 5), confidence: 'medium' })).toBe('Calibrate the rest');
+    expect(calibrationBannerCtaLabel({ stations: lines(0, 5), confidence: 'medium' })).toBe('Calibrate the rest');
+  });
+  it('a real Mixed Doubles woman with 8 singles tests', () => {
+    const SPLITS: Record<HyroxStation, number> = { ski_erg: 280, sled_push: 180, sled_pull: 300, burpee_broad_jumps: 330, row_erg: 300, farmer_carry: 130, sandbag_lunges: 300, wall_balls: 420 };
+    const p = predictHyroxRace({
+      biologicalSex: 'female',
+      hyroxConfig: {
+        format: 'open_doubles', division: 'mixed', athleteBand: 'intermediate', hyroxPhase: 'base',
+        stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+        weeklyMTL: 0, mtlCap: 1000, mtlHistory: [], runsPerWeek: 3, stationSessionsPerWeek: 1, bricksPerWeek: 1, weeklyHoursAvailable: 8,
+        stationBenchmarksSingles: SPLITS,
+      },
+    } as unknown as SimulatorState)!;
+    expect(p.stations.every(l => l.crossFormat)).toBe(true);
+    expect(calibrationBannerCtaLabel(p)).toBe('Test your stations');
   });
 });

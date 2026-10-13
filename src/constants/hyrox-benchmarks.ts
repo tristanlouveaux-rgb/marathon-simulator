@@ -14,14 +14,15 @@
  * SEED_ROXZONE_SEC) are Open Singles with women and men pooled, for callers
  * that pass no cohort. Callers that know the athlete read the seeds through
  * hyrox-results.ts: hyroxSeedField picks the field the athlete's band was
- * read in (the previous race's singles family, Open when no race is on file,
- * at the athlete's own sex), stationSeedTimesFor / seedRunPaceSecKmFor /
- * seedRoxzoneSecFor read that field's band medians, and
+ * read in (the planning field, Open Singles at the athlete's own sex, for
+ * every format; lane H3c, hyrox-planning-band.ts), stationSeedTimesFor /
+ * seedRunPaceSecKmFor / seedRoxzoneSecFor read that field's band medians, and
  * hyroxStationSeedsAtTarget converts the station seeds to the target's solo
- * loads per station (hyroxOpenToProSec / hyroxProToOpenSec, the difference in
- * differences on the Pro and Open results) when the two differ. A Pro target
- * whose band came from an Open race therefore seeds from the Open field's
- * medians converted to Pro loads, never from the fitter Pro field's band.
+ * loads per station (hyroxOpenToProSec, the difference in differences on the
+ * Pro and Open results) when those are the Pro tier. A Pro target therefore
+ * seeds from the Open field's medians converted to Pro loads, never from the
+ * fitter Pro field's band. The Pro band cells stay in the data module for
+ * reference; no seed reads them.
  * Seeds are one athlete's times; the doubles forecast scales them into the
  * pair's time with the doubles ratios (hyrox-doubles.ts).
  *

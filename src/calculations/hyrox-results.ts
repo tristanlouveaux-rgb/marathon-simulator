@@ -8,8 +8,10 @@
  * come from the same call here.
  *
  * Side of the line: tracking (descriptive population tables). The band
- * helpers also feed planning inputs (the band sets MTL caps and sessions);
- * the seeds live in src/constants/hyrox-benchmarks.ts.
+ * thresholds and seeds also feed planning inputs (the band sets MTL caps and
+ * sessions), always in the planning field (hyroxPlanningField, Open Singles at
+ * the athlete's sex; the planning band itself is hyrox-planning-band.ts); the
+ * seed tables live in src/constants/hyrox-benchmarks.ts.
  *
  * Which table set (orchestrator decision, lane H3b):
  *  - Seasons 8 and 9 (HYROX_S89_*) for station percentiles, placements,
@@ -509,10 +511,25 @@ export function hyroxBandFor(totalSec: number, format: HyroxFormat, sex: HyroxCo
 }
 
 /**
- * The band for a previous HYROX finish, read in the field it was raced in:
- * the previous race's format, with the athlete's sex for singles and the
- * doubles division (else sex) for doubles. A doubles time is banded against
- * doubles results directly, no singles conversion.
+ * The planning field: Open Singles at the athlete's own sex (biological sex,
+ * then a single-sex division pick, then the pooled Open Singles table). The
+ * one field the planning band is read in for every format (lane H3c,
+ * hyrox-planning-band.ts: a Pro or Doubles finish converts to Open Singles
+ * terms first), and the field whose band medians are the seeds
+ * (hyroxSeedField). Display ranks stay cohort-specific.
+ */
+export function hyroxPlanningField(biologicalSex: BiologicalSex, division?: HyroxDivision): HyroxResultsCohort {
+  return publishedOrPooled('open_singles', resolveHyroxAthleteSex(biologicalSex, division) ?? 'pooled');
+}
+
+/**
+ * The field-relative band for a previous HYROX finish, read in the field it
+ * was raced in: the previous race's format, with the athlete's sex for
+ * singles and the doubles division (else sex) for doubles. A descriptive
+ * position in that field. Planning does not read it: the plan's band is
+ * hyroxPlanningBandFor (hyrox-planning-band.ts), one field for every format,
+ * because the Pro fields are fitter and a field-relative band lowered the
+ * plan for choosing heavier weights (lane H3c).
  */
 export function hyroxBandForPreviousTime(
   prevTimeSec: number,
@@ -684,58 +701,55 @@ export function hyroxImprovementCeiling(opts: {
 /** Minimal state the seed helpers read. */
 export interface HyroxSeedStateInput {
   biologicalSex?: BiologicalSex;
-  hyroxConfig?: Pick<HyroxConfig, 'format' | 'division' | 'athleteBand' | 'hyroxPreviousTimeFormat'> | null;
+  hyroxConfig?: Pick<HyroxConfig, 'format' | 'division' | 'athleteBand'> | null;
 }
 
 /**
- * The field the athlete's band is read in: the previous race's format (a
- * doubles race is banded on the doubles results of the pair's division,
- * hyroxBandForPreviousTime), with the athlete's sex for singles; Open Singles
- * when no race is on file (an experience band). The one source for the band
- * thresholds a screen shows (chip detail "Band thresholds") and the field the
- * seeds are read in (hyroxSeedField), so the two always describe one field.
+ * The field the athlete's band is read in: the planning field
+ * (hyroxPlanningField, Open Singles at the athlete's own sex) for every
+ * format, with or without a race on file (lane H3c: a Pro or Doubles finish
+ * converts to Open Singles terms before banding, hyroxPlanningBandFor). The
+ * one source for the band thresholds a screen shows (chip detail "Band
+ * thresholds") and the field the seeds are read in (hyroxSeedField), so the
+ * two always describe one field.
  */
 export function hyroxBandField(state: HyroxSeedStateInput): HyroxResultsCohort {
-  const hx = state.hyroxConfig;
-  return hyroxResultsCohort(hx?.hyroxPreviousTimeFormat ?? 'open_singles', state.biologicalSex, hx?.division);
+  return hyroxPlanningField(state.biologicalSex, state.hyroxConfig?.division);
 }
 
 /**
- * The singles field the athlete's band was read in, whose band medians are
- * the seeds: the singles family (Open or Pro) of the band field
- * (hyroxBandField) at the athlete's own sex; Open when no race is on file. A
- * band is a position in a field, and the Pro field is fitter: an Open-raced
- * intermediate seeded from the Pro field's intermediate band would forecast
- * faster at heavier loads.
+ * The singles field whose band medians are the seeds: the band field
+ * (hyroxBandField, Open Singles at the athlete's own sex). A band is a
+ * position in a field, so its seeds are that field's band medians; the
+ * target's loads come after (hyroxStationSeedsAtTarget converts Open to Pro
+ * per station). Before lane H3c a Pro-raced band read the Pro field's medians,
+ * when the band itself was read in the Pro field.
  */
 export function hyroxSeedField(state: HyroxSeedStateInput): { format: HyroxSeedFormat; sex: HyroxBandCellSex } {
-  const format: HyroxSeedFormat = hyroxSinglesFormatOf(hyroxBandField(state).format);
-  const sex = resolveHyroxAthleteSex(state.biologicalSex, state.hyroxConfig?.division) ?? 'pooled';
-  return { format, sex };
+  const field = hyroxBandField(state);
+  const sex: HyroxBandCellSex = field.sex === 'female' || field.sex === 'male' ? field.sex : 'pooled';
+  return { format: 'open_singles', sex };
 }
 
 /**
  * Band seed per station, one athlete's time at the TARGET's loads: the band
- * medians of the seed field (hyroxSeedField), converted Open to Pro (or Pro
- * to Open) per station when the field's load family differs from the
- * target's solo load family (hyroxSoloLoadsArePro; hyroxOpenToProSec, the
- * difference in differences on the Pro and Open results). A woman in Mixed
- * Doubles races M-Open loads, the Women Pro tier, so her Open Singles women
- * medians convert as a Women Pro athlete's would. The seed every surface reads
- * for an untested station: the forecast, the planning benchmarks, the Stats
- * ledger, the station detail page, the benchmark card.
+ * medians of the seed field (hyroxSeedField, Open Singles at the athlete's
+ * sex), converted Open to Pro per station when the target's solo loads are
+ * the Pro tier (hyroxSoloLoadsArePro; hyroxOpenToProSec, the difference in
+ * differences on the Pro and Open results). A woman in Mixed Doubles races
+ * M-Open loads, the Women Pro tier, so her Open Singles women medians convert
+ * as a Women Pro athlete's would. The seed every surface reads for an
+ * untested station: the forecast, the planning benchmarks, the Stats ledger,
+ * the station detail page, the benchmark card.
  */
 export function hyroxStationSeedsAtTarget(state: HyroxSeedStateInput, band?: AbilityBand): Record<HyroxStation, number> {
   const b = band ?? state.hyroxConfig?.athleteBand ?? 'intermediate';
   const field = hyroxSeedField(state);
   const seeds = stationSeedTimesFor(b, field.format, field.sex);
   const targetPro = hyroxSoloLoadsArePro(state.hyroxConfig?.format ?? 'open_singles', state.biologicalSex, state.hyroxConfig?.division);
-  const fieldPro = field.format === 'pro_singles';
-  if (targetPro === fieldPro) return seeds;
+  if (!targetPro) return seeds;
   const out = {} as Record<HyroxStation, number>;
-  for (const st of Object.keys(seeds) as HyroxStation[]) {
-    out[st] = targetPro ? hyroxOpenToProSec(st, seeds[st], field.sex) : hyroxProToOpenSec(st, seeds[st], field.sex);
-  }
+  for (const st of Object.keys(seeds) as HyroxStation[]) out[st] = hyroxOpenToProSec(st, seeds[st], field.sex);
   return out;
 }
 

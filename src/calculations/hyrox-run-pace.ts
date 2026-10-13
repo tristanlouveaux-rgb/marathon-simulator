@@ -26,7 +26,9 @@
  *   doubles/singles run ratio from the ingested results (hyrox-doubles.ts),
  *   read at the athlete's singles run total. Partners run every leg together
  *   and the finish is the later chip (26/27 Doubles rulebook s4.3, s7.3), so
- *   the pair runs at the slower partner's pace: about 1.02 at P50.
+ *   the pair runs at about the slower partner's pace. At P50 the ratio is
+ *   1.01 to 1.06 in the same-sex divisions (Open and Pro); a Mixed pair reads
+ *   0.98 against women's singles and 1.09 against men's.
  * - `personalOffsetSec`: Bayesian update from logged-race observations.
  *   Decays to zero over 12 months without new evidence. See
  *   `hyrox-personal-pace.ts`.
@@ -108,7 +110,9 @@ export function cpRatioForVdot(vdot: number): number {
  * gut-anchored DOUBLES_TO_SINGLES_PACE_FACTOR (1.05 to 1.10, i.e. doubles 5
  * to 9% faster), which assumed partner rest from alternate whole stations.
  * The results show the opposite: the pair runs at about the slower
- * partner's pace (run ratio about 1.02 to 1.06 at the median).
+ * partner's pace. Median run ratio (S8-S9): 1.01 to 1.06 in the same-sex
+ * divisions, Open and Pro; a Mixed pair 0.98 against women's singles and
+ * 1.09 against men's.
  */
 export function doublesRunPaceFactor(singlesPaceSecKm: number, tables?: HyroxDoublesTables): number {
   return doublesRatioAt('run', singlesPaceSecKm * 8, tables).ratio;
@@ -122,7 +126,8 @@ export interface HyroxRunPaceComponents {
   /** CP-anchored ratio for user's VDOT (continuous interp). */
   cpRatio: number;
   /** Format adjustment applied: 1.0 for singles; for doubles the
-   *  percentile-matched run ratio (doublesRunPaceFactor, about 1.02 at P50). */
+   *  percentile-matched run ratio (doublesRunPaceFactor; 0.98 to 1.09 at
+   *  P50 across divisions). */
   formatFactor: number;
   /** Personalisation offset from logged-race observations (sec/km). */
   personalOffsetSec: number;

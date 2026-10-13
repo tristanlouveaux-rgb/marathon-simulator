@@ -39,10 +39,12 @@ import {
   hyroxStationPercentile,
   hyroxBandThresholds,
   hyroxSeedField,
+  hyroxFasterThanPct,
 } from '@/calculations/hyrox-results';
-import { hyroxTierLabel } from '@/calculations/hyrox-population';
+import { hyroxTierLabel, hyroxTierLabelIn } from '@/calculations/hyrox-population';
+import { hyroxOpenSinglesTermsSec } from '@/calculations/hyrox-planning-band';
 import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
-import { renderHyroxStatsView, hyroxStatsRank } from './stats-view';
+import { renderHyroxStatsView, hyroxStatsRank, hyroxBenchmarkLedger, fieldRankMarkerHtml, HYROX_LEDGER_LOAD_NOTE } from './stats-view';
 import { renderHyroxStationDetailView } from './station-detail-view';
 import { renderPercentileDistributions } from './percentile-distributions';
 import { renderPerformanceRadar } from './performance-radar';
@@ -142,6 +144,26 @@ describe('real station percentiles, no "est." label', () => {
     expect(out).toContain(hyroxResultsCaption({ format: 'pro_doubles', sex: 'female' }));
     expect(out).not.toMatch(/synthesised|Approximate/);
     expect((out.match(/hx-pd-line/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('the total row names its cohort; the other rows stay short (lane H3c)', () => {
+    const cases: Array<[Partial<NonNullable<SimulatorState['hyroxConfig']>>, 'female' | 'male', RegExp]> = [
+      [{ format: 'open_singles' }, 'female', / of women$/],
+      [{ format: 'open_singles' }, 'male', / of men$/],
+      [{ format: 'open_doubles', division: 'mixed' }, 'female', / of mixed pairs$/],
+    ];
+    for (const [hx, sex, re] of cases) {
+      const s = hyroxState({ ...hx, stationBenchmarksSingles: SINGLES }, { biologicalSex: sex });
+      setState(s);
+      const p = predictHyroxRace(s)!;
+      const cohort = hx.format === 'open_doubles' ? { format: 'open_doubles' as const, sex: 'mixed' as const } : { format: 'open_singles' as const, sex };
+      const label = hyroxTierLabelIn(hyroxFasterThanPct('total', p.totalSec, cohort)!, cohort);
+      expect(label).toMatch(re);
+      const out = renderPercentileDistributions(p);
+      expect(out).toContain(label);
+      const run = hyroxTierLabel(hyroxFasterThanPct('run_total', p.runSec, cohort)!);
+      expect(out).toContain(`>${run}</span>`);
+    }
   });
 });
 
@@ -254,6 +276,22 @@ describe('Stats circle past a coarse age table\'s end', () => {
     setState(s);
     renderHyroxStatsView();
     expect(document.getElementById('app-root')!.textContent).toContain(figure);
+    // The bar shows the bound as a bound: a range from the slow end to the
+    // bound and a hollow marker there, never a point (lane H3c).
+    const root = document.getElementById('app-root')!;
+    expect(root.querySelector('[data-hx-rank-marker="point"]')).toBeNull();
+    const marker = root.querySelector<HTMLElement>('[data-hx-rank-marker="bound"]')!;
+    expect(marker.style.left).toBe(`${100 - rank.tableRange[1]}%`);
+    const range = root.querySelector<HTMLElement>('[data-hx-rank-range="slow"]')!;
+    expect(range.style.left).toBe('0px');
+    expect(range.style.width).toBe(`${100 - rank.tableRange[1]}%`);
+  });
+
+  it('the bar marker: a point inside the table, a range to the fast end past it', () => {
+    expect(fieldRankMarkerHtml({ fasterThanPct: 62, beyond: null, tableRange: [1, 99] })).toContain('data-hx-rank-marker="point"');
+    const fast = fieldRankMarkerHtml({ fasterThanPct: 90, beyond: 'fast', tableRange: [10, 75] });
+    expect(fast).toContain('data-hx-rank-range="fast"');
+    expect(fast).toContain('left:90%;width:10%');
   });
 
   it('inside the table the figure is the plain percentage', () => {
@@ -268,8 +306,18 @@ describe('chip detail band thresholds: the cohort\'s field-relative scale', () =
     expect(hyroxSeedField(s)).toEqual({ format: 'open_singles', sex: 'male' });
     setState(s);
     renderHyroxChipDetail('you');
-    expect(html()).toContain('Open Singles men. Each band holds the same place in every format and sex field.');
-    expect(html()).not.toContain('Pro Singles men. Each band');
+    expect(html()).toContain('Open Singles men. Pro and Doubles times convert to Open Singles terms before banding.');
+    expect(html()).not.toContain('Pro Singles men.');
+  });
+
+  it('a Pro previous time: the caption shows it in Open Singles terms, the time the thresholds band (lane H3c)', () => {
+    const s = hyroxState({ format: 'pro_singles', hyroxPreviousTimeFormat: 'pro_singles', previousHyroxTimeSec: 5400 }, { biologicalSex: 'male' });
+    setState(s);
+    renderHyroxChipDetail('you');
+    const open = Math.round(hyroxOpenSinglesTermsSec(5400, 'pro_singles', 'male'));
+    const fmt = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    expect(open).toBeLessThan(5400);
+    expect(html()).toContain(`Open Singles men. Your 1:30:00 Pro Singles time is ${fmt(open)} in Open Singles terms.`);
   });
 
   it('a woman sees the women\'s thresholds for the field her band was read in', () => {
@@ -279,7 +327,32 @@ describe('chip detail band thresholds: the cohort\'s field-relative scale', () =
     const th = hyroxBandThresholds({ format: 'open_singles', sex: 'female' });
     const fmt = (sec: number) => `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
     expect(html()).toContain(fmt(th[0].maxSec));
-    expect(html()).toContain('Open Singles women. Each band holds the same place in every format and sex field.');
+    expect(html()).toContain('Open Singles women. Pro and Doubles times convert to Open Singles terms before banding.');
+  });
+});
+
+describe('Stats ledger: a row converted to the race\'s weights carries a load note (lane H3c)', () => {
+  it('a Mixed Doubles woman\'s Open Singles test reads at M-Open with the note', () => {
+    const hist = { sled_push: [{ dateISO: daysAgo(10), sec: 180, source: 'full_test' as const, format: 'open_singles' as const }] };
+    const s = hyroxState({ format: 'open_doubles', division: 'mixed', stationBenchmarksSingles: { sled_push: 180 }, stationBenchmarkHistory: hist }, { biologicalSex: 'female' });
+    const row = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'sled_push')!;
+    expect(row.loadsConverted).toBe(true);
+    expect(row.sec!).toBeGreaterThan(180);
+    setState(s);
+    renderHyroxStatsView();
+    expect(html()).toContain(HYROX_LEDGER_LOAD_NOTE);
+  });
+
+  it('a Pro target\'s Open test converts; an unloaded station and an own-weight test do not', () => {
+    const pro = hyroxState({ format: 'pro_singles', stationBenchmarksSingles: { sled_push: 180, ski_erg: 280 } }, { biologicalSex: 'male' });
+    const rows = hyroxBenchmarkLedger(pro).rows;
+    expect(rows.find(r => r.station === 'sled_push')!.loadsConverted).toBe(true);
+    expect(rows.find(r => r.station === 'ski_erg')!.loadsConverted).toBeUndefined();
+    const open = hyroxState({ stationBenchmarksSingles: { sled_push: 180 } }, { biologicalSex: 'male' });
+    expect(hyroxBenchmarkLedger(open).rows.find(r => r.station === 'sled_push')!.loadsConverted).toBeUndefined();
+    setState(open);
+    renderHyroxStatsView();
+    expect(html()).not.toContain(HYROX_LEDGER_LOAD_NOTE);
   });
 });
 
