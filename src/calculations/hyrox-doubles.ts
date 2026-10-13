@@ -28,9 +28,17 @@
  *    Open Doubles against Open Singles, both pooled (HYROX_DEFAULT_DOUBLES_TABLES).
  *
  * Station times are mapped per station (H1 used one aggregate station ratio
- * from the 8-station total of the S4 to S6 tables, which had no splits). At
- * the median the ratios run from about 0.92 (SkiErg, row: one machine, the
- * pair alternates) to about 0.6 (sleds, burpee broad jumps, wall balls).
+ * from the 8-station total of the S4 to S6 tables, which had no splits).
+ * Median ratios, S8-S9, across the divisions (Open Doubles women, men and
+ * mixed against each sex's singles; Pro Doubles women and men):
+ *   SkiErg and row 0.82 to 0.98 (one machine, the pair alternates), sled push
+ *   0.58 to 0.76, sled pull 0.68 to 0.80, burpee broad jumps 0.53 to 0.67,
+ *   farmers carry 0.74 to 0.84, sandbag lunges 0.67 to 0.77, wall balls 0.61
+ *   to 0.68, run total 0.98 to 1.09 (Mixed against women's singles 0.98,
+ *   against men's 1.09; same-sex divisions 1.01 to 1.06), Roxzone 0.89 to
+ *   0.99.
+ * Mixed pairs set the ends of most ranges: a woman's ratio and a man's differ
+ * because the pair is compared with each partner's own singles field.
  *
  * Mixed Doubles woman: the pair races M-Open loads, the Women Pro tier, while
  * her singles field is Open Singles women (W-Open loads). Her solo station
