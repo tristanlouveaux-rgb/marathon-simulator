@@ -11,7 +11,9 @@
  *      (2-week race taper, HYROX_TAPER_WEEKS_MIN).
  *   2. Week budget: weekly hours × the nominal phase multiplier × deload
  *      (0.75 every 4th week) × the effort / MTL-gap lever. Taper weeks:
- *      taperFraction (0.70 then 0.55) of the reference week's planned minutes.
+ *      taperFraction (0.70 then 0.55) of the reference week's planned minutes,
+ *      with the reference week's station and brick sessions, minutes and MTL
+ *      as ceilings.
  *   3. Sessions from the tier's weekly structure (HYROX_WEEKLY_STRUCTURE) and
  *      the athlete's session-count choice; no brick in base, before week 5 or
  *      in race week.
@@ -27,7 +29,8 @@
  *   7. Acute:chronic guard: a training week's planned load (canonical TSS) is
  *      at most ACWR_SAFE_HIGH × the mean of the previous 4 planned weeks (weeks
  *      before week 1 count as week 1). Over it, the budget shrinks and the week
- *      is rebuilt.
+ *      is rebuilt; a week keeps at least one station session or brick until
+ *      its long run is at its floor.
  *   8. Wrap into Week[].
  */
 
@@ -132,6 +135,15 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // trimmed for a quality run that then leaves the week keeps its length; the
 // first regenerated week reads the stored week before for the Sunday-to-Monday
 // rule; every change the rules force is noted on the week (hyroxPlanNotes).
+// Still v18 (unreleased; review round 2, 2026-10-13): a ceiling never takes a
+// training week's last station session or brick before the long run is at
+// its floor (the MTL cap and the spacing drops neither); the race taper holds
+// 0.70 / 0.55 of the reference week, with the reference week's per-session
+// caps (length, rounds, stations) and its station and brick minutes and MTL
+// as ceilings, shedding sessions when the floors leave it over; week 1 never
+// stretches the long run past the start, and taper weeks never stretch it
+// (the taper tempo is sized to the long run instead); intermediate peak reps
+// are labelled HYROX race pace.
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -304,9 +316,10 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
     // The whole technique session leaves only when that brings the week
     // under the cap: when the runs alone hold the week above it, dropping the
     // station session would take the week's HYROX-specific work for no
-    // compliance.
+    // compliance. It never leaves as the week's last station session or
+    // brick (review 2026-10-13: every training week keeps HYROX work).
     const tech = out.findIndex(s => s.t === 'hyrox_station_technique');
-    if (tech >= 0 && total() - mtlOf(out[tech]) <= cap) {
+    if (tech >= 0 && total() - mtlOf(out[tech]) <= cap && hasHyroxWork(out.filter((_, i) => i !== tech))) {
       adjustments.push(`W${weekIndex}: technique station session left out (MTL cap ${cap})`);
       out = out.filter((_, i) => i !== tech);
       continue;
@@ -375,6 +388,22 @@ interface HyroxRaceWeek {
   firstDow: number;
 }
 
+/** A reference week's per-session caps (sessionCapsOf). */
+type HyroxSessionCaps = Partial<Record<string, { min: number; rounds: number; stations: number }>>;
+
+/** Cap class of a station or brick session type. */
+function sessionCapClass(t: string): 'circuit' | 'brick' {
+  return t === 'hyrox_brick' || t === 'hyrox_mini_brick' ? 'brick' : 'circuit';
+}
+
+/** The cap for a session type: its own entry, else its class's (a deload or
+ *  taper week holding a type the reference week did not, e.g. the taper's
+ *  technique circuit after a race-pace peak). */
+function sessionCapFor(caps: HyroxSessionCaps | undefined, t: string): { min: number; rounds: number; stations: number } | undefined {
+  if (!caps) return undefined;
+  return caps[t] ?? caps[sessionCapClass(t)];
+}
+
 /** What one week's generation reads from the weeks before it. */
 interface HyroxWeekInputs {
   /** The week's minute budget (hours are a ceiling). */
@@ -408,12 +437,18 @@ interface HyroxWeekInputs {
    *  more than the week before (the taper never rises; the existing race-week
    *  rule). */
   prevRunMin?: number;
-  /** Deload weeks: per session type (station circuits, bricks), the longest
-   *  duration and the most rounds the last loaded week held. A deload holds
-   *  no session longer than its counterpart there (review 2026-10-12: a
-   *  deload brick of 90 min and 6 rounds against 75 min and 5 in the week
-   *  before). */
-  sessionCaps?: Partial<Record<string, { min: number; rounds: number }>>;
+  /** Deload and race-taper weeks: per session type (station circuits,
+   *  bricks), the longest duration, the most rounds and the most stations
+   *  the reference week (the last loaded week) held, with the circuit and
+   *  brick classes as a fallback for a type it did not hold. A deload or a
+   *  taper week holds no session longer or fuller than its counterpart there
+   *  (review 2026-10-12: a deload brick of 90 min and 6 rounds against 75 min
+   *  and 5 in the week before; review 2026-10-13: taper weeks rebuilt a full
+   *  4-station circuit of 50 to 72 min where the reference week held 2
+   *  stations, so taper week 1 sat up to 0.98 of the reference week). */
+  sessionCaps?: HyroxSessionCaps;
+  /** Name of the week's ceiling in the notes (default 'acute:chronic guard'). */
+  ceilingName?: string;
   /** Race week: circuit rounds at most the week before's (the taper never
    *  rises). Before (review 2026-10-12) race week's one circuit took the whole
    *  non-running budget: 64 to 73 min and 4 to 5 rounds against 2 rounds the
@@ -429,8 +464,11 @@ interface HyroxWeekInputs {
  *  50 to 65 min, so before 2026-10-13 a deload at low hours lost the whole
  *  circuit), the technique station session, the secondary brick, the quality
  *  run, then the brick. The long run is trimmed only after all of them (it is
- *  the cheapest load per minute and carries the progression). A product
- *  order: no source ranks sessions for this. */
+ *  the cheapest load per minute and carries the progression), down to its
+ *  floor. A group whose omission would leave the week with no station session
+ *  and no brick waits until the long run is at its floor (review 2026-10-13);
+ *  after it leaves, the long run takes back what fits. A product order: no
+ *  source ranks sessions for this. */
 const HYROX_GUARD_OMIT_ORDER = ['easy', 'stations', 'technique', 'light', 'quality', 'brick'] as const;
 type HyroxGuardOmit = typeof HYROX_GUARD_OMIT_ORDER[number];
 
@@ -515,22 +553,42 @@ function generateWeekSessions(
     ? state.commuteConfig.commuteDaysPerWeek
     : 0;
 
+  // Deload and race-taper weeks carry their reference week's session caps;
+  // the ceiling that cut something is named in the note.
+  const ceilingName = inputs.ceilingName ?? 'acute:chronic guard';
   // Clamp a budget-sized station or brick to its caps (minimum 35 min for
   // station sessions, 20 for a brick), then apply the week's scale.
   function clampDur(kind: string, raw: number): number {
     const minDur = kind.includes('station') ? 35 : 20;
     const capped = Math.min(HYROX_SESSION_MAX_MIN[kind] ?? 90, raw);
     const sized = Math.max(minDur, Math.round(capped * scale));
-    const refCap = inputs.sessionCaps?.[`hyrox_${kind}`];
+    const refCap = sessionCapFor(inputs.sessionCaps, `hyrox_${kind}`);
     return refCap ? Math.min(sized, Math.max(minDur, refCap.min)) : sized;
   }
-  // Deload weeks: no station or brick session longer, or with more rounds,
-  // than the same session in the last loaded week.
+  // Deload and race-taper weeks: no station or brick session with more
+  // rounds, or a circuit with more stations, than its counterpart in the
+  // reference week.
   const capToRef = (w: Workout): Workout => {
-    const refCap = inputs.sessionCaps?.[w.t];
-    if (!refCap || (w.hyroxRounds ?? 0) <= refCap.rounds) return w;
-    adjustments.push(`W${weekIndex}: ${w.n} cut to ${refCap.rounds} rounds (deload: the last loaded week's)`);
-    return withHyroxRounds(w, refCap.rounds);
+    const refCap = sessionCapFor(inputs.sessionCaps, w.t);
+    if (!refCap) return w;
+    let out = w;
+    if ((out.hyroxRounds ?? 0) > refCap.rounds) {
+      const rounds = Math.max(MIN_CIRCUIT_ROUNDS, refCap.rounds);
+      adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
+      out = withHyroxRounds(out, rounds);
+    }
+    const maxStations = Math.max(MIN_CIRCUIT_STATIONS, refCap.stations);
+    let cut = 0;
+    for (;;) {
+      const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
+      if (st.length <= maxStations) break;
+      const next = withoutHyroxStation(out, st.reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation);
+      if (next === out) break;
+      out = next;
+      cut++;
+    }
+    if (cut > 0) adjustments.push(`W${weekIndex}: ${cut} station(s) taken out of the ${out.n} (${ceilingName}: the reference week's ${maxStations})`);
+    return out;
   };
 
   // Read benchmarks from the format-specific slot, falling back to legacy pooled field.
@@ -546,9 +604,6 @@ function generateWeekSessions(
   // through every station, sleds included.
   const needsAssessment = weekIndex === 1 && !raceWeek;
   const omit = new Set(inputs.omit ?? []);
-  // Deload weeks carry their reference week's session caps; the ceiling that
-  // took something out is named in the note.
-  const ceilingName = inputs.sessionCaps ? 'deload ceiling' : 'acute:chronic guard';
   const guardNote = (what: string) => adjustments.push(`W${weekIndex}: ${what} left out (${ceilingName})`);
   const allKinds = stationKinds(tier, kindPhase, counts.stations);
   const sKinds = allKinds
@@ -625,8 +680,13 @@ function generateWeekSessions(
     const capped = capToRef(b);
     nonRun.push(light ? { ...capped, n: 'Secondary Brick', hyroxLight: true } : capped);
   }
+  // Running inside station and brick sessions counts toward the running
+  // share: the run components of every station and brick session (today the
+  // brick runs; the technique circuit's closing easy run is not a component
+  // yet, it sits in the station content lane H2b owns, so the share does not
+  // see it until H2b makes it one).
   const brickRunMin = nonRun
-    .filter(w => w.discipline === 'brick')
+    .filter(w => w.discipline === 'brick' || w.discipline === 'station')
     .reduce((sum, w) => sum + (w.hyroxComponents ?? [])
       .filter(c => c.type === 'run')
       .reduce((a, c) => a + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0), 0);
@@ -668,10 +728,23 @@ function generateWeekSessions(
     } else if (raceWeek) {
       quality = generateHyroxRun({ ...runParams, kind: 'run_tempo', targetMinutes: HYROX_RACE_WEEK_PRIMER_MIN, slotIndex: weekIndex });
     } else {
+      // Taper week 1: the taper tempo, sized like the other runs, then
+      // shortened (down to the primer's size) until it is no longer than the
+      // week's long run and the single-run ceiling. Before (review
+      // 2026-10-13) the long run was stretched to the tempo's distance, so a
+      // taper long run came out above TAPER_LONG_RUN_FRACTION.
       const others = slots - (longMin != null ? 1 : 0);
       const room = fitRoom * scale - (longMin ?? 0);
-      const tempoMin = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(HYROX_SESSION_MAX_MIN.run_tempo, Math.round(room / Math.max(1, others))));
-      quality = generateHyroxRun({ ...runParams, kind: 'run_tempo', targetMinutes: tempoMin, slotIndex: weekIndex });
+      const sized = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(HYROX_SESSION_MAX_MIN.run_tempo, Math.round(room / Math.max(1, others))));
+      const maxKm = Math.min(
+        longMin != null ? (longMin * 60) / easyPace : Infinity,
+        inputs.runCeilingKm ?? Infinity,
+      );
+      for (let t = Math.max(sized, HYROX_RACE_WEEK_PRIMER_MIN); t >= HYROX_RACE_WEEK_PRIMER_MIN && !quality; t--) {
+        const q = generateHyroxRun({ ...runParams, kind: 'run_tempo', targetMinutes: t, slotIndex: weekIndex });
+        if (hyroxRunLengthKm(q) <= maxKm + 1e-9) quality = q;
+      }
+      if (!quality) adjustments.push(`W${weekIndex}: Tempo Run longer than the long run or the 110% single-run ceiling at its shortest, run easy`);
     }
   }
   const qMin = () => quality?.estimatedDurationMin ?? 0;
@@ -681,12 +754,16 @@ function generateWeekSessions(
   // run's minutes at easy pace stand in for it). Then the long run and the
   // quality run fit inside the running share: the long run gives way first,
   // down to LONG_SOFT_FLOOR_MIN; below that the quality run leaves the week.
-  // A quality run longer than the long run (the 8 x 1 km session against a
-  // 70-min long run) stretches the long run to its distance when the tier cap,
-  // the ceiling and the running share allow; otherwise it takes its easy
-  // sibling. A long run trimmed for a quality run that then leaves the week
-  // keeps its full length (review 2026-10-12: an advanced 4 h week 5 ran a
-  // 34-min long run beside no quality run).
+  // In a training week, a quality run longer than the long run (the 8 x 1 km
+  // session against a 70-min long run) stretches the long run to its distance
+  // when the tier cap, the ceiling and the running share allow, and in week 1
+  // never above the long-run start (review 2026-10-13: a no-history
+  // beginner's 3-week plan opened with a 39-min long run against the 30-min
+  // start); otherwise the quality run takes its easy sibling. Taper weeks
+  // never stretch the long run (their tempo is sized to it above). A long run
+  // trimmed for a quality run that then leaves the week keeps its full length
+  // (review 2026-10-12: an advanced 4 h week 5 ran a 34-min long run beside no
+  // quality run).
   const longWanted = longMin;
   if (quality && inputs.runCeilingKm != null && hyroxRunLengthKm(quality) > inputs.runCeilingKm + 1e-9) {
     adjustments.push(`W${weekIndex}: ${quality.n} above the 110% single-run ceiling, run easy`);
@@ -706,7 +783,9 @@ function generateWeekSessions(
     const longKm = (longFit * 60) / easyPace;
     if (qKm > longKm + 1e-9) {
       const stretched = Math.ceil((qKm * easyPace) / 60);
-      if (stretched <= Math.min(HYROX_LONG_RUN[tier].capMin, ceilingMin) && stretched + qMin() <= fitRoom) {
+      const startCap = weekIndex === 1 && inputs.longRunMin != null ? inputs.longRunMin : Infinity;
+      const stretchCap = Math.min(HYROX_LONG_RUN[tier].capMin, ceilingMin, startCap);
+      if (trainingWeek && stretched <= stretchCap && stretched + qMin() <= fitRoom) {
         longFit = stretched;
       } else {
         adjustments.push(`W${weekIndex}: ${quality.n} longer than the long run, run easy`);
@@ -868,13 +947,16 @@ function generateWeekSessions(
     let found = findHyroxWeekSchedule(week, { prevSunday: inputs.prevSunday });
     while (!found) {
       if (!demoteOne()) {
+        // The week's last station session or brick leaves last.
+        const hyroxCount = week.filter(x => x.discipline === 'station' || x.discipline === 'brick').length;
         const dropOrder = (w: Workout): number =>
           w.commute ? -1
-            : w.t === 'hyrox_run_easy' && !isHyroxLongRun(w) ? 0
-              : w.t === 'hyrox_station_technique' ? 1
-                : w.hyroxLight ? 2
-                  : isHyroxLongRun(w) ? 3
-                    : 4;
+            : (w.discipline === 'station' || w.discipline === 'brick') && hyroxCount === 1 ? 5
+              : w.t === 'hyrox_run_easy' && !isHyroxLongRun(w) ? 0
+                : w.t === 'hyrox_station_technique' ? 1
+                  : w.hyroxLight ? 2
+                    : isHyroxLongRun(w) ? 3
+                      : 4;
         const candidates = week.filter(w => dropOrder(w) >= 0).sort((a, b) => dropOrder(a) - dropOrder(b));
         if (candidates.length === 0) break;
         week = week.filter(w => w !== candidates[0]);
@@ -1125,6 +1207,12 @@ function longestRunKm(ws: readonly Workout[]): number {
   return best;
 }
 
+/** True when a week holds a station session (the assessment included) or a
+ *  brick: its HYROX-specific work. */
+function hasHyroxWork(ws: readonly Workout[]): boolean {
+  return prescribed(ws).some(w => w.discipline === 'station' || w.discipline === 'brick');
+}
+
 /** Session counts of a built week (commute runs excluded; the assessment
  *  counts as a station session). */
 function sessionCountsOf(ws: readonly Workout[]): HyroxSessionCounts {
@@ -1141,20 +1229,40 @@ function runMinutesOf(ws: readonly Workout[]): number {
   return prescribed(ws).filter(w => w.discipline === 'run').reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
 }
 
-/** Longest duration and most rounds per station and brick session type in a
- *  week (the deload's per-session caps). */
-function sessionCapsOf(ws: readonly Workout[]): Partial<Record<string, { min: number; rounds: number }>> {
-  const out: Partial<Record<string, { min: number; rounds: number }>> = {};
+/** Longest duration, most rounds and most stations per station and brick
+ *  session type in a week, and per class ('circuit': technique or race pace;
+ *  'brick': brick or mini brick). The deload's and the race taper's
+ *  per-session caps (sessionCapFor). */
+function sessionCapsOf(ws: readonly Workout[]): HyroxSessionCaps {
+  const out: HyroxSessionCaps = {};
+  const raise = (key: string, w: Workout) => {
+    const cur = out[key];
+    out[key] = {
+      min: Math.max(cur?.min ?? 0, w.estimatedDurationMin ?? 0),
+      rounds: Math.max(cur?.rounds ?? 0, w.hyroxRounds ?? 0),
+      stations: Math.max(cur?.stations ?? 0, (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length),
+    };
+  };
   for (const w of prescribed(ws)) {
     if (w.discipline !== 'station' && w.discipline !== 'brick') continue;
     if (w.t === 'hyrox_assessment') continue;
-    const cur = out[w.t];
-    out[w.t] = {
-      min: Math.max(cur?.min ?? 0, w.estimatedDurationMin ?? 0),
-      rounds: Math.max(cur?.rounds ?? 0, w.hyroxRounds ?? 0),
-    };
+    raise(w.t, w);
+    raise(sessionCapClass(w.t), w);
   }
   return out;
+}
+
+/** Station and brick work of a week: minutes and MTL (the race taper holds
+ *  no more of either than its reference week). */
+function stationWorkOf(ws: readonly Workout[]): { min: number; mtl: number } {
+  let min = 0;
+  let mtl = 0;
+  for (const w of prescribed(ws)) {
+    if (w.discipline !== 'station' && w.discipline !== 'brick') continue;
+    min += w.estimatedDurationMin ?? 0;
+    mtl += w.musculoTendonLoad ?? 0;
+  }
+  return { min, mtl };
 }
 
 /** Largest round count of a week's station circuits (technique or race pace). */
@@ -1311,7 +1419,18 @@ export function buildHyroxTrainingWeeks(
     const maxQualityRuns = deloadRef
       ? prescribed(deloadRef.workouts).filter(x => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals').length
       : undefined;
-    const sessionCaps = deloadRef ? sessionCapsOf(deloadRef.workouts) : undefined;
+    // Race taper (both weeks): the reference week caps every station and brick
+    // session (length, rounds, stations) and the week's station and brick
+    // minutes and MTL. Before (review 2026-10-13) taper weeks rebuilt a full
+    // 4-station circuit at its 2-round floor where the reference week's had 2
+    // stations or none: taper week 1 sat above 0.80 of the reference week in
+    // 111 of 629 configurations, and 153 taper weeks held more station and
+    // brick minutes than the reference week.
+    const raceTaper = phase === 'taper' && w >= taperStart;
+    const taperRef = raceTaper ? refWeek : undefined;
+    const sessionCaps = deloadRef ? sessionCapsOf(deloadRef.workouts) : taperRef ? sessionCapsOf(taperRef.workouts) : undefined;
+    const ceilingName = deloadRef ? 'deload ceiling' : raceTaper ? 'taper' : undefined;
+    const taperWork = taperRef ? stationWorkOf(taperRef.workouts) : undefined;
     const prevRunMin = phase === 'taper' && built[w - 2] ? runMinutesOf(built[w - 2].workouts) : undefined;
     const maxCircuitRounds = raceWeek && built[w - 2]
       ? Math.max(MIN_CIRCUIT_ROUNDS, circuitRoundsOf(built[w - 2].workouts))
@@ -1327,10 +1446,12 @@ export function buildHyroxTrainingWeeks(
       const adjustments: string[] = [];
       const workouts = hyroxWeekForRace(state, w, trainingWeeks, phase, layout, {
         budgetMin, longRunMin, runCeilingKm, prevSunday: weekPrevSunday, scale, omit: omitted, capCounts,
-        maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps,
+        maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, ceilingName,
       }, adjustments);
-      return { workouts, adjustments, tss: hyroxPlannedTss(workouts), min: hyroxPlannedMinutes(workouts) };
+      const work = stationWorkOf(workouts);
+      return { workouts, adjustments, tss: hyroxPlannedTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl };
     };
+    type Attempt = ReturnType<typeof make>;
     // Ceilings: the acute:chronic guard (training weeks), the deload ceiling
     // (deload weeks) and the taper budget (taper weeks: planned minutes at
     // most taperFraction × the reference week). Every budget-sized session
@@ -1338,17 +1459,24 @@ export function buildHyroxTrainingWeeks(
     // give way together. Session floors and fixed formats move the load in
     // whole sessions, so a training week still over its ceiling then takes
     // stations out of circuits and leaves sessions out
-    // (HYROX_GUARD_OMIT_ORDER) and, last, trims the long run. A taper week keeps its run count and its long run and may sit
-    // above its ceiling by the session floors.
+    // (HYROX_GUARD_OMIT_ORDER) and, last, trims the long run. A race-taper
+    // week is also held to its reference week's station and brick minutes
+    // and MTL; over its ceiling after the scale it takes stations out of its
+    // circuits, then leaves sessions out (taperDropRank) until it fits: the
+    // fractions hold (review 2026-10-13), the primer alone excepted.
     const capTss = Math.min(acwrCapTss ?? Infinity, deloadCapTss ?? Infinity);
     const capMin = phase === 'taper' ? budgetMin : (deloadCapMin ?? Infinity);
     const hasCeiling = capTss < Infinity || capMin < Infinity;
     const trainingCeiling = phase !== 'taper' && hasCeiling;
-    const over = (a: { tss: number; min: number }) => a.tss > capTss + 1e-6 || a.min > capMin + 1e-6;
-    const ratio = (a: { tss: number; min: number }) => Math.min(
-      a.tss > 0 ? capTss / a.tss : Infinity,
-      a.min > 0 ? capMin / a.min : Infinity,
-    );
+    const limits: Array<{ cap: number; of: (a: Attempt) => number }> = [];
+    if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.tss });
+    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min });
+    if (taperWork) {
+      limits.push({ cap: taperWork.min, of: a => a.workMin });
+      limits.push({ cap: taperWork.mtl, of: a => a.workMtl });
+    }
+    const over = (a: Attempt) => limits.some(l => l.of(a) > l.cap + 1e-6);
+    const ratio = (a: Attempt) => limits.reduce((m, l) => Math.min(m, l.of(a) > 0 ? l.cap / l.of(a) : Infinity), Infinity);
     // Solver step: shrink by the overshoot each round, at least 3% (a round
     // that lands exactly on a floor otherwise repeats), for at most 16
     // rounds. Numerical choices with no physiological meaning.
@@ -1363,10 +1491,26 @@ export function buildHyroxTrainingWeeks(
     };
     let attempt = fit();
     if (trainingCeiling) {
+      // A ceiling never takes a week's last station session or brick before
+      // the long run is trimmed to its floor (review 2026-10-13: at 6 h the
+      // guard left novice and intermediate plans with no station or brick
+      // work for up to 10 weeks in a row, 33% of training weeks, to keep the
+      // tempo and the long run). A group whose omission would leave the week
+      // with no HYROX work waits until the long run is at its floor.
+      const heldWork = hasHyroxWork(attempt.workouts);
+      const deferred: HyroxGuardOmit[] = [];
       for (const o of HYROX_GUARD_OMIT_ORDER) {
         if (!over(attempt)) break;
+        const keep = omitted;
         omitted = [...omitted, o];
-        attempt = fit();
+        const trial = fit();
+        if (heldWork && !hasHyroxWork(trial.workouts)) {
+          omitted = keep;
+          deferred.push(o);
+          attempt = fit();
+          continue;
+        }
+        attempt = trial;
       }
       // Bring back any group left out on the way that fits beside the ones
       // that had to go (an easy run left out before the quality run went).
@@ -1376,6 +1520,35 @@ export function buildHyroxTrainingWeeks(
         omitted = omitted.filter(x => x !== o);
         const trial = fit();
         if (over(trial)) { omitted = keep; attempt = fit(); } else attempt = trial;
+      }
+      // The long run down to its floor (LONG_SOFT_FLOOR_MIN, or its own
+      // length when that is shorter: a deload or a 30-min start).
+      const longWanted = longRunMin;
+      const longFloor = Math.min(LONG_SOFT_FLOOR_MIN, longRunMin ?? 0);
+      for (let i = 0; i < 16 && over(attempt) && longRunMin != null && longRunMin > longFloor; i++) {
+        longRunMin = Math.max(longFloor, Math.floor(longRunMin * Math.min(0.97, ratio(attempt))));
+        attempt = make();
+      }
+      // Then the week's last station session or brick, and the long run gets
+      // back what that frees (the longest length up to the one it had that
+      // keeps the week under the ceiling).
+      if (over(attempt) && deferred.length > 0) {
+        for (const o of deferred) {
+          if (!over(attempt)) break;
+          omitted = [...omitted, o];
+          attempt = fit();
+        }
+        if (!over(attempt) && longWanted != null && longRunMin != null && longRunMin < longWanted) {
+          let lo = longRunMin;
+          let hi = longWanted;
+          while (lo < hi) {
+            const mid = Math.ceil((lo + hi) / 2);
+            longRunMin = mid;
+            if (over(make())) hi = mid - 1; else lo = mid;
+          }
+          longRunMin = lo;
+          attempt = make();
+        }
       }
       for (let i = 0; i < 16 && over(attempt) && longRunMin != null && longRunMin > 0; i++) {
         longRunMin = Math.floor(longRunMin * Math.min(0.97, ratio(attempt)));
@@ -1387,23 +1560,44 @@ export function buildHyroxTrainingWeeks(
           : `W${w}: planned load ${Math.round(attempt.tss)} TSS above the ${Math.round(capTss)} TSS guard`);
       }
     }
+    // A taper week sheds sessions while `tooHeavy` holds, lowest priority
+    // first (taperDropRank). With `workOnly`, only station and brick sessions
+    // qualify (a run never leaves for the station and brick caps). When one
+    // session's removal alone brings the week under, the lowest-priority such
+    // session goes instead, so the week keeps as much as fits (a race week 9
+    // min over keeps an easy run rather than losing both easy runs and the
+    // circuit). Race week keeps its primer.
+    const withWorkouts = (a: Attempt, workouts: Workout[]): Attempt => {
+      const work = stationWorkOf(workouts);
+      return { ...a, workouts, tss: hyroxPlannedTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl };
+    };
+    const shed = (tooHeavy: (a: Attempt) => boolean, workOnly: (a: Attempt) => boolean, why: string) => {
+      while (tooHeavy(attempt)) {
+        const cur = attempt;
+        const candidates = cur.workouts
+          .filter(x => taperDropRank(x, raceWeek) >= 0)
+          .filter(x => !workOnly(cur) || x.discipline === 'station' || x.discipline === 'brick')
+          .sort((a, b) => taperDropRank(a, raceWeek) - taperDropRank(b, raceWeek));
+        if (candidates.length === 0) break;
+        const pick = candidates.find(x => !tooHeavy(withWorkouts(cur, cur.workouts.filter(y => y !== x)))) ?? candidates[0];
+        attempt = withWorkouts(cur, cur.workouts.filter(x => x !== pick));
+        attempt.adjustments.push(`W${w}: ${pick.n} left out (${why})`);
+      }
+    };
+    if (raceTaper && over(attempt)) {
+      // The race taper's fractions (of the reference week, or of the weekly
+      // hours in a plan too short to hold one): stations out of the circuits
+      // first, then whole sessions.
+      omitted = ['stations'];
+      attempt = fit();
+      shed(over, a => a.min <= capMin + 1e-6 && a.tss <= capTss + 1e-6,
+        `taper: ${Math.round(budgetMin)} min, ${taperFraction(w - taperStart + 1, taperLen)} of ${taperRef ? 'the reference week' : 'the weekly hours'}`);
+    }
     // The taper never rises (running's rule, SCIENCE_LOG §CV.4): a taper week
     // whose session floors hold it above the week before loses sessions,
-    // lowest priority first, until it is no heavier. Race week keeps its
-    // primer.
+    // lowest priority first, until it is no heavier.
     const before = built[w - 2];
-    if (phase === 'taper' && before) {
-      while (attempt.min > before.plannedMin + 1e-6) {
-        const pick = attempt.workouts
-          .filter(x => taperDropRank(x, raceWeek) >= 0)
-          .sort((a, b) => taperDropRank(a, raceWeek) - taperDropRank(b, raceWeek))[0];
-        if (!pick) break;
-        attempt.workouts = attempt.workouts.filter(x => x !== pick);
-        attempt.adjustments.push(`W${w}: ${pick.n} left out (the taper never rises)`);
-        attempt.tss = hyroxPlannedTss(attempt.workouts);
-        attempt.min = hyroxPlannedMinutes(attempt.workouts);
-      }
-    }
+    if (phase === 'taper' && before) shed(a => a.min > before.plannedMin + 1e-6, () => false, 'the taper never rises');
 
     built.push({
       week: w,
