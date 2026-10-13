@@ -227,13 +227,14 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const mtlWithErg = (wk.triWorkouts ?? []).reduce((a, x) => a + (x.musculoTendonLoad ?? 0), 0);
       if (mtlWithErg > hx.mtlCap + EPS) out.push(`W${w}: easy erg lifts the week's MTL to ${mtlWithErg.toFixed(0)} above the ${hx.mtlCap} cap`);
     }
-    // Easy erg work fills what the sessions leave of the week's budget: a
-    // week HYROX_RUN_FLOOR_MIN or more under its budget says why (a ceiling or
-    // the MTL cap holds it, the chosen sessions are full, no erg access, or a
-    // session left out).
-    if (minutes(wk) < (detail[i]?.budgetMin ?? 0) - HYROX_RUN_FLOOR_MIN
+    // Easy erg work fills what the sessions leave of the week's budget (a
+    // deload's, up to its ceiling): a week HYROX_RUN_FLOOR_MIN or more under
+    // it says why (a ceiling or the MTL cap holds it, the chosen sessions are
+    // full, no erg access, or a session left out).
+    const fillTarget = Math.min(detail[i]?.budgetMin ?? 0, detail[i]?.deloadCapMin ?? Infinity);
+    if (minutes(wk) < fillTarget - HYROX_RUN_FLOOR_MIN
       && !notes(wk).some(n => /left unprescribed|holds it\)|left out/.test(n))) {
-      out.push(`W${w}: ${ws.length} of ${maxSessions} sessions, ${minutes(wk)} of ${detail[i]?.budgetMin} min and no note why`);
+      out.push(`W${w}: ${ws.length} of ${maxSessions} sessions, ${minutes(wk)} of ${Math.round(fillTarget)} min and no note why`);
     }
     // D2: training-week running at most HYROX_RUN_SHARE x the chosen minutes
     // (the brick runs alone can sit above it at the lowest hours).
