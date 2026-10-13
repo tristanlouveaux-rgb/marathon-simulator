@@ -26,8 +26,9 @@
  *      runs, none longer than the long run. Station sessions and bricks share
  *      the rest of the week's budget.
  *   5. Weekly MTL cap: easy runs shorten and leave first, then the long run
- *      shortens to its soft floor, then station and brick rounds and
- *      stations go (real volume); the week's last station work stays.
+ *      gives up its growth (never its previous length), then station and
+ *      brick rounds and stations go (real volume); the week's last station
+ *      work stays.
  *   6. Schedule with the hard-day and 48 h eccentric rules, Sunday to Monday
  *      included (scheduler.hyrox). A week the rules cannot hold loses a hard
  *      session to its easy sibling, then its lowest-priority session.
@@ -330,6 +331,10 @@ interface HyroxMtlRunTrim {
   easyMinFor: (km: number) => number;
   /** Taper weeks keep their run count: easy runs shorten, never leave. */
   keepRunCount: boolean;
+  /** The longest long run of the previous LONG_RUN_LOOKBACK_WEEKS weeks
+   *  (minutes; unset: none). The cap takes the long run's growth, never its
+   *  previous length (the D3 rule). */
+  prevLongRunMin?: number;
 }
 
 /** A standalone easy run that is not the long run (commute runs excluded). */
@@ -344,8 +349,9 @@ function isPlainEasyRun(w: Workout): boolean {
  *   1. easy runs shorten toward the run floor, then leave the week, shortest
  *      first (taper weeks keep their run count: shortened only); the runs
  *      left take back what the cut freed, up to their length;
- *   2. the long run shortens, down to its soft floor (LONG_SOFT_FLOOR_MIN, or
- *      its own length when that is shorter);
+ *   2. the long run gives up its growth: it shortens down to the longest
+ *      long run of the previous 4 weeks (at least LONG_SOFT_FLOOR_MIN, or its
+ *      own length when that is shorter), never under it (the D3 rule);
  *   3. one round off the highest-MTL station or brick session above
  *      MIN_CIRCUIT_ROUNDS (withHyroxRounds cuts the real volume: work, rest,
  *      duration and the description's round count);
@@ -408,12 +414,17 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
     if (easyAfter < easyBefore && out.some(isPlainEasyRun)) {
       adjustments.push(`W${weekIndex}: easy runs cut from ${easyBefore} to ${easyAfter} min (MTL cap ${cap})`);
     }
-    // 2. The long run, down to its soft floor: the last run cut. It stays at
-    // least as long as every other run of the week (by distance).
+    // 2. The long run gives up its growth: the last run cut, down to the
+    // longest long run of the previous weeks (at least LONG_SOFT_FLOOR_MIN),
+    // never under it, as it gives way to the quality run (D3). It stays at
+    // least as long as every other run of the week (by distance). Before
+    // (review 2026-10-13) it was cut to the soft floor, and the 110%
+    // single-run rule then held the weeks after it to the shorter run: novice
+    // 6 h 16 weeks peaked at a 53-min long run where it had reached 68.
     const long = out.find(w => isHyroxLongRun(w) && w.commute !== true);
     if (long && total() > cap) {
       const otherKm = Math.max(0, ...out.filter(w => w !== long && w.discipline === 'run' && w.commute !== true).map(hyroxRunLengthKm));
-      const longFloor = Math.min(minOf(long), Math.max(LONG_SOFT_FLOOR_MIN, runTrim.easyMinFor(otherKm)));
+      const longFloor = Math.min(minOf(long), Math.max(LONG_SOFT_FLOOR_MIN, runTrim.prevLongRunMin ?? 0, runTrim.easyMinFor(otherKm)));
       const cut = perMin(long) > 0 ? Math.ceil((total() - cap) / perMin(long)) : 0;
       const to = Math.max(longFloor, minOf(long) - cut);
       if (to < minOf(long)) {
@@ -1174,6 +1185,7 @@ function generateWeekSessions(
     easyFloorMin: HYROX_RUN_FLOOR_MIN,
     easyMinFor: (km) => Math.ceil((km * easyPace) / 60),
     keepRunCount,
+    prevLongRunMin: inputs.prevLongRunMin,
   });
 
   // Hard-session limits: at most HYROX_MAX_HARD_RUNS hard runs and

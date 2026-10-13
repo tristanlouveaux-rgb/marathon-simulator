@@ -104,7 +104,7 @@ import {
   HYROX_RUN_SHARE, HYROX_RUN_FLOOR_MIN, HYROX_LONG_RUN, HYROX_EASY_RPE,
   hyroxTier, hyroxSessionTotal,
 } from '@/constants/hyrox-constants';
-import { isHyroxDeloadWeek, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS, TAPER_LONG_RUN_FRACTION } from './plan_engine';
+import { isHyroxDeloadWeek, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS, TAPER_LONG_RUN_FRACTION, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { taperFraction } from './phases';
 import { isHighIntensity, isHardRun, isEccentricSession, isHyroxLongRun } from './scheduler.hyrox';
 import {
@@ -603,20 +603,33 @@ describe('HYROX MTL cap cuts real station volume', () => {
     expect(cutWeeks).toBeGreaterThan(0);
   });
 
-  it('decision A: easy runs, then the long run, give way before station work', () => {
+  it('decision A: easy runs give way, then the long run its growth, before station work; the long run never under its previous length', () => {
     // Every week the cap cut station work in: no easy run left (a taper week
-    // keeps its runs at the run floor), and the long run at its soft floor
-    // (or the distance of the week's other runs).
+    // keeps its runs at the run floor), and the long run at the longest long
+    // run of the 4 weeks before (at least LONG_SOFT_FLOOR_MIN, or the
+    // distance of the week's other runs). Review 2026-10-13: the cap cut the
+    // long run to the 30-min soft floor, and the 110% single-run rule then
+    // held the weeks after to the shorter run (novice 6 h 16 weeks peaked at
+    // a 53-min long run where it had reached 68).
     const cases: Array<[AbilityBand, number, number, number]> = [
-      ['intermediate', 14, 18, 0.5], ['novice', 6, 18, 1], ['competitive', 12, 20, 0.6], ['beginner', 10, 16, 1],
+      ['intermediate', 14, 18, 0.5], ['novice', 6, 18, 1], ['competitive', 12, 20, 0.6], ['beginner', 10, 16, 1], ['novice', 6, 16, 1],
     ];
     let checked = 0;
+    let longCuts = 0;
     for (const [band, hrs, len, f] of cases) {
       build(band, hrs, len);
       const ms = getMutableState();
       ms.hyroxConfig!.mtlCap = Math.round(HYROX_MTL_CAP[band] * f);
       const plan = generateHyroxPlanDetailed(ms);
-      plan.weeks.slice(0, plan.detail.length).forEach((wk, i) => {
+      const wks = plan.weeks.slice(0, plan.detail.length);
+      wks.forEach((wk, i) => {
+        const prevLong = Math.max(0, ...wks.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(x => prescribed(x).find(isHyroxLongRun)?.estimatedDurationMin ?? 0));
+        for (const n of notes(wk)) {
+          const m = n.match(/Long Run cut from (\d+) to (\d+) min \(MTL cap/);
+          if (!m) continue;
+          longCuts++;
+          expect(Number(m[2]), `${band} ${hrs}h ${len}w W${i + 1}: ${n}`).toBeGreaterThanOrEqual(Math.min(Number(m[1]), Math.max(LONG_SOFT_FLOOR_MIN, prevLong)));
+        }
         const cutStations = notes(wk).some(n => /station or brick round\(s\) cut \(MTL cap|station\(s\) taken out of a circuit \(MTL cap/.test(n));
         if (!cutStations) return;
         checked++;
@@ -628,11 +641,12 @@ describe('HYROX MTL cap cuts real station volume', () => {
         if (long) {
           const pace = (long.estimatedDurationMin! * 60) / hyroxRunLengthKm(long);
           const otherKm = Math.max(0, ...prescribed(wk).filter(w => w !== long && w.discipline === 'run').map(hyroxRunLengthKm));
-          expect(long.estimatedDurationMin!, `${band} ${hrs}h W${i + 1}`).toBeLessThanOrEqual(Math.max(30, Math.ceil((otherKm * pace) / 60)) + 1);
+          expect(long.estimatedDurationMin!, `${band} ${hrs}h W${i + 1}`).toBeLessThanOrEqual(Math.max(LONG_SOFT_FLOOR_MIN, prevLong, Math.ceil((otherKm * pace) / 60)) + 1);
         }
       });
     }
     expect(checked).toBeGreaterThan(0);
+    expect(longCuts).toBeGreaterThan(0);
   });
 });
 
@@ -958,8 +972,11 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       for (let i = 2; i < tw; i++) {
         const wk = s.wks[i];
         if (wk.ph === 'taper' || detail[i].deload) continue;
-        loaded++;
         expect(prescribed(wk).length).toBeLessThanOrEqual(7);
+        // Weeks the MTL cap cut sessions in hold fewer by decision A (easy
+        // runs leave before station rounds); every other loaded week counts.
+        const capped = notes(wk).some(n => /easy run\(s\) left out \(MTL cap/.test(n));
+        if (!capped) loaded++;
         if (prescribed(wk).length === 7) { seven++; continue; }
         // Short of 7: the week's budget is spent (under one easy erg session
         // left), or a ceiling or the MTL cap holds it, noted.
