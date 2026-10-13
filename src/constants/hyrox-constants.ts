@@ -523,8 +523,10 @@ export const RACE_WEEK_EXCLUDED_STATIONS: HyroxStation[] = [
  * 2026-10-12), which decides how fast short plans climb to these values.
  * Taper: taperFraction (phases.ts) of the reference week, 0.70 then 0.55.
  *
- * Deload: every 4th plan week in base, build and peak (isFourWeekCycleDeloadWeek)
- * at 0.75 of the week's volume. HWPO's HYROX programme deloads every 4th week;
+ * Deload: every 4th plan week in base, build and peak (isHyroxDeloadWeek: the
+ * 4-week cycle, except the week right before the race taper, which never
+ * deloads, as running's sharpening block skips it; Tristan 2026-10-13) at 0.75
+ * of the week's volume. HWPO's HYROX programme deloads every 4th week;
  * Centr is the only source for the depth (25% less volume). Before 2026-10-12
  * the factor was 0.70, copied from the triathlon engine without a source.
  */
@@ -554,8 +556,11 @@ export const HYROX_DAY_BEFORE_RACE_MAX_RUN_MIN = 20;
 
 /** Weeks in the chronic window of the plan's acute:chronic guard: the rolling
  *  mean of the previous 4 planned weeks (Tristan 2026-10-12; Gabbett 2016's
- *  4-week chronic load). Weeks before plan week 1 count as week 1, the
- *  athlete's starting week. */
+ *  4-week chronic load). Weeks before plan week 1 count as the athlete's
+ *  logged weekly load (signalBBaseline, canonical TSS) when it exists, which
+ *  also guards week 1, otherwise as the nominal week 1: its structure with a
+ *  station session in the assessment's slot (Tristan 2026-10-13). Before,
+ *  they counted as week 1 itself, the light assessment week. */
 export const HYROX_CHRONIC_WINDOW_WEEKS = 4;
 
 // ─── Time distribution across session types ──────────────────────────────────

@@ -227,7 +227,11 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const mtlWithErg = (wk.triWorkouts ?? []).reduce((a, x) => a + (x.musculoTendonLoad ?? 0), 0);
       if (mtlWithErg > hx.mtlCap + EPS) out.push(`W${w}: easy erg lifts the week's MTL to ${mtlWithErg.toFixed(0)} above the ${hx.mtlCap} cap`);
     }
-    if (ws.length < maxSessions && minutes(wk) < (detail[i]?.budgetMin ?? 0) - HYROX_RUN_FLOOR_MIN
+    // Easy erg work fills what the sessions leave of the week's budget: a
+    // week HYROX_RUN_FLOOR_MIN or more under its budget says why (a ceiling or
+    // the MTL cap holds it, the chosen sessions are full, no erg access, or a
+    // session left out).
+    if (minutes(wk) < (detail[i]?.budgetMin ?? 0) - HYROX_RUN_FLOOR_MIN
       && !notes(wk).some(n => /left unprescribed|holds it\)|left out/.test(n))) {
       out.push(`W${w}: ${ws.length} of ${maxSessions} sessions, ${minutes(wk)} of ${detail[i]?.budgetMin} min and no note why`);
     }
@@ -779,6 +783,203 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
         expect(taperLong.estimatedDurationMin).toBeLessThanOrEqual(Math.round(prevLong * TAPER_LONG_RUN_FRACTION));
         // The taper tempo is no longer than the taper long run.
         for (const q of prescribed(s.wks[tw - 2]).filter(isQuality)) expect(hyroxRunLengthKm(q)).toBeLessThanOrEqual(hyroxRunLengthKm(taperLong) + METRE_KM);
+      }
+    }
+  });
+});
+
+describe('HYROX round 4 decisions (2026-10-13)', () => {
+  const ALL_ERGS = { sled: 'always' as const, skiErg: true, rowErg: true };
+
+  it('D1: an easy erg session is time-defined easy aerobic work: RPE 4, neither hard nor eccentric, no station sets, null without ergs', () => {
+    const a = generateHyroxEasyErg({ targetMinutes: 45, stationAccess: ALL_ERGS, slotIndex: 0 })!;
+    const b = generateHyroxEasyErg({ targetMinutes: 45, stationAccess: ALL_ERGS, slotIndex: 1 })!;
+    for (const e of [a, b]) {
+      expect(isHyroxEasyErg(e)).toBe(true);
+      expect(e.rpe).toBe(HYROX_EASY_RPE);
+      expect(e.estimatedDurationMin).toBe(45);
+      expect(isHighIntensity(e)).toBe(false);
+      expect(isEccentricSession(e)).toBe(false);
+      expect(e.hyroxComponents).toBeUndefined();
+      expect(e.musculoTendonLoad ?? 0).toBeGreaterThan(0);
+      expect(e.d).not.toMatch(/—/);
+    }
+    // The SkiErg and the row erg alternate by slot.
+    expect(a.d).not.toBe(b.d);
+    expect(generateHyroxEasyErg({ targetMinutes: 45, stationAccess: { sled: 'always', skiErg: false, rowErg: false }, slotIndex: 0 })).toBeNull();
+  });
+
+  it('D1: what the sessions leave of a base week becomes easy erg work, and a larger budget never holds less of it', () => {
+    // Beginner, 16 weeks, the chosen 4 sessions: base weeks hold 2 runs and a
+    // circuit, so the fourth slot takes easy erg work sized from the unused
+    // budget (the withdrawn 2026-10-13 draft sized it from unfunded run slots,
+    // so a larger budget that funded the runs held less volume).
+    let prev = 0;
+    for (const hrs of [4, 5, 6]) {
+      const s = build('beginner', hrs, 16);
+      const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+      const w2 = s.wks[1];
+      expect(prescribed(w2).some(isHyroxEasyErg)).toBe(true);
+      expect(prescribed(w2).length).toBe(4);
+      // The budget is filled, or the erg session is at its cap (the tier
+      // long-run cap, 60 min) with every slot taken, noted.
+      expect(minutes(w2) >= detail[1].budgetMin - HYROX_RUN_FLOOR_MIN
+        || notes(w2).some(n => /left unprescribed \(the chosen 4 sessions are full, an easy erg session at most 60 min\)/.test(n))).toBe(true);
+      expect(minutes(w2)).toBeGreaterThan(prev);
+      prev = minutes(w2);
+    }
+  });
+
+  it('D1: the chosen session total is never exceeded, and a full week says so when its budget is left over', () => {
+    // Competitive at 12 h (the default 6 sessions): peak weeks hold 6 sessions
+    // of 6 and leave the rest of the 720 min unprescribed, noted.
+    const s = build('competitive', 12, 16);
+    const tw = planTrainingWeeks(s);
+    const peak = s.wks.slice(0, tw).filter((wk, i) => wk.ph === 'peak' && !deloadOf(s.wks.slice(0, tw))(i));
+    expect(peak.length).toBeGreaterThan(0);
+    for (const wk of peak) {
+      expect(prescribed(wk).length).toBe(6);
+      expect(notes(wk).some(n => /min left unprescribed \(the chosen 6 sessions are full\)/.test(n))).toBe(true);
+    }
+  });
+
+  it('D1: the 7-session choice at 8 h: every loaded week from week 3 holds 7 sessions, or a guard or the MTL cap holds it and the week says so', () => {
+    for (const band of ['beginner', 'novice', 'intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+      const s = build(band, 8, 16, { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>);
+      const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+      const tw = planTrainingWeeks(s);
+      let seven = 0;
+      let loaded = 0;
+      for (let i = 2; i < tw; i++) {
+        const wk = s.wks[i];
+        if (wk.ph === 'taper' || detail[i].deload) continue;
+        loaded++;
+        expect(prescribed(wk).length).toBeLessThanOrEqual(7);
+        if (prescribed(wk).length === 7) { seven++; continue; }
+        // Short of 7: the week's budget is spent (under one easy erg session
+        // left), or a ceiling or the MTL cap holds it, noted.
+        if (minutes(wk) >= detail[i].budgetMin - HYROX_RUN_FLOOR_MIN) continue;
+        expect(notes(wk).some(n => /holds it\)|left unprescribed \((acute:chronic guard|MTL cap|weekly hours)/.test(n)), `${band} W${i + 1}`).toBe(true);
+      }
+      expect(seven).toBeGreaterThanOrEqual(loaded / 2);
+    }
+  });
+
+  it('D2: the running budget is 0.40 of the chosen weekly hours, not of the phase budget', () => {
+    // Intermediate, 8 h, 16 weeks: base week 2 has a 282-min budget, so the
+    // old share funded 113 min of running; it now funds up to 192 (0.40 x 480).
+    const s = build('intermediate', 8, 16);
+    const runMin = runs(s.wks[1]).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    expect(runMin).toBeGreaterThan(HYROX_RUN_SHARE * 282);
+    expect(runMin).toBeLessThanOrEqual(HYROX_RUN_SHARE * 480);
+  });
+
+  it('D3: the long run gives up its growth, never its previous length, for the quality run, and says so', () => {
+    let held = 0;
+    for (const band of BANDS) {
+      for (const hrs of hoursGrid(band)) {
+        const s = build(band, hrs, 16);
+        const tw = planTrainingWeeks(s);
+        for (let i = 1; i < tw; i++) {
+          const wk = s.wks[i];
+          const n = notes(wk).find(x => /Long Run held at \d+ min, not \d+, for the quality run/.test(x));
+          if (!n) continue;
+          held++;
+          expect(prescribed(wk).some(isQuality), `${band} ${hrs}h W${i + 1}`).toBe(true);
+          const long = prescribed(wk).find(isHyroxLongRun)!;
+          const prevLong = Math.max(...s.wks.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(x => prescribed(x).find(isHyroxLongRun)?.estimatedDurationMin ?? 0));
+          expect(long.estimatedDurationMin!).toBeGreaterThanOrEqual(Math.min(prevLong, Number(n.match(/not (\d+)/)![1])));
+        }
+      }
+    }
+    expect(held).toBeGreaterThan(0);
+  });
+
+  it('D4: the chronic window before week 1 is the logged weekly load when there is one (week 1 guarded), else the nominal week 1', () => {
+    for (const band of BANDS) {
+      const s = build(band, HYROX_HOURS_RANGE[band].default, 16);
+      const nominal = generateHyroxPlanDetailed(structuredClone(s)).detail;
+      expect(nominal[0].chronicSeedSource).toBe('nominal');
+      expect(nominal[0].acwrCapTss).toBeNull();
+      // The nominal week 1 (a station session in the assessment's slot) is at
+      // least as heavy as the assessment week itself.
+      expect(nominal[0].chronicSeedTss).toBeGreaterThanOrEqual(nominal[0].plannedTss - EPS);
+      expect(nominal[1].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * (nominal[0].plannedTss + 3 * nominal[0].chronicSeedTss) / 4, 6);
+
+      const low = structuredClone(s);
+      low.signalBBaseline = 100;
+      const logged = generateHyroxPlanDetailed(low).detail;
+      expect(logged[0].chronicSeedSource).toBe('logged');
+      expect(logged[0].chronicSeedTss).toBe(100);
+      expect(logged[0].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * 100, 6);
+      expect(logged[0].plannedTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * 100 + EPS);
+
+      // A logged zero is no data (§BV): the nominal week stands in.
+      const zero = structuredClone(s);
+      zero.signalBBaseline = 0;
+      expect(generateHyroxPlanDetailed(zero).detail[0].chronicSeedSource).toBe('nominal');
+    }
+  });
+
+  it('D5: the week right before the race taper never deloads; the weekly load target agrees', () => {
+    const phases = ['base', 'base', 'base', 'base', 'build', 'build', 'peak', 'peak', 'taper', 'taper'] as const;
+    expect(isHyroxDeloadWeek(4, [...phases])).toBe(true);
+    expect(isHyroxDeloadWeek(8, [...phases])).toBe(false);
+    // A closing week after race week extends the taper run: week 8 is still
+    // the week right before it.
+    expect(isHyroxDeloadWeek(8, [...phases, 'taper'])).toBe(false);
+    // No race taper (a continuous plan): the plain 4-week cycle.
+    expect(isHyroxDeloadWeek(8, ['base', 'base', 'base', 'base', 'build', 'build', 'build', 'build', 'build'])).toBe(true);
+    for (const len of [10, 14, 18, 22]) {
+      const s = build('novice', 6, len);
+      const tw = planTrainingWeeks(s);
+      const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+      expect(s.wks[tw - 3].ph).not.toBe('taper');
+      expect(detail[tw - 3].deload).toBe(false);
+      expect(resolvePlannedWeekPhase(s, tw - 2).phase).not.toBe('deload');
+      expect(detail[3].deload).toBe(true);
+      expect(resolvePlannedWeekPhase(s, 4).phase).toBe('deload');
+    }
+  });
+
+  it('D6: race week holds no more runs than the reference week and keeps its circuit over easy runs', () => {
+    // Review: novice 6 h 11 w trained on 1 to 2 runs a week and raced off 3
+    // runs with no circuit.
+    const s = build('novice', 6, 11);
+    const tw = planTrainingWeeks(s);
+    const rw = prescribed(s.wks[tw - 1]);
+    expect(rw.filter(w => w.discipline === 'run').length).toBeLessThanOrEqual(runs(s.wks[tw - 3]).length);
+    expect(rw.some(isCircuit)).toBe(true);
+    expect(rw.some(isQuality)).toBe(true);
+    // Review minor 1: the never-rises ceiling takes stations out of circuits
+    // before it drops whole sessions.
+    const tb = build('total_beginner', 5, 10);
+    expect(prescribed(tb.wks[planTrainingWeeks(tb) - 2]).some(isCircuit)).toBe(true);
+    const two = build('competitive', 8, 14, { hyroxWeeklySessionCount: 2 } as Partial<OnboardingState>);
+    const twoRw = prescribed(two.wks[planTrainingWeeks(two) - 1]);
+    expect(twoRw.length).toBeGreaterThan(1);
+    expect(twoRw.some(isCircuit)).toBe(true);
+  });
+
+  it('D7: a first-timer is capped at the intermediate tier whatever the running fitness; a previous result is not', () => {
+    // A 35:00 10K (VDOT about 60) and no previous HYROX result.
+    const fast = build('total_beginner', 8, 16, { pbs: { k10: 2100 } } as Partial<OnboardingState>);
+    expect(fast.hyroxConfig!.athleteBand).toBe('intermediate');
+    expect(hyroxTier(fast.hyroxConfig!.athleteBand)).toBe('intermediate');
+    expect(build('competitive', 12, 16).hyroxConfig!.athleteBand).toBe('competitive');
+  });
+
+  it('D8: with no logged run, a 2-week plan keeps its race-week primer under the 110% rule', () => {
+    // Week 1 of a 2-week plan is a taper week (long run 0.65 x the start); the
+    // start counts as recent exposure, so the 25-min primer fits under 110%.
+    for (const band of ['total_beginner', 'beginner'] as AbilityBand[]) {
+      for (const hrs of [4, 6, 8, 10].filter(h => h >= HYROX_HOURS_RANGE[band].min && h <= HYROX_HOURS_RANGE[band].max)) {
+        const s = build(band, hrs, 2);
+        const tw = planTrainingWeeks(s);
+        const rw = prescribed(s.wks[tw - 1]);
+        if (!rw.some(w => w.discipline === 'run')) continue;
+        expect(rw.some(isQuality), `${band} ${hrs}h`).toBe(true);
+        expect(notes(s.wks[tw - 1]).some(n => /110% single-run ceiling/.test(n))).toBe(false);
       }
     }
   });
