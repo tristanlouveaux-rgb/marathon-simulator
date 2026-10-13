@@ -423,8 +423,9 @@ export interface HyroxStationBenchmark {
   /** The weight regime the stored value was recorded at (true = Pro weights),
    *  present when `sec` is. When it differs from the target's regime, `sec`
    *  carries the HYROX_PRO_STATION_MULTIPLIER conversion (identity on the erg
-   *  and bodyweight stations). The partner comparison reads it to leave a
-   *  converted value out of a head-to-head (hyrox-partner-snapshot.ts). */
+   *  and bodyweight stations). The partner snapshot reads `sec` at the
+   *  target's regime under that conversion, as the solo forecast does
+   *  (hyrox-partner-snapshot.ts recordedStationTier). */
   recordedAtProWeights?: boolean;
 }
 

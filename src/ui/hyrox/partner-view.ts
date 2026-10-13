@@ -21,9 +21,11 @@ import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from '@/calculat
 import { hyroxDivisionLabel } from '@/calculations/hyrox-division';
 import {
   compareHyroxPartners,
+  type HyroxPartnerComparison,
   type PartnerNotComparableReason,
   type PartnerStationComparison,
 } from '@/calculations/hyrox-partner-compare';
+import type { HyroxLoadTier } from '@/types/triathlon';
 import {
   formatHyroxPartnerCode,
   hyroxPartnerSource,
@@ -75,8 +77,27 @@ export const PARTNER_REASON_COPY: Record<PartnerNotComparableReason, string> = {
   missing_you: 'No benchmark from you',
   missing_partner: 'No benchmark from your partner',
   team_time: 'Pair time from a doubles race',
-  tier: 'Times at different loads',
+  tier: 'Not at the race loads',
+  tier_unknown: 'Load not known',
+  setup: 'Race setups differ',
 };
+
+/** Rulebook names of the load tiers, as the setup screen words them. */
+const TIER_NAME: Record<HyroxLoadTier, string> = { 'W-Open': 'Women Open', 'M-Open': 'Men Open', 'M-Pro': 'Men Pro' };
+
+/** The Pair forecast caption when the forecast is withheld: what is missing,
+ *  and from whom. */
+export function withheldForecastText(cmp: Pick<HyroxPartnerComparison, 'forecastWithheld' | 'withheldFor' | 'pairTier'>): string {
+  if (cmp.forecastWithheld === 'loads' && cmp.pairTier) {
+    const from = cmp.withheldFor === 'you' ? 'you' : cmp.withheldFor === 'both' ? 'both of you' : 'your partner';
+    return `Needs times at ${TIER_NAME[cmp.pairTier]} loads from ${from}.`;
+  }
+  if (cmp.forecastWithheld === 'loads_unknown') {
+    const whose = cmp.withheldFor === 'you' ? 'you' : cmp.withheldFor === 'both' ? 'either of you' : 'your partner';
+    return `Station loads not known for ${whose}.`;
+  }
+  return 'Needs matching race setups.';
+}
 
 /** The race a snapshot describes, for the setups-differ line. */
 function setupLabel(snap: Pick<HyroxPartnerSnapshot, 'format' | 'division'>): string {
@@ -415,11 +436,9 @@ function renderLinked(vs: Extract<ViewState, { kind: 'linked' }>): string {
             <div style="font-size:13px;font-weight:600;color:${TEXT_M}">Pair forecast</div>
             <div style="font-size:11px;color:${TEXT_S};margin-top:1px">${cmp.forecast
               ? `Equal split of every station.${venueNote}`
-              : cmp.forecastWithheld === 'loads'
-                ? 'Needs both partners at the same loads.'
-                : 'Needs matching race setups.'}</div>
+              : withheldForecastText(cmp)}</div>
           </div>
-          <div style="font-size:13px;color:${cmp.forecast ? TEXT_M : TEXT_L};font-variant-numeric:tabular-nums">${cmp.forecast ? ftRounded(cmp.forecast.totalSec) : 'Not available'}</div>
+          <div style="font-size:13px;color:${cmp.forecast ? TEXT_M : TEXT_L};font-variant-numeric:tabular-nums;text-align:right;flex-shrink:0">${cmp.forecast ? ftRounded(cmp.forecast.totalSec) : 'Not available'}</div>
         </div>
       </div>`;
   }

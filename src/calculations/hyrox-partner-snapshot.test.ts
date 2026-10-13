@@ -178,11 +178,15 @@ describe('recorded station tier', () => {
     expect(tierOf(s, 'sandbag_lunges')).toBe('W-Open');
   });
 
-  it('a Pro target reading Open-weight times has no tier: the Open/Pro ratio is unsourced', () => {
+  it('a Pro target reading Open-weight times: the converted value counts at the Pro tier, as in the solo forecast', () => {
     const s = hyroxState({ format: 'pro_doubles', division: 'men', stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: 'male' });
     const snap = buildHyroxPartnerSnapshot(s)!;
-    expect(snap.stationSec.sled_push).toBeDefined();
-    expect(snap.stationTier.sled_push).toBeUndefined();
+    // stationSec is the converted (Pro-weight) value the Stats ledger shows.
+    expect(snap.stationSec.sled_push).toBeGreaterThan(SINGLES_TIMES.sled_push);
+    expect(snap.stationTier.sled_push).toBe('M-Pro');
+    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: false }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
+    // The reverse direction too: Pro-weight times read by an Open target.
+    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: true }, 'open_doubles', 'male', 'men')).toBe('M-Open');
   });
 
   it('unknown sex in a singles slot: no tier', () => {

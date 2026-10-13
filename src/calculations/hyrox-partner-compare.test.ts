@@ -1,7 +1,8 @@
 /**
  * HYROX Doubles partner comparison: fair station leads (same tier, no pair
- * times, no unsourced conversions) and the pair forecast (slower run pace,
- * the data-driven doubles mapping on the equal-split station means).
+ * times, no cross-tier conversion beyond the app's Open/Pro convention) and
+ * the pair forecast (slower run pace, the data-driven doubles mapping on the
+ * equal-split station means), withheld with what is missing and from whom.
  */
 import { describe, it, expect } from 'vitest';
 import { getDefaultState } from '@/state/store';
@@ -10,7 +11,7 @@ import { HYROX_HOURS_RANGE, HYROX_MTL_CAP, HYROX_PRO_STATION_MULTIPLIER, HYROX_W
 import { doublesRatioAt } from './hyrox-doubles';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from './hyrox-partner-snapshot';
-import { compareHyroxPartners, hyroxPairSetup, isTierIndependentStation, pairForecastMixesLoads } from './hyrox-partner-compare';
+import { compareHyroxPartners, hyroxPairSetup, isTierIndependentStation, pairForecastLoadGaps } from './hyrox-partner-compare';
 import type { HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import type { SimulatorState } from '@/types/state';
 
@@ -75,12 +76,12 @@ describe('station leads', () => {
     expect(back.wall_balls).toMatchObject({ status: 'not_comparable', reason: 'team_time' });
   });
 
-  it('a loaded station with no recorded tier (converted or unknown) is not comparable', () => {
+  it('a loaded station with no known tier is not comparable, as load not known', () => {
     const tiers = allStations<HyroxLoadTier>('M-Open') as Partial<Record<HyroxStation, HyroxLoadTier>>;
     delete tiers.sled_push;
     delete tiers.ski_erg;
     const by = Object.fromEntries(compareHyroxPartners(snap({ stationTier: tiers }), snap()).stations.map(c => [c.station, c]));
-    expect(by.sled_push).toMatchObject({ status: 'not_comparable', reason: 'tier' });
+    expect(by.sled_push).toMatchObject({ status: 'not_comparable', reason: 'tier_unknown' });
     // Erg standards are the same at every tier: still compared.
     expect(by.ski_erg.status).toBe('level');
   });
@@ -114,10 +115,13 @@ describe('Mixed Doubles: both partners race Men Open loads', () => {
     expect(cmp.forecast).not.toBeNull();
   });
 
-  it('pair forecast withheld while any loaded station mixes loads (until per-sex conversions, lane H3b)', () => {
+  it('pair forecast withheld while her loaded stations are at Women Open (until per-sex conversions, lane H3b)', () => {
     const cmp = compareHyroxPartners(man, womanSinglesTimes);
     expect(cmp.forecast).toBeNull();
     expect(cmp.forecastWithheld).toBe('loads');
+    expect(cmp.withheldFor).toBe('partner');
+    // Seen from her side, the missing times are her own.
+    expect(compareHyroxPartners(womanSinglesTimes, man).withheldFor).toBe('you');
     // Station rows still show.
     expect(cmp.stations).toHaveLength(8);
   });
@@ -131,15 +135,42 @@ describe('Mixed Doubles: both partners race Men Open loads', () => {
     const cmp = compareHyroxPartners(manNoSledPush, womanOneOff);
     expect(cmp.stations.find(c => c.station === 'sled_push')).toMatchObject({ reason: 'missing_you' });
     expect(cmp.forecastWithheld).toBe('loads');
-    expect(pairForecastMixesLoads(manNoSledPush, womanOneOff, 'M-Open')).toBe(true);
+    expect(pairForecastLoadGaps(manNoSledPush, womanOneOff, 'M-Open')).toEqual({ offTier: 'partner', unknown: null });
   });
 
-  it('off-tier erg times do not withhold it (one race standard at every tier); an unknown loaded tier does', () => {
+  it('off-tier erg times do not withhold it (one race standard at every tier); an unknown loaded tier says so', () => {
     const ergsOff = snap({ division: 'mixed', stationTier: { ...allStations<HyroxLoadTier>('M-Open'), ski_erg: 'W-Open', row_erg: 'W-Open', burpee_broad_jumps: 'W-Open' } });
     expect(compareHyroxPartners(man, ergsOff).forecastWithheld).toBeNull();
     const unknownTier = allStations<HyroxLoadTier>('M-Open') as Partial<Record<HyroxStation, HyroxLoadTier>>;
     delete unknownTier.wall_balls;
-    expect(compareHyroxPartners(man, snap({ division: 'mixed', stationTier: unknownTier })).forecastWithheld).toBe('loads');
+    const cmp = compareHyroxPartners(man, snap({ division: 'mixed', stationTier: unknownTier }));
+    expect(cmp.forecastWithheld).toBe('loads_unknown');
+    expect(cmp.withheldFor).toBe('partner');
+    expect(cmp.stations.find(c => c.station === 'wall_balls')).toMatchObject({ reason: 'tier_unknown' });
+  });
+
+  it('a known off-tier value outranks an unknown one, and both partners can be named', () => {
+    const unknownTier = allStations<HyroxLoadTier>('M-Open') as Partial<Record<HyroxStation, HyroxLoadTier>>;
+    delete unknownTier.wall_balls;
+    const cmp = compareHyroxPartners(snap({ division: 'mixed', stationTier: unknownTier }), womanSinglesTimes);
+    expect(cmp.forecastWithheld).toBe('loads');
+    expect(cmp.withheldFor).toBe('partner');
+    const both = compareHyroxPartners(womanSinglesTimes, { ...womanSinglesTimes });
+    expect(both.withheldFor).toBe('both');
+  });
+});
+
+describe('Pro pair with tests at Open weights', () => {
+  it('converted values count at the Pro tier, as in the solo forecast: rows compare and the forecast shows', () => {
+    // Both partners' snapshots as the builder now writes them for Open-weight
+    // tests under a Men Pro doubles target (the Open/Pro convention).
+    const you = snap({ format: 'pro_doubles' }, 'M-Pro');
+    const partner = snap({ format: 'pro_doubles', stationSec: { ...snap().stationSec, sled_push: 215 } }, 'M-Pro');
+    const cmp = compareHyroxPartners(you, partner);
+    expect(cmp.pairTier).toBe('M-Pro');
+    expect(cmp.forecastWithheld).toBeNull();
+    expect(cmp.forecast).not.toBeNull();
+    expect(cmp.stations.find(c => c.station === 'sled_push')).toEqual({ station: 'sled_push', status: 'you', leadSec: 15 });
   });
 });
 
@@ -157,8 +188,9 @@ describe('pair setup', () => {
     expect(cmp.pairTier).toBeNull();
     expect(cmp.forecast).toBeNull();
     expect(cmp.forecastWithheld).toBe('setup');
+    expect(cmp.withheldFor).toBeNull();
     const by = Object.fromEntries(cmp.stations.map(c => [c.station, c]));
-    expect(by.sled_push.reason).toBe('tier');
+    expect(by.sled_push.reason).toBe('setup');
     expect(by.row_erg.status).toBe('level');
   });
 });

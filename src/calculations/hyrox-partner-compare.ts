@@ -11,15 +11,19 @@
  * as Mixed, or one still in singles), there is no pair tier.
  *
  * Station leads. Per station, each partner's benchmark (snapshot stationSec,
- * their own Stats ledger number). The comparison converts nothing:
+ * their own Stats ledger number). The comparison itself converts nothing:
  *   - SkiErg, Row Erg and Burpee Broad Jumps have one race standard in every
  *     tier (1000 m at damper 6, 80 m; derived from hyroxStationRaceStandard),
  *     so they compare as they are;
- *   - a loaded station compares only when both partners' values were measured
- *     at the pair's tier (snapshot stationTier). The only cross-tier ratio in
- *     the codebase, HYROX_PRO_STATION_MULTIPLIER, is UNSOURCED and was set from
- *     the men's Open-to-Pro jump, so no Women Open time is turned into a Men
- *     Open time: the station reads not comparable;
+ *   - a loaded station compares only when both partners' values are at the
+ *     pair's tier (snapshot stationTier). A value the app converted between
+ *     Open and Pro weights counts at the tier the conversion lands on, as in
+ *     each partner's own forecast and Stats ledger (the Open/Pro convention,
+ *     HYROX_PRO_STATION_MULTIPLIER). No other cross-tier conversion exists, so
+ *     a Mixed woman's Women Open time is never turned into a Men Open time:
+ *     the station reads not comparable ('tier'), or 'tier_unknown' when a
+ *     value's tier cannot be stated, or 'setup' when the two race setups
+ *     differ;
  *   - a benchmark that is a doubles race split is a pair time, not one
  *     athlete's capacity, so it cannot say who is faster: not comparable.
  * The lead is the whole-second difference. No "optimal split" saving is
@@ -39,14 +43,20 @@
  * their singles pace; the doubles station ratio then carries the cohort's
  * turn-taking benefit. Venue factors are not applied.
  *
- * The pair forecast is withheld (forecastWithheld):
+ * The pair forecast is withheld (forecastWithheld, with withheldFor naming
+ * whose times):
  *   - 'setup' when there is no pair tier (the two race setups differ);
- *   - 'loads' when either partner has a loaded-station benchmark that is not
- *     confirmed at the pair's tier (recorded at another tier, through the
- *     unsourced Open/Pro conversion, or unknown). Each partner's forecast
- *     station time is built from that benchmark, so the pair number would mix
- *     loads (a Mixed woman's Women Open times read as Men Open). The station
- *     rows still show, with the same 'tier' reason where both have a value.
+ *   - 'loads' when a partner has a loaded-station benchmark at a known tier
+ *     other than the pair's. Each partner's forecast station time is built
+ *     from that benchmark, so the pair number would mix loads (a Mixed
+ *     woman's Women Open times read as Men Open). A value converted between
+ *     Open and Pro by the app's convention is at the pair's tier, as in the
+ *     solo forecast, so a Pro pair whose tests were at Open weights keeps its
+ *     forecast;
+ *   - 'loads_unknown' when no value is at another known tier but one's tier
+ *     cannot be stated (a Mixed athlete with no biological sex on file, the
+ *     legacy pooled benchmark field).
+ *   The station rows still show either way.
  *   TODO(H3b): once lane H3b's per-sex Open->Pro station conversions land,
  *   convert instead of withholding. A woman's Women Open -> Women Pro
  *   conversion is the Women Open -> Men Open conversion a Mixed pair needs:
@@ -77,7 +87,17 @@ export type PartnerNotComparableReason =
   | 'missing_you'
   | 'missing_partner'
   | 'team_time'
-  | 'tier';
+  /** A loaded station with a value at a known tier other than the pair's. */
+  | 'tier'
+  /** A loaded station with a value whose tier cannot be stated. */
+  | 'tier_unknown'
+  /** A loaded station when the two race setups differ (no pair tier). */
+  | 'setup';
+
+/** Whose station times a withheld forecast waits on. */
+export type PartnerSide = 'you' | 'partner' | 'both';
+
+export type PairForecastWithheld = 'setup' | 'loads' | 'loads_unknown';
 
 export interface PartnerStationComparison {
   station: HyroxStation;
@@ -114,8 +134,11 @@ export interface HyroxPartnerComparison {
   /** Null when withheld (see forecastWithheld). */
   forecast: PartnerPairForecast | null;
   /** Why the forecast is null: 'setup' = the race setups differ; 'loads' = a
-   *  loaded-station benchmark is not at the pair's tier. Null when shown. */
-  forecastWithheld: 'setup' | 'loads' | null;
+   *  loaded-station benchmark is at another known tier; 'loads_unknown' = a
+   *  loaded-station benchmark's tier is unknown. Null when shown. */
+  forecastWithheld: PairForecastWithheld | null;
+  /** 'loads' / 'loads_unknown': whose station times the forecast waits on. */
+  withheldFor: PartnerSide | null;
 }
 
 /** The pair's format and tier, or nulls when the two setups disagree. */
@@ -128,11 +151,6 @@ export function hyroxPairSetup(
     ? you.raceTier
     : null;
   return { pairFormat, pairTier };
-}
-
-function atPairTier(snap: HyroxPartnerSnapshot, station: HyroxStation, pairTier: HyroxLoadTier | null): boolean {
-  if (isTierIndependentStation(station)) return true;
-  return pairTier != null && snap.stationTier[station] === pairTier;
 }
 
 function compareStation(
@@ -149,8 +167,14 @@ function compareStation(
   if (you.teamStations.includes(station) || partner.teamStations.includes(station)) {
     return { station, status: 'not_comparable', reason: 'team_time' };
   }
-  if (!atPairTier(you, station, pairTier) || !atPairTier(partner, station, pairTier)) {
-    return { station, status: 'not_comparable', reason: 'tier' };
+  if (!isTierIndependentStation(station)) {
+    if (pairTier == null) return { station, status: 'not_comparable', reason: 'setup' };
+    const ta = you.stationTier[station];
+    const tb = partner.stationTier[station];
+    if ((ta != null && ta !== pairTier) || (tb != null && tb !== pairTier)) {
+      return { station, status: 'not_comparable', reason: 'tier' };
+    }
+    if (ta == null || tb == null) return { station, status: 'not_comparable', reason: 'tier_unknown' };
   }
   const diff = Math.round(b) - Math.round(a);
   if (diff > 0) return { station, status: 'you', leadSec: diff };
@@ -158,16 +182,34 @@ function compareStation(
   return { station, status: 'level' };
 }
 
-/** True when either partner has a loaded-station benchmark that is not
- *  confirmed at the pair's tier: the pair forecast would mix loads. */
-export function pairForecastMixesLoads(
+function sideOf(you: boolean, partner: boolean): PartnerSide | null {
+  if (you && partner) return 'both';
+  if (you) return 'you';
+  return partner ? 'partner' : null;
+}
+
+/** Loaded-station benchmarks that keep the pair forecast from one load tier:
+ *  whose are at a known tier other than the pair's (offTier), and whose have
+ *  no known tier (unknown). */
+export function pairForecastLoadGaps(
   you: HyroxPartnerSnapshot,
   partner: HyroxPartnerSnapshot,
   pairTier: HyroxLoadTier,
-): boolean {
-  const offTier = (snap: HyroxPartnerSnapshot, st: HyroxStation) =>
-    snap.stationSec[st] != null && snap.stationTier[st] !== pairTier;
-  return HYROX_STATION_ORDER.some(st => !isTierIndependentStation(st) && (offTier(you, st) || offTier(partner, st)));
+): { offTier: PartnerSide | null; unknown: PartnerSide | null } {
+  const scan = (snap: HyroxPartnerSnapshot) => {
+    let off = false;
+    let unknown = false;
+    for (const st of HYROX_STATION_ORDER) {
+      if (isTierIndependentStation(st) || snap.stationSec[st] == null) continue;
+      const t = snap.stationTier[st];
+      if (t == null) unknown = true;
+      else if (t !== pairTier) off = true;
+    }
+    return { off, unknown };
+  };
+  const a = scan(you);
+  const b = scan(partner);
+  return { offTier: sideOf(a.off, b.off), unknown: sideOf(a.unknown, b.unknown) };
 }
 
 /** The pair forecast from two snapshots at one pair format (see header). */
@@ -212,9 +254,15 @@ export function compareHyroxPartners(
   const setBy = you.runPaceSecKm === partner.runPaceSecKm
     ? 'both'
     : you.runPaceSecKm > partner.runPaceSecKm ? 'you' : 'partner';
-  const forecastWithheld: HyroxPartnerComparison['forecastWithheld'] = !pairFormat || !pairTier
-    ? 'setup'
-    : pairForecastMixesLoads(you, partner, pairTier) ? 'loads' : null;
+  let forecastWithheld: PairForecastWithheld | null = null;
+  let withheldFor: PartnerSide | null = null;
+  if (!pairFormat || !pairTier) {
+    forecastWithheld = 'setup';
+  } else {
+    const gaps = pairForecastLoadGaps(you, partner, pairTier);
+    if (gaps.offTier) { forecastWithheld = 'loads'; withheldFor = gaps.offTier; }
+    else if (gaps.unknown) { forecastWithheld = 'loads_unknown'; withheldFor = gaps.unknown; }
+  }
   return {
     pairFormat,
     pairTier,
@@ -222,5 +270,6 @@ export function compareHyroxPartners(
     run: { paceSecKm, setBy },
     forecast: pairFormat && forecastWithheld == null ? hyroxPairForecast(you, partner, pairFormat, paceSecKm) : null,
     forecastWithheld,
+    withheldFor,
   };
 }

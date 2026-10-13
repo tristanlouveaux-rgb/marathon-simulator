@@ -54,9 +54,10 @@ export interface HyroxPartnerSnapshot {
    *  (resolveHyroxStationBenchmarks `sec`, the Stats ledger value). Absent =
    *  no benchmark (the forecast uses the population seed). */
   stationSec: Partial<Record<HyroxStation, number>>;
-  /** Per station with a benchmark: the load tier that value was measured at
-   *  (recordedStationTier). Absent when unknown, or when the value went
-   *  through the Open/Pro conversion, which has no sourced ratio. */
+  /** Per station with a benchmark: the load tier stationSec is expressed at
+   *  (recordedStationTier): the tier it was measured at, or, for a value the
+   *  app converted between Open and Pro weights, the tier that conversion
+   *  lands on. Absent when unknown. */
   stationTier: Partial<Record<HyroxStation, HyroxLoadTier>>;
   /** Stations whose benchmark comes from a doubles race split: the pair's
    *  time converted to one athlete's terms, not an individual capacity. */
@@ -107,20 +108,32 @@ function singlesFormatOf(format: HyroxPartnerFormat): HyroxPartnerFormat {
 }
 
 /**
- * The load tier a resolved benchmark was measured at, or null when it cannot
- * be stated without a conversion the codebase has no source for.
+ * The load tier a resolved benchmark's `sec` is expressed at, or null when it
+ * cannot be stated.
  *
- * - The value went through the Open/Pro conversion (recorded regime differs
- *   from the target's): null. HYROX_PRO_STATION_MULTIPLIER is marked UNSOURCED
- *   and was set from the men's jump only.
- * - Singles slot: the athlete's own singles tier at that regime (Women Open =
- *   W-Open, Women Pro = M-Open, Men Open = M-Open, Men Pro = M-Pro).
+ * `sec` is always at the target's weight regime (Open or Pro): a value
+ * recorded at the other regime carries the app's Open/Pro conversion
+ * (HYROX_PRO_STATION_MULTIPLIER, the convention the solo forecast and the
+ * Stats ledger apply; the multiplier itself is marked UNSOURCED and was set
+ * from the men's jump). The pair comparison follows the same convention as
+ * the solo forecast, so the tier is read at the target's regime whether or
+ * not the value was converted. Before (review 2026-10-13) a converted value
+ * had no tier, so a Pro pair whose tests were at Open weights read as "times
+ * at different loads" and lost its pair forecast, although both partners'
+ * solo forecasts used those values.
+ *
+ * - Singles slot: the athlete's own singles tier at the target's regime
+ *   (Women Open = W-Open, Women Pro = M-Open, Men Open = M-Open, Men Pro =
+ *   M-Pro).
  * - Doubles slot, doubles target: the tier of the athlete's current division
  *   (hyroxLoadTier). Entries do not record the division they were set in;
  *   the app prescribes and states every doubles station at the division's
  *   tier (hyroxLoadTierForState), so a doubles-slot value is read at it.
  * - Anything else (a doubles-slot value read by a singles target, the legacy
  *   pooled field, unknown sex or division): null.
+ *
+ * A Mixed woman's singles-slot values stay at W-Open (her own singles tier):
+ * no conversion from Women Open to Men Open loads exists yet (lane H3b).
  */
 export function recordedStationTier(
   b: Pick<HyroxStationBenchmark, 'sec' | 'slot' | 'recordedAtProWeights'>,
@@ -130,7 +143,6 @@ export function recordedStationTier(
 ): HyroxLoadTier | null {
   if (b.sec == null || b.recordedAtProWeights == null) return null;
   const targetPro = isHyroxProFormat(format);
-  if (b.recordedAtProWeights !== targetPro) return null;
   if (b.slot === 'singles') {
     const sex = resolveHyroxAthleteSex(biologicalSex, division);
     return sex ? hyroxLoadTier(targetPro ? 'pro_singles' : 'open_singles', sex) : null;

@@ -28,7 +28,7 @@ import { setLocalStateOwner } from '@/data/planSettingsSync';
 import { HYROX_HOURS_RANGE, HYROX_MTL_CAP, HYROX_WEEKLY_SESSIONS } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from '@/calculations/hyrox-partner-snapshot';
-import { renderHyroxPartnerView, stationStatusText, fmtLead, PARTNER_ERROR_COPY } from './partner-view';
+import { renderHyroxPartnerView, stationStatusText, fmtLead, PARTNER_ERROR_COPY, withheldForecastText } from './partner-view';
 import { partnerRowLabel, renderHyroxStatsView } from './stats-view';
 import { _resetHyroxPartnerSyncForTests, getHyroxPartnerCache, refreshHyroxPartnerOnForeground, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { HyroxPartnerSource, PartnerErrorCode, PartnerResult, PartnerInvite, PartnerLink, StoredPartnerSnapshot } from '@/data/hyroxPartner';
@@ -84,7 +84,9 @@ interface MockState {
   redeem?: PartnerResult<void>;
 }
 
-function mockSource(m: MockState): HyroxPartnerSource & Record<string, ReturnType<typeof vi.fn>> {
+type MockFns = Record<keyof HyroxPartnerSource, ReturnType<typeof vi.fn>>;
+
+function mockSource(m: MockState): HyroxPartnerSource & MockFns {
   const src = {
     getLink: vi.fn(async () => (m.linkError ? fail<PartnerLink | null>(m.linkError) : ok(m.link))),
     getOpenInvite: vi.fn(async () => ok(m.invite)),
@@ -102,7 +104,7 @@ function mockSource(m: MockState): HyroxPartnerSource & Record<string, ReturnTyp
     upsertMySnapshot: vi.fn(async () => ok(undefined)),
     removeMySnapshot: vi.fn(async () => ok(undefined)),
   };
-  return src as unknown as HyroxPartnerSource & Record<string, ReturnType<typeof vi.fn>>;
+  return src as unknown as HyroxPartnerSource & MockFns;
 }
 
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
@@ -136,6 +138,15 @@ describe('copy helpers', () => {
       expect(line).not.toContain('—');
       expect(line.length).toBeLessThan(80);
     }
+  });
+
+  it('a withheld pair forecast says what is missing and from whom', () => {
+    expect(withheldForecastText({ forecastWithheld: 'setup', withheldFor: null, pairTier: null })).toBe('Needs matching race setups.');
+    expect(withheldForecastText({ forecastWithheld: 'loads', withheldFor: 'partner', pairTier: 'M-Open' })).toBe('Needs times at Men Open loads from your partner.');
+    expect(withheldForecastText({ forecastWithheld: 'loads', withheldFor: 'you', pairTier: 'M-Pro' })).toBe('Needs times at Men Pro loads from you.');
+    expect(withheldForecastText({ forecastWithheld: 'loads', withheldFor: 'both', pairTier: 'W-Open' })).toBe('Needs times at Women Open loads from both of you.');
+    expect(withheldForecastText({ forecastWithheld: 'loads_unknown', withheldFor: 'partner', pairTier: 'M-Open' })).toBe('Station loads not known for your partner.');
+    expect(withheldForecastText({ forecastWithheld: 'loads_unknown', withheldFor: 'both', pairTier: 'M-Open' })).toBe('Station loads not known for either of you.');
   });
 });
 
@@ -272,18 +283,42 @@ describe('linked', () => {
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
     const row = (st: string) => rows.find(r => r.dataset.station === st)!.textContent!.replace(/\s+/g, ' ');
     expect(row('sled_push')).toContain('Not comparable');
-    expect(row('sled_push')).toContain('Times at different loads');
+    expect(row('sled_push')).toContain('Not at the race loads');
     expect(row('ski_erg')).toContain('You lead by 12 s');
-    // The pair number would read her Women Open times as Men Open: one short line instead.
-    expect(text('#hxp-forecast')).toContain('Needs both partners at the same loads.');
+    // The pair number would read her Women Open times as Men Open: one short
+    // line naming what is missing and from whom instead.
+    expect(text('#hxp-forecast')).toContain('Needs times at Men Open loads from your partner.');
     expect(text('#hxp-forecast')).toContain('Not available');
     expect(text('#hxp-forecast')).not.toMatch(/\d:\d\d:\d\d/);
     expect(text('#hxp-run')).toContain('solo pace');
   });
 
+  it('a partner time whose load is not known: that row says so and the forecast names whose loads are missing', async () => {
+    const me = buildHyroxPartnerSnapshot((await import('@/state/store')).getState())!;
+    const tiers = { ...me.stationTier };
+    delete tiers.wall_balls;
+    await renderLinked({ stationTier: tiers });
+    const wall = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station')).find(r => r.dataset.station === 'wall_balls')!;
+    expect(wall.textContent!.replace(/\s+/g, ' ')).toContain('Load not known');
+    expect(text('#hxp-forecast')).toContain('Station loads not known for your partner.');
+    expect(text('#hxp-forecast')).toContain('Not available');
+  });
+
+  it('a Men Pro pair whose tests were at Open weights: rows compare and the pair forecast shows, as the solo forecast does', async () => {
+    seed({ format: 'pro_doubles', division: 'men' });
+    await renderLinked();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
+    const row = (st: string) => rows.find(r => r.dataset.station === st)!.textContent!.replace(/\s+/g, ' ');
+    expect(row('sled_push')).toContain('Partner leads by 8 s');
+    expect(text('#hxp-forecast')).toMatch(/Pair forecast.*\d:\d\d:\d\d/);
+    expect(text('#hxp-forecast')).not.toContain('Needs');
+  });
+
   it('different race setups: one line naming both, no pair forecast', async () => {
     await renderLinked({ division: 'women', raceTier: 'W-Open' });
     expect(text('#hxp-setups')).toBe('Setups differ: you race Doubles Mixed, your partner Doubles Women.');
+    const sled = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station')).find(r => r.dataset.station === 'sled_push')!;
+    expect(sled.textContent!.replace(/\s+/g, ' ')).toContain('Race setups differ');
     expect(text('#hxp-forecast')).toContain('Needs matching race setups.');
     expect(text('#hxp-forecast')).toContain('Not available');
   });
