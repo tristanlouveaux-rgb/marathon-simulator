@@ -14,7 +14,7 @@ vi.mock('@/data/supabaseClient', () => ({
   SUPABASE_FUNCTIONS_BASE: undefined,
 }));
 
-import { doublesStationsCaption, crossFormatConversionNote } from './forecast-view';
+import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody } from './forecast-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 
@@ -57,5 +57,48 @@ describe('crossFormatConversionNote: a singles forecast from doubles race splits
 
   it('is empty when nothing was converted', () => {
     expect(crossFormatConversionNote({})).toBe('');
+  });
+
+  it('says a singles time replaces only its own station (benchmarks resolve per station)', () => {
+    const note = crossFormatConversionNote({ crossFormatConversion: 'doubles_to_singles', crossFormatStationRatio: 0.7134 });
+    expect(note).toContain('replaces the converted time for its own station');
+    expect(note).not.toMatch(/replace them\./);
+  });
+});
+
+describe('crossFormatBannerBody: what is still converted, what is still a seed', () => {
+  const protocol = 'each station at half distance, race effort';
+  const singlesLines = (converted: number, calibrated: number): HyroxStationLine[] =>
+    HYROX_STATION_ORDER.map((station, i) => ({
+      station, baseSec: 200, adjustedSec: 200,
+      source: i < calibrated ? 'calibrated' : 'seed',
+      ...(i < converted ? { teamTimeSplit: true } : {}),
+    }));
+
+  it('all 8 converted', () => {
+    const b = crossFormatBannerBody({ stations: singlesLines(8, 8), calibratedCount: 8 }, protocol);
+    expect(b).toMatch(/^Station times are converted from your doubles race splits\./);
+    expect(b).not.toContain('Population averages');
+    expect(b).toContain('station by station');
+  });
+
+  it('7 converted after one singles test: the count follows the stations', () => {
+    const b = crossFormatBannerBody({ stations: singlesLines(7, 8), calibratedCount: 8 }, protocol);
+    expect(b).toMatch(/^7 of 8 station times are converted/);
+    expect(b).not.toContain('Population averages');
+  });
+
+  it('3 converted, 5 on seeds: names both', () => {
+    const b = crossFormatBannerBody({ stations: singlesLines(3, 3), calibratedCount: 3 }, protocol);
+    expect(b).toMatch(/^3 of 8 station times are converted/);
+    expect(b).toContain('Population averages still stand in for 5 stations.');
+    const one = crossFormatBannerBody({ stations: singlesLines(3, 7), calibratedCount: 7 }, protocol);
+    expect(one).toContain('Population averages still stand in for 1 station.');
+  });
+
+  it('copy rules: no em dash', () => {
+    for (const [c, k] of [[8, 8], [7, 8], [3, 3]]) {
+      expect(crossFormatBannerBody({ stations: singlesLines(c, k), calibratedCount: k }, protocol)).not.toContain('—');
+    }
   });
 });

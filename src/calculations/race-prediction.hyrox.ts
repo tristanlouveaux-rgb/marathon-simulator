@@ -155,10 +155,11 @@ export interface HyroxPrediction {
   confidence: 'high' | 'medium' | 'low';
   /** Number of calibrated stations (vs seed). */
   calibratedCount: number;
-  /** Set when a singles prediction reads doubles race splits (the pair's
-   *  times) converted to singles terms through the doubles quantile mapping:
-   *  team time ÷ crossFormatStationRatio. The mirror of singles benchmarks
-   *  feeding a doubles prediction × the station ratio. */
+  /** Set when a singles prediction reads at least one doubles race split (the
+   *  pair's time) converted to singles terms through the doubles quantile
+   *  mapping: team time ÷ crossFormatStationRatio. The converted stations are
+   *  the lines with teamTimeSplit. The mirror of singles benchmarks feeding a
+   *  doubles prediction × the station ratio. */
   crossFormatConversion?: 'doubles_to_singles';
   /** With crossFormatConversion: the percentile-matched doubles/singles
    *  station ratio the pair's times were divided by. */
@@ -206,18 +207,19 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   const isPro     = hx.format === 'pro_singles'  || hx.format === 'pro_doubles';
 
   // ── Format-aware benchmark resolution ────────────────────────────────────
-  // resolveHyroxBenchmarks (hyrox-station-history.ts), shared with the
-  // benchmark card: the target's slot when it has values, else the other
-  // format's slot, else the legacy pooled field.
-  // - Doubles target from the singles slot: singles station time × the
-  //   percentile-matched doubles ratio (hyrox-doubles.ts).
-  // - Singles target from the doubles slot: the inverse through the same
-  //   mapping. A doubles race split is the pair's time and is divided by the
-  //   station ratio; a solo test or session best in the doubles slot is
+  // resolveHyroxBenchmarks (hyrox-station-history.ts), shared with every
+  // surface that counts calibrated stations, resolves PER STATION: the
+  // target's slot when it holds that station, else the other format's slot,
+  // else (both slots empty) the legacy pooled field.
+  // - Doubles target, a station from the singles slot: singles station time ×
+  //   the percentile-matched doubles ratio (hyrox-doubles.ts).
+  // - Singles target, a station from the doubles slot: the inverse through the
+  //   same mapping. A doubles race split is the pair's time and is divided by
+  //   the station ratio; a solo test or session best in the doubles slot is
   //   already one athlete's time and is used as is.
   // Per station the doubles slot holds either the pair's time or a solo time
   // (doublesBenchmarkIsTeamTime).
-  const { benchmarks: userBenchmarks, slot: benchmarkSlot } = resolveHyroxBenchmarks(hx);
+  const { benchmarks: userBenchmarks, slotOf: benchmarkSlotOf } = resolveHyroxBenchmarks(hx);
 
   // Every format covers all 8 stations. Doubles partners enter every station
   // together and split the work inside it (26/27 Doubles rulebook s7.2); the
@@ -305,8 +307,9 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     const calibrated = userBenchmarks[station];
     const seedTime = effectiveSeeds[station]; // always Open weights
     const fMult = HYROX_PRO_STATION_MULTIPLIER[station] ?? 1.0;
-    const entry = calibrated != null && benchmarkSlot
-      ? benchmarkEntryForSlotValue(hx, station, benchmarkSlot, calibrated)
+    const slot = benchmarkSlotOf[station];
+    const entry = calibrated != null && slot
+      ? benchmarkEntryForSlotValue(hx, station, slot, calibrated)
       : null;
     const sourceIsPro = entry?.source === 'race' && entry.proWeights != null
       ? entry.proWeights
@@ -325,7 +328,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     }
     // Seeds are at Open weights; only multiply when target is Pro.
     const seedAtTarget = isPro ? seedTime * fMult : seedTime;
-    const isTeamTime = benchmarkSlot === 'doubles' && calibrated != null
+    const isTeamTime = slot === 'doubles' && calibrated != null
       && doublesBenchmarkIsTeamTime(hx, station, calibrated);
     // Open-weight equivalent, for reading the athlete's place in the Open
     // results tables (the only doubles data there is).

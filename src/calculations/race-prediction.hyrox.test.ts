@@ -369,16 +369,63 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
     expect(singles.crossFormatConversion).toBeUndefined();
   });
 
-  it('a singles slot with values wins over the doubles slot (slot-level resolution)', () => {
+  it('per station: a singles value wins for its own station, the other 7 stay converted', () => {
     const singles = predictHyroxRace(buildState({
       format: 'open_singles',
       stationBenchmarksSingles: { row_erg: 260 },
       stationBenchmarksDoubles: doublesSplits,
       stationBenchmarkHistory: raceHistory,
     }))!;
-    expect(singles.crossFormatConversion).toBeUndefined();
-    expect(singles.calibratedCount).toBe(1);
-    expect(singles.stations.find(l => l.station === 'row_erg')!.baseSec).toBe(260);
+    expect(singles.crossFormatConversion).toBe('doubles_to_singles');
+    expect(singles.calibratedCount).toBe(8);
+    const row = singles.stations.find(l => l.station === 'row_erg')!;
+    expect(row.baseSec).toBe(260);
+    expect(row.teamTimeSplit).toBeUndefined();
+    const r = singles.crossFormatStationRatio!;
+    for (const st of STATIONS.filter(x => x !== 'row_erg')) {
+      const line = singles.stations.find(l => l.station === st)!;
+      expect(line.teamTimeSplit).toBe(true);
+      expect(line.baseSec * r).toBeCloseTo(doublesSplits[st], 6);
+    }
+  });
+
+  it('a singles test equal to its converted value leaves the forecast where it was (review 2026-10-13)', () => {
+    // Per slot, this test dropped the 7 other converted splits to seeds:
+    // 8 calibrated / medium became 1 calibrated / low and the total moved by
+    // minutes. Per station it adds no information, so nothing moves beyond
+    // the station ratio's one refinement pass reading a slightly different
+    // first-pass total.
+    const cfg = { format: 'open_singles' as const, stationBenchmarksDoubles: doublesSplits, stationBenchmarkHistory: raceHistory };
+    const before = predictHyroxRace(buildState(cfg))!;
+    const skiConverted = before.stations.find(l => l.station === 'ski_erg')!.baseSec;
+    const after = predictHyroxRace(buildState({
+      ...cfg,
+      stationBenchmarksSingles: { ski_erg: skiConverted },
+      stationBenchmarkHistory: {
+        ...raceHistory,
+        ski_erg: [...raceHistory.ski_erg, { dateISO: dateNDaysAgo(2), sec: skiConverted, source: 'half_test' as const, format: 'open_singles' as const }],
+      },
+    }))!;
+    expect(after.calibratedCount).toBe(8);
+    expect(after.confidence).toBe(before.confidence);
+    expect(after.stations.filter(l => l.teamTimeSplit)).toHaveLength(7);
+    expect(Math.abs(after.totalSec - before.totalSec)).toBeLessThanOrEqual(2);
+  });
+
+  it('doubles target: a doubles value wins for its own station, singles values fill the other 7', () => {
+    const singlesTimes = { ski_erg: 270, sled_push: 200, sled_pull: 260, burpee_broad_jumps: 300, row_erg: 290, farmer_carry: 110, sandbag_lunges: 280, wall_balls: 430 };
+    const p = predictHyroxRace(buildState({
+      format: 'open_doubles',
+      stationBenchmarksSingles: singlesTimes,
+      stationBenchmarksDoubles: { ski_erg: 200 },
+      stationBenchmarkHistory: { ski_erg: raceHistory.ski_erg },
+    }))!;
+    expect(p.calibratedCount).toBe(8);
+    const ski = p.stations.find(l => l.station === 'ski_erg')!;
+    expect(ski.teamTimeSplit).toBe(true);
+    expect(ski.baseSec).toBe(200);
+    const row = p.stations.find(l => l.station === 'row_erg')!;
+    expect(row.baseSec).toBeCloseTo(290 * p.doubles!.stationRatio, 6);
   });
 
   it('a Pro singles target reads a Pro doubles split at Pro weights, with no second Pro multiplier', () => {

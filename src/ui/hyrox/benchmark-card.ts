@@ -22,9 +22,10 @@ import {
   STATION_DISPLAY,
   HYROX_STATION_ORDER,
 } from '@/constants/hyrox-benchmarks';
-import { appendStationTest, resolveHyroxBenchmarks, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { appendStationTest, hyroxCalibrationCoverage, hyroxTestableStations, type HyroxFormat } from '@/calculations/hyrox-station-history';
 
-/** Stations that can be calibrated — always available (no equipment dependency). */
+/** Display order for the card's pending stations (ergs first). Which stations
+ *  count as testable comes from hyroxCalibrationCoverage. */
 const CALIBRATABLE: HyroxStation[] = [
   'row_erg', 'ski_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls',
   'burpee_broad_jumps', 'sled_push', 'sled_pull',
@@ -42,26 +43,16 @@ const HALF_PROTOCOL: Record<HyroxStation, string> = {
   wall_balls:         '50 reps',
 };
 
-/** The benchmarks the forecast reads (resolveHyroxBenchmarks, shared with
- *  predictHyroxRace): the target's slot, else the other format's slot, else
- *  the legacy pooled field. So "still using population estimates" counts the
- *  same stations the forecast shows as estimated. */
-function readBenchmarks(hx: NonNullable<SimulatorState['hyroxConfig']>): Partial<Record<HyroxStation, number>> {
-  return resolveHyroxBenchmarks(hx).benchmarks;
-}
-
-/** Which stations still use population estimates (no user data). */
+/** Which testable stations still use population estimates, in the card's
+ *  display order. Reads hyroxCalibrationCoverage, the per-station resolver
+ *  predictHyroxRace uses, so "still using population estimates" counts the
+ *  same stations the forecast shows as estimated, and Stats and Account show
+ *  the same count. */
 function stationsNeedingCalibration(s: SimulatorState): HyroxStation[] {
   const hx = s.hyroxConfig;
   if (!hx) return [];
-  const benchmarks = readBenchmarks(hx);
-  const avail = CALIBRATABLE.filter(station => {
-    if (station === 'ski_erg' && !hx.stationAccess.skiErg) return false;
-    if (station === 'row_erg' && !hx.stationAccess.rowErg) return false;
-    if ((station === 'sled_push' || station === 'sled_pull') && hx.stationAccess.sled === 'never') return false;
-    return true;
-  });
-  return avail.filter(station => !benchmarks[station]);
+  const { pending } = hyroxCalibrationCoverage(hx);
+  return CALIBRATABLE.filter(station => pending.includes(station));
 }
 
 /** Whether the benchmark card should show (current-week only, not dismissed, stations pending). */
@@ -79,13 +70,9 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
 
   const band = s.hyroxConfig!.athleteBand;
   const count = pending.length;
-  const label = count === CALIBRATABLE.filter(st => {
-    const hx = s.hyroxConfig!;
-    if (st === 'ski_erg' && !hx.stationAccess.skiErg) return false;
-    if (st === 'row_erg' && !hx.stationAccess.rowErg) return false;
-    if ((st === 'sled_push' || st === 'sled_pull') && hx.stationAccess.sled === 'never') return false;
-    return true;
-  }).length ? 'Using population benchmarks for all stations.' : `${count} station${count > 1 ? 's' : ''} still using population estimates.`;
+  const label = count === hyroxTestableStations(s.hyroxConfig!.stationAccess).length
+    ? 'Using population benchmarks for all stations.'
+    : `${count} station${count > 1 ? 's' : ''} still using population estimates.`;
 
   const stationRows = pending.slice(0, 4).map(station => {
     const display = STATION_DISPLAY[station];

@@ -9,6 +9,8 @@ import {
   latestTestAgeMonths,
   upsertRaceSplitEntry,
   resolveHyroxBenchmarks,
+  hyroxCalibrationCoverage,
+  hyroxTestableStations,
   type StationTestEntry,
 } from './hyrox-station-history';
 import type { SimulatorState } from '@/types/state';
@@ -217,21 +219,72 @@ describe('upsertRaceSplitEntry: one entry per logged race and station (review 20
   });
 });
 
-describe('resolveHyroxBenchmarks: the slot the forecast and the benchmark card read', () => {
-  it("the target format's slot wins when it has values", () => {
+describe('resolveHyroxBenchmarks: per-station benchmarks the forecast and every count read', () => {
+  it("per station, the target format's slot wins", () => {
     expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
-      .toEqual({ benchmarks: { ski_erg: 260 }, slot: 'singles' });
+      .toEqual({ benchmarks: { ski_erg: 260 }, slotOf: { ski_erg: 'singles' } });
     expect(resolveHyroxBenchmarks({ format: 'pro_doubles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
-      .toEqual({ benchmarks: { ski_erg: 200 }, slot: 'doubles' });
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
   });
 
-  it("an empty target slot falls back to the other format's slot, then the legacy field", () => {
+  it("a station the target slot lacks comes from the other format's slot (review 2026-10-13)", () => {
+    // Before: per slot, the singles ski value hid the 2 doubles splits.
+    expect(resolveHyroxBenchmarks({
+      format: 'open_singles',
+      stationBenchmarksSingles: { ski_erg: 260 },
+      stationBenchmarksDoubles: { ski_erg: 200, row_erg: 210, wall_balls: 300 },
+    })).toEqual({
+      benchmarks: { ski_erg: 260, row_erg: 210, wall_balls: 300 },
+      slotOf: { ski_erg: 'singles', row_erg: 'doubles', wall_balls: 'doubles' },
+    });
+    expect(resolveHyroxBenchmarks({
+      format: 'open_doubles',
+      stationBenchmarksSingles: { ski_erg: 260, row_erg: 250 },
+      stationBenchmarksDoubles: { ski_erg: 200 },
+    })).toEqual({
+      benchmarks: { ski_erg: 200, row_erg: 250 },
+      slotOf: { ski_erg: 'doubles', row_erg: 'singles' },
+    });
+  });
+
+  it('the legacy pooled field only when neither slot holds a value', () => {
     expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarksDoubles: { ski_erg: 200 } }))
-      .toEqual({ benchmarks: { ski_erg: 200 }, slot: 'doubles' });
-    expect(resolveHyroxBenchmarks({ format: 'open_doubles', stationBenchmarksSingles: { row_erg: 250 } }))
-      .toEqual({ benchmarks: { row_erg: 250 }, slot: 'singles' });
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
     expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarks: { ski_erg: 240 } }))
-      .toEqual({ benchmarks: { ski_erg: 240 }, slot: null });
-    expect(resolveHyroxBenchmarks({ format: 'open_singles' })).toEqual({ benchmarks: {}, slot: null });
+      .toEqual({ benchmarks: { ski_erg: 240 }, slotOf: {} });
+    // A slot value hides the pooled field entirely: the boot migration copies
+    // the pooled values into a slot, where their slot says what they are.
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksDoubles: { ski_erg: 200 }, stationBenchmarks: { row_erg: 240 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
+    expect(resolveHyroxBenchmarks({ format: 'open_singles' })).toEqual({ benchmarks: {}, slotOf: {} });
+  });
+});
+
+describe('hyroxCalibrationCoverage: the one "stations calibrated" count', () => {
+  const access = { sled: 'always' as const, skiErg: true, rowErg: true };
+
+  it('counts testable stations with a resolved benchmark, from either slot', () => {
+    const c = hyroxCalibrationCoverage({
+      format: 'open_singles',
+      stationAccess: access,
+      stationBenchmarksSingles: { ski_erg: 260 },
+      stationBenchmarksDoubles: { row_erg: 210, wall_balls: 300 },
+    });
+    expect(c.testable).toHaveLength(8);
+    expect(c.calibrated).toEqual(['ski_erg', 'row_erg', 'wall_balls']);
+    expect(c.pending).toHaveLength(5);
+  });
+
+  it('leaves out stations the athlete has no equipment for', () => {
+    expect(hyroxTestableStations({ sled: 'never', skiErg: false, rowErg: true }))
+      .toEqual(['burpee_broad_jumps', 'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls']);
+    expect(hyroxTestableStations(undefined)).toHaveLength(8);
+    const c = hyroxCalibrationCoverage({
+      format: 'open_doubles',
+      stationAccess: { sled: 'never', skiErg: true, rowErg: true },
+      stationBenchmarksSingles: { sled_push: 200, ski_erg: 260 },
+    });
+    expect(c.calibrated).toEqual(['ski_erg']);
+    expect(c.testable).toHaveLength(6);
   });
 });

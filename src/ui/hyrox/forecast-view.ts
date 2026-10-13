@@ -392,7 +392,27 @@ export function crossFormatConversionNote(
   const how = ratio != null
     ? `the pair's time ÷ ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data`
     : `the pair's time ÷ the doubles-to-singles station ratio at your level in the results data`;
-  return `Stations from your doubles race splits are converted to singles terms: ${how}. Singles splits or station tests replace them.`;
+  return `Stations from your doubles race splits are converted to singles terms: ${how}. A singles split or station test replaces the converted time for its own station.`;
+}
+
+/** Calibration-banner body for a singles forecast that converted doubles
+ *  race splits. Benchmarks resolve per station (resolveHyroxBenchmarks), so a
+ *  singles test replaces only its own station's converted time; the body
+ *  counts what is still converted and what is still a population seed. */
+export function crossFormatBannerBody(
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount'>,
+  protocol: string,
+): string {
+  const total = prediction.stations.length;
+  const convertedCount = prediction.stations.filter(l => l.teamTimeSplit).length;
+  const seedCount = total - prediction.calibratedCount;
+  const lead = convertedCount >= total
+    ? 'Station times are converted from your doubles race splits.'
+    : `${convertedCount} of ${total} station times are converted from your doubles race splits.`;
+  const seedClause = seedCount > 0
+    ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
+    : '';
+  return `${lead}${seedClause} A singles station assessment (${protocol}) replaces each one with your own time, station by station.`;
 }
 
 function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState): string {
@@ -771,7 +791,7 @@ function buildHyroxHero(
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
   const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
-    ? `Station times are converted from your doubles race splits. A singles station assessment (${calibrationProtocol}) replaces the conversion with your own singles times.`
+    ? crossFormatBannerBody(prediction, calibrationProtocol)
     : prediction.confidence === 'low'
     ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
     : `${calibrated} of ${totalStations} stations calibrated. Test the rest (${calibrationProtocol}) and the forecast gets more accurate with each one.`;
