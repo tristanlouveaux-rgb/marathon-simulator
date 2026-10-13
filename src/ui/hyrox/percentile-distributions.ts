@@ -29,7 +29,7 @@ import {
   hyroxResultsCaption,
   type HyroxResultsCohort,
 } from '@/calculations/hyrox-results';
-import { hyroxTierLabel } from '@/calculations/hyrox-population';
+import { hyroxTierLabel, hyroxTierLabelIn } from '@/calculations/hyrox-population';
 import type { HyroxPercentileTable, HyroxResultsMetric } from '@/data/hyrox-results-s79';
 
 type Breakpoints = HyroxPercentileTable;
@@ -41,6 +41,8 @@ interface MetricChart {
   realTable: Breakpoints;
   /** "Faster than X%" position (hyroxFasterThanPct on the same table). */
   fasterThanPct: number;
+  /** The cohort to name on the tier ("top 14% of women"): the total row only. */
+  nameCohort?: HyroxResultsCohort;
   /** Vibrant per-metric accent — stroke + dot colour. */
   accent: string;
   /** Translucent area fill paired with `accent`. */
@@ -198,9 +200,9 @@ function renderDistributionRow(metric: MetricChart, rowIndex: number): string {
 
   return `
     <div style="padding:14px 0 12px;border-top:1px solid rgba(0,0,0,0.06)">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-        <span style="font-size:13px;color:var(--c-black);font-weight:500">${metric.label}</span>
-        <span style="font-size:13px;color:var(--c-black);font-variant-numeric:tabular-nums;font-weight:600">${fmtMmSs(metric.userValueSec)}<span style="font-size:11px;color:var(--c-muted);font-weight:500;margin-left:6px">${fmtTier(metric.fasterThanPct)}</span></span>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--c-black);font-weight:500;flex-shrink:0">${metric.label}</span>
+        <span style="font-size:13px;color:var(--c-black);font-variant-numeric:tabular-nums;font-weight:600;text-align:right">${fmtMmSs(metric.userValueSec)}<span style="font-size:11px;color:var(--c-muted);font-weight:500;margin-left:6px">${metric.nameCohort ? hyroxTierLabelIn(metric.fasterThanPct, metric.nameCohort) : fmtTier(metric.fasterThanPct)}</span></span>
       </div>
       <div style="position:relative;width:100%">
         <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;width:100%;height:${H}px">
@@ -251,7 +253,9 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
     const table = hyroxResultsTable(r.metric, cohort);
     const fasterThanPct = hyroxFasterThanPct(r.metric, r.sec, cohort);
     if (!table || table.length < 3 || fasterThanPct == null) continue;
-    metrics.push({ label: r.label, userValueSec: r.sec, realTable: table, fasterThanPct, accent: r.accent, fill: r.fill });
+    // The total row names its cohort: the Stats rank line places the same
+    // finish in an age group, so an unnamed "top 14%" read as a disagreement.
+    metrics.push({ label: r.label, userValueSec: r.sec, realTable: table, fasterThanPct, accent: r.accent, fill: r.fill, ...(r.metric === 'total' ? { nameCohort: cohort } : {}) });
   }
   if (metrics.length === 0) return '';
 

@@ -459,6 +459,17 @@ export function crossFormatBannerBody(
   return `${lead}${capClause}${seedClause}${replace}`;
 }
 
+/** The calibration banner's CTA: "Test your stations" for a provisional
+ *  forecast, and when every station is converted from the other format
+ *  (nothing is calibrated in the target's own terms, so "the rest" would be
+ *  all of them); "Calibrate the rest" otherwise (lane H3c). */
+export function calibrationBannerCtaLabel(
+  prediction: Pick<HyroxPrediction, 'stations' | 'confidence'>,
+): string {
+  const allConverted = prediction.stations.length > 0 && prediction.stations.every(l => l.crossFormat);
+  return prediction.confidence === 'low' || allConverted ? 'Test your stations' : 'Calibrate the rest';
+}
+
 /** The confidence-detail caption under the forecast's confidence badge. A
  *  medium forecast held there by the cross-format cap (crossFormatCapped)
  *  says the conversion is the cap, so a fully calibrated forecast does not
@@ -767,7 +778,7 @@ export function hyroxRunPaceSourceNote(s: SimulatorState, source: HyroxPredictio
     const pbAge = pbAgeCaptionText(s, 'the run pace', st => [deriveHyroxRunPace(st).paceSecKm]);
     return `Run pace updated from your VDOT.${pbAge ? ` ${pbAge}` : ''}`;
   }
-  if (source === 'seed') return 'Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.';
+  if (source === 'seed') return 'Run pace is the median of your ability band in the HYROX results. Add a recent run for a VDOT-anchored prediction.';
   return '';
 }
 
@@ -817,7 +828,7 @@ function buildHyroxHero(
   const runPaceSecKm = Math.round(prediction.runSec / 8);
   const bandLabel = hx.athleteBand ? (hx.athleteBand[0].toUpperCase() + hx.athleteBand.slice(1)) : null;
   const runPaceSourceDetail = prediction.runPaceSource === 'derived' ? 'From VDOT'
-    : prediction.runPaceSource === 'seed' ? 'Population avg'
+    : prediction.runPaceSource === 'seed' ? 'Band median'
     : 'Set manually';
   const courseFactorDetail = Math.abs(courseFactorPct) < 0.1
     ? 'Course-neutral'
@@ -904,7 +915,7 @@ function buildHyroxHero(
   const showCalibrationBanner = prediction.confidence !== 'high'
     && (calibrated < totalStations || !!prediction.crossFormatConversion);
   const bannerTitle = prediction.confidence === 'low' ? 'Provisional forecast' : 'Sharpen your forecast';
-  const bannerCtaLabel = prediction.confidence === 'low' ? 'Test your stations' : 'Calibrate the rest';
+  const bannerCtaLabel = calibrationBannerCtaLabel(prediction);
   const provisionalBanner = showCalibrationBanner
     ? `
       <div style="margin-top:14px;padding:12px 14px;border-radius:12px;background:rgba(248,250,252,0.85);border:1px solid var(--c-border)">

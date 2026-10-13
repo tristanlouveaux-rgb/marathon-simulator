@@ -26,6 +26,7 @@ import {
   hyroxCalibrationCoverage,
 } from '@/calculations/hyrox-station-history';
 import { hyroxBandThresholds, hyroxBandField, hyroxCohortLabel } from '@/calculations/hyrox-results';
+import { hyroxOpenSinglesTermsSec } from '@/calculations/hyrox-planning-band';
 import { buildBenchmarkTrendChart } from '@/ui/triathlon/benchmark-charts';
 import { fp, fmtModelPaceKm } from '@/utils/format';
 import { classifyHyroxSessionKind, type HyroxSessionKind } from '@/calculations/hyrox-session-classifier';
@@ -201,14 +202,21 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
     : '';
 
   // Band thresholds rendered as a stat list, for the field the band is read
-  // in (hyroxBandField: the previous race's format by sex, or the pair's
-  // division for doubles; Open Singles when no race is on file), the same
-  // field the band seeds are read in (hyroxSeedField), so the thresholds and
-  // the seeds describe one field (review 2026-10-13: a Pro Singles man with
-  // an experience band saw Pro Singles thresholds over Open Singles seeds).
-  // hyroxBandThresholds is field-relative, the same place in every field.
-  // The currently-active band is highlighted so the user sees where they sit.
+  // in (hyroxBandField: the planning field, Open Singles at the athlete's own
+  // sex, for every format, lane H3c), the same field the band seeds are read
+  // in (hyroxSeedField), so the thresholds and the seeds describe one field.
+  // A Pro or Doubles previous time is banded in Open Singles terms
+  // (hyroxPlanningBandFor), so the caption shows that converted time next to
+  // the thresholds it is compared with. The currently-active band is
+  // highlighted so the user sees where they sit.
   const bandCohort = hyroxBandField(s);
+  const prevFmt = hx?.hyroxPreviousTimeFormat;
+  const prevOpenTermsSec = prevSec != null && prevFmt && prevFmt !== 'open_singles'
+    ? hyroxOpenSinglesTermsSec(prevSec, prevFmt, s.biologicalSex, hx?.division)
+    : null;
+  const thresholdsCaption = prevOpenTermsSec != null
+    ? `${hyroxCohortLabel(bandCohort)}. Your ${fmtMmSs(prevSec!)} ${prevFmtLabel} time is ${fmtMmSs(Math.round(prevOpenTermsSec))} in Open Singles terms.`
+    : `${hyroxCohortLabel(bandCohort)}. Pro and Doubles times convert to Open Singles terms before banding.`;
   const bandThresholds = hyroxBandThresholds(bandCohort);
   const bandRows = bandThresholds.map((t, i) => {
     const prevMax = i > 0 ? bandThresholds[i - 1].maxSec : 0;
@@ -256,7 +264,7 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
 
     <div style="${CARD};margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Band thresholds</div>
-      <div style="font-size:12px;color:${TEXT_L};margin-bottom:6px">${escapeText(hyroxCohortLabel(bandCohort))}. Each band holds the same place in every format and sex field.</div>
+      <div style="font-size:12px;color:${TEXT_L};margin-bottom:6px">${escapeText(thresholdsCaption)}</div>
       ${bandRows}
     </div>
 
@@ -276,7 +284,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
   const sourceCopy = prediction.runPaceSource === 'derived'
     ? `Updated from your VDOT (${vdot.toFixed(1)}). Recalculates from your runs as fitness changes.`
     : prediction.runPaceSource === 'seed'
-    ? `Population average for the ${s.hyroxConfig?.athleteBand ?? 'current'} band. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
+    ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band in the HYROX results. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
     : 'Set manually during onboarding. Updates from runs when better data is available.';
 
   const vdotSamples = (s.vdotHistory ?? [])
@@ -313,7 +321,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       ${vdotChart}
       ${statRow('Total run time', fmtMmSs(prediction.runSec))}
       ${cpRow}
-      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Population avg' : 'Set manually')}
+      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Band median' : 'Set manually')}
       ${cpLink}
     </div>
 

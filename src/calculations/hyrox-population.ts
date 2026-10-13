@@ -39,6 +39,7 @@ import {
   hyroxStationPercentile,
   hyroxResultsCaption,
   hyroxFormatName,
+  hyroxCohortNoun,
   type HyroxResultsCohort,
 } from './hyrox-results';
 
@@ -132,6 +133,20 @@ export function hyroxTierLabel(fasterThanPct: number): string {
   if (f >= 10) return `bottom ${f}%`;
   if (f >= 5)  return 'bottom 10%';
   return 'bottom 5%';
+}
+
+/**
+ * The tier label with its cohort named: "top 14% of women", "bottom 30% of
+ * mixed pairs", "median among men's pairs" (hyroxCohortNoun). For a row whose
+ * percentile can be read against another surface's: the forecast "Where you
+ * sit" total row, next to the Stats rank line's age-group placement (lane
+ * H3c: the same finish read "top 14%" there and "Faster than 83% of women
+ * aged 30 to 34" on Stats, with no cohort on the row).
+ */
+export function hyroxTierLabelIn(fasterThanPct: number, cohort: HyroxResultsCohort): string {
+  const tier = hyroxTierLabel(fasterThanPct);
+  const noun = hyroxCohortNoun(cohort);
+  return tier === 'median' ? `median among ${noun}` : `${tier} of ${noun}`;
 }
 
 /**
