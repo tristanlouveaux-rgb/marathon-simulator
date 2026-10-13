@@ -17,23 +17,32 @@
 -- Functions:
 --   redeem_hyrox_partner_invite(code)  SECURITY DEFINER, the only path that
 --                                      creates a link
+--   unlink_hyrox_partner()             SECURITY DEFINER, the only client path
+--                                      that ends a link
 --   hyrox_partner_link_after_delete()  SECURITY DEFINER trigger: ending a
---                                      link deletes both users' snapshots
+--                                      link deletes both users' snapshots and
+--                                      any code either still holds
 --
 -- Product defaults (kept in review, 2026-10-13): a code is 8 characters and
 -- lives 24 hours; one live code per user.
 --
 -- Retention: nothing records who linked with whom once the link ends. The
--- redeemed code is deleted inside the redeem transaction; ending a link
--- (either side, or an account deletion) deletes both snapshots; a user's
--- earlier codes, live or expired, are deleted when they create a new one;
--- expired codes of anyone are purged on every successful redeem.
+-- redeemed code is deleted inside the redeem transaction. The redeemer's own
+-- code, if they had one out, stays while linked so the partner can still
+-- enter it (a crossing redeem answers 'linked'); its row names only its
+-- owner. Ending a link (either side, or an account deletion) deletes both
+-- snapshots and both users' codes. A user's earlier codes, live or expired,
+-- are deleted when they create a new one; expired codes of anyone are purged
+-- on every successful redeem. A snapshot can only be written while its owner
+-- has a link (INSERT/UPDATE policies), so a stale client cannot re-create one
+-- after the partner unlinks.
 --
--- Locking: every path that links users or replaces a user's code takes a
--- transaction advisory lock per user first (key: hashtextextended of
--- 'hyrox_partner_user:' || user id, seed 0), two keys always in ascending
--- order, so concurrent redeems (A enters B's code while B enters A's) queue
--- instead of deadlocking.
+-- Locking: every path that links users, unlinks them or replaces a user's
+-- code takes a transaction advisory lock per user first (key:
+-- hashtextextended of 'hyrox_partner_user:' || user id, seed 0), two keys
+-- always in ascending order, so concurrent redeems (A enters B's code while B
+-- enters A's) and concurrent unlinks (both partners at once) queue instead of
+-- deadlocking.
 --
 -- Security notes (docs/DATA_ISOLATION_AUDIT.md, SECURITY_SWEEP_REPORT.md C1):
 --   * RLS is enabled on every table before any policy, so a half-applied
@@ -43,14 +52,17 @@
 --     privileges grant ALL to anon on new public tables; RLS would still deny
 --     anon (every policy is TO authenticated) but the revoke removes the
 --     surface entirely.
---   * No view. Two SECURITY DEFINER functions, both with a pinned
---     search_path: the redeem function (EXECUTE for authenticated only,
---     auth.uid() checked first) and the link after-delete trigger (EXECUTE
---     for nobody; it only deletes the snapshot of the link row being deleted).
---   * Unlink = delete the caller's link row; the mirror-row foreign key
---     cascades the partner's row away in the same statement. The partner
---     snapshot policy reads the link table, so read access ends with the row,
---     and the after-delete trigger then deletes both snapshots.
+--   * No view. Three SECURITY DEFINER functions, all with a pinned
+--     search_path: the redeem and unlink functions (EXECUTE for authenticated
+--     only, auth.uid() checked first) and the link after-delete trigger
+--     (EXECUTE for nobody; it only deletes the snapshot and codes of the user
+--     whose link row is being deleted).
+--   * Unlink = unlink_hyrox_partner(): under both users' locks it deletes the
+--     caller's link row; the mirror-row foreign key cascades the partner's
+--     row away in the same statement. Clients hold no DELETE on the link
+--     table, so no unlink skips the locks. The partner snapshot policy reads
+--     the link table, so read access ends with the row, and the after-delete
+--     trigger then deletes both snapshots.
 -- =============================================================
 
 
@@ -153,6 +165,8 @@ GRANT SELECT, INSERT, DELETE ON TABLE public.hyrox_partner_invites TO authentica
 -- make "a user is in at most one active link" a database guarantee: a row
 -- (A, B) cannot exist without (B, A), and each user owns one row, so A and B
 -- can appear in no other link. Deleting either row cascades to its mirror.
+-- Clients only read here: redeem_hyrox_partner_invite inserts and
+-- unlink_hyrox_partner deletes (section 5).
 
 CREATE TABLE IF NOT EXISTS public.hyrox_partner_links (
   user_id    uuid        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -174,16 +188,16 @@ CREATE POLICY hyrox_partner_links_select_member ON public.hyrox_partner_links
   FOR SELECT TO authenticated
   USING (user_id = (SELECT auth.uid()) OR partner_id = (SELECT auth.uid()));
 
+-- No DELETE policy: a direct delete would skip the per-user locks that keep
+-- two simultaneous unlinks from deadlocking. (Dropped here in case an earlier
+-- draft of this migration created it.)
 DROP POLICY IF EXISTS hyrox_partner_links_delete_member ON public.hyrox_partner_links;
-CREATE POLICY hyrox_partner_links_delete_member ON public.hyrox_partner_links
-  FOR DELETE TO authenticated
-  USING (user_id = (SELECT auth.uid()) OR partner_id = (SELECT auth.uid()));
 
--- No INSERT or UPDATE for clients: only redeem_hyrox_partner_invite inserts.
+-- SELECT only for clients: the two functions in section 5 write.
 REVOKE ALL ON TABLE public.hyrox_partner_links FROM PUBLIC;
 REVOKE ALL ON TABLE public.hyrox_partner_links FROM anon;
 REVOKE ALL ON TABLE public.hyrox_partner_links FROM authenticated;
-GRANT SELECT, DELETE ON TABLE public.hyrox_partner_links TO authenticated;
+GRANT SELECT ON TABLE public.hyrox_partner_links TO authenticated;
 
 
 -- ── 3. Snapshots ─────────────────────────────────────────────────────────────
@@ -278,17 +292,33 @@ CREATE POLICY hyrox_partner_snapshots_select_partner ON public.hyrox_partner_sna
       AND l.partner_id = hyrox_partner_snapshots.user_id
   ));
 
+-- Writes: the caller's own row, and only while the caller has a link. A
+-- snapshot exists to be read by a partner, so an unlinked user has nothing to
+-- write: a client whose cached link is stale (the partner unlinked, or an
+-- account deletion ended the link) is refused with 42501 instead of
+-- re-creating a row nobody can read. The client reads that refusal as
+-- 'unlinked'. Known limit: an upsert whose statement started before a
+-- concurrent unlink committed still lands (milliseconds; the next push is
+-- refused, and the row is deleted when the athlete leaves doubles, resets or
+-- deletes the account).
 DROP POLICY IF EXISTS hyrox_partner_snapshots_insert_own ON public.hyrox_partner_snapshots;
 CREATE POLICY hyrox_partner_snapshots_insert_own ON public.hyrox_partner_snapshots
   FOR INSERT TO authenticated
-  WITH CHECK (user_id = (SELECT auth.uid()));
+  WITH CHECK (
+    user_id = (SELECT auth.uid())
+    AND EXISTS (SELECT 1 FROM public.hyrox_partner_links l WHERE l.user_id = (SELECT auth.uid()))
+  );
 
 DROP POLICY IF EXISTS hyrox_partner_snapshots_update_own ON public.hyrox_partner_snapshots;
 CREATE POLICY hyrox_partner_snapshots_update_own ON public.hyrox_partner_snapshots
   FOR UPDATE TO authenticated
   USING (user_id = (SELECT auth.uid()))
-  WITH CHECK (user_id = (SELECT auth.uid()));
+  WITH CHECK (
+    user_id = (SELECT auth.uid())
+    AND EXISTS (SELECT 1 FROM public.hyrox_partner_links l WHERE l.user_id = (SELECT auth.uid()))
+  );
 
+-- Delete: the caller's own row, linked or not (leaving doubles, a reset).
 DROP POLICY IF EXISTS hyrox_partner_snapshots_delete_own ON public.hyrox_partner_snapshots;
 CREATE POLICY hyrox_partner_snapshots_delete_own ON public.hyrox_partner_snapshots
   FOR DELETE TO authenticated
@@ -300,15 +330,18 @@ REVOKE ALL ON TABLE public.hyrox_partner_snapshots FROM authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.hyrox_partner_snapshots TO authenticated;
 
 
--- ── 4. Ending a link deletes both snapshots ─────────────────────────────────
+-- ── 4. Ending a link deletes both snapshots and both users' codes ──────────
 -- A snapshot exists only to be read by a linked partner. When a link row is
 -- deleted (either partner unlinks: the mirror row cascades; or an account is
--- deleted: auth.users cascades), the snapshot of that row's user is deleted
--- too. Fires once per link row, so both users' snapshots go. SECURITY DEFINER
--- because the partner's row cascades inside the caller's statement and the
--- snapshot DELETE policy only covers the caller's own row. It deletes exactly
--- one user's snapshot, the user of the link row being deleted, and nobody can
--- call it directly (EXECUTE revoked below; a trigger fires without it).
+-- deleted: auth.users cascades, or delete-account removes the row), the
+-- snapshot of that row's user is deleted too, and so is any code that user
+-- still holds (the redeemer's own code kept for a crossing redeem, or a code
+-- made while linked), so an unlinked page never shows a code from before.
+-- Fires once per link row, so both users' rows go. SECURITY DEFINER because
+-- the partner's row cascades inside the caller's statement and the snapshot
+-- and invite DELETE policies only cover the caller's own rows. It deletes
+-- exactly one user's rows, the user of the link row being deleted, and nobody
+-- can call it directly (EXECUTE revoked below; a trigger fires without it).
 
 CREATE OR REPLACE FUNCTION public.hyrox_partner_link_after_delete()
 RETURNS trigger
@@ -318,6 +351,7 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   DELETE FROM public.hyrox_partner_snapshots s WHERE s.user_id = OLD.user_id;
+  DELETE FROM public.hyrox_partner_invites i WHERE i.owner_id = OLD.user_id;
   RETURN NULL;
 END;
 $$;
@@ -328,14 +362,18 @@ CREATE TRIGGER hyrox_partner_link_after_delete
   FOR EACH ROW EXECUTE FUNCTION public.hyrox_partner_link_after_delete();
 
 
--- ── 5. Redeem ────────────────────────────────────────────────────────────────
--- The only path that creates a link. Runs as the function owner so the caller
--- never reads another user's invite. Returns a status word (never raises for
--- an expected outcome, never returns another user's data):
---   'linked'            both link rows written and the code deleted (or a
---                       concurrent cross-redeem already made this pair)
+-- ── 5. Redeem and unlink ─────────────────────────────────────────────────────
+-- redeem_hyrox_partner_invite: the only path that creates a link. Runs as the
+-- function owner so the caller never reads another user's invite. Returns a
+-- status word (never raises for an expected outcome, never returns another
+-- user's data):
+--   'linked'            both link rows written and the code deleted, or the
+--                       pair already exists: a crossing redeem (the caller
+--                       enters the code of the partner who just redeemed the
+--                       caller's own code, during or after that redeem)
 --   'not_authenticated' no user in the token
---   'already_linked'    the caller already has a partner
+--   'already_linked'    the caller already has a partner (and the code is not
+--                       that partner's)
 --   'invalid_code'      not the code shape (the client checks this first)
 --   'own_code'          the caller's own code
 --   'unavailable'       no live code: never existed, already redeemed (a
@@ -343,19 +381,28 @@ CREATE TRIGGER hyrox_partner_link_after_delete
 --                       all three, so the answer does not say whether a code
 --                       ever existed
 --   'partner_linked'    the code's owner already has a partner
---   'retry'             a concurrent redeem won a lock race; nothing was
+--   'retry'             a concurrent call won a lock race; nothing was
 --                       written, the client calls once more
+--
+-- A linked caller learns nothing about codes except whether the one entered
+-- is their own partner's.
 --
 -- Locking: the first read (no lock) only learns the code's owner. Then both
 -- users' advisory locks are taken in ascending key order (the same key the
--- invite insert trigger uses), and the code and both users' link state are
--- re-read under them. Two redeems that share a user therefore run one after
--- the other, never a deadlock: A entering B's code while B enters A's gives
--- 'linked' to both (one pair); two people entering one code give 'linked'
--- and 'unavailable'; one person entering two codes gives 'linked' and
--- 'already_linked'. Anything that still fails on locking
+-- invite insert trigger and unlink_hyrox_partner use), and the code and both
+-- users' link state are re-read under them. Two redeems that share a user
+-- therefore run one after the other, never a deadlock: A entering B's code
+-- while B enters A's gives 'linked' to both (one pair); two people entering
+-- one code give 'linked' and 'unavailable'; one person entering two codes
+-- gives 'linked' and 'already_linked'. Anything that still fails on locking
 -- (deadlock, serialization, lock timeout) or a unique violation on the link
 -- rows rolls the inner block back and returns 'retry'.
+--
+-- Codes after a link: the redeemed code is deleted. The caller's own code,
+-- if they had one out, stays: their new partner may be typing it right now
+-- (A redeems B's code a few seconds before B taps Link on A's), and that
+-- crossing redeem then answers 'linked' and deletes it. Ending the link
+-- deletes it in any case (section 4).
 
 CREATE OR REPLACE FUNCTION public.redeem_hyrox_partner_invite(code text)
 RETURNS text
@@ -364,34 +411,47 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_uid   uuid := auth.uid();
-  v_code  text := upper(regexp_replace(coalesce(redeem_hyrox_partner_invite.code, ''), '[^A-Za-z0-9]', '', 'g'));
-  v_owner uuid;
-  v_inv   public.hyrox_partner_invites%ROWTYPE;
-  k_me    bigint;
-  k_owner bigint;
+  v_uid     uuid := auth.uid();
+  v_code    text := upper(regexp_replace(coalesce(redeem_hyrox_partner_invite.code, ''), '[^A-Za-z0-9]', '', 'g'));
+  v_partner uuid;
+  v_owner   uuid;
+  v_inv     public.hyrox_partner_invites%ROWTYPE;
+  k_me      bigint;
+  k_owner   bigint;
 BEGIN
   IF v_uid IS NULL THEN
     RETURN 'not_authenticated';
   END IF;
 
-  -- One partner at a time: a linked caller cannot redeem (and cannot probe codes).
-  IF EXISTS (SELECT 1 FROM public.hyrox_partner_links l WHERE l.user_id = v_uid) THEN
-    RETURN 'already_linked';
-  END IF;
+  SELECT l.partner_id INTO v_partner
+    FROM public.hyrox_partner_links l
+   WHERE l.user_id = v_uid;
 
-  IF v_code !~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$' THEN
-    RETURN 'invalid_code';
-  END IF;
-
-  SELECT i.owner_id INTO v_owner
-    FROM public.hyrox_partner_invites i
-   WHERE i.code = v_code;
-  IF NOT FOUND THEN
-    RETURN 'unavailable';
-  END IF;
-  IF v_owner = v_uid THEN
-    RETURN 'own_code';
+  IF v_partner IS NOT NULL THEN
+    -- One partner at a time: a linked caller cannot redeem. The exception is
+    -- the partner's own code (a crossing redeem), which settles below under
+    -- the locks as 'linked'. Any other code: 'already_linked', whether or not
+    -- it exists, so a linked caller cannot probe codes.
+    IF v_code ~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$'
+       AND EXISTS (SELECT 1 FROM public.hyrox_partner_invites i
+                    WHERE i.code = v_code AND i.owner_id = v_partner) THEN
+      v_owner := v_partner;
+    ELSE
+      RETURN 'already_linked';
+    END IF;
+  ELSE
+    IF v_code !~ '^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$' THEN
+      RETURN 'invalid_code';
+    END IF;
+    SELECT i.owner_id INTO v_owner
+      FROM public.hyrox_partner_invites i
+     WHERE i.code = v_code;
+    IF NOT FOUND THEN
+      RETURN 'unavailable';
+    END IF;
+    IF v_owner = v_uid THEN
+      RETURN 'own_code';
+    END IF;
   END IF;
 
   BEGIN
@@ -402,11 +462,14 @@ BEGIN
       PERFORM pg_advisory_xact_lock(greatest(k_me, k_owner));
     END IF;
 
-    -- Under the locks, the caller's link first. A cross-redeem that lost the
-    -- race (A entered B's code while B entered A's) finds the pair already
-    -- made, which is the outcome the caller asked for: 'linked'.
+    -- Under the locks, the caller's link first. A crossing redeem (made
+    -- before this call, or by a concurrent call that won the locks) finds the
+    -- pair already made, which is the outcome the caller asked for: 'linked'.
+    -- The code entered has no further use.
     IF EXISTS (SELECT 1 FROM public.hyrox_partner_links l
                 WHERE l.user_id = v_uid AND l.partner_id = v_owner) THEN
+      DELETE FROM public.hyrox_partner_invites i
+       WHERE i.code = v_code AND i.owner_id = v_owner;
       RETURN 'linked';
     END IF;
     IF EXISTS (SELECT 1 FROM public.hyrox_partner_links l WHERE l.user_id = v_uid) THEN
@@ -427,9 +490,11 @@ BEGIN
     INSERT INTO public.hyrox_partner_links (user_id, partner_id)
     VALUES (v_uid, v_owner), (v_owner, v_uid);
 
-    -- The redeemed code and both users' other codes: no row keeps the pair.
+    -- The redeemed code goes; its row was the only one naming the owner in
+    -- this exchange, so no row keeps the pair. The caller's own code stays
+    -- for a crossing redeem (see the section header).
     DELETE FROM public.hyrox_partner_invites i
-     WHERE i.owner_id IN (v_uid, v_owner);
+     WHERE i.owner_id = v_owner;
 
     -- Expired codes of anyone. SKIP LOCKED: rows another transaction holds
     -- are left for a later purge, so this never waits on (or deadlocks with)
@@ -452,6 +517,75 @@ REVOKE ALL ON FUNCTION public.redeem_hyrox_partner_invite(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.redeem_hyrox_partner_invite(text) FROM anon;
 REVOKE ALL ON FUNCTION public.redeem_hyrox_partner_invite(text) FROM authenticated;
 GRANT EXECUTE ON FUNCTION public.redeem_hyrox_partner_invite(text) TO authenticated;
+
+-- unlink_hyrox_partner: the only client path that ends a link. Status words:
+--   'unlinked'          the caller's link is gone: both rows (the mirror
+--                       cascades), both snapshots and both users' codes
+--                       (section 4)
+--   'not_linked'        there was nothing to end, including when the partner
+--                       unlinked first
+--   'not_authenticated' no user in the token
+--   'retry'             a lock failure; nothing was written, the client calls
+--                       once more
+--
+-- Locking: the partner is read without a lock, then both users' advisory
+-- locks are taken in ascending key order, the same order redeem uses. Before
+-- (review 2026-10-13) the client deleted its own row directly: each DELETE
+-- locked its own row and then waited on the mirror row the other held, so two
+-- partners unlinking at the same moment deadlocked and one saw an error. Now
+-- the second unlink waits for the first, then finds no row: 'not_linked'.
+
+CREATE OR REPLACE FUNCTION public.unlink_hyrox_partner()
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_uid       uuid := auth.uid();
+  v_partner   uuid;
+  k_me        bigint;
+  k_partner   bigint;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN 'not_authenticated';
+  END IF;
+
+  SELECT l.partner_id INTO v_partner
+    FROM public.hyrox_partner_links l
+   WHERE l.user_id = v_uid;
+  IF NOT FOUND THEN
+    RETURN 'not_linked';
+  END IF;
+
+  BEGIN
+    k_me      := hashtextextended('hyrox_partner_user:' || v_uid::text, 0);
+    k_partner := hashtextextended('hyrox_partner_user:' || v_partner::text, 0);
+    PERFORM pg_advisory_xact_lock(least(k_me, k_partner));
+    IF k_me <> k_partner THEN
+      PERFORM pg_advisory_xact_lock(greatest(k_me, k_partner));
+    END IF;
+
+    -- Only the link the caller had when the call began. If the partner
+    -- unlinked first there is nothing left to end.
+    DELETE FROM public.hyrox_partner_links l
+     WHERE l.user_id = v_uid AND l.partner_id = v_partner;
+    IF NOT FOUND THEN
+      RETURN 'not_linked';
+    END IF;
+  EXCEPTION
+    WHEN deadlock_detected OR serialization_failure OR lock_not_available THEN
+      RETURN 'retry';
+  END;
+
+  RETURN 'unlinked';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.unlink_hyrox_partner() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.unlink_hyrox_partner() FROM anon;
+REVOKE ALL ON FUNCTION public.unlink_hyrox_partner() FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.unlink_hyrox_partner() TO authenticated;
 
 -- Trigger functions: never callable over the API (a trigger fires without the
 -- caller holding EXECUTE).

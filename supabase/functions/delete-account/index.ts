@@ -204,8 +204,12 @@ Deno.serve(async (req: Request) => {
   }
 
   // HYROX Doubles partner: hard-delete now, link first (its trigger removes
-  // both snapshots), then the user's own snapshot and invite. Non-fatal: the
-  // auth.users purge cascades every partner row in 30 days regardless.
+  // both snapshots and both users' codes), then the user's own snapshot and
+  // invite. A direct service-role delete, not unlink_hyrox_partner (which
+  // reads auth.uid()): if the partner unlinks in the same instant one of the
+  // two deletes can fail once on a deadlock (logged here, or 'retry' on the
+  // partner's side) and the link still ends. Non-fatal: the auth.users purge
+  // cascades every partner row in 30 days regardless.
   const partnerCleanup: Array<[string, string]> = [
     ['hyrox_partner_links', 'user_id'],
     ['hyrox_partner_snapshots', 'user_id'],
