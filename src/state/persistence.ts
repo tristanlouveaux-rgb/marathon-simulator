@@ -1,6 +1,7 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
 import type { GarminPendingItem } from '@/types/state';
 import { savePlanSettings, setLocalStateOwner } from '@/data/planSettingsSync';
+import { scheduleHyroxPartnerSnapshotSync } from '@/data/hyroxPartnerSync';
 import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION, TRIATHLON_FIELDS_VERSION, VO2_DEVICE_ONLY_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities, getDefaultState } from './store';
@@ -548,6 +549,8 @@ export function saveState(): void {
 
     // Fire-and-forget Supabase backup. Only runs if user is authenticated
     savePlanSettings();
+    // HYROX Doubles partner: debounced snapshot push. No-op unless linked.
+    scheduleHyroxPartnerSnapshotSync();
   } catch (e) {
     console.error('Error saving state:', e);
   }

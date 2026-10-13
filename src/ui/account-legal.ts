@@ -96,6 +96,14 @@ export function openDeleteAccountModal(): void {
       const body = await res.json().catch(() => ({}));
       const purgeDate = body?.purge_date ? new Date(body.purge_date).toLocaleDateString() : 'in 30 days';
 
+      // HYROX Doubles partner: end the link and delete the shared race
+      // snapshot now, so a partner stops reading this account's numbers at
+      // once rather than at the purge. Best effort; never blocks deletion.
+      try {
+        const { removeMyHyroxPartnerData } = await import('@/data/hyroxPartner');
+        await removeMyHyroxPartnerData();
+      } catch { /* ignore */ }
+
       // Sign out and clear local state. signOut() fires SIGNED_OUT, whose
       // handler (main.ts) clears the per-device cache and HARD RELOADS the
       // page (the reload is what guarantees the old account's in-memory state

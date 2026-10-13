@@ -967,6 +967,13 @@ async function launchApp(): Promise<void> {
     } catch (err) {
       console.warn('[hyrox] personal run-pace offset refresh failed', err);
     }
+
+    // Doubles partner: read the link once per session and push this athlete's
+    // race snapshot when linked (src/data/hyroxPartnerSync.ts). Fire-and-forget;
+    // a no-op when unlinked, offline or signed out.
+    void import('@/data/hyroxPartnerSync')
+      .then(({ syncHyroxPartnerOnLaunch }) => syncHyroxPartnerOnLaunch())
+      .catch(err => console.warn('[hyrox] partner sync failed', err));
   }
 
   // Check if onboarding is complete
