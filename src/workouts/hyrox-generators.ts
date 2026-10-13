@@ -405,10 +405,12 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
 export const HYROX_EASY_ERG_TYPE = 'hyrox_erg_easy';
 
 /** True for an easy erg session (generateHyroxEasyErg). It carries discipline
- *  'station' (the SkiErg and the row erg are HYROX stations, and the gates and
- *  matching treat it like station work), but it is not station work for the
- *  plan's rules: not a station session, not HYROX-specific work, not a hard
- *  session, no eccentric load. */
+ *  'station' (the SkiErg and the row erg are HYROX stations: the injury gates
+ *  scale it with the station capacity, the MTL split counts it as station
+ *  load, and a logged gym session can fill its slot), but it is not station
+ *  work for the plan's rules: not a station session, not HYROX-specific work,
+ *  not a hard session, no eccentric load. The HYROX cards show it as a
+ *  time-defined cross-training session (Mark as Done, Adjust, Skip). */
 export function isHyroxEasyErg(w: Pick<Workout, 't'>): boolean {
   return w.t === HYROX_EASY_ERG_TYPE;
 }
@@ -461,8 +463,10 @@ export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
     rpe: HYROX_EASY_RPE,
     estimatedDurationMin: dur,
     musculoTendonLoad: mtl,
-    hyroxComponents: [{ type: station, durationSec: dur * 60, mtl }],
-    hyroxRounds: 1,
+    // No hyroxComponents: it is one continuous time-defined block, not a
+    // station set. Components would route it to the guided station player
+    // (one 1000 m SkiErg set) and the session recap would file its full
+    // length as a station time.
   };
 }
 

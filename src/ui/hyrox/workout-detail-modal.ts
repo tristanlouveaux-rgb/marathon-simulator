@@ -14,6 +14,7 @@ import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
+import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -107,7 +108,10 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
 
   const rawDisc = workout.discipline as string;
   const wt = (workout.t || '') as string;
+  // Easy erg work is time-defined aerobic work: the cross-training layout
+  // (Mark as Done, Adjust, Skip), not the guided station flow.
   const disc: HyroxDisc =
+    isHyroxEasyErg(workout) ? 'cross' :
     rawDisc === 'station' ? 'station' :
     rawDisc === 'brick'   ? 'brick' :
     (wt === 'gym' || wt === 'strength') ? 'strength' :

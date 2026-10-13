@@ -11,6 +11,7 @@ import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 import { strengthCardSummary } from '@/guided/strength-model';
+import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ function discColours(disc: HyroxDisc): { accent: string; badgeBg: string; badgeT
 }
 
 function workoutDisc(w: Workout): HyroxDisc {
+  // Easy erg work is a time-defined aerobic session: the cross-training card.
+  if (isHyroxEasyErg(w)) return 'cross';
   if (w.discipline === 'station') return 'station';
   if (w.discipline === 'brick') return 'brick';
   const t = (w.t || '') as string;

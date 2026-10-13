@@ -26,6 +26,7 @@ import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getS
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts, parseWorkoutDescription } from '@/workouts';
 import { displayDescWithPace } from '@/workouts/workout-scaling';
+import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
 import { resolveWeekWorkouts } from './week-resolve';
 import { isStoodDownByLayer } from '@/workouts/render-layer';
 import { getPlannedDayTSSContext } from './planned-day-tss';
@@ -3020,7 +3021,10 @@ export function buildTodayWorkoutHyrox(s: SimulatorState): string {
 
 function buildHyroxSessionBlock(w: any, isFirst: boolean, ourDay: number): string {
   const wt = String(w.t || '');
-  const disc = (w.discipline === 'station' || w.discipline === 'brick') ? String(w.discipline)
+  // Easy erg work carries discipline 'station' but shows as cross-training,
+  // as the HYROX plan card does (workout-card workoutDisc).
+  const disc = isHyroxEasyErg(w) ? 'cross'
+    : (w.discipline === 'station' || w.discipline === 'brick') ? String(w.discipline)
     : (wt === 'gym' || wt === 'strength') ? 'strength'
     : wt === 'cross_training' ? 'cross'
     : 'run';
