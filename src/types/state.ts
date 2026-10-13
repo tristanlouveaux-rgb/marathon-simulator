@@ -633,6 +633,12 @@ export interface Week {
    *  plan's build prescription, as running's forecast reads plan-engine
    *  targets). Unset when the window removed nothing. */
   raceWindowCut?: Array<Pick<Workout, 'discipline' | 'estimatedDurationMin'>>;
+  /** HYROX mode: what the plan generator's rules changed in this week, one
+   *  line each (sessions left out, demoted or cut to fewer rounds or
+   *  stations, and why), so a plan can be diagnosed from a state dump.
+   *  Written by plan_engine.hyrox at every generation; not shown in the UI.
+   *  Unset when the rules changed nothing. */
+  hyroxPlanNotes?: string[];
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
    *  the workout generator and Phase Timeline read this flag to swap content

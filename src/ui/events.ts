@@ -845,6 +845,9 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
     // The race window's cut sessions (forecast dose only) follow the week.
     if (fresh[i].raceWindowCut) s.wks[i].raceWindowCut = fresh[i].raceWindowCut;
     else delete s.wks[i].raceWindowCut;
+    // HYROX: the generator's notes on the week (sessions its rules changed).
+    if (fresh[i].hyroxPlanNotes) s.wks[i].hyroxPlanNotes = fresh[i].hyroxPlanNotes;
+    else delete s.wks[i].hyroxPlanNotes;
   }
 }
 

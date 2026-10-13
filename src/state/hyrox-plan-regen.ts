@@ -210,6 +210,9 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
     // own week is a closing week with no sessions; the flag follows the fresh plan.
     if (freshWeeks[i].raceClosing) wk.raceClosing = true;
     else delete wk.raceClosing;
+    // The generator's notes on the week (sessions its rules changed) follow it.
+    if (freshWeeks[i].hyroxPlanNotes) wk.hyroxPlanNotes = freshWeeks[i].hyroxPlanNotes;
+    else delete wk.hyroxPlanNotes;
     rekeyNameKeyedHyroxSlots(wk);
   }
   hx.generatorVersion = HYROX_GENERATOR_VERSION;

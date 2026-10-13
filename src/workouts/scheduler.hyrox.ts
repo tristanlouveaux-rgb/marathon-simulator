@@ -219,6 +219,8 @@ export function findHyroxWeekSchedule(
  *   week instead of being stacked on Monday. Unset = every day.
  * @param opts.prevSunday - The previous week's Sunday session, for the
  *   Sunday-to-Monday spacing.
+ * @param opts.dropped - Receives each session left out for want of a legal
+ *   day, so the plan engine can note it on the week.
  *
  * Without allowed days this is findHyroxWeekSchedule; when no legal placement
  * exists, sessions are placed greedily in priority order and a session with no
@@ -229,7 +231,7 @@ export function scheduleHyroxWeek(
   sessions: Workout[],
   _band: AbilityBand,
   allowedDays?: (w: Workout) => readonly number[],
-  opts: { prevSunday?: HyroxPrevSunday | null } = {},
+  opts: { prevSunday?: HyroxPrevSunday | null; dropped?: Workout[] } = {},
 ): Workout[] {
   if (!allowedDays) {
     const found = findHyroxWeekSchedule(sessions, opts);
@@ -250,7 +252,7 @@ export function scheduleHyroxWeek(
       assigned = day;
       break;
     }
-    if (assigned === -1) continue; // no legal day left: not in this week
+    if (assigned === -1) { opts.dropped?.push(session); continue; } // no legal day left: not in this week
     usedDays.add(assigned);
     placed.push({ w: session, day: assigned });
   }
