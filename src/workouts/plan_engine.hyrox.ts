@@ -25,21 +25,28 @@
  *      run gives up its growth for it, never its previous length), then easy
  *      runs, none longer than the long run. Station sessions and bricks share
  *      the rest of the week's budget.
- *   5. Weekly MTL cap: cut station and brick rounds (real volume).
+ *   5. Weekly MTL cap: easy runs shorten and leave first, then the long run
+ *      shortens to its soft floor, then station and brick rounds and
+ *      stations go (real volume); the week's last station work stays.
  *   6. Schedule with the hard-day and 48 h eccentric rules, Sunday to Monday
  *      included (scheduler.hyrox). A week the rules cannot hold loses a hard
  *      session to its easy sibling, then its lowest-priority session.
- *   7. Easy erg work: what the sessions leave of the week's budget becomes
- *      easy SkiErg or row work, up to the athlete's chosen session total, in
- *      the MTL the week leaves under the cap. Neither hard nor eccentric. It
- *      never fills what the injury gates took, nor the slot of the week's last
- *      station session or brick.
+ *   7. Easy erg work (discipline 'erg'): what the sessions leave of the
+ *      week's budget becomes easy SkiErg or row work, up to the athlete's
+ *      chosen session total, in the MTL the week leaves under the cap, each
+ *      session up to the tier long-run cap. With the chosen sessions full, a
+ *      training week's shortest easy run gives up its slot when the easy erg
+ *      session holds more (the easy runs left keep its minutes). Neither hard
+ *      nor eccentric. It never fills what the injury gates took, nor the slot
+ *      of the week's last station session or brick, nor a missing quality
+ *      run's slot.
  *   8. Acute:chronic guard: a training week's planned load (canonical TSS) is
  *      at most ACWR_SAFE_HIGH × the mean of the previous 4 planned weeks (weeks
  *      before week 1 count as the athlete's logged weekly load, else as the
  *      nominal week 1, fixed when the plan is created; week 1's assessment is
  *      exempt from week 1's guard). Over it, easy erg work gives way first,
- *      then the budget shrinks and the week is rebuilt; the long run is
+ *      then easy running, then the station work shrinks and the week is
+ *      rebuilt; the long run is
  *      trimmed to the run floor, then left out, before the week's last
  *      station session or brick, which leaves only when the week is still
  *      over without the long run.
@@ -184,6 +191,14 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // week 1's guard; race week holds a run whenever it holds a run slot (one easy
 // run at the run floor when the primer is above the 110% ceiling and the easy
 // runs would sit under the floor).
+// Still v18 (unreleased; round 5, Tristan's decisions A to E of 2026-10-13):
+// the MTL cap cuts easy running, then the long run, before station work (A);
+// the ceilings cut easy erg work, then easy running, before the station work,
+// at the largest scale that fits; a full week frees an easy-run slot for a
+// longer easy erg session, never a missing quality run's slot, and taper week
+// 1's tempo is sized alone (B); a week under the chosen hours says so (C);
+// easy erg work has its own discipline, 'erg' (D); the taper long run never
+// sits under the run floor (E).
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -625,8 +640,9 @@ interface HyroxWeekInputs {
 }
 
 /** What a training week's ceiling (the acute:chronic guard, the deload
- *  ceiling) takes away, in this order, when scaling every budget-sized
- *  session down to its floor still leaves the week above it: easy runs,
+ *  ceiling) takes away, in this order, when cutting easy erg work and easy
+ *  running (the solver's first steps, decision A's order) and scaling the
+ *  station work down to its floor still leave the week above it: easy runs,
  *  stations out of each circuit down to MIN_CIRCUIT_STATIONS
  *  (the circuit stays; a station session's floor is 2 rounds of every station,
  *  50 to 65 min, so before 2026-10-13 a deload at low hours lost the whole
