@@ -26,6 +26,7 @@ import {
   HYROX_HOURS_RANGE,
   applyHyroxSessionDelta,
   hyroxSessionTotal,
+  hyroxTier,
   SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES,
   SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES,
   computeDoublesCap,
@@ -57,6 +58,10 @@ function bandFromTime(sec: number): AbilityBand {
 
 const BAND_ORDER: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
 
+/** Highest band a first-timer is placed in: the top of the intermediate tier
+ *  (hyroxTier; Tristan 2026-10-13, D7). */
+const FIRST_TIMER_MAX_BAND: AbilityBand = 'intermediate';
+
 /**
  * Band of a first-timer (no usable previous HYROX time). The parameter sheet's
  * level mapping (2026-10-12) puts a first race in the beginner tier
@@ -65,6 +70,12 @@ const BAND_ORDER: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'inte
  * with a real running-fitness signal (hasRealRunningFitnessSignal, the
  * canonical gate) the band is the higher of 'total_beginner' and the VDOT band
  * (bandFromVdot, the thresholds the staleness re-band already uses).
+ *
+ * A first-timer is capped at the intermediate tier (the 'intermediate' band)
+ * whatever their running fitness (Tristan 2026-10-13, D7): the advanced tier
+ * doses two station sessions and race-pace stations from base, which needs
+ * station history a first race does not have. Before, a 35:00 10K first-timer
+ * (VDOT 60) went straight to 'competitive'.
  *
  * Before 2026-10-12 the band came from onboarding's experienceLevel, which the
  * HYROX flow never asks: every first-timer took the running default (or
@@ -76,6 +87,7 @@ function firstTimerBand(s: SimulatorState): AbilityBand {
   if (!realSignal) return 'total_beginner';
   const vdotBand = bandFromVdot(resolveRunningVdot(s));
   if (!vdotBand) return 'total_beginner';
+  if (hyroxTier(vdotBand) === 'advanced') return FIRST_TIMER_MAX_BAND;
   return BAND_ORDER.indexOf(vdotBand) > 0 ? vdotBand : 'total_beginner';
 }
 
@@ -85,9 +97,10 @@ function firstTimerBand(s: SimulatorState): AbilityBand {
  * Distribute a user-chosen total session count across runs/stations/bricks for
  * the athlete's build week (HYROX_WEEKLY_SESSIONS, the tier's build row). The
  * plan engine applies the same choice to every phase (weekSessionCounts).
- * - Adding: easy runs up to 5 (then easy erg work, which has no session type
- *   yet; the 2 to 7 slider never reaches it). Never extra bricks or stations
- *   (parameter sheet sessions.weekly; before 2026-10-12 up to 3 bricks).
+ * - Adding: easy runs up to 5. Never extra bricks or stations (parameter
+ *   sheet sessions.weekly; before 2026-10-12 up to 3 bricks). Easy erg work
+ *   comes next in the sheet; the plan engine adds it to a week's free slots,
+ *   up to this total, so the stored counts never hold it.
  * - Reducing: bricks first, then stations (never below 1), then runs (never below 1).
  */
 function distributeSessionCount(
