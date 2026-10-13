@@ -22,6 +22,7 @@ import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
 import type { SimulatorState } from '@/types/state';
+import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home')     import('../home-view').then(({ renderHomeView }) => renderHomeView());
@@ -214,12 +215,10 @@ export function renderHyroxStatsView(): void {
 
         <!-- Critical Pace derivation card -->
         ${cpComponents ? (() => {
-          const fmtPaceLocal = (secKm: number) => {
-            if (!Number.isFinite(secKm) || secKm <= 0) return '—';
-            const m = Math.floor(secKm / 60);
-            const ss = String(Math.round(secKm % 60)).padStart(2, '0');
-            return `${m}:${ss}`;
-          };
+          // Whole second with the minute carried (fmtModelPaceKm), as the
+          // forecast and Critical pace detail show the same paces.
+          const fmtPaceLocal = (secKm: number) =>
+            (!Number.isFinite(secKm) || secKm <= 0) ? '—' : fmtModelPaceKm(secKm);
           const v = s.v;
           const cpSec = Math.round(cpComponents.criticalPaceSecKm);
           const thresholdSec = Math.round(cpComponents.thresholdSecKm);
@@ -346,11 +345,9 @@ function renderRunPaceRow(
   source: 'user' | 'derived' | 'seed' | undefined,
 ): string {
   const seedSecKm = (SEED_RUN_PACE_SEC_KM as Record<string, number>)[band];
-  const fmtPace = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = String(Math.round(s % 60)).padStart(2, '0');
-    return `${m}:${sec}`;
-  };
+  // Run pace (can be fractional): whole second with the minute carried, the
+  // forecast's formatter, never "4:60".
+  const fmtPace = (s: number) => fmtModelPaceKm(s);
 
   const hasUser = userSecKm != null;
   const sourceCaption =
@@ -386,11 +383,9 @@ function renderBenchmarkRow(
   const seedSec = (STATION_SEED_TIMES_SEC as any)[band]?.[station] as number | undefined;
   const hasUser = userSec != null;
 
-  const fmtSec = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = String(Math.round(s % 60)).padStart(2, '0');
-    return `${m}:${sec}`;
-  };
+  // Station times (doubles and Pro values are fractional): rounded before the
+  // minute split, as the station detail page and forecast rows show them.
+  const fmtSec = (s: number) => ftRounded(s);
 
   // Standalone benchmark times are max-effort with rest. Comparing them to the
   // 89k-finisher Kaggle dataset (which captures mid-race fatigued station

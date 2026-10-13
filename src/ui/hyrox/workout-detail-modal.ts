@@ -14,6 +14,7 @@ import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
+import { ftRounded } from '@/utils/format';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -29,7 +30,7 @@ function renderStationRow(
   const subId = workout.hyroxStationSubs?.[station];
   const sub = subId ? findSubstitution(station, subId) : undefined;
   const distStr = c.reps ? `${c.reps} reps` : display.distance;
-  const targetStr = c.durationSec ? fmtSec(c.durationSec) : '—';
+  const targetStr = c.durationSec ? ftRounded(c.durationSec) : '—';
   const targetLabel = options.context === 'technique' ? 'per round'
                      : options.context === 'density' ? 'target' : '';
   const showTargetCol = options.context !== 'breakdown';
@@ -414,11 +415,6 @@ function openSubstitutionPicker(station: HyroxStation, onPick: (subId: string) =
   document.body.appendChild(sub);
 }
 
-function fmtSec(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
 
 /** Rest period as "30s" or "2 min" (whole minutes collapse to "N min"). */
 function fmtRest(sec: number): string {

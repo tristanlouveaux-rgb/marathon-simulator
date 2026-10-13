@@ -28,6 +28,19 @@ export function ft(seconds: number): string {
 }
 
 /**
+ * Seconds as "m:ss", or "h:mm:ss" from an hour, rounded to the nearest whole
+ * second before the split so the minute carries: 119.6 s reads "2:00", never
+ * "1:60". For fractional model times (HYROX doubles and Pro station times,
+ * goal back-calculation targets, forecast totals), matching the HYROX
+ * forecast surfaces, which round to the nearest second. ft floors instead; a
+ * number already shown through ft elsewhere stays on ft.
+ */
+export function ftRounded(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '--';
+  return ft(Math.round(seconds));
+}
+
+/**
  * Format pace as min:sec/km (or /mi when pref = 'mi').
  * Input is always sec/km; conversion to sec/mi is done internally.
  */

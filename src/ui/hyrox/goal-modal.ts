@@ -18,19 +18,13 @@ import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
-function fmtMmSs(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60).toString().padStart(2, '0');
-  return `${m}:${s}`;
-}
-function fmtHhMmSs(sec: number): string {
-  if (sec < 3600) return fmtMmSs(sec);
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.round(sec % 60).toString().padStart(2, '0');
-  return `${h}:${m.toString().padStart(2, '0')}:${s}`;
-}
+// Times and paces here are fractional (the back-calculation distributes the
+// gain proportionally), so they round to the whole second before the minute
+// split, the way the forecast shows the same numbers: times through ftRounded
+// (forecast hero and station rows), run pace through fmtModelPaceKm (forecast
+// average run pace). Rounding only the seconds part printed 59.6 s as "0:60".
 
 /** "56 min" / "1 min 20 sec" / "40 sec" — readable duration, never raw seconds. */
 function fmtApproxDuration(sec: number): string {
@@ -91,7 +85,7 @@ function populationFloorSec(prediction: HyroxPrediction): number {
   return HYROX_RUN_PACE_MIN_SEC_KM * 8 + stationFloor + prediction.roxzoneSec;
 }
 
-function renderResultBody(result: GoalBackCalcResult): string {
+export function renderResultBody(result: GoalBackCalcResult): string {
   if (result.feasibility === 'already_on_pace') {
     return `
       <div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(122,132,92,0.08);border-radius:10px;margin-bottom:14px">
@@ -110,7 +104,7 @@ function renderResultBody(result: GoalBackCalcResult): string {
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.05)">
       <span style="color:var(--c-black)">Run pace</span>
       <span style="display:flex;gap:14px;align-items:baseline">
-        <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(result.runPaceTarget.currentSecKm)} → ${fmtMmSs(result.runPaceTarget.targetSecKm)}</span>
+        <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtModelPaceKm(result.runPaceTarget.currentSecKm)} → ${fmtModelPaceKm(result.runPaceTarget.targetSecKm)}</span>
         <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${result.runPaceTarget.deltaSecKm.toFixed(1)}s/km</span>
       </span>
     </div>
@@ -125,7 +119,7 @@ function renderResultBody(result: GoalBackCalcResult): string {
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
           <span style="color:var(--c-black)">${display.name}</span>
           <span style="display:flex;gap:14px;align-items:baseline">
-            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(t.currentSec)} → ${fmtMmSs(t.targetSec)}</span>
+            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${ftRounded(t.currentSec)} → ${ftRounded(t.targetSec)}</span>
             <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${Math.round(t.deltaSec)}s</span>
           </span>
         </div>
@@ -157,12 +151,12 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
         <div style="font-size:17px;font-weight:700;color:#0F172A">Set a target finish</div>
         <button id="hx-goal-close" style="background:none;border:none;cursor:pointer;color:var(--c-faint);font-size:20px;line-height:1;padding:0">×</button>
       </div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${fmtHhMmSs(prediction.totalSec)}. Enter a target and we'll back-calculate the per-station times you'd need.</div>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. Enter a target and we'll back-calculate the per-station times you'd need.</div>
       <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Target time (mm:ss or h:mm:ss)</label>
       <input
         id="hx-goal-input"
         type="text"
-        value="${fmtHhMmSs(initialTarget)}"
+        value="${ftRounded(initialTarget)}"
         style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:6px"
       />
       <div id="hx-goal-echo" style="font-size:12px;color:var(--c-muted);min-height:16px;margin-bottom:14px"></div>
@@ -190,7 +184,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     }
     // Always echo the resolved interpretation so an ambiguous entry like "1:00"
     // (read as 1 hour) is visible and correctable.
-    if (echoEl) echoEl.textContent = `Target: ${fmtHhMmSs(sec)}`;
+    if (echoEl) echoEl.textContent = `Target: ${ftRounded(sec)}`;
     const result = computeGoalBackCalc(prediction, sec);
     resultEl.innerHTML = renderResultBody(result);
   };
