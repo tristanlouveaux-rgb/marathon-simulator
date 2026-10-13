@@ -135,6 +135,13 @@ export interface Workout extends WorkoutDefinition {
    *  clearStoredPlanRaceWindow), which keeps long sessions out of the last
    *  days before race day. Undefined = not the long ride. */
   longRide?: boolean;
+  /** Triathlon and cycling race taper (tri-taper.ts): 'race_pace' marks a
+   *  long-course taper quality session capped at race intensity, 'opener' a
+   *  race-week session holding race-pace repeats (Friel; Byrn's brick),
+   *  'day_before' the short activation session the day before the race
+   *  (its duration is a sourced cap, so effort scaling leaves it alone).
+   *  Undefined = not a taper role. */
+  taperRole?: 'race_pace' | 'opener' | 'day_before';
   testType?: string; // For physio capacity tests
   /** Canonical session duration in minutes. Set by the plan engine at
    * generation time so downstream code (scheduler capacity, card chips,

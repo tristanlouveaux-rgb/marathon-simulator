@@ -167,6 +167,13 @@ export function nameForBike(kind: BikeSessionKind): string {
   }
 }
 
+/** A bike target as a watt range (power meter and FTP known) or an HR-zone
+ *  label with its %FTP. Exported for the taper's race-pace sessions
+ *  (tri-taper.ts), which target the race's intensity factor. */
+export function bikeTargetLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number, workoutType?: string): string {
+  return pwLabel(ftp, hasPower, pct, workoutType);
+}
+
 function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number, workoutType?: string): string {
   if (hasPower && ftp) {
     const band = workoutType != null ? (BIKE_ADHERENCE_BAND[workoutType] ?? 0.07) : 0.07;

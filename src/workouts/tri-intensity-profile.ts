@@ -50,6 +50,13 @@ export type TriRunQualityKind = 'threshold' | 'vo2';
  * format except Ironman (1, aerobic-led). Swim adds a second quality session only
  * for short course (speed focus). This reproduces the pre-2026-06-15 70.3 pattern
  * (bike 2 / run 1 / swim 1) and the Ironman correction (all disciplines → 1).
+ *
+ * Taper rows mirror peak (Tristan, 2026-10-13: keep quality in the taper).
+ * Cutting intensity in a taper gave ES -0.02 against 0.33 for keeping it
+ * (Bosquet 2007; Wang 2023 -0.55 vs +0.25). The race taper itself takes its
+ * counts from the reference week (plan_engine.triathlon triTaperWeekOne);
+ * these rows feed the inter-cycle taper weeks of 28+ week plans. The gate
+ * below caps the intensity.
  */
 type DisciplineCounts = { swim: number; bike: number; run: number };
 export const TRI_QUALITY_SLOTS: Record<TriathlonDistance, Record<TrainingPhase, DisciplineCounts>> = {
@@ -57,31 +64,31 @@ export const TRI_QUALITY_SLOTS: Record<TriathlonDistance, Record<TrainingPhase, 
     base:  { swim: 1, bike: 1, run: 0 },
     build: { swim: 2, bike: 2, run: 1 },
     peak:  { swim: 2, bike: 2, run: 1 },
-    taper: { swim: 1, bike: 1, run: 0 },
+    taper: { swim: 2, bike: 2, run: 1 },
   },
   olympic: {
     base:  { swim: 1, bike: 1, run: 0 },
     build: { swim: 2, bike: 2, run: 1 },
     peak:  { swim: 2, bike: 2, run: 1 },
-    taper: { swim: 1, bike: 1, run: 0 },
+    taper: { swim: 2, bike: 2, run: 1 },
   },
   t100: {
     base:  { swim: 0, bike: 1, run: 0 },
     build: { swim: 1, bike: 2, run: 1 },
     peak:  { swim: 1, bike: 2, run: 1 },
-    taper: { swim: 0, bike: 1, run: 0 },
+    taper: { swim: 1, bike: 2, run: 1 },
   },
   '70.3': {
     base:  { swim: 0, bike: 1, run: 0 },
     build: { swim: 1, bike: 2, run: 1 },
     peak:  { swim: 1, bike: 2, run: 1 },
-    taper: { swim: 0, bike: 1, run: 0 },
+    taper: { swim: 1, bike: 2, run: 1 },
   },
   ironman: {
     base:  { swim: 0, bike: 0, run: 0 },
     build: { swim: 1, bike: 1, run: 1 },
     peak:  { swim: 1, bike: 1, run: 1 },
-    taper: { swim: 0, bike: 0, run: 0 },
+    taper: { swim: 1, bike: 1, run: 1 },
   },
 };
 
@@ -118,13 +125,8 @@ export const TRI_BRICK_POLICY: Record<TriathlonDistance, { phases: TrainingPhase
 /** Bike brick share of weekly bike hours — distance-independent (slightly shorter than the solo long ride). */
 export const BRICK_BIKE_SHARE = 0.40;
 
-// Low-intensity allowed quality kinds for the two phases that suppress the top end:
-//   - base: defer top-end VO2/anaerobic to build/peak (Daniels/Bompa).
-//   - taper: race week sharpens, it does not train. The remaining taper quality slot
-//     (the bike, and the sprint/olympic swim — taper zeroes the run slot entirely)
-//     stays a short sub-threshold primer, never a VO2/over-under/anaerobic block.
-//     Mirrors running's race-week primer and HYROX's intervals→tempo taper downgrade.
-//     The session DURATION is already cut by the phase multiplier; this caps INTENSITY.
+// Base: defer top-end VO2/anaerobic to build/peak (Daniels/Bompa). Base quality
+// stays sub-threshold (bike sweet spot or tempo, swim and run threshold).
 const LOW_INTENSITY_SWIM: readonly SwimSessionKind[] = ['threshold'];
 const LOW_INTENSITY_BIKE: readonly BikeSessionKind[] = ['sweet_spot', 'tempo'];
 const LOW_INTENSITY_RUN: readonly TriRunQualityKind[] = ['threshold'];
@@ -134,9 +136,48 @@ const LOW_INTENSITY_FALLBACK_SWIM: SwimSessionKind = 'threshold';
 const LOW_INTENSITY_FALLBACK_BIKE: BikeSessionKind = 'sweet_spot';
 const LOW_INTENSITY_FALLBACK_RUN: TriRunQualityKind = 'threshold';
 
-function gateLowIntensity<T>(list: readonly T[], allowed: readonly T[], phase: TrainingPhase, fallback: T): T[] {
+/**
+ * Taper intensity ceiling by race distance (Tristan, 2026-10-13; SCIENCE_LOG
+ * "Triathlon and cycling taper rebuild"). Quality stays in the taper (Bosquet
+ * 2007: cutting intensity ES -0.02, keeping it 0.33). The ceiling differs:
+ *   - 'short_efforts' (sprint, Olympic): short faster efforts are allowed, as
+ *     Laidlow keeps 30:30 VO2max sessions in the taper (220 Triathlon 2017).
+ *     The bike gains VO2 micro-intervals (30 s on, 30 s off, Billat 2001), the
+ *     swim keeps speed sets (25 to 75 m fast reps); the run stays at threshold
+ *     (the run library has no short-effort session).
+ *   - 'race_pace' (T100, 70.3, Ironman): quality is capped at race intensity
+ *     (Alexander: "cap the intensity at my target race pace"). Threshold is
+ *     above long-course race intensity, so the sub-threshold kinds the gate
+ *     allowed before (threshold runs and swims, sweet-spot rides) give way to
+ *     race-pace sessions (tri-taper.ts). Cycling mode, whose events last 1.5 h
+ *     or more, takes this ceiling at its event's intensity factor.
+ */
+export const TRI_TAPER_INTENSITY_CEILING: Record<TriathlonDistance, 'short_efforts' | 'race_pace'> = {
+  sprint:  'short_efforts',
+  olympic: 'short_efforts',
+  t100:    'race_pace',
+  '70.3':  'race_pace',
+  ironman: 'race_pace',
+};
+
+/** A taper quality slot filled by a race-pace session (tri-taper.ts). */
+export type TriRacePaceKind = 'race_pace';
+
+const TAPER_SHORT_SWIM: readonly SwimSessionKind[] = ['threshold', 'speed'];
+const TAPER_SHORT_BIKE: readonly BikeSessionKind[] = ['sweet_spot', 'tempo', 'vo2_micros'];
+const TAPER_SHORT_RUN: readonly TriRunQualityKind[] = ['threshold'];
+
+/** True when this plan's taper caps quality at race intensity. Cycling mode
+ *  always does (its distance field is a 70.3 placeholder). */
+export function triTaperCapsAtRacePace(distance: TriathlonDistance, cyclingOnly = false): boolean {
+  return cyclingOnly || TRI_TAPER_INTENSITY_CEILING[distance] === 'race_pace';
+}
+
+function gateLowIntensity<T>(
+  list: readonly T[], allowed: readonly T[], taperAllowed: readonly T[], phase: TrainingPhase, fallback: T,
+): T[] {
   if (phase !== 'base' && phase !== 'taper') return [...list];
-  const filtered = list.filter((k) => allowed.includes(k));
+  const filtered = list.filter((k) => (phase === 'taper' ? taperAllowed : allowed).includes(k));
   return filtered.length ? filtered : [fallback];
 }
 
@@ -170,8 +211,10 @@ export function selectBikeQualityKind(
   phase: TrainingPhase,
   slotIndex: number,
   weekIndex: number,
-): BikeSessionKind {
-  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].bike, LOW_INTENSITY_BIKE, phase, LOW_INTENSITY_FALLBACK_BIKE);
+  cyclingOnly = false,
+): BikeSessionKind | TriRacePaceKind {
+  if (phase === 'taper' && triTaperCapsAtRacePace(distance, cyclingOnly)) return 'race_pace';
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].bike, LOW_INTENSITY_BIKE, TAPER_SHORT_BIKE, phase, LOW_INTENSITY_FALLBACK_BIKE);
   // Rotate within the flavour list across weeks/slots so variety is preserved.
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
@@ -182,8 +225,9 @@ export function selectSwimQualityKind(
   phase: TrainingPhase,
   slotIndex: number,
   weekIndex: number,
-): SwimSessionKind {
-  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].swim, LOW_INTENSITY_SWIM, phase, LOW_INTENSITY_FALLBACK_SWIM);
+): SwimSessionKind | TriRacePaceKind {
+  if (phase === 'taper' && triTaperCapsAtRacePace(distance)) return 'race_pace';
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].swim, LOW_INTENSITY_SWIM, TAPER_SHORT_SWIM, phase, LOW_INTENSITY_FALLBACK_SWIM);
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
 
@@ -193,7 +237,8 @@ export function selectRunQualityKind(
   phase: TrainingPhase,
   slotIndex: number,
   weekIndex: number,
-): TriRunQualityKind {
-  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].run, LOW_INTENSITY_RUN, phase, LOW_INTENSITY_FALLBACK_RUN);
+): TriRunQualityKind | TriRacePaceKind {
+  if (phase === 'taper' && triTaperCapsAtRacePace(distance)) return 'race_pace';
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].run, LOW_INTENSITY_RUN, TAPER_SHORT_RUN, phase, LOW_INTENSITY_FALLBACK_RUN);
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
