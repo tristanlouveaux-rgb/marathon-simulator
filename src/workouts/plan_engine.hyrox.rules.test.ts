@@ -1391,6 +1391,43 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(weeks).toBeGreaterThan(500);
   });
 
+  it('beginner-tier deloads keep at least half the last loaded week\'s running (round 6, item 8)', () => {
+    // Review 2026-10-13: a technique circuit at its 2-round floor held its
+    // length under the deload's shared scale while floor(scale x the easy
+    // minutes) fell under the run floor and the easy run left: 57 deloads,
+    // all beginner tier, ran half the last loaded week or less
+    // (total_beginner 4 h 12 weeks W8: circuit 61, mini brick 34, long run
+    // 29, against easy 28, circuit 63, mini brick 47, long run 38). A deload
+    // now holds its easy run at the run floor and takes stations out of its
+    // circuits first. At 2 h the deload ceiling cannot hold the long run at
+    // the run floor beside the circuit at its floor, and the week keeps its
+    // station work (the round-4 guarantee), so 2 h is outside this check.
+    const run = (wk: Week) => runningMin(wk);
+    let deloads = 0;
+    for (const band of ['total_beginner', 'beginner', 'novice', 'intermediate'] as AbilityBand[]) {
+      const r = HYROX_HOURS_RANGE[band];
+      for (const hrs of [4, 6, r.default].filter((h, i, a) => a.indexOf(h) === i && h >= r.min && h <= r.max)) {
+        for (let len = 8; len <= 24; len += 2) {
+          const s = build(band, hrs, len);
+          const tw = planTrainingWeeks(s);
+          const wks = s.wks.slice(0, tw);
+          const isDeload = deloadOf(wks);
+          for (let i = 1; i < tw; i++) {
+            if (wks[i].ph === 'taper' || !isDeload(i)) continue;
+            let k = i - 1;
+            while (k >= 0 && (wks[k].ph === 'taper' || isDeload(k))) k--;
+            if (k < 0) continue;
+            deloads++;
+            expect(run(wks[i]), `${band} ${hrs}h ${len}w W${i + 1}`).toBeGreaterThanOrEqual(0.5 * run(wks[k]) - EPS);
+          }
+        }
+      }
+    }
+    expect(deloads).toBeGreaterThan(100);
+    const s = build('total_beginner', 4, 12);
+    expect(prescribed(s.wks[7]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
+  });
+
   it('E: no long run under the run floor at low logged loads, the taper long run included', () => {
     for (const logged of [20, 30]) {
       for (const band of BANDS) {
