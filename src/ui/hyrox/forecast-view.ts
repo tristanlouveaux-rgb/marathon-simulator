@@ -763,8 +763,11 @@ function buildHyroxHero(
   // Every non-high-confidence forecast tells the user, in plain terms, that a
   // proper station assessment makes the prediction more accurate, and names the
   // protocol so they do it right (half distance, race effort). Two tiers:
-  //   - low  → "Provisional forecast" (strong): cross-format or seed-dominated.
-  //   - medium → "Sharpen your forecast" (soft): partially calibrated.
+  //   - low  → "Provisional forecast" (strong): seed-dominated.
+  //   - medium → "Sharpen your forecast" (soft): partially calibrated, or
+  //     fully calibrated without a venue.
+  // Tier follows confidence (the calibrated count); the body names a
+  // cross-format conversion whenever there is one.
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
   const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
