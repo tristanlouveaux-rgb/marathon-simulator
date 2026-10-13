@@ -1627,6 +1627,10 @@ export function buildHyroxTrainingWeeks(
       : null;
     const deloadCapMin = deloadRef ? deloadRef.plannedMin * HYROX_DELOAD_FACTOR : null;
     const deloadCapTss = deloadRef ? deloadRef.plannedTss * HYROX_DELOAD_FACTOR : null;
+    // Easy erg work fills the week's budget; a deload's, at most its ceiling
+    // (0.75 of the last loaded week's minutes), so the notes measure what is
+    // left against the deload, not against the phase budget.
+    const fillMin = Math.min(budgetMin, deloadCapMin ?? Infinity);
 
     // Taper week 1 and deload weeks hold no session the reference week (the
     // last loaded week) did not: its counts cap theirs. Race week keeps the
@@ -1679,7 +1683,7 @@ export function buildHyroxTrainingWeeks(
       const workouts = hyroxWeekForRace(state, w, trainingWeeks, phase, layout, {
         budgetMin, longRunMin, runCeilingKm, prevSunday: weekPrevSunday, scale, omit: omitted, capCounts,
         maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, ceilingName,
-        runBudgetMin, fillMin: budgetMin, ergCapMin: ergCap, ergMaxMin, maxSessions, maxSessionsName, maxRuns, noAssessment,
+        runBudgetMin, fillMin, ergCapMin: ergCap, ergMaxMin, maxSessions, maxSessionsName, maxRuns, noAssessment,
         prevLongRunMin: prevLongRun > 0 ? prevLongRun : undefined,
       }, adjustments);
       const work = stationWorkOf(workouts);
