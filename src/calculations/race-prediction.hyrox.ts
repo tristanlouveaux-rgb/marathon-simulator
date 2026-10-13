@@ -30,7 +30,7 @@ import type { SimulatorState } from '@/types/state';
 import type { HyroxStation, AbilityBand } from '@/types/triathlon';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
-import { computeHyroxStaleness, bandFromVdot } from './hyrox-staleness';
+import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot } from './hyrox-staleness';
 import { PER_STATION_FATIGUE_RATE_BY_BAND } from '@/constants/hyrox-constants';
 import {
   getHyroxVenueById,
@@ -276,6 +276,12 @@ interface StationInput {
    *   - singles target: a doubles race split (÷ the ratio). A solo test in
    *     the doubles slot is one athlete's time, used as is, not converted. */
   crossFormat: boolean;
+  /** The value's own date when it is a station test or a guided session best
+   *  (the history entry that describes the slot value): its staleness weight
+   *  reads this date (hyroxEntrySplitsWeight), not the race's. Absent for a
+   *  race split, the 'manual' seed of one, or a value with no entry, which
+   *  read the race-age weight (lane H3c). */
+  ownDateISO?: string;
 }
 
 interface StationInputs {
@@ -442,11 +448,14 @@ function stationInputs(state: SimulatorState, hx: HyroxConfigOf): StationInputs 
     // split for a Pro Doubles target, or the reverse). Singles target: every
     // doubles race split.
     const crossFormat = calibrated != null && (isDoubles ? (!isTeamTime || !!converted?.teamCrossFamily) : isTeamTime);
+    // A test or a session best decays by its own date; a race split by the race's.
+    const ownDateISO = entry && !isRaceSplitSource(entry.source) ? entry.dateISO : undefined;
     return {
       station, calibrated, slot,
       soloAtTarget: converted?.soloAtTarget,
       teamAtTarget: converted?.teamAtTarget,
       isTeamTime, crossFormat,
+      ...(ownDateISO ? { ownDateISO } : {}),
     };
   });
   return { coverage, isDoubles, isPro, perStation, hasTeamTimes: perStation.some(p => p.isTeamTime), tables, singles };
@@ -522,6 +531,9 @@ export function hyroxTargetFrameCaption(state: SimulatorState, frame: 'solo' | '
 
 interface SeedBasis {
   stale: ReturnType<typeof computeHyroxStaleness>;
+  /** Physiology mitigation for per-entry splits weights (the race's own when
+   *  a race date is on file, else computed for the entries alone). */
+  mitigation: number;
   /** Band seeds per station, blended toward the VDOT band when the race is
    *  stale. One athlete's times at the TARGET weights (hyroxStationSeedsAtTarget). */
   effectiveSeeds: Record<HyroxStation, number>;
@@ -569,7 +581,8 @@ function seedBasis(state: SimulatorState, hx: HyroxConfigOf): SeedBasis {
     ? stale.bandWeight * seedRoxzone +
       (1 - stale.bandWeight) * hyroxSeedRoxzoneSec(state, vdotBand!)
     : seedRoxzone;
-  return { stale, effectiveSeeds, effectiveSeedRoxzone };
+  const mitigation = stale.ageMonths != null ? stale.physiologyMitigation : computePhysiologyMitigation(state);
+  return { stale, mitigation, effectiveSeeds, effectiveSeedRoxzone };
 }
 
 /** Seed time for a station at TARGET weights (seeds are read at them). */
@@ -592,10 +605,15 @@ interface StationBase {
  * seed mapped to a pair's time; a solo value or the seed mapped per station
  * (doublesStationTeamSec at its own percentile). Singles target: a doubles
  * race split's solo equivalent, blended with the seed.
+ *
+ * The blend weight is the value's own (lane H3c): a station test or session
+ * best by its own date (hyroxEntrySplitsWeight), a race split by the race's
+ * age (splitsWeight). Before, every value read the race's age, so a test
+ * taken last week was pulled toward the seed because the race was old.
  */
 function stationBase(inputs: StationInputs, sb: SeedBasis, p: StationInput): StationBase {
   const seed = seedAtTarget(sb, p);
-  const w = sb.stale.splitsWeight;
+  const w = p.ownDateISO != null ? hyroxEntrySplitsWeight(p.ownDateISO, sb.mitigation) : sb.stale.splitsWeight;
   const singlesSec = p.soloAtTarget != null ? w * p.soloAtTarget + (1 - w) * seed : seed;
   if (!inputs.isDoubles) return { baseSec: singlesSec, singlesSec };
   if (p.isTeamTime && p.teamAtTarget != null) {
