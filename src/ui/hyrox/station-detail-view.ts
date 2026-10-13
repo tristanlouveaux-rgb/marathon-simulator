@@ -9,7 +9,9 @@
  *   - `hyroxStationHistoryInTargetFrame` for progression and PR detection:
  *     every entry as one athlete's time at the target's weights (doubles race
  *     splits and other-weight times converted with the forecast's ratios),
- *     labelled once on the history card
+ *     labelled once, on the first card in that frame (the progression card,
+ *     else the stats card), whenever the target is doubles (the hero shows
+ *     the pair's time) or any entry is converted
  *   - `prediction.stations[].adjustedSec` for race-day-fatigued time
  *   - `getStationPercentile()` against the cohort's race splits
  *
@@ -29,7 +31,7 @@ import {
   hyroxTargetFrameCaption,
   type HyroxStationHistoryPoint,
 } from '@/calculations/race-prediction.hyrox';
-import { getStationPercentile } from '@/calculations/hyrox-population';
+import { getStationPercentile, hyroxTierLabel } from '@/calculations/hyrox-population';
 import { hyroxCohortForState } from '@/calculations/hyrox-results';
 import { hyroxStationRaceStandard, hyroxLoadTierForState, hyroxWallBallTargetM, hyroxDivisionLabel } from '@/calculations/hyrox-division';
 import {
@@ -164,8 +166,9 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const sourceLabel = isDoubles
     ? (stationLine?.source === 'calibrated' ? "Pair's time from your benchmark" : "Population estimate for the pair")
     : (stationLine?.source === 'calibrated' ? 'Your latest test' : 'Population estimate');
-  // Real race-split percentile in the target format's cohort.
-  const pctText = pct != null ? `· p${pct}` : '';
+  // Real race-split percentile in the target format's cohort, as the
+  // friendly tier every HYROX percentile chip shows (hyroxTierLabel).
+  const pctText = pct != null ? `· ${hyroxTierLabel(pct)}` : '';
 
   const hero = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:24px 22px 20px;margin-bottom:14px">
@@ -175,11 +178,23 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
     </div>
   `;
 
+  // ── Frame label ─────────────────────────────────────────────────────────
+  // The progression, stats and history cards read one athlete at the
+  // target's weights (displaySec). Labelled once, on the first of those cards,
+  // whenever the target is doubles (the hero above shows the pair's time) or
+  // any entry is converted (review 2026-10-13: a doubles target with only
+  // solo tests showed a pair's-time hero over unlabelled solo times).
+  const frameNoteText = isDoubles || anyConverted ? hyroxTargetFrameCaption(s) : '';
+  const frameNote = (marginBottom: number) => frameNoteText
+    ? `<div style="font-size:11px;color:var(--c-muted);margin-bottom:${marginBottom}px;line-height:1.4">${frameNoteText}</div>`
+    : '';
+
   // ── Sparkline + history ─────────────────────────────────────────────────
   const sparklineHtml = buildSparkline(history);
   const sparklineCard = sparklineHtml ? `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Progression</div>
+      ${frameNote(8)}
       ${sparklineHtml}
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);margin-top:8px">
         <span>${fmtDate(history[0].dateISO)}</span>
@@ -209,6 +224,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const statsCard = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Stats</div>
+      ${sparklineHtml ? '' : frameNote(4)}
       ${best ? statRow('Best', fmtMmSs(best.displaySec), fmtDate(best.dateISO)) : ''}
       ${latest ? statRow('Latest', fmtMmSs(latest.displaySec), fmtDate(latest.dateISO)) : ''}
       ${statRow(isDoubles ? 'Solo population estimate' : 'Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
@@ -241,7 +257,6 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const historyCard = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">All tests</div>
-      ${anyConverted ? `<div style="font-size:11px;color:var(--c-muted);margin-bottom:4px;line-height:1.4">${hyroxTargetFrameCaption(s)}</div>` : ''}
       ${historyRows}
     </div>
   `;

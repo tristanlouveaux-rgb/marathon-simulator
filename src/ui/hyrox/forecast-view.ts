@@ -16,7 +16,7 @@ import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
-import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption } from '@/calculations/hyrox-population';
+import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption, hyroxTierLabel } from '@/calculations/hyrox-population';
 import { hyroxCohortForState, hyroxCohortLabel } from '@/calculations/hyrox-results';
 import { hyroxDoublesTablesForState } from '@/calculations/hyrox-doubles';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
@@ -371,13 +371,17 @@ function renderStationOrderRow(
  *  time and are used unmapped (teamTimeSplit). */
 export function doublesStationsCaption(prediction: Pick<HyroxPrediction, 'doubles' | 'stations'>, cohortLabel?: string): string {
   const ratio = prediction.doubles?.stationRatio;
-  const splitCount = prediction.stations.filter(l => l.teamTimeSplit).length;
+  // Splits at the target's own weights are used as is; a split from the other
+  // weight family maps through the solo time (crossFormat, option A).
+  const splitCount = prediction.stations.filter(l => l.teamTimeSplit && !l.crossFormat).length;
+  const otherWeightSplits = prediction.stations.some(l => l.teamTimeSplit && l.crossFormat);
   const field = cohortLabel ? ` ${cohortLabel}` : '';
   let ratioClause = '';
   if (ratio != null && splitCount === prediction.stations.length) {
     ratioClause = ' Each is a split from your doubles race, used as is.';
   } else if (ratio != null) {
-    const scaled = ` Stations from tests or seed times map from your solo time station by station, at your level in the${field} results (×${ratio.toFixed(2)} across all 8).`;
+    const sources = otherWeightSplits ? 'tests, seed times or a race at the other weights' : 'tests or seed times';
+    const scaled = ` Stations from ${sources} map from your solo time station by station, at your level in the${field} results (×${ratio.toFixed(2)} across all 8).`;
     const splits = splitCount > 0 ? ' Splits from your doubles race are already the pair\'s time and stay as they are.' : '';
     ratioClause = scaled + splits;
   }
@@ -397,13 +401,25 @@ export function crossFormatConversionNote(
 }
 
 /** Where a cross-format forecast's converted times came from, and the
- *  format whose assessment replaces them. */
-function crossFormatLabels(direction: HyroxPrediction['crossFormatConversion']): { from: string; target: string } {
-  // A doubles target maps every solo time (singles benchmarks, and the
-  // doubles slot's solo tests and session bests) to a pair's time.
-  return direction === 'singles_to_doubles'
-    ? { from: 'your solo times', target: 'doubles' }
-    : { from: 'your doubles race splits', target: 'singles' };
+ *  format whose assessment replaces them. A doubles target maps every solo
+ *  time (singles benchmarks, and the doubles slot's solo tests and session
+ *  bests) to a pair's time, and a doubles race split from the other weight
+ *  family (Open Doubles split, Pro Doubles target, or the reverse) through
+ *  the athlete's solo time (option A); the lines say which (teamTimeSplit). */
+function crossFormatLabels(
+  direction: HyroxPrediction['crossFormatConversion'],
+  stations: Pick<HyroxStationLine, 'crossFormat' | 'teamTimeSplit'>[],
+): { from: string; target: string; otherWeightSplits: boolean } {
+  if (direction !== 'singles_to_doubles') return { from: 'your doubles race splits', target: 'singles', otherWeightSplits: false };
+  const converted = stations.filter(l => l.crossFormat);
+  const splits = converted.filter(l => l.teamTimeSplit).length;
+  const solo = converted.length - splits;
+  const from = splits === 0
+    ? 'your solo times'
+    : solo === 0
+      ? 'your doubles race splits at the other weights'
+      : 'your solo times and doubles race splits at the other weights';
+  return { from, target: 'doubles', otherWeightSplits: splits > 0 };
 }
 
 /** Calibration-banner body for a forecast that converted the other format's
@@ -421,21 +437,24 @@ export function crossFormatBannerBody(
   prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion' | 'crossFormatCapped'>,
   protocol: string,
 ): string {
-  const { from, target } = crossFormatLabels(prediction.crossFormatConversion);
+  const { from, target, otherWeightSplits } = crossFormatLabels(prediction.crossFormatConversion, prediction.stations);
   const total = prediction.stations.length;
   const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
   const seedCount = total - prediction.calibratedCount;
   const lead = convertedCount >= total
     ? `Station times are converted from ${from}.`
     : `${convertedCount} of ${total} station times ${convertedCount === 1 ? 'is' : 'are'} converted from ${from}.`;
+  // Untested stations read the band seed: the median split of the ability
+  // band in the HYROX results (hyroxForecastProvenanceCaption's wording).
   const seedClause = seedCount > 0
-    ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
+    ? ` ${seedCount} untested station${seedCount === 1 ? '' : 's'} use${seedCount === 1 ? 's' : ''} the median split of your ability band in the HYROX results.`
     : '';
   const capClause = prediction.crossFormatCapped ? ' Converted times cap confidence at medium.' : '';
-  // A doubles target maps every solo time, so only splits from a doubles
-  // race replace a converted station (H1 decision, option A).
+  // A doubles target maps every solo time and every split from the other
+  // weight family, so only splits from a doubles race at the target's own
+  // weights replace a converted station (H1 decision, option A).
   const replace = prediction.crossFormatConversion === 'singles_to_doubles'
-    ? ' Station splits from a doubles race replace them with the pair\'s own times, station by station.'
+    ? ` Station splits from a doubles race${otherWeightSplits ? ' at your race\'s weights' : ''} replace them with the pair\'s own times, station by station.`
     : ` A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
   return `${lead}${capClause}${seedClause}${replace}`;
 }
@@ -453,24 +472,36 @@ export function hyroxConfidenceCaption(
   const total = prediction.stations.length;
   const calibrated = prediction.calibratedCount;
   const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
+  const raceAge = (): string => {
+    const months = prediction.staleness?.ageMonths;
+    return months != null ? `The race is ${Math.round(months)} months old` : 'The race is old';
+  };
+  // Why a forecast sits at medium, once the cross-format cap is ruled out.
+  // 6+ calibrated stations with a venue read high (predictHyroxRace), so at
+  // 6+ the reason is the missing venue or the race-age cap, and asking for
+  // more calibration would be wrong (review 2026-10-13: 8/8 calibrated with a
+  // 9-month-old race read "Calibrate more to sharpen the prediction").
+  const mediumReason = (): string => {
+    if (calibrated < 6) return 'Calibrate more to sharpen the prediction.';
+    if (!hasVenue) return 'No race venue is set, so confidence is medium.';
+    return `${raceAge()}, so confidence is medium.`;
+  };
   if (prediction.confidence === 'high') {
     return `Based on ${calibrated}/${total} calibrated benchmarks${hasVenue ? ' and venue factors' : ''}.`;
   }
   if (prediction.confidence === 'medium' && convertedCount > 0) {
-    const counts = `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion).from}.`;
+    const counts = `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion, prediction.stations).from}.`;
     if (prediction.crossFormatCapped) return `${counts} Converted times cap confidence at medium.`;
-    return calibrated < total ? `${counts} Calibrate more to sharpen the prediction.` : counts;
+    return `${counts} ${mediumReason()}`;
   }
   if (prediction.confidence === 'medium') {
-    return `${calibrated}/${total} stations calibrated. Calibrate more to sharpen the prediction.`;
+    return `${calibrated}/${total} stations calibrated. ${mediumReason()}`;
   }
   // Low with 3+ calibrated stations is the race-age cap (the calibrated
   // count alone gives medium): say so, not "mostly seed data" (H1 review,
   // 2026-10-13: 8/8 calibrated read "Only 8/8 stations calibrated").
   if (calibrated >= 3) {
-    const months = prediction.staleness?.ageMonths;
-    const age = months != null ? `The race is ${Math.round(months)} months old` : 'The race is old';
-    return `${calibrated}/${total} stations calibrated. ${age}, so confidence is low.`;
+    return `${calibrated}/${total} stations calibrated. ${raceAge()}, so confidence is low.`;
   }
   return `Mostly seed data. Only ${calibrated}/${total} stations calibrated. Best treated as a rough benchmark.`;
 }
@@ -493,11 +524,13 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:500;color:var(--c-black);border:1px solid rgba(0,0,0,0.12);border-radius:6px;padding:2px 7px;flex-shrink:0">Target</span>`
       : '';
 
-    // Inline percentile (e.g. "p73") — only when calibrated, since
-    // seed-based entries have no athlete-personal percentile. A real
-    // race-split percentile (HYROX results, seasons 8 and 9).
+    // Inline tier (e.g. "top 27%"), only when calibrated, since seed-based
+    // entries have no athlete-personal percentile. A real race-split
+    // percentile (HYROX results, seasons 8 and 9), as the friendly tier the
+    // distributions card shows (hyroxTierLabel), never "p73": that card's
+    // p25/p50/p75 guides are cumulative time percentiles.
     const pctChip = pct != null
-      ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">p${pct}</span>`
+      ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">${hyroxTierLabel(pct)}</span>`
       : '';
 
     // PR badge when the latest history entry beats all priors.
@@ -629,7 +662,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string,
         </div>
         <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
           <span style="font-size:11px;font-weight:600;color:#15803D;background:rgba(34,197,94,0.14);border-radius:100px;padding:2px 8px;font-variant-numeric:tabular-nums">−${p.savingSec}s</span>
-          <span style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">${fmtSec(p.currentSec)} · p${pct}</span>
+          <span style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">${fmtSec(p.currentSec)} · ${hyroxTierLabel(pct)}</span>
         </div>
       </div>
     `;
@@ -856,13 +889,20 @@ function buildHyroxHero(
   // cross-format conversion whenever there is one.
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
+  // A low forecast with 3+ calibrated stations is held there by the race-age
+  // cap, not by seed data, so it gets the calibrated-count body.
   const provisionalBody = prediction.crossFormatConversion
     ? crossFormatBannerBody(prediction, calibrationProtocol)
-    : prediction.confidence === 'low'
-    ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
+    : prediction.confidence === 'low' && calibrated < 3
+    ? `Untested ${targetFormatLabel} stations use the median split of your ability band in the HYROX results. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
     : `${calibrated} of ${totalStations} stations calibrated. Test the rest (${calibrationProtocol}) and the forecast gets more accurate with each one.`;
-  // Fire for low (provisional) and medium (partially calibrated). High = silent.
-  const showCalibrationBanner = prediction.confidence !== 'high';
+  // Fire for low (provisional) and medium (partially calibrated). High =
+  // silent. With all 8 stations calibrated and none converted there is
+  // nothing to calibrate: the confidence caption names what holds the
+  // forecast below high (no venue, or the race's age), so no banner asks the
+  // athlete to "test the rest" (review 2026-10-13).
+  const showCalibrationBanner = prediction.confidence !== 'high'
+    && (calibrated < totalStations || !!prediction.crossFormatConversion);
   const bannerTitle = prediction.confidence === 'low' ? 'Provisional forecast' : 'Sharpen your forecast';
   const bannerCtaLabel = prediction.confidence === 'low' ? 'Test your stations' : 'Calibrate the rest';
   const provisionalBanner = showCalibrationBanner

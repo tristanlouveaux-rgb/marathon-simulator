@@ -23,6 +23,7 @@ import {
   hyroxCohortPlacement,
   hyroxPlacementHeadline,
   hyroxPlacementCaption,
+  hyroxPlacementFigure,
   hyroxCohortLabel,
   type HyroxCohortPlacement,
 } from '@/calculations/hyrox-results';
@@ -162,8 +163,8 @@ export function renderHyroxStatsView(): void {
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:12px">Field rank</div>
             <div style="display:flex;align-items:center;gap:16px">
-              <div style="flex-shrink:0;width:56px;height:56px;border-radius:50%;background:#f8f7f4;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">
-                ${fasterThanPct}%
+              <div style="flex-shrink:0;width:56px;height:56px;border-radius:50%;background:#f8f7f4;display:flex;align-items:center;justify-content:center;font-size:${rank!.beyond ? 16 : 19}px;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">
+                ${hyroxPlacementFigure(rank!).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
               </div>
               <div>
                 <div style="font-size:16px;font-weight:600;color:#0F172A">${hyroxPlacementHeadline(rank!)}</div>

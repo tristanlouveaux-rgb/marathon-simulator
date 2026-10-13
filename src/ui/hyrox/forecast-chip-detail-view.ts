@@ -16,7 +16,7 @@ import { saveState } from '@/state/persistence';
 import type { SimulatorState } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
-import { predictHyroxRace, hyroxStationHistoryInTargetFrame, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, hyroxStationHistoryInTargetFrame, hyroxTargetFrameCaption, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent, getFutureHyroxEvents, HYROX_WORLD_SERIES } from '@/data/hyrox-events';
@@ -25,7 +25,7 @@ import {
   latestTestAgeMonths,
   hyroxCalibrationCoverage,
 } from '@/calculations/hyrox-station-history';
-import { hyroxBandThresholds, hyroxResultsCohort, hyroxCohortLabel } from '@/calculations/hyrox-results';
+import { hyroxBandThresholds, hyroxBandField, hyroxCohortLabel } from '@/calculations/hyrox-results';
 import { buildBenchmarkTrendChart } from '@/ui/triathlon/benchmark-charts';
 import { fp, fmtModelPaceKm } from '@/utils/format';
 import { classifyHyroxSessionKind, type HyroxSessionKind } from '@/calculations/hyrox-session-classifier';
@@ -201,11 +201,14 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
     : '';
 
   // Band thresholds rendered as a stat list, for the field the band is read
-  // in: the previous race's format (else the target's) by sex, or the pair's
-  // division for doubles (hyroxBandThresholds: field-relative, the same place
-  // in every field). The currently-active band is highlighted so the user
-  // sees where they sit.
-  const bandCohort = hyroxResultsCohort(hx?.hyroxPreviousTimeFormat ?? hx?.format ?? 'open_singles', s.biologicalSex, hx?.division);
+  // in (hyroxBandField: the previous race's format by sex, or the pair's
+  // division for doubles; Open Singles when no race is on file), the same
+  // field the band seeds are read in (hyroxSeedField), so the thresholds and
+  // the seeds describe one field (review 2026-10-13: a Pro Singles man with
+  // an experience band saw Pro Singles thresholds over Open Singles seeds).
+  // hyroxBandThresholds is field-relative, the same place in every field.
+  // The currently-active band is highlighted so the user sees where they sit.
+  const bandCohort = hyroxBandField(s);
   const bandThresholds = hyroxBandThresholds(bandCohort);
   const bandRows = bandThresholds.map((t, i) => {
     const prevMax = i > 0 ? bandThresholds[i - 1].maxSec : 0;
@@ -330,11 +333,15 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
   const calibrated = prediction.calibratedCount;
   const summedSec = prediction.stationsSec;
   // Aggregate improvement across all tested stations (sum of latest-vs-previous
-  // deltas in the target frame). Surfaces "you've trimmed 1:24
-  // off your stations". A real-data summary that mirrors VDOT's delta.
-  // History in one frame (hyroxStationHistoryInTargetFrame): one athlete's
-  // time at the target's weights, so a pair's split never sits next to a solo
-  // test and Pro next to Open.
+  // deltas). Surfaces "you've trimmed 1:24 off your stations". A real-data
+  // summary that mirrors VDOT's delta.
+  // One frame per card: the rows are the forecast's lines (the pair's time
+  // for doubles), so the PR captions and this delta read every history entry
+  // in the line's own terms (hyroxStationHistoryInTargetFrame targetSec, the
+  // forecast's own conversion). A pair's split never sits next to a solo
+  // test, Pro next to Open, and a PR never reads slower than its row (review
+  // 2026-10-13: an Open Doubles row of 2:00 showed "PR 2:41", the PR's solo
+  // equivalent). The frame is labelled once on the card.
   const frames = new Map(prediction.stations.map(l => [l.station, hyroxStationHistoryInTargetFrame(s, l.station)]));
   let totalImprovementSec = 0;
   let improvedCount = 0;
@@ -342,9 +349,14 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
     if (line.source !== 'calibrated') continue;
     const hist = frames.get(line.station) ?? [];
     if (hist.length < 2) continue;
-    totalImprovementSec += hist[hist.length - 1].displaySec - hist[hist.length - 2].displaySec;
+    totalImprovementSec += hist[hist.length - 1].targetSec - hist[hist.length - 2].targetSec;
     improvedCount += 1;
   }
+  const isDoublesTarget = s.hyroxConfig?.format === 'open_doubles' || s.hyroxConfig?.format === 'pro_doubles';
+  const anyConverted = prediction.stations.some(l => l.source === 'calibrated' && (frames.get(l.station) ?? []).some(e => e.targetConverted));
+  const frameNote = isDoublesTarget || anyConverted
+    ? `<div style="font-size:11px;color:${TEXT_L};margin-bottom:4px;line-height:1.4">${escapeText(hyroxTargetFrameCaption(s, 'line'))}</div>`
+    : '';
   const hasImprovementSignal = improvedCount > 0;
   const improvementGood = totalImprovementSec < 0;
 
@@ -354,14 +366,13 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
     const ageMo = isCalibrated ? latestTestAgeMonths(s, line.station) : null;
     const ageCaption = ageMo != null && ageMo >= 4 ? ` · ${Math.round(ageMo)} mo ago` : '';
     const hist = isCalibrated ? (frames.get(line.station) ?? []) : [];
-    const best = hist.reduce<{ displaySec: number } | null>((b, e) => (b == null || e.displaySec < b.displaySec ? e : b), null);
+    const best = hist.reduce<{ targetSec: number } | null>((b, e) => (b == null || e.targetSec < b.targetSec ? e : b), null);
     const testCount = hist.length;
-    // Compare in solo terms at the target's weights: a doubles line is the
-    // pair's time, so its solo equivalent is the line ÷ its station ratio.
-    const lineSolo = line.baseSec / (line.teamRatio ?? 1);
-    const isPR = best != null && Math.abs(best.displaySec - lineSolo) < 0.5 && testCount >= 2;
-    const bestCaption = best != null && testCount >= 2 && best.displaySec < lineSolo - 0.5
-      ? ` · PR ${fmtMmSs(best.displaySec)}`
+    // Compare in the row's own terms (targetSec: the pair's time for a
+    // doubles target), the frame the row value is in.
+    const isPR = best != null && Math.abs(best.targetSec - line.baseSec) < 0.5 && testCount >= 2;
+    const bestCaption = best != null && testCount >= 2 && best.targetSec < line.baseSec - 0.5
+      ? ` · PR ${fmtMmSs(best.targetSec)}`
       : isPR
       ? ' · PR'
       : '';
@@ -411,10 +422,11 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
 
     <div style="${CARD};margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Per-station breakdown</div>
+      ${frameNote}
       ${rows}
     </div>
 
-    ${captionCard('Untested stations use population averages from the seed table for your band. Testing each station replaces the seed with your personal time. Mosaic doubles a half-distance test for the actual race-pace estimate. Calibrating all 8 takes the seed-data caveat off the prediction.')}
+    ${captionCard('Untested stations use the median split of your ability band in the HYROX results. Testing each station replaces that median with your own time. Mosaic doubles a half-distance test for the race-pace estimate. Calibrating all 8 takes the seed-data caveat off the prediction.')}
   `;
 
   return { title: 'Stations', subhead: 'Personal anchors vs population seeds', body };

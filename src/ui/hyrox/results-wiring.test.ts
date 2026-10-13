@@ -8,8 +8,13 @@
  *    percentiles, no "est." label; the radar and the distributions card lead
  *    with the cohort's provenance.
  *  - Station detail history: one frame (one athlete at the target's weights),
- *    labelled once.
- *  - Chip detail band thresholds: the cohort's field-relative thresholds.
+ *    labelled once, also when a doubles target has only solo tests.
+ *  - Chip detail per-station card: the rows are the forecast's lines, so PR
+ *    captions read in the row's frame (the pair's time for doubles), labelled
+ *    once; a PR never reads slower than its row.
+ *  - Chip detail band thresholds: the field the band seeds are read in.
+ *  - Stats circle past a coarse age table's end shows the bound ("<25%").
+ *  - Percentile chips read as tiers ("top 27%"), never "pNN".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -29,10 +34,13 @@ import { predictHyroxRace, hyroxStationHistoryInTargetFrame, hyroxTargetFrameCap
 import {
   hyroxCohortPlacement,
   hyroxPlacementHeadline,
+  hyroxPlacementFigure,
   hyroxResultsCaption,
   hyroxStationPercentile,
   hyroxBandThresholds,
+  hyroxSeedField,
 } from '@/calculations/hyrox-results';
+import { hyroxTierLabel } from '@/calculations/hyrox-population';
 import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
 import { renderHyroxStatsView, hyroxStatsRank } from './stats-view';
 import { renderHyroxStationDetailView } from './station-detail-view';
@@ -121,9 +129,10 @@ describe('real station percentiles, no "est." label', () => {
     const s = hyroxState({ stationBenchmarksSingles: SINGLES }, { biologicalSex: 'male' });
     setState(s);
     renderHyroxStationDetailView('wall_balls');
-    const pct = hyroxStationPercentile('wall_balls', SINGLES.wall_balls, { format: 'open_singles', sex: 'male' });
-    expect(html()).toContain(`· p${pct}`);
+    const pct = hyroxStationPercentile('wall_balls', SINGLES.wall_balls, { format: 'open_singles', sex: 'male' })!;
+    expect(html()).toContain(`· ${hyroxTierLabel(pct)}`);
     expect(html()).not.toMatch(/est\. p/);
+    expect(html()).not.toMatch(/· p\d/);
   });
 
   it('the distributions card draws the cohort\'s own tables and says so', () => {
@@ -161,7 +170,108 @@ describe('station detail history: one frame, labelled once', () => {
   });
 });
 
+describe('station detail: a doubles target labels the solo frame even with no conversion', () => {
+  it('solo tests only: the hero is the pair\'s time, the cards below say one athlete, once', () => {
+    const hist = {
+      sled_push: [
+        { dateISO: daysAgo(100), sec: 210, source: 'half_test' as const, format: 'open_doubles' as const },
+        { dateISO: daysAgo(10), sec: 200, source: 'half_test' as const, format: 'open_doubles' as const },
+      ],
+    };
+    const s = hyroxState({ format: 'open_doubles', division: 'women', stationBenchmarksDoubles: { sled_push: 200 }, stationBenchmarkHistory: hist }, { biologicalSex: 'female' });
+    expect(hyroxStationHistoryInTargetFrame(s, 'sled_push').some(e => e.converted)).toBe(false);
+    setState(s);
+    renderHyroxStationDetailView('sled_push');
+    expect(html().split(hyroxTargetFrameCaption(s)).length - 1).toBe(1);
+  });
+
+  it('a singles target with nothing converted shows no frame label', () => {
+    const s = hyroxState({ stationBenchmarksSingles: { sled_push: 200 },
+      stationBenchmarkHistory: { sled_push: [{ dateISO: daysAgo(10), sec: 200, source: 'half_test' as const, format: 'open_singles' as const }] } }, { biologicalSex: 'female' });
+    setState(s);
+    renderHyroxStationDetailView('sled_push');
+    expect(html()).not.toContain(hyroxTargetFrameCaption(s));
+  });
+});
+
+describe('chip detail per-station card: one frame per card', () => {
+  const fmt = (sec: number) => { const t = Math.round(sec); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  it('Open Doubles women, two sled push race splits: the PR reads in the row\'s frame, never slower than the row', () => {
+    const hist = {
+      sled_push: [
+        { dateISO: daysAgo(200), sec: 105, source: 'race' as const, format: 'open_doubles' as const, proWeights: false },
+        { dateISO: daysAgo(10), sec: 120, source: 'race' as const, format: 'open_doubles' as const, proWeights: false },
+      ],
+    };
+    const s = hyroxState({ format: 'open_doubles', division: 'women', stationBenchmarksDoubles: { sled_push: 120 }, stationBenchmarkHistory: hist }, { biologicalSex: 'female' });
+    const line = predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!;
+    expect(line.baseSec).toBeCloseTo(120, 6);
+    setState(s);
+    renderHyroxChipDetail('stations');
+    const out = html();
+    const pr = /PR (\d+):(\d{2})/.exec(out);
+    expect(pr).not.toBeNull();
+    const prSec = Number(pr![1]) * 60 + Number(pr![2]);
+    expect(prSec).toBeLessThanOrEqual(Math.round(line.baseSec));
+    expect(prSec).toBe(105);
+    expect(out).toContain(fmt(line.baseSec));
+    // The frame (the pair at the race's weights) is labelled at most once.
+    expect(out.split(hyroxTargetFrameCaption(s, 'line')).length - 1).toBe(1);
+    expect(out).not.toContain('population averages from the seed table');
+  });
+
+  it('a singles target with a doubles race split: PR in solo terms, the label once', () => {
+    const hist = {
+      sled_push: [
+        { dateISO: daysAgo(200), sec: 105, source: 'race' as const, format: 'open_doubles' as const, proWeights: false },
+        { dateISO: daysAgo(10), sec: 190, source: 'half_test' as const, format: 'open_singles' as const },
+      ],
+    };
+    const s = hyroxState({ stationBenchmarksSingles: { sled_push: 190 }, stationBenchmarkHistory: hist }, { biologicalSex: 'female' });
+    const line = predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!;
+    const frame = hyroxStationHistoryInTargetFrame(s, 'sled_push');
+    expect(frame[0].targetSec).toBeCloseTo(frame[0].displaySec, 9);
+    setState(s);
+    renderHyroxChipDetail('stations');
+    const out = html();
+    const best = Math.min(...frame.map(e => e.targetSec));
+    expect(best).toBeLessThan(line.baseSec - 0.5);
+    expect(out).toContain(`PR ${fmt(best)}`);
+    expect(out.split(hyroxTargetFrameCaption(s, 'line')).length - 1).toBe(1);
+  });
+});
+
+describe('Stats circle past a coarse age table\'s end', () => {
+  it('a slow finish in the women 65 to 69 table: the circle shows the bound, matching the headline', () => {
+    const slow: Record<HyroxStation, number> = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, 900])) as Record<HyroxStation, number>;
+    const s = hyroxState({ athleteBand: 'total_beginner', stationBenchmarksSingles: slow }, { biologicalSex: 'female', onboarding: { ...getDefaultState().onboarding, age: 67 } as SimulatorState['onboarding'] });
+    const rank = hyroxStatsRank(s, predictHyroxRace(s)!.totalSec)!;
+    expect(rank.ageGroup).toBe('65-69');
+    expect(rank.beyond).toBe('slow');
+    const figure = hyroxPlacementFigure(rank);
+    expect(figure).toBe(`<${Math.round(100 - rank.tableRange[1])}%`);
+    expect(hyroxPlacementHeadline(rank)).toBe(`Slower than ${Math.round(rank.tableRange[1])}% of women aged 65 to 69`);
+    setState(s);
+    renderHyroxStatsView();
+    expect(document.getElementById('app-root')!.textContent).toContain(figure);
+  });
+
+  it('inside the table the figure is the plain percentage', () => {
+    expect(hyroxPlacementFigure({ fasterThanPct: 62, beyond: null, tableRange: [1, 99] })).toBe('62%');
+    expect(hyroxPlacementFigure({ fasterThanPct: 75, beyond: 'fast', tableRange: [25, 75] })).toBe('>75%');
+  });
+});
+
 describe('chip detail band thresholds: the cohort\'s field-relative scale', () => {
+  it('a Pro Singles man with an experience band sees the field his seeds are read in', () => {
+    const s = hyroxState({ format: 'pro_singles' }, { biologicalSex: 'male' });
+    expect(hyroxSeedField(s)).toEqual({ format: 'open_singles', sex: 'male' });
+    setState(s);
+    renderHyroxChipDetail('you');
+    expect(html()).toContain('Open Singles men. Each band holds the same place in every format and sex field.');
+    expect(html()).not.toContain('Pro Singles men. Each band');
+  });
+
   it('a woman sees the women\'s thresholds for the field her band was read in', () => {
     const s = hyroxState({ hyroxPreviousTimeFormat: 'open_singles', previousHyroxTimeSec: 5800 }, { biologicalSex: 'female' });
     setState(s);

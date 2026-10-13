@@ -13,10 +13,16 @@
  *    of lanes before H3b are gone.
  *
  * No app code reads the S4 to S6 tables (hyrox-population-distributions.ts)
- * any more. The file stays as the calibration source of the band field
- * percentiles: HYROX_TIME_TO_BAND_THRESHOLDS was most likely set against its
- * pooled open singles total table, and a data test pins
- * HYROX_S89_BAND_FIELD_PERCENTILES to it.
+ * any more. The file stays as the calibration field of the band field
+ * percentiles: HYROX_TIME_TO_BAND_THRESHOLDS (60, 80, 100, 120 min) is read
+ * as positions in its pooled open singles total table (p1.0, p25.3, p73.5,
+ * p92.9), and a data test pins HYROX_S89_BAND_FIELD_PERCENTILES to it. The
+ * only recorded anchor for those thresholds is the HyroxDataLab list in
+ * SCIENCE_LOG "HYROX Population Percentiles (2026-05-06)" (60, 80, 100,
+ * 120 min at p5, p15, p35, p60, gender-mixed Open). It was rejected: those
+ * anchors were hand-set and contradict the real results (60 min sits below
+ * p1 of the S4 to S6 field, not p5), and reading the thresholds at them would
+ * push most athletes down a band.
  *
  * Science log: docs/SCIENCE_LOG.md §HYROX Population Percentiles and the
  * lane H3b entry.
@@ -103,21 +109,29 @@ export function hyroxMethodologyCaption(): string {
   return `Station times come from your station tests and race splits, or the median split of your ability band where a station is untested, and update from recent strength-station sessions. The HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${n} finishers ${HYROX_RESULTS_VIA}, set the band seed times, the finish and station percentiles by format and sex, and the doubles and Pro conversions.`;
 }
 
-/** Human-readable label from a "faster than" percentile (0-100).
- *  Mirrors the headline precisely: "Faster than 99%" → "Top 1% globally".
- *  Falls back to descriptive text below the top-of-field range. */
-export function percentileLabel(fasterThanPct: number): string {
-  if (fasterThanPct >= 40) return `Top ${Math.max(1, 100 - fasterThanPct)}% globally`;
-  if (fasterThanPct >= 20) return 'Mid-pack';
-  if (fasterThanPct >= 5)  return 'Back of the field';
-  return 'Below typical finish range';
-}
-
-/** Headline phrasing for the "your time vs population" hero line.
- *  At extremes, "faster than X%" reads weirdly. Switch to descriptive text. */
-export function percentileHeadline(fasterThanPct: number): string {
-  if (fasterThanPct >= 5) return `Faster than ${fasterThanPct}% of finishers`;
-  return 'Below typical finishing range';
+/**
+ * The friendly tier label for a "faster than" percentile (0 to 100), as
+ * UX_PATTERNS "Tier label translation" sets it: "top 1%", "top 27%",
+ * "median", "bottom 30%". The one label every HYROX percentile chip reads (the
+ * distributions card rows, the forecast station rows, the biggest-targets
+ * rows, the station detail hero), so a "pNN" never means "faster than NN%" on
+ * one row and a cumulative time percentile on the next (review 2026-10-13:
+ * the station chips read "p73" next to the distributions card's p25/p50/p75
+ * time guides).
+ *
+ * Replaces percentileLabel ("Top X% globally") and percentileHeadline, which
+ * nothing read after lane H3b.
+ */
+export function hyroxTierLabel(fasterThanPct: number): string {
+  const f = Math.max(0, Math.min(100, Math.round(fasterThanPct)));
+  if (f >= 99) return 'top 1%';
+  if (f >= 95) return 'top 5%';
+  if (f >= 90) return 'top 10%';
+  if (f >= 55) return `top ${100 - f}%`;
+  if (f >= 45) return 'median';
+  if (f >= 10) return `bottom ${f}%`;
+  if (f >= 5)  return 'bottom 10%';
+  return 'bottom 5%';
 }
 
 /**

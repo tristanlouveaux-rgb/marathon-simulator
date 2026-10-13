@@ -87,7 +87,7 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
     const b = body(8, 8);
     expect(b).toMatch(/^Station times are converted from your doubles race splits\./);
     expect(b).toContain('Converted times cap confidence at medium.');
-    expect(b).not.toContain('Population averages');
+    expect(b).not.toContain('untested station');
     expect(b).toContain('A singles station assessment');
     expect(b).toContain('station by station');
   });
@@ -95,7 +95,7 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
   it('7 converted after one singles test: the count follows the stations', () => {
     const b = body(7, 8);
     expect(b).toMatch(/^7 of 8 station times are converted/);
-    expect(b).not.toContain('Population averages');
+    expect(b).not.toContain('untested station');
   });
 
   it('1 converted: singular verb', () => {
@@ -109,8 +109,8 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
   it('3 converted, 5 on seeds: names both', () => {
     const b = body(3, 3);
     expect(b).toMatch(/^3 of 8 station times are converted/);
-    expect(b).toContain('Population averages still stand in for 5 stations.');
-    expect(body(3, 7)).toContain('Population averages still stand in for 1 station.');
+    expect(b).toContain('5 untested stations use the median split of your ability band in the HYROX results.');
+    expect(body(3, 7)).toContain('1 untested station uses the median split of your ability band in the HYROX results.');
   });
 
   it('solo times feeding a doubles forecast: names the solo source; only doubles race splits replace them (option A)', () => {
@@ -131,7 +131,7 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
     const low = body(1, 2, false);
     expect(low).toMatch(/^1 of 8 station times is converted/);
     expect(low).not.toContain('cap confidence');
-    expect(low).toContain('Population averages still stand in for 6 stations.');
+    expect(low).toContain('6 untested stations use the median split of your ability band in the HYROX results.');
     expect(body(8, 8, true)).toContain('Converted times cap confidence at medium.');
     // 8 converted but held at medium by something else (no venue): no cap claim.
     expect(body(8, 8, false)).not.toContain('cap confidence');
@@ -193,7 +193,7 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
     const b = crossFormatBannerBody(prediction, protocol);
     expect(b).toMatch(/^3 of 8 station times are converted from your doubles race splits\./);
     expect(b).not.toContain('cap confidence');
-    expect(b).toContain('Population averages still stand in for 5 stations.');
+    expect(b).toContain('5 untested stations use the median split of your ability band in the HYROX results.');
     const c = hyroxConfidenceCaption(prediction, false);
     expect(c).toBe('3/8 stations calibrated, 3 converted from your doubles race splits. Calibrate more to sharpen the prediction.');
   });
@@ -203,7 +203,7 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
     expect(prediction.confidence).toBe('medium');
     expect(prediction.crossFormatCapped).toBeUndefined();
     expect(crossFormatBannerBody(prediction, protocol)).not.toContain('cap confidence');
-    expect(hyroxConfidenceCaption(prediction, false)).toBe('8/8 stations calibrated, 8 converted from your doubles race splits.');
+    expect(hyroxConfidenceCaption(prediction, false)).toBe('8/8 stations calibrated, 8 converted from your doubles race splits. No race venue is set, so confidence is medium.');
   });
 
   it('real forecast: 8 converted stations and a venue would read high, so the cap binds and both say so', () => {
@@ -241,16 +241,27 @@ describe('hyroxConfidenceCaption: a cross-format cap says so', () => {
     const partial = hyroxConfidenceCaption({ stations: lines(3, 3), calibratedCount: 3, confidence: 'medium', crossFormatConversion: 'doubles_to_singles' }, false);
     expect(partial).toBe('3/8 stations calibrated, 3 converted from your doubles race splits. Calibrate more to sharpen the prediction.');
     const full = hyroxConfidenceCaption({ stations: lines(8, 8), calibratedCount: 8, confidence: 'medium', crossFormatConversion: 'doubles_to_singles' }, false);
-    expect(full).toBe('8/8 stations calibrated, 8 converted from your doubles race splits.');
+    expect(full).toBe('8/8 stations calibrated, 8 converted from your doubles race splits. No race venue is set, so confidence is medium.');
     for (const c of [partial, full]) {
       expect(c).not.toContain('cap confidence');
       expect(c).not.toContain('—');
     }
   });
 
-  it('medium without converted times keeps the calibrate-more caption', () => {
+  it('medium without converted times keeps the calibrate-more caption below 6 calibrated stations', () => {
     expect(hyroxConfidenceCaption({ stations: lines(0, 4), calibratedCount: 4, confidence: 'medium' }, false))
       .toBe('4/8 stations calibrated. Calibrate more to sharpen the prediction.');
+  });
+
+  it('medium at 6+ calibrated stations names what holds it there, never "Calibrate more" (review 2026-10-13)', () => {
+    const stale = hyroxConfidenceCaption({ stations: lines(0, 8), calibratedCount: 8, confidence: 'medium', staleness: { ageMonths: 9.2, category: 'aging', physiologyMitigation: 0.3 } }, true);
+    expect(stale).toBe('8/8 stations calibrated. The race is 9 months old, so confidence is medium.');
+    const noVenue = hyroxConfidenceCaption({ stations: lines(0, 6), calibratedCount: 6, confidence: 'medium' }, false);
+    expect(noVenue).toBe('6/8 stations calibrated. No race venue is set, so confidence is medium.');
+    for (const c of [stale, noVenue]) {
+      expect(c).not.toContain('Calibrate more');
+      expect(c).not.toContain('—');
+    }
   });
 
   it('high and low are unchanged', () => {
@@ -280,5 +291,21 @@ describe('hyroxConfidenceCaption: a cross-format cap says so', () => {
     } as unknown as SimulatorState)!;
     expect(p.confidence).toBe('low');
     expect(hyroxConfidenceCaption(p, true)).toMatch(/^8\/8 stations calibrated\. The race is (19|20) months old, so confidence is low\.$/);
+  });
+
+  it('real forecast: 8 calibrated stations, a venue and a 9-month-old race read medium and name the race age', () => {
+    const SPLITS: Record<HyroxStation, number> = { ski_erg: 280, sled_push: 180, sled_pull: 300, burpee_broad_jumps: 330, row_erg: 300, farmer_carry: 130, sandbag_lunges: 300, wall_balls: 420 };
+    const d = new Date(Date.now() - 9 * 30.44 * 86400000).toISOString().slice(0, 10);
+    const p = predictHyroxRace({
+      hyroxConfig: {
+        format: 'open_singles', athleteBand: 'intermediate', hyroxPhase: 'base',
+        stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+        weeklyMTL: 0, mtlCap: 1000, mtlHistory: [], runsPerWeek: 3, stationSessionsPerWeek: 1, bricksPerWeek: 1, weeklyHoursAvailable: 8,
+        venueId: 'london-excel', stationBenchmarksSingles: SPLITS, hyroxPreviousRaceDate: d,
+      },
+    } as unknown as SimulatorState)!;
+    expect(p.calibratedCount).toBe(8);
+    expect(p.confidence).toBe('medium');
+    expect(hyroxConfidenceCaption(p, true)).toMatch(/^8\/8 stations calibrated\. The race is (8|9) months old, so confidence is medium\.$/);
   });
 });

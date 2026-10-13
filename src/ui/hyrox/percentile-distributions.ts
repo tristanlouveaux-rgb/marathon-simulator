@@ -29,6 +29,7 @@ import {
   hyroxResultsCaption,
   type HyroxResultsCohort,
 } from '@/calculations/hyrox-results';
+import { hyroxTierLabel } from '@/calculations/hyrox-population';
 import type { HyroxPercentileTable, HyroxResultsMetric } from '@/data/hyrox-results-s79';
 
 type Breakpoints = HyroxPercentileTable;
@@ -68,24 +69,9 @@ function fmtMmSs(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** Convert "faster than X%" → human-readable tier label.
- *  fasterThan=99 → "top 1%" (you beat 99% of finishers).
- *  fasterThan=50 → "median".
- *  fasterThan=10 → "bottom 10%" (you beat only 10% of finishers).
- */
-function fmtTier(fasterThanPct: number): string {
-  const f = Math.max(0, Math.min(100, Math.round(fasterThanPct)));
-  if (f >= 99) return 'top 1%';
-  if (f >= 95) return 'top 5%';
-  if (f >= 90) return 'top 10%';
-  if (f >= 75) return `top ${100 - f}%`;
-  if (f >= 55) return `top ${100 - f}%`;
-  if (f >= 45) return 'median';
-  if (f >= 25) return `bottom ${f}%`;
-  if (f >= 10) return `bottom ${f}%`;
-  if (f >= 5)  return 'bottom 10%';
-  return 'bottom 5%';
-}
+/** "faster than X%" as the friendly tier label (hyroxTierLabel, the label
+ *  every HYROX percentile chip reads). */
+const fmtTier = hyroxTierLabel;
 
 /** Inverse lookup: time at a target cumulative percentile. */
 function timeAtCumPct(table: Breakpoints, targetCumPct: number): number | null {
