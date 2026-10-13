@@ -59,6 +59,7 @@ import {
   formatHyroxPartnerCode,
   redeemInvite,
   removeMyHyroxPartnerData,
+  removeMySnapshot,
   rowToSnapshot,
   snapshotToRow,
   SNAPSHOT_COLUMNS,
@@ -113,16 +114,14 @@ describe('code helpers', () => {
 });
 
 describe('createInvite', () => {
-  it('drops the caller\'s unused codes, inserts only owner_id, returns the server code', async () => {
+  it('inserts only owner_id in one request and returns the server code (the server drops the earlier code)', async () => {
     h.responder = (c) => (opArgs(c, 'insert').length ? { data: { code: 'ABCDEFGH', expires_at: '2026-10-14T12:00:00Z' } } : {});
     const r = await createInvite();
     expect(r).toEqual({ ok: true, value: { code: 'ABCDEFGH', expiresAt: '2026-10-14T12:00:00Z' } });
-    const del = h.calls[0];
-    expect(del.table).toBe('hyrox_partner_invites');
-    expect(opArgs(del, 'delete')).toHaveLength(1);
-    expect(opArgs(del, 'eq')).toEqual([['owner_id', 'user-a']]);
-    expect(opArgs(del, 'is')).toEqual([['used_at', null]]);
-    const ins = h.calls[1];
+    expect(h.calls).toHaveLength(1);
+    const ins = h.calls[0];
+    expect(ins.table).toBe('hyrox_partner_invites');
+    expect(opArgs(ins, 'delete')).toHaveLength(0);
     expect(opArgs(ins, 'insert')).toEqual([[{ owner_id: 'user-a' }]]);
   });
 
@@ -156,13 +155,13 @@ describe('createInvite', () => {
 });
 
 describe('getOpenInvite', () => {
-  it('reads only the caller\'s unused, unexpired code', async () => {
+  it('reads only the caller\'s unexpired code (a redeemed code no longer exists)', async () => {
     h.responder = () => ({ data: { code: 'ABCDEFGH', expires_at: 'x' } });
     const r = await getOpenInvite();
     expect(r).toEqual({ ok: true, value: { code: 'ABCDEFGH', expiresAt: 'x' } });
     const c = h.calls[0];
     expect(opArgs(c, 'eq')).toEqual([['owner_id', 'user-a']]);
-    expect(opArgs(c, 'is')).toEqual([['used_at', null]]);
+    expect(opArgs(c, 'is')).toEqual([]);
     expect(opArgs(c, 'gt')[0][0]).toBe('expires_at');
   });
 });
@@ -181,7 +180,7 @@ describe('redeemInvite', () => {
 
   it('maps every status word', async () => {
     const cases: Array<[string, string]> = [
-      ['invalid_code', 'invalid_code'], ['expired', 'expired'], ['used', 'used'], ['own_code', 'own_code'],
+      ['invalid_code', 'invalid_code'], ['unavailable', 'unavailable'], ['own_code', 'own_code'],
       ['already_linked', 'already_linked'], ['partner_linked', 'partner_linked'], ['not_authenticated', 'no_session'],
       ['something_else', 'unknown'],
     ];
@@ -190,6 +189,19 @@ describe('redeemInvite', () => {
       expect(await redeemInvite('ABCDEFGH')).toEqual({ ok: false, error });
     }
     expect(mapRedeemStatus('linked')).toEqual({ ok: true, value: undefined });
+  });
+
+  it('retry (a concurrent redeem won the lock race) calls once more and reports the settled outcome', async () => {
+    let n = 0;
+    h.responder = () => ({ data: ++n === 1 ? 'retry' : 'linked' });
+    expect(await redeemInvite('ABCDEFGH')).toEqual({ ok: true, value: undefined });
+    expect(h.calls.filter(c => c.rpc)).toHaveLength(2);
+  });
+
+  it('retry twice in a row is a plain failure, with no third call', async () => {
+    h.responder = () => ({ data: 'retry' });
+    expect(await redeemInvite('ABCDEFGH')).toEqual({ ok: false, error: 'unknown' });
+    expect(h.calls.filter(c => c.rpc)).toHaveLength(2);
   });
 });
 
@@ -224,6 +236,16 @@ describe('snapshots', () => {
     expect(row.station_team).toEqual([false, false, false, false, false, false, false, true]);
     expect(opts).toEqual({ onConflict: 'user_id' });
     expect(JSON.stringify(row)).not.toContain('Tristan');
+  });
+
+  it('removeMySnapshot deletes only the caller\'s row, and refuses for another owner stamp', async () => {
+    expect(await removeMySnapshot({ expectUserId: 'user-a' })).toEqual({ ok: true, value: undefined });
+    expect(h.calls[0].table).toBe('hyrox_partner_snapshots');
+    expect(opArgs(h.calls[0], 'delete')).toHaveLength(1);
+    expect(opArgs(h.calls[0], 'eq')).toEqual([['user_id', 'user-a']]);
+    h.calls.length = 0;
+    expect(await removeMySnapshot({ expectUserId: 'user-z' })).toEqual({ ok: false, error: 'no_session' });
+    expect(h.calls).toHaveLength(0);
   });
 
   it('upsert refuses when the session user is not the local state\'s owner', async () => {
@@ -271,8 +293,9 @@ describe('snapshots', () => {
 });
 
 describe('account deletion cleanup', () => {
-  it('deletes the caller\'s link, snapshot and invites', async () => {
+  it('deletes the caller\'s link first, then snapshot and invites', async () => {
     expect(await removeMyHyroxPartnerData()).toBe(true);
+    expect(h.calls.map(c => c.table)).toEqual(['hyrox_partner_links', 'hyrox_partner_snapshots', 'hyrox_partner_invites']);
     const byTable = Object.fromEntries(h.calls.map(c => [c.table, c]));
     expect(opArgs(byTable.hyrox_partner_links, 'eq')).toEqual([['user_id', 'user-a']]);
     expect(opArgs(byTable.hyrox_partner_snapshots, 'eq')).toEqual([['user_id', 'user-a']]);

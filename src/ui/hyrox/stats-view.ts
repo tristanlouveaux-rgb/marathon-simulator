@@ -22,7 +22,7 @@ import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
-import { getHyroxPartnerCache, refreshHyroxPartnerCache, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
+import { getHyroxPartnerCache, refreshHyroxPartnerCache, setHyroxPartnerCacheListener, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { SimulatorState } from '@/types/state';
 import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
@@ -295,14 +295,20 @@ export function renderHyroxStatsView(): void {
   });
 
   // Partner row (doubles only) → Partner page. The label reads the session
-  // link cache; the first visit in a session fills it in the background.
+  // link cache; the first visit in a session fills it in the background, and
+  // any later cache change (a foreground re-read after the partner links or
+  // unlinks) updates the label in place while the row is on screen.
   const partnerRow = document.getElementById('hx-stats-partner-row');
   if (partnerRow) {
     const openPartner = () => import('./partner-view').then(({ renderHyroxPartnerView }) => renderHyroxPartnerView());
     partnerRow.addEventListener('click', openPartner);
     partnerRow.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openPartner(); } });
+    setHyroxPartnerCacheListener((c) => {
+      const el = document.getElementById('hx-stats-partner-value');
+      if (el && c) el.textContent = `${partnerRowLabel(c)} ›`;
+    });
     if (getHyroxPartnerCache() === undefined) {
-      void refreshHyroxPartnerCache().then(c => {
+      void refreshHyroxPartnerCache(undefined, { readInvite: true }).then(c => {
         const el = document.getElementById('hx-stats-partner-value');
         if (el) el.textContent = `${partnerRowLabel(c) || 'Link'} ›`;
       });

@@ -29,8 +29,9 @@ export type PartnerErrorCode =
   | 'offline'
   | 'no_session'
   | 'invalid_code'
-  | 'expired'
-  | 'used'
+  /** No live code: unknown, expired or already redeemed. The server answers
+   *  all three with one word so it never says whether a code existed. */
+  | 'unavailable'
   | 'own_code'
   | 'already_linked'
   | 'partner_linked'
@@ -70,6 +71,8 @@ export interface HyroxPartnerSource {
   getLink(): Promise<PartnerResult<PartnerLink | null>>;
   unlink(): Promise<PartnerResult<void>>;
   upsertMySnapshot(snapshot: HyroxPartnerSnapshot, opts?: UpsertSnapshotOptions): Promise<PartnerResult<void>>;
+  /** Delete the caller's own snapshot (the athlete left doubles mode). */
+  removeMySnapshot(opts?: UpsertSnapshotOptions): Promise<PartnerResult<void>>;
   getPartnerSnapshot(): Promise<PartnerResult<StoredPartnerSnapshot | null>>;
 }
 
@@ -193,13 +196,14 @@ function fail<T>(error: PartnerErrorCode): PartnerResult<T> {
   return { ok: false, error };
 }
 
-/** The redeem function's status words → result. */
+/** The redeem function's status words → result. 'retry' (a concurrent
+ *  redeem won a lock race, nothing was written) is handled by redeemInvite
+ *  and reads as unknown here. */
 export function mapRedeemStatus(status: unknown): PartnerResult<void> {
   switch (status) {
     case 'linked': return { ok: true, value: undefined };
     case 'invalid_code': return fail('invalid_code');
-    case 'expired': return fail('expired');
-    case 'used': return fail('used');
+    case 'unavailable': return fail('unavailable');
     case 'own_code': return fail('own_code');
     case 'already_linked': return fail('already_linked');
     case 'partner_linked': return fail('partner_linked');
@@ -226,13 +230,12 @@ function serverError<T>(error: unknown): PartnerResult<T> {
 
 // ── Calls ────────────────────────────────────────────────────────────────────
 
-/** New invite code. Drops the caller's earlier unused codes first so one
- *  live code exists per user. The code and expiry are set by the server. */
+/** New invite code. The server sets the code and expiry and deletes the
+ *  caller's earlier code in the same statement (one code per user). */
 export async function createInvite(): Promise<PartnerResult<PartnerInvite>> {
   const u = await sessionUser();
   if ('error' in u) return fail(u.error);
   try {
-    await supabase.from(INVITES).delete().eq('owner_id', u.id).is('used_at', null);
     for (let attempt = 0; attempt < 2; attempt++) {
       const { data, error } = await supabase
         .from(INVITES)
@@ -249,7 +252,8 @@ export async function createInvite(): Promise<PartnerResult<PartnerInvite>> {
   }
 }
 
-/** The caller's live, unused invite, if any (to show it again on return). */
+/** The caller's live invite, if any (to show it again on return). A
+ *  redeemed code no longer exists, so any row here is unused. */
 export async function getOpenInvite(): Promise<PartnerResult<PartnerInvite | null>> {
   const u = await sessionUser();
   if ('error' in u) return fail(u.error);
@@ -258,10 +262,7 @@ export async function getOpenInvite(): Promise<PartnerResult<PartnerInvite | nul
       .from(INVITES)
       .select('code,expires_at')
       .eq('owner_id', u.id)
-      .is('used_at', null)
       .gt('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false })
-      .limit(1)
       .maybeSingle();
     if (error) return serverError(error);
     return { ok: true, value: data ? { code: data.code, expiresAt: data.expires_at } : null };
@@ -270,16 +271,21 @@ export async function getOpenInvite(): Promise<PartnerResult<PartnerInvite | nul
   }
 }
 
-/** Redeem a partner's code (redeem_hyrox_partner_invite, SECURITY DEFINER). */
+/** Redeem a partner's code (redeem_hyrox_partner_invite, SECURITY DEFINER).
+ *  'retry' means a concurrent redeem won a lock race and nothing was written:
+ *  call once more, which then reads the settled state. */
 export async function redeemInvite(input: string): Promise<PartnerResult<void>> {
   const code = normaliseHyroxPartnerCode(input);
   if (!isWellFormedHyroxPartnerCode(code)) return fail('invalid_code');
   const u = await sessionUser();
   if ('error' in u) return fail(u.error);
   try {
-    const { data, error } = await supabase.rpc('redeem_hyrox_partner_invite', { code });
-    if (error) return serverError(error);
-    return mapRedeemStatus(data);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { data, error } = await supabase.rpc('redeem_hyrox_partner_invite', { code });
+      if (error) return serverError(error);
+      if (data !== 'retry') return mapRedeemStatus(data);
+    }
+    return fail('unknown');
   } catch (e) {
     return serverError(e);
   }
@@ -302,7 +308,8 @@ export async function getLink(): Promise<PartnerResult<PartnerLink | null>> {
   }
 }
 
-/** Unlink: delete the caller's link row; the partner's mirror row cascades. */
+/** Unlink: delete the caller's link row; the partner's mirror row cascades
+ *  and the database deletes both snapshots (hyrox_partner_link_after_delete). */
 export async function unlink(): Promise<PartnerResult<void>> {
   const u = await sessionUser();
   if ('error' in u) return fail(u.error);
@@ -327,6 +334,21 @@ export async function upsertMySnapshot(
     const { error } = await supabase
       .from(SNAPSHOTS)
       .upsert(snapshotToRow(u.id, snapshot), { onConflict: 'user_id' });
+    if (error) return serverError(error);
+    return { ok: true, value: undefined };
+  } catch (e) {
+    return serverError(e);
+  }
+}
+
+/** Delete the caller's own snapshot (the athlete left doubles mode). Refused
+ *  unless the session user is `expectUserId` when given, as for the upsert. */
+export async function removeMySnapshot(opts: UpsertSnapshotOptions = {}): Promise<PartnerResult<void>> {
+  const u = await sessionUser();
+  if ('error' in u) return fail(u.error);
+  if (opts.expectUserId && opts.expectUserId !== u.id) return fail('no_session');
+  try {
+    const { error } = await supabase.from(SNAPSHOTS).delete().eq('user_id', u.id);
     if (error) return serverError(error);
     return { ok: true, value: undefined };
   } catch (e) {
@@ -368,19 +390,22 @@ export async function getPartnerSnapshot(): Promise<PartnerResult<StoredPartnerS
 /**
  * Account deletion: end the link and delete this user's snapshot and invites
  * at once, so a partner stops reading the numbers immediately rather than
- * after the 30-day purge (auth.users delete cascades the rest). Best effort:
- * never throws, returns false on any failure.
+ * after the 30-day purge (auth.users delete cascades the rest; the
+ * delete-account edge function does the same server-side once deployed).
+ * The link goes first: its delete trigger also removes both snapshots, so the
+ * snapshot delete after it usually finds nothing. One call at a time, so the
+ * three deletes never wait on each other. Best effort: never throws, returns
+ * false on any failure.
  */
 export async function removeMyHyroxPartnerData(): Promise<boolean> {
   const u = await sessionUser();
   if ('error' in u) return false;
   try {
-    const results = await Promise.all([
-      supabase.from(LINKS).delete().eq('user_id', u.id),
-      supabase.from(SNAPSHOTS).delete().eq('user_id', u.id),
-      supabase.from(INVITES).delete().eq('owner_id', u.id),
-    ]);
-    return results.every(r => !r.error);
+    let ok = true;
+    ok = !(await supabase.from(LINKS).delete().eq('user_id', u.id)).error && ok;
+    ok = !(await supabase.from(SNAPSHOTS).delete().eq('user_id', u.id)).error && ok;
+    ok = !(await supabase.from(INVITES).delete().eq('owner_id', u.id)).error && ok;
+    return ok;
   } catch {
     return false;
   }
@@ -394,5 +419,6 @@ export const hyroxPartnerSource: HyroxPartnerSource = {
   getLink,
   unlink,
   upsertMySnapshot,
+  removeMySnapshot,
   getPartnerSnapshot,
 };

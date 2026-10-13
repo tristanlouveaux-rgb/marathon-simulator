@@ -24,12 +24,13 @@ vi.mock('@/data/supabaseClient', () => ({
 }));
 
 import { getDefaultState, setState } from '@/state/store';
+import { setLocalStateOwner } from '@/data/planSettingsSync';
 import { HYROX_HOURS_RANGE, HYROX_MTL_CAP, HYROX_WEEKLY_SESSIONS } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from '@/calculations/hyrox-partner-snapshot';
 import { renderHyroxPartnerView, stationStatusText, fmtLead, PARTNER_ERROR_COPY } from './partner-view';
 import { partnerRowLabel, renderHyroxStatsView } from './stats-view';
-import { _resetHyroxPartnerSyncForTests, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
+import { _resetHyroxPartnerSyncForTests, getHyroxPartnerCache, refreshHyroxPartnerOnForeground, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { HyroxPartnerSource, PartnerErrorCode, PartnerResult, PartnerInvite, PartnerLink, StoredPartnerSnapshot } from '@/data/hyroxPartner';
 import type { HyroxConfig, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import type { SimulatorState } from '@/types/state';
@@ -99,6 +100,7 @@ function mockSource(m: MockState): HyroxPartnerSource & Record<string, ReturnTyp
     unlink: vi.fn(async () => { m.link = null; return ok(undefined); }),
     getPartnerSnapshot: vi.fn(async () => ok(m.link ? m.partner : null)),
     upsertMySnapshot: vi.fn(async () => ok(undefined)),
+    removeMySnapshot: vi.fn(async () => ok(undefined)),
   };
   return src as unknown as HyroxPartnerSource & Record<string, ReturnType<typeof vi.fn>>;
 }
@@ -114,6 +116,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setLocalStateOwner(null);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -153,12 +156,29 @@ describe('unlinked', () => {
     const src = mockSource({ link: null, invite: null, partner: null });
     renderHyroxPartnerView({ source: src });
     await flush();
+    expect(getHyroxPartnerCache()).toEqual({ linked: false, inviteExpiresAt: null });
     $('#hxp-create')!.click();
     await flush();
     expect(src.createInvite).toHaveBeenCalledTimes(1);
     expect(text('#hxp-code')).toBe('ABCD-EFGH');
     expect($('#hxp-copy')?.textContent).toBe('Copy');
     expect(document.body.textContent).toContain('Single use. Expires in 24 h.');
+    // The open code is recorded so the foreground hook re-reads the link.
+    expect(getHyroxPartnerCache()?.inviteExpiresAt).toBeTruthy();
+  });
+
+  it('a code out, partner redeems while the app is in the background: the foreground re-read pushes the snapshot', async () => {
+    setLocalStateOwner('user-a');
+    const m: MockState = { link: null, invite: null, partner: null };
+    const src = mockSource(m);
+    renderHyroxPartnerView({ source: src });
+    await flush();
+    $('#hxp-create')!.click();
+    await flush();
+    m.link = { partnerId: 'user-b', createdAt: 't' };
+    await refreshHyroxPartnerOnForeground(src);
+    expect(getHyroxPartnerCache()?.linked).toBe(true);
+    expect(src.upsertMySnapshot).toHaveBeenCalled();
   });
 
   it('Copy writes the code to the clipboard', async () => {
@@ -184,20 +204,20 @@ describe('unlinked', () => {
     expect(window.getSelection()?.toString().replace(/\s+/g, '')).toBe('ABCD-EFGH');
   });
 
-  it('a rejected code shows one plain line and keeps what was typed', async () => {
-    const src = mockSource({ link: null, invite: null, partner: null, redeem: fail('expired') });
+  it('a dead code (expired, used or unknown) shows one plain line and keeps what was typed', async () => {
+    const src = mockSource({ link: null, invite: null, partner: null, redeem: fail('unavailable') });
     renderHyroxPartnerView({ source: src });
     await flush();
     ($('#hxp-code-input') as HTMLInputElement).value = 'wxyz-2345';
     $('#hxp-redeem')!.click();
     await flush();
     expect(src.redeemInvite).toHaveBeenCalledWith('wxyz-2345');
-    expect(text('#hxp-msg')).toBe(PARTNER_ERROR_COPY.expired);
+    expect(text('#hxp-msg')).toBe('This code has expired or been used. Check the 8 characters.');
     expect(($('#hxp-code-input') as HTMLInputElement).value).toBe('wxyz-2345');
   });
 
   it.each([
-    ['own_code' as const], ['used' as const], ['already_linked' as const], ['partner_linked' as const], ['offline' as const], ['invalid_code' as const],
+    ['own_code' as const], ['already_linked' as const], ['partner_linked' as const], ['offline' as const], ['invalid_code' as const], ['unknown' as const],
   ])('redeem error %s maps to its line', async (err) => {
     const src = mockSource({ link: null, invite: null, partner: null, redeem: fail(err) });
     renderHyroxPartnerView({ source: src });
@@ -241,12 +261,12 @@ describe('linked', () => {
     const row = (st: string) => rows.find(r => r.dataset.station === st)!.textContent!.replace(/\s+/g, ' ');
     expect(row('ski_erg')).toContain('You lead by 12 s');
     expect(row('sled_push')).toContain('Partner leads by 8 s');
-    expect(text('#hxp-run')).toContain("Partner's pace, the slower of the two");
+    expect(text('#hxp-run')).toContain("Your partner's solo pace, the slower of the two");
     expect(text('#hxp-forecast')).toMatch(/Pair forecast.*\d:\d\d:\d\d/);
     expect($('#hxp-setups')).toBeNull();
   });
 
-  it('a woman\'s Women Open times in a Mixed pair: loaded stations not comparable, ergs compared', async () => {
+  it('a woman\'s Women Open times in a Mixed pair: loaded stations not comparable, ergs compared, pair forecast withheld', async () => {
     const tiers = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, 'W-Open'])) as Record<HyroxStation, HyroxLoadTier>;
     await renderLinked({ stationTier: tiers });
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
@@ -254,6 +274,11 @@ describe('linked', () => {
     expect(row('sled_push')).toContain('Not comparable');
     expect(row('sled_push')).toContain('Times at different loads');
     expect(row('ski_erg')).toContain('You lead by 12 s');
+    // The pair number would read her Women Open times as Men Open: one short line instead.
+    expect(text('#hxp-forecast')).toContain('Needs both partners at the same loads.');
+    expect(text('#hxp-forecast')).toContain('Not available');
+    expect(text('#hxp-forecast')).not.toMatch(/\d:\d\d:\d\d/);
+    expect(text('#hxp-run')).toContain('solo pace');
   });
 
   it('different race setups: one line naming both, no pair forecast', async () => {
@@ -295,7 +320,7 @@ describe('linked', () => {
     renderHyroxPartnerView({ source: src });
     await flush();
     expect(text('#hxp-headline')).toBe('Linked');
-    expect(document.body.textContent).toContain('No numbers from your partner yet.');
+    expect(document.body.textContent).toContain('No numbers from your partner yet. They appear when your partner next opens Mosaic with a Doubles race set.');
     expect(document.querySelectorAll('.hxp-station')).toHaveLength(0);
     expect($('#hxp-unlink')).not.toBeNull();
   });
@@ -331,5 +356,13 @@ describe('Stats entry row', () => {
     seed({ format: 'open_singles', division: undefined });
     renderHyroxStatsView();
     expect($('#hx-stats-partner-row')).toBeNull();
+  });
+
+  it('the label follows a later cache change while Stats is on screen (foreground re-read)', () => {
+    setHyroxPartnerCache({ linked: true, initials: 'MK' });
+    renderHyroxStatsView();
+    expect(text('#hx-stats-partner-value')).toBe('MK ›');
+    setHyroxPartnerCache({ linked: false, inviteExpiresAt: null });
+    expect(text('#hx-stats-partner-value')).toBe('Link ›');
   });
 });

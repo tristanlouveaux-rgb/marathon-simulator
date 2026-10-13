@@ -30,6 +30,7 @@ import {
   type HyroxPartnerSource,
   type PartnerErrorCode,
   type PartnerInvite,
+  type PartnerLink,
   type StoredPartnerSnapshot,
 } from '@/data/hyroxPartner';
 import { flushHyroxPartnerSnapshot, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
@@ -41,7 +42,9 @@ const TEXT_L = '#94A3B8';
 const CARD = 'background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:16px 18px';
 const ROW = 'display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid rgba(0,0,0,0.04)';
 
-/** How often the code screen re-checks whether the partner has redeemed. */
+/** How often the code screen re-checks whether the partner has redeemed.
+ *  Polling runs only while a code is on screen; elsewhere the app re-reads
+ *  the link on foreground (refreshHyroxPartnerOnForeground). */
 const LINK_POLL_MS = 5000;
 
 export interface HyroxPartnerViewOptions {
@@ -59,9 +62,8 @@ type ViewState =
 export const PARTNER_ERROR_COPY: Record<PartnerErrorCode, string> = {
   offline: 'Offline. Connect and try again.',
   no_session: 'Sign in to link a partner.',
-  invalid_code: 'Code not found. Check the 8 characters.',
-  expired: 'Code expired. Ask your partner for a new one.',
-  used: 'Code already used. Ask your partner for a new one.',
+  invalid_code: 'Check the code. It has 8 characters.',
+  unavailable: 'This code has expired or been used. Check the 8 characters.',
   own_code: 'This is your own code. Your partner enters it on their phone.',
   already_linked: 'You already have a partner. Unlink first.',
   partner_linked: 'That athlete already has a partner.',
@@ -172,16 +174,20 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
     managePoll();
   };
 
+  // The session cache records an open code's expiry, so the foreground hook
+  // knows to re-read the link while the code is out.
   const loadUnlinked = async (message: string | null = null) => {
     const inv = await source.getOpenInvite();
-    paint({ kind: 'unlinked', invite: inv.ok ? inv.value : null, message, busy: false, copied: '' });
+    const invite = inv.ok ? inv.value : null;
+    setHyroxPartnerCache({ linked: false, inviteExpiresAt: invite?.expiresAt ?? null });
+    paint({ kind: 'unlinked', invite, message, busy: false, copied: '' });
   };
 
-  const loadLinked = async () => {
+  const loadLinked = async (link?: PartnerLink) => {
     void flushHyroxPartnerSnapshot({ source, force: true });
     const p = await source.getPartnerSnapshot();
     if (!p.ok) { paint({ kind: 'load_error', error: p.error }); return; }
-    setHyroxPartnerCache({ linked: true, initials: p.value?.snapshot.initials ?? null });
+    setHyroxPartnerCache({ linked: true, since: link?.createdAt ?? null, initials: p.value?.snapshot.initials ?? null });
     paint({ kind: 'linked', partner: p.value, confirmUnlink: false, message: null, busy: false });
   };
 
@@ -189,11 +195,8 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
     paint({ kind: 'loading' });
     const link = await source.getLink();
     if (!link.ok) { paint({ kind: 'load_error', error: link.error }); return; }
-    if (link.value) await loadLinked();
-    else {
-      setHyroxPartnerCache({ linked: false });
-      await loadUnlinked();
-    }
+    if (link.value) await loadLinked(link.value);
+    else await loadUnlinked();
   };
 
   const managePoll = () => {
@@ -205,7 +208,7 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
       const link = await source.getLink();
       if (link.ok && link.value && alive() && vs.kind === 'unlinked') {
         stopPoll();
-        await loadLinked();
+        await loadLinked(link.value);
       }
     }, LINK_POLL_MS);
   };
@@ -218,6 +221,7 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
       paint({ ...vs, busy: true, message: null });
       const r = await source.createInvite();
       if (vs.kind !== 'unlinked') return;
+      if (r.ok) setHyroxPartnerCache({ linked: false, inviteExpiresAt: r.value.expiresAt });
       paint(r.ok
         ? { ...vs, invite: r.value, busy: false, copied: '' }
         : { ...vs, busy: false, message: PARTNER_ERROR_COPY[r.error] });
@@ -268,7 +272,6 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
       const r = await source.unlink();
       if (vs.kind !== 'linked') return;
       if (r.ok) {
-        setHyroxPartnerCache({ linked: false });
         await loadUnlinked();
       } else {
         paint({ ...vs, busy: false, message: PARTNER_ERROR_COPY[r.error] });
@@ -372,7 +375,7 @@ function renderLinked(vs: Extract<ViewState, { kind: 'linked' }>): string {
       <div style="${CARD}">
         <div style="font-size:13px;color:${TEXT_S};line-height:1.5">${partner
           ? 'Your numbers are not ready yet.'
-          : 'No numbers from your partner yet. They appear after your partner next opens Mosaic in HYROX mode.'}</div>
+          : 'No numbers from your partner yet. They appear when your partner next opens Mosaic with a Doubles race set.'}</div>
       </div>`;
   } else {
     const cmp = compareHyroxPartners(mine, partner);
@@ -392,9 +395,11 @@ function renderLinked(vs: Extract<ViewState, { kind: 'linked' }>): string {
             <div style="font-size:13px;color:${c.status === 'not_comparable' ? TEXT_L : TEXT_M};font-variant-numeric:tabular-nums;text-align:right;flex-shrink:0">${stationStatusText(c)}</div>
           </div>`).join('')}
       </div>`;
-    const runCaption = cmp.run.setBy === 'partner' ? "Partner's pace, the slower of the two"
-      : cmp.run.setBy === 'you' ? 'Your pace, the slower of the two'
-      : 'Same pace for both';
+    // Solo pace (singles terms): the slower partner's own HYROX pace. It can
+    // differ from the Stats HYROX pace, which carries the doubles run ratio.
+    const runCaption = cmp.run.setBy === 'partner' ? "Your partner's solo pace, the slower of the two"
+      : cmp.run.setBy === 'you' ? 'Your solo pace, the slower of the two'
+      : 'Solo pace, the same for both';
     const venueNote = s.hyroxConfig?.venueId ? ' Before course factors.' : '';
     pairCard = `
       <div style="${CARD};margin-top:14px">
@@ -410,7 +415,9 @@ function renderLinked(vs: Extract<ViewState, { kind: 'linked' }>): string {
             <div style="font-size:13px;font-weight:600;color:${TEXT_M}">Pair forecast</div>
             <div style="font-size:11px;color:${TEXT_S};margin-top:1px">${cmp.forecast
               ? `Equal split of every station.${venueNote}`
-              : 'Needs matching race setups.'}</div>
+              : cmp.forecastWithheld === 'loads'
+                ? 'Needs both partners at the same loads.'
+                : 'Needs matching race setups.'}</div>
           </div>
           <div style="font-size:13px;color:${cmp.forecast ? TEXT_M : TEXT_L};font-variant-numeric:tabular-nums">${cmp.forecast ? ftRounded(cmp.forecast.totalSec) : 'Not available'}</div>
         </div>
