@@ -21,12 +21,12 @@
 
 import type { Workout } from '@/types/state';
 import type { TriSkillSlider, TriathlonDistance } from '@/types/triathlon';
-import { plannedTssPerMin } from '@/constants';
 import { CYCLING_EVENT_INTENSITY_FACTOR, TRI_TAPER_MIN_SESSION_SHARE } from '@/constants/triathlon-constants';
 import { RACE_INTENSITY_BY_DISTANCE } from '@/calculations/bike-physics';
 import { bikeTargetLabel, generateBikeSession, loadForBike, rpeForBike, type BikeSessionKind } from './bike';
 import { estimateDistanceMetres, loadForSwim, rpeForSwim } from './swim';
 import { PRIMER_MAX_DAYS_OUT, PRIMER_MIN_DAYS_OUT } from './race-day-rules';
+import { loadForTriRun } from './rung-load';
 import { DAY_NAMES } from './scheduler.triathlon';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -145,20 +145,6 @@ function swimWuCdMin(ctx: TriTaperSessionCtx): number {
   return (SWIM_WU_CD_M / 100) * pace / 60;
 }
 
-function runLoad(minutes: number, repMin: number, shortCourse: boolean): { aerobic: number; anaerobic: number } {
-  // Repeats valued at the type row of their intensity: threshold for short
-  // course, marathon pace (the sub-threshold row) for long course.
-  const rest = Math.max(0, minutes - repMin);
-  const repTss = repMin * plannedTssPerMin(shortCourse ? 'threshold' : 'marathon_pace');
-  const easyTss = rest * plannedTssPerMin('easy');
-  // Shares from the tri run library: threshold 0.77/0.23, easy 0.95/0.05.
-  const repAn = shortCourse ? 0.23 : 0.05;
-  return {
-    aerobic: Math.round(repTss * (1 - repAn) + easyTss * 0.95),
-    anaerobic: Math.round(repTss * repAn + easyTss * 0.05),
-  };
-}
-
 function addLoads(a: { aerobic: number; anaerobic: number }, b: { aerobic: number; anaerobic: number }) {
   return { aerobic: a.aerobic + b.aerobic, anaerobic: a.anaerobic + b.anaerobic };
 }
@@ -173,7 +159,10 @@ function addLoads(a: { aerobic: number; anaerobic: number }, b: { aerobic: numbe
  * Types follow the race intensity: a bike session takes the kind whose zone
  * holds the race intensity factor; a short-course run or swim is threshold
  * work, a long-course one an easy run or an endurance swim with race-pace
- * repeats inside (taperRole marks it either way).
+ * repeats inside (taperRole marks it either way). Load is the whole session
+ * at its type's rate, the library's convention for a session with warm-up
+ * and recoveries, and the rate the Adjust overlay and accepted suggestions
+ * reprice with (loadForRung, loadForTriRun).
  */
 export function triRacePaceSession(input: {
   discipline: 'swim' | 'bike' | 'run';
@@ -192,8 +181,7 @@ export function triRacePaceSession(input: {
     const t = kind === 'endurance' ? 'bike_endurance' : kind === 'tempo' ? 'bike_tempo' : 'bike_sweet_spot';
     const steady = bikeTargetLabel(ctx.ftp, ctx.hasPowerMeter, BIKE_STEADY_PCT_FTP, 'bike_endurance');
     const race = bikeTargetLabel(ctx.ftp, ctx.hasPowerMeter, ctx.bikeIF, t);
-    const repMin = reps * TRI_RACE_PACE_REP_SEC / 60;
-    const load = addLoads(loadForBike(kind, repMin), loadForBike('endurance', Math.max(0, minutes - repMin)));
+    const load = loadForBike(kind, minutes);
     const rpe = rpeForBike(kind, 'taper');
     return {
       n: name, t, discipline: 'bike', r: rpe, rpe, ...load,
@@ -204,24 +192,22 @@ export function triRacePaceSession(input: {
   }
   if (discipline === 'run') {
     const reps = input.reps ?? repeatsFor(minutes, RUN_WU_CD_MIN);
-    const repMin = reps * TRI_RACE_PACE_REP_SEC / 60;
     const t = ctx.shortCourse ? 'threshold' : 'easy';
     const rpe = ctx.shortCourse ? 8 : 4;
     return {
-      n: name, t, discipline: 'run', r: rpe, rpe, ...runLoad(minutes, repMin, ctx.shortCourse),
+      n: name, t, discipline: 'run', r: rpe, rpe, ...loadForTriRun(t, minutes)!,
       d: `${fmtMin(minutes)} @ ${ctx.easyLabel}, with ${reps}×${TRI_RACE_PACE_REP_SEC}s @ race pace in the middle, ${TRI_RACE_PACE_RECOVERY_MIN}min jog between.`,
       estimatedDurationMin: minutes,
       taperRole: role,
     };
   }
   const reps = input.reps ?? repeatsFor(minutes, swimWuCdMin(ctx));
-  const repMin = reps * TRI_RACE_PACE_REP_SEC / 60;
-  const repKind = ctx.shortCourse ? 'threshold' : 'endurance';
+  const kind = ctx.shortCourse ? 'threshold' : 'endurance';
   const metres = estimateDistanceMetres(minutes, ctx.swimSkill, ctx.cssSecPer100m);
-  const rpe = rpeForSwim(repKind, 'taper');
+  const rpe = rpeForSwim(kind, 'taper');
   return {
     n: name, t: ctx.shortCourse ? 'swim_threshold' : 'swim_endurance', discipline: 'swim', r: rpe, rpe,
-    ...addLoads(loadForSwim(repKind, repMin), loadForSwim('endurance', Math.max(0, minutes - repMin))),
+    ...loadForSwim(kind, minutes),
     d: `${metres}m total, steady, with ${reps}×${TRI_RACE_PACE_REP_SEC}s @ race pace in the middle, ${TRI_RACE_PACE_RECOVERY_MIN}min easy swimming between.`,
     estimatedDurationMin: minutes,
     taperRole: role,
@@ -279,12 +265,11 @@ export function triDayBeforeRide(input: {
  *  with Allen's 5 x 10 s pickups. */
 export function triDayBeforeRun(minutes: number, easyLabel: string): Workout {
   const m = Math.round(minutes);
-  const total = m * plannedTssPerMin('easy');
   return {
     n: 'Pre-race jog',
     d: `${m}min easy jog @ ${easyLabel}, with ${TRI_DAY_BEFORE_PICKUP_REPS}×${TRI_DAY_BEFORE_PICKUP_SEC}s pickups to race pace. Activation only.`,
     t: 'easy', discipline: 'run', r: 4, rpe: 4,
-    aerobic: Math.round(total * 0.95), anaerobic: Math.round(total * 0.05),
+    ...loadForTriRun('easy', m)!,
     estimatedDurationMin: m,
     taperRole: 'day_before',
   };
@@ -296,14 +281,11 @@ export function triRaceWeekBrick(ctx: TriTaperSessionCtx): Workout {
   const runMin = TRI_RACE_WEEK_BRICK_RUN_MIN;
   const bikeMin = TRI_RACE_WEEK_BRICK_TOTAL_MIN - runMin;
   const reps = TRI_RACE_WEEK_BRICK_BUILD_REPS;
-  const repMin = reps * TRI_RACE_PACE_REP_SEC / 60;
-  const kind = bikeKindForIntensity(ctx.bikeIF);
   const steady = bikeTargetLabel(ctx.ftp, ctx.hasPowerMeter, BIKE_STEADY_PCT_FTP, 'bike_endurance');
   const pm = ctx.hasPowerMeter && ctx.ftp;
-  const load = addLoads(
-    addLoads(loadForBike(kind, repMin), loadForBike('endurance', bikeMin - repMin)),
-    runLoad(runMin, repMin, ctx.shortCourse),
-  );
+  // Steady legs with short builds: the bike leg at the endurance rate, the
+  // run leg at the easy rate (the builds are 3 of each leg's minutes).
+  const load = addLoads(loadForBike('endurance', bikeMin), loadForTriRun('easy', runMin)!);
   return {
     n: 'Brick: bike + run',
     t: 'brick',
@@ -384,8 +366,10 @@ export interface TriRaceWeekInput {
  *      number of TRI_TAPER_SESSION_FLOOR_MIN sessions at most. Then, while
  *      race week (the race counted as one session, as it takes the long
  *      session's slot) holds fewer than TRI_TAPER_MIN_SESSION_SHARE of the
- *      reference sessions, one more session where the floor allows. Every
- *      discipline the plan has keeps at least one session.
+ *      reference sessions, one more session in the discipline with the most
+ *      minutes per session left; frequency wins over the floor, so a thin
+ *      budget gets a floor-length session and the week sits a few minutes
+ *      above its fraction. Every discipline the plan has keeps a session.
  *   5. Sessions without a fixed day go to the earliest days at least 3 days
  *      out, biggest first, one per discipline per day, within the day caps
  *      when a day has room; with no day free of its discipline a session is
@@ -493,8 +477,10 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     let bestSize = -1;
     for (const d of DISCS) {
       if (!present[d]) continue;
+      // Frequency wins over the floor: the added session is floor length when
+      // the budget is thinner, from the discipline it overshoots least.
       const size = rem[d] / (n[d] + 1);
-      if (size >= floorMin && n[d] < freeDays(d) && size > bestSize) { best = d; bestSize = size; }
+      if (rem[d] > 0 && n[d] < freeDays(d) && size > bestSize) { best = d; bestSize = size; }
     }
     if (!best) break;
     n[best]++;

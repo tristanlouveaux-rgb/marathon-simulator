@@ -5,7 +5,9 @@
  *   - race week (taper, race-week content) is the week holding race day minus 3;
  *   - a Monday to Wednesday race's own week is a closing week with no sessions;
  *   - the 6 days before race day hold race-week sessions only: no long run,
- *     brick or long ride, nothing from a peak (or any non-race) week;
+ *     brick or long ride, nothing from a peak (or any non-race) week; the
+ *     60-min race-week brick of a long-course plan (Byrn, tri-taper.ts) is
+ *     race-week content;
  *   - nothing on or after race day, and the plan's final week holds race day.
  *
  * "The 7 days before race day" is read as the 7-day week ending on race day:
@@ -86,8 +88,11 @@ function build(mode: Mode, race: string): SimulatorState {
   return getState();
 }
 
-/** Long run, triathlon brick, solo long ride, full HYROX brick. */
+/** Long run, triathlon brick, solo long ride, full HYROX brick. The 60-min
+ *  race-week brick of a long-course plan (Byrn; tri-taper.ts, taperRole
+ *  'opener') is race-week content, not a long session. */
 function isLongSession(w: Workout): boolean {
+  if (w.t === 'brick' && w.taperRole === 'opener') return false;
   return isLongRun(w) || w.t === 'brick' || w.t === 'hyrox_brick' || w.longRide === true;
 }
 
@@ -170,10 +175,28 @@ describe('a Monday to Wednesday race trains like the Sunday before it', () => {
         expect(s.wks.slice(0, 6).map(w => w.ph)).toEqual(sundayWeeks.map(w => w.ph));
         // Weeks before race week are identical.
         expect(s.wks.slice(0, 5).map(w => w.triWorkouts)).toEqual(sundayWeeks.slice(0, 5).map(w => w.ws));
-        // Race week: the same sessions, each placed relative to its own race
-        // day by the race-day rules (so their days differ).
-        const content = (ws: Workout[] | undefined) => (ws ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
-        expect(content(s.wks[5].triWorkouts), `${mode} ${race}`).toEqual(content(sundayWeeks[5].ws));
+        // Race week: the same volume per discipline (the same reference week
+        // and fraction). Its sessions sit relative to their own race day, so
+        // they differ for triathlon and cycling (tri-taper.ts: the day-before
+        // activation and the rest day 2 days out exist only when those days
+        // fall in race week); within one floor-length session per discipline.
+        if (mode === 'hyrox') {
+          const content = (ws: Workout[] | undefined) => (ws ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
+          expect(content(s.wks[5].triWorkouts), `${mode} ${race}`).toEqual(content(sundayWeeks[5].ws));
+        } else {
+          const perDisc = (ws: Workout[] | undefined) => {
+            const m: Record<string, number> = { swim: 0, bike: 0, run: 0 };
+            for (const w of ws ?? []) {
+              if (w.t === 'gym' || w.commute) continue;
+              if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline] += sg.durationMin;
+              else m[w.discipline ?? 'run'] += w.estimatedDurationMin ?? 0;
+            }
+            return m;
+          };
+          const a = perDisc(s.wks[5].triWorkouts);
+          const b = perDisc(sundayWeeks[5].ws);
+          for (const d of ['swim', 'bike', 'run']) expect(Math.abs(a[d] - b[d]), `${mode} ${race} ${d}: ${a[d]} vs ${b[d]}`).toBeLessThanOrEqual(20);
+        }
       }
     });
   }

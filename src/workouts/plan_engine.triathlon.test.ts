@@ -102,11 +102,17 @@ describe('Triathlon plan engine — generation shape', () => {
     }
   });
 
-  it('brick workouts appear only in build and peak phases', () => {
+  it('brick workouts appear only in build and peak phases, plus the race-week brick', () => {
     const weeks = generateTriathlonPlan(makeTriState());
     for (const wk of weeks) {
-      const hasBrick = (wk.triWorkouts ?? []).some((w) => w.t === 'brick');
-      if (hasBrick) {
+      const bricks = (wk.triWorkouts ?? []).filter((w) => w.t === 'brick');
+      if (bricks.length === 0) continue;
+      if (wk.w === weeks.length) {
+        // Byrn's short race-week brick (tri-taper.ts), 60 min with a 15-min run.
+        expect(bricks).toHaveLength(1);
+        expect(bricks[0].taperRole).toBe('opener');
+        expect(bricks[0].estimatedDurationMin).toBe(60);
+      } else {
         expect(['build', 'peak']).toContain(wk.ph);
       }
     }

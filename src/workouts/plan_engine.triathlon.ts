@@ -123,7 +123,15 @@ import { isLongRun } from './long-run';
 // refresh (applyTriGeneratorRegen). The bump makes stored plans built from an
 // uncapped watch s.lt (easy 4:24/km at watch 62, run skill 3) regenerate at
 // the capped paces (5:45/km).
-export const TRI_GENERATOR_VERSION = 23;
+// v24: the race taper rebuild (tri-taper.ts, SCIENCE_LOG "Triathlon and
+// cycling taper rebuild", Tristan 2026-10-13). Taper length by race distance
+// (sprint 1 week, others 2, cycling 2; race week only under 8 h), taper weeks
+// sized per discipline from the reference week (0.55 then 0.30, or 0.55 for a
+// one-week taper), quality kept with fewer reps (long course capped at race
+// intensity), race week composed from openers, Byrn's brick, a rest day 2 days
+// out and a capped activation the day before. Stored plans regenerate so
+// existing users get the new taper.
+export const TRI_GENERATOR_VERSION = 24;
 
 /**
  * Representative average session length (hours) per discipline. The generator
@@ -527,25 +535,39 @@ interface TriWeekGenCtx {
   firstDow: number;
 }
 
-/** Taper switches for this plan (planning side): cycling mode, and a
- *  triathlete whose reference week is under TRI_LOW_HOURS_THRESHOLD_H of swim,
- *  bike and run (Goeringer), who tapers in race week only. The reference week
- *  is sized as a full peak week (multiplier 1.00, no deload), the week the
- *  taper is measured against. */
-export function triTaperOpts(state: SimulatorState): { cyclingOnly: boolean; lowHours: boolean } {
-  const tri = state.triConfig!;
-  const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
-  const cyclingOnly = disciplines.length === 1 && disciplines.includes('bike');
+/** Cycling mode: the tri engine with the bike alone. */
+function triIsCyclingOnly(state: SimulatorState): boolean {
+  const disciplines = state.triConfig!.disciplines ?? ['swim', 'bike', 'run'];
+  return disciplines.length === 1 && disciplines.includes('bike');
+}
+
+/** Taper switches for a plan of `trainingWeeks` (planning side): cycling mode,
+ *  and a triathlete whose reference week holds under TRI_LOW_HOURS_THRESHOLD_H
+ *  of swim, bike and run (Goeringer), who tapers in race week only. The
+ *  reference week is the one the distance's taper measures against (the last
+ *  base, build or peak week before it that is not a deload), sized by its
+ *  hour budget, brick run included. */
+export function triTaperOpts(state: SimulatorState, trainingWeeks: number): { cyclingOnly: boolean; lowHours: boolean } {
+  const cyclingOnly = triIsCyclingOnly(state);
   if (cyclingOnly) return { cyclingOnly, lowHours: false };
-  const peak = triWeekSizing(state, 1, 1, 'peak', { ignoreDeload: true });
-  const brickRunMin = peak.brickActive ? peak.runHours * 60 * peak.brickPolicy.runShare : 0;
-  const sbrMin = peak.weekHours * 60 + brickRunMin;
+  const phases = computeTriPlanPhases(state.triConfig!.distance, trainingWeeks);
+  let start = trainingWeeks;
+  while (start > 1 && phases[start - 2]?.ph === 'taper') start--;
+  let refWeek = 1;
+  let refPhase: TrainingPhase = 'peak';
+  for (let w = start - 1; w >= 1; w--) {
+    const ph = phases[w - 1].ph;
+    if (ph !== 'taper' && !isFourWeekCycleDeloadWeek(w, ph)) { refWeek = w; refPhase = ph; break; }
+  }
+  const ref = triWeekSizing(state, refWeek, trainingWeeks, refPhase, { ignoreDeload: true });
+  const brickRunMin = ref.brickActive ? ref.runHours * 60 * ref.brickPolicy.runShare : 0;
+  const sbrMin = ref.weekHours * 60 + brickRunMin;
   return { cyclingOnly, lowHours: sbrMin < TRI_LOW_HOURS_THRESHOLD_H * 60 };
 }
 
 /** The plan's phases (race taper per triRaceTaperWeeks). */
 function triPlanPhases(state: SimulatorState, trainingWeeks: number) {
-  return computeTriPlanPhases(state.triConfig!.distance, trainingWeeks, triTaperOpts(state));
+  return computeTriPlanPhases(state.triConfig!.distance, trainingWeeks, triTaperOpts(state, trainingWeeks));
 }
 
 /** The race taper of a plan: its first week, its length, and the reference
@@ -677,7 +699,7 @@ function triGates(
 function triTaperCtx(state: SimulatorState, weekIndex: number, totalWeeks: number, phase: TrainingPhase): TriTaperSessionCtx {
   const tri = state.triConfig!;
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
-  const { cyclingOnly } = triTaperOpts(state);
+  const cyclingOnly = triIsCyclingOnly(state);
   const pace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm
     ?? easyPaceSecPerKmFromSkill(rating.run as TriSkillSlider);
   return {
@@ -733,7 +755,7 @@ function triTaperWeekOne(state: SimulatorState, weekIndex: number, totalWeeks: n
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const own = triWeekParts(state, weekIndex, totalWeeks, phase);
   const ctx = triTaperCtx(state, weekIndex, totalWeeks, phase);
-  const { cyclingOnly } = triTaperOpts(state);
+  const cyclingOnly = triIsCyclingOnly(state);
   const dur = (w: Workout) => w.estimatedDurationMin ?? 0;
 
   // Swim.
@@ -818,7 +840,7 @@ function triRaceWeek(
   const phase: TrainingPhase = 'taper';
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
-  const { cyclingOnly } = triTaperOpts(state);
+  const cyclingOnly = triIsCyclingOnly(state);
   const fraction = taper.weeks <= 1 ? TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION : TRI_RACE_WEEK_FRACTION;
   const ctx = triTaperCtx(state, weekIndex, totalWeeks, phase);
   const own = triWeekParts(state, weekIndex, totalWeeks, phase);
@@ -919,7 +941,7 @@ function triWeekParts(
   const gymSessions = state.gs ?? 0;
   const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
   const hasRun = disciplines.includes('run');
-  const { cyclingOnly } = triTaperOpts(state);
+  const cyclingOnly = triIsCyclingOnly(state);
 
   const sizing = triWeekSizing(state, weekIndex, totalWeeks, phase, opts);
   const {
