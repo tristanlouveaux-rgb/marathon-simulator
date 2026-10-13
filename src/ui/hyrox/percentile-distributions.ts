@@ -21,7 +21,7 @@
 
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
-import { getFinishTimePercentile } from '@/calculations/hyrox-population';
+import { getFinishTimePercentile, hyroxPopulationCaption } from '@/calculations/hyrox-population';
 import { getState } from '@/state/store';
 import {
   POPULATION_DATA_AVAILABLE,
@@ -29,9 +29,9 @@ import {
   HYROX_RUN_PERCENTILE_TABLES,
   HYROX_STATIONS_PERCENTILE_TABLES,
   HYROX_ROXZONE_PERCENTILE_TABLES,
-  LAST_VERIFIED_SEASON,
   lookupRealPercentile,
 } from '@/data/hyrox-population-distributions';
+import { doublesRatioAt } from '@/calculations/hyrox-doubles';
 
 type Format = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 type CumTable = Record<Format, Array<[number, number]>>;
@@ -274,19 +274,19 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
 
   const bands = ['competitive', 'advanced', 'intermediate', 'novice', 'beginner', 'total_beginner'] as const;
 
-  // Synthetic anchors by band (used as fallback when no real table for this format).
-  const totalByBand = bands.map(b => {
-    const stations = STATION_SEED_TIMES_SEC[b];
-    const stationSum = Object.values(stations).reduce((s, v) => s + v, 0);
-    return 8 * SEED_RUN_PACE_SEC_KM[b] + stationSum + SEED_ROXZONE_SEC[b];
-  });
-  const runByBand = bands.map(b => 8 * SEED_RUN_PACE_SEC_KM[b]);
-  const stationsByBand = bands.map(b => Object.values(STATION_SEED_TIMES_SEC[b]).reduce((s, v) => s + v, 0));
-  const roxzoneByBand = bands.map(b => SEED_ROXZONE_SEC[b]);
-
   const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const doublesScale = isDoubles ? 0.5 : 1;
   const fmt: Format = (hx.format ?? 'open_singles') as Format;
+
+  // Synthetic anchors by band (used as fallback when no real table for this
+  // format, i.e. Pro Doubles). Doubles bands are the pair's times: each singles
+  // band value × the percentile-matched doubles ratio for that metric
+  // (hyrox-doubles.ts), the forecast's own model, not a flat halving.
+  const toPair = (metric: 'stations' | 'roxzone' | 'run', sec: number) =>
+    isDoubles ? sec * doublesRatioAt(metric, sec).ratio : sec;
+  const runByBand = bands.map(b => toPair('run', 8 * SEED_RUN_PACE_SEC_KM[b]));
+  const stationsByBand = bands.map(b => toPair('stations', Object.values(STATION_SEED_TIMES_SEC[b]).reduce((s, v) => s + v, 0)));
+  const roxzoneByBand = bands.map(b => toPair('roxzone', SEED_ROXZONE_SEC[b]));
+  const totalByBand = bands.map((_, i) => runByBand[i] + stationsByBand[i] + roxzoneByBand[i]);
 
   function realTableFor(t: CumTable): Breakpoints | null {
     if (!POPULATION_DATA_AVAILABLE) return null;
@@ -339,13 +339,13 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
       fill:   'rgba(20,184,166,0.10)',
     },
     {
-      label: `Stations total${isDoubles ? ' (4 stations)' : ' (8 stations)'}`,
+      label: `Stations total (8 stations${isDoubles ? ', pair' : ''})`,
       userValueSec: prediction.stationsSec,
       realTable: realTableFor(HYROX_STATIONS_PERCENTILE_TABLES),
-      syntheticBands: stationsByBand.map(v => v * doublesScale),
+      syntheticBands: stationsByBand,
       fasterThanPct: fasterThanFromTable(
         HYROX_STATIONS_PERCENTILE_TABLES, prediction.stationsSec,
-        stationsByBand.map(v => v * doublesScale),
+        stationsByBand,
       ),
       accent: '#FB923C',                           // orange-400. HYROX's signature workout
       fill:   'rgba(251,146,60,0.10)',
@@ -354,10 +354,10 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
       label: 'RoxZone transitions',
       userValueSec: prediction.roxzoneSec,
       realTable: realTableFor(HYROX_ROXZONE_PERCENTILE_TABLES),
-      syntheticBands: roxzoneByBand.map(v => v * doublesScale),
+      syntheticBands: roxzoneByBand,
       fasterThanPct: fasterThanFromTable(
         HYROX_ROXZONE_PERCENTILE_TABLES, prediction.roxzoneSec,
-        roxzoneByBand.map(v => v * doublesScale),
+        roxzoneByBand,
       ),
       accent: '#8B5CF6',                             // violet-500. Distinct from the orange above; transitions read as the "connective tissue" of the race
       fill:   'rgba(139,92,246,0.10)',
@@ -365,10 +365,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
   ];
 
   const anyReal = metrics.some(m => m.realTable !== null);
-  const finisherCountLabel = anyReal ? '89,868 finishers' : 'synthesised';
-  const subtitle = anyReal
-    ? `Live HYROX field. ${finisherCountLabel} across ${LAST_VERIFIED_SEASON.replace(/\s*\(.*\)\s*/, '').trim()}.`
-    : 'Distributions synthesised from band seed times. Approximate.';
+  const subtitle = anyReal ? hyroxPopulationCaption(fmt) : 'Distributions synthesised from band seed times. Approximate.';
 
   return `
     <style>

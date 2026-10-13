@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseHhMmSs } from './goal-modal';
+import { parseHhMmSs, renderResultBody } from './goal-modal';
+import type { GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
 
 // Competitive HYROX singles floor is ~50-55 min. Use 3000s (50 min) as the
 // disambiguation threshold the modal passes in (derived from the population
@@ -36,5 +37,35 @@ describe('parseHhMmSs — target finish parsing', () => {
     expect(parseHhMmSs('abc', FLOOR)).toBeNull();
     expect(parseHhMmSs('1:75', FLOOR)).toBeNull(); // seconds >= 60
     expect(parseHhMmSs('1:90:00', FLOOR)).toBeNull(); // minutes >= 60
+  });
+});
+
+describe('goal back-calculation rows: fractional times never print ":60"', () => {
+  // The back-calculation distributes the gain proportionally, so targets are
+  // fractional. Rounding only the seconds part printed 119.6 s as "1:60".
+  const result: GoalBackCalcResult = {
+    feasibility: 'achievable',
+    gainNeededSec: 120,
+    totalHeadroomSec: 600,
+    stationTargets: [
+      { station: 'ski_erg', currentSec: 300.2, targetSec: 119.6, deltaSec: -180.6, source: 'seed' },
+      { station: 'row_erg', currentSec: 299.7, targetSec: 279.5, deltaSec: -20.2, source: 'calibrated' },
+    ],
+    runPaceTarget: { currentSecKm: 359.6, targetSecKm: 299.6, deltaSecKm: -60 },
+    roxzoneSec: 380,
+    achievedSec: 4500,
+    shortfallSec: 0,
+    caveat: null,
+  };
+  const html = renderResultBody(result);
+
+  it('station times round before the minute split, like the forecast rows', () => {
+    expect(html).toContain('5:00 → 2:00');
+    expect(html).toContain('5:00 → 4:40');
+    expect(html).not.toMatch(/\d:60/);
+  });
+
+  it('run pace carries the minute, like the forecast average run pace', () => {
+    expect(html).toContain('6:00 → 5:00');
   });
 });

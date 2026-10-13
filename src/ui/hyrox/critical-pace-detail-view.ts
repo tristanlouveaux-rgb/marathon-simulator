@@ -90,14 +90,16 @@ export function renderHyroxCriticalPaceDetail(opts?: { onBack?: () => void }): v
       <div style="font-size:11px;color:${TEXT_S};line-height:1.5;margin-top:12px">Derived from your VDOT history. Faster VDOT lowers critical pace, so the line falls as your aerobic fitness rises.</div>
     </div>`;
 
-  const isDoubles = !!cp && cp.formatFactor < 1.0;
+  // Doubles by format: the doubles run ratio comes from the results tables
+  // and is usually above 1 (the pair runs at the slower partner's pace).
+  const isDoubles = !!cp && (s.hyroxConfig?.format === 'open_doubles' || s.hyroxConfig?.format === 'pro_doubles');
   const derivationCard = cp ? `
     <div class="hxcp-fade" style="${CARD};animation-delay:0.16s;margin-top:14px">
       <div style="font-size:13px;color:${TEXT_S};font-weight:500;margin-bottom:4px">How today's number is built</div>
       ${statRow('Threshold pace', `${fmtPace(cp.thresholdSecKm)}`)}
       ${statRow('CP-ratio at your VDOT', cp.cpRatio.toFixed(2))}
       ${statRow('Critical pace', fmtPace(cp.criticalPaceSecKm), true)}
-      ${isDoubles ? statRow(`Doubles factor (${cp.formatFactor.toFixed(2)})`, fmtPace(cp.criticalPaceSecKm * cp.formatFactor)) : ''}
+      ${isDoubles ? statRow(`Doubles run ratio (${cp.formatFactor.toFixed(2)})`, fmtPace(cp.criticalPaceSecKm * cp.formatFactor)) : ''}
       ${cp.personalOffsetSec !== 0 ? statRow('Personal offset from race history', `${cp.personalOffsetSec > 0 ? '+' : ''}${cp.personalOffsetSec}s/km`) : ''}
       ${statRow('HYROX run pace', fmtPace(result.paceSecKm), true)}
     </div>` : '';

@@ -2,7 +2,7 @@
  * HYROX venue dataset. Per-event characteristics that produce small but
  * measurable course-time differences.
  *
- * **Confidence: low-medium.** Hyrox is identical-format (15 stations, 8×1km
+ * **Confidence: low-medium.** Hyrox is identical-format (8 stations, 8×1km
  * runs) so venue differences are smaller than running/cycling course factors.
  * Values below are inferred from athlete reports, finishing-time spreads
  * across venues at the same season, and venue floor-plan analysis. Treat as
@@ -46,7 +46,7 @@ export interface HyroxVenue {
   floorSurface: HyroxFloorSurface;
   lapDifficulty: HyroxLapDifficulty;
   tempTendency: HyroxTempTendency;
-  /** Venue altitude in metres (only Mexico City is meaningful). */
+  /** Venue altitude in metres (meaningful at Mexico City and Guadalajara). */
   altitudeM: number;
   notes?: string;
 }
@@ -77,6 +77,13 @@ export const HYROX_VENUES: HyroxVenue[] = [
   { id: 'toronto-mtcc',         name: 'Metro Toronto Convention', city: 'Toronto',      country: 'Canada',         floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'cool',     altitudeM: 76,   notes: 'Cool Canadian winter venue.' },
   { id: 'sao-paulo-trans',      name: 'Transamerica Expo',      city: 'São Paulo',      country: 'Brazil',         floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'warm',     altitudeM: 760,  notes: 'Warm climate; mild altitude.' },
   { id: 'cape-town-ctcc',       name: 'CTICC',                  city: 'Cape Town',      country: 'South Africa',   floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'standard', altitudeM: 10,   notes: 'Coastal venue; mild climate.' },
+  // Added 2026-10-12 for 2027 events held away from the city's default hall
+  // (getVenueIdForEvent event overrides). Floor, lap and temperature are the
+  // neutral no-adjustment defaults: no course data exists for these halls yet.
+  // Altitude is the city elevation (Paris copied from paris-portes).
+  { id: 'paris-grand-palais',   name: 'Grand Palais',           city: 'Paris',          country: 'France',         floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'standard', altitudeM: 35,   notes: 'Host of the April 2027 Paris race. Neutral course defaults until course data exists.' },
+  { id: 'vegas-lvcc',           name: 'Las Vegas Convention Center', city: 'Las Vegas', country: 'USA',            floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'standard', altitudeM: 610,  notes: 'Host of the March 2027 Las Vegas race, replacing Mandalay Bay. Indoor AC, as Mandalay Bay.' },
+  { id: 'guadalajara-expo',     name: 'Expo Guadalajara',       city: 'Guadalajara',    country: 'Mexico',         floorSurface: 'rubber',   lapDifficulty: 'standard', tempTendency: 'standard', altitudeM: 1566, notes: 'Host of the March 2027 Guadalajara race. Altitude is the meaningful factor (city elevation).' },
 ];
 
 export function getHyroxVenueById(id: string): HyroxVenue | undefined {

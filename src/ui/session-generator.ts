@@ -13,6 +13,7 @@ import { generateSwimSession, describeSwimSession, estimateDistanceMetres, SWIM_
 import { generateBikeSession, describeBikeSession, BIKE_VARIANT_COUNT, type BikeSessionKind } from '@/workouts/bike';
 import { generateGymWorkouts, type GymFocus } from '@/workouts/gym';
 import { generateHyroxBrick } from '@/workouts/hyrox-generators';
+import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
 import { injuryStrengthDecision } from '@/workouts/injury-strength';
 import type { GymGoal } from '@/constants/strength-constants';
 import { tuneGymWorkout, hyroxBandForIntensity, type GymRestStyle, type GymIntensity } from '@/workouts/gym-pool';
@@ -1258,6 +1259,10 @@ export function openSessionGenerator(): void {
         phase,
         slotIndex: s.w ?? 1,
         bodyWeightKg: s.bodyWeightKg ?? 75,
+        // The athlete's rulebook tier (format x biological sex x division), so
+        // station MTL uses their race loads. Outside HYROX mode there is no
+        // config: Open singles plus biological sex.
+        loadTier: hyroxLoadTierForState(s),
       });
     } else if (focus === 'running' && !injured && !isBeginnerOrNovice) {
       // World-class running strength: a rotating, balanced, evidence-based pool

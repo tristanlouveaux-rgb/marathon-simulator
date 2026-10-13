@@ -1,18 +1,29 @@
 /**
- * HYROX population percentile estimates.
+ * HYROX population percentiles.
  *
- * Based on HyroxDataLab 700k+ race database percentile distributions
- * and band thresholds from hyrox-benchmarks.ts. Open division, gender-mixed.
- * Values are approximate midpoints. Real distributions vary by age/gender/location.
+ * Two kinds, kept apart in copy:
+ *  - Finish-time percentiles (getFinishTimePercentile) read the real results
+ *    tables (hyrox-population-distributions.ts, S4 to S6, men and women
+ *    pooled) and fall back to the synthetic tables below only for formats with
+ *    no ingested rows (pro_doubles).
+ *  - Station percentiles (getStationPercentile) are SYNTHETIC: the results
+ *    data has no per-station splits, so each station is placed on the
+ *    ability-band seed times mapped to hand-picked percentiles. Never caption
+ *    them as results data (STATION_PERCENTILE_CAVEAT).
  *
  * Science log: docs/SCIENCE_LOG.md §HYROX Population Percentiles.
  */
 
 import { STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
+import { doublesTotalInSinglesTermsSec } from './hyrox-doubles';
 import {
   POPULATION_DATA_AVAILABLE,
   HYROX_TOTAL_PERCENTILE_TABLES,
+  HYROX_FORMAT_FINISHER_COUNTS,
+  HYROX_POPULATION_SEASONS_LABEL,
+  HYROX_POPULATION_ERA_NOTE,
+  HYROX_DOUBLES_POOLING_NOTE,
   lookupRealPercentile,
 } from '@/data/hyrox-population-distributions';
 
@@ -80,10 +91,73 @@ export function getFinishTimePercentile(timeSec: number, format: HyroxFormat): n
     if (realCum != null) return Math.max(0, Math.min(100, 100 - realCum));
   }
   const table = (format === 'pro_singles' || format === 'pro_doubles') ? PRO_PERCENTILE_TABLE : OPEN_PERCENTILE_TABLE;
-  // cumulativePercentile = % of finishers slower-than-or-equal-to this time
+  // The synthetic tables are singles finish times. A doubles total is the
+  // pair's time (faster), so convert it to singles terms with the canonical
+  // doubles-to-singles total conversion (percentile-matched on the Open
+  // results) before the lookup; otherwise a Pro Doubles pair reads as far up
+  // the Pro singles field.
+  const isDoubles = format === 'open_doubles' || format === 'pro_doubles';
+  const lookupSec = isDoubles ? doublesTotalInSinglesTermsSec(timeSec) : timeSec;
+  // cumulativePercentile = % of finishers at or faster than this time
   // "faster than X%" = 100 - cumulativePercentile
-  const pctSlowerThanYou = interpolatePercentile(table, timeSec);
-  return Math.round(100 - pctSlowerThanYou);
+  const pctAtOrFaster = interpolatePercentile(table, lookupSec);
+  return Math.round(100 - pctAtOrFaster);
+}
+
+/** Format name for captions. */
+export function hyroxFormatLabel(format: HyroxFormat): string {
+  switch (format) {
+    case 'open_singles': return 'Open Singles';
+    case 'pro_singles':  return 'Pro Singles';
+    case 'open_doubles': return 'Open Doubles';
+    case 'pro_doubles':  return 'Pro Doubles';
+  }
+}
+
+/**
+ * Canonical provenance caption for any surface that places a finish (or a
+ * split total) against the HYROX results data: the format's finisher count,
+ * the seasons with years, that women and men are pooled, the 75-rep Women
+ * Open era caveat, and for doubles the pooling caveat. Formats with no
+ * ingested rows (Pro Doubles) get a synthetic-scale caption instead.
+ */
+export function hyroxPopulationCaption(format: HyroxFormat): string {
+  const n = HYROX_FORMAT_FINISHER_COUNTS[format] ?? 0;
+  if (!POPULATION_DATA_AVAILABLE || n === 0) {
+    return `The results data has no ${hyroxFormatLabel(format)} rows. This placement uses a synthetic scale, after converting the pair's time to singles terms. Approximate.`;
+  }
+  const pooling = format === 'open_doubles' ? ` ${HYROX_DOUBLES_POOLING_NOTE}` : '';
+  return `HYROX results: ${n.toLocaleString('en-US')} ${hyroxFormatLabel(format)} finishers, women and men together, ${HYROX_POPULATION_SEASONS_LABEL}. ${HYROX_POPULATION_ERA_NOTE}${pooling}`;
+}
+
+/** Total finisher rows across every ingested format, for captions that
+ *  describe the whole dataset (sum of HYROX_FORMAT_FINISHER_COUNTS). */
+export function hyroxPopulationTotalFinishers(): number {
+  return Object.values(HYROX_FORMAT_FINISHER_COUNTS).reduce((a, n) => a + n, 0);
+}
+
+/**
+ * Provenance for a HYROX forecast: which parts come from the results data and
+ * which do not. Station times come from the athlete's benchmarks or the
+ * ability-band seed times, and run legs from running fitness; the results data
+ * supplies the finish percentiles and, for doubles, the doubles ratios
+ * (hyrox-doubles.ts). Count, seasons and era come from hyroxPopulationCaption.
+ */
+export function hyroxForecastProvenanceCaption(format: HyroxFormat): string {
+  const base = 'Station times use your benchmarks, or the ability-band seed times where a station is untested. Run legs follow your running fitness.';
+  if (format === 'pro_doubles') {
+    return `${base} The doubles station, Roxzone and run ratios come from the Open Doubles results. ${hyroxPopulationCaption('open_doubles')} ${hyroxPopulationCaption('pro_doubles')}`;
+  }
+  const fromData = format === 'open_doubles'
+    ? 'The doubles station, Roxzone and run ratios and the finish percentiles come from the results data.'
+    : 'Finish percentiles are placed on the results data.';
+  return `${base} ${fromData} ${hyroxPopulationCaption(format)}`;
+}
+
+/** Methodology-page summary of the HYROX forecast's sources, across formats. */
+export function hyroxMethodologyCaption(): string {
+  const n = hyroxPopulationTotalFinishers().toLocaleString('en-US');
+  return `Station times come from your station tests and race splits, or the ability-band seed times where a station is untested, and update from recent strength-station sessions. The HYROX results data (${n} finishers, ${HYROX_POPULATION_SEASONS_LABEL}) sets the finish percentiles and the doubles-to-singles ratios. It has no per-station splits, so station percentiles are estimates. ${HYROX_POPULATION_ERA_NOTE}`;
 }
 
 /** Human-readable label from a "faster than" percentile (0-100).
@@ -104,9 +178,20 @@ export function percentileHeadline(fasterThanPct: number): string {
 }
 
 /**
- * Returns "faster than X%" for a single station, relative to the Open population.
- * Uses the band seed times as percentile anchors:
- *   competitive = P5, advanced = P15, intermediate = P35, novice = P60, beginner = P80
+ * Caption for any surface that shows a station percentile. Station
+ * percentiles are estimates, not results data.
+ */
+export const STATION_PERCENTILE_CAVEAT =
+  'Station percentiles are estimates placed on the ability-band seed times. The results data has no per-station splits.';
+
+/**
+ * Returns an ESTIMATED "faster than X%" for a single station. Synthetic: the
+ * results data has no per-station splits, so the band seed times are the
+ * anchors, at hand-picked percentiles (not derived from data):
+ *   competitive = P5, advanced = P15, intermediate = P35, novice = P60,
+ *   beginner = P80, total_beginner = P95
+ * Output is clamped to 3..97. Seeds are singles times: pass a doubles line in
+ * singles terms (stationSinglesEquivalentSec).
  *
  * Lower station time = faster = higher percentile (inverse of finish time).
  */

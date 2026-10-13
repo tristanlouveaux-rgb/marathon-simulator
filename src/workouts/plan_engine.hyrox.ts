@@ -19,7 +19,7 @@ import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, raceWeekPrimer
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
-import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import {
   HYROX_WEEKLY_SESSIONS,
@@ -32,6 +32,8 @@ import {
   computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS } from './hyrox-generators';
+import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
+import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
@@ -284,6 +286,8 @@ function generateWeekSessions(
     bricks:   hx.bricksPerWeek   ?? HYROX_WEEKLY_SESSIONS[band].bricks,
   };
   const bodyWeightKg = state.bodyWeightKg;
+  // Station loads for MTL follow the athlete's division (hyrox-division.ts).
+  const loadTier = hyroxLoadTierForState(state);
 
   // Hours available this week
   const mult = phaseMultiplier(phase, weekIndex, totalWeeks);
@@ -335,11 +339,17 @@ function generateWeekSessions(
   const stationMin = sessions.stations > 0 ? (stationHours / sessions.stations) * 60 : 0;
   const brickMin   = sessions.bricks   > 0 ? (brickHours   / sessions.bricks)   * 60 : 0;
 
-  // Read benchmarks from the format-specific slot, falling back to legacy pooled field.
-  const isDoublesFormat = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const stationBenchmarks = (
-    isDoublesFormat ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles
-  ) ?? hx.stationBenchmarks as Partial<Record<HyroxStation, number>> | undefined;
+  // Station target times: the forecast's per-station benchmarks as one
+  // athlete's time over the full station distance at the target's weights
+  // (hyroxPlanningStationBenchmarks), the values the Stats Benchmarks ledger
+  // shows. The sessions load stations at the target's tier (loadTier), so a
+  // Pro race split is prescribed as its Open equivalent to an Open target,
+  // the forecast's own Open/Pro conversion. A doubles race split
+  // (the pair's time) is read through the same station ratio the forecast
+  // applies, for every target: a singles athlete whose times came from
+  // doubles race splits trains to those times, not to population seeds, and
+  // a doubles athlete is never prescribed the pair's time as a solo target.
+  const stationBenchmarks = hyroxPlanningStationBenchmarks(state);
   const workouts: Workout[] = [];
 
   // Race week is sharpening, not training (SCIENCE_LOG §CE): its sessions take
@@ -379,7 +389,7 @@ function generateWeekSessions(
   const raceWeekCircuitOk = !raceWeek || raceWeekCircuitStations(hx.stationAccess).length >= MIN_CIRCUIT_STATIONS;
   for (let i = 0; i < sessions.stations; i++) {
     if (needsAssessment && i === 0) {
-      workouts.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg }));
+      workouts.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier }));
       continue;
     }
     if (!raceWeekCircuitOk) continue;
@@ -394,6 +404,7 @@ function generateWeekSessions(
       bodyWeightKg,
       stationBenchmarks,
       raceWeek: !!raceWeek,
+      loadTier,
     }));
   }
 
@@ -414,6 +425,7 @@ function generateWeekSessions(
         slotIndex: i + weekIndex,
         bodyWeightKg,
         stationBenchmarks,
+        loadTier,
       }));
     }
   }

@@ -11,12 +11,13 @@ import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '@/ui/page-flair';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
-import { predictHyroxRace, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, stationSinglesEquivalentSec, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
+import { HYROX_DOUBLES_POOLING_NOTE } from '@/data/hyrox-population-distributions';
 import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-projection.hyrox';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
-import { getStationPercentile, stationStatus } from '@/calculations/hyrox-population';
+import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption } from '@/calculations/hyrox-population';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
 import { computeStationPotential } from '@/calculations/hyrox-station-potential';
@@ -144,8 +145,8 @@ function renderRunLegsTable(legs: HyroxRunLeg[], currentRunSec: number, projecte
  * comparison would be apples-to-oranges. Race-day percentile lives on the
  * headline finish-time card where the comparison is valid.
  *
- * Doubles still uses the legacy split layout because the athlete only does 4
- * of 8 stations, breaking the simple alternation.
+ * Doubles keeps the separate Run legs + Your stations cards, with each
+ * station shown as the pair's time.
  *
  * `mode` controls row ordering:
  *  - 'race' → R1 → Station 1 → R2 → Station 2 → … (the real-race sequence)
@@ -362,6 +363,102 @@ function renderStationOrderRow(
   `;
 }
 
+/** Caption for the doubles "Your stations" card: the times are the pair's.
+ *  Stations from tests or seed times are scaled from singles by the
+ *  percentile-matched ratio from the results data; splits from a doubles race
+ *  are already the pair's time and are used unscaled (teamTimeSplit). */
+export function doublesStationsCaption(prediction: Pick<HyroxPrediction, 'doubles' | 'stations'>): string {
+  const ratio = prediction.doubles?.stationRatio;
+  const splitCount = prediction.stations.filter(l => l.teamTimeSplit).length;
+  let ratioClause = '';
+  if (ratio != null && splitCount === prediction.stations.length) {
+    ratioClause = ' Each is a split from your doubles race, used as is.';
+  } else if (ratio != null) {
+    const scaled = ` Stations from tests or seed times are your singles time × ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data.`;
+    const splits = splitCount > 0 ? ' Splits from your doubles race are already the pair\'s time and stay as they are.' : '';
+    ratioClause = scaled + splits;
+  }
+  return `The pair's time at each station. Partners enter every station together and split the work inside it.${ratioClause} ${HYROX_DOUBLES_POOLING_NOTE}`;
+}
+
+/** Confidence-detail note for a singles forecast that converted doubles race
+ *  splits (crossFormatConversion): the pair's times are put in singles terms
+ *  through the same results-data ratio the doubles forecast uses. */
+export function crossFormatConversionNote(
+  prediction: Pick<HyroxPrediction, 'crossFormatConversion' | 'crossFormatStationRatio'>,
+): string {
+  if (prediction.crossFormatConversion !== 'doubles_to_singles') return '';
+  const ratio = prediction.crossFormatStationRatio;
+  const how = ratio != null
+    ? `the pair's time ÷ ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data`
+    : `the pair's time ÷ the doubles-to-singles station ratio at your level in the results data`;
+  return `Stations from your doubles race splits are converted to singles terms: ${how}. A singles split or station test replaces the converted time for its own station.`;
+}
+
+/** Where a cross-format forecast's converted times came from, and the
+ *  format whose assessment replaces them. */
+function crossFormatLabels(direction: HyroxPrediction['crossFormatConversion']): { from: string; target: string } {
+  return direction === 'singles_to_doubles'
+    ? { from: 'your singles benchmarks', target: 'doubles' }
+    : { from: 'your doubles race splits', target: 'singles' };
+}
+
+/** Calibration-banner body for a forecast that converted the other format's
+ *  benchmarks (crossFormatConversion, either direction). Benchmarks resolve
+ *  per station (resolveHyroxBenchmarks), so a test in the target format
+ *  replaces only its own station's converted time; the body counts what is
+ *  still converted (lines with crossFormat) and what is still a population
+ *  seed. The body says the conversion caps confidence only when that cap is
+ *  what holds the forecast at medium (crossFormatCapped), as
+ *  hyroxConfidenceCaption does. A forecast held at medium or low by its
+ *  calibrated count or a missing venue is not told so (review 2026-10-13:
+ *  3 converted stations and no venue read 'Converted times cap confidence at
+ *  medium', though 3 stations give medium without any cap). */
+export function crossFormatBannerBody(
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion' | 'crossFormatCapped'>,
+  protocol: string,
+): string {
+  const { from, target } = crossFormatLabels(prediction.crossFormatConversion);
+  const total = prediction.stations.length;
+  const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
+  const seedCount = total - prediction.calibratedCount;
+  const lead = convertedCount >= total
+    ? `Station times are converted from ${from}.`
+    : `${convertedCount} of ${total} station times ${convertedCount === 1 ? 'is' : 'are'} converted from ${from}.`;
+  const seedClause = seedCount > 0
+    ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
+    : '';
+  const capClause = prediction.crossFormatCapped ? ' Converted times cap confidence at medium.' : '';
+  return `${lead}${capClause}${seedClause} A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
+}
+
+/** The confidence-detail caption under the forecast's confidence badge. A
+ *  medium forecast held there by the cross-format cap (crossFormatCapped)
+ *  says the conversion is the cap, so a fully calibrated forecast does not
+ *  ask for more stations. A medium forecast holding converted times for
+ *  another reason (too few stations, no venue) names the conversion without
+ *  blaming it. */
+export function hyroxConfidenceCaption(
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'confidence' | 'crossFormatConversion' | 'crossFormatCapped'>,
+  hasVenue: boolean,
+): string {
+  const total = prediction.stations.length;
+  const calibrated = prediction.calibratedCount;
+  const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
+  if (prediction.confidence === 'high') {
+    return `Based on ${calibrated}/${total} calibrated benchmarks${hasVenue ? ' and venue factors' : ''}.`;
+  }
+  if (prediction.confidence === 'medium' && convertedCount > 0) {
+    const counts = `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion).from}.`;
+    if (prediction.crossFormatCapped) return `${counts} Converted times cap confidence at medium.`;
+    return calibrated < total ? `${counts} Calibrate more to sharpen the prediction.` : counts;
+  }
+  if (prediction.confidence === 'medium') {
+    return `${calibrated}/${total} stations calibrated. Calibrate more to sharpen the prediction.`;
+  }
+  return `Mostly seed data. Only ${calibrated}/${total} stations calibrated. Best treated as a rough benchmark.`;
+}
+
 function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState): string {
   const fmt = (state.hyroxConfig?.format ?? 'open_singles') as HyroxFormat;
   return stations.map((line, i) => {
@@ -369,7 +466,9 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
     const sourceTag = line.source === 'calibrated' ? 'Your time' : 'Estimated';
     const delta = line.adjustedSec - line.baseSec;
     const showDelta = Math.abs(delta) >= 1;
-    const pct = line.source === 'calibrated' ? getStationPercentile(line.station, line.baseSec) : null;
+    // Station percentiles are seed-anchored estimates in singles terms, so a
+    // doubles line is converted back to singles before the lookup.
+    const pct = line.source === 'calibrated' ? getStationPercentile(line.station, stationSinglesEquivalentSec(line)) : null;
     const status = pct != null ? stationStatus(pct) : null;
     const statusChip = status === 'strength'
       ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.12);border-radius:6px;padding:2px 7px;flex-shrink:0">Strength</span>`
@@ -377,10 +476,11 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:500;color:var(--c-black);border:1px solid rgba(0,0,0,0.12);border-radius:6px;padding:2px 7px;flex-shrink:0">Target</span>`
       : '';
 
-    // Inline percentile (e.g. "p73") — only when calibrated, since seed-based
-    // entries have no athlete-personal percentile.
+    // Inline percentile (e.g. "est. p73") — only when calibrated, since
+    // seed-based entries have no athlete-personal percentile. Marked as an
+    // estimate: it is placed on band seed times, not race results.
     const pctChip = pct != null
-      ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">p${pct}</span>`
+      ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">est. p${pct}</span>`
       : '';
 
     // PR badge when the latest history entry beats all priors.
@@ -495,7 +595,8 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
   // trend-card delta colour. Distinct from the radar (indigo) and the four
   // percentile-row hues, and reads instantly as "good thing".
   const limiterRows = potential.topTargets.map(p => {
-    const pct = getStationPercentile(p.station, p.currentSec);
+    const line = stations.find(l => l.station === p.station);
+    const pct = getStationPercentile(p.station, line ? stationSinglesEquivalentSec(line) : p.currentSec);
     return `
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:10px 0;border-top:1px solid rgba(0,0,0,0.05)">
         <div style="flex:1">
@@ -504,7 +605,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
         </div>
         <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
           <span style="font-size:11px;font-weight:600;color:#15803D;background:rgba(34,197,94,0.14);border-radius:100px;padding:2px 8px;font-variant-numeric:tabular-nums">−${p.savingSec}s</span>
-          <span style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">${fmtSec(p.currentSec)} · p${pct}</span>
+          <span style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">${fmtSec(p.currentSec)} · est. p${pct}</span>
         </div>
       </div>
     `;
@@ -517,7 +618,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
   return `
     <div class="hf" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Biggest targets</div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:2px">Closing the gap to ${targetBandLabel}-band on these would deliver the most time back.</div>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:2px">Closing the gap to ${targetBandLabel}-band on these would deliver the most time back. ${STATION_PERCENTILE_CAVEAT}</div>
       ${limiterRows}
       ${totalSavingLine}
     </div>
@@ -707,37 +808,32 @@ function buildHyroxHero(
     prediction.confidence === 'high'   ? 'High confidence'   :
     prediction.confidence === 'medium' ? 'Medium confidence' :
                                           'Low confidence';
-  const confidenceCaption =
-    prediction.confidence === 'high'
-      ? `Based on ${calibrated}/${totalStations} calibrated benchmarks${venue ? ` and venue factors` : ''}.`
-    : prediction.confidence === 'medium'
-      ? `${calibrated}/${totalStations} stations calibrated. Calibrate more to sharpen the prediction.`
-      : `Mostly seed data. Only ${calibrated}/${totalStations} stations calibrated. Best treated as a rough benchmark.`;
-  const conversionNote = prediction.crossFormatConversion === 'doubles_to_singles'
-    ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
-    : prediction.crossFormatConversion === 'singles_to_doubles'
-    ? `Forecast based on seed times. Your benchmarks are from a singles race. Add doubles splits to calibrate.`
-    : '';
+  const confidenceCaption = hyroxConfidenceCaption(prediction, !!venue);
+  const conversionNote = crossFormatConversionNote(prediction);
 
   // Provisional banner — surfaced prominently (not behind the confidence badge)
   // whenever the forecast rests mostly on population seed data. A user who has
   // raced but never calibrated stations, or whose only benchmarks are in the
   // other format, needs to know the number is an estimate and what to do about
   // it. Two causes, two bodies:
-  //   - cross-format: their splits exist but in the wrong format (4 vs 8
-  //     stations / different rest), so we use band averages for the target.
+  //   - cross-format: station times converted from the other format's
+  //     benchmarks (a doubles race split ÷ the station ratio for singles, a
+  //     singles time × the ratio for doubles). Converted times cap
+  //     confidence at medium; the body says so only when that cap is what
+  //     holds the forecast there (crossFormatCapped).
   //   - seed-dominated: few or no stations calibrated.
   // Every non-high-confidence forecast tells the user, in plain terms, that a
   // proper station assessment makes the prediction more accurate, and names the
   // protocol so they do it right (half distance, race effort). Two tiers:
-  //   - low  → "Provisional forecast" (strong): cross-format or seed-dominated.
-  //   - medium → "Sharpen your forecast" (soft): partially calibrated.
+  //   - low  → "Provisional forecast" (strong): seed-dominated.
+  //   - medium → "Sharpen your forecast" (soft): partially calibrated, or
+  //     fully calibrated without a venue.
+  // Tier follows confidence (the calibrated count); the body names a
+  // cross-format conversion whenever there is one.
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
-  const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
-    ? `Your station times are from a doubles race, so this forecast uses population averages for singles. A singles station assessment (${calibrationProtocol}) replaces the estimates and makes the forecast accurate to you.`
-    : prediction.crossFormatConversion === 'singles_to_doubles'
-    ? `Your station times are from a singles race, so this forecast uses population averages for doubles. A doubles station assessment (${calibrationProtocol}) replaces the estimates and makes the forecast accurate to you.`
+  const provisionalBody = prediction.crossFormatConversion
+    ? crossFormatBannerBody(prediction, calibrationProtocol)
     : prediction.confidence === 'low'
     ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
     : `${calibrated} of ${totalStations} stations calibrated. Test the rest (${calibrationProtocol}) and the forecast gets more accurate with each one.`;
@@ -817,7 +913,7 @@ function buildHyroxHero(
             ${stalenessNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${stalenessNote}</div>` : ''}
             ${runPaceSourceNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${runPaceSourceNote}</div>` : ''}
             ${equivalentNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${equivalentNote}</div>` : ''}
-            <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">Calibrated against 89,868 real HYROX finishers from Seasons 4–6.</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">${hyroxForecastProvenanceCaption(hx.format as HyroxFormat)}</div>
           </div>
         </div>
       </div>
@@ -870,9 +966,8 @@ export function renderHyroxForecastView(): void {
           ${buildHyroxHero(s, prediction, hx, venue)}
 
           <!-- Race-order forecast: runs and stations interleaved (singles only).
-               Each row shows current → projected with delta. Doubles falls back
-               to separate Run Legs + Per-station forecast cards because the
-               athlete only does 4 of 8 stations. -->
+               Each row shows current → projected with delta. Doubles shows
+               separate Run Legs + Your stations cards (pair's station times). -->
           ${(hx.format !== 'open_doubles' && hx.format !== 'pro_doubles') ? (() => {
             // Average 1km run pace before fatigue/venue itemisation. Computed from
             // total run time (post-venue) ÷ 8 so the header matches what the
@@ -922,7 +1017,7 @@ export function renderHyroxForecastView(): void {
             </div>
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
               <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Your stations</div>
-              <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">In doubles you complete 4 of 8 stations; partner takes the others. Times shown are your active stations only.</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">${doublesStationsCaption(prediction)}</div>
               ${renderStationsTable(prediction.stations, s)}
             </div>
           `}

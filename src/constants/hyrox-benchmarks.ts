@@ -19,7 +19,7 @@
  * Science log entry: docs/SCIENCE_LOG.md §L.
  */
 
-import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 
 /**
  * Population-average station times (seconds) by ability band.
@@ -152,7 +152,9 @@ export const STATION_DISPLAY: Record<HyroxStation, { name: string; distance: str
   row_erg:            { name: 'Row Erg',             distance: '1000m' },
   farmer_carry:       { name: 'Farmer Carry',        distance: '200m' },
   sandbag_lunges:     { name: 'Sandbag Lunges',      distance: '100m' },
-  wall_balls:         { name: 'Wall Balls',           distance: '100 reps (Open) / 75 reps (women)' },
+  // 100 reps in every division, Women Open included, since 24/25 (26/27 Singles
+  // rulebook s8.8, Doubles rulebook s4.1 and s8.8). 75 was the 23/24 Women Open count.
+  wall_balls:         { name: 'Wall Balls',           distance: '100 reps' },
 };
 
 /** Race station order — always fixed in a HYROX event. */
@@ -161,13 +163,57 @@ export const HYROX_STATION_ORDER: HyroxStation[] = [
   'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls',
 ];
 
-/** External load approximations for MTL calculation (Open weights, kg).
- *  These are approximations for computing the externalLoadFactor in computeComponentMTL.
- *  Sled weights are factored down since force is shared via the push/harness. */
-export const STATION_EXTERNAL_LOAD_KG: Partial<Record<HyroxStation, number>> = {
-  sled_push:      50,   // half race sled weight (force proxy)
-  sled_pull:      40,
-  farmer_carry:   24,   // per-hand; single DB/KB equivalent
-  sandbag_lunges: 20,
-  wall_balls:      9,
+/**
+ * Station loads per load tier, kg (26/27 Singles rulebook s4.1, Doubles rulebook
+ * s4.1; no load changed from 25/26). Sled weights include the sled. Farmers carry
+ * is per hand. Women Pro races the Men Open tier. Which tier an athlete races
+ * comes from `hyroxLoadTier` (src/calculations/hyrox-division.ts), never from
+ * the format alone.
+ */
+export const HYROX_LOAD_TIER_KG: Record<HyroxLoadTier, {
+  sledPush: number;
+  sledPull: number;
+  farmerPerHand: number;
+  sandbag: number;
+  wallBall: number;
+}> = {
+  'W-Open': { sledPush: 102, sledPull: 78,  farmerPerHand: 16, sandbag: 10, wallBall: 4 },
+  'M-Open': { sledPush: 152, sledPull: 103, farmerPerHand: 24, sandbag: 20, wallBall: 6 },
+  'M-Pro':  { sledPush: 202, sledPull: 153, farmerPerHand: 32, sandbag: 30, wallBall: 9 },
 };
+
+/** Wall-ball target height, metres, by the thrower's sex (26/27 Singles rulebook
+ *  s8.8): 2.70 m for women, Women Pro included; 3.00 m for men. In Mixed Doubles
+ *  each partner throws to their own target. */
+export const WALL_BALL_TARGET_M = { female: 2.70, male: 3.00 } as const;
+
+/** Fraction of the race sled weight (sled included) used as the sled stations'
+ *  external-load proxy in MTL. Push and pull share force between the sled's
+ *  rolling resistance and the athlete, so half the sled weight stands in for the
+ *  load the legs carry. The rule the original STATION_EXTERNAL_LOAD_KG comment
+ *  stated ("half race sled weight, force proxy"); one rule for every tier. */
+export const SLED_EXTERNAL_LOAD_FRACTION = 0.5;
+
+/**
+ * External load per station for the MTL externalLoadFactor (computeComponentMTL),
+ * kg, derived from the athlete's load tier:
+ *   - sled push / pull: SLED_EXTERNAL_LOAD_FRACTION × the tier's sled weight
+ *   - farmers carry: the tier's per-hand kettlebell
+ *   - sandbag lunges: the tier's sandbag
+ *   - wall balls: the tier's ball
+ * Ergs and burpee broad jumps carry no external load (absent).
+ *
+ * Replaces the fixed STATION_EXTERNAL_LOAD_KG table, which mixed tiers under an
+ * "Open weights" label (9 kg Men Pro ball, Men Open farmers and sandbag, sleds at
+ * half the Women Open weights).
+ */
+export function stationExternalLoadKg(tier: HyroxLoadTier): Partial<Record<HyroxStation, number>> {
+  const t = HYROX_LOAD_TIER_KG[tier];
+  return {
+    sled_push:      t.sledPush * SLED_EXTERNAL_LOAD_FRACTION,
+    sled_pull:      t.sledPull * SLED_EXTERNAL_LOAD_FRACTION,
+    farmer_carry:   t.farmerPerHand,
+    sandbag_lunges: t.sandbag,
+    wall_balls:     t.wallBall,
+  };
+}

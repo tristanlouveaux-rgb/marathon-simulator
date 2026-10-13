@@ -27,6 +27,7 @@ import {
   bestStationTime,
   getStationHistory,
   latestImprovementSec,
+  hyroxCalibrationCoverage,
 } from '@/calculations/hyrox-station-history';
 import { buildBenchmarkTrendChart } from '@/ui/triathlon/benchmark-charts';
 import { fp, fmtModelPaceKm } from '@/utils/format';
@@ -165,13 +166,11 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
   // Two paths: log a previous HYROX time (anchors the band), or test stations
   // (anchors per-station seeds). When neither is set the prediction leans on
   // the experience-level fallback only. We surface the asks prominently.
-  const stationsSingles = hx?.stationBenchmarksSingles ?? {};
-  const stationsDoubles = hx?.stationBenchmarksDoubles ?? {};
-  const stationsLegacy = hx?.stationBenchmarks ?? {};
-  const calibratedStationCount =
-    Object.keys(stationsSingles).length +
-    Object.keys(stationsDoubles).length +
-    Object.keys(stationsLegacy).length;
+  // Tested stations: hyroxCalibrationCoverage, the forecast's per-station
+  // resolver and the count Stats and Account show. Summing the keys of both
+  // slots and the legacy field counted a station once per place it was
+  // stored, so 2 tested stations could read as 4 or more.
+  const calibratedStationCount = hx ? hyroxCalibrationCoverage(hx).calibrated.length : 0;
   const sparseStations = calibratedStationCount < 4;
 
   const calibrationCard = (!prevSec || sparseStations) ? `

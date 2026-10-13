@@ -942,7 +942,9 @@ function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string
     } else if (r.percentile == null) {
       sub = `<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Technique pace</div>`;
     } else {
-      const parts = [`Faster than ${r.percentile}% of the field`];
+      // Station percentiles are seed-anchored estimates (getStationPercentile),
+      // not results data: label them as such.
+      const parts = [`Estimated p${r.percentile} on the band seed times`];
       if (r.deltaSec != null && r.deltaSec < 0) parts.push(`${fmtDelta(r.deltaSec)} off your best`);
       sub = `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${parts.join(' · ')}</div>`;
     }

@@ -11,12 +11,12 @@ import {
   deriveHyroxRunPace,
   derivePopulationRunPace,
   cpRatioForVdot,
-  convertHyroxRunPaceFormat,
+  doublesRunPaceFactor,
   HYROX_FATIGUE_TO_THRESHOLD_RATIO,
   CP_RATIO_ANCHORS,
-  DOUBLES_TO_SINGLES_PACE_FACTOR,
 } from './hyrox-run-pace';
 import { SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { HYROX_RUN_PERCENTILE_TABLES } from '@/data/hyrox-population-distributions';
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 
@@ -83,34 +83,25 @@ describe('cpRatioForVdot — continuous interpolation', () => {
   });
 });
 
-describe('convertHyroxRunPaceFormat', () => {
-  it('returns identity when from === to', () => {
-    expect(convertHyroxRunPaceFormat(240, 'singles', 'singles', 'advanced')).toBe(240);
-    expect(convertHyroxRunPaceFormat(240, 'doubles', 'doubles', 'advanced')).toBe(240);
+describe('doublesRunPaceFactor — percentile-matched run ratio from the results tables', () => {
+  const singlesRun = HYROX_RUN_PERCENTILE_TABLES.open_singles;
+  const doublesRun = HYROX_RUN_PERCENTILE_TABLES.open_doubles;
+  const atPct = (t: Array<[number, number]>, p: number) => t.find(([, q]) => q === p)![0];
+
+  it('at the singles median run the factor is doubles P50 ÷ singles P50', () => {
+    const singlesPace = atPct(singlesRun, 50) / 8;
+    expect(doublesRunPaceFactor(singlesPace)).toBeCloseTo(atPct(doublesRun, 50) / atPct(singlesRun, 50), 6);
   });
 
-  it('doubles → singles makes pace slower (multiply by factor)', () => {
-    const factor = DOUBLES_TO_SINGLES_PACE_FACTOR.advanced;
-    expect(convertHyroxRunPaceFormat(240, 'doubles', 'singles', 'advanced'))
-      .toBeCloseTo(240 * factor, 4);
+  it('a median pair runs slower than a median singles athlete (slower partner sets the pace)', () => {
+    expect(doublesRunPaceFactor(atPct(singlesRun, 50) / 8)).toBeGreaterThan(1);
   });
 
-  it('singles → doubles makes pace faster (divide by factor)', () => {
-    const factor = DOUBLES_TO_SINGLES_PACE_FACTOR.advanced;
-    expect(convertHyroxRunPaceFormat(254, 'singles', 'doubles', 'advanced'))
-      .toBeCloseTo(254 / factor, 4);
-  });
-
-  it('round-trip is identity', () => {
-    const original = 240;
-    const singles = convertHyroxRunPaceFormat(original, 'doubles', 'singles', 'intermediate');
-    const back = convertHyroxRunPaceFormat(singles, 'singles', 'doubles', 'intermediate');
-    expect(back).toBeCloseTo(original, 4);
-  });
-
-  it('format factor is larger for less-trained tiers', () => {
-    expect(DOUBLES_TO_SINGLES_PACE_FACTOR.beginner)
-      .toBeGreaterThan(DOUBLES_TO_SINGLES_PACE_FACTOR.competitive);
+  it('holds the end ratio outside the table', () => {
+    const p1 = atPct(doublesRun, 1) / atPct(singlesRun, 1);
+    const p99 = atPct(doublesRun, 99) / atPct(singlesRun, 99);
+    expect(doublesRunPaceFactor(150)).toBeCloseTo(p1, 6);
+    expect(doublesRunPaceFactor(900)).toBeCloseTo(p99, 6);
   });
 });
 
@@ -131,11 +122,13 @@ describe('derivePopulationRunPace — base model without personal offset', () =>
     expect(r!.paceSecKm).toBeLessThan(255);
   });
 
-  it('doubles pace is faster than singles for the same athlete', () => {
+  it('doubles pace is the singles critical pace × the results-table run ratio', () => {
     const state = buildState({ vdot: 50, ltPace: 240, band: 'advanced' });
-    const singles = derivePopulationRunPace(state, 'singles');
-    const doubles = derivePopulationRunPace(state, 'doubles');
-    expect(doubles!.paceSecKm).toBeLessThan(singles!.paceSecKm);
+    const singles = derivePopulationRunPace(state, 'singles')!;
+    const doubles = derivePopulationRunPace(state, 'doubles')!;
+    const cp = singles.components.criticalPaceSecKm;
+    expect(doubles.components.formatFactor).toBeCloseTo(doublesRunPaceFactor(cp), 6);
+    expect(doubles.paceSecKm).toBe(Math.max(190, Math.round(cp * doublesRunPaceFactor(cp))));
   });
 
   it('exposes derivation components for the Stats CP card', () => {
@@ -253,13 +246,22 @@ describe('deriveHyroxRunPace — full pipeline', () => {
     expect(result.components!.personalOffsetSec).toBeLessThan(-5);
   });
 
-  it('doubles target reaches a faster pace than the singles equivalent', () => {
+  it('a mid-field doubles target runs slower than the singles equivalent', () => {
+    // VDOT 38 puts the singles run near the open_singles median, where the
+    // results tables show pairs running slower than solo athletes.
     const singles = deriveHyroxRunPace(buildState({
-      vdot: 50, ltPace: 240, band: 'advanced', format: 'open_singles',
+      vdot: 38, band: 'novice', format: 'open_singles',
     })).paceSecKm;
     const doubles = deriveHyroxRunPace(buildState({
-      vdot: 50, ltPace: 240, band: 'advanced', format: 'open_doubles',
+      vdot: 38, band: 'novice', format: 'open_doubles',
     })).paceSecKm;
-    expect(doubles).toBeLessThan(singles);
+    expect(doubles).toBeGreaterThan(singles);
+  });
+
+  it('doubles seed fallback applies the same run ratio as the derived path', () => {
+    const r = deriveHyroxRunPace(buildState({ vdot: null, band: 'novice', format: 'open_doubles' }));
+    expect(r.source).toBe('seed');
+    const seed = SEED_RUN_PACE_SEC_KM.novice;
+    expect(r.paceSecKm).toBe(Math.round(seed * doublesRunPaceFactor(seed)));
   });
 });

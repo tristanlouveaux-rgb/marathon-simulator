@@ -17,9 +17,10 @@
 
 import type { Workout } from '@/types/state';
 import { fmtModelPaceKm } from '@/utils/format';
-import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, STATION_EXTERNAL_LOAD_KG } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, stationExternalLoadKg } from '@/constants/hyrox-benchmarks';
+import { HYROX_DEFAULT_LOAD_TIER } from '@/calculations/hyrox-division';
 import { ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS } from '@/constants/hyrox-constants';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -45,6 +46,9 @@ export interface StationParams {
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   /** Race week (technique circuits only): leave out RACE_WEEK_EXCLUDED_STATIONS. */
   raceWeek?: boolean;
+  /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
+   *  Absent: HYROX_DEFAULT_LOAD_TIER. */
+  loadTier?: HyroxLoadTier;
 }
 
 export interface BrickParams {
@@ -56,6 +60,9 @@ export interface BrickParams {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
+   *  Absent: HYROX_DEFAULT_LOAD_TIER. */
+  loadTier?: HyroxLoadTier;
 }
 
 // ─── Station availability helpers ────────────────────────────────────────────
@@ -126,10 +133,12 @@ function stationSeedSec(
   return benchmarks?.[station] ?? STATION_SEED_TIMES_SEC[band][station];
 }
 
-/** Format seconds as "m:ss". */
+/** Format a station time as "m:ss", rounded to the whole second before the
+ *  minute split, so 299.6 reads 5:00, never 4:60. */
 function fmtSec(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
+  const whole = Math.round(sec);
+  const m = Math.floor(whole / 60);
+  const s = whole % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
@@ -262,9 +271,9 @@ export function generateHyroxStation(params: StationParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'station_technique') {
-    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek });
+    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek, loadTier: params.loadTier });
   }
-  return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
+  return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
 }
 
 function generateStationTechnique(p: {
@@ -276,6 +285,7 @@ function generateStationTechnique(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   raceWeek?: boolean;
+  loadTier?: HyroxLoadTier;
 }): Workout {
   // Up to 4 stations at 65% of seed time (technique pace), 60s between stations
   // and 3 min between rounds. Round count fills the station-work budget (slot
@@ -311,7 +321,7 @@ function generateStationTechnique(p: {
     const display = STATION_DISPLAY[s];
     const techSec = perStationSec[i];
     const workMinTotal = (techSec / 60) * rounds;
-    const externalKg = STATION_EXTERNAL_LOAD_KG[s];
+    const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[s];
     const stationMTL = computeComponentMTL(workMinTotal, 5, s, externalKg, p.bodyWeightKg);
     totalMTL += stationMTL;
 
@@ -361,6 +371,7 @@ function generateStationDensity(p: {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
 }): Workout {
   // Time-capped station circuit (research §7.2: "station work for time / AMRAP").
   // Pick the race's primary discriminators (2 high-MTL) + 1 erg, then run the
@@ -402,7 +413,7 @@ function generateStationDensity(p: {
     const display = STATION_DISPLAY[s];
     const seedSec = perStationSec[i];
     const workMinTotal = (seedSec / 60) * rounds;
-    const externalKg = STATION_EXTERNAL_LOAD_KG[s];
+    const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[s];
     const stationMTL = computeComponentMTL(workMinTotal, 7, s, externalKg, p.bodyWeightKg);
     totalMTL += stationMTL;
 
@@ -445,9 +456,9 @@ export function generateHyroxBrick(params: BrickParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'mini_brick') {
-    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
+    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
   }
-  return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
+  return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
 }
 
 function generateFullBrick(p: {
@@ -458,6 +469,7 @@ function generateFullBrick(p: {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
 }): Workout {
   // N rounds of (1km run + 1 station). Pick a key station based on phase.
   // Phase progression: base → erg-based stations, build/peak → high-MTL stations.
@@ -492,7 +504,7 @@ function generateFullBrick(p: {
 
   // MTL for station component
   const stationDurMinTotal = (stationSeedSec_ / 60) * rounds;
-  const externalKg = STATION_EXTERNAL_LOAD_KG[station];
+  const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[station];
   const stationMTL = computeComponentMTL(stationDurMinTotal, 7, station, externalKg, p.bodyWeightKg);
 
   const components: HyroxComponent[] = [
@@ -536,6 +548,7 @@ function generateMiniBrick(p: {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
 }): Workout {
   // Beginner-friendly: 500m run + 1 erg station. Builds the run-to-station
   // transition pattern without the full eccentric load of race-distance bricks.
@@ -557,7 +570,12 @@ function generateMiniBrick(p: {
   const runDurMinTotal = (runSeedSec / 60) * rounds;
   const runMTL = computeComponentMTL(runDurMinTotal, 6, 'run_easy', undefined, p.bodyWeightKg);
   const stationDurMinTotal = (stationSeedSec_ / 60) * rounds;
-  const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, undefined, p.bodyWeightKg);
+  // External load at the athlete's tier, as generateFullBrick. Only the
+  // farmer-carry fallback (no ski or row erg) carries one; ergs have none, so
+  // their MTL is unchanged. Before 2026-10-13 the mini brick passed no
+  // external load, so that fallback carried none for anyone.
+  const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[station];
+  const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, externalKg, p.bodyWeightKg);
 
   const components: HyroxComponent[] = [
     { type: 'run', distanceM: 500, durationSec: runSeedSec, mtl: runMTL, restAfterSec: 0 },
@@ -585,6 +603,9 @@ export interface AssessmentParams {
   band: AbilityBand;
   stationAccess: HyroxConfig['stationAccess'];
   bodyWeightKg?: number;
+  /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
+   *  Absent: HYROX_DEFAULT_LOAD_TIER. */
+  loadTier?: HyroxLoadTier;
 }
 
 /**
@@ -595,6 +616,7 @@ export interface AssessmentParams {
 export function generateHyroxAssessment(params: AssessmentParams): Workout {
   const { band, stationAccess, bodyWeightKg } = params;
   const stations = availableStations(stationAccess);
+  const externalLoads = stationExternalLoadKg(params.loadTier ?? HYROX_DEFAULT_LOAD_TIER);
 
   const components: HyroxComponent[] = stations.map(station => {
     const display = STATION_DISPLAY[station];
@@ -603,7 +625,7 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
     const easyDurMin = easyDurSec / 60;
     const stationMTL = computeComponentMTL(
       easyDurMin, 4, station,
-      STATION_EXTERNAL_LOAD_KG[station] ?? 0,
+      externalLoads[station] ?? 0,
       bodyWeightKg
     );
     void display;

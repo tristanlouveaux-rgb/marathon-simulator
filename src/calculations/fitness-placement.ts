@@ -8,7 +8,8 @@
  *  - Run speed   → pooled marathon table (888,989 finishes, 5 majors)
  *  - VO2max      → FRIEND registry treadmill norms (Kaminsky 2015)
  *  - Bike FTP    → Coggan W/kg power-profile bands (bike-physics.ts)
- *  - HYROX       → real per-format finisher tables (89,868 rows, S4-S6)
+ *  - HYROX       → real per-format finisher tables (S4-S6; row counts in
+ *                  src/data/hyrox-population-distributions.ts)
  *
  * Two-numbers rule: any screen showing a placement next to a metric must
  * call these helpers with the same input the metric display uses.

@@ -24,15 +24,16 @@ import {
   HYROX_DEFAULT_PLAN_WEEKS,
   HYROX_WEEKLY_SESSIONS,
   HYROX_HOURS_RANGE,
-  SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES,
-  SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
-import { HYROX_STATION_ORDER, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { seedRoxzoneSecForFormat, hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { appendStationTest } from '@/calculations/hyrox-station-history';
+import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { derivePopulationRunPace } from '@/calculations/hyrox-run-pace';
 import {
   backComputeRunPaceFromRace,
@@ -114,13 +115,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
         ? (rawFormat as 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles')
         : 'open_singles';
 
-    // Derive ability band. When previous-race format differs from the target
-    // format, expand or compress the previous total time using a same-athlete
-    // cross-format factor before banding. A 60-min doubles is ~73-min singles
-    // (× 1.22); a 60-min singles is ~51-min doubles (× 0.85). See
-    // SCIENCE_LOG §T for the empirical lower bound (1.125 cohort) and the
-    // coaching-consensus midpoint (1.22) we anchor on. Same-format previous
-    // and target → no factor applied.
+    // Derive ability band from the previous time in singles terms (the band
+    // thresholds and seed times are singles times): hyroxBandingTimeSec. A
+    // doubles previous time is converted with the data ratio the doubles
+    // forecast uses (doublesTotalInSinglesTermsSec), for either target; a
+    // singles time stays as is.
     const prevTimeSec = state.previousHyroxTimeSec;
     const prevFmt = state.hyroxPreviousTimeFormat;
     // Format must be one of the four known values to be trusted. A missing or
@@ -133,14 +132,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     if (prevTimeSec != null && !prevFormatKnown) {
       console.warn('[hyrox init] previousHyroxTimeSec set but hyroxPreviousTimeFormat unknown — skipping band derivation and benchmark seeding');
     }
-    const isPrevDoubles = prevFmt === 'open_doubles' || prevFmt === 'pro_doubles';
     const isTargetDoubles = format === 'open_doubles' || format === 'pro_doubles';
     const adjustedPrevTimeSec = (prevTimeSec != null && prevFormatKnown)
-      ? Math.round(
-           isPrevDoubles && !isTargetDoubles ? prevTimeSec * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES :
-          !isPrevDoubles &&  isTargetDoubles ? prevTimeSec * SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES :
-          prevTimeSec
-        )
+      ? hyroxBandingTimeSec(prevTimeSec, prevFmt)
       : null;
     const timeBasedBand: AbilityBand = adjustedPrevTimeSec != null
       ? bandFromTime(adjustedPrevTimeSec)
@@ -203,8 +197,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     }
 
     const baseMtlCap = HYROX_MTL_CAP[band];
-    // Doubles: all 8 runs (full eccentric load) + 4 stations (half). Run portion
-    // of the cap stays full; station portion halves. See computeDoublesCap docs.
+    // Doubles: all 8 runs (full eccentric load) + half of each station (the
+    // partner does the other half). Run portion of the cap stays full; station
+    // portion halves. See computeDoublesCap docs.
     const mtlCap = isTargetDoubles ? computeDoublesCap(baseMtlCap) : baseMtlCap;
     const sessions = state.hyroxWeeklySessionCount != null
       ? distributeSessionCount(state.hyroxWeeklySessionCount, band)
@@ -239,6 +234,29 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       (state.hyroxPreviousTimeRaceId && getHyroxEventById(state.hyroxPreviousTimeRaceId)?.date)
       || state.hyroxPreviousRaceDate;
 
+    // One history entry per seeded split, source 'race', with the race's format
+    // and weights. The entry is the split's provenance: a doubles race split is
+    // the pair's time (doublesBenchmarkIsTeamTime), and a Pro race split is a
+    // Pro-weight time, so the predictor does not apply the Pro multiplier on top
+    // (audit 2026-10-12: Pro sled push 260 s became 299 s). Per entry, not the
+    // config-wide benchmarksAtProWeights flag, which describes station tests.
+    let stationBenchmarkHistory: HyroxConfig['stationBenchmarkHistory'];
+    if (hasBenchmarks && prevFormatKnown) {
+      stationBenchmarkHistory = {};
+      const raceDateISO = prevRaceDateISO ?? localDateKey(new Date());
+      for (const st of HYROX_STATION_ORDER) {
+        const sec = (stationBenchmarks as Record<string, number | undefined>)[st];
+        if (sec == null) continue;
+        stationBenchmarkHistory[st] = appendStationTest(undefined, {
+          dateISO: raceDateISO,
+          sec,
+          source: 'race',
+          format: prevFmt,
+          proWeights: isHyroxProFormat(prevFmt),
+        });
+      }
+    }
+
     // ── Personal run-pace offset from historic race ──────────────────────
     // Compute an initial Bayesian residual: observed run pace from the
     // pasted/derived historic race vs the population model's prediction at
@@ -260,7 +278,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
           (sum, st) => sum + ((splits as Record<string, number>)[st] ?? 0),
           0,
         );
-        roxzoneSec = SEED_ROXZONE_SEC[band] ?? 0;
+        // Splits give the stations; Roxzone is the band seed in the race's
+        // format (doubles: × the percentile-matched Roxzone ratio).
+        roxzoneSec = seedRoxzoneSecForFormat(band, prevFormat);
         stationsFromSplits = true;
       } else {
         const est = estimateStationsAndRoxzoneFromBand(band, prevFormat);
@@ -316,6 +336,10 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     const hyroxConfig: HyroxConfig = {
       format,
+      // Division (load tier with format + biological sex; hyrox-division.ts).
+      // Unset when the setup screen did not ask or the athlete kept the
+      // sex-derived default, which resolves the same way.
+      division: state.hyroxDivision,
       targetFinishTimeSec: carriedTargetFinishSec,
       athleteBand: band,
       hyroxPhase: 'base',
@@ -347,6 +371,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       weeklyHoursAvailable: state.triTimeAvailableHoursPerWeek ?? HYROX_HOURS_RANGE[band].default,
       stationBenchmarksSingles: benchmarkSingles,
       stationBenchmarksDoubles: benchmarkDoubles,
+      stationBenchmarkHistory,
       raceEventId: state.hyroxRaceEventId,
       venueId: state.hyroxVenueId ?? (state.hyroxRaceEventId ? getVenueIdForEvent(state.hyroxRaceEventId) : undefined),
       generatorVersion: HYROX_GENERATOR_VERSION,

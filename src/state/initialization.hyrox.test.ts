@@ -28,6 +28,8 @@ vi.stubGlobal('alert', vi.fn());
 
 import { initializeHyroxSimulator } from './initialization.hyrox';
 import { getMutableState, getState } from './store';
+import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { HYROX_PRO_STATION_MULTIPLIER } from '@/constants/hyrox-constants';
 
 const SAMPLE_SPLITS = {
   ski_erg: 250,
@@ -122,31 +124,44 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
       previousHyroxTimeSec: 3600,            // 1:00:00 doubles
       hyroxPreviousStationSplits: undefined,
     }));
-    // 3600 × 1.22 = 4392 (73:12) → advanced (sub-80 min singles).
-    // Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60). Confirms direction flip.
+    // Singles terms via the data ratio (doublesTotalInSinglesTermsSec):
+    // 3600 → about 4053 (67:33) → advanced (sub-80 min singles).
+    // Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60). Confirms direction.
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
-  it('70-min doubles previous + singles target → intermediate', () => {
+  it('70-min doubles previous + singles target → advanced, the same band as a doubles target', () => {
     initializeHyroxSimulator(buildOnboarding({
       hyroxFormat: 'open_singles',
       hyroxPreviousTimeFormat: 'open_doubles',
-      previousHyroxTimeSec: 4200,            // 1:10:00 doubles
+      previousHyroxTimeSec: 4200,            // 1:10:00 doubles, about P22 of the doubles field
       hyroxPreviousStationSplits: undefined,
     }));
-    // 4200 × 1.22 = 5124 (85:24) → intermediate (sub-100 min singles).
-    expect(getState().hyroxConfig!.athleteBand).toBe('intermediate');
+    // Singles terms via the data ratio: about 4724 (78:44) → advanced
+    // (sub-80 min singles). The old × 1.22 rule read 85:24 → intermediate,
+    // while a doubles target banded the same time on the data ratio.
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
+    resetState();
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'open_doubles',
+      hyroxPreviousTimeFormat: 'open_doubles',
+      previousHyroxTimeSec: 4200,
+      hyroxPreviousStationSplits: undefined,
+    }));
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
-  it('60-min singles previous + doubles target → competitive doubles band', () => {
+  it('60-min singles previous + doubles target → the singles band (advanced)', () => {
     initializeHyroxSimulator(buildOnboarding({
       hyroxFormat: 'open_doubles',
       hyroxPreviousTimeFormat: 'open_singles',
       previousHyroxTimeSec: 3600,            // 1:00:00 singles
       hyroxPreviousStationSplits: undefined,
     }));
-    // 3600 × 0.85 = 3060 → bandFromTime(<3600) → competitive.
-    expect(getState().hyroxConfig!.athleteBand).toBe('competitive');
+    // Bands on singles terms: 3600 is not under 3600 → advanced. The old rule
+    // (× 0.85 = 3060 → competitive) banded on doubles terms, and the doubles
+    // forecast then scaled that band's seeds by the doubles ratio again.
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
   it('same-format previous and target → no factor applied', () => {
@@ -169,5 +184,40 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
     }));
     // prevFormatKnown=false → adjustedPrevTimeSec=null → bandFromExperience('intermediate')
     expect(getState().hyroxConfig!.athleteBand).toBe('intermediate');
+  });
+});
+
+describe('initializeHyroxSimulator: Pro-weight splits and division', () => {
+  beforeEach(() => resetState());
+
+  it('splits from a Pro race are recorded as Pro-weight race entries (no second Pro multiplier)', () => {
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'pro_singles',
+      hyroxPreviousTimeFormat: 'pro_singles',
+    }));
+    const hx = getState().hyroxConfig!;
+    const entry = hx.stationBenchmarkHistory?.sled_push?.[0];
+    expect(entry).toMatchObject({ sec: SAMPLE_SPLITS.sled_push, source: 'race', format: 'pro_singles', proWeights: true });
+    // The config-wide flag describes station tests and stays unset.
+    expect(hx.benchmarksAtProWeights).toBeUndefined();
+    const line = predictHyroxRace(getState())!.stations.find(l => l.station === 'sled_push')!;
+    expect(line.baseSec).toBeCloseTo(SAMPLE_SPLITS.sled_push, 6);
+  });
+
+  it('splits from an Open race are Open-weight race entries; a Pro target applies the multiplier once', () => {
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'pro_singles',
+      hyroxPreviousTimeFormat: 'open_singles',
+    }));
+    const hx = getState().hyroxConfig!;
+    expect(hx.stationBenchmarkHistory?.sled_push?.[0]).toMatchObject({ source: 'race', format: 'open_singles', proWeights: false });
+    expect(hx.benchmarksAtProWeights).toBeUndefined();
+    const line = predictHyroxRace(getState())!.stations.find(l => l.station === 'sled_push')!;
+    expect(line.baseSec).toBeCloseTo(SAMPLE_SPLITS.sled_push * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+  });
+
+  it('copies the division pick to hyroxConfig.division', () => {
+    initializeHyroxSimulator(buildOnboarding({ hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' }));
+    expect(getState().hyroxConfig!.division).toBe('mixed');
   });
 });
