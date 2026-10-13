@@ -239,6 +239,9 @@ interface StationInput {
   crossFormat: boolean;
   /** Pro multiplier for the station (1 for erg and bodyweight stations). */
   fMult: number;
+  /** The weight regime `calibrated` was recorded at (true = Pro), before the
+   *  Open/Pro conversion to `calibratedAtTarget`. */
+  sourceIsPro: boolean;
 }
 
 interface StationInputs {
@@ -295,7 +298,7 @@ function stationInputs(hx: HyroxConfigOf): StationInputs {
     const isTeamTime = slot === 'doubles' && calibrated != null
       && doublesBenchmarkIsTeamTime(hx, station, calibrated);
     const crossFormat = calibrated != null && (isDoubles ? slot === 'singles' : isTeamTime);
-    return { station, calibrated, slot, calibratedAtTarget, isTeamTime, crossFormat, fMult };
+    return { station, calibrated, slot, calibratedAtTarget, isTeamTime, crossFormat, fMult, sourceIsPro };
   });
   return { coverage, isDoubles, isPro, perStation, hasTeamTimes: perStation.some(p => p.isTeamTime) };
 }
@@ -417,6 +420,12 @@ export interface HyroxStationBenchmark {
   teamTimeSplit: boolean;
   /** The value is converted from the other format's benchmark (StationInput). */
   crossFormat: boolean;
+  /** The weight regime the stored value was recorded at (true = Pro weights),
+   *  present when `sec` is. When it differs from the target's regime, `sec`
+   *  carries the HYROX_PRO_STATION_MULTIPLIER conversion (identity on the erg
+   *  and bodyweight stations). The partner comparison reads it to leave a
+   *  converted value out of a head-to-head (hyrox-partner-snapshot.ts). */
+  recordedAtProWeights?: boolean;
 }
 
 export interface HyroxResolvedStationBenchmarks {
@@ -458,6 +467,7 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
       ...(p.slot ? { slot: p.slot } : {}),
       teamTimeSplit: p.isTeamTime,
       crossFormat: p.crossFormat,
+      recordedAtProWeights: p.sourceIsPro,
     };
   });
   return { stations, stationRatio, coverage: inputs.coverage };
