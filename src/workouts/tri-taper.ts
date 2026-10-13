@@ -485,8 +485,16 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     if (!best) break;
     n[best]++;
   }
+  // No session longer than the reference week's average session of its
+  // discipline: when race week has too few free days for the budget (a race
+  // in the plan's first days, a Thursday race), the minutes that do not fit
+  // are left out, as sessions with no free day are.
   const size: Record<TriDisc, number> = { swim: 0, bike: 0, run: 0 };
-  for (const d of DISCS) size[d] = n[d] > 0 ? Math.max(floorMin, Math.round(rem[d] / n[d])) : 0;
+  for (const d of DISCS) {
+    if (n[d] === 0) continue;
+    const avg = ref.counts[d] > 0 ? ref.minutes[d] / ref.counts[d] : Infinity;
+    size[d] = Math.max(floorMin, Math.round(Math.min(avg, rem[d] / n[d])));
+  }
 
   // Openers beyond a discipline's session count are left out (latest first).
   const openersPlaced: Record<TriDisc, number> = { swim: 0, bike: 0, run: 0 };
