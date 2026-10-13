@@ -17,8 +17,9 @@ import { computeWeekActualMTL, computeWeekMTL, hyroxMtlAcwr } from '@/calculatio
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
 import { getFinishTimePercentile, percentileLabel, percentileHeadline, hyroxPopulationCaption, hyroxFormatLabel } from '@/calculations/hyrox-population';
-import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
-import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
+import { predictHyroxRace, type HyroxPrediction } from '@/calculations/race-prediction.hyrox';
+import { latestTestAgeMonths, hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
+import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
 import type { SimulatorState } from '@/types/state';
@@ -66,24 +67,16 @@ export function renderHyroxStatsView(): void {
   const raceDays = raceDate ? daysUntil(raceDate) : null;
   const phase = (s.wks?.[s.w - 1] as any)?.ph as string | undefined;
 
-  // Read from format-specific benchmark slot, falling back to legacy pooled field.
-  const isDoublesFormat = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const benchmarks = (isDoublesFormat ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks ?? {};
-  const access = hx.stationAccess;
-  const calibratable = HYROX_STATION_ORDER.filter(st => {
-    if (st === 'ski_erg' && !access.skiErg) return false;
-    if (st === 'row_erg' && !access.rowErg) return false;
-    if ((st === 'sled_push' || st === 'sled_pull') && access.sled === 'never') return false;
-    return true;
-  });
-  const calibrated = calibratable.filter(st => benchmarks[st] != null);
-  const pending = calibratable.filter(st => benchmarks[st] == null);
-
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   // Population comparison
   const prediction = predictHyroxRace(s);
+
+  // Benchmarks ledger: the forecast's per-station benchmarks and its
+  // calibrated count (hyroxBenchmarkLedger), so Stats, Account, the benchmark
+  // card and the forecast agree.
+  const ledger = hyroxBenchmarkLedger(hx, prediction);
   const predTimeSec = prediction?.totalSec ?? hx.previousHyroxTimeSec;
   const fasterThanPct = predTimeSec != null
     ? getFinishTimePercentile(predTimeSec, hx.format ?? 'open_singles')
@@ -261,9 +254,9 @@ export function renderHyroxStatsView(): void {
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Benchmarks</div>
-              <div style="font-size:11px;color:var(--c-muted)">${calibrated.length} / ${calibratable.length} stations calibrated</div>
+              <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.rows.length} stations calibrated</div>
             </div>
-            ${calibratable.map(st => renderBenchmarkRow(st, benchmarks[st], hx.athleteBand, s)).join('')}
+            ${ledger.rows.map(row => renderBenchmarkRow(row, hx.athleteBand, s)).join('')}
             ${renderRunPaceRow(hx.hyroxRunPaceSecKm, hx.athleteBand, hx.hyroxRunPaceSource)}
             ${(format === 'pro_singles' || format === 'pro_doubles') ? `
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
@@ -373,12 +366,57 @@ function renderRunPaceRow(
   `;
 }
 
+/** One Benchmarks-ledger row (hyroxBenchmarkLedger). */
+export interface HyroxBenchmarkLedgerRow {
+  station: HyroxStation;
+  /** The athlete's benchmark for the station in the target's terms; absent
+   *  when the station still uses the population seed. */
+  sec?: number;
+  /** True when `sec` is a doubles race split (the pair's time) converted to
+   *  singles terms for a singles target. */
+  convertedFromDoubles: boolean;
+}
+
+/**
+ * The Stats Benchmarks ledger: one row per testable station and the
+ * calibrated count, from hyroxCalibrationCoverage (the forecast's per-station
+ * resolver). A station resolved from the other format's slot keeps the
+ * forecast's reading of it:
+ *  - Singles target, a doubles race split: the pair's time ÷ the forecast's
+ *    crossFormatStationRatio, the conversion the forecast applies, so the
+ *    pair's time never sits raw next to singles seeds. The forecast line's
+ *    teamTimeSplit flag decides which values are race splits.
+ *  - Anything else (a solo test from the doubles slot, a singles time for a
+ *    doubles target) is already one athlete's time and shows as stored, like
+ *    the doubles slot's own solo tests.
+ * The ledger shows the benchmark itself, before the forecast's staleness
+ * blend, Pro-weight adjustment and venue factors.
+ */
+export function hyroxBenchmarkLedger(
+  hx: NonNullable<SimulatorState['hyroxConfig']>,
+  prediction: Pick<HyroxPrediction, 'stations' | 'crossFormatStationRatio'> | null,
+): { rows: HyroxBenchmarkLedgerRow[]; calibratedCount: number } {
+  const coverage = hyroxCalibrationCoverage(hx);
+  const ratio = prediction?.crossFormatStationRatio;
+  const rows = coverage.testable.map((station): HyroxBenchmarkLedgerRow => {
+    const raw = coverage.benchmarks[station];
+    if (raw == null) return { station, convertedFromDoubles: false };
+    const line = prediction?.stations.find(l => l.station === station);
+    const convert = !isHyroxDoublesFormat(hx.format) && coverage.slotOf[station] === 'doubles'
+      && line?.teamTimeSplit === true && ratio != null && ratio > 0;
+    return convert
+      ? { station, sec: raw / ratio!, convertedFromDoubles: true }
+      : { station, sec: raw, convertedFromDoubles: false };
+  });
+  return { rows, calibratedCount: coverage.calibrated.length };
+}
+
 function renderBenchmarkRow(
-  station: HyroxStation,
-  userSec: number | undefined,
+  row: HyroxBenchmarkLedgerRow,
   band: string,
   state: SimulatorState,
 ): string {
+  const { station, sec: userSec } = row;
   const display = STATION_DISPLAY[station];
   const seedSec = (STATION_SEED_TIMES_SEC as any)[band]?.[station] as number | undefined;
   const hasUser = userSec != null;
@@ -395,9 +433,10 @@ function renderBenchmarkRow(
   let calibratedRightCol = '';
   if (hasUser) {
     const ageMo = latestTestAgeMonths(state, station);
+    const label = row.convertedFromDoubles ? 'Converted from doubles race' : 'Calibrated';
     const ageCaption = (ageMo != null && ageMo >= 4)
-      ? `Calibrated · ${Math.round(ageMo)} mo ago`
-      : 'Calibrated';
+      ? `${label} · ${Math.round(ageMo)} mo ago`
+      : label;
     calibratedRightCol = `
       <div style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums;text-align:right">${fmtSec(userSec!)}</div>
       <div style="font-size:10px;color:var(--c-muted);text-align:right">${ageCaption}</div>
