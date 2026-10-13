@@ -455,12 +455,27 @@ describe('predictHyroxRace: converted stations cap confidence at medium, in both
     expect(p.crossFormatConversion).toBe('singles_to_doubles');
     expect(p.stations.every(l => l.crossFormat)).toBe(true);
     expect(p.confidence).toBe('medium');
+    // The cap is what holds it at medium.
+    expect(p.crossFormatCapped).toBe(true);
+  });
+
+  it('crossFormatCapped is set only when the cap lowered high to medium: without a venue the same forecast is medium anyway', () => {
+    const p = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksSingles: singlesTimes }))!;
+    expect(p.crossFormatConversion).toBe('singles_to_doubles');
+    expect(p.confidence).toBe('medium');
+    expect(p.crossFormatCapped).toBeUndefined();
+    const three = predictHyroxRace(buildState({ format: 'open_singles', venueId: 'london-excel',
+      stationBenchmarksDoubles: { ski_erg: 200, row_erg: 220, wall_balls: 320 } }))!;
+    expect(three.crossFormatConversion).toBe('doubles_to_singles');
+    expect(three.confidence).toBe('medium');
+    expect(three.crossFormatCapped).toBeUndefined();
   });
 
   it('the same times in the target format\'s own slot reach high with a venue', () => {
     const singles = predictHyroxRace(buildState({ format: 'open_singles', stationBenchmarksSingles: singlesTimes, venueId: 'london-excel' }))!;
     expect(singles.crossFormatConversion).toBeUndefined();
     expect(singles.confidence).toBe('high');
+    expect(singles.crossFormatCapped).toBeUndefined();
     const doubles = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
       stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
     }))!;
@@ -478,6 +493,7 @@ describe('predictHyroxRace: converted stations cap confidence at medium, in both
     }))!;
     expect(p.stations.filter(l => l.crossFormat).map(l => l.station)).toEqual(['ski_erg']);
     expect(p.confidence).toBe('medium');
+    expect(p.crossFormatCapped).toBe(true);
   });
 
   it('a solo test in the doubles slot read by a singles target is used as is: not converted, no cap', () => {

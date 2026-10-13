@@ -178,6 +178,14 @@ export interface HyroxPrediction {
   /** With crossFormatConversion: the percentile-matched doubles/singles
    *  station ratio of the conversion. */
   crossFormatStationRatio?: number;
+  /** True only when the cross-format cap is what holds confidence at medium:
+   *  without the converted stations the forecast would read high (6+
+   *  calibrated stations and a venue). Absent when the forecast would be
+   *  medium or low anyway (for example 3 calibrated stations, or no venue),
+   *  or a staleness cap takes it to low. The copy names the cap only then
+   *  (review 2026-10-13: it used to on any medium forecast holding converted
+   *  stations). */
+  crossFormatCapped?: boolean;
   /** Doubles only: the percentile-matched ratios applied (hyrox-doubles.ts). */
   doubles?: {
     /** Pair's station time ÷ singles station time. */
@@ -716,9 +724,13 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     calibratedCount >= 6 && hx.venueId ? 'high' :
     calibratedCount >= 3 ? 'medium' :
     'low';
-  if (hasCrossFormat && confidence === 'high') confidence = 'medium';
+  const crossFormatLowered = hasCrossFormat && confidence === 'high';
+  if (crossFormatLowered) confidence = 'medium';
   if (stale.confidenceCap === 'low') confidence = 'low';
   else if (stale.confidenceCap === 'medium' && confidence === 'high') confidence = 'medium';
+  // The copy names the cap only when it is what holds the forecast at medium
+  // (a staleness cap to low overrides it).
+  const crossFormatCapped = crossFormatLowered && confidence === 'medium';
 
   // ── Per-station "current → projected" trajectory ──────────────────────────
   // Independent from `buildHyroxProjection`. That one projects the AGGREGATE
@@ -751,6 +763,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     calibratedCount,
     crossFormatConversion,
     crossFormatStationRatio: crossFormatConversion ? stationRatio : undefined,
+    ...(crossFormatCapped ? { crossFormatCapped: true } : {}),
     doubles: isDoubles
       ? { stationRatio, roxzoneRatio, stationsSinglesPercentile: stationsSinglesPercentile ?? 0 }
       : undefined,

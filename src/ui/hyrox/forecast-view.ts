@@ -408,11 +408,14 @@ function crossFormatLabels(direction: HyroxPrediction['crossFormatConversion']):
  *  per station (resolveHyroxBenchmarks), so a test in the target format
  *  replaces only its own station's converted time; the body counts what is
  *  still converted (lines with crossFormat) and what is still a population
- *  seed. A medium forecast is told the conversion caps it, as
- *  hyroxConfidenceCaption does; a low one is not, since the cap is not what
- *  holds it there (review 2026-10-13). */
+ *  seed. The body says the conversion caps confidence only when that cap is
+ *  what holds the forecast at medium (crossFormatCapped), as
+ *  hyroxConfidenceCaption does. A forecast held at medium or low by its
+ *  calibrated count or a missing venue is not told so (review 2026-10-13:
+ *  3 converted stations and no venue read 'Converted times cap confidence at
+ *  medium', though 3 stations give medium without any cap). */
 export function crossFormatBannerBody(
-  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion' | 'confidence'>,
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion' | 'crossFormatCapped'>,
   protocol: string,
 ): string {
   const { from, target } = crossFormatLabels(prediction.crossFormatConversion);
@@ -425,15 +428,18 @@ export function crossFormatBannerBody(
   const seedClause = seedCount > 0
     ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
     : '';
-  const capClause = prediction.confidence === 'medium' ? ' Converted times cap confidence at medium.' : '';
+  const capClause = prediction.crossFormatCapped ? ' Converted times cap confidence at medium.' : '';
   return `${lead}${capClause}${seedClause} A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
 }
 
 /** The confidence-detail caption under the forecast's confidence badge. A
- *  medium forecast holding converted times says the conversion is the cap,
- *  so a fully calibrated forecast does not ask for more stations. */
+ *  medium forecast held there by the cross-format cap (crossFormatCapped)
+ *  says the conversion is the cap, so a fully calibrated forecast does not
+ *  ask for more stations. A medium forecast holding converted times for
+ *  another reason (too few stations, no venue) names the conversion without
+ *  blaming it. */
 export function hyroxConfidenceCaption(
-  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'confidence' | 'crossFormatConversion'>,
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'confidence' | 'crossFormatConversion' | 'crossFormatCapped'>,
   hasVenue: boolean,
 ): string {
   const total = prediction.stations.length;
@@ -443,7 +449,9 @@ export function hyroxConfidenceCaption(
     return `Based on ${calibrated}/${total} calibrated benchmarks${hasVenue ? ' and venue factors' : ''}.`;
   }
   if (prediction.confidence === 'medium' && convertedCount > 0) {
-    return `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion).from}. Converted times cap confidence at medium.`;
+    const counts = `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion).from}.`;
+    if (prediction.crossFormatCapped) return `${counts} Converted times cap confidence at medium.`;
+    return calibrated < total ? `${counts} Calibrate more to sharpen the prediction.` : counts;
   }
   if (prediction.confidence === 'medium') {
     return `${calibrated}/${total} stations calibrated. Calibrate more to sharpen the prediction.`;
@@ -811,7 +819,8 @@ function buildHyroxHero(
   //   - cross-format: station times converted from the other format's
   //     benchmarks (a doubles race split ÷ the station ratio for singles, a
   //     singles time × the ratio for doubles). Converted times cap
-  //     confidence at medium.
+  //     confidence at medium; the body says so only when that cap is what
+  //     holds the forecast there (crossFormatCapped).
   //   - seed-dominated: few or no stations calibrated.
   // Every non-high-confidence forecast tells the user, in plain terms, that a
   // proper station assessment makes the prediction more accurate, and names the
