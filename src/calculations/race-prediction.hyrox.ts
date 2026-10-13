@@ -14,14 +14,16 @@
  *
  * Inputs (in priority order):
  *   - Per-station calibrated benchmark from `hyroxConfig.stationBenchmarks`
- *     (else seed time for the user's ability band).
+ *     (else the seed: the real band median of the field the band was read in,
+ *     at the target's weights, hyroxStationSeedsAtTarget).
  *   - Per-km run pace from `hyroxConfig.hyroxRunPaceSecKm` (else seed pace).
  *   - Venue id from `hyroxConfig.venueId`. When absent, the prediction is
  *     venue-neutral and `courseFactors` is empty.
  *
- * Confidence: medium-low. Station seed times are well-anchored (HyroxDataLab,
- * roxlyfe.com); venue multipliers are coarse heuristics. See
- * `src/data/hyrox-venues.ts` header for the rationale.
+ * Confidence: medium-low. Seeds, doubles ratios and the Open/Pro conversion
+ * read the real results (HYROX results, seasons 8 and 9, hyrox-results.ts);
+ * venue multipliers are coarse heuristics. See `src/data/hyrox-venues.ts`
+ * header for the rationale.
  */
 
 import type { SimulatorState } from '@/types/state';
@@ -92,21 +94,23 @@ export interface HyroxStationLine {
   baseSec: number;
   adjustedSec: number;
   source: 'calibrated' | 'seed';
-  /** Doubles only: the percentile-matched doubles/singles station ratio that
-   *  turned singles station time into the pair's time (hyrox-doubles.ts).
-   *  Absent for singles. Anything that compares a line with singles-anchored
-   *  references (band seeds, station percentiles) divides by it first
-   *  (stationSinglesEquivalentSec). */
+  /** Doubles only: this station's pair ÷ solo ratio, baseSec over the line's
+   *  solo equivalent (each station maps at its own percentile in the
+   *  station's results, hyrox-doubles.ts). Absent for singles. Anything that
+   *  compares a line with one athlete's references (band seeds, solo history)
+   *  divides by it first (stationSinglesEquivalentSec). Station percentiles
+   *  place the line itself on the pair's division table. */
   teamRatio?: number;
   /** True when baseSec comes from a doubles race split (the pair's time).
-   *  Doubles target: used as is, not scaled by teamRatio. Singles target: the
-   *  pair's time converted to singles terms (÷ the prediction's
-   *  crossFormatStationRatio). */
+   *  Doubles target: used as is, not mapped. Singles target: the pair's time
+   *  converted to the solo time at the same percentile of that station's
+   *  results. */
   teamTimeSplit?: boolean;
-  /** True when baseSec is converted from the other format's benchmark
-   *  through the doubles quantile mapping: a singles time × the station ratio
-   *  for a doubles target, a doubles race split ÷ the ratio for a singles
-   *  target. A cross-format estimate: it caps confidence at medium. */
+  /** True when baseSec reaches the target format through the doubles
+   *  quantile mapping: for a doubles target every calibrated value that is
+   *  not a doubles race split (H1 decision, option A); for a singles target a
+   *  doubles race split. A cross-format estimate: it caps confidence at
+   *  medium. */
   crossFormat?: boolean;
 }
 
@@ -190,8 +194,8 @@ export interface HyroxPrediction {
    *     the station ratio.
    *  Either direction caps confidence at medium. */
   crossFormatConversion?: 'doubles_to_singles' | 'singles_to_doubles';
-  /** With crossFormatConversion: the percentile-matched doubles/singles
-   *  station ratio of the conversion. */
+  /** With crossFormatConversion: the aggregate pair ÷ solo ratio over the
+   *  converted stations (each station converts at its own ratio). */
   crossFormatStationRatio?: number;
   /** True only when the cross-format cap is what holds confidence at medium:
    *  without the converted stations the forecast would read high (6+
@@ -203,11 +207,13 @@ export interface HyroxPrediction {
   crossFormatCapped?: boolean;
   /** Doubles only: the percentile-matched ratios applied (hyrox-doubles.ts). */
   doubles?: {
-    /** Pair's station time ÷ singles station time. */
+    /** Pair's 8-station time ÷ the solo 8-station time (aggregate of the
+     *  per-station mapping). */
     stationRatio: number;
     /** Pair's Roxzone ÷ singles Roxzone. */
     roxzoneRatio: number;
-    /** Athlete's cumulative percentile in the open_singles stations table. */
+    /** The solo 8-station total's cumulative percentile in the athlete's
+     *  singles work-total table. */
     stationsSinglesPercentile: number;
   };
   /** Provenance of the run pace used in this prediction. */
