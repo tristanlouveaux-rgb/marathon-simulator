@@ -24,7 +24,7 @@
  *    (the pair's time) ÷ the forecast's station ratio, and a value stored at
  *    the other weight regime (a Pro race split for an Open target) converted
  *    to the target's weights. The round is compared with that value to the
- *    whole second (hyroxPlanningStationBenchmarks), the number the Stats
+ *    whole second (hyroxCalibratedStationBenchmarks), the number the Stats
  *    ledger shows and the plan prescribes, so an improvement moves both
  *    faster, never slower, and a sub-second tie with a fractional converted
  *    value is not an improvement.
@@ -54,7 +54,7 @@ import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
 import { hyroxSinglesCohortForState, hyroxCohortLabel, hyroxStationLowerFenceSec, type HyroxResultsCohort } from '@/calculations/hyrox-results';
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
-import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
+import { hyroxCalibratedStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 
 /** Race-pace HYROX sessions whose best-round times may improve a benchmark.
@@ -70,7 +70,7 @@ export interface StationSessionResult {
   /** Fastest round recorded for this station this session (sec). */
   bestSec: number;
   /** Current user benchmark, one athlete's time at the target's weights, to
-   *  the whole second (hyroxPlanningStationBenchmarks), or null when the
+   *  the whole second (hyroxCalibratedStationBenchmarks), or null when the
    *  station still uses the population seed. */
   benchmarkSec: number | null;
   /** benchmarkSec − bestSec (positive = faster than the benchmark). Null when no benchmark. */
@@ -108,12 +108,12 @@ function isDoublesFormat(f: HyroxFormat): boolean {
 /** Per station, the benchmark a best round is compared with: the forecast's
  *  resolved benchmark as one athlete's time at the target's weights, to the
  *  whole second the Stats ledger shows and the plan prescribes
- *  (hyroxPlanningStationBenchmarks). Rounds are timed to the whole second, so
+ *  (hyroxCalibratedStationBenchmarks). Rounds are timed to the whole second, so
  *  a round of 307 against a converted 307.4 is a tie, not a 0 s improvement
  *  (review 2026-10-13). Stations on the population seed are absent. */
 function soloBenchmarks(s: SimulatorState): Map<HyroxStation, number> {
   const out = new Map<HyroxStation, number>();
-  for (const [station, sec] of Object.entries(hyroxPlanningStationBenchmarks(s))) {
+  for (const [station, sec] of Object.entries(hyroxCalibratedStationBenchmarks(s))) {
     if (sec != null) out.set(station as HyroxStation, sec);
   }
   return out;

@@ -33,7 +33,7 @@ import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/const
 import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
 import { hyroxProToOpenSec } from '@/calculations/hyrox-results';
 import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
-import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks, predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks, hyroxCalibratedStationBenchmarks, hyroxStationSeedsForState, predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxBenchmarkLedger } from '@/ui/hyrox/stats-view';
 import { openHyroxAddSessionModal } from '@/ui/hyrox/add-session-modal';
 import { applyHyroxSessionBenchmarks } from '@/calculations/hyrox-session-benchmarks';
@@ -148,6 +148,28 @@ describe('plan engine station targets come from the forecast\'s per-station benc
       expect(comp.durationSec).toBe(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatios[st]!));
       expect(comp.durationSec).toBe(Math.round(doublesStationSoloSec(st, DOUBLES_SPLITS[st])));
     }
+  });
+});
+
+describe('untested stations: the plan prescribes the seed Stats and the forecast show (lane H3b)', () => {
+  it('a Pro women\'s target with no tests trains to its own field\'s seeds at Pro weights, not Open pooled seeds', () => {
+    const s = hyroxState({ format: 'pro_singles' });
+    s.biologicalSex = 'female';
+    s.wks = generateHyroxPlan(s);
+    const seeds = hyroxStationSeedsForState(s);
+    const targets = hyroxPlanningStationBenchmarks(s);
+    for (const st of HYROX_STATION_ORDER) expect(targets[st]).toBe(Math.round(seeds[st]));
+    const comps = densityComponents(s.wks);
+    expect(comps.length).toBeGreaterThan(0);
+    for (const comp of comps) expect(comp.durationSec).toBe(Math.round(seeds[comp.type as HyroxStation]));
+    // Heavier loads than the Open pooled default on the sled push.
+    expect(targets.sled_push!).toBeGreaterThan(STATION_SEED_TIMES_SEC.intermediate.sled_push);
+  });
+
+  it('an untested station is not a benchmark a session best must beat', () => {
+    const s = hyroxState({ format: 'open_singles', stationBenchmarksSingles: { row_erg: 290 } });
+    expect(Object.keys(hyroxCalibratedStationBenchmarks(s))).toEqual(['row_erg']);
+    expect(Object.keys(hyroxPlanningStationBenchmarks(s))).toHaveLength(8);
   });
 });
 

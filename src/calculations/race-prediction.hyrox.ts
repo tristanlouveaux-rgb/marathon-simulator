@@ -621,19 +621,34 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
   return { stations, stationRatio: soloSum > 0 ? teamSum / soloSum : 1, stationRatios, coverage: inputs.coverage };
 }
 
-/** Station target times for the session generators (plan engine, add-session
- *  modal) and the benchmark a guided session's best round must beat
- *  (hyrox-session-benchmarks.ts): resolveHyroxStationBenchmarks' `sec` per
- *  calibrated station (one athlete over the full station distance, at the
- *  target's weights, in every format), to the whole second the Stats ledger
- *  shows (a converted split is fractional, a round is timed to the whole
- *  second). The generators fall back to the band seed, also one athlete's
- *  time, for the rest. */
-export function hyroxPlanningStationBenchmarks(state: SimulatorState): Partial<Record<HyroxStation, number>> {
+/** The athlete's calibrated station benchmarks only: resolveHyroxStationBenchmarks'
+ *  `sec` per calibrated station (one athlete over the full station distance,
+ *  at the target's weights, in every format), to the whole second the Stats
+ *  ledger shows (a converted split is fractional, a round is timed to the
+ *  whole second). Stations on the seed are absent. The benchmark a guided
+ *  session's best round must beat (hyrox-session-benchmarks.ts). */
+export function hyroxCalibratedStationBenchmarks(state: SimulatorState): Partial<Record<HyroxStation, number>> {
   const out: Partial<Record<HyroxStation, number>> = {};
   for (const b of resolveHyroxStationBenchmarks(state)?.stations ?? []) {
     if (b.sec != null) out[b.station] = Math.round(b.sec);
   }
+  return out;
+}
+
+/** Station target times for the session generators (plan engine, add-session
+ *  modal): every station, the calibrated benchmark where there is one
+ *  (hyroxCalibratedStationBenchmarks) and the band seed at the target's
+ *  weights for the rest (hyroxStationSeedsAtTarget, to the whole second),
+ *  the numbers the Stats ledger shows. Lane H3b: the seeds used to come from
+ *  the generators' own Open, sexes-pooled STATION_SEED_TIMES_SEC fallback,
+ *  so a Pro or a women's target was prescribed Open pooled times for an
+ *  untested station while Stats and the forecast showed its own field's. */
+export function hyroxPlanningStationBenchmarks(state: SimulatorState): Partial<Record<HyroxStation, number>> {
+  const calibrated = hyroxCalibratedStationBenchmarks(state);
+  if (!state.hyroxConfig) return calibrated;
+  const seeds = hyroxStationSeedsAtTarget(state);
+  const out: Partial<Record<HyroxStation, number>> = {};
+  for (const st of HYROX_STATION_ORDER) out[st] = calibrated[st] ?? Math.round(seeds[st]);
   return out;
 }
 
