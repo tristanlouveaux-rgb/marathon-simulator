@@ -66,8 +66,15 @@
  * The round-4 review fixes (2026-10-13, second pass) add: the chronic seed
  * fixed at plan creation (D4), a done easy erg recording its load, the 110%
  * rule's pre-plan exposure counting a logged run in weeks 2 to 4 (D8), and a
- * low logged load (50 TSS) giving no run under the floor, no erg-only week and
- * no single-run jump.
+ * low logged load giving no run under the floor, no erg-only week and no
+ * single-run jump. The third pass adds logged loads of 20, 30, 40 and 50 TSS
+ * run through every rule above: station work every training week (a ceiling
+ * leaves the long run out before the last station session or brick), a
+ * guard or deload ceiling exceeded only by a week holding just its last
+ * station session or brick and saying so, week 1's assessment exempt from
+ * week 1's guard and noted, and race week holding a run whenever it holds a
+ * run slot (the primer, or one easy run at the run floor when the primer is
+ * above the 110% ceiling, noted).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -175,6 +182,15 @@ const deloadOf = (wks: readonly Week[]) => {
   return (i: number) => isHyroxDeloadWeek(i + 1, phases);
 };
 
+/** A week holding only its last station session or brick: no run, no easy
+ *  erg work, one station or brick session. A ceiling never takes that session
+ *  (review 2026-10-13), so at its floor it may sit above the guard or the
+ *  deload ceiling, and the week's notes say so. */
+const lastWorkOnly = (wk: Week | undefined) => {
+  const ws = prescribed(wk);
+  return runs(wk).length === 0 && !ws.some(isHyroxEasyErg) && ws.filter(isWork).length === 1;
+};
+
 /** Every rule violation of a built plan, as readable strings. `defaultHours`:
  *  the plan sits at its band's default hours (the D3 coverage rule). */
 function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): string[] {
@@ -279,9 +295,12 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
     // easy erg never takes the slot of the week's last station session or brick.
     if (ph !== 'taper' && !raceWeek && ergs.length > 0 && !ws.some(isWork)) out.push(`W${w}: easy erg work and no station session or brick`);
     // No standalone run under the run floor (the primer excepted): the plans
-    // here have no logged runs, so the floor is HYROX_RUN_FLOOR_MIN.
+    // here have no logged runs, so the floor is HYROX_RUN_FLOOR_MIN. A taper
+    // long run follows TAPER_LONG_RUN_FRACTION of the long run before it
+    // (checked below), so after a long run under 31 min (a logged load of 30
+    // TSS or less) it sits under the floor.
     for (const r of runs(wk)) {
-      if (!isQuality(r) && (r.estimatedDurationMin ?? 0) < HYROX_RUN_FLOOR_MIN) out.push(`W${w}: ${r.n} ${r.estimatedDurationMin} min, under the ${HYROX_RUN_FLOOR_MIN}-min run floor`);
+      if (!isQuality(r) && !(ph === 'taper' && isHyroxLongRun(r)) && (r.estimatedDurationMin ?? 0) < HYROX_RUN_FLOOR_MIN) out.push(`W${w}: ${r.n} ${r.estimatedDurationMin} min, under the ${HYROX_RUN_FLOOR_MIN}-min run floor`);
     }
     // Single-run rule.
     if (w >= 2) {
@@ -295,8 +314,11 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const ref = lastLoaded(i);
       if (ref >= 0) {
         const r = wks[ref];
-        if (minutes(wk) > HYROX_DELOAD_FACTOR * minutes(r) + EPS) out.push(`W${w}: deload ${minutes(wk)} min above ${HYROX_DELOAD_FACTOR} x W${ref + 1} (${minutes(r)})`);
-        if (tss(wk) > HYROX_DELOAD_FACTOR * tss(r) + EPS) out.push(`W${w}: deload ${tss(wk).toFixed(1)} TSS above ${HYROX_DELOAD_FACTOR} x W${ref + 1} (${tss(r).toFixed(1)})`);
+        // Over it only when the week holds just its last station session or
+        // brick at its floor, and the week says so.
+        const heldOver = lastWorkOnly(wk) && notes(wk).some(n => /deload \d+ min \/ \d+ TSS above/.test(n));
+        if (!heldOver && minutes(wk) > HYROX_DELOAD_FACTOR * minutes(r) + EPS) out.push(`W${w}: deload ${minutes(wk)} min above ${HYROX_DELOAD_FACTOR} x W${ref + 1} (${minutes(r)})`);
+        if (!heldOver && tss(wk) > HYROX_DELOAD_FACTOR * tss(r) + EPS) out.push(`W${w}: deload ${tss(wk).toFixed(1)} TSS above ${HYROX_DELOAD_FACTOR} x W${ref + 1} (${tss(r).toFixed(1)})`);
         if (ws.filter(isHighIntensity).length > prescribed(r).filter(isHighIntensity).length) out.push(`W${w}: deload holds more hard sessions than W${ref + 1}`);
         if (ws.filter(isQuality).length > prescribed(r).filter(isQuality).length) out.push(`W${w}: deload holds more quality runs than W${ref + 1}`);
       }
@@ -305,7 +327,14 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
     // circuit no more rounds than the week before's.
     if (raceWeek) {
       const primer = ws.filter(isQuality);
-      if (runs(wk).length > 0 && primer.length !== 1) out.push(`W${w}: race week holds ${primer.length} primers`);
+      // Race week holds a run whenever it holds a run slot: the primer, or,
+      // when the 110% ceiling excludes it and the easy runs would sit under
+      // the run floor, one easy run at the floor (noted).
+      const floorRun = primer.length === 0 && runs(wk).length === 1 && runs(wk)[0].estimatedDurationMin === HYROX_RUN_FLOOR_MIN
+        && notes(wk).some(n => /race week holds a run/.test(n)) && notes(wk).some(n => /Tempo Run above the 110% single-run ceiling/.test(n));
+      if (runs(wk).length > 0 && primer.length !== 1 && !floorRun) out.push(`W${w}: race week holds ${primer.length} primers`);
+      const refRW = lastLoaded(i);
+      if (refRW >= 0 && runs(wks[refRW]).length > 0 && runs(wk).length === 0) out.push(`W${w}: race week holds no run, the reference week ${runs(wks[refRW]).length}`);
       for (const p of primer) {
         if (p.estimatedDurationMin !== HYROX_RACE_WEEK_PRIMER_MIN || !/ 10 min at /.test(p.d ?? '')) out.push(`W${w}: race-week primer ${p.estimatedDurationMin} min (${p.d})`);
       }
@@ -317,7 +346,7 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       // (review 2026-10-13: up to 60 min against a 49-min taper long run).
       const beforeLong = prescribed(wks[i - 1]).find(isHyroxLongRun)?.estimatedDurationMin;
       for (const e of ws.filter(x => x.t === 'hyrox_run_easy')) {
-        if (beforeLong != null && (e.estimatedDurationMin ?? 0) > beforeLong) out.push(`W${w}: race-week easy run ${e.estimatedDurationMin} min, the week before's long run ${beforeLong}`);
+        if (beforeLong != null && (e.estimatedDurationMin ?? 0) > beforeLong && !floorRun) out.push(`W${w}: race-week easy run ${e.estimatedDurationMin} min, the week before's long run ${beforeLong}`);
       }
       // D6: no more runs than the reference week; the circuit stays over the
       // easy runs unless the reference week's station work or the race-week
@@ -350,7 +379,14 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       let chronic = 0;
       for (let k = 1; k <= 4; k++) chronic += i - k >= 0 ? tss(wks[i - k]) : seed;
       chronic /= 4;
-      if (tss(wk) > ACWR_SAFE_HIGH * chronic + EPS) out.push(`W${w}: planned ${tss(wk).toFixed(1)} TSS above ${(ACWR_SAFE_HIGH * chronic).toFixed(1)}`);
+      // Week 1's assessment is exempt from week 1's guard (a fixed
+      // calibration pass), and noted when the week sits above it.
+      const exempt = w === 1 ? tss({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0;
+      if (exempt > 0 && tss(wk) > ACWR_SAFE_HIGH * chronic + EPS && !notes(wk).some(n => /by the assessment/.test(n))) out.push(`W1: planned ${tss(wk).toFixed(1)} TSS above the guard and no assessment note`);
+      // Over the guard only when the week holds just its last station session
+      // or brick at its floor, and the week says so.
+      const heldOver = lastWorkOnly(wk) && notes(wk).some(n => /planned load \d+ TSS above the \d+ TSS guard/.test(n));
+      if (!heldOver && tss(wk) - exempt > ACWR_SAFE_HIGH * chronic + EPS) out.push(`W${w}: planned ${(tss(wk) - exempt).toFixed(1)} TSS above ${(ACWR_SAFE_HIGH * chronic).toFixed(1)}`);
     }
     // Taper fractions, station work and the taper long run.
     if (ph === 'taper' && w >= taperStart) {
@@ -569,7 +605,7 @@ describe('HYROX plan detail', () => {
     const { detail } = generateHyroxPlanDetailed(s);
     expect(detail).toHaveLength(18);
     for (const d of detail) {
-      if (d.acwrCapTss != null) expect(d.plannedTss).toBeLessThanOrEqual(d.acwrCapTss + EPS);
+      if (d.acwrCapTss != null) expect(d.plannedTss - d.guardExemptTss).toBeLessThanOrEqual(d.acwrCapTss + EPS);
     }
     const loaded = detail.filter(d => d.phase !== 'taper' && !d.deload);
     const ref = loaded[loaded.length - 1];
@@ -941,7 +977,14 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       expect(logged[0].chronicSeedSource).toBe('logged');
       expect(logged[0].chronicSeedTss).toBe(100);
       expect(logged[0].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * 100, 6);
-      expect(logged[0].plannedTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * 100 + EPS);
+      // Week 1's assessment is exempt from week 1's guard (a fixed
+      // calibration pass); the rest of week 1 is guarded.
+      const assessment = prescribed({ triWorkouts: logged[0].workouts } as Week).filter(w => w.t === 'hyrox_assessment');
+      expect(assessment).toHaveLength(1);
+      expect(logged[0].guardExemptTss).toBeCloseTo(tss({ triWorkouts: assessment } as Week), 6);
+      expect(logged[0].plannedTss - logged[0].guardExemptTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * 100 + EPS);
+      expect(logged[1].guardExemptTss).toBe(0);
+      expect(nominal[0].guardExemptTss).toBe(0);
 
       // A logged zero is no data (§BV): the nominal week stands in.
       const zero = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16, {}, 0));
@@ -1079,38 +1122,51 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  it('a low logged load (50 TSS): no run under the floor, no easy erg in place of station work, no single-run jump', () => {
-    // Review 2026-10-13: the guard trimmed long runs to 4 min, week 2 then
-    // jumped to 110% of the start, and deloads that lost their station
-    // session filled the slot with easy erg work (24 weeks).
-    let deloadsWithoutWork = 0;
-    for (const band of BANDS) {
-      for (let len = 8; len <= 24; len += 2) {
-        const s = build(band, HYROX_HOURS_RANGE[band].default, len, {}, 50);
-        const tw = planTrainingWeeks(s);
-        const wks = s.wks.slice(0, tw);
-        const isDeload = deloadOf(wks);
-        wks.forEach((wk, i) => {
-          const at = `${band} ${len}w W${i + 1}`;
-          for (const r of runs(wk)) if (!isQuality(r)) expect(r.estimatedDurationMin!, at).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN);
-          if (wk.ph !== 'taper' && i < tw - 1) {
-            if (prescribed(wk).some(isHyroxEasyErg)) expect(prescribed(wk).some(isWork), at).toBe(true);
-            if (i >= 1 && !prescribed(wk).some(isWork)) {
-              // Only a deload whose ceiling could not hold a station session
-              // beside the long run, and it says so.
-              expect(isDeload(i), at).toBe(true);
-              expect(notes(wk).some(n => /left out \(deload ceiling\)/.test(n)), at).toBe(true);
-              deloadsWithoutWork++;
+  for (const logged of [20, 30, 40, 50]) it(`a logged load of ${logged} TSS: every rule holds, station work every training week, no run under the floor, race week holds a run whenever it holds a run slot`, () => {
+    // Review 2026-10-13 (second pass): the guard trimmed long runs to 4 min
+    // and week 2 then jumped to 110% of the start. Review 2026-10-13 (third
+    // pass): at 40 TSS or less the guard left out the week's last station
+    // session before the long run (578 to 679 loaded weeks held a lone long
+    // run where a station session and a 20-min long run fitted), week 1's
+    // fixed assessment alone broke week 1's guard, and 49 to 95 race weeks
+    // held nothing. A ceiling now trims the long run to the run floor and
+    // leaves it out before it takes the last station session or brick; such
+    // a session at its floor may sit above the guard or the deload ceiling,
+    // noted (violations: lastWorkOnly). Week 1's assessment is exempt from
+    // week 1's guard.
+    let plans = 0;
+    let trainingWeeks = 0;
+    let emptyRaceWeeks = 0;
+    const found: string[] = [];
+    {
+      for (const band of BANDS) {
+        const r = HYROX_HOURS_RANGE[band];
+        for (const hrs of [r.min, 4, r.default].filter((h, i, a) => a.indexOf(h) === i && h >= r.min && h <= r.max)) {
+          for (const len of [8, 12, 16, 20, 24]) {
+            const s = structuredClone(build(band, hrs, len, {}, logged));
+            plans++;
+            expect(s.hyroxConfig!.planChronicSeed).toEqual({ source: 'logged', loggedTss: logged });
+            for (const v of violations(s)) found.push(`${logged} TSS ${band} ${hrs}h ${len}w: ${v}`);
+            const tw = planTrainingWeeks(s);
+            const wks = s.wks.slice(0, tw);
+            wks.forEach((wk, i) => {
+              if (wk.ph !== 'taper' && i < tw - 1) trainingWeeks++;
+              if (prescribed(wk).some(isHyroxEasyErg) && wk.ph !== 'taper') expect(prescribed(wk).some(isWork), `${logged} ${band} ${hrs}h ${len}w W${i + 1}`).toBe(true);
+            });
+            if (prescribed(wks[tw - 1]).length === 0) {
+              // Only when race week holds no run slot: the reference week
+              // held no run (D6).
+              emptyRaceWeeks++;
+              expect(notes(wks[tw - 1]).some(n => /race week holds no more runs than the reference week's 0/.test(n)), `${logged} ${band} ${hrs}h ${len}w`).toBe(true);
             }
           }
-          if (i >= 1) {
-            const prev = Math.max(0, ...wks.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(longestKm));
-            if (prev > 0) expect(longestKm(wk), at).toBeLessThanOrEqual(prev * (1 + LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST) + METRE_KM);
-          }
-        });
+        }
       }
     }
-    expect(deloadsWithoutWork).toBeGreaterThan(0);
-  });
+    expect(plans).toBeGreaterThan(60);
+    expect(trainingWeeks).toBeGreaterThan(700);
+    expect(found.slice(0, 10)).toEqual([]);
+    expect(emptyRaceWeeks).toBeLessThan(plans / 5);
+  }, 30000);
 });
 
