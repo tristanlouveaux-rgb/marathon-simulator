@@ -338,16 +338,8 @@ interface HyroxMtlRunTrim {
   remake: (w: Workout, minutes: number) => Workout;
   /** Shortest easy run (HYROX_RUN_FLOOR_MIN). */
   easyFloorMin: number;
-  /** Minutes at easy pace that cover a distance (km): the long run never
-   *  shortens under another run's distance (no other run longer than the
-   *  long run). */
-  easyMinFor: (km: number) => number;
   /** Taper weeks keep their run count: easy runs shorten, never leave. */
   keepRunCount: boolean;
-  /** The longest long run of the previous LONG_RUN_LOOKBACK_WEEKS weeks
-   *  (minutes; unset: none). The cap takes the long run's growth, never its
-   *  previous length (the D3 rule). */
-  prevLongRunMin?: number;
 }
 
 /** A standalone easy run that is not the long run (commute runs excluded). */
@@ -356,27 +348,29 @@ function isPlainEasyRun(w: Workout): boolean {
 }
 
 /**
- * Weekly MTL cap (rules_to_code 16). While the week's MTL is above the cap,
- * easy running gives way first and the HYROX-specific station work last
- * (Tristan 2026-10-13, decision A):
- *   1. easy runs shorten toward the run floor, then leave the week, shortest
- *      first (taper weeks keep their run count: shortened only); the runs
- *      left take back what the cut freed, up to their length;
- *   2. the long run gives up its growth: it shortens down to the longest
- *      long run of the previous 4 weeks (at least LONG_SOFT_FLOOR_MIN, or its
- *      own length when that is shorter), never under it (the D3 rule);
- *   3. one round off the highest-MTL station or brick session above
+ * Weekly MTL cap (rules_to_code 16). The constraint hierarchy's step 4
+ * (buildHyroxTrainingWeeks): while the week's MTL is above the cap,
+ *   0. easy erg work gives way first: it is sized after the cap, inside the
+ *      MTL the week leaves under it (generateWeekSessions easyErgFor), so it
+ *      never costs a run minute or a station round;
+ *   1. easy runs (not the long run, not the quality run) shorten toward the
+ *      run floor, then leave the week, shortest first (taper weeks keep their
+ *      run count: shortened only); the runs left take back what the cut
+ *      freed, up to their length;
+ *   2. one round off the highest-MTL station or brick session above
  *      MIN_CIRCUIT_ROUNDS (withHyroxRounds cuts the real volume: work, rest,
  *      duration and the description's round count);
- *   4. with every session at MIN_CIRCUIT_ROUNDS, the highest-MTL station out
+ *   3. with every session at MIN_CIRCUIT_ROUNDS, the highest-MTL station out
  *      of the highest-MTL circuit holding more than MIN_CIRCUIT_STATIONS
  *      (withoutHyroxStation);
- *   5. then the technique station session leaves the week, when that brings
+ *   4. then the technique station session leaves the week, when that brings
  *      the week under the cap, never as its last station session or brick.
- * Easy erg work is sized after the cap, inside the MTL the week leaves under
- * it, so it never costs a run minute or a station round. The quality run is
- * never cut (a fixed format). A week still over the cap after that is left as
- * it is and reported. Each step is noted on the week. Before 2026-10-13 the
+ * The long run and the quality run are never cut (the hierarchy's first
+ * allocation step: the long run is never cut to make room for anything below
+ * it; the quality run is a fixed format). A week still over the cap after
+ * that is left as it is and its note says so. Each step is noted on the
+ * week. Round 5 (2026-10-13) also shortened the long run down to its
+ * previous length; round 6 leaves it alone. Before 2026-10-13 the
  * cap cut station rounds while every run stayed, so at 10 to 12 h 19% of
  * training weeks were over 70% running and peak-week load fell as hours rose
  * in 57 band/length pairs (the larger running share took the cap). Before
@@ -426,24 +420,6 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
     const easyAfter = out.filter(isPlainEasyRun).reduce((a, w) => a + minOf(w), 0);
     if (easyAfter < easyBefore && out.some(isPlainEasyRun)) {
       adjustments.push(`W${weekIndex}: easy runs cut from ${easyBefore} to ${easyAfter} min (MTL cap ${cap})`);
-    }
-    // 2. The long run gives up its growth: the last run cut, down to the
-    // longest long run of the previous weeks (at least LONG_SOFT_FLOOR_MIN),
-    // never under it, as it gives way to the quality run (D3). It stays at
-    // least as long as every other run of the week (by distance). Before
-    // (review 2026-10-13) it was cut to the soft floor, and the 110%
-    // single-run rule then held the weeks after it to the shorter run: novice
-    // 6 h 16 weeks peaked at a 53-min long run where it had reached 68.
-    const long = out.find(w => isHyroxLongRun(w) && w.commute !== true);
-    if (long && total() > cap) {
-      const otherKm = Math.max(0, ...out.filter(w => w !== long && w.discipline === 'run' && w.commute !== true).map(hyroxRunLengthKm));
-      const longFloor = Math.min(minOf(long), Math.max(LONG_SOFT_FLOOR_MIN, runTrim.prevLongRunMin ?? 0, runTrim.easyMinFor(otherKm)));
-      const cut = perMin(long) > 0 ? Math.ceil((total() - cap) / perMin(long)) : 0;
-      const to = Math.max(longFloor, minOf(long) - cut);
-      if (to < minOf(long)) {
-        out = out.map(w => (w === long ? runTrim.remake(w, to) : w));
-        adjustments.push(`W${weekIndex}: Long Run cut from ${minOf(long)} to ${to} min (MTL cap ${cap})`);
-      }
     }
   }
   let roundCuts = 0;
@@ -629,9 +605,9 @@ interface HyroxWeekInputs {
    *  easy erg work away first (buildHyroxTrainingWeeks fit). Unset: no limit. */
   ergCapMin?: number;
   /** Training weeks: the most standalone easy-run minutes (not the long run
-   *  or the quality run) the week may hold. The week's ceilings take easy
-   *  running away after easy erg work and before the station work
-   *  (buildHyroxTrainingWeeks fit). Unset: no limit. */
+   *  or the quality run) the week may hold: the ceilings' scale times what
+   *  the week held at full size (buildHyroxTrainingWeeks fit), so easy runs
+   *  the long run caps shrink with the station work. Unset: no limit. */
   easyRunCapMin?: number;
   /** Taper weeks: the longest easy session, the taper's long run (the week's
    *  own; race week, which holds none, the week before's). It caps easy erg
@@ -652,10 +628,6 @@ interface HyroxWeekInputs {
    *  nominal week-1 structure that seeds the guard's chronic window when no
    *  logged weekly load exists (D4). */
   noAssessment?: boolean;
-  /** Training weeks: the longest long run of the previous
-   *  LONG_RUN_LOOKBACK_WEEKS weeks (minutes). The long run gives up its growth
-   *  for the tier quality run, never this length (D3). */
-  prevLongRunMin?: number;
   /** The shortest long run a training week prescribes: HYROX_RUN_FLOOR_MIN,
    *  or the athlete's long-run start when that is shorter (a start held under
    *  it by a short logged run). One sized under it is left out. Unset:
@@ -679,8 +651,8 @@ interface HyroxWeekInputs {
  *  third pass); it leaves only when the week is still over without the long
  *  run, and the long run then takes back what fits. A product order: no
  *  source ranks sessions for this. */
-const HYROX_GUARD_OMIT_ORDER = ['easy', 'stations', 'technique', 'light', 'quality', 'brick'] as const;
-type HyroxGuardOmit = typeof HYROX_GUARD_OMIT_ORDER[number];
+const HYROX_GUARD_OMIT_ORDER = ['easy', 'stations', 'technique', 'light', 'brick'] as const;
+type HyroxGuardOmit = typeof HYROX_GUARD_OMIT_ORDER[number] | 'quality';
 
 /**
  * Days a race-week session may take, in order of preference (the running
@@ -917,10 +889,11 @@ function generateWeekSessions(
   // ── Runs: the long run, the quality run, then easy runs ───────────────────
   const runParams = { band, phase, bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, thresholdPaceSecKm, maxHR: state.maxHR };
   const runs: Workout[] = [];
-  // The running share left after the bricks' run segments. The long run and
-  // the quality run fit inside it unscaled; the guard's and the taper's scale
-  // shrinks only what the easy runs get. A taper week's long run follows the
-  // taper rule and is not trimmed here.
+  // The running share left after the bricks' run segments: what the easy
+  // runs get after the long run and the quality run (the hierarchy's
+  // allocation step "running up to 0.40 x the chosen weekly minutes"); the
+  // ceilings' scale shrinks it. A taper week's long run follows the taper
+  // rule and is not trimmed here.
   const fitRoom = Math.max(0, runBudget - brickRunMin);
   let slots = counts.runs;
   const ceilingMin = inputs.runCeilingKm != null ? Math.floor((inputs.runCeilingKm * easyPace) / 60) : Infinity;
@@ -980,41 +953,29 @@ function generateWeekSessions(
   }
   const qMin = () => quality?.estimatedDurationMin ?? 0;
 
-  // No run above the single-run ceiling, and no other run longer than the
-  // long run (both by distance; Frandsen 2025 measured distance, and the long
-  // run's minutes at easy pace stand in for it). Then the long run and the
-  // quality run fit inside the running share: the long run gives way first,
-  // down to LONG_SOFT_FLOOR_MIN; below that the quality run leaves the week.
-  // In a training week, a quality run longer than the long run (the 8 x 1 km
-  // session against a 70-min long run) stretches the long run to its distance
-  // when the tier cap, the ceiling and the running share allow, and in week 1
+  // No run above the single-run ceiling (a hard rule), and no other run
+  // longer than the long run (both by distance; Frandsen 2025 measured
+  // distance, and the long run's minutes at easy pace stand in for it). In a
+  // training week the long run and the quality run are the first allocation
+  // (the constraint hierarchy, buildHyroxTrainingWeeks): the running share
+  // does not size them, only the easy runs after them, and the week's size
+  // (the ceilings) is what takes the long run's growth for the quality run
+  // (D3) and then the quality run. A quality run longer than the long run
+  // (the 8 x 1 km session against a 70-min long run) stretches the long run
+  // to its distance when the tier cap and the ceiling allow, and in week 1
   // never above the long-run start (review 2026-10-13: a no-history
   // beginner's 3-week plan opened with a 39-min long run against the 30-min
   // start); otherwise the quality run takes its easy sibling. Taper weeks
-  // never stretch the long run (their tempo is sized to it above). A long run
-  // trimmed for a quality run that then leaves the week keeps its full length
-  // (review 2026-10-12: an advanced 4 h week 5 ran a 34-min long run beside no
-  // quality run).
+  // never stretch the long run (their tempo is sized to it above). Before
+  // round 6 (2026-10-13) the running share sized both: the long run gave up
+  // its growth and the quality run left the week whenever 0.40 of the chosen
+  // hours could not hold them, whatever room the week had.
   const longWanted = longMin;
   if (quality && inputs.runCeilingKm != null && hyroxRunLengthKm(quality) > inputs.runCeilingKm + 1e-9) {
     adjustments.push(`W${weekIndex}: ${quality.n} above the 110% single-run ceiling, run easy`);
     quality = null;
   }
-  // The quality run ranks ahead of the long run's growth, not of its length
-  // (D3, Tristan 2026-10-13): the long run gives up what it would add over
-  // the longest long run of the previous weeks (prevLongRunMin), never less
-  // than LONG_SOFT_FLOOR_MIN; when the quality run still does not fit, it
-  // leaves. Before, the long run was trimmed to 30 min for it.
   let longFit = longMin;
-  if (trainingWeek && longMin != null && quality && longMin + qMin() > fitRoom) {
-    const holdMin = Math.min(longMin, Math.max(LONG_SOFT_FLOOR_MIN, inputs.prevLongRunMin ?? 0));
-    if (fitRoom - qMin() >= holdMin) {
-      longFit = Math.floor(fitRoom - qMin());
-    } else {
-      adjustments.push(`W${weekIndex}: quality run left out (running share ${Math.round(fitRoom)} min, the long run holds ${holdMin} min)`);
-      quality = null;
-    }
-  }
   if (quality && longFit != null) {
     const qKm = hyroxRunLengthKm(quality);
     const longKm = (longFit * 60) / easyPace;
@@ -1022,7 +983,7 @@ function generateWeekSessions(
       const stretched = Math.ceil((qKm * easyPace) / 60);
       const startCap = weekIndex === 1 && inputs.longRunMin != null ? inputs.longRunMin : Infinity;
       const stretchCap = Math.min(HYROX_LONG_RUN[tier].capMin, ceilingMin, startCap);
-      if (trainingWeek && stretched <= stretchCap && stretched + qMin() <= fitRoom) {
+      if (trainingWeek && stretched <= stretchCap) {
         longFit = stretched;
       } else {
         adjustments.push(`W${weekIndex}: ${quality.n} longer than the long run, run easy`);
@@ -1031,13 +992,9 @@ function generateWeekSessions(
     }
   }
   longMin = quality ? longFit : longWanted;
-  if (quality && trainingWeek && longWanted != null && longFit != null && longFit < longWanted) {
-    adjustments.push(`W${weekIndex}: Long Run held at ${longFit} min, not ${longWanted}, for the quality run (running share)`);
-  }
-  if (trainingWeek && longMin != null && longMin > fitRoom) longMin = Math.floor(fitRoom);
   // No training-week long run under the run floor (review 2026-10-13: a
-  // 50-TSS logged load held long runs to 4 to 17 min): one the running share
-  // or a ceiling sizes under it is left out.
+  // 50-TSS logged load held long runs to 4 to 17 min): one a ceiling sizes
+  // under it is left out.
   const runFloor = inputs.runFloorMin ?? HYROX_RUN_FLOOR_MIN;
   if (trainingWeek && longMin != null && longMin < runFloor) {
     if (longMin > 0) adjustments.push(`W${weekIndex}: Long Run left out (${longMin} min, under the ${runFloor}-min run floor)`);
@@ -1055,11 +1012,10 @@ function generateWeekSessions(
     slots--;
   }
   const runRoom = Math.max(0, fitRoom * scale - (longMin ?? 0) - qMin());
-  // A training week's ceiling holds its easy running (easyRunCapMin) before
-  // it shrinks the station work.
-  const easyHeld = inputs.easyRunCapMin != null && inputs.easyRunCapMin < runRoom - 1e-9;
-  const easyRoom = easyHeld ? Math.max(0, inputs.easyRunCapMin as number) : runRoom;
-  const easyWhy = easyHeld ? ceilingName : 'running share';
+  const easyRoom = inputs.easyRunCapMin != null ? Math.min(runRoom, Math.max(0, inputs.easyRunCapMin)) : runRoom;
+  // What holds the easy runs: the week's ceiling when its scale shrinks them,
+  // otherwise the running share.
+  const easyWhy = scale < 1 ? ceilingName : 'running share';
   // Easy runs share what is left, each at most the long run (race week, which
   // holds none: the week before's long run; easyMaxMin) and the ceiling, and
   // at least HYROX_RUN_FLOOR_MIN; a share below the floor is merged into
@@ -1132,7 +1088,6 @@ function generateWeekSessions(
       n = 0;
     }
     if (n < slots) adjustments.push(`W${weekIndex}: ${slots - n} easy run(s) left out (${easyWhy})`);
-    if (n > 0 && easyHeld) adjustments.push(`W${weekIndex}: easy runs held to ${n * each} min (${ceilingName})`);
   } else if (slots > 0) {
     adjustments.push(`W${weekIndex}: ${slots} easy run(s) left out (${easyWhy})`);
   }
@@ -1188,17 +1143,15 @@ function generateWeekSessions(
   const injuryFreedMin = hyroxPlannedMinutes(workouts) - hyroxPlannedMinutes(gated);
   const injuryFreedSlots = prescribed(workouts).length - prescribed(gated).length;
 
-  // Enforce the MTL cap: easy running first, then the long run, then station
-  // rounds and stations (enforceMTLCap, decision A).
+  // Enforce the MTL cap: easy running first, then station rounds and
+  // stations; the long run and the quality run are never cut (enforceMTLCap).
   let week = enforceMTLCap(gated, hx.mtlCap, adjustments, weekIndex, {
     remake: (w, minutes) => ({
       ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: minutes, longRun: isHyroxLongRun(w), slotIndex: weekIndex }),
       ...(w.modReason ? { modReason: w.modReason } : {}),
     }),
     easyFloorMin: HYROX_RUN_FLOOR_MIN,
-    easyMinFor: (km) => Math.ceil((km * easyPace) / 60),
     keepRunCount,
-    prevLongRunMin: inputs.prevLongRunMin,
   });
 
   // Hard-session limits: at most HYROX_MAX_HARD_RUNS hard runs and
@@ -1298,7 +1251,14 @@ function generateWeekSessions(
   // take its minutes (each no longer than the long run, the 110% single-run
   // ceiling or the tier long-run cap), and the slot holds easy erg work, when
   // that gives the week more minutes. One slot a week, never the long run,
-  // the quality run or the easy run standing in a missing quality run's slot. Before (review
+  // the quality run or the easy run standing in a missing quality run's slot.
+  // Only when the easy runs left keep every running minute (round 6: easy
+  // running ranks above easy erg work in the hierarchy's allocation), and
+  // never with an active injury: the injury gates and the capability
+  // substitution's offers decide that week (round 6; review 2026-10-13: with
+  // stations gated and runs open, 138 of 630 training weeks lost an easy run,
+  // the injured athlete's only gate-safe training, for an erg session the
+  // gates then dropped). Before (review
   // 2026-10-13), one more hour funded another short run that took the easy
   // erg's slot, so the week held less: intermediate 23 weeks at 7 h held 36 to
   // 51 min less a week than at 6 h through build and peak (an easy run of 22
@@ -1307,11 +1267,19 @@ function generateWeekSessions(
   // ranks an easy run against easy erg work when the session count binds.
   const ergSlotFor = (ws: Workout[]): Workout[] => {
     if (!trainingWeek) return ws;
+    if (!isPastWeek && injuryState?.active) return ws;
     const maxSessions = Math.min(inputs.maxSessions ?? 7, 7);
-    if (maxSessions - prescribed(ws).length - injuryFreedSlots > 0) return ws;
     const mtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg);
     if (mtlPerMin == null) return ws;
     const maxEach = Math.min(HYROX_LONG_RUN[tier].capMin, inputs.easyMaxMin ?? Infinity);
+    // Free slots whose easy erg sessions, each at its longest, already hold
+    // what the week leaves: no slot to free. (Round 6: with one slot free and
+    // its session at the cap, one more hour funded a third 22-min easy run in
+    // the slot a 63-min easy erg session held, intermediate 4 weeks at 7 h
+    // with the 7-session choice, and the week held 29 min less than at 6 h.)
+    const free = maxSessions - prescribed(ws).length - injuryFreedSlots;
+    const unusedNow = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(ws) - injuryFreedMin;
+    if (free > 0 && unusedNow - free * maxEach < HYROX_RUN_FLOOR_MIN) return ws;
     // What one easy erg session could hold beside a week.
     const ergRoom = (x: readonly Workout[]): number => {
       const unused = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(x) - injuryFreedMin;
@@ -1347,18 +1315,14 @@ function generateWeekSessions(
       ...(w.modReason ? { modReason: w.modReason } : {}),
     }] as const));
     const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
+    // The easy runs left keep the week's easy running (whole minutes: each
+    // run's share is rounded down).
+    const easyAfter = next.filter(isPlainEasyRun).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    if (easyAfter < easyMin - rest.length) return ws;
     const room = ergRoom(next);
     if (room < HYROX_RUN_FLOOR_MIN) return ws;
-    // The easy erg session as the injury gates leave it: the station capacity
-    // scales it or drops it, and an easy run never leaves for an erg session
-    // the gates then take (review 2026-10-13: with stations gated and runs
-    // open, 138 of 630 training weeks lost an easy run, the injured
-    // athlete's only gate-safe training, for an erg session that was then
-    // dropped).
     const probe = generateHyroxEasyErg({ targetMinutes: room, stationAccess: hx.stationAccess, slotIndex: weekIndex, bodyWeightKg });
-    const gatedErg = !probe ? [] : isPastWeek ? [probe] : applyHyroxInjuryGates([probe], injuryState, weeksFromCurrent);
-    const ergMin = gatedErg[0]?.estimatedDurationMin ?? 0;
-    if (ergMin <= 0 || hyroxPlannedMinutes(next) + ergMin <= hyroxPlannedMinutes(ws)) return ws;
+    if ((probe?.estimatedDurationMin ?? 0) <= 0) return ws;
     const kept = rest.length > 0 ? `, the easy running shared by ${rest.length} easy run${rest.length === 1 ? '' : 's'} of ${Math.max(each, ...rest.map(w => w.estimatedDurationMin ?? 0))} min` : '';
     adjustments.push(`W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min${kept} (the chosen sessions are full)`);
     return next;
@@ -1413,15 +1377,24 @@ function generateWeekSessions(
       // placed again with the easy erg work. Leaving out or merging an easy
       // run never breaks the spacing rules, so it places; if it did not, the
       // week keeps its runs and holds no easy erg work.
-      // A freed slot is taken only when the week then holds easy erg work;
-      // otherwise the easy run stays and the swap's notes go.
+      // A freed slot is taken only when the week then holds more minutes
+      // with its easy erg work than without the swap; otherwise the easy run
+      // stays and the swap's notes go.
       const mark = adjustments.length;
       let freed = ergSlotFor(week);
       let ergs = easyErgFor(freed);
-      if (freed !== week && ergs.length === 0) {
+      if (freed !== week) {
+        const swapNotes = adjustments.slice(mark);
         adjustments.length = mark;
-        freed = week;
-        ergs = easyErgFor(week);
+        const plain = easyErgFor(week);
+        const total = (ws: readonly Workout[], es: readonly Workout[]) => hyroxPlannedMinutes(ws) + hyroxPlannedMinutes(es);
+        if (ergs.length > 0 && total(freed, ergs) > total(week, plain)) {
+          adjustments.length = mark;
+          adjustments.push(...swapNotes);
+        } else {
+          freed = week;
+          ergs = plain;
+        }
       }
       if (ergs.length > 0) {
         const again = findHyroxWeekSchedule([...freed, ...ergs], { prevSunday: inputs.prevSunday });
@@ -1556,10 +1529,6 @@ export interface HyroxWeekDetail {
   phase: HyroxPhase;
   deload: boolean;
   raceWeek: boolean;
-  /** The weekly hours the week was built with: the chosen hours, or fewer
-   *  when the week built at the chosen hours held fewer minutes or less load
-   *  than the plan at one hour less (the hours ladder, decision B). */
-  builtAtHours: number;
   /** Minute budget the week was built with (after the acute:chronic guard). */
   budgetMin: number;
   /** Planned minutes and canonical TSS of the prescribed sessions. */
@@ -1856,13 +1825,10 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  * passes its own week). That week's Sunday-to-Monday spacing also reads the
  * stored week before it, the one the user keeps (moved sessions, an older
  * generator's layout), and holds to the stricter of the two.
- *
- * `hoursLadder: false` builds at the chosen hours alone, without the hours
- * ladder (decision B); for tests and measurement only.
  */
 export function buildHyroxTrainingWeeks(
   state: SimulatorState, trainingWeeks: number, layout: RaceWeekLayout | null, upto: number = trainingWeeks,
-  opts: { storedBoundaryWeek?: number; hoursLadder?: boolean } = {},
+  opts: { storedBoundaryWeek?: number } = {},
 ): HyroxWeekDetail[] {
   const hx = state.hyroxConfig!;
   const tier = hyroxTier(hx.athleteBand);
@@ -1926,12 +1892,18 @@ export function buildHyroxTrainingWeeks(
   const easyRunTssPerMin = plannedTssPerMin('hyrox_run_easy', HYROX_EASY_RPE);
 
   const last = Math.min(upto, trainingWeeks);
-  // What a week's rules read from the weeks before it on a rung of the hours
-  // ladder: the deload and its reference, the single-run ceiling, the
-  // acute:chronic guard and the previous Sunday. Shared by the week build and
-  // by the ladder's check of a lower rung's week on this rung's weeks.
-  const historyLimits = (w: number, lv: HyroxHoursRung) => {
-    const built = lv.built;
+  // The chosen weekly hours (minutes): a ceiling on every training week.
+  const hoursMin = (hx.weeklyHoursAvailable ?? 0) * 60;
+  // The weeks built so far, in order: each week's rules read them.
+  const built: HyroxWeekDetail[] = [];
+  // The guard's chronic seed (D4): the logged weekly load, or the nominal
+  // week 1, computed when week 1 is built.
+  let chronicSeedTss = loggedSeedTss;
+  let seedSet = chronicSeedSource === 'logged';
+  // What a week's rules read from the weeks before it: the deload and its
+  // reference, the single-run ceiling, the acute:chronic guard and the
+  // previous Sunday.
+  const historyLimits = (w: number) => {
     const prevSunday = built.length > 0 ? hyroxSundayFlags(built[built.length - 1].workouts) : null;
     const phase = (planPhases[w - 1]?.ph ?? 'base') as HyroxPhase;
     const raceWeek = isRaceWeek(w, trainingWeeks, state.continuousMode);
@@ -1954,6 +1926,10 @@ export function buildHyroxTrainingWeeks(
     // The last loaded week (not a taper or a deload week): the taper's and the
     // deload's reference.
     const refWeek = [...built].reverse().find(b => b.phase !== 'taper' && !b.deload);
+    // The previous loaded week's long run (minutes; null: none): a loaded
+    // week's long run is never shorter, unless the taper or a hard rule says
+    // so (step 3 of the constraint hierarchy).
+    const prevLoadedLong = refWeek?.longRunMin ?? null;
     // Deload (running's CV.4): the last loaded week × HYROX_DELOAD_FACTOR in
     // planned minutes and planned TSS, with no session, hard session or
     // quality run that week did not hold. Before (review 2026-10-12) the
@@ -1964,7 +1940,7 @@ export function buildHyroxTrainingWeeks(
 
     const chronicMean = () => {
       let sum = 0;
-      for (let k = 1; k <= HYROX_CHRONIC_WINDOW_WEEKS; k++) sum += built[w - 1 - k]?.plannedTss ?? lv.seedTss;
+      for (let k = 1; k <= HYROX_CHRONIC_WINDOW_WEEKS; k++) sum += built[w - 1 - k]?.plannedTss ?? chronicSeedTss;
       return sum / HYROX_CHRONIC_WINDOW_WEEKS;
     };
     const acwrCapTss = phase !== 'taper' && (w >= 2 || chronicSeedSource === 'logged')
@@ -1975,14 +1951,11 @@ export function buildHyroxTrainingWeeks(
     const weekPrevSunday = w === storedBoundary && w >= 2
       ? mergePrevSundays(prevSunday, hyroxSundayFlags(state.wks?.[w - 2]?.triWorkouts ?? []))
       : prevSunday;
-    return { phase, raceWeek, deload, runCeilingKm, prevLongRun, refWeek, deloadRef, acwrCapTss, weekPrevSunday };
+    return { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday };
   };
-  // One week of one rung of the hours ladder (below): built on the rung's
-  // weeks before it, with the minute budget, running share and hours ceiling
-  // of `hoursMin` (the rung's own hours, or fewer).
-  const buildWeek = (w: number, lv: HyroxHoursRung, hoursMin: number): HyroxWeekDetail => {
-    const built = lv.built;
-    const { phase, raceWeek, deload, runCeilingKm, prevLongRun, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w, lv);
+  // One week, built on the weeks before it.
+  const buildWeek = (w: number): HyroxWeekDetail => {
+    const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w);
     const effortMult = w >= (state.w ?? 1) ? effortNow : 1.0;
     // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR): reduce-only,
     // suppressed on deload/taper and past weeks, combined with effort under ONE clamp
@@ -2089,7 +2062,8 @@ export function buildHyroxTrainingWeeks(
     let scale = 1;
     let omitted: HyroxGuardOmit[] = [];
     let ergCap: number | undefined;
-    // Training weeks: the most easy-run minutes the ceilings leave (fit).
+    // Training weeks: the most easy-run minutes the ceilings' scale leaves
+    // (fit).
     let easyCap: number | undefined;
     // Set when a ceiling took the week's last station session or brick: easy
     // erg work does not take its place.
@@ -2100,94 +2074,87 @@ export function buildHyroxTrainingWeeks(
     // below about 55 TSS of logged weekly load it alone was over the guard
     // and every other session of week 1 went. The rest of week 1 stays under
     // ACWR_SAFE_HIGH x the logged load. Its load still counts in week 1's
-    // planned TSS, so the weeks after it read it in their chronic window.
-    const guardExemptTss = (ws: readonly Workout[]): number => (w === 1
-      ? hyroxPlannedTss(prescribed(ws).filter(x => x.t === 'hyrox_assessment'))
-      : 0);
+    // planned TSS, so the weeks after it read it in their chronic window. The
+    // phase budget exempts its minutes the same way (step 2 of the hierarchy).
+    const assessmentOf = (ws: readonly Workout[]): Workout[] => (w === 1
+      ? prescribed(ws).filter(x => x.t === 'hyrox_assessment')
+      : []);
+    const guardExemptTss = (ws: readonly Workout[]): number => hyroxPlannedTss(assessmentOf(ws));
+    const attemptOf = (workouts: Workout[], adjustments: string[]) => {
+      const work = stationWorkOf(workouts);
+      const ergMin = prescribed(workouts).filter(isHyroxEasyErg).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
+      const easyMin = prescribed(workouts).filter(isPlainEasyRun).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
+      const tss = hyroxPlannedTss(workouts);
+      const min = hyroxPlannedMinutes(workouts);
+      return {
+        workouts, adjustments, tss, guardTss: tss - guardExemptTss(workouts), min,
+        budgetedMin: min - hyroxPlannedMinutes(assessmentOf(workouts)),
+        workMin: work.min, workMtl: work.mtl, ergMin, easyMin,
+      };
+    };
     const make = () => {
       const adjustments: string[] = [];
       const workouts = hyroxWeekForRace(state, w, trainingWeeks, phase, layout, {
         budgetMin, longRunMin, runCeilingKm, prevSunday: weekPrevSunday, scale, omit: omitted, capCounts,
         maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, ceilingName,
         runBudgetMin, fillMin, ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap, easyMaxMin, maxSessions, maxSessionsName, maxRuns, noAssessment,
-        prevLongRunMin: prevLongRun > 0 ? prevLongRun : undefined, runFloorMin,
+        runFloorMin,
       }, adjustments);
-      const work = stationWorkOf(workouts);
-      const ergMin = prescribed(workouts).filter(isHyroxEasyErg).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
-      const easyMin = prescribed(workouts).filter(isPlainEasyRun).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
-      const tss = hyroxPlannedTss(workouts);
-      return { workouts, adjustments, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin, easyMin };
+      return attemptOf(workouts, adjustments);
     };
     type Attempt = ReturnType<typeof make>;
-    // Ceilings: the acute:chronic guard (training weeks), the deload ceiling
-    // (deload weeks), the weekly hours (training weeks; scope item 9: hours
-    // are a ceiling) and, in a taper week, the taper budget (taperFraction ×
-    // the reference week), the reference week's station and brick minutes and
-    // MTL, and the week before (the taper never rises; running's rule,
-    // SCIENCE_LOG §CV.4). Easy erg work gives way first (its minutes price
-    // linearly: `ergPerMin`, what one minute adds to the limit), then every
+    // Step 2 of the constraint hierarchy, the week's size: the acute:chronic
+    // guard (training weeks), the deload ceiling (deload weeks), the chosen
+    // weekly hours and the phase budget (training weeks; week 1's assessment
+    // exempt from the budget) and, in a taper week, the taper budget
+    // (taperFraction × the reference week), the reference week's station and
+    // brick minutes and MTL, and the week before (the taper never rises;
+    // running's rule, SCIENCE_LOG §CV.4). Plain proportional sizing, as in
+    // round 4: easy erg work gives way first (its minutes price linearly:
+    // `ergPerMin`, what one minute adds to the limit), then every
     // budget-sized session shrinks by the same scale each round, so stations,
     // bricks and easy runs give way together. Session floors and fixed
     // formats move the load in whole sessions, so a training week still over
-    // its ceiling then takes stations out of circuits and leaves sessions out
-    // (HYROX_GUARD_OMIT_ORDER) and, last, trims the long run. A taper week
-    // over its ceiling after the scale takes stations out of its circuits,
-    // then leaves sessions out (taperDropRank) until it fits: the fractions
-    // hold (review 2026-10-13), the primer alone excepted. Before (review
-    // 2026-10-13) the session floors held 2-h plans at up to 113% of the hours
-    // in their peak weeks, and the never-rises rule dropped whole sessions
-    // without trying the stations cut first.
+    // its size then leaves sessions out in the hierarchy's allocation order,
+    // lowest first (below). A taper week over its ceiling after the scale
+    // takes stations out of its circuits, then leaves sessions out
+    // (taperDropRank) until it fits: the fractions hold (review 2026-10-13),
+    // the primer alone excepted. Before round 6 (2026-10-13) the phase budget
+    // sized the station sessions and the easy erg fill but did not cap the
+    // week, so a base week could hold the running share of the chosen hours
+    // on top of a station budget of its phase.
     const capTss = Math.min(acwrCapTss ?? Infinity, deloadCapTss ?? Infinity);
     const hoursCapMin = hoursMin > 0 ? hoursMin : Infinity;
     const capMin = phase === 'taper' ? budgetMin : Math.min(deloadCapMin ?? Infinity, hoursCapMin);
+    const phaseCapMin = phase !== 'taper' && budgetMin < capMin - 1e-6 ? budgetMin : Infinity;
     const before = built[w - 2];
     const beforeCapMin = phase === 'taper' && before ? before.plannedMin : Infinity;
-    const hasCeiling = capTss < Infinity || capMin < Infinity;
+    const hasCeiling = capTss < Infinity || capMin < Infinity || phaseCapMin < Infinity;
     const trainingCeiling = phase !== 'taper' && hasCeiling;
-    // `hours`: the limit is the chosen weekly hours alone (a loaded training
-    // week); the easy-running step of the solver applies to it only.
-    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number; easyPerMin: number; hours?: boolean }> = [];
-    if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.guardTss, ergPerMin: ergTssPerMin, easyPerMin: easyRunTssPerMin });
-    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1, hours: phase !== 'taper' && capMin === hoursCapMin });
-    if (beforeCapMin < Infinity) limits.push({ cap: beforeCapMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1 });
+    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number }> = [];
+    if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.guardTss, ergPerMin: ergTssPerMin });
+    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1 });
+    if (phaseCapMin < Infinity) limits.push({ cap: phaseCapMin, of: a => a.budgetedMin, ergPerMin: 1 });
+    if (beforeCapMin < Infinity) limits.push({ cap: beforeCapMin, of: a => a.min, ergPerMin: 1 });
     if (taperWork) {
-      limits.push({ cap: taperWork.min, of: a => a.workMin, ergPerMin: 0, easyPerMin: 0 });
-      limits.push({ cap: taperWork.mtl, of: a => a.workMtl, ergPerMin: 0, easyPerMin: 0 });
+      limits.push({ cap: taperWork.min, of: a => a.workMin, ergPerMin: 0 });
+      limits.push({ cap: taperWork.mtl, of: a => a.workMtl, ergPerMin: 0 });
     }
     const over = (a: Attempt) => limits.some(l => l.of(a) > l.cap + 1e-6);
     const ratio = (a: Attempt) => limits.reduce((m, l) => Math.min(m, l.of(a) > 0 ? l.cap / l.of(a) : Infinity), Infinity);
-    // Solver: easy erg work first, cut by what the largest overshoot needs
-    // (erg minutes price linearly). Then, when the chosen weekly hours are
-    // the only limit the week is over, easy running, cut the same way
-    // (decision A's order, easy running before the HYROX-specific station
-    // work; it costs no minutes against an hours limit). Under the
-    // acute:chronic guard, the deload ceiling and the taper limits, station
-    // sessions and easy runs shrink together by one scale, as before round 5
-    // (review 2026-10-13:
-    // decision A covers the MTL cap; cutting easy running first under the
-    // guard, the lowest load per minute, cost the most minutes, and deloads
-    // came out station-heavy, 873 of 1,813 holding the last loaded week's
-    // station rounds). The scale shrinks by the overshoot each round, at
-    // least 3% (a round that lands exactly on a floor otherwise repeats), for
-    // at most 16 rounds, then the largest scale between the last two rounds
-    // that fits (8 halvings). Numerical choices with no physiological
-    // meaning. Before 2026-10-13 the scale stopped at the first fit, up to 3%
-    // under it: a week at one more hour lost a station round it had room for
-    // (intermediate 10 weeks, W5 at 9 h against 10 h: a 50-min race-pace
-    // circuit of 3 rounds became 33 min of 2).
-    const cutFor = (a: Attempt, perMin: (l: typeof limits[number]) => number): number | null => {
-      let cut = 0;
-      for (const l of limits) {
-        const excess = l.of(a) - l.cap;
-        if (excess <= 1e-6) continue;
-        if (perMin(l) <= 0) return null;
-        cut = Math.max(cut, excess / perMin(l));
-      }
-      return cut;
-    };
+    // Solver (round 4): easy erg work first, cut by what the largest
+    // overshoot needs (erg minutes price linearly). Then the scale, shrunk by
+    // the overshoot each round, at least 3% (a round that lands exactly on a
+    // floor otherwise repeats), for at most 16 rounds. Numerical choices with
+    // no physiological meaning. In a training week the scale also caps the
+    // easy running at the scale times what the week held at full size (review
+    // 2026-10-13): the scale on the running share alone left easy runs that
+    // the long run caps untouched until the week left them out whole
+    // (beginner 5 h 12 weeks W5, stations gated by an injury: a 33-min easy
+    // run left out, over the guard by 0.02 TSS, where 32 min fitted).
     // The scale moves station and brick sessions in whole rounds, and easy
     // runs merge under the run floor, so the week can land well under its
-    // ceiling: easy erg work takes that room (what it holds the larger rounds
+    // size: easy erg work takes that room (what it holds the larger rounds
     // could not).
     const withErgRoom = (a: Attempt): Attempt => {
       if (over(a)) return a;
@@ -2209,8 +2176,15 @@ export function buildHyroxTrainingWeeks(
       let a = make();
       if (!over(a)) return a;
       if (a.ergMin > 0) {
-        const cut = cutFor(a, l => l.ergPerMin);
-        if (cut != null && cut < a.ergMin) {
+        let cut = 0;
+        let ergCan = true;
+        for (const l of limits) {
+          const excess = l.of(a) - l.cap;
+          if (excess <= 1e-6) continue;
+          if (l.ergPerMin <= 0) { ergCan = false; break; }
+          cut = Math.max(cut, excess / l.ergPerMin);
+        }
+        if (ergCan && cut < a.ergMin) {
           ergCap = Math.max(0, Math.floor(a.ergMin - cut));
           a = make();
           if (!over(a)) return a;
@@ -2218,33 +2192,11 @@ export function buildHyroxTrainingWeeks(
       }
       ergCap = 0;
       a = make();
-      const hoursOnly = limits.every(l => l.hours || l.of(a) <= l.cap + 1e-6);
-      if (phase !== 'taper' && hoursOnly && over(a) && a.easyMin > 0) {
-        const cut = cutFor(a, l => l.easyPerMin);
-        if (cut != null && cut < a.easyMin) {
-          easyCap = Math.max(0, Math.floor(a.easyMin - cut));
-          a = make();
-          if (!over(a)) return withErgRoom(a);
-        }
-        easyCap = 0;
-        a = make();
-        if (!over(a)) return withErgRoom(a);
-      }
-      if (!over(a)) return a;
-      // Under the guard or the deload ceiling, a training week's easy running
-      // shrinks with the station work by the same scale: its minutes are
-      // capped at the scale times what the week held at full size. The scale
-      // on the running share alone left easy runs capped by the long run
-      // untouched until the week left them out whole (beginner 5 h 12 weeks
-      // W5, stations gated by an injury: a 33-min easy run left out where 32
-      // min fitted).
-      const easyFull = a.easyMin;
-      const propEasy = phase !== 'taper' && !hoursOnly && easyFull > 0;
+      const easyFull = phase !== 'taper' ? a.easyMin : 0;
       const setScale = (x: number) => {
         scale = x;
-        if (propEasy) easyCap = Math.floor(easyFull * x);
+        easyCap = easyFull > 0 ? Math.floor(easyFull * x) : undefined;
       };
-      let fitScale = 1;
       let overScale = 1;
       for (let i = 0; i < 16 && over(a); i++) {
         overScale = scale;
@@ -2252,78 +2204,105 @@ export function buildHyroxTrainingWeeks(
         a = make();
       }
       if (!over(a) && scale < 1) {
-        fitScale = scale;
-        for (let i = 0; i < 8 && overScale - fitScale > 1e-4; i++) {
+        // The largest scale between the last two rounds that fits (session
+        // rounds and easy runs move in whole steps, so the first fit can sit
+        // a round under the size; round 5's refinement, kept so one more
+        // hour does not lose a station round it had room for).
+        let fitScale = scale;
+        for (let i = 0; i < 6 && overScale - fitScale > 1e-3; i++) {
           setScale((fitScale + overScale) / 2);
           const b = make();
           if (over(b)) overScale = scale; else { fitScale = scale; a = b; }
         }
         setScale(fitScale);
-        a = make();
+        // The room the whole rounds leave goes to easy running first, up to
+        // what the week held at full size (easy running ranks above easy erg
+        // work), then to easy erg work (withErgRoom). Before round 6, one
+        // more hour lengthened an easy run past what the guard could hold,
+        // the scale took a station round with it, and the room it left stayed
+        // empty (intermediate 12 weeks, W5 at 10 h held 260 min against 273
+        // at 9 h, with 29 TSS of the guard unused).
+        // (setScale sets easyCap; a cast, as the narrowing does not see it.)
+        const capNow = easyCap as number | undefined;
+        if (easyFull > 0 && capNow != null && capNow < easyFull) {
+          let lo = capNow;
+          let hi = easyFull;
+          for (let i = 0; i < 6 && hi - lo > 1; i++) {
+            const mid = Math.floor((lo + hi) / 2);
+            easyCap = mid;
+            const b = make();
+            if (over(b)) hi = mid; else { lo = mid; a = b; }
+          }
+          easyCap = hi;
+          const top = make();
+          if (!over(top)) a = top; else easyCap = lo;
+        }
         a = withErgRoom(a);
       }
       return a;
     };
     // The nominal week 1 that seeds the chronic window without a logged load
     // (D4): week 1 as generated with a station session in the assessment's
-    // slot, under week 1's own ceiling (the weekly hours), at the rung's own
-    // hours, and never lighter than the rung below's (a week the rung below
-    // built stays inside this rung's guard).
-    if (w === 1 && chronicSeedSource === 'nominal' && !lv.seedSet) {
+    // slot, under week 1's own ceilings (the weekly hours, the phase budget).
+    if (w === 1 && chronicSeedSource === 'nominal' && !seedSet) {
       noAssessment = true;
-      lv.seedTss = Math.max(fit().tss, lv.seedFloor);
-      lv.seedSet = true;
+      chronicSeedTss = fit().tss;
+      seedSet = true;
       noAssessment = false;
     }
     let attempt = fit();
     if (trainingCeiling && !deloadRef) {
-      // Name the ceiling that binds in the notes: the guard when the week at
-      // full size is over it, otherwise the weekly hours.
+      // Name the ceiling that binds hardest at full size in the notes: the
+      // guard, the weekly hours or the phase budget.
       scale = 1;
       ergCap = undefined;
+      easyCap = undefined;
       const full = make();
-      if (full.guardTss <= capTss + 1e-6 && full.min > hoursCapMin + 1e-6) {
-        ceilingName = 'weekly hours';
+      const named: Array<[string | undefined, number]> = [
+        [undefined, capTss < Infinity && full.guardTss > 0 ? capTss / full.guardTss : Infinity],
+        ['weekly hours', full.min > 0 ? hoursCapMin / full.min : Infinity],
+        [`${phase} budget`, full.budgetedMin > 0 ? phaseCapMin / full.budgetedMin : Infinity],
+      ];
+      const [name, r] = named.reduce((m, x) => (x[1] < m[1] ? x : m));
+      if (r < 1 - 1e-9 && name) {
+        ceilingName = name;
         attempt = fit();
       }
     }
     if (trainingCeiling) {
-      // A ceiling never takes a week's last station session or brick before
-      // the long run is trimmed to its floor (review 2026-10-13: at 6 h the
-      // guard left novice and intermediate plans with no station or brick
-      // work for up to 10 weeks in a row, 33% of training weeks, to keep the
-      // tempo and the long run). A group whose omission would leave the week
-      // with no HYROX work waits until the long run is at its floor.
+      // Step 3 of the hierarchy run backwards: a training week still over its
+      // size after the scale leaves sessions out lowest priority first. The
+      // long run and the quality run are the first allocation, the week's
+      // last station session or brick the second, the other station and brick
+      // work the third, easy running the fourth (easy erg work, the fifth,
+      // has already gone in fit):
+      //   1. easy runs, stations out of each circuit down to
+      //      MIN_CIRCUIT_STATIONS, the technique station session, the
+      //      secondary brick, the brick (HYROX_GUARD_OMIT_ORDER); a group whose
+      //      omission would leave the week with no station session and no
+      //      brick is the week's last station session or brick and waits;
+      //   2. the long run gives up its growth over the previous loaded week's
+      //      long run for the quality run (D3), the longest length that fits;
+      //      then the quality run leaves (the long run keeps its length);
+      //   3. what left on the way comes back, highest priority first, when it
+      //      fits beside what had to go;
+      //   4. the long run shortens toward the run floor, then leaves;
+      //   5. last, the week's last station session or brick, only when the
+      //      week is still over its size without the long run; the long run
+      //      then takes back what fits, up to the length it had.
+      // Steps 4 and 5 are where the hierarchy's order yields: every training
+      // week keeps HYROX work (the round-4 guarantee, review 2026-10-13: at a
+      // logged load of 40 TSS or less, 578 to 679 loaded weeks held a lone
+      // long run where a station session and a 20-min long run fitted). In
+      // order, at 20 to 100 TSS of logged load, 1,179 training weeks held no
+      // station session or brick, and 326 at the default sessions (mostly at
+      // 2 h). Before round 6 (2026-10-13) the quality run left before the
+      // brick.
       const heldWork = hasHyroxWork(attempt.workouts);
+      const isQ = (x: Workout) => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals';
       const deferred: HyroxGuardOmit[] = [];
       for (const o of HYROX_GUARD_OMIT_ORDER) {
         if (!over(attempt)) break;
-        // The quality run ranks ahead of the long run's growth (D3, Tristan
-        // 2026-10-13): before it leaves, the long run holds the longest
-        // length of the previous weeks, or the longest length up to the one
-        // wanted that fits beside it. When that is not enough the long run
-        // keeps its growth and the quality run leaves.
-        if (o === 'quality' && longRunMin != null && prevLongRun > 0 && longRunMin > prevLongRun
-          && attempt.workouts.some(x => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals')) {
-          const wanted = longRunMin;
-          longRunMin = prevLongRun;
-          const held = fit();
-          if (!over(held)) {
-            let lo = prevLongRun;
-            let hi = wanted;
-            while (lo < hi) {
-              const mid = Math.ceil((lo + hi) / 2);
-              longRunMin = mid;
-              if (over(fit())) hi = mid - 1; else lo = mid;
-            }
-            longRunMin = lo;
-            attempt = fit();
-            if (lo < wanted) attempt.adjustments.push(`W${w}: Long Run held at ${lo} min, not ${wanted}, for the quality run (${ceilingName ?? 'acute:chronic guard'})`);
-            break;
-          }
-          longRunMin = wanted;
-          attempt = fit();
-        }
         const keep = omitted;
         omitted = [...omitted, o];
         const trial = fit();
@@ -2335,33 +2314,52 @@ export function buildHyroxTrainingWeeks(
         }
         attempt = trial;
       }
-      // Bring back any group left out on the way that fits beside the ones
-      // that had to go (an easy run left out before the quality run went).
-      for (const o of HYROX_GUARD_OMIT_ORDER) {
+      const longWanted = longRunMin;
+      if (over(attempt) && attempt.workouts.some(isQ)) {
+        // D3: the long run gives up its growth, never the previous loaded
+        // week's length (at least LONG_SOFT_FLOOR_MIN), for the quality run.
+        const hold = Math.max(LONG_SOFT_FLOOR_MIN, prevLoadedLong ?? 0);
+        if (longWanted != null && longWanted > hold) {
+          longRunMin = hold;
+          if (!over(fit())) {
+            let lo = hold;
+            let hi = longWanted;
+            while (lo < hi) {
+              const mid = Math.ceil((lo + hi) / 2);
+              longRunMin = mid;
+              if (over(fit())) hi = mid - 1; else lo = mid;
+            }
+            longRunMin = lo;
+            attempt = fit();
+            if (lo < longWanted) attempt.adjustments.push(`W${w}: Long Run held at ${lo} min, not ${longWanted}, for the quality run (${ceilingName ?? 'acute:chronic guard'})`);
+          } else {
+            longRunMin = longWanted;
+          }
+        }
+        if (over(attempt)) {
+          longRunMin = longWanted;
+          omitted = [...omitted, 'quality'];
+          attempt = fit();
+        }
+      }
+      // What left on the way comes back, highest priority first, when it fits.
+      for (const o of [...HYROX_GUARD_OMIT_ORDER].reverse()) {
         if (!omitted.includes(o) || over(attempt)) continue;
         const keep = omitted;
         omitted = omitted.filter(x => x !== o);
         const trial = fit();
         if (over(trial)) { omitted = keep; attempt = fit(); } else attempt = trial;
       }
-      // The long run down to its floor (LONG_SOFT_FLOOR_MIN, or its own
-      // length when that is shorter: a deload or a 30-min start).
-      const longWanted = longRunMin;
-      const longFloor = Math.min(LONG_SOFT_FLOOR_MIN, longRunMin ?? 0);
-      for (let i = 0; i < 16 && over(attempt) && longRunMin != null && longRunMin > longFloor; i++) {
-        longRunMin = Math.max(longFloor, Math.floor(longRunMin * Math.min(0.97, ratio(attempt))));
-        attempt = make();
-      }
-      // Then the long run down to the run floor, then out of the week, before
-      // the week's last station session or brick (review 2026-10-13: at a
-      // logged load of 40 TSS or less the station session left first and the
-      // long run grew back into its room, so 578 to 679 loaded weeks held a
-      // lone 30 to 54-min long run where a station session and a 20-min long
-      // run fitted). The long run is never trimmed under the run floor
-      // (review 2026-10-13: it was trimmed to 4 min under a 50-TSS logged
-      // load, and the week after jumped to 110% of the start).
+      // The long run toward the run floor, then out of the week. Never under
+      // the run floor (review 2026-10-13: it was trimmed to 4 min under a
+      // 50-TSS logged load, and the week after jumped to 110% of the start).
       let longLeftOut = false;
+      const longBeforeTrim = attempt.workouts.find(isHyroxLongRun)?.estimatedDurationMin;
       const trimLongToFloor = () => {
+        // From the length the week holds (the single-run ceiling can hold it
+        // under the one asked for).
+        const held = attempt.workouts.find(isHyroxLongRun)?.estimatedDurationMin;
+        if (longRunMin != null && held != null && held < longRunMin) longRunMin = held;
         for (let i = 0; i < 16 && over(attempt) && longRunMin != null && longRunMin > runFloorMin; i++) {
           longRunMin = Math.max(runFloorMin, Math.floor(longRunMin * Math.min(0.97, ratio(attempt))));
           attempt = make();
@@ -2374,10 +2372,10 @@ export function buildHyroxTrainingWeeks(
       };
       trimLongToFloor();
       // Last, the week's last station session or brick, only when the week is
-      // still over its ceiling without the long run. The long run then takes
+      // still over its size without the long run. The long run then takes
       // back what fits, from the run floor up to the length it had: the
-      // station session alone was over the ceiling, so the long run never
-      // holds more than the station session would have.
+      // station session alone was over the size, so the long run never holds
+      // more than the station session would have.
       if (over(attempt) && deferred.length > 0) {
         for (const o of deferred) {
           if (!over(attempt)) break;
@@ -2410,8 +2408,11 @@ export function buildHyroxTrainingWeeks(
         }
         trimLongToFloor();
       }
-      if (longLeftOut && !attempt.workouts.some(isHyroxLongRun)) {
+      const longAfter = attempt.workouts.find(isHyroxLongRun)?.estimatedDurationMin;
+      if (longLeftOut && longAfter == null) {
         attempt.adjustments.push(`W${w}: Long Run left out (${ceilingName ?? 'acute:chronic guard'})`);
+      } else if (longBeforeTrim != null && longAfter != null && longAfter < longBeforeTrim) {
+        attempt.adjustments.push(`W${w}: Long Run cut from ${longBeforeTrim} to ${longAfter} min (${ceilingName ?? 'acute:chronic guard'})`);
       }
       if (w === 1 && acwrCapTss != null && attempt.tss > capTss + 1e-6 && attempt.guardTss <= capTss + 1e-6) {
         attempt.adjustments.push(`W${w}: planned load ${Math.round(attempt.tss)} TSS, above the ${Math.round(capTss)} TSS guard by the assessment (${Math.round(attempt.tss - attempt.guardTss)} TSS, not counted by the guard)`);
@@ -2421,7 +2422,9 @@ export function buildHyroxTrainingWeeks(
           ? `W${w}: deload ${Math.round(attempt.min)} min / ${Math.round(attempt.tss)} TSS above ${HYROX_DELOAD_FACTOR} of the last loaded week (${Math.round(deloadRef.plannedMin)} min / ${Math.round(deloadRef.plannedTss)} TSS)`
           : attempt.guardTss > capTss + 1e-6
             ? `W${w}: planned load ${Math.round(attempt.guardTss)} TSS above the ${Math.round(capTss)} TSS guard`
-            : `W${w}: ${Math.round(attempt.min)} min above the ${Math.round(hoursCapMin)}-min weekly hours`);
+            : attempt.min > hoursCapMin + 1e-6
+              ? `W${w}: ${Math.round(attempt.min)} min above the ${Math.round(hoursCapMin)}-min weekly hours`
+              : `W${w}: ${Math.round(attempt.budgetedMin)} min above the ${Math.round(phaseCapMin)}-min ${phase} budget`);
       }
     }
     // A taper week sheds sessions while `tooHeavy` holds, lowest priority
@@ -2433,13 +2436,7 @@ export function buildHyroxTrainingWeeks(
     // short station circuit stays over the easy runs (before, the best-fit
     // rule dropped the circuit when that alone fitted: 3 default-hours race
     // weeks held no circuit). Race week keeps its primer.
-    const withWorkouts = (a: Attempt, workouts: Workout[]): Attempt => {
-      const work = stationWorkOf(workouts);
-      const ergMin = prescribed(workouts).filter(isHyroxEasyErg).reduce((x, y) => x + (y.estimatedDurationMin ?? 0), 0);
-      const easyMin = prescribed(workouts).filter(isPlainEasyRun).reduce((x, y) => x + (y.estimatedDurationMin ?? 0), 0);
-      const tss = hyroxPlannedTss(workouts);
-      return { ...a, workouts, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin, easyMin };
-    };
+    const withWorkouts = (a: Attempt, workouts: Workout[]): Attempt => attemptOf(workouts, a.adjustments);
     const fraction = raceTaper ? taperFraction(w - taperStart + 1, taperLen) : null;
     const whyOf = (a: Attempt): string => (raceTaper && (a.min > capMin + 1e-6 || a.workMin > (taperWork?.min ?? Infinity) + 1e-6 || a.workMtl > (taperWork?.mtl ?? Infinity) + 1e-6))
       ? `taper: ${Math.round(budgetMin)} min, ${fraction} of ${taperRef ? 'the reference week' : 'the weekly hours'}`
@@ -2485,7 +2482,7 @@ export function buildHyroxTrainingWeeks(
     // MTL cap; the chosen session count, with what holds the sessions (the
     // running share, an easy run kept in a missing quality run's slot, each
     // session at its cap); no erg access; the injury gates. The note itself
-    // is written once the hours ladder has picked the week (hoursNote).
+    // is written with the week's detail, below.
     const hoursWhy: string[] = [];
     if (phase !== 'taper') {
       const ws = prescribed(attempt.workouts);
@@ -2529,13 +2526,12 @@ export function buildHyroxTrainingWeeks(
       phase,
       deload,
       raceWeek,
-      builtAtHours: hoursMin / 60,
       budgetMin: Math.round(budgetMin),
       plannedMin: hyroxPlannedMinutes(attempt.workouts),
       plannedTss: attempt.tss,
       acwrCapTss,
       guardExemptTss: acwrCapTss != null ? guardExemptTss(attempt.workouts) : 0,
-      chronicSeedTss: lv.seedTss,
+      chronicSeedTss,
       chronicSeedSource,
       deloadCapMin,
       deloadCapTss,
@@ -2547,256 +2543,18 @@ export function buildHyroxTrainingWeeks(
       adjustments: attempt.adjustments,
       workouts: attempt.workouts,
     };
-    HOURS_WHY.set(detail, hoursWhy);
+    // A training week HYROX_RUN_FLOOR_MIN or more under the chosen weekly
+    // hours says so, with what holds it (decision C).
+    const plannedMin = detail.plannedMin;
+    if (phase !== 'taper' && hoursMin > 0 && hoursMin - plannedMin >= HYROX_RUN_FLOOR_MIN) {
+      const text = hoursWhy.length > 0 ? hoursWhy.join('; ') : 'the running share and the session caps hold it';
+      detail.adjustments = [...detail.adjustments, `W${w}: ${plannedMin} of the chosen ${Math.round(hoursMin)} min (${text})`];
+    }
     return detail;
   };
 
-  // The hours ladder (decision B, Tristan 2026-10-13: for the same athlete
-  // and plan length, one more chosen hour never gives fewer total plan
-  // minutes or a lighter peak week). A plan is built at every whole hour from
-  // the band's lowest choice up to the chosen hours, lowest first, and the
-  // rung of the chosen hours is the plan. Each rung holds at least what the
-  // rung below holds: total minutes, and the peak week's minutes and planned
-  // load (canonical TSS), over the training weeks and over all weeks. A rung
-  // is its own build when that holds; otherwise the weeks the rung below
-  // needs are held to its same week (minutes and load), fewest first:
-  //   1. the week that sets each of the rung below's peaks above this rung's,
-  //      and, for the total, the weeks furthest under the rung below's until
-  //      they cover the shortfall; again, up to HYROX_LADDER_ROUNDS rounds;
-  //   2. else every week;
-  //   3. else every week, and where no week holds as much, the rung below's
-  //      weeks up to that one (this always holds).
-  // A held week is the week built with the rung below's hours on this rung's
-  // weeks before it (a week built for fewer hours sits inside every ceiling of
-  // more hours: the running share, the weekly hours and the phase budget are
-  // larger, and the guard, the single-run ceiling and the deload read the same
-  // weeks), else the rung below's own week when every rule that reads the
-  // weeks before holds on this rung's (lowerWeekFits). A rung depends only on
-  // the rungs below it, so the plan at one hour less is the rung below and B
-  // holds by construction. Before (review 2026-10-13) one more hour gave fewer
-  // total plan minutes in 11 of 1,380 adjacent-hour pairs at the default
-  // sessions and 189 with a logged load of 100 TSS: under a binding guard or
-  // MTL cap, the larger running share brings the tier quality run (denser
-  // work, more load per minute), which holds fewer minutes, and the guard
-  // then reads the lighter weeks after it. The order (the rung's own build
-  // first, the fewest held weeks) is a product rule; HYROX_LADDER_ROUNDS is a
-  // cost bound. With more than one rung every rung builds all training weeks,
-  // so a week rebuilt alone (upto) is the week of the full plan.
-  const chosenHours = hx.weeklyHoursAvailable ?? 0;
-  const lowest = HYROX_HOURS_RANGE[hx.athleteBand]?.min ?? chosenHours;
-  const ladder: number[] = [];
-  if (Number.isFinite(chosenHours) && opts.hoursLadder !== false) for (let h = lowest; h < chosenHours - 1e-9; h++) ladder.push(h);
-  ladder.push(chosenHours);
-  const weeksToBuild = ladder.length > 1 ? trainingWeeks : last;
-  const holdsAtLeast = (a: HyroxWeekDetail, b: HyroxWeekDetail): boolean =>
-    a.plannedMin >= b.plannedMin && a.plannedTss >= b.plannedTss - 1e-6;
-  const minOf = (d: HyroxWeekDetail) => d.plannedMin;
-  const tssOf = (d: HyroxWeekDetail) => d.plannedTss;
-  const sumOf = (p: readonly HyroxWeekDetail[], f: (d: HyroxWeekDetail) => number) => p.reduce((x, d) => x + f(d), 0);
-  const peakOf = (p: readonly HyroxWeekDetail[], f: (d: HyroxWeekDetail) => number, training: boolean) =>
-    Math.max(0, ...p.filter(d => !training || d.phase !== 'taper').map(f));
-  const planHoldsAtLeast = (a: readonly HyroxWeekDetail[], b: readonly HyroxWeekDetail[]): boolean =>
-    sumOf(a, minOf) >= sumOf(b, minOf)
-    && [true, false].every(t => peakOf(a, minOf, t) >= peakOf(b, minOf, t) && peakOf(a, tssOf, t) >= peakOf(b, tssOf, t) - 1e-6);
-  // A week taken onto a rung's weeks before it: its guard, seed and deload
-  // ceiling read from those weeks.
-  const retag = (w: number, lv: HyroxHoursRung, d: HyroxWeekDetail): HyroxWeekDetail => {
-    const h = historyLimits(w, lv);
-    const exempt = w === 1 ? hyroxPlannedTss(prescribed(d.workouts).filter(x => x.t === 'hyrox_assessment')) : 0;
-    const out: HyroxWeekDetail = {
-      ...d,
-      acwrCapTss: h.acwrCapTss,
-      guardExemptTss: h.acwrCapTss != null ? exempt : 0,
-      chronicSeedTss: lv.seedTss,
-      deloadCapMin: h.deloadRef ? h.deloadRef.plannedMin * HYROX_DELOAD_FACTOR : null,
-      deloadCapTss: h.deloadRef ? h.deloadRef.plannedTss * HYROX_DELOAD_FACTOR : null,
-    };
-    HOURS_WHY.set(out, HOURS_WHY.get(d) ?? []);
-    return out;
-  };
-  // The rung below's week taken as it is onto this rung's weeks before it: a
-  // loaded training week or a deload, when every rule that reads the weeks
-  // before holds on this rung's (the acute:chronic guard, the single-run
-  // ceiling, the Sunday-to-Monday spacing; a deload's ceiling, its reference
-  // week's session caps, counts, hard sessions and quality runs). Taper weeks
-  // are not taken this way.
-  const lowerWeekFits = (w: number, lv: HyroxHoursRung, d: HyroxWeekDetail): HyroxWeekDetail | null => {
-    const h = historyLimits(w, lv);
-    if (h.phase === 'taper' || h.raceWeek || h.deload !== d.deload) return null;
-    const ws = prescribed(d.workouts);
-    const exempt = w === 1 ? hyroxPlannedTss(ws.filter(x => x.t === 'hyrox_assessment')) : 0;
-    if (h.acwrCapTss != null && d.plannedTss - exempt > h.acwrCapTss + 1e-6) return null;
-    if (h.runCeilingKm != null && d.longestRunKm > h.runCeilingKm + 0.001) return null;
-    const monday = ws.filter(x => x.dayOfWeek === 0);
-    if (h.weekPrevSunday?.hard && monday.some(isHyroxHardSession)) return null;
-    if (h.weekPrevSunday?.eccentric && monday.some(isEccentricSession)) return null;
-    const ref = h.deloadRef;
-    if (ref) {
-      if (d.plannedMin > ref.plannedMin * HYROX_DELOAD_FACTOR + 1e-6 || d.plannedTss > ref.plannedTss * HYROX_DELOAD_FACTOR + 1e-6) return null;
-      const caps = sessionCapsOf(ref.workouts);
-      for (const x of ws) {
-        if (!isHyroxWork(x) || x.t === 'hyrox_assessment') continue;
-        const c = sessionCapFor(caps, x.t ?? '');
-        if (!c) continue;
-        const minDur = (x.t ?? '').includes('station') ? 35 : 20;
-        const stations = (x.hyroxComponents ?? []).filter(k => k.type !== 'run').length;
-        if ((x.estimatedDurationMin ?? 0) > Math.max(minDur, c.min) || (x.hyroxRounds ?? 0) > Math.max(MIN_CIRCUIT_ROUNDS, c.rounds)
-          || stations > Math.max(MIN_CIRCUIT_STATIONS, c.stations)) return null;
-      }
-      const rc = sessionCountsOf(ref.workouts);
-      const dc = sessionCountsOf(d.workouts);
-      const isQ = (x: Workout) => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals';
-      const rp = prescribed(ref.workouts);
-      if (dc.runs > rc.runs || dc.stations > rc.stations || dc.bricks > rc.bricks
-        || ws.length > Math.min(chosenSessions, rp.length)
-        || ws.filter(isHyroxHardSession).length > rp.filter(isHyroxHardSession).length
-        || ws.filter(isQ).length > rp.filter(isQ).length) return null;
-    }
-    return retag(w, lv, d);
-  };
-  // A rung, built from week `from` on (the weeks before it kept from `base`,
-  // built the same way). `held(w)`: week w is held to the rung below's;
-  // `takeBelow`: where no week holds as much, the rung takes the rung below's
-  // weeks up to that one.
-  const runRung = (
-    li: number, below: HyroxHoursRung | null, base: HyroxHoursRung | null, from: number,
-    held: (w: number) => boolean, takeBelow: boolean,
-  ): HyroxHoursRung => {
-    const lv: HyroxHoursRung = {
-      hoursMin: ladder[li] * 60, built: [],
-      seedTss: loggedSeedTss, seedSet: chronicSeedSource === 'logged', seedFloor: below?.seedTss ?? 0,
-    };
-    if (base && from > 1) {
-      lv.built = base.built.slice(0, from - 1);
-      lv.seedTss = base.seedTss;
-      lv.seedSet = base.seedSet;
-    }
-    for (let w = lv.built.length + 1; w <= weeksToBuild; w++) {
-      let wk = buildWeek(w, lv, lv.hoursMin);
-      const lower = below?.built[w - 1];
-      if (below && lower && held(w) && !holdsAtLeast(wk, lower)) {
-        let pick: HyroxWeekDetail | null = null;
-        if (li >= 1) {
-          const cand = buildWeek(w, lv, ladder[li - 1] * 60);
-          if (holdsAtLeast(cand, lower)) pick = cand;
-        }
-        pick ??= lowerWeekFits(w, lv, lower);
-        if (pick) wk = pick;
-        else if (takeBelow) {
-          const taken: HyroxWeekDetail[] = [];
-          for (let v = 1; v <= w; v++) taken.push(retag(v, { ...lv, built: taken }, below.built[v - 1]));
-          lv.built = taken;
-          continue;
-        }
-      }
-      lv.built.push(wk);
-    }
-    return lv;
-  };
-  // The weeks to hold next (step 1): for each peak of the rung below's above
-  // this rung's, its week (the largest); else, for the total, the weeks
-  // furthest under the rung below's until they cover the shortfall.
-  const weeksToHold = (a: readonly HyroxWeekDetail[], b: readonly HyroxWeekDetail[], held: ReadonlySet<number>): number[] => {
-    const open = (i: number) => !!b[i] && !!a[i] && !held.has(i + 1) && !holdsAtLeast(a[i], b[i]);
-    const out = new Set<number>();
-    for (const t of [true, false]) {
-      for (const f of [minOf, tssOf]) {
-        const mine = peakOf(a, f, t);
-        let best = -1;
-        b.forEach((d, i) => {
-          if ((!t || d.phase !== 'taper') && open(i) && f(d) > mine + 1e-6 && (best < 0 || f(d) > f(b[best]))) best = i;
-        });
-        if (best >= 0) out.add(best + 1);
-      }
-    }
-    if (out.size > 0) return [...out];
-    const short = sumOf(b, minOf) - sumOf(a, minOf);
-    if (short > 0) {
-      const under = b.map((_, i) => i)
-        .filter(i => open(i) && b[i].plannedMin > a[i].plannedMin)
-        .sort((x, y) => (b[y].plannedMin - a[y].plannedMin) - (b[x].plannedMin - a[x].plannedMin));
-      let cover = 0;
-      for (const i of under) {
-        out.add(i + 1);
-        cover += b[i].plannedMin - a[i].plannedMin;
-        if (cover >= short) break;
-      }
-    }
-    return [...out];
-  };
-  // The first week of a rung under the rung below's same week.
-  const firstUnder = (r: HyroxHoursRung, f: HyroxHoursRung): number => {
-    const i = r.built.findIndex((d, k) => !!f.built[k] && !holdsAtLeast(d, f.built[k]));
-    return i < 0 ? r.built.length + 1 : i + 1;
-  };
-  let below: HyroxHoursRung | null = null;
-  for (let li = 0; li < ladder.length; li++) {
-    let rung = runRung(li, below, null, 1, () => false, false);
-    if (below && !planHoldsAtLeast(rung.built, below.built)) {
-      const f = below;
-      const held = new Set<number>();
-      let ok = false;
-      for (let round = 0; round < HYROX_LADDER_ROUNDS && !ok; round++) {
-        const add = weeksToHold(rung.built, f.built, held);
-        if (add.length === 0) break;
-        for (const w of add) held.add(w);
-        rung = runRung(li, f, rung, Math.min(...add), w => held.has(w), false);
-        ok = planHoldsAtLeast(rung.built, f.built);
-      }
-      if (!ok) {
-        rung = runRung(li, f, rung, firstUnder(rung, f), () => true, false);
-        if (!planHoldsAtLeast(rung.built, f.built)) rung = runRung(li, f, rung, firstUnder(rung, f), () => true, true);
-      }
-    }
-    below = rung;
-  }
-  const plan = below as HyroxHoursRung;
-  return plan.built.slice(0, last).map(d => hoursNote(d, plan.hoursMin));
-}
-
-/** Rounds of the hours ladder's step 1 (buildHyroxTrainingWeeks), each holding
- *  more weeks to the rung below's before every week is held: a cost bound on
- *  the plan build, no physiological meaning. */
-const HYROX_LADDER_ROUNDS = 4;
-
-/** One rung of the hours ladder (buildHyroxTrainingWeeks): the weeks built so
- *  far at `hoursMin`, and the guard's chronic seed. */
-interface HyroxHoursRung {
-  hoursMin: number;
-  built: HyroxWeekDetail[];
-  /** The chronic seed (canonical TSS): the logged weekly load, or the nominal
-   *  week 1 at the rung's hours, never under the rung below's (seedFloor: a
-   *  week the rung below built then stays inside this rung's guard). */
-  seedTss: number;
-  seedSet: boolean;
-  seedFloor: number;
-}
-
-/** What holds a built week under the chosen weekly hours (decision C), keyed
- *  by the week's detail; read by hoursNote. */
-const HOURS_WHY = new WeakMap<HyroxWeekDetail, string[]>();
-
-/**
- * The plan's week with its notes against the chosen weekly hours: a week the
- * hours ladder held to the plan at fewer hours says so (decision B), and a
- * training week HYROX_RUN_FLOOR_MIN or more under the chosen hours says so,
- * with what holds it (decision C). A held week's reason is the hold: the
- * reasons its lower-hours build recorded (a running share, a budget) are
- * those of the fewer hours.
- */
-function hoursNote(d: HyroxWeekDetail, hoursMin: number): HyroxWeekDetail {
-  const notes = [...d.adjustments];
-  const held = d.builtAtHours * 60 < hoursMin - 1e-6;
-  const heldText = `held to the ${d.builtAtHours} h week`;
-  if (held) {
-    notes.push(`W${d.week}: ${heldText} (built for ${hoursMin / 60} h this week held fewer minutes or less load, and one more chosen hour never holds less)`);
-  }
-  if (d.phase !== 'taper' && hoursMin > 0 && hoursMin - d.plannedMin >= HYROX_RUN_FLOOR_MIN) {
-    const why = held ? [heldText] : [...(HOURS_WHY.get(d) ?? [])];
-    const text = why.length > 0 ? why.join('; ') : 'the running share and the session caps hold it';
-    notes.push(`W${d.week}: ${d.plannedMin} of the chosen ${Math.round(hoursMin)} min (${text})`);
-  }
-  return notes.length === d.adjustments.length ? d : { ...d, adjustments: notes };
+  for (let w = 1; w <= last; w++) built.push(buildWeek(w));
+  return built;
 }
 
 // ─── Single-week regenerator (used by injury-gate updates) ───────────────────
