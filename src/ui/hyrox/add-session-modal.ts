@@ -20,8 +20,8 @@ import {
   generateHyroxBrick,
 } from '@/workouts/hyrox-generators';
 import { scheduleHyroxWeek } from '@/workouts/scheduler.hyrox';
-import type { HyroxStation } from '@/types/triathlon';
 import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
+import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import type { Workout } from '@/types/state';
 
 type SessionKind =
@@ -59,8 +59,8 @@ const OPTIONS: SessionOption[] = [
  *  When `durationMin` is omitted, falls back to the option's default duration. */
 function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefined, slotIndex: number, phase: 'base' | 'build' | 'peak' | 'taper', durationMin?: number): number {
   const targetMin = durationMin ?? OPTIONS.find(o => o.kind === kind)?.defaultMin ?? 45;
-  const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const benchmarks = (isDoubles ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks;
+  // Station targets the plan engine uses (hyroxPlanningStationBenchmarks).
+  const benchmarks = hyroxPlanningStationBenchmarks(getState());
   let draft;
   if (kind === 'run_easy' || kind === 'run_tempo' || kind === 'run_intervals') {
     draft = generateHyroxRun({
@@ -229,8 +229,8 @@ function addSession(kind: SessionKind, durationMin?: number): void {
   const phase = (wk.ph ?? 'base') as 'base' | 'build' | 'peak' | 'taper';
   const slotIndex = (wk.triWorkouts?.length ?? 0) + (ms.w ?? 1);
   const targetMin = durationMin ?? OPTIONS.find(o => o.kind === kind)?.defaultMin ?? 45;
-  const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const benchmarks = (isDoubles ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks;
+  // Station targets the plan engine uses (hyroxPlanningStationBenchmarks).
+  const benchmarks = hyroxPlanningStationBenchmarks(ms);
 
   let workout: Workout;
   if (kind === 'run_easy' || kind === 'run_tempo' || kind === 'run_intervals') {
@@ -252,7 +252,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       phase,
       slotIndex,
       bodyWeightKg: ms.bodyWeightKg,
-      stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
+      stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
     });
   } else {
@@ -264,7 +264,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       phase,
       slotIndex,
       bodyWeightKg: ms.bodyWeightKg,
-      stationBenchmarks: benchmarks as Partial<Record<HyroxStation, number>> | undefined,
+      stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
     });
   }

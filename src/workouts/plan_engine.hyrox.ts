@@ -19,7 +19,7 @@ import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, raceWeekPrimer
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
-import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import {
   HYROX_WEEKLY_SESSIONS,
@@ -33,6 +33,7 @@ import {
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS } from './hyrox-generators';
 import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
+import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays } from './scheduler.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
@@ -338,11 +339,13 @@ function generateWeekSessions(
   const stationMin = sessions.stations > 0 ? (stationHours / sessions.stations) * 60 : 0;
   const brickMin   = sessions.bricks   > 0 ? (brickHours   / sessions.bricks)   * 60 : 0;
 
-  // Read benchmarks from the format-specific slot, falling back to legacy pooled field.
-  const isDoublesFormat = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const stationBenchmarks = (
-    isDoublesFormat ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles
-  ) ?? hx.stationBenchmarks as Partial<Record<HyroxStation, number>> | undefined;
+  // Station target times: the forecast's per-station benchmarks in the target
+  // format's terms (hyroxPlanningStationBenchmarks), the values the Stats
+  // Benchmarks ledger shows. A station held only in the other format's slot
+  // is read through the same conversion the forecast applies, so a singles
+  // athlete whose times came from doubles race splits trains to those times,
+  // not to population seeds.
+  const stationBenchmarks = hyroxPlanningStationBenchmarks(state);
   const workouts: Workout[] = [];
 
   // Race week is sharpening, not training (SCIENCE_LOG §CE): its sessions take

@@ -134,9 +134,12 @@ function stationSeedSec(
 }
 
 /** Format seconds as "m:ss". */
+/** Format a station time as "m:ss", rounded to the whole second before the
+ *  minute split, so 299.6 reads 5:00, never 4:60. */
 function fmtSec(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
+  const whole = Math.round(sec);
+  const m = Math.floor(whole / 60);
+  const s = whole % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
