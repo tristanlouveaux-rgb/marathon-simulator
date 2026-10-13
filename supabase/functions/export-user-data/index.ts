@@ -14,11 +14,17 @@
  *   - daily_metrics, sleep_summaries, activity_details, garmin_activities,
  *     coach_chat_usage, coach_narrative_cache, physiology_snapshots,
  *     best_efforts, power_curve_points, route_safety_ratings
+ *   - HYROX Doubles partner: hyrox_partner_snapshots (the race numbers shared
+ *     with a linked partner), hyrox_partner_links (the user's own row) and
+ *     hyrox_partner_invites (the user's open code, if any)
  *
  * What's stripped:
  *   - strava_tokens / garmin_tokens (credentials — never exported)
  *   - service-internal counters (llm_spend_tracker)
- *   - any field flagged sensitive (none currently)
+ *   - hyrox_partner_links.partner_id (another user's identifier; the export
+ *     says that a link exists and since when)
+ *   - hyrox_partner_invites.code (a live single-use code that links whoever
+ *     enters it; the export keeps when it was made and when it expires)
  *
  * Why server-side rather than client-side: many of these tables have RLS
  * SELECT policies but are also keyed via foreign tables (e.g.
@@ -67,6 +73,14 @@ const EXPORT_TABLES = [
   'best_efforts',
   'power_curve_points',
   'route_safety_ratings',
+  'hyrox_partner_snapshots',
+] as const
+
+// HYROX Doubles partner tables with a column left out (see header): the
+// caller's own rows only, keyed by the column named here.
+const PARTIAL_EXPORTS = [
+  { table: 'hyrox_partner_links', key: 'user_id', columns: 'user_id,created_at' },
+  { table: 'hyrox_partner_invites', key: 'owner_id', columns: 'owner_id,created_at,expires_at' },
 ] as const
 
 Deno.serve(async (req: Request) => {
@@ -130,6 +144,15 @@ Deno.serve(async (req: Request) => {
       } else {
         tables[table] = data ?? []
       }
+    } catch (err) {
+      tables[table] = { error: err instanceof Error ? err.message : 'unknown' }
+    }
+  }
+
+  for (const { table, key, columns } of PARTIAL_EXPORTS) {
+    try {
+      const { data, error } = await admin.from(table).select(columns).eq(key, userId)
+      tables[table] = error ? { error: error.message } : (data ?? [])
     } catch (err) {
       tables[table] = { error: err instanceof Error ? err.message : 'unknown' }
     }
