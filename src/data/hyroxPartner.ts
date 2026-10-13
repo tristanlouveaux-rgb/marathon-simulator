@@ -454,12 +454,13 @@ export async function removeAllMyPartnerData(opts: UpsertSnapshotOptions = {}): 
   }
 }
 
-/** The signed-in user's id, or null. Works offline while the stored session
- *  is valid (the reset's pending flag needs it when the state has no owner
- *  stamp). */
+/** The stored session's user id, or null. A local read (no token refresh,
+ *  so no sign-out side effect, and it works offline): the reset's pending
+ *  flag needs the id when the state has no owner stamp. */
 export async function sessionUserId(): Promise<string | null> {
   try {
-    return await getUserId();
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
   } catch {
     return null;
   }

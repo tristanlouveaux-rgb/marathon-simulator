@@ -33,6 +33,9 @@ vi.mock('./supabaseClient', () => {
   }
   return {
     supabase: {
+      auth: {
+        getSession: async () => ({ data: { session: h.userId ? { user: { id: h.userId } } : null } }),
+      },
       from: (table: string) => builder(table),
       rpc: (fn: string, args: unknown) => {
         const call: Call = { table: null, rpc: { fn, args }, ops: [] };
@@ -371,7 +374,7 @@ describe('full cleanup (wipe, reset out of doubles, account deletion)', () => {
     expect(await removeMyHyroxPartnerData()).toBe(false);
   });
 
-  it('sessionUserId reads the session, null without one', async () => {
+  it('sessionUserId reads the stored session locally, null without one', async () => {
     expect(await sessionUserId()).toBe('user-a');
     h.userId = null;
     expect(await sessionUserId()).toBeNull();
