@@ -40,7 +40,9 @@
  *   - every training week after week 1 holds a station session or a brick
  *     (review 2026-10-13: at 6 h the guard emptied up to 10 weeks in a row);
  *   - no brick in base, before plan week 5 or in race week;
- *   - one prescribed session a day.
+ *   - one prescribed session a day;
+ *   - no week above the chosen weekly hours (review 2026-10-13: 2-h peak
+ *     weeks reached 113%).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -156,6 +158,8 @@ function violations(s: SimulatorState): string[] {
     const ph = wk.ph as 'base' | 'build' | 'peak' | 'taper';
     const ws = prescribed(wk);
     const raceWeek = w === tw;
+    // Weekly hours are a ceiling (scope item 9).
+    if (minutes(wk) > s.hyroxConfig!.weeklyHoursAvailable * 60 + EPS) out.push(`W${w}: ${minutes(wk)} min above the ${s.hyroxConfig!.weeklyHoursAvailable} h chosen`);
     // Hard-session counts.
     if (ws.filter(isHighIntensity).length > HYROX_MAX_HARD_SESSIONS) out.push(`W${w}: ${ws.filter(isHighIntensity).length} hard sessions`);
     if (ws.filter(isHardRun).length > HYROX_MAX_HARD_RUNS) out.push(`W${w}: ${ws.filter(isHardRun).length} hard runs`);

@@ -143,7 +143,8 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // as ceilings, shedding sessions when the floors leave it over; week 1 never
 // stretches the long run past the start, and taper weeks never stretch it
 // (the taper tempo is sized to the long run instead); intermediate peak reps
-// are labelled HYROX race pace.
+// are labelled HYROX race pace; no training week sits above the chosen
+// weekly hours.
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -1429,7 +1430,7 @@ export function buildHyroxTrainingWeeks(
     const raceTaper = phase === 'taper' && w >= taperStart;
     const taperRef = raceTaper ? refWeek : undefined;
     const sessionCaps = deloadRef ? sessionCapsOf(deloadRef.workouts) : taperRef ? sessionCapsOf(taperRef.workouts) : undefined;
-    const ceilingName = deloadRef ? 'deload ceiling' : raceTaper ? 'taper' : undefined;
+    let ceilingName: string | undefined = deloadRef ? 'deload ceiling' : raceTaper ? 'taper' : undefined;
     const taperWork = taperRef ? stationWorkOf(taperRef.workouts) : undefined;
     const prevRunMin = phase === 'taper' && built[w - 2] ? runMinutesOf(built[w - 2].workouts) : undefined;
     const maxCircuitRounds = raceWeek && built[w - 2]
@@ -1464,8 +1465,12 @@ export function buildHyroxTrainingWeeks(
     // and MTL; over its ceiling after the scale it takes stations out of its
     // circuits, then leaves sessions out (taperDropRank) until it fits: the
     // fractions hold (review 2026-10-13), the primer alone excepted.
+    // Training weeks also stay within the chosen weekly hours (scope item 9:
+    // hours are a ceiling). Before (review 2026-10-13) the session floors held
+    // 2-h plans at up to 113% of the hours in their peak weeks.
     const capTss = Math.min(acwrCapTss ?? Infinity, deloadCapTss ?? Infinity);
-    const capMin = phase === 'taper' ? budgetMin : (deloadCapMin ?? Infinity);
+    const hoursCapMin = hoursMin > 0 ? hoursMin : Infinity;
+    const capMin = phase === 'taper' ? budgetMin : Math.min(deloadCapMin ?? Infinity, hoursCapMin);
     const hasCeiling = capTss < Infinity || capMin < Infinity;
     const trainingCeiling = phase !== 'taper' && hasCeiling;
     const limits: Array<{ cap: number; of: (a: Attempt) => number }> = [];
@@ -1490,6 +1495,16 @@ export function buildHyroxTrainingWeeks(
       return a;
     };
     let attempt = fit();
+    if (trainingCeiling && !deloadRef) {
+      // Name the ceiling that binds in the notes: the guard when the week at
+      // full size is over it, otherwise the weekly hours.
+      scale = 1;
+      const full = make();
+      if (full.tss <= capTss + 1e-6 && full.min > hoursCapMin + 1e-6) {
+        ceilingName = 'weekly hours';
+        attempt = fit();
+      }
+    }
     if (trainingCeiling) {
       // A ceiling never takes a week's last station session or brick before
       // the long run is trimmed to its floor (review 2026-10-13: at 6 h the
@@ -1557,7 +1572,9 @@ export function buildHyroxTrainingWeeks(
       if (over(attempt)) {
         attempt.adjustments.push(deloadRef
           ? `W${w}: deload ${Math.round(attempt.min)} min / ${Math.round(attempt.tss)} TSS above ${HYROX_DELOAD_FACTOR} of the last loaded week (${Math.round(deloadRef.plannedMin)} min / ${Math.round(deloadRef.plannedTss)} TSS)`
-          : `W${w}: planned load ${Math.round(attempt.tss)} TSS above the ${Math.round(capTss)} TSS guard`);
+          : attempt.tss > capTss + 1e-6
+            ? `W${w}: planned load ${Math.round(attempt.tss)} TSS above the ${Math.round(capTss)} TSS guard`
+            : `W${w}: ${Math.round(attempt.min)} min above the ${Math.round(hoursCapMin)}-min weekly hours`);
       }
     }
     // A taper week sheds sessions while `tooHeavy` holds, lowest priority
