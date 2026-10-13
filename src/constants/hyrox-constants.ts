@@ -650,3 +650,18 @@ export const HYROX_INTERVAL_HR_FRACTION = 0.90;
 /** Warm-up and cool-down around a quality run (existing generator values). */
 export const HYROX_QUALITY_WARMUP_MIN = 10;
 export const HYROX_QUALITY_COOLDOWN_MIN = 5;
+
+/** Shortest tempo block (minutes): the generator's existing floor on tempo
+ *  work, unchanged since the triathlon port. A taper tempo holds at least this
+ *  much work, and its duration is the warm-up, this work and the cool-down
+ *  (before 2026-10-13 a tempo sized under 25 min kept its smaller duration
+ *  while its description still prescribed 10 + 10 + 5 min). */
+export const HYROX_TEMPO_MIN_WORK_MIN = 10;
+
+/** Race-week primer (minutes): the minimum taper tempo, warm-up + 10 min of
+ *  tempo + cool-down (SCIENCE_LOG §CE: race-week quality volume collapses to a
+ *  short primer; the 24 min of threshold 3 days out it names was the bug). Fixed
+ *  whatever the race-week budget. The base generator produced the same 10 min
+ *  of work; the review of 2026-10-12 found the v18 draft sized it from the run
+ *  share (median 15 to 17 min of work, up to 24, for advanced athletes). */
+export const HYROX_RACE_WEEK_PRIMER_MIN = HYROX_QUALITY_WARMUP_MIN + HYROX_TEMPO_MIN_WORK_MIN + HYROX_QUALITY_COOLDOWN_MIN;

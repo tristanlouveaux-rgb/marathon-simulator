@@ -23,6 +23,7 @@ import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_ST
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
   HYROX_INTERVAL_HR_FRACTION, HYROX_QUALITY_WARMUP_MIN, HYROX_QUALITY_COOLDOWN_MIN,
+  HYROX_TEMPO_MIN_WORK_MIN,
   type HyroxQualityFormat,
 } from '@/constants/hyrox-constants';
 
@@ -174,9 +175,10 @@ function bandMaxRounds(band: AbilityBand): number {
   }
 }
 
-/** A circuit session is at least this many rounds (below this it is a single
- *  pass, i.e. the calibration assessment, not a training circuit). */
-const MIN_CIRCUIT_ROUNDS = 2;
+/** A circuit or brick session is at least this many rounds (below this it is a
+ *  single pass, i.e. the calibration assessment, not a training circuit). The
+ *  weekly MTL cap (plan_engine.hyrox enforceMTLCap) cuts rounds down to it. */
+export const MIN_CIRCUIT_ROUNDS = 2;
 
 /**
  * Rounds that best fill a time budget given one round's duration: nearest whole
@@ -256,8 +258,11 @@ export function generateHyroxRun(params: RunParams): Workout {
     }
     case 'run_tempo': {
       const fmt = params.format?.kind === 'run_tempo' ? params.format : null;
-      const tempoMin = fmt ? fmt.workMin : Math.max(10, dur - (warm + cool));
-      if (fmt) dur = warm + tempoMin + cool;
+      const tempoMin = fmt ? fmt.workMin : Math.max(HYROX_TEMPO_MIN_WORK_MIN, dur - (warm + cool));
+      // The duration is what the description prescribes: warm-up, tempo work
+      // and cool-down (a taper tempo sized under 25 min used to keep the
+      // smaller number beside a 25-min prescription).
+      dur = warm + tempoMin + cool;
       distanceKm = kmAt(warm + cool, easyPace) + kmAt(tempoMin, tempoPace);
       mtlSegments = [{ min: warm + cool, rpe: 4, kind: 'run_easy' }, { min: tempoMin, rpe: 7, kind: 'run_tempo' }];
       name = 'Tempo Run';
@@ -350,8 +355,44 @@ export function withHyroxRounds(w: Workout, rounds: number): Workout {
   };
 }
 
-/** A circuit or brick is at least this many rounds (the generators' floor). */
-export const MIN_SESSION_ROUNDS = 2;
+/**
+ * The same station circuit without one of its stations (the weekly MTL cap,
+ * plan_engine.hyrox enforceMTLCap, once every session is at
+ * MIN_CIRCUIT_ROUNDS). Cuts real volume: the station's component leaves, the
+ * duration drops by its work and the rest after it in every round, the MTL is
+ * the sum of what is left, and the station leaves the description's list. A
+ * circuit keeps at least MIN_CIRCUIT_STATIONS stations; a brick or a session
+ * without the station is returned unchanged.
+ */
+export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout {
+  if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') return w;
+  const comps = w.hyroxComponents ?? [];
+  const idx = comps.findIndex(c => c.type === station);
+  const stationCount = comps.filter(c => c.type !== 'run').length;
+  if (idx < 0 || stationCount <= MIN_CIRCUIT_STATIONS) return w;
+  const removed = comps[idx];
+  const rest = comps.filter((_, i) => i !== idx);
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const cutSec = rounds * ((removed.durationSec ?? 0) + (removed.restAfterSec ?? 0));
+  const mtl = rest.reduce((sum, c) => sum + c.mtl, 0);
+  const name = STATION_DISPLAY[station].name;
+  // The station list sits between "N rounds: " and the first ". "; its entries
+  // are "Name (...)" joined by " + " (technique) or " → " (density).
+  const m = /^(\d+ rounds: )(.*?)(\. .*)$/.exec(w.d ?? '');
+  let d = w.d ?? '';
+  if (m) {
+    const sep = m[2].includes(' → ') ? ' → ' : ' + ';
+    const kept = m[2].split(sep).filter(line => !line.startsWith(`${name} (`));
+    d = `${m[1]}${kept.join(sep)}${m[3]}`;
+  }
+  return {
+    ...w,
+    hyroxComponents: rest,
+    musculoTendonLoad: mtl,
+    estimatedDurationMin: Math.max(1, Math.round((w.estimatedDurationMin ?? 0) - cutSec / 60)),
+    d,
+  };
+}
 
 // ─── Station session generators ───────────────────────────────────────────────
 

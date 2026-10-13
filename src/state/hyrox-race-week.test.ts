@@ -12,7 +12,15 @@
  *   - race-week volume within the taper (since 2026-10-12: taperFraction,
  *     0.55 of the reference week's planned minutes, the last loaded week)
  *     unless the session floors hold it above, and then never above the week
- *     before.
+ *     before, except by the primer when the primer is all race week holds
+ *     (SCIENCE_LOG §CE update 4: race week holds the primer whenever it holds
+ *     a run);
+ *   - since 2026-10-13 (review of generator v18): race week keeps the peak
+ *     structure minus the brick (the primer, the easy runs and the circuit),
+ *     whatever a reference week thinned by the guard or the running share
+ *     held; the primer is fixed at HYROX_RACE_WEEK_PRIMER_MIN (10 min of
+ *     tempo work); race week never holds more runs than the peak structure
+ *     (a circuit slot never becomes a run).
  *   - review 2026-10-08: the primer takes running's primer day (Tuesday when 3
  *     to 5 days out, else the latest window day: 3 days out for every Monday
  *     to Wednesday race) and easy runs the latest free days, so the last
@@ -57,7 +65,9 @@ import { isHighIntensity } from '@/workouts/scheduler.hyrox';
 import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
 import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT } from '@/workouts/race-day-rules';
 import { firstTrackedDow } from '@/ui/workout-status';
-import { RACE_WEEK_EXCLUDED_STATIONS, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
+import {
+  RACE_WEEK_EXCLUDED_STATIONS, HYROX_HOURS_RANGE, HYROX_RACE_WEEK_PRIMER_MIN, HYROX_WEEKLY_STRUCTURE, hyroxTier,
+} from '@/constants/hyrox-constants';
 import { taperFraction } from '@/workouts/phases';
 import { isFourWeekCycleDeloadWeek } from '@/workouts/plan_engine';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
@@ -103,19 +113,10 @@ const minutes = (wk: Week | undefined) =>
 const isStation = (w: Workout) => w.t.startsWith('hyrox_station_') || w.t === 'hyrox_assessment';
 const isEasyRun = (w: Workout) => w.t === 'hyrox_run_easy' || (w.t === 'easy' && w.commute === true);
 const isRun = (w: Workout) => w.t.startsWith('hyrox_run_') || w.t === 'easy';
-const runMinutes = (wk: Week | undefined) =>
-  (wk?.triWorkouts ?? []).filter(isRun).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
 /** Days before race day of the running engine's race-week primer, by race
  *  weekday (0 = Monday): Tuesday when 3 to 5 days out, else the latest window
  *  day (initializeSimulator probe, 2026-10-08). */
 const RUNNING_PRIMER_DAYS_OUT = [3, 3, 3, 3, 3, 4, 5];
-
-/** The week before race week lost days to the race window (a Thursday to
- *  Saturday race: its last 1 to 3 days are within 6 days of race day), so its
- *  run minutes are not the full week's. */
-function hyroxWeekBeforeCut(s: SimulatorState, layout: ReturnType<typeof raceWeekLayout>, tw: number): boolean {
-  return !!layout && layout.raceDayIndex - ((tw - 2) * 7 + 6) <= 6;
-}
 
 /** Every race-week rule violation of a built plan, as readable strings. */
 function raceWeekViolations(s: SimulatorState, race: string): string[] {
@@ -149,14 +150,19 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
       out.push(`primer ${daysOut} days out, running's ${RUNNING_PRIMER_DAYS_OUT[layout.raceDayOfWeek]}`);
     }
   }
+  // Easy runs take the latest free days, so a race week holding one ends at
+  // most 3 days before race day. A race week the taper cut to the primer
+  // alone ends on the primer's day (3 to 5 days out).
   const allDaysOut = (wk.triWorkouts ?? []).map(w => layout.raceDayIndex - ((tw - 1) * 7 + (w.dayOfWeek ?? 0)));
-  if (allDaysOut.length > 0 && Math.min(...allDaysOut) > PRIMER_MIN_DAYS_OUT) {
+  if (allDaysOut.length > 0 && Math.min(...allDaysOut) > PRIMER_MIN_DAYS_OUT && (wk.triWorkouts ?? []).some(isEasyRun)) {
     out.push(`${Math.min(...allDaysOut) - 1} empty days before race day`);
   }
-  // Race week never runs more than the week before (without ergs included).
-  if (tw > 1 && runMinutes(wk) > runMinutes(s.wks[tw - 2]) && !hyroxWeekBeforeCut(s, layout, tw)) {
-    out.push(`race week runs ${runMinutes(wk)} min, the week before ${runMinutes(s.wks[tw - 2])}`);
-  }
+  // A circuit slot never becomes a run (without ergs included): race week
+  // holds at most the peak structure's runs (commute runs are the athlete's
+  // travel, on top).
+  const peakRuns = HYROX_WEEKLY_STRUCTURE[hyroxTier(s.hyroxConfig!.athleteBand)].peak.runs;
+  const rwRuns = (wk.triWorkouts ?? []).filter(w => isRun(w) && w.commute !== true).length;
+  if (rwRuns > peakRuns) out.push(`race week holds ${rwRuns} runs, the peak structure ${peakRuns}`);
   const days = (wk.triWorkouts ?? []).map(w => w.dayOfWeek);
   if (new Set(days).size !== days.length) out.push('two sessions on one day');
   // Race-week volume: the taper fraction of the reference week (the last
@@ -171,17 +177,20 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   }
   const budget = Math.round(taperFraction(tw - taperStart + 1, tw - taperStart + 1) * refMin);
   const before = tw > 1 ? minutes(s.wks[tw - 2]) : Infinity;
-  if (minutes(wk) > Math.max(budget, before)) out.push(`race week ${minutes(wk)} min above the ${budget}-min budget and the week before (${before})`);
-  if (minutes(wk) > before) out.push(`race week ${minutes(wk)} min above the week before (${before})`);
+  const ceilingBefore = Math.max(before, HYROX_RACE_WEEK_PRIMER_MIN);
+  if (minutes(wk) > Math.max(budget, ceilingBefore)) out.push(`race week ${minutes(wk)} min above the ${budget}-min budget and the week before (${before})`);
+  if (minutes(wk) > ceilingBefore) out.push(`race week ${minutes(wk)} min above the week before (${before})`);
   return out;
 }
 
 describe('scenario hyrox: Saturday race in week 12', () => {
   // Generator v18 (2026-10-12): intermediate tier (1:30:00 open singles), one
   // station session a week, a 2-week taper at 0.70 / 0.55 of the reference
-  // week. Race week keeps the reference week's two runs (the tempo primer and
-  // an easy run) and its one station session as a light circuit.
-  it('race week is the tempo primer, a light circuit and an easy run the day before', () => {
+  // week. Race week keeps the peak structure minus the brick: the tempo primer,
+  // two easy runs on the latest free days and the station session as a light
+  // circuit (review 2026-10-13: the v18 draft copied a reference week's two
+  // runs).
+  it('race week is the tempo primer, a light circuit and easy runs on the last days', () => {
     at('2026-10-08T12:00:00');
     const s = build({ customRaceDate: '2026-12-26' });
     expect(s.tw).toBe(12);
@@ -189,8 +198,13 @@ describe('scenario hyrox: Saturday race in week 12', () => {
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Tue hyrox_run_tempo',
       'Wed hyrox_station_technique',
+      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
+    // The primer: 10 min of tempo work in a 25-min session.
+    const primer = race.find(w => w.t === 'hyrox_run_tempo')!;
+    expect(primer.estimatedDurationMin).toBe(HYROX_RACE_WEEK_PRIMER_MIN);
+    expect(primer.d).toMatch(/ 10 min at /);
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
     // The light circuit keeps the ergs and the farmer carry.
     for (const w of race.filter(isStation)) {
@@ -213,9 +227,10 @@ describe('scenario hyrox: Saturday race in week 12', () => {
     // (the two circuit slots as easy runs), 5 runs on 5 days in a row.
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Tue hyrox_run_tempo',
+      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
-    expect(runMinutes(s.wks[11])).toBeLessThanOrEqual(runMinutes(s.wks[10]));
+    expect(minutes(s.wks[11])).toBeLessThanOrEqual(minutes(s.wks[10]));
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
   });
 });
