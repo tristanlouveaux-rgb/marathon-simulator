@@ -418,16 +418,13 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
         // all it holds.
         const allowed = raceWeek ? Math.max(ceiling, HYROX_RACE_WEEK_PRIMER_MIN) : ceiling;
         if (minutes(wk) > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min above ${taperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
-        // Above the reference week's station and brick work only by the
-        // taper's smallest circuit (round 6 review, pass 2): one technique
-        // circuit of at most MIN_CIRCUIT_ROUNDS rounds and MIN_CIRCUIT_STATIONS
-        // stations, and no other station or brick work.
-        const work = ws.filter(isWork);
-        const floorCircuit = work.length === 1 && work[0].t === 'hyrox_station_technique'
-          && (work[0].hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS
-          && (work[0].hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS;
-        if (!floorCircuit && stationWork(wk).min > stationWork(ref).min + EPS) out.push(`W${w}: taper station and brick ${stationWork(wk).min} min above the reference week's ${stationWork(ref).min}`);
-        if (!floorCircuit && stationWork(wk).mtl > stationWork(ref).mtl + EPS) out.push(`W${w}: taper station and brick MTL ${stationWork(wk).mtl.toFixed(0)} above the reference week's ${stationWork(ref).mtl.toFixed(0)}`);
+        // Above the reference week's station and brick work only up to the
+        // taper's smallest circuit (round 6 review, pass 2: MIN_CIRCUIT_ROUNDS
+        // rounds of MIN_CIRCUIT_STATIONS stations, hyroxRaceTaperFloorCircuit).
+        const floor = hyroxRaceTaperFloorCircuit(s, w, raceWeek) ?? { min: 0, mtl: 0 };
+        const workCap = { min: Math.max(stationWork(ref).min, floor.min), mtl: Math.max(stationWork(ref).mtl, floor.mtl) };
+        if (stationWork(wk).min > workCap.min + EPS) out.push(`W${w}: taper station and brick ${stationWork(wk).min} min above the reference week's ${stationWork(ref).min} and the smallest circuit's ${floor.min}`);
+        if (stationWork(wk).mtl > workCap.mtl + EPS) out.push(`W${w}: taper station and brick MTL ${stationWork(wk).mtl.toFixed(0)} above the reference week's ${stationWork(ref).mtl.toFixed(0)} and the smallest circuit's ${floor.mtl.toFixed(0)}`);
       }
       const raw = w >= 2 ? minutes(wks[i - 1]) : Infinity;
       const before = raceWeek ? Math.max(raw, HYROX_RACE_WEEK_PRIMER_MIN) : raw;

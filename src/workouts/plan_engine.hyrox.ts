@@ -756,8 +756,10 @@ function hyroxStationBenchmarksOf(hx: HyroxConfig): Partial<Record<HyroxStation,
  * leaves the taper one short circuit (round 6 review, pass 2: once the long
  * run and the quality run came first, a peak week holding a 26-min race-pace
  * block left both taper weeks with no circuit, 106 to 249 of 1,020 race weeks
- * per variant). Null when the week cannot hold a circuit (race week without
- * enough of the remaining stations).
+ * per variant). The injury gates apply to it as to the week's own circuit
+ * (current and future weeks). Null when the week cannot hold a circuit (race
+ * week without enough of the remaining stations, or stations the injury gates
+ * drop).
  */
 export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: number, raceWeek: boolean): { min: number; mtl: number } | null {
   const hx = state.hyroxConfig!;
@@ -781,7 +783,10 @@ export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: num
     if (next === c) break;
     c = next;
   }
-  return { min: c.estimatedDurationMin ?? 0, mtl: c.musculoTendonLoad ?? 0 };
+  const injuryState = (state as any).injuryState as InjuryState | undefined;
+  const [gated] = weekIndex < (state.w ?? 1) ? [c] : applyHyroxInjuryGates([c], injuryState);
+  if (!gated) return null;
+  return { min: gated.estimatedDurationMin ?? 0, mtl: gated.musculoTendonLoad ?? 0 };
 }
 
 function generateWeekSessions(
