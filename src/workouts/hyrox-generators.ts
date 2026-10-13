@@ -454,7 +454,7 @@ export function generateHyroxBrick(params: BrickParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'mini_brick') {
-    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks });
+    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
   }
   return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
 }
@@ -546,6 +546,7 @@ function generateMiniBrick(p: {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
 }): Workout {
   // Beginner-friendly: 500m run + 1 erg station. Builds the run-to-station
   // transition pattern without the full eccentric load of race-distance bricks.
@@ -567,7 +568,12 @@ function generateMiniBrick(p: {
   const runDurMinTotal = (runSeedSec / 60) * rounds;
   const runMTL = computeComponentMTL(runDurMinTotal, 6, 'run_easy', undefined, p.bodyWeightKg);
   const stationDurMinTotal = (stationSeedSec_ / 60) * rounds;
-  const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, undefined, p.bodyWeightKg);
+  // External load at the athlete's tier, as generateFullBrick. Only the
+  // farmer-carry fallback (no ski or row erg) carries one; ergs have none, so
+  // their MTL is unchanged. Before 2026-10-13 the mini brick passed no
+  // external load, so that fallback carried none for anyone.
+  const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[station];
+  const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, externalKg, p.bodyWeightKg);
 
   const components: HyroxComponent[] = [
     { type: 'run', distanceM: 500, durationSec: runSeedSec, mtl: runMTL, restAfterSec: 0 },
