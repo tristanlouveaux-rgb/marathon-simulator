@@ -3021,8 +3021,8 @@ export function buildTodayWorkoutHyrox(s: SimulatorState): string {
 
 function buildHyroxSessionBlock(w: any, isFirst: boolean, ourDay: number): string {
   const wt = String(w.t || '');
-  // Easy erg work carries discipline 'station' but shows as cross-training,
-  // as the HYROX plan card does (workout-card workoutDisc).
+  // Easy erg work (discipline 'erg') shows as cross-training, as the HYROX
+  // plan card does (workout-card workoutDisc).
   const disc = isHyroxEasyErg(w) ? 'cross'
     : (w.discipline === 'station' || w.discipline === 'brick') ? String(w.discipline)
     : (wt === 'gym' || wt === 'strength') ? 'strength'

@@ -99,3 +99,28 @@ describe('MTL detail page in week 2 of a HYROX plan', () => {
     expect(text).toContain(`Ramp rate appears once ${ROLLING_ACWR_MIN_OBSERVED_DAYS} days of plan weeks are complete.`);
   });
 });
+
+describe('MTL detail page: easy erg work is not station load (decision D)', () => {
+  it('a done easy erg session shows as Easy erg, with its own share of chronic load', () => {
+    const s = hyroxState();
+    // The first week holding easy erg work, every session of it done.
+    const i = s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(w => w.discipline === 'erg'));
+    expect(i).toBeGreaterThanOrEqual(0);
+    s.w = i + 1;
+    for (const w of s.wks[i].triWorkouts ?? []) complete(s.wks[i], w);
+    setState(s);
+
+    renderMtlLoadView(() => {});
+    const text = document.getElementById('app-root')!.textContent ?? '';
+    const leaves = Array.from(document.querySelectorAll('#app-root div'))
+      .filter(el => el.children.length === 0)
+      .map(el => (el.textContent ?? '').trim());
+    // The contributor row and the split tile name it; no row reads it as a station.
+    expect(leaves.some(t => /^Easy erg · \d+ MTL$/.test(t))).toBe(true);
+    expect(text).toContain('Easy erg');
+    const ergRows = (s.wks[i].triWorkouts ?? []).filter(w => w.discipline === 'erg').length;
+    const stationRows = (s.wks[i].triWorkouts ?? []).filter(w => w.discipline === 'station').length;
+    expect(leaves.filter(t => /^Station · \d+ MTL$/.test(t))).toHaveLength(stationRows);
+    expect(leaves.filter(t => /^Easy erg · \d+ MTL$/.test(t))).toHaveLength(ergRows);
+  });
+});

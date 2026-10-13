@@ -904,6 +904,8 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       expect(isHighIntensity(e)).toBe(false);
       expect(isEccentricSession(e)).toBe(false);
       expect(e.hyroxComponents).toBeUndefined();
+      // Decision D: its own discipline, never 'station'.
+      expect(e.discipline).toBe('erg');
       expect(e.musculoTendonLoad ?? 0).toBeGreaterThan(0);
       expect(e.d).not.toMatch(/—/);
     }

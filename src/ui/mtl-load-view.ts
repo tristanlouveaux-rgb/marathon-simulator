@@ -10,7 +10,8 @@
  * MTL is `durationMin × sRPE × modality × impact × (1 + externalLoad)` per
  * component, summed to a weekly value, then exponentially smoothed into chronic
  * (42d τ) and acute (7d τ) EMAs in `src/calculations/mtl.ts`. The discipline
- * split uses run/station/brick coefficients. Running has lower per-minute MTL
+ * split uses run/station/brick coefficients; easy erg work has its own share
+ * (shown only when it holds some), never counted as station load. Running has lower per-minute MTL
  * than station work but accumulates over more weekly minutes, so it is often
  * the largest single chronic contributor.
  */
@@ -162,7 +163,7 @@ function getMtlLoadHTML(): string {
 
   // ── Discipline split (current week index) ──
   const disc = weeks.length > 0 ? computeMTLFitnessFatigueByDiscipline(weeks, wIdx) : null;
-  const discTotal = disc ? (disc.runMtlCTL + disc.stationMtlCTL + disc.brickMtlCTL) : 0;
+  const discTotal = disc ? (disc.runMtlCTL + disc.stationMtlCTL + disc.brickMtlCTL + disc.ergMtlCTL) : 0;
 
   // ── This week's contributors ──
   const contributors = (currentWk?.triWorkouts ?? [])
@@ -171,7 +172,7 @@ function getMtlLoadHTML(): string {
         : (w as { discipline?: string }).discipline === 'station' ? 'Station session'
         : (w as { discipline?: string }).discipline === 'brick' ? 'Brick session'
         : (w.n || 'Run'),
-      discipline: ((w as { discipline?: string }).discipline ?? 'run') as 'run' | 'station' | 'brick',
+      discipline: (isHyroxEasyErg(w) ? 'erg' : ((w as { discipline?: string }).discipline ?? 'run')) as 'run' | 'station' | 'brick' | 'erg',
       mtl: w.musculoTendonLoad ?? 0,
       done: currentWk ? isMtlSessionCompleted(currentWk, w) : false,
       day: w.dayOfWeek ?? 0,
@@ -228,14 +229,19 @@ function getMtlLoadHTML(): string {
     const runP = pct(disc.runMtlCTL);
     const stP = pct(disc.stationMtlCTL);
     const brP = pct(disc.brickMtlCTL);
+    // Easy erg work's share: its own tile, in a neutral grey, only when it
+    // holds some of the chronic load.
+    const showErg = disc.ergMtlCTL >= 0.05;
+    const ergP = pct(disc.ergMtlCTL);
     return card(`
       <div style="font-size:11px;color:${TEXT_S};margin-bottom:10px;font-weight:500">Where chronic load comes from</div>
       <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-bottom:10px;background:rgba(0,0,0,0.05)">
         <div style="width:${stP}%;background:${HERO_BRONZE}"></div>
         <div style="width:${brP}%;background:#a16207"></div>
         <div style="width:${runP}%;background:${TEXT_M};opacity:0.45"></div>
+        ${showErg ? `<div style="width:${ergP}%;background:${TEXT_L};opacity:0.5"></div>` : ''}
       </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">
+      <div style="display:grid;grid-template-columns:repeat(${showErg ? 4 : 3},1fr);gap:8px;font-size:12px">
         <div>
           <div style="display:flex;align-items:center;gap:6px;color:${TEXT_S}"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${HERO_BRONZE}"></span>Station</div>
           <div style="font-size:14px;font-weight:600;color:${TEXT_M};margin-top:2px">${disc.stationMtlCTL.toFixed(1)} <span style="font-size:11px;color:${TEXT_L};font-weight:400">(${stP}%)</span></div>
@@ -248,6 +254,10 @@ function getMtlLoadHTML(): string {
           <div style="display:flex;align-items:center;gap:6px;color:${TEXT_S}"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${TEXT_M};opacity:0.45"></span>Run</div>
           <div style="font-size:14px;font-weight:600;color:${TEXT_M};margin-top:2px">${disc.runMtlCTL.toFixed(1)} <span style="font-size:11px;color:${TEXT_L};font-weight:400">(${runP}%)</span></div>
         </div>
+        ${showErg ? `<div>
+          <div style="display:flex;align-items:center;gap:6px;color:${TEXT_S}"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${TEXT_L};opacity:0.5"></span>Easy erg</div>
+          <div style="font-size:14px;font-weight:600;color:${TEXT_M};margin-top:2px">${disc.ergMtlCTL.toFixed(1)} <span style="font-size:11px;color:${TEXT_L};font-weight:400">(${ergP}%)</span></div>
+        </div>` : ''}
       </div>
     `);
   })() : '';
@@ -268,7 +278,7 @@ function getMtlLoadHTML(): string {
               <div style="font-size:11px;color:${TEXT_L}">${dayName(c.day)}</div>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-              <div style="font-size:11px;color:${TEXT_S}">${c.discipline === 'station' ? 'Station' : c.discipline === 'brick' ? 'Brick' : 'Run'} · ${Math.round(c.mtl)} MTL</div>
+              <div style="font-size:11px;color:${TEXT_S}">${c.discipline === 'station' ? 'Station' : c.discipline === 'brick' ? 'Brick' : c.discipline === 'erg' ? 'Easy erg' : 'Run'} · ${Math.round(c.mtl)} MTL</div>
               <div style="font-size:11px;color:${c.done ? ZONE_SAFE : TEXT_L}">${c.done ? 'completed' : 'planned'}</div>
             </div>
           </div>

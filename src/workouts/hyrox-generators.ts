@@ -447,7 +447,9 @@ export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
     n: 'Easy Erg',
     d: `${dur} min easy on the ${STATION_DISPLAY[station].name}. Conversational effort (RPE ${HYROX_EASY_RPE}). Aerobic volume without running impact.`,
     t: HYROX_EASY_ERG_TYPE,
-    discipline: 'station',
+    // Its own discipline (decision D, Tristan 2026-10-13): every surface that
+    // counts station sessions by discipline leaves it out.
+    discipline: 'erg',
     r: HYROX_EASY_RPE,
     rpe: HYROX_EASY_RPE,
     estimatedDurationMin: dur,

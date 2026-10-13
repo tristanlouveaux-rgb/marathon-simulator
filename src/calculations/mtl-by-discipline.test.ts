@@ -46,6 +46,19 @@ describe('computeWeekMTLByDiscipline', () => {
     expect(result.brick).toBe(150);
   });
 
+  it('easy erg work is its own bucket, never station or run, whether stored as discipline erg or the old station', () => {
+    const erg = (discipline: 'erg' | 'station', mtl: number) => ({
+      id: `e-${discipline}`, n: 'Easy Erg', t: 'hyrox_erg_easy', discipline, musculoTendonLoad: mtl, matchedActivityId: 'stub-activity',
+    } as unknown as Workout);
+    const wk = week([workout('run', 30), workout('station', 200), erg('erg', 60), erg('station', 40)]);
+    expect(computeWeekMTLByDiscipline(wk)).toEqual({ run: 30, station: 200, brick: 0, erg: 100 });
+    expect(computeWeekActualMTLByDiscipline(wk)).toEqual({ run: 30, station: 200, brick: 0, erg: 100 });
+    const split = computeMTLFitnessFatigueByDiscipline([wk, wk], 1);
+    const all = computeMTLFitnessFatigue([wk, wk], 1);
+    expect(split.ergMtlCTL).toBeGreaterThan(0);
+    expect(split.runMtlCTL + split.stationMtlCTL + split.brickMtlCTL + split.ergMtlCTL).toBeCloseTo(all.mtlCTL, 9);
+  });
+
   it('treats unknown discipline as run (fallback)', () => {
     const wk = week([
       { id: 'x', n: 'test', t: 'easy', musculoTendonLoad: 40 } as unknown as Workout,
@@ -59,7 +72,7 @@ describe('computeWeekMTLByDiscipline', () => {
   it('returns zeros for an empty week', () => {
     const wk = week([]);
     const result = computeWeekMTLByDiscipline(wk);
-    expect(result).toEqual({ run: 0, station: 0, brick: 0 });
+    expect(result).toEqual({ run: 0, station: 0, brick: 0, erg: 0 });
   });
 });
 

@@ -541,7 +541,7 @@ export function recordPlannedRunDone(
  * maintenance") takes its sport from its label, by the canonical label rule
  * (deriveSportFromLabel): 'rowing' for the erg. Its bike and swim offers carry
  * a discipline. A HYROX easy erg session (SkiErg or row erg, discipline
- * 'station') records as 'rowing' (review 2026-10-13: it recorded nothing, so
+ * 'erg') records as 'rowing' (review 2026-10-13: it recorded nothing, so
  * a done erg was missing from every load surface and from the HYROX forecast's
  * adherence count). Rowing is the nearest sport the load model holds for
  * either erg (SPORTS_DB has no SkiErg entry; its runSpec and leg load are

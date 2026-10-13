@@ -517,6 +517,9 @@ export function classifyWorkoutKind(w: any): 'run' | 'bike' | 'swim' | 'strength
   if (/^swim/.test(t)         || /^swim\b/.test(n))                   return 'swim';
 
   if (/^hyrox_(station|assessment|brick|mini_brick)/.test(t)) return 'strength';
+  // Easy erg work runs on the SkiErg or the row erg, HYROX stations: a
+  // holiday pauses it with them. Its name ('Easy Erg') read as a run before.
+  if (t === 'hyrox_erg_easy') return 'strength';
   if (/^(strength|gym|lift)/.test(t))                           return 'strength';
   if (/^(strength|gym|lift)\b/.test(n))                         return 'strength';
 

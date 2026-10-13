@@ -97,8 +97,10 @@ export interface Workout extends WorkoutDefinition {
   t: string;                    // Workout type
   /** Triathlon or HYROX discipline the workout belongs to.
    *  Undefined = running (default for back-compat).
-   *  'station' and 'brick' are HYROX-only values. */
-  discipline?: Discipline | 'station' | 'brick';
+   *  'station', 'brick' and 'erg' are HYROX-only values: 'erg' is easy erg
+   *  work (hyrox_erg_easy), easy aerobic volume on the SkiErg or the row erg,
+   *  neither a station session nor a run. */
+  discipline?: Discipline | 'station' | 'brick' | 'erg';
   /** Brick workouts carry two ordered segments (bike → run typically). Only set when t === 'brick'. */
   brickSegments?: import('./triathlon').BrickSegments['segments'];
   rpe?: number;                 // Expected RPE (alternative to r)
