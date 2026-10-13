@@ -1210,3 +1210,71 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
   }, 30000);
 });
 
+
+describe('HYROX round 5 decisions (2026-10-13)', () => {
+  /** Station and brick minutes of a week (easy erg work excluded). */
+  const workMin = (wk: Week) => prescribed(wk).filter(isWork).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+  const total = (p: readonly Week[]) => p.reduce((a, wk) => a + minutes(wk), 0);
+  const peak = (p: readonly Week[]) => {
+    const t = p.filter(wk => wk.ph !== 'taper');
+    return Math.max(0, ...(t.length > 0 ? t : p).map(minutes));
+  };
+  const qualityRuns = (p: readonly Week[]) => p.filter(wk => wk.ph !== 'taper').reduce((a, wk) => a + prescribed(wk).filter(isQuality).length, 0);
+  const CEILING = /acute:chronic guard|deload ceiling|MTL cap \d+/;
+
+  it('B: one more chosen hour never gives fewer total plan minutes or a shorter peak week, but where a standing decision ranks above it', () => {
+    // Every band at 2 to 12 h, plan lengths 2 to 24, the default sessions.
+    // Where an adjacent hour holds less, the pair must be one of the two
+    // conflicts the round-5 report escalates:
+    //   - quality entry (D3): the plan at one more hour holds more quality
+    //     runs. Under the acute:chronic guard or the chosen session count a
+    //     quality run holds fewer minutes than the easy work it replaces;
+    //   - a ceiling's mix (decision A and the guard's order): every week that
+    //     holds less is held by the guard, the MTL cap or the deload ceiling
+    //     with at least the station and brick minutes of the plan at one hour
+    //     less (station work grows with the hours and is cut last, so it
+    //     takes minutes from easy running and easy erg work), or is a taper
+    //     or deload week after a loaded week that holds less, or a taper week
+    //     whose reference week holds one more run (the taper keeps the
+    //     reference week's run count; at equal minutes the reference week can
+    //     hold an easy run where one hour less held easy erg work).
+    // Anything else is a monotonicity bug (before round 5: total plan minutes
+    // fell in 26 of 1,380 pairs and peak-week minutes in 68).
+    const unexplained: string[] = [];
+    let pairs = 0;
+    let conflicts = 0;
+    for (const band of BANDS) {
+      for (let len = 2; len <= 24; len++) {
+        let prev: Week[] | null = null;
+        for (let h = 2; h <= 12; h++) {
+          const s = build(band, h, len);
+          const cur = s.wks.slice(0, planTrainingWeeks(s));
+          if (prev) {
+            pairs++;
+            if (total(cur) < total(prev) || peak(cur) < peak(prev)) {
+              conflicts++;
+              if (qualityRuns(cur) > qualityRuns(prev)) { prev = cur; continue; }
+              const fell = cur.map((_, i) => i).filter(i => minutes(cur[i]) < minutes(prev![i]));
+              const isDeload = (wk: Week) => notes(wk).some(n => /deload/.test(n));
+              const firstLoaded = fell.find(i => cur[i].ph !== 'taper' && !isDeload(cur[i]));
+              const runs = (wk: Week) => prescribed(wk).filter(w => w.discipline === 'run').length;
+              const refI = cur.map((_, i) => i).filter(i => cur[i].ph !== 'taper' && !isDeload(cur[i])).pop();
+              const refMoreRuns = refI != null && runs(cur[refI]) > runs(prev[refI]);
+              for (const i of fell) {
+                const follows = ((cur[i].ph === 'taper' || isDeload(cur[i])) && firstLoaded != null && firstLoaded < i)
+                  || (cur[i].ph === 'taper' && refI != null && refI < i && refMoreRuns);
+                const ceiling = notes(cur[i]).some(n => CEILING.test(n)) && workMin(cur[i]) >= workMin(prev[i]);
+                if (!follows && !ceiling) unexplained.push(`${band} ${len}w ${h - 1}->${h} h W${i + 1} ${minutes(prev[i])}->${minutes(cur[i])}`);
+              }
+            }
+          }
+          prev = cur;
+        }
+      }
+    }
+    expect(pairs).toBe(BANDS.length * 23 * 10);
+    expect(unexplained.slice(0, 10)).toEqual([]);
+    // Most adjacent hours hold more: the conflicts stay a small share.
+    expect(conflicts).toBeLessThan(pairs / 20);
+  }, 300000);
+});

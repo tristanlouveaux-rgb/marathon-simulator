@@ -914,14 +914,19 @@ function generateWeekSessions(
     } else if (raceWeek) {
       quality = generateHyroxRun({ ...runParams, kind: 'run_tempo', targetMinutes: HYROX_RACE_WEEK_PRIMER_MIN, slotIndex: weekIndex });
     } else {
-      // Taper week 1: the taper tempo, sized like the other runs, then
-      // shortened (down to the primer's size) until it is no longer than the
-      // week's long run and the single-run ceiling. Before (review
-      // 2026-10-13) the long run was stretched to the tempo's distance, so a
-      // taper long run came out above TAPER_LONG_RUN_FRACTION.
-      const others = slots - (longMin != null ? 1 : 0);
+      // Taper week 1: the taper tempo, sized from the running share the long
+      // run leaves (as the week's one other run: its easy runs take the
+      // week's unspent minutes, below), then shortened (down to the primer's
+      // size) until it is no longer than the week's long run and the
+      // single-run ceiling. Before (review 2026-10-13) the long run was
+      // stretched to the tempo's distance, so a taper long run came out above
+      // TAPER_LONG_RUN_FRACTION. Before round 5 the tempo shared the running
+      // share with the easy runs, so a taper week inheriting one more easy
+      // run from its reference week held a tempo of 25 min where it had held
+      // 43, with the chosen sessions full (intermediate 14 weeks, 10 h against
+      // 11 h: taper week 1 held 18 min less at the higher hours).
       const room = fitRoom * scale - (longMin ?? 0);
-      const sized = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(HYROX_SESSION_MAX_MIN.run_tempo, Math.round(room / Math.max(1, others))));
+      const sized = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(HYROX_SESSION_MAX_MIN.run_tempo, Math.round(room)));
       const maxKm = Math.min(
         longMin != null ? (longMin * 60) / easyPace : Infinity,
         inputs.runCeilingKm ?? Infinity,
@@ -1248,11 +1253,11 @@ function generateWeekSessions(
   // Easy erg work absorbs the hours the session count leaves (decision C,
   // Tristan 2026-10-13): when the chosen sessions are full and easy erg work
   // could hold at least HYROX_RUN_FLOOR_MIN of what is left, a training week
-  // frees a slot for it, first by merging its two shortest easy runs into one
-  // (same running minutes; no longer than the long run, the 110% single-run
-  // ceiling or the tier long-run cap), else by giving its shortest easy run's
-  // slot to an easy erg session that holds more minutes than that run. One
-  // slot a week, never the long run or the quality run. Before (review
+  // frees a slot for it: its shortest easy run leaves, the easy runs left
+  // take its minutes (each no longer than the long run, the 110% single-run
+  // ceiling or the tier long-run cap), and the slot holds easy erg work, when
+  // that gives the week more minutes. One slot a week, never the long run,
+  // the quality run or the easy run standing in a missing quality run's slot. Before (review
   // 2026-10-13), one more hour funded another short run that took the easy
   // erg's slot, so the week held less: intermediate 23 weeks at 7 h held 36 to
   // 51 min less a week than at 6 h through build and peak (an easy run of 22
@@ -1273,30 +1278,39 @@ function generateWeekSessions(
       const byMtl = mtlPerMin > 0 ? Math.max(0, mtlRoom) / mtlPerMin : Infinity;
       return Math.floor(Math.min(unused, inputs.ergCapMin ?? Infinity, byMtl, maxEach));
     };
-    const easy = ws.filter(isPlainEasyRun).sort((a, b) => (a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0));
-    if (easy.length >= 2) {
-      const sum = (easy[0].estimatedDurationMin ?? 0) + (easy[1].estimatedDurationMin ?? 0);
-      if (sum <= Math.min(easyCapMin, HYROX_LONG_RUN[tier].capMin)) {
-        const merged: Workout = {
-          ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: sum, slotIndex: weekIndex }),
-          ...(easy[0].modReason ? { modReason: easy[0].modReason } : {}),
-        };
-        const next = [...ws.filter(w => w !== easy[0] && w !== easy[1]), merged];
-        if (ergRoom(next) >= HYROX_RUN_FLOOR_MIN) {
-          adjustments.push(`W${weekIndex}: 2 easy runs merged into 1 of ${merged.estimatedDurationMin} min (a slot for easy erg work; the chosen sessions are full)`);
-          return next;
-        }
-      }
-    }
-    if (easy.length >= 1) {
-      const next = ws.filter(w => w !== easy[0]);
-      const room = ergRoom(next);
-      if (room >= HYROX_RUN_FLOOR_MIN && room > (easy[0].estimatedDurationMin ?? 0)) {
-        adjustments.push(`W${weekIndex}: Easy Run of ${easy[0].estimatedDurationMin} min left out for an easy erg session of up to ${room} min (the chosen sessions are full)`);
-        return next;
-      }
-    }
-    return ws;
+    // A week whose tier format calls for a quality run and that holds none
+    // (the running share, a ceiling or the spacing left it out) keeps one
+    // easy run in its slot, the longest: the slot the quality run takes when
+    // one more hour funds it. Easy erg work never takes it, so the quality
+    // run's arrival never shortens the week (decision B).
+    const holdsQuality = ws.some(w => w.t === 'hyrox_run_tempo' || w.t === 'hyrox_run_intervals');
+    const standIn = fmt != null && structureRuns >= 2 && !holdsQuality ? 1 : 0;
+    const all = ws.filter(isPlainEasyRun).sort((a, b) => (a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0));
+    const candidates = all.slice(0, Math.max(0, all.length - standIn));
+    if (candidates.length === 0) return ws;
+    // The shortest easy run gives up its slot; the easy runs left share the
+    // week's easy running, each no longer than the long run, the 110%
+    // single-run ceiling or the tier long-run cap.
+    const out = candidates[0];
+    const rest = all.filter(w => w !== out);
+    const easyMin = all.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    // With an easy run standing in a missing quality run's slot, no easy run
+    // grows past the quality run's length: when one more hour funds it, it
+    // takes that slot without shortening the week.
+    const qualityMin = standIn && fmt
+      ? (generateHyroxRun({ ...runParams, kind: fmt.kind, targetMinutes: 0, format: fmt, slotIndex: weekIndex }).estimatedDurationMin ?? Infinity)
+      : Infinity;
+    const each = rest.length > 0 ? Math.floor(Math.min(easyCapMin, HYROX_LONG_RUN[tier].capMin, qualityMin, easyMin / rest.length)) : 0;
+    const resized = new Map(rest.map(w => [w, (w.estimatedDurationMin ?? 0) >= each ? w : {
+      ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: each, slotIndex: weekIndex }),
+      ...(w.modReason ? { modReason: w.modReason } : {}),
+    }] as const));
+    const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
+    const room = ergRoom(next);
+    if (room < HYROX_RUN_FLOOR_MIN || hyroxPlannedMinutes(next) + room <= hyroxPlannedMinutes(ws)) return ws;
+    const kept = rest.length > 0 ? `, the easy running shared by ${rest.length} easy run${rest.length === 1 ? '' : 's'} of ${Math.max(each, ...rest.map(w => w.estimatedDurationMin ?? 0))} min` : '';
+    adjustments.push(`W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min${kept} (the chosen sessions are full)`);
+    return next;
   };
 
   // Schedule. Race week: each session only on the days the race-day rules
