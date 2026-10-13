@@ -2065,8 +2065,9 @@ export function buildHyroxTrainingWeeks(
       : prevSunday;
     return { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday };
   };
-  // One week, built on the weeks before it.
-  const buildWeek = (w: number): HyroxWeekDetail => {
+  // One week, built on the weeks before it. `nominal`: week 1 with a station
+  // session in the assessment's slot (the D4 chronic seed, below).
+  const buildWeek = (w: number, nominal = false): HyroxWeekDetail => {
     const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w);
     const effortMult = w >= (state.w ?? 1) ? effortNow : 1.0;
     // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR): reduce-only,
@@ -2196,7 +2197,7 @@ export function buildHyroxTrainingWeeks(
     // Set when a ceiling took the week's last station session or brick: easy
     // erg work does not take its place.
     let ergBlocked = false;
-    let noAssessment = false;
+    const noAssessment = nominal;
     // Set while a ceiling shortens the long run (the trim below).
     let longFixed = false;
     // Week 1's assessment is exempt from week 1's guard (review 2026-10-13):
@@ -2371,15 +2372,6 @@ export function buildHyroxTrainingWeeks(
       }
       return a;
     };
-    // The nominal week 1 that seeds the chronic window without a logged load
-    // (D4): week 1 as generated with a station session in the assessment's
-    // slot, under week 1's own ceilings (the weekly hours, the phase budget).
-    if (w === 1 && chronicSeedSource === 'nominal' && !seedSet) {
-      noAssessment = true;
-      chronicSeedTss = fit().tss;
-      seedSet = true;
-      noAssessment = false;
-    }
     let attempt = fit();
     // The week at full size fits its ceilings: no ceiling holds it (the
     // hours line, below).
@@ -2720,7 +2712,21 @@ export function buildHyroxTrainingWeeks(
     return detail;
   };
 
-  for (let w = 1; w <= last; w++) built.push(buildWeek(w));
+  for (let w = 1; w <= last; w++) {
+    // The nominal week 1 that seeds the chronic window without a logged load
+    // (D4): week 1 as the plan builds it with a station session in the
+    // assessment's slot, under every rule of week 1 (its size, the
+    // allocation order). Week 1 itself is unguarded without a logged load,
+    // so it does not read the seed. Before (round 6 review of the solver
+    // alone), the seed was the solver's attempt, which at 2 h could sit over
+    // the week's own size (novice 2 h 9 weeks: 185 TSS for a 66-min week) and
+    // let week 3 jump 2.15 times week 2's load.
+    if (w === 1 && !seedSet) {
+      chronicSeedTss = buildWeek(1, true).plannedTss;
+      seedSet = true;
+    }
+    built.push(buildWeek(w));
+  }
   return built;
 }
 

@@ -1284,7 +1284,7 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     //   - Asserted per training week in every variant.
     //   - Reported, not asserted, on total plan minutes with the 7-session
     //     choice and a logged load of 100 TSS: there the hierarchy itself
-    //     drops a few pairs further (2 and 5 of 420). With the sessions full,
+    //     drops a few pairs further (2 and 3 of 420). With the sessions full,
     //     an easy run outranks an easy erg session, so one more hour's easy
     //     run can take a 65-min erg session's slot when the runs cannot merge
     //     under the long run's length; under a binding guard, whole station
