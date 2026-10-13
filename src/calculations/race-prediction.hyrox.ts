@@ -27,7 +27,7 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import type { HyroxStation, AbilityBand } from '@/types/triathlon';
+import type { HyroxStation, AbilityBand, HyroxLoadTier } from '@/types/triathlon';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
 import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot } from './hyrox-staleness';
@@ -64,6 +64,7 @@ import {
   hyroxSoloToFieldSec,
   hyroxStationSeedsAtTarget,
   hyroxSeedRoxzoneSec,
+  HYROX_LOADED_STATIONS,
   type HyroxResultsCohort,
 } from './hyrox-results';
 import {
@@ -76,7 +77,7 @@ import {
   type HyroxCalibrationCoverage,
 } from './hyrox-station-history';
 import { availableStations } from '@/workouts/hyrox-generators';
-import { isHyroxProFormat } from './hyrox-division';
+import { isHyroxProFormat, resolveHyroxAthleteSex } from './hyrox-division';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -282,6 +283,9 @@ interface StationInput {
    *  race split, the 'manual' seed of one, or a value with no entry, which
    *  read the race-age weight (lane H3c). */
   ownDateISO?: string;
+  /** The stored time crossed load families to reach the target's weights
+   *  (ConvertedTime.loadsConverted). */
+  loadsConverted?: boolean;
 }
 
 interface StationInputs {
@@ -338,6 +342,10 @@ interface ConvertedTime {
    *  for a Pro Doubles target, or the reverse): it reaches the target's pair
    *  time through the doubles mapping (solo, Open/Pro, back to the pair). */
   teamCrossFamily?: boolean;
+  /** A loaded station's time crossed load families on the way (Open to Pro
+   *  or Pro to Open, per station and sex): the number at the target differs
+   *  from the stored one because of the weights. */
+  loadsConverted?: boolean;
 }
 
 /**
@@ -368,7 +376,9 @@ function convertToTarget(
     if (!frame.soloPro && soloIsPro) return hyroxProToOpenSec(station, solo, sex);   // Pro → Open: faster
     return solo;                                                                    // identity
   };
-  if (!isTeamTime) return { soloAtTarget: toTargetLoads(sec, sourceIsPro) };
+  const crossesLoads = (soloIsPro: boolean): { loadsConverted?: true } =>
+    soloIsPro !== frame.soloPro && HYROX_LOADED_STATIONS.includes(station) ? { loadsConverted: true } : {};
+  if (!isTeamTime) return { soloAtTarget: toTargetLoads(sec, sourceIsPro), ...crossesLoads(sourceIsPro) };
   const sameFamily = sourceIsPro === frame.isPro;
   const sourceFormat = sourceIsPro ? 'pro_doubles' : 'open_doubles';
   const sourceTables = sameFamily
@@ -376,8 +386,8 @@ function convertToTarget(
     : hyroxDoublesTables(sourceFormat, frame.biologicalSex, frame.division);
   const sourceSoloPro = sameFamily ? frame.soloPro : hyroxSoloLoadsArePro(sourceFormat, frame.biologicalSex, frame.division);
   const soloAtTarget = toTargetLoads(doublesStationSoloSec(station, sec, sourceTables), sourceSoloPro);
-  if (sameFamily) return { soloAtTarget, teamAtTarget: sec };
-  return { soloAtTarget, teamAtTarget: doublesStationTeamSec(station, soloAtTarget, frame.tables), teamCrossFamily: true };
+  if (sameFamily) return { soloAtTarget, teamAtTarget: sec, ...crossesLoads(sourceSoloPro) };
+  return { soloAtTarget, teamAtTarget: doublesStationTeamSec(station, soloAtTarget, frame.tables), teamCrossFamily: true, ...crossesLoads(sourceSoloPro) };
 }
 
 /** The weight family of a stored time, the `sourceIsPro` convertToTarget
@@ -406,6 +416,24 @@ function entryIsPro(
   if (hx.benchmarksAtProWeights) return true;
   if (!entry || isRaceSplitSource(entry.source)) return false;
   return !isHyroxProFormat(entry.format) && hyroxSoloLoadsArePro(entry.format, frame.biologicalSex, frame.division);
+}
+
+/**
+ * The load tier a station test logged now is read at (entryIsPro for a test
+ * under the target format): the Pro tier of the athlete's sex when the
+ * forecast reads it as Pro (Men Open for a woman, Men Pro for a man), else
+ * the Open tier (Women Open, Men Open). A woman in Mixed Doubles: Men Open,
+ * the pair's loads. Null without a HYROX config or a known sex. The loads the
+ * test entry modal tells the athlete to use.
+ */
+export function hyroxStationTestLoadTier(state: SimulatorState): HyroxLoadTier | null {
+  const hx = state.hyroxConfig;
+  if (!hx) return null;
+  const sex = resolveHyroxAthleteSex(state.biologicalSex, hx.division);
+  if (!sex) return null;
+  const pro = entryIsPro(hx, { biologicalSex: state.biologicalSex, division: hx.division }, { source: 'half_test', format: hx.format });
+  if (sex === 'female') return pro ? 'M-Open' : 'W-Open';
+  return pro ? 'M-Pro' : 'M-Open';
 }
 
 /**
@@ -456,6 +484,7 @@ function stationInputs(state: SimulatorState, hx: HyroxConfigOf): StationInputs 
       teamAtTarget: converted?.teamAtTarget,
       isTeamTime, crossFormat,
       ...(ownDateISO ? { ownDateISO } : {}),
+      ...(converted?.loadsConverted ? { loadsConverted: true } : {}),
     };
   });
   return { coverage, isDoubles, isPro, perStation, hasTeamTimes: perStation.some(p => p.isTeamTime), tables, singles };
@@ -659,6 +688,9 @@ export interface HyroxStationBenchmark {
   teamTimeSplit: boolean;
   /** The value is converted from the other format's benchmark (StationInput). */
   crossFormat: boolean;
+  /** `sec` is the stored time converted to the target's weights (Open to Pro
+   *  or Pro to Open, per loaded station): the Stats ledger's load note. */
+  loadsConverted?: boolean;
 }
 
 export interface HyroxResolvedStationBenchmarks {
@@ -705,6 +737,7 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
       ...(p.slot ? { slot: p.slot } : {}),
       teamTimeSplit: p.isTeamTime,
       crossFormat: p.crossFormat,
+      ...(p.loadsConverted ? { loadsConverted: true } : {}),
     };
   });
   return { stations, stationRatio: soloSum > 0 ? teamSum / soloSum : 1, stationRatios, coverage: inputs.coverage };

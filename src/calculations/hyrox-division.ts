@@ -168,6 +168,38 @@ export function hyroxLoadsSentence(tier: HyroxLoadTier, wallBallTargetM: number 
   return `sled push ${t.sledPush} kg, sled pull ${t.sledPull} kg, farmers carry 2 × ${t.farmerPerHand} kg, sandbag ${t.sandbag} kg, wall ball ${t.wallBall} kg ${target}`;
 }
 
+/** A load tier's name for copy: "Women Open", "Men Open", "Men Pro". */
+export function hyroxLoadTierName(tier: HyroxLoadTier): string {
+  return tier === 'W-Open' ? 'Women Open' : tier === 'M-Open' ? 'Men Open' : 'Men Pro';
+}
+
+/**
+ * One station's load at a tier, for copy, with no distance (a half test runs
+ * half the race distance): "152 kg incl. sled", "2 × 24 kg", "20 kg
+ * sandbag", "6 kg ball to 2.70 m". Null for a station with no load (SkiErg,
+ * row, burpee broad jumps). Sled weights include the sled (rulebook).
+ */
+export function hyroxStationLoadPhrase(
+  station: HyroxStation,
+  tier: HyroxLoadTier,
+  wallBallTargetM: number | null,
+): string | null {
+  const t = HYROX_LOAD_TIER_KG[tier];
+  switch (station) {
+    case 'sled_push':      return `${t.sledPush} kg incl. sled`;
+    case 'sled_pull':      return `${t.sledPull} kg incl. sled`;
+    case 'farmer_carry':   return `2 × ${t.farmerPerHand} kg`;
+    case 'sandbag_lunges': return `${t.sandbag} kg sandbag`;
+    case 'wall_balls': {
+      const target = wallBallTargetM != null
+        ? `to ${wallBallTargetM.toFixed(2)} m`
+        : `to ${WALL_BALL_TARGET_M.female.toFixed(2)} m (women) or ${WALL_BALL_TARGET_M.male.toFixed(2)} m (men)`;
+      return `${t.wallBall} kg ball ${target}`;
+    }
+    default: return null;
+  }
+}
+
 /**
  * One station's race standard for the athlete's tier, for copy (26/27 Singles
  * rulebook s8.1, s8.2, s8.5, s8.8; no change from 25/26): SkiErg and row at

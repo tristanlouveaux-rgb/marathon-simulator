@@ -22,7 +22,15 @@ import {
   HYROX_STATION_ORDER,
 } from '@/constants/hyrox-benchmarks';
 import { appendStationTest, hyroxCalibrationCoverage, type HyroxFormat } from '@/calculations/hyrox-station-history';
-import { hyroxStationSeedsForState } from '@/calculations/race-prediction.hyrox';
+import { hyroxStationSeedsForState, hyroxStationTestLoadTier } from '@/calculations/race-prediction.hyrox';
+import {
+  isHyroxDoublesFormat,
+  isHyroxProFormat,
+  hyroxLoadTierName,
+  hyroxStationLoadPhrase,
+  hyroxWallBallTargetM,
+  resolveHyroxAthleteSex,
+} from '@/calculations/hyrox-division';
 
 /** Display order for the card's pending stations (ergs first). Which stations
  *  are pending and testable comes from hyroxCalibrationCoverage. */
@@ -81,7 +89,7 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
   const coverage = hyroxCalibrationCoverage(s.hyroxConfig!);
   const count = coverage.pending.length;
   const label = count === coverage.total
-    ? 'Using population benchmarks for all stations.'
+    ? 'All stations use population estimates.'
     : `${count} station${count > 1 ? 's' : ''} still using population estimates.`;
   const untestable = coverage.pending.filter(st => !coverage.testable.includes(st));
 
@@ -116,7 +124,7 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
         <button id="hx-bench-dismiss" style="background:none;border:none;cursor:pointer;color:var(--c-faint);font-size:18px;line-height:1;padding:0 0 0 8px">×</button>
       </div>
       <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">
-        Complete each station at half the race distance, record your time. More accurate than population averages for forecasting and plan calibration.
+        Complete each station at half the race distance and record your time. Your times replace the median split of your ability band in the HYROX results, in the forecast and the plan.
       </div>
       ${stationRows}
       ${moreCount > 0 ? `<div style="margin-top:8px;font-size:11px;color:var(--c-faint)">+${moreCount} more station${moreCount > 1 ? 's' : ''}</div>` : ''}
@@ -145,12 +153,36 @@ export function wireHyroxBenchmarkCard(onUpdate: () => void): void {
   });
 }
 
+/**
+ * The test entry modal's load line for a doubles athlete: the loads the
+ * forecast reads the test at (hyroxStationTestLoadTier), for a loaded station.
+ * A woman in Mixed Doubles tests at Men Open, the pair's loads; a Pro Doubles
+ * test reads at Open loads unless "Calibrated at Pro weights" is on. Null for
+ * singles, a station with no load, or an unknown sex (lane H3c: she had no way
+ * to know her tests are read at M-Open).
+ */
+export function stationTestLoadNote(s: SimulatorState, station: HyroxStation): string | null {
+  const hx = s.hyroxConfig;
+  if (!hx || !isHyroxDoublesFormat(hx.format)) return null;
+  const tier = hyroxStationTestLoadTier(s);
+  if (!tier) return null;
+  const phrase = hyroxStationLoadPhrase(station, tier, hyroxWallBallTargetM(s.biologicalSex, hx.division));
+  if (!phrase) return null;
+  const mixedWoman = hx.division === 'mixed' && resolveHyroxAthleteSex(s.biologicalSex, hx.division) === 'female';
+  const why = mixedWoman ? ', the weights your pair races' : '';
+  const proHint = isHyroxProFormat(hx.format) && !hx.benchmarksAtProWeights
+    ? ' Testing at Pro loads? Turn on Calibrated at Pro weights in Stats first.'
+    : '';
+  return `Test at ${hyroxLoadTierName(tier)} loads${why}: ${phrase}.${proHint}`;
+}
+
 function openStationTimeModal(station: HyroxStation, onUpdate: () => void): void {
   const existing = document.getElementById('hx-bench-modal');
   if (existing) existing.remove();
 
   const display = STATION_DISPLAY[station];
   const protocol = HALF_PROTOCOL[station];
+  const loadNote = stationTestLoadNote(getMutableState(), station);
 
   const overlay = document.createElement('div');
   overlay.id = 'hx-bench-modal';
@@ -158,10 +190,11 @@ function openStationTimeModal(station: HyroxStation, onUpdate: () => void): void
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:20px;padding:28px 24px;max-width:360px;width:100%;box-shadow:0 24px 64px rgba(0,0,0,0.18)">
       <div style="font-size:17px;font-weight:700;color:#0F172A;margin-bottom:6px">${display.name}</div>
-      <div style="font-size:13px;color:var(--c-muted);margin-bottom:20px;line-height:1.5">
+      <div style="font-size:13px;color:var(--c-muted);margin-bottom:${loadNote ? 10 : 20}px;line-height:1.5">
         Complete <strong>${protocol}</strong> at race effort. Enter your time below.
         The system will estimate your full-distance performance.
       </div>
+      ${loadNote ? `<div id="hx-bench-load-note" style="font-size:13px;color:var(--c-black);margin-bottom:20px;line-height:1.5">${loadNote}</div>` : ''}
       <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Your half-test time (mm:ss)</label>
       <input
         id="hx-bench-time-input"
