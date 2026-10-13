@@ -188,7 +188,7 @@ describe('a Monday to Wednesday race trains like the Sunday before it', () => {
             const m: Record<string, number> = { swim: 0, bike: 0, run: 0 };
             for (const w of ws ?? []) {
               if (w.t === 'gym' || w.commute) continue;
-              if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline] += sg.durationMin;
+              if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline] += sg.durationMin ?? 0;
               else m[w.discipline ?? 'run'] += w.estimatedDurationMin ?? 0;
             }
             return m;

@@ -156,7 +156,7 @@ function raceWeekMinutes(s: SimulatorState): Record<'swim' | 'bike' | 'run', num
   const m = { swim: 0, bike: 0, run: 0 };
   for (const w of s.wks[planTrainingWeeks(s) - 1].triWorkouts ?? []) {
     if (w.t === 'gym' || w.commute) continue;
-    if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline as 'swim' | 'bike' | 'run'] += sg.durationMin;
+    if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline as 'swim' | 'bike' | 'run'] += sg.durationMin ?? 0;
     else m[(w.discipline ?? 'run') as 'swim' | 'bike' | 'run'] += w.estimatedDurationMin ?? 0;
   }
   return m;
