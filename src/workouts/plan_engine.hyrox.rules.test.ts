@@ -296,11 +296,10 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
     if (ph !== 'taper' && !raceWeek && ergs.length > 0 && !ws.some(isWork)) out.push(`W${w}: easy erg work and no station session or brick`);
     // No standalone run under the run floor (the primer excepted): the plans
     // here have no logged runs, so the floor is HYROX_RUN_FLOOR_MIN. A taper
-    // long run follows TAPER_LONG_RUN_FRACTION of the long run before it
-    // (checked below), so after a long run under 31 min (a logged load of 30
-    // TSS or less) it sits under the floor.
+    // long run included (decision E: it rises to the floor when the long run
+    // before it reached it).
     for (const r of runs(wk)) {
-      if (!isQuality(r) && !(ph === 'taper' && isHyroxLongRun(r)) && (r.estimatedDurationMin ?? 0) < HYROX_RUN_FLOOR_MIN) out.push(`W${w}: ${r.n} ${r.estimatedDurationMin} min, under the ${HYROX_RUN_FLOOR_MIN}-min run floor`);
+      if (!isQuality(r) && (r.estimatedDurationMin ?? 0) < HYROX_RUN_FLOOR_MIN) out.push(`W${w}: ${r.n} ${r.estimatedDurationMin} min, under the ${HYROX_RUN_FLOOR_MIN}-min run floor`);
     }
     // Single-run rule.
     if (w >= 2) {
@@ -406,7 +405,8 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       if (minutes(wk) > before + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the week before (${raw})`);
       if (long) {
         const prevLong = Math.max(0, ...wks.slice(Math.max(0, i - 4), i).map(x => prescribed(x).find(isHyroxLongRun)?.estimatedDurationMin ?? 0));
-        if ((long.estimatedDurationMin ?? 0) > Math.round(prevLong * TAPER_LONG_RUN_FRACTION)) out.push(`W${w}: taper long run ${long.estimatedDurationMin} min above ${TAPER_LONG_RUN_FRACTION} x ${prevLong}`);
+        const allowed = prevLong >= HYROX_RUN_FLOOR_MIN ? Math.max(HYROX_RUN_FLOOR_MIN, Math.round(prevLong * TAPER_LONG_RUN_FRACTION)) : Math.round(prevLong * TAPER_LONG_RUN_FRACTION);
+        if ((long.estimatedDurationMin ?? 0) > allowed) out.push(`W${w}: taper long run ${long.estimatedDurationMin} min above ${TAPER_LONG_RUN_FRACTION} x ${prevLong}`);
       }
     }
   }
@@ -1279,4 +1279,44 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // Most adjacent hours hold more: the conflicts stay a small share.
     expect(conflicts).toBeLessThan(pairs / 20);
   }, 300000);
+
+  it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
+    let short = 0;
+    for (const band of BANDS) {
+      for (const hrs of hoursGrid(band)) {
+        for (const len of [8, 16, 24]) {
+          const s = build(band, hrs, len);
+          const tw = planTrainingWeeks(s);
+          for (let i = 0; i < tw; i++) {
+            const wk = s.wks[i];
+            if (wk.ph === 'taper') continue;
+            const n = notes(wk).find(x => /^W\d+: \d+ of the chosen \d+ min \(/.test(x));
+            if (hrs * 60 - minutes(wk) >= HYROX_RUN_FLOOR_MIN) {
+              short++;
+              expect(n, `${band} ${hrs}h ${len}w W${i + 1}`).toBeDefined();
+              expect(n!).toContain(`${minutes(wk)} of the chosen ${hrs * 60} min`);
+              expect(n!).not.toMatch(/—/);
+            } else {
+              expect(n, `${band} ${hrs}h ${len}w W${i + 1}`).toBeUndefined();
+            }
+          }
+        }
+      }
+    }
+    expect(short).toBeGreaterThan(0);
+  }, 120000);
+
+  it('E: no long run under the run floor at low logged loads, the taper long run included', () => {
+    for (const logged of [20, 30]) {
+      for (const band of BANDS) {
+        for (const len of [8, 10, 14]) {
+          const s = build(band, HYROX_HOURS_RANGE[band].default, len, {}, logged);
+          for (const wk of s.wks.slice(0, planTrainingWeeks(s))) {
+            const long = prescribed(wk).find(isHyroxLongRun);
+            if (long) expect(long.estimatedDurationMin!, `${band} ${len}w ${logged} TSS`).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN);
+          }
+        }
+      }
+    }
+  });
 });

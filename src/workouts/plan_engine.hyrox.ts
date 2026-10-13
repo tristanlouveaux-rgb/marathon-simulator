@@ -1902,8 +1902,14 @@ export function buildHyroxTrainingWeeks(
     let longRunMin: number | null;
     if (phase === 'taper') {
       // The long run in a taper week: TAPER_LONG_RUN_FRACTION of the longest
-      // long run of the previous 4 weeks (the start when there is none).
-      longRunMin = raceWeek ? null : Math.round((prevLongRun > 0 ? prevLongRun : start.startMin) * TAPER_LONG_RUN_FRACTION);
+      // long run of the previous 4 weeks (the start when there is none),
+      // never under the run floor when that long run reached it (decision E,
+      // Tristan 2026-10-13; the deload's rule). Before, a logged load of 30
+      // TSS or less, whose long runs sat at 22 to 29 min, gave taper long
+      // runs of 14 to 19 min (28 plans).
+      const taperRef = prevLongRun > 0 ? prevLongRun : start.startMin;
+      const taperLong = Math.round(taperRef * TAPER_LONG_RUN_FRACTION);
+      longRunMin = raceWeek ? null : taperRef >= runFloorMin ? Math.max(runFloorMin, taperLong) : taperLong;
       if (w >= taperStart) {
         // Race taper: taperFraction (0.70 then 0.55; SCIENCE_LOG §CV.4) of the
         // reference week, the last loaded week before the taper.
@@ -2359,6 +2365,28 @@ export function buildHyroxTrainingWeeks(
       attempt = fit();
       if (taperWork) shed(a => a.workMin > taperWork.min + 1e-6 || a.workMtl > taperWork.mtl + 1e-6, true, "taper: the reference week's station and brick work");
       shed(raceTaper ? over : (a: Attempt) => a.min > beforeCapMin + 1e-6, false);
+    }
+
+    // A training week that holds less than the chosen weekly hours says so
+    // plainly, with what holds it (decision C, Tristan 2026-10-13): the
+    // phase budget (base and build weeks ramp toward the chosen hours) or a
+    // deload, a ceiling, the chosen session count with every session at its
+    // longest, or no erg access for easy erg work. The other notes name each
+    // cut; this one gives the week's total against the chosen hours.
+    if (phase !== 'taper' && hoursMin > 0) {
+      const planned = hyroxPlannedMinutes(attempt.workouts);
+      if (hoursMin - planned >= HYROX_RUN_FLOOR_MIN) {
+        const n = attempt.adjustments.join(' | ');
+        const why: string[] = [];
+        if (deloadRef) why.push(`a deload holds at most ${HYROX_DELOAD_FACTOR} of the last loaded week`);
+        else if (budgetMin < hoursMin - HYROX_RUN_FLOOR_MIN) why.push(`the ${phase} week's budget is ${Math.round(budgetMin)} min`);
+        if (/acute:chronic guard/.test(n)) why.push('the acute:chronic guard holds its load');
+        if (/MTL cap \d+/.test(n)) why.push(`the MTL cap of ${hx.mtlCap} holds its load`);
+        if (/are full/.test(n)) why.push(`${maxSessionsName} are full, each session at its longest`);
+        if (/no erg access/.test(n)) why.push('no erg access for easy erg work');
+        if (/injury/.test(n)) why.push('the injury gates');
+        attempt.adjustments.push(`W${w}: ${planned} of the chosen ${Math.round(hoursMin)} min (${why.length > 0 ? why.join('; ') : 'every session at its longest'})`);
+      }
     }
 
     built.push({
