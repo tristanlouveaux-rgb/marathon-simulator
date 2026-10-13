@@ -133,7 +133,6 @@ function stationSeedSec(
   return benchmarks?.[station] ?? STATION_SEED_TIMES_SEC[band][station];
 }
 
-/** Format seconds as "m:ss". */
 /** Format a station time as "m:ss", rounded to the whole second before the
  *  minute split, so 299.6 reads 5:00, never 4:60. */
 function fmtSec(sec: number): string {
