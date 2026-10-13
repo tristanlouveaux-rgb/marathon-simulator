@@ -369,23 +369,29 @@ function stationRatioFor(inputs: StationInputs, sb: SeedBasis): { ratio: number;
  *  (resolveHyroxStationBenchmarks). */
 export interface HyroxStationBenchmark {
   station: HyroxStation;
-  /** The benchmark in the target format's terms, as the target's own slot
-   *  holds one: for a singles target a doubles race split converted to
-   *  singles terms (the pair's time ÷ the station ratio); anything else as
-   *  stored (the doubles slot holds solo tests as one athlete's time and race
-   *  splits as the pair's time). The value the Stats Benchmarks ledger shows
-   *  and the session generators prescribe from: before the forecast's
-   *  staleness blend, Pro-weight adjustment and venue factors. Absent when the
-   *  station uses the population seed. */
+  /** The benchmark as one athlete's time over the full station distance, for
+   *  every target format: a doubles race split (the pair's time) ÷ the
+   *  forecast's station ratio, anything else as stored (singles times, and
+   *  the doubles slot's solo tests and session bests). These are the terms
+   *  of the band seeds, of a station session (one athlete covers the full
+   *  distance) and of a guided session's best round, so the Stats Benchmarks
+   *  ledger, the session generators' targets and the session-best check all
+   *  read this one number. A doubles target's forecast scales it × the
+   *  station ratio into the pair's time. Before the forecast's staleness
+   *  blend, Pro-weight adjustment and venue factors. Absent when the station
+   *  uses the population seed.
+   *
+   *  History (review 2026-10-13): a doubles target's race split was kept as
+   *  the pair's time here while its solo tests, the seeds and session bests
+   *  were one athlete's time. Plans prescribed the pair's time as a solo
+   *  target (about 30% too fast), and a solo session best that beat the
+   *  split's solo equivalent moved the Stats row and the next plan's target
+   *  slower. */
   sec?: number;
-  /** The same benchmark as one athlete's effort: a doubles race split ÷ the
-   *  station ratio, anything else as stored. A solo effort (a guided
-   *  session's best round) is compared with this, never with the pair's
-   *  time. */
-  soloSec?: number;
   /** The slot the value came from (absent for the legacy pooled field). */
   slot?: BenchmarkSlot;
-  /** The value is a doubles race split (the pair's time). */
+  /** The stored value is a doubles race split (the pair's time); `sec` is its
+   *  solo equivalent. */
   teamTimeSplit: boolean;
   /** The value is converted from the other format's benchmark (StationInput). */
   crossFormat: boolean;
@@ -406,7 +412,8 @@ export interface HyroxResolvedStationBenchmarks {
  * station ratio predictHyroxRace applies). One source for the Stats
  * Benchmarks ledger, the plan engine and add-session generator targets, and
  * the guided-session PB check, so a converted race split reads the same
- * everywhere and a slower training round never overwrites it.
+ * everywhere, in one athlete's terms for every format, and a slower training
+ * round never overwrites it.
  *
  * The station ratio is computed only when a value is a doubles race split;
  * otherwise no value needs it.
@@ -422,11 +429,9 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
     if (p.calibrated == null) {
       return { station: p.station, teamTimeSplit: false, crossFormat: false };
     }
-    const solo = p.isTeamTime ? p.calibrated / stationRatio : p.calibrated;
     return {
       station: p.station,
-      sec: p.isTeamTime && !inputs.isDoubles ? solo : p.calibrated,
-      soloSec: solo,
+      sec: p.isTeamTime ? p.calibrated / stationRatio : p.calibrated,
       ...(p.slot ? { slot: p.slot } : {}),
       teamTimeSplit: p.isTeamTime,
       crossFormat: p.crossFormat,
@@ -436,9 +441,11 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
 }
 
 /** Station target times for the session generators (plan engine, add-session
- *  modal): resolveHyroxStationBenchmarks' `sec` per calibrated station, to the
- *  whole second the Stats ledger shows (a converted split is fractional). The
- *  generators fall back to the band seed for the rest. */
+ *  modal): resolveHyroxStationBenchmarks' `sec` per calibrated station (one
+ *  athlete over the full station distance, in every format), to the whole
+ *  second the Stats ledger shows (a converted split is fractional). The
+ *  generators fall back to the band seed, also one athlete's time, for the
+ *  rest. */
 export function hyroxPlanningStationBenchmarks(state: SimulatorState): Partial<Record<HyroxStation, number>> {
   const out: Partial<Record<HyroxStation, number>> = {};
   for (const b of resolveHyroxStationBenchmarks(state)?.stations ?? []) {

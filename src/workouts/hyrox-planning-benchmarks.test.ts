@@ -9,7 +9,9 @@
  * Forecast, Stats and Account showed their converted times (review
  * 2026-10-13). Both now read hyroxPlanningStationBenchmarks, the
  * resolveHyroxStationBenchmarks values the Stats ledger shows, to the whole
- * second.
+ * second. Every value is one athlete's time over the full station, so a
+ * doubles target's race split is prescribed as its solo equivalent, never as
+ * the pair's time, and a session best moves the target faster.
  *
  * Real generator, real add-session modal (jsdom). saveState and the plan-view
  * re-render are stubbed.
@@ -32,6 +34,8 @@ import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-b
 import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { hyroxBenchmarkLedger } from '@/ui/hyrox/stats-view';
 import { openHyroxAddSessionModal } from '@/ui/hyrox/add-session-modal';
+import { applyHyroxSessionBenchmarks } from '@/calculations/hyrox-session-benchmarks';
+import type { SetRecord } from '@/guided/strength-controller';
 import type { SimulatorState, Week } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 
@@ -100,6 +104,10 @@ const CASES = [
     name: 'singles target, own singles times: unchanged',
     hx: { format: 'open_singles' as const, stationBenchmarksSingles: { ...SINGLES_TIMES } },
   },
+  {
+    name: 'doubles target, own doubles race splits: the solo equivalent of each split',
+    hx: { format: 'open_doubles' as const, stationBenchmarksDoubles: { ...DOUBLES_SPLITS }, stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles') },
+  },
 ];
 
 beforeEach(() => {
@@ -135,6 +143,53 @@ describe('plan engine station targets come from the forecast\'s per-station benc
       const st = comp.type as HyroxStation;
       expect(comp.durationSec).not.toBe(seeds[st]);
       expect(comp.durationSec).toBe(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatio));
+    }
+  });
+});
+
+describe('doubles target with doubles race splits: one number per station for Stats, the plan and session bests', () => {
+  // Review 2026-10-13: the plan prescribed the pair's time as a solo,
+  // full-distance target ('Row Erg (1000m, target 3:40)', about 30% too fast),
+  // and a solo session best that beat the split's solo equivalent moved the
+  // Stats row and the next plan's target from 3:40 to 5:00.
+  const doublesCase = () => hyroxState(CASES[3].hx);
+
+  it('the plan target is Math.round of the Stats row, the solo equivalent, never the pair\'s time', () => {
+    const s = doublesCase();
+    const resolved = resolveHyroxStationBenchmarks(s)!;
+    const targets = hyroxPlanningStationBenchmarks(s);
+    const ledger = hyroxBenchmarkLedger(s);
+    for (const row of ledger.rows) {
+      const b = resolved.stations.find(x => x.station === row.station)!;
+      expect(row.basis).toBe('solo_of_doubles_race');
+      expect(row.sec).toBe(b.sec);
+      expect(targets[row.station]).toBe(Math.round(row.sec!));
+      expect(targets[row.station]).toBe(Math.round(DOUBLES_SPLITS[row.station] / resolved.stationRatio));
+      expect(targets[row.station]!).toBeGreaterThan(DOUBLES_SPLITS[row.station]);
+    }
+  });
+
+  it('a solo improvement moves the Stats row and the next plan\'s target faster, never slower', () => {
+    const s = doublesCase();
+    const rowBefore = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'row_erg')!.sec!;
+    const targetBefore = hyroxPlanningStationBenchmarks(s).row_erg!;
+    const best = targetBefore - 8;
+    const session = { t: 'hyrox_station_density', n: 'X', d: '', hyroxRounds: 2, hyroxComponents: [{ type: 'row_erg', distanceM: 1000, mtl: 0 }] } as any;
+    const rec = (setIndex: number, durationSec: number): SetRecord =>
+      ({ exerciseName: 'x', exerciseIndex: 0, setIndex, setCount: 2, reps: '', durationSec });
+    const applied = applyHyroxSessionBenchmarks(session, [rec(0, best + 5), rec(1, best)], s);
+    expect(applied).toHaveLength(1);
+    expect(applied[0].fromSec!).toBeCloseTo(rowBefore, 9);
+
+    const rowAfter = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'row_erg')!;
+    expect(rowAfter.sec).toBe(best);
+    expect(rowAfter.sec!).toBeLessThan(rowBefore);
+    s.wks = generateHyroxPlan(s);
+    const targetAfter = hyroxPlanningStationBenchmarks(s).row_erg!;
+    expect(targetAfter).toBe(best);
+    expect(targetAfter).toBeLessThan(targetBefore);
+    for (const comp of densityComponents(s.wks).filter(c => c.type === 'row_erg')) {
+      expect(comp.durationSec).toBe(best);
     }
   });
 });

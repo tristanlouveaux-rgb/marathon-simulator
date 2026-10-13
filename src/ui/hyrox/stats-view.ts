@@ -366,28 +366,59 @@ function renderRunPaceRow(
   `;
 }
 
+/** Where a Benchmarks-ledger value comes from (hyroxBenchmarkLedger). */
+export type HyroxBenchmarkBasis =
+  /** No athlete time: the row shows the band's population estimate. */
+  | 'seed'
+  /** The athlete's own time, stored in these terms. */
+  | 'calibrated'
+  /** Singles target: a doubles race split (the pair's time) ÷ the forecast's
+   *  station ratio, a singles time. */
+  | 'converted_from_doubles_race'
+  /** Doubles target: a doubles race split ÷ the forecast's station ratio, the
+   *  solo time the forecast scales back to the pair's time. */
+  | 'solo_of_doubles_race'
+  /** Doubles target: a singles benchmark, which the forecast scales × the
+   *  station ratio (a cross-format estimate). */
+  | 'from_singles';
+
+/** The ledger caption for each basis. */
+export const HYROX_BENCHMARK_BASIS_LABEL: Record<HyroxBenchmarkBasis, string> = {
+  seed: 'Population est.',
+  calibrated: 'Calibrated',
+  converted_from_doubles_race: 'Converted from doubles race',
+  solo_of_doubles_race: 'Solo equivalent of doubles race',
+  from_singles: 'From singles benchmark',
+};
+
 /** One Benchmarks-ledger row (hyroxBenchmarkLedger). */
 export interface HyroxBenchmarkLedgerRow {
   station: HyroxStation;
-  /** The athlete's benchmark for the station in the target's terms; absent
-   *  when the station still uses the population seed. */
+  /** The athlete's benchmark for the station as one athlete's time over the
+   *  full station distance (resolveHyroxStationBenchmarks `sec`); absent when
+   *  the station still uses the population seed. */
   sec?: number;
-  /** True when `sec` is a doubles race split (the pair's time) converted to
-   *  singles terms for a singles target. */
-  convertedFromDoubles: boolean;
+  basis: HyroxBenchmarkBasis;
 }
 
 /**
  * The Stats Benchmarks ledger: one row per raced station (all 8) and the
  * calibrated count, from resolveHyroxStationBenchmarks, the forecast's own
  * per-station computation. The same values feed the plan engine's station
- * targets and the guided-session PB check. A station resolved from the other
- * format's slot keeps the forecast's reading of it:
- *  - Singles target, a doubles race split: the pair's time ÷ the forecast's
- *    station ratio, so the pair's time never sits raw next to singles seeds.
- *  - Anything else (a solo test from the doubles slot, a singles time for a
- *    doubles target) is already one athlete's time and shows as stored, like
- *    the doubles slot's own solo tests.
+ * targets and the guided-session PB check, so the ledger, the plan and a
+ * session-best update read one number per station.
+ *
+ * Every row is one athlete's time over the full station distance, the terms
+ * of the band seeds shown for uncalibrated rows, in every format:
+ *  - A doubles race split (the pair's time) ÷ the forecast's station ratio.
+ *    A singles target reads it as 'Converted from doubles race', a doubles
+ *    target as 'Solo equivalent of doubles race' (its forecast scales it
+ *    back to the pair's time).
+ *  - A singles benchmark read by a doubles target shows as stored, captioned
+ *    'From singles benchmark': the forecast flags it as converted and caps
+ *    confidence on it.
+ *  - Anything else (the target's own times, a solo test from the doubles
+ *    slot) shows as stored, 'Calibrated'.
  * The ledger shows the benchmark itself, before the forecast's staleness
  * blend, Pro-weight adjustment and venue factors. Stations the athlete has no
  * equipment for are listed too: the forecast reads their race splits, and the
@@ -399,9 +430,13 @@ export function hyroxBenchmarkLedger(
   const resolved = resolveHyroxStationBenchmarks(state);
   if (!resolved) return { rows: [], calibratedCount: 0, total: HYROX_STATION_ORDER.length };
   const doublesTarget = isHyroxDoublesFormat(state.hyroxConfig?.format);
-  const rows = resolved.stations.map((b): HyroxBenchmarkLedgerRow => (b.sec == null
-    ? { station: b.station, convertedFromDoubles: false }
-    : { station: b.station, sec: b.sec, convertedFromDoubles: !doublesTarget && b.teamTimeSplit }));
+  const rows = resolved.stations.map((b): HyroxBenchmarkLedgerRow => {
+    if (b.sec == null) return { station: b.station, basis: 'seed' };
+    const basis: HyroxBenchmarkBasis = b.teamTimeSplit
+      ? (doublesTarget ? 'solo_of_doubles_race' : 'converted_from_doubles_race')
+      : (doublesTarget && b.crossFormat ? 'from_singles' : 'calibrated');
+    return { station: b.station, sec: b.sec, basis };
+  });
   return { rows, calibratedCount: resolved.coverage.calibrated.length, total: resolved.coverage.total };
 }
 
@@ -427,7 +462,7 @@ function renderBenchmarkRow(
   let calibratedRightCol = '';
   if (hasUser) {
     const ageMo = latestTestAgeMonths(state, station);
-    const label = row.convertedFromDoubles ? 'Converted from doubles race' : 'Calibrated';
+    const label = HYROX_BENCHMARK_BASIS_LABEL[row.basis];
     const ageCaption = (ageMo != null && ageMo >= 4)
       ? `${label} · ${Math.round(ageMo)} mo ago`
       : label;
@@ -447,7 +482,7 @@ function renderBenchmarkRow(
         ${hasUser
           ? calibratedRightCol
           : `<div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${seedSec ? fmtSec(seedSec) : '—'}</div>
-             <div style="font-size:10px;color:var(--c-faint)">Population est.</div>`
+             <div style="font-size:10px;color:var(--c-faint)">${HYROX_BENCHMARK_BASIS_LABEL.seed}</div>`
         }
       </div>
     </div>

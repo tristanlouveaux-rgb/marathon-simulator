@@ -253,7 +253,7 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     expect(fast.deltaSec).toBe(10);
   });
 
-  it('doubles target, own doubles race split: a solo round is compared in solo terms (the pair\'s time ÷ the station ratio)', () => {
+  it('doubles target, own doubles race split: a solo round is compared with the split\'s solo equivalent (the pair\'s time ÷ the station ratio)', () => {
     const s = fullState({
       format: 'open_doubles',
       stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
@@ -261,21 +261,46 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     });
     const prediction = predictHyroxRace(s)!;
     const row = resolvedRow(s);
-    // Stats and the generators read the pair's time as stored ...
-    expect(row.sec).toBe(DOUBLES_SPLITS.row_erg);
-    // ... the solo comparison divides it by the forecast's own ratio.
-    expect(row.soloSec!).toBeCloseTo(DOUBLES_SPLITS.row_erg / prediction.doubles!.stationRatio, 9);
-    expect(row.soloSec!).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
+    expect(row.teamTimeSplit).toBe(true);
+    // One number per station for Stats, the generators and this check: the
+    // pair's time ÷ the forecast's own ratio.
+    expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS.row_erg / prediction.doubles!.stationRatio, 9);
+    expect(row.sec!).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
 
     // Slower than the pair's time but faster than its solo equivalent: one
-    // athlete beat their share of the race split.
-    const solo = Math.floor(row.soloSec!) - 20;
+    // athlete beat the split's solo equivalent.
+    const solo = Math.floor(row.sec!) - 20;
     expect(solo).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
     const r = summariseHyroxSession(rowSession, rowRounds(solo), s)[0];
-    expect(r.benchmarkSec).toBeCloseTo(row.soloSec!, 9);
+    expect(r.benchmarkSec).toBeCloseTo(row.sec!, 9);
     expect(r.isImprovement).toBe(true);
     // Slower than the solo equivalent: no improvement.
-    const slow = summariseHyroxSession(rowSession, rowRounds(Math.ceil(row.soloSec!) + 10), s)[0];
+    const slow = summariseHyroxSession(rowSession, rowRounds(Math.ceil(row.sec!) + 10), s)[0];
     expect(slow.isImprovement).toBe(false);
+  });
+
+  it('doubles target, own doubles race split: an improvement moves the benchmark and the forecast row faster, never slower', () => {
+    // Review 2026-10-13 probe: Open Doubles, 8 doubles race splits plus a
+    // venue, a guided row round of 300 s. The summary read 'Benchmark
+    // updated' while the Stats row and the next plan's target went from the
+    // pair's time (3:40) to 5:00.
+    const s = fullState({
+      format: 'open_doubles',
+      venueId: 'london-excel',
+      stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
+      stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles'),
+    });
+    const before = resolvedRow(s).sec!;
+    const forecastBefore = predictHyroxRace(s)!.stations.find(l => l.station === 'row_erg')!.baseSec;
+    expect(before).toBeGreaterThan(300);
+    const applied = applyHyroxSessionBenchmarks(rowSession, rowRounds(300), s);
+    expect(applied).toHaveLength(1);
+    expect(applied[0].fromSec).toBeCloseTo(before, 9);
+    expect(applied[0].toSec).toBe(300);
+    const after = resolvedRow(s);
+    expect(after.teamTimeSplit).toBe(false);
+    expect(after.sec).toBe(300);
+    expect(after.sec!).toBeLessThan(before);
+    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'row_erg')!.baseSec).toBeLessThan(forecastBefore);
   });
 });

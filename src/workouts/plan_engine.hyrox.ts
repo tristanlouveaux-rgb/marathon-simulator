@@ -339,12 +339,14 @@ function generateWeekSessions(
   const stationMin = sessions.stations > 0 ? (stationHours / sessions.stations) * 60 : 0;
   const brickMin   = sessions.bricks   > 0 ? (brickHours   / sessions.bricks)   * 60 : 0;
 
-  // Station target times: the forecast's per-station benchmarks in the target
-  // format's terms (hyroxPlanningStationBenchmarks), the values the Stats
-  // Benchmarks ledger shows. A station held only in the other format's slot
-  // is read through the same conversion the forecast applies, so a singles
-  // athlete whose times came from doubles race splits trains to those times,
-  // not to population seeds.
+  // Station target times: the forecast's per-station benchmarks as one
+  // athlete's time over the full station distance
+  // (hyroxPlanningStationBenchmarks), the values the Stats Benchmarks ledger
+  // shows, in the terms of the band seeds they replace. A doubles race split
+  // (the pair's time) is read through the same station ratio the forecast
+  // applies, for every target: a singles athlete whose times came from
+  // doubles race splits trains to those times, not to population seeds, and
+  // a doubles athlete is never prescribed the pair's time as a solo target.
   const stationBenchmarks = hyroxPlanningStationBenchmarks(state);
   const workouts: Workout[] = [];
 

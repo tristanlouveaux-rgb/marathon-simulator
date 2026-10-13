@@ -16,9 +16,10 @@
  * on file, the Forecast read 8/8 and Stats 6/6. Equipment access now only
  * decides which stations a test prompt lists.
  *
- * Stats rows that come from the other format's slot keep the forecast's
- * reading: a doubles race split (the pair's time) shows in singles terms for a
- * singles target, never raw next to singles seeds.
+ * Stats rows are one athlete's time over the full station, the terms of the
+ * seeds beside them and of the plan's targets: a doubles race split (the
+ * pair's time) shows ÷ the forecast's station ratio for every target, never
+ * raw next to singles seeds. Each row says where its value comes from.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
@@ -221,7 +222,7 @@ describe('Stats ledger rows from the other format\'s slot', () => {
     expect(ratio).toBeGreaterThan(0);
     const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
-      expect(row.convertedFromDoubles).toBe(true);
+      expect(row.basis).toBe('converted_from_doubles_race');
       expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS[row.station] / ratio, 9);
       // Fresh open race: the forecast line carries the same singles-terms value.
       expect(row.sec!).toBeCloseTo(prediction.stations.find(l => l.station === row.station)!.baseSec, 6);
@@ -239,8 +240,8 @@ describe('Stats ledger rows from the other format\'s slot', () => {
     const s = hyroxState(CASES[2].hx);
     const ledger = hyroxBenchmarkLedger(s);
     const ski = ledger.rows.find(r => r.station === 'ski_erg')!;
-    expect(ski).toEqual({ station: 'ski_erg', sec: 280, convertedFromDoubles: false });
-    expect(ledger.rows.filter(r => r.convertedFromDoubles)).toHaveLength(7);
+    expect(ski).toEqual({ station: 'ski_erg', sec: 280, basis: 'calibrated' });
+    expect(ledger.rows.filter(r => r.basis === 'converted_from_doubles_race')).toHaveLength(7);
   });
 
   it('singles target: a solo test in the doubles slot is one athlete\'s time and shows as stored', () => {
@@ -250,15 +251,46 @@ describe('Stats ledger rows from the other format\'s slot', () => {
       stationBenchmarkHistory: { ski_erg: [{ dateISO: daysAgo(5), sec: 270, source: 'half_test', format: 'open_doubles' }] },
     });
     const ledger = hyroxBenchmarkLedger(s);
-    expect(ledger.rows.find(r => r.station === 'ski_erg')).toEqual({ station: 'ski_erg', sec: 270, convertedFromDoubles: false });
+    expect(ledger.rows.find(r => r.station === 'ski_erg')).toEqual({ station: 'ski_erg', sec: 270, basis: 'calibrated' });
+    expect(ledger.rows.filter(r => r.basis === 'seed')).toHaveLength(7);
     expect(ledger.calibratedCount).toBe(1);
   });
 
-  it('doubles target: singles times show as stored (the ledger\'s solo terms)', () => {
+  it('doubles target: singles times show as stored (the ledger\'s solo terms), captioned as from the singles benchmark', () => {
     const s = hyroxState(CASES[1].hx);
+    const prediction = predictHyroxRace(s)!;
+    // The forecast flags these stations as converted and caps confidence.
+    expect(prediction.crossFormatConversion).toBe('singles_to_doubles');
     const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
-      expect(row).toEqual({ station: row.station, sec: SINGLES_TIMES[row.station], convertedFromDoubles: false });
+      expect(row).toEqual({ station: row.station, sec: SINGLES_TIMES[row.station], basis: 'from_singles' });
     }
+    setState(s);
+    renderHyroxStatsView();
+    const html = document.getElementById('app-root')!.innerHTML;
+    expect(html).toContain('From singles benchmark');
+    expect(html).not.toContain('>Calibrated<');
+  });
+
+  it('doubles target, own doubles race splits: the solo equivalent (the pair\'s time ÷ the forecast\'s ratio), never the pair\'s time', () => {
+    const s = hyroxState({ format: 'open_doubles', stationBenchmarksDoubles: { ...DOUBLES_SPLITS }, stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles') });
+    const prediction = predictHyroxRace(s)!;
+    const ratio = prediction.doubles!.stationRatio;
+    expect(ratio).toBeLessThan(1);
+    // Own format: nothing is cross-format, confidence is not capped by it.
+    expect(prediction.crossFormatConversion).toBeUndefined();
+    const ledger = hyroxBenchmarkLedger(s);
+    for (const row of ledger.rows) {
+      expect(row.basis).toBe('solo_of_doubles_race');
+      expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS[row.station] / ratio, 9);
+      // The forecast line is the pair's time: the ledger value × the ratio.
+      expect(row.sec! * ratio).toBeCloseTo(prediction.stations.find(l => l.station === row.station)!.baseSec, 6);
+    }
+    setState(s);
+    renderHyroxStatsView();
+    const html = document.getElementById('app-root')!.innerHTML;
+    expect(html).toContain('Solo equivalent of doubles race');
+    expect(html).toContain(ftRounded(DOUBLES_SPLITS.wall_balls / ratio));
+    expect(html).not.toContain(`>${ftRounded(DOUBLES_SPLITS.wall_balls)}<`);
   });
 });
