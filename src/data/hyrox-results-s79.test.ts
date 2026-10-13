@@ -3,11 +3,13 @@
  *
  * These check the tables against their own provenance (the ingest report and
  * cell counts written by scripts/ingest-hyrox-results-s79.py), the DKW
- * cell-size rule, and three medians quoted by the lane brief as a smoke check.
+ * cell-size rule, the app's band thresholds, and three medians quoted by the
+ * lane brief as a smoke check.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { HYROX_TIME_TO_BAND_THRESHOLDS } from '@/constants/hyrox-constants';
 import {
   HYROX_S79_AGE_DROPS,
   HYROX_S79_AGE_GROUPS,
@@ -15,11 +17,13 @@ import {
   HYROX_S79_AGE_TOTAL_COUNTS,
   HYROX_S79_AGE_TOTAL_PERCENTILES,
   HYROX_S79_ATTRIBUTION,
+  HYROX_S79_CROSS_LABEL_RESOLUTIONS,
   HYROX_S79_DKW_ALPHA,
   HYROX_S79_FINISHER_COUNTS,
   HYROX_S79_GRIDS,
   HYROX_S79_GRID_LADDER,
   HYROX_S79_IMPROVEMENT,
+  HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS,
   HYROX_S79_IMPROVEMENT_REPORT,
   HYROX_S79_IMPROVEMENT_SUPPRESSED,
   HYROX_S79_INGEST_REPORT,
@@ -32,6 +36,12 @@ import {
   HYROX_S79_SEASON_MEDIANS,
   HYROX_S79_SUPPRESSED_CELLS,
   HYROX_S79_TOTAL_FENCES_SEC,
+  HYROX_S79_VENUE_SPREAD,
+  HYROX_S89_FINISHER_COUNTS,
+  HYROX_S89_GRIDS,
+  HYROX_S89_PERCENTILES,
+  HYROX_S89_SEASONS,
+  HYROX_S89_SUPPRESSED_CELLS,
   type HyroxPercentileTable,
   type HyroxResultsFormat,
   type HyroxResultsMetric,
@@ -54,15 +64,22 @@ const finestGridFor = (n: number) => HYROX_S79_GRID_LADDER.find(g => n >= g.minN
 const at = (t: HyroxPercentileTable, p: number) => t.find(([, q]) => q === p)?.[0];
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
+type CellFamily = {
+  percentiles: typeof HYROX_S79_PERCENTILES;
+  counts: typeof HYROX_S79_FINISHER_COUNTS;
+};
+const POOLED: CellFamily = { percentiles: HYROX_S79_PERCENTILES, counts: HYROX_S79_FINISHER_COUNTS };
+const CURRENT_JUDGING: CellFamily = { percentiles: HYROX_S89_PERCENTILES, counts: HYROX_S89_FINISHER_COUNTS };
+
 interface MainCell { format: HyroxResultsFormat; sex: HyroxResultsSex; metric: HyroxResultsMetric; table: HyroxPercentileTable; n: number }
-function mainCells(): MainCell[] {
+function mainCells(family: CellFamily = POOLED): MainCell[] {
   const out: MainCell[] = [];
   for (const format of FORMATS) {
     for (const sex of SEXES) {
-      const byMetric = HYROX_S79_PERCENTILES[format][sex];
+      const byMetric = family.percentiles[format][sex];
       if (!byMetric) continue;
       for (const metric of METRICS) {
-        out.push({ format, sex, metric, table: byMetric[metric], n: HYROX_S79_FINISHER_COUNTS[format][sex]![metric] });
+        out.push({ format, sex, metric, table: byMetric[metric], n: family.counts[format][sex]![metric] });
       }
     }
   }
@@ -162,11 +179,13 @@ describe('HYROX S7-S9 results: percentile tables', () => {
     }
   });
 
-  it('stays inside the total-time fences that filtered it', () => {
+  it('respects the lower total fence and never reaches past the slowest corroborated total', () => {
+    const slowestKept = Math.max(HYROX_S79_INGEST_REPORT.keptAboveFenceMaxTotalSec,
+      ...FORMATS.flatMap(f => SEXES.map(s => HYROX_S79_TOTAL_FENCES_SEC[f][s]?.hi ?? 0)));
     for (const c of mainCells().filter(x => x.metric === 'total')) {
       const f = HYROX_S79_TOTAL_FENCES_SEC[c.format][c.sex]!;
       expect(c.table[0][0]).toBeGreaterThanOrEqual(f.lo);
-      expect(c.table[c.table.length - 1][0]).toBeLessThanOrEqual(f.hi);
+      expect(c.table[c.table.length - 1][0]).toBeLessThanOrEqual(slowestKept);
     }
   });
 
@@ -187,8 +206,10 @@ describe('HYROX S7-S9 results: counts reconcile with the ingest report', () => {
 
   it('every input row is accounted for by exactly one rule', () => {
     const excluded = sum(Object.values(r.excludedDivisions));
-    const dropped = r.droppedTotalMissing + r.droppedExactDuplicates + r.droppedTotalBelowFence
-      + r.droppedTotalAboveFence + r.droppedInconsistent + r.droppedInconsistentUntimedRoxzone;
+    const dropped = r.droppedTotalMissing + r.droppedExactDuplicates
+      + r.droppedCrossLabelAgeOnly + r.droppedCrossLabelResolved + r.droppedCrossLabelAmbiguous
+      + r.droppedTotalBelowFence + r.droppedAboveFenceUncorroborated + r.droppedAboveFenceOneSegment
+      + r.droppedInconsistent + r.droppedInconsistentUntimedRoxzone;
     expect(r.inputRows - excluded - dropped).toBe(r.rowsKeptForTotal);
     expect(r.totalOnlyMissingSplit + r.totalOnlySplitBelowFence + r.splitEligibleRoxzoneTimed
       + r.splitEligibleRoxzoneUntimed).toBe(r.rowsKeptForTotal);
@@ -196,12 +217,47 @@ describe('HYROX S7-S9 results: counts reconcile with the ingest report', () => {
     expect(r.splitEligibleRoxzoneTimed).toBe(r.rowsKeptForRoxzone);
   });
 
+  it('splits the missing-total drops into null and zero, and by event', () => {
+    expect(r.droppedTotalMissingNull + r.droppedTotalMissingZero).toBe(r.droppedTotalMissing);
+    expect(sum(r.droppedTotalMissingByEvent.map(e => e.rows))).toBe(r.droppedTotalMissing);
+  });
+
   it('per-cell fence counts add up to the report', () => {
     const fences = FORMATS.flatMap(f => SEXES.map(s => HYROX_S79_TOTAL_FENCES_SEC[f][s]).filter(x => x != null));
     expect(sum(fences.map(f => f!.droppedBelow))).toBe(r.droppedTotalBelowFence);
-    expect(sum(fences.map(f => f!.droppedAbove))).toBe(r.droppedTotalAboveFence);
+    expect(sum(fences.map(f => f!.aboveFence))).toBe(r.aboveFenceRows);
+    expect(sum(fences.map(f => f!.keptAboveCorroborated))).toBe(r.keptAboveFenceCorroborated);
     const excluded = sum(Object.values(r.excludedDivisions));
-    expect(sum(fences.map(f => f!.rowsTested))).toBe(r.inputRows - excluded - r.droppedTotalMissing - r.droppedExactDuplicates);
+    expect(sum(fences.map(f => f!.rowsTested))).toBe(r.inputRows - excluded - r.droppedTotalMissing
+      - r.droppedExactDuplicates - r.droppedCrossLabelAgeOnly - r.droppedCrossLabelResolved - r.droppedCrossLabelAmbiguous);
+    for (const f of fences) {
+      expect(f!.keptAboveCorroborated).toBeLessThanOrEqual(f!.aboveFence);
+      expect(f!.maxSegmentShare > 0 && f!.maxSegmentShare < 1).toBe(true);
+    }
+  });
+
+  it('every above-fence row is either corroborated or dropped by a named rule', () => {
+    expect(r.keptAboveFenceCorroborated + r.droppedAboveFenceUncorroborated + r.droppedAboveFenceOneSegment
+      + r.aboveFenceInconsistent).toBe(r.aboveFenceRows);
+    expect(r.aboveFenceInconsistent).toBeLessThanOrEqual(r.droppedInconsistent + r.droppedInconsistentUntimedRoxzone);
+    const [lo, hi] = r.droppedAboveFenceOneSegmentTotalRangeSec!;
+    expect(lo).toBeLessThanOrEqual(hi);
+  });
+
+  it('cross-label copies: chance matches ruled out, resolutions significant, counts reconcile', () => {
+    expect(r.maxLog10ChanceMatchBound!).toBeLessThan(Math.log10(HYROX_S79_DKW_ALPHA));
+    for (const c of HYROX_S79_CROSS_LABEL_RESOLUTIONS) {
+      expect(c.signTestP).toBeLessThan(HYROX_S79_DKW_ALPHA);
+      expect(c.votesKept).toBeGreaterThan(c.votesDropped);
+      expect(c.votesKept + c.votesDropped + c.abstained).toBe(c.copies);
+    }
+    // Every copy group in the data is a pair, so one row goes per resolved copy.
+    expect(sum(HYROX_S79_CROSS_LABEL_RESOLUTIONS.map(c => c.copies))).toBe(r.droppedCrossLabelResolved);
+    // Ambiguous sets drop every copy, so their row count is a multiple of two.
+    expect(r.droppedCrossLabelAmbiguous % 2).toBe(0);
+    const ambiguousAge = sum(HYROX_S79_AGE_DROPS.filter(d => d.reason === 'ambiguous_age_label').map(d => d.rows));
+    expect(ambiguousAge).toBeGreaterThan(0);
+    expect(ambiguousAge).toBeLessThanOrEqual(r.droppedCrossLabelAgeOnly + r.droppedCrossLabelResolved);
   });
 
   it('published plus suppressed cell counts equal the rows kept per metric', () => {
@@ -255,6 +311,56 @@ describe('HYROX S7-S9 results: counts reconcile with the ingest report', () => {
   });
 });
 
+describe('HYROX S8-S9 current-judging tables', () => {
+  it('publish the same cells and metrics as the pooled tables, well formed on their DKW grid', () => {
+    expect([...HYROX_S89_SEASONS]).toEqual([8, 9]);
+    const cells = mainCells(CURRENT_JUDGING);
+    expect(cells.length).toBe(mainCells().length);
+    for (const c of cells) {
+      const label = `S89 ${c.format}/${c.sex}/${c.metric}`;
+      expectWellFormed(c.table, c.n, label);
+      expect(HYROX_S89_GRIDS[c.format][c.sex]![c.metric]).toBe(finestGridFor(c.n)!.name);
+    }
+    for (const s of HYROX_S89_SUPPRESSED_CELLS) {
+      expect(HYROX_S89_PERCENTILES[s.format][s.sex]).toBeUndefined();
+      expect(Math.min(s.n, s.nSplits, s.nRoxzone)).toBeLessThan(HYROX_S79_MIN_CELL_N);
+    }
+  });
+
+  it('counts equal the S8 plus S9 rows of the season table', () => {
+    for (const format of FORMATS) {
+      for (const sex of SEXES) {
+        const n = HYROX_S89_FINISHER_COUNTS[format][sex];
+        if (!n) continue;
+        const rows = HYROX_S79_SEASON_MEDIANS.filter(x => x.format === format && x.sex === sex && x.season >= 8);
+        expect(n.total).toBe(sum(rows.map(x => x.nTotal)));
+        expect(n.run_total).toBe(sum(rows.map(x => x.nSplits)));
+      }
+    }
+  });
+
+  it("the judging step the header cites: open singles wall balls and sled push are slower in S8-S9 than pooled", () => {
+    for (const sex of ['female', 'male'] as const) {
+      for (const m of ['wall_balls', 'sled_push'] as const) {
+        expect(at(HYROX_S89_PERCENTILES.open_singles[sex]![m], 50)!, `${sex}/${m}`)
+          .toBeGreaterThan(at(HYROX_S79_PERCENTILES.open_singles[sex]![m], 50)!);
+      }
+    }
+  });
+});
+
+describe('HYROX S7-S9 results: venue spread', () => {
+  it('covers every published cell and metric with ordered quantiles and ratios', () => {
+    for (const c of mainCells()) {
+      const v = HYROX_S79_VENUE_SPREAD[c.format][c.sex]![c.metric];
+      const label = `${c.format}/${c.sex}/${c.metric}`;
+      expect(v.events, label).toBeGreaterThan(0);
+      expect(v.p10 <= v.p50 && v.p50 <= v.p90, label).toBe(true);
+      expect(v.ratioMin <= v.ratioP10 && v.ratioP10 <= v.ratioP90 && v.ratioP90 <= v.ratioMax, label).toBe(true);
+    }
+  });
+});
+
 describe('HYROX S7-S9 results: age-group tables', () => {
   it('every published age cell meets the minimum and sits on its DKW grid', () => {
     const cells = ageCells();
@@ -294,6 +400,12 @@ describe('HYROX S7-S9 results: age-group tables', () => {
 
 describe('HYROX S7-S9 results: improvement tables', () => {
   const rep = HYROX_S79_IMPROVEMENT_REPORT;
+
+  it('cut the band cells with the app\'s own HYROX_TIME_TO_BAND_THRESHOLDS', () => {
+    // If the app's bands change, update BAND_THRESHOLDS in
+    // scripts/ingest-hyrox-results-s79.py and regenerate the module.
+    expect(HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS).toEqual(HYROX_TIME_TO_BAND_THRESHOLDS);
+  });
 
   it('every cell meets the minimum and has ordered quartiles', () => {
     for (const c of HYROX_S79_IMPROVEMENT) {
