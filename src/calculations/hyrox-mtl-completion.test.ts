@@ -123,8 +123,10 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
 
     const week2 = advanceAndRegenerateWeek2(s);
     expect(s.wks[1].ctlRatio).toBeUndefined();
-    expect(plannedMinutes(week2)).toBe(fullWeek2); // 170 min (generator v18); a stamped ratio would cut it
-    expect(fullWeek2).toBe(170);
+    expect(plannedMinutes(week2)).toBe(fullWeek2); // a stamped ratio would cut it
+    // 282 min since 2026-10-13 (generator v18): easy erg work fills week 2's
+    // budget (0.5875 x 8 h); 170 before.
+    expect(fullWeek2).toBe(282);
   });
 
   it('a week with nothing done still reads 0 and still re-anchors next week down', () => {

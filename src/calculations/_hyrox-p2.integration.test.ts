@@ -13,6 +13,7 @@ import { generateHyroxPlan, regenerateHyroxWeek } from '@/workouts/plan_engine.h
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { HyroxConfig } from '@/types/triathlon';
+import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
 
 // ─── Minimal valid HyroxConfig ────────────────────────────────────────────────
 
@@ -22,7 +23,11 @@ const BASE_HYROX_CONFIG: HyroxConfig = {
   hyroxPhase: 'build',
   stationAccess: { sled: 'always', skiErg: true, rowErg: true },
   weeklyMTL: 0,
-  mtlCap: 200,
+  // The band's real weekly MTL cap. With the old 200 placeholder the cap held
+  // every week to its runs alone (station rounds at their floors, no easy erg
+  // work), and since 2026-10-13 the running budget is 0.40 x the chosen hours
+  // whatever the effort lever says (D2), so the lever had nothing left to move.
+  mtlCap: HYROX_MTL_CAP.intermediate,
   mtlHistory: [],
   // Per-band session counts (intermediate defaults): 3 runs, 2 stations, 1 brick
   runsPerWeek: 3,

@@ -23,7 +23,7 @@ import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_ST
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
   HYROX_INTERVAL_HR_FRACTION, HYROX_QUALITY_WARMUP_MIN, HYROX_QUALITY_COOLDOWN_MIN,
-  HYROX_TEMPO_MIN_WORK_MIN,
+  HYROX_TEMPO_MIN_WORK_MIN, HYROX_EASY_RPE,
   type HyroxQualityFormat,
 } from '@/constants/hyrox-constants';
 
@@ -252,7 +252,7 @@ export function generateHyroxRun(params: RunParams): Workout {
         name = 'Easy Run';
         desc = `${dur} min easy at ${fmtPace(easyPace)}/km (~${round1(distanceKm)} km). Fully conversational: complete sentences are easy.`;
       }
-      rpe = 4;
+      rpe = HYROX_EASY_RPE;
       mtlKind = 'run_easy';
       break;
     }
@@ -396,6 +396,73 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
     musculoTendonLoad: mtl,
     estimatedDurationMin: Math.max(1, Math.round((w.estimatedDurationMin ?? 0) - cutSec / 60)),
     d,
+  };
+}
+
+// ─── Easy erg session ─────────────────────────────────────────────────────────
+
+/** Session type of easy erg work. */
+export const HYROX_EASY_ERG_TYPE = 'hyrox_erg_easy';
+
+/** True for an easy erg session (generateHyroxEasyErg). It carries discipline
+ *  'station' (the SkiErg and the row erg are HYROX stations, and the gates and
+ *  matching treat it like station work), but it is not station work for the
+ *  plan's rules: not a station session, not HYROX-specific work, not a hard
+ *  session, no eccentric load. */
+export function isHyroxEasyErg(w: Pick<Workout, 't'>): boolean {
+  return w.t === HYROX_EASY_ERG_TYPE;
+}
+
+/** The ergs an athlete can use for easy erg work, in alternation order. */
+function easyErgStations(access: HyroxConfig['stationAccess']): HyroxStation[] {
+  const avail = availableStations(access);
+  return (['ski_erg', 'row_erg'] as HyroxStation[]).filter(s => avail.includes(s));
+}
+
+/** MTL per minute of the athlete's heaviest easy erg (the weekly MTL cap sizes
+ *  easy erg work with it), or null without erg access. */
+export function hyroxEasyErgMtlPerMin(access: HyroxConfig['stationAccess'], bodyWeightKg?: number): number | null {
+  const ergs = easyErgStations(access);
+  if (ergs.length === 0) return null;
+  return Math.max(...ergs.map(s => computeComponentMTL(1, HYROX_EASY_RPE, s, STATION_EXTERNAL_LOAD_KG[s], bodyWeightKg)));
+}
+
+/** Parameters of an easy erg session. */
+export interface EasyErgParams {
+  targetMinutes: number;
+  stationAccess: HyroxConfig['stationAccess'];
+  /** Alternates the SkiErg and the row erg across a plan's sessions. */
+  slotIndex: number;
+  bodyWeightKg?: number;
+}
+
+/**
+ * Easy erg session: continuous easy work on the SkiErg or the row erg (the
+ * athlete's ergs only, alternating by slot), at the easy RPE
+ * (HYROX_EASY_RPE). The parameter sheet's split.running_share row sends the
+ * hours the running share and the station sessions leave unprescribed to easy
+ * erg work, not to more running (Brandt 2025, n=11, suggests swapping some
+ * running for rowing or SkiErg; untested). Aerobic volume with no running
+ * impact: no eccentric station, not a hard session. MTL from mtl.ts at the
+ * erg's own factors. Returns null without erg access. Planning side.
+ */
+export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
+  const ergs = easyErgStations(p.stationAccess);
+  if (ergs.length === 0) return null;
+  const station = ergs[Math.abs(p.slotIndex) % ergs.length];
+  const dur = Math.max(1, Math.round(p.targetMinutes));
+  const mtl = computeComponentMTL(dur, HYROX_EASY_RPE, station, STATION_EXTERNAL_LOAD_KG[station], p.bodyWeightKg);
+  return {
+    n: 'Easy Erg',
+    d: `${dur} min easy on the ${STATION_DISPLAY[station].name}. Conversational effort (RPE ${HYROX_EASY_RPE}). Aerobic volume without running impact.`,
+    t: HYROX_EASY_ERG_TYPE,
+    discipline: 'station',
+    r: HYROX_EASY_RPE,
+    rpe: HYROX_EASY_RPE,
+    estimatedDurationMin: dur,
+    musculoTendonLoad: mtl,
+    hyroxComponents: [{ type: station, durationSec: dur * 60, mtl }],
+    hyroxRounds: 1,
   };
 }
 

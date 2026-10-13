@@ -37,9 +37,10 @@
  *     experienceLevel || 'intermediate'), the inputs resolveWeekWorkouts
  *     (week-resolve.ts) hands generateWeekWorkouts: the ability cycle in a race
  *     plan, the block recovery week ('taper') in a continuous plan.
- *   - Deload, triathlon (cycling runs on the tri engine) and HYROX:
- *     `forceDeload || isFourWeekCycleDeloadWeek(weekNum, ph)`, the rule those
- *     engines generate with.
+ *   - Deload, triathlon (cycling runs on the tri engine):
+ *     `forceDeload || isFourWeekCycleDeloadWeek(weekNum, ph)`, the rule that
+ *     engine generates with. HYROX: `forceDeload || isHyroxDeloadWeek(...)`,
+ *     the same cycle minus the week right before the race taper (2026-10-13).
  *   - Race taper: the last contiguous run of 'taper' weeks in the plan. Its
  *     1-indexed position (1 = first taper week, taperWeeks = race week) feeds
  *     the existing taperMultiplier ramp: 0.75 / 0.65 / 0.55 over 3 weeks and
@@ -59,7 +60,7 @@
 
 import type { SimulatorState, TrainingPhase, Week } from '@/types';
 import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry, typedVolumeWeeklyTSS } from './fitness-model';
-import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
+import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, isHyroxDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
 import { isSharpeningBlock } from '@/workouts/phases';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 
@@ -92,7 +93,12 @@ export interface PlannedWeekPhase {
 function isEngineDeloadWeek(s: PlannedTargetState, weekNum: number, wk: Week): boolean {
   if (s.trackOnly) return false;
   if ((wk as Week & { forceDeload?: boolean }).forceDeload) return true;
-  if (s.eventType === 'triathlon' || s.eventType === 'hyrox') {
+  if (s.eventType === 'hyrox') {
+    // The 4-week cycle minus the week right before the race taper
+    // (isHyroxDeloadWeek, the rule plan_engine.hyrox generates with).
+    return isHyroxDeloadWeek(weekNum, (s.wks ?? []).map(w => w.ph ?? 'base'), wk.ph);
+  }
+  if (s.eventType === 'triathlon') {
     return isFourWeekCycleDeloadWeek(weekNum, wk.ph);
   }
   const ability = abilityBandFromVdot(s.v || 45, s.onboarding?.experienceLevel || 'intermediate');

@@ -19,7 +19,8 @@
  *
  * Preferences (soft): brick Saturday, long run Sunday, quality and race-pace
  * sessions Tuesday/Thursday, technique circuits Wednesday/Friday, easy runs
- * bookend the week. Commute runs (appended on top of the plan, SCIENCE_LOG §AK)
+ * bookend the week, easy erg work (neither hard nor eccentric) takes a day
+ * left free, placed last. Commute runs (appended on top of the plan, SCIENCE_LOG §AK)
  * are easy and are placed after the prescribed sessions, each commute day's
  * legs on one day.
  *
@@ -32,6 +33,7 @@
 import type { Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
+import { isHyroxEasyErg } from './hyrox-generators';
 
 export const HYROX_DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const DAY_NAMES = HYROX_DAY_NAMES;
@@ -89,6 +91,7 @@ export function hyroxPreferredDays(w: Pick<Workout, 't'> & { longRun?: boolean; 
   if (w.t === 'hyrox_run_tempo') return [...TEMPO_DAYS];
   if (w.t === 'hyrox_run_intervals') return [3, 1, 4, 2]; // Thu/Tue
   if (w.t === 'hyrox_run_easy' && w.longRun) return [6, 0, 5, 2, 4]; // long run: Sunday first
+  if (isHyroxEasyErg(w)) return [2, 4, 0, 6, 5, 3, 1];  // easy erg: whatever day is left, midweek first
   // easy run: bookend
   return [0, 6, 2, 4, 5];
 }
@@ -113,6 +116,7 @@ function priority(w: Workout): number {
   if (w.t === 'hyrox_station_technique') return 5;
   if (w.t === 'hyrox_mini_brick') return 5.5; // secondary (light) brick
   if (isHyroxLongRun(w)) return 5.8;
+  if (isHyroxEasyErg(w)) return 6.5; // easy erg work: placed last, on a day left free
   return 6; // easy run
 }
 

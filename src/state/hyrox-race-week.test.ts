@@ -70,7 +70,7 @@ import {
   RACE_WEEK_EXCLUDED_STATIONS, HYROX_HOURS_RANGE, HYROX_RACE_WEEK_PRIMER_MIN, HYROX_WEEKLY_STRUCTURE, hyroxTier,
 } from '@/constants/hyrox-constants';
 import { taperFraction } from '@/workouts/phases';
-import { isFourWeekCycleDeloadWeek } from '@/workouts/plan_engine';
+import { isHyroxDeloadWeek } from '@/workouts/plan_engine';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
 import type { AbilityBand } from '@/types/triathlon';
@@ -178,8 +178,9 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   let taperStart = tw;
   while (taperStart > 1 && s.wks[taperStart - 2].ph === 'taper') taperStart--;
   let refMin = (s.hyroxConfig?.weeklyHoursAvailable ?? 0) * 60;
+  const phases = s.wks.slice(0, tw).map(w => w.ph);
   for (let i = taperStart - 2; i >= 0; i--) {
-    if (s.wks[i].ph !== 'taper' && !isFourWeekCycleDeloadWeek(i + 1, s.wks[i].ph)) { refMin = prescribedMinutes(s.wks[i]); break; }
+    if (s.wks[i].ph !== 'taper' && !isHyroxDeloadWeek(i + 1, phases)) { refMin = prescribedMinutes(s.wks[i]); break; }
   }
   const budget = taperFraction(tw - taperStart + 1, tw - taperStart + 1) * refMin;
   const before = tw > 1 ? prescribedMinutes(s.wks[tw - 2]) : Infinity;
@@ -193,27 +194,35 @@ describe('scenario hyrox: Saturday race in week 12', () => {
   // Generator v18 (2026-10-12): intermediate tier (1:30:00 open singles), one
   // station session a week, a 2-week taper at 0.70 / 0.55 of the reference
   // week. Race week keeps the peak structure minus the brick: the tempo primer,
-  // two easy runs on the latest free days and the station session as a light
+  // easy runs on the latest free days and the station session as a light
   // circuit (review 2026-10-13: the v18 draft copied a reference week's two
-  // runs).
-  it('race week is the tempo primer, a light circuit and easy runs on the last days', () => {
+  // runs). Round 4 (2026-10-13): race week holds no more runs than the
+  // reference week (week 10: the long run and the 8 x 1 km, D6), so one easy
+  // run; the rest of its 0.55 is easy erg work 3 or more days out (D1), no
+  // longer than the taper long run of week 11.
+  it('race week is the tempo primer, a light circuit, easy erg work and an easy run the day before', () => {
     at('2026-10-08T12:00:00');
     const s = build({ customRaceDate: '2026-12-26' });
     expect(s.tw).toBe(12);
     const race = s.wks[11].triWorkouts ?? [];
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
+      'Mon hyrox_erg_easy',
       'Tue hyrox_run_tempo',
       'Wed hyrox_station_technique',
-      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
+    const erg = race.find(w => w.t === 'hyrox_erg_easy')!;
+    const taperLong = (s.wks[10].triWorkouts ?? []).find(w => w.n === 'Long Run')!;
+    expect(erg.estimatedDurationMin).toBeLessThanOrEqual(taperLong.estimatedDurationMin!);
+    expect(race.filter(w => w.discipline === 'run').length).toBeLessThanOrEqual(
+      (s.wks[9].triWorkouts ?? []).filter(w => w.discipline === 'run').length);
     // The primer: 10 min of tempo work in a 25-min session.
     const primer = race.find(w => w.t === 'hyrox_run_tempo')!;
     expect(primer.estimatedDurationMin).toBe(HYROX_RACE_WEEK_PRIMER_MIN);
     expect(primer.d).toMatch(/ 10 min at /);
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
     // The light circuit keeps the ergs and the farmer carry.
-    for (const w of race.filter(isStation)) {
+    for (const w of race.filter(w => isStation(w) && w.t !== 'hyrox_erg_easy')) {
       expect((w.hyroxComponents ?? []).map(c => c.type).sort()).toEqual(['farmer_carry', 'row_erg', 'ski_erg']);
     }
     // The run the day before the race is an easy jog of 20 min or less.
@@ -230,12 +239,14 @@ describe('scenario hyrox: Saturday race in week 12', () => {
     const s = build({ customRaceDate: '2026-12-26', hyroxHasSkiErg: false, hyroxHasRowErg: false } as Partial<OnboardingState>);
     const race = s.wks[11].triWorkouts ?? [];
     // Before (2026-10-08): Mon easy, Tue tempo, Wed easy, Thu easy, Fri easy
-    // (the two circuit slots as easy runs), 5 runs on 5 days in a row.
+    // (the two circuit slots as easy runs), 5 runs on 5 days in a row. Since
+    // round 4 (D6) race week holds the reference week's 2 runs, and without
+    // erg access the rest stays unprescribed (noted).
     expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Tue hyrox_run_tempo',
-      'Thu hyrox_run_easy',
       'Fri hyrox_run_easy',
     ]);
+    expect((s.wks[11].hyroxPlanNotes ?? []).some(n => /left unprescribed \(no erg access/.test(n))).toBe(true);
     expect(minutes(s.wks[11])).toBeLessThanOrEqual(minutes(s.wks[10]));
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
   });
@@ -247,15 +258,16 @@ describe('a Monday to Wednesday race: the primer 3 days out, the last session at
     const s = build({ customRaceDate: '2026-11-18', experienceLevel: 'beginner', triTimeAvailableHoursPerWeek: 5, ...bandOnboarding('beginner') });
     const tw = planTrainingWeeks(s);
     // Before: Mon easy, Tue circuit, Wed circuit, Fri tempo (5 days out); Sat
-    // to Tue empty. Running's Wednesday race holds a Sunday primer. Since the
-    // review of 2026-10-13 race week holds 0.55 of the reference week (114
-    // min, so 63): the circuit (34) and the primer (25) fit, the Saturday easy
-    // run (20) does not and leaves, noted on the week.
+    // to Tue empty. Running's Wednesday race holds a Sunday primer. Race week
+    // holds 0.55 of the reference week (review 2026-10-13). Since round 4 the
+    // reference week funds its running against the chosen hours (D2: 179 min,
+    // 114 before), so the circuit, the Saturday easy run and the primer all
+    // fit in its 0.55.
     expect((s.wks[tw - 1].triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Wed hyrox_station_technique',
+      'Sat hyrox_run_easy',
       'Sun hyrox_run_tempo',
     ]);
-    expect(s.wks[tw - 1].hyroxPlanNotes ?? []).toContain(`W${tw}: Easy Run left out (taper: 63 min, 0.55 of the reference week)`);
     expect(s.wks[tw].raceClosing).toBe(true);
     expect(raceWeekViolations(s, '2026-11-18')).toEqual([]);
   });

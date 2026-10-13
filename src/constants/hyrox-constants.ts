@@ -361,9 +361,12 @@ export const HYROX_MAX_RUNS_PER_WEEK = 5;
  * Apply the athlete's session-count choice to a structure row. `delta` is the
  * chosen weekly total minus the tier's build-week total (HYROX_WEEKLY_SESSIONS).
  *   - Adding: easy runs up to HYROX_MAX_RUNS_PER_WEEK. Easy erg work comes next
- *     in the sheet, but HYROX has no erg session type yet; the session slider
- *     (2 to 7) never reaches it (a 7-session beginner or intermediate week is
- *     5 runs + 1 station + 1 brick, an advanced one 4 runs + 2 + 1).
+ *     in the sheet; the session slider (2 to 7) never reaches it through the
+ *     stored counts (a 7-session beginner or intermediate week is 5 runs + 1
+ *     station + 1 brick, an advanced one 4 runs + 2 + 1). The plan engine
+ *     fills a week's free session slots with easy erg work instead: run slots
+ *     the running share cannot fund, and slots the phase structure leaves
+ *     empty (a base week has no brick), never above the chosen total.
  *   - Reducing: bricks first, then station sessions (never below 1), then runs
  *     (never below 1). Unchanged order from the previous distributeSessionCount.
  */
@@ -558,17 +561,30 @@ export const HYROX_CHRONIC_WINDOW_WEEKS = 4;
 // ─── Time distribution across session types ──────────────────────────────────
 
 /**
- * Running share of the week's planned hours, every tier: standalone runs plus
- * the run segments of bricks (parameter sheet split.running_share). The rest
- * holds station sessions and the bricks' station work. Hours a week are a
- * ceiling: what the sessions leave unprescribed stays unprescribed (the sheet
- * sends it to easy erg work, which has no session type yet), never to more
- * running. Lucy Procter's 40 to 50% of her own hours is the only figure; the
+ * Running share, every tier: standalone runs plus the run segments of bricks
+ * (parameter sheet split.running_share). Measured against the athlete's
+ * chosen weekly hours (Tristan 2026-10-13, D2): a training week's running
+ * budget is 0.40 x the chosen weekly minutes (a deload's x HYROX_DELOAD_FACTOR,
+ * and never above it under the effort lever); a taper week's is 0.40 x the
+ * taper week's own budget. Before 2026-10-13 the share was taken of the
+ * phase-scaled week budget, so base weeks funded 0.22 to 0.34 of the hours
+ * and the quality run often did not fit. The rest of the week holds station
+ * sessions and the bricks' station work (0.60 of the week's budget). Minutes
+ * the sessions leave unprescribed go to easy erg work (SkiErg or row, the
+ * sheet's split.running_share row), never to more running; weekly hours stay
+ * a ceiling. Lucy Procter's 40 to 50% of her own hours is the only figure; the
  * low end is used. Ketzer 2026 attributes 27.6% of single-element injuries to
  * running. Replaces HYROX_TIME_SPLIT (runs 0.40 / stations 0.35 / bricks
  * 0.25), which put about 50% of the week into running once brick runs counted.
  */
 export const HYROX_RUN_SHARE = 0.40;
+
+/** Prescribed RPE of easy HYROX aerobic work: easy runs and easy erg sessions
+ *  (the generator's existing easy-run RPE, also the RPE of the week-1
+ *  assessment's easy pass). Technique effort is RPE 5 (sheet stations row);
+ *  the sheet sends unprescribed hours to easy erg work, so it takes the easy
+ *  value. */
+export const HYROX_EASY_RPE = 4;
 
 /** Maximum session duration caps (minutes) for the sessions whose length
  *  follows the week's budget. The old all-band 75-min easy-run cap is replaced
@@ -586,7 +602,9 @@ export const HYROX_SESSION_MAX_MIN: Record<string, number> = {
 
 /** Shortest run the generator prescribes (minutes): the generator's existing
  *  run floor. A share below it is merged into fewer runs, as running does with
- *  its easy floor, instead of being raised past the week's running share. */
+ *  its easy floor, instead of being raised past the week's running share.
+ *  Also the shortest easy erg session (plan_engine.hyrox: unprescribed minutes
+ *  below it stay unprescribed): the same easy aerobic floor, reused. */
 export const HYROX_RUN_FLOOR_MIN = 20;
 
 // ─── Long run ───────────────────────────────────────────────────────────────

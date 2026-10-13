@@ -87,6 +87,10 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
     const weekBefore = weeks[4].triWorkouts ?? [];
     for (const w of weekBefore) expect(w.dayOfWeek ?? 0, w.n).toBeLessThan(4);
     expect(weekBefore.find(w => w.n === 'Long Run')?.dayOfWeek).toBe(3);
-    expect((noRace[5].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 3)).toBe(true);
+    // Without the race date week 5's long run keeps its Sunday. (Race week
+    // itself no longer shows the difference: since 2026-10-13 it holds no more
+    // runs than the reference week, here the primer and one easy run, which
+    // the no-race plan places early in the week too.)
+    expect((noRace[4].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 4)).toBe(true);
   });
 });
