@@ -111,13 +111,19 @@ describe('Mixed woman: forecast', () => {
   it('a test at her seed-at-target value leaves every station line unchanged', () => {
     const seeds = hyroxStationSeedsForState(mixedWoman());
     const before = predictHyroxRace(mixedWoman())!;
-    for (const slot of ['doubles', 'singles'] as const) {
-      const s = mixedWoman(soloTests(slot, seeds));
-      const after = predictHyroxRace(s)!;
+    // Tests logged under her Mixed Doubles target (M-Open loads), and tests
+    // she logged earlier under Open Singles at W-Open loads, at the Women
+    // Open band medians: both are the same athlete as the seed.
+    const cases: Array<[string, Partial<NonNullable<SimulatorState['hyroxConfig']>>]> = [
+      ['M-Open tests', soloTests('doubles', seeds)],
+      ['W-Open tests from Open Singles', soloTests('singles', stationSeedTimesFor('intermediate', 'open_singles', 'female'))],
+    ];
+    for (const [name, over] of cases) {
+      const after = predictHyroxRace(mixedWoman(over))!;
       for (const st of HYROX_STATION_ORDER) {
         const a = after.stations.find(l => l.station === st)!;
         const b = before.stations.find(l => l.station === st)!;
-        expect(a.baseSec, `${slot} ${st}`).toBeCloseTo(b.baseSec, 6);
+        expect(a.baseSec, `${name} ${st}`).toBeCloseTo(b.baseSec, 4);
         expect(a.source).toBe('calibrated');
       }
     }

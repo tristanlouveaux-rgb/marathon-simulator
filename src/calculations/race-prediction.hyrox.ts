@@ -76,6 +76,7 @@ import {
   type HyroxCalibrationCoverage,
 } from './hyrox-station-history';
 import { availableStations } from '@/workouts/hyrox-generators';
+import { isHyroxProFormat } from './hyrox-division';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -291,28 +292,6 @@ interface StationInputs {
   singles: HyroxResultsCohort;
 }
 
-/**
- * Per station, the resolved benchmark at target weights and how it reaches the
- * target format. Reads hyroxCalibrationCoverage (the per-station resolver every
- * calibrated-count surface reads).
- *
- * Weight regime per station, from the history entry that describes the slot
- * value (benchmarkEntryForSlotValue):
- *   - a race split carries its race's weights (proWeights);
- *   - a guided-session best carries the weights the session was prescribed
- *     at (proWeights: the target was Pro, since the generators load stations
- *     at the target's tier, hyroxLoadTierForState);
- *   - a station test, or a value with no entry, follows
- *     benchmarksAtProWeights, the athlete's toggle.
- * Open/Pro conversion (lane H3b): per station and sex from the Pro and Open
- * results (hyroxOpenToProSec / hyroxProToOpenSec, a difference in differences
- * at the athlete's percentile). Erg and bodyweight stations convert at 1.
- * It replaced HYROX_PRO_STATION_MULTIPLIER (unsourced, one set for both sexes).
- *
- * A doubles race split converts to one athlete's time in its own weight
- * family first (doublesStationSoloSec, per station), then to the target's
- * weights, so the Pro/Open conversion always runs on singles tables.
- */
 /** What converting one stored time to the target needs: the target's
  *  format family, its doubles mapping, the athlete's sex and division, and
  *  the load family of the athlete's solo work at the target's loads. */
@@ -395,22 +374,29 @@ function convertToTarget(
   return { soloAtTarget, teamAtTarget: doublesStationTeamSec(station, soloAtTarget, frame.tables), teamCrossFamily: true };
 }
 
-/** The load family of a stored solo time: a race split carries its race's
- *  weights and a guided-session best the weights it was prescribed at
- *  (proWeights). A station test, or a value with no entry, follows the
- *  athlete's toggle (benchmarksAtProWeights: on = the tests were at Pro
- *  weights, kept when the target later changes); off, a Pro target's tests
- *  are at Open weights (the toggle's own convention) and any other target's
- *  are at its solo loads: the Open tier, except a woman in Mixed Doubles,
- *  whose tests are at the pair's M-Open loads, the Women Pro tier (the test
- *  protocol shows the target's tier, and the toggle is not offered). */
+/** The load family of a stored solo time (true = the Pro tier of the
+ *  athlete's sex):
+ *   - a race split carries its race's weights and a guided-session best the
+ *     weights it was prescribed at (proWeights);
+ *   - a station test follows the athlete's toggle (benchmarksAtProWeights:
+ *     on = the tests were at Pro weights, kept when the target later
+ *     changes). Off, a test logged under a Pro format was at Open weights
+ *     (the toggle's own convention), and one logged under an Open format was
+ *     at that format's solo loads (hyroxSoloLoadsArePro on the entry's
+ *     format): the Open tier, except a woman in Mixed Doubles, whose tests
+ *     are at the pair's M-Open loads, the Women Pro tier (the test protocol
+ *     shows the target's tier, and the toggle is not offered there). A test
+ *     she logged earlier under Open Singles stays at W-Open;
+ *   - a value with no entry reads the same rule on the target's format. */
 function entryIsPro(
   hx: HyroxConfigOf,
-  frame: Pick<TargetFrame, 'isPro' | 'soloPro'>,
-  entry: Pick<StationTestEntry, 'source' | 'proWeights'> | null | undefined,
+  frame: Pick<TargetFrame, 'isPro' | 'soloPro' | 'biologicalSex' | 'division'>,
+  entry: Pick<StationTestEntry, 'source' | 'proWeights' | 'format'> | null | undefined,
 ): boolean {
   if ((entry?.source === 'race' || entry?.source === 'session') && entry.proWeights != null) return entry.proWeights;
-  return !!hx.benchmarksAtProWeights || (!frame.isPro && frame.soloPro);
+  if (hx.benchmarksAtProWeights) return true;
+  if (!entry) return !frame.isPro && frame.soloPro;
+  return !isHyroxProFormat(entry.format) && hyroxSoloLoadsArePro(entry.format, frame.biologicalSex, frame.division);
 }
 
 /**
@@ -421,11 +407,16 @@ function entryIsPro(
  * Weight regime per station, from the history entry that describes the slot
  * value (benchmarkEntryForSlotValue): a race split carries its race's weights
  * (proWeights); a guided-session best carries the weights the session was
- * prescribed at (proWeights: the target was Pro, since the generators load
- * stations at the target's tier, hyroxLoadTierForState); a station test, or a
- * value with no entry, follows benchmarksAtProWeights, the athlete's toggle.
+ * prescribed at (proWeights: the target's solo loads were the Pro tier of the
+ * athlete's sex, since the generators load stations at the target's tier,
+ * hyroxLoadTierForState); a station test, or a value with no entry, follows
+ * entryIsPro (the athlete's toggle, else the target's solo loads).
  * Conversion: convertToTarget. The Open/Pro step replaced
  * HYROX_PRO_STATION_MULTIPLIER (unsourced, one set for both sexes) in lane H3b.
+ * Erg and bodyweight stations convert at 1. A doubles race split converts to
+ * one athlete's time in its own weight family first (doublesStationSoloSec,
+ * per station), then to the target's loads, so the Pro/Open conversion always
+ * runs on singles tables.
  */
 function stationInputs(state: SimulatorState, hx: HyroxConfigOf): StationInputs {
   const frame = targetFrameOf(state, hx);
