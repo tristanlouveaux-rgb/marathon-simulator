@@ -586,9 +586,10 @@ interface SeedBasis {
  * but a current VDOT of 53 should weight toward 'advanced' seeds.
  *
  * Seeds are the real band medians of the field the band was read in
- * (hyroxSeedField), at the target's weights (hyroxStationSeedsAtTarget: a
- * Pro target with an Open-raced band gets the Open medians converted to Pro
- * weights per station from the Pro and Open results).
+ * (hyroxSeedField: the planning field, Open Singles at the athlete's sex,
+ * lane H3c), at the target's weights (hyroxStationSeedsAtTarget: a Pro
+ * target, or a woman in Mixed Doubles, gets the Open medians converted to
+ * Pro weights per station from the Pro and Open results).
  */
 function seedBasis(state: SimulatorState, hx: HyroxConfigOf): SeedBasis {
   const band = hx.athleteBand;
