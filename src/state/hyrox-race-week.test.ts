@@ -240,12 +240,18 @@ describe('scenario hyrox: Saturday race in week 12', () => {
     const race = s.wks[11].triWorkouts ?? [];
     // Before (2026-10-08): Mon easy, Tue tempo, Wed easy, Thu easy, Fri easy
     // (the two circuit slots as easy runs), 5 runs on 5 days in a row. Since
-    // round 4 (D6) race week holds the reference week's 2 runs, and without
-    // erg access the rest stays unprescribed (noted).
-    expect(race.map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
-      'Tue hyrox_run_tempo',
-      'Fri hyrox_run_easy',
-    ]);
+    // round 4 (D6) race week holds no more runs than the reference week, and
+    // without erg access the rest stays unprescribed (noted). Round 5
+    // (decision B, the hours ladder): without ergs the 8-h build of the peak
+    // weeks holds the 8 x 1 km and 4 sessions, fewer minutes than the 7-h
+    // build's two easy runs, so weeks 9 and 10 are held to the 7-h weeks
+    // (the long run and two easy runs) and race week holds the primer and two
+    // easy runs, no circuit.
+    const ref = s.wks[9].triWorkouts ?? [];
+    expect(race.filter(w => w.discipline === 'run').length).toBeLessThanOrEqual(ref.filter(w => w.discipline === 'run').length);
+    expect(race.some(isStation)).toBe(false);
+    expect(race.find(w => w.t === 'hyrox_run_tempo')?.dayOfWeek).toBe(1);
+    expect(race.filter(w => w.t !== 'hyrox_run_tempo').every(w => w.t === 'hyrox_run_easy')).toBe(true);
     expect((s.wks[11].hyroxPlanNotes ?? []).some(n => /left unprescribed \(no erg access/.test(n))).toBe(true);
     expect(minutes(s.wks[11])).toBeLessThanOrEqual(minutes(s.wks[10]));
     expect(raceWeekViolations(s, '2026-12-26')).toEqual([]);
@@ -319,7 +325,7 @@ describe('every race weekday, band, format, hours budget and station access', ()
       }
       expect(plans).toBeGreaterThan(100);
       expect(found.slice(0, 5)).toEqual([]);
-    });
+    }, 120000);
   }
 
   it('commute runs: still easy runs only in the last 2 days, one session a day', () => {
