@@ -260,7 +260,9 @@ export function phasesForLen(
  * so any user already running a default-length plan sees the same numbers.
  *
  * Taper capped at 2 (Mujika & Padilla 2003). Tri detraining bites sooner than
- * running because of the cross-training fatigue load.
+ * running because of the cross-training fatigue load. These ratios now set
+ * the race taper only for plans too short to hold the distance's taper;
+ * computeTriPlanPhases otherwise fixes it at triRaceTaperWeeks (2026-10-13).
  *
  * Double-periodization threshold is **28 weeks** for tri. Sooner than running's
  * 33. Because tri's monotony pain shows earlier when training across three

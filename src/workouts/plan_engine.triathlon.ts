@@ -5,6 +5,8 @@
  *   1. Phase each week (base → build → peak → taper, plus checkpoint flag for
  *      double-periodization plans ≥28w) via computeTriPlanPhases()
  *   2. Compute weekly total hours from time-available × phase multiplier
+ *      (race-taper weeks instead take fractions of the reference week per
+ *      discipline, tri-taper.ts)
  *   3. Split total hours into per-discipline hours via triConfig.volumeSplit
  *   4. Emit sessions per discipline via swim/bike/run generators
  *   5. Hand to scheduler.triathlon.ts for day assignment
@@ -155,10 +157,10 @@ export const TRI_AVG_SESSION_HOURS = { swim: 0.75, bike: 1.3, run: 0.9 } as cons
 export const TRI_MAX_SESSIONS_PER_DISCIPLINE = 3;
 export const TRI_MAX_BIKE_SESSIONS_CYCLING_ONLY = 5;
 
-/** The shortest solo swim, ride or run the generator prescribes, in minutes
- *  (every session's minutes are floored here). Named 2026-10-08 for the
- *  race-week primer, which takes this length (the shortest session, as
- *  running's primer is a fixed minimal session, SCIENCE_LOG §CE). */
+/** The shortest solo swim, ride or run the generator prescribes in a training
+ *  week, in minutes (every session's minutes are floored here). Race-taper
+ *  weeks use the generators' own 20-min floor instead
+ *  (TRI_TAPER_SESSION_FLOOR_MIN, tri-taper.ts). */
 const TRI_SESSION_FLOOR_MIN = 30;
 
 /**
@@ -1291,7 +1293,10 @@ function phaseMultiplier(phase: TrainingPhase, weekIndex: number, totalWeeks: nu
   //   Base: 0.55 at week 1 → 0.85 near end of base
   //   Build: 0.85 → 1.00
   //   Peak: 1.00 → 1.05 → 1.00
-  //   Taper: 0.75 → 0.55 → 0.30
+  //   Taper: 0.75 → 0.55 → 0.30. Race-taper weeks are sized from the
+  //   reference week (triTaperWeekOne, triRaceWeek); here the taper branch
+  //   sizes the inter-cycle taper weeks of 28+ week plans (0.75) and the race
+  //   taper's own commitments (commutes, gym, day caps).
   switch (phase) {
     case 'base': {
       // How deep into the base phase are we? Week 1 ≈ 0, last base week ≈ 1.
