@@ -1471,6 +1471,34 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(prescribed(s.wks[7]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
   });
 
+  it('with an active injury the easy erg slot swap never runs, whatever the capacities (round 6, item 6)', () => {
+    // The injury gates and the capability substitution's offers decide an
+    // injured week; the swap (an easy run's slot freed for easy erg work)
+    // does not run, even with every capacity open. The same athlete without
+    // the injury swaps in some of these weeks.
+    let swappedHealthy = 0;
+    let weeks = 0;
+    for (const band of ['intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+      for (const hrs of [8, 10, 12]) {
+        for (const sess of [6, 7]) {
+          const s = structuredClone(build(band, hrs, 16, { hyroxWeeklySessionCount: sess } as Partial<OnboardingState>));
+          const healthy = generateHyroxPlanDetailed(structuredClone(s)).detail;
+          swappedHealthy += healthy.filter(d => d.adjustments.some(n => /left out for an easy erg session/.test(n))).length;
+          for (const caps of [{ runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 }, { runCapacity: 100, upperLoadCapacity: 50, lowerLoadCapacity: 100 }]) {
+            const inj = structuredClone(s);
+            (inj as unknown as { injuryState: unknown }).injuryState = { active: true, ...caps };
+            for (const d of generateHyroxPlanDetailed(inj).detail) {
+              weeks++;
+              expect(d.adjustments.some(n => /left out for an easy erg session/.test(n)), `${band} ${hrs}h ${sess} W${d.week}`).toBe(false);
+            }
+          }
+        }
+      }
+    }
+    expect(weeks).toBeGreaterThan(500);
+    expect(swappedHealthy).toBeGreaterThan(0);
+  });
+
   it('E: no long run under the run floor at low logged loads, the taper long run included', () => {
     for (const logged of [20, 30]) {
       for (const band of BANDS) {
