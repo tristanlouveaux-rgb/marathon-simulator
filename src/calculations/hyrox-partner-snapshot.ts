@@ -12,10 +12,13 @@
  *   - initials: the letters the app header already shows (or null);
  *   - stationSec / stationTier / teamStations: per-station benchmarks, the
  *     canonical per-station number (resolveHyroxStationBenchmarks, the Stats
- *     ledger value), the load tier each was measured at, and which of them
- *     are a doubles race split (a pair time);
- *   - forecastStationSec, runPaceSecKm, roxzoneSec: the athlete's own forecast
- *     inputs in singles terms (predictHyroxRace), for the pair forecast.
+ *     ledger value: one athlete at their solo loads in the race), the load
+ *     tier the athlete's numbers are expressed at, and which benchmarks are a
+ *     doubles race split (a pair time);
+ *   - forecastStationSec, roxzoneSec: the athlete's own forecast lines
+ *     (predictHyroxRace, before venue factors) in the race format's terms,
+ *     the pair's time for doubles; runPaceSecKm: their singles run pace.
+ *     The pair forecast reads these.
  * Health and training data (VDOT, LT, HRV, sleep, heart rate, activities,
  * biological sex, name, plan) are read only where a whitelisted number is
  * derived from them, and never copied.
@@ -24,20 +27,10 @@
 import type { SimulatorState } from '@/types/state';
 import type { HyroxConfig, HyroxDivision, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import {
-  predictHyroxRace,
-  resolveHyroxStationBenchmarks,
-  stationSinglesEquivalentSec,
-  type HyroxStationBenchmark,
-} from './race-prediction.hyrox';
+import { predictHyroxRace, resolveHyroxStationBenchmarks } from './race-prediction.hyrox';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
-import {
-  hyroxLoadTier,
-  isHyroxDoublesFormat,
-  isHyroxProFormat,
-  resolveHyroxAthleteSex,
-  resolveHyroxDivision,
-} from './hyrox-division';
+import { hyroxSinglesFormatOf, hyroxSoloLoadsArePro } from './hyrox-results';
+import { hyroxLoadTier, resolveHyroxAthleteSex, resolveHyroxDivision } from './hyrox-division';
 
 export type HyroxPartnerFormat = HyroxConfig['format'];
 
@@ -50,24 +43,31 @@ export interface HyroxPartnerSnapshot {
   raceTier: HyroxLoadTier | null;
   /** Header initials (first letter of up to two name words), or null. */
   initials: string | null;
-  /** Per station, whole seconds: one athlete over the full station
-   *  (resolveHyroxStationBenchmarks `sec`, the Stats ledger value). Absent =
-   *  no benchmark (the forecast uses the population seed). */
+  /** Per station, whole seconds: one athlete over the full station at their
+   *  solo loads in the race (resolveHyroxStationBenchmarks `sec`, the Stats
+   *  ledger value, after H3b's per-entry Open/Pro conversion). Absent = no
+   *  benchmark (the forecast uses the population seed). */
   stationSec: Partial<Record<HyroxStation, number>>;
-  /** Per station with a benchmark: the load tier stationSec is expressed at
-   *  (recordedStationTier): the tier it was measured at, or, for a value the
-   *  app converted between Open and Pro weights, the tier that conversion
-   *  lands on. Absent when unknown. */
+  /** Per station: the load tier the athlete's numbers at that station
+   *  (stationSec and forecastStationSec) are expressed at, their solo loads
+   *  in the race (hyroxSoloStationTier). Every station carries it, a seeded
+   *  one too. Absent when it cannot be stated (no sex on file in Mixed). */
   stationTier: Partial<Record<HyroxStation, HyroxLoadTier>>;
   /** Stations whose benchmark comes from a doubles race split: the pair's
    *  time converted to one athlete's terms, not an individual capacity. */
   teamStations: HyroxStation[];
-  /** Per station, whole seconds: the athlete's own forecast station time in
-   *  singles terms, before venue factors (stationSinglesEquivalentSec). */
+  /** Per station, whole seconds: the athlete's own forecast station line in
+   *  the race format's terms, before venue factors (HyroxStationLine
+   *  baseSec). Doubles: the pair's time at this athlete's percentile in their
+   *  own singles field, read from the pair's division table (H3b's
+   *  per-station doubles mapping; a pair at percentile p is taken to be two
+   *  athletes near p in their own fields). */
   forecastStationSec: Record<HyroxStation, number>;
   /** The athlete's own HYROX run pace, singles terms, whole s/km. */
   runPaceSecKm: number;
-  /** The athlete's forecast Roxzone, singles terms, whole seconds. */
+  /** The athlete's forecast Roxzone in the race format's terms (doubles: the
+   *  pair's Roxzone at this athlete's percentile, the same mapping), whole
+   *  seconds. */
   roxzoneSec: number;
 }
 
@@ -101,58 +101,34 @@ export function hyroxPartnerInitials(name: string | undefined | null): string | 
   return isValidHyroxPartnerInitials(out) ? out : null;
 }
 
-function singlesFormatOf(format: HyroxPartnerFormat): HyroxPartnerFormat {
-  if (format === 'open_doubles') return 'open_singles';
-  if (format === 'pro_doubles') return 'pro_singles';
-  return format;
-}
-
 /**
- * The load tier a resolved benchmark's `sec` is expressed at, or null when it
- * cannot be stated.
+ * The load tier one athlete's station numbers are expressed at: their solo
+ * loads in the race (hyroxSoloLoadsArePro, lane H3b), named as the singles
+ * tier of their sex in that load family. Women Open = W-Open, Women Pro =
+ * M-Open, Men Open = M-Open, Men Pro = M-Pro; a woman in Mixed Doubles races
+ * M-Open, the Women Pro tier.
  *
- * `sec` is always at the target's weight regime (Open or Pro): a value
- * recorded at the other regime carries the app's Open/Pro conversion
- * (HYROX_PRO_STATION_MULTIPLIER, the convention the solo forecast and the
- * Stats ledger apply; the multiplier itself is marked UNSOURCED and was set
- * from the men's jump). The pair comparison follows the same convention as
- * the solo forecast, so the tier is read at the target's regime whether or
- * not the value was converted. Before (review 2026-10-13) a converted value
- * had no tier, so a Pro pair whose tests were at Open weights read as "times
- * at different loads" and lost its pair forecast, although both partners'
- * solo forecasts used those values.
+ * Every number the snapshot carries is at these loads: H3b converts each
+ * stored benchmark there per entry (convertToTarget: hyroxOpenToProSec /
+ * hyroxProToOpenSec, per station and sex, a difference in differences on the
+ * Pro and Open results), so a Mixed woman's Women Open tests reach the Stats
+ * ledger, her forecast and this snapshot as Men Open times, and a Pro
+ * athlete's Open-weight tests as Pro times. Seeds are read at the same loads
+ * (hyroxStationSeedsAtTarget).
  *
- * - Singles slot: the athlete's own singles tier at the target's regime
- *   (Women Open = W-Open, Women Pro = M-Open, Men Open = M-Open, Men Pro =
- *   M-Pro).
- * - Doubles slot, doubles target: the tier of the athlete's current division
- *   (hyroxLoadTier). Entries do not record the division they were set in;
- *   the app prescribes and states every doubles station at the division's
- *   tier (hyroxLoadTierForState), so a doubles-slot value is read at it.
- * - Anything else (a doubles-slot value read by a singles target, the legacy
- *   pooled field, unknown sex or division): null.
- *
- * A Mixed woman's singles-slot values stay at W-Open (her own singles tier):
- * no conversion from Women Open to Men Open loads exists yet (lane H3b).
+ * Null when the athlete's sex cannot be resolved (resolveHyroxAthleteSex: no
+ * biological sex on file in a Mixed or unknown division). The app then reads
+ * the pooled tables, whose times mix the women's and men's loads, so the
+ * numbers sit at no single tier.
  */
-export function recordedStationTier(
-  b: Pick<HyroxStationBenchmark, 'sec' | 'slot'>,
+export function hyroxSoloStationTier(
   format: HyroxPartnerFormat,
   biologicalSex: SimulatorState['biologicalSex'],
   division: HyroxDivision | undefined,
 ): HyroxLoadTier | null {
-  if (b.sec == null) return null;
-  const targetPro = isHyroxProFormat(format);
-  if (b.slot === 'singles') {
-    const sex = resolveHyroxAthleteSex(biologicalSex, division);
-    return sex ? hyroxLoadTier(targetPro ? 'pro_singles' : 'open_singles', sex) : null;
-  }
-  if (b.slot === 'doubles' && isHyroxDoublesFormat(format)) {
-    return resolveHyroxDivision(format, biologicalSex, division)
-      ? hyroxLoadTier(format, biologicalSex, division)
-      : null;
-  }
-  return null;
+  const sex = resolveHyroxAthleteSex(biologicalSex, division);
+  if (!sex) return null;
+  return hyroxLoadTier(hyroxSoloLoadsArePro(format, biologicalSex, division) ? 'pro_singles' : 'open_singles', sex);
 }
 
 /**
@@ -168,7 +144,7 @@ export function hyroxSinglesRunPaceSecKm(state: SimulatorState): number | null {
   const keepStored = hx.hyroxRunPaceSource === 'user';
   const singlesHx: HyroxConfig = {
     ...hx,
-    format: singlesFormatOf(hx.format),
+    format: hyroxSinglesFormatOf(hx.format),
     ...(keepStored ? {} : { hyroxRunPaceSecKm: undefined }),
   };
   const pace = deriveHyroxRunPace({ ...state, hyroxConfig: singlesHx }).paceSecKm;
@@ -198,27 +174,27 @@ export function buildHyroxPartnerSnapshot(state: SimulatorState): HyroxPartnerSn
   const raceTier = division ? hyroxLoadTier(hx.format, state.biologicalSex, hx.division) : null;
 
   const stationSec: Partial<Record<HyroxStation, number>> = {};
-  const stationTier: Partial<Record<HyroxStation, HyroxLoadTier>> = {};
   const teamStations: HyroxStation[] = [];
   for (const b of resolved.stations) {
     if (b.sec == null) continue;
     const sec = positiveInt(b.sec);
     if (sec == null) continue;
     stationSec[b.station] = sec;
-    const tier = recordedStationTier(b, hx.format, state.biologicalSex, hx.division);
-    if (tier) stationTier[b.station] = tier;
     if (b.teamTimeSplit) teamStations.push(b.station);
   }
 
+  const soloTier = hyroxSoloStationTier(hx.format, state.biologicalSex, hx.division);
+  const stationTier: Partial<Record<HyroxStation, HyroxLoadTier>> = {};
   const forecastStationSec = {} as Record<HyroxStation, number>;
   for (const st of HYROX_STATION_ORDER) {
     const line = prediction.stations.find(l => l.station === st);
-    const sec = line ? positiveInt(stationSinglesEquivalentSec(line)) : null;
+    const sec = line ? positiveInt(line.baseSec) : null;
     if (sec == null) return null;
     forecastStationSec[st] = sec;
+    if (soloTier) stationTier[st] = soloTier;
   }
 
-  const roxzoneSec = positiveInt(prediction.roxzoneSec / (prediction.doubles?.roxzoneRatio ?? 1));
+  const roxzoneSec = positiveInt(prediction.roxzoneSec);
   if (roxzoneSec == null) return null;
 
   return {

@@ -6,14 +6,15 @@ import { describe, it, expect } from 'vitest';
 import { getDefaultState } from '@/state/store';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { HYROX_HOURS_RANGE, HYROX_MTL_CAP, HYROX_WEEKLY_SESSIONS } from '@/constants/hyrox-constants';
-import { predictHyroxRace, resolveHyroxStationBenchmarks, stationSinglesEquivalentSec } from './race-prediction.hyrox';
+import { predictHyroxRace, resolveHyroxStationBenchmarks } from './race-prediction.hyrox';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
+import { HYROX_LOADED_STATIONS, hyroxOpenToProSec } from './hyrox-results';
 import {
   buildHyroxPartnerSnapshot,
   hyroxPartnerInitials,
   hyroxSinglesRunPaceSecKm,
+  hyroxSoloStationTier,
   isValidHyroxPartnerInitials,
-  recordedStationTier,
   HYROX_PARTNER_SNAPSHOT_KEYS,
 } from './hyrox-partner-snapshot';
 import type { SimulatorState } from '@/types/state';
@@ -118,16 +119,19 @@ describe('partner snapshot numbers are the canonical values', () => {
     expect([...snap.teamStations].sort()).toEqual([...HYROX_STATION_ORDER].sort());
   });
 
-  it('forecast stations are the forecast lines in singles terms', () => {
-    const s = hyroxState({ stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: 'male' });
-    const snap = buildHyroxPartnerSnapshot(s)!;
-    const pred = predictHyroxRace(s)!;
-    expect(pred.doubles).toBeDefined();
-    for (const line of pred.stations) {
-      expect(snap.forecastStationSec[line.station]).toBe(Math.round(stationSinglesEquivalentSec(line)));
+  it('forecast stations and Roxzone are the forecast lines in the pair\'s terms', () => {
+    for (const [sex, division] of [['male', 'men'], ['female', 'mixed'], ['male', 'mixed']] as const) {
+      const s = hyroxState({ division, stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: sex });
+      const snap = buildHyroxPartnerSnapshot(s)!;
+      const pred = predictHyroxRace(s)!;
+      expect(pred.doubles).toBeDefined();
+      for (const line of pred.stations) {
+        // The doubles line itself (pre-venue), not its solo equivalent.
+        expect(snap.forecastStationSec[line.station]).toBe(Math.round(line.baseSec));
+        expect(line.teamRatio!).toBeLessThan(1);
+      }
+      expect(snap.roxzoneSec).toBe(Math.round(pred.roxzoneSec));
     }
-    // Roxzone in singles terms: the forecast's doubles Roxzone ÷ its ratio.
-    expect(snap.roxzoneSec).toBe(Math.round(pred.roxzoneSec / pred.doubles!.roxzoneRatio));
   });
 
   it('run pace is the singles pace, without the doubles run ratio', () => {
@@ -150,52 +154,81 @@ describe('partner snapshot numbers are the canonical values', () => {
   });
 });
 
-describe('recorded station tier', () => {
+describe('station tier: the athlete\'s solo loads in the race', () => {
   const tierOf = (s: SimulatorState, st: HyroxStation) => buildHyroxPartnerSnapshot(s)!.stationTier[st];
+  const ledger = (s: SimulatorState) => Object.fromEntries(resolveHyroxStationBenchmarks(s)!.stations.map(b => [b.station, b.sec]));
 
-  it('a man in Open doubles: singles-slot times are at Men Open', () => {
-    const s = hyroxState({ division: 'men', stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: 'male' });
-    expect(tierOf(s, 'sled_push')).toBe('M-Open');
-    expect(tierOf(s, 'wall_balls')).toBe('M-Open');
+  it('a man in Men Open doubles: every station at Men Open, a seeded one too', () => {
+    const { sled_pull: _omit, ...partial } = SINGLES_TIMES;
+    const s = hyroxState({ division: 'men', stationBenchmarksSingles: partial }, { biologicalSex: 'male' });
+    const snap = buildHyroxPartnerSnapshot(s)!;
+    expect(snap.stationSec.sled_pull).toBeUndefined();
+    for (const st of HYROX_STATION_ORDER) expect(snap.stationTier[st]).toBe('M-Open');
+    // Same loads: nothing is converted.
+    expect(snap.stationSec.sled_push).toBe(SINGLES_TIMES.sled_push);
   });
 
-  it('a woman in Mixed doubles: singles-slot times are at Women Open, doubles-slot tests at Men Open', () => {
-    const singles = hyroxState({ division: 'mixed', stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: 'female' });
-    expect(tierOf(singles, 'sled_push')).toBe('W-Open');
-    const tests = hyroxState(
+  it('a woman in Mixed doubles: her Women Open tests arrive converted to Men Open loads (H3b, women\'s conversion)', () => {
+    const s = hyroxState(
+      { division: 'mixed', stationBenchmarksSingles: { ...SINGLES_TIMES }, stationBenchmarkHistory: history(SINGLES_TIMES, 'open_singles', 'full_test') },
+      { biologicalSex: 'female' },
+    );
+    const snap = buildHyroxPartnerSnapshot(s)!;
+    const sec = ledger(s);
+    for (const st of HYROX_STATION_ORDER) {
+      expect(snap.stationTier[st]).toBe('M-Open');
+      expect(snap.stationSec[st]).toBe(Math.round(sec[st]!));
+    }
+    for (const st of HYROX_LOADED_STATIONS) {
+      expect(snap.stationSec[st]).toBe(Math.round(hyroxOpenToProSec(st, SINGLES_TIMES[st], 'female')));
+      expect(snap.stationSec[st]).toBeGreaterThan(SINGLES_TIMES[st]);
+    }
+    // Erg and bodyweight stations have one standard at every tier.
+    expect(snap.stationSec.ski_erg).toBe(SINGLES_TIMES.ski_erg);
+    expect(snap.stationSec.burpee_broad_jumps).toBe(SINGLES_TIMES.burpee_broad_jumps);
+  });
+
+  it('a woman in Mixed doubles: tests logged in doubles mode are already at Men Open', () => {
+    const s = hyroxState(
       { division: 'mixed', stationBenchmarksDoubles: { ...SINGLES_TIMES }, stationBenchmarkHistory: history(SINGLES_TIMES, 'open_doubles', 'full_test') },
       { biologicalSex: 'female' },
     );
-    expect(tierOf(tests, 'sled_push')).toBe('M-Open');
-    expect(buildHyroxPartnerSnapshot(tests)!.teamStations).toEqual([]);
+    const snap = buildHyroxPartnerSnapshot(s)!;
+    expect(snap.stationTier.sled_push).toBe('M-Open');
+    expect(snap.stationSec.sled_push).toBe(SINGLES_TIMES.sled_push);
+    expect(snap.teamStations).toEqual([]);
   });
 
-  it('a woman in Women doubles: doubles-slot tests at Women Open', () => {
+  it('a woman in Women doubles: Women Open, unconverted', () => {
     const s = hyroxState(
       { division: 'women', stationBenchmarksDoubles: { ...SINGLES_TIMES }, stationBenchmarkHistory: history(SINGLES_TIMES, 'open_doubles', 'full_test') },
       { biologicalSex: 'female' },
     );
     expect(tierOf(s, 'sandbag_lunges')).toBe('W-Open');
+    expect(buildHyroxPartnerSnapshot(s)!.stationSec.sandbag_lunges).toBe(SINGLES_TIMES.sandbag_lunges);
   });
 
-  it('a Pro target reading Open-weight times: the converted value counts at the Pro tier, as in the solo forecast', () => {
+  it('a Men Pro target reading Open-weight tests: converted with the men\'s conversion, at Men Pro', () => {
     const s = hyroxState({ format: 'pro_doubles', division: 'men', stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: 'male' });
     const snap = buildHyroxPartnerSnapshot(s)!;
-    // stationSec is the converted (Pro-weight) value the Stats ledger shows.
+    expect(snap.stationSec.sled_push).toBe(Math.round(hyroxOpenToProSec('sled_push', SINGLES_TIMES.sled_push, 'male')));
     expect(snap.stationSec.sled_push).toBeGreaterThan(SINGLES_TIMES.sled_push);
     expect(snap.stationTier.sled_push).toBe('M-Pro');
-    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
-    // The reverse direction too: Pro-weight times read by an Open target.
-    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', 'male', 'men')).toBe('M-Open');
   });
 
-  it('unknown sex in a singles slot: no tier', () => {
-    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', undefined, 'mixed')).toBeNull();
-    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', 'female', 'mixed')).toBe('W-Open');
-    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
-    // A doubles-slot value read by a singles target: the division it was set in is unknown.
-    expect(recordedStationTier({ sec: 200, slot: 'doubles' }, 'open_singles', 'male', undefined)).toBeNull();
-    expect(recordedStationTier({ sec: undefined, slot: 'singles' }, 'open_doubles', 'male', 'men')).toBeNull();
+  it('hyroxSoloStationTier names the solo loads; unknown sex in Mixed has none', () => {
+    expect(hyroxSoloStationTier('open_doubles', 'female', 'mixed')).toBe('M-Open');
+    expect(hyroxSoloStationTier('open_doubles', 'male', 'mixed')).toBe('M-Open');
+    expect(hyroxSoloStationTier('open_doubles', 'female', 'women')).toBe('W-Open');
+    expect(hyroxSoloStationTier('pro_doubles', 'female', 'women')).toBe('M-Open');
+    expect(hyroxSoloStationTier('pro_doubles', 'male', 'men')).toBe('M-Pro');
+    expect(hyroxSoloStationTier('open_singles', 'female', undefined)).toBe('W-Open');
+    // A single-sex division names the sex when none is on file.
+    expect(hyroxSoloStationTier('open_doubles', undefined, 'women')).toBe('W-Open');
+    expect(hyroxSoloStationTier('open_doubles', undefined, 'mixed')).toBeNull();
+    expect(hyroxSoloStationTier('open_doubles', 'prefer_not_to_say', 'mixed')).toBeNull();
+    const s = hyroxState({ division: 'mixed', stationBenchmarksSingles: { ...SINGLES_TIMES } }, { biologicalSex: undefined });
+    expect(buildHyroxPartnerSnapshot(s)!.stationTier).toEqual({});
   });
 
   it('race tier follows hyroxLoadTier; unknown division shares no tier', () => {

@@ -40,7 +40,7 @@ const MY_TIMES: Partial<Record<HyroxStation, number>> = {
   row_erg: 290, farmer_carry: 110, sandbag_lunges: 280, wall_balls: 430,
 };
 
-function seed(hx: Partial<HyroxConfig> = {}, over: Partial<SimulatorState> = {}): void {
+function athleteState(hx: Partial<HyroxConfig> = {}, over: Partial<SimulatorState> = {}): SimulatorState {
   const band = 'intermediate' as const;
   const s = getDefaultState();
   s.eventType = 'hyrox';
@@ -59,7 +59,11 @@ function seed(hx: Partial<HyroxConfig> = {}, over: Partial<SimulatorState> = {})
     ...hx,
   };
   Object.assign(s, over);
-  setState(s);
+  return s;
+}
+
+function seed(hx: Partial<HyroxConfig> = {}, over: Partial<SimulatorState> = {}): void {
+  setState(athleteState(hx, over));
 }
 
 const ok = <T>(value: T): PartnerResult<T> => ({ ok: true, value });
@@ -286,7 +290,33 @@ describe('linked', () => {
     expect($('#hxp-setups')).toBeNull();
   });
 
-  it('a woman\'s Women Open times in a Mixed pair: loaded stations not comparable, ergs compared, pair forecast withheld', async () => {
+  it('a Mixed pair where she tested at Women Open loads: her times arrive at Men Open, every row compares, the pair forecast shows', async () => {
+    // Her own snapshot as her app builds it: singles-slot tests, no Pro toggle,
+    // converted to her M-Open race loads with the women's conversion (H3b).
+    const her = buildHyroxPartnerSnapshot(athleteState({}, { biologicalSex: 'female', onboarding: { name: 'Mara Kent' } as SimulatorState['onboarding'] }))!;
+    expect(her.stationTier.sled_push).toBe('M-Open');
+    expect(her.stationSec.sled_push!).toBeGreaterThan(MY_TIMES.sled_push!);
+    await renderLinked({ ...her, initials: 'MK' });
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
+    expect(rows).toHaveLength(8);
+    for (const r of rows) expect(r.textContent!).not.toContain('Not comparable');
+    expect(rows.find(r => r.dataset.station === 'sled_push')!.textContent!.replace(/\s+/g, ' ')).toContain('You lead by');
+    expect(text('#hxp-forecast')).toMatch(/Pair forecast.*Equal split of every station\..*\d:\d\d:\d\d/);
+    expect(text('#hxp-forecast')).not.toContain('Needs');
+    expect($('#hxp-setups')).toBeNull();
+  });
+
+  it('no biological sex on file in a Mixed pair: the forecast says your station loads are not known', async () => {
+    seed({}, { biologicalSex: undefined });
+    const partnerMan = buildHyroxPartnerSnapshot(athleteState())!;
+    await renderLinked({ ...partnerMan, initials: 'MK' });
+    const sled = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station')).find(r => r.dataset.station === 'sled_push')!;
+    expect(sled.textContent!.replace(/\s+/g, ' ')).toContain('Load not known');
+    expect(text('#hxp-forecast')).toContain('Station loads not known for you.');
+    expect(text('#hxp-forecast')).toContain('Not available');
+  });
+
+  it('a partner row whose loaded times sit at another tier (written outside this builder): not comparable, forecast withheld', async () => {
     const tiers = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, 'W-Open'])) as Record<HyroxStation, HyroxLoadTier>;
     await renderLinked({ stationTier: tiers });
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
@@ -294,8 +324,6 @@ describe('linked', () => {
     expect(row('sled_push')).toContain('Not comparable');
     expect(row('sled_push')).toContain('Not at the race loads');
     expect(row('ski_erg')).toContain('You lead by 12 s');
-    // The pair number would read her Women Open times as Men Open: one short
-    // line naming what is missing and from whom instead.
     expect(text('#hxp-forecast')).toContain('Needs times at Men Open loads from your partner.');
     expect(text('#hxp-forecast')).toContain('Not available');
     expect(text('#hxp-forecast')).not.toMatch(/\d:\d\d:\d\d/);
@@ -313,7 +341,7 @@ describe('linked', () => {
     expect(text('#hxp-forecast')).toContain('Not available');
   });
 
-  it('a Men Pro pair whose tests were at Open weights: rows compare and the pair forecast shows, as the solo forecast does', async () => {
+  it('a Men Pro pair whose tests were at Open weights: converted to Pro with the men\'s conversion, rows compare and the pair forecast shows', async () => {
     seed({ format: 'pro_doubles', division: 'men' });
     await renderLinked();
     const rows = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station'));
@@ -326,6 +354,12 @@ describe('linked', () => {
   it('different race setups: one line naming both, no pair forecast', async () => {
     await renderLinked({ division: 'women', raceTier: 'W-Open' });
     expect(text('#hxp-setups')).toBe('Setups differ: you race Doubles Mixed, your partner Doubles Women.');
+    expect(text('#hxp-forecast')).toContain('Needs matching race setups.');
+  });
+
+  it('Men and Mixed share Men Open loads but are different races: setups differ', async () => {
+    await renderLinked({ division: 'men', raceTier: 'M-Open' });
+    expect(text('#hxp-setups')).toBe('Setups differ: you race Doubles Mixed, your partner Doubles Men.');
     const sled = Array.from(document.querySelectorAll<HTMLElement>('.hxp-station')).find(r => r.dataset.station === 'sled_push')!;
     expect(sled.textContent!.replace(/\s+/g, ' ')).toContain('Race setups differ');
     expect(text('#hxp-forecast')).toContain('Needs matching race setups.');

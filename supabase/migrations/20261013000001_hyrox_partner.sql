@@ -206,11 +206,21 @@ GRANT SELECT ON TABLE public.hyrox_partner_links TO authenticated;
 --   ski_erg, sled_push, sled_pull, burpee_broad_jumps, row_erg,
 --   farmer_carry, sandbag_lunges, wall_balls
 -- station_sec: the athlete's benchmark (seconds, one athlete over the full
---   station, the Stats ledger value); NULL = no benchmark (population seed).
--- station_tier: the load tier station_sec was measured at, NULL when unknown
---   or when the value went through a cross-tier conversion (no sourced ratio).
+--   station at their solo loads in the race, the Stats ledger value);
+--   NULL = no benchmark (population seed).
+-- station_tier: the load tier the athlete's numbers at that station
+--   (station_sec and forecast_station_sec) are expressed at: their solo loads
+--   in the race. The app converts every stored benchmark to those loads with
+--   the per-sex Open/Pro conversions from the HYROX results data, so a Mixed
+--   woman's Women Open tests are stored as Men Open times. Set on every
+--   station, seeded ones too. NULL when it cannot be stated (no biological sex
+--   on file in a Mixed or unknown division: the numbers then come from pooled
+--   tables that mix both sexes' loads).
 -- station_team: true when that benchmark is a doubles race split (a pair time).
--- forecast_station_sec: the athlete's own forecast per station, singles terms.
+-- forecast_station_sec: the athlete's own forecast per station before venue
+--   factors, in the race format's terms (doubles: the pair's time at the
+--   athlete's percentile). roxzone_sec: the same for Roxzone.
+-- run_pace_sec_km: the athlete's singles run pace.
 -- initials: at most two letters, rendered to the linked partner, so the CHECK
 --   refuses digits, punctuation (including < > & " '), spaces and controls.
 
