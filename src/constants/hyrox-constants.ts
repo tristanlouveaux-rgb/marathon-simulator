@@ -569,9 +569,10 @@ export const HYROX_CHRONIC_WINDOW_WEEKS = 4;
  * Running share, every tier: standalone runs plus the run segments of bricks
  * (parameter sheet split.running_share). Measured against the athlete's
  * chosen weekly hours (Tristan 2026-10-13, D2): a training week's running
- * budget is 0.40 x the chosen weekly minutes (a deload's x HYROX_DELOAD_FACTOR,
- * and never above it under the effort lever); a taper week's is 0.40 x the
- * taper week's own budget. Before 2026-10-13 the share was taken of the
+ * budget is 0.40 x the chosen weekly minutes, a deload's too (its ceiling,
+ * 0.75 of the last loaded week, and its deloaded long run do the reducing),
+ * never above it under the effort lever; a taper week's is 0.40 x the taper
+ * week's own budget. Before 2026-10-13 the share was taken of the
  * phase-scaled week budget, so base weeks funded 0.22 to 0.34 of the hours
  * and the quality run often did not fit. The rest of the week holds station
  * sessions and the bricks' station work (0.60 of the week's budget). Minutes
