@@ -149,6 +149,19 @@ describe('Mixed woman: forecast', () => {
     expect(faster).toBeLessThan(seedLine);
   });
 
+  it('a doubles split with no weight record (a migrated "manual" seed, or a slot value with no entry) stays in the Open Doubles family', () => {
+    for (const over of [
+      { stationBenchmarksDoubles: { sled_push: 150 }, stationBenchmarkHistory: { sled_push: [{ dateISO: TODAY, sec: 150, source: 'manual' as const, format: 'open_doubles' as const }] } },
+      { stationBenchmarksDoubles: { sled_push: 150 } },
+    ]) {
+      const p = predictHyroxRace(mixedWoman(over))!;
+      const l = p.stations.find(x => x.station === 'sled_push')!;
+      expect(l.teamTimeSplit).toBe(true);
+      expect(l.crossFormat).toBeUndefined();
+      expect(l.baseSec).toBeCloseTo(150, 6);
+    }
+  });
+
   it('a Mixed doubles race split round-trips: the pair\'s time as is, the solo at M-Open', () => {
     const split = 150;
     const s = mixedWoman({

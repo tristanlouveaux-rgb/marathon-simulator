@@ -374,28 +374,31 @@ function convertToTarget(
   return { soloAtTarget, teamAtTarget: doublesStationTeamSec(station, soloAtTarget, frame.tables), teamCrossFamily: true };
 }
 
-/** The load family of a stored solo time (true = the Pro tier of the
- *  athlete's sex):
+/** The weight family of a stored time, the `sourceIsPro` convertToTarget
+ *  reads (for a doubles race split, the pair's family; for a solo time, the
+ *  Pro tier of the athlete's sex):
  *   - a race split carries its race's weights and a guided-session best the
  *     weights it was prescribed at (proWeights);
- *   - a station test follows the athlete's toggle (benchmarksAtProWeights:
- *     on = the tests were at Pro weights, kept when the target later
- *     changes). Off, a test logged under a Pro format was at Open weights
- *     (the toggle's own convention), and one logged under an Open format was
- *     at that format's solo loads (hyroxSoloLoadsArePro on the entry's
- *     format): the Open tier, except a woman in Mixed Doubles, whose tests
- *     are at the pair's M-Open loads, the Women Pro tier (the test protocol
- *     shows the target's tier, and the toggle is not offered there). A test
- *     she logged earlier under Open Singles stays at W-Open;
- *   - a value with no entry reads the same rule on the target's format. */
+ *   - the athlete's toggle (benchmarksAtProWeights) marks everything else as
+ *     Pro when on (kept when the target later changes);
+ *   - a race split with no weight record (the boot migration's 'manual'
+ *     seed), or a slot value with no entry, is Open (the toggle's own
+ *     convention, unchanged from before lane H3b);
+ *   - a station test logged under a Pro format was at Open weights (the
+ *     toggle's convention), and one logged under an Open format at that
+ *     format's solo loads (hyroxSoloLoadsArePro on the entry's format): the
+ *     Open tier, except a woman in Mixed Doubles, whose tests are at the
+ *     pair's M-Open loads, the Women Pro tier (the test protocol shows the
+ *     target's tier, and the toggle is not offered there). A test she logged
+ *     earlier under Open Singles stays at W-Open. */
 function entryIsPro(
   hx: HyroxConfigOf,
-  frame: Pick<TargetFrame, 'isPro' | 'soloPro' | 'biologicalSex' | 'division'>,
+  frame: Pick<TargetFrame, 'biologicalSex' | 'division'>,
   entry: Pick<StationTestEntry, 'source' | 'proWeights' | 'format'> | null | undefined,
 ): boolean {
   if ((entry?.source === 'race' || entry?.source === 'session') && entry.proWeights != null) return entry.proWeights;
   if (hx.benchmarksAtProWeights) return true;
-  if (!entry) return !frame.isPro && frame.soloPro;
+  if (!entry || isRaceSplitSource(entry.source)) return false;
   return !isHyroxProFormat(entry.format) && hyroxSoloLoadsArePro(entry.format, frame.biologicalSex, frame.division);
 }
 
