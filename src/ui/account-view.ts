@@ -709,11 +709,11 @@ function renderProfileGroup(): string {
     const runPaceHint = runPace.source === 'seed' ? 'estimate · log a run' : undefined;
 
     // Station calibration: hyroxCalibrationCoverage, the forecast's
-    // per-station resolver, the same count Stats, the benchmark card and the
-    // forecast show. The denominator counts only stations the athlete can
-    // test.
+    // per-station resolver, the same count and denominator (all 8 raced
+    // stations) the Forecast, Stats, the benchmark card and the chip detail
+    // show.
     const coverage = hx ? hyroxCalibrationCoverage(hx) : null;
-    const calibratable = coverage?.testable ?? HYROX_STATION_ORDER;
+    const stationTotal = coverage?.total ?? HYROX_STATION_ORDER.length;
     const calibratedCount = coverage?.calibrated.length ?? 0;
 
     const prevSec = hx?.previousHyroxTimeSec;
@@ -736,7 +736,7 @@ function renderProfileGroup(): string {
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
           ${card('Run pace', fpModel(runPace.paceSecKm, pref), runPaceHint)}
           ${card(finishLabel, finishValue, finishHint)}
-          ${card('Stations', `${calibratedCount}/${calibratable.length}`, 'calibrated')}
+          ${card('Stations', `${calibratedCount}/${stationTotal}`, 'calibrated')}
         </div>
       </div>`;
   } else {

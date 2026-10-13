@@ -165,9 +165,9 @@ function hasAnyStationValue(b: BenchmarkMap): boolean {
 
 /**
  * The benchmark set a forecast reads, resolved per station. One rule for the
- * predictor and every surface that counts calibrated stations (Stats, Account,
- * the benchmark card, the forecast chip detail; hyroxCalibrationCoverage), so
- * they all count the stations the forecast calibrates.
+ * predictor, planning (resolveHyroxStationBenchmarks) and every surface that
+ * counts calibrated stations (hyroxCalibrationCoverage), so they all count
+ * and read the stations the forecast calibrates.
  *  - Per station, the target format's slot when it holds a value for that
  *    station.
  *  - Else the other format's slot for that station. Its value reaches the
@@ -232,33 +232,46 @@ export function hyroxTestableStations(access?: HyroxConfig['stationAccess']): Hy
 
 /** Calibration coverage (hyroxCalibrationCoverage). */
 export interface HyroxCalibrationCoverage extends ResolvedHyroxBenchmarks {
-  /** Stations the athlete can test (hyroxTestableStations). */
-  testable: HyroxStation[];
-  /** Testable stations with an athlete time the forecast reads. */
+  /** The denominator every surface shows: all 8 raced stations. */
+  total: number;
+  /** Stations with an athlete time the forecast reads (a test, session best
+   *  or race split, from either slot), whether or not the athlete can test
+   *  the station today. */
   calibrated: HyroxStation[];
-  /** Testable stations still on the population seed. */
+  /** Stations still on the population seed. */
   pending: HyroxStation[];
+  /** Stations the athlete can test with the equipment they have
+   *  (hyroxTestableStations). */
+  testable: HyroxStation[];
+  /** Pending stations the athlete can test: the ones a test prompt lists. */
+  testablePending: HyroxStation[];
 }
 
 /**
  * Which stations hold an athlete time and which still use the population
- * seed: the one count behind "X / Y stations calibrated" on Stats, Account,
- * the benchmark card and the forecast chip detail. It reads
- * resolveHyroxBenchmarks, the predictor's own resolver, so with full station
- * access `calibrated.length` equals predictHyroxRace().calibratedCount. The
- * predictor counts all 8 raced stations; these surfaces count only the
- * stations the athlete can test.
+ * seed: the one count behind "X / 8 stations calibrated" on the Forecast
+ * (predictHyroxRace().calibratedCount), Stats, Account, the benchmark card and
+ * the forecast chip detail. It reads resolveHyroxBenchmarks, the predictor's
+ * own resolver, and counts all 8 raced stations: a sled race split counts
+ * for an athlete with no sled to test on, because the forecast reads it.
+ * Equipment access only decides which pending stations a test prompt lists
+ * (testablePending). Before (review 2026-10-13) the Forecast counted raced
+ * stations and the other surfaces counted testable ones, so with no sled
+ * access and a sled split on file the Forecast read 8/8 and Stats 6/6.
  */
 export function hyroxCalibrationCoverage(
   hx: Pick<HyroxConfig, 'format' | 'stationBenchmarksSingles' | 'stationBenchmarksDoubles' | 'stationBenchmarks' | 'stationAccess'>,
 ): HyroxCalibrationCoverage {
   const resolved = resolveHyroxBenchmarks(hx);
   const testable = hyroxTestableStations(hx.stationAccess);
+  const pending = HYROX_STATION_ORDER.filter(st => resolved.benchmarks[st] == null);
   return {
     ...resolved,
+    total: HYROX_STATION_ORDER.length,
+    calibrated: HYROX_STATION_ORDER.filter(st => resolved.benchmarks[st] != null),
+    pending,
     testable,
-    calibrated: testable.filter(st => resolved.benchmarks[st] != null),
-    pending: testable.filter(st => resolved.benchmarks[st] == null),
+    testablePending: testable.filter(st => pending.includes(st)),
   };
 }
 

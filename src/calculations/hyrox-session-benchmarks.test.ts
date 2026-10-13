@@ -8,7 +8,9 @@ import {
 } from './hyrox-session-benchmarks';
 import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
-import type { HyroxComponent } from '@/types/triathlon';
+import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
+import { predictHyroxRace, resolveHyroxStationBenchmarks } from './race-prediction.hyrox';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { SetRecord } from '@/guided/strength-controller';
 
 // Competitive (elite) seed times used as the sanity floor: wall_balls 265, row_erg 238.
@@ -17,7 +19,7 @@ const ROW: HyroxComponent = { type: 'row_erg', distanceM: 1000, mtl: 0 };
 
 function state(over: Partial<NonNullable<SimulatorState['hyroxConfig']>> = {}): SimulatorState {
   return {
-    hyroxConfig: { format: 'open_singles', stationBenchmarksSingles: {}, ...over },
+    hyroxConfig: { format: 'open_singles', athleteBand: 'intermediate', stationBenchmarksSingles: {}, ...over },
   } as any as SimulatorState;
 }
 
@@ -168,5 +170,112 @@ describe('applyHyroxSessionBenchmarks', () => {
     const applied = applyHyroxSessionBenchmarks(w, densityRecords([300, 280], [250, 240]), s);
     expect(applied).toEqual([]);
     expect(s.hyroxConfig!.stationBenchmarksSingles!.wall_balls).toBe(320);
+  });
+});
+
+describe('session bests compare with the benchmark the forecast reads (review 2026-10-13)', () => {
+  // An Open Singles athlete whose station times come from a doubles race:
+  // the singles slot is empty, every station resolves from the doubles slot
+  // and reads in singles terms (the pair's time ÷ the forecast's ratio).
+  // Before, the session check read only the singles slot, found nothing, and
+  // took any round as an improvement: a 348 s row replaced a 307.6 s
+  // converted split and the forecast got 50 s slower.
+  const DOUBLES_SPLITS: Record<HyroxStation, number> = {
+    ski_erg: 200, sled_push: 140, sled_pull: 190, burpee_broad_jumps: 210,
+    row_erg: 220, farmer_carry: 80, sandbag_lunges: 200, wall_balls: 320,
+  };
+  const SINGLES_TIMES: Record<HyroxStation, number> = {
+    ski_erg: 270, sled_push: 200, sled_pull: 260, burpee_broad_jumps: 300,
+    row_erg: 290, farmer_carry: 110, sandbag_lunges: 280, wall_balls: 430,
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const raceHistory = (splits: Record<HyroxStation, number>, format: 'open_doubles' | 'open_singles') =>
+    Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, [
+      { dateISO: today, sec: splits[st], source: 'race' as const, format, proWeights: false },
+    ]]));
+  const fullState = (over: Partial<NonNullable<SimulatorState['hyroxConfig']>>): SimulatorState => ({
+    hyroxConfig: {
+      format: 'open_singles', athleteBand: 'intermediate', hyroxPhase: 'base',
+      stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+      weeklyMTL: 0, mtlCap: 1000, mtlHistory: [], runsPerWeek: 3,
+      stationSessionsPerWeek: 1, bricksPerWeek: 1, weeklyHoursAvailable: 8,
+      ...over,
+    },
+  } as any as SimulatorState);
+  const rowSession = workout('hyrox_station_density', [ROW], 2);
+  const rowRounds = (sec: number) => [rec(0, sec + 6, 0), rec(0, sec, 1)];
+  const singlesFromDoubles = () => fullState({
+    format: 'open_singles',
+    stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
+    stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles'),
+  });
+  const resolvedRow = (s: SimulatorState) => resolveHyroxStationBenchmarks(s)!.stations.find(b => b.station === 'row_erg')!;
+
+  it('singles target from doubles splits: a slower round is no improvement and the forecast does not move', () => {
+    const s = singlesFromDoubles();
+    const before = predictHyroxRace(s)!;
+    const converted = resolvedRow(s).sec!;
+    // The converted value is the forecast's own row line.
+    expect(converted).toBeCloseTo(before.stations.find(l => l.station === 'row_erg')!.baseSec, 6);
+    expect(converted).toBeCloseTo(DOUBLES_SPLITS.row_erg / before.crossFormatStationRatio!, 9);
+
+    const slow = Math.round(converted) + 40;
+    const r = summariseHyroxSession(rowSession, rowRounds(slow), s)[0];
+    expect(r.benchmarkSec).toBeCloseTo(converted, 9);
+    expect(r.isImprovement).toBe(false);
+    expect(applyHyroxSessionBenchmarks(rowSession, rowRounds(slow), s)).toEqual([]);
+    expect(s.hyroxConfig!.stationBenchmarksSingles?.row_erg).toBeUndefined();
+    expect(predictHyroxRace(s)!.totalSec).toBe(before.totalSec);
+  });
+
+  it('singles target from doubles splits: a faster round improves from the converted value, its own station only', () => {
+    const s = singlesFromDoubles();
+    const converted = resolvedRow(s).sec!;
+    const fast = Math.floor(converted) - 20;
+    const applied = applyHyroxSessionBenchmarks(rowSession, rowRounds(fast), s);
+    expect(applied).toHaveLength(1);
+    expect(applied[0].fromSec).toBeCloseTo(converted, 9);
+    expect(applied[0].toSec).toBe(fast);
+    expect(s.hyroxConfig!.stationBenchmarksSingles!.row_erg).toBe(fast);
+    const after = predictHyroxRace(s)!;
+    expect(after.stations.find(l => l.station === 'row_erg')!.baseSec).toBe(fast);
+    expect(after.stations.filter(l => l.teamTimeSplit)).toHaveLength(7);
+    expect(after.calibratedCount).toBe(8);
+  });
+
+  it('doubles target reading singles benchmarks: compares with the singles time as stored', () => {
+    const s = fullState({ format: 'open_doubles', stationBenchmarksSingles: { ...SINGLES_TIMES } });
+    const slow = summariseHyroxSession(rowSession, rowRounds(SINGLES_TIMES.row_erg + 10), s)[0];
+    expect(slow.benchmarkSec).toBe(SINGLES_TIMES.row_erg);
+    expect(slow.isImprovement).toBe(false);
+    const fast = summariseHyroxSession(rowSession, rowRounds(SINGLES_TIMES.row_erg - 10), s)[0];
+    expect(fast.isImprovement).toBe(true);
+    expect(fast.deltaSec).toBe(10);
+  });
+
+  it('doubles target, own doubles race split: a solo round is compared in solo terms (the pair\'s time ÷ the station ratio)', () => {
+    const s = fullState({
+      format: 'open_doubles',
+      stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
+      stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles'),
+    });
+    const prediction = predictHyroxRace(s)!;
+    const row = resolvedRow(s);
+    // Stats and the generators read the pair's time as stored ...
+    expect(row.sec).toBe(DOUBLES_SPLITS.row_erg);
+    // ... the solo comparison divides it by the forecast's own ratio.
+    expect(row.soloSec!).toBeCloseTo(DOUBLES_SPLITS.row_erg / prediction.doubles!.stationRatio, 9);
+    expect(row.soloSec!).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
+
+    // Slower than the pair's time but faster than its solo equivalent: one
+    // athlete beat their share of the race split.
+    const solo = Math.floor(row.soloSec!) - 20;
+    expect(solo).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
+    const r = summariseHyroxSession(rowSession, rowRounds(solo), s)[0];
+    expect(r.benchmarkSec).toBeCloseTo(row.soloSec!, 9);
+    expect(r.isImprovement).toBe(true);
+    // Slower than the solo equivalent: no improvement.
+    const slow = summariseHyroxSession(rowSession, rowRounds(Math.ceil(row.soloSec!) + 10), s)[0];
+    expect(slow.isImprovement).toBe(false);
   });
 });

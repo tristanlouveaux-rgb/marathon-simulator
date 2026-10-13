@@ -16,6 +16,15 @@
  *  - **PB-only**: a benchmark only ever improves (lower time) from a session; a
  *    slow day never degrades it. A station with no user benchmark yet is
  *    calibrated from the best round (better than the population estimate).
+ *  - The stored benchmark is the one the forecast reads
+ *    (resolveHyroxStationBenchmarks): per station from either format's slot,
+ *    so a converted race split from the other format counts as the
+ *    benchmark. A best round is one athlete's effort, so it is compared in
+ *    solo terms: a doubles race split (the pair's time) ÷ the forecast's
+ *    station ratio. Before (review 2026-10-13) only the target format's slot
+ *    was read: for a singles athlete whose station times came from doubles
+ *    race splits it held nothing, so any round passed as an improvement and
+ *    a slower session time replaced the converted split in the forecast.
  *  - A **sanity floor** (the elite / competitive seed time) rejects implausibly
  *    fast times that are almost certainly a timing slip.
  *
@@ -32,6 +41,7 @@ import type { SetRecord } from '@/guided/strength-controller';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { resolveHyroxStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 
 /** Race-pace HYROX sessions whose best-round times may improve a benchmark.
  *  Technique (65% pace) and the assessment (RPE 4 walkthrough) are excluded. */
@@ -45,7 +55,8 @@ export interface StationSessionResult {
   displayName: string;
   /** Fastest round recorded for this station this session (sec). */
   bestSec: number;
-  /** Current user benchmark for the active format (sec), or null if none yet. */
+  /** Current user benchmark in solo terms (resolveHyroxStationBenchmarks
+   *  soloSec), or null when the station still uses the population seed. */
   benchmarkSec: number | null;
   /** benchmarkSec − bestSec (positive = faster than the benchmark). Null when no benchmark. */
   deltaSec: number | null;
@@ -74,12 +85,15 @@ function isDoublesFormat(f: HyroxFormat): boolean {
   return f === 'open_doubles' || f === 'pro_doubles';
 }
 
-/** Format-aware current scalar benchmark for a station (null if none). */
-function readBenchmark(s: SimulatorState, station: HyroxStation): number | null {
-  const hx = s.hyroxConfig;
-  if (!hx) return null;
-  const slot = isDoublesFormat(currentFormat(s)) ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles;
-  return slot?.[station] ?? hx.stationBenchmarks?.[station] ?? null;
+/** Per station, the benchmark a best round is compared with: the forecast's
+ *  resolved benchmark in solo terms (resolveHyroxStationBenchmarks soloSec).
+ *  Stations on the population seed are absent. */
+function soloBenchmarks(s: SimulatorState): Map<HyroxStation, number> {
+  const out = new Map<HyroxStation, number>();
+  for (const b of resolveHyroxStationBenchmarks(s)?.stations ?? []) {
+    if (b.soloSec != null) out.set(b.station, b.soloSec);
+  }
+  return out;
 }
 
 /** A time below the elite (competitive) seed for a station is almost certainly a
@@ -168,10 +182,11 @@ export function summariseHyroxSession(
   if (!components.length || !records.length) return [];
   const racePace = isRacePaceHyroxSession(workout.t);
   const best = bestRoundPerStation(components, records);
+  const benchmarks = soloBenchmarks(state);
 
   const results: StationSessionResult[] = [];
   for (const [station, bestSec] of best) {
-    const benchmarkSec = readBenchmark(state, station);
+    const benchmarkSec = benchmarks.get(station) ?? null;
     const eligible = racePace && passesSanityFloor(station, bestSec);
     const isImprovement = eligible && (benchmarkSec == null || bestSec < benchmarkSec);
     results.push({

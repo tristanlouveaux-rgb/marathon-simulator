@@ -1,16 +1,20 @@
 // @vitest-environment jsdom
 /**
- * "Stations calibrated" is one number on every surface.
+ * "Stations calibrated" is one number, over one denominator, on every surface.
  *
  * The forecast (predictHyroxRace().calibratedCount), the plan-view benchmark
- * card, the Stats Benchmarks card and the Account HYROX card all count through
- * one per-station resolver (resolveHyroxBenchmarks via
- * hyroxCalibrationCoverage). Review 2026-10-13: an Open Singles target whose
- * previous race was doubles with 8 splits showed '8/8 stations calibrated' on
- * the Forecast and hid the benchmark card, while Stats read '0 / 8' with every
- * row 'Population est.' and Account read 0/8, because Stats and Account still
- * read only the target format's slot. The doubles target with singles
- * benchmarks only had the same split.
+ * card, the Stats Benchmarks card, the Account HYROX card and the forecast
+ * chip detail all count through hyroxCalibrationCoverage (the per-station
+ * resolver, resolveHyroxBenchmarks), out of all 8 raced stations.
+ *
+ * Review 2026-10-13: an Open Singles target whose previous race was doubles
+ * with 8 splits showed '8/8 stations calibrated' on the Forecast and hid the
+ * benchmark card, while Stats read '0 / 8' with every row 'Population est.'
+ * and Account read 0/8, because Stats and Account still read only the target
+ * format's slot. Then the Forecast counted raced stations while the other
+ * surfaces counted testable ones: with no sled access and a sled race split
+ * on file, the Forecast read 8/8 and Stats 6/6. Equipment access now only
+ * decides which stations a test prompt lists.
  *
  * Stats rows that come from the other format's slot keep the forecast's
  * reading: a doubles race split (the pair's time) shows in singles terms for a
@@ -24,12 +28,20 @@ vi.mock('@/state/persistence', async (orig) => ({
   ...(await orig<typeof import('@/state/persistence')>()),
   saveState: vi.fn(),
 }));
+vi.mock('@/data/supabaseClient', () => ({
+  supabase: { auth: { getUser: async () => ({ data: { user: null } }), getSession: async () => ({ data: { session: null } }) } },
+  SUPABASE_URL: 'http://localhost',
+  SUPABASE_ANON_KEY: 'test',
+  SUPABASE_FUNCTIONS_BASE: undefined,
+}));
 
 import { getDefaultState, setState } from '@/state/store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
-import { shouldShowBenchmarkCard } from './benchmark-card';
+import { shouldShowBenchmarkCard, renderHyroxBenchmarkCard } from './benchmark-card';
 import { hyroxBenchmarkLedger, renderHyroxStatsView } from './stats-view';
+import { renderHyroxChipDetail } from './forecast-chip-detail-view';
+import { renderAccountView } from '../account-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { ftRounded } from '@/utils/format';
 import type { SimulatorState } from '@/types/state';
@@ -73,6 +85,31 @@ function hyroxState(hx: Partial<NonNullable<SimulatorState['hyroxConfig']>>): Si
   return s;
 }
 
+/** The rendered Stats count line, e.g. '8 / 8'. */
+function statsCount(s: SimulatorState): string | null {
+  setState(s);
+  renderHyroxStatsView();
+  const m = document.getElementById('app-root')!.innerHTML.match(/(\d+) \/ (\d+) stations calibrated/);
+  return m ? `${m[1]} / ${m[2]}` : null;
+}
+
+/** The Account HYROX card's 'Stations' value, e.g. '8/8'. The account page
+ *  renders its HTML synchronously before its async connection checks. */
+function accountStations(s: SimulatorState): string | null {
+  setState(s);
+  void renderAccountView().catch(() => {});
+  const m = document.getElementById('app-root')!.innerHTML.match(/>Stations<\/div>\s*<div[^>]*>([^<]+)<\/div>/);
+  return m ? m[1].trim() : null;
+}
+
+/** The forecast chip detail's Stations page headline, e.g. '8/8'. */
+function chipStations(s: SimulatorState): string | null {
+  setState(s);
+  renderHyroxChipDetail('stations');
+  const m = document.getElementById('app-root')!.innerHTML.match(/>(\d+\/\d+)<\/div>/);
+  return m ? m[1] : null;
+}
+
 const CASES: Array<{ name: string; hx: Partial<NonNullable<SimulatorState['hyroxConfig']>> }> = [
   {
     name: 'singles target, doubles race splits only',
@@ -92,42 +129,85 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="app-root"></div>';
 });
 
-describe('stations calibrated: forecast, benchmark card, Stats and Account agree', () => {
+describe('stations calibrated: forecast, benchmark card, Stats, Account and chip detail agree', () => {
   for (const c of CASES) {
     it(c.name, () => {
       const s = hyroxState(c.hx);
       const prediction = predictHyroxRace(s)!;
       const coverage = hyroxCalibrationCoverage(s.hyroxConfig!);
-      const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, prediction);
+      const ledger = hyroxBenchmarkLedger(s);
 
       expect(prediction.calibratedCount).toBe(8);
       expect(coverage.calibrated.length).toBe(prediction.calibratedCount);
       expect(ledger.calibratedCount).toBe(prediction.calibratedCount);
+      expect(ledger.total).toBe(prediction.stations.length);
       expect(ledger.rows.every(r => r.sec != null)).toBe(true);
       // Nothing left to calibrate, so the benchmark card stays hidden.
       expect(shouldShowBenchmarkCard(s, 1)).toBe(false);
 
       // Stats renders the same count.
-      setState(s);
-      renderHyroxStatsView();
+      expect(statsCount(s)).toBe('8 / 8');
       const html = document.getElementById('app-root')!.innerHTML;
-      expect(html).toContain('8 / 8 stations calibrated');
       // No station row on the seed; the one 'Population est.' left is the
       // run-pace row (no run pace on file in this state).
       expect((html.match(/Population est\./g) ?? []).length).toBe(1);
+      expect(accountStations(s)).toBe('8/8');
+      expect(chipStations(s)).toBe('8/8');
     });
   }
 
-  it('Account counts through hyroxCalibrationCoverage, not the target slot alone', () => {
-    const src = readFileSync(join(__dirname, '..', 'account-view.ts'), 'utf8');
-    expect(src).toContain('hyroxCalibrationCoverage(hx)');
-    expect(src).not.toMatch(/stationBenchmarksSingles|stationBenchmarksDoubles/);
+  it('no sled access, sled race splits on file: every surface reads 8 / 8, as the forecast does', () => {
+    const s = hyroxState({ ...CASES[0].hx, stationAccess: { sled: 'never', skiErg: true, rowErg: true } });
+    const prediction = predictHyroxRace(s)!;
+    expect(prediction.calibratedCount).toBe(8);
+    expect(hyroxCalibrationCoverage(s.hyroxConfig!).calibrated).toHaveLength(8);
+    const ledger = hyroxBenchmarkLedger(s);
+    expect(ledger.rows.map(r => r.station)).toEqual(HYROX_STATION_ORDER);
+    expect(ledger.rows.find(r => r.station === 'sled_push')!.sec).toBeDefined();
+    expect(ledger.calibratedCount).toBe(8);
+    expect(shouldShowBenchmarkCard(s, 1)).toBe(false);
+    expect(statsCount(s)).toBe('8 / 8');
+    expect(accountStations(s)).toBe('8/8');
+    expect(chipStations(s)).toBe('8/8');
   });
 
-  it('Stats and the forecast chip detail read no benchmark slot directly', () => {
+  it('no sled access, no sled times: every surface reads 6 / 8; the card has nothing it can prompt', () => {
+    const six = Object.fromEntries(Object.entries(SINGLES_TIMES).filter(([st]) => st !== 'sled_push' && st !== 'sled_pull'));
+    const s = hyroxState({ format: 'open_singles', stationAccess: { sled: 'never', skiErg: true, rowErg: true }, stationBenchmarksSingles: six });
+    expect(predictHyroxRace(s)!.calibratedCount).toBe(6);
+    const ledger = hyroxBenchmarkLedger(s);
+    expect(ledger.calibratedCount).toBe(6);
+    expect(ledger.total).toBe(8);
+    expect(ledger.rows.filter(r => r.sec == null).map(r => r.station)).toEqual(['sled_push', 'sled_pull']);
+    expect(statsCount(s)).toBe('6 / 8');
+    expect(accountStations(s)).toBe('6/8');
+    expect(chipStations(s)).toBe('6/8');
+    // Both pending stations need a sled: no test prompt.
+    expect(shouldShowBenchmarkCard(s, 1)).toBe(false);
+  });
+
+  it('no sled access, one testable station pending: the card counts all 3 pending, lists the testable one', () => {
+    const five = Object.fromEntries(Object.entries(SINGLES_TIMES).filter(([st]) => !['sled_push', 'sled_pull', 'wall_balls'].includes(st)));
+    const s = hyroxState({ format: 'open_singles', stationAccess: { sled: 'never', skiErg: true, rowErg: true }, stationBenchmarksSingles: five });
+    expect(predictHyroxRace(s)!.calibratedCount).toBe(5);
+    expect(statsCount(s)).toBe('5 / 8');
+    expect(accountStations(s)).toBe('5/8');
+    expect(shouldShowBenchmarkCard(s, 1)).toBe(true);
+    const card = renderHyroxBenchmarkCard(s);
+    expect(card).toContain('3 stations still using population estimates.');
+    expect(card).toContain('data-hx-bench-station="wall_balls"');
+    expect(card).not.toContain('data-hx-bench-station="sled_push"');
+    expect(card).toContain('Sled Push and Sled Pull need equipment not in your setup.');
+    expect(card).not.toContain('—');
+  });
+
+  it('Account and the chip detail count through hyroxCalibrationCoverage, never a slot or the testable list', () => {
+    const account = readFileSync(join(__dirname, '..', 'account-view.ts'), 'utf8');
+    expect(account).toContain('hyroxCalibrationCoverage(hx)');
+    expect(account).not.toMatch(/stationBenchmarksSingles|stationBenchmarksDoubles/);
+    expect(account).not.toMatch(/coverage\?\.testable/);
     for (const f of ['stats-view.ts', 'forecast-chip-detail-view.ts']) {
       const src = readFileSync(join(__dirname, f), 'utf8');
-      expect(src, f).toContain('hyroxCalibrationCoverage');
       expect(src, f).not.toMatch(/stationBenchmarksSingles|stationBenchmarksDoubles/);
     }
   });
@@ -139,7 +219,7 @@ describe('Stats ledger rows from the other format\'s slot', () => {
     const prediction = predictHyroxRace(s)!;
     const ratio = prediction.crossFormatStationRatio!;
     expect(ratio).toBeGreaterThan(0);
-    const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, prediction);
+    const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
       expect(row.convertedFromDoubles).toBe(true);
       expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS[row.station] / ratio, 9);
@@ -157,8 +237,7 @@ describe('Stats ledger rows from the other format\'s slot', () => {
 
   it('singles target: the singles test shows as stored, the other 7 stay converted', () => {
     const s = hyroxState(CASES[2].hx);
-    const prediction = predictHyroxRace(s)!;
-    const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, prediction);
+    const ledger = hyroxBenchmarkLedger(s);
     const ski = ledger.rows.find(r => r.station === 'ski_erg')!;
     expect(ski).toEqual({ station: 'ski_erg', sec: 280, convertedFromDoubles: false });
     expect(ledger.rows.filter(r => r.convertedFromDoubles)).toHaveLength(7);
@@ -170,24 +249,16 @@ describe('Stats ledger rows from the other format\'s slot', () => {
       stationBenchmarksDoubles: { ski_erg: 270 },
       stationBenchmarkHistory: { ski_erg: [{ dateISO: daysAgo(5), sec: 270, source: 'half_test', format: 'open_doubles' }] },
     });
-    const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, predictHyroxRace(s));
+    const ledger = hyroxBenchmarkLedger(s);
     expect(ledger.rows.find(r => r.station === 'ski_erg')).toEqual({ station: 'ski_erg', sec: 270, convertedFromDoubles: false });
     expect(ledger.calibratedCount).toBe(1);
   });
 
   it('doubles target: singles times show as stored (the ledger\'s solo terms)', () => {
     const s = hyroxState(CASES[1].hx);
-    const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, predictHyroxRace(s));
+    const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
       expect(row).toEqual({ station: row.station, sec: SINGLES_TIMES[row.station], convertedFromDoubles: false });
     }
-  });
-
-  it('only testable stations are listed (no sled access: 6 rows)', () => {
-    const s = hyroxState({ ...CASES[0].hx, stationAccess: { sled: 'never', skiErg: true, rowErg: true } });
-    const ledger = hyroxBenchmarkLedger(s.hyroxConfig!, predictHyroxRace(s));
-    expect(ledger.rows.map(r => r.station)).not.toContain('sled_push');
-    expect(ledger.rows).toHaveLength(6);
-    expect(ledger.calibratedCount).toBe(6);
   });
 });

@@ -22,10 +22,10 @@ import {
   STATION_DISPLAY,
   HYROX_STATION_ORDER,
 } from '@/constants/hyrox-benchmarks';
-import { appendStationTest, hyroxCalibrationCoverage, hyroxTestableStations, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { appendStationTest, hyroxCalibrationCoverage, type HyroxFormat } from '@/calculations/hyrox-station-history';
 
 /** Display order for the card's pending stations (ergs first). Which stations
- *  count as testable comes from hyroxCalibrationCoverage. */
+ *  are pending and testable comes from hyroxCalibrationCoverage. */
 const CALIBRATABLE: HyroxStation[] = [
   'row_erg', 'ski_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls',
   'burpee_broad_jumps', 'sled_push', 'sled_pull',
@@ -43,16 +43,19 @@ const HALF_PROTOCOL: Record<HyroxStation, string> = {
   wall_balls:         '50 reps',
 };
 
-/** Which testable stations still use population estimates, in the card's
- *  display order. Reads hyroxCalibrationCoverage, the per-station resolver
- *  predictHyroxRace uses, so "still using population estimates" counts the
- *  same stations the forecast shows as estimated, and Stats and Account show
- *  the same count. */
+/** The stations the card prompts a test for: pending stations the athlete
+ *  has the equipment to test, in the card's display order. Reads
+ *  hyroxCalibrationCoverage, the per-station resolver predictHyroxRace uses. */
 function stationsNeedingCalibration(s: SimulatorState): HyroxStation[] {
   const hx = s.hyroxConfig;
   if (!hx) return [];
-  const { pending } = hyroxCalibrationCoverage(hx);
-  return CALIBRATABLE.filter(station => pending.includes(station));
+  const { testablePending } = hyroxCalibrationCoverage(hx);
+  return CALIBRATABLE.filter(station => testablePending.includes(station));
+}
+
+/** "A", "A and B", "A, B and C". */
+function joinNames(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /** Whether the benchmark card should show (current-week only, not dismissed, stations pending). */
@@ -69,10 +72,16 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
   if ((s.hyroxConfig as any)?.dismissedBenchmarkCard) return '';
 
   const band = s.hyroxConfig!.athleteBand;
-  const count = pending.length;
-  const label = count === hyroxTestableStations(s.hyroxConfig!.stationAccess).length
+  // The count is hyroxCalibrationCoverage's, the one the Forecast, Stats,
+  // Account and the chip detail show: every raced station still on the
+  // population seed, out of 8. The rows list only the ones the athlete can
+  // test; the rest are named below them.
+  const coverage = hyroxCalibrationCoverage(s.hyroxConfig!);
+  const count = coverage.pending.length;
+  const label = count === coverage.total
     ? 'Using population benchmarks for all stations.'
     : `${count} station${count > 1 ? 's' : ''} still using population estimates.`;
+  const untestable = coverage.pending.filter(st => !coverage.testable.includes(st));
 
   const stationRows = pending.slice(0, 4).map(station => {
     const display = STATION_DISPLAY[station];
@@ -109,6 +118,7 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
       </div>
       ${stationRows}
       ${moreCount > 0 ? `<div style="margin-top:8px;font-size:11px;color:var(--c-faint)">+${moreCount} more station${moreCount > 1 ? 's' : ''}</div>` : ''}
+      ${untestable.length > 0 ? `<div style="margin-top:8px;font-size:11px;color:var(--c-faint)">${joinNames(untestable.map(st => STATION_DISPLAY[st].name))} ${untestable.length > 1 ? 'need' : 'needs'} equipment not in your setup.</div>` : ''}
     </div>
   `;
 }

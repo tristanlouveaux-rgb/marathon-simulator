@@ -17,8 +17,8 @@ import { computeWeekActualMTL, computeWeekMTL, hyroxMtlAcwr } from '@/calculatio
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
 import { getFinishTimePercentile, percentileLabel, percentileHeadline, hyroxPopulationCaption, hyroxFormatLabel } from '@/calculations/hyrox-population';
-import { predictHyroxRace, type HyroxPrediction } from '@/calculations/race-prediction.hyrox';
-import { latestTestAgeMonths, hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
+import { predictHyroxRace, resolveHyroxStationBenchmarks } from '@/calculations/race-prediction.hyrox';
+import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
@@ -76,7 +76,7 @@ export function renderHyroxStatsView(): void {
   // Benchmarks ledger: the forecast's per-station benchmarks and its
   // calibrated count (hyroxBenchmarkLedger), so Stats, Account, the benchmark
   // card and the forecast agree.
-  const ledger = hyroxBenchmarkLedger(hx, prediction);
+  const ledger = hyroxBenchmarkLedger(s);
   const predTimeSec = prediction?.totalSec ?? hx.previousHyroxTimeSec;
   const fasterThanPct = predTimeSec != null
     ? getFinishTimePercentile(predTimeSec, hx.format ?? 'open_singles')
@@ -254,7 +254,7 @@ export function renderHyroxStatsView(): void {
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Benchmarks</div>
-              <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.rows.length} stations calibrated</div>
+              <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.total} stations calibrated</div>
             </div>
             ${ledger.rows.map(row => renderBenchmarkRow(row, hx.athleteBand, s)).join('')}
             ${renderRunPaceRow(hx.hyroxRunPaceSecKm, hx.athleteBand, hx.hyroxRunPaceSource)}
@@ -378,37 +378,31 @@ export interface HyroxBenchmarkLedgerRow {
 }
 
 /**
- * The Stats Benchmarks ledger: one row per testable station and the
- * calibrated count, from hyroxCalibrationCoverage (the forecast's per-station
- * resolver). A station resolved from the other format's slot keeps the
- * forecast's reading of it:
+ * The Stats Benchmarks ledger: one row per raced station (all 8) and the
+ * calibrated count, from resolveHyroxStationBenchmarks, the forecast's own
+ * per-station computation. The same values feed the plan engine's station
+ * targets and the guided-session PB check. A station resolved from the other
+ * format's slot keeps the forecast's reading of it:
  *  - Singles target, a doubles race split: the pair's time ÷ the forecast's
- *    crossFormatStationRatio, the conversion the forecast applies, so the
- *    pair's time never sits raw next to singles seeds. The forecast line's
- *    teamTimeSplit flag decides which values are race splits.
+ *    station ratio, so the pair's time never sits raw next to singles seeds.
  *  - Anything else (a solo test from the doubles slot, a singles time for a
  *    doubles target) is already one athlete's time and shows as stored, like
  *    the doubles slot's own solo tests.
  * The ledger shows the benchmark itself, before the forecast's staleness
- * blend, Pro-weight adjustment and venue factors.
+ * blend, Pro-weight adjustment and venue factors. Stations the athlete has no
+ * equipment for are listed too: the forecast reads their race splits, and the
+ * count is the one every surface shows (hyroxCalibrationCoverage, out of 8).
  */
 export function hyroxBenchmarkLedger(
-  hx: NonNullable<SimulatorState['hyroxConfig']>,
-  prediction: Pick<HyroxPrediction, 'stations' | 'crossFormatStationRatio'> | null,
-): { rows: HyroxBenchmarkLedgerRow[]; calibratedCount: number } {
-  const coverage = hyroxCalibrationCoverage(hx);
-  const ratio = prediction?.crossFormatStationRatio;
-  const rows = coverage.testable.map((station): HyroxBenchmarkLedgerRow => {
-    const raw = coverage.benchmarks[station];
-    if (raw == null) return { station, convertedFromDoubles: false };
-    const line = prediction?.stations.find(l => l.station === station);
-    const convert = !isHyroxDoublesFormat(hx.format) && coverage.slotOf[station] === 'doubles'
-      && line?.teamTimeSplit === true && ratio != null && ratio > 0;
-    return convert
-      ? { station, sec: raw / ratio!, convertedFromDoubles: true }
-      : { station, sec: raw, convertedFromDoubles: false };
-  });
-  return { rows, calibratedCount: coverage.calibrated.length };
+  state: SimulatorState,
+): { rows: HyroxBenchmarkLedgerRow[]; calibratedCount: number; total: number } {
+  const resolved = resolveHyroxStationBenchmarks(state);
+  if (!resolved) return { rows: [], calibratedCount: 0, total: HYROX_STATION_ORDER.length };
+  const doublesTarget = isHyroxDoublesFormat(state.hyroxConfig?.format);
+  const rows = resolved.stations.map((b): HyroxBenchmarkLedgerRow => (b.sec == null
+    ? { station: b.station, convertedFromDoubles: false }
+    : { station: b.station, sec: b.sec, convertedFromDoubles: !doublesTarget && b.teamTimeSplit }));
+  return { rows, calibratedCount: resolved.coverage.calibrated.length, total: resolved.coverage.total };
 }
 
 function renderBenchmarkRow(

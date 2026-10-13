@@ -263,19 +263,21 @@ describe('resolveHyroxBenchmarks: per-station benchmarks the forecast and every 
 describe('hyroxCalibrationCoverage: the one "stations calibrated" count', () => {
   const access = { sled: 'always' as const, skiErg: true, rowErg: true };
 
-  it('counts testable stations with a resolved benchmark, from either slot', () => {
+  it('counts raced stations with a resolved benchmark, from either slot, out of 8', () => {
     const c = hyroxCalibrationCoverage({
       format: 'open_singles',
       stationAccess: access,
       stationBenchmarksSingles: { ski_erg: 260 },
       stationBenchmarksDoubles: { row_erg: 210, wall_balls: 300 },
     });
+    expect(c.total).toBe(8);
     expect(c.testable).toHaveLength(8);
     expect(c.calibrated).toEqual(['ski_erg', 'row_erg', 'wall_balls']);
     expect(c.pending).toHaveLength(5);
+    expect(c.testablePending).toEqual(c.pending);
   });
 
-  it('leaves out stations the athlete has no equipment for', () => {
+  it('equipment access decides only what a test prompt lists, never the count', () => {
     expect(hyroxTestableStations({ sled: 'never', skiErg: false, rowErg: true }))
       .toEqual(['burpee_broad_jumps', 'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls']);
     expect(hyroxTestableStations(undefined)).toHaveLength(8);
@@ -284,7 +286,14 @@ describe('hyroxCalibrationCoverage: the one "stations calibrated" count', () => 
       stationAccess: { sled: 'never', skiErg: true, rowErg: true },
       stationBenchmarksSingles: { sled_push: 200, ski_erg: 260 },
     });
-    expect(c.calibrated).toEqual(['ski_erg']);
+    // The sled_push value counts: the forecast reads it.
+    expect(c.calibrated).toEqual(['ski_erg', 'sled_push']);
+    expect(c.total).toBe(8);
+    expect(c.pending).toHaveLength(6);
     expect(c.testable).toHaveLength(6);
+    // sled_pull is pending but cannot be tested: not in the prompt list.
+    expect(c.pending).toContain('sled_pull');
+    expect(c.testablePending).not.toContain('sled_pull');
+    expect(c.testablePending).toHaveLength(5);
   });
 });
