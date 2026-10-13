@@ -75,6 +75,12 @@
  * week 1's guard and noted, and race week holding a run whenever it holds a
  * run slot (the primer, or one easy run at the run floor when the primer is
  * above the 110% ceiling, noted).
+ * Round 6 (2026-10-13, one constraint hierarchy, buildHyroxTrainingWeeks):
+ * D2's share sizes the easy runs only (the long run, the quality run and the
+ * brick runs alone may sit above it, with no easy run); a loaded week's long
+ * run is never shorter than the previous loaded week's unless the week's
+ * size cut it and the week says so; decision B is a report (total minutes
+ * fall by at most one easy session), not a constraint.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 

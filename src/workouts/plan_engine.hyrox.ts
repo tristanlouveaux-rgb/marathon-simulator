@@ -5,56 +5,53 @@
  * of the app (triWorkouts field, same Week schema as triathlon mode).
  *
  * Generation flow (planning side; parameter sheet 2026-10-12 and Tristan's
- * decisions of the same day). Weeks are built in order, because each week's
- * ceiling reads the weeks before it:
+ * decisions since). Weeks are built in order, because each week's ceilings
+ * read the weeks before it, by one constraint hierarchy (round 6, documented
+ * at buildHyroxTrainingWeeks: hard safety, then the week's size, then the
+ * allocation order inside it, then the MTL cap, monotonicity reported):
  *   1. Phase each week (base → build → peak → taper) from computeHyroxPlanPhases
  *      (2-week race taper, HYROX_TAPER_WEEKS_MIN).
- *   2. Week budget: weekly hours × the nominal phase multiplier × deload
- *      (0.75 every 4th week, never the week right before the race taper,
- *      isHyroxDeloadWeek) × the effort / MTL-gap lever. Taper weeks:
- *      taperFraction (0.70 then 0.55) of the reference week's planned minutes,
- *      with the reference week's station and brick sessions, minutes and MTL
- *      as ceilings.
+ *   2. Week size: the chosen weekly hours, the phase budget (weekly hours ×
+ *      the nominal phase multiplier × deload 0.75 every 4th week, never the
+ *      week right before the race taper, isHyroxDeloadWeek, × the effort /
+ *      MTL-gap lever), the deload ceiling and the acute:chronic guard (a
+ *      training week's planned load at most ACWR_SAFE_HIGH × the mean of the
+ *      previous 4 planned weeks; weeks before week 1 count as the logged
+ *      weekly load, else the nominal week 1, fixed when the plan is created).
+ *      Taper weeks: taperFraction (0.70 then 0.55) of the reference week's
+ *      planned minutes, with the reference week's station and brick sessions,
+ *      minutes and MTL as ceilings.
  *   3. Sessions from the tier's weekly structure (HYROX_WEEKLY_STRUCTURE) and
  *      the athlete's session-count choice; no brick in base, before week 5 or
  *      in race week; race week holds no more runs than the reference week.
- *   4. Running is at most HYROX_RUN_SHARE of the chosen weekly hours in a
- *      training week, of the week's own budget in a taper week (standalone
- *      runs plus brick runs): the long run first (tier start, step and cap,
- *      the 110% single-run rule), then the quality run (tier format; the long
- *      run gives up its growth for it, never its previous length), then easy
- *      runs, none longer than the long run. Station sessions and bricks share
- *      the rest of the week's budget.
- *   5. Weekly MTL cap: easy runs shorten and leave first, then the long run
- *      gives up its growth (never its previous length), then station and
- *      brick rounds and stations go (real volume); the week's last station
- *      work stays.
+ *   4. Runs: the long run (tier start, step and cap, the 110% single-run rule)
+ *      and the tier quality run first; easy runs after them, up to
+ *      HYROX_RUN_SHARE of the chosen weekly hours in a training week, of the
+ *      week's own budget in a taper week (standalone runs plus brick runs),
+ *      none longer than the long run. Station sessions and bricks share the
+ *      rest of the week's budget.
+ *   5. Weekly MTL cap: easy runs shorten and leave first, then station and
+ *      brick rounds and stations go (real volume); the long run, the quality
+ *      run and the week's last station work stay.
  *   6. Schedule with the hard-day and 48 h eccentric rules, Sunday to Monday
  *      included (scheduler.hyrox). A week the rules cannot hold loses a hard
  *      session to its easy sibling, then its lowest-priority session.
  *   7. Easy erg work (discipline 'erg'): what the sessions leave of the
- *      week's budget becomes easy SkiErg or row work, up to the athlete's
+ *      week's size becomes easy SkiErg or row work, up to the athlete's
  *      chosen session total, in the MTL the week leaves under the cap, each
- *      session up to the tier long-run cap. With the chosen sessions full, a
- *      training week's shortest easy run gives up its slot when the easy erg
- *      session holds more (the easy runs left keep its minutes). Neither hard
- *      nor eccentric. It never fills what the injury gates took, nor the slot
- *      of the week's last station session or brick, nor a missing quality
- *      run's slot.
- *   8. Acute:chronic guard: a training week's planned load (canonical TSS) is
- *      at most ACWR_SAFE_HIGH × the mean of the previous 4 planned weeks (weeks
- *      before week 1 count as the athlete's logged weekly load, else as the
- *      nominal week 1, fixed when the plan is created; week 1's assessment is
- *      exempt from week 1's guard). Over it, easy erg work gives way first,
- *      then the station work and easy running shrink by one scale (over the
- *      weekly hours alone, easy running gives way before the station work)
- *      and the week is rebuilt; the long run is trimmed to the run floor,
- *      then left out, before the week's last station session or brick, which
- *      leaves only when the week is still over without the long run.
- *   9. The hours ladder (decision B): the plan is built at every whole hour
- *      from the band's lowest choice up to the chosen hours, each rung
- *      holding the rung below's total minutes and peak week (minutes and
- *      TSS); a week held to the rung below's says so.
+ *      session up to the tier long-run cap. An easy run's slot goes to it when
+ *      the easy runs left keep every running minute and the week holds more.
+ *      Neither hard nor eccentric. It never fills what the injury gates took,
+ *      nor the slot of the week's last station session or brick, nor a
+ *      missing quality run's slot, and no slot moves with an active injury.
+ *   8. A week over its size gives way in the allocation order run backwards
+ *      (easy erg work, the scale, easy runs, stations out of circuits, the
+ *      technique session, the secondary brick, the brick, the long run's
+ *      growth for the quality run, the quality run); the long run shortens to
+ *      the run floor and leaves before the week's last station session or
+ *      brick, which leaves only when the week is still over without it.
+ *   9. A loaded week the chosen session count holds under its size is marked
+ *      for the plan view's hours line (HyroxHoursFit).
  *  10. Wrap into Week[].
  */
 
@@ -213,6 +210,17 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // the deload shrink both by one scale; an injury that gates the stations
 // never trades an easy run for erg work the gates drop; the hours note names
 // the limit that binds, and a held week says so.
+// Still v18 (unreleased; round 6, 2026-10-13): one constraint hierarchy
+// (buildHyroxTrainingWeeks) replaces the layered decisions. The hours ladder
+// goes (one more hour is reported, not enforced); the phase budget is part
+// of the week's size; the running share sizes only the easy runs, so the long
+// run and the tier quality run come first and a loaded week's long run never
+// shortens under the previous loaded week's unless the week's size cuts it;
+// ceilings leave the brick before the quality run; the MTL cap never cuts the
+// long run; the easy erg slot keeps every running minute and never moves
+// with an active injury; deloads hold an easy run at the run floor and cut
+// circuit stations first; the plan view states when the chosen session count
+// holds a loaded week under its hours (Week.hyroxHoursFit).
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -644,22 +652,23 @@ interface HyroxWeekInputs {
   runFloorMin?: number;
 }
 
-/** What a training week's ceiling (the acute:chronic guard, the deload
- *  ceiling) takes away, in this order, when cutting easy erg work and easy
- *  running (the solver's first steps, decision A's order) and scaling the
- *  station work down to its floor still leave the week above it: easy runs,
- *  stations out of each circuit down to MIN_CIRCUIT_STATIONS
- *  (the circuit stays; a station session's floor is 2 rounds of every station,
- *  50 to 65 min, so before 2026-10-13 a deload at low hours lost the whole
- *  circuit), the technique station session, the secondary brick, the quality
- *  run, then the brick. The long run is trimmed only after all of them (it is
- *  the cheapest load per minute and carries the progression), down to its
- *  soft floor (LONG_SOFT_FLOOR_MIN). A group whose omission would leave the
- *  week with no station session and no brick waits until the long run is
- *  trimmed to the run floor and left out (review 2026-10-13, round 2 and
- *  third pass); it leaves only when the week is still over without the long
- *  run, and the long run then takes back what fits. A product order: no
- *  source ranks sessions for this. */
+/** What a training week over its size (the acute:chronic guard, the deload
+ *  ceiling, the weekly hours, the phase budget) leaves out, in this order,
+ *  when cutting easy erg work and scaling the station work and easy runs
+ *  down to their floors still leave it above: easy runs, stations out of
+ *  each circuit down to MIN_CIRCUIT_STATIONS (the circuit stays; a station
+ *  session's floor is 2 rounds of every station, 50 to 65 min, so before
+ *  2026-10-13 a deload at low hours lost the whole circuit), the technique
+ *  station session, the secondary brick, the brick (the constraint
+ *  hierarchy's allocation order run backwards, buildHyroxTrainingWeeks). A
+ *  deload takes the stations out of its circuits before its easy runs. Then
+ *  the long run gives up its growth for the quality run (D3) and the quality
+ *  run leaves ('quality'). A group whose omission would leave the week with
+ *  no station session and no brick waits until the long run is trimmed to
+ *  the run floor and left out (review 2026-10-13, round 2 and third pass); it
+ *  leaves only when the week is still over without the long run, and the
+ *  long run then takes back what fits. Within the station work, a product
+ *  order: no source ranks sessions for this. */
 const HYROX_GUARD_OMIT_ORDER = ['easy', 'stations', 'technique', 'light', 'brick'] as const;
 type HyroxGuardOmit = typeof HYROX_GUARD_OMIT_ORDER[number] | 'quality';
 
@@ -1305,7 +1314,7 @@ function generateWeekSessions(
     // (the running share, a ceiling or the spacing left it out) keeps one
     // easy run in its slot, the longest: the slot the quality run takes when
     // one more hour funds it. Easy erg work never takes it, so the quality
-    // run's arrival never shortens the week (decision B).
+    // run's arrival does not shorten the week (monotonicity, reported).
     const holdsQuality = ws.some(w => w.t === 'hyrox_run_tempo' || w.t === 'hyrox_run_intervals');
     const standIn = fmt != null && structureRuns >= 2 && !holdsQuality ? 1 : 0;
     const all = ws.filter(isPlainEasyRun).sort((a, b) => (a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0));
@@ -1851,7 +1860,66 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
 }
 
 /**
- * Build training weeks 1..upto in order. Each week reads the weeks before it:
+ * Build training weeks 1..upto in order, by ONE constraint hierarchy (round 6,
+ * 2026-10-13; it replaces the decisions rounds 1 to 5 layered on each other).
+ * The levels apply in this order, and a lower level never breaks a higher one.
+ *
+ * 1. HARD SAFETY, never broken and never traded:
+ *    - no single run above 110% of the longest run of the previous
+ *      LONG_RUN_LOOKBACK_WEEKS weeks (Frandsen 2025; runCeilingKm);
+ *    - no two hard sessions on adjacent days and 48 h between eccentric
+ *      sessions, Sunday to Monday included (scheduler.hyrox; a week that
+ *      cannot place loses a hard session to its easy sibling, then its
+ *      lowest-priority session);
+ *    - the race taper at taperFraction (0.70, then 0.55) of the reference
+ *      week, with its station and brick work as ceilings and never above the
+ *      week before (taperDropRank sheds sessions until they hold);
+ *    - no brick in base, before HYROX_FIRST_BRICK_WEEK or in race week
+ *      (weekSessionCounts), and the race-week closing rules
+ *      (hyroxWeekForRace, raceWeekDays).
+ * 2. WEEK SIZE = min(the chosen weekly hours, the acute:chronic guard
+ *    (ACWR_SAFE_HIGH x the mean of the previous HYROX_CHRONIC_WINDOW_WEEKS
+ *    planned weeks, the weeks before week 1 seeded per D4), the phase budget
+ *    (week 1's assessment exempt), the deload or taper fraction). Plain
+ *    proportional sizing (fit, as in round 4): easy erg work gives way first,
+ *    then the station sessions, bricks and easy runs shrink by one scale; the
+ *    room whole rounds leave goes back to easy running, then to easy erg work.
+ * 3. ALLOCATION inside the week size, in priority order:
+ *    a. the tier quality run (when the phase calls for one) and the long run.
+ *       A loaded week's long run is never shorter than the previous loaded
+ *       week's, unless the taper or a hard rule says so; it gives up only its
+ *       growth, and only for the quality run (D3). The running share sizes
+ *       neither of them;
+ *    b. the week's last station session or brick;
+ *    c. the other station and brick sessions the tier structure holds;
+ *    d. easy running, up to HYROX_RUN_SHARE x the chosen weekly minutes
+ *       (standalone runs plus brick runs);
+ *    e. easy erg work for the minutes left, within the athlete's chosen
+ *       session count, each session up to the tier long-run cap (60/75/90
+ *       min), in its own discipline ('erg'), never a station session. An easy
+ *       run's slot goes to it only when the easy runs left keep every running
+ *       minute, and never with an active injury (ergSlotFor).
+ *    A week over its size gives way in reverse order: e, d, c, then a's
+ *    long-run growth for the quality run (D3), then the quality run. The one
+ *    exception: b leaves only after the long run has shortened to the run
+ *    floor and left the week, so every training week keeps HYROX work (the
+ *    round-4 guarantee; in strict order, 1,179 training weeks at logged loads
+ *    of 20 to 100 TSS and 326 at the default sessions held none).
+ * 4. MTL CAP (the cap alone): easy erg work is sized inside what the cap
+ *    leaves, then easy runs shorten and leave (never the long run or the
+ *    quality run), then station rounds and stations go (never the week's
+ *    last station session); a week still over the cap says so
+ *    (enforceMTLCap).
+ * 5. MONOTONICITY is reported, not enforced: one more chosen hour may
+ *    restructure a week, and no quality run is removed to hold the minutes
+ *    (the rules test reports every adjacent-hour pair whose total plan
+ *    minutes fall and bounds the fall to one easy session).
+ * Deloads also hold an easy run at the run floor under the shared scale and
+ * take stations out of their circuits before an easy run leaves
+ * (easyHoldMin). A loaded week the chosen session count holds under its size
+ * is marked for the plan view (HyroxHoursFit).
+ *
+ * Each week reads the weeks before it:
  * the acute:chronic guard (planned TSS at most ACWR_SAFE_HIGH × the mean of the
  * previous HYROX_CHRONIC_WINDOW_WEEKS weeks; Tristan 2026-10-12, Gabbett 2016's
  * 0.8 to 1.3 sweet spot, the same bound as running's week-1 ACWR_SAFETY_CAP),
