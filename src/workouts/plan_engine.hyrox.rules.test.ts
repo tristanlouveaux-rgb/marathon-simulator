@@ -1391,6 +1391,49 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(weeks).toBeGreaterThan(500);
   });
 
+  it('the hours line (round 6, item 7): only a loaded week the chosen session count holds, with the week\'s own numbers', () => {
+    // Week.hyroxHoursFit drives the plan view's one muted line ("Your 5
+    // sessions fit about 6 h of your 8 h."). Review 2026-10-13: 2,271 of
+    // 14,147 hours notes stated a budget below the week's own minutes, so
+    // every number is checked against the week.
+    let marked = 0;
+    for (const band of BANDS) {
+      for (const hrs of hoursGrid(band)) {
+        for (const len of [8, 16, 24]) {
+          const s = build(band, hrs, len);
+          const tw = planTrainingWeeks(s);
+          const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+          for (let i = 0; i < tw; i++) {
+            const wk = s.wks[i];
+            const fit = wk.hyroxHoursFit;
+            const d = detail[i];
+            const label = `${band} ${hrs}h ${len}w W${i + 1}`;
+            expect(fit, label).toEqual(d.hoursFit);
+            if (!fit) continue;
+            marked++;
+            expect(wk.ph === 'taper' || d.deload || d.raceWeek, label).toBe(false);
+            expect(fit.sessions, label).toBe(prescribed(wk).length);
+            expect(fit.sessions, label).toBeGreaterThanOrEqual(chosenSessions(s));
+            expect(fit.plannedMin, label).toBe(minutes(wk));
+            expect(fit.chosenHours, label).toBe(hrs);
+            // Under its size by at least one easy session's floor, the size
+            // being the chosen hours or the phase budget when that is lower.
+            expect(Math.min(hrs * 60, d.budgetMin) - fit.plannedMin, label).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN - 0.5);
+            // No ceiling and no MTL cap held it.
+            expect(notes(wk).some(n => /\((acute:chronic guard|weekly hours|base budget|build budget|peak budget)\)|MTL cap \d+/.test(n)), label).toBe(false);
+            // The line's rounded figure sits under the chosen hours.
+            expect(Math.round(fit.plannedMin / 30) / 2, label).toBeLessThan(hrs);
+          }
+        }
+      }
+    }
+    expect(marked).toBeGreaterThan(50);
+    // The line never shows for a week the phase budget, a deload or the taper
+    // holds: a base week that fills its budget carries none.
+    const s = build('intermediate', 8, 16);
+    expect(s.wks[1].hyroxHoursFit).toBeUndefined();
+  }, 120000);
+
   it('beginner-tier deloads keep at least half the last loaded week\'s running (round 6, item 8)', () => {
     // Review 2026-10-13: a technique circuit at its 2-round floor held its
     // length under the deload's shared scale while floor(scale x the easy

@@ -25,6 +25,7 @@ import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { fireSelectionHaptic } from '@/utils/platform';
 import { raceDayCardHtml } from '../race-day-card';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { hyroxHoursFitFor, hyroxHoursFitLine } from './hours-fit-line';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -247,6 +248,12 @@ export function renderHyroxPlanView(): void {
 
         <!-- Future-week draft banner -->
         ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Draft. Final workouts depend on the preceding week\'s performance.</div>` : ''}
+
+        <!-- Hours line: the chosen session count holds the week under its size (plan_engine.hyrox HyroxHoursFit) -->
+        ${(() => {
+          const fit = hyroxHoursFitFor(s, viewWeek);
+          return fit ? `<div id="hx-hours-fit" style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">${hyroxHoursFitLine(fit)}</div>` : '';
+        })()}
 
         <!-- Benchmark calibration card (current week only) -->
         ${shouldShowBenchmarkCard(s, viewWeek) ? renderHyroxBenchmarkCard(s) : ''}

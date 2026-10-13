@@ -262,6 +262,9 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
     // The generator's notes on the week (sessions its rules changed) follow it.
     if (freshWeeks[i].hyroxPlanNotes) wk.hyroxPlanNotes = freshWeeks[i].hyroxPlanNotes;
     else delete wk.hyroxPlanNotes;
+    // The session-count hours line follows the week too.
+    if (freshWeeks[i].hyroxHoursFit) wk.hyroxHoursFit = freshWeeks[i].hyroxHoursFit;
+    else delete wk.hyroxHoursFit;
     rekeyNameKeyedHyroxSlots(wk);
   }
   hx.generatorVersion = HYROX_GENERATOR_VERSION;

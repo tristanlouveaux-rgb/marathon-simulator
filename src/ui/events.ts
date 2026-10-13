@@ -848,6 +848,9 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
     // HYROX: the generator's notes on the week (sessions its rules changed).
     if (fresh[i].hyroxPlanNotes) s.wks[i].hyroxPlanNotes = fresh[i].hyroxPlanNotes;
     else delete s.wks[i].hyroxPlanNotes;
+    // HYROX: the session-count hours line follows the week.
+    if (fresh[i].hyroxHoursFit) s.wks[i].hyroxHoursFit = fresh[i].hyroxHoursFit;
+    else delete s.wks[i].hyroxHoursFit;
   }
 }
 

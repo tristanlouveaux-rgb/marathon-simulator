@@ -1573,6 +1573,27 @@ export interface HyroxWeekDetail {
   /** Changes the rules forced on the week (dropped or demoted sessions). */
   adjustments: string[];
   workouts: Workout[];
+  /** Set when a loaded training week cannot reach its size because the
+   *  athlete's chosen session count binds (HyroxHoursFit); unset otherwise. */
+  hoursFit?: HyroxHoursFit;
+}
+
+/**
+ * A loaded training week (not a deload, the taper or race week) that holds
+ * the athlete's chosen session count and stays HYROX_RUN_FLOOR_MIN or more
+ * under its size (the chosen weekly hours, or the phase budget when that is
+ * lower) with no ceiling, MTL cap or injury holding it: more sessions would
+ * hold more. The HYROX plan view states it in one line (round 6, item 7):
+ * "Your 5 sessions fit about 6 h of your 8 h." Weeks short of the chosen
+ * hours by design (the phase budget, a deload, the taper) carry none.
+ */
+export interface HyroxHoursFit {
+  /** Prescribed sessions the week holds (commute runs excluded). */
+  sessions: number;
+  /** The week's planned minutes (commute runs excluded). */
+  plannedMin: number;
+  /** The athlete's chosen weekly hours. */
+  chosenHours: number;
 }
 
 /**
@@ -2292,6 +2313,9 @@ export function buildHyroxTrainingWeeks(
       noAssessment = false;
     }
     let attempt = fit();
+    // The week at full size fits its ceilings: no ceiling holds it (the
+    // hours line, below).
+    const fitsAtFullSize = scale === 1 && ergCap === undefined && easyCap === undefined && omitted.length === 0;
     if (trainingCeiling && !deloadRef) {
       // Name the ceiling that binds hardest at full size in the notes: the
       // guard, the weekly hours or the phase budget.
@@ -2609,9 +2633,18 @@ export function buildHyroxTrainingWeeks(
       adjustments: attempt.adjustments,
       workouts: attempt.workouts,
     };
-    // A training week HYROX_RUN_FLOOR_MIN or more under the chosen weekly
-    // hours says so, with what holds it (decision C).
+    // The chosen session count holds a loaded week under its size (HyroxHoursFit).
     const plannedMin = detail.plannedMin;
+    const weekSizeMin = Math.min(hoursCapMin, budgetMin);
+    const injured = !!(state as any).injuryState?.active && w >= (state.w ?? 1);
+    const sessionsHeld = prescribed(attempt.workouts).length;
+    if (phase !== 'taper' && !raceWeek && !deload && !injured && fitsAtFullSize && hoursMin > 0
+      && sessionsHeld >= chosenSessions && weekSizeMin - plannedMin >= HYROX_RUN_FLOOR_MIN
+      && !attempt.adjustments.some(n => /MTL cap \d+/.test(n))) {
+      detail.hoursFit = { sessions: sessionsHeld, plannedMin, chosenHours: hoursMin / 60 };
+    }
+    // A training week HYROX_RUN_FLOOR_MIN or more under the chosen weekly
+    // hours says so in its notes, with what holds it (decision C).
     if (phase !== 'taper' && hoursMin > 0 && hoursMin - plannedMin >= HYROX_RUN_FLOOR_MIN) {
       const text = hoursWhy.length > 0 ? hoursWhy.join('; ') : 'the running share and the session caps hold it';
       detail.adjustments = [...detail.adjustments, `W${w}: ${plannedMin} of the chosen ${Math.round(hoursMin)} min (${text})`];
@@ -2649,13 +2682,15 @@ export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): W
   const built = buildHyroxTrainingWeeks(state, trainingWeeks, layout, weekIndex, { storedBoundaryWeek: weekIndex });
   const workouts = built[weekIndex - 1]?.workouts ?? [];
   const notes = built[weekIndex - 1]?.adjustments ?? [];
-  const { hyroxPlanNotes: _old, ...rest } = existing;
+  const hoursFit = built[weekIndex - 1]?.hoursFit;
+  const { hyroxPlanNotes: _old, hyroxHoursFit: _oldFit, ...rest } = existing;
   return {
     ...rest,
     ph: p.ph as any,
     ...(p.checkpoint ? { checkpoint: true } : { checkpoint: existing.checkpoint }),
     triWorkouts: workouts,
     ...(notes.length > 0 ? { hyroxPlanNotes: notes } : {}),
+    ...(hoursFit ? { hyroxHoursFit: hoursFit } : {}),
   };
 }
 
@@ -2689,6 +2724,7 @@ export function generateHyroxPlanDetailed(state: SimulatorState): { weeks: Week[
       ...(p.checkpoint ? { checkpoint: true } : {}),
       triWorkouts: workouts,
       ...(!closing && (detail[w - 1]?.adjustments.length ?? 0) > 0 ? { hyroxPlanNotes: detail[w - 1].adjustments } : {}),
+      ...(!closing && detail[w - 1]?.hoursFit ? { hyroxHoursFit: detail[w - 1].hoursFit } : {}),
       rated: {},
       skip: [],
       cross: [],
