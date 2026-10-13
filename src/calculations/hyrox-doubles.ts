@@ -6,155 +6,251 @@
  * every station together through all 8 transitions (s7.3), and they take turns
  * inside every station with no minimum share (s7.2). Nobody skips a station.
  *
- * Model: quantile mapping on the app's own ingested results
- * (src/data/hyrox-population-distributions.ts, Kaggle jgug05/hyrox-results,
- * seasons S4 to S6). For a metric (stations total, Roxzone, run total), find
- * the athlete's cumulative percentile p of their singles time in the
- * open_singles table, then
+ * Model: quantile mapping on the real results (src/data/hyrox-results-s79.ts,
+ * seasons 8 and 9, read through hyrox-results.ts). For a metric (one station,
+ * the 8-station work total, Roxzone, run total, finish total), find the
+ * athlete's cumulative percentile p of their singles time in the singles
+ * table, then
  *
- *     ratio(p) = open_doubles(p) / open_singles(p)
+ *     ratio(p) = doubles(p) / singles(p)
  *
- * with both tables linearly interpolated in p. The team's time for that
- * metric = singles time x ratio(p). Outside the table (faster than P1 or slower
- * than P99) the end ratio holds. Every ratio is computed from the tables here;
- * none is hard-coded. At P50: stations 1577 / 2208 = 0.71, Roxzone 380 / 405 =
- * 0.94, run 2762 / 2695 = 1.02 (the pair runs at the slower partner's pace).
+ * with both tables linearly interpolated in p. The pair's time for that metric
+ * = singles time x ratio(p). Outside the table the end ratio holds. Every
+ * ratio is read from the tables; none is hard-coded.
+ *
+ * Which tables (HyroxDoublesTables, hyroxDoublesTables):
+ *  - doubles side: the pair's division (women, men, mixed) in the target's
+ *    weight family (Open Doubles or Pro Doubles, which now has data);
+ *  - singles side: the athlete's own sex in the matching singles format
+ *    (Open or Pro Singles). A pair at percentile p is taken to be two
+ *    athletes near p in their own fields (assortative pairing).
+ *  - unknown sex or division: the format's pooled tables. No cohort passed:
+ *    Open Doubles against Open Singles, both pooled (HYROX_DEFAULT_DOUBLES_TABLES).
+ *
+ * Station times are mapped per station (H1 used one aggregate station ratio
+ * from the 8-station total of the S4 to S6 tables, which had no splits). At
+ * the median the ratios run from about 0.92 (SkiErg, row: one machine, the
+ * pair alternates) to about 0.6 (sleds, burpee broad jumps, wall balls).
+ *
+ * Mixed Doubles woman: the pair races M-Open loads, the Women Pro tier, while
+ * her singles field is Open Singles women (W-Open loads). Her solo station
+ * times are at M-Open, so the station mappings convert them Pro to Open
+ * (hyroxSoloToFieldSec) before reading the women's singles table and back
+ * after (HyroxDoublesTables.soloProLoadsInOpenField, set by hyroxDoublesTables
+ * from hyroxSoloFrame). Before this (review 2026-10-13) her M-Open tests were
+ * placed on the W-Open table, so a test at her prescribed load made the
+ * forecast slower.
  *
  * Limitations:
  *  - Cohort comparison, not the same athletes racing both formats.
- *  - open_doubles pools Women, Men and Mixed pairs (three load tiers) and is
- *    compared against pooled Women and Men open singles.
- *  - The stations table is the 8-station total, so one station ratio applies
- *    to every station; per-station doubles ratios are not in the data.
- *  - No pro_doubles rows exist; Pro Doubles uses the Open ratios.
- *  - S4 to S6 predates the 100-rep Women Open wall-ball standard (75 then).
+ *  - The Mixed woman's Pro-to-Open step uses the Open-to-Pro conversion (a
+ *    difference in differences, hyrox-results.ts), itself a cohort comparison.
+ *  - Venue variation and the S8 judging step are inherited from the tables.
  */
 
-import type { AbilityBand, HyroxConfig, HyroxStation } from '@/types/triathlon';
-import {
-  HYROX_STATIONS_PERCENTILE_TABLES,
-  HYROX_ROXZONE_PERCENTILE_TABLES,
-  HYROX_RUN_PERCENTILE_TABLES,
-  HYROX_TOTAL_PERCENTILE_TABLES,
-} from '@/data/hyrox-population-distributions';
-import { SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import type { AbilityBand, HyroxConfig, HyroxDivision, HyroxStation } from '@/types/triathlon';
+import type { HyroxResultsMetric } from '@/data/hyrox-results-s79';
+import { seedRoxzoneSecFor } from '@/constants/hyrox-benchmarks';
 import { isHyroxDoublesFormat } from './hyrox-division';
 import { benchmarkEntryForSlotValue, isRaceSplitSource } from './hyrox-station-history';
+import {
+  cumulativePercentileIn,
+  secondsAtPercentileIn,
+  hyroxResultsTable,
+  hyroxResultsCohort,
+  hyroxSoloFrame,
+  hyroxSoloToFieldSec,
+  hyroxFieldToSoloSec,
+  hyroxDoublesFormatOf,
+  type HyroxResultsCohort,
+} from './hyrox-results';
 
 type HyroxFormat = HyroxConfig['format'];
-type Breakpoints = Array<[number, number]>;
+type Breakpoints = ReadonlyArray<readonly [number, number]>;
+type BiologicalSex = 'male' | 'female' | 'prefer_not_to_say' | null | undefined;
 
-export type DoublesMetric = 'stations' | 'roxzone' | 'run' | 'total';
+/** 'stations' is the 8-station work total, 'run' the run total. A station key
+ *  maps that station alone. */
+export type DoublesMetric = 'stations' | 'roxzone' | 'run' | 'total' | HyroxStation;
 
-const TABLES: Record<DoublesMetric, Record<'open_singles' | 'open_doubles', Breakpoints>> = {
-  stations: HYROX_STATIONS_PERCENTILE_TABLES,
-  roxzone:  HYROX_ROXZONE_PERCENTILE_TABLES,
-  run:      HYROX_RUN_PERCENTILE_TABLES,
-  total:    HYROX_TOTAL_PERCENTILE_TABLES,
+function resultsMetric(metric: DoublesMetric): HyroxResultsMetric {
+  if (metric === 'stations') return 'work_total';
+  if (metric === 'run') return 'run_total';
+  return metric;
+}
+
+/** The singles and doubles cohorts a doubles mapping reads. */
+export interface HyroxDoublesTables {
+  singles: HyroxResultsCohort;
+  doubles: HyroxResultsCohort;
+  /** The athlete's solo times are at the Pro tier of their sex while
+   *  `singles` is the Open field (a woman in Mixed Doubles: M-Open loads, the
+   *  Women Pro tier). The station mappings (doublesStationTeamSec,
+   *  doublesStationSoloSec) take and return solo times at those loads and
+   *  convert to the field's terms internally (hyroxSoloToFieldSec). Absent:
+   *  solo times are already in the singles field's terms. */
+  soloProLoadsInOpenField?: boolean;
+}
+
+/** Open Doubles against Open Singles, both pooled: the mapping for callers
+ *  that pass no cohort. */
+export const HYROX_DEFAULT_DOUBLES_TABLES: HyroxDoublesTables = {
+  singles: { format: 'open_singles', sex: 'pooled' },
+  doubles: { format: 'open_doubles', sex: 'pooled' },
 };
+
+/** The doubles mapping for an athlete: the pair's division in the target's
+ *  weight family against the athlete's own sex in the matching singles format
+ *  (hyroxSoloFrame), flagged when the athlete's solo loads are the Pro tier of
+ *  that Open field (a woman in Mixed Doubles). */
+export function hyroxDoublesTables(
+  format: HyroxFormat,
+  biologicalSex: BiologicalSex,
+  division?: HyroxDivision,
+): HyroxDoublesTables {
+  const frame = hyroxSoloFrame(format, biologicalSex, division);
+  return {
+    singles: frame.field,
+    doubles: hyroxResultsCohort(hyroxDoublesFormatOf(format), biologicalSex, division),
+    ...(frame.proLoadsInOpenField ? { soloProLoadsInOpenField: true } : {}),
+  };
+}
+
+/** The solo frame part of a tables object, for hyroxSoloToFieldSec. */
+function soloFrameOf(tables: HyroxDoublesTables) {
+  return { field: tables.singles, proLoadsInOpenField: !!tables.soloProLoadsInOpenField };
+}
+
+/** hyroxDoublesTables for the current state. */
+export function hyroxDoublesTablesForState(state: {
+  biologicalSex?: BiologicalSex;
+  hyroxConfig?: Pick<HyroxConfig, 'format' | 'division'> | null;
+}): HyroxDoublesTables {
+  return hyroxDoublesTables(state.hyroxConfig?.format ?? 'open_doubles', state.biologicalSex, state.hyroxConfig?.division);
+}
+
+function tablesFor(metric: DoublesMetric, tables: HyroxDoublesTables): { singles: Breakpoints; doubles: Breakpoints } {
+  const m = resultsMetric(metric);
+  const singles = hyroxResultsTable(m, tables.singles) ?? hyroxResultsTable(m, HYROX_DEFAULT_DOUBLES_TABLES.singles)!;
+  const doubles = hyroxResultsTable(m, tables.doubles) ?? hyroxResultsTable(m, HYROX_DEFAULT_DOUBLES_TABLES.doubles)!;
+  return { singles, doubles };
+}
 
 /** Unrounded cumulative percentile of `sec` in a breakpoint table, clamped to
  *  the table's end percentiles. */
 export function cumulativePercentileAt(table: Breakpoints, sec: number): number {
-  if (sec <= table[0][0]) return table[0][1];
-  const last = table[table.length - 1];
-  if (sec >= last[0]) return last[1];
-  for (let i = 1; i < table.length; i++) {
-    const [t0, p0] = table[i - 1];
-    const [t1, p1] = table[i];
-    if (sec <= t1) return p0 + ((sec - t0) / (t1 - t0)) * (p1 - p0);
-  }
-  return last[1];
+  return cumulativePercentileIn(table, sec);
 }
 
 /** Seconds at cumulative percentile `pct` in a breakpoint table, clamped to the
  *  table's end points. */
 export function secondsAtCumulativePercentile(table: Breakpoints, pct: number): number {
-  if (pct <= table[0][1]) return table[0][0];
-  const last = table[table.length - 1];
-  if (pct >= last[1]) return last[0];
-  for (let i = 1; i < table.length; i++) {
-    const [t0, p0] = table[i - 1];
-    const [t1, p1] = table[i];
-    if (pct <= p1) return t0 + ((pct - p0) / (p1 - p0)) * (t1 - t0);
-  }
-  return last[0];
+  return secondsAtPercentileIn(table, pct);
 }
 
 export interface DoublesRatio {
   /** Team time ÷ singles time at the athlete's percentile. */
   ratio: number;
-  /** The athlete's cumulative percentile in the open_singles table (1 = fastest). */
+  /** The cumulative percentile the ratio was read at (1 = fastest): in the
+   *  singles table for doublesRatioAt, in the doubles table for
+   *  doublesRatioAtTeamTime. */
   singlesPercentile: number;
 }
 
 /** Percentile-matched doubles/singles ratio for a metric, read at the
  *  athlete's singles time. */
-export function doublesRatioAt(metric: DoublesMetric, singlesSec: number): DoublesRatio {
-  const singles = TABLES[metric].open_singles;
-  const doubles = TABLES[metric].open_doubles;
-  const p = cumulativePercentileAt(singles, singlesSec);
-  const ratio = secondsAtCumulativePercentile(doubles, p) / secondsAtCumulativePercentile(singles, p);
+export function doublesRatioAt(
+  metric: DoublesMetric,
+  singlesSec: number,
+  tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES,
+): DoublesRatio {
+  const t = tablesFor(metric, tables);
+  const p = cumulativePercentileIn(t.singles, singlesSec);
+  const ratio = secondsAtPercentileIn(t.doubles, p) / secondsAtPercentileIn(t.singles, p);
   return { ratio, singlesPercentile: p };
 }
 
 /** The same ratio read from the doubles side: the pair's time's percentile in
- *  the open_doubles table. For converting a pair's time to singles terms
- *  (singles = team ÷ ratio), e.g. to place a Pro Doubles total, which has no
- *  ingested table, on the Pro singles scale. */
-export function doublesRatioAtTeamTime(metric: DoublesMetric, teamSec: number): DoublesRatio {
-  const singles = TABLES[metric].open_singles;
-  const doubles = TABLES[metric].open_doubles;
-  const p = cumulativePercentileAt(doubles, teamSec);
-  const ratio = secondsAtCumulativePercentile(doubles, p) / secondsAtCumulativePercentile(singles, p);
+ *  the doubles table. For converting a pair's time to singles terms
+ *  (singles = team ÷ ratio). */
+export function doublesRatioAtTeamTime(
+  metric: DoublesMetric,
+  teamSec: number,
+  tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES,
+): DoublesRatio {
+  const t = tablesFor(metric, tables);
+  const p = cumulativePercentileIn(t.doubles, teamSec);
+  const ratio = secondsAtPercentileIn(t.doubles, p) / secondsAtPercentileIn(t.singles, p);
   return { ratio, singlesPercentile: p };
 }
 
-/**
- * A doubles finish time (the pair's total) in singles terms: the open_singles
- * total at the same cumulative percentile, i.e. team ÷ the total ratio read on
- * the doubles side (doublesRatioAtTeamTime). Inside the tables this is the
- * exact inverse of the forecast's own mapping (singles × doublesRatioAt):
- * the doubles median 4747 s reads as the singles median 5338 s.
- *
- * The one doubles-to-singles total conversion. Banding a doubles previous time
- * (hyroxBandingTimeSec, for both targets) and placing a Pro Doubles total on
- * the Pro singles scale (getFinishTimePercentile) both go through it. It
- * replaced SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES (1.22, from coaching
- * consensus), which banded a singles target on a different conversion than a
- * doubles target: the doubles median read 1:36:30 in one path and 1:28:58 in
- * the other (2026-10-13).
- *
- * Limitation: a cohort comparison, not the same athletes racing both formats
- * (see the module header).
- */
-export function doublesTotalInSinglesTermsSec(teamSec: number): number {
-  return teamSec / doublesRatioAtTeamTime('total', teamSec).ratio;
+/** One athlete's station time (at their solo loads in this pair) as the
+ *  pair's time at that station: the solo time in the singles field's terms
+ *  (hyroxSoloToFieldSec, identity unless soloProLoadsInOpenField), mapped at
+ *  its percentile. */
+export function doublesStationTeamSec(station: HyroxStation, singlesSec: number, tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES): number {
+  const fieldSec = hyroxSoloToFieldSec(station, singlesSec, soloFrameOf(tables));
+  return fieldSec * doublesRatioAt(station, fieldSec, tables).ratio;
 }
 
-/** Team station ratio, refined once for stations whose time is already a team
- *  time (a doubles race split). `soloSec` holds singles-capacity times (tests,
- *  singles splits, seeds); `teamSec` holds team times. The first pass reads the
- *  ratio with team stations at their seed singles time; the second converts
- *  team times back to singles with that ratio and reads it again. */
+/** A pair's station time (a doubles race split) as one athlete's time at
+ *  their solo loads in this pair: the singles time at the same percentile,
+ *  back at the solo loads (hyroxFieldToSoloSec). The inverse of
+ *  doublesStationTeamSec inside the tables. */
+export function doublesStationSoloSec(station: HyroxStation, teamSec: number, tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES): number {
+  const fieldSec = teamSec / doublesRatioAtTeamTime(station, teamSec, tables).ratio;
+  return hyroxFieldToSoloSec(station, fieldSec, soloFrameOf(tables));
+}
+
+/**
+ * A doubles finish time (the pair's total) in singles terms: the singles total
+ * at the same cumulative percentile. Inside the tables this is the exact
+ * inverse of singles × doublesRatioAt('total').
+ *
+ * Kept for hyroxBandingTimeSec (the onboarding initializer's banding until
+ * lane H2 moves it to hyroxBandForPreviousTime). Placements no longer convert:
+ * a doubles total is placed on the doubles table directly.
+ */
+export function doublesTotalInSinglesTermsSec(
+  teamSec: number,
+  tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES,
+): number {
+  return teamSec / doublesRatioAtTeamTime('total', teamSec, tables).ratio;
+}
+
+/**
+ * Aggregate team station ratio over the 8-station work total, refined once
+ * for stations whose time is already a team time. Kept for callers of the H1
+ * API; the forecast maps each station on its own (doublesStationTeamSec,
+ * doublesStationSoloSec).
+ */
 export function doublesStationRatio(
   soloSec: number[],
   teamSec: number[],
   teamSeedSoloSec: number[],
+  tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES,
 ): DoublesRatio {
   const soloSum = soloSec.reduce((a, b) => a + b, 0);
-  const first = doublesRatioAt('stations', soloSum + teamSeedSoloSec.reduce((a, b) => a + b, 0));
+  const first = doublesRatioAt('stations', soloSum + teamSeedSoloSec.reduce((a, b) => a + b, 0), tables);
   if (teamSec.length === 0) return first;
-  return doublesRatioAt('stations', soloSum + teamSec.reduce((a, b) => a + b / first.ratio, 0));
+  return doublesRatioAt('stations', soloSum + teamSec.reduce((a, b) => a + b / first.ratio, 0), tables);
 }
 
-/** Seed Roxzone (seconds) for a band in a format: the band seed for singles;
- *  for doubles, the seed x the percentile-matched Roxzone ratio (partners pass
- *  through all 8 transitions together, so Roxzone is not halved). */
-export function seedRoxzoneSecForFormat(band: AbilityBand, format: HyroxFormat): number {
-  const seed = SEED_ROXZONE_SEC[band] ?? 0;
+/** Seed Roxzone (seconds) for a band in a format: the singles band seed (the
+ *  athlete's singles cohort when `tables` is given); for doubles, the seed ×
+ *  the percentile-matched Roxzone ratio (partners pass through all 8
+ *  transitions together, so Roxzone is not halved). */
+export function seedRoxzoneSecForFormat(
+  band: AbilityBand,
+  format: HyroxFormat,
+  tables?: HyroxDoublesTables,
+): number {
+  const singles = tables?.singles;
+  const seedFormat = singles && (singles.format === 'open_singles' || singles.format === 'pro_singles') ? singles.format : 'open_singles';
+  const seedSex = singles && singles.sex !== 'mixed' ? singles.sex : 'pooled';
+  const seed = seedRoxzoneSecFor(band, seedFormat, seedSex);
   if (!isHyroxDoublesFormat(format) || seed <= 0) return seed;
-  return Math.round(seed * doublesRatioAt('roxzone', seed).ratio);
+  return Math.round(seed * doublesRatioAt('roxzone', seed, tables ?? HYROX_DEFAULT_DOUBLES_TABLES).ratio);
 }
 
 /**
@@ -176,26 +272,15 @@ export function doublesBenchmarkIsTeamTime(
 }
 
 /**
- * A previous HYROX finish time in the terms the band thresholds use, for
- * banding. Side: planning input (the band sets the MTL cap, sessions and
- * hours) and tracking (the band's seed times feed the forecast).
+ * A previous HYROX finish time in singles terms, for the global band scale
+ * (HYROX_TIME_TO_BAND_THRESHOLDS). A doubles time → doublesTotalInSinglesTermsSec;
+ * a singles time as is.
  *
- * The band thresholds (HYROX_TIME_TO_BAND_THRESHOLDS) and the band seed times
- * are singles times, so every target is banded on the previous time in
- * singles terms:
- *  - a doubles previous time → doublesTotalInSinglesTermsSec, the inverse of
- *    the doubles forecast's own mapping;
- *  - a singles previous time as is.
- * The target format does not enter: a doubles target scales the band's
- * singles seeds by the doubles ratios in the forecast, a singles target uses
- * them directly.
- *
- * History: a doubles target was banded on the doubles time itself (a singles
- * time × 0.85, a doubles time unconverted), applying the doubles conversion
- * twice (review 2026-10-12). A singles target then expanded a doubles time ×
- * 1.22 (SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES, coaching consensus) while a
- * doubles target used the data ratio, so the same previous time banded on two
- * different singles-terms times (fixed 2026-10-13).
+ * Superseded by hyroxBandForPreviousTime (hyrox-results.ts), which bands the
+ * time in the field it was raced in (format x sex, field-relative thresholds)
+ * with no conversion. Kept for the onboarding initializer
+ * (src/state/initialization.hyrox.ts, lane H2), which still bands on the
+ * global scale until H2 switches it over.
  */
 export function hyroxBandingTimeSec(prevTimeSec: number, prevFormat: HyroxFormat): number {
   if (!isHyroxDoublesFormat(prevFormat)) return prevTimeSec;

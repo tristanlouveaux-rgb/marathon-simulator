@@ -39,6 +39,7 @@ vi.mock('@/data/supabaseClient', () => ({
 import { getDefaultState, setState } from '@/state/store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
+import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
 import { shouldShowBenchmarkCard, renderHyroxBenchmarkCard } from './benchmark-card';
 import { hyroxBenchmarkLedger, renderHyroxStatsView } from './stats-view';
 import { renderHyroxChipDetail } from './forecast-chip-detail-view';
@@ -215,15 +216,14 @@ describe('stations calibrated: forecast, benchmark card, Stats, Account and chip
 });
 
 describe('Stats ledger rows from the other format\'s slot', () => {
-  it('singles target: a doubles race split shows in singles terms (÷ the forecast\'s ratio), captioned as converted', () => {
+  it('singles target: a doubles race split shows in singles terms (its station\'s own ratio), captioned as converted', () => {
     const s = hyroxState(CASES[0].hx);
     const prediction = predictHyroxRace(s)!;
-    const ratio = prediction.crossFormatStationRatio!;
-    expect(ratio).toBeGreaterThan(0);
+    expect(prediction.crossFormatStationRatio!).toBeGreaterThan(0);
     const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
       expect(row.basis).toBe('converted_from_doubles_race');
-      expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS[row.station] / ratio, 9);
+      expect(row.sec!).toBeCloseTo(doublesStationSoloSec(row.station, DOUBLES_SPLITS[row.station]), 9);
       // Fresh open race: the forecast line carries the same singles-terms value.
       expect(row.sec!).toBeCloseTo(prediction.stations.find(l => l.station === row.station)!.baseSec, 6);
     }
@@ -231,7 +231,7 @@ describe('Stats ledger rows from the other format\'s slot', () => {
     renderHyroxStatsView();
     const html = document.getElementById('app-root')!.innerHTML;
     expect(html).toContain('Converted from doubles race');
-    expect(html).toContain(ftRounded(DOUBLES_SPLITS.ski_erg / ratio));
+    expect(html).toContain(ftRounded(doublesStationSoloSec('ski_erg', DOUBLES_SPLITS.ski_erg)));
     // The raw pair's time never shows.
     expect(html).not.toContain(`>${ftRounded(DOUBLES_SPLITS.wall_balls)}<`);
   });
@@ -272,25 +272,25 @@ describe('Stats ledger rows from the other format\'s slot', () => {
     expect(html).not.toContain('>Calibrated<');
   });
 
-  it('doubles target, own doubles race splits: the solo equivalent (the pair\'s time ÷ the forecast\'s ratio), never the pair\'s time', () => {
+  it('doubles target, own doubles race splits: the solo equivalent (the pair\'s time at its station\'s ratio), never the pair\'s time', () => {
     const s = hyroxState({ format: 'open_doubles', stationBenchmarksDoubles: { ...DOUBLES_SPLITS }, stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles') });
     const prediction = predictHyroxRace(s)!;
-    const ratio = prediction.doubles!.stationRatio;
-    expect(ratio).toBeLessThan(1);
+    expect(prediction.doubles!.stationRatio).toBeLessThan(1);
     // Own format: nothing is cross-format, confidence is not capped by it.
     expect(prediction.crossFormatConversion).toBeUndefined();
     const ledger = hyroxBenchmarkLedger(s);
     for (const row of ledger.rows) {
+      const line = prediction.stations.find(l => l.station === row.station)!;
       expect(row.basis).toBe('solo_of_doubles_race');
-      expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS[row.station] / ratio, 9);
-      // The forecast line is the pair's time: the ledger value × the ratio.
-      expect(row.sec! * ratio).toBeCloseTo(prediction.stations.find(l => l.station === row.station)!.baseSec, 6);
+      expect(row.sec!).toBeCloseTo(doublesStationSoloSec(row.station, DOUBLES_SPLITS[row.station]), 9);
+      // The forecast line is the pair's time: the ledger value × the line's ratio.
+      expect(row.sec! * line.teamRatio!).toBeCloseTo(line.baseSec, 6);
     }
     setState(s);
     renderHyroxStatsView();
     const html = document.getElementById('app-root')!.innerHTML;
     expect(html).toContain('Solo equivalent of doubles race');
-    expect(html).toContain(ftRounded(DOUBLES_SPLITS.wall_balls / ratio));
+    expect(html).toContain(ftRounded(doublesStationSoloSec('wall_balls', DOUBLES_SPLITS.wall_balls)));
     expect(html).not.toContain(`>${ftRounded(DOUBLES_SPLITS.wall_balls)}<`);
   });
 });

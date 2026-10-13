@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { HYROX_TIME_TO_BAND_THRESHOLDS } from '@/constants/hyrox-constants';
+import { HYROX_TOTAL_PERCENTILE_TABLES } from '@/data/hyrox-population-distributions';
 import {
   HYROX_S79_AGE_DROPS,
   HYROX_S79_AGE_GROUPS,
@@ -42,6 +43,18 @@ import {
   HYROX_S89_PERCENTILES,
   HYROX_S89_SEASONS,
   HYROX_S89_SUPPRESSED_CELLS,
+  HYROX_S89_POOLED_PERCENTILES,
+  HYROX_S89_POOLED_FINISHER_COUNTS,
+  HYROX_S89_POOLED_GRIDS,
+  HYROX_S89_BAND_FIELD_PERCENTILES,
+  HYROX_S89_BAND_THRESHOLDS_SEC,
+  HYROX_S89_BAND_SEEDS,
+  HYROX_S89_BAND_SEEDS_SUPPRESSED,
+  HYROX_S89_SEASONS_LABEL,
+  HYROX_S79_SEASONS_LABEL,
+  HYROX_S89_ATTRIBUTION,
+  HYROX_RESULTS_VIA,
+  HYROX_S79_STATION_LOWER_FENCES_SEC,
   type HyroxPercentileTable,
   type HyroxResultsFormat,
   type HyroxResultsMetric,
@@ -344,6 +357,119 @@ describe('HYROX S8-S9 current-judging tables', () => {
       for (const m of ['wall_balls', 'sled_push'] as const) {
         expect(at(HYROX_S89_PERCENTILES.open_singles[sex]![m], 50)!, `${sex}/${m}`)
           .toBeGreaterThan(at(HYROX_S79_PERCENTILES.open_singles[sex]![m], 50)!);
+      }
+    }
+  });
+});
+
+/** Unrounded cumulative percentile, clamped to the table ends (the app's
+ *  cumulativePercentileAt rule, restated so the data test stands alone). */
+function cumAt(table: readonly (readonly [number, number])[], sec: number): number {
+  if (sec <= table[0][0]) return table[0][1];
+  const last = table[table.length - 1];
+  if (sec >= last[0]) return last[1];
+  for (let i = 1; i < table.length; i++) {
+    const [t0, p0] = table[i - 1];
+    const [t1, p1] = table[i];
+    if (sec <= t1) return p0 + ((sec - t0) / (t1 - t0)) * (p1 - p0);
+  }
+  return last[1];
+}
+
+describe('HYROX S8-S9 pooled-by-format tables and season labels (lane H3b)', () => {
+  it('pool every published sex cell: counts add up, tables well formed on their DKW grid', () => {
+    for (const format of FORMATS) {
+      const pooled = HYROX_S89_POOLED_PERCENTILES[format];
+      const counts = HYROX_S89_POOLED_FINISHER_COUNTS[format];
+      expect(pooled, format).toBeDefined();
+      for (const metric of METRICS) {
+        const cellSum = sum(SEXES.map(sex => HYROX_S89_FINISHER_COUNTS[format][sex]?.[metric] ?? 0));
+        expect(counts![metric], `${format}/${metric}`).toBe(cellSum);
+        expectWellFormed(pooled![metric], counts![metric], `pooled ${format}/${metric}`);
+        expect(HYROX_S89_POOLED_GRIDS[format]![metric]).toBe(finestGridFor(counts![metric])!.name);
+      }
+    }
+  });
+
+  it('the pooled median sits between the sex cells\' medians', () => {
+    for (const format of FORMATS) {
+      const meds = SEXES.map(sex => HYROX_S89_PERCENTILES[format][sex]?.total).filter(Boolean)
+        .map(t => at(t!, 50)!);
+      const pooledMed = at(HYROX_S89_POOLED_PERCENTILES[format]!.total, 50)!;
+      expect(pooledMed).toBeGreaterThanOrEqual(Math.min(...meds));
+      expect(pooledMed).toBeLessThanOrEqual(Math.max(...meds));
+    }
+  });
+
+  it('labels are read from the data and the attribution carries them', () => {
+    expect(HYROX_S89_SEASONS_LABEL).toMatch(/^seasons 8 and 9 \(\d{4} to \d{4}\)$/);
+    expect(HYROX_S79_SEASONS_LABEL).toMatch(/^seasons 7 to 9 \(\d{4} to \d{4}\)$/);
+    expect(HYROX_S89_ATTRIBUTION).toBe(`HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${HYROX_RESULTS_VIA}`);
+    expect(HYROX_S79_ATTRIBUTION).toBe(`HYROX results, ${HYROX_S79_SEASONS_LABEL}, ${HYROX_RESULTS_VIA}`);
+  });
+});
+
+describe('HYROX station lower fences (lane H3b)', () => {
+  it('cover every published cell and station, below the cell\'s fastest published split', () => {
+    const stations = METRICS.filter(m => !['total', 'run_total', 'work_total', 'roxzone'].includes(m));
+    for (const format of FORMATS) {
+      for (const sex of SEXES) {
+        const table = HYROX_S79_PERCENTILES[format][sex];
+        const fences = HYROX_S79_STATION_LOWER_FENCES_SEC[format][sex];
+        expect(!!fences, `${format}/${sex}`).toBe(!!table);
+        if (!table) continue;
+        for (const st of stations) {
+          const f = fences![st as 'ski_erg'];
+          expect(f, `${format}/${sex}/${st}`).toBeGreaterThan(0);
+          expect(f).toBeLessThan(table[st][0][0]);
+        }
+      }
+    }
+  });
+});
+
+describe('HYROX S8-S9 field-relative bands (lane H3b)', () => {
+  it("each threshold keeps its position in the calibration field: the app's pooled open singles S4-S6 total table", () => {
+    const calib = HYROX_TOTAL_PERCENTILE_TABLES.open_singles;
+    const finite = HYROX_TIME_TO_BAND_THRESHOLDS.filter(t => Number.isFinite(t.maxSec));
+    expect(HYROX_S89_BAND_FIELD_PERCENTILES.length).toBe(finite.length);
+    finite.forEach((t, i) => {
+      expect(HYROX_S89_BAND_FIELD_PERCENTILES[i]).toBeCloseTo(cumAt(calib, t.maxSec), 3);
+    });
+  });
+
+  it('every cell threshold sits at its field percentile in that cell\'s own total table', () => {
+    for (const format of FORMATS) {
+      for (const [sex, th] of Object.entries(HYROX_S89_BAND_THRESHOLDS_SEC[format])) {
+        const table = sex === 'pooled'
+          ? HYROX_S89_POOLED_PERCENTILES[format]!.total
+          : HYROX_S89_PERCENTILES[format][sex as HyroxResultsSex]!.total;
+        th!.forEach((sec, i) => {
+          if (i > 0) expect(sec, `${format}/${sex} ascending`).toBeGreaterThan(th![i - 1]);
+          // Table interpolation vs the exact type-7 quantile: within 1 point.
+          expect(Math.abs(cumAt(table, sec) - HYROX_S89_BAND_FIELD_PERCENTILES[i]), `${format}/${sex}/${i}`)
+            .toBeLessThanOrEqual(1);
+        });
+      }
+    }
+  });
+
+  it('band seeds: every band of every cell published, medians ordered and inside the band', () => {
+    expect(HYROX_S89_BAND_SEEDS_SUPPRESSED.length).toBe(0);
+    const order = ['competitive', 'advanced', 'intermediate', 'novice', 'beginner'] as const;
+    for (const format of FORMATS) {
+      for (const [sex, byBand] of Object.entries(HYROX_S89_BAND_SEEDS[format])) {
+        const th = HYROX_S89_BAND_THRESHOLDS_SEC[format][sex as 'female']!;
+        order.forEach((band, i) => {
+          const cell = byBand![band];
+          expect(cell, `${format}/${sex}/${band}`).toBeDefined();
+          expect(cell!.n).toBeGreaterThanOrEqual(HYROX_S79_MIN_CELL_N);
+          const lo = i === 0 ? 0 : th[i - 1];
+          const hi = i < th.length ? th[i] : Infinity;
+          expect(cell!.medians.total).toBeGreaterThanOrEqual(lo);
+          expect(cell!.medians.total).toBeLessThan(hi);
+          if (i > 0) expect(cell!.medians.total).toBeGreaterThan(byBand![order[i - 1]]!.medians.total);
+        });
       }
     }
   });

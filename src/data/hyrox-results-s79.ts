@@ -11,9 +11,10 @@
  *     --results <hyrox_results_anonymised.parquet> --repeat <repeat_athletes.csv> \
  *     --out src/data/hyrox-results-s79.ts --refresh-date 2026-10-13
  *
- * Side of the line: tracking (descriptive population tables). Not yet wired to
- * any consumer; src/data/hyrox-population-distributions.ts (S4 to S6) is still
- * the live source until lane H3b switches over.
+ * Side of the line: tracking (descriptive population tables). Read through
+ * src/calculations/hyrox-results.ts, the one lookup every surface uses.
+ * The band seeds (HYROX_S89_BAND_SEEDS) also feed planning inputs through
+ * src/constants/hyrox-benchmarks.ts (station targets for untested stations).
  *
  * Conventions
  * - All times are whole seconds.
@@ -113,6 +114,11 @@ export const HYROX_S79_SEASONS = [7, 8, 9] as const;
 export const HYROX_S89_SEASONS = [8, 9] as const;
 export const HYROX_S79_SOURCE = 'Kaggle: HYROX Race Results, Seasons 7-9 (Anonymised), Tanvi Jivani; built with pyrox-client (MIT) from public HYROX results';
 export const HYROX_S79_ATTRIBUTION = 'HYROX results, seasons 7 to 9 (2024 to 2026), via the open pyrox project';
+/** Season and calendar-year spans of the kept rows, read from the data. */
+export const HYROX_S79_SEASONS_LABEL = 'seasons 7 to 9 (2024 to 2026)';
+export const HYROX_S89_SEASONS_LABEL = 'seasons 8 and 9 (2025 to 2026)';
+export const HYROX_S89_ATTRIBUTION = 'HYROX results, seasons 8 and 9 (2025 to 2026), via the open pyrox project';
+export const HYROX_RESULTS_VIA = 'via the open pyrox project';
 
 /** DKW cell-size rule. A grid is used only when n >= minN, where minN makes the
  *  95% simultaneous band half-width eps = sqrt(ln(2/0.05) / (2n)) at most half the
@@ -182,6 +188,17 @@ export const HYROX_S79_TOTAL_FENCES_SEC: Record<HyroxResultsFormat, Partial<Reco
   pro_singles: { female: { lo: 2227, hi: 12442, rowsTested: 25219, droppedBelow: 1, aboveFence: 35, keptAboveCorroborated: 19, maxSegmentShare: 0.203 }, male: { lo: 1996, hi: 12130, rowsTested: 55281, droppedBelow: 1, aboveFence: 42, keptAboveCorroborated: 27, maxSegmentShare: 0.23 } },
   open_doubles: { female: { lo: 2626, hi: 10786, rowsTested: 183175, droppedBelow: 5, aboveFence: 97, keptAboveCorroborated: 89, maxSegmentShare: 0.21 }, male: { lo: 2136, hi: 9981, rowsTested: 176149, droppedBelow: 3, aboveFence: 103, keptAboveCorroborated: 90, maxSegmentShare: 0.226 }, mixed: { lo: 2300, hi: 10916, rowsTested: 192055, droppedBelow: 8, aboveFence: 126, keptAboveCorroborated: 107, maxSegmentShare: 0.213 } },
   pro_doubles: { female: { lo: 2332, hi: 10007, rowsTested: 20816, droppedBelow: 0, aboveFence: 29, keptAboveCorroborated: 27, maxSegmentShare: 0.204 }, male: { lo: 2039, hi: 8788, rowsTested: 35570, droppedBelow: 0, aboveFence: 43, keptAboveCorroborated: 40, maxSegmentShare: 0.197 }, mixed: { lo: 2372, hi: 8655, rowsTested: 39, droppedBelow: 0, aboveFence: 0, keptAboveCorroborated: 0, maxSegmentShare: 0.228 } },
+};
+
+/** Station split lower fences (seconds) per published format x sex cell: the
+ *  log-scale Tukey far-out lower fence of rule 6, below which a split is a timing
+ *  slip (time credited to a neighbour). The floor a guided-session round must clear
+ *  before it may write a benchmark. Suppressed cells are left out. */
+export const HYROX_S79_STATION_LOWER_FENCES_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxStation, number>>>> = {
+  open_singles: { female: { ski_erg: 209, sled_push: 54, sled_pull: 104, burpee_broad_jumps: 95, row_erg: 214, farmer_carry: 49, sandbag_lunges: 88, wall_balls: 87 }, male: { ski_erg: 187, sled_push: 54, sled_pull: 86, burpee_broad_jumps: 79, row_erg: 190, farmer_carry: 40, sandbag_lunges: 87, wall_balls: 86 } },
+  pro_singles: { female: { ski_erg: 208, sled_push: 66, sled_pull: 97, burpee_broad_jumps: 83, row_erg: 212, farmer_carry: 39, sandbag_lunges: 90, wall_balls: 88 }, male: { ski_erg: 189, sled_push: 63, sled_pull: 78, burpee_broad_jumps: 65, row_erg: 189, farmer_carry: 31, sandbag_lunges: 84, wall_balls: 89 } },
+  open_doubles: { female: { ski_erg: 199, sled_push: 46, sled_pull: 97, burpee_broad_jumps: 77, row_erg: 215, farmer_carry: 55, sandbag_lunges: 82, wall_balls: 114 }, male: { ski_erg: 172, sled_push: 43, sled_pull: 69, burpee_broad_jumps: 59, row_erg: 184, farmer_carry: 45, sandbag_lunges: 76, wall_balls: 116 }, mixed: { ski_erg: 180, sled_push: 46, sled_pull: 81, burpee_broad_jumps: 62, row_erg: 186, farmer_carry: 50, sandbag_lunges: 78, wall_balls: 97 } },
+  pro_doubles: { female: { ski_erg: 193, sled_push: 54, sled_pull: 98, burpee_broad_jumps: 71, row_erg: 203, farmer_carry: 59, sandbag_lunges: 84, wall_balls: 107 }, male: { ski_erg: 169, sled_push: 47, sled_pull: 84, burpee_broad_jumps: 54, row_erg: 180, farmer_carry: 52, sandbag_lunges: 77, wall_balls: 113 } },
 };
 
 /** Finishers behind each pooled S7-S9 table (format x sex x metric). */
@@ -556,6 +573,80 @@ export const HYROX_S89_GRIDS: Record<HyroxResultsFormat, Partial<Record<HyroxRes
     female: { total: 'five_point', run_total: 'five_point', work_total: 'five_point', roxzone: 'five_point', ski_erg: 'five_point', sled_push: 'five_point', sled_pull: 'five_point', burpee_broad_jumps: 'five_point', row_erg: 'five_point', farmer_carry: 'five_point', sandbag_lunges: 'five_point', wall_balls: 'five_point' },
     male: { total: 'five_point', run_total: 'five_point', work_total: 'five_point', roxzone: 'five_point', ski_erg: 'five_point', sled_push: 'five_point', sled_pull: 'five_point', burpee_broad_jumps: 'five_point', row_erg: 'five_point', farmer_carry: 'five_point', sandbag_lunges: 'five_point', wall_balls: 'five_point' },
   },
+};
+
+/** Current-judging S8-S9 tables per format with every published sex cell pooled
+ *  (women and men, plus mixed pairs in open_doubles; pro_doubles mixed stays out).
+ *  The fallback for an athlete whose sex and division are unknown. */
+export const HYROX_S89_POOLED_FINISHER_COUNTS: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, number>>> = {
+  open_singles: { total: 329704, run_total: 325879, work_total: 325879, roxzone: 311625, ski_erg: 325879, sled_push: 325879, sled_pull: 325879, burpee_broad_jumps: 325879, row_erg: 325879, farmer_carry: 325879, sandbag_lunges: 325879, wall_balls: 325879 },
+  pro_singles: { total: 59335, run_total: 58670, work_total: 58670, roxzone: 56179, ski_erg: 58670, sled_push: 58670, sled_pull: 58670, burpee_broad_jumps: 58670, row_erg: 58670, farmer_carry: 58670, sandbag_lunges: 58670, wall_balls: 58670 },
+  open_doubles: { total: 415641, run_total: 409844, work_total: 409844, roxzone: 391616, ski_erg: 409844, sled_push: 409844, sled_pull: 409844, burpee_broad_jumps: 409844, row_erg: 409844, farmer_carry: 409844, sandbag_lunges: 409844, wall_balls: 409844 },
+  pro_doubles: { total: 44763, run_total: 44222, work_total: 44222, roxzone: 43237, ski_erg: 44222, sled_push: 44222, sled_pull: 44222, burpee_broad_jumps: 44222, row_erg: 44222, farmer_carry: 44222, sandbag_lunges: 44222, wall_balls: 44222 },
+};
+export const HYROX_S89_POOLED_PERCENTILES: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, HyroxPercentileTable>>> = {
+  open_singles: {
+    total: [[3774, 1], [3910, 2], [4146, 5], [4388, 10], [4568, 15], [4720, 20], [4860, 25], [4995, 30], [5122, 35], [5250, 40], [5375, 45], [5513, 50], [5657, 55], [5811, 60], [5978, 65], [6169, 70], [6386, 75], [6648, 80], [6977, 85], [7450, 90], [8261, 95], [9342, 98], [10148, 99]],
+    run_total: [[1764, 1], [1838, 2], [1958, 5], [2079, 10], [2169, 15], [2244, 20], [2313, 25], [2377, 30], [2439, 35], [2502, 40], [2565, 45], [2629, 50], [2696, 55], [2767, 60], [2846, 65], [2932, 70], [3034, 75], [3157, 80], [3312, 85], [3544, 90], [3953, 95], [4498, 98], [4898, 99]],
+    work_total: [[1605, 1], [1667, 2], [1773, 5], [1880, 10], [1960, 15], [2028, 20], [2090, 25], [2150, 30], [2208, 35], [2266, 40], [2325, 45], [2388, 50], [2454, 55], [2525, 60], [2603, 65], [2692, 70], [2792, 75], [2915, 80], [3070, 85], [3292, 90], [3675, 95], [4216, 98], [4653, 99]],
+    roxzone: [[228, 1], [247, 2], [279, 5], [311, 10], [335, 15], [356, 20], [376, 25], [394, 30], [413, 35], [432, 40], [452, 45], [472, 50], [494, 55], [518, 60], [545, 65], [575, 70], [609, 75], [650, 80], [701, 85], [772, 90], [888, 95], [1033, 98], [1144, 99]],
+    ski_erg: [[240, 1], [243, 2], [250, 5], [256, 10], [261, 15], [265, 20], [270, 25], [274, 30], [278, 35], [282, 40], [286, 45], [290, 50], [295, 55], [300, 60], [305, 65], [310, 70], [316, 75], [323, 80], [331, 85], [341, 90], [359, 95], [381, 98], [397, 99]],
+    sled_push: [[108, 1], [115, 2], [126, 5], [136, 10], [144, 15], [150, 20], [156, 25], [162, 30], [168, 35], [173, 40], [179, 45], [184, 50], [191, 55], [197, 60], [204, 65], [213, 70], [222, 75], [234, 80], [249, 85], [271, 90], [312, 95], [378, 98], [439, 99]],
+    sled_pull: [[186, 1], [196, 2], [215, 5], [232, 10], [245, 15], [257, 20], [268, 25], [278, 30], [288, 35], [298, 40], [308, 45], [319, 50], [330, 55], [342, 60], [355, 65], [370, 70], [387, 75], [408, 80], [435, 85], [472, 90], [534, 95], [621, 98], [691, 99]],
+    burpee_broad_jumps: [[181, 1], [197, 2], [222, 5], [246, 10], [264, 15], [280, 20], [295, 25], [309, 30], [322, 35], [335, 40], [349, 45], [363, 50], [379, 55], [395, 60], [413, 65], [433, 70], [457, 75], [485, 80], [521, 85], [573, 90], [663, 95], [796, 98], [904, 99]],
+    row_erg: [[253, 1], [257, 2], [264, 5], [272, 10], [277, 15], [282, 20], [287, 25], [291, 30], [296, 35], [300, 40], [305, 45], [309, 50], [314, 55], [319, 60], [324, 65], [329, 70], [336, 75], [343, 80], [352, 85], [364, 90], [385, 95], [413, 98], [437, 99]],
+    farmer_carry: [[84, 1], [89, 2], [96, 5], [103, 10], [108, 15], [113, 20], [117, 25], [121, 30], [124, 35], [128, 40], [132, 45], [136, 50], [140, 55], [145, 60], [150, 65], [156, 70], [164, 75], [172, 80], [183, 85], [198, 90], [225, 95], [259, 98], [290, 99]],
+    sandbag_lunges: [[179, 1], [194, 2], [214, 5], [233, 10], [247, 15], [259, 20], [269, 25], [280, 30], [290, 35], [300, 40], [310, 45], [321, 50], [333, 55], [345, 60], [359, 65], [375, 70], [393, 75], [416, 80], [445, 85], [488, 90], [568, 95], [692, 98], [808, 99]],
+    wall_balls: [[228, 1], [244, 2], [268, 5], [294, 10], [313, 15], [331, 20], [346, 25], [362, 30], [378, 35], [394, 40], [411, 45], [428, 50], [448, 55], [469, 60], [493, 65], [520, 70], [552, 75], [592, 80], [644, 85], [720, 90], [859, 95], [1065, 98], [1238, 99]],
+  },
+  pro_singles: {
+    total: [[3509, 1], [3811, 5], [4008, 10], [4155, 15], [4289, 20], [4410, 25], [4526, 30], [4640, 35], [4758, 40], [4874, 45], [4991, 50], [5114, 55], [5247, 60], [5392, 65], [5559, 70], [5747, 75], [5968, 80], [6261, 85], [6685, 90], [7426, 95], [9316, 99]],
+    run_total: [[1611, 1], [1775, 5], [1859, 10], [1923, 15], [1979, 20], [2030, 25], [2079, 30], [2127, 35], [2174, 40], [2223, 45], [2274, 50], [2328, 55], [2385, 60], [2446, 65], [2514, 70], [2591, 75], [2686, 80], [2811, 85], [2988, 90], [3312, 95], [4167, 99]],
+    work_total: [[1528, 1], [1690, 5], [1796, 10], [1872, 15], [1942, 20], [2006, 25], [2065, 30], [2123, 35], [2181, 40], [2243, 45], [2303, 50], [2365, 55], [2435, 60], [2511, 65], [2597, 70], [2693, 75], [2810, 80], [2959, 85], [3177, 90], [3563, 95], [4595, 99]],
+    roxzone: [[202, 1], [241, 5], [265, 10], [282, 15], [298, 20], [313, 25], [327, 30], [341, 35], [356, 40], [372, 45], [388, 50], [406, 55], [426, 60], [448, 65], [473, 70], [503, 75], [540, 80], [586, 85], [651, 90], [759, 95], [995, 99]],
+    ski_erg: [[229, 1], [237, 5], [242, 10], [246, 15], [250, 20], [253, 25], [256, 30], [258, 35], [261, 40], [265, 45], [268, 50], [271, 55], [275, 60], [279, 65], [284, 70], [289, 75], [294, 80], [301, 85], [309, 90], [323, 95], [353, 99]],
+    sled_push: [[140, 1], [160, 5], [173, 10], [182, 15], [191, 20], [198, 25], [205, 30], [213, 35], [220, 40], [227, 45], [235, 50], [243, 55], [253, 60], [263, 65], [274, 70], [288, 75], [304, 80], [326, 85], [357, 90], [419, 95], [585, 99]],
+    sled_pull: [[201, 1], [229, 5], [247, 10], [261, 15], [274, 20], [285, 25], [297, 30], [308, 35], [320, 40], [332, 45], [345, 50], [358, 55], [373, 60], [389, 65], [407, 70], [429, 75], [456, 80], [491, 85], [540, 90], [630, 95], [864, 99]],
+    burpee_broad_jumps: [[150, 1], [175, 5], [193, 10], [206, 15], [218, 20], [228, 25], [238, 30], [248, 35], [258, 40], [268, 45], [278, 50], [290, 55], [301, 60], [314, 65], [328, 70], [345, 75], [365, 80], [389, 85], [424, 90], [485, 95], [653, 99]],
+    row_erg: [[239, 1], [249, 5], [256, 10], [261, 15], [264, 20], [268, 25], [271, 30], [275, 35], [278, 40], [282, 45], [285, 50], [289, 55], [293, 60], [297, 65], [302, 70], [307, 75], [313, 80], [320, 85], [330, 90], [348, 95], [390, 99]],
+    farmer_carry: [[83, 1], [93, 5], [99, 10], [104, 15], [109, 20], [114, 25], [119, 30], [124, 35], [129, 40], [134, 45], [140, 50], [146, 55], [152, 60], [159, 65], [167, 70], [176, 75], [186, 80], [200, 85], [219, 90], [250, 95], [334, 99]],
+    sandbag_lunges: [[170, 1], [201, 5], [219, 10], [233, 15], [244, 20], [255, 25], [265, 30], [275, 35], [285, 40], [295, 45], [305, 50], [316, 55], [327, 60], [340, 65], [353, 70], [369, 75], [389, 80], [415, 85], [455, 90], [532, 95], [748, 99]],
+    wall_balls: [[219, 1], [255, 5], [278, 10], [297, 15], [313, 20], [328, 25], [343, 30], [358, 35], [373, 40], [388, 45], [404, 50], [421, 55], [440, 60], [461, 65], [485, 70], [514, 75], [550, 80], [597, 85], [666, 90], [797, 95], [1176, 99]],
+  },
+  open_doubles: {
+    total: [[3511, 1], [3625, 2], [3845, 5], [4066, 10], [4223, 15], [4357, 20], [4477, 25], [4589, 30], [4696, 35], [4799, 40], [4903, 45], [5009, 50], [5118, 55], [5233, 60], [5356, 65], [5494, 70], [5654, 75], [5845, 80], [6081, 85], [6411, 90], [6960, 95], [7694, 98], [8268, 99]],
+    run_total: [[1819, 1], [1899, 2], [2035, 5], [2177, 10], [2277, 15], [2363, 20], [2438, 25], [2508, 30], [2574, 35], [2639, 40], [2703, 45], [2767, 50], [2833, 55], [2902, 60], [2977, 65], [3058, 70], [3152, 75], [3265, 80], [3409, 85], [3614, 90], [3969, 95], [4451, 98], [4814, 99]],
+    work_total: [[1310, 1], [1349, 2], [1412, 5], [1477, 10], [1524, 15], [1565, 20], [1601, 25], [1636, 30], [1669, 35], [1702, 40], [1735, 45], [1769, 50], [1804, 55], [1842, 60], [1883, 65], [1929, 70], [1981, 75], [2043, 80], [2122, 85], [2232, 90], [2426, 95], [2692, 98], [2910, 99]],
+    roxzone: [[219, 1], [238, 2], [270, 5], [301, 10], [324, 15], [343, 20], [361, 25], [379, 30], [395, 35], [413, 40], [430, 45], [449, 50], [469, 55], [491, 60], [515, 65], [542, 70], [573, 75], [610, 80], [659, 85], [724, 90], [828, 95], [957, 98], [1054, 99]],
+    ski_erg: [[218, 1], [222, 2], [228, 5], [235, 10], [240, 15], [244, 20], [248, 25], [252, 30], [255, 35], [259, 40], [263, 45], [266, 50], [270, 55], [274, 60], [278, 65], [283, 70], [288, 75], [293, 80], [300, 85], [309, 90], [322, 95], [338, 98], [350, 99]],
+    sled_push: [[77, 1], [81, 2], [87, 5], [93, 10], [97, 15], [101, 20], [104, 25], [107, 30], [110, 35], [113, 40], [116, 45], [120, 50], [123, 55], [127, 60], [131, 65], [135, 70], [141, 75], [147, 80], [155, 85], [167, 90], [189, 95], [224, 98], [257, 99]],
+    sled_pull: [[138, 1], [147, 2], [161, 5], [175, 10], [185, 15], [193, 20], [201, 25], [208, 30], [215, 35], [221, 40], [228, 45], [235, 50], [242, 55], [249, 60], [258, 65], [266, 70], [277, 75], [289, 80], [304, 85], [324, 90], [360, 95], [409, 98], [451, 99]],
+    burpee_broad_jumps: [[122, 1], [131, 2], [144, 5], [158, 10], [168, 15], [177, 20], [185, 25], [193, 30], [201, 35], [208, 40], [216, 45], [224, 50], [232, 55], [241, 60], [250, 65], [261, 70], [273, 75], [287, 80], [306, 85], [331, 90], [376, 95], [439, 98], [490, 99]],
+    row_erg: [[238, 1], [243, 2], [250, 5], [258, 10], [263, 15], [268, 20], [273, 25], [277, 30], [281, 35], [285, 40], [289, 45], [293, 50], [297, 55], [301, 60], [306, 65], [311, 70], [316, 75], [322, 80], [329, 85], [338, 90], [354, 95], [374, 98], [389, 99]],
+    farmer_carry: [[75, 1], [78, 2], [83, 5], [88, 10], [91, 15], [94, 20], [97, 25], [99, 30], [102, 35], [104, 40], [106, 45], [109, 50], [111, 55], [113, 60], [116, 65], [119, 70], [122, 75], [125, 80], [130, 85], [135, 90], [145, 95], [159, 98], [175, 99]],
+    sandbag_lunges: [[142, 1], [151, 2], [164, 5], [176, 10], [185, 15], [193, 20], [199, 25], [206, 30], [212, 35], [218, 40], [224, 45], [231, 50], [238, 55], [245, 60], [253, 65], [262, 70], [273, 75], [285, 80], [301, 85], [323, 90], [364, 95], [421, 98], [470, 99]],
+    wall_balls: [[203, 1], [208, 2], [216, 5], [225, 10], [231, 15], [237, 20], [243, 25], [248, 30], [253, 35], [259, 40], [265, 45], [272, 50], [279, 55], [286, 60], [295, 65], [306, 70], [319, 75], [335, 80], [357, 85], [391, 90], [454, 95], [551, 98], [637, 99]],
+  },
+  pro_doubles: {
+    total: [[3211, 1], [3464, 5], [3614, 10], [3749, 15], [3858, 20], [3961, 25], [4056, 30], [4145, 35], [4233, 40], [4325, 45], [4421, 50], [4518, 55], [4621, 60], [4730, 65], [4849, 70], [4995, 75], [5165, 80], [5372, 85], [5668, 90], [6211, 95], [7510, 99]],
+    run_total: [[1619, 1], [1777, 5], [1871, 10], [1943, 15], [2007, 20], [2068, 25], [2125, 30], [2180, 35], [2233, 40], [2289, 45], [2345, 50], [2403, 55], [2463, 60], [2527, 65], [2599, 70], [2678, 75], [2771, 80], [2890, 85], [3054, 90], [3369, 95], [4194, 99]],
+    work_total: [[1271, 1], [1366, 5], [1425, 10], [1468, 15], [1505, 20], [1538, 25], [1570, 30], [1600, 35], [1631, 40], [1662, 45], [1693, 50], [1726, 55], [1763, 60], [1802, 65], [1844, 70], [1894, 75], [1953, 80], [2030, 85], [2136, 90], [2339, 95], [2847, 99]],
+    roxzone: [[183, 1], [224, 5], [247, 10], [264, 15], [279, 20], [292, 25], [305, 30], [318, 35], [332, 40], [346, 45], [361, 50], [377, 55], [395, 60], [414, 65], [437, 70], [464, 75], [498, 80], [542, 85], [606, 90], [700, 95], [899, 99]],
+    ski_erg: [[206, 1], [214, 5], [219, 10], [222, 15], [226, 20], [229, 25], [232, 30], [234, 35], [237, 40], [241, 45], [244, 50], [248, 55], [252, 60], [257, 65], [261, 70], [266, 75], [271, 80], [277, 85], [285, 90], [297, 95], [322, 99]],
+    sled_push: [[91, 1], [103, 5], [110, 10], [115, 15], [119, 20], [123, 25], [126, 30], [130, 35], [134, 40], [137, 45], [141, 50], [145, 55], [150, 60], [155, 65], [160, 70], [166, 75], [174, 80], [184, 85], [199, 90], [227, 95], [312, 99]],
+    sled_pull: [[164, 1], [184, 5], [196, 10], [205, 15], [213, 20], [220, 25], [227, 30], [234, 35], [240, 40], [247, 45], [254, 50], [261, 55], [269, 60], [278, 65], [287, 70], [298, 75], [311, 80], [329, 85], [353, 90], [396, 95], [513, 99]],
+    burpee_broad_jumps: [[104, 1], [120, 5], [130, 10], [138, 15], [145, 20], [151, 25], [157, 30], [162, 35], [168, 40], [174, 45], [180, 50], [185, 55], [192, 60], [199, 65], [207, 70], [216, 75], [227, 80], [240, 85], [260, 90], [294, 95], [388, 99]],
+    row_erg: [[223, 1], [233, 5], [239, 10], [244, 15], [248, 20], [251, 25], [255, 30], [258, 35], [262, 40], [266, 45], [269, 50], [273, 55], [277, 60], [282, 65], [286, 70], [291, 75], [297, 80], [303, 85], [313, 90], [327, 95], [360, 99]],
+    farmer_carry: [[76, 1], [83, 5], [88, 10], [90, 15], [93, 20], [95, 25], [97, 30], [99, 35], [101, 40], [103, 45], [106, 50], [108, 55], [110, 60], [113, 65], [116, 70], [119, 75], [122, 80], [127, 85], [133, 90], [143, 95], [173, 99]],
+    sandbag_lunges: [[138, 1], [159, 5], [171, 10], [179, 15], [187, 20], [194, 25], [200, 30], [206, 35], [212, 40], [218, 45], [225, 50], [231, 55], [238, 60], [245, 65], [253, 70], [263, 75], [275, 80], [290, 85], [311, 90], [348, 95], [451, 99]],
+    wall_balls: [[199, 1], [209, 5], [215, 10], [220, 15], [225, 20], [230, 25], [234, 30], [239, 35], [243, 40], [248, 45], [254, 50], [260, 55], [266, 60], [274, 65], [284, 70], [295, 75], [310, 80], [332, 85], [363, 90], [431, 95], [624, 99]],
+  },
+};
+export const HYROX_S89_POOLED_GRIDS: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, HyroxGridName>>> = {
+  open_singles: { total: 'fine', run_total: 'fine', work_total: 'fine', roxzone: 'fine', ski_erg: 'fine', sled_push: 'fine', sled_pull: 'fine', burpee_broad_jumps: 'fine', row_erg: 'fine', farmer_carry: 'fine', sandbag_lunges: 'fine', wall_balls: 'fine' },
+  pro_singles: { total: 'five_point', run_total: 'five_point', work_total: 'five_point', roxzone: 'five_point', ski_erg: 'five_point', sled_push: 'five_point', sled_pull: 'five_point', burpee_broad_jumps: 'five_point', row_erg: 'five_point', farmer_carry: 'five_point', sandbag_lunges: 'five_point', wall_balls: 'five_point' },
+  open_doubles: { total: 'fine', run_total: 'fine', work_total: 'fine', roxzone: 'fine', ski_erg: 'fine', sled_push: 'fine', sled_pull: 'fine', burpee_broad_jumps: 'fine', row_erg: 'fine', farmer_carry: 'fine', sandbag_lunges: 'fine', wall_balls: 'fine' },
+  pro_doubles: { total: 'five_point', run_total: 'five_point', work_total: 'five_point', roxzone: 'five_point', ski_erg: 'five_point', sled_push: 'five_point', sled_pull: 'five_point', burpee_broad_jumps: 'five_point', row_erg: 'five_point', farmer_carry: 'five_point', sandbag_lunges: 'five_point', wall_balls: 'five_point' },
 };
 
 /** Median split per run leg (run 1 to run 8), seconds. Same rows as run_total. */
@@ -1295,6 +1386,147 @@ export const HYROX_S79_IMPROVEMENT_SUPPRESSED: ReadonlyArray<Pick<HyroxImproveme
   { format: 'pro_singles', sex: 'male', groupBy: 'mean_of_races', band: 'beginner', gapHalfSeasons: 2, n: 30 },
   { format: 'pro_singles', sex: 'male', groupBy: 'mean_of_races', band: 'beginner', gapHalfSeasons: 3, n: 15 },
   { format: 'pro_singles', sex: 'male', groupBy: 'mean_of_races', band: 'beginner', gapHalfSeasons: 4, n: 3 },
+];
+
+/**
+ * Field-relative ability bands, seasons 8 and 9 (HYROX_S89_SEASONS).
+ *
+ * HYROX_TIME_TO_BAND_THRESHOLDS is one finish-time scale for every format and
+ * sex, so women and doubles athletes were banded against a male-dominated
+ * singles field. Each threshold is kept as a position in the field instead:
+ * HYROX_S89_BAND_FIELD_PERCENTILES is each threshold's cumulative percentile in
+ * the app's earlier pooled open singles total table (S4 to S6,
+ * HYROX_TOTAL_PERCENTILE_TABLES.open_singles). The only recorded anchor for the
+ * thresholds, the HyroxDataLab list in SCIENCE_LOG "HYROX Population Percentiles"
+ * (60, 80, 100, 120 min at p5, p15, p35, p60), was rejected: it was hand-set and
+ * contradicts the real results (60 min is below p1 of the S4 to S6 field), and
+ * reading the thresholds there would push most athletes down a band. 3600 s sits
+ * below that table's p1, which the clamped lookup reads as p1, the finest
+ * percentile it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those
+ * percentiles in each format x sex field (type 7 quantile), plus each format
+ * with its sexes pooled (the fallback for an unknown sex). Thresholds apply as
+ * bandFromTime does: sec < threshold, first match wins, beginner above the last.
+ *
+ * HYROX_S89_BAND_SEEDS: for each band, the median of every metric among the
+ * finishers whose total falls in that band of their field. The median split of
+ * the band's athletes, not each split's own quantile (split ranks are not
+ * comonotonic with total rank). total_beginner has no finish-time threshold
+ * (it is the experience pick for a first HYROX); consumers give it the
+ * beginner cell. Doubles station seeds are the pair's time at the station.
+ */
+export const HYROX_S89_BAND_FIELD_PERCENTILES: readonly number[] = [1.0, 25.3211, 73.5085, 92.916];
+export type HyroxBandCellSex = HyroxResultsSex | 'pooled';
+export type HyroxTimeBand = Exclude<AbilityBand, 'total_beginner'>;
+export const HYROX_S89_BAND_THRESHOLDS_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxBandCellSex, readonly number[]>>> = {
+  open_singles: { female: [4135, 5188, 6617, 8184], male: [3701, 4708, 6115, 7627], pooled: [3774, 4869, 6318, 7853] },
+  pro_singles: { female: [3747, 4651, 5922, 7323], male: [3462, 4322, 5560, 6886], pooled: [3509, 4417, 5685, 7040] },
+  open_doubles: { female: [3967, 4848, 5894, 6936], male: [3396, 4167, 5167, 6188], mixed: [3544, 4516, 5611, 6739], pooled: [3511, 4484, 5604, 6686] },
+  pro_doubles: { female: [3555, 4344, 5324, 6395], male: [3154, 3811, 4673, 5548], pooled: [3211, 3967, 4950, 5932] },
+};
+export interface HyroxBandSeedCell { n: number; nSplits: number; nRoxzone: number; medians: Record<HyroxResultsMetric, number> }
+export const HYROX_S89_BAND_SEEDS: Record<HyroxResultsFormat, Partial<Record<HyroxBandCellSex, Partial<Record<HyroxTimeBand, HyroxBandSeedCell>>>>> = {
+  open_singles: {
+    female: {
+      competitive: { n: 1194, nSplits: 1185, nRoxzone: 1122, medians: { total: 4027, run_total: 1993, work_total: 1717, roxzone: 290, ski_erg: 281, sled_push: 126, sled_pull: 231, burpee_broad_jumps: 239, row_erg: 287, farmer_carry: 102, sandbag_lunges: 197, wall_balls: 243 } },
+      advanced: { n: 29036, nSplits: 28741, nRoxzone: 26889, medians: { total: 4839, run_total: 2368, work_total: 2055, roxzone: 374, ski_erg: 299, sled_push: 149, sled_pull: 283, burpee_broad_jumps: 311, row_erg: 309, farmer_carry: 120, sandbag_lunges: 249, wall_balls: 313 } },
+      intermediate: { n: 57583, nSplits: 56994, nRoxzone: 53501, medians: { total: 5800, run_total: 2817, work_total: 2484, roxzone: 485, ski_erg: 319, sled_push: 176, sled_pull: 349, burpee_broad_jumps: 409, row_erg: 332, farmer_carry: 140, sandbag_lunges: 316, wall_balls: 413 } },
+      novice: { n: 23191, nSplits: 22846, nRoxzone: 21510, medians: { total: 7151, run_total: 3424, work_total: 3108, roxzone: 628, ski_erg: 343, sled_push: 213, sled_pull: 437, burpee_broad_jumps: 551, row_erg: 362, farmer_carry: 167, sandbag_lunges: 415, wall_balls: 570 } },
+      beginner: { n: 8464, nSplits: 8297, nRoxzone: 7921, medians: { total: 8988, run_total: 4309, work_total: 3991, roxzone: 783, ski_erg: 371, sled_push: 254, sled_pull: 548, burpee_broad_jumps: 752, row_erg: 398, farmer_carry: 200, sandbag_lunges: 564, wall_balls: 820 } },
+    },
+    male: {
+      competitive: { n: 2095, nSplits: 2078, nRoxzone: 2009, medians: { total: 3599, run_total: 1784, work_total: 1544, roxzone: 256, ski_erg: 246, sled_push: 134, sled_pull: 190, burpee_broad_jumps: 187, row_erg: 254, farmer_carry: 92, sandbag_lunges: 190, wall_balls: 240 } },
+      advanced: { n: 51137, nSplits: 50808, nRoxzone: 49206, medians: { total: 4368, run_total: 2097, work_total: 1892, roxzone: 335, ski_erg: 259, sled_push: 159, sled_pull: 239, burpee_broad_jumps: 255, row_erg: 272, farmer_carry: 109, sandbag_lunges: 253, wall_balls: 323 } },
+      intermediate: { n: 101268, nSplits: 100238, nRoxzone: 96785, medians: { total: 5313, run_total: 2517, work_total: 2325, roxzone: 450, ski_erg: 276, sled_push: 188, sled_pull: 301, burpee_broad_jumps: 340, row_erg: 295, farmer_carry: 133, sandbag_lunges: 325, wall_balls: 437 } },
+      novice: { n: 40832, nSplits: 40158, nRoxzone: 38660, medians: { total: 6639, run_total: 3099, work_total: 2930, roxzone: 615, ski_erg: 295, sled_push: 233, sled_pull: 384, burpee_broad_jumps: 452, row_erg: 324, farmer_carry: 163, sandbag_lunges: 421, wall_balls: 601 } },
+      beginner: { n: 14904, nSplits: 14534, nRoxzone: 14022, medians: { total: 8422, run_total: 3959, work_total: 3731, roxzone: 811, ski_erg: 318, sled_push: 295, sled_pull: 487, burpee_broad_jumps: 592, row_erg: 355, farmer_carry: 197, sandbag_lunges: 559, wall_balls: 843 } },
+    },
+    pooled: {
+      competitive: { n: 3293, nSplits: 3274, nRoxzone: 3171, medians: { total: 3660, run_total: 1808, work_total: 1572, roxzone: 262, ski_erg: 248, sled_push: 135, sled_pull: 194, burpee_broad_jumps: 192, row_erg: 256, farmer_carry: 94, sandbag_lunges: 195, wall_balls: 245 } },
+      advanced: { n: 80093, nSplits: 79502, nRoxzone: 76465, medians: { total: 4503, run_total: 2168, work_total: 1943, roxzone: 347, ski_erg: 266, sled_push: 157, sled_pull: 250, burpee_broad_jumps: 269, row_erg: 279, farmer_carry: 113, sandbag_lunges: 254, wall_balls: 324 } },
+      intermediate: { n: 158968, nSplits: 157271, nRoxzone: 150094, medians: { total: 5496, run_total: 2630, work_total: 2385, roxzone: 464, ski_erg: 291, sled_push: 183, sled_pull: 319, burpee_broad_jumps: 365, row_erg: 309, farmer_carry: 136, sandbag_lunges: 321, wall_balls: 425 } },
+      novice: { n: 63980, nSplits: 63010, nRoxzone: 60006, medians: { total: 6851, run_total: 3238, work_total: 2997, roxzone: 620, ski_erg: 316, sled_push: 222, sled_pull: 407, burpee_broad_jumps: 493, row_erg: 341, farmer_carry: 164, sandbag_lunges: 414, wall_balls: 580 } },
+      beginner: { n: 23370, nSplits: 22822, nRoxzone: 21889, medians: { total: 8662, run_total: 4115, work_total: 3834, roxzone: 798, ski_erg: 342, sled_push: 273, sled_pull: 514, burpee_broad_jumps: 660, row_erg: 375, farmer_carry: 198, sandbag_lunges: 557, wall_balls: 825 } },
+    },
+  },
+  pro_singles: {
+    female: {
+      competitive: { n: 188, nSplits: 187, nRoxzone: 181, medians: { total: 3665, run_total: 1784, work_total: 1610, roxzone: 256, ski_erg: 260, sled_push: 156, sled_pull: 217, burpee_broad_jumps: 193, row_erg: 268, farmer_carry: 100, sandbag_lunges: 185, wall_balls: 222 } },
+      advanced: { n: 4601, nSplits: 4562, nRoxzone: 4370, medians: { total: 4329, run_total: 2052, work_total: 1940, roxzone: 306, ski_erg: 277, sled_push: 195, sled_pull: 272, burpee_broad_jumps: 239, row_erg: 287, farmer_carry: 122, sandbag_lunges: 239, wall_balls: 286 } },
+      intermediate: { n: 9127, nSplits: 9022, nRoxzone: 8636, medians: { total: 5209, run_total: 2418, work_total: 2377, roxzone: 396, ski_erg: 295, sled_push: 241, sled_pull: 347, burpee_broad_jumps: 313, row_erg: 308, farmer_carry: 157, sandbag_lunges: 311, wall_balls: 381 } },
+      novice: { n: 3674, nSplits: 3621, nRoxzone: 3468, medians: { total: 6418, run_total: 2909, work_total: 2976, roxzone: 523, ski_erg: 314, sled_push: 303, sled_pull: 444, burpee_broad_jumps: 408, row_erg: 332, farmer_carry: 202, sandbag_lunges: 400, wall_balls: 524 } },
+      beginner: { n: 1342, nSplits: 1302, nRoxzone: 1251, medians: { total: 8119, run_total: 3623, work_total: 3853, roxzone: 700, ski_erg: 339, sled_push: 394, sled_pull: 581, burpee_broad_jumps: 544, row_erg: 365, farmer_carry: 255, sandbag_lunges: 541, wall_balls: 764 } },
+    },
+    male: {
+      competitive: { n: 400, nSplits: 396, nRoxzone: 382, medians: { total: 3400, run_total: 1678, work_total: 1474, roxzone: 242, ski_erg: 232, sled_push: 152, sled_pull: 200, burpee_broad_jumps: 156, row_erg: 239, farmer_carry: 86, sandbag_lunges: 173, wall_balls: 229 } },
+      advanced: { n: 9821, nSplits: 9738, nRoxzone: 9378, medians: { total: 4021, run_total: 1887, work_total: 1815, roxzone: 286, ski_erg: 245, sled_push: 188, sled_pull: 258, burpee_broad_jumps: 198, row_erg: 257, farmer_carry: 104, sandbag_lunges: 231, wall_balls: 307 } },
+      intermediate: { n: 19477, nSplits: 19327, nRoxzone: 18465, medians: { total: 4861, run_total: 2210, work_total: 2260, roxzone: 372, ski_erg: 258, sled_push: 233, sled_pull: 343, burpee_broad_jumps: 265, row_erg: 275, farmer_carry: 132, sandbag_lunges: 304, wall_balls: 415 } },
+      novice: { n: 7838, nSplits: 7733, nRoxzone: 7373, medians: { total: 6010, run_total: 2648, work_total: 2859, roxzone: 504, ski_erg: 273, sled_push: 294, sled_pull: 461, burpee_broad_jumps: 347, row_erg: 298, farmer_carry: 171, sandbag_lunges: 392, wall_balls: 565 } },
+      beginner: { n: 2867, nSplits: 2782, nRoxzone: 2675, medians: { total: 7633, run_total: 3330, work_total: 3681, roxzone: 694, ski_erg: 293, sled_push: 388, sled_pull: 613, burpee_broad_jumps: 448, row_erg: 327, farmer_carry: 218, sandbag_lunges: 520, wall_balls: 800 } },
+    },
+    pooled: {
+      competitive: { n: 592, nSplits: 588, nRoxzone: 569, medians: { total: 3431, run_total: 1690, work_total: 1491, roxzone: 242, ski_erg: 232, sled_push: 153, sled_pull: 203, burpee_broad_jumps: 158, row_erg: 239, farmer_carry: 87, sandbag_lunges: 176, wall_balls: 233 } },
+      advanced: { n: 14407, nSplits: 14280, nRoxzone: 13730, medians: { total: 4105, run_total: 1928, work_total: 1850, roxzone: 293, ski_erg: 250, sled_push: 190, sled_pull: 262, burpee_broad_jumps: 209, row_erg: 262, farmer_carry: 108, sandbag_lunges: 234, wall_balls: 304 } },
+      intermediate: { n: 28615, nSplits: 28373, nRoxzone: 27104, medians: { total: 4977, run_total: 2276, work_total: 2300, roxzone: 380, ski_erg: 268, sled_push: 236, sled_pull: 344, burpee_broad_jumps: 280, row_erg: 285, farmer_carry: 140, sandbag_lunges: 306, wall_balls: 402 } },
+      novice: { n: 11517, nSplits: 11349, nRoxzone: 10861, medians: { total: 6150, run_total: 2749, work_total: 2894, roxzone: 510, ski_erg: 287, sled_push: 296, sled_pull: 452, burpee_broad_jumps: 369, row_erg: 311, farmer_carry: 183, sandbag_lunges: 393, wall_balls: 543 } },
+      beginner: { n: 4204, nSplits: 4080, nRoxzone: 3915, medians: { total: 7818, run_total: 3440, work_total: 3737, roxzone: 697, ski_erg: 310, sled_push: 389, sled_pull: 597, burpee_broad_jumps: 482, row_erg: 343, farmer_carry: 233, sandbag_lunges: 527, wall_balls: 780 } },
+    },
+  },
+  open_doubles: {
+    female: {
+      competitive: { n: 1371, nSplits: 1345, nRoxzone: 1260, medians: { total: 3865, run_total: 2075, work_total: 1464, roxzone: 296, ski_erg: 258, sled_push: 92, sled_pull: 190, burpee_broad_jumps: 173, row_erg: 277, farmer_carry: 89, sandbag_lunges: 162, wall_balls: 214 } },
+      advanced: { n: 33550, nSplits: 33182, nRoxzone: 31335, medians: { total: 4567, run_total: 2516, work_total: 1642, roxzone: 371, ski_erg: 274, sled_push: 100, sled_pull: 219, burpee_broad_jumps: 212, row_erg: 295, farmer_carry: 101, sandbag_lunges: 193, wall_balls: 235 } },
+      intermediate: { n: 66503, nSplits: 65681, nRoxzone: 62317, medians: { total: 5310, run_total: 2967, work_total: 1857, roxzone: 473, ski_erg: 291, sled_push: 112, sled_pull: 255, burpee_broad_jumps: 261, row_erg: 314, farmer_carry: 113, sandbag_lunges: 230, wall_balls: 266 } },
+      novice: { n: 26778, nSplits: 26375, nRoxzone: 25210, medians: { total: 6265, run_total: 3528, work_total: 2134, roxzone: 602, ski_erg: 308, sled_push: 127, sled_pull: 298, burpee_broad_jumps: 325, row_erg: 336, farmer_carry: 125, sandbag_lunges: 276, wall_balls: 315 } },
+      beginner: { n: 9786, nSplits: 9591, nRoxzone: 9247, medians: { total: 7466, run_total: 4308, work_total: 2496, roxzone: 734, ski_erg: 329, sled_push: 142, sled_pull: 345, burpee_broad_jumps: 411, row_erg: 360, farmer_carry: 136, sandbag_lunges: 335, wall_balls: 393 } },
+    },
+    male: {
+      competitive: { n: 1295, nSplits: 1282, nRoxzone: 1219, medians: { total: 3311, run_total: 1777, work_total: 1269, roxzone: 245, ski_erg: 219, sled_push: 90, sled_pull: 147, burpee_broad_jumps: 129, row_erg: 238, farmer_carry: 80, sandbag_lunges: 147, wall_balls: 214 } },
+      advanced: { n: 31804, nSplits: 31501, nRoxzone: 29808, medians: { total: 3909, run_total: 2116, work_total: 1444, roxzone: 315, ski_erg: 233, sled_push: 102, sled_pull: 174, burpee_broad_jumps: 161, row_erg: 255, farmer_carry: 90, sandbag_lunges: 182, wall_balls: 238 } },
+      intermediate: { n: 62957, nSplits: 62212, nRoxzone: 59050, medians: { total: 4610, run_total: 2552, work_total: 1635, roxzone: 408, ski_erg: 246, sled_push: 112, sled_pull: 204, burpee_broad_jumps: 196, row_erg: 273, farmer_carry: 101, sandbag_lunges: 219, wall_balls: 269 } },
+      novice: { n: 25399, nSplits: 25049, nRoxzone: 23619, medians: { total: 5523, run_total: 3093, work_total: 1883, roxzone: 554, ski_erg: 261, sled_push: 129, sled_pull: 242, burpee_broad_jumps: 238, row_erg: 296, farmer_carry: 113, sandbag_lunges: 264, wall_balls: 315 } },
+      beginner: { n: 9262, nSplits: 9094, nRoxzone: 8653, medians: { total: 6718, run_total: 3865, work_total: 2191, roxzone: 722, ski_erg: 278, sled_push: 152, sled_pull: 287, burpee_broad_jumps: 286, row_erg: 320, farmer_carry: 125, sandbag_lunges: 320, wall_balls: 383 } },
+    },
+    mixed: {
+      competitive: { n: 1456, nSplits: 1436, nRoxzone: 1383, medians: { total: 3452, run_total: 1848, work_total: 1329, roxzone: 255, ski_erg: 229, sled_push: 99, sled_pull: 162, burpee_broad_jumps: 139, row_erg: 246, farmer_carry: 85, sandbag_lunges: 155, wall_balls: 211 } },
+      advanced: { n: 35693, nSplits: 35270, nRoxzone: 34115, medians: { total: 4211, run_total: 2278, work_total: 1556, roxzone: 335, ski_erg: 246, sled_push: 117, sled_pull: 202, burpee_broad_jumps: 175, row_erg: 268, farmer_carry: 98, sandbag_lunges: 199, wall_balls: 238 } },
+      intermediate: { n: 70826, nSplits: 69746, nRoxzone: 67557, medians: { total: 5005, run_total: 2751, work_total: 1800, roxzone: 437, ski_erg: 262, sled_push: 134, sled_pull: 242, burpee_broad_jumps: 218, row_erg: 289, farmer_carry: 111, sandbag_lunges: 246, wall_balls: 280 } },
+      novice: { n: 28551, nSplits: 27960, nRoxzone: 27065, medians: { total: 6005, run_total: 3315, work_total: 2121, roxzone: 574, ski_erg: 280, sled_push: 157, sled_pull: 290, burpee_broad_jumps: 272, row_erg: 313, farmer_carry: 124, sandbag_lunges: 303, wall_balls: 351 } },
+      beginner: { n: 10410, nSplits: 10120, nRoxzone: 9778, medians: { total: 7313, run_total: 4106, work_total: 2552, roxzone: 734, ski_erg: 301, sled_push: 189, sled_pull: 348, burpee_broad_jumps: 339, row_erg: 339, farmer_carry: 138, sandbag_lunges: 379, wall_balls: 469 } },
+    },
+    pooled: {
+      competitive: { n: 4156, nSplits: 4106, nRoxzone: 3922, medians: { total: 3417, run_total: 1830, work_total: 1310, roxzone: 257, ski_erg: 224, sled_push: 94, sled_pull: 155, burpee_broad_jumps: 135, row_erg: 242, farmer_carry: 83, sandbag_lunges: 154, wall_balls: 215 } },
+      advanced: { n: 100904, nSplits: 99816, nRoxzone: 95155, medians: { total: 4168, run_total: 2266, work_total: 1525, roxzone: 337, ski_erg: 243, sled_push: 107, sled_pull: 192, burpee_broad_jumps: 175, row_erg: 266, farmer_carry: 95, sandbag_lunges: 192, wall_balls: 240 } },
+      intermediate: { n: 200352, nSplits: 197724, nRoxzone: 188856, medians: { total: 4996, run_total: 2766, work_total: 1769, roxzone: 441, ski_erg: 267, sled_push: 119, sled_pull: 236, burpee_broad_jumps: 225, row_erg: 293, farmer_carry: 109, sandbag_lunges: 231, wall_balls: 270 } },
+      novice: { n: 80765, nSplits: 79403, nRoxzone: 75960, medians: { total: 5987, run_total: 3347, work_total: 2067, roxzone: 579, ski_erg: 289, sled_push: 136, sled_pull: 283, burpee_broad_jumps: 285, row_erg: 320, farmer_carry: 122, sandbag_lunges: 279, wall_balls: 322 } },
+      beginner: { n: 29464, nSplits: 28795, nRoxzone: 27723, medians: { total: 7226, run_total: 4131, work_total: 2444, roxzone: 729, ski_erg: 309, sled_push: 157, sled_pull: 334, burpee_broad_jumps: 358, row_erg: 345, farmer_carry: 134, sandbag_lunges: 343, wall_balls: 411 } },
+    },
+  },
+  pro_doubles: {
+    female: {
+      competitive: { n: 166, nSplits: 166, nRoxzone: 163, medians: { total: 3475, run_total: 1804, work_total: 1420, roxzone: 246, ski_erg: 241, sled_push: 114, sled_pull: 188, burpee_broad_jumps: 147, row_erg: 257, farmer_carry: 91, sandbag_lunges: 161, wall_balls: 205 } },
+      advanced: { n: 4039, nSplits: 3984, nRoxzone: 3885, medians: { total: 4084, run_total: 2154, work_total: 1593, roxzone: 305, ski_erg: 256, sled_push: 132, sled_pull: 222, burpee_broad_jumps: 175, row_erg: 276, farmer_carry: 103, sandbag_lunges: 196, wall_balls: 222 } },
+      intermediate: { n: 8007, nSplits: 7919, nRoxzone: 7732, medians: { total: 4781, run_total: 2567, work_total: 1814, roxzone: 390, ski_erg: 271, sled_push: 150, sled_pull: 266, burpee_broad_jumps: 211, row_erg: 293, farmer_carry: 115, sandbag_lunges: 240, wall_balls: 252 } },
+      novice: { n: 3224, nSplits: 3182, nRoxzone: 3121, medians: { total: 5675, run_total: 3058, work_total: 2111, roxzone: 510, ski_erg: 287, sled_push: 173, sled_pull: 316, burpee_broad_jumps: 260, row_erg: 314, farmer_carry: 129, sandbag_lunges: 296, wall_balls: 307 } },
+      beginner: { n: 1178, nSplits: 1150, nRoxzone: 1115, medians: { total: 6926, run_total: 3779, work_total: 2561, roxzone: 661, ski_erg: 307, sled_push: 205, sled_pull: 387, burpee_broad_jumps: 337, row_erg: 340, farmer_carry: 145, sandbag_lunges: 365, wall_balls: 425 } },
+    },
+    male: {
+      competitive: { n: 278, nSplits: 276, nRoxzone: 269, medians: { total: 3087, run_total: 1644, work_total: 1231, roxzone: 219, ski_erg: 206, sled_push: 101, sled_pull: 164, burpee_broad_jumps: 111, row_erg: 219, farmer_carry: 78, sandbag_lunges: 140, wall_balls: 208 } },
+      advanced: { n: 6844, nSplits: 6774, nRoxzone: 6619, medians: { total: 3579, run_total: 1874, work_total: 1422, roxzone: 263, ski_erg: 220, sled_push: 119, sled_pull: 203, burpee_broad_jumps: 135, row_erg: 241, farmer_carry: 91, sandbag_lunges: 176, wall_balls: 226 } },
+      intermediate: { n: 13560, nSplits: 13428, nRoxzone: 13166, medians: { total: 4190, run_total: 2221, work_total: 1623, roxzone: 333, ski_erg: 233, sled_push: 136, sled_pull: 247, burpee_broad_jumps: 164, row_erg: 256, farmer_carry: 100, sandbag_lunges: 217, wall_balls: 254 } },
+      novice: { n: 5472, nSplits: 5404, nRoxzone: 5289, medians: { total: 4968, run_total: 2656, work_total: 1879, roxzone: 436, ski_erg: 245, sled_push: 158, sled_pull: 300, burpee_broad_jumps: 195, row_erg: 275, farmer_carry: 111, sandbag_lunges: 260, wall_balls: 303 } },
+      beginner: { n: 1995, nSplits: 1939, nRoxzone: 1878, medians: { total: 6035, run_total: 3259, work_total: 2234, roxzone: 597, ski_erg: 259, sled_push: 193, sled_pull: 364, burpee_broad_jumps: 234, row_erg: 298, farmer_carry: 124, sandbag_lunges: 319, wall_balls: 399 } },
+    },
+    pooled: {
+      competitive: { n: 448, nSplits: 443, nRoxzone: 431, medians: { total: 3132, run_total: 1657, work_total: 1249, roxzone: 221, ski_erg: 208, sled_push: 102, sled_pull: 166, burpee_broad_jumps: 114, row_erg: 222, farmer_carry: 79, sandbag_lunges: 141, wall_balls: 210 } },
+      advanced: { n: 10880, nSplits: 10769, nRoxzone: 10535, medians: { total: 3701, run_total: 1936, work_total: 1463, roxzone: 274, ski_erg: 224, sled_push: 122, sled_pull: 210, burpee_broad_jumps: 143, row_erg: 245, farmer_carry: 93, sandbag_lunges: 182, wall_balls: 228 } },
+      intermediate: { n: 21569, nSplits: 21352, nRoxzone: 20889, medians: { total: 4410, run_total: 2344, work_total: 1693, roxzone: 352, ski_erg: 244, sled_push: 141, sled_pull: 254, burpee_broad_jumps: 180, row_erg: 269, farmer_carry: 106, sandbag_lunges: 225, wall_balls: 252 } },
+      novice: { n: 8694, nSplits: 8576, nRoxzone: 8389, medians: { total: 5289, run_total: 2841, work_total: 1983, roxzone: 469, ski_erg: 269, sled_push: 165, sled_pull: 304, burpee_broad_jumps: 226, row_erg: 296, farmer_carry: 120, sandbag_lunges: 275, wall_balls: 297 } },
+      beginner: { n: 3172, nSplits: 3082, nRoxzone: 2993, medians: { total: 6481, run_total: 3516, work_total: 2391, roxzone: 626, ski_erg: 290, sled_push: 198, sled_pull: 372, burpee_broad_jumps: 289, row_erg: 324, farmer_carry: 136, sandbag_lunges: 343, wall_balls: 397 } },
+    },
+  },
+};
+/** Band seed cells withheld for fewer than HYROX_S79_MIN_CELL_N split rows. */
+export const HYROX_S89_BAND_SEEDS_SUPPRESSED: ReadonlyArray<{ format: HyroxResultsFormat; sex: HyroxBandCellSex; band: HyroxTimeBand; n: number; nSplits: number; nRoxzone: number }> = [
 ];
 
 /** Repeat-athlete ingest report. authorRelMedianPct is the median change using the

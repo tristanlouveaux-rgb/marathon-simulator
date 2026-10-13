@@ -138,9 +138,14 @@ export interface HyroxConfig {
   /** Station benchmarks for Doubles format (seconds per station). Treated as Open-weight
    *  baseline unless `benchmarksAtProWeights` is true. */
   stationBenchmarksDoubles?: Partial<Record<HyroxStation, number>>;
-  /** When true, calibrated benchmarks were set at Pro-division weights, so the
-   *  predictor must NOT apply HYROX_PRO_STATION_MULTIPLIER on top when predicting Pro.
-   *  Default false: assume Open-weight baseline. */
+  /** When true, station tests were done at Pro-division weights, so the
+   *  predictor reads them at Pro loads and applies no Open-to-Pro conversion
+   *  on top when predicting Pro (and converts them Pro to Open for an Open
+   *  target). Default false: a Pro target's tests are at Open weights and
+   *  convert per station and sex with hyroxOpenToProSec (the difference in
+   *  differences on the Pro and Open results, hyrox-results.ts); any other
+   *  target's tests are at its own solo loads. Race splits and session bests
+   *  carry their own proWeights. */
   benchmarksAtProWeights?: boolean;
   /** Legacy pooled benchmarks — migrated to Singles/Doubles slots on first launch with new code. */
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
