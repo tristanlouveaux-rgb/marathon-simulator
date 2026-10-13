@@ -2479,10 +2479,12 @@ export function buildHyroxTrainingWeeks(
       const ws = prescribed(attempt.workouts);
       const planned = hyroxPlannedMinutes(attempt.workouts);
       const n = attempt.adjustments.join(' | ');
-      const budgetBinds = budgetMin < hoursMin - HYROX_RUN_FLOOR_MIN;
+      // The phase budget binds when it sits under the chosen hours and the
+      // week holds it, or holds all of it but less than one easy erg session.
+      const budgetBinds = budgetMin < hoursMin - 0.5;
       if (deloadRef) hoursWhy.push(`a deload holds at most ${HYROX_DELOAD_FACTOR} of the last loaded week`);
       else if (budgetBinds && planned > budgetMin + 0.5) {
-        const fixed = ws.some(x => x.t === 'hyrox_assessment') ? 'the fixed assessment holds it above' : 'session floors hold it above';
+        const fixed = ws.some(x => x.t === 'hyrox_assessment') ? 'the fixed assessment holds it above' : 'fixed session lengths hold it above';
         hoursWhy.push(`the ${phase} week's budget is ${Math.round(budgetMin)} min, ${fixed}`);
       } else if (budgetBinds && fillMin - planned < HYROX_RUN_FLOOR_MIN) hoursWhy.push(`the ${phase} week's budget is ${Math.round(budgetMin)} min`);
       if (/acute:chronic guard/.test(n)) hoursWhy.push('the acute:chronic guard holds its load');
