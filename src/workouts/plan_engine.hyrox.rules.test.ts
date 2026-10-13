@@ -21,7 +21,8 @@
  *     0.55 only by its fixed 25-min primer when the primer is all it holds;
  *     never above the week before, race week again excepted by the primer
  *     alone (SCIENCE_LOG §CE update 4); no more station and brick minutes, and
- *     no more station and brick MTL, than the reference week; the taper long
+ *     no more station and brick MTL, than the reference week, unless the week
+ *     holds just the taper's smallest circuit (round 6 review, pass 2); the taper long
  *     run at most TAPER_LONG_RUN_FRACTION of the longest long run of the 4
  *     weeks before (review 2026-10-13: taper week 1 sat up to 0.98 of the
  *     reference week, race week up to 0.93);
@@ -118,7 +119,7 @@ import {
   generateHyroxEasyErg, isHyroxEasyErg, MIN_CIRCUIT_ROUNDS, MIN_CIRCUIT_STATIONS,
 } from './hyrox-generators';
 import { resolvePlannedWeekPhase } from '@/calculations/planned-week-target';
-import { generateHyroxPlan, generateHyroxPlanDetailed, regenerateHyroxWeek, buildHyroxTrainingWeeks } from './plan_engine.hyrox';
+import { generateHyroxPlan, generateHyroxPlanDetailed, regenerateHyroxWeek, regenerateHyroxWeeksFrom, buildHyroxTrainingWeeks, hyroxRaceTaperFloorCircuit } from './plan_engine.hyrox';
 import { planTrainingWeeks, storedPlanRaceLayout } from './race-week-layout';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 
@@ -417,8 +418,16 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
         // all it holds.
         const allowed = raceWeek ? Math.max(ceiling, HYROX_RACE_WEEK_PRIMER_MIN) : ceiling;
         if (minutes(wk) > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min above ${taperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
-        if (stationWork(wk).min > stationWork(ref).min + EPS) out.push(`W${w}: taper station and brick ${stationWork(wk).min} min above the reference week's ${stationWork(ref).min}`);
-        if (stationWork(wk).mtl > stationWork(ref).mtl + EPS) out.push(`W${w}: taper station and brick MTL ${stationWork(wk).mtl.toFixed(0)} above the reference week's ${stationWork(ref).mtl.toFixed(0)}`);
+        // Above the reference week's station and brick work only by the
+        // taper's smallest circuit (round 6 review, pass 2): one technique
+        // circuit of at most MIN_CIRCUIT_ROUNDS rounds and MIN_CIRCUIT_STATIONS
+        // stations, and no other station or brick work.
+        const work = ws.filter(isWork);
+        const floorCircuit = work.length === 1 && work[0].t === 'hyrox_station_technique'
+          && (work[0].hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS
+          && (work[0].hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS;
+        if (!floorCircuit && stationWork(wk).min > stationWork(ref).min + EPS) out.push(`W${w}: taper station and brick ${stationWork(wk).min} min above the reference week's ${stationWork(ref).min}`);
+        if (!floorCircuit && stationWork(wk).mtl > stationWork(ref).mtl + EPS) out.push(`W${w}: taper station and brick MTL ${stationWork(wk).mtl.toFixed(0)} above the reference week's ${stationWork(ref).mtl.toFixed(0)}`);
       }
       const raw = w >= 2 ? minutes(wks[i - 1]) : Infinity;
       const before = raceWeek ? Math.max(raw, HYROX_RACE_WEEK_PRIMER_MIN) : raw;
@@ -1278,62 +1287,95 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // removed to hold the minutes. The sweep reports every adjacent-hour pair
     // whose total plan minutes fall. The bound is one easy session: the tier
     // long-run cap (HYROX_LONG_RUN capMin), the longest easy session the plan
-    // prescribes (an easy erg session lengthens up to it).
-    //   - Asserted on total plan minutes at the default sessions and in open
-    //     doubles.
-    //   - Asserted per training week in every variant.
-    //   - Reported, not asserted, on total plan minutes with the 7-session
-    //     choice and a logged load of 100 TSS: there the hierarchy itself
-    //     drops a few pairs further (2 and 3 of 420). With the sessions full,
-    //     an easy run outranks an easy erg session, so one more hour's easy
-    //     run can take a 65-min erg session's slot when the runs cannot merge
-    //     under the long run's length; under a binding guard, whole station
-    //     rounds move the week and its chronic load, and the taper inherits
-    //     the reference week's minutes and session count.
+    // prescribes (an easy erg session lengthens up to it). Asserted on total
+    // plan minutes and per training week, at the default sessions, in open
+    // doubles, with the 7-session choice and at logged weekly loads of 20, 50,
+    // 100 and 200 TSS (round 6 review, pass 2: under a binding guard the week
+    // was sized from the chosen hours, and at a logged 50 TSS 36 pairs fell by
+    // more than one easy session, up to 240 min; a week a fixed ceiling holds
+    // is now the same week at every chosen hours above its size). One more
+    // hour also never costs the plan a quality run.
+    // With the 7-session choice and at a logged 200 TSS a few pairs fall
+    // further, from one rule alone (an open question for Tristan): easy
+    // running ranks above easy erg work (step 3 of the hierarchy). With the
+    // chosen sessions full, a session slot goes to an easy run first, so one
+    // more hour that funds an easy run (or easy runs too long to merge under
+    // the long run's length) takes the slot an easy erg session of up to the
+    // tier long-run cap held; under the MTL cap, easy runs keep their MTL and
+    // easy erg work (less MTL a minute) gets what is left. The minutes the
+    // erg session held stay unprescribed. There the test asserts that every
+    // such pair comes from that rule: a week holding more easy-run minutes
+    // and fewer easy erg minutes, with minutes left unprescribed because the
+    // chosen sessions are full or the MTL cap holds them.
     const variants: Array<[string, Partial<OnboardingState>, number | undefined, boolean]> = [
       ['default', {}, undefined, true],
       ['open doubles', { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>, undefined, true],
       ['7 sessions', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, undefined, false],
-      ['logged 100 TSS', {}, 100, false],
+      ['logged 20 TSS', {}, 20, true],
+      ['logged 50 TSS', {}, 50, true],
+      ['logged 100 TSS', {}, 100, true],
+      ['logged 200 TSS', {}, 200, false],
     ];
-    const lengths = [2, 4, 8, 12, 16, 20, 24];
+    const sum = (ws: Workout[]) => ws.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    const easyRunMin = (wk: Week) => sum(prescribed(wk).filter(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w)));
+    const ergMin = (wk: Week) => sum(prescribed(wk).filter(isHyroxEasyErg));
+    // A week where the larger hours' easy running took easy erg work's slot
+    // or its MTL room.
+    const easyFirst = (before: Week, after: Week) => minutes(after) < minutes(before)
+      && easyRunMin(after) > easyRunMin(before) && ergMin(after) < ergMin(before)
+      && notes(after).some(n => /left unprescribed \((the chosen \d+ sessions are full|MTL cap \d+)/.test(n));
+    const unattributed: string[] = [];
+    let attributed = 0;
+    const lengths = [2, 8, 12, 16, 19, 24];
     const fell: string[] = [];
     const tooFar: string[] = [];
     const weekTooFar: string[] = [];
+    const qualityFell: string[] = [];
     let pairs = 0;
     for (const [name, over, logged, assertTotal] of variants) {
       for (const band of BANDS) {
         const easyMax = HYROX_LONG_RUN[hyroxTier(band)].capMin;
+        const r = HYROX_HOURS_RANGE[band];
         for (const len of lengths) {
-          let prev: { total: number; weeks: Week[] } | null = null;
-          for (let h = 2; h <= 12; h++) {
+          let prev: { total: number; quality: number; weeks: Week[] } | null = null;
+          for (let h = Math.max(2, r.min); h <= Math.min(12, r.max); h++) {
             const s = build(band, h, len, over, logged);
             const weeks = s.wks.slice(0, planTrainingWeeks(s));
             const total = weeks.reduce((a, wk) => a + minutes(wk), 0);
+            const quality = weeks.reduce((a, wk) => a + prescribed(wk).filter(isQuality).length, 0);
             if (prev != null) {
               pairs++;
+              const label = `${name} ${band} ${len}w ${h - 1}->${h} h`;
               if (total < prev.total - EPS) {
-                const line = `${name} ${band} ${len}w ${h - 1}->${h} h: ${prev.total} -> ${total} min`;
-                fell.push(line);
-                if (assertTotal && prev.total - total > easyMax + EPS) tooFar.push(`${line} (more than the ${easyMax}-min easy session)`);
+                fell.push(`${label}: ${prev.total} -> ${total} min`);
+                if (prev.total - total > easyMax + EPS) {
+                  const line = `${label}: ${prev.total} -> ${total} min (more than the ${easyMax}-min easy session)`;
+                  if (assertTotal) tooFar.push(line);
+                  else if (weeks.some((wk, i) => prev!.weeks[i] && easyFirst(prev!.weeks[i], wk))) attributed++;
+                  else unattributed.push(line);
+                }
               }
+              if (quality < prev.quality) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
               weeks.forEach((wk, i) => {
                 const before = prev!.weeks[i];
-                if (wk.ph === 'taper' || !before || before.ph === 'taper') return;
-                if (minutes(before) - minutes(wk) > easyMax + EPS) weekTooFar.push(`${name} ${band} ${len}w ${h - 1}->${h} h W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min`);
+                if (!before) return;
+                if (minutes(before) - minutes(wk) > easyMax + EPS) weekTooFar.push(`${label} W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min`);
               });
             }
-            prev = { total, weeks };
+            prev = { total, quality, weeks };
           }
         }
       }
     }
-    expect(pairs).toBe(variants.length * BANDS.length * lengths.length * 10);
+    expect(pairs).toBeGreaterThan(variants.length * BANDS.length * lengths.length * 5);
     // The report: every pair whose total plan minutes fall.
     console.info(`[hyrox B report] ${fell.length} of ${pairs} adjacent-hour pairs hold fewer total plan minutes${fell.length > 0 ? `:\n  ${fell.join('\n  ')}` : ''}`);
+    console.info(`[hyrox B report] ${attributed} pair(s) with the 7-session choice or a logged 200 TSS fall by more than one easy session, each from easy running ranking above easy erg work`);
     expect(tooFar.slice(0, 10)).toEqual([]);
+    expect(unattributed.slice(0, 10)).toEqual([]);
     expect(weekTooFar.slice(0, 10)).toEqual([]);
-  }, 600000);
+    expect(qualityFell.slice(0, 10)).toEqual([]);
+  }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
     let short = 0;
@@ -1401,14 +1443,23 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // Week.hyroxHoursFit drives the plan view's one muted line ("Your 5
     // sessions fit about 6 h of your 8 h."). Review 2026-10-13: 2,271 of
     // 14,147 hours notes stated a budget below the week's own minutes, so
-    // every number is checked against the week.
+    // every number is checked against the week. Round 6 review, pass 2: 79% of
+    // marked weeks were base and build weeks whose phase budget held them
+    // hours under the chosen hours, and in 11% one more session added under
+    // 20 min. A marked week's size is the chosen hours (the phase budget is
+    // not under them), and one more chosen session holds at least
+    // HYROX_RUN_FLOOR_MIN more of it.
     let marked = 0;
+    let liftChecked = 0;
+    const tooSmall: string[] = [];
     for (const band of BANDS) {
       for (const hrs of hoursGrid(band)) {
         for (const len of [8, 16, 24]) {
           const s = build(band, hrs, len);
           const tw = planTrainingWeeks(s);
           const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+          const chosen = chosenSessions(s);
+          let plus: SimulatorState | null = null;
           for (let i = 0; i < tw; i++) {
             const wk = s.wks[i];
             const fit = wk.hyroxHoursFit;
@@ -1419,26 +1470,39 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
             marked++;
             expect(wk.ph === 'taper' || d.deload || d.raceWeek, label).toBe(false);
             expect(fit.sessions, label).toBe(prescribed(wk).length);
-            expect(fit.sessions, label).toBeGreaterThanOrEqual(chosenSessions(s));
+            expect(fit.sessions, label).toBeGreaterThanOrEqual(chosen);
             expect(fit.plannedMin, label).toBe(minutes(wk));
             expect(fit.chosenHours, label).toBe(hrs);
-            // Under its size by at least one easy session's floor, the size
-            // being the chosen hours or the phase budget when that is lower.
-            expect(Math.min(hrs * 60, d.budgetMin) - fit.plannedMin, label).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN - 0.5);
+            // The week's size is the chosen hours: its phase budget is not
+            // under them, and it sits at least one easy session's floor under.
+            expect(d.budgetMin, label).toBeGreaterThanOrEqual(hrs * 60 - 0.5);
+            expect(hrs * 60 - fit.plannedMin, label).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN - 0.5);
             // No ceiling and no MTL cap held it.
-            expect(notes(wk).some(n => /\((acute:chronic guard|weekly hours|base budget|build budget|peak budget)\)|MTL cap \d+/.test(n)), label).toBe(false);
+            expect(notes(wk).some(n => /\((acute:chronic guard|weekly hours|base budget|build budget|peak budget)\)|MTL cap \d+|guard holds its load/.test(n)), label).toBe(false);
             // The line's rounded figure sits under the chosen hours.
             expect(Math.round(fit.plannedMin / 30) / 2, label).toBeLessThan(hrs);
+            // One more chosen session holds at least HYROX_RUN_FLOOR_MIN more.
+            if (chosen < 7) {
+              plus ??= build(band, hrs, len, { hyroxWeeklySessionCount: chosen + 1 } as Partial<OnboardingState>);
+              liftChecked++;
+              if (minutes(plus.wks[i]) - fit.plannedMin < HYROX_RUN_FLOOR_MIN) tooSmall.push(`${label}: ${fit.plannedMin} -> ${minutes(plus.wks[i])} min with ${chosen + 1} sessions`);
+            }
           }
         }
       }
     }
-    expect(marked).toBeGreaterThan(50);
+    expect(marked).toBeGreaterThan(20);
+    expect(liftChecked).toBeGreaterThan(10);
+    expect(tooSmall.slice(0, 10)).toEqual([]);
     // The line never shows for a week the phase budget, a deload or the taper
-    // holds: a base week that fills its budget carries none.
-    const s = build('intermediate', 8, 16);
-    expect(s.wks[1].hyroxHoursFit).toBeUndefined();
-  }, 120000);
+    // holds: a base week that fills its budget carries none, nor does a base
+    // or build week the phase budget holds hours under the chosen hours
+    // (competitive 12 h 16 weeks, weeks 2 and 3: about 6.5 h of a 7 to 7.5 h
+    // budget, review pass 2).
+    expect(build('intermediate', 8, 16).wks[1].hyroxHoursFit).toBeUndefined();
+    const c12 = build('competitive', 12, 16);
+    for (const wk of c12.wks) if (wk.ph !== 'peak') expect(wk.hyroxHoursFit, `competitive 12h 16w W${wk.w}`).toBeUndefined();
+  }, 300000);
 
   it('beginner-tier deloads keep at least half the last loaded week\'s running (round 6, item 8)', () => {
     // Review 2026-10-13: a technique circuit at its 2-round floor held its
@@ -1473,8 +1537,12 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
       }
     }
     expect(deloads).toBeGreaterThan(100);
-    const s = build('total_beginner', 4, 12);
-    expect(prescribed(s.wks[7]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
+    // beginner 4 h 12 weeks: W7 holds an easy run of 20 min, a 59-min circuit,
+    // a 49-min mini brick and a 38-min long run; the W8 deload keeps its easy
+    // run at the run floor and shortens the circuit and the mini brick.
+    const s = build('beginner', 4, 12);
+    expect(prescribed(s.wks[6]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
+    expect(prescribed(s.wks[7]).find(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))?.estimatedDurationMin).toBe(HYROX_RUN_FLOOR_MIN);
   });
 
   it('with an active injury the easy erg slot swap never runs, whatever the capacities (round 6, item 6)', () => {
@@ -1517,5 +1585,65 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
         }
       }
     }
+  });
+
+  it('race week keeps a circuit whenever the athlete has the stations, the race-week days allow it and the taper fractions hold the primer beside the smallest circuit (round 6 review, pass 2)', () => {
+    // Review: once the long run and the quality run came first, a reference
+    // week holding a short race-pace block capped the taper's station work
+    // under any circuit, and 106 to 249 of 1,020 race weeks per variant held
+    // none (21 to 23, all at 2 h, at round 4). The taper's station ceilings now
+    // never sit under its smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
+    // MIN_CIRCUIT_STATIONS stations). A race week without a circuit is one the
+    // race-day rules left no day for, or one whose 0.55 fraction (or the week
+    // before, the taper never rising) cannot hold the primer beside it.
+    let withCircuit = 0;
+    let weeks = 0;
+    for (const [over, logged] of [[{}, undefined], [{ hyroxFormat: 'open_doubles' }, undefined], [{}, 100]] as Array<[Partial<OnboardingState>, number | undefined]>) {
+      for (const band of BANDS) {
+        if (HYROX_WEEKLY_STRUCTURE[hyroxTier(band)].peak.stations === 0) continue;
+        for (const hrs of hoursGrid(band)) {
+          for (let len = 8; len <= 24; len += 4) {
+            const s = build(band, hrs, len, over, logged);
+            const tw = planTrainingWeeks(s);
+            const wks = s.wks.slice(0, tw);
+            const rw = wks[tw - 1];
+            const label = `${JSON.stringify(over)} ${logged ?? '-'} ${band} ${hrs}h ${len}w`;
+            weeks++;
+            if (prescribed(rw).some(isCircuit)) { withCircuit++; continue; }
+            if (notes(rw).some(n => /Station Circuit left out \(no race-week day/.test(n))) continue;
+            const isDeload = deloadOf(wks);
+            let taperStart = tw;
+            while (taperStart > 1 && wks[taperStart - 2].ph === 'taper') taperStart--;
+            let ref = taperStart - 2;
+            while (ref >= 0 && (wks[ref].ph === 'taper' || isDeload(ref))) ref--;
+            const floor = hyroxRaceTaperFloorCircuit(s, tw, true);
+            expect(floor, label).not.toBeNull();
+            const cap = Math.min(
+              ref >= 0 ? taperFraction(tw - taperStart + 1, tw - taperStart + 1) * minutes(wks[ref]) : Infinity,
+              tw >= 2 ? minutes(wks[tw - 2]) : Infinity,
+            );
+            const primer = prescribed(rw).filter(isQuality).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+            expect(primer + floor!.min, label).toBeGreaterThan(cap + EPS);
+          }
+        }
+      }
+    }
+    expect(withCircuit).toBeGreaterThan(0.8 * weeks);
+  }, 300000);
+
+  it('the injury modal rebuilds every remaining week in one build, as the full plan builds them (round 6 review, pass 2)', () => {
+    const s = structuredClone(build('intermediate', 8, 16));
+    s.w = 5;
+    (s as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 100, upperLoadCapacity: 0, lowerLoadCapacity: 100 };
+    const many = regenerateHyroxWeeksFrom(s, 5);
+    expect(many).toHaveLength(s.wks.length - 4);
+    const full = generateHyroxPlanDetailed(structuredClone(s)).weeks;
+    many.forEach((wk, i) => {
+      expect(wk?.triWorkouts, `W${5 + i}`).toEqual(full[4 + i].triWorkouts);
+      expect(wk?.hyroxPlanNotes, `W${5 + i}`).toEqual(full[4 + i].hyroxPlanNotes);
+    });
+    expect(regenerateHyroxWeek(s, 5)).toEqual(many[0]);
+    expect(regenerateHyroxWeek(s, 0)).toBeNull();
+    expect(regenerateHyroxWeek(s, s.wks.length + 1)).toBeNull();
   });
 });
