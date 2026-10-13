@@ -61,11 +61,11 @@ function bandFromTime(sec: number): AbilityBand {
  *  same rule as onboarding once the previous race's format is known: the
  *  previous time in singles terms (hyroxBandingTimeSec). Before the format is
  *  picked, the time as entered. */
-export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat' | 'hyroxFormat'>): AbilityBand | null {
+export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat'>): AbilityBand | null {
   const sec = ob.previousHyroxTimeSec;
   if (sec == null) return null;
   const prevFmt = ob.hyroxPreviousTimeFormat;
-  return bandFromTime(prevFmt ? hyroxBandingTimeSec(sec, prevFmt, ob.hyroxFormat ?? 'open_singles') : sec);
+  return bandFromTime(prevFmt ? hyroxBandingTimeSec(sec, prevFmt) : sec);
 }
 
 /** User-friendly target finish time message derived from ability band. */

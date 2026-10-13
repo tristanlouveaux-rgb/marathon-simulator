@@ -1,16 +1,19 @@
 /**
  * Tests for HYROX format-aware band derivation.
  *
- * Onboarding, "Log a previous HYROX time" and the previous-format fix all band
- * on hyroxBandingTimeSec (hyrox-doubles.ts): the previous time in singles terms,
- * because the band thresholds and the band seed times are singles times.
- *   - doubles target: a doubles previous time ÷ the data ratio (the inverse of
- *     the doubles forecast's quantile mapping), a singles previous time as is.
- *   - singles target: a doubles previous time × SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES
- *     (1.22), a singles previous time as is.
- * The old doubles-target rule (a singles time × 0.85, a doubles time as is)
- * banded on doubles terms and the forecast then applied the doubles ratios to
- * that band's seeds a second time (review 2026-10-12).
+ * Onboarding, "Log a previous HYROX time", the previous-format fix and the
+ * setup step all band on hyroxBandingTimeSec (hyrox-doubles.ts): the previous
+ * time in singles terms, because the band thresholds and the band seed times
+ * are singles times. A doubles previous time goes through
+ * doublesTotalInSinglesTermsSec (the inverse of the doubles forecast's
+ * quantile mapping) for EITHER target; a singles previous time stays as is.
+ *
+ * History: the doubles-target rule (a singles time × 0.85, a doubles time as
+ * is) banded on doubles terms and the forecast then applied the doubles ratios
+ * a second time (review 2026-10-12). The singles-target rule (a doubles time ×
+ * 1.22, coaching consensus) used a different conversion from the doubles
+ * target, so the doubles median banded on 1:36:30 in one path and 1:28:58 in
+ * the other (unified 2026-10-13).
  */
 import { describe, expect, it } from 'vitest';
 import { HYROX_TIME_TO_BAND_THRESHOLDS } from '@/constants/hyrox-constants';
@@ -27,8 +30,9 @@ function bandFromTime(sec: number): AbilityBand {
   return 'beginner';
 }
 
-function deriveBand(prevTimeSec: number, prevFmt: Format, targetFmt: Format): AbilityBand {
-  return bandFromTime(hyroxBandingTimeSec(prevTimeSec, prevFmt, targetFmt));
+/** Target format kept in the signature to show it does not move the band. */
+function deriveBand(prevTimeSec: number, prevFmt: Format, _targetFmt: Format): AbilityBand {
+  return bandFromTime(hyroxBandingTimeSec(prevTimeSec, prevFmt));
 }
 
 const median = (f: 'open_singles' | 'open_doubles') =>
@@ -52,17 +56,26 @@ describe('same-athlete cross-format band derivation', () => {
       .toBe(deriveBand(median('open_singles'), 'open_singles', 'open_singles'));
   });
 
-  it('60-min doubles → singles: × 1.22 = 73:12 → advanced (NOT competitive — pre-fix bug)', () => {
+  it('60-min doubles → singles: data ratio ≈ 67:33 singles → advanced (NOT competitive)', () => {
     expect(deriveBand(60 * 60, 'open_doubles', 'open_singles')).toBe('advanced');
   });
 
-  it('70-min doubles → singles: × 1.22 = 85:24 → intermediate', () => {
-    expect(deriveBand(70 * 60, 'open_doubles', 'open_singles')).toBe('intermediate');
+  it('70-min doubles (about P22 of the doubles field) → singles: ≈ 78:44 singles → advanced', () => {
+    // Under the old × 1.22 rule this read 85:24 and banded intermediate.
+    expect(deriveBand(70 * 60, 'open_doubles', 'open_singles')).toBe('advanced');
   });
 
-  it('pro_doubles → pro_singles applies factor', () => {
-    // 65 min pro doubles → 79.3 min pro singles → advanced (sub-80).
+  it('pro_doubles → pro_singles converts through the same data ratio', () => {
+    // 65 min pro doubles → about 73:15 singles terms → advanced (sub-80).
     expect(deriveBand(65 * 60, 'pro_doubles', 'pro_singles')).toBe('advanced');
+  });
+
+  it('a doubles previous time bands the same for either target (one conversion)', () => {
+    const doubles = HYROX_TOTAL_PERCENTILE_TABLES.open_doubles.map(([t]) => t);
+    for (const t of [...doubles, 55 * 60, 70 * 60, 95 * 60, 115 * 60]) {
+      expect(deriveBand(t, 'open_doubles', 'open_singles')).toBe(deriveBand(t, 'open_doubles', 'open_doubles'));
+      expect(hyroxBandingTimeSec(t, 'open_doubles')).toBe(hyroxBandingTimeSec(t, 'pro_doubles'));
+    }
   });
 
   it('a singles previous time bands the same for either target', () => {

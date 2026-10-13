@@ -103,7 +103,7 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
   // Band on the previous time in singles terms (hyroxBandingTimeSec), the
   // same rule as onboarding.
-  const newBand = bandFromTime(hyroxBandingTimeSec(update.timeSec, update.format, hx.format));
+  const newBand = bandFromTime(hyroxBandingTimeSec(update.timeSec, update.format));
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;

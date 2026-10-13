@@ -122,7 +122,7 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
   const prevTimeSec = hx.previousHyroxTimeSec;
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-    const newBand = bandFromTime(hyroxBandingTimeSec(prevTimeSec, newFormat, hx.format));
+    const newBand = bandFromTime(hyroxBandingTimeSec(prevTimeSec, newFormat));
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];

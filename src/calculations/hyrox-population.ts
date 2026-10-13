@@ -16,7 +16,7 @@
 
 import { STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
-import { doublesRatioAtTeamTime } from './hyrox-doubles';
+import { doublesTotalInSinglesTermsSec } from './hyrox-doubles';
 import {
   POPULATION_DATA_AVAILABLE,
   HYROX_TOTAL_PERCENTILE_TABLES,
@@ -92,11 +92,12 @@ export function getFinishTimePercentile(timeSec: number, format: HyroxFormat): n
   }
   const table = (format === 'pro_singles' || format === 'pro_doubles') ? PRO_PERCENTILE_TABLE : OPEN_PERCENTILE_TABLE;
   // The synthetic tables are singles finish times. A doubles total is the
-  // pair's time (faster), so convert it to singles terms with the
-  // percentile-matched total ratio from the Open results before the lookup;
-  // otherwise a Pro Doubles pair reads as far up the Pro singles field.
+  // pair's time (faster), so convert it to singles terms with the canonical
+  // doubles-to-singles total conversion (percentile-matched on the Open
+  // results) before the lookup; otherwise a Pro Doubles pair reads as far up
+  // the Pro singles field.
   const isDoubles = format === 'open_doubles' || format === 'pro_doubles';
-  const lookupSec = isDoubles ? timeSec / doublesRatioAtTeamTime('total', timeSec).ratio : timeSec;
+  const lookupSec = isDoubles ? doublesTotalInSinglesTermsSec(timeSec) : timeSec;
   // cumulativePercentile = % of finishers at or faster than this time
   // "faster than X%" = 100 - cumulativePercentile
   const pctAtOrFaster = interpolatePercentile(table, lookupSec);

@@ -18,8 +18,8 @@ import {
   seedRoxzoneSecForFormat,
   doublesBenchmarkIsTeamTime,
   hyroxBandingTimeSec,
+  doublesTotalInSinglesTermsSec,
 } from './hyrox-doubles';
-import { SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES } from '@/constants/hyrox-constants';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import { derivePopulationRunPace } from './hyrox-run-pace';
 import { getFinishTimePercentile } from './hyrox-population';
@@ -161,22 +161,39 @@ describe('doubles benchmark provenance', () => {
   });
 });
 
+describe('doublesTotalInSinglesTermsSec: the one doubles-to-singles total conversion', () => {
+  const totals = HYROX_TOTAL_PERCENTILE_TABLES;
+  it('maps a doubles total to the singles total at the same percentile', () => {
+    for (const p of [5, 25, 50, 75, 95]) {
+      expect(doublesTotalInSinglesTermsSec(at(totals.open_doubles, p))).toBeCloseTo(at(totals.open_singles, p), 6);
+    }
+  });
+  it('is the exact inverse of the forecast mapping (singles × doublesRatioAt) inside the tables', () => {
+    for (const singles of [4000, 4793, 5338, 6042, 7000]) {
+      const team = singles * doublesRatioAt('total', singles).ratio;
+      expect(doublesTotalInSinglesTermsSec(team)).toBeCloseTo(singles, 6);
+    }
+  });
+});
+
 describe('hyroxBandingTimeSec', () => {
   const totals = HYROX_TOTAL_PERCENTILE_TABLES;
-  it('a doubles target bands a doubles previous time on singles terms (the data ratio)', () => {
+  it('a doubles previous time is banded on singles terms (the data ratio)', () => {
     // The doubles median maps to the singles median: the inverse of the
     // forecast's quantile mapping, read from the tables.
-    expect(hyroxBandingTimeSec(at(totals.open_doubles, 50), 'open_doubles', 'open_doubles'))
+    expect(hyroxBandingTimeSec(at(totals.open_doubles, 50), 'open_doubles'))
       .toBeCloseTo(at(totals.open_singles, 50), -1);
-    expect(hyroxBandingTimeSec(at(totals.open_doubles, 25), 'pro_doubles', 'open_doubles'))
+    expect(hyroxBandingTimeSec(at(totals.open_doubles, 25), 'pro_doubles'))
       .toBeCloseTo(at(totals.open_singles, 25), -1);
+    expect(hyroxBandingTimeSec(at(totals.open_doubles, 75), 'open_doubles'))
+      .toBeCloseTo(at(totals.open_singles, 75), -1);
   });
-  it('a singles previous time stays as is for any target', () => {
-    expect(hyroxBandingTimeSec(5338, 'open_singles', 'open_doubles')).toBe(5338);
-    expect(hyroxBandingTimeSec(5338, 'pro_singles', 'open_singles')).toBe(5338);
+  it('a singles previous time stays as is', () => {
+    expect(hyroxBandingTimeSec(5338, 'open_singles')).toBe(5338);
+    expect(hyroxBandingTimeSec(5338, 'pro_singles')).toBe(5338);
   });
-  it('a singles target expands a doubles previous time by the same-athlete factor', () => {
-    expect(hyroxBandingTimeSec(3600, 'open_doubles', 'open_singles')).toBe(Math.round(3600 * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES));
+  it('uses the same conversion as the Pro Doubles finish percentile (one source)', () => {
+    expect(hyroxBandingTimeSec(4747, 'open_doubles')).toBe(Math.round(doublesTotalInSinglesTermsSec(4747)));
   });
 });
 

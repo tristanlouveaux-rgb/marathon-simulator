@@ -38,7 +38,6 @@ import {
   HYROX_TOTAL_PERCENTILE_TABLES,
 } from '@/data/hyrox-population-distributions';
 import { SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
-import { SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES } from '@/constants/hyrox-constants';
 import { isHyroxDoublesFormat } from './hyrox-division';
 import { benchmarkEntryForSlotValue, isRaceSplitSource } from './hyrox-station-history';
 
@@ -111,6 +110,28 @@ export function doublesRatioAtTeamTime(metric: DoublesMetric, teamSec: number): 
   return { ratio, singlesPercentile: p };
 }
 
+/**
+ * A doubles finish time (the pair's total) in singles terms: the open_singles
+ * total at the same cumulative percentile, i.e. team ÷ the total ratio read on
+ * the doubles side (doublesRatioAtTeamTime). Inside the tables this is the
+ * exact inverse of the forecast's own mapping (singles × doublesRatioAt):
+ * the doubles median 4747 s reads as the singles median 5338 s.
+ *
+ * The one doubles-to-singles total conversion. Banding a doubles previous time
+ * (hyroxBandingTimeSec, for both targets) and placing a Pro Doubles total on
+ * the Pro singles scale (getFinishTimePercentile) both go through it. It
+ * replaced SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES (1.22, from coaching
+ * consensus), which banded a singles target on a different conversion than a
+ * doubles target: the doubles median read 1:36:30 in one path and 1:28:58 in
+ * the other (2026-10-13).
+ *
+ * Limitation: a cohort comparison, not the same athletes racing both formats
+ * (see the module header).
+ */
+export function doublesTotalInSinglesTermsSec(teamSec: number): number {
+  return teamSec / doublesRatioAtTeamTime('total', teamSec).ratio;
+}
+
 /** Team station ratio, refined once for stations whose time is already a team
  *  time (a doubles race split). `soloSec` holds singles-capacity times (tests,
  *  singles splits, seeds); `teamSec` holds team times. The first pass reads the
@@ -160,28 +181,23 @@ export function doublesBenchmarkIsTeamTime(
  * hours) and tracking (the band's seed times feed the forecast).
  *
  * The band thresholds (HYROX_TIME_TO_BAND_THRESHOLDS) and the band seed times
- * are singles times. The doubles forecast multiplies the band's singles seeds
- * by the doubles ratios, so a doubles target is banded on a singles-terms time:
- *  - a doubles previous time ÷ the percentile-matched total ratio, read on the
- *    doubles side (doublesRatioAtTeamTime), the inverse of the forecast's own
- *    mapping;
+ * are singles times, so every target is banded on the previous time in
+ * singles terms:
+ *  - a doubles previous time → doublesTotalInSinglesTermsSec, the inverse of
+ *    the doubles forecast's own mapping;
  *  - a singles previous time as is.
- * Banding a doubles target on the doubles time itself (a singles time × 0.85,
- * a doubles time unconverted) applied the doubles conversion twice: review
- * 2026-10-12 measured a doubles-median athlete banded advanced, stations 13%
- * and Roxzone 35% faster than the doubles median.
+ * The target format does not enter: a doubles target scales the band's
+ * singles seeds by the doubles ratios in the forecast, a singles target uses
+ * them directly.
  *
- * A singles target is unchanged: a doubles previous time ×
- * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES, a singles previous time as is.
+ * History: a doubles target was banded on the doubles time itself (a singles
+ * time × 0.85, a doubles time unconverted), applying the doubles conversion
+ * twice (review 2026-10-12). A singles target then expanded a doubles time ×
+ * 1.22 (SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES, coaching consensus) while a
+ * doubles target used the data ratio, so the same previous time banded on two
+ * different singles-terms times (fixed 2026-10-13).
  */
-export function hyroxBandingTimeSec(
-  prevTimeSec: number,
-  prevFormat: HyroxFormat,
-  targetFormat: HyroxFormat,
-): number {
+export function hyroxBandingTimeSec(prevTimeSec: number, prevFormat: HyroxFormat): number {
   if (!isHyroxDoublesFormat(prevFormat)) return prevTimeSec;
-  if (isHyroxDoublesFormat(targetFormat)) {
-    return Math.round(prevTimeSec / doublesRatioAtTeamTime('total', prevTimeSec).ratio);
-  }
-  return Math.round(prevTimeSec * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES);
+  return Math.round(doublesTotalInSinglesTermsSec(prevTimeSec));
 }

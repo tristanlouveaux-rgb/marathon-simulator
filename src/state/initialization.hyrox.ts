@@ -117,9 +117,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Derive ability band from the previous time in singles terms (the band
     // thresholds and seed times are singles times): hyroxBandingTimeSec. A
-    // doubles target converts a doubles previous time with the data ratio the
-    // doubles forecast uses and leaves a singles time as is; a singles target
-    // expands a doubles previous time × 1.22 (SCIENCE_LOG §T).
+    // doubles previous time is converted with the data ratio the doubles
+    // forecast uses (doublesTotalInSinglesTermsSec), for either target; a
+    // singles time stays as is.
     const prevTimeSec = state.previousHyroxTimeSec;
     const prevFmt = state.hyroxPreviousTimeFormat;
     // Format must be one of the four known values to be trusted. A missing or
@@ -134,7 +134,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     }
     const isTargetDoubles = format === 'open_doubles' || format === 'pro_doubles';
     const adjustedPrevTimeSec = (prevTimeSec != null && prevFormatKnown)
-      ? hyroxBandingTimeSec(prevTimeSec, prevFmt, format)
+      ? hyroxBandingTimeSec(prevTimeSec, prevFmt)
       : null;
     const timeBasedBand: AbilityBand = adjustedPrevTimeSec != null
       ? bandFromTime(adjustedPrevTimeSec)

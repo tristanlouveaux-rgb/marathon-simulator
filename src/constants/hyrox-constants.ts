@@ -13,25 +13,11 @@
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/workouts/phases';
 
-/** Same-athlete cross-format TOTAL time multiplier — DOUBLES → SINGLES.
- *  In singles, the athlete completes all 8 stations continuously without the
- *  partner-rest pattern doubles offers. Population-data lower bound: 1.125
- *  (P50 cohort comparison, S4–S6. See src/data/hyrox-population-distributions.ts
- *  where open_singles P50 total = 5338 s vs open_doubles P50 total = 4747 s;
- *  ratio is cohort-comparison so it understates the same-athlete gap).
- *  Coaching consensus (Hyrox Hub, Roxzone pacing analyses) puts same-athlete
- *  doubles → singles total expansion at 1.20–1.25. We use the midpoint 1.22.
- *
- *  Used ONLY for banding a SINGLES target on a doubles previous time
- *  (hyroxBandingTimeSec in src/calculations/hyrox-doubles.ts). A doubles
- *  target is banded on the data ratio instead, the inverse of the doubles
- *  forecast's own quantile mapping, so the two directions use different
- *  conversions (open question for Tristan). A singles target with only doubles
- *  station benchmarks falls back to seed station times with a confidence drop.
- *
- *  Recalibrate when matched-athlete cross-format records become available
- *  (e.g. Strava ingest of users who race both formats). See SCIENCE_LOG §T. */
-export const SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22;
+// Doubles ↔ singles total-time conversion lives in
+// src/calculations/hyrox-doubles.ts (doublesTotalInSinglesTermsSec), a
+// percentile match on the ingested results. SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES
+// (1.22, coaching consensus) was removed 2026-10-13 so banding and the doubles
+// forecast share one conversion.
 
 /**
  * Station-time multiplier for Pro division vs Open.

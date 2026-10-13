@@ -127,12 +127,12 @@ describe('hyrox-setup: Pro note gives the athlete\'s own division loads', () => 
 
 describe('hyrox-setup: band-driven defaults use the onboarding banding rule', () => {
   const p50 = (f: 'open_singles' | 'open_doubles') => HYROX_TOTAL_PERCENTILE_TABLES[f].find(([, p]) => p === 50)![0];
-  it('a doubles-median time for a doubles target bands like the singles median', () => {
-    expect(setupBand({ previousHyroxTimeSec: p50('open_doubles'), hyroxPreviousTimeFormat: 'open_doubles', hyroxFormat: 'open_doubles' }))
-      .toBe(setupBand({ previousHyroxTimeSec: p50('open_singles'), hyroxPreviousTimeFormat: 'open_singles', hyroxFormat: 'open_singles' }));
+  it('a doubles-median time bands like the singles median (any target)', () => {
+    expect(setupBand({ previousHyroxTimeSec: p50('open_doubles'), hyroxPreviousTimeFormat: 'open_doubles' }))
+      .toBe(setupBand({ previousHyroxTimeSec: p50('open_singles'), hyroxPreviousTimeFormat: 'open_singles' }));
   });
   it('before the previous format is picked, the time as entered', () => {
-    expect(setupBand({ previousHyroxTimeSec: 75 * 60, hyroxFormat: 'open_doubles' })).toBe('advanced');
-    expect(setupBand({ hyroxFormat: 'open_doubles' })).toBeNull();
+    expect(setupBand({ previousHyroxTimeSec: 75 * 60 })).toBe('advanced');
+    expect(setupBand({})).toBeNull();
   });
 });

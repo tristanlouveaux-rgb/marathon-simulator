@@ -124,20 +124,31 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
       previousHyroxTimeSec: 3600,            // 1:00:00 doubles
       hyroxPreviousStationSplits: undefined,
     }));
-    // 3600 × 1.22 = 4392 (73:12) → advanced (sub-80 min singles).
-    // Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60). Confirms direction flip.
+    // Singles terms via the data ratio (doublesTotalInSinglesTermsSec):
+    // 3600 → about 4053 (67:33) → advanced (sub-80 min singles).
+    // Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60). Confirms direction.
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
-  it('70-min doubles previous + singles target → intermediate', () => {
+  it('70-min doubles previous + singles target → advanced, the same band as a doubles target', () => {
     initializeHyroxSimulator(buildOnboarding({
       hyroxFormat: 'open_singles',
       hyroxPreviousTimeFormat: 'open_doubles',
-      previousHyroxTimeSec: 4200,            // 1:10:00 doubles
+      previousHyroxTimeSec: 4200,            // 1:10:00 doubles, about P22 of the doubles field
       hyroxPreviousStationSplits: undefined,
     }));
-    // 4200 × 1.22 = 5124 (85:24) → intermediate (sub-100 min singles).
-    expect(getState().hyroxConfig!.athleteBand).toBe('intermediate');
+    // Singles terms via the data ratio: about 4724 (78:44) → advanced
+    // (sub-80 min singles). The old × 1.22 rule read 85:24 → intermediate,
+    // while a doubles target banded the same time on the data ratio.
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
+    resetState();
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'open_doubles',
+      hyroxPreviousTimeFormat: 'open_doubles',
+      previousHyroxTimeSec: 4200,
+      hyroxPreviousStationSplits: undefined,
+    }));
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
   it('60-min singles previous + doubles target → the singles band (advanced)', () => {
