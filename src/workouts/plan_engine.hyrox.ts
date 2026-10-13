@@ -46,12 +46,16 @@
  *      before week 1 count as the athlete's logged weekly load, else as the
  *      nominal week 1, fixed when the plan is created; week 1's assessment is
  *      exempt from week 1's guard). Over it, easy erg work gives way first,
- *      then easy running, then the station work shrinks and the week is
- *      rebuilt; the long run is
- *      trimmed to the run floor, then left out, before the week's last
- *      station session or brick, which leaves only when the week is still
- *      over without the long run.
- *   9. Wrap into Week[].
+ *      then the station work and easy running shrink by one scale (over the
+ *      weekly hours alone, easy running gives way before the station work)
+ *      and the week is rebuilt; the long run is trimmed to the run floor,
+ *      then left out, before the week's last station session or brick, which
+ *      leaves only when the week is still over without the long run.
+ *   9. The hours ladder (decision B): the plan is built at every whole hour
+ *      from the band's lowest choice up to the chosen hours, each rung
+ *      holding the rung below's total minutes and peak week (minutes and
+ *      TSS); a week held to the rung below's says so.
+ *  10. Wrap into Week[].
  */
 
 import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, raceWeekPrimerDow, PRIMER_MIN_DAYS_OUT, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
@@ -201,6 +205,14 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // 1's tempo is sized alone (B); a week under the chosen hours says so (C);
 // easy erg work has its own discipline, 'erg' (D); the taper long run never
 // sits under the run floor (E).
+// Still v18 (unreleased; round 5 review fixes, 2026-10-13): one more chosen
+// hour never holds less, by construction (the hours ladder: the plan at each
+// whole hour from the band's lowest, each holding the one below; B); the MTL
+// cap takes the long run's growth, never its previous length; only the
+// weekly-hours ceiling cuts easy running before station work, the guard and
+// the deload shrink both by one scale; an injury that gates the stations
+// never trades an easy run for erg work the gates drop; the hours note names
+// the limit that binds, and a held week says so.
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
