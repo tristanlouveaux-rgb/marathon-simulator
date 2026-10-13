@@ -21,6 +21,7 @@ import { ROLLING_ACWR_MIN_OBSERVED_DAYS } from '@/calculations/fitness-model';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { buildSkyBackground } from './sky-background';
 import { atmosphereGradient } from './page-flair';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
@@ -166,7 +167,8 @@ function getMtlLoadHTML(): string {
   // ── This week's contributors ──
   const contributors = (currentWk?.triWorkouts ?? [])
     .map(w => ({
-      name: (w as { discipline?: string }).discipline === 'station' ? 'Station session'
+      name: isHyroxEasyErg(w) ? (w.n || 'Easy Erg')
+        : (w as { discipline?: string }).discipline === 'station' ? 'Station session'
         : (w as { discipline?: string }).discipline === 'brick' ? 'Brick session'
         : (w.n || 'Run'),
       discipline: ((w as { discipline?: string }).discipline ?? 'run') as 'run' | 'station' | 'brick',

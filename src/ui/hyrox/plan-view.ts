@@ -24,6 +24,7 @@ import { formatKm } from '@/utils/format';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { fireSelectionHaptic } from '@/utils/platform';
 import { raceDayCardHtml } from '../race-day-card';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -133,11 +134,15 @@ export function renderHyroxPlanView(): void {
     ? `Load raised ${effortPct}% this week after recent sessions were rated easier than planned.`
     : `Load eased ${effortPct}% this week after recent sessions were rated harder than planned.`;
 
-  // Per-discipline minute totals
+  // Per-discipline minute totals. Easy erg work is neither a station session
+  // nor a run (its card reads Cross-train): its minutes are named in the
+  // caption under the bars.
   const minByDisc = { run: 0, station: 0, brick: 0 };
+  let ergMin = 0;
   for (const w of workouts) {
     const d = w.discipline as string;
-    if (d === 'station') minByDisc.station += estimateMinutes(w);
+    if (isHyroxEasyErg(w)) ergMin += estimateMinutes(w);
+    else if (d === 'station') minByDisc.station += estimateMinutes(w);
     else if (d === 'brick') minByDisc.brick += estimateMinutes(w);
     else minByDisc.run += estimateMinutes(w);
   }
@@ -225,7 +230,7 @@ export function renderHyroxPlanView(): void {
             ${renderDisciplineMini('station', minByDisc.station, totalMin)}
             ${renderDisciplineMini('brick', minByDisc.brick, totalMin)}
           </div>
-          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours per discipline this week</div>
+          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours per discipline this week${ergMin > 0 ? `. Easy erg work: ${fmtHours(ergMin)}.` : ''}</div>
           ${showEffortNote ? `<div style="text-align:center;font-size:11px;color:var(--c-muted);margin-top:8px;line-height:1.5">${effortNote}</div>` : ''}
         </div>
 

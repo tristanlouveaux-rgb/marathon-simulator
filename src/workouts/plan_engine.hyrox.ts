@@ -988,6 +988,12 @@ function generateWeekSessions(
   const gated = isPastWeek
     ? workouts
     : applyHyroxInjuryGates(workouts, injuryState, weeksFromCurrent);
+  // What the injury gates took (minutes and sessions): easy erg work never
+  // fills it. Replacing gated training is the capability substitution's
+  // offer, which the athlete accepts (buildCapabilityOffers), not an
+  // automatic refill.
+  const injuryFreedMin = hyroxPlannedMinutes(workouts) - hyroxPlannedMinutes(gated);
+  const injuryFreedSlots = prescribed(workouts).length - prescribed(gated).length;
 
   // Enforce the MTL cap by cutting rounds, then stations (enforceMTLCap).
   let week = enforceMTLCap(gated, hx.mtlCap, adjustments, weekIndex);
@@ -1032,8 +1038,8 @@ function generateWeekSessions(
   const easyErgFor = (ws: readonly Workout[]): Workout[] => {
     const maxSessions = Math.min(inputs.maxSessions ?? 7, 7);
     const sessionsName = inputs.maxSessionsName ?? `${maxSessions} sessions`;
-    const free = maxSessions - prescribed(ws).length;
-    const unused = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(ws);
+    const free = maxSessions - prescribed(ws).length - injuryFreedSlots;
+    const unused = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(ws) - injuryFreedMin;
     if (unused < HYROX_RUN_FLOOR_MIN) return [];
     if (free <= 0) {
       // The session count binds: the athlete's chosen total is never exceeded
@@ -1062,15 +1068,24 @@ function generateWeekSessions(
       const e = generateHyroxEasyErg({ targetMinutes: each, stationAccess: hx.stationAccess, slotIndex: weekIndex + i, bodyWeightKg });
       if (e) ergs.push(e);
     }
+    // The injury gates scale easy erg work with the station capacity, or
+    // drop it; the notes name what the week holds.
+    const kept = isPastWeek ? ergs : applyHyroxInjuryGates(ergs, injuryState, weeksFromCurrent);
+    if (kept.length === 0) {
+      adjustments.push(`W${weekIndex}: ${Math.round(unused)} min left unprescribed (injury: no easy erg work at the current station capacity)`);
+      return [];
+    }
+    const keptEach = kept[0].estimatedDurationMin ?? each;
     const held = total < unused - 1e-6 ? ` (${byMtl < Math.min(unused, inputs.ergCapMin ?? Infinity) ? `MTL cap ${hx.mtlCap}` : ceilingName} holds it)` : '';
-    adjustments.push(`W${weekIndex}: ${k} easy erg session${k === 1 ? '' : 's'} of ${each} min (unprescribed minutes)${held}`);
+    adjustments.push(`W${weekIndex}: ${kept.length} easy erg session${kept.length === 1 ? '' : 's'} of ${keptEach} min (unprescribed minutes)${held}`);
     // Every slot taken and each session at its longest: the rest of the
     // budget stays unprescribed.
     const left = Math.round(total - k * each);
     if (!held && left >= HYROX_RUN_FLOOR_MIN) {
       adjustments.push(`W${weekIndex}: ${left} min left unprescribed (${sessionsName} are full, an easy erg session at most ${maxEach} min)`);
     }
-    return isPastWeek ? ergs : applyHyroxInjuryGates(ergs, injuryState, weeksFromCurrent);
+    if (keptEach < each) adjustments.push(`W${weekIndex}: easy erg sessions cut to ${keptEach} min (injury: station capacity)`);
+    return kept;
   };
 
   // Schedule. Race week: each session only on the days the race-day rules

@@ -4,6 +4,10 @@ import type { InjuryState } from '@/types/injury';
 import { pickAerobicSubstitute, buildCapabilityOffers, buildAerobicOffer } from './capability-substitution';
 import { generateRehabPhaseWorkouts } from '@/injury/engine';
 import type { SimulatorState } from '@/types/state';
+import { getDefaultState } from '@/state/store';
+import { generateHyroxPlan, regenerateHyroxWeek, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 function injury(overrides: Partial<InjuryState>): InjuryState {
   return {
@@ -156,3 +160,38 @@ describe('buildCapabilityOffers routing guards', () => {
     expect(await buildCapabilityOffers(state({ eventType: 'running', injuryState: inj } as any))).toEqual([]);
   });
 });
+
+describe('buildCapabilityOffers: HYROX easy erg work is aerobic time', () => {
+  it('an injury that drops easy erg work offers a substitute for its minutes too', async () => {
+    const band = 'intermediate' as const;
+    const s = getDefaultState();
+    s.eventType = 'hyrox';
+    s.planStartDate = '2026-09-28';
+    s.w = 1;
+    s.tw = 16;
+    s.hyroxConfig = {
+      format: 'open_singles', athleteBand: band, hyroxPhase: 'base',
+      stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+      weeklyMTL: 0, mtlCap: HYROX_MTL_CAP[band], mtlHistory: [],
+      runsPerWeek: HYROX_WEEKLY_SESSIONS[band].runs, stationSessionsPerWeek: HYROX_WEEKLY_SESSIONS[band].stations,
+      bricksPerWeek: HYROX_WEEKLY_SESSIONS[band].bricks, weeklyHoursAvailable: HYROX_HOURS_RANGE[band].default,
+      generatorVersion: HYROX_GENERATOR_VERSION,
+    };
+    s.wks = generateHyroxPlan(s);
+    const wi = s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(isHyroxEasyErg));
+    expect(wi).toBeGreaterThanOrEqual(0);
+    s.w = wi + 1;
+    const ungated = s.wks[wi];
+    const ergMin = (ungated.triWorkouts ?? []).filter(isHyroxEasyErg).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    const brickMin = (ungated.triWorkouts ?? []).filter(w => w.discipline === 'brick').reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    // Arms out: the station gate drops station sessions, bricks and easy erg
+    // work; runs and the bike stay.
+    s.injuryState = injury({ runCapacity: 100, bikeCapacity: 100, lowerLoadCapacity: 100, upperLoadCapacity: 0 });
+    s.wks[wi] = regenerateHyroxWeek(s, wi + 1)!;
+    expect((s.wks[wi].triWorkouts ?? []).some(isHyroxEasyErg)).toBe(false);
+    const offers = await buildCapabilityOffers(s);
+    const aerobic = offers.find(o => o.workout.discipline === 'bike');
+    expect(aerobic?.workout.estimatedDurationMin).toBe(ergMin + brickMin);
+  });
+});
+

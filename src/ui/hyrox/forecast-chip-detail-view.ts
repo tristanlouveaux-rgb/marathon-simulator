@@ -38,6 +38,7 @@ import {
   buildSportDonut as buildSportDonutShared,
   buildSportLegend as buildSportLegendShared,
 } from '@/ui/sport-mix-donut';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 export type HyroxChipKey = 'you' | 'runpace' | 'stations' | 'training' | 'venue';
 
@@ -549,7 +550,9 @@ function pageTraining(s: SimulatorState): { title: string; subhead: string; body
       futureSlots += 1;
       const disc = (w as { discipline?: string }).discipline;
       if (disc === 'run') futureRuns += 1;
-      else if (disc === 'station') futureStations += 1;
+      // Easy erg work is not a station session (it carries discipline
+      // 'station' for the injury gates and the MTL split only).
+      else if (disc === 'station' && !isHyroxEasyErg(w)) futureStations += 1;
       else if (disc === 'brick') futureBricks += 1;
     }
   }

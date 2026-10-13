@@ -13,12 +13,15 @@
  */
 
 import type { SimulatorState } from '@/types/state';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 /**
  * Average planned Hyrox sessions per week over the next `weeks` weeks of the
- * plan. Counts every `wk.triWorkouts` entry in the look-ahead window. Hyrox
- * mode stores all session types (run, station, brick) under the same field as
- * triathlon mode does. A closing week (raceClosing: a Monday to Wednesday
+ * plan. Counts every `wk.triWorkouts` entry in the look-ahead window except
+ * easy erg work (isHyroxEasyErg: easy aerobic volume on the ergs, not a
+ * Hyrox-style session; review 2026-10-13: counting it lifted the station
+ * horizon, up to 49 s faster for a beginner). Hyrox mode stores all session
+ * types (run, station, brick) under the same field as triathlon mode does. A closing week (raceClosing: a Monday to Wednesday
  * race's own week, which holds only the race) is not a training week and is
  * skipped, as every running weeks-of-training input reads planTrainingWeeks.
  *
@@ -37,7 +40,7 @@ export function plannedHyroxSessionsPerWeek(
     const wk = wks[w];
     if (!wk?.triWorkouts || wk.raceClosing) continue;
     weeksCovered += 1;
-    total += wk.triWorkouts.length;
+    total += wk.triWorkouts.filter(w => !isHyroxEasyErg(w)).length;
   }
   if (weeksCovered === 0) return 0;
   return total / weeksCovered;

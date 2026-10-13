@@ -29,6 +29,7 @@ import type { SimulatorState, Workout, Week } from '@/types/state';
 import type { InjuryState } from '@/types/injury';
 import { pickAerobicSubstitute, getDisciplineCapacity } from '@/injury/engine';
 import { injuryStrengthDecision, RPE_BY_PHASE } from '@/workouts/injury-strength';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 // Re-export so existing importers (and the unit tests) keep their path. The
 // pick now lives in injury/engine.ts beside getDisciplineCapacity so running's
@@ -44,11 +45,15 @@ export interface CapabilityOffer {
 
 type CapabilityMode = 'hyrox' | 'triathlon';
 
-/** Is this an aerobic (engine-building) session for the mode? */
+/** Is this an aerobic (engine-building) session for the mode? HYROX: runs,
+ *  bricks, commute runs and easy erg work (continuous easy aerobic volume on
+ *  the SkiErg or row erg; the station gate drops it, so an injury that does
+ *  frees its minutes for the substitute). */
 function isAerobic(w: Workout, mode: CapabilityMode): boolean {
   const t = (w.t || '') as string;
   if (mode === 'hyrox') {
     return t.startsWith('hyrox_run_') || t === 'hyrox_brick' || t === 'hyrox_mini_brick'
+      || isHyroxEasyErg(w)
       || (t === 'easy' && (w as { commute?: boolean }).commute === true);
   }
   // triathlon: any swim/bike/run discipline session, or a brick.
