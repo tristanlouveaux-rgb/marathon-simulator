@@ -7,6 +7,7 @@ import {
   latestIsPR,
   latestStationTest,
   latestTestAgeMonths,
+  upsertRaceSplitEntry,
   type StationTestEntry,
 } from './hyrox-station-history';
 import type { SimulatorState } from '@/types/state';
@@ -180,5 +181,37 @@ describe('hyrox-station-history', () => {
       });
       expect(latestImprovementSec(s, 'wall_balls', 'open_singles')).toBeNull();
     });
+  });
+});
+
+describe('upsertRaceSplitEntry: one entry per logged race and station (review 2026-10-12)', () => {
+  const race = (dateISO: string, sec: number, format: StationTestEntry['format'] = 'open_doubles') =>
+    ({ dateISO, sec, source: 'race' as const, format });
+
+  it('re-logging the same race (date and format) replaces its entry', () => {
+    let h = upsertRaceSplitEntry(undefined, race('2026-03-14', 300));
+    h = upsertRaceSplitEntry(h, race('2026-03-14', 280));
+    expect(h).toEqual([race('2026-03-14', 280)]);
+  });
+
+  it('a different date or format is a different race and is kept', () => {
+    let h = upsertRaceSplitEntry(undefined, race('2026-03-14', 300));
+    h = upsertRaceSplitEntry(h, race('2026-06-20', 290));
+    h = upsertRaceSplitEntry(h, race('2026-06-20', 400, 'open_singles'));
+    expect(h.map(e => `${e.dateISO} ${e.format} ${e.sec}`)).toEqual([
+      '2026-03-14 open_doubles 300',
+      '2026-06-20 open_doubles 290',
+      '2026-06-20 open_singles 400',
+    ]);
+  });
+
+  it('never removes tests, session bests or the manual backfill on the race date', () => {
+    const existing: StationTestEntry[] = [
+      { dateISO: '2026-03-14', sec: 310, source: 'half_test', format: 'open_doubles' },
+      { dateISO: '2026-03-14', sec: 305, source: 'manual', format: 'open_doubles' },
+      { dateISO: '2026-03-14', sec: 300, source: 'session', format: 'open_doubles' },
+    ];
+    const h = upsertRaceSplitEntry(existing, race('2026-03-14', 280));
+    expect(h.map(e => e.source).sort()).toEqual(['half_test', 'manual', 'race', 'session']);
   });
 });

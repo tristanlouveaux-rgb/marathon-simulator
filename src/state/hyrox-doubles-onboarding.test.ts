@@ -215,3 +215,41 @@ describe('correcting the previous race format', () => {
     expect(s.hyroxConfig!.athleteBand).toBe(singles.hyroxConfig!.athleteBand);
   });
 });
+
+describe('re-logging the same previous race does not duplicate its history entries', () => {
+  it('same race date and format: the corrected splits replace the earlier entries', () => {
+    const s = init({});
+    applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_doubles', raceDateISO: ago(30), stationSplits: { ski_erg: 290, row_erg: 300 } });
+    applyHyroxPrevTimeUpdate({ timeSec: 4790, format: 'open_doubles', raceDateISO: ago(30), stationSplits: { ski_erg: 280, row_erg: 300 } });
+    const hist = s.hyroxConfig!.stationBenchmarkHistory!;
+    expect(hist.ski_erg).toEqual([{ dateISO: ago(30), sec: 280, source: 'race', format: 'open_doubles', proWeights: false }]);
+    expect(hist.row_erg).toHaveLength(1);
+    expect(s.hyroxConfig!.stationBenchmarksDoubles?.ski_erg).toBe(280);
+    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'ski_erg')!.baseSec).toBeCloseTo(280, 6);
+  });
+
+  it('re-logging the onboarding race replaces the onboarding entries', () => {
+    const s = init({
+      previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles', hyroxPreviousRaceDate: ago(30),
+      hyroxPreviousStationSplits: { ski_erg: 290 },
+    });
+    applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_doubles', raceDateISO: ago(30), stationSplits: { ski_erg: 285 } });
+    expect(s.hyroxConfig!.stationBenchmarkHistory!.ski_erg!.map(e => e.sec)).toEqual([285]);
+  });
+
+  it('an undated race re-logged the same day replaces its entries', () => {
+    const s = init({});
+    applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_doubles', stationSplits: { ski_erg: 290 } });
+    applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_doubles', stationSplits: { ski_erg: 280 } });
+    expect(s.hyroxConfig!.stationBenchmarkHistory!.ski_erg!.map(e => e.sec)).toEqual([280]);
+  });
+
+  it('a different race keeps both, and a test on the race date is untouched', () => {
+    const s = init({});
+    logHalfTest(s, 'ski_erg', 310, ago(30));
+    applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_doubles', raceDateISO: ago(30), stationSplits: { ski_erg: 290 } });
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', raceDateISO: ago(10), stationSplits: { ski_erg: 280 } });
+    expect(s.hyroxConfig!.stationBenchmarkHistory!.ski_erg!.map(e => `${e.source} ${e.sec}`).sort())
+      .toEqual(['half_test 310', 'race 280', 'race 290']);
+  });
+});

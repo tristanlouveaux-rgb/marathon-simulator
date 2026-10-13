@@ -20,7 +20,7 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
 import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
-import { appendStationTest } from '@/calculations/hyrox-station-history';
+import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { localDateKey } from '@/utils/local-date';
@@ -83,12 +83,14 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
     // became 212.8 s). The entry's proWeights also keeps a Pro race split from
     // getting the Pro multiplier on top, without touching
     // benchmarksAtProWeights, which describes station tests.
+    // Re-logging the same race (same date and format) replaces its earlier
+    // entries (upsertRaceSplitEntry) rather than duplicating them.
     const raceDateISO = hx.hyroxPreviousRaceDate ?? localDateKey(new Date());
     hx.stationBenchmarkHistory = hx.stationBenchmarkHistory ?? {};
     for (const st of HYROX_STATION_ORDER) {
       const sec = update.stationSplits[st];
       if (sec == null) continue;
-      hx.stationBenchmarkHistory[st] = appendStationTest(hx.stationBenchmarkHistory[st], {
+      hx.stationBenchmarkHistory[st] = upsertRaceSplitEntry(hx.stationBenchmarkHistory[st], {
         dateISO: raceDateISO,
         sec,
         source: 'race',

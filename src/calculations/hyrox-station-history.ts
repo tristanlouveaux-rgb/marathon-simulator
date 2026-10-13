@@ -52,6 +52,26 @@ export function appendStationTest(
   return next;
 }
 
+/**
+ * Record one logged race's split for a station, replacing any earlier 'race'
+ * entry for the same race. Race identity is what the log carries: the entry's
+ * date (race day, or the log date when the race is undated) and its format.
+ * Re-logging a race, e.g. to correct a typo, then rewrites its entries instead
+ * of adding a second set to the history list and sparkline (review
+ * 2026-10-12). A different date or format is a different race and is kept.
+ * Other sources (tests, session bests, the 'manual' boot backfill) are never
+ * touched. Returns the new array.
+ */
+export function upsertRaceSplitEntry(
+  existing: StationTestEntry[] | undefined,
+  entry: StationTestEntry & { source: 'race' },
+): StationTestEntry[] {
+  const kept = (existing ?? []).filter(e =>
+    !(e.source === 'race' && e.dateISO === entry.dateISO && e.format === entry.format),
+  );
+  return appendStationTest(kept, entry);
+}
+
 /** Latest test entry for a station; null if none. */
 export function latestStationTest(
   state: SimulatorState,
