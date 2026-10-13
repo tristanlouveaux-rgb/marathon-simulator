@@ -93,7 +93,7 @@
  */
 
 import type { GarminActual, GpsRecording, SportKey, Week, Workout } from '@/types';
-import { parseDistanceKm } from '@/calculations/matching';
+import { parseDistanceKm, isErgActivityType } from '@/calculations/matching';
 import {
   isStrengthActual, isGymSessionActual, resolveActualSport, isRunSport,
   deriveSportFromActivityType, deriveSportFromLabel, isInAppHyroxSession,
@@ -101,6 +101,7 @@ import {
 import { localDateKey } from '@/utils/local-date';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { collectActivityAliases, scrubExcessRecords } from '@/calculations/excess-records';
 
 /** garminId prefix of every in-app record (strength-complete.ts convention). */
 export const IN_APP_GARMIN_ID_PREFIX = 'guided-';
@@ -621,6 +622,9 @@ export function isSessionCompletedByActivity(
  *     when today's watch copy syncs, as on a running plan card);
  *   - the slot is not rated, or has no planned duration.
  *
+ * A HYROX easy erg slot claims a synced erg row of its planned day instead of
+ * writing a record, when one sits unmatched in the week (claimSyncedErgRow).
+ *
  * `durationMin` is the caller's canonical planned duration: estimateTriWorkoutMin
  * (the dose the tri card and getPlannedDayTSSContext price), or for a
  * Just-Track run with no stored duration the running card's estimateWorkoutDurMin.
@@ -645,6 +649,10 @@ export function recordPlannedSessionDone(
   if (opts.weekNum > opts.currentWeek) return null;
   if (typeof wk.rated?.[key] !== 'number') return null;
   if (!(opts.durationMin > 0)) return null;
+  if (isHyroxEasyErg(w)) {
+    const claimed = claimSyncedErgRow(wk, key, w, opts);
+    if (claimed) return claimed;
+  }
   return writeInAppActual(wk, key, buildPlannedSessionActual(w, {
     rpe: opts.rpe,
     startTime: manualCompletionStartIso(opts.planStartDate, opts.weekNum, w.dayOfWeek, opts.nowMs),
@@ -652,6 +660,98 @@ export function recordPlannedSessionDone(
     nowMs: opts.nowMs,
     ...(sport === 'run' ? {} : { manualSport: sport }),
   }));
+}
+
+/** Local calendar day (YYYY-MM-DD) of a plan session: plan start + week and
+ *  weekday offsets, or '' when either is unknown. */
+function plannedSessionDayKey(planStartDate: string | null | undefined, weekNum: number, dayOfWeek: number | null | undefined): string {
+  const parts = (planStartDate ?? '').slice(0, 10).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => !Number.isFinite(n)) || dayOfWeek == null || !(weekNum >= 1)) return '';
+  const [y, m, d] = parts;
+  return localDateKey(new Date(y, m - 1, d + (weekNum - 1) * 7 + dayOfWeek, 12, 0, 0, 0));
+}
+
+/**
+ * Mark as Done on a HYROX easy erg slot with a synced erg row of the slot's
+ * planned day sitting unmatched in the week: the row moves onto the slot and
+ * no record is written (review 2026-10-13: the row, an adhoc 'Rowing' in a
+ * past week or an item awaiting review in the current one, and the Mark as
+ * Done record counted the session twice, 95 TSS for one 43-min erg). Tracking
+ * side. The tap says the session was done, so any erg row of that day is it,
+ * whatever its length; the nearest to the planned duration wins. An erg row
+ * (isErgActivityType) is:
+ *   - awaiting review (garminPending, garminMatched '__pending__'): its record
+ *     goes on the slot, and its review item stays as the re-review record, as
+ *     the matcher's slot matches keep it;
+ *   - logged as an adhoc activity (garminMatched `garmin-<id>`): its record
+ *     moves to the slot, and the adhoc card, its rating and any excess-load
+ *     record of it leave (scrubExcessRecords).
+ * The slot keeps the athlete's rating and a synced record already on it. Null
+ * when there is no such row.
+ */
+function claimSyncedErgRow(
+  wk: Week,
+  key: string,
+  w: Pick<Workout, 'n' | 't' | 'dayOfWeek'>,
+  opts: { durationMin: number; planStartDate: string | null | undefined; weekNum: number },
+): GarminActual | null {
+  const existing = wk.garminActuals?.[key];
+  if (existing && !isInAppActual(existing)) return null;
+  const day = plannedSessionDayKey(opts.planStartDate, opts.weekNum, w.dayOfWeek);
+  if (!day) return null;
+  type Candidate = { garminId: string; actual: GarminActual; adhocId?: string };
+  const candidates: Candidate[] = [];
+  for (const p of wk.garminPending ?? []) {
+    if (wk.garminMatched?.[p.garminId] !== '__pending__') continue;
+    if (!isErgActivityType(p.activityType) || localDateKey(p.startTime) !== day) continue;
+    candidates.push({
+      garminId: p.garminId,
+      actual: {
+        garminId: p.garminId,
+        startTime: p.startTime,
+        distanceKm: (p.distanceM ?? 0) / 1000,
+        durationSec: p.durationSec,
+        avgPaceSecKm: p.avgPaceSecKm ?? null,
+        avgHR: p.avgHR ?? null,
+        maxHR: p.maxHR ?? null,
+        calories: p.calories ?? null,
+        aerobicEffect: p.aerobicEffect ?? null,
+        anaerobicEffect: p.anaerobicEffect ?? null,
+        iTrimp: p.iTrimp ?? null,
+        hrZones: p.hrZones ?? null,
+        polyline: p.polyline ?? null,
+        kmSplits: p.kmSplits ?? null,
+        averageWatts: p.averageWatts ?? null,
+        normalizedPowerW: p.normalizedPowerW ?? null,
+        maxWatts: p.maxWatts ?? null,
+        deviceWatts: p.deviceWatts ?? null,
+        kilojoules: p.kilojoules ?? null,
+        activityType: p.activityType,
+      },
+    });
+  }
+  for (const [garminId, matched] of Object.entries(wk.garminMatched ?? {})) {
+    if (matched !== `garmin-${garminId}`) continue;
+    const a = wk.garminActuals?.[matched];
+    if (!a || isInAppActual(a) || !isErgActivityType(a.activityType) || !a.startTime || localDateKey(a.startTime) !== day) continue;
+    candidates.push({ garminId, actual: a, adhocId: matched });
+  }
+  if (candidates.length === 0) return null;
+  const gap = (c: Candidate) => Math.abs(c.actual.durationSec / 60 - opts.durationMin);
+  const pick = candidates.reduce((best, c) => (gap(c) < gap(best) ? c : best));
+  if (!wk.garminActuals) wk.garminActuals = {};
+  if (!wk.garminMatched) wk.garminMatched = {};
+  const { displayName: _adhocName, ...measured } = pick.actual;
+  const aliases = collectActivityAliases(wk, pick.garminId);
+  wk.garminActuals[key] = { ...measured, workoutName: w.n, plannedType: w.t ?? null };
+  wk.garminMatched[pick.garminId] = key;
+  scrubExcessRecords([wk], aliases);
+  if (pick.adhocId) {
+    delete wk.garminActuals[pick.adhocId];
+    wk.adhocWorkouts = (wk.adhocWorkouts ?? []).filter(x => x.id !== pick.adhocId);
+    if (wk.rated) delete wk.rated[pick.adhocId];
+  }
+  return wk.garminActuals[key];
 }
 
 /** Remove the in-app record at `key`, if that is what sits there. Synced actuals are untouched. */

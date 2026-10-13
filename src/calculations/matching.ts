@@ -8,6 +8,7 @@
 import type { Workout } from '@/types';
 import { isLongRun } from '@/workouts/long-run';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { deriveSportFromActivityType } from '@/cross-training/activities';
 
 /** Incoming activity from an external source */
 export interface ExternalActivity {
@@ -16,6 +17,9 @@ export interface ExternalActivity {
   durationMin: number;
   dayOfWeek: number;       // 0=Mon, 6=Sun
   name?: string;
+  /** Raw activity type from the source (e.g. 'ROWING', 'Rowing'): tells an
+   *  erg row apart inside the 'walk' / 'other' classes (isErgActivityType). */
+  activityType?: string | null;
   avgPaceSecPerKm?: number;
   avgHR?: number;
   stream?: import('./stream-processor').ActivityStream;
@@ -63,6 +67,34 @@ export function isRunClassActivity(type: string): boolean {
   return type === 'run';
 }
 
+/**
+ * A synced activity that can fill a HYROX easy erg slot: an erg row, by its
+ * raw activity type (deriveSportFromActivityType 'rowing', the row family of
+ * the supersede rules, syncedCrossEnduranceFamily). The matcher's app types
+ * cannot tell it apart: a row is 'walk' (ROWING) or 'other' beside walks,
+ * hikes and kayaking. A SkiErg has no activity type of its own in the sources
+ * (it derives to skiing, beside outdoor skiing), so it fills the slot only by
+ * a manual tap on Mark as Done. Tracking side.
+ */
+export function isErgActivityType(activityType: string | null | undefined): boolean {
+  return deriveSportFromActivityType(activityType) === 'rowing';
+}
+
+/** Slot duration window for an erg row on an easy erg slot: 0.5 to 2.0 x the
+ *  slot's planned minutes, the HYROX station branch's slot window
+ *  (activity-matcher) and the completion window (in-app-activity). */
+const ERG_SLOT_DURATION_RATIO_MIN = 0.5;
+const ERG_SLOT_DURATION_RATIO_MAX = 2.0;
+
+/** True when an erg row of `durationMin` falls inside an easy erg slot's
+ *  duration window (a slot with no planned minutes takes any). */
+export function ergRowFitsSlot(durationMin: number, slot: Pick<Workout, 'estimatedDurationMin'>): boolean {
+  const planned = slot.estimatedDurationMin ?? 0;
+  if (!(planned > 0)) return true;
+  const ratio = durationMin / planned;
+  return ratio >= ERG_SLOT_DURATION_RATIO_MIN && ratio <= ERG_SLOT_DURATION_RATIO_MAX;
+}
+
 /** Run-slot types beyond isRunSlot that the matching screen lets a run fill. */
 const EXTRA_RUN_SLOT_TYPES = new Set(['run', 'steady', 'float']);
 
@@ -79,12 +111,18 @@ const EXTRA_RUN_SLOT_TYPES = new Set(['run', 'steady', 'float']);
  *  - ride  → a cross slot, a tri brick or any tri bike slot.
  *  - swim  → a cross slot or any tri swim slot.
  *  - walk, other → a cross slot only. Never a run slot (audit D3).
+ *  - A HYROX easy erg slot takes an erg row only, whatever its app type, by
+ *    the raw `activityType` (isErgActivityType; review 2026-10-13: a synced
+ *    row could never complete the slot, so the row and a later Mark as Done
+ *    counted the session twice). Without the raw type nothing fills it.
  */
 export function isActivityCompatibleWithSlot(
   appType: string,
   workout: Pick<Workout, 't'> & { longRun?: boolean; discipline?: string },
+  activityType?: string | null,
 ): boolean {
   const wt = workout.t ?? '';
+  if (isHyroxEasyErg(workout)) return isErgActivityType(activityType);
   if (isRunClassActivity(appType)) {
     return isRunSlot(workout) || isLongRun(workout) || EXTRA_RUN_SLOT_TYPES.has(wt) || wt === 'cross' || wt === 'brick';
   }
@@ -115,9 +153,12 @@ export function findMatchingWorkout(
   const isGym  = activity.type === 'gym';
   const isOther = activity.type === 'other' || activity.type === 'walk';
 
-  // Filter to matchable workouts
+  // Filter to matchable workouts. A HYROX easy erg slot takes an erg row
+  // inside its duration window, and nothing else.
+  const isErgRow = isErgActivityType(activity.activityType);
   const candidates = weeklyPlan.filter(w => {
     if (w.status === 'replaced') return false;
+    if (isHyroxEasyErg(w)) return isErgRow && ergRowFitsSlot(activity.durationMin, w);
     if (isRun)   return isRunSlot(w);
     if (isGym)   return w.t === 'gym';
     if (isOther) return w.t === 'cross';
@@ -164,6 +205,13 @@ export function findMatchingWorkout(
           reasons.push('distance roughly similar');
         }
       }
+    }
+
+    // --- Erg match (a HYROX easy erg slot; a same-day row reaches the
+    // sport-match score, an adjacent-day one does not) ---
+    if (isHyroxEasyErg(w)) {
+      score += 2;
+      reasons.push('type match (erg)');
     }
 
     // --- Gym match ---

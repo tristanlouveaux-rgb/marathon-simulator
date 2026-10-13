@@ -6,7 +6,7 @@
 import { getMutableState, saveState } from '@/state';
 import { gp } from '@/calculations/paces';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
+import { findMatchingWorkout, parseDistanceKm, isErgActivityType, ergRowFitsSlot, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary, resolveTrimpSex, type BiologicalSex } from './trimp';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { calculateZones, computeHREffortScore, hrEffortProfile } from './heart-rate';
@@ -749,6 +749,82 @@ function matchHyroxStationRow(
   };
   if (!targetWk.garminPending!.some(p => p.garminId === row.garmin_id)) {
     targetWk.garminPending!.push(stationPending);
+  }
+}
+
+/**
+ * Write a synced erg row onto the HYROX easy erg slot `workoutId` in `wk`
+ * (review 2026-10-13: a synced row could never fill the slot, so it became an
+ * adhoc 'Rowing' or waited in review, and a later Mark as Done on the erg
+ * added a second record of the same session). Tracking side. Rated from the
+ * row (deriveRPE, the slot's RPE as the fallback), garminMatched, the slot
+ * record (the row's own activityType names the sport: rowing load, as the
+ * in-app record's 'rowing' tag) and the re-review record, as the HYROX
+ * station and run matches write them.
+ */
+function matchHyroxErgRow(
+  s: ReturnType<typeof getMutableState>,
+  wk: Week,
+  workoutId: string,
+  slot: Workout,
+  row: GarminActivityRow,
+  rhrBaseline: number | null | undefined,
+  appType: string,
+): void {
+  if (!wk.rated) wk.rated = {};
+  if (!wk.garminMatched) wk.garminMatched = {};
+  if (!wk.garminPending) wk.garminPending = [];
+  if (!wk.garminActuals) wk.garminActuals = {};
+  const iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
+  wk.rated[workoutId] = deriveRPE(row, slot.rpe || slot.r || 4, s.maxHR, s.restingHR, s.onboarding?.age);
+  wk.garminMatched[row.garmin_id] = workoutId;
+  wk.garminActuals[workoutId] = {
+    garminId: row.garmin_id,
+    startTime: row.start_time,
+    distanceKm: (row.distance_m ?? 0) / 1000,
+    durationSec: row.duration_sec,
+    avgPaceSecKm: row.avg_pace_sec_km ?? null,
+    avgHR: row.avg_hr ?? null,
+    maxHR: row.max_hr ?? null,
+    calories: row.calories ?? null,
+    aerobicEffect: row.aerobic_effect ?? null,
+    anaerobicEffect: row.anaerobic_effect ?? null,
+    iTrimp,
+    hrZones: row.hrZones ?? null,
+    activityType: row.activity_type,
+    plannedType: slot.t ?? null,
+    workoutName: slot.n,
+    hrDrift: row.hrDrift ?? null,
+    ambientTempC: row.ambientTempC ?? null,
+    elevationGainM: row.elevationGainM ?? null,
+    polyline: row.polyline ?? null,
+    kmSplits: row.kmSplits ?? null,
+    averageWatts: row.averageWatts ?? null,
+    normalizedPowerW: row.normalizedPowerW ?? null,
+    maxWatts: row.maxWatts ?? null,
+    deviceWatts: row.deviceWatts ?? null,
+    kilojoules: row.kilojoules ?? null,
+  };
+  if (!wk.garminPending.some(p => p.garminId === row.garmin_id)) {
+    wk.garminPending.push({
+      garminId: row.garmin_id,
+      activityType: row.activity_type,
+      appType,
+      startTime: row.start_time,
+      durationSec: row.duration_sec,
+      distanceM: row.distance_m ?? null,
+      avgPaceSecKm: row.avg_pace_sec_km ?? null,
+      avgHR: row.avg_hr ?? null,
+      maxHR: row.max_hr ?? null,
+      aerobicEffect: row.aerobic_effect ?? null,
+      anaerobicEffect: row.anaerobic_effect ?? null,
+      garminRpe: row.garmin_rpe ?? null,
+      calories: row.calories ?? null,
+      iTrimp,
+      hrZones: row.hrZones ?? null,
+      polyline: row.polyline ?? null,
+      kmSplits: row.kmSplits ?? null,
+    });
   }
 }
 
@@ -1560,6 +1636,29 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         if (hit) {
           supersedeInAppCrossSession(s, hit.week, hit.key, row, rhrBaseline, appType);
           changed = true;
+          continue;
+        }
+      }
+
+      // HYROX easy erg work: a synced erg row (isErgActivityType, the row
+      // family above) fills an unrated easy erg slot on the row's own day,
+      // its duration 0.5 to 2.0 x the slot's (ergRowFitsSlot), past and
+      // current week alike (review 2026-10-13: the slot took no synced
+      // activity, so the row and a later Mark as Done counted twice). A
+      // session marked done first is superseded above. Another day's row goes
+      // to review (current week), where the slot is offered, or logs as adhoc
+      // (past week), which Mark as Done on the slot then claims
+      // (recordPlannedSessionDone).
+      if (isHyrox && !isInAppRow && isErgActivityType(row.activity_type)) {
+        const rowDay = dayOfWeekFromDate(new Date(row.start_time));
+        const ergSlot = (wk.triWorkouts ?? []).find((w: Workout) => isHyroxEasyErg(w)
+          && wk.rated![w.id || w.n] === undefined
+          && w.dayOfWeek === rowDay
+          && ergRowFitsSlot(row.duration_sec / 60, w));
+        if (ergSlot) {
+          matchHyroxErgRow(s, wk, ergSlot.id || ergSlot.n, ergSlot, row, rhrBaseline, appType);
+          changed = true;
+          console.log(`[ActivityMatcher] HYROX: matched ${row.activity_type} (${Math.round(row.duration_sec / 60)}min) → "${ergSlot.n}" week ${weekIdx}`);
           continue;
         }
       }

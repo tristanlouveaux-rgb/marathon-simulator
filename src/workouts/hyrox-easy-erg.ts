@@ -15,9 +15,10 @@ export const HYROX_EASY_ERG_TYPE = 'hyrox_erg_easy';
  * station load), but it is not a station session: not HYROX-specific work for
  * the plan's rules, not a hard session, no eccentric load, not counted as a
  * station session by the session counts, and a gym or HIIT activity never
- * fills its slot. The HYROX cards show it as a time-defined cross-training
- * session (Mark as Done, Adjust, Skip); Mark as Done records it as rowing
- * (plannedSessionRecordSport).
+ * fills its slot; a synced erg row does (isErgActivityType, matching.ts). The
+ * HYROX cards show it as a time-defined cross-training session (Mark as
+ * Done, Adjust, Skip); Mark as Done records it as rowing
+ * (plannedSessionRecordSport), or claims an unmatched erg row of its day.
  */
 export function isHyroxEasyErg(w: { t?: string | null }): boolean {
   return w.t === HYROX_EASY_ERG_TYPE;

@@ -46,6 +46,7 @@ import {
 } from '@/calculations/matching';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 import { isInAppActual } from '@/calculations/in-app-activity';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 import { classifyByName } from '@/data/stravaSync';
 import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem, Workout } from '@/types';
 import type { SportKey } from '@/types/activities';
@@ -219,7 +220,7 @@ function redirectToTriSuggestionFlow(
  */
 function matchItemToSlot(item: GarminPendingItem, candidates: Workout[]): MatchResult | null {
   const match = findMatchingWorkout(buildExternalActivity(item), candidates);
-  return match && isActivityCompatibleWithSlot(item.appType, match.matchedWorkout) ? match : null;
+  return match && isActivityCompatibleWithSlot(item.appType, match.matchedWorkout, item.activityType) ? match : null;
 }
 
 function buildExternalActivity(item: GarminPendingItem): ExternalActivity {
@@ -229,6 +230,7 @@ function buildExternalActivity(item: GarminPendingItem): ExternalActivity {
   return {
     type: item.appType as ExternalActivity['type'],
     name: formatActivityType(item.activityType), // used for sport-name matching against recurring activities
+    activityType: item.activityType, // tells an erg row apart (a HYROX easy erg slot)
     distanceKm,
     durationMin,
     dayOfWeek: jsDay === 0 ? 6 : jsDay - 1,
@@ -265,9 +267,11 @@ function deriveItemRPE(
   );
 }
 
-/** Default: integrate runs/gym/matched-sports, long/intense cross-training, log-only otherwise */
+/** Default: integrate runs/gym/matched-sports, an erg row matching a HYROX
+ *  easy erg slot, long/intense cross-training, log-only otherwise */
 function defaultsToIntegrate(item: GarminPendingItem, match: MatchResult | null): boolean {
   if (item.appType === 'run' || item.appType === 'gym' || item.appType === 'other') return match !== null;
+  if (match && isHyroxEasyErg(match.matchedWorkout)) return true;
   return item.durationSec > 2700 || (item.aerobicEffect != null && item.aerobicEffect >= 2.5);
 }
 
@@ -874,7 +878,9 @@ function renderCard(
   const match       = matchCache.get(item.garminId) ?? null;
 
   let matchHint = '';
-  if (item.appType === 'run' || item.appType === 'gym' || item.appType === 'other') {
+  // An erg row (a 'walk' class activity) shows the hint when it matches a
+  // HYROX easy erg slot.
+  if (item.appType === 'run' || item.appType === 'gym' || item.appType === 'other' || (match != null && isHyroxEasyErg(match.matchedWorkout))) {
     if (match) {
       const color  = match.confidence === 'high' ? 'color:var(--c-ok)' : 'color:var(--c-caution)';
       const prefix = match.confidence === 'high' ? 'Matches' : 'Possible match';
@@ -2025,6 +2031,11 @@ export function autoProcessActivities(
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
         hrZones: item.hrZones ?? null,
+        // An erg row on a HYROX easy erg slot keeps its activity type, so the
+        // load model values it as rowing (as the matcher's erg match does).
+        ...(isHyroxEasyErg(namedMatch.matchedWorkout)
+          ? { activityType: item.activityType, iTrimp: item.iTrimp ?? null, plannedType: namedMatch.matchedWorkout.t, workoutName: namedMatch.workoutName }
+          : {}),
       } as GarminActual;
       const idx = planCandidates.findIndex(w => (w.id || w.n) === namedMatch.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);

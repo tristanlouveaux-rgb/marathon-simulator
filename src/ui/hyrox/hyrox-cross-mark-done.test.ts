@@ -40,10 +40,11 @@ import { computeWeekRawTSS, computeWeekTSS } from '@/calculations/fitness-model'
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
-import { isActivityCompatibleWithSlot } from '@/calculations/matching';
+import { isActivityCompatibleWithSlot, findMatchingWorkout } from '@/calculations/matching';
+import { autoProcessActivities } from '@/ui/activity-review';
 import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
-import type { SimulatorState, Workout } from '@/types/state';
+import type { SimulatorState, Workout, Week } from '@/types/state';
 
 const OFFER_MIN = 40;
 const OFFER_DAY = 2; // Wednesday
@@ -292,5 +293,166 @@ describe('a ticked HYROX easy erg session counts like a recorded one', () => {
       calories: null, aerobic_effect: null, anaerobic_effect: null, iTrimp: null, hrZones: null,
     }]);
     expect(wk.garminActuals?.[erg.id!]).toBeUndefined();
+  });
+});
+
+describe('a synced erg row before Mark as Done completes the easy erg slot once (review 2026-10-13)', () => {
+  // Before: the matcher filed a row as 'walk', which fills a cross slot only,
+  // so the row became an adhoc 'Rowing' (past week) or waited in review with
+  // no slot to take it (current week), and a later Mark as Done on the erg
+  // wrote a second record of the same session (95 TSS for one 43-min erg).
+  const firstErgWeek = (s: SimulatorState) => s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(isHyroxEasyErg));
+  const ergOf = (wk: Week) => (wk.triWorkouts ?? []).find(isHyroxEasyErg)!;
+  const dayDate = (i: number, dow: number, hour: number) => new Date(2026, 8, 28 + i * 7 + dow, hour, 0, 0);
+  const rowOn = (id: string, at: Date, min: number, type = 'ROWING'): GarminActivityRow => ({
+    garmin_id: id, activity_type: type, start_time: at.toISOString(), duration_sec: min * 60, distance_m: 9000,
+    avg_pace_sec_km: null, avg_hr: 130, max_hr: 150, calories: null, aerobic_effect: null, anaerobic_effect: null,
+    iTrimp: null, hrZones: null,
+  });
+  const tapDone = (w: Workout, weekIdx: number) => {
+    vi.setSystemTime(Date.now() + 1000);
+    openHyroxWorkoutDetail(w, weekIdx);
+    (document.querySelector('#hx-detail-mark-done') as HTMLButtonElement).click();
+  };
+  const weekTss = (s: SimulatorState, wk: Week) => computeWeekRawTSS(wk as never, wk.rated as never, s.planStartDate);
+
+  it('past week: a row on the erg\'s day fills its slot, and Mark as Done adds nothing', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 2;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    vi.setSystemTime(dayDate(i + 1, 2, 20));
+    matchAndAutoComplete([rowOn('strava-ROW1', dayDate(i, erg.dayOfWeek!, 8), erg.estimatedDurationMin!)]);
+    expect(wk.garminActuals?.[erg.id!]?.garminId).toBe('strava-ROW1');
+    expect(wk.garminActuals?.[erg.id!]?.activityType).toBe('ROWING');
+    expect(wk.garminMatched?.['strava-ROW1']).toBe(erg.id);
+    expect((wk.adhocWorkouts ?? []).some(a => a.id === 'garmin-strava-ROW1')).toBe(false);
+    expect(typeof wk.rated[erg.id!]).toBe('number');
+    const synced = weekTss(s, wk);
+    expect(synced).toBeGreaterThan(0);
+    tapDone(erg, i);
+    expect(wk.garminActuals?.[erg.id!]?.garminId).toBe('strava-ROW1');
+    expect(weekTss(s, wk)).toBeCloseTo(synced, 6);
+  });
+
+  it('a walk, a row on another day or a row outside 0.5 to 2.0 x the slot never fills it', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 2;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    vi.setSystemTime(dayDate(i + 1, 2, 20));
+    const other = (erg.dayOfWeek! + 3) % 7;
+    matchAndAutoComplete([
+      rowOn('strava-WALK', dayDate(i, erg.dayOfWeek!, 7), erg.estimatedDurationMin!, 'WALKING'),
+      rowOn('strava-ROWDAY', dayDate(i, other, 7), erg.estimatedDurationMin!),
+      rowOn('strava-ROWSHORT', dayDate(i, erg.dayOfWeek!, 9), Math.floor(erg.estimatedDurationMin! * 0.4)),
+    ]);
+    expect(wk.garminActuals?.[erg.id!]).toBeUndefined();
+    expect(wk.rated[erg.id!]).toBeUndefined();
+  });
+
+  it('Activity Review offers the erg slot to a row, never to a walk, and auto-assigns a same-day row as rowing', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 1;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    // The shared slot rule the matching screen's taps and the review's
+    // auto-match apply: the raw activity type tells a row apart.
+    expect(isActivityCompatibleWithSlot('walk', erg, 'ROWING')).toBe(true);
+    expect(isActivityCompatibleWithSlot('other', erg, 'INDOOR_ROWING')).toBe(true);
+    expect(isActivityCompatibleWithSlot('walk', erg, 'WALKING')).toBe(false);
+    expect(isActivityCompatibleWithSlot('walk', erg)).toBe(false);
+    const act = (dow: number, activityType: string, min = erg.estimatedDurationMin!) => ({
+      type: 'walk' as const, distanceKm: 9, durationMin: min, dayOfWeek: dow, activityType, name: 'Rowing',
+    });
+    expect(findMatchingWorkout(act(erg.dayOfWeek!, 'ROWING'), wk.triWorkouts ?? [])?.workoutId).toBe(erg.id);
+    expect(findMatchingWorkout(act((erg.dayOfWeek! + 1) % 7, 'ROWING'), wk.triWorkouts ?? [])).toBeNull();
+    expect(findMatchingWorkout(act(erg.dayOfWeek!, 'WALKING'), wk.triWorkouts ?? [])).toBeNull();
+
+    // A same-day row left awaiting review (synced before the matcher took
+    // erg rows) is assigned to the slot with its activity type.
+    vi.setSystemTime(dayDate(i, 6, 20));
+    const item = {
+      garminId: 'strava-ROWQ', activityType: 'ROWING', appType: 'walk', startTime: dayDate(i, erg.dayOfWeek!, 8).toISOString(),
+      durationSec: erg.estimatedDurationMin! * 60, distanceM: 9000, avgPaceSecKm: null, avgHR: 130, maxHR: 150,
+      aerobicEffect: null, anaerobicEffect: null, garminRpe: null, calories: null, iTrimp: null, hrZones: null,
+    };
+    wk.garminPending = [item];
+    wk.garminMatched = { 'strava-ROWQ': '__pending__' };
+    let done = false;
+    autoProcessActivities([item], () => { done = true; });
+    expect(wk.garminMatched['strava-ROWQ']).toBe(erg.id);
+    expect(wk.garminActuals?.[erg.id!]?.garminId).toBe('strava-ROWQ');
+    expect(wk.garminActuals?.[erg.id!]?.activityType).toBe('ROWING');
+    expect((wk.adhocWorkouts ?? []).length).toBe(0);
+    document.querySelectorAll('button').forEach(b => { if (/skip|done|save/i.test(b.textContent ?? '')) (b as HTMLButtonElement).click(); });
+    void done;
+  });
+
+  it('current week: Mark as Done claims a same-day row awaiting review instead of writing a record', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 1;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    vi.setSystemTime(dayDate(i, 6, 20));
+    // A short row: outside the slot's duration window, so it waits in review.
+    const short = Math.floor(erg.estimatedDurationMin! * 0.4);
+    matchAndAutoComplete([rowOn('strava-ROWP', dayDate(i, erg.dayOfWeek!, 8), short)]);
+    expect(wk.garminMatched?.['strava-ROWP']).toBe('__pending__');
+    expect(wk.garminActuals?.[erg.id!]).toBeUndefined();
+    tapDone(erg, i);
+    const rec = wk.garminActuals![erg.id!];
+    expect(rec.garminId).toBe('strava-ROWP');
+    expect(isManualInAppActual(rec)).toBe(false);
+    expect(rec.durationSec).toBe(short * 60);
+    expect(wk.garminMatched!['strava-ROWP']).toBe(erg.id);
+    // Not counted as an extra activity awaiting review any more, and the
+    // session counts once.
+    expect(Object.values(wk.garminMatched!).filter(v => v === '__pending__')).toHaveLength(0);
+    expect(Object.keys(wk.garminActuals!).filter(k => wk.garminActuals![k].garminId === 'strava-ROWP')).toEqual([erg.id]);
+  });
+
+  it('past week: Mark as Done claims a same-day row logged as an adhoc activity: one record, no adhoc card', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 2;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    vi.setSystemTime(dayDate(i + 1, 2, 20));
+    const long = Math.ceil(erg.estimatedDurationMin! * 2.2);
+    matchAndAutoComplete([rowOn('strava-ROWA', dayDate(i, erg.dayOfWeek!, 8), long)]);
+    expect(wk.garminMatched?.['strava-ROWA']).toBe('garmin-strava-ROWA');
+    expect((wk.adhocWorkouts ?? []).some(a => a.id === 'garmin-strava-ROWA')).toBe(true);
+    const synced = weekTss(s, wk);
+    tapDone(erg, i);
+    expect(wk.garminActuals![erg.id!].garminId).toBe('strava-ROWA');
+    expect(wk.garminActuals!['garmin-strava-ROWA']).toBeUndefined();
+    expect((wk.adhocWorkouts ?? []).some(a => a.id === 'garmin-strava-ROWA')).toBe(false);
+    expect(wk.rated['garmin-strava-ROWA']).toBeUndefined();
+    expect(wk.garminMatched!['strava-ROWA']).toBe(erg.id);
+    // One session, counted once: the row's load at the athlete's rating
+    // (the tap's RPE replaces the RPE derived for the adhoc card), never the
+    // row plus a record of the planned session.
+    const rated = wk.rated[erg.id!] as number;
+    expect(weekTss(s, wk)).toBeCloseTo(long * TL_PER_MIN[rated], 0);
+    expect(weekTss(s, wk)).toBeLessThanOrEqual(synced + 1e-6);
+  });
+
+  it('Mark as Done with no erg row that day still writes the rowing record', () => {
+    const s = hyroxState();
+    const i = firstErgWeek(s);
+    s.w = i + 1;
+    const wk = s.wks[i];
+    const erg = ergOf(wk);
+    vi.setSystemTime(dayDate(i, 6, 20));
+    const other = (erg.dayOfWeek! + 3) % 7;
+    matchAndAutoComplete([rowOn('strava-ROWX', dayDate(i, other, 8), Math.floor(erg.estimatedDurationMin! * 0.4))]);
+    tapDone(erg, i);
+    expect(isManualInAppActual(wk.garminActuals![erg.id!])).toBe(true);
+    expect(wk.garminMatched!['strava-ROWX']).toBe('__pending__');
   });
 });

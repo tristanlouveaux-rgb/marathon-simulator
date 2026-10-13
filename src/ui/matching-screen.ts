@@ -64,9 +64,10 @@ function workoutTypeShort(t: string): string {
 }
 
 /** The shared slot-compatibility rule (matching.ts). Walks, hikes and rows only
- *  take cross slots, never a run slot (audit D3). */
+ *  take cross slots, never a run slot (audit D3); an erg row also takes a
+ *  HYROX easy erg slot, by its raw activity type. */
 function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
-  return isActivityCompatibleWithSlot(item.appType, workout);
+  return isActivityCompatibleWithSlot(item.appType, workout, item.activityType);
 }
 
 function escHtml(s: string | null | undefined): string {
