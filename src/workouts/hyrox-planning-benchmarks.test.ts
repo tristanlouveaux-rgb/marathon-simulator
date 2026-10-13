@@ -30,6 +30,8 @@ vi.mock('@/ui/hyrox/plan-view', () => ({ renderHyroxPlanView: vi.fn() }));
 import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from './plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
+import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
+import { hyroxProToOpenSec } from '@/calculations/hyrox-results';
 import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks, predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxBenchmarkLedger } from '@/ui/hyrox/stats-view';
@@ -142,7 +144,9 @@ describe('plan engine station targets come from the forecast\'s per-station benc
     for (const comp of densityComponents(s.wks)) {
       const st = comp.type as HyroxStation;
       expect(comp.durationSec).not.toBe(seeds[st]);
-      expect(comp.durationSec).toBe(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatio));
+      // Each split converts at its own station's ratio (lane H3b).
+      expect(comp.durationSec).toBe(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatios[st]!));
+      expect(comp.durationSec).toBe(Math.round(doublesStationSoloSec(st, DOUBLES_SPLITS[st])));
     }
   });
 });
@@ -164,7 +168,7 @@ describe('doubles target with doubles race splits: one number per station for St
       expect(row.basis).toBe('solo_of_doubles_race');
       expect(row.sec).toBe(b.sec);
       expect(targets[row.station]).toBe(Math.round(row.sec!));
-      expect(targets[row.station]).toBe(Math.round(DOUBLES_SPLITS[row.station] / resolved.stationRatio));
+      expect(targets[row.station]).toBe(Math.round(DOUBLES_SPLITS[row.station] / resolved.stationRatios[row.station]!));
       expect(targets[row.station]!).toBeGreaterThan(DOUBLES_SPLITS[row.station]);
     }
   });
@@ -219,13 +223,15 @@ describe('Open target with a Pro race split: plan, Stats and forecast read the O
       expect(target).toBe(Math.round(line.baseSec));
       const row = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'sled_pull')!;
       expect(row.sec!).toBeCloseTo(line.baseSec, 9);
+      // Pro to Open per station from the results (difference in differences);
+      // a Pro Doubles split first converts to the solo time in Pro Doubles.
       if (format === 'pro_singles') {
-        expect(target).toBe(Math.round(sec / 1.15));
+        expect(target).toBe(Math.round(hyroxProToOpenSec('sled_pull', sec, 'pooled')));
         expect(target).toBeLessThan(sec);
       } else {
-        const ratio = resolveHyroxStationBenchmarks(s)!.stationRatio;
-        expect(target).toBe(Math.round(sec / 1.15 / ratio));
-        expect(target).toBeLessThan(Math.round(sec / ratio));
+        const proSolo = doublesStationSoloSec('sled_pull', sec, { singles: { format: 'pro_singles', sex: 'pooled' }, doubles: { format: 'pro_doubles', sex: 'pooled' } });
+        expect(target).toBe(Math.round(hyroxProToOpenSec('sled_pull', proSolo, 'pooled')));
+        expect(target).toBeLessThan(Math.round(proSolo));
       }
       const pulls = densityComponents(s.wks).filter(c => c.type === 'sled_pull');
       expect(pulls.length).toBeGreaterThan(0);

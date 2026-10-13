@@ -88,7 +88,10 @@ describe('HYROX init personal run-pace offset reads the resolved engine', () => 
   it('equals the offset refreshHyroxPersonalRunPaceOffset computes on the launch state', () => {
     const s = init({
       pbs: { k5: 1260, h: 5700 }, pbDates: { k5: ago(3 * 365), h: ago(3 * 365) },
-      previousHyroxTimeSec: 4500, hyroxPreviousTimeFormat: 'open_singles', hyroxPreviousRaceDate: ago(120),
+      // With the lane H3b seeds a 4500 s finish back-computes to the model's
+      // own pace (residual rounds to 0, so no offset is written); 4600 s keeps
+      // a non-zero residual for the comparison below.
+      previousHyroxTimeSec: 4600, hyroxPreviousTimeFormat: 'open_singles', hyroxPreviousRaceDate: ago(120),
     } as Partial<OnboardingState>);
     const initOffset = s.hyroxConfig!.personalRunPaceOffsetSec;
     expect(initOffset).toBeDefined();
