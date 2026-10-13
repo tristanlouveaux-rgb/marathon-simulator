@@ -46,7 +46,7 @@ import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
-import type { HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import {
   HYROX_WEEKLY_SESSIONS,
@@ -1247,8 +1247,9 @@ export interface HyroxWeekDetail {
   acwrCapTss: number | null;
   /** What the guard's chronic window counts each week before week 1 as
    *  (canonical TSS, D4): the athlete's logged weekly load (signalBBaseline)
-   *  when it exists, otherwise the nominal week 1 (its structure with a
-   *  station session in the assessment's slot). The same on every week. */
+   *  as stored when the plan was created (hyroxConfig.planChronicSeed),
+   *  otherwise the nominal week 1 (its structure with a station session in
+   *  the assessment's slot). The same on every week. */
   chronicSeedTss: number;
   chronicSeedSource: 'logged' | 'nominal';
   /** Deload weeks: HYROX_DELOAD_FACTOR × the last loaded week's planned
@@ -1458,6 +1459,49 @@ function taperDropRank(w: Workout, raceWeek: boolean): number {
   return 6;
 }
 
+/** What the guard's chronic window counts each week before week 1 as (D4):
+ *  the logged weekly load, or the nominal week 1. */
+export type HyroxChronicSeed = NonNullable<HyroxConfig['planChronicSeed']>;
+
+/**
+ * The chronic seed a plan created now stores (D4): the athlete's logged
+ * weekly load (signalBBaseline: the median completed week of raw
+ * physiological TSS, all sports, canonical TSS) when there is one, otherwise
+ * the nominal week 1. A missing, non-finite or zero value is no data (§BV).
+ * Read once, when the plan is created: the live value is a rolling median
+ * every sync refreshes, so it comes to hold the plan's own weeks (review
+ * 2026-10-13: re-read at every rollover, it moved the remaining weeks by up
+ * to half, unnoted).
+ */
+export function hyroxChronicSeedSnapshot(signalBBaseline: number | null | undefined): HyroxChronicSeed {
+  return signalBBaseline != null && Number.isFinite(signalBBaseline) && signalBBaseline > 0
+    ? { source: 'logged', loggedTss: signalBBaseline }
+    : { source: 'nominal' };
+}
+
+/** The plan's chronic seed: the one stored when the plan was created, else
+ *  (a plan built before 2026-10-13) the live baseline. */
+function planChronicSeed(state: SimulatorState): HyroxChronicSeed {
+  const stored = state.hyroxConfig?.planChronicSeed;
+  if (stored?.source === 'nominal') return { source: 'nominal' };
+  if (stored?.source === 'logged' && stored.loggedTss != null && Number.isFinite(stored.loggedTss) && stored.loggedTss > 0) {
+    return { source: 'logged', loggedTss: stored.loggedTss };
+  }
+  return hyroxChronicSeedSnapshot(state.signalBBaseline);
+}
+
+/** Store the plan's chronic seed when it has none (a plan built before
+ *  2026-10-13), from the live baseline, so later regenerations read a fixed
+ *  value. The full rebuilds of the same plan (generator version, previous
+ *  time, previous format) call it; a new plan (initializeHyroxSimulator)
+ *  stores a fresh one. Returns true when it wrote. */
+export function ensureHyroxChronicSeed(state: SimulatorState): boolean {
+  const hx = state.hyroxConfig;
+  if (!hx || hx.planChronicSeed) return false;
+  hx.planChronicSeed = hyroxChronicSeedSnapshot(state.signalBBaseline);
+  return true;
+}
+
 /** The stricter of two previous-Sunday readings: hard or eccentric if either
  *  says so (null when both Sundays are empty). */
 function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null): HyroxPrevSunday | null {
@@ -1476,8 +1520,9 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  * ceiling (the last loaded week × HYROX_DELOAD_FACTOR); the single-run rule
  * (110% of the longest run of the previous LONG_RUN_LOOKBACK_WEEKS weeks;
  * Frandsen 2025); the taper's reference week and the week before; and the
- * previous Sunday. Deterministic: the same state gives the same weeks, so one
- * week can be rebuilt alone.
+ * previous Sunday. Deterministic: the same plan config gives the same weeks
+ * (the chronic seed is the one stored when the plan was created, never the
+ * live baseline), so one week can be rebuilt alone.
  *
  * `storedBoundaryWeek`: the first week the caller replaces (default s.w, the
  * week from which the in-place regenerations rebuild; regenerateHyroxWeek
@@ -1525,10 +1570,12 @@ export function buildHyroxTrainingWeeks(
   // computed when week 1 is built. Before, the window counted the weeks before
   // week 1 as week 1, the light assessment week (novice 6 h: 126 min, 116
   // TSS), which held the whole plan low. A logged zero is no data (§BV), so it
-  // falls back to the nominal week.
-  const logged = state.signalBBaseline;
-  const chronicSeedSource: 'logged' | 'nominal' = logged != null && Number.isFinite(logged) && logged > 0 ? 'logged' : 'nominal';
-  let chronicSeedTss = chronicSeedSource === 'logged' ? (logged as number) : 0;
+  // falls back to the nominal week. The value is the one stored when the plan
+  // was created (hyroxConfig.planChronicSeed), so the same plan config gives
+  // the same weeks at every regeneration.
+  const seed = planChronicSeed(state);
+  const chronicSeedSource = seed.source;
+  let chronicSeedTss = seed.source === 'logged' ? (seed.loggedTss as number) : 0;
   // Pre-plan running exposure for the single-run rule when no run was logged
   // in the 30 days before the plan (D8): week 1 already runs the long-run
   // start with no ceiling, so weeks 2 to LONG_RUN_LOOKBACK_WEEKS count that

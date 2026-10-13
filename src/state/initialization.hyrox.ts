@@ -31,7 +31,7 @@ import {
   SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateHyroxPlan, hyroxChronicSeedSnapshot, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
@@ -365,6 +365,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       raceEventId: state.hyroxRaceEventId,
       venueId: state.hyroxVenueId ?? (state.hyroxRaceEventId ? getVenueIdForEvent(state.hyroxRaceEventId) : undefined),
       generatorVersion: HYROX_GENERATOR_VERSION,
+      // The guard's chronic seed (plan engine D4), fixed for this plan's
+      // life: the logged weekly load as it stands now, before the plan.
+      planChronicSeed: hyroxChronicSeedSnapshot(s.signalBBaseline),
     };
 
     s.hyroxConfig = hyroxConfig;

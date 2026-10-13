@@ -26,7 +26,7 @@ import {
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
 import type { AbilityBand } from '@/types/triathlon';
-import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
+import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
@@ -126,6 +126,9 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
   // date.
   if (rebanded) {
     archiveCurrentWksIfPopulated();
+    // Same plan, same start: it keeps the chronic seed stored when it was
+    // created (D4), or stores one now if it predates them.
+    ensureHyroxChronicSeed(s);
     s.wks = generateHyroxPlan(s);
     redistributeArchivedActivitiesToNewPlan();
   }

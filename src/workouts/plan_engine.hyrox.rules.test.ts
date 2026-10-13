@@ -98,6 +98,7 @@ import {
 import { resolvePlannedWeekPhase } from '@/calculations/planned-week-target';
 import { generateHyroxPlan, generateHyroxPlanDetailed, regenerateHyroxWeek } from './plan_engine.hyrox';
 import { planTrainingWeeks } from './race-week-layout';
+import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 
 const BANDS: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
 /** Previous open-singles finish time that bands an athlete; null = first-timer. */
@@ -117,8 +118,11 @@ beforeAll(() => {
 });
 afterAll(() => { vi.restoreAllMocks(); });
 
-function build(band: AbilityBand, hours: number, weeks: number, over: Partial<OnboardingState> = {}): SimulatorState {
+/** A plan from the real initializer. `loggedWeeklyTss`: the athlete's logged
+ *  weekly load (signalBBaseline) when the plan is created. */
+function build(band: AbilityBand, hours: number, weeks: number, over: Partial<OnboardingState> = {}, loggedWeeklyTss?: number): SimulatorState {
   resetState();
+  if (loggedWeeklyTss != null) getMutableState().signalBBaseline = loggedWeeklyTss;
   const sec = BAND_PREV_SEC[band];
   initializeHyroxSimulator({
     ...defaultOnboardingState, name: 'QA', currentStep: 'initializing',
@@ -907,8 +911,7 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       expect(nominal[0].chronicSeedTss).toBeGreaterThanOrEqual(nominal[0].plannedTss - EPS);
       expect(nominal[1].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * (nominal[0].plannedTss + 3 * nominal[0].chronicSeedTss) / 4, 6);
 
-      const low = structuredClone(s);
-      low.signalBBaseline = 100;
+      const low = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16, {}, 100));
       const logged = generateHyroxPlanDetailed(low).detail;
       expect(logged[0].chronicSeedSource).toBe('logged');
       expect(logged[0].chronicSeedTss).toBe(100);
@@ -916,10 +919,41 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       expect(logged[0].plannedTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * 100 + EPS);
 
       // A logged zero is no data (§BV): the nominal week stands in.
-      const zero = structuredClone(s);
-      zero.signalBBaseline = 0;
+      const zero = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16, {}, 0));
+      expect(zero.hyroxConfig!.planChronicSeed).toEqual({ source: 'nominal' });
       expect(generateHyroxPlanDetailed(zero).detail[0].chronicSeedSource).toBe('nominal');
     }
+  });
+
+  it('D4: the chronic seed is fixed when the plan is created; a later baseline change moves no regenerated week', () => {
+    // Review 2026-10-13: the seed was re-read from the live signalBBaseline (a
+    // rolling median every sync refreshes) at every rollover and single-week
+    // rebuild: intermediate 8 h logged 150 then 350 lifted weeks 6 to 16 by
+    // about 40% (W6 222 to 315 min), competitive 12 h 400 then 150 halved them.
+    const shape = (wk: Week | null | undefined) => prescribed(wk ?? undefined).map(w => `${w.dayOfWeek} ${w.t} ${w.estimatedDurationMin}`).join(' | ');
+    const cases: Array<[AbilityBand, number, number | undefined, number]> = [
+      ['intermediate', 8, 150, 350], ['competitive', 12, 400, 150], ['intermediate', 8, undefined, 120], ['novice', 6, 200, 60],
+    ];
+    for (const [band, hrs, x, y] of cases) {
+      const s = structuredClone(build(band, hrs, 16, {}, x));
+      expect(s.hyroxConfig!.planChronicSeed).toEqual(x != null ? { source: 'logged', loggedTss: x } : { source: 'nominal' });
+      const stored = s.wks.map(shape);
+      s.w = 6;
+      s.signalBBaseline = y;
+      const fresh = generateHyroxPlan(s);
+      for (let i = 5; i < stored.length; i++) expect(shape(fresh[i]), `${band} ${x}->${y} W${i + 1}`).toBe(stored[i]);
+      expect(shape(regenerateHyroxWeek(s, 9))).toBe(stored[8]);
+      expect(generateHyroxPlanDetailed(s).detail[0].chronicSeedSource).toBe(x != null ? 'logged' : 'nominal');
+    }
+    // A plan built before the seed was stored fixes it at the version
+    // regeneration, from the live value; a new plan stores a fresh one.
+    const legacy = structuredClone(build('intermediate', 8, 16));
+    delete legacy.hyroxConfig!.planChronicSeed;
+    legacy.hyroxConfig!.generatorVersion = 17;
+    legacy.signalBBaseline = 260;
+    expect(applyHyroxGeneratorRegen(legacy)).toBe(true);
+    expect(legacy.hyroxConfig!.planChronicSeed).toEqual({ source: 'logged', loggedTss: 260 });
+    expect(build('intermediate', 8, 16, {}, 333).hyroxConfig!.planChronicSeed).toEqual({ source: 'logged', loggedTss: 333 });
   });
 
   it('D5: the week right before the race taper never deloads; the weekly load target agrees', () => {

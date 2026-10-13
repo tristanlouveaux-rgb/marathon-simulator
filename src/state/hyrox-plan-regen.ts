@@ -32,7 +32,7 @@
 
 import type { GarminActual, GarminPendingItem, SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
-import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { ensureHyroxChronicSeed, generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, type HyroxSessionCounts } from '@/constants/hyrox-constants';
 
 /** Generator version that moved the band defaults to the tier structure
@@ -246,6 +246,9 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
   const savedVersion = hx.generatorVersion ?? 0;
   if (savedVersion >= HYROX_GENERATOR_VERSION) return false;
   migratePreV18HyroxSessionCounts(s);
+  // A plan built before the chronic seed was stored (D4) fixes it now, so the
+  // rollovers and single-week rebuilds after this one read the same value.
+  ensureHyroxChronicSeed(s);
   const freshWeeks = generateHyroxPlan(s);
   if (freshWeeks.length === 0) return false;
   for (let i = 0; i < Math.min(s.wks.length, freshWeeks.length); i++) {
