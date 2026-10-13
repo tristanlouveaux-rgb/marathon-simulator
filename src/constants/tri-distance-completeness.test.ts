@@ -21,7 +21,7 @@ import {
 } from '@/constants/triathlon-constants';
 import { RACE_INTENSITY_BY_DISTANCE } from '@/calculations/bike-physics';
 import { DURABILITY_THRESHOLDS } from '@/calculations/durability-cap';
-import { RUN_HORIZON_PARAMS_BY_DISTANCE, TRI_TAPER_WEEKS } from '@/constants/triathlon-horizon-params';
+import { RUN_HORIZON_PARAMS_BY_DISTANCE } from '@/constants/triathlon-horizon-params';
 import { RACE_READINESS_TARGETS } from '@/constants/race-readiness-targets';
 
 describe('triathlon distance completeness', () => {
@@ -39,9 +39,6 @@ describe('triathlon distance completeness', () => {
       expect(DURABILITY_THRESHOLDS[d], `DURABILITY_THRESHOLDS[${d}]`).toBeDefined();
       expect(RUN_HORIZON_PARAMS_BY_DISTANCE[d], `RUN_HORIZON_PARAMS_BY_DISTANCE[${d}]`).toBeDefined();
       expect(RACE_READINESS_TARGETS[d], `RACE_READINESS_TARGETS[${d}]`).toBeDefined();
-      for (const disc of ['swim', 'bike', 'run'] as const) {
-        expect(TRI_TAPER_WEEKS[disc][d], `TRI_TAPER_WEEKS[${disc}][${d}]`).toBeDefined();
-      }
     }
   });
 

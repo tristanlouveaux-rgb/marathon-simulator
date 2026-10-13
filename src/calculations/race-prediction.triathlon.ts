@@ -83,7 +83,6 @@ import {
   applyTriHorizonSwim,
   applyTriHorizonBike,
   applyTriHorizonRun,
-  defaultTaperWeeks,
 } from './training-horizon.triathlon';
 import {
   yearsOfTrainingToExperienceLevel,
@@ -111,7 +110,6 @@ import { computeTriAdaptationRatios, type TriAdaptationRatios } from './tri-adap
 import { computeTriDisciplineConfidence, type TriDisciplineConfidence } from './tri-discipline-confidence';
 import { computeTriRaceReadiness, computeProjectionPenaltyShare } from './race-readiness';
 import { RACE_READINESS_TARGETS } from '@/constants/race-readiness-targets';
-import { TRI_TAPER_WEEKS } from '@/constants/triathlon-horizon-params';
 import { CSS_DETRAINING_PER_4WK } from '@/constants/triathlon-constants';
 import {
   CLIMATE_ANCHOR_TEMP_C,
@@ -121,7 +119,7 @@ import {
 } from '@/constants/triathlon-course-factors';
 import type { InjuryState } from '@/types/injury';
 import { disciplineRecovery, recoveryDebitWeeks, type DisciplineRecovery } from './injury-recovery';
-import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { raceForecastHorizonISO, triPlanTaperWeeks } from '@/workouts/race-week-layout';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
@@ -165,6 +163,8 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
 
   // ── Live projection inputs ───────────────────────────────────────────────
   const weeksRemaining = computeWeeksRemaining(state);
+  // The plan's race taper (tracking side reads the plan's taper).
+  const taperWeeks = triPlanTaperWeeks(state) ?? 0;
 
   // ── Injury-aware recovery debit (per discipline) ─────────────────────────
   // A current injury costs the athlete only the disciplines they have
@@ -249,6 +249,7 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     adherence,
     experienceLevel,
     distance,
+    taperWeeks,
     adaptation,
     disciplineConfidence,
   });
@@ -297,13 +298,16 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   const runRef = runRefParams.ref_sessions['intermediate'];
   const closureWeeks = RACE_READINESS_TARGETS[distance].closureWeeks;
 
-  // Per-discipline taper weeks. Subtracted from useful build time so a race
-  // in taper window doesn't get "training closure" credit (it's freshness,
-  // not endurance build). Per Mujika 2002 + Friel 2018: swim taper is longest
-  // (technique consolidation), bike shortest. From `TRI_TAPER_WEEKS`.
-  const swimTaper = TRI_TAPER_WEEKS.swim[distance];
-  const bikeTaper = TRI_TAPER_WEEKS.bike[distance];
-  const runTaper  = TRI_TAPER_WEEKS.run[distance];
+  // Taper weeks, subtracted from useful build time so a race in the taper
+  // window gets no "training closure" credit (freshness, not endurance build).
+  // The plan's own race taper (triPlanTaperWeeks), shared by swim, bike and
+  // run as the plan tapers all three over the same weeks (Tristan
+  // 2026-10-13). It replaced a per-discipline table (Mujika 2002, Friel 2018:
+  // swim longest, bike shortest; Ironman run 3 weeks) that the plan never
+  // followed.
+  const swimTaper = taperWeeks;
+  const bikeTaper = taperWeeks;
+  const runTaper  = taperWeeks;
 
   // Per-discipline reference WEEKLY VOLUME (hours for swim/bike, km for run).
   // Combined with planned hours, this lets the dose factor see "5 short bike
@@ -597,6 +601,8 @@ function buildProjection(args: {
   adherence: ReturnType<typeof computeTriAdherence>;
   experienceLevel: string;
   distance: TriathlonDistance;
+  /** The plan's race taper in weeks (triPlanTaperWeeks), every discipline. */
+  taperWeeks: number;
   adaptation: TriAdaptationRatios;
   disciplineConfidence: TriDisciplineConfidence;
 }): { markers: TriProjectionMarkers; baselines: EffectiveBaselines } {
@@ -667,7 +673,7 @@ function buildProjection(args: {
       weeks_remaining: swimWeeks,
       sessions_per_week: args.sessions.swim,
       ability_band: swimBand,
-      taper_weeks: defaultTaperWeeks('swim', args.distance),
+      taper_weeks: args.taperWeeks,
       experience_level: args.experienceLevel,
       adherence_penalty_pct: args.adherence.swim.penaltyPct,
       adaptation_ratio: args.adaptation.swim,
@@ -685,7 +691,7 @@ function buildProjection(args: {
       weeks_remaining: bikeWeeks,
       sessions_per_week: args.sessions.bike,
       ability_band: bikeBand,
-      taper_weeks: defaultTaperWeeks('bike', args.distance),
+      taper_weeks: args.taperWeeks,
       experience_level: args.experienceLevel,
       adherence_penalty_pct: args.adherence.bike.penaltyPct,
       adaptation_ratio: args.adaptation.bike,
@@ -702,7 +708,7 @@ function buildProjection(args: {
       weeks_remaining: runWeeks,
       sessions_per_week: args.sessions.run,
       ability_band: runBand,
-      taper_weeks: defaultTaperWeeks('run', args.distance),
+      taper_weeks: args.taperWeeks,
       experience_level: args.experienceLevel,
       triathlon_distance: args.distance,
       adherence_penalty_pct: args.adherence.run.penaltyPct,

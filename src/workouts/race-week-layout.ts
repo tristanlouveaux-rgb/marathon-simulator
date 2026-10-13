@@ -1,6 +1,8 @@
 import { addCalendarDays, calendarDayNumber, localDateKey, localMondayKey } from '@/utils/local-date';
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
+import type { TriathlonDistance } from '@/types/triathlon';
+import { triRaceTaperWeeks } from '@/constants/triathlon-constants';
 
 /**
  * Where race day falls in a plan's calendar weeks (Monday to Sunday, week 1 =
@@ -222,4 +224,29 @@ export function planTaperWeeks(s: {
   }
   if (taper > 0) return taper;
   return computeRunningPlanPhases(training, s.rd).filter(p => p.ph === 'taper').length;
+}
+
+/**
+ * Race-taper weeks of a triathlon or cycling plan, for the forecast (tracking
+ * side; Tristan 2026-10-13: the forecast reads the plan's taper): the trailing
+ * 'taper' weeks of the plan's training weeks (a closing week excluded), or,
+ * before the plan's weeks exist, the race distance's taper
+ * (triRaceTaperWeeks; cycling 2). Every discipline shares it, as the plan
+ * tapers all three over the same weeks. Undefined without a triathlon config.
+ */
+export function triPlanTaperWeeks(s: {
+  tw?: number;
+  wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
+  triConfig?: { distance: TriathlonDistance; disciplines?: ReadonlyArray<string> } | null;
+}): number | undefined {
+  if (!s.triConfig) return undefined;
+  const training = planTrainingWeeks(s);
+  const wks = s.wks ?? [];
+  let taper = 0;
+  if (training > 0 && wks.length >= training) {
+    for (let i = training - 1; i >= 0 && wks[i]?.ph === 'taper'; i--) taper++;
+  }
+  if (taper > 0) return taper;
+  const d = s.triConfig.disciplines;
+  return triRaceTaperWeeks(s.triConfig.distance, { cyclingOnly: !!d && d.length === 1 && d[0] === 'bike' });
 }
