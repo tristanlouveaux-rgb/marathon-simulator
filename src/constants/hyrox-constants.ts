@@ -610,7 +610,8 @@ export const HYROX_LONG_RUN: Record<HyroxTier, { startMin: number; stepMin: numb
 
 /** A quality-run format: a continuous tempo, or intervals by heart rate
  *  (about HYROX_INTERVAL_HR_FRACTION of max HR, easy jog between reps) or by
- *  goal race pace over 1 km (standing rest). */
+ *  HYROX race pace over 1 km (standing rest; the sheet's goal race pace,
+ *  priced at the athlete's current HYROX run pace). */
 export type HyroxQualityFormat =
   | { kind: 'run_tempo'; workMin: number }
   | { kind: 'run_intervals'; reps: number; repMin: number; recoveryMin: number; target: 'hr' }
@@ -620,8 +621,9 @@ export type HyroxQualityFormat =
  * One quality run a week by tier and phase (parameter sheet intervals.formats;
  * HYROX Data Lab, Dearden, Gutierrez-Hellin 2026, Rox Lyfe). Beginner base is
  * easy running only. Peak: beginner 4 x 3 min and advanced 6 x 4 min at about
- * 90% of max HR with 3 min easy jog; intermediate 8 x 1 km at goal race pace
- * with 3 min rest. 10 min warm-up and 5 min cool-down (existing). Taper weeks
+ * 90% of max HR with 3 min easy jog; intermediate 8 x 1 km at race pace with
+ * 3 min rest (the sheet's goal race pace; the generator prices it at the
+ * athlete's current HYROX run pace and labels it HYROX race pace). 10 min warm-up and 5 min cool-down (existing). Taper weeks
  * and race week keep the existing taper tempo (the race-week primer). Replaces
  * the race pace x 0.97 / x 0.88 factors and the 4 to 12 x 400 m format.
  */

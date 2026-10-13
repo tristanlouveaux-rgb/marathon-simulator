@@ -274,12 +274,17 @@ export function generateHyroxRun(params: RunParams): Workout {
     case 'run_intervals': {
       const fmt = params.format?.kind === 'run_intervals' ? params.format : null;
       if (fmt && fmt.target === 'race_pace') {
-        // 1 km reps at goal race pace with standing rest (intermediate peak).
+        // 1 km reps at HYROX race pace with standing rest (intermediate peak).
+        // The sheet names goal race pace; the pace here is the athlete's
+        // current HYROX run pace (hyroxRunPaceSecKm, the band seed without
+        // one), so it is labelled HYROX race pace, as the no-signal tempo is
+        // (review 2026-10-13). A goal pace from the target finish time is
+        // an open question for the forecast lane.
         const repSec = fmt.repKm * racePace;
         dur = Math.round(warm + (fmt.reps * repSec) / 60 + (fmt.reps - 1) * fmt.recoveryMin + cool);
         distanceKm = kmAt(warm + cool, easyPace) + fmt.reps * fmt.repKm;
         mtlSegments = [{ min: warm + cool, rpe: 4, kind: 'run_easy' }, { min: (fmt.reps * repSec) / 60, rpe: 8, kind: 'run_intervals' }];
-        desc = `${warm} min easy warm-up. ${fmt.reps} × ${fmt.repKm} km at goal race pace (~${fmtPace(Math.round(racePace))}/km), ${fmt.recoveryMin} min rest between reps. ${cool} min easy cool-down.`;
+        desc = `${warm} min easy warm-up. ${fmt.reps} × ${fmt.repKm} km at HYROX race pace (~${fmtPace(Math.round(racePace))}/km), ${fmt.recoveryMin} min rest between reps. ${cool} min easy cool-down.`;
       } else {
         // Heart-rate reps with an easy jog between them (beginner and advanced
         // peak). Without a format (not reached by the plan engine) the

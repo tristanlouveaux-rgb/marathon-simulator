@@ -325,11 +325,11 @@ describe('HYROX long run', () => {
 });
 
 describe('HYROX quality runs', () => {
-  it('tier formats: intermediate peak 8 x 1 km at goal race pace, advanced peak 6 x 4 min by heart rate, beginner base easy only', () => {
+  it('tier formats: intermediate peak 8 x 1 km at HYROX race pace, advanced peak 6 x 4 min by heart rate, beginner base easy only', () => {
     const s = build('intermediate', 12, 18);
     const peak = s.wks.find(wk => wk.ph === 'peak' && !isFourWeekCycleDeloadWeek(wk.w, 'peak'))!;
     const q = prescribed(peak).find(w => w.t === 'hyrox_run_intervals');
-    expect(q?.d).toMatch(/8 × 1 km at goal race pace/);
+    expect(q?.d).toMatch(/8 × 1 km at HYROX race pace/);
     const adv = build('advanced', 12, 18);
     const advPeak = adv.wks.find(wk => wk.ph === 'peak' && !isFourWeekCycleDeloadWeek(wk.w, 'peak'))!;
     expect(prescribed(advPeak).find(w => w.t === 'hyrox_run_intervals')?.d).toMatch(/6 × 4 min at about 90% of max HR/);
