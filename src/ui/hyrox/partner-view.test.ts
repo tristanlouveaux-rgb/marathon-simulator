@@ -30,7 +30,7 @@ import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from '@/calculat
 import { renderHyroxPartnerView, stationStatusText, fmtLead, PARTNER_ERROR_COPY } from './partner-view';
 import { partnerRowLabel, renderHyroxStatsView } from './stats-view';
 import { _resetHyroxPartnerSyncForTests, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
-import type { HyroxPartnerSource, PartnerResult, PartnerInvite, PartnerLink, StoredPartnerSnapshot } from '@/data/hyroxPartner';
+import type { HyroxPartnerSource, PartnerErrorCode, PartnerResult, PartnerInvite, PartnerLink, StoredPartnerSnapshot } from '@/data/hyroxPartner';
 import type { HyroxConfig, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import type { SimulatorState } from '@/types/state';
 
@@ -62,7 +62,7 @@ function seed(hx: Partial<HyroxConfig> = {}, over: Partial<SimulatorState> = {})
 }
 
 const ok = <T>(value: T): PartnerResult<T> => ({ ok: true, value });
-const fail = <T>(error: PartnerResult<T> extends { ok: false; error: infer E } ? E : never): PartnerResult<T> => ({ ok: false, error } as PartnerResult<T>);
+const fail = <T>(error: PartnerErrorCode): PartnerResult<T> => ({ ok: false, error });
 
 /** A partner built from the viewer's own snapshot with set differences. */
 function partnerFrom(me: HyroxPartnerSnapshot, over: Partial<HyroxPartnerSnapshot> = {}): HyroxPartnerSnapshot {
