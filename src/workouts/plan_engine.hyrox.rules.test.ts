@@ -67,8 +67,8 @@
  * fixed at plan creation (D4), a done easy erg recording its load, the 110%
  * rule's pre-plan exposure counting a logged run in weeks 2 to 4 (D8), and a
  * low logged load giving no run under the floor, no erg-only week and no
- * single-run jump. The third pass adds logged loads of 20, 30, 40 and 50 TSS
- * run through every rule above: station work every training week (a ceiling
+ * single-run jump. The third pass adds logged loads of 20, 30, 40, 50 and 100
+ * TSS run through every rule above: station work every training week (a ceiling
  * leaves the long run out before the last station session or brick), a
  * guard or deload ceiling exceeded only by a week holding just its last
  * station session or brick and saying so, week 1's assessment exempt from
@@ -1122,7 +1122,7 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  for (const logged of [20, 30, 40, 50]) it(`a logged load of ${logged} TSS: every rule holds, station work every training week, no run under the floor, race week holds a run whenever it holds a run slot`, () => {
+  for (const logged of [20, 30, 40, 50, 100]) it(`a logged load of ${logged} TSS: every rule holds, station work every training week, no run under the floor, race week holds a run whenever it holds a run slot`, () => {
     // Review 2026-10-13 (second pass): the guard trimmed long runs to 4 min
     // and week 2 then jumped to 110% of the start. Review 2026-10-13 (third
     // pass): at 40 TSS or less the guard left out the week's last station
