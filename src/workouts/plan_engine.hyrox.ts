@@ -2132,9 +2132,11 @@ export function buildHyroxTrainingWeeks(
     const beforeCapMin = phase === 'taper' && before ? before.plannedMin : Infinity;
     const hasCeiling = capTss < Infinity || capMin < Infinity;
     const trainingCeiling = phase !== 'taper' && hasCeiling;
-    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number; easyPerMin: number }> = [];
+    // `hours`: the limit is the chosen weekly hours alone (a loaded training
+    // week); the easy-running step of the solver applies to it only.
+    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number; easyPerMin: number; hours?: boolean }> = [];
     if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.guardTss, ergPerMin: ergTssPerMin, easyPerMin: easyRunTssPerMin });
-    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1 });
+    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1, hours: phase !== 'taper' && capMin === hoursCapMin });
     if (beforeCapMin < Infinity) limits.push({ cap: beforeCapMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1 });
     if (taperWork) {
       limits.push({ cap: taperWork.min, of: a => a.workMin, ergPerMin: 0, easyPerMin: 0 });
@@ -2143,18 +2145,24 @@ export function buildHyroxTrainingWeeks(
     const over = (a: Attempt) => limits.some(l => l.of(a) > l.cap + 1e-6);
     const ratio = (a: Attempt) => limits.reduce((m, l) => Math.min(m, l.of(a) > 0 ? l.cap / l.of(a) : Infinity), Infinity);
     // Solver: easy erg work first, cut by what the largest overshoot needs
-    // (erg minutes price linearly). Then, in a training week, easy running,
-    // cut the same way (Tristan 2026-10-13, decision A: easy running gives
-    // way before the HYROX-specific station work; the omit order already
-    // left easy runs out first). Then the scale on the station work, shrunk
-    // by the overshoot each round, at least 3% (a round that lands exactly on
-    // a floor otherwise repeats), for at most 16 rounds, then the largest
-    // scale between the last two rounds that fits (8 halvings). Numerical
-    // choices with no physiological meaning. Before 2026-10-13 the scale
-    // shrank station sessions and easy runs together and stopped at the
-    // first fit, up to 3% under it: a week at one more hour, with longer easy
-    // runs, lost a station round to them (intermediate 10 weeks, W5 at 9 h
-    // against 10 h: a 50-min race-pace circuit of 3 rounds became 33 min of 2).
+    // (erg minutes price linearly). Then, when the chosen weekly hours are
+    // the only limit the week is over, easy running, cut the same way
+    // (decision A's order, easy running before the HYROX-specific station
+    // work; it costs no minutes against an hours limit). Under the
+    // acute:chronic guard, the deload ceiling and the taper limits, station
+    // sessions and easy runs shrink together by one scale, as before round 5
+    // (review 2026-10-13:
+    // decision A covers the MTL cap; cutting easy running first under the
+    // guard, the lowest load per minute, cost the most minutes, and deloads
+    // came out station-heavy, 873 of 1,813 holding the last loaded week's
+    // station rounds). The scale shrinks by the overshoot each round, at
+    // least 3% (a round that lands exactly on a floor otherwise repeats), for
+    // at most 16 rounds, then the largest scale between the last two rounds
+    // that fits (8 halvings). Numerical choices with no physiological
+    // meaning. Before 2026-10-13 the scale stopped at the first fit, up to 3%
+    // under it: a week at one more hour lost a station round it had room for
+    // (intermediate 10 weeks, W5 at 9 h against 10 h: a 50-min race-pace
+    // circuit of 3 rounds became 33 min of 2).
     const cutFor = (a: Attempt, perMin: (l: typeof limits[number]) => number): number | null => {
       let cut = 0;
       for (const l of limits) {
@@ -2198,7 +2206,8 @@ export function buildHyroxTrainingWeeks(
       }
       ergCap = 0;
       a = make();
-      if (phase !== 'taper' && over(a) && a.easyMin > 0) {
+      const hoursOnly = limits.every(l => l.hours || l.of(a) <= l.cap + 1e-6);
+      if (phase !== 'taper' && hoursOnly && over(a) && a.easyMin > 0) {
         const cut = cutFor(a, l => l.easyPerMin);
         if (cut != null && cut < a.easyMin) {
           easyCap = Math.max(0, Math.floor(a.easyMin - cut));
@@ -2210,21 +2219,34 @@ export function buildHyroxTrainingWeeks(
         if (!over(a)) return withErgRoom(a);
       }
       if (!over(a)) return a;
+      // Under the guard or the deload ceiling, a training week's easy running
+      // shrinks with the station work by the same scale: its minutes are
+      // capped at the scale times what the week held at full size. The scale
+      // on the running share alone left easy runs capped by the long run
+      // untouched until the week left them out whole (beginner 5 h 12 weeks
+      // W5, stations gated by an injury: a 33-min easy run left out where 32
+      // min fitted).
+      const easyFull = a.easyMin;
+      const propEasy = phase !== 'taper' && !hoursOnly && easyFull > 0;
+      const setScale = (x: number) => {
+        scale = x;
+        if (propEasy) easyCap = Math.floor(easyFull * x);
+      };
       let fitScale = 1;
       let overScale = 1;
       for (let i = 0; i < 16 && over(a); i++) {
         overScale = scale;
-        scale *= Math.min(0.97, ratio(a));
+        setScale(scale * Math.min(0.97, ratio(a)));
         a = make();
       }
       if (!over(a) && scale < 1) {
         fitScale = scale;
         for (let i = 0; i < 8 && overScale - fitScale > 1e-4; i++) {
-          scale = (fitScale + overScale) / 2;
+          setScale((fitScale + overScale) / 2);
           const b = make();
           if (over(b)) overScale = scale; else { fitScale = scale; a = b; }
         }
-        scale = fitScale;
+        setScale(fitScale);
         a = make();
         a = withErgRoom(a);
       }
