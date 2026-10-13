@@ -38,6 +38,21 @@
  * The equal-split mean assumes each partner covers half of every station at
  * their singles pace; the doubles station ratio then carries the cohort's
  * turn-taking benefit. Venue factors are not applied.
+ *
+ * The pair forecast is withheld (forecastWithheld):
+ *   - 'setup' when there is no pair tier (the two race setups differ);
+ *   - 'loads' when either partner has a loaded-station benchmark that is not
+ *     confirmed at the pair's tier (recorded at another tier, through the
+ *     unsourced Open/Pro conversion, or unknown). Each partner's forecast
+ *     station time is built from that benchmark, so the pair number would mix
+ *     loads (a Mixed woman's Women Open times read as Men Open). The station
+ *     rows still show, with the same 'tier' reason where both have a value.
+ *   TODO(H3b): once lane H3b's per-sex Open->Pro station conversions land,
+ *   convert instead of withholding. A woman's Women Open -> Women Pro
+ *   conversion is the Women Open -> Men Open conversion a Mixed pair needs:
+ *   the Women Pro tier is M-Open, and a Mixed woman throws wall balls to the
+ *   same 2.70 m target as in Women Pro (hyrox-division.ts, 26/27 rulebook
+ *   s4.1, s8.8).
  */
 
 import type { HyroxLoadTier, HyroxStation } from '@/types/triathlon';
@@ -96,8 +111,11 @@ export interface HyroxPartnerComparison {
     paceSecKm: number;
     setBy: 'you' | 'partner' | 'both';
   };
-  /** Null without a pair tier (the partners' race setups differ). */
+  /** Null when withheld (see forecastWithheld). */
   forecast: PartnerPairForecast | null;
+  /** Why the forecast is null: 'setup' = the race setups differ; 'loads' = a
+   *  loaded-station benchmark is not at the pair's tier. Null when shown. */
+  forecastWithheld: 'setup' | 'loads' | null;
 }
 
 /** The pair's format and tier, or nulls when the two setups disagree. */
@@ -138,6 +156,18 @@ function compareStation(
   if (diff > 0) return { station, status: 'you', leadSec: diff };
   if (diff < 0) return { station, status: 'partner', leadSec: -diff };
   return { station, status: 'level' };
+}
+
+/** True when either partner has a loaded-station benchmark that is not
+ *  confirmed at the pair's tier: the pair forecast would mix loads. */
+export function pairForecastMixesLoads(
+  you: HyroxPartnerSnapshot,
+  partner: HyroxPartnerSnapshot,
+  pairTier: HyroxLoadTier,
+): boolean {
+  const offTier = (snap: HyroxPartnerSnapshot, st: HyroxStation) =>
+    snap.stationSec[st] != null && snap.stationTier[st] !== pairTier;
+  return HYROX_STATION_ORDER.some(st => !isTierIndependentStation(st) && (offTier(you, st) || offTier(partner, st)));
 }
 
 /** The pair forecast from two snapshots at one pair format (see header). */
@@ -182,11 +212,15 @@ export function compareHyroxPartners(
   const setBy = you.runPaceSecKm === partner.runPaceSecKm
     ? 'both'
     : you.runPaceSecKm > partner.runPaceSecKm ? 'you' : 'partner';
+  const forecastWithheld: HyroxPartnerComparison['forecastWithheld'] = !pairFormat || !pairTier
+    ? 'setup'
+    : pairForecastMixesLoads(you, partner, pairTier) ? 'loads' : null;
   return {
     pairFormat,
     pairTier,
     stations,
     run: { paceSecKm, setBy },
-    forecast: pairFormat && pairTier ? hyroxPairForecast(you, partner, pairFormat, paceSecKm) : null,
+    forecast: pairFormat && forecastWithheld == null ? hyroxPairForecast(you, partner, pairFormat, paceSecKm) : null,
+    forecastWithheld,
   };
 }
