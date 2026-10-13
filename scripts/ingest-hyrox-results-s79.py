@@ -889,6 +889,135 @@ def band_from_sec(sec):
     return 'beginner'
 
 
+# ─── Pooled-by-format tables and season labels (lane H3b) ────────────────────
+
+def build_pooled_format_tables(final, seasons, published_cells):
+    """Per format, every published sex cell pooled (women and men, plus mixed
+    pairs for doubles; pro_doubles mixed stays out as a suppressed cell). The
+    fallback when the athlete's sex and division are unknown."""
+    cells = collections.defaultdict(lambda: collections.defaultdict(list))
+    for r in final:
+        if r['season'] not in seasons or (r['format'], r['sex']) not in published_cells:
+            continue
+        c = cells[r['format']]
+        for m in METRICS:
+            v = metric_values(r, m)
+            if v is not None:
+                c[m].append(v)
+    tables, counts, grids = {}, {}, {}
+    for fmt in FORMATS:
+        c = cells.get(fmt)
+        if not c or min(len(c[m]) for m in METRICS) < MIN_CELL_N:
+            continue
+        for m in METRICS:
+            name, tbl = percentile_table(c[m])
+            tables[(fmt, m)] = tbl
+            counts[(fmt, m)] = len(c[m])
+            grids[(fmt, m)] = name
+    return tables, counts, grids
+
+
+def seasons_label(final, seasons):
+    """'seasons 8 and 9 (2025 to 2026)': the seasons and the calendar years
+    their kept rows span, read from the data."""
+    years = sorted({r['year'] for r in final if r['season'] in seasons})
+    ss = sorted(seasons)
+    part = f'seasons {ss[0]} and {ss[1]}' if len(ss) == 2 else f'seasons {ss[0]} to {ss[-1]}'
+    return f'{part} ({years[0]} to {years[-1]})'
+
+
+RESULTS_VIA = 'via the open pyrox project'
+
+
+# ─── Field-relative band thresholds and band seeds (lane H3b) ────────────────
+
+# HYROX_TIME_TO_BAND_THRESHOLDS is one finish-time scale for every format and
+# sex. No calibration source is recorded for it (the constant's comment and
+# SCIENCE_LOG name none), so its meaning is taken as a position in the field it
+# most likely matches: the app's earlier pooled open singles total table
+# (HYROX_TOTAL_PERCENTILE_TABLES.open_singles in
+# src/data/hyrox-population-distributions.ts, Kaggle jgug05/hyrox-results,
+# seasons 4 to 6, women and men pooled). This is a copy of that table; a test
+# asserts it equals the app's, so the two cannot drift apart.
+BAND_CALIBRATION_TABLE = [[3829, 1], [4163, 5], [4384, 10], [4793, 25], [5338, 50],
+                          [6042, 75], [6853, 90], [7448, 95], [8856, 99]]
+
+
+def cum_pct_clamped(table, sec):
+    """Cumulative percentile of `sec` in a [seconds, percentile] table: linear
+    interpolation, clamped to the table's end percentiles. The same rule as
+    the app's cumulativePercentileAt (src/calculations/hyrox-doubles.ts)."""
+    if sec <= table[0][0]:
+        return float(table[0][1])
+    if sec >= table[-1][0]:
+        return float(table[-1][1])
+    for (t0, p0), (t1, p1) in zip(table, table[1:]):
+        if sec <= t1:
+            return p0 + (sec - t0) / (t1 - t0) * (p1 - p0)
+    return float(table[-1][1])
+
+
+# Each threshold as a percentile of the calibration field. 3600 s sits below
+# the table's p1 (3829 s); the clamped lookup reads it as p1, the finest
+# percentile the table resolves.
+BAND_FIELD_PERCENTILES = [round(cum_pct_clamped(BAND_CALIBRATION_TABLE, mx), 4)
+                          for mx, _ in BAND_THRESHOLDS[:-1]]
+# Cells for the band tables: every published format x sex cell, plus each
+# format's sexes pooled (the fallback when the athlete's sex is unknown).
+POOLED = 'pooled'
+
+
+def build_band_tables(final, seasons, published_cells):
+    """Per format x sex (and per format pooled), on the given seasons:
+     - thresholds: the total time at each BAND_FIELD_PERCENTILES percentile
+       (type 7 quantile, whole seconds), so a band means the same position in
+       every field;
+     - seeds: for each band, the median of every metric among the finishers
+       whose total falls in the band (thresholds applied as bandFromTime does:
+       sec < maxSec, first match wins). The median split of the athletes in
+       the band, not each split's own quantile: split ranks are not
+       comonotonic with total rank, so marginal quantiles summed at one
+       percentile miss the band's total.
+    A band cell with fewer than MIN_CELL_N split rows is suppressed."""
+    groups = collections.defaultdict(list)
+    for r in final:
+        if r['season'] not in seasons or (r['format'], r['sex']) not in published_cells:
+            continue
+        groups[(r['format'], r['sex'])].append(r)
+        groups[(r['format'], POOLED)].append(r)
+    thresholds, seeds, suppressed = {}, {}, []
+    for fmt in FORMATS:
+        for sex in SEXES + [POOLED]:
+            rows = groups.get((fmt, sex))
+            if not rows:
+                continue
+            totals = sorted(r['total'] for r in rows)
+            th = [rnd(quantile(totals, p / 100.0)) for p in BAND_FIELD_PERCENTILES]
+            thresholds[(fmt, sex)] = th
+            by_band = collections.defaultdict(list)
+            for r in rows:
+                band = BANDS[-1]
+                for mx, b in zip(th, BANDS):
+                    if r['total'] < mx:
+                        band = b
+                        break
+                by_band[band].append(r)
+            for band in BANDS:
+                rs = by_band.get(band, [])
+                vals = {m: [v for v in (metric_values(r, m) for r in rs) if v is not None] for m in METRICS}
+                n_splits = len(vals['run_total'])
+                n_rz = len(vals['roxzone'])
+                if min(n_splits, n_rz) < MIN_CELL_N:
+                    suppressed.append({'format': fmt, 'sex': sex, 'band': band, 'n': len(rs),
+                                       'nSplits': n_splits, 'nRoxzone': n_rz})
+                    continue
+                seeds[(fmt, sex, band)] = {
+                    'n': len(rs), 'nSplits': n_splits, 'nRoxzone': n_rz,
+                    'medians': {m: rnd(median(vals[m])) for m in METRICS},
+                }
+    return thresholds, seeds, suppressed
+
+
 def build_improvement(repeat_path, final, total_fences, windows):
     # Event median per (season, location, year, format, sex) from the cleaned
     # total population. Normalising by it removes course and venue effects.
@@ -1131,9 +1260,10 @@ def emit(out_path, refresh_date, x):
     w(' *     --results <hyrox_results_anonymised.parquet> --repeat <repeat_athletes.csv> \\')
     w(f' *     --out src/data/hyrox-results-s79.ts --refresh-date {refresh_date}')
     w(' *')
-    w(' * Side of the line: tracking (descriptive population tables). Not yet wired to')
-    w(' * any consumer; src/data/hyrox-population-distributions.ts (S4 to S6) is still')
-    w(' * the live source until lane H3b switches over.')
+    w(' * Side of the line: tracking (descriptive population tables). Read through')
+    w(' * src/calculations/hyrox-results.ts, the one lookup every surface uses.')
+    w(' * The band seeds (HYROX_S89_BAND_SEEDS) also feed planning inputs through')
+    w(' * src/constants/hyrox-benchmarks.ts (station targets for untested stations).')
     w(' *')
     w(' * Conventions')
     w(' * - All times are whole seconds.')
@@ -1237,7 +1367,12 @@ def emit(out_path, refresh_date, x):
     w(f'/** Seasons behind the HYROX_S89_* current-judging tables. */')
     w(f'export const HYROX_S89_SEASONS = {ts_val(list(CURRENT_JUDGING_SEASONS))} as const;')
     w("export const HYROX_S79_SOURCE = 'Kaggle: HYROX Race Results, Seasons 7-9 (Anonymised), Tanvi Jivani; built with pyrox-client (MIT) from public HYROX results';")
-    w("export const HYROX_S79_ATTRIBUTION = 'HYROX results, seasons 7 to 9 (2024 to 2026), via the open pyrox project';")
+    w(f"export const HYROX_S79_ATTRIBUTION = {ts_str('HYROX results, ' + x['s79_label'] + ', ' + RESULTS_VIA)};")
+    w('/** Season and calendar-year spans of the kept rows, read from the data. */')
+    w(f"export const HYROX_S79_SEASONS_LABEL = {ts_str(x['s79_label'])};")
+    w(f"export const HYROX_S89_SEASONS_LABEL = {ts_str(x['s89_label'])};")
+    w(f"export const HYROX_S89_ATTRIBUTION = {ts_str('HYROX results, ' + x['s89_label'] + ', ' + RESULTS_VIA)};")
+    w(f"export const HYROX_RESULTS_VIA = {ts_str(RESULTS_VIA)};")
     w('')
     w('/** DKW cell-size rule. A grid is used only when n >= minN, where minN makes the')
     w(' *  95% simultaneous band half-width eps = sqrt(ln(2/0.05) / (2n)) at most half the')
@@ -1288,6 +1423,27 @@ def emit(out_path, refresh_date, x):
     w('// (HYROX_S89_SEASONS). See the file header on the S8 judging change.')
     emit_cell_tables(w, 'HYROX_S89', 'current-judging S8-S9', x['s89_tables'], x['s89_counts'], x['s89_grids'],
                      x['s89_suppressed'])
+    pt, pc, pg = x['s89_pooled_tables'], x['s89_pooled_counts'], x['s89_pooled_grids']
+    pooled_fmts = [f for f in FORMATS if (f, 'total') in pt]
+    w('/** Current-judging S8-S9 tables per format with every published sex cell pooled')
+    w(' *  (women and men, plus mixed pairs in open_doubles; pro_doubles mixed stays out).')
+    w(" *  The fallback for an athlete whose sex and division are unknown. */")
+    w('export const HYROX_S89_POOLED_FINISHER_COUNTS: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, number>>> = {')
+    for fmt in pooled_fmts:
+        w(f'  {fmt}: {{ ' + ', '.join(f'{m}: {pc[(fmt, m)]}' for m in METRICS) + ' },')
+    w('};')
+    w('export const HYROX_S89_POOLED_PERCENTILES: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, HyroxPercentileTable>>> = {')
+    for fmt in pooled_fmts:
+        w(f'  {fmt}: {{')
+        for m in METRICS:
+            w(f'    {m}: {ts_table(pt[(fmt, m)])},')
+        w('  },')
+    w('};')
+    w('export const HYROX_S89_POOLED_GRIDS: Partial<Record<HyroxResultsFormat, Record<HyroxResultsMetric, HyroxGridName>>> = {')
+    for fmt in pooled_fmts:
+        w(f'  {fmt}: {{ ' + ', '.join(f'{m}: {ts_str(pg[(fmt, m)])}' for m in METRICS) + ' },')
+    w('};')
+    w('')
 
     run_legs = x['run_legs']
     w('/** Median split per run leg (run 1 to run 8), seconds. Same rows as run_total. */')
@@ -1450,6 +1606,61 @@ def emit(out_path, refresh_date, x):
         w(f'  {ts_obj_inline(c)},')
     w('];')
     w('')
+    # Field-relative band thresholds and band seeds (lane H3b).
+    bth, bseeds = x['band_thresholds'], x['band_seeds']
+    band_sexes = SEXES + [POOLED]
+    w('/**')
+    w(' * Field-relative ability bands, seasons 8 and 9 (HYROX_S89_SEASONS).')
+    w(' *')
+    w(' * HYROX_TIME_TO_BAND_THRESHOLDS is one finish-time scale for every format and')
+    w(' * sex, so women and doubles athletes were banded against a male-dominated')
+    w(' * singles field. Each threshold is kept as a position in the field instead:')
+    w(' * HYROX_S89_BAND_FIELD_PERCENTILES is each threshold\'s cumulative percentile in')
+    w(' * the app\'s earlier pooled open singles total table (S4 to S6,')
+    w(' * HYROX_TOTAL_PERCENTILE_TABLES.open_singles), the field the thresholds most')
+    w(' * likely match; no calibration source is recorded for them. 3600 s sits below')
+    w(" * that table's p1, which the clamped lookup reads as p1, the finest percentile")
+    w(' * it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those')
+    w(' * percentiles in each format x sex field (type 7 quantile), plus each format')
+    w(' * with its sexes pooled (the fallback for an unknown sex). Thresholds apply as')
+    w(' * bandFromTime does: sec < threshold, first match wins, beginner above the last.')
+    w(' *')
+    w(' * HYROX_S89_BAND_SEEDS: for each band, the median of every metric among the')
+    w(' * finishers whose total falls in that band of their field. The median split of')
+    w(" * the band's athletes, not each split's own quantile (split ranks are not")
+    w(' * comonotonic with total rank). total_beginner has no finish-time threshold')
+    w(' * (it is the experience pick for a first HYROX); consumers give it the')
+    w(' * beginner cell. Doubles station seeds are the pair\'s time at the station.')
+    w(' */')
+    w(f'export const HYROX_S89_BAND_FIELD_PERCENTILES: readonly number[] = {ts_val(BAND_FIELD_PERCENTILES)};')
+    w("export type HyroxBandCellSex = HyroxResultsSex | 'pooled';")
+    w("export type HyroxTimeBand = Exclude<AbilityBand, 'total_beginner'>;")
+    w('export const HYROX_S89_BAND_THRESHOLDS_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxBandCellSex, readonly number[]>>> = {')
+    for fmt in FORMATS:
+        parts = [f'{sex}: {ts_val(bth[(fmt, sex)])}' for sex in band_sexes if (fmt, sex) in bth]
+        w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
+    w('};')
+    w('export interface HyroxBandSeedCell { n: number; nSplits: number; nRoxzone: number; medians: Record<HyroxResultsMetric, number> }')
+    w('export const HYROX_S89_BAND_SEEDS: Record<HyroxResultsFormat, Partial<Record<HyroxBandCellSex, Partial<Record<HyroxTimeBand, HyroxBandSeedCell>>>>> = {')
+    for fmt in FORMATS:
+        w(f'  {fmt}: {{')
+        for sex in band_sexes:
+            cells = [(b, bseeds[(fmt, sex, b)]) for b in BANDS if (fmt, sex, b) in bseeds]
+            if not cells:
+                continue
+            w(f'    {sex}: {{')
+            for b, c in cells:
+                med = ', '.join(f'{m}: {c["medians"][m]}' for m in METRICS)
+                w(f'      {b}: {{ n: {c["n"]}, nSplits: {c["nSplits"]}, nRoxzone: {c["nRoxzone"]}, medians: {{ {med} }} }},')
+            w('    },')
+        w('  },')
+    w('};')
+    w('/** Band seed cells withheld for fewer than HYROX_S79_MIN_CELL_N split rows. */')
+    w('export const HYROX_S89_BAND_SEEDS_SUPPRESSED: ReadonlyArray<{ format: HyroxResultsFormat; sex: HyroxBandCellSex; band: HyroxTimeBand; n: number; nSplits: number; nRoxzone: number }> = [')
+    for c in x['band_suppressed']:
+        w(f'  {ts_obj_inline(c)},')
+    w('];')
+    w('')
     w('/** Repeat-athlete ingest report. authorRelMedianPct is the median change using the')
     w(' *  dataset\'s own *_rel columns, for comparison only: their venue-typical time is')
     w(' *  constant per event but drifts against the recomputed event median from season')
@@ -1482,6 +1693,11 @@ def main():
     windows = season_windows(final)
     improvement, imp_suppressed, imp_report = build_improvement(a.repeat, final, total_fences, windows)
     drift = build_same_venue_drift(final, published_cells, windows)
+    s89_published = {(f, s) for (f, s, _) in s89_tables}
+    band_thresholds, band_seeds, band_suppressed = build_band_tables(final, CURRENT_JUDGING_SEASONS, s89_published)
+    s89_pooled_tables, s89_pooled_counts, s89_pooled_grids = build_pooled_format_tables(final, CURRENT_JUDGING_SEASONS, s89_published)
+    s79_label = seasons_label(final, (7, 8, 9))
+    s89_label = seasons_label(final, CURRENT_JUDGING_SEASONS)
 
     emit(a.out, a.refresh_date, {
         'report': report, 'fences': fences, 'resolutions': resolutions,
@@ -1491,6 +1707,9 @@ def main():
         'age_drops': age_drops, 'age_mapping': age_mapping, 'season_meds': season_meds,
         'venue_spread': venue_spread, 'run_legs': run_legs, 'improvement': improvement,
         'imp_suppressed': imp_suppressed, 'imp_report': imp_report, 'drift': drift,
+        'band_thresholds': band_thresholds, 'band_seeds': band_seeds, 'band_suppressed': band_suppressed,
+        's89_pooled_tables': s89_pooled_tables, 's89_pooled_counts': s89_pooled_counts, 's89_pooled_grids': s89_pooled_grids,
+        's79_label': s79_label, 's89_label': s89_label,
     })
 
     # Human-readable report
@@ -1558,6 +1777,15 @@ def main():
         if c['band'] == 'all' and c['gapHalfSeasons'] == 'all' and c['format'] != 'all_singles':
             p(f'  {c}')
     p(f'  suppressed improvement cells: {len(imp_suppressed)}')
+    p(f'== Band field percentiles: {BAND_FIELD_PERCENTILES} ==')
+    for k in sorted(band_thresholds, key=lambda k: (FORMATS.index(k[0]), (SEXES + [POOLED]).index(k[1]))):
+        p(f'  {k}: ' + ' '.join(fmt_mmss(t) for t in band_thresholds[k]))
+    for k in sorted(band_seeds, key=lambda k: (FORMATS.index(k[0]), (SEXES + [POOLED]).index(k[1]), BANDS.index(k[2]))):
+        c = band_seeds[k]
+        med = c['medians']
+        p(f"  {k}: n={c['n']} total={fmt_mmss(med['total'])} run={fmt_mmss(med['run_total'])} work={fmt_mmss(med['work_total'])} "
+          f"rz={fmt_mmss(med['roxzone'])} sum_parts={fmt_mmss(med['run_total'] + sum(med[m] for m in STATION_KEYS) + med['roxzone'])}")
+    p(f'  suppressed band cells: {band_suppressed}')
 
 
 if __name__ == '__main__':
