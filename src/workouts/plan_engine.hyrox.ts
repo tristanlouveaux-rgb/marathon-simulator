@@ -303,28 +303,110 @@ function mtlCuttable(s: Workout): boolean {
   return (s.discipline === 'station' || s.discipline === 'brick') && s.t !== 'hyrox_assessment' && !isHyroxEasyErg(s);
 }
 
+/** How the MTL cap shortens the week's easy running (enforceMTLCap). */
+interface HyroxMtlRunTrim {
+  /** The run at a new length (minutes at easy pace), same kind. */
+  remake: (w: Workout, minutes: number) => Workout;
+  /** Shortest easy run (HYROX_RUN_FLOOR_MIN). */
+  easyFloorMin: number;
+  /** Minutes at easy pace that cover a distance (km): the long run never
+   *  shortens under another run's distance (no other run longer than the
+   *  long run). */
+  easyMinFor: (km: number) => number;
+  /** Taper weeks keep their run count: easy runs shorten, never leave. */
+  keepRunCount: boolean;
+}
+
+/** A standalone easy run that is not the long run (commute runs excluded). */
+function isPlainEasyRun(w: Workout): boolean {
+  return w.t === 'hyrox_run_easy' && !isHyroxLongRun(w) && w.commute !== true;
+}
+
 /**
- * Weekly MTL cap (rules_to_code 16). While the week's MTL is above the cap:
- *   1. take one round off the highest-MTL station or brick session above
+ * Weekly MTL cap (rules_to_code 16). While the week's MTL is above the cap,
+ * easy running gives way first and the HYROX-specific station work last
+ * (Tristan 2026-10-13, decision A):
+ *   1. easy runs shorten toward the run floor, then leave the week, shortest
+ *      first (taper weeks keep their run count: shortened only); the runs
+ *      left take back what the cut freed, up to their length;
+ *   2. the long run shortens, down to its soft floor (LONG_SOFT_FLOOR_MIN, or
+ *      its own length when that is shorter);
+ *   3. one round off the highest-MTL station or brick session above
  *      MIN_CIRCUIT_ROUNDS (withHyroxRounds cuts the real volume: work, rest,
  *      duration and the description's round count);
- *   2. with every session at MIN_CIRCUIT_ROUNDS, take the highest-MTL station
- *      out of the highest-MTL circuit holding more than MIN_CIRCUIT_STATIONS
+ *   4. with every session at MIN_CIRCUIT_ROUNDS, the highest-MTL station out
+ *      of the highest-MTL circuit holding more than MIN_CIRCUIT_STATIONS
  *      (withoutHyroxStation);
- *   3. then the technique station session leaves the week, when that brings
- *      the week under the cap (the runs alone can hold a week above it).
- * A week still over the cap after that is left as it is and reported. Each
- * step is noted on the week. Before 2026-10-12 the cap scaled only the
- * reported MTL numbers and left every session as prescribed; the v18 draft
- * stopped at 2 rounds and left 4% of weeks over the cap (review 2026-10-12).
- * The cap values are still initial estimates (HYROX_MTL_CAP), and the order
+ *   5. then the technique station session leaves the week, when that brings
+ *      the week under the cap, never as its last station session or brick.
+ * Easy erg work is sized after the cap, inside the MTL the week leaves under
+ * it, so it never costs a run minute or a station round. The quality run is
+ * never cut (a fixed format). A week still over the cap after that is left as
+ * it is and reported. Each step is noted on the week. Before 2026-10-13 the
+ * cap cut station rounds while every run stayed, so at 10 to 12 h 19% of
+ * training weeks were over 70% running and peak-week load fell as hours rose
+ * in 57 band/length pairs (the larger running share took the cap). Before
+ * 2026-10-12 the cap scaled only the reported MTL numbers. The cap values are
+ * still initial estimates (HYROX_MTL_CAP). The order inside the station work
  * (highest MTL first, technique before race pace) is a product order: no
  * source ranks the cuts.
  */
-function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], weekIndex: number): Workout[] {
+function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], weekIndex: number, runTrim?: HyroxMtlRunTrim): Workout[] {
   let out = [...sessions];
   const total = () => out.reduce((sum, s) => sum + (s.musculoTendonLoad ?? 0), 0);
   const mtlOf = (s: Workout) => s.musculoTendonLoad ?? 0;
+  const minOf = (s: Workout) => s.estimatedDurationMin ?? 0;
+  const perMin = (s: Workout) => (minOf(s) > 0 ? mtlOf(s) / minOf(s) : 0);
+  if (runTrim && total() > cap) {
+    const floor = runTrim.easyFloorMin;
+    // 1. Easy runs: shorten together toward the floor.
+    const before = new Map(out.filter(isPlainEasyRun).map(w => [w, minOf(w)] as const));
+    const easyBefore = [...before.values()].reduce((a, m) => a + m, 0);
+    for (let i = 0; i < 8 && total() > cap; i++) {
+      const above = out.filter(w => isPlainEasyRun(w) && minOf(w) > floor);
+      const rate = above.reduce((a, w) => a + perMin(w), 0);
+      if (above.length === 0 || rate <= 0) break;
+      const cutEach = Math.max(1, Math.ceil((total() - cap) / rate));
+      out = out.map(w => (above.includes(w) ? runTrim.remake(w, Math.max(floor, minOf(w) - cutEach)) : w));
+    }
+    // Then they leave the week, shortest first; the ones left take back what
+    // fits under the cap, up to the length they had.
+    let left = 0;
+    while (!runTrim.keepRunCount && total() > cap) {
+      const easy = out.filter(isPlainEasyRun).sort((a, b) => minOf(a) - minOf(b));
+      if (easy.length === 0) break;
+      out = out.filter(w => w !== easy[0]);
+      left++;
+    }
+    if (left > 0) {
+      const room = cap - total();
+      const rest = out.filter(isPlainEasyRun);
+      const rate = rest.reduce((a, w) => a + perMin(w), 0);
+      const want = Math.max(...[...before.values()], 0);
+      if (rest.length > 0 && rate > 0 && room > 0) {
+        const addEach = Math.floor(room / rate);
+        if (addEach > 0) out = out.map(w => (rest.includes(w) ? runTrim.remake(w, Math.min(want, minOf(w) + addEach)) : w));
+      }
+      adjustments.push(`W${weekIndex}: ${left} easy run(s) left out (MTL cap ${cap})`);
+    }
+    const easyAfter = out.filter(isPlainEasyRun).reduce((a, w) => a + minOf(w), 0);
+    if (easyAfter < easyBefore && out.some(isPlainEasyRun)) {
+      adjustments.push(`W${weekIndex}: easy runs cut from ${easyBefore} to ${easyAfter} min (MTL cap ${cap})`);
+    }
+    // 2. The long run, down to its soft floor: the last run cut. It stays at
+    // least as long as every other run of the week (by distance).
+    const long = out.find(w => isHyroxLongRun(w) && w.commute !== true);
+    if (long && total() > cap) {
+      const otherKm = Math.max(0, ...out.filter(w => w !== long && w.discipline === 'run' && w.commute !== true).map(hyroxRunLengthKm));
+      const longFloor = Math.min(minOf(long), Math.max(LONG_SOFT_FLOOR_MIN, runTrim.easyMinFor(otherKm)));
+      const cut = perMin(long) > 0 ? Math.ceil((total() - cap) / perMin(long)) : 0;
+      const to = Math.max(longFloor, minOf(long) - cut);
+      if (to < minOf(long)) {
+        out = out.map(w => (w === long ? runTrim.remake(w, to) : w));
+        adjustments.push(`W${weekIndex}: Long Run cut from ${minOf(long)} to ${to} min (MTL cap ${cap})`);
+      }
+    }
+  }
   let roundCuts = 0;
   let stationCuts = 0;
   while (total() > cap) {
@@ -507,6 +589,11 @@ interface HyroxWeekInputs {
   /** The most easy erg minutes the week may hold: the week's ceilings take
    *  easy erg work away first (buildHyroxTrainingWeeks fit). Unset: no limit. */
   ergCapMin?: number;
+  /** Training weeks: the most standalone easy-run minutes (not the long run
+   *  or the quality run) the week may hold. The week's ceilings take easy
+   *  running away after easy erg work and before the station work
+   *  (buildHyroxTrainingWeeks fit). Unset: no limit. */
+  easyRunCapMin?: number;
   /** Taper weeks: the longest easy session, the taper's long run (the week's
    *  own; race week, which holds none, the week before's). It caps easy erg
    *  sessions, and race week's easy runs too (review 2026-10-13: a 2-week
@@ -923,6 +1010,11 @@ function generateWeekSessions(
     slots--;
   }
   const runRoom = Math.max(0, fitRoom * scale - (longMin ?? 0) - qMin());
+  // A training week's ceiling holds its easy running (easyRunCapMin) before
+  // it shrinks the station work.
+  const easyHeld = inputs.easyRunCapMin != null && inputs.easyRunCapMin < runRoom - 1e-9;
+  const easyRoom = easyHeld ? Math.max(0, inputs.easyRunCapMin as number) : runRoom;
+  const easyWhy = easyHeld ? ceilingName : 'running share';
   // Easy runs share what is left, each at most the long run (race week, which
   // holds none: the week before's long run; easyMaxMin) and the ceiling, and
   // at least HYROX_RUN_FLOOR_MIN; a share below the floor is merged into
@@ -979,12 +1071,12 @@ function generateWeekSessions(
       adjustments.push(`W${weekIndex}: ${n} easy run(s) left out (no longer than the ${Math.floor(easyCapMin)}-min long run, under the ${HYROX_RUN_FLOOR_MIN}-min run floor)`);
     }
     if (n < slots) adjustments.push(`W${weekIndex}: ${slots - n} easy run(s) left out (the taper never rises)`);
-  } else if (slots > 0 && runRoom >= HYROX_RUN_FLOOR_MIN) {
+  } else if (slots > 0 && easyRoom >= HYROX_RUN_FLOOR_MIN) {
     let n = slots;
-    let each = runRoom / n;
+    let each = easyRoom / n;
     if (each < HYROX_RUN_FLOOR_MIN) {
-      n = Math.max(1, Math.floor(runRoom / HYROX_RUN_FLOOR_MIN));
-      each = runRoom / n;
+      n = Math.max(1, Math.floor(easyRoom / HYROX_RUN_FLOOR_MIN));
+      each = easyRoom / n;
     }
     each = Math.floor(Math.min(each, easyCapMin));
     if (each >= HYROX_RUN_FLOOR_MIN) {
@@ -994,9 +1086,10 @@ function generateWeekSessions(
     } else {
       n = 0;
     }
-    if (n < slots) adjustments.push(`W${weekIndex}: ${slots - n} easy run(s) left out (running share)`);
+    if (n < slots) adjustments.push(`W${weekIndex}: ${slots - n} easy run(s) left out (${easyWhy})`);
+    if (n > 0 && easyHeld) adjustments.push(`W${weekIndex}: easy runs held to ${n * each} min (${ceilingName})`);
   } else if (slots > 0) {
-    adjustments.push(`W${weekIndex}: ${slots} easy run(s) left out (running share)`);
+    adjustments.push(`W${weekIndex}: ${slots} easy run(s) left out (${easyWhy})`);
   }
   if (longRun) runs.unshift(longRun);
 
@@ -1050,8 +1143,17 @@ function generateWeekSessions(
   const injuryFreedMin = hyroxPlannedMinutes(workouts) - hyroxPlannedMinutes(gated);
   const injuryFreedSlots = prescribed(workouts).length - prescribed(gated).length;
 
-  // Enforce the MTL cap by cutting rounds, then stations (enforceMTLCap).
-  let week = enforceMTLCap(gated, hx.mtlCap, adjustments, weekIndex);
+  // Enforce the MTL cap: easy running first, then the long run, then station
+  // rounds and stations (enforceMTLCap, decision A).
+  let week = enforceMTLCap(gated, hx.mtlCap, adjustments, weekIndex, {
+    remake: (w, minutes) => ({
+      ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: minutes, longRun: isHyroxLongRun(w), slotIndex: weekIndex }),
+      ...(w.modReason ? { modReason: w.modReason } : {}),
+    }),
+    easyFloorMin: HYROX_RUN_FLOOR_MIN,
+    easyMinFor: (km) => Math.ceil((km * easyPace) / 60),
+    keepRunCount,
+  });
 
   // Hard-session limits: at most HYROX_MAX_HARD_RUNS hard runs and
   // HYROX_MAX_HARD_SESSIONS hard sessions (the structure holds both; a slider
@@ -1143,6 +1245,60 @@ function generateWeekSessions(
     return kept;
   };
 
+  // Easy erg work absorbs the hours the session count leaves (decision C,
+  // Tristan 2026-10-13): when the chosen sessions are full and easy erg work
+  // could hold at least HYROX_RUN_FLOOR_MIN of what is left, a training week
+  // frees a slot for it, first by merging its two shortest easy runs into one
+  // (same running minutes; no longer than the long run, the 110% single-run
+  // ceiling or the tier long-run cap), else by giving its shortest easy run's
+  // slot to an easy erg session that holds more minutes than that run. One
+  // slot a week, never the long run or the quality run. Before (review
+  // 2026-10-13), one more hour funded another short run that took the easy
+  // erg's slot, so the week held less: intermediate 23 weeks at 7 h held 36 to
+  // 51 min less a week than at 6 h through build and peak (an easy run of 22
+  // min in place of an easy erg session of 60 to 75), and total plan minutes
+  // fell as hours rose in 26 band/length pairs. A product choice: no source
+  // ranks an easy run against easy erg work when the session count binds.
+  const ergSlotFor = (ws: Workout[]): Workout[] => {
+    if (!trainingWeek) return ws;
+    const maxSessions = Math.min(inputs.maxSessions ?? 7, 7);
+    if (maxSessions - prescribed(ws).length - injuryFreedSlots > 0) return ws;
+    const mtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg);
+    if (mtlPerMin == null) return ws;
+    const maxEach = Math.min(HYROX_LONG_RUN[tier].capMin, inputs.easyMaxMin ?? Infinity);
+    // What one easy erg session could hold beside a week.
+    const ergRoom = (x: readonly Workout[]): number => {
+      const unused = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(x) - injuryFreedMin;
+      const mtlRoom = hx.mtlCap - x.reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
+      const byMtl = mtlPerMin > 0 ? Math.max(0, mtlRoom) / mtlPerMin : Infinity;
+      return Math.floor(Math.min(unused, inputs.ergCapMin ?? Infinity, byMtl, maxEach));
+    };
+    const easy = ws.filter(isPlainEasyRun).sort((a, b) => (a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0));
+    if (easy.length >= 2) {
+      const sum = (easy[0].estimatedDurationMin ?? 0) + (easy[1].estimatedDurationMin ?? 0);
+      if (sum <= Math.min(easyCapMin, HYROX_LONG_RUN[tier].capMin)) {
+        const merged: Workout = {
+          ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: sum, slotIndex: weekIndex }),
+          ...(easy[0].modReason ? { modReason: easy[0].modReason } : {}),
+        };
+        const next = [...ws.filter(w => w !== easy[0] && w !== easy[1]), merged];
+        if (ergRoom(next) >= HYROX_RUN_FLOOR_MIN) {
+          adjustments.push(`W${weekIndex}: 2 easy runs merged into 1 of ${merged.estimatedDurationMin} min (a slot for easy erg work; the chosen sessions are full)`);
+          return next;
+        }
+      }
+    }
+    if (easy.length >= 1) {
+      const next = ws.filter(w => w !== easy[0]);
+      const room = ergRoom(next);
+      if (room >= HYROX_RUN_FLOOR_MIN && room > (easy[0].estimatedDurationMin ?? 0)) {
+        adjustments.push(`W${weekIndex}: Easy Run of ${easy[0].estimatedDurationMin} min left out for an easy erg session of up to ${room} min (the chosen sessions are full)`);
+        return next;
+      }
+    }
+    return ws;
+  };
+
   // Schedule. Race week: each session only on the days the race-day rules
   // allow; one that finds no free allowed day is left out (raceWeekDays).
   // Other weeks: the hard-day and 48 h rules always hold; when no placement
@@ -1186,8 +1342,19 @@ function generateWeekSessions(
     // sessions, maxSessions).
     // A week whose last station session or brick the spacing rules took
     // holds no easy erg in its place.
-    const ergs = found && (!heldWork || hasHyroxWork(week)) ? easyErgFor(week) : [];
-    if (ergs.length > 0) scheduled = findHyroxWeekSchedule([...week, ...ergs], { prevSunday: inputs.prevSunday }) ?? scheduled;
+    const ergOk = !!found && (!heldWork || hasHyroxWork(week));
+    if (ergOk) {
+      // A merged or left-out easy run frees a slot (ergSlotFor); the week is
+      // placed again with the easy erg work. Leaving out or merging an easy
+      // run never breaks the spacing rules, so it places; if it did not, the
+      // week keeps its runs and holds no easy erg work.
+      const freed = ergSlotFor(week);
+      const ergs = easyErgFor(freed);
+      if (freed !== week || ergs.length > 0) {
+        const again = findHyroxWeekSchedule([...freed, ...ergs], { prevSunday: inputs.prevSunday });
+        if (again) { week = freed; scheduled = again; }
+      }
+    }
   }
 
   // Generator check (not a sourced cap): eccentric sessions a week against
@@ -1668,8 +1835,10 @@ export function buildHyroxTrainingWeeks(
   // The shortest training-week long run: the run floor, or the start when a
   // short logged run holds the start under it.
   const runFloorMin = Math.min(HYROX_RUN_FLOOR_MIN, start.startMin);
-  // Canonical TSS per minute of easy erg work (the ceilings take it away first).
+  // Canonical TSS per minute of easy erg work and of an easy run (the
+  // ceilings take them away first).
   const ergTssPerMin = plannedTssPerMin(HYROX_EASY_ERG_TYPE, HYROX_EASY_RPE);
+  const easyRunTssPerMin = plannedTssPerMin('hyrox_run_easy', HYROX_EASY_RPE);
 
   const built: HyroxWeekDetail[] = [];
   let prevSunday: HyroxPrevSunday | null = null;
@@ -1817,6 +1986,8 @@ export function buildHyroxTrainingWeeks(
     let scale = 1;
     let omitted: HyroxGuardOmit[] = [];
     let ergCap: number | undefined;
+    // Training weeks: the most easy-run minutes the ceilings leave (fit).
+    let easyCap: number | undefined;
     // Set when a ceiling took the week's last station session or brick: easy
     // erg work does not take its place.
     let ergBlocked = false;
@@ -1835,13 +2006,14 @@ export function buildHyroxTrainingWeeks(
       const workouts = hyroxWeekForRace(state, w, trainingWeeks, phase, layout, {
         budgetMin, longRunMin, runCeilingKm, prevSunday: weekPrevSunday, scale, omit: omitted, capCounts,
         maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, ceilingName,
-        runBudgetMin, fillMin, ergCapMin: ergBlocked ? 0 : ergCap, easyMaxMin, maxSessions, maxSessionsName, maxRuns, noAssessment,
+        runBudgetMin, fillMin, ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap, easyMaxMin, maxSessions, maxSessionsName, maxRuns, noAssessment,
         prevLongRunMin: prevLongRun > 0 ? prevLongRun : undefined, runFloorMin,
       }, adjustments);
       const work = stationWorkOf(workouts);
       const ergMin = prescribed(workouts).filter(isHyroxEasyErg).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
+      const easyMin = prescribed(workouts).filter(isPlainEasyRun).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
       const tss = hyroxPlannedTss(workouts);
-      return { workouts, adjustments, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin };
+      return { workouts, adjustments, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin, easyMin };
     };
     type Attempt = ReturnType<typeof make>;
     // Ceilings: the acute:chronic guard (training weeks), the deload ceiling
@@ -1869,36 +2041,65 @@ export function buildHyroxTrainingWeeks(
     const beforeCapMin = phase === 'taper' && before ? before.plannedMin : Infinity;
     const hasCeiling = capTss < Infinity || capMin < Infinity;
     const trainingCeiling = phase !== 'taper' && hasCeiling;
-    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number }> = [];
-    if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.guardTss, ergPerMin: ergTssPerMin });
-    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1 });
-    if (beforeCapMin < Infinity) limits.push({ cap: beforeCapMin, of: a => a.min, ergPerMin: 1 });
+    const limits: Array<{ cap: number; of: (a: Attempt) => number; ergPerMin: number; easyPerMin: number }> = [];
+    if (capTss < Infinity) limits.push({ cap: capTss, of: a => a.guardTss, ergPerMin: ergTssPerMin, easyPerMin: easyRunTssPerMin });
+    if (capMin < Infinity) limits.push({ cap: capMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1 });
+    if (beforeCapMin < Infinity) limits.push({ cap: beforeCapMin, of: a => a.min, ergPerMin: 1, easyPerMin: 1 });
     if (taperWork) {
-      limits.push({ cap: taperWork.min, of: a => a.workMin, ergPerMin: 0 });
-      limits.push({ cap: taperWork.mtl, of: a => a.workMtl, ergPerMin: 0 });
+      limits.push({ cap: taperWork.min, of: a => a.workMin, ergPerMin: 0, easyPerMin: 0 });
+      limits.push({ cap: taperWork.mtl, of: a => a.workMtl, ergPerMin: 0, easyPerMin: 0 });
     }
     const over = (a: Attempt) => limits.some(l => l.of(a) > l.cap + 1e-6);
     const ratio = (a: Attempt) => limits.reduce((m, l) => Math.min(m, l.of(a) > 0 ? l.cap / l.of(a) : Infinity), Infinity);
     // Solver: easy erg work first, cut by what the largest overshoot needs
-    // (erg minutes price linearly). Then the scale, shrunk by the overshoot
-    // each round, at least 3% (a round that lands exactly on a floor otherwise
-    // repeats), for at most 16 rounds. Numerical choices with no
-    // physiological meaning.
+    // (erg minutes price linearly). Then, in a training week, easy running,
+    // cut the same way (Tristan 2026-10-13, decision A: easy running gives
+    // way before the HYROX-specific station work; the omit order already
+    // left easy runs out first). Then the scale on the station work, shrunk
+    // by the overshoot each round, at least 3% (a round that lands exactly on
+    // a floor otherwise repeats), for at most 16 rounds, then the largest
+    // scale between the last two rounds that fits (8 halvings). Numerical
+    // choices with no physiological meaning. Before 2026-10-13 the scale
+    // shrank station sessions and easy runs together and stopped at the
+    // first fit, up to 3% under it: a week at one more hour, with longer easy
+    // runs, lost a station round to them (intermediate 10 weeks, W5 at 9 h
+    // against 10 h: a 50-min race-pace circuit of 3 rounds became 33 min of 2).
+    const cutFor = (a: Attempt, perMin: (l: typeof limits[number]) => number): number | null => {
+      let cut = 0;
+      for (const l of limits) {
+        const excess = l.of(a) - l.cap;
+        if (excess <= 1e-6) continue;
+        if (perMin(l) <= 0) return null;
+        cut = Math.max(cut, excess / perMin(l));
+      }
+      return cut;
+    };
+    // The scale moves station and brick sessions in whole rounds, and easy
+    // runs merge under the run floor, so the week can land well under its
+    // ceiling: easy erg work takes that room (what it holds the larger rounds
+    // could not).
+    const withErgRoom = (a: Attempt): Attempt => {
+      if (over(a)) return a;
+      let room = Infinity;
+      for (const l of limits) if (l.ergPerMin > 0) room = Math.min(room, (l.cap - l.of(a)) / l.ergPerMin);
+      if (room >= HYROX_RUN_FLOOR_MIN && room < Infinity) {
+        const keep = ergCap;
+        ergCap = Math.floor(room);
+        const b = make();
+        if (!over(b) && b.min > a.min) return b;
+        ergCap = keep;
+      }
+      return a;
+    };
     const fit = () => {
       scale = 1;
       ergCap = undefined;
+      easyCap = undefined;
       let a = make();
       if (!over(a)) return a;
       if (a.ergMin > 0) {
-        let cut = 0;
-        let ergCan = true;
-        for (const l of limits) {
-          const excess = l.of(a) - l.cap;
-          if (excess <= 1e-6) continue;
-          if (l.ergPerMin <= 0) { ergCan = false; break; }
-          cut = Math.max(cut, excess / l.ergPerMin);
-        }
-        if (ergCan && cut < a.ergMin) {
+        const cut = cutFor(a, l => l.ergPerMin);
+        if (cut != null && cut < a.ergMin) {
           ergCap = Math.max(0, Math.floor(a.ergMin - cut));
           a = make();
           if (!over(a)) return a;
@@ -1906,22 +2107,35 @@ export function buildHyroxTrainingWeeks(
       }
       ergCap = 0;
       a = make();
+      if (phase !== 'taper' && over(a) && a.easyMin > 0) {
+        const cut = cutFor(a, l => l.easyPerMin);
+        if (cut != null && cut < a.easyMin) {
+          easyCap = Math.max(0, Math.floor(a.easyMin - cut));
+          a = make();
+          if (!over(a)) return withErgRoom(a);
+        }
+        easyCap = 0;
+        a = make();
+        if (!over(a)) return withErgRoom(a);
+      }
+      if (!over(a)) return a;
+      let fitScale = 1;
+      let overScale = 1;
       for (let i = 0; i < 16 && over(a); i++) {
+        overScale = scale;
         scale *= Math.min(0.97, ratio(a));
         a = make();
       }
-      // The scale moves station and brick sessions in whole rounds, so the
-      // week can land well under its ceiling: easy erg work takes that room
-      // (what it holds the larger rounds could not).
       if (!over(a) && scale < 1) {
-        let room = Infinity;
-        for (const l of limits) if (l.ergPerMin > 0) room = Math.min(room, (l.cap - l.of(a)) / l.ergPerMin);
-        if (room >= HYROX_RUN_FLOOR_MIN && room < Infinity) {
-          ergCap = Math.floor(room);
+        fitScale = scale;
+        for (let i = 0; i < 8 && overScale - fitScale > 1e-4; i++) {
+          scale = (fitScale + overScale) / 2;
           const b = make();
-          if (!over(b)) return b;
-          ergCap = 0;
+          if (over(b)) overScale = scale; else { fitScale = scale; a = b; }
         }
+        scale = fitScale;
+        a = make();
+        a = withErgRoom(a);
       }
       return a;
     };
@@ -2094,8 +2308,9 @@ export function buildHyroxTrainingWeeks(
     const withWorkouts = (a: Attempt, workouts: Workout[]): Attempt => {
       const work = stationWorkOf(workouts);
       const ergMin = prescribed(workouts).filter(isHyroxEasyErg).reduce((x, y) => x + (y.estimatedDurationMin ?? 0), 0);
+      const easyMin = prescribed(workouts).filter(isPlainEasyRun).reduce((x, y) => x + (y.estimatedDurationMin ?? 0), 0);
       const tss = hyroxPlannedTss(workouts);
-      return { ...a, workouts, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin };
+      return { ...a, workouts, tss, guardTss: tss - guardExemptTss(workouts), min: hyroxPlannedMinutes(workouts), workMin: work.min, workMtl: work.mtl, ergMin, easyMin };
     };
     const fraction = raceTaper ? taperFraction(w - taperStart + 1, taperLen) : null;
     const whyOf = (a: Attempt): string => (raceTaper && (a.min > capMin + 1e-6 || a.workMin > (taperWork?.min ?? Infinity) + 1e-6 || a.workMtl > (taperWork?.mtl ?? Infinity) + 1e-6))

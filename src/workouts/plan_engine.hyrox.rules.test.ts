@@ -573,29 +573,66 @@ describe('HYROX MTL cap cuts real station volume', () => {
   });
 
   it('a week over its MTL cap prescribes fewer station or brick rounds, not just smaller numbers', () => {
+    // Half the band's cap, so the easy running the cap cuts first (decision
+    // A) cannot bring every week under it and station rounds go too.
     const s = build('intermediate', 14, 18);
-    const cap = HYROX_MTL_CAP.intermediate;
-    const uncapped = (() => {
+    const cap = Math.round(HYROX_MTL_CAP.intermediate / 2);
+    const plan = (mtlCap: number) => {
       const ms = getMutableState();
       const saved = ms.hyroxConfig!.mtlCap;
-      ms.hyroxConfig!.mtlCap = 1e9;
-      const plan = generateHyroxPlan(ms);
+      ms.hyroxConfig!.mtlCap = mtlCap;
+      const out = generateHyroxPlan(ms);
       ms.hyroxConfig!.mtlCap = saved;
-      return plan;
-    })();
+      return out;
+    };
+    const uncapped = plan(1e9);
+    const capped = plan(cap);
     let cutWeeks = 0;
-    s.wks.forEach((wk, i) => {
+    capped.forEach((wk, i) => {
       const before = prescribed(uncapped[i]).filter(w => w.discipline !== 'run').reduce((a, w) => a + (w.hyroxRounds ?? 0), 0);
       const after = prescribed(wk).filter(w => w.discipline !== 'run').reduce((a, w) => a + (w.hyroxRounds ?? 0), 0);
-      const mtl = prescribed(wk).reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
+      // Easy erg work is one continuous block with no components.
+      const sets = prescribed(wk).filter(w => !isHyroxEasyErg(w));
+      const mtl = sets.reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
       if (after < before) {
         cutWeeks++;
         // The reported MTL is the sum of what the sessions prescribe.
-        expect(mtl).toBeCloseTo(prescribed(wk).reduce((a, w) => a + (w.hyroxComponents ?? []).reduce((b, c) => b + c.mtl, 0), 0), 6);
+        expect(mtl).toBeCloseTo(sets.reduce((a, w) => a + (w.hyroxComponents ?? []).reduce((b, c) => b + c.mtl, 0), 0), 6);
       }
     });
     expect(cutWeeks).toBeGreaterThan(0);
-    expect(cap).toBeGreaterThan(0);
+  });
+
+  it('decision A: easy runs, then the long run, give way before station work', () => {
+    // Every week the cap cut station work in: no easy run left (a taper week
+    // keeps its runs at the run floor), and the long run at its soft floor
+    // (or the distance of the week's other runs).
+    const cases: Array<[AbilityBand, number, number, number]> = [
+      ['intermediate', 14, 18, 0.5], ['novice', 6, 18, 1], ['competitive', 12, 20, 0.6], ['beginner', 10, 16, 1],
+    ];
+    let checked = 0;
+    for (const [band, hrs, len, f] of cases) {
+      build(band, hrs, len);
+      const ms = getMutableState();
+      ms.hyroxConfig!.mtlCap = Math.round(HYROX_MTL_CAP[band] * f);
+      const plan = generateHyroxPlanDetailed(ms);
+      plan.weeks.slice(0, plan.detail.length).forEach((wk, i) => {
+        const cutStations = notes(wk).some(n => /station or brick round\(s\) cut \(MTL cap|station\(s\) taken out of a circuit \(MTL cap/.test(n));
+        if (!cutStations) return;
+        checked++;
+        const taper = wk.ph === 'taper';
+        const easy = prescribed(wk).filter(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w));
+        if (!taper) expect(easy, `${band} ${hrs}h W${i + 1}`).toEqual([]);
+        else for (const e of easy) expect(e.estimatedDurationMin).toBe(HYROX_RUN_FLOOR_MIN);
+        const long = prescribed(wk).find(isHyroxLongRun);
+        if (long) {
+          const pace = (long.estimatedDurationMin! * 60) / hyroxRunLengthKm(long);
+          const otherKm = Math.max(0, ...prescribed(wk).filter(w => w !== long && w.discipline === 'run').map(hyroxRunLengthKm));
+          expect(long.estimatedDurationMin!, `${band} ${hrs}h W${i + 1}`).toBeLessThanOrEqual(Math.max(30, Math.ceil((otherKm * pace) / 60)) + 1);
+        }
+      });
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
@@ -951,6 +988,9 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
           const n = notes(wk).find(x => /Long Run held at \d+ min, not \d+, for the quality run/.test(x));
           if (!n) continue;
           held++;
+          // The MTL cap shortens the long run before it cuts station work
+          // (decision A): a later cut than the quality run's, noted.
+          if (notes(wk).some(x => /Long Run cut from \d+ to \d+ min \(MTL cap/.test(x))) continue;
           expect(prescribed(wk).some(isQuality), `${band} ${hrs}h W${i + 1}`).toBe(true);
           const long = prescribed(wk).find(isHyroxLongRun)!;
           const prevLong = Math.max(...s.wks.slice(Math.max(0, i - LONG_RUN_LOOKBACK_WEEKS), i).map(x => prescribed(x).find(isHyroxLongRun)?.estimatedDurationMin ?? 0));
