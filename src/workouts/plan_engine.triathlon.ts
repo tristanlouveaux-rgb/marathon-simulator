@@ -421,7 +421,7 @@ export function isTriLongSession(w: Pick<Workout, 't' | 'longRun' | 'longRide'>)
  * shared between solo sessions and the brick's transition run, then split by
  * discipline; each discipline's session count is its hours over
  * TRI_AVG_SESSION_HOURS, capped. Shared by the week generator and the race
- * week's frequency rule (the week before race week, triRaceWeekCounts).
+ * taper (its low-hours test sizes the reference week, triTaperOpts).
  */
 function triWeekSizing(
   state: SimulatorState,
