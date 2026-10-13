@@ -16,7 +16,8 @@ vi.mock('@/data/supabaseClient', () => ({
 
 import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody, hyroxConfidenceCaption } from './forecast-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import type { SimulatorState } from '@/types/state';
 
 const doubles = { stationRatio: 0.71, roxzoneRatio: 0.94, stationsSinglesPercentile: 50 };
 const lines = (splits: number): HyroxStationLine[] =>
@@ -75,8 +76,8 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
       ...(i < converted ? { teamTimeSplit: true, crossFormat: true } : {}),
     }));
   const d2s = 'doubles_to_singles' as const;
-  const body = (converted: number, calibrated: number) =>
-    crossFormatBannerBody({ stations: singlesLines(converted, calibrated), calibratedCount: calibrated, crossFormatConversion: d2s }, protocol);
+  const body = (converted: number, calibrated: number, confidence: 'high' | 'medium' | 'low' = 'medium') =>
+    crossFormatBannerBody({ stations: singlesLines(converted, calibrated), calibratedCount: calibrated, crossFormatConversion: d2s, confidence }, protocol);
 
   it('all 8 converted', () => {
     const b = body(8, 8);
@@ -113,16 +114,48 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
       station, baseSec: 200, adjustedSec: 200, source: 'calibrated', teamRatio: 0.71,
       ...(i < 1 ? { crossFormat: true } : {}),
     }));
-    const b = crossFormatBannerBody({ stations: lines, calibratedCount: 8, crossFormatConversion: 'singles_to_doubles' }, protocol);
+    const b = crossFormatBannerBody({ stations: lines, calibratedCount: 8, crossFormatConversion: 'singles_to_doubles', confidence: 'medium' }, protocol);
     expect(b).toMatch(/^1 of 8 station times is converted from your singles benchmarks\./);
     expect(b).toContain('A doubles station assessment');
-    const all = crossFormatBannerBody({ stations: lines.map(l => ({ ...l, crossFormat: true })), calibratedCount: 8, crossFormatConversion: 'singles_to_doubles' }, protocol);
+    const all = crossFormatBannerBody({ stations: lines.map(l => ({ ...l, crossFormat: true })), calibratedCount: 8, crossFormatConversion: 'singles_to_doubles', confidence: 'medium' }, protocol);
     expect(all).toMatch(/^Station times are converted from your singles benchmarks\./);
+  });
+
+  it('names the cap only when it binds: a low forecast is not told converted times cap it at medium', () => {
+    // 2 calibrated stations: low whatever the conversion.
+    const low = body(1, 2, 'low');
+    expect(low).toMatch(/^1 of 8 station times is converted/);
+    expect(low).not.toContain('cap confidence');
+    expect(low).toContain('Population averages still stand in for 6 stations.');
+    expect(body(8, 8, 'medium')).toContain('Converted times cap confidence at medium.');
+  });
+
+  it('real forecast: Open Singles, 1 doubles split, 7 stations on seeds and a venue reads low, and the banner drops the cap sentence', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const s = {
+      v: 50,
+      hyroxConfig: {
+        format: 'open_singles', athleteBand: 'intermediate', hyroxPhase: 'base',
+        stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+        weeklyMTL: 0, mtlCap: 1000, mtlHistory: [], runsPerWeek: 3,
+        stationSessionsPerWeek: 1, bricksPerWeek: 1, weeklyHoursAvailable: 8,
+        venueId: 'london-excel',
+        stationBenchmarksDoubles: { row_erg: 220 },
+        stationBenchmarkHistory: { row_erg: [{ dateISO: today, sec: 220, source: 'race', format: 'open_doubles', proWeights: false }] },
+      },
+    } as any as SimulatorState;
+    const prediction = predictHyroxRace(s)!;
+    expect(prediction.crossFormatConversion).toBe('doubles_to_singles');
+    expect(prediction.confidence).toBe('low');
+    const b = crossFormatBannerBody(prediction, protocol);
+    expect(b).toMatch(/^1 of 8 station times is converted from your doubles race splits\./);
+    expect(b).not.toContain('cap confidence');
   });
 
   it('copy rules: no em dash', () => {
     for (const [c, k] of [[8, 8], [7, 8], [3, 3], [1, 8]]) {
       expect(body(c, k)).not.toContain('—');
+      expect(body(c, k, 'low')).not.toContain('—');
     }
   });
 });

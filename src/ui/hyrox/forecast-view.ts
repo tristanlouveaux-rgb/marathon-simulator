@@ -408,9 +408,11 @@ function crossFormatLabels(direction: HyroxPrediction['crossFormatConversion']):
  *  per station (resolveHyroxBenchmarks), so a test in the target format
  *  replaces only its own station's converted time; the body counts what is
  *  still converted (lines with crossFormat) and what is still a population
- *  seed, and says why a fully calibrated forecast still reads medium. */
+ *  seed. A medium forecast is told the conversion caps it, as
+ *  hyroxConfidenceCaption does; a low one is not, since the cap is not what
+ *  holds it there (review 2026-10-13). */
 export function crossFormatBannerBody(
-  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion'>,
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion' | 'confidence'>,
   protocol: string,
 ): string {
   const { from, target } = crossFormatLabels(prediction.crossFormatConversion);
@@ -423,7 +425,8 @@ export function crossFormatBannerBody(
   const seedClause = seedCount > 0
     ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
     : '';
-  return `${lead} Converted times cap confidence at medium.${seedClause} A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
+  const capClause = prediction.confidence === 'medium' ? ' Converted times cap confidence at medium.' : '';
+  return `${lead}${capClause}${seedClause} A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
 }
 
 /** The confidence-detail caption under the forecast's confidence badge. A
