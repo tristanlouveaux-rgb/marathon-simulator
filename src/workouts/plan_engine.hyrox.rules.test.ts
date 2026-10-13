@@ -1323,6 +1323,42 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(short).toBeGreaterThan(0);
   }, 120000);
 
+  it('an injury that gates the stations never trades an easy run for an easy erg session the gates drop', () => {
+    // Review 2026-10-13: with the station capacity at 0 and running open,
+    // the chosen sessions counted as full (the gated stations' slots), the
+    // shortest easy run left for an easy erg session, and the gates then
+    // dropped the erg: 138 of 630 training weeks lost an easy run, the
+    // injured athlete's only gate-safe training (novice 10 h 12 weeks, W5: 3
+    // runs and 170 min became 2 runs and 105 min).
+    let weeks = 0;
+    for (const band of BANDS) {
+      const r = HYROX_HOURS_RANGE[band];
+      for (const hrs of [r.default, 10, 12].filter((h, i, a) => a.indexOf(h) === i && h >= r.min && h <= r.max)) {
+        for (const len of [12, 16, 20]) {
+          const s = structuredClone(build(band, hrs, len));
+          (s as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 100, upperLoadCapacity: 0, lowerLoadCapacity: 100 };
+          const { detail } = generateHyroxPlanDetailed(s);
+          // The same athlete without erg access, where no easy run can leave
+          // for erg work: the runs must be the same.
+          const noErg = structuredClone(s);
+          noErg.hyroxConfig!.stationAccess = { ...noErg.hyroxConfig!.stationAccess, skiErg: false, rowErg: false };
+          const ref = generateHyroxPlanDetailed(noErg).detail;
+          const runMin = (ws: Workout[]) => ws.filter(w => w.discipline === 'run' && w.commute !== true).map(w => w.estimatedDurationMin ?? 0).sort((a, b) => a - b).join(',');
+          for (const d of detail) {
+            if (d.phase === 'taper') continue;
+            weeks++;
+            const label = `${band} ${hrs}h ${len}w W${d.week}`;
+            expect(d.workouts.some(isHyroxEasyErg), label).toBe(false);
+            expect(d.adjustments.some(n => /left out for an easy erg session/.test(n)), label).toBe(false);
+            expect(d.workouts.some(isWork), label).toBe(false);
+            expect(runMin(d.workouts), label).toBe(runMin(ref[d.week - 1].workouts));
+          }
+        }
+      }
+    }
+    expect(weeks).toBeGreaterThan(500);
+  });
+
   it('E: no long run under the run floor at low logged loads, the taper long run included', () => {
     for (const logged of [20, 30]) {
       for (const band of BANDS) {

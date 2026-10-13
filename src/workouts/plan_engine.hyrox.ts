@@ -1335,7 +1335,17 @@ function generateWeekSessions(
     }] as const));
     const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
     const room = ergRoom(next);
-    if (room < HYROX_RUN_FLOOR_MIN || hyroxPlannedMinutes(next) + room <= hyroxPlannedMinutes(ws)) return ws;
+    if (room < HYROX_RUN_FLOOR_MIN) return ws;
+    // The easy erg session as the injury gates leave it: the station capacity
+    // scales it or drops it, and an easy run never leaves for an erg session
+    // the gates then take (review 2026-10-13: with stations gated and runs
+    // open, 138 of 630 training weeks lost an easy run, the injured
+    // athlete's only gate-safe training, for an erg session that was then
+    // dropped).
+    const probe = generateHyroxEasyErg({ targetMinutes: room, stationAccess: hx.stationAccess, slotIndex: weekIndex, bodyWeightKg });
+    const gatedErg = !probe ? [] : isPastWeek ? [probe] : applyHyroxInjuryGates([probe], injuryState, weeksFromCurrent);
+    const ergMin = gatedErg[0]?.estimatedDurationMin ?? 0;
+    if (ergMin <= 0 || hyroxPlannedMinutes(next) + ergMin <= hyroxPlannedMinutes(ws)) return ws;
     const kept = rest.length > 0 ? `, the easy running shared by ${rest.length} easy run${rest.length === 1 ? '' : 's'} of ${Math.max(each, ...rest.map(w => w.estimatedDurationMin ?? 0))} min` : '';
     adjustments.push(`W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min${kept} (the chosen sessions are full)`);
     return next;
@@ -1390,11 +1400,25 @@ function generateWeekSessions(
       // placed again with the easy erg work. Leaving out or merging an easy
       // run never breaks the spacing rules, so it places; if it did not, the
       // week keeps its runs and holds no easy erg work.
-      const freed = ergSlotFor(week);
-      const ergs = easyErgFor(freed);
-      if (freed !== week || ergs.length > 0) {
+      // A freed slot is taken only when the week then holds easy erg work;
+      // otherwise the easy run stays and the swap's notes go.
+      const mark = adjustments.length;
+      let freed = ergSlotFor(week);
+      let ergs = easyErgFor(freed);
+      if (freed !== week && ergs.length === 0) {
+        adjustments.length = mark;
+        freed = week;
+        ergs = easyErgFor(week);
+      }
+      if (ergs.length > 0) {
         const again = findHyroxWeekSchedule([...freed, ...ergs], { prevSunday: inputs.prevSunday });
-        if (again) { week = freed; scheduled = again; }
+        if (again) {
+          week = freed;
+          scheduled = again;
+        } else {
+          adjustments.length = mark;
+          adjustments.push(`W${weekIndex}: ${ergs.reduce((a, e) => a + (e.estimatedDurationMin ?? 0), 0)} min of easy erg work left out (no day the spacing rules leave free)`);
+        }
       }
     }
   }
