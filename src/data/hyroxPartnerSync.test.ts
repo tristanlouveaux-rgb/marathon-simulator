@@ -75,7 +75,9 @@ function mockSource(linked: boolean, invite: { code: string; expiresAt: string }
     getPartnerSnapshot: vi.fn(async () => ok(null)),
     upsertMySnapshot: vi.fn(async () => ok(undefined)),
     removeMySnapshot: vi.fn(async () => ok(undefined)),
-    removeAllMyPartnerData: vi.fn(async () => ok(undefined)),
+    // As the live source: refused unless the session user is the expected one.
+    removeAllMyPartnerData: vi.fn(async (opts?: { expectUserId?: string }) =>
+      (opts?.expectUserId && opts.expectUserId !== 'user-a' ? { ok: false, error: 'no_session' } : ok(undefined))),
     sessionUserId: vi.fn(async () => 'user-a'),
   } as unknown as HyroxPartnerSource & MockFns;
 }
@@ -311,7 +313,7 @@ describe('Reset plan and Wipe everything', () => {
     const src = mockSource(true);
     src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
     await cleanUpHyroxPartnerOnReset('wipe', src);
-    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'wipe' });
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'wipe' }]);
     // Next launch: a fresh module state reads the flag from storage.
     _resetHyroxPartnerSyncForTests();
     seedHyrox({ eventType: 'running' as SimulatorState['eventType'], hyroxConfig: undefined });
@@ -327,7 +329,7 @@ describe('Reset plan and Wipe everything', () => {
     const src = mockSource(true);
     src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
     await cleanUpHyroxPartnerOnReset('wipe', src);
-    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'wipe' });
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'wipe' }]);
 
     _resetHyroxPartnerSyncForTests();
     localStorage.clear();
@@ -338,13 +340,70 @@ describe('Reset plan and Wipe everything', () => {
     expect(pendingFlag()).toBeNull();
   });
 
-  it('a flag for another account waits: the call is refused and the flag kept', async () => {
+  it('a flag for another account waits for that account: no request, the flag kept', async () => {
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify([{ userId: 'user-z', action: 'wipe' }]));
+    const src = mockSource(true);
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(pendingFlag()).toEqual([{ userId: 'user-z', action: 'wipe' }]);
+    expect(hasPendingHyroxPartnerCleanup('user-z')).toBe(true);
+    expect(hasPendingHyroxPartnerCleanup('user-a')).toBe(false);
+  });
+
+  it('another account\'s flag does not block the signed-in account', async () => {
+    // A single entry, as a flag written before entries were kept per account.
     localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-z', action: 'wipe' }));
     const src = mockSource(true);
-    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'no_session' });
+    expect(await partnerBlockedByPendingCleanup(src)).toBe(false);
+    await syncHyroxPartnerOnLaunch(src);
+    expect(src.getLink).toHaveBeenCalled();
+    expect(src.upsertMySnapshot).toHaveBeenCalledWith(expect.anything(), { expectUserId: 'user-a' });
+    expect(hasPendingHyroxPartnerCleanup('user-z')).toBe(true);
+  });
+
+  it('another account\'s Reset plan is not decided by the signed-in account\'s setup', async () => {
+    // user-a is in HYROX doubles with setup finished: that would keep a link,
+    // but the decision belongs to user-z's own rebuilt state.
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-z', action: 'reset' }));
+    seedHyrox({ hasCompletedOnboarding: true });
+    const src = mockSource(true);
+    _setHyroxPartnerSyncSourceForTests(src);
     await resolvePendingHyroxPartnerCleanup(src);
-    expect(src.removeAllMyPartnerData).toHaveBeenCalledWith({ expectUserId: 'user-z' });
-    expect(pendingFlag()).toEqual({ userId: 'user-z', action: 'wipe' });
+    scheduleHyroxPartnerSnapshotSync();
+    await settle();
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(localStorage.getItem(HYROX_PARTNER_PENDING_KEY)).not.toBeNull();
+    expect(hasPendingHyroxPartnerCleanup('user-z')).toBe(true);
+  });
+
+  it('flags are kept per account: a new reset does not drop another account\'s flag', async () => {
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify([{ userId: 'user-z', action: 'wipe' }]));
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    await cleanUpHyroxPartnerOnReset('wipe', src);
+    expect(pendingFlag()).toEqual([{ userId: 'user-z', action: 'wipe' }, { userId: 'user-a', action: 'wipe' }]);
+    // Online again: user-a's entry clears, user-z's stays.
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).toHaveBeenLastCalledWith({ expectUserId: 'user-a' });
+    expect(pendingFlag()).toEqual([{ userId: 'user-z', action: 'wipe' }]);
+  });
+
+  it('a wipe still owed stays a wipe when a Reset plan follows', async () => {
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    await cleanUpHyroxPartnerOnReset('wipe', src);
+    await cleanUpHyroxPartnerOnReset('reset', src);
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'wipe' }]);
+  });
+
+  it('the flag is written at the call, before any await (the partner chunk may not load offline)', async () => {
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    _setHyroxPartnerSyncSourceForTests(src);
+    const run = cleanUpHyroxPartnerOnReset('wipe');
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'wipe' }]);
+    await run;
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'wipe' }]);
   });
 
   it('reset in doubles: the snapshot goes now, the link waits for the new setup', async () => {
@@ -352,7 +411,7 @@ describe('Reset plan and Wipe everything', () => {
     await cleanUpHyroxPartnerOnReset('reset', src);
     expect(src.removeMySnapshot).toHaveBeenCalledWith({ expectUserId: 'user-a' });
     expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
-    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'reset' });
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'reset' }]);
   });
 
   it('reset outside doubles: no snapshot request, the decision still waits', async () => {
@@ -360,7 +419,7 @@ describe('Reset plan and Wipe everything', () => {
     const src = mockSource(false);
     await cleanUpHyroxPartnerOnReset('reset', src);
     expect(src.removeMySnapshot).not.toHaveBeenCalled();
-    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'reset' });
+    expect(pendingFlag()).toEqual([{ userId: 'user-a', action: 'reset' }]);
   });
 
   it('reset decision: waits while setup is unfinished; doubles again keeps the link; anything else unlinks', async () => {

@@ -33,13 +33,19 @@
  *     waits for the new setup: finished in HYROX doubles, the link stays and
  *     the next push restores the snapshot; finished in anything else, the
  *     cleanup runs as for a wipe.
- * Both record a pending flag (HYROX_PARTNER_PENDING_KEY, with the account id)
- * before any request, cleared only once the server cleanup succeeds. Offline,
- * the reset does not wait: the flag is retried at the next launch
- * (resolvePendingHyroxPartnerCleanup, main.ts), and while it stands the sync
- * and the Partner page read and write nothing, so a new snapshot never
- * reaches the old partner. A flag for another account waits for that
- * account to sign in again.
+ * Both record a pending flag (HYROX_PARTNER_PENDING_KEY, one entry per
+ * account id) before any await: on the web this module's Supabase calls live
+ * in a lazy chunk that an offline device cannot load, so the flag is written
+ * synchronously from the owner stamp. It is cleared only once the server
+ * cleanup succeeds. Offline, the reset does not wait: the flag is retried at
+ * the next launch (resolvePendingHyroxPartnerCleanup, main.ts), and while it
+ * stands the sync and the Partner page read and write nothing for that
+ * account, so a new snapshot never reaches the old partner. Each entry
+ * belongs to the account that made the reset: another account signed in on
+ * the same device is neither blocked by it nor decides it (a 'reset' entry
+ * is decided on its own account's rebuilt state), and the entry waits for
+ * its account to sign in again. A pending wipe is never downgraded to a
+ * reset.
  *
  * A push is skipped when the snapshot is unchanged since the last push, and
  * refused when the local state is not stamped as the signed-in user's
@@ -78,19 +84,20 @@ let foregroundInFlight = false;
 let cacheListener: ((next: HyroxPartnerCache | undefined) => void) | null = null;
 let sourceForTests: HyroxPartnerSource | null = null;
 
-/** localStorage key of a reset's partner cleanup still owed to the server. */
+/** localStorage key of the resets' partner cleanups still owed to the server:
+ *  a JSON array with at most one entry per account. */
 export const HYROX_PARTNER_PENDING_KEY = 'mosaic_hyrox_partner_cleanup';
 
 export interface PendingHyroxPartnerCleanup {
-  /** The account the reset was made in; only that session runs it. */
+  /** The account the reset was made in; only that account's session runs it. */
   userId: string;
   /** 'wipe': end the link, delete the snapshot and code. 'reset': decide once
    *  setup is finished again (doubles keeps the link, else as 'wipe'). */
   action: 'wipe' | 'reset';
 }
 
-/** Cached read of the pending flag; undefined until first read. */
-let pending: PendingHyroxPartnerCleanup | null | undefined;
+/** Cached read of the pending entries; undefined until first read. */
+let pending: PendingHyroxPartnerCleanup[] | undefined;
 let pendingInFlight: Promise<void> | null = null;
 /** The saveState hook tries a 'reset' decision once per session. */
 let pendingTriedOnSave = false;
@@ -133,38 +140,62 @@ function stateOwner(): string | null {
   try { return getLocalStateOwner(); } catch { return null; }
 }
 
-function readPending(): PendingHyroxPartnerCleanup | null {
+function isPendingEntry(p: unknown): p is PendingHyroxPartnerCleanup {
+  const e = p as Partial<PendingHyroxPartnerCleanup> | null;
+  return !!e && typeof e.userId === 'string' && !!e.userId && (e.action === 'wipe' || e.action === 'reset');
+}
+
+/** Every pending entry, one per account (a single object is read as one). */
+function readPending(): PendingHyroxPartnerCleanup[] {
   if (pending !== undefined) return pending;
-  pending = null;
+  pending = [];
   try {
     const raw = localStorage.getItem(HYROX_PARTNER_PENDING_KEY);
-    const p = raw ? JSON.parse(raw) as Partial<PendingHyroxPartnerCleanup> : null;
-    if (p && typeof p.userId === 'string' && p.userId && (p.action === 'wipe' || p.action === 'reset')) {
-      pending = { userId: p.userId, action: p.action };
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+    for (const p of list) {
+      if (isPendingEntry(p) && !pending.some(q => q.userId === p.userId)) {
+        pending.push({ userId: p.userId, action: p.action });
+      }
     }
   } catch { /* unreadable storage: nothing pending */ }
   return pending;
 }
 
-function writePending(next: PendingHyroxPartnerCleanup | null): void {
+/** The signed-in account's pending entry, or null (none, or no session). */
+function pendingFor(userId: string | null | undefined): PendingHyroxPartnerCleanup | null {
+  if (!userId) return null;
+  return readPending().find(p => p.userId === userId) ?? null;
+}
+
+/** Set (or, with null, clear) one account's entry; other accounts' entries
+ *  are kept. */
+function writePending(userId: string, action: PendingHyroxPartnerCleanup['action'] | null): void {
+  const next = readPending().filter(p => p.userId !== userId);
+  if (action) next.push({ userId, action });
   pending = next;
   try {
-    if (next) localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify(next));
+    if (next.length > 0) localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify(next));
     else localStorage.removeItem(HYROX_PARTNER_PENDING_KEY);
   } catch { /* storage unavailable: the flag lives for this session only */ }
 }
 
-/** True while a reset's partner cleanup is still owed to the server. */
-export function hasPendingHyroxPartnerCleanup(): boolean {
-  return readPending() != null;
+/** True while a reset's partner cleanup is still owed to the server: for
+ *  `userId` when given, else for any account on this device. */
+export function hasPendingHyroxPartnerCleanup(userId?: string): boolean {
+  return userId === undefined ? readPending().length > 0 : pendingFor(userId) != null;
 }
 
 /**
- * Reset plan / Wipe everything (events.ts), called before softResetState:
- * the owner stamp is read first, before softResetState clears it. Records
- * the pending flag, then tries the server step once (see the header rules).
- * Never throws. Offline the requests fail at once, so the reset is not held
- * up; the flag stays for the next launch.
+ * Reset plan / Wipe everything (events.ts), called before softResetState.
+ * Everything up to the first await runs at the call: the owner stamp and the
+ * mode are read before softResetState clears them, and the pending flag is
+ * written then. On the web the partner calls are a lazy chunk an offline
+ * device cannot load, so the flag must never wait on that import. Only a
+ * state with no owner stamp waits for the stored session's id. Then the
+ * server step is tried once (see the header rules). Never throws. Offline the
+ * requests fail at once, so the reset is not held up; the flag stays for the
+ * next launch.
  */
 export async function cleanUpHyroxPartnerOnReset(
   kind: 'wipe' | 'reset',
@@ -172,15 +203,21 @@ export async function cleanUpHyroxPartnerOnReset(
 ): Promise<void> {
   const owner = stateOwner();
   const wasDoubles = inHyroxDoublesMode();
+  const record = (userId: string): void => {
+    // A wipe still owed by this account stays a wipe: a later Reset plan
+    // does not make ending the link conditional on the new setup.
+    writePending(userId, kind === 'reset' && pendingFor(userId)?.action === 'wipe' ? 'wipe' : kind);
+    setHyroxPartnerCache(undefined);
+  };
+  if (owner) record(owner);
   try {
     const src = source ?? await liveSource();
     const userId = owner ?? await src.sessionUserId();
     if (!userId) return;
-    writePending({ userId, action: kind });
-    setHyroxPartnerCache(undefined);
+    if (!owner) record(userId);
     if (kind === 'wipe') {
       const res = await src.removeAllMyPartnerData({ expectUserId: userId });
-      if (res.ok) writePending(null);
+      if (res.ok) writePending(userId, null);
     } else if (wasDoubles) {
       await src.removeMySnapshot({ expectUserId: userId });
     }
@@ -190,26 +227,31 @@ export async function cleanUpHyroxPartnerOnReset(
 }
 
 /**
- * Run a pending reset cleanup if it can be decided now. 'wipe' always runs;
- * 'reset' waits for setup to finish, then keeps the link when the athlete is
- * in HYROX doubles and runs the full cleanup otherwise. The flag is cleared
- * only on success; a call for another account is refused (no_session) and the
- * flag waits for that account. Concurrent callers share one attempt.
+ * Run the signed-in account's pending reset cleanup if it can be decided now.
+ * 'wipe' always runs; 'reset' waits for setup to finish, then keeps the link
+ * when the athlete is in HYROX doubles and runs the full cleanup otherwise.
+ * The entry is cleared only on success. Another account's entry is never
+ * run or decided here: it waits for that account. Concurrent callers share
+ * one attempt.
  */
 export function resolvePendingHyroxPartnerCleanup(source?: HyroxPartnerSource): Promise<void> {
-  const p = readPending();
-  if (!p) return Promise.resolve();
+  if (readPending().length === 0) return Promise.resolve();
   if (pendingInFlight) return pendingInFlight;
   const attempt = async (): Promise<void> => {
     try {
-      if (p.action === 'reset') {
-        if (!getState().hasCompletedOnboarding) return;
-        if (inHyroxDoublesMode()) { writePending(null); return; }
-      }
       const src = source ?? await liveSource();
+      const p = pendingFor(await src.sessionUserId());
+      if (!p) return;
+      if (p.action === 'reset') {
+        // Decided on this account's own rebuilt state only.
+        const owner = stateOwner();
+        if (owner && owner !== p.userId) return;
+        if (!getState().hasCompletedOnboarding) return;
+        if (inHyroxDoublesMode()) { writePending(p.userId, null); return; }
+      }
       const res = await src.removeAllMyPartnerData({ expectUserId: p.userId });
       if (res.ok) {
-        writePending(null);
+        writePending(p.userId, null);
         setHyroxPartnerCache({ linked: false, inviteExpiresAt: null });
       }
     } catch (e) {
@@ -223,24 +265,29 @@ export function resolvePendingHyroxPartnerCleanup(source?: HyroxPartnerSource): 
   return run;
 }
 
-/** Settle a pending cleanup first; true while it still stands (the partner
- *  feature then reads and writes nothing). */
+/** Settle the signed-in account's pending cleanup first; true while it still
+ *  stands (the partner feature then reads and writes nothing). Another
+ *  account's entry never blocks the signed-in one. */
 export async function partnerBlockedByPendingCleanup(source?: HyroxPartnerSource): Promise<boolean> {
-  if (!readPending()) return false;
-  await resolvePendingHyroxPartnerCleanup(source);
-  return readPending() != null;
+  if (readPending().length === 0) return false;
+  const src = source ?? await liveSource();
+  const userId = await src.sessionUserId();
+  if (!pendingFor(userId)) return false;
+  await resolvePendingHyroxPartnerCleanup(src);
+  return pendingFor(userId) != null;
 }
 
 /** Called from saveState(). Cheap no-op unless linked in doubles mode, or
  *  the athlete has just left doubles mode, or a Reset plan's link decision
  *  is due (setup just finished). */
 export function scheduleHyroxPartnerSnapshotSync(): void {
-  if (readPending()?.action === 'reset' && !pendingTriedOnSave && getState().hasCompletedOnboarding) {
+  if (!pendingTriedOnSave && getState().hasCompletedOnboarding && readPending().some(p => p.action === 'reset')) {
     pendingTriedOnSave = true;
     void resolvePendingHyroxPartnerCleanup().then(() => {
       // Back in doubles after a Reset plan: read the link and push now
-      // rather than at the next launch.
-      if (!readPending() && cache === undefined && inHyroxDoublesMode()) void syncHyroxPartnerOnLaunch();
+      // rather than at the next launch (the launch sync waits while this
+      // account's cleanup still stands).
+      if (cache === undefined && inHyroxDoublesMode()) void syncHyroxPartnerOnLaunch();
     });
   }
   const doubles = inHyroxDoublesMode();

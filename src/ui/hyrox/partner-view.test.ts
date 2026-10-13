@@ -422,6 +422,16 @@ describe('load errors', () => {
     expect(text('#hxp-headline')).toBe('Not linked');
   });
 
+  it('another account\'s cleanup still owed on this device: the page reads the signed-in account\'s link', async () => {
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify([{ userId: 'user-z', action: 'wipe' }]));
+    const src = mockSource({ link: null, invite: null, partner: null });
+    renderHyroxPartnerView({ source: src });
+    await flush();
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(src.getLink).toHaveBeenCalled();
+    expect(text('#hxp-headline')).toBe('Not linked');
+  });
+
   it('offline: one line and Try again', async () => {
     const m: MockState = { link: null, invite: null, partner: null, linkError: 'offline' };
     const src = mockSource(m);
