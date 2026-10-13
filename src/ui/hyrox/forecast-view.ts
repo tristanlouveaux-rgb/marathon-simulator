@@ -395,24 +395,57 @@ export function crossFormatConversionNote(
   return `Stations from your doubles race splits are converted to singles terms: ${how}. A singles split or station test replaces the converted time for its own station.`;
 }
 
-/** Calibration-banner body for a singles forecast that converted doubles
- *  race splits. Benchmarks resolve per station (resolveHyroxBenchmarks), so a
- *  singles test replaces only its own station's converted time; the body
- *  counts what is still converted and what is still a population seed. */
+/** Where a cross-format forecast's converted times came from, and the
+ *  format whose assessment replaces them. */
+function crossFormatLabels(direction: HyroxPrediction['crossFormatConversion']): { from: string; target: string } {
+  return direction === 'singles_to_doubles'
+    ? { from: 'your singles benchmarks', target: 'doubles' }
+    : { from: 'your doubles race splits', target: 'singles' };
+}
+
+/** Calibration-banner body for a forecast that converted the other format's
+ *  benchmarks (crossFormatConversion, either direction). Benchmarks resolve
+ *  per station (resolveHyroxBenchmarks), so a test in the target format
+ *  replaces only its own station's converted time; the body counts what is
+ *  still converted (lines with crossFormat) and what is still a population
+ *  seed, and says why a fully calibrated forecast still reads medium. */
 export function crossFormatBannerBody(
-  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount'>,
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'crossFormatConversion'>,
   protocol: string,
 ): string {
+  const { from, target } = crossFormatLabels(prediction.crossFormatConversion);
   const total = prediction.stations.length;
-  const convertedCount = prediction.stations.filter(l => l.teamTimeSplit).length;
+  const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
   const seedCount = total - prediction.calibratedCount;
   const lead = convertedCount >= total
-    ? 'Station times are converted from your doubles race splits.'
-    : `${convertedCount} of ${total} station times are converted from your doubles race splits.`;
+    ? `Station times are converted from ${from}.`
+    : `${convertedCount} of ${total} station times ${convertedCount === 1 ? 'is' : 'are'} converted from ${from}.`;
   const seedClause = seedCount > 0
     ? ` Population averages still stand in for ${seedCount} station${seedCount === 1 ? '' : 's'}.`
     : '';
-  return `${lead}${seedClause} A singles station assessment (${protocol}) replaces each one with your own time, station by station.`;
+  return `${lead} Converted times cap confidence at medium.${seedClause} A ${target} station assessment (${protocol}) replaces each one with your own time, station by station.`;
+}
+
+/** The confidence-detail caption under the forecast's confidence badge. A
+ *  medium forecast holding converted times says the conversion is the cap,
+ *  so a fully calibrated forecast does not ask for more stations. */
+export function hyroxConfidenceCaption(
+  prediction: Pick<HyroxPrediction, 'stations' | 'calibratedCount' | 'confidence' | 'crossFormatConversion'>,
+  hasVenue: boolean,
+): string {
+  const total = prediction.stations.length;
+  const calibrated = prediction.calibratedCount;
+  const convertedCount = prediction.stations.filter(l => l.crossFormat).length;
+  if (prediction.confidence === 'high') {
+    return `Based on ${calibrated}/${total} calibrated benchmarks${hasVenue ? ' and venue factors' : ''}.`;
+  }
+  if (prediction.confidence === 'medium' && convertedCount > 0) {
+    return `${calibrated}/${total} stations calibrated, ${convertedCount} converted from ${crossFormatLabels(prediction.crossFormatConversion).from}. Converted times cap confidence at medium.`;
+  }
+  if (prediction.confidence === 'medium') {
+    return `${calibrated}/${total} stations calibrated. Calibrate more to sharpen the prediction.`;
+  }
+  return `Mostly seed data. Only ${calibrated}/${total} stations calibrated. Best treated as a rough benchmark.`;
 }
 
 function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState): string {
@@ -764,12 +797,7 @@ function buildHyroxHero(
     prediction.confidence === 'high'   ? 'High confidence'   :
     prediction.confidence === 'medium' ? 'Medium confidence' :
                                           'Low confidence';
-  const confidenceCaption =
-    prediction.confidence === 'high'
-      ? `Based on ${calibrated}/${totalStations} calibrated benchmarks${venue ? ` and venue factors` : ''}.`
-    : prediction.confidence === 'medium'
-      ? `${calibrated}/${totalStations} stations calibrated. Calibrate more to sharpen the prediction.`
-      : `Mostly seed data. Only ${calibrated}/${totalStations} stations calibrated. Best treated as a rough benchmark.`;
+  const confidenceCaption = hyroxConfidenceCaption(prediction, !!venue);
   const conversionNote = crossFormatConversionNote(prediction);
 
   // Provisional banner — surfaced prominently (not behind the confidence badge)
@@ -777,8 +805,10 @@ function buildHyroxHero(
   // raced but never calibrated stations, or whose only benchmarks are in the
   // other format, needs to know the number is an estimate and what to do about
   // it. Two causes, two bodies:
-  //   - cross-format: a singles forecast whose station times are converted
-  //     from doubles race splits (the pair's time ÷ the station ratio).
+  //   - cross-format: station times converted from the other format's
+  //     benchmarks (a doubles race split ÷ the station ratio for singles, a
+  //     singles time × the ratio for doubles). Converted times cap
+  //     confidence at medium.
   //   - seed-dominated: few or no stations calibrated.
   // Every non-high-confidence forecast tells the user, in plain terms, that a
   // proper station assessment makes the prediction more accurate, and names the
@@ -790,7 +820,7 @@ function buildHyroxHero(
   // cross-format conversion whenever there is one.
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
-  const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
+  const provisionalBody = prediction.crossFormatConversion
     ? crossFormatBannerBody(prediction, calibrationProtocol)
     : prediction.confidence === 'low'
     ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`

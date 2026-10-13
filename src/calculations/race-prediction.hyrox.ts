@@ -88,6 +88,11 @@ export interface HyroxStationLine {
    *  pair's time converted to singles terms (÷ the prediction's
    *  crossFormatStationRatio). */
   teamTimeSplit?: boolean;
+  /** True when baseSec is converted from the other format's benchmark
+   *  through the doubles quantile mapping: a singles time × the station ratio
+   *  for a doubles target, a doubles race split ÷ the ratio for a singles
+   *  target. A cross-format estimate: it caps confidence at medium. */
+  crossFormat?: boolean;
 }
 
 /** A station line's time in singles terms: the pair's time ÷ the doubles
@@ -160,14 +165,18 @@ export interface HyroxPrediction {
   confidence: 'high' | 'medium' | 'low';
   /** Number of calibrated stations (vs seed). */
   calibratedCount: number;
-  /** Set when a singles prediction reads at least one doubles race split (the
-   *  pair's time) converted to singles terms through the doubles quantile
-   *  mapping: team time ÷ crossFormatStationRatio. The converted stations are
-   *  the lines with teamTimeSplit. The mirror of singles benchmarks feeding a
-   *  doubles prediction × the station ratio. */
-  crossFormatConversion?: 'doubles_to_singles';
+  /** Set when at least one station is converted from the other format's
+   *  benchmark through the doubles quantile mapping (the lines with
+   *  crossFormat):
+   *   - 'doubles_to_singles': a singles prediction reading a doubles race
+   *     split (the pair's time) in singles terms, team time ÷
+   *     crossFormatStationRatio (those lines also carry teamTimeSplit);
+   *   - 'singles_to_doubles': a doubles prediction reading a singles time ×
+   *     the station ratio.
+   *  Either direction caps confidence at medium. */
+  crossFormatConversion?: 'doubles_to_singles' | 'singles_to_doubles';
   /** With crossFormatConversion: the percentile-matched doubles/singles
-   *  station ratio the pair's times were divided by. */
+   *  station ratio of the conversion. */
   crossFormatStationRatio?: number;
   /** Doubles only: the percentile-matched ratios applied (hyrox-doubles.ts). */
   doubles?: {
@@ -542,6 +551,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
       source: p.calibrated != null ? ('calibrated' as const) : ('seed' as const),
       ...(isDoubles ? { teamRatio: stationRatio } : {}),
       ...(p.isTeamTime ? { teamTimeSplit: true } : {}),
+      ...(p.crossFormat ? { crossFormat: true } : {}),
     };
   });
   const rawStationsSec = stationLines.reduce((sum, l) => sum + l.baseSec, 0);
@@ -660,18 +670,21 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
 
   const totalSec = Math.round(runSecAdj + stationsSecAdj + roxzoneSecAdj);
 
-  // A singles forecast that converted doubles race splits says so (UI note).
-  const crossFormatConversion: HyroxPrediction['crossFormatConversion'] =
-    !isDoubles && hasTeamTimes ? 'doubles_to_singles' : undefined;
+  // A forecast that converted the other format's benchmarks says so (UI note
+  // and banner).
+  const hasCrossFormat = perStation.some(p => p.crossFormat);
+  const crossFormatConversion: HyroxPrediction['crossFormatConversion'] = !hasCrossFormat
+    ? undefined
+    : isDoubles ? 'singles_to_doubles' : 'doubles_to_singles';
 
   // ── Confidence scoring ────────────────────────────────────────────────────
   // The calibrated count is hyroxCalibrationCoverage's, the count Stats,
   // Account, the benchmark card and the chip detail show (stations with an
   // athlete time, of all 8 raced stations).
-  // Calibrated stations count the same whichever slot they came from: the
-  // other format's values reach the target through the doubles quantile
-  // mapping in both directions (singles × ratio for doubles, a pair's split
-  // ÷ ratio for singles), so neither direction is capped.
+  // A station converted from the other format's benchmark counts as
+  // calibrated (it is the athlete's own time) but caps confidence at medium
+  // in either direction: it passes through one aggregate percentile-matched
+  // station ratio, a cross-format estimate rather than a time in this format.
   // Race-age staleness can also cap confidence (medium/low) when the previous
   // race is older than 6 months and current physiology can't fully mitigate.
   const calibratedCount = inputs.coverage.calibrated.length;
@@ -679,6 +692,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     calibratedCount >= 6 && hx.venueId ? 'high' :
     calibratedCount >= 3 ? 'medium' :
     'low';
+  if (hasCrossFormat && confidence === 'high') confidence = 'medium';
   if (stale.confidenceCap === 'low') confidence = 'low';
   else if (stale.confidenceCap === 'medium' && confidence === 'high') confidence = 'medium';
 

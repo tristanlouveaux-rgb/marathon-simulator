@@ -14,7 +14,7 @@ vi.mock('@/data/supabaseClient', () => ({
   SUPABASE_FUNCTIONS_BASE: undefined,
 }));
 
-import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody } from './forecast-view';
+import { doublesStationsCaption, crossFormatConversionNote, crossFormatBannerBody, hyroxConfidenceCaption } from './forecast-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 
@@ -72,33 +72,85 @@ describe('crossFormatBannerBody: what is still converted, what is still a seed',
     HYROX_STATION_ORDER.map((station, i) => ({
       station, baseSec: 200, adjustedSec: 200,
       source: i < calibrated ? 'calibrated' : 'seed',
-      ...(i < converted ? { teamTimeSplit: true } : {}),
+      ...(i < converted ? { teamTimeSplit: true, crossFormat: true } : {}),
     }));
+  const d2s = 'doubles_to_singles' as const;
+  const body = (converted: number, calibrated: number) =>
+    crossFormatBannerBody({ stations: singlesLines(converted, calibrated), calibratedCount: calibrated, crossFormatConversion: d2s }, protocol);
 
   it('all 8 converted', () => {
-    const b = crossFormatBannerBody({ stations: singlesLines(8, 8), calibratedCount: 8 }, protocol);
+    const b = body(8, 8);
     expect(b).toMatch(/^Station times are converted from your doubles race splits\./);
+    expect(b).toContain('Converted times cap confidence at medium.');
     expect(b).not.toContain('Population averages');
+    expect(b).toContain('A singles station assessment');
     expect(b).toContain('station by station');
   });
 
   it('7 converted after one singles test: the count follows the stations', () => {
-    const b = crossFormatBannerBody({ stations: singlesLines(7, 8), calibratedCount: 8 }, protocol);
+    const b = body(7, 8);
     expect(b).toMatch(/^7 of 8 station times are converted/);
     expect(b).not.toContain('Population averages');
   });
 
+  it('1 converted: singular verb', () => {
+    const b = body(1, 8);
+    expect(b).toMatch(/^1 of 8 station times is converted from your doubles race splits\./);
+    expect(b).not.toContain('times are converted');
+    // Plural stays plural.
+    expect(body(2, 8)).toMatch(/^2 of 8 station times are converted/);
+  });
+
   it('3 converted, 5 on seeds: names both', () => {
-    const b = crossFormatBannerBody({ stations: singlesLines(3, 3), calibratedCount: 3 }, protocol);
+    const b = body(3, 3);
     expect(b).toMatch(/^3 of 8 station times are converted/);
     expect(b).toContain('Population averages still stand in for 5 stations.');
-    const one = crossFormatBannerBody({ stations: singlesLines(3, 7), calibratedCount: 7 }, protocol);
-    expect(one).toContain('Population averages still stand in for 1 station.');
+    expect(body(3, 7)).toContain('Population averages still stand in for 1 station.');
+  });
+
+  it('singles benchmarks feeding a doubles forecast: names the singles source and a doubles assessment', () => {
+    const lines: HyroxStationLine[] = HYROX_STATION_ORDER.map((station, i) => ({
+      station, baseSec: 200, adjustedSec: 200, source: 'calibrated', teamRatio: 0.71,
+      ...(i < 1 ? { crossFormat: true } : {}),
+    }));
+    const b = crossFormatBannerBody({ stations: lines, calibratedCount: 8, crossFormatConversion: 'singles_to_doubles' }, protocol);
+    expect(b).toMatch(/^1 of 8 station times is converted from your singles benchmarks\./);
+    expect(b).toContain('A doubles station assessment');
+    const all = crossFormatBannerBody({ stations: lines.map(l => ({ ...l, crossFormat: true })), calibratedCount: 8, crossFormatConversion: 'singles_to_doubles' }, protocol);
+    expect(all).toMatch(/^Station times are converted from your singles benchmarks\./);
   });
 
   it('copy rules: no em dash', () => {
-    for (const [c, k] of [[8, 8], [7, 8], [3, 3]]) {
-      expect(crossFormatBannerBody({ stations: singlesLines(c, k), calibratedCount: k }, protocol)).not.toContain('—');
+    for (const [c, k] of [[8, 8], [7, 8], [3, 3], [1, 8]]) {
+      expect(body(c, k)).not.toContain('—');
     }
+  });
+});
+
+describe('hyroxConfidenceCaption: a cross-format cap says so', () => {
+  const lines = (converted: number, calibrated: number): HyroxStationLine[] =>
+    HYROX_STATION_ORDER.map((station, i) => ({
+      station, baseSec: 200, adjustedSec: 200,
+      source: i < calibrated ? 'calibrated' : 'seed',
+      ...(i < converted ? { teamTimeSplit: true, crossFormat: true } : {}),
+    }));
+
+  it('medium with converted times: names the conversion as the cap, never asks for more stations', () => {
+    const c = hyroxConfidenceCaption({ stations: lines(8, 8), calibratedCount: 8, confidence: 'medium', crossFormatConversion: 'doubles_to_singles' }, true);
+    expect(c).toBe('8/8 stations calibrated, 8 converted from your doubles race splits. Converted times cap confidence at medium.');
+    expect(c).not.toContain('Calibrate more');
+    expect(c).not.toContain('—');
+  });
+
+  it('medium without converted times keeps the calibrate-more caption', () => {
+    expect(hyroxConfidenceCaption({ stations: lines(0, 4), calibratedCount: 4, confidence: 'medium' }, false))
+      .toBe('4/8 stations calibrated. Calibrate more to sharpen the prediction.');
+  });
+
+  it('high and low are unchanged', () => {
+    expect(hyroxConfidenceCaption({ stations: lines(0, 8), calibratedCount: 8, confidence: 'high' }, true))
+      .toBe('Based on 8/8 calibrated benchmarks and venue factors.');
+    expect(hyroxConfidenceCaption({ stations: lines(2, 2), calibratedCount: 2, confidence: 'low', crossFormatConversion: 'doubles_to_singles' }, false))
+      .toContain('Mostly seed data.');
   });
 });

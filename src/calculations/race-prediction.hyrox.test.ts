@@ -104,15 +104,17 @@ describe('predictHyroxRace', () => {
   it('singles benchmarks feed a doubles prediction through the doubles station ratio', () => {
     // The doubles model is singles station time × the percentile-matched
     // ratio (hyrox-doubles.ts), so singles times are its input: no seed
-    // fallback, no cross-format flag.
+    // fallback. The station is flagged as converted from the other format.
     const singlesSki = 250;
     const calibrated = predictHyroxRace(buildState({
       format: 'open_doubles',
       stationBenchmarksSingles: { ski_erg: singlesSki },
     }))!;
-    expect(calibrated.crossFormatConversion).toBeUndefined();
+    expect(calibrated.crossFormatConversion).toBe('singles_to_doubles');
+    expect(calibrated.crossFormatStationRatio).toBe(calibrated.doubles!.stationRatio);
     const skiLine = calibrated.stations.find(l => l.station === 'ski_erg')!;
     expect(skiLine.source).toBe('calibrated');
+    expect(skiLine.crossFormat).toBe(true);
     expect(skiLine.baseSec).toBeCloseTo(singlesSki * calibrated.doubles!.stationRatio, 6);
   });
 
@@ -349,11 +351,15 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
       expect(s1.baseSec * r).toBeCloseTo(doublesSplits[st], 6);
       expect(d1.baseSec).toBeCloseTo(doublesSplits[st], 6);
     }
-    // Fully calibrated: confidence follows the count, like singles benchmarks
-    // feeding a doubles target (no cross-format cap).
+    // Fully calibrated, but every station is a cross-format estimate:
+    // confidence caps at medium even with a venue (high needs it otherwise).
     expect(singles.calibratedCount).toBe(8);
+    expect(singles.stations.every(l => l.crossFormat)).toBe(true);
     expect(singles.confidence).toBe('medium');
-    expect(predictHyroxRace(buildState({ ...cfg, format: 'open_singles', venueId: 'london-excel' }))!.confidence).toBe('high');
+    expect(predictHyroxRace(buildState({ ...cfg, format: 'open_singles', venueId: 'london-excel' }))!.confidence).toBe('medium');
+    // The doubles forecast reads its own race splits: no conversion, no cap.
+    expect(doubles.crossFormatConversion).toBeUndefined();
+    expect(predictHyroxRace(buildState({ ...cfg, format: 'open_doubles', venueId: 'london-excel' }))!.confidence).toBe('high');
   });
 
   it('a solo test in the doubles slot is one athlete\'s time: used as is, no conversion flag', () => {
@@ -437,5 +443,53 @@ describe('predictHyroxRace: singles target from doubles benchmarks (one quantile
     }))!;
     const line = pro.stations.find(l => l.station === 'sled_push')!;
     expect(line.baseSec).toBeCloseTo(180 / pro.crossFormatStationRatio!, 6);
+  });
+});
+
+describe('predictHyroxRace: converted stations cap confidence at medium, in both directions', () => {
+  const singlesTimes = { ski_erg: 270, sled_push: 200, sled_pull: 260, burpee_broad_jumps: 300, row_erg: 290, farmer_carry: 110, sandbag_lunges: 280, wall_balls: 430 };
+
+  it('doubles target, 8 singles benchmarks and a venue: medium, not high', () => {
+    const p = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksSingles: singlesTimes, venueId: 'london-excel' }))!;
+    expect(p.calibratedCount).toBe(8);
+    expect(p.crossFormatConversion).toBe('singles_to_doubles');
+    expect(p.stations.every(l => l.crossFormat)).toBe(true);
+    expect(p.confidence).toBe('medium');
+  });
+
+  it('the same times in the target format\'s own slot reach high with a venue', () => {
+    const singles = predictHyroxRace(buildState({ format: 'open_singles', stationBenchmarksSingles: singlesTimes, venueId: 'london-excel' }))!;
+    expect(singles.crossFormatConversion).toBeUndefined();
+    expect(singles.confidence).toBe('high');
+    const doubles = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
+      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
+    }))!;
+    expect(doubles.stations.some(l => l.crossFormat)).toBe(false);
+    expect(doubles.confidence).toBe('high');
+  });
+
+  it('one converted station is enough to cap', () => {
+    const p = predictHyroxRace(buildState({
+      format: 'open_doubles',
+      stationBenchmarksDoubles: { ...singlesTimes, ski_erg: undefined } as any,
+      stationBenchmarksSingles: { ski_erg: 270 },
+      stationBenchmarkHistory: Object.fromEntries(Object.entries(singlesTimes).filter(([st]) => st !== 'ski_erg').map(([st, sec]) => [st, [{ dateISO: dateNDaysAgo(3), sec, source: 'half_test' as const, format: 'open_doubles' as const }]])),
+      venueId: 'london-excel',
+    }))!;
+    expect(p.stations.filter(l => l.crossFormat).map(l => l.station)).toEqual(['ski_erg']);
+    expect(p.confidence).toBe('medium');
+  });
+
+  it('a solo test in the doubles slot read by a singles target is used as is: not converted, no cap', () => {
+    const p = predictHyroxRace(buildState({
+      format: 'open_singles',
+      stationBenchmarksSingles: { ...singlesTimes, ski_erg: undefined } as any,
+      stationBenchmarksDoubles: { ski_erg: 270 },
+      stationBenchmarkHistory: { ski_erg: [{ dateISO: dateNDaysAgo(3), sec: 270, source: 'half_test', format: 'open_doubles' }] },
+      venueId: 'london-excel',
+    }))!;
+    expect(p.calibratedCount).toBe(8);
+    expect(p.stations.some(l => l.crossFormat)).toBe(false);
+    expect(p.confidence).toBe('high');
   });
 });
