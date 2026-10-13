@@ -35,7 +35,7 @@ import { getPhysiologicalVdot, effectivePhysiologyPbs, isPbTombstoned, recordPbD
 import { vo2maxPlacement, ftpPlacement, hyroxPlacement, ageGradeForTime, wmaKeyForRaceDist, runnerFieldPlacement } from '@/calculations/fitness-placement';
 import { vo2BandAnchors } from '@/data/vo2max-norms';
 import { openStandardSec, type WmaDistanceKey } from '@/data/wma-age-grading';
-import { hyroxPopulationCaption } from '@/calculations/hyrox-population';
+import { hyroxResultsCohort, hyroxResultsCaption, hyroxPlacementWho } from '@/calculations/hyrox-results';
 import { poweredByStrava } from '@/ui/strava-brand';
 import { swapFadedText } from '@/ui/raster-safe-text';
 import { localDateKey } from '@/utils/local-date';
@@ -1408,9 +1408,12 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
               const sessions = state.hyroxWeeklySessionCount ?? null;
               const benchmarkCount = state.hyroxPreviousStationSplits ? Object.keys(state.hyroxPreviousStationSplits).length : 0;
               const hours = state.triTimeAvailableHoursPerWeek;
-              // Field position against the real per-format finisher table.
-              // Null for pro_doubles (no ingested data) or no previous time.
-              const hyroxPlace = prevTime != null ? hyroxPlacement(fmt, prevTime) : null;
+              // Field position against the real results of the field the
+              // previous race was raced in: its format, by sex (singles) or
+              // the pair's division (doubles). HYROX results, seasons 8 and 9.
+              const prevFmt = state.hyroxPreviousTimeFormat ?? fmt;
+              const placeCohort = hyroxResultsCohort(prevFmt, state.biologicalSex, state.hyroxDivision);
+              const hyroxPlace = prevTime != null ? hyroxPlacement(prevFmt, prevTime, placeCohort) : null;
               return `
                 ${renderSectionLabel('HYROX setup')}
                 <div class="r-row readonly" style="cursor:default">
@@ -1424,8 +1427,8 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
                 <div class="r-row readonly" style="cursor:default">
                   <div class="r-row-body">
                     <p class="r-row-label">Field position</p>
-                    <p class="r-row-value">Faster than ${hyroxPlace.fasterThanPct}% of ${fmtLabel} finishers</p>
-                    <p class="r-row-sub">${hyroxPopulationCaption(fmt)}</p>
+                    <p class="r-row-value">Faster than ${hyroxPlace.fasterThanPct}% of ${hyroxPlacementWho({ cohort: placeCohort, ageGroup: null })}</p>
+                    <p class="r-row-sub">${hyroxResultsCaption(placeCohort)}</p>
                     ${placementScaleBar(
                       ((hyroxPlace.scale.slowSec - (prevTime ?? 0)) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,
                       ((hyroxPlace.scale.slowSec - hyroxPlace.scale.medianSec) / (hyroxPlace.scale.slowSec - hyroxPlace.scale.fastSec)) * 100,

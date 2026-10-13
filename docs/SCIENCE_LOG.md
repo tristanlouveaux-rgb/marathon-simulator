@@ -752,6 +752,7 @@ projectedTotalSec = disciplineHorizonTotal × (1 + factorPct)
 - Taper is *not* a factor any more — it lives where it belongs, inside the per-discipline horizon models (per-class for stations, distance-appropriate for run, generic for roxzone). The run VDOT horizon stops passing `taper_weeks: 0` and now uses the default `HYROX_TAPER_WEEKS`.
 - Item (4) above ("`taper_weeks: 0` prevents double-counting") is obsolete: taper now consistently lives in the horizon for all three disciplines, and the factor model handles reality-vs-plan adjustments only.
 - Factor breakdown semantics: each factor row's `deltaSec` is its contribution to `improvementSec`. Sum of `factors[].deltaSec` ≈ `improvementSec` (within rounding tolerance), making the breakdown reconcilable for UI transparency.
+- *Update 2026-10-12 (§DI): the "Weekly volume ±3%" factor is removed (double count of the sessions the horizons already read); stations the plan never programmes bank no horizon gain.*
 
 ---
 
@@ -1180,6 +1181,8 @@ In doubles each athlete runs all 8 legs but only completes 4 of 8 stations (part
 
 **v1 calibration source**: gut-anchored from elite split comparisons and interval-recovery literature. **Flagged for empirical recalibration** from the Kaggle 89k-finisher dataset (same-athlete cross-format pairs). Once calibrated, the table will move to `hyrox-population-distributions.ts` with an empirical citation.
 
+> **Superseded 2026-10-13 (§DH, `b739051`).** `DOUBLES_TO_SINGLES_PACE_FACTOR` and `convertHyroxRunPaceFormat` are removed. The premise was wrong: doubles partners split the work inside every station and run every leg together (26/27 Doubles rulebook s7.2, s7.3), and the results tables show open_doubles runs slower than open_singles (P50 2762 s against 2695 s). `formatFactor` for doubles is now `doublesRunPaceFactor` (`hyrox-run-pace.ts:110`): the percentile-matched doubles/singles run ratio at the athlete's singles run total, about 1.02 at P50, applied to the seed fallback too. The personal-offset back-computation of a doubles race uses the same ratios.
+
 ### Bayesian personalisation
 
 The population model (CP-ratio + format) is the **prior**. Each logged HYROX race provides an **observation** (back-computed run pace from `finish − stations − roxzone`, divided by 8). The **residual** `observed − model_at_that_format` updates a personal offset:
@@ -1569,6 +1572,8 @@ VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX h
 
 **Supersedes §N.** The single-direction `DOUBLES_TO_SINGLES_FACTOR = 0.92` previously documented in §N was wrong-direction at the population level (singles is harder than doubles, not easier) and ignored the same-athlete picture. Replaced with two anchored constants.
 
+> **Superseded 2026-10-13 by §DH (lane H1, `c6f090b`, `88b0d52`, `8e07c12`).** Both constants are removed. Every target is banded on the previous time in singles terms: a doubles time converts with `doublesTotalInSinglesTermsSec` (the open_singles total at the same percentile of the ingested results, about × 1.125 at P50), a singles time stays as is (`hyroxBandingTimeSec`). The old doubles-target rule banded on doubles terms, so the doubles conversion ran twice. Per-station cross-format inference is now done through the same quantile mapping, and a converted station caps confidence at medium instead of forcing low. This entry is kept for history.
+
 **Files**: `src/constants/hyrox-constants.ts:32-36`, `src/state/initialization.hyrox.ts:111-124`, `src/calculations/hyrox-format-band.test.ts` (8 tests).
 
 ### Model
@@ -1746,6 +1751,8 @@ Both tests reflect Mujika & Padilla 2003 (*Med Sci Sports Exerc* 35(7):1182–11
 
 **Refresh**: re-run `scripts/ingest-hyrox-results.mjs` with a fresher CSV, paste the generated tables back. Bump `LAST_REFRESH_DATE`.
 
+**Update 2026-10-13 (§DH, §DI, lane H1).** These tables now also drive the doubles forecast (percentile-matched open_doubles ÷ open_singles ratios) and the one doubles-to-singles total conversion. Every surface that cites them uses `hyroxPopulationCaption`: the format's finisher count, women and men together, seasons 4 to 6 (2021/22 to 2023/24), the 75-rep Women Open era note and, for Open Doubles, the pooled-pairs note. The docstring's percentile direction is corrected (cumulative = % at or faster). The S7 to S9 re-ingest (`src/data/hyrox-results-s79.ts`, merged in `3e4b08d`, lane H3a) is not wired yet; these tables stay live until lane H3b.
+
 ---
 
 ## §Q — HYROX `hxFormat` workout tagging (deferred decision, 2026-05-07)
@@ -1771,7 +1778,7 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 
 **Factor 1 — Training fitness** (±5% bound). `mtlCTL` is the 42-day daily-equivalent EMA of weekly MTL (the chronic load anchor). Compared to a band-anchored expectation: `expectedMtlCtl(band) = HYROX_MTL_CAP[band] × 0.70 ÷ 7` (~70% of the band's cap, daily-equivalent). Athletes training above their band's anchor are projected to outperform; below get penalised. Soft-saturating at ±5% prevents extreme ratios from overwhelming the projection.
 
-**Factor 2 — Weekly volume** (±3% bound). Configured `runsPerWeek + stationSessionsPerWeek + bricksPerWeek` vs `HYROX_WEEKLY_SESSIONS[band]` total. Smaller weight than fitness because volume is already partly captured in CTL.
+**Factor 2 — Weekly volume** (±3% bound). Configured `runsPerWeek + stationSessionsPerWeek + bricksPerWeek` vs `HYROX_WEEKLY_SESSIONS[band]` total. Smaller weight than fitness because volume is already partly captured in CTL. *Removed 2026-10-12 (§DI, `762bd5f`): sessions per week already drive the station and run horizons, so this factor counted the same volume twice. Factor 3 now counts planned slots that hold a record (`isMtlSessionCompleted`), not every `garminActuals` key.*
 
 **Factor 3 — Plan adherence** (0..+4% slowdown). Completed sessions / planned sessions over the last 3 completed weeks. Same penalty pattern as triathlon's `tri-adherence.ts:80` — missed sessions incur a slowdown, full adherence is neutral.
 
@@ -1800,12 +1807,16 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 
 **Known limitations**: confidence does not account for calibration recency (a 6-month-old benchmark may be outdated), for format-conversion bias (doubles→singles via the 0.92 factor introduces additional uncertainty), or for venue extrapolation accuracy.
 
+**Update 2026-10-13 (§DH).** The calibrated count is `hyroxCalibrationCoverage` (`hyrox-station-history.ts:262`): stations with an athlete time from either format's slot, out of all 8 raced stations, the same count the benchmark card, Stats, Account and the chip detail show. A station converted from the other format's benchmark counts as calibrated and caps confidence at medium in either direction (`crossFormatCapped` when that cap is what holds it there). The 0.92 limitation above is obsolete: format conversion goes through the quantile mapping and its uncertainty is the medium cap.
+
 **Side**: tracking (prediction, not planning).
 
 ---
 
 ## §N — HYROX Doubles→Singles Time Conversion Factor (2026-05-07) — SUPERSEDED by §T
 
+> **§T was itself superseded on 2026-10-13 by §DH** (quantile mapping on the ingested results).
+>
 > ⚠️ **Superseded 2026-05-08.** The 0.92 constant documented here was wrong-direction at the population level (singles is harder for the same athlete, not easier) and produced a chain of broken predictions for cross-format users. Replaced by bidirectional same-athlete factors `SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22` / `SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85`, used only for band derivation. Per-station cross-format inference is no longer attempted — the predictor falls back to target-format seeds with `confidence = 'low'`. See §T for the current model. This entry is preserved for historical context only.
 
 **Model**: `DOUBLES_TO_SINGLES_FACTOR = 0.92` in `src/constants/hyrox-constants.ts`.
@@ -3159,6 +3170,7 @@ Where:
 - `modalityFactor` = eccentric + mechanical loading multiplier relative to baseline IL. Ergs: 0.5; sled/farmer carry: 1.0–1.2; plyometrics (burpee BJ): 1.3. From Verkhoshansky & Siff 2009 on eccentric loading taxonomy.
 - `impactFactor` = ground-impact amplification. Ergs: 0.7 (minimal footstrike); sled push/pull/carry: 1.0; burpee BJ/sandbag lunges: 1.0–1.3. From Clarkson & Hubal 2002 on DOMS and eccentric exercise.
 - `externalLoadFactor = min(0.6, externalLoadKg / bodyWeightKg × 0.5)`. Caps at 0.6 (60% amplification) — conservative linear fit for external-to-body-weight ratio. Clamped because above bodyweight loads (e.g. heavy farmer carry) have diminishing marginal MTL per unit of extra load.
+  *Update 2026-10-13 (§DG): `externalLoadKg` comes from the athlete's load tier, `stationExternalLoadKg(hyroxLoadTierForState(s))` (sleds at 0.5 × the tier's sled weight, farmers, sandbag and ball at the tier's load), replacing the fixed `STATION_EXTERNAL_LOAD_KG` table, which mixed tiers.*
 - `cap` = per-band weekly MTL ceiling from `HYROX_MTL_CAP`. **Initial estimates pending real-training validation.**
 
 **Saturation curve rationale**: The one-minus-exponential form prevents linearly accumulating MTL at extreme loads. Real tissue tolerance asymptotes as load approaches and exceeds the individual's current capacity — analogous to the Banister impulse-response saturation used in some CTL models (Busso 2003, *Med Sci Sports Exerc* 35(7)). The saturation constant is set equal to `cap` so the 63% saturation point aligns with the per-band ceiling.
@@ -6252,6 +6264,8 @@ Hidden entirely (`vo2 = null`, reason `'insufficient-sessions'`) below 3 session
 
 **Files.** `src/calculations/hyrox-population.ts` (new), `src/ui/hyrox/stats-view.ts` (consumes).
 
+**Update 2026-10-13 (§DH, §DI).** Finish percentiles read the ingested S4 to S6 tables (§R) where a format has rows; the synthetic table above is the fallback for Pro Doubles, whose pair total is first converted to singles terms (`doublesTotalInSinglesTermsSec`). Station percentiles (`getStationPercentile`) are synthetic, placed on the band seed times at hand-picked percentiles (P5, P15, P35, P60, P80, P95), and are labelled as estimates ("est. pN").
+
 ## VO2 Resolver Audit (2026-05-07)
 
 **Purpose.** Systematic audit of `getPhysiologicalVdot` resolver chain (`src/calculations/physiological-vdot.ts:144`) and supporting sync paths before adding conflict-surfacing UI (WS-2b).
@@ -6338,7 +6352,7 @@ Richer-counts-for-shorter principle: a longer race fully credits shorter target 
 | beginner | 0.9%/station | |
 | total_beginner | 1.1%/station | ~8.8% total drift — consistent with age-group 2h+ finishers |
 
-Doubles format: rate × 0.5 (athletes alternate stations; waiting partner accumulates metabolic cost but not full eccentric load).
+Doubles format: rate × 0.5 (athletes alternate stations; waiting partner accumulates metabolic cost but not full eccentric load). *Removed 2026-10-12 (§DH, `b739051`): partners split the work inside every station and run together (26/27 Doubles rulebook s7.2, s7.3), the 0.5 had no source, and no per-leg doubles data exists to set a different rate. Doubles uses the singles band rate; it only shapes the per-leg split, since legs are normalised to the run total.*
 
 **Scientific basis.** HYROX finishing-time distributions (HyroxDataLab / roxlyfe.com) show that run-leg decline scales with performance level. Goss 2021 (repeated high-intensity bouts and run-economy decline) supports the mechanistic model. Bi-exponential EPOC decay would be more accurate but requires integrating station-specific eccentric load over time — too complex for v1.
 
@@ -8148,5 +8162,224 @@ At 50 km the race-target week sits under the ramp, so the plan is unchanged and 
 7. Triathlon, cycling and HYROX keep runs/week × 50 as the last resort even with a typed km.
 
 **Guards.** `athlete-archetype.test.ts` (`typedVolumeArchetype`: the classifier on the typed km, a PB never changes the classification, start and ramp monotonic in typed km, synced classification first), `fitness-model.test.ts` (`typedVolumeWeeklyTSS` pricing, the 5.5 min/km fallback, the chain order, undefined for triathlon and HYROX), `planned-week-target.test.ts` (a running target prices the typed km; triathlon and HYROX targets equal the untyped ones), `state/initialization.load-target-no-history.test.ts` (typed 50 and 15 km week-1 volume and target, typed equals synced plan, the forecast ramp, synced history wins, the sharpening-block monotonic check), `ui/wizard/steps/review-pb-draft.test.ts` (a saved volume edit sets the flag), `state/typed-km-mode-gates.test.ts` (no typed ramp or target in triathlon, cycling, HYROX or Just-Track). Not device-verified.
+
+---
+
+## §DG — HYROX divisions and load tiers; MTL external load from the athlete's tier (2026-10-12/13, lane H1)
+
+**Side.** Both. Planning: every HYROX station, brick and assessment generator computes the station's muscle-tendon load (MTL) from the athlete's tier. Tracking copy (the setup Pro note and division hint, the station detail "Race standard" row) reads the same tier, so the loads shown and the loads used never disagree.
+
+**Sources.** HYROX 26/27 Singles rulebook s4.1 (divisions and loads), s8.1 and s8.2 (SkiErg and row at damper 6 in every division), s8.5 (sleds as 4 × 12.5 m lanes), s8.8 (wall balls: 100 reps in every division since 24/25, target by sex); 26/27 Doubles rulebook s4.1 and s8.8 (doubles divisions, Mixed loads and targets); 23/24 Doubles rulebook for the old 75-rep Women Open count. Rulebooks: https://maintain.hyrox.com/rulebooks/HYROX_RulebookSingles_EN.pdf and https://maintain.hyrox.com/rulebooks/HYROX_RulebookDoubles_EN.pdf. No load, distance or rep count changed from 25/26. Merged in `8352d0e` (`d9c77ad`, `bc0b515`, `a1b308f`, `64b6c7f`).
+
+**Where.** `src/calculations/hyrox-division.ts` (`hyroxLoadTier` `:108`, `resolveHyroxDivision` `:77`, `hyroxLoadTierForState` `:138`, `hyroxStationRaceStandard` `:178`, `HYROX_DEFAULT_LOAD_TIER` `:40`); `src/constants/hyrox-benchmarks.ts` (`HYROX_LOAD_TIER_KG` `:173`, `WALL_BALL_TARGET_M` `:188`, `SLED_EXTERNAL_LOAD_FRACTION` `:195`, `stationExternalLoadKg` `:210`). Callers: `plan_engine.hyrox.ts:290`, `add-session-modal.ts`, `session-generator.ts:1265` (the gym generator's HYROX brick, any mode), `generateMiniBrick` and `generateFullBrick` in `hyrox-generators.ts`.
+
+**Model.**
+
+```
+division (doubles) = pick ∈ {women, men, mixed}; 'mixed' under Pro Doubles is invalid → biological sex; no pick → biological sex
+division (singles) = biological sex; unset or prefer_not_to_say → pick ∈ {women, men}; none → unknown
+
+tier = unknown → HYROX_DEFAULT_LOAD_TIER (M-Open)
+       mixed   → M-Open                       (both partners)
+       women   → Pro ? M-Open : W-Open        (Women Pro races the Men Open tier)
+       men     → Pro ? M-Pro  : M-Open
+
+externalLoadKg(station, tier):
+  sled push, sled pull = SLED_EXTERNAL_LOAD_FRACTION (0.5) × the tier's sled weight (sled included)
+  farmers carry        = the tier's per-hand kettlebell
+  sandbag lunges       = the tier's sandbag
+  wall balls           = the tier's ball
+  SkiErg, RowErg, burpee broad jumps: none
+externalLoadFactor = min(0.6, externalLoadKg / bodyWeightKg × 0.5)   (§L, unchanged)
+```
+
+| Tier | Who races it | Sled push / pull (incl. sled) | Farmers | Sandbag | Ball |
+|---|---|---|---|---|---|
+| W-Open | Women Open, Doubles Women | 102 / 78 kg | 2 × 16 kg | 10 kg | 4 kg |
+| M-Open | Men Open, Women Pro, Doubles Men, Doubles Women Pro, Doubles Mixed (both) | 152 / 103 kg | 2 × 24 kg | 20 kg | 6 kg |
+| M-Pro | Men Pro, Doubles Men Pro | 202 / 153 kg | 2 × 32 kg | 30 kg | 9 kg |
+
+Wall-ball target by the thrower's own sex: 2.70 m for women (Women Pro included), 3.00 m for men; in Mixed Doubles each partner throws to their own target. Relay (Open loads by each athlete's sex) is not a supported format.
+
+**MTL external load, kg, before and after.**
+
+| Station | Before (everyone) | W-Open | M-Open | M-Pro |
+|---|---|---|---|---|
+| Sled push | 50 | 51 | 76 | 101 |
+| Sled pull | 40 | 39 | 51.5 | 76.5 |
+| Farmers carry (per hand) | 24 | 16 | 24 | 32 |
+| Sandbag lunges | 20 | 10 | 20 | 30 |
+| Wall balls | 9 | 4 | 6 | 9 |
+
+The old `STATION_EXTERNAL_LOAD_KG` table was labelled "Open weights" and mixed three tiers: the 9 kg ball is Men Pro, the farmers and sandbag are Men Open, and the sled proxies are half the Women Open sleds.
+
+**Constants.**
+- `HYROX_LOAD_TIER_KG` and `WALL_BALL_TARGET_M`: rulebook values (s4.1, s8.8).
+- `SLED_EXTERNAL_LOAD_FRACTION` = 0.5: the rule the original table's comment stated ("half race sled weight, force proxy"), now applied to every tier's sled weight. Push and pull share the force between the sled's rolling resistance and the athlete; half the sled weight stands in for the load the legs carry. A pragmatic proxy, not a measurement.
+- `HYROX_DEFAULT_LOAD_TIER` = M-Open: the fallback with no biological sex and no division pick (states saved before divisions existed, a HYROX brick added from another mode with no sex on file). M-Open is the middle of the three tiers, so the error is at most one tier. A product choice pending Tristan (ISSUE-395). The setup screen asks for the division whenever sex is unknown, so new HYROX plans do not reach it.
+
+**Why defensible.** The loads are rulebook facts, read through one helper, so the MTL model, the Pro note and the Race standard row cannot drift apart. The sex rule follows the rulebook (rankings use biological sex at birth); for doubles the division is the pair's category, so the pick wins. Women Pro being told the Men Pro loads, and every athlete's MTL using a mixed-tier table, were factual errors.
+
+**Limitations.**
+1. The 0.5 sled fraction is unmeasured.
+2. `HYROX_MTL_CAP` was never validated and was not re-checked after this change: men's Open sled external load rises and women's Open farmers, sandbag and ball fall (ISSUE-395).
+3. `HYROX_PRO_STATION_MULTIPLIER` (`hyrox-constants.ts:38`; sleds 1.15, other loaded stations 1.08) is unsourced and one set for both sexes. It was set from the men's Open-to-Pro jump (sled push 152 to 202 kg, +33%; sandbag 20 to 30 kg, +50%); the women's jump is larger in relative terms (102 to 152 kg, +49%; 10 to 20 kg, +100%). The ingested results hold only pooled 8-station totals, and Pro and Open are different cohorts (pro_singles station P50 2222 s against open_singles 2208 s: fitter athletes at heavier loads), so per-station or per-sex ratios cannot be derived from them. Since `9acc3f0` it also converts cross-regime splits for plan targets and Stats rows (§DH).
+4. Station seed times (`STATION_SEED_TIMES_SEC`) are still gender-averaged: the tier changes the loads, not the seed times.
+5. World Championships: the 25/26 Singles rulebook and the hyroxus.com FAQ say under-60 Open qualifiers race Pro weights at Worlds; the 26/27 rulebooks do not restate it, so a World Championships target keeps the athlete's own tier (not implemented on purpose).
+6. Generator output changed without a `HYROX_GENERATOR_VERSION` bump (still 17); stored plans keep the old MTL until a regeneration.
+
+**Guards.** `hyrox-division.test.ts` (33: every division and format, Mixed under Pro, unknown sex, labels, loads sentence, race standard), `workouts/hyrox-load-tier-callers.test.ts` (5: every non-test generator call passes `loadTier`; mini brick farmer-carry MTL W-Open < M-Open < M-Pro; erg mini brick unchanged; full brick tier reaches MTL), `ui/wizard/steps/hyrox-setup-division.test.ts` (12: Division row visibility, prefill, Mixed cleared under Pro, `setupBand`), `constants/hyrox-rule-copy.test.ts` (3). Not device-verified.
+
+---
+
+## §DH — HYROX doubles forecast and cross-format conversion: quantile mapping on the results data (2026-10-12/13, lane H1)
+
+**Side.** Tracking (race-time prediction, finish percentiles), with two planning inputs that read it: the ability band (which sets the MTL cap, sessions, hours and plan weeks) and the station target times the generators prescribe.
+
+**Rules.** HYROX 26/27 Doubles rulebook: the finish is the later partner's chip (s4.3); partners take turns inside every station after a self-selected distance, with no minimum share (s7.2), so nobody skips a station; both run all 8 × 1 km legs together and enter and leave every station together (s7.3; a 1-minute penalty if apart, more than 3 penalties and the pair is out of competition). So the pair runs at the slower partner's pace, passes through all 8 Roxzone transitions together, and covers every station between them.
+
+**Supersedes.** §T's same-athlete factors (`SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES` 1.22, coaching consensus; `SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES` 0.85, unsourced) and its "no per-station cross-format inference, confidence low" rule; §AA's `DOUBLES_TO_SINGLES_PACE_FACTOR` (1.05 to 1.10 by band, gut-anchored); §M's doubles × 0.5 fatigue rate (no source). The old doubles forecast gave each partner the even-indexed 4 whole stations at singles time and halved the Roxzone seed. The audit measured an intermediate pair at 58:04, faster than 98%, against the open_doubles median of 1:19:07.
+
+**Where.** `src/calculations/hyrox-doubles.ts` (`doublesRatioAt` `:93`, `doublesRatioAtTeamTime` `:105`, `doublesTotalInSinglesTermsSec` `:131`, `doublesStationRatio` `:140`, `seedRoxzoneSecForFormat` `:154`, `doublesBenchmarkIsTeamTime` `:169`, `hyroxBandingTimeSec` `:200`); `doublesRunPaceFactor` (`hyrox-run-pace.ts:110`); `race-prediction.hyrox.ts` (`stationInputs` `:274`, `stationRatioFor` `:363`, `resolveHyroxStationBenchmarks` `:443`, `hyroxPlanningStationBenchmarks` `:474`, confidence `:722-733`); `hyrox-station-history.ts` (`resolveHyroxBenchmarks` `:186`, `hyroxCalibrationCoverage` `:262`, `benchmarkEntryForSlotValue` `:296`, `upsertRaceSplitEntry` `:66`); `getFinishTimePercentile` (`hyrox-population.ts:84`). Merged in `8352d0e` (`b739051`, `c6f090b`, `84573b2`, `57cd28d`, `88b0d52`, `8e07c12`, `6296424`, `1bae2f2`, `795c4ad`, `7d193b7`, `3b6fd99`, `fc03f09`, `67a0bf1`, `9acc3f0`, `0e416bb`).
+
+**Model.**
+
+```
+Tables T_m, m ∈ {stations, roxzone, run, total}: open_singles and open_doubles cumulative breakpoints
+(src/data/hyrox-population-distributions.ts; cumulative = % at or faster; linear interpolation;
+clamped to the end breakpoints, so the P1 and P99 ratios hold outside the table).
+
+p_s(x)        = cumulative percentile of x in T_m.open_singles
+ratio_m(x)    = T_m.open_doubles(p_s(x)) / T_m.open_singles(p_s(x))                 doublesRatioAt
+ratioD_m(y)   = the same ratio with p read from y in T_m.open_doubles                doublesRatioAtTeamTime
+
+Doubles target
+  station ratio r   = ratio_stations(S); S = the athlete's singles station total at Open weights:
+                      solo values (singles times, tests, session bests, seeds) after the staleness blend,
+                      plus doubles race splits converted back once: S = Σsolo + Σ(split ÷ r₁),
+                      r₁ read with the split stations at their seed                  doublesStationRatio
+  pair station      = singles station time (at target weights) × r; a doubles race split is used as is
+  pair Roxzone      = singles Roxzone seed × ratio_roxzone(seed)                     (not halved)
+  pair run pace     = singles critical-pace-derived pace × ratio_run(8 × pace)       (seed fallback too)
+  run-leg fade      = the singles band rate; legs are normalised to the run total
+
+Singles target reading the doubles slot
+  doubles race split           → split ÷ r (r read the same way, at the athlete's singles station total)
+  solo test or session best    → used as is (one athlete's time)
+
+Doubles total in singles terms
+  doublesTotalInSinglesTermsSec(y) = y ÷ ratioD_total(y)   (= the open_singles total at y's percentile)
+  band time = doubles previous time → doublesTotalInSinglesTermsSec; singles → as is      hyroxBandingTimeSec
+  Pro Doubles finish percentile = Pro singles scale at doublesTotalInSinglesTermsSec(pair total)
+
+Benchmark resolution, per station (resolveHyroxBenchmarks)
+  the target format's slot if it holds the station, else the other slot;
+  the legacy pooled field only when both slots are empty
+Team time? (doublesBenchmarkIsTeamTime): the stationBenchmarkHistory entry whose time matches the slot value;
+  'race' or 'manual' (the boot migration's label for the onboarding seed) → the pair's time;
+  test or session best → solo; no matching entry → the pair's time (race-split paths kept no history before 2026-10-12)
+Weight regime per value: a race split or session best → its entry's proWeights; a test or no entry →
+  benchmarksAtProWeights (the Stats toggle); Open → Pro × HYROX_PRO_STATION_MULTIPLIER, Pro → Open ÷ it
+
+Confidence
+  calibrated = hyroxCalibrationCoverage(hx).calibrated.length (stations with an athlete time, of all 8)
+  ≥ 6 and a venue → high; ≥ 3 → medium; else low
+  any converted station (doubles target: a singles-slot value; singles target: a doubles race split): high → medium
+  staleness cap after; crossFormatCapped = the conversion lowered high to medium and it is still medium
+
+Benchmarks outside the forecast (Stats ledger, plan and add-session targets, session-best check)
+  sec = the value at target weights, ÷ r for a doubles race split      (one athlete, full station distance)
+  planning and session-best value = round(sec)                         hyroxPlanningStationBenchmarks
+```
+
+**Data (ratio = open_doubles ÷ open_singles at the breakpoint).**
+
+| Metric | P1 | P10 | P25 | P50 | P75 | P90 | P99 |
+|---|---|---|---|---|---|---|---|
+| Stations | 0.758 | 0.741 | 0.730 | 0.714 (1577 / 2208) | 0.694 | 0.674 | 0.620 |
+| Roxzone | 0.918 | 0.915 | 0.932 | 0.938 (380 / 405) | 0.939 | 0.930 | 0.898 |
+| Run | 0.996 | 1.010 | 1.019 | 1.025 (2762 / 2695) | 1.025 | 1.021 | 0.989 |
+| Total | 0.888 | 0.887 | 0.889 | 0.889 (4747 / 5338) | 0.880 | 0.870 | 0.837 |
+
+Rows: open_singles 50,364 finishers, open_doubles 28,046 (`HYROX_FORMAT_FINISHER_COUNTS`). Pairs gain more on stations the slower they are; the run ratio sits just above 1 through most of the field (the slower partner sets the pace).
+
+**Constants.** None new. Every ratio is computed from the ingested tables in code. Removed: `SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES` (1.22), `SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES` (0.85), `DOUBLES_TO_SINGLES_PACE_FACTOR` (1.05 to 1.10), the doubles 0.5 fatigue-rate factor and the 4/8 Roxzone halving.
+
+**Decisions (follow-up rounds, 2026-10-13).** (1) The guided-session best check reads the forecast's resolved benchmark, in one athlete's terms. (2) Planning (plan engine and add-session station targets) reads the same value. (3) Converted stations cap confidence at medium in both directions. (4) One calibrated count over all 8 raced stations on every surface; equipment access only decides which pending stations the benchmark card prompts. (5) The banner reads "1 of 8 station times is converted" in the singular.
+
+**Why defensible.**
+- *Data, not consensus.* The previous doubles constants were gut-anchored or coaching consensus and contradicted the app's own results tables: the old pace factor made doubles runs 5 to 9% faster, while open_doubles runs are about 2.5% slower than open_singles at P50.
+- *Rule-consistent structure.* The pair covers every station and every transition together and finishes on the later chip, so a per-metric ratio on the full 8-station total, the full Roxzone and the full run is the right shape; the 4-whole-stations model contradicted s7.2.
+- *Percentile matching.* Comparing at the same percentile keeps a fast singles athlete against fast pairs; one P50 ratio would overstate a fast athlete's doubles gain (station ratio 0.76 at P1 against 0.62 at P99).
+- *One conversion both ways.* Banding, the Pro Doubles percentile and the forecast all use the same mapping and its exact inverse, so a time read in one direction and back returns itself (inside the tables). Before, the doubles median read 1:36:30 in singles terms in one banding path and 1:28:58 in the other.
+- *The athlete's own times are not discarded.* Per-station resolution keeps every converted station when one station is tested in the target format (before: 8 calibrated and medium fell to 1 and low).
+- *One number per station.* The forecast, the Stats Benchmarks rows, the plan's targets and the session-best check read one computation, so a slower round can never replace a faster converted split (a 348 s round had replaced a 307.6 s converted split, total 50 s slower), and an Open target is never prescribed a Pro split at Open loads (260 s prescribed against a 226.1 s forecast row).
+- *Honest confidence.* A converted station is the athlete's own time passed through one aggregate cross-format ratio: calibrated, but capped at medium, and the copy names the cap only when it is what holds the forecast at medium.
+
+**Effect.** Tested (`hyrox-doubles.test.ts`): a singles athlete at the singles medians forecasts within 3% of the open_doubles median (4747 s) and labels 40 to 60%; the intermediate cold start at VDOT 45 forecasts over 70 minutes, between 40% and 80% (was 58:04, faster than 98%). Reviewer's probe at `c6f090b`, doubles target with a doubles-median previous time and no splits: intermediate band (was advanced), stations 1597 s (field P50 1577; was 1369), Roxzone 366 s (380; was 247), personal run-pace offset +16 s/km (was +31; the singles-median athlete reads +14). Singles banding of a doubles previous time (`88b0d52`): P25 1:11:03 reads 1:19:53, advanced (was intermediate at 1:26:41 under × 1.22); P50 reads 1:28:58 and P75 1:40:42, unchanged bands. Doubles P25, P50 and P75 race splits land on singles station totals of 1959, 2210 and 2531 s against the open_singles table's 1961, 2208 and 2533 s. A singles test equal to its converted value keeps 8 calibrated and the same confidence, with the total within 2 s.
+
+**Limitations.**
+1. Cohort comparison, not the same athletes racing both formats. Singles and doubles fields self-select differently, so the ratios describe fields, not one athlete's change of format.
+2. open_doubles pools women's, men's and mixed pairs (three load tiers) and is compared against pooled women's and men's open singles.
+3. One aggregate station ratio applies to every station: the tables hold the 8-station total only.
+4. The data is seasons 4 to 6 (2021/22 to 2023/24), when Women Open did 75 wall balls; women's station and total times understate today's 100-rep standard.
+5. Pro Doubles has no rows and uses the Open ratios.
+6. Confidence-cap scope depends on the slot: a doubles target's own solo tests in the doubles slot go through the same ratio as singles-slot values but are not capped (Open Doubles with a venue and 8 solo half tests reads high; the same times in the singles slot read medium). Option A: cap every station scaled by the ratio; option B: keep the slot rule (ISSUE-395).
+7. A doubles-slot value with no history entry is read as the pair's time (the assumption for states written before 2026-10-12).
+8. Race identity for a re-logged race is the entry date and format; an undated race re-logged on another day, a corrected date or a re-log with fewer splits leaves stale entries. Unreachable today: the only entry to the log modal shows when no previous time is on file (ISSUE-395).
+9. Station history views (station detail Best, Latest, Since first test, sparkline, PR badge; chip detail history) mix the pair's race splits with solo tests, and Pro with Open weights (ISSUE-395).
+10. For a Pro target, untested stations disagree across surfaces: Stats and the generators use the Open-weight band seed, the forecast the seed × `HYROX_PRO_STATION_MULTIPLIER` (up to 15% on the sleds). Pre-existing (ISSUE-395).
+11. `benchmarksAtProWeights` is one toggle for station tests in both slots; a Pro-weight singles test beside an Open-weight doubles test cannot both be right.
+12. Existing doubles athletes keep the band the old rule gave them until they re-log a race or re-onboard, and a personal run-pace offset computed under the old doubles model stays frozen (the refresh skips a set offset) and decays over 12 months (ISSUE-395).
+13. One refinement pass for the station ratio leaves 1 to 2 s of drift when converted and solo values mix.
+
+**Planned re-check.** A real-results re-ingest is under way in lane H3. Its first half merged in `3e4b08d` (H3a, 2026-10-13): seasons 7 to 9, about 1.16 million results, baked into per-division, sex and age tables in `src/data/hyrox-results-s79.ts`. Nothing reads those tables yet; `hyrox-population-distributions.ts` (S4 to S6) stays the live source until lane H3b switches over. The switch is expected to address limitations 2 to 5 and the Pro multiplier in §DG.
+
+**Guards.** `hyrox-doubles.test.ts` (28: table reads, ratio shape, team-time detection by slot value, the inverse conversion, banding, forecast structure, the median and audit-regression checks, Pro Doubles placement), `race-prediction.hyrox.test.ts` (per-station resolution, converted lines, `crossFormatCapped` cases), `hyrox-format-band.test.ts`, `state/hyrox-doubles-onboarding.test.ts` (16: banding and race-split provenance through the real onboarding and logging paths, Pro weights of race splits against tests, the previous-format correction), `hyrox-station-history.test.ts`, `hyrox-session-benchmarks.test.ts` (resolver, Pro and doubles splits, whole-second ties), `workouts/hyrox-planning-benchmarks.test.ts` (11: plan target = round of the forecast row), `ui/hyrox/calibration-count-agreement.test.ts` (12: forecast, coverage, ledger, rendered Stats and the benchmark card agree; Account by source scan), `ui/hyrox/doubles-stations-caption.test.ts` (22), `ui/hyrox/benchmark-card-slot.test.ts` (4), `hyrox-run-pace.test.ts`. Not device-verified.
+
+---
+
+## §DI — HYROX forecast honesty: one volume count, planned-slot adherence, no gain without equipment, provenance captions (2026-10-12, lane H1)
+
+**Side.** Tracking (the race-day projection and the labels on HYROX comparisons). Merged in `8352d0e` (`762bd5f`, `51d20bc`, `b739051`, `10aa61d`).
+
+**Where.** `buildHyroxProjection` and the adherence helper (`race-projection.hyrox.ts`, `:193`), `buildStationProjection` (`race-prediction.hyrox.ts:811`), `hyroxPopulationCaption` (`hyrox-population.ts:124`), `hyroxForecastProvenanceCaption` (`:146`), `hyroxMethodologyCaption` (`:158`), `STATION_PERCENTILE_CAVEAT` (`:184`), `getStationPercentile`; caption constants in `src/data/hyrox-population-distributions.ts:38-51`.
+
+**Projection model after the change.**
+
+```
+projectedTotalSec = disciplineHorizonTotal × (1 + factorPct)          (§AH addendum, unchanged shape)
+
+factorPct = Σ {
+  Training fitness (chronic MTL vs plan)   bounded ±5%
+  Plan adherence                           0 to +4% slowdown
+  Race-day readiness                       bounded ±2% (taper window only)
+}                                          (the "Weekly volume" ±3% factor is removed)
+
+adherence  = Σ planned slots with a record ÷ Σ planned slots, last completed weeks
+             (a record = isMtlSessionCompleted(wk, w): a match link or wk.garminActuals[w.id || w.n])
+station horizon weeks = 0 for a station not in availableStations(stationAccess)
+             (no sled track, no SkiErg or RowErg: the generators never schedule it)
+```
+
+**Why defensible.**
+- *Weekly volume counted twice.* Sessions per week already drive the per-station horizon (`plannedHyroxSessionsPerWeek`) and the run horizon (runs plus half the bricks). A second factor comparing configured sessions with the band default added up to 3% for the same volume and leaned high-session plans faster.
+- *Adherence measures the plan.* Counting every `garminActuals` key let unplanned records fill the numerator and hide missed planned sessions. The completion test is the one the MTL sums use, so one rule decides "done" for load and for adherence.
+- *No gain without stimulus.* A station the plan never prescribes cannot bank a training gain from the plan's dose.
+
+**Provenance captions.**
+- The results data (Kaggle jgug05/hyrox-results, seasons 4 to 6) has finish, run, station-total and Roxzone distributions per format, and no per-station splits. Station percentiles are synthetic: the band seed times placed at hand-picked percentiles (competitive P5, advanced P15, intermediate P35, novice P60, beginner P80, total beginner P95), clamped to 3 to 97. They now read "est. pN", and the radar, the guided session summary, the station detail and the targets card say so.
+- `hyroxPopulationCaption(format)`: "HYROX results: N Format finishers, women and men together, seasons 4 to 6 (2021/22 to 2023/24)." plus the era note ("Women Open did 75 wall balls then (100 since 2024/25), so women's times in this data run faster than today's race.") and, for Open Doubles, the pooling note. Counts come from `HYROX_FORMAT_FINISHER_COUNTS`; a format with no rows (Pro Doubles) gets a synthetic-scale caption.
+- The forecast is not calibrated against the results data. Station times are the athlete's benchmarks or band seed times, run legs follow running fitness, and the data sets only the finish percentiles and the doubles ratios. The forecast hero detail and the methodology page say exactly that. A guard test fails on a hardcoded finisher count outside the data file.
+
+**Limitations.**
+1. The factor weights stay heuristic (§P).
+2. A session done in place of a planned one without a match or record does not count toward adherence.
+3. Equipment access is the setup answer; a station trained somewhere else (a gym visit with a sled) banks no projected gain until the setup changes.
+4. The station-percentile anchors are hand-picked, not data; the label says estimate, the number does not get more accurate.
+5. Not fixed: a fresh half test is doubled into a full-station forecast with no fresh-to-race fade (`benchmark-card.ts:193`). No sourced fade constant exists in the code, the research files or the results tables (ISSUE-395).
+6. Pooled sexes and the S4 to S6 era remain until lane H3b wires the S7 to S9 tables (`src/data/hyrox-results-s79.ts`, merged unwired in `3e4b08d`).
+
+**Guards.** `race-projection.hyrox.test.ts` (18: no weekly-volume factor, planned-slot adherence ignoring adhoc records, no gain for unprogrammed stations), `hyrox-population-captions.test.ts` (8: caption content per format, the estimate caveat, the radar subtitle, provenance and methodology captions, the hardcoded-count guard). Not device-verified.
 
 ---

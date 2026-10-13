@@ -8,6 +8,38 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+> **2026-10-13 — HYROX lane H1 (26/27 rules, divisions, doubles forecast, labels, 2027 calendar): open questions (ISSUE-395).** Raised in the implementer and reviewer reports for `fix/hyrox-h1` (merged in `8352d0e`; CHANGELOG 2026-10-13; SCIENCE_LOG §DG to §DI). Notes added to ISSUE-195, ISSUE-390 and ISSUE-391. None of the lane-H1 changes is marked fixed: they are unit-tested, not device-verified (`docs/DEVICE_TESTS.md`).
+
+### ISSUE-395: HYROX lane H1 open questions *(P3, 2026-10-13, needs Tristan's decisions; several pre-existing)* — OPEN
+
+The S7 to S9 results re-ingest is under way in lane H3: H3a merged in `3e4b08d` (about 1.16 million results, per-division, sex and age tables in `src/data/hyrox-results-s79.ts`), not yet read by any consumer; lane H3b wires it. It is expected to address (g), (h) and (i), and the pooled-sex and 75-rep-era caveats on every HYROX caption.
+
+(a) **Confidence-cap scope** (§DH limitation 6). A converted station caps confidence at medium (`race-prediction.hyrox.ts:727`), but which values count as converted depends on the slot. For a doubles target a singles-slot value is capped, while a solo test or session best in the doubles slot goes through the same × station ratio and is not: Open Doubles with a venue and 8 solo half tests in the doubles slot reads high, the same 8 times in the singles slot read medium. Option A: cap every station the doubles forecast scales by the ratio, so only the pair's own race splits reach high. Option B: keep the slot rule as a recorded limitation.
+
+(b) **Stale-race caption contradicts itself** (pre-existing copy, now in `hyroxConfidenceCaption`, `forecast-view.ts:441`). When race-age staleness caps confidence at low, the caption reads "Mostly seed data. Only 8/8 stations calibrated. Best treated as a rough benchmark." for a fully calibrated forecast (reproduced: Open Singles, 8 doubles splits, a venue, a 20-month-old race). Reviewer's fix: use the seed-data sentence only below 3 calibrated stations, otherwise name the race age.
+
+(c) **Pro target, untested stations disagree across surfaces** (pre-existing). Stats shows the Open-weight band seed as "Population est." and the generators prescribe that seed at Pro loads, while the forecast row uses seed × `HYROX_PRO_STATION_MULTIPLIER` (`seedAtTarget`, `race-prediction.hyrox.ts:351`): up to 15% apart on the sleds. Fix: expose the forecast's seed at target weights per station for the Stats seed row and the generator fallback (needs a `HYROX_GENERATOR_VERSION` bump).
+
+(d) **History views mix the pair's time with solo times, and Pro with Open weights.** Race splits now land in `stationBenchmarkHistory`, so on a doubles plan the station detail Best, Latest, Since first test, sparkline and PR badge, and the chip detail history, compare the pair's race split with one athlete's tests (rendered probe: "Best 4:40" on a 280 s pair's split beside "Latest 5:00", a solo test far better than the split's solo equivalent). A Pro split shows tagged "· Pro weights" while Stats shows its Open equivalent. Fix in one place: compare history in solo terms at the target's weights, or keep race splits apart from solo entries. Related: should a Stats row converted from the other weight regime say so (a 4:20 Pro split shows as 3:46, captioned "Calibrated")?
+
+(e) **Race identity for a re-logged race.** `upsertRaceSplitEntry` (`hyrox-station-history.ts:66`) dedupes by entry date and format: an undated race re-logged on a later day, a corrected date, or a re-log with fewer splits leaves stale entries or slot values. Unreachable today, because the only entry to the log modal (`hx-cd-log-prev`, `forecast-chip-detail-view.ts:186`) shows only when no previous time is on file. Decide before any "edit previous race" UI ships: does a log edit the previous race (replace every entry with its id, clear stations the new log omits) or record a new race (keep the old one's history)?
+
+(f) **Fresh half test × 2 with no fade.** The benchmark card doubles a half-distance test into the full-station benchmark (`benchmark-card.ts:193`) with no fresh-to-race fade. No fade constant exists in the code, the research files or the results tables (which have no fatigued per-station splits); a sourced per-station number is needed. See ISSUE-195.
+
+(g) **`HYROX_PRO_STATION_MULTIPLIER` is unsourced and one set for both sexes** (`hyrox-constants.ts:38`; sleds 1.15, other loaded stations 1.08). Set from the men's Open-to-Pro jump; the women's jump is larger in relative terms (sled push +49% against +33%, sandbag +100% against +50%). Since `9acc3f0` it also converts cross-regime race splits for plan targets and Stats rows, not only the forecast. Replace from per-station, per-sex Open and Pro results.
+
+(h) **`HYROX_DEFAULT_LOAD_TIER` = M-Open** (`hyrox-division.ts:40`), the tier with no biological sex and no division pick (pre-division saved states; a HYROX brick from another mode with no sex on file). The middle tier, so at most one tier off. Pre-division states with a Pro target and unknown sex load sessions at M-Open (the Women Pro load) while their session bests are saved as Pro times. Confirm M-Open or pick another.
+
+(i) **Re-check `HYROX_MTL_CAP` after the tier change** (`hyrox-constants.ts:168`). MTL external load moved: men's Open sled push 50 to 76 kg and pull 40 to 51.5 kg; women's Open farmers 24 to 16 kg, sandbag 20 to 10 kg, ball 9 to 4 kg. The caps were never validated; re-check after dogfooding.
+
+(j) **Existing doubles athletes** keep the band the old rule gave them (doubles terms, often one band fast) until they re-log a race or re-onboard, and a personal run-pace offset computed under the old doubles model stays frozen (the refresh skips a set offset) and decays over 12 months. Re-band and reset them at launch? That regenerates plans, so it belongs with lane H2's `HYROX_GENERATOR_VERSION` bump.
+
+(k) **Setup hours slider keeps the time-entry band.** `setupBand` (`hyrox-setup.ts:64`) converts a doubles time once the previous race's format is picked, but the previous-format and target-format toggles never rescope the hours slider, which is scoped at time entry before the format row appears (a 1:19:07 doubles time scopes "advanced", max 16 h, against "intermediate", max 14 h). The plan band and the sessions and plan-week defaults are right; only the slider range is stale. Fix: one rescope helper called from the time input and both format toggles.
+
+(l) **Docs outside `docs/`.** CLAUDE.md's "Visualisations of real data" rule still gives "Live HYROX field. 89,868 finishers across S4–S6" as the correct subtitle; the code now uses `hyroxPopulationCaption` and a guard test blocks the hardcoded count. The docs pass could not edit CLAUDE.md.
+
+Not implemented on purpose: World Championships Pro loads. The 25/26 Singles rulebook and the hyroxus.com FAQ say under-60 Open qualifiers race Pro weights at Worlds; the 26/27 rulebooks do not restate it. Confirm the 26/27 rule before coding it.
+
 > **2026-10-12 — Fitness model (lane v): follow-ups (ISSUE-387 → 394).** Raised in the implementer and reviewer reports for `fix/lane-v` (merged in `33052a8`, plus `5795c3f`; CHANGELOG 2026-10-12; SCIENCE_LOG §CY update, §DA to §DE). Each is an open question for Tristan, a default the orchestrator took under his delegation for him to confirm, or a defect found next to the changed code; several are pre-existing. Notes added to ISSUE-359 and ISSUE-372 to ISSUE-377. None of the lane-v changes is marked fixed: they are unit-tested, not device-verified (`docs/DEVICE_TESTS.md`).
 
 ### ISSUE-387: PB ageing can make a prediction faster *(P2, 2026-10-12, needs Tristan's decision, mirror rule)* — OPEN
@@ -26,9 +58,13 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 (a) `derivePopulationRunPace` and `deriveHyroxRunPace` round the pace with `Math.round` (`hyrox-run-pace.ts:189`, `:227`). As `s.lt` drifts with PB age, the run pace ticks by 1 s/km, about 8 s on an 8 km HYROX run total overnight: the defect class `0b55382` fixed for `s.lt`. Keep the model value unrounded and round at display? (b) HYROX generator run labels carry the minute since `ced8427`, but `HYROX_GENERATOR_VERSION` was not bumped (still 17), so a stored HYROX plan keeps any old ":60" label until its next regeneration. Bump it?
 
+**Note 2026-10-13 (lane H1, `8352d0e`):** `HYROX_GENERATOR_VERSION` is still 17. Lane H1 also changed generator output (station MTL follows the athlete's load tier, wall balls read "100 reps", station target times read `hyroxPlanningStationBenchmarks`, the station time formatter carries the minute) without a bump; lane H2 is to bump it for both lanes (ISSUE-395 (j)). Part (a) is unchanged: `derivePopulationRunPace` and `deriveHyroxRunPace` still round, now after the doubles run ratio.
+
 ### ISSUE-391: Time and pace formatters outside the model-pace rule can show ":60", and two surfaces round one race time differently *(P3, 2026-10-12)* — OPEN
 
 (a) **Actual-activity paces** (implementer): formatters that round the seconds without carrying the minute read an actual 4:59.6/km as "4:60/km", for example `fmtPace` in `src/ui/activity-detail.ts:55-61`, the strava-detail pace formatter (`strava-detail.ts:269`), `fmtPace` in `src/calculations/workout-insight.ts:45` and the HYROX Stats pace formatter (`src/ui/hyrox/stats-view.ts:220`). They were left alone because they are not model paces. (b) **Race times** (found while writing the lane-v docs, read in code, not measured): the Stats "Current Race Estimates" card formats `predictStandardDistances` with its own `fmtTime` (`stats-view.ts:3252-3258`), which rounds the seconds without carrying the minute, while the Forecast tiles use `ft` (`format.ts:20`), which floors. `predictStandardDistances` returns fractional seconds (a 5K of 1639.5 s in the review's probe), so the two surfaces can show one prediction 1 s apart, and the Stats card can read "22:60" for 1379.6 s, the defect `1f9bf0a` fixed in the session generator's `fmtTimeSec`. The forecast-progress formatters at `stats-view.ts:3162` and `:4145` share the pattern. One race-time formatter that rounds once before splitting, used by every surface?
+
+**Note 2026-10-13 (lane H1, `50ab879`):** the HYROX Stats pace formatter in (a) now goes through `fmtModelPaceKm`, and the HYROX Stats Benchmarks card, the goal modal and the HYROX workout detail target column format times through the new `ftRounded` (`src/utils/format.ts:38`: nearest whole second, then the `ft` split); the station detail page's own formatter rounds first (`10aa61d`). A source scan (`hyrox-time-format-guard.test.ts`) covers `src/ui/hyrox` only. The non-HYROX formatters in (a) and (b) are unchanged. Not marked fixed.
 
 ### ISSUE-392: Cycling onboarding runs no launch refresh *(P3, 2026-10-12)* — OPEN
 
@@ -1910,6 +1946,8 @@ Net effect: modal showed a 2:35 bike split when the headline said 2:50. A 15W-eq
 **Files**: `src/ui/hyrox/station-detail-view.ts` (Phase 1, when ISSUE-193 ships), future `src/calculations/hyrox-personal-fade.ts` (Phase 2).
 
 **Estimated**: ~1 h for Phase 1 once 193 ships. Phase 2 gated on race-result-import design.
+
+**Note 2026-10-13 (lane H1, `c9952a5`, `c6f090b`):** race splits from onboarding and Log a previous time are now written to the station history (source 'race'), so the Phase 2 input exists per station when a race is logged with splits. The station detail "Race-day fade" row shows only when the newest entry is a test or session best (a race split is already a race-day time) and never on a doubles page. The fresh half test is still doubled with no fade constant (ISSUE-395 (f)).
 
 ---
 

@@ -38,12 +38,8 @@ import { applyHyroxPrevFormatChange } from './hyrox-prev-format-fix';
 import { getMutableState, resetState } from './store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { appendStationTest } from '@/calculations/hyrox-station-history';
-import { HYROX_PRO_STATION_MULTIPLIER } from '@/constants/hyrox-constants';
-import {
-  HYROX_STATIONS_PERCENTILE_TABLES,
-  HYROX_ROXZONE_PERCENTILE_TABLES,
-  HYROX_TOTAL_PERCENTILE_TABLES,
-} from '@/data/hyrox-population-distributions';
+import { hyroxOpenToProSec } from '@/calculations/hyrox-results';
+import { HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 
 const FROZEN_NOW = new Date();
 vi.useFakeTimers({ toFake: ['Date'] });
@@ -52,7 +48,11 @@ afterAll(() => { vi.useRealTimers(); });
 
 const DAY = 86400000;
 const ago = (d: number) => new Date(Date.now() - d * DAY).toISOString().slice(0, 10);
-const p50 = (t: Array<[number, number]>) => t.find(([, p]) => p === 50)![0];
+const p50 = (t: HyroxPercentileTable) => t.find(([, p]) => p === 50)![0];
+// Real results, seasons 8 and 9, sexes pooled (no biological sex in these
+// onboarding states).
+const OD = HYROX_S89_POOLED_PERCENTILES.open_doubles!;
+const OS = HYROX_S89_POOLED_PERCENTILES.open_singles!;
 
 function init(extra: Partial<OnboardingState>): SimulatorState {
   resetState();
@@ -77,14 +77,14 @@ function logHalfTest(s: SimulatorState, station: HyroxStation, fullSec: number, 
 }
 
 describe('doubles onboarding bands on singles terms', () => {
-  const doublesMedian = p50(HYROX_TOTAL_PERCENTILE_TABLES.open_doubles);
-  const singlesMedian = p50(HYROX_TOTAL_PERCENTILE_TABLES.open_singles);
+  const doublesMedian = p50(OD.total);
+  const singlesMedian = p50(OS.total);
 
   it('a doubles-median previous time, no splits: stations and Roxzone near the doubles P50', () => {
     const s = init({ previousHyroxTimeSec: doublesMedian, hyroxPreviousTimeFormat: 'open_doubles' });
     const pred = predictHyroxRace(s)!;
-    const stationsP50 = p50(HYROX_STATIONS_PERCENTILE_TABLES.open_doubles);
-    const roxzoneP50 = p50(HYROX_ROXZONE_PERCENTILE_TABLES.open_doubles);
+    const stationsP50 = p50(OD.work_total);
+    const roxzoneP50 = p50(OD.roxzone);
     const rawStations = pred.stations.reduce((a, l) => a + l.baseSec, 0);
     expect(Math.abs(rawStations - stationsP50) / stationsP50).toBeLessThan(0.05);
     expect(Math.abs(pred.roxzoneSec - roxzoneP50) / roxzoneP50).toBeLessThan(0.05);
@@ -188,7 +188,7 @@ describe('a logged race does not change the weight regime of station tests', () 
     const open = init({ hyroxFormat: 'pro_singles' });
     applyHyroxPrevTimeUpdate({ timeSec: 4800, format: 'open_singles', raceDateISO: ago(30), stationSplits: { sled_push: 200 } });
     expect(predictHyroxRace(open)!.stations.find(l => l.station === 'sled_push')!.baseSec)
-      .toBeCloseTo(200 * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+      .toBeCloseTo(hyroxOpenToProSec('sled_push', 200, 'pooled'), 6);
   });
 });
 
@@ -199,19 +199,20 @@ describe('correcting the previous race format', () => {
       hyroxPreviousRaceDate: ago(30), hyroxPreviousStationSplits: { sled_push: 260 },
     });
     expect(predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!.baseSec)
-      .toBeCloseTo(260 * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+      .toBeCloseTo(hyroxOpenToProSec('sled_push', 260, 'pooled'), 6);
     applyHyroxPrevFormatChange('pro_singles');
     expect(s.hyroxConfig!.stationBenchmarkHistory?.sled_push?.[0]).toMatchObject({ source: 'race', format: 'pro_singles', proWeights: true });
     expect(predictHyroxRace(s)!.stations.find(l => l.station === 'sled_push')!.baseSec).toBeCloseTo(260, 6);
   });
 
-  it('singles → doubles for a doubles target bands the doubles time on singles terms', () => {
-    const doublesMedian = p50(HYROX_TOTAL_PERCENTILE_TABLES.open_doubles);
+  it('singles → doubles for a doubles target re-bands the time in the doubles field (field-relative, lane H3b)', () => {
+    const doublesMedian = p50(OD.total);
     const s = init({ previousHyroxTimeSec: doublesMedian, hyroxPreviousTimeFormat: 'open_singles' });
-    // As a singles time, the doubles median (79 min) bands advanced.
-    expect(s.hyroxConfig!.athleteBand).toBe('advanced');
     applyHyroxPrevFormatChange('open_doubles');
-    const singles = init({ hyroxFormat: 'open_singles', previousHyroxTimeSec: p50(HYROX_TOTAL_PERCENTILE_TABLES.open_singles), hyroxPreviousTimeFormat: 'open_singles' });
+    // Read in the doubles field it holds the median: the same band as the
+    // singles median in the singles field.
+    expect(s.hyroxConfig!.athleteBand).toBe('intermediate');
+    const singles = init({ hyroxFormat: 'open_singles', previousHyroxTimeSec: p50(OS.total), hyroxPreviousTimeFormat: 'open_singles' });
     expect(s.hyroxConfig!.athleteBand).toBe(singles.hyroxConfig!.athleteBand);
   });
 });

@@ -29,7 +29,7 @@ vi.stubGlobal('alert', vi.fn());
 import { initializeHyroxSimulator } from './initialization.hyrox';
 import { getMutableState, getState } from './store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
-import { HYROX_PRO_STATION_MULTIPLIER } from '@/constants/hyrox-constants';
+import { hyroxOpenToProSec, hyroxSinglesCohortForState } from '@/calculations/hyrox-results';
 
 const SAMPLE_SPLITS = {
   ski_erg: 250,
@@ -213,7 +213,9 @@ describe('initializeHyroxSimulator: Pro-weight splits and division', () => {
     expect(hx.stationBenchmarkHistory?.sled_push?.[0]).toMatchObject({ source: 'race', format: 'open_singles', proWeights: false });
     expect(hx.benchmarksAtProWeights).toBeUndefined();
     const line = predictHyroxRace(getState())!.stations.find(l => l.station === 'sled_push')!;
-    expect(line.baseSec).toBeCloseTo(SAMPLE_SPLITS.sled_push * HYROX_PRO_STATION_MULTIPLIER.sled_push!, 6);
+    // Open to Pro per station from the results (difference in differences).
+    expect(line.baseSec).toBeCloseTo(hyroxOpenToProSec('sled_push', SAMPLE_SPLITS.sled_push, hyroxSinglesCohortForState(getState()).sex), 6);
+    expect(line.baseSec).toBeGreaterThan(SAMPLE_SPLITS.sled_push);
   });
 
   it('copies the division pick to hyroxConfig.division', () => {

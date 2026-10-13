@@ -1,8 +1,8 @@
 /**
- * HYROX Doubles forecast. Ratios come from the ingested results tables
- * (quantile mapping, hyrox-doubles.ts); the forecast covers all 8 stations as
- * the pair's time, Roxzone is not halved, and the run follows the slower
- * partner (doubles run ratio).
+ * HYROX Doubles forecast. Ratios come from the real results tables (seasons
+ * 8 and 9, quantile mapping per station and per division, hyrox-doubles.ts);
+ * the forecast covers all 8 stations as the pair's time, Roxzone is not
+ * halved, and the run follows the slower partner (doubles run ratio).
  *
  * Regression: the audit (2026-10-12) measured the old "4 whole stations each"
  * model at 58:04 "faster than 98%" for an intermediate doubles athlete at
@@ -15,6 +15,10 @@ import {
   doublesRatioAt,
   doublesRatioAtTeamTime,
   doublesStationRatio,
+  doublesStationTeamSec,
+  doublesStationSoloSec,
+  hyroxDoublesTables,
+  HYROX_DEFAULT_DOUBLES_TABLES,
   seedRoxzoneSecForFormat,
   doublesBenchmarkIsTeamTime,
   hyroxBandingTimeSec,
@@ -24,18 +28,14 @@ import { predictHyroxRace } from './race-prediction.hyrox';
 import { derivePopulationRunPace } from './hyrox-run-pace';
 import { getFinishTimePercentile } from './hyrox-population';
 import { estimateStationsAndRoxzoneFromBand } from './hyrox-personal-pace';
-import {
-  HYROX_STATIONS_PERCENTILE_TABLES,
-  HYROX_ROXZONE_PERCENTILE_TABLES,
-  HYROX_RUN_PERCENTILE_TABLES,
-  HYROX_TOTAL_PERCENTILE_TABLES,
-} from '@/data/hyrox-population-distributions';
+import { HYROX_S89_PERCENTILES, HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 import { HYROX_STATION_ORDER, SEED_ROXZONE_SEC, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
 import type { SimulatorState } from '@/types/state';
 import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 
-type Table = Array<[number, number]>;
-const at = (t: Table, p: number) => t.find(([, q]) => q === p)![0];
+const at = (t: HyroxPercentileTable, p: number) => t.find(([, q]) => q === p)![0];
+const OS = HYROX_S89_POOLED_PERCENTILES.open_singles!;
+const OD = HYROX_S89_POOLED_PERCENTILES.open_doubles!;
 
 function buildState(overrides: Partial<HyroxConfig> = {}, top: Partial<SimulatorState> = {}): SimulatorState {
   return {
@@ -58,13 +58,13 @@ function buildState(overrides: Partial<HyroxConfig> = {}, top: Partial<Simulator
 }
 
 describe('quantile helpers', () => {
-  const t = HYROX_STATIONS_PERCENTILE_TABLES.open_singles;
+  const t = OS.work_total;
   it('read a breakpoint exactly and interpolate between breakpoints', () => {
     expect(cumulativePercentileAt(t, at(t, 50))).toBe(50);
     expect(secondsAtCumulativePercentile(t, 50)).toBe(at(t, 50));
-    const mid = (at(t, 25) + at(t, 50)) / 2;
-    expect(cumulativePercentileAt(t, mid)).toBeCloseTo(37.5, 6);
-    expect(secondsAtCumulativePercentile(t, 37.5)).toBeCloseTo(mid, 6);
+    const mid = (at(t, 45) + at(t, 50)) / 2;
+    expect(cumulativePercentileAt(t, mid)).toBeCloseTo(47.5, 6);
+    expect(secondsAtCumulativePercentile(t, 47.5)).toBeCloseTo(mid, 6);
   });
   it('clamp at the table ends', () => {
     expect(cumulativePercentileAt(t, 1)).toBe(1);
@@ -72,43 +72,64 @@ describe('quantile helpers', () => {
   });
 });
 
-describe('doublesRatioAt: ratios come from the tables, not constants', () => {
+describe('doublesRatioAt: ratios come from the real tables, not constants', () => {
   const metrics = [
-    ['stations', HYROX_STATIONS_PERCENTILE_TABLES],
-    ['roxzone', HYROX_ROXZONE_PERCENTILE_TABLES],
-    ['run', HYROX_RUN_PERCENTILE_TABLES],
-    ['total', HYROX_TOTAL_PERCENTILE_TABLES],
+    ['stations', 'work_total'],
+    ['roxzone', 'roxzone'],
+    ['run', 'run_total'],
+    ['total', 'total'],
+    ['sled_push', 'sled_push'],
+    ['ski_erg', 'ski_erg'],
   ] as const;
-  for (const [metric, tables] of metrics) {
-    it(`${metric}: at every breakpoint the ratio is open_doubles ÷ open_singles`, () => {
-      for (const [sec, p] of tables.open_singles) {
+  for (const [metric, key] of metrics) {
+    it(`${metric}: at every breakpoint the ratio is open_doubles ÷ open_singles (pooled, S8-S9)`, () => {
+      for (const [sec, p] of OS[key]) {
         const r = doublesRatioAt(metric, sec);
         expect(r.singlesPercentile).toBeCloseTo(p, 6);
-        expect(r.ratio).toBeCloseTo(at(tables.open_doubles, p) / sec, 6);
+        expect(r.ratio).toBeCloseTo(at(OD[key], p) / sec, 6);
       }
     });
   }
-  it('station ratio falls from the front of the field to the back (pairs gain more when slower)', () => {
-    const s = HYROX_STATIONS_PERCENTILE_TABLES.open_singles;
-    expect(doublesRatioAt('stations', at(s, 1)).ratio).toBeGreaterThan(doublesRatioAt('stations', at(s, 50)).ratio);
-    expect(doublesRatioAt('stations', at(s, 50)).ratio).toBeGreaterThan(doublesRatioAt('stations', at(s, 99)).ratio);
+  it('each station has its own ratio: one erg, alternated, gains little; the sleds and wall balls gain most', () => {
+    const ski = doublesRatioAt('ski_erg', at(OS.ski_erg, 50)).ratio;
+    const wb = doublesRatioAt('wall_balls', at(OS.wall_balls, 50)).ratio;
+    expect(ski).toBeGreaterThan(0.85);
+    expect(wb).toBeLessThan(0.7);
+  });
+  it('the division selects the doubles table and the athlete\'s sex the singles table', () => {
+    const t = hyroxDoublesTables('open_doubles', 'female', 'mixed');
+    expect(t.doubles).toEqual({ format: 'open_doubles', sex: 'mixed' });
+    expect(t.singles).toEqual({ format: 'open_singles', sex: 'female' });
+    const women = hyroxDoublesTables('open_doubles', 'female', 'women');
+    const sec = at(HYROX_S89_PERCENTILES.open_singles.female!.sled_push, 50);
+    expect(doublesRatioAt('sled_push', sec, women).ratio).toBeCloseTo(
+      at(HYROX_S89_PERCENTILES.open_doubles.female!.sled_push, 50) / sec, 6);
+    // Pro Doubles reads its own (real) tables.
+    const pro = hyroxDoublesTables('pro_doubles', 'male', 'men');
+    expect(pro.doubles).toEqual({ format: 'pro_doubles', sex: 'male' });
+    expect(pro.singles).toEqual({ format: 'pro_singles', sex: 'male' });
+    // Unknown sex and division: pooled.
+    expect(hyroxDoublesTables('open_doubles', undefined, undefined)).toEqual(HYROX_DEFAULT_DOUBLES_TABLES);
   });
   it('outside the table the end ratio holds', () => {
-    const s = HYROX_STATIONS_PERCENTILE_TABLES;
-    expect(doublesRatioAt('stations', 500).ratio).toBeCloseTo(at(s.open_doubles, 1) / at(s.open_singles, 1), 6);
-    expect(doublesRatioAt('stations', 9999).ratio).toBeCloseTo(at(s.open_doubles, 99) / at(s.open_singles, 99), 6);
+    expect(doublesRatioAt('stations', 500).ratio).toBeCloseTo(at(OD.work_total, 1) / at(OS.work_total, 1), 6);
+    expect(doublesRatioAt('stations', 99999).ratio).toBeCloseTo(at(OD.work_total, 99) / at(OS.work_total, 99), 6);
   });
   it('read from the doubles side, the ratio converts a pair time back to the matching singles time', () => {
-    const s = HYROX_TOTAL_PERCENTILE_TABLES;
-    const r = doublesRatioAtTeamTime('total', at(s.open_doubles, 50));
-    expect(at(s.open_doubles, 50) / r.ratio).toBeCloseTo(at(s.open_singles, 50), 6);
+    const r = doublesRatioAtTeamTime('total', at(OD.total, 50));
+    expect(at(OD.total, 50) / r.ratio).toBeCloseTo(at(OS.total, 50), 6);
   });
-  it('station ratio with team-time splits converts them back to singles before the lookup', () => {
-    const s = HYROX_STATIONS_PERCENTILE_TABLES;
-    // All stations as one team-time total equal to the doubles median: the
-    // refined ratio lands on the median ratio.
-    const r = doublesStationRatio([], [at(s.open_doubles, 50)], [at(s.open_singles, 50)]);
-    expect(r.ratio).toBeCloseTo(at(s.open_doubles, 50) / at(s.open_singles, 50), 3);
+  it('per station, team and solo conversions invert each other inside the tables', () => {
+    for (const st of HYROX_STATION_ORDER) {
+      const solo = at(OS[st], 50);
+      const team = doublesStationTeamSec(st, solo);
+      expect(team).toBeCloseTo(at(OD[st], 50), 6);
+      expect(doublesStationSoloSec(st, team)).toBeCloseTo(solo, 6);
+    }
+  });
+  it('aggregate station ratio (H1 API) with team-time splits converts them back first', () => {
+    const r = doublesStationRatio([], [at(OD.work_total, 50)], [at(OS.work_total, 50)]);
+    expect(r.ratio).toBeCloseTo(at(OD.work_total, 50) / at(OS.work_total, 50), 3);
   });
 });
 
@@ -120,10 +141,12 @@ describe('seed Roxzone and the race back-computation in doubles', () => {
     expect(doubles).toBeGreaterThan(seed * 0.85);
     expect(seedRoxzoneSecForFormat('intermediate', 'open_singles')).toBe(seed);
   });
-  it('a doubles finish-time observation estimates the pair\'s station time', () => {
-    const singlesSum = HYROX_STATION_ORDER.reduce((a, st) => a + STATION_SEED_TIMES_SEC.intermediate[st], 0);
+  it('a doubles finish-time observation estimates the pair\'s station time per station', () => {
+    const seeds = STATION_SEED_TIMES_SEC.intermediate;
+    const singlesSum = HYROX_STATION_ORDER.reduce((a, st) => a + seeds[st], 0);
+    const pairSum = HYROX_STATION_ORDER.reduce((a, st) => a + doublesStationTeamSec(st, seeds[st]), 0);
     const est = estimateStationsAndRoxzoneFromBand('intermediate', 'open_doubles');
-    expect(est.stationsTotalSec).toBe(Math.round(singlesSum * doublesRatioAt('stations', singlesSum).ratio));
+    expect(est.stationsTotalSec).toBe(Math.round(pairSum));
     expect(est.roxzoneSec).toBe(seedRoxzoneSecForFormat('intermediate', 'open_doubles'));
     expect(estimateStationsAndRoxzoneFromBand('intermediate', 'open_singles').stationsTotalSec).toBe(singlesSum);
   });
@@ -161,56 +184,49 @@ describe('doubles benchmark provenance', () => {
   });
 });
 
-describe('doublesTotalInSinglesTermsSec: the one doubles-to-singles total conversion', () => {
-  const totals = HYROX_TOTAL_PERCENTILE_TABLES;
+describe('doublesTotalInSinglesTermsSec: the doubles-to-singles total conversion', () => {
   it('maps a doubles total to the singles total at the same percentile', () => {
     for (const p of [5, 25, 50, 75, 95]) {
-      expect(doublesTotalInSinglesTermsSec(at(totals.open_doubles, p))).toBeCloseTo(at(totals.open_singles, p), 6);
+      expect(doublesTotalInSinglesTermsSec(at(OD.total, p))).toBeCloseTo(at(OS.total, p), 6);
     }
   });
   it('is the exact inverse of the forecast mapping (singles × doublesRatioAt) inside the tables', () => {
-    for (const singles of [4000, 4793, 5338, 6042, 7000]) {
+    for (const singles of [4200, 4860, 5513, 6386, 7400]) {
       const team = singles * doublesRatioAt('total', singles).ratio;
       expect(doublesTotalInSinglesTermsSec(team)).toBeCloseTo(singles, 6);
     }
   });
 });
 
-describe('hyroxBandingTimeSec', () => {
-  const totals = HYROX_TOTAL_PERCENTILE_TABLES;
-  it('a doubles previous time is banded on singles terms (the data ratio)', () => {
-    // The doubles median maps to the singles median: the inverse of the
-    // forecast's quantile mapping, read from the tables.
-    expect(hyroxBandingTimeSec(at(totals.open_doubles, 50), 'open_doubles'))
-      .toBeCloseTo(at(totals.open_singles, 50), -1);
-    expect(hyroxBandingTimeSec(at(totals.open_doubles, 25), 'pro_doubles'))
-      .toBeCloseTo(at(totals.open_singles, 25), -1);
-    expect(hyroxBandingTimeSec(at(totals.open_doubles, 75), 'open_doubles'))
-      .toBeCloseTo(at(totals.open_singles, 75), -1);
+describe('hyroxBandingTimeSec (the onboarding initializer\'s global-scale banding)', () => {
+  it('a doubles previous time is read in singles terms (the data ratio)', () => {
+    expect(hyroxBandingTimeSec(at(OD.total, 50), 'open_doubles')).toBeCloseTo(at(OS.total, 50), -1);
+    expect(hyroxBandingTimeSec(at(OD.total, 75), 'open_doubles')).toBeCloseTo(at(OS.total, 75), -1);
   });
   it('a singles previous time stays as is', () => {
     expect(hyroxBandingTimeSec(5338, 'open_singles')).toBe(5338);
     expect(hyroxBandingTimeSec(5338, 'pro_singles')).toBe(5338);
   });
-  it('uses the same conversion as the Pro Doubles finish percentile (one source)', () => {
+  it('uses doublesTotalInSinglesTermsSec (one source)', () => {
     expect(hyroxBandingTimeSec(4747, 'open_doubles')).toBe(Math.round(doublesTotalInSinglesTermsSec(4747)));
   });
 });
 
 describe('predictHyroxRace: doubles', () => {
-  it('covers all 8 stations as the pair\'s time, each at the same station ratio', () => {
+  it('covers all 8 stations as the pair\'s time, each mapped at its own station ratio', () => {
     const singles = predictHyroxRace(buildState({ format: 'open_singles' }))!;
     const doubles = predictHyroxRace(buildState())!;
     expect(doubles.stations.length).toBe(8);
-    const r = doubles.doubles!.stationRatio;
     for (const line of doubles.stations) {
       const s = singles.stations.find(l => l.station === line.station)!;
-      expect(line.teamRatio).toBe(r);
-      expect(line.baseSec).toBeCloseTo(s.baseSec * r, 6);
+      expect(line.baseSec).toBeCloseTo(doublesStationTeamSec(line.station, s.baseSec), 6);
+      expect(line.teamRatio).toBeCloseTo(line.baseSec / s.baseSec, 9);
     }
-    // Ratio read at the athlete's singles station total.
-    expect(r).toBeCloseTo(doublesRatioAt('stations', singles.stations.reduce((a, l) => a + l.baseSec, 0)).ratio, 6);
-    // The old model kept about half the singles station sum (4 of 8 stations).
+    // Ratios differ by station (one aggregate ratio was H1's model).
+    const ratios = new Set(doubles.stations.map(l => l.teamRatio!.toFixed(3)));
+    expect(ratios.size).toBeGreaterThan(4);
+    // Aggregate ratio = pair's station sum ÷ solo station sum.
+    expect(doubles.doubles!.stationRatio).toBeCloseTo(doubles.stations.reduce((a, l) => a + l.baseSec, 0) / singles.stations.reduce((a, l) => a + l.baseSec, 0), 6);
     expect(doubles.stationsSec).toBeGreaterThan(0.6 * singles.stationsSec);
   });
 
@@ -229,26 +245,22 @@ describe('predictHyroxRace: doubles', () => {
     });
   });
 
-  it('a doubles race split is used as the pair\'s time; a solo test is scaled by the ratio', () => {
+  it('a doubles race split is used as the pair\'s time; a solo test is mapped per station', () => {
     const team = predictHyroxRace(buildState({ stationBenchmarksDoubles: { ski_erg: 250 } }))!;
     expect(team.stations.find(l => l.station === 'ski_erg')!.baseSec).toBe(250);
     const solo = predictHyroxRace(buildState({
       stationBenchmarksDoubles: { ski_erg: 250 },
       stationBenchmarkHistory: { ski_erg: [{ dateISO: '2026-09-01', sec: 250, source: 'half_test', format: 'open_doubles' }] },
     }))!;
-    expect(solo.stations.find(l => l.station === 'ski_erg')!.baseSec).toBeCloseTo(250 * solo.doubles!.stationRatio, 6);
+    expect(solo.stations.find(l => l.station === 'ski_erg')!.baseSec).toBeCloseTo(doublesStationTeamSec('ski_erg', 250), 6);
   });
 
   it('a median singles athlete forecasts near the open_doubles median, with a mid-field label', () => {
-    const s = HYROX_STATIONS_PERCENTILE_TABLES.open_singles;
-    // Singles stations summing to the singles median, split by the
-    // intermediate seed shape.
-    const seedSum = HYROX_STATION_ORDER.reduce((a, st) => a + STATION_SEED_TIMES_SEC.intermediate[st], 0);
     const singlesMedianStations = Object.fromEntries(
-      HYROX_STATION_ORDER.map(st => [st, STATION_SEED_TIMES_SEC.intermediate[st] * at(s, 50) / seedSum]),
+      HYROX_STATION_ORDER.map(st => [st, at(OS[st], 50)]),
     ) as Record<HyroxStation, number>;
     // VDOT whose singles HYROX run total sits at the singles median.
-    const medianPace = at(HYROX_RUN_PERCENTILE_TABLES.open_singles, 50) / 8;
+    const medianPace = at(OS.run_total, 50) / 8;
     let bestV = 40;
     let bestErr = Infinity;
     for (let v = 30; v <= 55; v += 0.1) {
@@ -257,7 +269,7 @@ describe('predictHyroxRace: doubles', () => {
       if (err < bestErr) { bestErr = err; bestV = v; }
     }
     const p = predictHyroxRace(buildState({ stationBenchmarksSingles: singlesMedianStations }, { v: bestV } as Partial<SimulatorState>))!;
-    const doublesMedian = at(HYROX_TOTAL_PERCENTILE_TABLES.open_doubles, 50);
+    const doublesMedian = at(OD.total, 50);
     expect(Math.abs(p.totalSec - doublesMedian) / doublesMedian).toBeLessThan(0.03);
     const fasterThan = getFinishTimePercentile(p.totalSec, 'open_doubles');
     expect(fasterThan).toBeGreaterThanOrEqual(40);
@@ -269,13 +281,12 @@ describe('predictHyroxRace: doubles', () => {
     expect(p.totalSec).toBeGreaterThan(70 * 60);
     const fasterThan = getFinishTimePercentile(p.totalSec, 'open_doubles');
     expect(fasterThan).toBeLessThan(80);
-    expect(fasterThan).toBeGreaterThan(40);
+    expect(fasterThan).toBeGreaterThan(30);
   });
 
-  it('Pro Doubles (no ingested table) is placed on the Pro scale in singles terms', () => {
-    const t = at(HYROX_TOTAL_PERCENTILE_TABLES.open_doubles, 50);
-    // A pair's time read straight off the singles Pro scale would look far
-    // up the field; converted to singles terms it reads mid-field.
+  it('Pro Doubles is placed on its own (real) table: a pair\'s time no longer reads off the singles scale', () => {
+    const t = at(HYROX_S89_POOLED_PERCENTILES.pro_doubles!.total, 50);
+    expect(getFinishTimePercentile(t, 'pro_doubles')).toBe(50);
     expect(getFinishTimePercentile(t, 'pro_doubles')).toBeLessThan(getFinishTimePercentile(t, 'pro_singles'));
   });
 });

@@ -1,127 +1,103 @@
 /**
- * Population-sourced HYROX benchmark data.
+ * HYROX benchmark data: band seed times derived from real results.
  *
- * Station seed times (seconds) and run pace by ability band.
- * Open division, gender-averaged midpoints.
+ * Station seed times, run pace and Roxzone per ability band come from the
+ * HYROX results tables (src/data/hyrox-results-s79.ts, HYROX_S89_BAND_SEEDS,
+ * seasons 8 and 9, the field as judged now). For each band of a format x sex
+ * field (the band's percentile range in that field, HYROX_S89_BAND_THRESHOLDS_SEC),
+ * the seed is the median split among the finishers whose total falls in the
+ * band. Run pace = the band's median run total / 8. total_beginner has no
+ * finish-time range (it is the pick for a first HYROX) and takes the beginner
+ * cell.
  *
- * Sources (all accessed 2026-05):
- *   HyroxDataLab. 700k+ race database, target split tables by finish goal
- *   RoxLyfe. Elite vs average Pro division analysis (roxlyfe.com)
- *   Hyroxy.com. Open/Pro aggregate station averages
+ * The exported tables (STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM,
+ * SEED_ROXZONE_SEC) are Open Singles with women and men pooled, for callers
+ * that pass no cohort. Callers that know the athlete read the seeds through
+ * hyrox-results.ts: hyroxSeedField picks the field the athlete's band was
+ * read in (the previous race's singles family, Open when no race is on file,
+ * at the athlete's own sex), stationSeedTimesFor / seedRunPaceSecKmFor /
+ * seedRoxzoneSecFor read that field's band medians, and
+ * hyroxStationSeedsAtTarget converts the station seeds to the target's solo
+ * loads per station (hyroxOpenToProSec / hyroxProToOpenSec, the difference in
+ * differences on the Pro and Open results) when the two differ. A Pro target
+ * whose band came from an Open race therefore seeds from the Open field's
+ * medians converted to Pro loads, never from the fitter Pro field's band.
+ * Seeds are one athlete's times; the doubles forecast scales them into the
+ * pair's time with the doubles ratios (hyrox-doubles.ts).
  *
- * Key structural findings:
- *   - Biggest skill gaps: Sled Pull (3:17 elite-vs-avg), Wall Balls (3:13),
- *     Burpee Broad Jumps (2:54). These are the primary discriminators.
- *   - Smallest gaps: SkiErg (0:30), Row Erg (0:37). Cardio machines compress the field.
- *   - Running degradation is tier-defining: beginners fade from ~3:44/km (leg 1)
- *     to ~6:19/km (leg 8). Competitive athletes hold 3:24-4:15 with minimal fade.
+ * History: until lane H3b (2026-10-13) these were hand-set from HyroxDataLab,
+ * roxlyfe.com and Hyroxy.com aggregates (SCIENCE_LOG §L), Open division,
+ * sexes averaged, with a Pro target's seeds scaled by the unsourced
+ * HYROX_PRO_STATION_MULTIPLIER.
  *
- * Science log entry: docs/SCIENCE_LOG.md §L.
+ * Limitations: venue variation (sled stations vary most, HYROX_S79_VENUE_SPREAD);
+ * run legs are not exactly 1 km at every venue; a band's median split is a
+ * race split (in-race fatigue), not a fresh test.
  */
 
 import type { AbilityBand, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
+import {
+  HYROX_S89_BAND_SEEDS,
+  type HyroxBandCellSex,
+  type HyroxBandSeedCell,
+} from '@/data/hyrox-results-s79';
 
-/**
- * Population-average station times (seconds) by ability band.
- * Open division, gender-averaged midpoints from HyroxDataLab target-split table
- * and roxlyfe.com elite/average cohort analysis.
- */
-export const STATION_SEED_TIMES_SEC: Record<AbilityBand, Record<HyroxStation, number>> = {
-  // sub-65 min total, ~3:52/km avg. Based on elite/sub-1:05 cohort (roxlyfe.com).
-  competitive: {
-    ski_erg:            227,  // 3:47  (roxlyfe elite)
-    sled_push:          165,  // 2:45
-    sled_pull:          194,  // 3:14
-    burpee_broad_jumps: 141,  // 2:21
-    row_erg:            238,  // 3:58
-    farmer_carry:        97,  // 1:37
-    sandbag_lunges:     183,  // 3:03
-    wall_balls:         265,  // 4:25
-  },
-  // 65-80 min total, ~4:30/km. Top-10% to top-25% cohort from HyroxDataLab.
-  advanced: {
-    ski_erg:            260,  // 4:20
-    sled_push:          190,  // 3:10  (HyroxDataLab sub-1:20 target)
-    sled_pull:          250,  // 4:10
-    burpee_broad_jumps: 255,  // 4:15
-    row_erg:            260,  // 4:20
-    farmer_carry:       110,  // 1:50
-    sandbag_lunges:     220,  // 3:40
-    wall_balls:         315,  // 5:15
-  },
-  // 80-100 min total, ~5:05/km. HyroxDataLab intermediate cohort (4:27-5:19 range per station).
-  intermediate: {
-    ski_erg:            267,  // 4:27  (HyroxDataLab measured)
-    sled_push:          221,  // 3:41  (HyroxDataLab measured)
-    sled_pull:          306,  // 5:06  (HyroxDataLab measured)
-    burpee_broad_jumps: 319,  // 5:19  (HyroxDataLab measured)
-    row_erg:            284,  // 4:44  (HyroxDataLab measured)
-    farmer_carry:       130,  // 2:10  (HyroxDataLab measured)
-    sandbag_lunges:     296,  // 4:56  (HyroxDataLab measured)
-    wall_balls:         421,  // 7:01  (HyroxDataLab measured)
-  },
-  // 100-120 min total, ~5:55/km. Interpolated from HyroxDataLab 1:30-1:45 target rows.
-  novice: {
-    ski_erg:            300,  // 5:00
-    sled_push:          250,  // 4:10
-    sled_pull:          350,  // 5:50
-    burpee_broad_jumps: 360,  // 6:00
-    row_erg:            306,  // 5:06
-    farmer_carry:       150,  // 2:30
-    sandbag_lunges:     330,  // 5:30
-    wall_balls:         435,  // 7:15  (Hyroxy.com Open average)
-  },
-  // 120-150 min total, ~6:40/km. Extrapolated from target-split table + roxlyfe beginner cohort.
-  beginner: {
-    ski_erg:            345,  // 5:45
-    sled_push:          290,  // 4:50
-    sled_pull:          410,  // 6:50  (roxlyfe avg men 6:31, women 6:36. Average)
-    burpee_broad_jumps: 420,  // 7:00
-    row_erg:            345,  // 5:45
-    farmer_carry:       180,  // 3:00
-    sandbag_lunges:     370,  // 6:10
-    wall_balls:         470,  // 7:50  (roxlyfe avg men 7:38, women 7:18)
-  },
-  // 150+ min total, ~7:15/km. Extrapolated conservatively above beginner range.
-  total_beginner: {
-    ski_erg:            400,  // 6:40
-    sled_push:          340,  // 5:40
-    sled_pull:          480,  // 8:00
-    burpee_broad_jumps: 510,  // 8:30
-    row_erg:            400,  // 6:40
-    farmer_carry:       220,  // 3:40
-    sandbag_lunges:     430,  // 7:10
-    wall_balls:         540,  // 9:00
-  },
-};
+/** Singles formats a seed can be read from (one athlete's times). */
+export type HyroxSeedFormat = 'open_singles' | 'pro_singles';
 
-/**
- * Average fatigued 1km run pace (seconds/km). Mean across all 8 legs.
- * Leg 1 is faster; leg 8 is slower. These represent the average.
- * Source: HyroxDataLab target-split run totals divided by 8km.
- */
-export const SEED_RUN_PACE_SEC_KM: Record<AbilityBand, number> = {
-  competitive:    232,  // 3:52/km (roxlyfe elite avg: legs 3:24-4:15, mean ~3:58; rounded)
-  advanced:       270,  // 4:30/km
-  intermediate:   305,  // 5:05/km
-  novice:         355,  // 5:55/km
-  beginner:       400,  // 6:40/km
-  total_beginner: 435,  // 7:15/km
-};
+const SEED_STATIONS: HyroxStation[] = [
+  'ski_erg', 'sled_push', 'sled_pull', 'burpee_broad_jumps',
+  'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls',
+];
+const ALL_BANDS: AbilityBand[] = ['competitive', 'advanced', 'intermediate', 'novice', 'beginner', 'total_beginner'];
 
-/**
- * RoxZone transition time total (seconds). Time moving between start/finish zones.
- * Elite athletes use 2:54; beginners lose 10-12 minutes in transitions.
- * Source: roxlyfe.com (elite 2:54, average 6:58); HyroxDataLab target table.
- */
-export const SEED_ROXZONE_SEC: Record<AbilityBand, number> = {
-  competitive:    174,  // 2:54  (roxlyfe elite)
-  advanced:       270,  // 4:30  (interpolated)
-  intermediate:   390,  // 6:30  (HyroxDataLab target table)
-  novice:         480,  // 8:00
-  beginner:       600,  // 10:00
-  total_beginner: 720,  // 12:00
-};
+function bandSeedCell(band: AbilityBand, format: HyroxSeedFormat, sex: HyroxBandCellSex): HyroxBandSeedCell {
+  const b = band === 'total_beginner' ? 'beginner' : band;
+  const cells = HYROX_S89_BAND_SEEDS[format];
+  return (sex !== 'pooled' ? cells[sex]?.[b] : undefined) ?? cells.pooled![b]!;
+}
+
+/** Station seed times (seconds, one athlete) for a band in a singles field. */
+export function stationSeedTimesFor(
+  band: AbilityBand,
+  format: HyroxSeedFormat = 'open_singles',
+  sex: HyroxBandCellSex = 'pooled',
+): Record<HyroxStation, number> {
+  const m = bandSeedCell(band, format, sex).medians;
+  return Object.fromEntries(SEED_STATIONS.map(st => [st, m[st]])) as Record<HyroxStation, number>;
+}
+
+/** Seed fatigued run pace (seconds/km, mean of the 8 legs) for a band: the
+ *  band's median run total / 8, to the whole second. */
+export function seedRunPaceSecKmFor(
+  band: AbilityBand,
+  format: HyroxSeedFormat = 'open_singles',
+  sex: HyroxBandCellSex = 'pooled',
+): number {
+  return Math.round(bandSeedCell(band, format, sex).medians.run_total / 8);
+}
+
+/** Seed Roxzone total (seconds) for a band: the band's median Roxzone. */
+export function seedRoxzoneSecFor(
+  band: AbilityBand,
+  format: HyroxSeedFormat = 'open_singles',
+  sex: HyroxBandCellSex = 'pooled',
+): number {
+  return bandSeedCell(band, format, sex).medians.roxzone;
+}
+
+/** Open Singles seed times by band, women and men pooled (stationSeedTimesFor
+ *  with no cohort). */
+export const STATION_SEED_TIMES_SEC: Record<AbilityBand, Record<HyroxStation, number>> =
+  Object.fromEntries(ALL_BANDS.map(b => [b, stationSeedTimesFor(b)])) as Record<AbilityBand, Record<HyroxStation, number>>;
+
+/** Open Singles seed run pace by band (seconds/km), women and men pooled. */
+export const SEED_RUN_PACE_SEC_KM: Record<AbilityBand, number> =
+  Object.fromEntries(ALL_BANDS.map(b => [b, seedRunPaceSecKmFor(b)])) as Record<AbilityBand, number>;
+
+/** Open Singles seed Roxzone by band (seconds), women and men pooled. */
+export const SEED_ROXZONE_SEC: Record<AbilityBand, number> =
+  Object.fromEntries(ALL_BANDS.map(b => [b, seedRoxzoneSecFor(b)])) as Record<AbilityBand, number>;
 
 /**
  * Minimum plausible station times (seconds). Physical lower bound for any human.

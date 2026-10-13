@@ -6,9 +6,14 @@
  * current, fresh-test → race-day fade, and a CTA to test again.
  *
  * Reads:
- *   - `stationBenchmarkHistory` for progression and PR detection
+ *   - `hyroxStationHistoryInTargetFrame` for progression and PR detection:
+ *     every entry as one athlete's time at the target's weights (doubles race
+ *     splits and other-weight times converted with the forecast's ratios),
+ *     labelled once, on the first card in that frame (the progression card,
+ *     else the stats card), whenever the target is doubles (the hero shows
+ *     the pair's time) or any entry is converted
  *   - `prediction.stations[].adjustedSec` for race-day-fatigued time
- *   - `getStationPercentile()` for cohort ranking
+ *   - `getStationPercentile()` against the cohort's race splits
  *
  * Side: tracking. No new constants; all data comes from the existing prediction
  * + history pipeline.
@@ -18,18 +23,29 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '@/ui/page-flair';
 import type { HyroxStation } from '@/types/triathlon';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
-import { HYROX_PRO_STATION_MULTIPLIER } from '@/constants/hyrox-constants';
-import { predictHyroxRace, stationSinglesEquivalentSec } from '@/calculations/race-prediction.hyrox';
-import { getStationPercentile } from '@/calculations/hyrox-population';
+import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import {
+  predictHyroxRace,
+  hyroxStationSeedsForState,
+  hyroxStationHistoryInTargetFrame,
+  hyroxTargetFrameCaption,
+  type HyroxStationHistoryPoint,
+} from '@/calculations/race-prediction.hyrox';
+import { getStationPercentile, hyroxTierLabel } from '@/calculations/hyrox-population';
+import { hyroxCohortForState } from '@/calculations/hyrox-results';
 import { hyroxStationRaceStandard, hyroxLoadTierForState, hyroxWallBallTargetM, hyroxDivisionLabel } from '@/calculations/hyrox-division';
 import {
-  getStationHistory,
-  bestStationTime,
   isRaceSplitSource,
   type HyroxFormat,
   type StationTestEntry,
 } from '@/calculations/hyrox-station-history';
+
+const FORMAT_LABEL: Record<HyroxFormat, string> = {
+  open_singles: 'Open Singles',
+  pro_singles: 'Pro Singles',
+  open_doubles: 'Open Doubles',
+  pro_doubles: 'Pro Doubles',
+};
 
 const SOURCE_LABEL: Record<StationTestEntry['source'], string> = {
   half_test: 'Half test',
@@ -55,15 +71,16 @@ function fmtDate(iso: string): string {
   return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-/** SVG sparkline of test times chronologically (faster = up).
+/** SVG sparkline of test times chronologically (faster = up), in the target
+ *  frame (displaySec).
  *  Per CLAUDE.md SVG rules: explicit width/height, preserveAspectRatio="none",
  *  vector-effect="non-scaling-stroke" so the line stays crisp under stretch. */
-function buildSparkline(entries: StationTestEntry[]): string {
+function buildSparkline(entries: HyroxStationHistoryPoint[]): string {
   if (entries.length < 2) return '';
   const W = 320;
   const H = 80;
   const pad = 6;
-  const secs = entries.map(e => e.sec);
+  const secs = entries.map(e => e.displaySec);
   const minSec = Math.min(...secs);
   const maxSec = Math.max(...secs);
   const range = Math.max(maxSec - minSec, 1);
@@ -71,14 +88,14 @@ function buildSparkline(entries: StationTestEntry[]): string {
   // Invert y so faster = top.
   const points = entries.map((e, i) => {
     const x = pad + i * xStep;
-    const y = pad + ((e.sec - minSec) / range) * (H - pad * 2);
+    const y = pad + ((e.displaySec - minSec) / range) * (H - pad * 2);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   const linePath = `M ${points.join(' L ')}`;
   const areaPath = `${linePath} L ${pad + (entries.length - 1) * xStep},${H - pad} L ${pad},${H - pad} Z`;
   const dots = entries.map((e, i) => {
     const x = pad + i * xStep;
-    const y = pad + ((e.sec - minSec) / range) * (H - pad * 2);
+    const y = pad + ((e.displaySec - minSec) / range) * (H - pad * 2);
     return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#7a845c" vector-effect="non-scaling-stroke"/>`;
   }).join('');
   return `
@@ -100,9 +117,12 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const display = STATION_DISPLAY[station];
   const fmt = (hx.format ?? 'open_singles') as HyroxFormat;
 
-  // Filter history to current format so we don't mix singles + doubles times
-  // on the same chart. A user racing both should see two separate progressions.
-  const history = getStationHistory(s, station).filter(e => e.format === fmt);
+  // Every entry, every format, in one frame: one athlete's time at the
+  // target's weights (hyroxStationHistoryInTargetFrame, the forecast's own
+  // conversion), so race splits and solo tests, Pro and Open weights, compare
+  // directly.
+  const history = hyroxStationHistoryInTargetFrame(s, station);
+  const anyConverted = history.some(e => e.converted);
 
   // Race-day adjusted time from the predictor. This is the in-race-fatigued
   // version after run-leg fatigue accumulation but before within-station fade
@@ -113,33 +133,32 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const baseSec = stationLine?.baseSec ?? null;
 
   const latest = history[history.length - 1] ?? null;
-  const best = bestStationTime(s, station, fmt);
-  // The band seed at the target's weights, as the predictor uses it (seeds
-  // are Open-weight; a Pro target gets the Pro multiplier). Singles terms: a
-  // doubles page labels it as the singles estimate, since the hero shows the
-  // pair's time.
-  const isProTarget = fmt === 'pro_singles' || fmt === 'pro_doubles';
-  const seedSec = STATION_SEED_TIMES_SEC[hx.athleteBand][station]
-    * (isProTarget ? (HYROX_PRO_STATION_MULTIPLIER[station] ?? 1) : 1);
-  // Doubles lines are the pair's time; the seed-anchored percentile and the
-  // fresh-test fade are singles comparisons.
+  const best = history.reduce<HyroxStationHistoryPoint | null>((b, e) => (b == null || e.displaySec < b.displaySec ? e : b), null);
+  // The band seed at the target's weights for the athlete's singles field,
+  // as the predictor reads it (hyroxStationSeedsForState: real band medians,
+  // Pro Singles for a Pro target). One athlete's time: a doubles page labels
+  // it as the solo estimate, since the hero shows the pair's time.
+  const seedSec = hyroxStationSeedsForState(s)[station];
+  // Doubles lines are the pair's time; the fresh-test fade is a solo
+  // comparison. The percentile places the line's own terms on the cohort's
+  // race splits (the pair's division for doubles).
   const isDoubles = fmt === 'open_doubles' || fmt === 'pro_doubles';
   const pct = stationLine != null && stationLine.source === 'calibrated'
-    ? getStationPercentile(station, stationSinglesEquivalentSec(stationLine))
+    ? getStationPercentile(station, stationLine.baseSec, hyroxCohortForState(s))
     : null;
 
   // Improvement since FIRST test (chronologically). Anchored at oldest, not best.
   const first = history[0] ?? null;
   const improvementSec = (latest && first && history.length > 1)
-    ? latest.sec - first.sec
+    ? Math.round(latest.displaySec - first.displaySec)
     : null;
 
   // Race-day fade: how much slower the predicted race-day time is vs the latest
   // fresh test. ISSUE-195 Phase 1. Purely informational, no new math.
   // Only against a fresh test: a race split is already a race-day time.
   const latestIsFreshTest = latest != null && !isRaceSplitSource(latest.source);
-  const fadePct = (latest && latestIsFreshTest && raceDaySec != null && latest.sec > 0)
-    ? ((raceDaySec - latest.sec) / latest.sec) * 100
+  const fadePct = (latest && latestIsFreshTest && raceDaySec != null && latest.displaySec > 0)
+    ? ((raceDaySec - latest.displaySec) / latest.displaySec) * 100
     : null;
 
   // ── Hero ────────────────────────────────────────────────────────────────
@@ -147,8 +166,9 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const sourceLabel = isDoubles
     ? (stationLine?.source === 'calibrated' ? "Pair's time from your benchmark" : "Population estimate for the pair")
     : (stationLine?.source === 'calibrated' ? 'Your latest test' : 'Population estimate');
-  // Estimated: placed on the band seed times, not race results.
-  const pctText = pct != null ? `· est. p${pct}` : '';
+  // Real race-split percentile in the target format's cohort, as the
+  // friendly tier every HYROX percentile chip shows (hyroxTierLabel).
+  const pctText = pct != null ? `· ${hyroxTierLabel(pct)}` : '';
 
   const hero = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:24px 22px 20px;margin-bottom:14px">
@@ -158,11 +178,23 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
     </div>
   `;
 
+  // ── Frame label ─────────────────────────────────────────────────────────
+  // The progression, stats and history cards read one athlete at the
+  // target's weights (displaySec). Labelled once, on the first of those cards,
+  // whenever the target is doubles (the hero above shows the pair's time) or
+  // any entry is converted (review 2026-10-13: a doubles target with only
+  // solo tests showed a pair's-time hero over unlabelled solo times).
+  const frameNoteText = isDoubles || anyConverted ? hyroxTargetFrameCaption(s) : '';
+  const frameNote = (marginBottom: number) => frameNoteText
+    ? `<div style="font-size:11px;color:var(--c-muted);margin-bottom:${marginBottom}px;line-height:1.4">${frameNoteText}</div>`
+    : '';
+
   // ── Sparkline + history ─────────────────────────────────────────────────
   const sparklineHtml = buildSparkline(history);
   const sparklineCard = sparklineHtml ? `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Progression</div>
+      ${frameNote(8)}
       ${sparklineHtml}
       <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint);margin-top:8px">
         <span>${fmtDate(history[0].dateISO)}</span>
@@ -192,19 +224,20 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   const statsCard = `
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Stats</div>
-      ${best ? statRow('Best', fmtMmSs(best.sec), fmtDate(best.dateISO)) : ''}
-      ${latest ? statRow('Latest', fmtMmSs(latest.sec), fmtDate(latest.dateISO)) : ''}
-      ${statRow(isDoubles ? 'Singles population estimate' : 'Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
+      ${sparklineHtml ? '' : frameNote(4)}
+      ${best ? statRow('Best', fmtMmSs(best.displaySec), fmtDate(best.dateISO)) : ''}
+      ${latest ? statRow('Latest', fmtMmSs(latest.displaySec), fmtDate(latest.dateISO)) : ''}
+      ${statRow(isDoubles ? 'Solo population estimate' : 'Population estimate', fmtMmSs(seedSec), `Band: ${hx.athleteBand.replace(/_/g, ' ')}`)}
       ${statRow('Race standard', hyroxStationRaceStandard(station, hyroxLoadTierForState(s), hyroxWallBallTargetM(s.biologicalSex, hx.division)), hyroxDivisionLabel(hx.format, s.biologicalSex, hx.division) ?? undefined)}
       ${first && history.length > 1 ? statRow('Since first test', improvementText, fmtDate(first.dateISO)) : ''}
-      ${raceDaySec != null && latest && latestIsFreshTest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.sec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
+      ${raceDaySec != null && latest && latestIsFreshTest && !isDoubles ? statRow('Race-day fade', fadeText, `Fresh ${fmtMmSs(latest.displaySec)} → race ${fmtMmSs(raceDaySec)}`) : ''}
     </div>
   `;
 
   // ── History list ─────────────────────────────────────────────────────────
   const historyRows = history.length > 0
     ? [...history].reverse().map((e, i) => {
-        const isBest = best && e.sec === best.sec && e.dateISO === best.dateISO;
+        const isBest = best != null && e === best;
         const bestBadge = isBest
           ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.16);border-radius:6px;padding:2px 7px;margin-left:6px">Best</span>`
           : '';
@@ -213,9 +246,9 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
             <span>
               <span style="font-size:12px;color:var(--c-black)">${fmtDate(e.dateISO)}</span>
               ${bestBadge}
-              <div style="font-size:10px;color:var(--c-faint);margin-top:1px">${SOURCE_LABEL[e.source]}${e.proWeights ? ' · Pro weights' : ''}</div>
+              <div style="font-size:10px;color:var(--c-faint);margin-top:1px">${SOURCE_LABEL[e.source]} · ${FORMAT_LABEL[e.format]}</div>
             </span>
-            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(e.sec)}</span>
+            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(e.displaySec)}</span>
           </div>
         `;
       }).join('')

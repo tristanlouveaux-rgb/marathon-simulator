@@ -10,10 +10,13 @@ import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { predictHyroxRace, resolveHyroxStationBenchmarks } from './race-prediction.hyrox';
+import { doublesStationSoloSec } from './hyrox-doubles';
+import { hyroxOpenToProSec, hyroxProToOpenSec, hyroxStationLowerFenceSec } from './hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { SetRecord } from '@/guided/strength-controller';
 
-// Competitive (elite) seed times used as the sanity floor: wall_balls 265, row_erg 238.
+// Sanity floor: the station's timing-slip fence in the results (rule 6 of the
+// ingest, HYROX_S79_STATION_LOWER_FENCES_SEC), far below these rounds.
 const WB: HyroxComponent = { type: 'wall_balls', reps: 100, mtl: 0 };
 const ROW: HyroxComponent = { type: 'row_erg', distanceM: 1000, mtl: 0 };
 
@@ -75,13 +78,19 @@ describe('summariseHyroxSession', () => {
     expect(r.every(x => x.percentile === null)).toBe(true);  // not comparable
   });
 
-  it('rejects implausibly fast times below the elite seed (sanity floor)', () => {
+  it('rejects implausibly fast times below the results\' timing-slip fence (sanity floor)', () => {
     const w = workout('hyrox_station_density', [WB, ROW]);
-    // wall_balls 100 in 120s is faster than the competitive seed (265s) — a timing slip.
-    const r = summariseHyroxSession(w, densityRecords([120, 120], [240, 240]), state());
+    // A wall-ball round under its far-out lower fence in the results (rule 6
+    // of the ingest) is a timing slip: e.g. 1:05 read as 65 s.
+    const fence = hyroxStationLowerFenceSec('wall_balls', { format: 'open_singles', sex: 'pooled' })!;
+    const slip = fence - 20;
+    const r = summariseHyroxSession(w, densityRecords([slip, slip], [240, 240]), state());
     const wb = r.find(x => x.station === 'wall_balls')!;
     expect(wb.eligible).toBe(false);
     expect(wb.isImprovement).toBe(false);
+    // An elite but real 4:00 row clears the floor (the old competitive-seed
+    // floor became the top 1%'s median and would have rejected it).
+    expect(r.find(x => x.station === 'row_erg')!.eligible).toBe(true);
   });
 });
 
@@ -215,9 +224,10 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     const s = singlesFromDoubles();
     const before = predictHyroxRace(s)!;
     const converted = resolvedRow(s).sec!;
-    // The converted value is the forecast's own row line.
+    // The converted value is the forecast's own row line: the solo time at
+    // the same percentile of the row results (per station).
     expect(converted).toBeCloseTo(before.stations.find(l => l.station === 'row_erg')!.baseSec, 6);
-    expect(converted).toBeCloseTo(DOUBLES_SPLITS.row_erg / before.crossFormatStationRatio!, 9);
+    expect(converted).toBeCloseTo(doublesStationSoloSec('row_erg', DOUBLES_SPLITS.row_erg), 9);
 
     const slow = Math.round(converted) + 40;
     const r = summariseHyroxSession(rowSession, rowRounds(slow), s)[0];
@@ -254,7 +264,7 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     expect(fast.deltaSec).toBe(10);
   });
 
-  it('doubles target, own doubles race split: a solo round is compared with the split\'s solo equivalent (the pair\'s time ÷ the station ratio)', () => {
+  it('doubles target, own doubles race split: a solo round is compared with the split\'s solo equivalent (the pair\'s time at its station\'s ratio)', () => {
     const s = fullState({
       format: 'open_doubles',
       stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
@@ -264,13 +274,14 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     const row = resolvedRow(s);
     expect(row.teamTimeSplit).toBe(true);
     // One number per station for Stats, the generators and this check: the
-    // pair's time ÷ the forecast's own ratio.
-    expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS.row_erg / prediction.doubles!.stationRatio, 9);
+    // pair's time at the forecast's own row ratio.
+    expect(row.sec!).toBeCloseTo(doublesStationSoloSec('row_erg', DOUBLES_SPLITS.row_erg), 9);
+    expect(row.sec!).toBeCloseTo(DOUBLES_SPLITS.row_erg / prediction.stations.find(l => l.station === 'row_erg')!.teamRatio!, 9);
     expect(row.sec!).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
 
     // Slower than the pair's time but faster than its solo equivalent: one
     // athlete beat the split's solo equivalent.
-    const solo = Math.floor(row.sec!) - 20;
+    const solo = Math.floor((row.sec! + DOUBLES_SPLITS.row_erg) / 2);
     expect(solo).toBeGreaterThan(DOUBLES_SPLITS.row_erg);
     const r = summariseHyroxSession(rowSession, rowRounds(solo), s)[0];
     expect(r.benchmarkSec).toBe(Math.round(row.sec!));
@@ -285,24 +296,31 @@ describe('session bests compare with the benchmark the forecast reads (review 20
     // venue, a guided row round of 300 s. The summary read 'Benchmark
     // updated' while the Stats row and the next plan's target went from the
     // pair's time (3:40) to 5:00.
+    // Since lane H3b each station maps on its own ratio; wall balls gain most
+    // from a partner (about 0.64 at the median), so the gap between the
+    // pair's time and one athlete's is widest there.
     const s = fullState({
       format: 'open_doubles',
       venueId: 'london-excel',
       stationBenchmarksDoubles: { ...DOUBLES_SPLITS },
       stationBenchmarkHistory: raceHistory(DOUBLES_SPLITS, 'open_doubles'),
     });
-    const before = resolvedRow(s).sec!;
-    const forecastBefore = predictHyroxRace(s)!.stations.find(l => l.station === 'row_erg')!.baseSec;
-    expect(before).toBeGreaterThan(300);
-    const applied = applyHyroxSessionBenchmarks(rowSession, rowRounds(300), s);
+    const wbSession = workout('hyrox_station_density', [WB], 2);
+    const wbRounds = (sec: number) => [rec(0, sec + 6, 0), rec(0, sec, 1)];
+    const resolvedWb = (st: SimulatorState) => resolveHyroxStationBenchmarks(st)!.stations.find(b => b.station === 'wall_balls')!;
+    const before = resolvedWb(s).sec!;
+    const forecastBefore = predictHyroxRace(s)!.stations.find(l => l.station === 'wall_balls')!.baseSec;
+    const round = Math.floor((before + DOUBLES_SPLITS.wall_balls) / 2);
+    expect(round).toBeGreaterThan(DOUBLES_SPLITS.wall_balls);
+    const applied = applyHyroxSessionBenchmarks(wbSession, wbRounds(round), s);
     expect(applied).toHaveLength(1);
     expect(applied[0].fromSec).toBe(Math.round(before));
-    expect(applied[0].toSec).toBe(300);
-    const after = resolvedRow(s);
+    expect(applied[0].toSec).toBe(round);
+    const after = resolvedWb(s);
     expect(after.teamTimeSplit).toBe(false);
-    expect(after.sec).toBe(300);
+    expect(after.sec).toBe(round);
     expect(after.sec!).toBeLessThan(before);
-    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'row_erg')!.baseSec).toBeLessThan(forecastBefore);
+    expect(predictHyroxRace(s)!.stations.find(l => l.station === 'wall_balls')!.baseSec).toBeLessThan(forecastBefore);
   });
 });
 
@@ -358,30 +376,33 @@ describe('session bests compare and store at the target\'s weights (review 2026-
     });
   }
 
-  it('Open target, Pro singles split: the reviewer\'s probe numbers', () => {
+  it('Open target, Pro singles split: the reviewer\'s probe, on the data-derived Pro conversion', () => {
     const s = proSinglesSplit();
-    expect(sledResolved(s).sec!).toBeCloseTo(260 / 1.15, 9);
-    const r = summariseHyroxSession(sledSession, sledRounds(243), s)[0];
-    expect(r.benchmarkSec).toBe(226);
+    const openEq = hyroxProToOpenSec('sled_push', 260, 'pooled');
+    expect(sledResolved(s).sec!).toBeCloseTo(openEq, 9);
+    const r = summariseHyroxSession(sledSession, sledRounds(Math.round(openEq) + 17), s)[0];
+    expect(r.benchmarkSec).toBe(Math.round(openEq));
     expect(r.isImprovement).toBe(false);
     expect(r.deltaSec).toBe(-17);
   });
 
   it('Open target: a faster round is stored at Open weights and the forecast reads it as is', () => {
     const s = proSinglesSplit();
-    const applied = applyHyroxSessionBenchmarks(sledSession, sledRounds(215), s);
-    expect(applied).toEqual([expect.objectContaining({ station: 'sled_push', fromSec: 226, toSec: 215 })]);
+    const from = Math.round(hyroxProToOpenSec('sled_push', 260, 'pooled'));
+    const best = from - 11;
+    const applied = applyHyroxSessionBenchmarks(sledSession, sledRounds(best), s);
+    expect(applied).toEqual([expect.objectContaining({ station: 'sled_push', fromSec: from, toSec: best })]);
     const hist = s.hyroxConfig!.stationBenchmarkHistory!.sled_push!;
-    expect(hist[hist.length - 1]).toMatchObject({ sec: 215, source: 'session', format: 'open_singles', proWeights: false });
-    expect(sledLine(s).baseSec).toBe(215);
+    expect(hist[hist.length - 1]).toMatchObject({ sec: best, source: 'session', format: 'open_singles', proWeights: false });
+    expect(sledLine(s).baseSec).toBe(best);
   });
 
   it('Pro target with Open-weight tests: a round done at Pro loads is stored at Pro weights, not scaled again', () => {
     // The athlete's toggle says benchmarks are at Open weights, so a station
-    // test is scaled × the Pro multiplier. A guided round is done at the Pro
-    // target's own loads (loadTier), so the forecast reads it as is.
+    // test converts to Pro weights (hyroxOpenToProSec). A guided round is done
+    // at the Pro target's own loads (loadTier), so the forecast reads it as is.
     const s = base({ format: 'pro_singles', benchmarksAtProWeights: false, stationBenchmarksSingles: { sled_push: 230 } });
-    const target = Math.round(230 * 1.15);
+    const target = Math.round(hyroxOpenToProSec('sled_push', 230, 'pooled'));
     expect(summariseHyroxSession(sledSession, sledRounds(target), s)[0].benchmarkSec).toBe(target);
     const best = target - 10;
     applyHyroxSessionBenchmarks(sledSession, sledRounds(best), s);

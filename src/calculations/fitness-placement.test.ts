@@ -11,6 +11,7 @@ import {
   runnerFieldPlacementForFitness,
 } from '@/calculations/fitness-placement';
 import { lookupVo2Percentile, resolveVo2AgeBand, vo2BandAnchors } from '@/data/vo2max-norms';
+import { HYROX_S89_PERCENTILES, HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 import { ageGrade } from '@/data/wma-age-grading';
 import { tv } from '@/calculations/vdot';
 import { lookupDistanceAggregatePercentile, DISTANCE_AGGREGATE_PERCENTILE_TABLES } from '@/data/marathon-population-distributions';
@@ -244,14 +245,15 @@ describe('ftpPlacement', () => {
 });
 
 describe('hyroxPlacement', () => {
-  it('returns null for formats without ingested data', () => {
-    expect(hyroxPlacement('pro_doubles', 5000)).toBeNull();
+  const p50 = (t: HyroxPercentileTable) => t.find(([, q]) => q === 50)![0];
+  it('every format has real data now, Pro Doubles included (HYROX results, seasons 8 and 9)', () => {
+    expect(hyroxPlacement('pro_doubles', p50(HYROX_S89_POOLED_PERCENTILES.pro_doubles!.total))!.fasterThanPct).toBe(50);
   });
 
-  it('places the open singles median at ~50', () => {
-    // open_singles p50 breakpoint = 5338s
-    const p = hyroxPlacement('open_singles', 5338)!;
-    expect(p.fasterThanPct).toBe(50);
+  it('places the pooled open singles median at 50, and a cohort on its own table', () => {
+    expect(hyroxPlacement('open_singles', p50(HYROX_S89_POOLED_PERCENTILES.open_singles!.total))!.fasterThanPct).toBe(50);
+    const women = HYROX_S89_PERCENTILES.open_singles.female!.total;
+    expect(hyroxPlacement('open_singles', p50(women), { format: 'open_singles', sex: 'female' })!.fasterThanPct).toBe(50);
   });
 
   it('is monotonic: faster times beat more of the field', () => {

@@ -184,18 +184,18 @@ describe('recorded station tier', () => {
     // stationSec is the converted (Pro-weight) value the Stats ledger shows.
     expect(snap.stationSec.sled_push).toBeGreaterThan(SINGLES_TIMES.sled_push);
     expect(snap.stationTier.sled_push).toBe('M-Pro');
-    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: false }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
+    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
     // The reverse direction too: Pro-weight times read by an Open target.
-    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: true }, 'open_doubles', 'male', 'men')).toBe('M-Open');
+    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', 'male', 'men')).toBe('M-Open');
   });
 
   it('unknown sex in a singles slot: no tier', () => {
-    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: false }, 'open_doubles', undefined, 'mixed')).toBeNull();
-    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: false }, 'open_doubles', 'female', 'mixed')).toBe('W-Open');
-    expect(recordedStationTier({ sec: 200, slot: 'singles', recordedAtProWeights: true }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
+    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', undefined, 'mixed')).toBeNull();
+    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'open_doubles', 'female', 'mixed')).toBe('W-Open');
+    expect(recordedStationTier({ sec: 200, slot: 'singles' }, 'pro_doubles', 'female', 'women')).toBe('M-Open');
     // A doubles-slot value read by a singles target: the division it was set in is unknown.
-    expect(recordedStationTier({ sec: 200, slot: 'doubles', recordedAtProWeights: false }, 'open_singles', 'male', undefined)).toBeNull();
-    expect(recordedStationTier({ sec: undefined, slot: 'singles', recordedAtProWeights: false }, 'open_doubles', 'male', 'men')).toBeNull();
+    expect(recordedStationTier({ sec: 200, slot: 'doubles' }, 'open_singles', 'male', undefined)).toBeNull();
+    expect(recordedStationTier({ sec: undefined, slot: 'singles' }, 'open_doubles', 'male', 'men')).toBeNull();
   });
 
   it('race tier follows hyroxLoadTier; unknown division shares no tier', () => {

@@ -136,12 +136,12 @@ function singlesFormatOf(format: HyroxPartnerFormat): HyroxPartnerFormat {
  * no conversion from Women Open to Men Open loads exists yet (lane H3b).
  */
 export function recordedStationTier(
-  b: Pick<HyroxStationBenchmark, 'sec' | 'slot' | 'recordedAtProWeights'>,
+  b: Pick<HyroxStationBenchmark, 'sec' | 'slot'>,
   format: HyroxPartnerFormat,
   biologicalSex: SimulatorState['biologicalSex'],
   division: HyroxDivision | undefined,
 ): HyroxLoadTier | null {
-  if (b.sec == null || b.recordedAtProWeights == null) return null;
+  if (b.sec == null) return null;
   const targetPro = isHyroxProFormat(format);
   if (b.slot === 'singles') {
     const sex = resolveHyroxAthleteSex(biologicalSex, division);

@@ -29,8 +29,8 @@
 
 import type { SimulatorState } from '@/types/state';
 import type { HyroxStation, AbilityBand } from '@/types/triathlon';
-import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
-import { doublesRatioAt, seedRoxzoneSecForFormat } from './hyrox-doubles';
+import { HYROX_STATION_ORDER, stationSeedTimesFor } from '@/constants/hyrox-benchmarks';
+import { doublesStationTeamSec, seedRoxzoneSecForFormat, type HyroxDoublesTables } from './hyrox-doubles';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.44;
 /** Months after which the personalised offset decays fully to 0. */
@@ -71,25 +71,32 @@ export function backComputeRunPaceFromRace(obs: HyroxRaceObservation): number | 
  *  per-station splits aren't available. Caller can use this to construct a
  *  HyroxRaceObservation from a finish time alone.
  *
- *  Doubles: the pair's clock time, i.e. the singles seed totals × the
- *  percentile-matched doubles ratios (hyrox-doubles.ts), the same model the
- *  forecast uses. Without it a doubles finish minus singles station time left
- *  too little run time, and the personal offset read the athlete as faster
- *  than they run. */
+ *  Seeds are the band's median splits in the race's singles field
+ *  (stationSeedTimesFor; `tables.singles` when given, else Open Singles
+ *  pooled). Doubles: the pair's clock time, each station's seed mapped to the
+ *  pair's time at its own percentile (doublesStationTeamSec), the same model
+ *  the forecast uses. Without it a doubles finish minus singles station time
+ *  left too little run time, and the personal offset read the athlete as
+ *  faster than they run. */
 export function estimateStationsAndRoxzoneFromBand(
   band: AbilityBand,
   format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles',
+  tables?: HyroxDoublesTables,
 ): { stationsTotalSec: number; roxzoneSec: number } {
-  const seeds = STATION_SEED_TIMES_SEC[band];
-  const singlesStationsSec = HYROX_STATION_ORDER.reduce(
-    (sum, st) => sum + (seeds[st as HyroxStation] ?? 0),
-    0,
-  );
+  const singles = tables?.singles;
+  const seedFormat = singles?.format === 'pro_singles' ? 'pro_singles' : 'open_singles';
+  const seedSex = singles && singles.sex !== 'mixed' ? singles.sex : 'pooled';
+  const seeds = stationSeedTimesFor(band, seedFormat, seedSex);
   const isDoubles = format === 'open_doubles' || format === 'pro_doubles';
-  const stationsTotalSec = isDoubles
-    ? Math.round(singlesStationsSec * doublesRatioAt('stations', singlesStationsSec).ratio)
-    : singlesStationsSec;
-  const roxzoneSec = seedRoxzoneSecForFormat(band, format);
+  // The seeds are band medians in the singles field's own terms, so the
+  // mapping reads them as such: without the Mixed-woman flag, which marks
+  // solo times at the pair's M-Open loads (hyrox-doubles.ts).
+  const fieldTables: HyroxDoublesTables | undefined = tables ? { singles: tables.singles, doubles: tables.doubles } : undefined;
+  const stationsTotalSec = Math.round(HYROX_STATION_ORDER.reduce(
+    (sum, st) => sum + (isDoubles ? doublesStationTeamSec(st as HyroxStation, seeds[st as HyroxStation], fieldTables) : seeds[st as HyroxStation]),
+    0,
+  ));
+  const roxzoneSec = seedRoxzoneSecForFormat(band, format, tables);
   return { stationsTotalSec, roxzoneSec };
 }
 

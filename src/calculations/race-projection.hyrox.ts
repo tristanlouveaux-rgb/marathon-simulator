@@ -37,6 +37,9 @@ import { hyroxMtlChronicVsPlan, isMtlSessionCompleted } from './mtl';
 import { bandFromVdot } from './hyrox-staleness';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { hyroxImprovementCeiling } from './hyrox-results';
+import { doublesTotalInSinglesTermsSec, hyroxDoublesTablesForState } from './hyrox-doubles';
+import { isHyroxDoublesFormat, resolveHyroxAthleteSex } from './hyrox-division';
 
 export interface HyroxProjectionFactor {
   /** Display name. */
@@ -380,6 +383,42 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
           explanation: `Recovery signals over the last 7 days indicate ${readinessLabel} readiness. HRV, sleep, and resting HR vs baseline.`,
         });
       }
+    }
+  }
+
+  // Factor: improvement ceiling from the results (tracking side). The
+  // projected gain to race day may not exceed what the top quarter of repeat
+  // HYROX athletes achieved over a comparable gap: the 75th percentile of the
+  // first-to-latest improvement, venue-relative, grouped by the mean of both
+  // races so regression to the mean is out (hyroxImprovementCeiling,
+  // HYROX_S79_IMPROVEMENT). Applied last, over every factor, as the same
+  // uniform modifier, so the factor list still sums to improvementSec.
+  // Optimistic end of what the data supports: the median repeat athlete
+  // improves about 4%, the ceiling sits at the upper quartile.
+  const hxFormat = hx.format ?? 'open_singles';
+  const singlesTotalSec = isHyroxDoublesFormat(hxFormat)
+    ? doublesTotalInSinglesTermsSec(currentTotalSec, hyroxDoublesTablesForState(state))
+    : currentTotalSec;
+  const ceiling = weeksRemaining > 0 && currentTotalSec > 0
+    ? hyroxImprovementCeiling({
+        format: hxFormat,
+        sex: resolveHyroxAthleteSex(state.biologicalSex, hx.division),
+        singlesTotalSec,
+        weeksRemaining,
+      })
+    : null;
+  if (ceiling && disciplineHorizonTotal > 0) {
+    const uncapped = disciplineHorizonTotal * (1 + factorPct);
+    const floorSec = currentTotalSec * (1 - ceiling.pct / 100);
+    if (uncapped < floorSec) {
+      const ceilingPct = floorSec / disciplineHorizonTotal - (1 + factorPct);
+      factorPct += ceilingPct;
+      const months = ceiling.cell.gapHalfSeasons === 'all' ? null : ceiling.cell.gapHalfSeasons * 6;
+      factors.push({
+        name: 'Results ceiling',
+        deltaSec: Math.round(ceilingPct * disciplineHorizonTotal),
+        explanation: `Gain held to ${ceiling.pct.toFixed(1)}%. A quarter of ${ceiling.cell.n.toLocaleString('en-US')} repeat HYROX athletes improved more than that${months ? ` over about ${months} months` : ''}, relative to each event's median.`,
+      });
     }
   }
 
