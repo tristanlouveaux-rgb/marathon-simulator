@@ -244,14 +244,19 @@ describe('band seeds at the target\'s weights', () => {
     biologicalSex: 'female' as const,
     hyroxConfig: { format, athleteBand: 'intermediate' as const, hyroxPreviousTimeFormat: prev },
   });
-  it('the seed field is the previous race\'s weight family at the athlete\'s sex, Open with no race', () => {
-    expect(hyroxSeedField(st('pro_singles', 'pro_singles'))).toEqual({ format: 'pro_singles', sex: 'female' });
+  it('the seed field is the planning field, Open Singles at the athlete\'s sex, whatever the previous race (lane H3c)', () => {
+    expect(hyroxSeedField(st('pro_singles', 'pro_singles'))).toEqual({ format: 'open_singles', sex: 'female' });
     expect(hyroxSeedField(st('pro_singles', 'open_doubles'))).toEqual({ format: 'open_singles', sex: 'female' });
     expect(hyroxSeedField(st('pro_singles'))).toEqual({ format: 'open_singles', sex: 'female' });
+    expect(hyroxSeedField({ hyroxConfig: { format: 'pro_doubles', athleteBand: 'intermediate', division: 'men' } })).toEqual({ format: 'open_singles', sex: 'male' });
+    expect(hyroxSeedField({ hyroxConfig: { format: 'open_doubles', athleteBand: 'intermediate', division: 'mixed' } })).toEqual({ format: 'open_singles', sex: 'pooled' });
   });
-  it('same family: the band medians as they are', () => {
-    expect(hyroxStationSeedsAtTarget(st('pro_singles', 'pro_singles'))).toEqual(stationSeedTimesFor('intermediate', 'pro_singles', 'female'));
+  it('an Open target reads the band medians as they are', () => {
     expect(hyroxStationSeedsAtTarget(st('open_singles'))).toEqual(stationSeedTimesFor('intermediate', 'open_singles', 'female'));
+    expect(hyroxStationSeedsAtTarget(st('open_singles', 'pro_singles'))).toEqual(stationSeedTimesFor('intermediate', 'open_singles', 'female'));
+  });
+  it('a Pro-raced band reads the Open medians at Pro weights, the same seeds as an Open-raced band', () => {
+    expect(hyroxStationSeedsAtTarget(st('pro_singles', 'pro_singles'))).toEqual(hyroxStationSeedsAtTarget(st('pro_singles', 'open_singles')));
   });
   it('an Open-raced band for a Pro target converts each loaded station to Pro weights (slower)', () => {
     const open = stationSeedTimesFor('intermediate', 'open_singles', 'female');

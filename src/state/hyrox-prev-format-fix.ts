@@ -24,7 +24,7 @@ import {
 } from '@/constants/hyrox-constants';
 import { generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
-import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
@@ -105,16 +105,14 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
     }
   }
 
-  // Re-derive the band in the field the previous race was raced in
-  // (hyroxBandForPreviousTime: the format x sex, or doubles division, table's
-  // field-relative thresholds). The previous time is physiologically the same
-  // effort regardless of which slot it lives in, but its place in the field
-  // differs across formats.
+  // Re-derive the planning band (hyroxPlanningBandFor): the previous time is
+  // the same effort whichever format it is filed under, but its Open Singles
+  // equivalent depends on that format's loads and pairing.
   let rebanded = false;
   const prevTimeSec = hx.previousHyroxTimeSec;
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-    const newBand = hyroxBandForPreviousTime(prevTimeSec, newFormat, s.biologicalSex, hx.division);
+    const newBand = hyroxPlanningBandFor(prevTimeSec, newFormat, s.biologicalSex, hx.division);
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];

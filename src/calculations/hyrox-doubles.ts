@@ -208,8 +208,9 @@ export function doublesStationSoloSec(station: HyroxStation, teamSec: number, ta
  * inverse of singles × doublesRatioAt('total').
  *
  * Kept for hyroxBandingTimeSec (the onboarding initializer's banding until
- * lane H2 moves it to hyroxBandForPreviousTime). Placements no longer convert:
- * a doubles total is placed on the doubles table directly.
+ * lane H2 moves it to hyroxPlanningBandFor, hyrox-planning-band.ts).
+ * Placements no longer convert: a doubles total is placed on the doubles
+ * table directly.
  */
 export function doublesTotalInSinglesTermsSec(
   teamSec: number,
@@ -236,19 +237,21 @@ export function doublesStationRatio(
   return doublesRatioAt('stations', soloSum + teamSec.reduce((a, b) => a + b / first.ratio, 0), tables);
 }
 
-/** Seed Roxzone (seconds) for a band in a format: the singles band seed (the
- *  athlete's singles cohort when `tables` is given); for doubles, the seed ×
- *  the percentile-matched Roxzone ratio (partners pass through all 8
- *  transitions together, so Roxzone is not halved). */
+/** Seed Roxzone (seconds) for a band in a format: the band's median Roxzone
+ *  in the planning field, Open Singles at the athlete's sex (`tables.singles`
+ *  sex when given, else pooled), the field the planning band is read in
+ *  (hyroxPlanningBandFor; Roxzone carries no load, so a Pro race needs no
+ *  conversion); for doubles, the seed × the percentile-matched Roxzone ratio
+ *  (partners pass through all 8 transitions together, so Roxzone is not
+ *  halved). */
 export function seedRoxzoneSecForFormat(
   band: AbilityBand,
   format: HyroxFormat,
   tables?: HyroxDoublesTables,
 ): number {
   const singles = tables?.singles;
-  const seedFormat = singles && (singles.format === 'open_singles' || singles.format === 'pro_singles') ? singles.format : 'open_singles';
   const seedSex = singles && singles.sex !== 'mixed' ? singles.sex : 'pooled';
-  const seed = seedRoxzoneSecFor(band, seedFormat, seedSex);
+  const seed = seedRoxzoneSecFor(band, 'open_singles', seedSex);
   if (!isHyroxDoublesFormat(format) || seed <= 0) return seed;
   return Math.round(seed * doublesRatioAt('roxzone', seed, tables ?? HYROX_DEFAULT_DOUBLES_TABLES).ratio);
 }
@@ -276,11 +279,11 @@ export function doublesBenchmarkIsTeamTime(
  * (HYROX_TIME_TO_BAND_THRESHOLDS). A doubles time → doublesTotalInSinglesTermsSec;
  * a singles time as is.
  *
- * Superseded by hyroxBandForPreviousTime (hyrox-results.ts), which bands the
- * time in the field it was raced in (format x sex, field-relative thresholds)
- * with no conversion. Kept for the onboarding initializer
- * (src/state/initialization.hyrox.ts, lane H2), which still bands on the
- * global scale until H2 switches it over.
+ * Superseded by hyroxPlanningBandFor (hyrox-planning-band.ts), which
+ * converts the time to Open Singles terms of the athlete's sex (per station
+ * for doubles, Open/Pro per loaded station) and bands it on that field.
+ * Kept for the onboarding initializer (src/state/initialization.hyrox.ts,
+ * lane H2), which still bands on the global scale until H2 switches it over.
  */
 export function hyroxBandingTimeSec(prevTimeSec: number, prevFormat: HyroxFormat): number {
   if (!isHyroxDoublesFormat(prevFormat)) return prevTimeSec;

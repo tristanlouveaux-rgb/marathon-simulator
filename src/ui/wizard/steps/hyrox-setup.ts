@@ -20,7 +20,6 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState } from '@/state/store';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import {
-  HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_HOURS_RANGE,
   HYROX_DEFAULT_PLAN_WEEKS,
   HYROX_WEEKLY_SESSIONS,
@@ -42,32 +41,22 @@ import {
 } from '@/calculations/hyrox-division';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
-import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 // Venue normally derives from the race-event selection. Manual venue picker
 // is shown as a fallback only when the user picks "Other / enter date manually".
 import { HYROX_VENUES } from '@/data/hyrox-venues';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Derive ability band from previous finish time (seconds). */
-function bandFromTime(sec: number): AbilityBand {
-  for (const { maxSec, band } of HYROX_TIME_TO_BAND_THRESHOLDS) {
-    if (sec < maxSec) return band;
-  }
-  return 'beginner';
-}
-
-/** Band for this step's defaults (hours range, sessions, plan weeks), on the
- *  same rule as the post-onboarding re-band once the previous race's format
- *  is known: the time banded in the field it was raced in, by sex (singles)
- *  or division (doubles) (hyroxBandForPreviousTime, field-relative
- *  thresholds). Before the format is picked, the time as entered on the
- *  global scale. */
+/** Band for this step's defaults (hours range, sessions, plan weeks): the
+ *  planning band, the rule the initializer and every re-band use
+ *  (hyroxPlanningBandFor: the time in Open Singles terms, banded on the Open
+ *  Singles field of the athlete's sex). Before the previous format is picked,
+ *  the time is read as an Open Singles finish. */
 export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat' | 'biologicalSex' | 'hyroxDivision'>): AbilityBand | null {
   const sec = ob.previousHyroxTimeSec;
   if (sec == null) return null;
-  const prevFmt = ob.hyroxPreviousTimeFormat;
-  return prevFmt ? hyroxBandForPreviousTime(sec, prevFmt, ob.biologicalSex, ob.hyroxDivision) : bandFromTime(sec);
+  return hyroxPlanningBandFor(sec, ob.hyroxPreviousTimeFormat ?? 'open_singles', ob.biologicalSex, ob.hyroxDivision);
 }
 
 /** User-friendly target finish time message derived from ability band. */
@@ -560,7 +549,7 @@ function wireEventHandlers(): void {
       const sec = read.sec;
       setTimeError('');
       updateOnboarding({ previousHyroxTimeSec: sec });
-      const band = setupBand(getOnboarding()) ?? bandFromTime(sec);
+      const band = setupBand(getOnboarding()) ?? 'novice';
       if (splitsSection) splitsSection.style.display = 'block';
       if (prevFormatRow) prevFormatRow.style.display = 'block';
       // Reveal the date picker if no event ID is currently selected.
