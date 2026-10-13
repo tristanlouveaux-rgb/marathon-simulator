@@ -16,16 +16,38 @@
  *     debounces a push after benchmark, run-pace or forecast changes. It
  *     returns at once unless the session cache says linked, so unlinked users
  *     and every other mode pay nothing. It also notices the athlete leaving
- *     doubles mode (a format change through a rebuild, a switch to another
- *     sport, a wipe) and deletes their own snapshot then;
+ *     doubles mode in place (Account > Edit settings: a format change, or a
+ *     switch to another sport) and deletes their own snapshot then; the link
+ *     stays, so a temporary format change does not cost the pair their link;
+ *   - Reset plan and Wipe everything (events.ts): cleanUpHyroxPartnerOnReset()
+ *     runs before the local reset (rules below);
  *   - the Partner page pushes right after linking and on open, and polls the
  *     link only while a code is on screen.
+ *
+ * Reset rules (softResetState replaces the state with defaults, so neither
+ * path passes through the leaving-doubles check):
+ *   - Wipe everything ends the link and deletes the athlete's snapshot and
+ *     code (removeAllMyPartnerData), whatever mode they were in;
+ *   - Reset plan deletes the snapshot at once when the athlete was in doubles
+ *     (the rebuilt state has no HYROX numbers until setup ends). The link
+ *     waits for the new setup: finished in HYROX doubles, the link stays and
+ *     the next push restores the snapshot; finished in anything else, the
+ *     cleanup runs as for a wipe.
+ * Both record a pending flag (HYROX_PARTNER_PENDING_KEY, with the account id)
+ * before any request, cleared only once the server cleanup succeeds. Offline,
+ * the reset does not wait: the flag is retried at the next launch
+ * (resolvePendingHyroxPartnerCleanup, main.ts), and while it stands the sync
+ * and the Partner page read and write nothing, so a new snapshot never
+ * reaches the old partner. A flag for another account waits for that
+ * account to sign in again.
  *
  * A push is skipped when the snapshot is unchanged since the last push, and
  * refused when the local state is not stamped as the signed-in user's
  * (getLocalStateOwner), so a stale in-memory state from a previous account can
  * never be written under a new one (the 2026-08-04 cross-account incident).
- * The same stamp guards the leaving-doubles delete.
+ * The same stamp guards the leaving-doubles delete. The server refuses a
+ * snapshot write from a user with no link (42501, read as 'not_linked'): the
+ * cache then flips to unlinked and pushes stop.
  *
  * Static imports stay light (store, owner stamp, the doubles-format check):
  * the snapshot builder and the Supabase calls load on first use.
@@ -55,6 +77,23 @@ let lastSeenDoubles: boolean | undefined;
 let foregroundInFlight = false;
 let cacheListener: ((next: HyroxPartnerCache | undefined) => void) | null = null;
 let sourceForTests: HyroxPartnerSource | null = null;
+
+/** localStorage key of a reset's partner cleanup still owed to the server. */
+export const HYROX_PARTNER_PENDING_KEY = 'mosaic_hyrox_partner_cleanup';
+
+export interface PendingHyroxPartnerCleanup {
+  /** The account the reset was made in; only that session runs it. */
+  userId: string;
+  /** 'wipe': end the link, delete the snapshot and code. 'reset': decide once
+   *  setup is finished again (doubles keeps the link, else as 'wipe'). */
+  action: 'wipe' | 'reset';
+}
+
+/** Cached read of the pending flag; undefined until first read. */
+let pending: PendingHyroxPartnerCleanup | null | undefined;
+let pendingInFlight: Promise<void> | null = null;
+/** The saveState hook tries a 'reset' decision once per session. */
+let pendingTriedOnSave = false;
 
 /** Debounce after the last saveState before a push. Engineering value: long
  *  enough to coalesce a burst of saves (a session completion writes several),
@@ -94,9 +133,116 @@ function stateOwner(): string | null {
   try { return getLocalStateOwner(); } catch { return null; }
 }
 
+function readPending(): PendingHyroxPartnerCleanup | null {
+  if (pending !== undefined) return pending;
+  pending = null;
+  try {
+    const raw = localStorage.getItem(HYROX_PARTNER_PENDING_KEY);
+    const p = raw ? JSON.parse(raw) as Partial<PendingHyroxPartnerCleanup> : null;
+    if (p && typeof p.userId === 'string' && p.userId && (p.action === 'wipe' || p.action === 'reset')) {
+      pending = { userId: p.userId, action: p.action };
+    }
+  } catch { /* unreadable storage: nothing pending */ }
+  return pending;
+}
+
+function writePending(next: PendingHyroxPartnerCleanup | null): void {
+  pending = next;
+  try {
+    if (next) localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify(next));
+    else localStorage.removeItem(HYROX_PARTNER_PENDING_KEY);
+  } catch { /* storage unavailable: the flag lives for this session only */ }
+}
+
+/** True while a reset's partner cleanup is still owed to the server. */
+export function hasPendingHyroxPartnerCleanup(): boolean {
+  return readPending() != null;
+}
+
+/**
+ * Reset plan / Wipe everything (events.ts), called before softResetState:
+ * the owner stamp is read first, before softResetState clears it. Records
+ * the pending flag, then tries the server step once (see the header rules).
+ * Never throws. Offline the requests fail at once, so the reset is not held
+ * up; the flag stays for the next launch.
+ */
+export async function cleanUpHyroxPartnerOnReset(
+  kind: 'wipe' | 'reset',
+  source?: HyroxPartnerSource,
+): Promise<void> {
+  const owner = stateOwner();
+  const wasDoubles = inHyroxDoublesMode();
+  try {
+    const src = source ?? await liveSource();
+    const userId = owner ?? await src.sessionUserId();
+    if (!userId) return;
+    writePending({ userId, action: kind });
+    setHyroxPartnerCache(undefined);
+    if (kind === 'wipe') {
+      const res = await src.removeAllMyPartnerData({ expectUserId: userId });
+      if (res.ok) writePending(null);
+    } else if (wasDoubles) {
+      await src.removeMySnapshot({ expectUserId: userId });
+    }
+  } catch (e) {
+    console.warn('[hyroxPartnerSync] reset cleanup failed:', e);
+  }
+}
+
+/**
+ * Run a pending reset cleanup if it can be decided now. 'wipe' always runs;
+ * 'reset' waits for setup to finish, then keeps the link when the athlete is
+ * in HYROX doubles and runs the full cleanup otherwise. The flag is cleared
+ * only on success; a call for another account is refused (no_session) and the
+ * flag waits for that account. Concurrent callers share one attempt.
+ */
+export function resolvePendingHyroxPartnerCleanup(source?: HyroxPartnerSource): Promise<void> {
+  const p = readPending();
+  if (!p) return Promise.resolve();
+  if (pendingInFlight) return pendingInFlight;
+  const attempt = async (): Promise<void> => {
+    try {
+      if (p.action === 'reset') {
+        if (!getState().hasCompletedOnboarding) return;
+        if (inHyroxDoublesMode()) { writePending(null); return; }
+      }
+      const src = source ?? await liveSource();
+      const res = await src.removeAllMyPartnerData({ expectUserId: p.userId });
+      if (res.ok) {
+        writePending(null);
+        setHyroxPartnerCache({ linked: false, inviteExpiresAt: null });
+      }
+    } catch (e) {
+      console.warn('[hyroxPartnerSync] pending cleanup failed:', e);
+    }
+  };
+  // Cleared in a .finally so it runs after this assignment, even when the
+  // attempt returns without awaiting anything.
+  const run = attempt().finally(() => { if (pendingInFlight === run) pendingInFlight = null; });
+  pendingInFlight = run;
+  return run;
+}
+
+/** Settle a pending cleanup first; true while it still stands (the partner
+ *  feature then reads and writes nothing). */
+export async function partnerBlockedByPendingCleanup(source?: HyroxPartnerSource): Promise<boolean> {
+  if (!readPending()) return false;
+  await resolvePendingHyroxPartnerCleanup(source);
+  return readPending() != null;
+}
+
 /** Called from saveState(). Cheap no-op unless linked in doubles mode, or
- *  the athlete has just left doubles mode. */
+ *  the athlete has just left doubles mode, or a Reset plan's link decision
+ *  is due (setup just finished). */
 export function scheduleHyroxPartnerSnapshotSync(): void {
+  if (readPending()?.action === 'reset' && !pendingTriedOnSave && getState().hasCompletedOnboarding) {
+    pendingTriedOnSave = true;
+    void resolvePendingHyroxPartnerCleanup().then(() => {
+      // Back in doubles after a Reset plan: read the link and push now
+      // rather than at the next launch.
+      if (!readPending() && cache === undefined && inHyroxDoublesMode()) void syncHyroxPartnerOnLaunch();
+    });
+  }
   const doubles = inHyroxDoublesMode();
   const leftDoubles = lastSeenDoubles === true && !doubles;
   lastSeenDoubles = doubles;
@@ -146,6 +292,9 @@ export async function flushHyroxPartnerSnapshot(
     const source = opts.source ?? await liveSource();
     const res = await source.upsertMySnapshot(snapshot, { expectUserId: owner });
     if (res.ok) lastPushed = signature;
+    // The server holds no link for this user (the partner unlinked since the
+    // cache was filled): stop pushing until a link is read again.
+    else if (res.error === 'not_linked') setHyroxPartnerCache({ linked: false, inviteExpiresAt: null });
     return res.ok;
   } catch (e) {
     console.warn('[hyroxPartnerSync] push failed:', e);
@@ -163,6 +312,7 @@ export async function refreshHyroxPartnerCache(
 ): Promise<HyroxPartnerCache | undefined> {
   try {
     const src = source ?? await liveSource();
+    if (await partnerBlockedByPendingCleanup(src)) return cache;
     const link = await src.getLink();
     if (!link.ok) return cache;
     if (!link.value) {
@@ -237,5 +387,8 @@ export function _resetHyroxPartnerSyncForTests(): void {
   foregroundInFlight = false;
   cacheListener = null;
   sourceForTests = null;
+  pending = undefined;
+  pendingInFlight = null;
+  pendingTriedOnSave = false;
   if (timer) { clearTimeout(timer); timer = null; }
 }

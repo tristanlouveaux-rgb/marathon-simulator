@@ -35,6 +35,10 @@ export type PartnerErrorCode =
   | 'own_code'
   | 'already_linked'
   | 'partner_linked'
+  /** A snapshot write was refused because the caller has no link (the
+   *  snapshot INSERT/UPDATE policies require one): the partner unlinked, or
+   *  the link ended some other way, since the client last read it. */
+  | 'not_linked'
   | 'unknown';
 
 export type PartnerResult<T> = { ok: true; value: T } | { ok: false; error: PartnerErrorCode };
@@ -73,7 +77,12 @@ export interface HyroxPartnerSource {
   upsertMySnapshot(snapshot: HyroxPartnerSnapshot, opts?: UpsertSnapshotOptions): Promise<PartnerResult<void>>;
   /** Delete the caller's own snapshot (the athlete left doubles mode). */
   removeMySnapshot(opts?: UpsertSnapshotOptions): Promise<PartnerResult<void>>;
+  /** End the link and delete the caller's snapshot and code (Wipe
+   *  everything, a Reset plan that leaves doubles, account deletion). */
+  removeAllMyPartnerData(opts?: UpsertSnapshotOptions): Promise<PartnerResult<void>>;
   getPartnerSnapshot(): Promise<PartnerResult<StoredPartnerSnapshot | null>>;
+  /** The signed-in user's id, or null (no session, or it cannot be read). */
+  sessionUserId(): Promise<string | null>;
 }
 
 // ── Code helpers ─────────────────────────────────────────────────────────────
@@ -228,6 +237,34 @@ function serverError<T>(error: unknown): PartnerResult<T> {
   return fail('unknown');
 }
 
+/** PostgreSQL insufficient_privilege: on a snapshot write, the policy's
+ *  link check refused it (the caller's own user id is always sent). */
+const RLS_REFUSED = '42501';
+
+/** The unlink function's status words → result. 'not_linked' (nothing left
+ *  to end, including when the partner unlinked first) is the outcome the
+ *  caller asked for. 'retry' is handled by callUnlink and reads as unknown. */
+export function mapUnlinkStatus(status: unknown): PartnerResult<void> {
+  switch (status) {
+    case 'unlinked':
+    case 'not_linked': return { ok: true, value: undefined };
+    case 'not_authenticated': return fail('no_session');
+    default: return fail('unknown');
+  }
+}
+
+/** unlink_hyrox_partner (SECURITY DEFINER): ends the caller's link under
+ *  both users' locks. 'retry' (a lock failure, nothing written) is called
+ *  once more. Throws only what supabase-js throws. */
+async function callUnlink(): Promise<PartnerResult<void>> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data, error } = await supabase.rpc('unlink_hyrox_partner');
+    if (error) return serverError(error);
+    if (data !== 'retry') return mapUnlinkStatus(data);
+  }
+  return fail('unknown');
+}
+
 // ── Calls ────────────────────────────────────────────────────────────────────
 
 /** New invite code. The server sets the code and expiry and deletes the
@@ -308,15 +345,16 @@ export async function getLink(): Promise<PartnerResult<PartnerLink | null>> {
   }
 }
 
-/** Unlink: delete the caller's link row; the partner's mirror row cascades
- *  and the database deletes both snapshots (hyrox_partner_link_after_delete). */
+/** Unlink through unlink_hyrox_partner: the caller's row goes, the
+ *  partner's mirror row cascades, and the database deletes both snapshots
+ *  and both users' codes (hyrox_partner_link_after_delete). Clients hold no
+ *  DELETE on the link table, so both partners unlinking at once queue on
+ *  the per-user locks instead of deadlocking. */
 export async function unlink(): Promise<PartnerResult<void>> {
   const u = await sessionUser();
   if ('error' in u) return fail(u.error);
   try {
-    const { error } = await supabase.from(LINKS).delete().eq('user_id', u.id);
-    if (error) return serverError(error);
-    return { ok: true, value: undefined };
+    return await callUnlink();
   } catch (e) {
     return serverError(e);
   }
@@ -334,6 +372,7 @@ export async function upsertMySnapshot(
     const { error } = await supabase
       .from(SNAPSHOTS)
       .upsert(snapshotToRow(u.id, snapshot), { onConflict: 'user_id' });
+    if ((error as { code?: string } | null)?.code === RLS_REFUSED) return fail('not_linked');
     if (error) return serverError(error);
     return { ok: true, value: undefined };
   } catch (e) {
@@ -388,27 +427,47 @@ export async function getPartnerSnapshot(): Promise<PartnerResult<StoredPartnerS
 }
 
 /**
- * Account deletion: end the link and delete this user's snapshot and invites
- * at once, so a partner stops reading the numbers immediately rather than
- * after the 30-day purge (auth.users delete cascades the rest; the
- * delete-account edge function does the same server-side once deployed).
- * The link goes first: its delete trigger also removes both snapshots, so the
- * snapshot delete after it usually finds nothing. One call at a time, so the
- * three deletes never wait on each other. Best effort: never throws, returns
- * false on any failure.
+ * End the link and delete this user's snapshot and code at once, so a
+ * partner stops reading the numbers immediately. Used by Wipe everything, a
+ * Reset plan that leaves doubles (hyroxPartnerSync) and account deletion
+ * (before the 30-day purge; the delete-account edge function does the same
+ * server-side once deployed). The link goes first: its delete trigger also
+ * removes both snapshots and both users' codes, so the two deletes after it
+ * cover an unlinked user. One call at a time, so the deletes never wait on
+ * each other. Refused unless the session user is `expectUserId` when given.
+ * Never throws; a failed step makes the result a failure.
  */
-export async function removeMyHyroxPartnerData(): Promise<boolean> {
+export async function removeAllMyPartnerData(opts: UpsertSnapshotOptions = {}): Promise<PartnerResult<void>> {
   const u = await sessionUser();
-  if ('error' in u) return false;
+  if ('error' in u) return fail(u.error);
+  if (opts.expectUserId && opts.expectUserId !== u.id) return fail('no_session');
   try {
-    let ok = true;
-    ok = !(await supabase.from(LINKS).delete().eq('user_id', u.id)).error && ok;
-    ok = !(await supabase.from(SNAPSHOTS).delete().eq('user_id', u.id)).error && ok;
-    ok = !(await supabase.from(INVITES).delete().eq('owner_id', u.id)).error && ok;
-    return ok;
-  } catch {
-    return false;
+    const link = await callUnlink();
+    const snap = await supabase.from(SNAPSHOTS).delete().eq('user_id', u.id);
+    const inv = await supabase.from(INVITES).delete().eq('owner_id', u.id);
+    if (!link.ok) return link;
+    if (snap.error) return serverError(snap.error);
+    if (inv.error) return serverError(inv.error);
+    return { ok: true, value: undefined };
+  } catch (e) {
+    return serverError(e);
   }
+}
+
+/** The signed-in user's id, or null. Works offline while the stored session
+ *  is valid (the reset's pending flag needs it when the state has no owner
+ *  stamp). */
+export async function sessionUserId(): Promise<string | null> {
+  try {
+    return await getUserId();
+  } catch {
+    return null;
+  }
+}
+
+/** Account deletion (account-legal.ts): removeAllMyPartnerData as a flag. */
+export async function removeMyHyroxPartnerData(): Promise<boolean> {
+  return (await removeAllMyPartnerData()).ok;
 }
 
 /** The live data source. */
@@ -420,5 +479,7 @@ export const hyroxPartnerSource: HyroxPartnerSource = {
   unlink,
   upsertMySnapshot,
   removeMySnapshot,
+  removeAllMyPartnerData,
   getPartnerSnapshot,
+  sessionUserId,
 };

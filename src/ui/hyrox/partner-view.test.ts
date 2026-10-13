@@ -30,7 +30,7 @@ import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { buildHyroxPartnerSnapshot, type HyroxPartnerSnapshot } from '@/calculations/hyrox-partner-snapshot';
 import { renderHyroxPartnerView, stationStatusText, fmtLead, PARTNER_ERROR_COPY, withheldForecastText } from './partner-view';
 import { partnerRowLabel, renderHyroxStatsView } from './stats-view';
-import { _resetHyroxPartnerSyncForTests, getHyroxPartnerCache, refreshHyroxPartnerOnForeground, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
+import { _resetHyroxPartnerSyncForTests, getHyroxPartnerCache, HYROX_PARTNER_PENDING_KEY, refreshHyroxPartnerOnForeground, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { HyroxPartnerSource, PartnerErrorCode, PartnerResult, PartnerInvite, PartnerLink, StoredPartnerSnapshot } from '@/data/hyroxPartner';
 import type { HyroxConfig, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import type { SimulatorState } from '@/types/state';
@@ -103,6 +103,8 @@ function mockSource(m: MockState): HyroxPartnerSource & MockFns {
     getPartnerSnapshot: vi.fn(async () => ok(m.link ? m.partner : null)),
     upsertMySnapshot: vi.fn(async () => ok(undefined)),
     removeMySnapshot: vi.fn(async () => ok(undefined)),
+    removeAllMyPartnerData: vi.fn(async () => ok(undefined)),
+    sessionUserId: vi.fn(async () => 'user-a'),
   };
   return src as unknown as HyroxPartnerSource & MockFns;
 }
@@ -114,6 +116,7 @@ const text = (sel: string) => $(sel)?.textContent?.replace(/\s+/g, ' ').trim() ?
 beforeEach(() => {
   document.body.innerHTML = '<div id="app-root"></div>';
   _resetHyroxPartnerSyncForTests();
+  localStorage.removeItem(HYROX_PARTNER_PENDING_KEY);
   seed();
 });
 
@@ -249,6 +252,12 @@ describe('unlinked', () => {
     await flush();
     expect(text('#hxp-headline')).toBe('MK');
     expect(document.querySelectorAll('.hxp-station')).toHaveLength(8);
+    // The cache carries the server's link time, so the next foreground sees
+    // the same link and sends no extra push.
+    expect(getHyroxPartnerCache()).toMatchObject({ linked: true, since: 't', initials: 'MK' });
+    const pushes = src.upsertMySnapshot.mock.calls.length;
+    await refreshHyroxPartnerOnForeground(src);
+    expect(src.upsertMySnapshot.mock.calls.length).toBe(pushes);
   });
 });
 
@@ -362,6 +371,23 @@ describe('linked', () => {
 });
 
 describe('load errors', () => {
+  it('a reset\'s partner cleanup still owed to the server: no link read, one line and Try again', async () => {
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'wipe' }));
+    const src = mockSource({ link: { partnerId: 'user-b', createdAt: 't' }, invite: null, partner: null });
+    src.removeAllMyPartnerData.mockResolvedValueOnce(fail('unknown'));
+    renderHyroxPartnerView({ source: src });
+    await flush();
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledWith({ expectUserId: 'user-a' });
+    expect(src.getLink).not.toHaveBeenCalled();
+    expect(text('#hxp-sub')).toBe(PARTNER_ERROR_COPY.unknown);
+    // Try again: the cleanup lands, then the page reads the (now ended) link.
+    src.getLink.mockResolvedValue(ok(null));
+    $('#hxp-retry')!.click();
+    await flush();
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledTimes(2);
+    expect(text('#hxp-headline')).toBe('Not linked');
+  });
+
   it('offline: one line and Try again', async () => {
     const m: MockState = { link: null, invite: null, partner: null, linkError: 'offline' };
     const src = mockSource(m);

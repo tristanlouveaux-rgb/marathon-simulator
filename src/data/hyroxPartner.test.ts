@@ -57,9 +57,12 @@ import {
   mapRedeemStatus,
   normaliseHyroxPartnerCode,
   formatHyroxPartnerCode,
+  mapUnlinkStatus,
   redeemInvite,
+  removeAllMyPartnerData,
   removeMyHyroxPartnerData,
   removeMySnapshot,
+  sessionUserId,
   rowToSnapshot,
   snapshotToRow,
   SNAPSHOT_COLUMNS,
@@ -217,10 +220,39 @@ describe('link and unlink', () => {
     expect(await getLink()).toEqual({ ok: true, value: null });
   });
 
-  it('unlink deletes only the caller\'s row', async () => {
+  it('unlink goes through the locked definer function, never a direct delete', async () => {
+    h.responder = () => ({ data: 'unlinked' });
     expect(await unlink()).toEqual({ ok: true, value: undefined });
-    expect(opArgs(h.calls[0], 'delete')).toHaveLength(1);
-    expect(opArgs(h.calls[0], 'eq')).toEqual([['user_id', 'user-a']]);
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0].rpc).toEqual({ fn: 'unlink_hyrox_partner', args: undefined });
+    expect(h.calls[0].table).toBeNull();
+  });
+
+  it('nothing left to end (the partner unlinked first) is the outcome asked for', async () => {
+    h.responder = () => ({ data: 'not_linked' });
+    expect(await unlink()).toEqual({ ok: true, value: undefined });
+    expect(mapUnlinkStatus('not_authenticated')).toEqual({ ok: false, error: 'no_session' });
+    expect(mapUnlinkStatus('odd')).toEqual({ ok: false, error: 'unknown' });
+  });
+
+  it('unlink retry (a lock failure) calls once more; twice is a plain failure', async () => {
+    let n = 0;
+    h.responder = () => ({ data: ++n === 1 ? 'retry' : 'unlinked' });
+    expect(await unlink()).toEqual({ ok: true, value: undefined });
+    expect(h.calls.filter(c => c.rpc)).toHaveLength(2);
+    h.calls.length = 0;
+    h.responder = () => ({ data: 'retry' });
+    expect(await unlink()).toEqual({ ok: false, error: 'unknown' });
+    expect(h.calls.filter(c => c.rpc)).toHaveLength(2);
+  });
+
+  it('unlink offline or signed out makes no request', async () => {
+    h.userId = null;
+    expect(await unlink()).toEqual({ ok: false, error: 'no_session' });
+    h.userId = 'user-a';
+    vi.stubGlobal('navigator', { onLine: false });
+    expect(await unlink()).toEqual({ ok: false, error: 'offline' });
+    expect(h.calls).toHaveLength(0);
   });
 });
 
@@ -246,6 +278,13 @@ describe('snapshots', () => {
     h.calls.length = 0;
     expect(await removeMySnapshot({ expectUserId: 'user-z' })).toEqual({ ok: false, error: 'no_session' });
     expect(h.calls).toHaveLength(0);
+  });
+
+  it('upsert refused by the link check (42501) reads as not_linked', async () => {
+    h.responder = () => ({ error: { code: '42501', message: 'new row violates row-level security policy' } });
+    expect(await upsertMySnapshot(SNAP)).toEqual({ ok: false, error: 'not_linked' });
+    h.responder = () => ({ error: { code: '23514', message: 'check violation' } });
+    expect(await upsertMySnapshot(SNAP)).toEqual({ ok: false, error: 'unknown' });
   });
 
   it('upsert refuses when the session user is not the local state\'s owner', async () => {
@@ -292,21 +331,49 @@ describe('snapshots', () => {
   });
 });
 
-describe('account deletion cleanup', () => {
-  it('deletes the caller\'s link first, then snapshot and invites', async () => {
-    expect(await removeMyHyroxPartnerData()).toBe(true);
-    expect(h.calls.map(c => c.table)).toEqual(['hyrox_partner_links', 'hyrox_partner_snapshots', 'hyrox_partner_invites']);
-    const byTable = Object.fromEntries(h.calls.map(c => [c.table, c]));
-    expect(opArgs(byTable.hyrox_partner_links, 'eq')).toEqual([['user_id', 'user-a']]);
+describe('full cleanup (wipe, reset out of doubles, account deletion)', () => {
+  it('unlinks through the function first, then deletes the caller\'s snapshot and invites', async () => {
+    h.responder = (c) => (c.rpc ? { data: 'unlinked' } : {});
+    expect(await removeAllMyPartnerData({ expectUserId: 'user-a' })).toEqual({ ok: true, value: undefined });
+    expect(h.calls.map(c => c.rpc?.fn ?? c.table)).toEqual(['unlink_hyrox_partner', 'hyrox_partner_snapshots', 'hyrox_partner_invites']);
+    const byTable = Object.fromEntries(h.calls.filter(c => c.table).map(c => [c.table, c]));
     expect(opArgs(byTable.hyrox_partner_snapshots, 'eq')).toEqual([['user_id', 'user-a']]);
     expect(opArgs(byTable.hyrox_partner_invites, 'eq')).toEqual([['owner_id', 'user-a']]);
-    for (const c of h.calls) expect(opArgs(c, 'delete')).toHaveLength(1);
+    for (const c of h.calls.filter(c => c.table)) expect(opArgs(c, 'delete')).toHaveLength(1);
   });
 
-  it('never throws; reports failure', async () => {
+  it('an unlinked caller still has its snapshot and code deleted', async () => {
+    h.responder = (c) => (c.rpc ? { data: 'not_linked' } : {});
+    expect(await removeAllMyPartnerData()).toEqual({ ok: true, value: undefined });
+    expect(h.calls).toHaveLength(3);
+  });
+
+  it('refused for another account, with no request', async () => {
+    expect(await removeAllMyPartnerData({ expectUserId: 'user-z' })).toEqual({ ok: false, error: 'no_session' });
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('a failed step is a failure; offline makes no request', async () => {
+    h.responder = (c) => (c.rpc ? { data: 'unlinked' } : { error: { message: 'boom' } });
+    expect(await removeAllMyPartnerData()).toEqual({ ok: false, error: 'unknown' });
+    h.calls.length = 0;
+    vi.stubGlobal('navigator', { onLine: false });
+    expect(await removeAllMyPartnerData()).toEqual({ ok: false, error: 'offline' });
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('account deletion reads it as a flag and never throws', async () => {
+    h.responder = (c) => (c.rpc ? { data: 'unlinked' } : {});
+    expect(await removeMyHyroxPartnerData()).toBe(true);
     h.responder = () => ({ error: { message: 'boom' } });
     expect(await removeMyHyroxPartnerData()).toBe(false);
     h.userId = null;
     expect(await removeMyHyroxPartnerData()).toBe(false);
+  });
+
+  it('sessionUserId reads the session, null without one', async () => {
+    expect(await sessionUserId()).toBe('user-a');
+    h.userId = null;
+    expect(await sessionUserId()).toBeNull();
   });
 });

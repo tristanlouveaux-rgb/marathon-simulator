@@ -37,7 +37,7 @@ import { isNative } from '@/utils/platform';
 import { installWebOverscrollBounce } from '@/ui/web-overscroll-bounce';
 import { initSharedFileIntake } from '@/data/shared-file-intake';
 import { mergeEnrichmentsFromServer } from '@/data/enrichmentSync';
-import { refreshHyroxPartnerOnForeground, syncHyroxPartnerOnLaunch } from '@/data/hyroxPartnerSync';
+import { refreshHyroxPartnerOnForeground, resolvePendingHyroxPartnerCleanup, syncHyroxPartnerOnLaunch } from '@/data/hyroxPartnerSync';
 import { installPageSwipeNav } from '@/ui/page-swipe-nav';
 import '@/ui/strava-detail';
 
@@ -356,6 +356,12 @@ async function launchApp(): Promise<void> {
     void import('@/ui/account-required-notice').then(({ maybeShowAccountRequiredNotice }) => {
       maybeShowAccountRequiredNotice();
     });
+
+    // HYROX Doubles partner: a Wipe everything (or a Reset plan whose setup
+    // has since ended outside doubles) that could not reach the server left
+    // a pending cleanup; run it now. One localStorage read when none is
+    // pending; never acts for another account (src/data/hyroxPartnerSync.ts).
+    void resolvePendingHyroxPartnerCleanup();
   }
 
   // One-time cleanup: the weekly-hours onboarding slider was removed (2026-06-01).

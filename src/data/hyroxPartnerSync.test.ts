@@ -4,7 +4,9 @@
  * debounced after saves, skips unchanged snapshots, never writes a state that
  * is not stamped as the signed-in user's; re-reads the link on foreground
  * when a code is out or a link exists; deletes the athlete's own snapshot
- * when they leave doubles mode.
+ * when they leave doubles mode; stops pushing when the server refuses a
+ * write for want of a link; and runs the Reset plan / Wipe everything
+ * partner cleanup, with a pending flag retried until it succeeds.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -19,8 +21,13 @@ import { getDefaultState, getState, setState } from '@/state/store';
 import { setLocalStateOwner } from './planSettingsSync';
 import { HYROX_HOURS_RANGE, HYROX_MTL_CAP, HYROX_WEEKLY_SESSIONS } from '@/constants/hyrox-constants';
 import {
+  cleanUpHyroxPartnerOnReset,
   flushHyroxPartnerSnapshot,
   getHyroxPartnerCache,
+  hasPendingHyroxPartnerCleanup,
+  HYROX_PARTNER_PENDING_KEY,
+  partnerBlockedByPendingCleanup,
+  resolvePendingHyroxPartnerCleanup,
   refreshHyroxPartnerCache,
   refreshHyroxPartnerOnForeground,
   scheduleHyroxPartnerSnapshotSync,
@@ -68,6 +75,8 @@ function mockSource(linked: boolean, invite: { code: string; expiresAt: string }
     getPartnerSnapshot: vi.fn(async () => ok(null)),
     upsertMySnapshot: vi.fn(async () => ok(undefined)),
     removeMySnapshot: vi.fn(async () => ok(undefined)),
+    removeAllMyPartnerData: vi.fn(async () => ok(undefined)),
+    sessionUserId: vi.fn(async () => 'user-a'),
   } as unknown as HyroxPartnerSource & MockFns;
 }
 
@@ -156,6 +165,28 @@ describe('partner snapshot sync', () => {
     expect(vi.getTimerCount()).toBe(1);
     setHyroxPartnerCache({ linked: false });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a push refused for want of a link flips the cache to unlinked and stops pushing', async () => {
+    vi.useFakeTimers();
+    const src = mockSource(true);
+    src.upsertMySnapshot.mockResolvedValueOnce({ ok: false, error: 'not_linked' });
+    setHyroxPartnerCache({ linked: true, since: 't', initials: 'MK' });
+    scheduleHyroxPartnerSnapshotSync();
+    expect(await flushHyroxPartnerSnapshot({ source: src })).toBe(false);
+    expect(getHyroxPartnerCache()).toEqual({ linked: false, inviteExpiresAt: null });
+    // The pending debounced push is dropped and later saves schedule none.
+    expect(vi.getTimerCount()).toBe(0);
+    scheduleHyroxPartnerSnapshotSync();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('any other failed push keeps the cache linked', async () => {
+    const src = mockSource(true);
+    src.upsertMySnapshot.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    setHyroxPartnerCache({ linked: true, since: 't' });
+    expect(await flushHyroxPartnerSnapshot({ source: src })).toBe(false);
+    expect(getHyroxPartnerCache()?.linked).toBe(true);
   });
 
   it('a failed link check keeps the cache as it was', async () => {
@@ -260,5 +291,152 @@ describe('foreground refresh', () => {
     getStateHx().format = 'open_singles';
     await refreshHyroxPartnerOnForeground(src);
     expect(src.getLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('Reset plan and Wipe everything', () => {
+  const pendingFlag = () => JSON.parse(localStorage.getItem(HYROX_PARTNER_PENDING_KEY) ?? 'null');
+
+  it('wipe: ends the link and deletes snapshot and code under the owner stamp; the flag clears on success', async () => {
+    const src = mockSource(true);
+    setHyroxPartnerCache({ linked: true, since: 't' });
+    await cleanUpHyroxPartnerOnReset('wipe', src);
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledWith({ expectUserId: 'user-a' });
+    expect(src.removeMySnapshot).not.toHaveBeenCalled();
+    expect(pendingFlag()).toBeNull();
+    expect(getHyroxPartnerCache()).toBeUndefined();
+  });
+
+  it('wipe offline: the flag stays for the next launch, which retries and clears it', async () => {
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    await cleanUpHyroxPartnerOnReset('wipe', src);
+    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'wipe' });
+    // Next launch: a fresh module state reads the flag from storage.
+    _resetHyroxPartnerSyncForTests();
+    seedHyrox({ eventType: 'running' as SimulatorState['eventType'], hyroxConfig: undefined });
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledTimes(2);
+    expect(src.removeAllMyPartnerData).toHaveBeenLastCalledWith({ expectUserId: 'user-a' });
+    expect(hasPendingHyroxPartnerCleanup()).toBe(false);
+    expect(pendingFlag()).toBeNull();
+  });
+
+  it('no owner stamp: the session user is recorded; no session at all: nothing is recorded', async () => {
+    setLocalStateOwner(null);
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'offline' });
+    await cleanUpHyroxPartnerOnReset('wipe', src);
+    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'wipe' });
+
+    _resetHyroxPartnerSyncForTests();
+    localStorage.clear();
+    const none = mockSource(true);
+    none.sessionUserId.mockResolvedValueOnce(null);
+    await cleanUpHyroxPartnerOnReset('wipe', none);
+    expect(none.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(pendingFlag()).toBeNull();
+  });
+
+  it('a flag for another account waits: the call is refused and the flag kept', async () => {
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-z', action: 'wipe' }));
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValueOnce({ ok: false, error: 'no_session' });
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledWith({ expectUserId: 'user-z' });
+    expect(pendingFlag()).toEqual({ userId: 'user-z', action: 'wipe' });
+  });
+
+  it('reset in doubles: the snapshot goes now, the link waits for the new setup', async () => {
+    const src = mockSource(true);
+    await cleanUpHyroxPartnerOnReset('reset', src);
+    expect(src.removeMySnapshot).toHaveBeenCalledWith({ expectUserId: 'user-a' });
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'reset' });
+  });
+
+  it('reset outside doubles: no snapshot request, the decision still waits', async () => {
+    seedHyrox({ eventType: 'running' as SimulatorState['eventType'], hyroxConfig: undefined });
+    const src = mockSource(false);
+    await cleanUpHyroxPartnerOnReset('reset', src);
+    expect(src.removeMySnapshot).not.toHaveBeenCalled();
+    expect(pendingFlag()).toEqual({ userId: 'user-a', action: 'reset' });
+  });
+
+  it('reset decision: waits while setup is unfinished; doubles again keeps the link; anything else unlinks', async () => {
+    const src = mockSource(true);
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'reset' }));
+    // Setup not finished (the wizard after the reload).
+    seedHyrox({ eventType: 'running' as SimulatorState['eventType'], hyroxConfig: undefined, hasCompletedOnboarding: false });
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(hasPendingHyroxPartnerCleanup()).toBe(true);
+
+    // Finished in HYROX doubles: the link stays, the flag clears.
+    seedHyrox({ hasCompletedOnboarding: true });
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(hasPendingHyroxPartnerCleanup()).toBe(false);
+
+    // Finished in singles: as a wipe.
+    _resetHyroxPartnerSyncForTests();
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'reset' }));
+    seedHyrox({ hasCompletedOnboarding: true });
+    getStateHx().format = 'open_singles';
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledWith({ expectUserId: 'user-a' });
+    expect(hasPendingHyroxPartnerCleanup()).toBe(false);
+  });
+
+  it('the save that finishes setup settles a Reset plan decision once per session', async () => {
+    const src = mockSource(true);
+    _setHyroxPartnerSyncSourceForTests(src);
+    src.removeAllMyPartnerData.mockResolvedValue({ ok: false, error: 'offline' });
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'reset' }));
+    seedHyrox({ eventType: 'running' as SimulatorState['eventType'], hyroxConfig: undefined, hasCompletedOnboarding: false });
+    scheduleHyroxPartnerSnapshotSync(); // mid-wizard save
+    await settle();
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    getState().hasCompletedOnboarding = true;
+    scheduleHyroxPartnerSnapshotSync(); // setup finished, outside doubles
+    scheduleHyroxPartnerSnapshotSync();
+    await settle();
+    expect(src.removeAllMyPartnerData).toHaveBeenCalledTimes(1);
+    expect(hasPendingHyroxPartnerCleanup()).toBe(true); // offline: left for the next launch
+  });
+
+  it('back in doubles after a Reset plan: the finishing save reads the link and pushes', async () => {
+    const src = mockSource(true);
+    _setHyroxPartnerSyncSourceForTests(src);
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'reset' }));
+    seedHyrox({ hasCompletedOnboarding: true });
+    scheduleHyroxPartnerSnapshotSync();
+    await settle();
+    expect(hasPendingHyroxPartnerCleanup()).toBe(false);
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
+    expect(src.getLink).toHaveBeenCalled();
+    expect(src.upsertMySnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('while a cleanup stands the sync reads and writes nothing for the partner', async () => {
+    const src = mockSource(true);
+    src.removeAllMyPartnerData.mockResolvedValue({ ok: false, error: 'unknown' });
+    localStorage.setItem(HYROX_PARTNER_PENDING_KEY, JSON.stringify({ userId: 'user-a', action: 'wipe' }));
+    seedHyrox({ hasCompletedOnboarding: true });
+    expect(await partnerBlockedByPendingCleanup(src)).toBe(true);
+    await syncHyroxPartnerOnLaunch(src);
+    expect(src.getLink).not.toHaveBeenCalled();
+    expect(src.upsertMySnapshot).not.toHaveBeenCalled();
+    expect(getHyroxPartnerCache()).toBeUndefined();
+    // Once the cleanup lands, the next check reads the link again.
+    src.removeAllMyPartnerData.mockResolvedValue({ ok: true, value: undefined });
+    expect(await partnerBlockedByPendingCleanup(src)).toBe(false);
+  });
+
+  it('nothing pending: no request and no block', async () => {
+    const src = mockSource(true);
+    await resolvePendingHyroxPartnerCleanup(src);
+    expect(await partnerBlockedByPendingCleanup(src)).toBe(false);
+    expect(src.removeAllMyPartnerData).not.toHaveBeenCalled();
   });
 });

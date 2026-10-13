@@ -35,7 +35,7 @@ import {
   type PartnerLink,
   type StoredPartnerSnapshot,
 } from '@/data/hyroxPartner';
-import { flushHyroxPartnerSnapshot, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
+import { flushHyroxPartnerSnapshot, partnerBlockedByPendingCleanup, setHyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import { fpModel, ftRounded } from '@/utils/format';
 
 const TEXT_M = '#0F172A';
@@ -69,6 +69,7 @@ export const PARTNER_ERROR_COPY: Record<PartnerErrorCode, string> = {
   own_code: 'This is your own code. Your partner enters it on their phone.',
   already_linked: 'You already have a partner. Unlink first.',
   partner_linked: 'That athlete already has a partner.',
+  not_linked: 'No partner linked.',
   unknown: 'Something went wrong. Try again.',
 };
 
@@ -214,6 +215,12 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
 
   const load = async () => {
     paint({ kind: 'loading' });
+    // A reset's partner cleanup still owed to the server: link nothing and
+    // show nothing until it lands (hyroxPartnerSync reset rules).
+    if (await partnerBlockedByPendingCleanup(source)) {
+      paint({ kind: 'load_error', error: typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'unknown' });
+      return;
+    }
     const link = await source.getLink();
     if (!link.ok) { paint({ kind: 'load_error', error: link.error }); return; }
     if (link.value) await loadLinked(link.value);
@@ -268,8 +275,16 @@ export function renderHyroxPartnerView(opts: HyroxPartnerViewOptions = {}): void
       const r = await source.redeemInvite(value);
       if (vs.kind !== 'unlinked') return;
       if (r.ok) {
-        setHyroxPartnerCache({ linked: true });
-        await loadLinked();
+        // The server's link time becomes the cache's `since`, so the next
+        // foreground sees the same link and pushes nothing extra.
+        const link = await source.getLink();
+        if (link.ok && !link.value) {
+          await loadUnlinked();
+        } else {
+          const value = link.ok ? link.value ?? undefined : undefined;
+          setHyroxPartnerCache({ linked: true, since: value?.createdAt ?? null });
+          await loadLinked(value);
+        }
       } else {
         paint({ ...vs, busy: false, message: PARTNER_ERROR_COPY[r.error] });
         const again = document.getElementById('hxp-code-input') as HTMLInputElement | null;
