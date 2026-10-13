@@ -121,6 +121,76 @@ def grid_min_gap(grid):
 LADDER = [(name, grid, dkw_min_n(grid_min_gap(grid))) for name, grid in GRID_LADDER]
 MIN_CELL_N = LADDER[-1][2]
 
+# One significance level for every test in this ingest (the DKW band above,
+# the chance-match bound and the sign test below), so no second constant.
+ALPHA = DKW_ALPHA
+
+# Seasons used for the current-judging tables (HYROX_S89_*). S8 changed the
+# judging standard; at the same venues wall balls and sled push step up at the
+# S7 to S8 boundary (see HYROX_S79_SAME_VENUE_SEASON_SHIFT), so consumers that
+# want the field as it is judged now use S8 and S9 only.
+CURRENT_JUDGING_SEASONS = (8, 9)
+
+# The 18 timing fields in a fixed order: total, roxzone, then the 16 splits.
+TIMING_FIELD_COUNT = 18
+
+
+def timing_fields(r):
+    return [r['total'], r['rz']] + r['splits']
+
+
+def event_key(r):
+    return (r['season'], r['year'], r['location'])
+
+
+def event_collision_probs(rows):
+    """Per event, per timing field: the probability that two rows drawn at
+    random from the event share the same whole-second value (sum of squared
+    value shares over the rows that have the field timed)."""
+    by_ev = collections.defaultdict(list)
+    for r in rows:
+        by_ev[event_key(r)].append(r)
+    out = {}
+    for ev, rs in by_ev.items():
+        probs = []
+        for f in range(TIMING_FIELD_COUNT):
+            c = collections.Counter(timing_fields(r)[f] for r in rs
+                                    if timing_fields(r)[f] is not None and timing_fields(r)[f] > 0)
+            n = sum(c.values())
+            probs.append(sum(x * x for x in c.values()) / float(n * n) if n else 1.0)
+        out[ev] = (len(rs), probs)
+    return out
+
+
+def log10_chance_match_bound(stats, r):
+    """Upper bound (log10) on the expected number of row pairs at r's event that
+    would match r's timed fields by coincidence: C(n, 2) x the product of the
+    per-field collision probabilities. Assumes fields are independent; they
+    are positively correlated (a fast athlete is fast everywhere), so this is
+    an approximation, but the observed margin is more than 25 orders of
+    magnitude (HYROX_S79_INGEST_REPORT.maxLog10ChanceMatchBound). The rows
+    being tested count towards the collision probabilities, which only makes
+    the bound more conservative."""
+    n, probs = stats[event_key(r)]
+    pairs = n * (n - 1) / 2.0
+    if pairs <= 0:
+        return float('-inf')
+    lb = math.log10(pairs)
+    for f, v in enumerate(timing_fields(r)):
+        if v is not None and v > 0:
+            lb += math.log10(probs[f])
+    return lb
+
+
+def sign_test_p(a, b):
+    """Exact two-sided sign test of a votes against b votes (H0: 50/50)."""
+    n = a + b
+    if n == 0:
+        return 1.0
+    m = max(a, b)
+    tail = sum(math.comb(n, k) for k in range(m, n + 1))
+    return min(1.0, 2 * tail / 2 ** n)
+
 
 def pick_grid(n):
     for name, grid, min_n in LADDER:
@@ -179,6 +249,11 @@ def percentile_table(values):
 def median(values):
     vals = sorted(values)
     return quantile(vals, 0.5) if vals else None
+
+
+def fmt_hmm(sec):
+    m = rnd(sec / 60.0)
+    return f'{m // 60}:{m % 60:02d} h'
 
 
 def fmt_mmss(sec):
@@ -277,33 +352,177 @@ def ingest(results_path):
             raise SystemExit(f'unknown gender {r["sex"]!r}')
         rows.append(r)
 
-    # R2 total null or <= 0 (DNS/DNF placeholders, incl. all-zero rows)
+    # R2 total null or <= 0. Reported by event so the header can say where the
+    # rows come from (in the 2026-10 file: one division at one event that was
+    # published with zero times, plus a couple of stray zeros).
     kept = [r for r in rows if r['total'] is not None and r['total'] > 0]
     report['droppedTotalMissing'] = len(rows) - len(kept)
+    timed_by_event_fmt = collections.Counter((event_key(r), r['format']) for r in kept)
+    timed_by_event = collections.Counter(event_key(r) for r in kept)
+    miss = collections.Counter()
+    miss_null = 0
+    for r in rows:
+        if r['total'] is None:
+            miss_null += 1
+        if r['total'] is None or r['total'] <= 0:
+            miss[(event_key(r), r['format'])] += 1
+    report['droppedTotalMissingNull'] = miss_null
+    report['droppedTotalMissingZero'] = report['droppedTotalMissing'] - miss_null
+    report['droppedTotalMissingByEvent'] = [
+        {'season': ev[0], 'year': ev[1], 'location': ev[2], 'format': fmt, 'rows': n,
+         'timedRowsSameEventAndFormat': timed_by_event_fmt.get((ev, fmt), 0),
+         'timedRowsSameEventOtherFormats': timed_by_event.get(ev, 0) - timed_by_event_fmt.get((ev, fmt), 0)}
+        for (ev, fmt), n in sorted(miss.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
 
-    # R3 exact duplicates: identical on every field, including all 18 timing
-    # fields at 1 s resolution. Two different athletes or teams matching on
-    # all of them is not a realistic coincidence; it is a scrape artefact.
+    # Chance-match statistics for R3 and R3b. A set of rows is treated as one
+    # result recorded more than once only when two different finishers at the
+    # event matching on all of its timed fields by coincidence is implausible:
+    # the bound on expected chance matches must be below ALPHA.
+    stats = event_collision_probs(kept)
+    log_alpha = math.log10(ALPHA)
+    max_bound = float('-inf')
+    kept_distinct = 0
+
+    # R3 exact duplicates: identical on every field (labels and all 18 timing
+    # fields at 1 s resolution). A scrape artefact; one copy is kept.
     seen = set()
     deduped = []
     for r in kept:
         key = (r['format'], r['sex'], r['season'], r['year'], r['location'],
                r['age'], r['total'], r['rz'], tuple(r['splits']))
         if key in seen:
-            continue
+            b = log10_chance_match_bound(stats, r)
+            if b < log_alpha:
+                max_bound = max(max_bound, b)
+                continue
+            kept_distinct += 1
         seen.add(key)
         deduped.append(r)
     report['droppedExactDuplicates'] = len(kept) - len(deduped)
     kept = deduped
 
-    # R4 total sanity fences per format x sex (log-scale Tukey far-out)
+    # R3b one result filed under two labels: rows at the same event identical
+    # on all 18 timing fields but carrying a different (division, sex, age)
+    # label. A single result has one true label.
+    #  - Same format and sex, different age label: the result is real and its
+    #    format and sex are agreed, so one copy stays for the format x sex
+    #    tables; its age is ambiguous, so it is left out of the age tables.
+    #  - Different format or sex: copies are pooled into sets per event and
+    #    label pair, and each copy votes for the label whose station profile it
+    #    fits better: the robust z-score |ln(work/run) - median| / IQR of
+    #    ln(work_total / run_total) in each label's own format x sex cell
+    #    (doubles partners split the stations but run together, so this ratio
+    #    separates singles from doubles regardless of ability). The set is
+    #    resolved to the favoured label only when an exact two-sided sign test
+    #    rejects a 50/50 split at ALPHA. A single copy can never pass (the
+    #    ratio distributions overlap: singles p1 is about pro doubles p99), so
+    #    isolated copies are dropped together with their twin: the label is
+    #    ambiguous and the station profile cannot settle it row by row. A set
+    #    spanning more than two labels would also count as ambiguous (none
+    #    occurs in the 2026-10 file).
+    groups = collections.defaultdict(list)
+    for r in kept:
+        groups[(event_key(r), r['total'], r['rz'], tuple(r['splits']))].append(r)
+    multi = []
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        b = log10_chance_match_bound(stats, g[0])
+        if b >= log_alpha:
+            kept_distinct += len(g) - 1
+            continue
+        max_bound = max(max_bound, b)
+        multi.append(g)
+    in_group = {r['i'] for g in multi for r in g}
+
+    ratio_cells = collections.defaultdict(list)
+    for r in kept:
+        if r['i'] in in_group:
+            continue
+        sp = r['splits']
+        if all(x is not None and x > 0 for x in sp):
+            ratio_cells[(r['format'], r['sex'])].append(math.log(sum(sp[1::2]) / sum(sp[0::2])))
+    ratio_stats = {}
+    for cell, vals in ratio_cells.items():
+        if len(vals) >= MIN_CELL_N:
+            vals.sort()
+            ratio_stats[cell] = (quantile(vals, 0.5), quantile(vals, 0.75) - quantile(vals, 0.25))
+
+    drop_ids = set()
+    age_only = 0
+    sets = collections.defaultdict(list)
+    for g in multi:
+        labels = sorted({(r['format'], r['sex']) for r in g})
+        if len(labels) == 1:
+            g[0]['age_ambiguous'] = True
+            for r in g[1:]:
+                drop_ids.add(r['i'])
+                age_only += 1
+        else:
+            sets[(event_key(g[0]), tuple(labels))].append(g)
+    resolved_rows = ambiguous_rows = 0
+    resolutions = []
+    for (ev, labels), gs in sorted(sets.items()):
+        votes = collections.Counter()
+        abstained = 0
+        for g in gs:
+            sp = g[0]['splits']
+            if len(labels) != 2 or not all(x is not None and x > 0 for x in sp) \
+                    or any(lb not in ratio_stats for lb in labels):
+                abstained += 1
+                continue
+            lr = math.log(sum(sp[1::2]) / sum(sp[0::2]))
+            z = {lb: abs(lr - ratio_stats[lb][0]) / ratio_stats[lb][1] for lb in labels}
+            if z[labels[0]] == z[labels[1]]:
+                abstained += 1
+            else:
+                votes[min(z, key=z.get)] += 1
+        p = sign_test_p(votes[labels[0]], votes[labels[1]]) if len(labels) == 2 else 1.0
+        if p < ALPHA:
+            win = max(labels, key=lambda lb: votes[lb])
+            lose = [lb for lb in labels if lb != win][0]
+            for g in gs:
+                keep = [r for r in g if (r['format'], r['sex']) == win]
+                if len({r['age'] for r in keep}) > 1:
+                    keep[0]['age_ambiguous'] = True
+                for r in g:
+                    if r is not keep[0]:
+                        drop_ids.add(r['i'])
+                        resolved_rows += 1
+            resolutions.append({
+                'season': ev[0], 'year': ev[1], 'location': ev[2],
+                'keptFormat': win[0], 'keptSex': win[1], 'droppedFormat': lose[0], 'droppedSex': lose[1],
+                'copies': len(gs), 'votesKept': votes[win], 'votesDropped': votes[lose],
+                'abstained': abstained, 'signTestP': float(f'{p:.3g}'),
+            })
+        else:
+            for g in gs:
+                for r in g:
+                    drop_ids.add(r['i'])
+                    ambiguous_rows += 1
+    kept = [r for r in kept if r['i'] not in drop_ids]
+    report['crossLabelGroups'] = len(multi)
+    report['droppedCrossLabelAgeOnly'] = age_only
+    report['droppedCrossLabelResolved'] = resolved_rows
+    report['droppedCrossLabelAmbiguous'] = ambiguous_rows
+    # Rows that matched another row's timings but were kept as separate
+    # results because the chance-match bound was not below ALPHA.
+    report['identicalTimingsKeptAsDistinct'] = kept_distinct
+    report['maxLog10ChanceMatchBound'] = round(max_bound, 1) if max_bound > float('-inf') else None
+
+    # R4 total sanity fences per format x sex (log-scale Tukey far-out).
+    # Below the lower fence: impossible times, dropped. Above the upper fence:
+    # the slow tail is continuous and most of these rows are internally
+    # consistent, so they are not dropped on the fence alone; they must be
+    # corroborated by their own splits (see R5).
     by_cell = collections.defaultdict(list)
     for r in kept:
         by_cell[(r['format'], r['sex'])].append(r)
     total_fences = {}
     for cell, rs in by_cell.items():
         total_fences[cell] = log_fences([r['total'] for r in rs])
-    below = above = 0
+    below = 0
     cell_n = collections.Counter()
     cell_below = collections.Counter()
     cell_above = collections.Counter()
@@ -315,28 +534,48 @@ def ingest(results_path):
         if r['total'] < lo:
             below += 1
             cell_below[cell] += 1
-        elif r['total'] > hi:
-            above += 1
+            continue
+        r['above'] = r['total'] > hi
+        if r['above']:
             cell_above[cell] += 1
-        else:
-            tmp.append(r)
+        tmp.append(r)
     report['droppedTotalBelowFence'] = below
-    report['droppedTotalAboveFence'] = above
+    report['aboveFenceRows'] = sum(cell_above.values())
     kept = tmp
 
-    # Per-split fences (on rows that passed R4, values > 0).
+    # Per-split, roxzone and segment-share fences, all from rows inside both
+    # total fences so extreme rows do not move the fences that test them.
     by_cell = collections.defaultdict(list)
     for r in kept:
-        by_cell[(r['format'], r['sex'])].append(r)
+        if not r['above']:
+            by_cell[(r['format'], r['sex'])].append(r)
     split_lo = {}
     rz_fences = {}
+    share_hi = {}
     for cell, rs in by_cell.items():
         for j in range(16):
             split_lo[(cell, j)] = log_fences([r['splits'][j] for r in rs])[0]
         rz_fences[cell] = log_fences([r['rz'] for r in rs])
+        # Largest-segment share: the longest of the 17 segments over the total,
+        # on fully timed, consistent rows. A genuine slow finisher is slow
+        # throughout, so no one segment dominates (median share about 9%); a
+        # late or missed mat dumps hours into one segment (in the 2026-10
+        # file every fully timed, consistent total over 7 h holds more than
+        # 70% of its time in one segment). Same far-out rule, log scale. A
+        # cell with no such rows cannot corroborate anything (share fence 0).
+        shares = []
+        for r in rs:
+            sp = r['splits']
+            if r['rz'] and r['rz'] > 0 and all(x is not None and x > 0 for x in sp) \
+                    and abs(r['total'] - sum(sp) - r['rz']) <= CONSISTENCY_TOLERANCE_SEC:
+                shares.append(max(sp + [r['rz']]) / float(r['total']))
+        share_hi[cell] = log_fences(shares)[1] if shares else 0.0
 
     # R5 consistency + classification
     cls = collections.Counter()
+    cell_kept_above = collections.Counter()
+    kept_above_max = 0
+    one_seg_min, one_seg_max = float('inf'), 0
     final = []
     for r in kept:
         cell = (r['format'], r['sex'])
@@ -346,6 +585,10 @@ def ingest(results_path):
         r['split_ok'] = False
         r['rz_ok'] = False
         if not all16:
+            if r['above']:
+                # An extreme total with a missed mat cannot be checked.
+                cls['droppedAboveFenceUncorroborated'] += 1
+                continue
             # A missed timing mat. The data show the missing segment's time is
             # sometimes absent and sometimes folded into a neighbour, so the
             # row's other splits are untrustworthy; its total (start/finish
@@ -355,18 +598,32 @@ def ingest(results_path):
             continue
         s16 = sum(sp)
         if rz_timed:
+            rz_val = r['rz']
             if abs(r['total'] - s16 - r['rz']) > CONSISTENCY_TOLERANCE_SEC:
                 cls['droppedInconsistent'] += 1
+                if r['above']:
+                    cls['aboveFenceInconsistent'] += 1
                 continue
         else:
             # Roxzone not timed at this event or for this row: the implied
             # roxzone (total - 16 segments) must itself be a plausible roxzone
             # by the same far-out fence, otherwise split time is missing.
             lo, hi = rz_fences[cell]
-            implied = r['total'] - s16
-            if implied < lo or implied > hi:
+            rz_val = r['total'] - s16
+            if rz_val < lo or rz_val > hi:
                 cls['droppedInconsistentUntimedRoxzone'] += 1
+                if r['above']:
+                    cls['aboveFenceInconsistent'] += 1
                 continue
+        if r['above']:
+            if max(sp + [rz_val]) / float(r['total']) > share_hi[cell]:
+                cls['droppedAboveFenceOneSegment'] += 1
+                one_seg_min = min(one_seg_min, r['total'])
+                one_seg_max = max(one_seg_max, r['total'])
+                continue
+            cls['keptAboveFenceCorroborated'] += 1
+            cell_kept_above[cell] += 1
+            kept_above_max = max(kept_above_max, r['total'])
         # Misattribution check: a split far below its far-out fence (e.g. a
         # 4 s sandbag lunge) means its time was credited to a neighbour.
         glitch = any(sp[j] < split_lo[(cell, j)] for j in range(16))
@@ -380,10 +637,14 @@ def ingest(results_path):
         r['rz_ok'] = rz_timed
         cls['splitEligibleRoxzoneTimed' if rz_timed else 'splitEligibleRoxzoneUntimed'] += 1
         final.append(r)
-    for k in ['droppedInconsistent', 'droppedInconsistentUntimedRoxzone',
+    for k in ['droppedAboveFenceUncorroborated', 'droppedAboveFenceOneSegment', 'keptAboveFenceCorroborated',
+              'aboveFenceInconsistent', 'droppedInconsistent', 'droppedInconsistentUntimedRoxzone',
               'totalOnlyMissingSplit', 'totalOnlySplitBelowFence',
               'splitEligibleRoxzoneTimed', 'splitEligibleRoxzoneUntimed']:
         report[k] = cls.get(k, 0)
+    report['keptAboveFenceMaxTotalSec'] = kept_above_max
+    report['droppedAboveFenceOneSegmentTotalRangeSec'] = (
+        [one_seg_min, one_seg_max] if cls.get('droppedAboveFenceOneSegment') else None)
     report['rowsKeptForTotal'] = len(final)
     report['rowsKeptForSplits'] = cls['splitEligibleRoxzoneTimed'] + cls['splitEligibleRoxzoneUntimed']
     report['rowsKeptForRoxzone'] = cls['splitEligibleRoxzoneTimed']
@@ -391,8 +652,10 @@ def ingest(results_path):
     fences_out = {}
     for cell, (lo, hi) in sorted(total_fences.items()):
         fences_out[cell] = {'totalLoSec': rnd(lo), 'totalHiSec': rnd(hi), 'rowsTested': cell_n[cell],
-                            'droppedBelow': cell_below[cell], 'droppedAbove': cell_above[cell]}
-    return final, report, fences_out, total_fences
+                            'droppedBelow': cell_below[cell], 'aboveFence': cell_above[cell],
+                            'keptAboveCorroborated': cell_kept_above[cell],
+                            'maxSegmentShare': round(share_hi[cell], 3) if cell in share_hi else None}
+    return final, report, fences_out, total_fences, resolutions
 
 
 def metric_values(r, metric):
@@ -411,9 +674,13 @@ def metric_values(r, metric):
     return sp[2 * j + 1]
 
 
-def build_tables(final):
+def build_tables(final, seasons=None):
+    """Percentile tables per format x sex x metric. seasons=None pools every
+    season; a tuple restricts the rows (used for the current-judging tables)."""
     cells = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in final:
+        if seasons is not None and r['season'] not in seasons:
+            continue
         c = cells[(r['format'], r['sex'])]
         for m in METRICS:
             v = metric_values(r, m)
@@ -458,7 +725,11 @@ def build_age_tables(final, published_cells):
     for r in final:
         if (r['format'], r['sex']) not in published_cells:
             continue
-        band, why = map_age(r['format'], r['sex'], r['age'])
+        if r.get('age_ambiguous'):
+            # Rule R3b: the same result carried two age labels.
+            band, why = None, 'ambiguous_age_label'
+        else:
+            band, why = map_age(r['format'], r['sex'], r['age'])
         if band is None:
             drops[(r['format'], why)] += 1
             continue
@@ -516,22 +787,38 @@ def build_season_medians(final, published_cells):
 
 
 def build_venue_spread(final, published_cells):
-    ev = collections.defaultdict(list)
+    """Spread of event medians across events, per format x sex x metric. Only
+    events whose metric has n >= MIN_CELL_N count. Ratios are event median over
+    the pooled cell median (the published p50 before rounding)."""
+    ev = collections.defaultdict(lambda: collections.defaultdict(list))
+    pooled = collections.defaultdict(lambda: collections.defaultdict(list))
     for r in final:
-        if r['split_ok'] and (r['format'], r['sex']) in published_cells:
-            ev[(r['format'], r['sex'], r['season'], r['year'], r['location'])].append(sum(r['splits'][0::2]))
-    per_cell = collections.defaultdict(list)
-    for (fmt, sex, *_), vals in ev.items():
-        if len(vals) >= MIN_CELL_N:
-            per_cell[(fmt, sex)].append(median(vals))
+        cell = (r['format'], r['sex'])
+        if cell not in published_cells:
+            continue
+        for m in METRICS:
+            v = metric_values(r, m)
+            if v is not None:
+                ev[(cell, event_key(r))][m].append(v)
+                pooled[cell][m].append(v)
+    meds = collections.defaultdict(list)
+    for (cell, _), by_m in ev.items():
+        for m, vals in by_m.items():
+            if len(vals) >= MIN_CELL_N:
+                meds[(cell, m)].append(median(vals))
     out = {}
-    for k, meds in per_cell.items():
-        meds.sort()
-        out[k] = {
-            'events': len(meds),
-            'p10': rnd(quantile(meds, 0.10)),
-            'p50': rnd(quantile(meds, 0.50)),
-            'p90': rnd(quantile(meds, 0.90)),
+    for (cell, m), ms in meds.items():
+        ms.sort()
+        base = median(pooled[cell][m])
+        out[(cell[0], cell[1], m)] = {
+            'events': len(ms),
+            'p10': rnd(quantile(ms, 0.10)),
+            'p50': rnd(quantile(ms, 0.50)),
+            'p90': rnd(quantile(ms, 0.90)),
+            'ratioMin': round(ms[0] / base, 2),
+            'ratioP10': round(quantile(ms, 0.10) / base, 2),
+            'ratioP90': round(quantile(ms, 0.90) / base, 2),
+            'ratioMax': round(ms[-1] / base, 2),
         }
     return out
 
@@ -583,9 +870,12 @@ def build_same_venue_drift(final, published_cells, windows):
 
 # ─── Improvement (repeat athletes) ───────────────────────────────────────────
 
-# HYROX_TIME_TO_BAND_THRESHOLDS in src/constants/hyrox-constants.ts, applied
-# exactly as bandFromTime() does (sec < maxSec, first match wins).
+# A copy of HYROX_TIME_TO_BAND_THRESHOLDS in src/constants/hyrox-constants.ts,
+# applied exactly as bandFromTime() does (sec < maxSec, first match wins).
 # total_beginner is never time-derived in the app, so it cannot appear here.
+# Emitted as HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS; a test asserts it equals
+# the app constant, so a change to the app's bands fails CI until this file is
+# updated and the module regenerated.
 BAND_THRESHOLDS = [(60 * 60, 'competitive'), (80 * 60, 'advanced'),
                    (100 * 60, 'intermediate'), (120 * 60, 'novice'),
                    (float('inf'), 'beginner')]
@@ -629,6 +919,10 @@ def build_improvement(repeat_path, final, total_fences, windows):
         if not ta or not tb or ta <= 0 or tb <= 0:
             drops['totalMissing'] += 1
             continue
+        # Both fences apply here. The results tables keep a total above the
+        # upper fence only when its own splits corroborate it (rule R4/R5);
+        # the repeat file carries relative splits only, so it cannot be
+        # corroborated and is dropped.
         lo, hi = total_fences[(fmt, sex)]
         if not (lo <= ta <= hi and lo <= tb <= hi):
             drops['totalOutsideFence'] += 1
@@ -719,6 +1013,8 @@ def ts_val(v):
         return 'null'
     if isinstance(v, bool):
         return 'true' if v else 'false'
+    if isinstance(v, float) and math.isinf(v):
+        return 'Infinity' if v > 0 else '-Infinity'
     if isinstance(v, (int, float)):
         return repr(v)
     if isinstance(v, str):
@@ -730,16 +1026,59 @@ def ts_val(v):
     raise TypeError(type(v))
 
 
-def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_suppressed,
-         age_tables, age_counts, age_grids, age_suppressed, age_drops, age_mapping,
-         season_meds, venue_spread, run_legs, improvement, imp_suppressed, imp_report, drift):
+def emit_cell_tables(w, name, doc, tables, counts, grids, suppressed):
+    """Percentile tables + finisher counts + grids + suppressed cells, one
+    family of exports per row set (pooled S7-S9 or current judging S8-S9)."""
+    published = sorted({(f, s) for (f, s, _) in tables}, key=lambda x: (FORMATS.index(x[0]), SEXES.index(x[1])))
+    w(f'/** Finishers behind each {doc} table (format x sex x metric). */')
+    w(f'export const {name}_FINISHER_COUNTS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, number>>>> = {{')
+    for fmt in FORMATS:
+        w(f'  {fmt}: {{')
+        for sex in SEXES:
+            if (fmt, sex) in published:
+                w(f'    {sex}: {{ ' + ', '.join(f'{m}: {counts[(fmt, sex, m)]}' for m in METRICS) + ' },')
+        w('  },')
+    w('};')
+    w('')
+    w(f'/** {doc[0].upper() + doc[1:]} format x sex cells withheld because a metric falls below')
+    w(' *  HYROX_S79_MIN_CELL_N. pro_doubles mixed is also not a rulebook category. */')
+    w(f'export const {name}_SUPPRESSED_CELLS: ReadonlyArray<{{ format: HyroxResultsFormat; sex: HyroxResultsSex; n: number; nSplits: number; nRoxzone: number }}> = [')
+    for s in suppressed:
+        w(f'  {ts_obj_inline(s)},')
+    w('];')
+    w('')
+    w(f'/** {doc[0].upper() + doc[1:]} percentile tables per format x sex x metric. */')
+    w(f'export const {name}_PERCENTILES: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, HyroxPercentileTable>>>> = {{')
+    for fmt in FORMATS:
+        w(f'  {fmt}: {{')
+        for sex in SEXES:
+            if (fmt, sex) not in published:
+                continue
+            w(f'    {sex}: {{')
+            for m in METRICS:
+                w(f'      {m}: {ts_table(tables[(fmt, sex, m)])},')
+            w('    },')
+        w('  },')
+    w('};')
+    w('')
+    w(f'/** Grid used by each {doc} table (see HYROX_S79_GRID_LADDER). */')
+    w(f'export const {name}_GRIDS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, HyroxGridName>>>> = {{')
+    for fmt in FORMATS:
+        w(f'  {fmt}: {{')
+        for sex in SEXES:
+            if (fmt, sex) in published:
+                w(f'    {sex}: {{ ' + ', '.join(f'{m}: {ts_str(grids[(fmt, sex, m)])}' for m in METRICS) + ' },')
+        w('  },')
+    w('};')
+    w('')
+
+
+def emit(out_path, refresh_date, x):
+    report, fences, tables = x['report'], x['fences'], x['tables']
+    drift, venue = x['drift'], x['venue_spread']
+    published_cells = sorted({(f, s) for (f, s, _) in tables}, key=lambda c: (FORMATS.index(c[0]), SEXES.index(c[1])))
+
     # Header claims computed from the data so they stay true on regeneration.
-    shares = []
-    for (fmt, sex), f in fences.items():
-        if (fmt, sex, 'total') in tables and f['rowsTested']:
-            shares.append((100.0 * f['droppedAbove'] / f['rowsTested'], f'{fmt} {sex}'))
-    max_above_pct, max_above_cell = max(shares)
-    max_above_pct = f'{max_above_pct:.2f}'
     shift_lines = []
     for fmt in FORMATS:
         best = None
@@ -754,6 +1093,29 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
             shift_lines.append(
                 f"{fmt}: {best['medianShiftSec']['total']:+d} s ({best['sex']}, {best['from']} to {best['to']}, "
                 f"{best['venuesTotal']} venues); smallest total IQR in the format {iqr_min} s")
+    miss = report['droppedTotalMissingByEvent']
+    top = miss[0] if miss else None
+    rest = report['droppedTotalMissing'] - (top['rows'] if top else 0)
+    ref = ('open_singles', 'male')
+    venue_ref = []
+    for m in ['run_total'] + STATION_KEYS + ['roxzone']:
+        v = venue.get((ref[0], ref[1], m))
+        if v:
+            venue_ref.append(f"{m} {v['ratioP10']:.2f}-{v['ratioP90']:.2f}")
+    widest = {}
+    spread = collections.defaultdict(list)
+    for (fmt, sex, m), v in venue.items():
+        lo, hi = widest.get(m, (9.0, 0.0))
+        widest[m] = (min(lo, v['ratioMin']), max(hi, v['ratioMax']))
+        spread[m].append(v['ratioP90'] - v['ratioP10'])
+    # Stations ranked by their mean p10-to-p90 event-median spread across cells.
+    station_rank = sorted(STATION_KEYS, key=lambda m: -sum(spread[m]) / len(spread[m]))
+    open_shifts = [c['medianShiftSec']['total'] for c in drift
+                   if c['format'] in ('open_singles', 'open_doubles') and c['medianShiftSec']['total'] is not None]
+    open_drift = (min(open_shifts), max(open_shifts))
+    above = report['aboveFenceRows']
+    kept_above = report['keptAboveFenceCorroborated']
+
     L = []
     w = L.append
     w('/**')
@@ -791,13 +1153,39 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w(' *')
     w(' * Row hygiene (counts in HYROX_S79_INGEST_REPORT)')
     w(' * 1. Divisions relay, adaptive, elite, elite_doubles excluded (different events).')
-    w(' * 2. Total missing or <= 0 dropped (DNS/DNF placeholders).')
-    w(' * 3. Exact duplicate rows dropped (identical on all 18 timing fields).')
-    w(' * 4. Total outside the log-scale Tukey far-out fence (Q1 - 3 IQR, Q3 + 3 IQR)')
-    w(' *    per format x sex dropped. Fences in HYROX_S79_TOTAL_FENCES_SEC. Below the')
-    w(' *    lower fence are impossible times; above the upper fence the tail is')
-    w(f' *    continuous, so some genuine very slow finishers go too (at most {max_above_pct}% of a')
-    w(f' *    cell, {max_above_cell}), shifting the published p99 by at most that many points.')
+    w(f" * 2. Total missing or <= 0 dropped: {report['droppedTotalMissingZero']} zero and"
+      f" {report['droppedTotalMissingNull']} null totals.")
+    if top:
+        whole = 'the whole ' if top['timedRowsSameEventAndFormat'] == 0 else ''
+        w(f" *    {top['rows']} are {whole}{top['format']} division at {top['location']} {top['year']}"
+          f" (S{top['season']}), published with zero")
+        w(f" *    times ({top['timedRowsSameEventAndFormat']} timed rows in that division there,"
+          f" {top['timedRowsSameEventOtherFormats']} timed rows in the event's")
+        w(f' *    other divisions). The other {rest} are scattered zeros (droppedTotalMissingByEvent).')
+    w(' * 3. Exact duplicate rows dropped (identical labels and all 18 timing fields).')
+    w(' * 3b. One result filed under two labels (same event, all 18 timing fields identical,')
+    w(' *    different division, sex or age label). Age-only differences keep one copy for')
+    w(f" *    the format x sex tables and leave it out of the age tables ({report['droppedCrossLabelAgeOnly']} copies dropped).")
+    w(' *    Division or sex differences: copies at an event are pooled per label pair and')
+    w(' *    each votes for the label whose work/run time ratio it fits (robust z against')
+    w(' *    each label cell); a set resolves only when a two-sided sign test rejects 50/50')
+    w(f" *    at alpha {ALPHA} (HYROX_S79_CROSS_LABEL_RESOLUTIONS; {report['droppedCrossLabelResolved']} copies dropped). Isolated")
+    w(f" *    copies cannot pass, so both twins go ({report['droppedCrossLabelAmbiguous']} rows). Rules 3 and 3b need the")
+    w(' *    expected number of chance matches at the event (C(n,2) x product of per-field')
+    w(f" *    collision probabilities) below alpha; the largest bound met was 10^{report['maxLog10ChanceMatchBound']}.")
+    w(' * 4. Total below the log-scale Tukey far-out lower fence (Q1 - 3 IQR) per format x')
+    w(' *    sex dropped (impossible times). Above the upper fence (Q3 + 3 IQR) the slow tail')
+    w(' *    is continuous and most rows add up, so the fence alone drops nothing: such a')
+    w(' *    total is kept only when its own timing corroborates it, i.e. all 16 splits')
+    w(' *    timed, consistent with the total (rule 5), and no single segment holding more')
+    w(' *    than the far-out largest-segment share (maxSegmentShare in')
+    w(' *    HYROX_S79_TOTAL_FENCES_SEC). A late or missed mat puts hours into one segment;')
+    w(f" *    genuine slow finishers are slow throughout. Kept {kept_above} of {above} above-fence rows;")
+    w(f" *    dropped {report['droppedAboveFenceUncorroborated']} with a missed mat, {report['aboveFenceInconsistent']} inconsistent (counted in rule 5),")
+    rng = report['droppedAboveFenceOneSegmentTotalRangeSec']
+    w(f" *    {report['droppedAboveFenceOneSegment']} with one dominant segment"
+      + (f" (totals {fmt_hmm(rng[0])} to {fmt_hmm(rng[1])})." if rng else '.'))
+    w(f" *    The longest corroborated total kept is {fmt_hmm(report['keptAboveFenceMaxTotalSec'])}.")
     w(' * 5. Rows with all 17 segments timed: |total - sum| <= 17 s required (17')
     w(' *    segments + total, each rounded to the second, can only drift < 18 s).')
     w(' *    Rows with untimed roxzone: implied roxzone (total - 16 segments) must sit')
@@ -807,21 +1195,31 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w(' * Split metrics (run_total, work_total, stations) share one row set; roxzone')
     w(' * additionally needs a timed roxzone.')
     w(' *')
-    w(' * Seasons are pooled (S7 to S9). At the same venue and the same half of the')
-    w(' * season one year apart, the largest shift in the median total is:')
+    w(' * Seasons are pooled (S7 to S9) in HYROX_S79_PERCENTILES. At the same venue and')
+    w(' * the same half of the season one year apart, the largest shift in the median')
+    w(' * total is:')
     for line in shift_lines:
         w(f' *   {line}')
     w(' * Open formats have many shared venues; pro shifts rest on few venues. S9 is a')
     w(' * partial season whose larger raw shift is mostly venue mix. Wall balls and')
     w(' * sled push step up at the S7 to S8 boundary at the same venues (attributed to')
-    w(' * the S8 judging change), so pooled tables for those two stations read faster')
-    w(' * than the S8 and S9 field: compare the pooled p50 with the S8 and S9 rows of')
-    w(' * HYROX_S79_SEASON_MEDIANS, and see HYROX_S79_SAME_VENUE_SEASON_SHIFT.')
+    w(' * the S8 judging change), so pooled tables for those two stations, and for')
+    w(' * work_total and total that contain them, read faster than the field as judged')
+    w(' * now. HYROX_S89_PERCENTILES holds the same tables from S8 and S9 only; use them')
+    w(' * where the current judging standard matters (station targets, placements).')
     w(' *')
-    w(' * Limitation: run legs are not exactly 1 km at every venue (course layouts')
-    w(' * differ), so run splits carry venue variation. HYROX_S79_VENUE_RUN_TOTAL_SPREAD')
-    w(' * shows the spread of event medians, which mixes course length with field')
-    w(' * strength.')
+    w(' * Limitation: venues differ. Run legs are not exactly 1 km everywhere (course')
+    w(' * layouts differ), roxzone depends on the transition layout, and station times')
+    w(' * vary with venue set-up (sled surface and lane length for the sleds). Event')
+    w(f' * medians as a ratio of the pooled median, p10 to p90 of events, {ref[0]} {ref[1]}:')
+    for i in range(0, len(venue_ref), 4):
+        w(' *   ' + ', '.join(venue_ref[i:i + 4]))
+    w(f' * Among stations the widest p10-p90 spread (mean over cells) is {station_rank[0]}, then')
+    w(f' * {station_rank[1]}. Widest event-median range in any cell: ' + ', '.join(
+        f'{m} {widest[m][0]:.2f}-{widest[m][1]:.2f}' for m in (station_rank[0], station_rank[1], 'roxzone')) + '.')
+    w(' * HYROX_S79_VENUE_SPREAD has every metric and cell. Event medians mix venue')
+    w(' * effects with field strength; the data cannot separate the two. Station targets')
+    w(' * derived from these tables inherit this venue variation.')
     w(' */')
     w('')
     w("import type { AbilityBand, HyroxStation } from '@/types/triathlon';")
@@ -836,6 +1234,8 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('')
     w(f'export const HYROX_S79_LAST_REFRESH_DATE = {ts_str(refresh_date)};')
     w('export const HYROX_S79_SEASONS = [7, 8, 9] as const;')
+    w(f'/** Seasons behind the HYROX_S89_* current-judging tables. */')
+    w(f'export const HYROX_S89_SEASONS = {ts_val(list(CURRENT_JUDGING_SEASONS))} as const;')
     w("export const HYROX_S79_SOURCE = 'Kaggle: HYROX Race Results, Seasons 7-9 (Anonymised), Tanvi Jivani; built with pyrox-client (MIT) from public HYROX results';")
     w("export const HYROX_S79_ATTRIBUTION = 'HYROX results, seasons 7 to 9 (2024 to 2026), via the open pyrox project';")
     w('')
@@ -846,91 +1246,60 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     for name, grid, min_n in LADDER:
         w(f'  {{ name: {ts_str(name)}, percentiles: {ts_val(grid)}, minN: {min_n} }},')
     w('];')
+    w(f'/** Significance level for every test in the ingest (DKW band, chance-match bound, sign test). */')
     w(f'export const HYROX_S79_DKW_ALPHA = {DKW_ALPHA};')
     w(f'/** Smallest publishable cell (coarsest grid\'s minN). */')
     w(f'export const HYROX_S79_MIN_CELL_N = {MIN_CELL_N};')
     w(f'/** Timing-consistency tolerance (seconds); see header rule 5. */')
     w(f'export const HYROX_S79_CONSISTENCY_TOLERANCE_SEC = {CONSISTENCY_TOLERANCE_SEC};')
     w('')
-    w('/** Ingest report: rows dropped or routed by each hygiene rule, in order. */')
+    w('/** Ingest report: rows dropped or routed by each hygiene rule, in order.')
+    w(' *  aboveFenceInconsistent is the subset of the rule 5 drops that sat above the')
+    w(' *  upper total fence; keptAboveFenceCorroborated is a subset of rowsKeptForTotal. */')
     w('export const HYROX_S79_INGEST_REPORT = {')
     for k, v in report.items():
         w(f'  {k}: {ts_val(v)},')
     w('} as const;')
     w('')
-    w('/** Total-time sanity fences (seconds) per format x sex, from rule 4, with the rows')
-    w(' *  each fence tested and dropped. */')
-    w('export const HYROX_S79_TOTAL_FENCES_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, { lo: number; hi: number; rowsTested: number; droppedBelow: number; droppedAbove: number }>>> = {')
+    w('/** Rule 3b sets resolved by the sign test: one label kept, its twin copies dropped. */')
+    w('export const HYROX_S79_CROSS_LABEL_RESOLUTIONS: ReadonlyArray<{ season: number; year: number; location: string; keptFormat: HyroxResultsFormat; keptSex: HyroxResultsSex; droppedFormat: HyroxResultsFormat; droppedSex: HyroxResultsSex; copies: number; votesKept: number; votesDropped: number; abstained: number; signTestP: number }> = [')
+    for c in x['resolutions']:
+        w(f'  {ts_obj_inline(c)},')
+    w('];')
+    w('')
+    w('/** Total-time fences (seconds) per format x sex from rule 4: rows tested, dropped')
+    w(' *  below, above the upper fence, and kept above it after corroboration, plus the')
+    w(' *  largest-segment share fence used to corroborate. */')
+    w('export const HYROX_S79_TOTAL_FENCES_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, { lo: number; hi: number; rowsTested: number; droppedBelow: number; aboveFence: number; keptAboveCorroborated: number; maxSegmentShare: number }>>> = {')
     for fmt in FORMATS:
         parts = []
         for sex in SEXES:
             f = fences.get((fmt, sex))
             if f:
                 parts.append(f'{sex}: {{ lo: {f["totalLoSec"]}, hi: {f["totalHiSec"]}, rowsTested: {f["rowsTested"]}, '
-                             f'droppedBelow: {f["droppedBelow"]}, droppedAbove: {f["droppedAbove"]} }}')
+                             f'droppedBelow: {f["droppedBelow"]}, aboveFence: {f["aboveFence"]}, '
+                             f'keptAboveCorroborated: {f["keptAboveCorroborated"]}, maxSegmentShare: {ts_val(f["maxSegmentShare"])} }}')
         w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
     w('};')
     w('')
 
-    published_cells = sorted({(f, s) for (f, s, _) in tables}, key=lambda x: (FORMATS.index(x[0]), SEXES.index(x[1])))
+    emit_cell_tables(w, 'HYROX_S79', 'pooled S7-S9', tables, x['counts'], x['grids'], x['main_suppressed'])
+    w('// Current-judging tables: same rules and rows as above, seasons 8 and 9 only')
+    w('// (HYROX_S89_SEASONS). See the file header on the S8 judging change.')
+    emit_cell_tables(w, 'HYROX_S89', 'current-judging S8-S9', x['s89_tables'], x['s89_counts'], x['s89_grids'],
+                     x['s89_suppressed'])
 
-    w('/** Finishers behind each published table (format x sex x metric). */')
-    w('export const HYROX_S79_FINISHER_COUNTS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, number>>>> = {')
-    for fmt in FORMATS:
-        w(f'  {fmt}: {{')
-        for sex in SEXES:
-            if (fmt, sex) not in published_cells:
-                continue
-            parts = ', '.join(f'{m}: {counts[(fmt, sex, m)]}' for m in METRICS)
-            w(f'    {sex}: {{ {parts} }},')
-        w('  },')
-    w('};')
-    w('')
-    w('/** Format x sex cells withheld because a metric falls below HYROX_S79_MIN_CELL_N.')
-    w(' *  pro_doubles mixed is also not a rulebook category (no Pro Mixed doubles). */')
-    w('export const HYROX_S79_SUPPRESSED_CELLS: ReadonlyArray<{ format: HyroxResultsFormat; sex: HyroxResultsSex; n: number; nSplits: number; nRoxzone: number }> = [')
-    for s in main_suppressed:
-        w(f'  {ts_obj_inline(s)},')
-    w('];')
-    w('')
-    w('/** Percentile tables per format x sex x metric. */')
-    w('export const HYROX_S79_PERCENTILES: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, HyroxPercentileTable>>>> = {')
-    for fmt in FORMATS:
-        w(f'  {fmt}: {{')
-        for sex in SEXES:
-            if (fmt, sex) not in published_cells:
-                continue
-            w(f'    {sex}: {{')
-            for m in METRICS:
-                w(f'      {m}: {ts_table(tables[(fmt, sex, m)])},')
-            w('    },')
-        w('  },')
-    w('};')
-    w('')
-    w('/** Grid used by each published table (see HYROX_S79_GRID_LADDER). */')
-    w('export const HYROX_S79_GRIDS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, HyroxGridName>>>> = {')
-    for fmt in FORMATS:
-        w(f'  {fmt}: {{')
-        for sex in SEXES:
-            if (fmt, sex) not in published_cells:
-                continue
-            parts = ', '.join(f'{m}: {ts_str(grids[(fmt, sex, m)])}' for m in METRICS)
-            w(f'    {sex}: {{ {parts} }},')
-        w('  },')
-    w('};')
-    w('')
+    run_legs = x['run_legs']
     w('/** Median split per run leg (run 1 to run 8), seconds. Same rows as run_total. */')
     w('export const HYROX_S79_RUN_LEG_MEDIANS_SEC: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, readonly number[]>>> = {')
     for fmt in FORMATS:
-        parts = []
-        for sex in SEXES:
-            if (fmt, sex) in published_cells:
-                parts.append(f'{sex}: {ts_val(run_legs[(fmt, sex)])}')
+        parts = [f'{sex}: {ts_val(run_legs[(fmt, sex)])}' for sex in SEXES if (fmt, sex) in published_cells]
         w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
     w('};')
     w('')
 
     # Age tables
+    age_tables, age_counts = x['age_tables'], x['age_counts']
     w('/**')
     w(' * Age-group bands per format. Singles keep the 5-year bands in the data.')
     w(' * Doubles pool onto 10-year bands: season 7 doubles used 10-year bands')
@@ -947,13 +1316,14 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('')
     w('/** Source label -> published band, with rows mapped (total-table rows only). */')
     w('export const HYROX_S79_AGE_LABEL_MAPPING: ReadonlyArray<{ format: HyroxResultsFormat; label: string; band: string; rows: number }> = [')
-    for (fmt, label, band), n in sorted(age_mapping.items(), key=lambda kv: (FORMATS.index(kv[0][0]), kv[0][2], kv[0][1])):
+    for (fmt, label, band), n in sorted(x['age_mapping'].items(), key=lambda kv: (FORMATS.index(kv[0][0]), kv[0][2], kv[0][1])):
         w(f'  {{ format: {ts_str(fmt)}, label: {ts_str(label)}, band: {ts_str(band)}, rows: {n} }},')
     w('];')
     w('')
-    w('/** Total-table rows left out of the age tables, by format and reason. */')
+    w('/** Total-table rows left out of the age tables, by format and reason')
+    w(' *  (ambiguous_age_label: rule 3b, one result carried two age labels). */')
     w('export const HYROX_S79_AGE_DROPS: ReadonlyArray<{ format: HyroxResultsFormat; reason: string; rows: number }> = [')
-    for (fmt, why), n in sorted(age_drops.items(), key=lambda kv: (FORMATS.index(kv[0][0]), kv[0][1])):
+    for (fmt, why), n in sorted(x['age_drops'].items(), key=lambda kv: (FORMATS.index(kv[0][0]), kv[0][1])):
         w(f'  {{ format: {ts_str(fmt)}, reason: {ts_str(why)}, rows: {n} }},')
     w('];')
     w('')
@@ -961,11 +1331,10 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('export const HYROX_S79_AGE_TOTAL_PERCENTILES: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<string, HyroxPercentileTable>>>> = {')
     for fmt in FORMATS:
         w(f'  {fmt}: {{')
+        bands = SINGLES_AGE_BANDS if fmt in ('open_singles', 'pro_singles') else DOUBLES_AGE_BANDS
         for sex in SEXES:
-            keys = [b for (f, s, b) in age_tables if f == fmt and s == sex]
-            if not keys:
+            if not any((fmt, sex, b) in age_tables for b in bands):
                 continue
-            bands = SINGLES_AGE_BANDS if fmt in ('open_singles', 'pro_singles') else DOUBLES_AGE_BANDS
             w(f'    {sex}: {{')
             for b in bands:
                 if (fmt, sex, b) in age_tables:
@@ -978,8 +1347,8 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('export const HYROX_S79_AGE_TOTAL_COUNTS: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<string, number>>>> = {')
     for fmt in FORMATS:
         w(f'  {fmt}: {{')
+        bands = SINGLES_AGE_BANDS if fmt in ('open_singles', 'pro_singles') else DOUBLES_AGE_BANDS
         for sex in SEXES:
-            bands = SINGLES_AGE_BANDS if fmt in ('open_singles', 'pro_singles') else DOUBLES_AGE_BANDS
             parts = [f'{ts_str(b)}: {age_counts[(fmt, sex, b)]}' for b in bands if (fmt, sex, b) in age_counts]
             if parts:
                 w(f'    {sex}: {{ ' + ', '.join(parts) + ' },')
@@ -988,12 +1357,13 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('')
     w('/** Age cells withheld for n < HYROX_S79_MIN_CELL_N. */')
     w('export const HYROX_S79_AGE_SUPPRESSED_CELLS: ReadonlyArray<{ format: HyroxResultsFormat; sex: HyroxResultsSex; ageGroup: string; n: number }> = [')
-    for s in age_suppressed:
+    for s in x['age_suppressed']:
         w(f'  {ts_obj_inline(s)},')
     w('];')
     w('')
 
     # Season medians
+    season_meds = x['season_meds']
     w('/** Per-season medians (seconds) to show whether S7, S8 and S9 are comparable. */')
     w('export const HYROX_S79_SEASON_MEDIANS: ReadonlyArray<{ format: HyroxResultsFormat; sex: HyroxResultsSex; season: number; nTotal: number; nSplits: number; medians: Record<HyroxResultsMetric, number> }> = [')
     for (fmt, sex, season) in sorted(season_meds, key=lambda k: (FORMATS.index(k[0]), SEXES.index(k[1]), k[2])):
@@ -1011,37 +1381,47 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
         w(f'  {ts_obj_inline(c)},')
     w('];')
     w('')
-    w('/** Spread of event-median run_total across events (n >= HYROX_S79_MIN_CELL_N),')
-    w(' *  seconds. Quantifies course-length variation between venues. */')
-    w('export const HYROX_S79_VENUE_RUN_TOTAL_SPREAD: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, { events: number; p10: number; p50: number; p90: number }>>> = {')
+    w('/** Spread of event medians across events (events with n >= HYROX_S79_MIN_CELL_N for')
+    w(' *  that metric): p10/p50/p90 of event medians in seconds, and the min, p10, p90 and')
+    w(' *  max of event median / pooled cell median. Quantifies venue variation (course')
+    w(' *  length, station set-up) mixed with field strength. */')
+    w('export const HYROX_S79_VENUE_SPREAD: Record<HyroxResultsFormat, Partial<Record<HyroxResultsSex, Record<HyroxResultsMetric, { events: number; p10: number; p50: number; p90: number; ratioMin: number; ratioP10: number; ratioP90: number; ratioMax: number }>>>> = {')
     for fmt in FORMATS:
-        parts = []
+        w(f'  {fmt}: {{')
         for sex in SEXES:
-            v = venue_spread.get((fmt, sex))
-            if v and (fmt, sex) in published_cells:
-                parts.append(f'{sex}: {ts_obj_inline(v)}')
-        w(f'  {fmt}: {{ ' + ', '.join(parts) + ' },')
+            if (fmt, sex) not in published_cells:
+                continue
+            w(f'    {sex}: {{')
+            for m in METRICS:
+                w(f'      {m}: {ts_obj_inline(venue[(fmt, sex, m)])},')
+            w('    },')
+        w('  },')
     w('};')
     w('')
 
     # Improvement
     w('/**')
-    w(' * Improvement between a repeat athlete\'s first and latest race (singles only;')
-    w(' * the repeat file has no doubles). Negative = faster.')
+    w(' * Change between a repeat athlete\'s FIRST and LATEST race (singles only; the')
+    w(' * repeat file has no doubles). Negative = faster. Not a per-race rate: the races')
+    w(' * are 1 to 4 half-season windows apart (roughly 6 to 24 months) with an unknown')
+    w(' * number of races in between.')
     w(' * - relPct: change in time relative to the event median (event x format x sex),')
-    w(' *   which removes course and venue effects. Also includes field drift: the')
-    w(' *   field has slowed slightly season on season, which flatters relPct.')
+    w(' *   which removes course and venue effects. It also includes field drift: in the')
+    w(f' *   open formats the same-venue median total moves by {open_drift[0]:+d} to {open_drift[1]:+d} s a year')
+    w(' *   (HYROX_S79_SAME_VENUE_SEASON_SHIFT); a slower field flatters relPct.')
     w(' * - absPct / absMedianSec: raw change in finish time (venue noise included).')
     w(' * - Quartiles are [p25, median, p75].')
-    w(' * - band: HYROX_TIME_TO_BAND_THRESHOLDS on the first race\'s total (groupBy')
-    w(' *   first_race) or on the mean of both races (groupBy mean_of_races, Oldham\'s')
-    w(' *   method). Grouping on the first race builds in regression to the mean (a')
-    w(' *   slow first race tends to be followed by a faster one); compare the two.')
+    w(' * - band: HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS (= HYROX_TIME_TO_BAND_THRESHOLDS)')
+    w(' *   on the first race\'s total (groupBy first_race) or on the mean of both races')
+    w(' *   (groupBy mean_of_races, Oldham\'s method). Grouping on the first race builds')
+    w(' *   in regression to the mean (a slow first race tends to be followed by a faster')
+    w(' *   one); compare the two.')
     w(' * - gapHalfSeasons: half-season windows between the races, from season and')
     w(' *   calendar year (the only populated date fields; month is empty). Gap g means')
     w(' *   roughly 6g months apart, anywhere from 6(g-1) to 6(g+1) months. The')
     w(' *   repeat file holds no pair inside a single window, so gaps start at 1.')
-    w(' * - Selection: only athletes who raced again appear (survivorship).')
+    w(' * - Selection: only athletes who raced again appear (survivorship). Totals')
+    w(' *   outside either fence are dropped (relative splits cannot corroborate them).')
     w(' */')
     w("export interface HyroxImprovementCell {")
     w("  format: 'all_singles' | 'open_singles' | 'pro_singles';")
@@ -1054,14 +1434,19 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w('  absPct: readonly [number, number, number];')
     w('  absMedianSec: number;')
     w('}')
+    w('/** Band thresholds the improvement cells were cut with (seconds, first match wins). */')
+    w("export const HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS: ReadonlyArray<{ maxSec: number; band: Exclude<AbilityBand, 'total_beginner'> }> = [")
+    for mx, b in BAND_THRESHOLDS:
+        w(f'  {{ maxSec: {ts_val(float(mx)) if math.isinf(mx) else int(mx)}, band: {ts_str(b)} }},')
+    w('];')
     w('export const HYROX_S79_IMPROVEMENT: readonly HyroxImprovementCell[] = [')
-    for c in improvement:
+    for c in x['improvement']:
         w(f'  {ts_obj_inline(c)},')
     w('];')
     w('')
     w('/** Improvement cells withheld for n < HYROX_S79_MIN_CELL_N (empty cells omitted). */')
     w("export const HYROX_S79_IMPROVEMENT_SUPPRESSED: ReadonlyArray<Pick<HyroxImprovementCell, 'format' | 'sex' | 'groupBy' | 'band' | 'gapHalfSeasons' | 'n'>> = [")
-    for c in imp_suppressed:
+    for c in x['imp_suppressed']:
         w(f'  {ts_obj_inline(c)},')
     w('];')
     w('')
@@ -1070,7 +1455,7 @@ def emit(out_path, refresh_date, report, fences, tables, counts, grids, main_sup
     w(' *  constant per event but drifts against the recomputed event median from season')
     w(' *  to season, so it is not used. */')
     w('export const HYROX_S79_IMPROVEMENT_REPORT = {')
-    for k, v in imp_report.items():
+    for k, v in x['imp_report'].items():
         w(f'  {k}: {ts_val(v)},')
     w('} as const;')
     w('')
@@ -1086,8 +1471,9 @@ def main():
     ap.add_argument('--refresh-date', required=True)
     a = ap.parse_args()
 
-    final, report, fences, total_fences = ingest(a.results)
+    final, report, fences, total_fences, resolutions = ingest(a.results)
     tables, counts, grids, main_suppressed, _cells = build_tables(final)
+    s89_tables, s89_counts, s89_grids, s89_suppressed, _ = build_tables(final, CURRENT_JUDGING_SEASONS)
     published_cells = {(f, s) for (f, s, _) in tables}
     age_tables, age_counts, age_grids, age_suppressed, age_drops, age_mapping = build_age_tables(final, published_cells)
     season_meds = build_season_medians(final, published_cells)
@@ -1097,28 +1483,50 @@ def main():
     improvement, imp_suppressed, imp_report = build_improvement(a.repeat, final, total_fences, windows)
     drift = build_same_venue_drift(final, published_cells, windows)
 
-    emit(a.out, a.refresh_date, report, fences, tables, counts, grids, main_suppressed,
-         age_tables, age_counts, age_grids, age_suppressed, age_drops, age_mapping,
-         season_meds, venue_spread, run_legs, improvement, imp_suppressed, imp_report, drift)
+    emit(a.out, a.refresh_date, {
+        'report': report, 'fences': fences, 'resolutions': resolutions,
+        'tables': tables, 'counts': counts, 'grids': grids, 'main_suppressed': main_suppressed,
+        's89_tables': s89_tables, 's89_counts': s89_counts, 's89_grids': s89_grids, 's89_suppressed': s89_suppressed,
+        'age_tables': age_tables, 'age_counts': age_counts, 'age_suppressed': age_suppressed,
+        'age_drops': age_drops, 'age_mapping': age_mapping, 'season_meds': season_meds,
+        'venue_spread': venue_spread, 'run_legs': run_legs, 'improvement': improvement,
+        'imp_suppressed': imp_suppressed, 'imp_report': imp_report, 'drift': drift,
+    })
 
     # Human-readable report
     p = print
     p('== Ingest report ==')
     for k, v in report.items():
         p(f'  {k}: {v}')
+    p('== Cross-label resolutions ==')
+    for c in resolutions:
+        p(f'  {c}')
+    p('== Total fences ==')
+    for k, v in sorted(fences.items()):
+        p(f'  {k}: {v}')
     p('== Grid ladder ==')
     for name, grid, min_n in LADDER:
         p(f'  {name}: minN {min_n}, {len(grid)} breakpoints')
-    p('== Headline medians (p50) ==')
+    for label, tbls, cnts in (('pooled S7-S9', tables, counts), ('S8-S9', s89_tables, s89_counts)):
+        p(f'== Headline medians (p50), {label} ==')
+        for fmt in FORMATS:
+            for sex in SEXES:
+                if (fmt, sex, 'total') not in tbls:
+                    continue
+                med = {m: dict((pp, s) for s, pp in tbls[(fmt, sex, m)]).get(50) for m in METRICS}
+                p(f'  {fmt} {sex} n={cnts[(fmt, sex, "total")]}/{cnts[(fmt, sex, "run_total")]}/{cnts[(fmt, sex, "roxzone")]}: '
+                  + ' '.join(f'{m}={fmt_mmss(med[m])}' for m in METRICS))
+    p('== Tails (p95/p98/p99 total, pooled) ==')
     for fmt in FORMATS:
         for sex in SEXES:
-            if (fmt, sex) not in published_cells:
-                continue
-            med = {m: dict((pp, s) for s, pp in tables[(fmt, sex, m)]).get(50) for m in METRICS}
-            p(f'  {fmt} {sex} n={counts[(fmt, sex, "total")]}/{counts[(fmt, sex, "run_total")]}/{counts[(fmt, sex, "roxzone")]}: '
-              + ' '.join(f'{m}={fmt_mmss(med[m])}' for m in METRICS))
+            if (fmt, sex, 'total') in tables:
+                d = dict((pp, s) for s, pp in tables[(fmt, sex, 'total')])
+                p(f'  {fmt} {sex}: ' + ' '.join(f'p{pp}={d.get(pp)}' for pp in (95, 98, 99)))
     p('== Suppressed main cells ==')
     for s in main_suppressed:
+        p(f'  {s}')
+    p('== Suppressed S8-S9 cells ==')
+    for s in s89_suppressed:
         p(f'  {s}')
     p('== Age drops ==')
     for k, v in sorted(age_drops.items()):
@@ -1136,14 +1544,18 @@ def main():
         ms = c['medianShiftSec']
         p(f"  {c['format']} {c['sex']} {c['from']}->{c['to']} venues={c['venuesTotal']}/{c['venuesSplits']}: "
           + ' '.join(f'{m}={ms[m]}' for m in METRICS))
-    p('== Venue run_total spread ==')
-    for k, v in sorted(venue_spread.items()):
-        p(f'  {k}: {v}')
+    p('== Venue spread (ratio min/p10/p90/max) ==')
+    for k in sorted(venue_spread):
+        v = venue_spread[k]
+        p(f"  {k}: events={v['events']} {v['ratioMin']}/{v['ratioP10']}/{v['ratioP90']}/{v['ratioMax']}")
     p('== Improvement report ==')
     for k, v in imp_report.items():
         p(f'  {k}: {v}')
     for c in improvement:
         if c['format'] == 'all_singles' and c['sex'] == 'all':
+            p(f'  {c}')
+    for c in improvement:
+        if c['band'] == 'all' and c['gapHalfSeasons'] == 'all' and c['format'] != 'all_singles':
             p(f'  {c}')
     p(f'  suppressed improvement cells: {len(imp_suppressed)}')
 
