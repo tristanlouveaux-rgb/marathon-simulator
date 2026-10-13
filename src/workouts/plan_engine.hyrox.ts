@@ -427,7 +427,8 @@ interface HyroxWeekInputs {
    *  the reference week did not hold (running's rule, SCIENCE_LOG §CV.4). Race
    *  week is exempt: it keeps the peak structure minus the brick, whatever a
    *  reference week thinned by the guard or the running share held (§CE
-   *  update 4: race week holds the primer whenever it holds a run). */
+   *  update 4: race week holds the primer whenever it holds a run, unless
+   *  the 110% single-run ceiling excludes it). */
   capCounts?: HyroxSessionCounts;
   /** Deload weeks: hard sessions and quality runs at most the last loaded
    *  week's (running's CV.4: deload quality count at most the last loaded
@@ -710,7 +711,10 @@ function generateWeekSessions(
   // slots). Taper week 1: the existing taper tempo, sized like the other
   // runs, beside the long run. Race week: the primer whenever the week holds
   // a run, fixed at HYROX_RACE_WEEK_PRIMER_MIN (10 min of tempo work), taking
-  // an easy run's place on a tight budget (SCIENCE_LOG §CE update 4). Before
+  // an easy run's place on a tight budget (SCIENCE_LOG §CE update 4). The
+  // 110% single-run ceiling still applies to it: in a 2-week plan, whose week
+  // 1 is a taper week with a long run of 0.65 x the start, the primer is above
+  // the ceiling and race week holds easy runs only (an open question). Before
   // (review 2026-10-12) race week copied its run count from a reference week
   // the guard or the running share had thinned, and the primer needed a
   // second run: 95 of 918 no-race-date plans and 594 of 2,268 race-date plans
@@ -1274,11 +1278,11 @@ function circuitRoundsOf(ws: readonly Workout[]): number {
 }
 
 /** Order a taper week sheds sessions in when it would rise above the week
- *  before: easy runs, the technique circuit, the secondary brick, the taper
- *  brick, then the long run; the tempo last. -1 = never: a commute run, and
- *  race week's primer (race week holds the primer whenever it holds a run,
- *  SCIENCE_LOG §CE update 4). A product order: no source ranks these
- *  sessions. */
+ *  before or above its taper fraction: easy runs, the technique circuit, the
+ *  secondary brick, the taper brick, then the long run; the tempo last. -1 =
+ *  never: a commute run, and race week's primer (race week holds the primer
+ *  whenever it holds a run, SCIENCE_LOG §CE update 4). A product order: no
+ *  source ranks these sessions. */
 function taperDropRank(w: Workout, raceWeek: boolean): number {
   if (w.commute) return -1;
   if (w.t === 'hyrox_run_easy' && !isHyroxLongRun(w)) return 0;
