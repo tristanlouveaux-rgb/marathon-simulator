@@ -2763,19 +2763,26 @@ interface HyroxHoursRung {
 const HOURS_WHY = new WeakMap<HyroxWeekDetail, string[]>();
 
 /**
- * The plan's week with its note against the chosen weekly hours (decision C):
- * a training week HYROX_RUN_FLOOR_MIN or more under them says so, with what
- * holds it, and a week the hours ladder built with fewer hours says that
- * first (one more hour held less that week).
+ * The plan's week with its notes against the chosen weekly hours: a week the
+ * hours ladder held to the plan at fewer hours says so (decision B), and a
+ * training week HYROX_RUN_FLOOR_MIN or more under the chosen hours says so,
+ * with what holds it (decision C). A held week's reason is the hold: the
+ * reasons its lower-hours build recorded (a running share, a budget) are
+ * those of the fewer hours.
  */
 function hoursNote(d: HyroxWeekDetail, hoursMin: number): HyroxWeekDetail {
-  if (d.phase === 'taper' || hoursMin <= 0 || hoursMin - d.plannedMin < HYROX_RUN_FLOOR_MIN) return d;
-  const why = [...(HOURS_WHY.get(d) ?? [])];
-  if (d.builtAtHours * 60 < hoursMin - 1e-6) {
-    why.unshift(`built as at ${d.builtAtHours} h: one more hour never holds less, and the week built at ${hoursMin / 60} h held fewer minutes or less load`);
+  const notes = [...d.adjustments];
+  const held = d.builtAtHours * 60 < hoursMin - 1e-6;
+  const heldText = `held to the ${d.builtAtHours} h week`;
+  if (held) {
+    notes.push(`W${d.week}: ${heldText} (built for ${hoursMin / 60} h this week held fewer minutes or less load, and one more chosen hour never holds less)`);
   }
-  const text = why.length > 0 ? why.join('; ') : 'the running share and the session caps hold it';
-  return { ...d, adjustments: [...d.adjustments, `W${d.week}: ${d.plannedMin} of the chosen ${Math.round(hoursMin)} min (${text})`] };
+  if (d.phase !== 'taper' && hoursMin > 0 && hoursMin - d.plannedMin >= HYROX_RUN_FLOOR_MIN) {
+    const why = held ? [heldText] : [...(HOURS_WHY.get(d) ?? [])];
+    const text = why.length > 0 ? why.join('; ') : 'the running share and the session caps hold it';
+    notes.push(`W${d.week}: ${d.plannedMin} of the chosen ${Math.round(hoursMin)} min (${text})`);
+  }
+  return notes.length === d.adjustments.length ? d : { ...d, adjustments: notes };
 }
 
 // ─── Single-week regenerator (used by injury-gate updates) ───────────────────

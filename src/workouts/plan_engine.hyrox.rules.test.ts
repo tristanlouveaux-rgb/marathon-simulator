@@ -1286,15 +1286,22 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
   it('B: a week the hours ladder holds to the plan at fewer hours says so', () => {
     // Intermediate 18 weeks at 8 h: the 8-h build of W16 holds the interval
     // run and 286 min (the MTL cap), the 7-h build no quality run and 360
-    // min, the plan's peak; the plan takes the 7-h week and says so.
+    // min, the plan's peak; the plan takes the 7-h week and says so, and
+    // holds more minutes than the 8-h build alone.
     const s = build('intermediate', 8, 18);
+    const tw = planTrainingWeeks(s);
     const layout = storedPlanRaceLayout(s.tw, s.planStartDate, s.hyroxConfig!.raceDate);
-    const plain = buildHyroxTrainingWeeks(structuredClone(s), planTrainingWeeks(s), layout, undefined, { hoursLadder: false });
-    const held = s.wks.slice(0, planTrainingWeeks(s)).filter(wk => notes(wk).some(n => /built as at \d+ h/.test(n)));
+    const plain = buildHyroxTrainingWeeks(structuredClone(s), tw, layout, undefined, { hoursLadder: false });
+    const { detail } = generateHyroxPlanDetailed(structuredClone(s));
+    const held = detail.filter(d => d.builtAtHours < 8);
     expect(held.length).toBeGreaterThan(0);
-    const total = (ms: number[]) => ms.reduce((a, m) => a + m, 0);
-    expect(total(s.wks.slice(0, planTrainingWeeks(s)).map(minutes))).toBeGreaterThan(total(plain.map(d => d.plannedMin)));
-    for (const wk of held) expect(notes(wk).join(' ')).not.toMatch(/—/);
+    for (const d of held) {
+      expect(d.adjustments.some(n => n.startsWith(`W${d.week}: held to the ${d.builtAtHours} h week (built for 8 h this week held fewer minutes or less load`)), `W${d.week}`).toBe(true);
+      expect(d.adjustments.join(' ')).not.toMatch(/—/);
+    }
+    for (const d of detail.filter(x => x.builtAtHours === 8)) expect(d.adjustments.some(n => /held to the/.test(n))).toBe(false);
+    const sum = (ms: number[]) => ms.reduce((a, m) => a + m, 0);
+    expect(sum(s.wks.slice(0, tw).map(minutes))).toBeGreaterThan(sum(plain.map(d => d.plannedMin)));
   });
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
