@@ -42,7 +42,7 @@ import {
 } from '@/calculations/hyrox-division';
 import { getFutureHyroxEvents, getPastHyroxEvents, getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
-import { hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { hyroxBandForPreviousTime } from '@/calculations/hyrox-results';
 // Venue normally derives from the race-event selection. Manual venue picker
 // is shown as a fallback only when the user picks "Other / enter date manually".
 import { HYROX_VENUES } from '@/data/hyrox-venues';
@@ -58,14 +58,16 @@ function bandFromTime(sec: number): AbilityBand {
 }
 
 /** Band for this step's defaults (hours range, sessions, plan weeks), on the
- *  same rule as onboarding once the previous race's format is known: the
- *  previous time in singles terms (hyroxBandingTimeSec). Before the format is
- *  picked, the time as entered. */
-export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat'>): AbilityBand | null {
+ *  same rule as the post-onboarding re-band once the previous race's format
+ *  is known: the time banded in the field it was raced in, by sex (singles)
+ *  or division (doubles) (hyroxBandForPreviousTime, field-relative
+ *  thresholds). Before the format is picked, the time as entered on the
+ *  global scale. */
+export function setupBand(ob: Pick<OnboardingState, 'previousHyroxTimeSec' | 'hyroxPreviousTimeFormat' | 'biologicalSex' | 'hyroxDivision'>): AbilityBand | null {
   const sec = ob.previousHyroxTimeSec;
   if (sec == null) return null;
   const prevFmt = ob.hyroxPreviousTimeFormat;
-  return bandFromTime(prevFmt ? hyroxBandingTimeSec(sec, prevFmt) : sec);
+  return prevFmt ? hyroxBandForPreviousTime(sec, prevFmt, ob.biologicalSex, ob.hyroxDivision) : bandFromTime(sec);
 }
 
 /** User-friendly target finish time message derived from ability band. */

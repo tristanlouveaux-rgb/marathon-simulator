@@ -18,11 +18,11 @@ import type { HyroxStation } from '@/types/triathlon';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  STATION_SEED_TIMES_SEC,
   STATION_DISPLAY,
   HYROX_STATION_ORDER,
 } from '@/constants/hyrox-benchmarks';
 import { appendStationTest, hyroxCalibrationCoverage, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { hyroxStationSeedsForState } from '@/calculations/race-prediction.hyrox';
 
 /** Display order for the card's pending stations (ergs first). Which stations
  *  are pending and testable comes from hyroxCalibrationCoverage. */
@@ -71,7 +71,9 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
   if (!pending.length) return '';
   if ((s.hyroxConfig as any)?.dismissedBenchmarkCard) return '';
 
-  const band = s.hyroxConfig!.athleteBand;
+  // The band seed the forecast reads for an untested station (real band
+  // median, the athlete's singles field at the target's weights).
+  const seeds = hyroxStationSeedsForState(s);
   // The count is hyroxCalibrationCoverage's, the one the Forecast, Stats,
   // Account and the chip detail show: every raced station still on the
   // population seed, out of 8. The rows list only the ones the athlete can
@@ -85,7 +87,7 @@ export function renderHyroxBenchmarkCard(s: SimulatorState): string {
 
   const stationRows = pending.slice(0, 4).map(station => {
     const display = STATION_DISPLAY[station];
-    const seedSec = STATION_SEED_TIMES_SEC[band][station];
+    const seedSec = Math.round(seeds[station]);
     const seedMin = Math.floor(seedSec / 60);
     const seedSecStr = String(seedSec % 60).padStart(2, '0');
     return `

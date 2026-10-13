@@ -1,50 +1,44 @@
 /**
  * HYROX Percentile distribution charts.
  *
- * For each headline metric (total time, run total, station total, RoxZone),
- * renders an asymmetric population PDF derived from the real cumulative-percentile
- * breakpoints in `src/data/hyrox-population-distributions.ts` (Kaggle dataset
- * `jgug05/hyrox-results`, S4–S6, ~92k finishers).
+ * For each headline metric (total time, run total, work total across the 8
+ * stations, RoxZone), renders an asymmetric population PDF derived from the
+ * real cumulative-percentile breakpoints of the athlete's cohort
+ * (hyroxResultsTable: HYROX results, seasons 8 and 9, format x sex, or the
+ * pair's division for doubles; src/data/hyrox-results-s79.ts).
  *
  * Method: differentiate the cumulative-percentile table between adjacent
  * breakpoints to produce per-segment density (% per second), oversample with
  * linear interpolation, lightly smooth, then plot. This is the actual shape of
- * the population. No synthesised Gaussians, no fake noise. When the format
- * has no real table (e.g. pro_doubles), the fallback band-anchored synthetic is
- * used and labelled honestly.
+ * the population. No synthesised Gaussians, no fake noise. Every format has
+ * real tables now (Pro Doubles included), so the synthetic fallback is gone; a
+ * metric with no published table is left out.
  *
  * UX: glass card per UX_PATTERNS, HTML-positioned p25/p50/p75 reference lines,
- * single data colour (slate), user time inlined in the row header. No SVG text.
+ * user time inlined in the row header. No SVG text.
  *
  * Side: tracking. Used on forecast view as a transparency aid.
  */
 
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
-import { STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
-import { getFinishTimePercentile, hyroxPopulationCaption } from '@/calculations/hyrox-population';
 import { getState } from '@/state/store';
 import {
-  POPULATION_DATA_AVAILABLE,
-  HYROX_TOTAL_PERCENTILE_TABLES,
-  HYROX_RUN_PERCENTILE_TABLES,
-  HYROX_STATIONS_PERCENTILE_TABLES,
-  HYROX_ROXZONE_PERCENTILE_TABLES,
-  lookupRealPercentile,
-} from '@/data/hyrox-population-distributions';
-import { doublesRatioAt } from '@/calculations/hyrox-doubles';
+  hyroxCohortForState,
+  hyroxResultsTable,
+  hyroxFasterThanPct,
+  hyroxResultsCaption,
+  type HyroxResultsCohort,
+} from '@/calculations/hyrox-results';
+import type { HyroxPercentileTable, HyroxResultsMetric } from '@/data/hyrox-results-s79';
 
-type Format = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
-type CumTable = Record<Format, Array<[number, number]>>;
-type Breakpoints = Array<[number, number]>;
+type Breakpoints = HyroxPercentileTable;
 
 interface MetricChart {
   label: string;
   userValueSec: number;
-  /** Real cumulative-percentile breakpoints (or null when format has no real data). */
-  realTable: Breakpoints | null;
-  /** Synthetic band anchors used when realTable is unavailable. */
-  syntheticBands: number[];
-  /** Pre-computed "faster than X%" position. */
+  /** Real cumulative-percentile breakpoints of the cohort. */
+  realTable: Breakpoints;
+  /** "Faster than X%" position (hyroxFasterThanPct on the same table). */
   fasterThanPct: number;
   /** Vibrant per-metric accent — stroke + dot colour. */
   accent: string;
@@ -148,38 +142,19 @@ function densityFromCumTable(table: Breakpoints, xMin: number, xMax: number): nu
   return smoothed;
 }
 
-/** Synthetic fallback density (when no real table for this format). */
-function syntheticDensity(bandValues: number[], xMin: number, xMax: number): number[] {
-  const sigma = Math.max(20, (bandValues[bandValues.length - 1] - bandValues[0]) * 0.07);
-  const out: number[] = [];
-  for (let i = 0; i < SAMPLE_COUNT; i++) {
-    const x = xMin + (i / (SAMPLE_COUNT - 1)) * (xMax - xMin);
-    let sum = 0;
-    for (const mu of bandValues) {
-      const z = (x - mu) / sigma;
-      sum += Math.exp(-0.5 * z * z);
-    }
-    out.push(sum / bandValues.length);
-  }
-  return out;
-}
-
 /** Build the SVG + HTML overlay for a single distribution row. */
 function renderDistributionRow(metric: MetricChart, rowIndex: number): string {
-  const { realTable, syntheticBands, userValueSec } = metric;
-  const isReal = realTable !== null && realTable.length >= 3;
+  const { realTable, userValueSec } = metric;
 
   // Visible x-range: slightly outside the data range to give the tails room.
-  const dataMin = isReal ? realTable![0][0] : Math.min(...syntheticBands);
-  const dataMax = isReal ? realTable![realTable!.length - 1][0] : Math.max(...syntheticBands);
+  const dataMin = realTable[0][0];
+  const dataMax = realTable[realTable.length - 1][0];
   const pad = (dataMax - dataMin) * 0.04;
   const xMin = dataMin - pad;
   const xMax = dataMax + pad;
   const xRange = xMax - xMin;
 
-  const samples = isReal
-    ? densityFromCumTable(realTable!, xMin, xMax)
-    : syntheticDensity(syntheticBands, xMin, xMax);
+  const samples = densityFromCumTable(realTable, xMin, xMax);
   const maxDensity = Math.max(...samples, 1e-6);
 
   // Build curve path.
@@ -191,15 +166,13 @@ function renderDistributionRow(metric: MetricChart, rowIndex: number): string {
   const linePath = `M${pts.join(' L')}`;
   const fillPath = `${linePath} L${PAD_X + usableW},${H - 6} L${PAD_X},${H - 6} Z`;
 
-  // p25 / p50 / p75 guide x positions (only when real data available).
+  // p25 / p50 / p75 guide x positions.
   const pctXs: Array<{ pct: number; x: number; label: string }> = [];
-  if (isReal) {
-    for (const [pct, label] of [[25, 'p25'], [50, 'p50'], [75, 'p75']] as const) {
-      const t = timeAtCumPct(realTable!, pct);
-      if (t == null) continue;
-      const x = PAD_X + ((t - xMin) / xRange) * usableW;
-      pctXs.push({ pct, x, label });
-    }
+  for (const [pct, label] of [[25, 'p25'], [50, 'p50'], [75, 'p75']] as const) {
+    const t = timeAtCumPct(realTable, pct);
+    if (t == null) continue;
+    const x = PAD_X + ((t - xMin) / xRange) * usableW;
+    pctXs.push({ pct, x, label });
   }
 
   // User position.
@@ -259,7 +232,7 @@ function renderDistributionRow(metric: MetricChart, rowIndex: number): string {
           : ''
         }
         <div style="position:relative;width:100%;height:26px;margin-top:2px">
-          ${isReal ? pctLabelsHtml : ''}
+          ${pctLabelsHtml}
           <span class="hx-pd-pill" style="position:absolute;left:${pillLeft};top:13px;transform:${pillTransform};font-size:9px;font-weight:600;color:${USER_LINE};font-variant-numeric:tabular-nums;opacity:0;animation-delay:${userDelay + 80}ms">you</span>
         </div>
       </div>
@@ -272,100 +245,31 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
   const hx = s.hyroxConfig;
   if (!hx) return '';
 
-  const bands = ['competitive', 'advanced', 'intermediate', 'novice', 'beginner', 'total_beginner'] as const;
-
   const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const fmt: Format = (hx.format ?? 'open_singles') as Format;
-
-  // Synthetic anchors by band (used as fallback when no real table for this
-  // format, i.e. Pro Doubles). Doubles bands are the pair's times: each singles
-  // band value × the percentile-matched doubles ratio for that metric
-  // (hyrox-doubles.ts), the forecast's own model, not a flat halving.
-  const toPair = (metric: 'stations' | 'roxzone' | 'run', sec: number) =>
-    isDoubles ? sec * doublesRatioAt(metric, sec).ratio : sec;
-  const runByBand = bands.map(b => toPair('run', 8 * SEED_RUN_PACE_SEC_KM[b]));
-  const stationsByBand = bands.map(b => toPair('stations', Object.values(STATION_SEED_TIMES_SEC[b]).reduce((s, v) => s + v, 0)));
-  const roxzoneByBand = bands.map(b => toPair('roxzone', SEED_ROXZONE_SEC[b]));
-  const totalByBand = bands.map((_, i) => runByBand[i] + stationsByBand[i] + roxzoneByBand[i]);
-
-  function realTableFor(t: CumTable): Breakpoints | null {
-    if (!POPULATION_DATA_AVAILABLE) return null;
-    const arr = t[fmt];
-    return arr && arr.length >= 3 ? arr : null;
-  }
-
-  function fasterThanFromTable(t: CumTable, timeSec: number, syntheticAnchors: number[], fallbackPct?: number): number {
-    if (POPULATION_DATA_AVAILABLE) {
-      const cumPct = lookupRealPercentile(t, fmt, timeSec);
-      if (cumPct != null) return Math.max(0, Math.min(100, 100 - cumPct));
-    }
-    if (fallbackPct != null) return fallbackPct;
-    // Linear interpolation through synthetic band anchors at canonical percentile pegs.
-    const anchors = [95, 85, 65, 40, 20, 5];
-    if (timeSec <= syntheticAnchors[0]) return 100;
-    if (timeSec >= syntheticAnchors[syntheticAnchors.length - 1]) return 0;
-    for (let i = 1; i < syntheticAnchors.length; i++) {
-      if (timeSec <= syntheticAnchors[i]) {
-        const frac = (timeSec - syntheticAnchors[i - 1]) / (syntheticAnchors[i] - syntheticAnchors[i - 1]);
-        return Math.round(anchors[i - 1] + frac * (anchors[i] - anchors[i - 1]));
-      }
-    }
-    return 0;
-  }
+  // The target format's cohort: the prediction is in its terms (the pair's
+  // time for doubles), so it is placed on the same table the curve is drawn
+  // from, and the tier label and the curve agree.
+  const cohort: HyroxResultsCohort = hyroxCohortForState(s);
 
   // Per-metric accents. Each row gets its own colour, mirroring the trend-card
   // pattern (Swim CSS / Bike FTP / Run LT / VO2max each have a distinct hue).
   // Run = teal mirrors the canonical Run LT colour.
-  const metrics: MetricChart[] = [
-    {
-      label: 'Total finish time',
-      userValueSec: prediction.totalSec,
-      realTable: realTableFor(HYROX_TOTAL_PERCENTILE_TABLES),
-      syntheticBands: totalByBand,
-      fasterThanPct: fasterThanFromTable(
-        HYROX_TOTAL_PERCENTILE_TABLES, prediction.totalSec, totalByBand,
-        getFinishTimePercentile(prediction.totalSec, fmt),
-      ),
-      accent: '#F472B6',                           // pink-400. The headline summary
-      fill:   'rgba(244,114,182,0.10)',
-    },
-    {
-      label: 'Run total (8 × 1km)',
-      userValueSec: prediction.runSec,
-      realTable: realTableFor(HYROX_RUN_PERCENTILE_TABLES),
-      syntheticBands: runByBand,
-      fasterThanPct: fasterThanFromTable(HYROX_RUN_PERCENTILE_TABLES, prediction.runSec, runByBand),
-      accent: '#14B8A6',                           // teal-500. Mirrors canonical Run LT
-      fill:   'rgba(20,184,166,0.10)',
-    },
-    {
-      label: `Stations total (8 stations${isDoubles ? ', pair' : ''})`,
-      userValueSec: prediction.stationsSec,
-      realTable: realTableFor(HYROX_STATIONS_PERCENTILE_TABLES),
-      syntheticBands: stationsByBand,
-      fasterThanPct: fasterThanFromTable(
-        HYROX_STATIONS_PERCENTILE_TABLES, prediction.stationsSec,
-        stationsByBand,
-      ),
-      accent: '#FB923C',                           // orange-400. HYROX's signature workout
-      fill:   'rgba(251,146,60,0.10)',
-    },
-    {
-      label: 'RoxZone transitions',
-      userValueSec: prediction.roxzoneSec,
-      realTable: realTableFor(HYROX_ROXZONE_PERCENTILE_TABLES),
-      syntheticBands: roxzoneByBand,
-      fasterThanPct: fasterThanFromTable(
-        HYROX_ROXZONE_PERCENTILE_TABLES, prediction.roxzoneSec,
-        roxzoneByBand,
-      ),
-      accent: '#8B5CF6',                             // violet-500. Distinct from the orange above; transitions read as the "connective tissue" of the race
-      fill:   'rgba(139,92,246,0.10)',
-    },
+  const rows: Array<{ label: string; metric: HyroxResultsMetric; sec: number; accent: string; fill: string }> = [
+    { label: 'Total finish time', metric: 'total', sec: prediction.totalSec, accent: '#F472B6', fill: 'rgba(244,114,182,0.10)' },
+    { label: 'Run total (8 × 1km)', metric: 'run_total', sec: prediction.runSec, accent: '#14B8A6', fill: 'rgba(20,184,166,0.10)' },
+    { label: `Stations total (8 stations${isDoubles ? ', pair' : ''})`, metric: 'work_total', sec: prediction.stationsSec, accent: '#FB923C', fill: 'rgba(251,146,60,0.10)' },
+    { label: 'RoxZone transitions', metric: 'roxzone', sec: prediction.roxzoneSec, accent: '#8B5CF6', fill: 'rgba(139,92,246,0.10)' },
   ];
+  const metrics: MetricChart[] = [];
+  for (const r of rows) {
+    const table = hyroxResultsTable(r.metric, cohort);
+    const fasterThanPct = hyroxFasterThanPct(r.metric, r.sec, cohort);
+    if (!table || table.length < 3 || fasterThanPct == null) continue;
+    metrics.push({ label: r.label, userValueSec: r.sec, realTable: table, fasterThanPct, accent: r.accent, fill: r.fill });
+  }
+  if (metrics.length === 0) return '';
 
-  const anyReal = metrics.some(m => m.realTable !== null);
-  const subtitle = anyReal ? hyroxPopulationCaption(fmt) : 'Distributions synthesised from band seed times. Approximate.';
+  const subtitle = hyroxResultsCaption(cohort);
 
   return `
     <style>
