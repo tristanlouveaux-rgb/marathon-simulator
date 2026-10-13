@@ -506,6 +506,30 @@ describe('predictHyroxRace: converted stations cap confidence at medium, in both
     expect(doubles.crossFormatCapped).toBe(true);
   });
 
+  it('option A: doubles race splits from the other weight family are mapped, so they cap a doubles target at medium', () => {
+    const splits = (format: 'open_doubles' | 'pro_doubles') => Object.fromEntries(Object.entries(singlesTimes).map(([st, sec]) => [st, [
+      { dateISO: dateNDaysAgo(3), sec, source: 'race' as const, format, proWeights: format === 'pro_doubles' },
+    ]]));
+    // Pro Doubles target, Open Doubles splits: solo, Open to Pro, back to the pair.
+    const pro = predictHyroxRace(buildState({ format: 'pro_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
+      stationBenchmarkHistory: splits('open_doubles') }))!;
+    expect(pro.calibratedCount).toBe(8);
+    expect(pro.stations.every(l => l.teamTimeSplit && l.crossFormat)).toBe(true);
+    expect(pro.crossFormatConversion).toBe('singles_to_doubles');
+    expect(pro.confidence).toBe('medium');
+    expect(pro.crossFormatCapped).toBe(true);
+    // The reverse: Open Doubles target, Pro Doubles splits.
+    const open = predictHyroxRace(buildState({ format: 'open_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
+      stationBenchmarkHistory: splits('pro_doubles') }))!;
+    expect(open.stations.every(l => l.crossFormat)).toBe(true);
+    expect(open.confidence).toBe('medium');
+    // The target family's own splits reach high.
+    const own = predictHyroxRace(buildState({ format: 'pro_doubles', stationBenchmarksDoubles: singlesTimes, venueId: 'london-excel',
+      stationBenchmarkHistory: splits('pro_doubles') }))!;
+    expect(own.stations.some(l => l.crossFormat)).toBe(false);
+    expect(own.confidence).toBe('high');
+  });
+
   it('one converted station is enough to cap', () => {
     const p = predictHyroxRace(buildState({
       format: 'open_doubles',

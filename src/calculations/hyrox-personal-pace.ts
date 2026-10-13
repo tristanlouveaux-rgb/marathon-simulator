@@ -88,8 +88,12 @@ export function estimateStationsAndRoxzoneFromBand(
   const seedSex = singles && singles.sex !== 'mixed' ? singles.sex : 'pooled';
   const seeds = stationSeedTimesFor(band, seedFormat, seedSex);
   const isDoubles = format === 'open_doubles' || format === 'pro_doubles';
+  // The seeds are band medians in the singles field's own terms, so the
+  // mapping reads them as such: without the Mixed-woman flag, which marks
+  // solo times at the pair's M-Open loads (hyrox-doubles.ts).
+  const fieldTables: HyroxDoublesTables | undefined = tables ? { singles: tables.singles, doubles: tables.doubles } : undefined;
   const stationsTotalSec = Math.round(HYROX_STATION_ORDER.reduce(
-    (sum, st) => sum + (isDoubles ? doublesStationTeamSec(st as HyroxStation, seeds[st as HyroxStation], tables) : seeds[st as HyroxStation]),
+    (sum, st) => sum + (isDoubles ? doublesStationTeamSec(st as HyroxStation, seeds[st as HyroxStation], fieldTables) : seeds[st as HyroxStation]),
     0,
   ));
   const roxzoneSec = seedRoxzoneSecForFormat(band, format, tables);

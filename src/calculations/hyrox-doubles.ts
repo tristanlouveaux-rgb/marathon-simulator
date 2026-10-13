@@ -32,11 +32,19 @@
  * the median the ratios run from about 0.92 (SkiErg, row: one machine, the
  * pair alternates) to about 0.6 (sleds, burpee broad jumps, wall balls).
  *
+ * Mixed Doubles woman: the pair races M-Open loads, the Women Pro tier, while
+ * her singles field is Open Singles women (W-Open loads). Her solo station
+ * times are at M-Open, so the station mappings convert them Pro to Open
+ * (hyroxSoloToFieldSec) before reading the women's singles table and back
+ * after (HyroxDoublesTables.soloProLoadsInOpenField, set by hyroxDoublesTables
+ * from hyroxSoloFrame). Before this (review 2026-10-13) her M-Open tests were
+ * placed on the W-Open table, so a test at her prescribed load made the
+ * forecast slower.
+ *
  * Limitations:
  *  - Cohort comparison, not the same athletes racing both formats.
- *  - A Mixed Doubles athlete's solo times are compared with their own sex's
- *    singles table, which races a lighter tier for women (Women Open loads)
- *    than the pair (Men Open loads).
+ *  - The Mixed woman's Pro-to-Open step uses the Open-to-Pro conversion (a
+ *    difference in differences, hyrox-results.ts), itself a cohort comparison.
  *  - Venue variation and the S8 judging step are inherited from the tables.
  */
 
@@ -50,7 +58,9 @@ import {
   secondsAtPercentileIn,
   hyroxResultsTable,
   hyroxResultsCohort,
-  hyroxSinglesCohort,
+  hyroxSoloFrame,
+  hyroxSoloToFieldSec,
+  hyroxFieldToSoloSec,
   hyroxDoublesFormatOf,
   type HyroxResultsCohort,
 } from './hyrox-results';
@@ -73,6 +83,13 @@ function resultsMetric(metric: DoublesMetric): HyroxResultsMetric {
 export interface HyroxDoublesTables {
   singles: HyroxResultsCohort;
   doubles: HyroxResultsCohort;
+  /** The athlete's solo times are at the Pro tier of their sex while
+   *  `singles` is the Open field (a woman in Mixed Doubles: M-Open loads, the
+   *  Women Pro tier). The station mappings (doublesStationTeamSec,
+   *  doublesStationSoloSec) take and return solo times at those loads and
+   *  convert to the field's terms internally (hyroxSoloToFieldSec). Absent:
+   *  solo times are already in the singles field's terms. */
+  soloProLoadsInOpenField?: boolean;
 }
 
 /** Open Doubles against Open Singles, both pooled: the mapping for callers
@@ -83,16 +100,25 @@ export const HYROX_DEFAULT_DOUBLES_TABLES: HyroxDoublesTables = {
 };
 
 /** The doubles mapping for an athlete: the pair's division in the target's
- *  weight family against the athlete's own sex in the matching singles format. */
+ *  weight family against the athlete's own sex in the matching singles format
+ *  (hyroxSoloFrame), flagged when the athlete's solo loads are the Pro tier of
+ *  that Open field (a woman in Mixed Doubles). */
 export function hyroxDoublesTables(
   format: HyroxFormat,
   biologicalSex: BiologicalSex,
   division?: HyroxDivision,
 ): HyroxDoublesTables {
+  const frame = hyroxSoloFrame(format, biologicalSex, division);
   return {
-    singles: hyroxSinglesCohort(format, biologicalSex, division),
+    singles: frame.field,
     doubles: hyroxResultsCohort(hyroxDoublesFormatOf(format), biologicalSex, division),
+    ...(frame.proLoadsInOpenField ? { soloProLoadsInOpenField: true } : {}),
   };
+}
+
+/** The solo frame part of a tables object, for hyroxSoloToFieldSec. */
+function soloFrameOf(tables: HyroxDoublesTables) {
+  return { field: tables.singles, proLoadsInOpenField: !!tables.soloProLoadsInOpenField };
 }
 
 /** hyroxDoublesTables for the current state. */
@@ -158,16 +184,22 @@ export function doublesRatioAtTeamTime(
   return { ratio, singlesPercentile: p };
 }
 
-/** One athlete's station time as the pair's time at that station. */
+/** One athlete's station time (at their solo loads in this pair) as the
+ *  pair's time at that station: the solo time in the singles field's terms
+ *  (hyroxSoloToFieldSec, identity unless soloProLoadsInOpenField), mapped at
+ *  its percentile. */
 export function doublesStationTeamSec(station: HyroxStation, singlesSec: number, tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES): number {
-  return singlesSec * doublesRatioAt(station, singlesSec, tables).ratio;
+  const fieldSec = hyroxSoloToFieldSec(station, singlesSec, soloFrameOf(tables));
+  return fieldSec * doublesRatioAt(station, fieldSec, tables).ratio;
 }
 
-/** A pair's station time (a doubles race split) as one athlete's time: the
- *  singles time at the same percentile. The inverse of doublesStationTeamSec
- *  inside the tables. */
+/** A pair's station time (a doubles race split) as one athlete's time at
+ *  their solo loads in this pair: the singles time at the same percentile,
+ *  back at the solo loads (hyroxFieldToSoloSec). The inverse of
+ *  doublesStationTeamSec inside the tables. */
 export function doublesStationSoloSec(station: HyroxStation, teamSec: number, tables: HyroxDoublesTables = HYROX_DEFAULT_DOUBLES_TABLES): number {
-  return teamSec / doublesRatioAtTeamTime(station, teamSec, tables).ratio;
+  const fieldSec = teamSec / doublesRatioAtTeamTime(station, teamSec, tables).ratio;
+  return hyroxFieldToSoloSec(station, fieldSec, soloFrameOf(tables));
 }
 
 /**
