@@ -22,6 +22,7 @@ import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
+import { getHyroxPartnerCache, refreshHyroxPartnerCache, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { SimulatorState } from '@/types/state';
 import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
@@ -270,6 +271,16 @@ export function renderHyroxStatsView(): void {
           </div>
         </div>
 
+        ${isHyroxDoublesFormat(format) ? `
+        <!-- Doubles partner: drill-down to the Partner page -->
+        <div class="hxsf" style="padding:12px 20px 0;animation-delay:0.20s">
+          <div id="hx-stats-partner-row" role="button" tabindex="0" style="background:#fff;border-radius:16px;padding:14px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <div style="font-size:13px;font-weight:600;color:#0F172A">Partner</div>
+            <div id="hx-stats-partner-value" style="font-size:13px;color:var(--c-muted)">${escapeHtmlText(partnerRowLabel(getHyroxPartnerCache()))} ›</div>
+          </div>
+        </div>
+        ` : ''}
+
       </div>
 
       ${renderTabBar('stats')}
@@ -282,6 +293,21 @@ export function renderHyroxStatsView(): void {
   document.getElementById('hx-stats-mtl-card')?.addEventListener('click', () => {
     import('../mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderHyroxStatsView()));
   });
+
+  // Partner row (doubles only) → Partner page. The label reads the session
+  // link cache; the first visit in a session fills it in the background.
+  const partnerRow = document.getElementById('hx-stats-partner-row');
+  if (partnerRow) {
+    const openPartner = () => import('./partner-view').then(({ renderHyroxPartnerView }) => renderHyroxPartnerView());
+    partnerRow.addEventListener('click', openPartner);
+    partnerRow.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openPartner(); } });
+    if (getHyroxPartnerCache() === undefined) {
+      void refreshHyroxPartnerCache().then(c => {
+        const el = document.getElementById('hx-stats-partner-value');
+        if (el) el.textContent = `${partnerRowLabel(c) || 'Link'} ›`;
+      });
+    }
+  }
 
   // CP card tap → full drill-down page (critical pace over time + the science).
   document.getElementById('hx-stats-cp-card')?.addEventListener('click', () => {
@@ -307,6 +333,21 @@ export function renderHyroxStatsView(): void {
     btn.style.color = on ? '#FDFCF7' : 'var(--c-black)';
     btn.textContent = on ? 'On' : 'Off';
   });
+}
+
+/** Stats Partner row value, plain text: the partner's initials when linked,
+ *  "Link" when not, empty until the link has been checked this session (so a
+ *  linked athlete never sees "Link" flash first). Escape before putting it in
+ *  innerHTML (escapeHtmlText). */
+export function partnerRowLabel(cache: HyroxPartnerCache | undefined): string {
+  if (!cache) return '';
+  if (!cache.linked) return 'Link';
+  return cache.initials || 'Linked';
+}
+
+/** The partner's initials come from another user's row: escaped for innerHTML. */
+function escapeHtmlText(t: string | null | undefined): string {
+  return (t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
 function renderAcwrRow(acwr: number): string {
