@@ -8,6 +8,7 @@ import {
   latestStationTest,
   latestTestAgeMonths,
   upsertRaceSplitEntry,
+  resolveHyroxBenchmarks,
   type StationTestEntry,
 } from './hyrox-station-history';
 import type { SimulatorState } from '@/types/state';
@@ -213,5 +214,24 @@ describe('upsertRaceSplitEntry: one entry per logged race and station (review 20
     ];
     const h = upsertRaceSplitEntry(existing, race('2026-03-14', 280));
     expect(h.map(e => e.source).sort()).toEqual(['half_test', 'manual', 'race', 'session']);
+  });
+});
+
+describe('resolveHyroxBenchmarks: the slot the forecast and the benchmark card read', () => {
+  it("the target format's slot wins when it has values", () => {
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 260 }, slot: 'singles' });
+    expect(resolveHyroxBenchmarks({ format: 'pro_doubles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slot: 'doubles' });
+  });
+
+  it("an empty target slot falls back to the other format's slot, then the legacy field", () => {
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slot: 'doubles' });
+    expect(resolveHyroxBenchmarks({ format: 'open_doubles', stationBenchmarksSingles: { row_erg: 250 } }))
+      .toEqual({ benchmarks: { row_erg: 250 }, slot: 'singles' });
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarks: { ski_erg: 240 } }))
+      .toEqual({ benchmarks: { ski_erg: 240 }, slot: null });
+    expect(resolveHyroxBenchmarks({ format: 'open_singles' })).toEqual({ benchmarks: {}, slot: null });
   });
 });

@@ -381,6 +381,20 @@ export function doublesStationsCaption(prediction: Pick<HyroxPrediction, 'double
   return `The pair's time at each station. Partners enter every station together and split the work inside it.${ratioClause} ${HYROX_DOUBLES_POOLING_NOTE}`;
 }
 
+/** Confidence-detail note for a singles forecast that converted doubles race
+ *  splits (crossFormatConversion): the pair's times are put in singles terms
+ *  through the same results-data ratio the doubles forecast uses. */
+export function crossFormatConversionNote(
+  prediction: Pick<HyroxPrediction, 'crossFormatConversion' | 'crossFormatStationRatio'>,
+): string {
+  if (prediction.crossFormatConversion !== 'doubles_to_singles') return '';
+  const ratio = prediction.crossFormatStationRatio;
+  const how = ratio != null
+    ? `the pair's time ÷ ${ratio.toFixed(2)}, the doubles-to-singles station ratio at your level in the results data`
+    : `the pair's time ÷ the doubles-to-singles station ratio at your level in the results data`;
+  return `Stations from your doubles race splits are converted to singles terms: ${how}. Singles splits or station tests replace them.`;
+}
+
 function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState): string {
   const fmt = (state.hyroxConfig?.format ?? 'open_singles') as HyroxFormat;
   return stations.map((line, i) => {
@@ -736,18 +750,15 @@ function buildHyroxHero(
     : prediction.confidence === 'medium'
       ? `${calibrated}/${totalStations} stations calibrated. Calibrate more to sharpen the prediction.`
       : `Mostly seed data. Only ${calibrated}/${totalStations} stations calibrated. Best treated as a rough benchmark.`;
-  const conversionNote = prediction.crossFormatConversion === 'doubles_to_singles'
-    ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
-    : '';
+  const conversionNote = crossFormatConversionNote(prediction);
 
   // Provisional banner — surfaced prominently (not behind the confidence badge)
   // whenever the forecast rests mostly on population seed data. A user who has
   // raced but never calibrated stations, or whose only benchmarks are in the
   // other format, needs to know the number is an estimate and what to do about
   // it. Two causes, two bodies:
-  //   - cross-format: doubles splits only, predicting singles, so we use band
-  //     averages for the target. (Singles splits feed a doubles forecast
-  //     directly through the doubles ratios.)
+  //   - cross-format: a singles forecast whose station times are converted
+  //     from doubles race splits (the pair's time ÷ the station ratio).
   //   - seed-dominated: few or no stations calibrated.
   // Every non-high-confidence forecast tells the user, in plain terms, that a
   // proper station assessment makes the prediction more accurate, and names the
@@ -757,7 +768,7 @@ function buildHyroxHero(
   const targetFormatLabel = (hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? 'doubles' : 'singles';
   const calibrationProtocol = 'each station at half distance, race effort';
   const provisionalBody = prediction.crossFormatConversion === 'doubles_to_singles'
-    ? `Your station times are from a doubles race, so this forecast uses population averages for singles. A singles station assessment (${calibrationProtocol}) replaces the estimates and makes the forecast accurate to you.`
+    ? `Station times are converted from your doubles race splits. A singles station assessment (${calibrationProtocol}) replaces the conversion with your own singles times.`
     : prediction.confidence === 'low'
     ? `This forecast uses population averages for your ${targetFormatLabel} stations. Log a station assessment (${calibrationProtocol}) and the forecast sharpens to your real numbers.`
     : `${calibrated} of ${totalStations} stations calibrated. Test the rest (${calibrationProtocol}) and the forecast gets more accurate with each one.`;

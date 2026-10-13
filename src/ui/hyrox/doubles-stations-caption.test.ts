@@ -14,7 +14,7 @@ vi.mock('@/data/supabaseClient', () => ({
   SUPABASE_FUNCTIONS_BASE: undefined,
 }));
 
-import { doublesStationsCaption } from './forecast-view';
+import { doublesStationsCaption, crossFormatConversionNote } from './forecast-view';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 
@@ -43,5 +43,19 @@ describe('doublesStationsCaption', () => {
   });
   it('copy rules: no em dash', () => {
     for (const n of [0, 3, 8]) expect(doublesStationsCaption({ doubles, stations: lines(n) })).not.toContain('—');
+  });
+});
+
+describe('crossFormatConversionNote: a singles forecast from doubles race splits', () => {
+  it('names the conversion and the ratio', () => {
+    const note = crossFormatConversionNote({ crossFormatConversion: 'doubles_to_singles', crossFormatStationRatio: 0.7134 });
+    expect(note).toContain('converted to singles terms');
+    expect(note).toContain("the pair's time ÷ 0.71");
+    expect(note).toContain('results data');
+    expect(note).not.toContain('—');
+  });
+
+  it('is empty when nothing was converted', () => {
+    expect(crossFormatConversionNote({})).toBe('');
   });
 });

@@ -81,18 +81,23 @@ describe('predictHyroxRace', () => {
     expect(skiLine.baseSec).toBe(fastSki);
   });
 
-  it('cross-format: doubles-only benchmarks predicting singles falls back to seeds + low confidence', () => {
+  it('cross-format: a doubles race split feeds a singles prediction in singles terms (÷ the station ratio)', () => {
+    // No history entry: a race split written before race entries existed,
+    // so the pair's time (doublesBenchmarkIsTeamTime).
     const doublesSki = 250;
     const calibrated = predictHyroxRace(buildState({
       format: 'open_singles',
       stationBenchmarksDoubles: { ski_erg: doublesSki },
     }))!;
     const skiLine = calibrated.stations.find(l => l.station === 'ski_erg')!;
-    // Per-station cross-format inference is no longer attempted; ski leg
-    // resolves to the intermediate-band seed (267s).
-    expect(skiLine.source).toBe('seed');
-    expect(skiLine.baseSec).toBe(267);
+    expect(skiLine.source).toBe('calibrated');
+    expect(skiLine.teamTimeSplit).toBe(true);
+    expect(skiLine.teamRatio).toBeUndefined();
     expect(calibrated.crossFormatConversion).toBe('doubles_to_singles');
+    expect(calibrated.crossFormatStationRatio).toBeGreaterThan(0.6);
+    expect(calibrated.crossFormatStationRatio).toBeLessThan(0.8);
+    expect(skiLine.baseSec).toBeCloseTo(doublesSki / calibrated.crossFormatStationRatio!, 6);
+    // One calibrated station: low by count, not by a cross-format cap.
     expect(calibrated.confidence).toBe('low');
   });
 
@@ -321,5 +326,69 @@ describe('predictHyroxRace: Pro race splits are not multiplied twice', () => {
       benchmarksAtProWeights: true,
     }))!;
     expect(p.stations.find(l => l.station === 'sled_push')!.baseSec).toBe(260);
+  });
+});
+
+describe('predictHyroxRace: singles target from doubles benchmarks (one quantile mapping)', () => {
+  const STATIONS = ['ski_erg', 'sled_push', 'sled_pull', 'burpee_broad_jumps', 'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls'] as const;
+  const doublesSplits = { ski_erg: 200, sled_push: 140, sled_pull: 190, burpee_broad_jumps: 210, row_erg: 220, farmer_carry: 80, sandbag_lunges: 200, wall_balls: 320 };
+  const raceHistory = Object.fromEntries(STATIONS.map(st => [st, [
+    { dateISO: dateNDaysAgo(30), sec: doublesSplits[st], source: 'race' as const, format: 'open_doubles' as const, proWeights: false },
+  ]]));
+
+  it('8 doubles race splits: singles lines × the ratio give back the splits, with the doubles forecast\'s own ratio', () => {
+    const cfg = { stationBenchmarksDoubles: doublesSplits, stationBenchmarkHistory: raceHistory } as Partial<SimulatorState['hyroxConfig']>;
+    const singles = predictHyroxRace(buildState({ ...cfg, format: 'open_singles' }))!;
+    const doubles = predictHyroxRace(buildState({ ...cfg, format: 'open_doubles' }))!;
+    const r = singles.crossFormatStationRatio!;
+    expect(r).toBeCloseTo(doubles.doubles!.stationRatio, 9);
+    for (const st of STATIONS) {
+      const s1 = singles.stations.find(l => l.station === st)!;
+      const d1 = doubles.stations.find(l => l.station === st)!;
+      expect(s1.source).toBe('calibrated');
+      expect(s1.baseSec * r).toBeCloseTo(doublesSplits[st], 6);
+      expect(d1.baseSec).toBeCloseTo(doublesSplits[st], 6);
+    }
+    // Fully calibrated: confidence follows the count, like singles benchmarks
+    // feeding a doubles target (no cross-format cap).
+    expect(singles.calibratedCount).toBe(8);
+    expect(singles.confidence).toBe('medium');
+    expect(predictHyroxRace(buildState({ ...cfg, format: 'open_singles', venueId: 'london-excel' }))!.confidence).toBe('high');
+  });
+
+  it('a solo test in the doubles slot is one athlete\'s time: used as is, no conversion flag', () => {
+    const singles = predictHyroxRace(buildState({
+      format: 'open_singles',
+      stationBenchmarksDoubles: { ski_erg: 270 },
+      stationBenchmarkHistory: { ski_erg: [{ dateISO: dateNDaysAgo(5), sec: 270, source: 'half_test', format: 'open_doubles' }] },
+    }))!;
+    const ski = singles.stations.find(l => l.station === 'ski_erg')!;
+    expect(ski.source).toBe('calibrated');
+    expect(ski.teamTimeSplit).toBeUndefined();
+    expect(ski.baseSec).toBe(270);
+    expect(singles.crossFormatConversion).toBeUndefined();
+  });
+
+  it('a singles slot with values wins over the doubles slot (slot-level resolution)', () => {
+    const singles = predictHyroxRace(buildState({
+      format: 'open_singles',
+      stationBenchmarksSingles: { row_erg: 260 },
+      stationBenchmarksDoubles: doublesSplits,
+      stationBenchmarkHistory: raceHistory,
+    }))!;
+    expect(singles.crossFormatConversion).toBeUndefined();
+    expect(singles.calibratedCount).toBe(1);
+    expect(singles.stations.find(l => l.station === 'row_erg')!.baseSec).toBe(260);
+  });
+
+  it('a Pro singles target reads a Pro doubles split at Pro weights, with no second Pro multiplier', () => {
+    const proHistory = { sled_push: [{ dateISO: dateNDaysAgo(30), sec: 180, source: 'race' as const, format: 'pro_doubles' as const, proWeights: true }] };
+    const pro = predictHyroxRace(buildState({
+      format: 'pro_singles',
+      stationBenchmarksDoubles: { sled_push: 180 },
+      stationBenchmarkHistory: proHistory,
+    }))!;
+    const line = pro.stations.find(l => l.station === 'sled_push')!;
+    expect(line.baseSec).toBeCloseTo(180 / pro.crossFormatStationRatio!, 6);
   });
 });

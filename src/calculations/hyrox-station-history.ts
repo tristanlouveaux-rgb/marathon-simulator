@@ -146,6 +146,35 @@ function slotOfFormat(format: HyroxFormat): BenchmarkSlot {
   return format === 'open_doubles' || format === 'pro_doubles' ? 'doubles' : 'singles';
 }
 
+/**
+ * The benchmark set a forecast reads, and the slot it came from. One rule for
+ * the predictor and the benchmark card, so the card's "still using population
+ * estimates" count matches the stations the forecast calibrates.
+ *  - The target format's slot when it has values.
+ *  - Else the other format's slot. Its values reach the target through the
+ *    doubles quantile mapping (hyrox-doubles.ts): singles times × the station
+ *    ratio for a doubles target; for a singles target, a doubles race split
+ *    (the pair's time) ÷ the station ratio, and a solo test from the doubles
+ *    slot as is.
+ *  - Else the legacy pooled field (slot null).
+ * Resolution is per slot, not per station: once the target's slot has one
+ * value the other slot is not read.
+ */
+export function resolveHyroxBenchmarks(
+  hx: Pick<HyroxConfig, 'format' | 'stationBenchmarksSingles' | 'stationBenchmarksDoubles' | 'stationBenchmarks'>,
+): { benchmarks: Partial<Record<HyroxStation, number>>; slot: BenchmarkSlot | null } {
+  const nonEmpty = (b?: Partial<Record<HyroxStation, number>>): b is Partial<Record<HyroxStation, number>> =>
+    b != null && Object.keys(b).length > 0;
+  const own: BenchmarkSlot = slotOfFormat(hx.format);
+  const other: BenchmarkSlot = own === 'doubles' ? 'singles' : 'doubles';
+  const read = (slot: BenchmarkSlot) => (slot === 'doubles' ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles);
+  const ownValues = read(own);
+  if (nonEmpty(ownValues)) return { benchmarks: ownValues, slot: own };
+  const otherValues = read(other);
+  if (nonEmpty(otherValues)) return { benchmarks: otherValues, slot: other };
+  return { benchmarks: hx.stationBenchmarks ?? {}, slot: null };
+}
+
 /** True for sources that record a race split: the logged race's own splits
  *  ('race'), and 'manual', the boot migration's label for the onboarding seed,
  *  which only ever held race splits. */

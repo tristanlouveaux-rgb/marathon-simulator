@@ -22,7 +22,7 @@ import {
   STATION_DISPLAY,
   HYROX_STATION_ORDER,
 } from '@/constants/hyrox-benchmarks';
-import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { appendStationTest, resolveHyroxBenchmarks, type HyroxFormat } from '@/calculations/hyrox-station-history';
 
 /** Stations that can be calibrated — always available (no equipment dependency). */
 const CALIBRATABLE: HyroxStation[] = [
@@ -42,10 +42,12 @@ const HALF_PROTOCOL: Record<HyroxStation, string> = {
   wall_balls:         '50 reps',
 };
 
-/** Read benchmarks from the format-specific slot, falling back to legacy pooled field. */
+/** The benchmarks the forecast reads (resolveHyroxBenchmarks, shared with
+ *  predictHyroxRace): the target's slot, else the other format's slot, else
+ *  the legacy pooled field. So "still using population estimates" counts the
+ *  same stations the forecast shows as estimated. */
 function readBenchmarks(hx: NonNullable<SimulatorState['hyroxConfig']>): Partial<Record<HyroxStation, number>> {
-  const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  return (isDoubles ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks ?? {};
+  return resolveHyroxBenchmarks(hx).benchmarks;
 }
 
 /** Which stations still use population estimates (no user data). */
