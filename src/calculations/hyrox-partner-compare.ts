@@ -54,8 +54,10 @@
  *              together, 26/27 Doubles rulebook s4.3, s7.3);
  *   roxzone  = the slower of the two partners' Roxzone lines (partners pass
  *              all 8 transitions together, s7.3), compared in the pair's terms.
- * Two identical partners reproduce the athlete's own doubles forecast.
- * Venue factors are not applied.
+ * Two identical partners reproduce the athlete's own doubles forecast
+ * stations and Roxzone. The run differs by design: the athlete's own doubles
+ * forecast applies the cohort's doubles run ratio, while the pair runs at the
+ * slower partner's singles pace. Venue factors are not applied.
  *
  * The pair forecast is withheld (forecastWithheld, with withheldFor naming
  * whose times):
