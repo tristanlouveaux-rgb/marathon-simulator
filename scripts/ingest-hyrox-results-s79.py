@@ -938,13 +938,18 @@ RESULTS_VIA = 'via the open pyrox project'
 # ─── Field-relative band thresholds and band seeds (lane H3b) ────────────────
 
 # HYROX_TIME_TO_BAND_THRESHOLDS is one finish-time scale for every format and
-# sex. No calibration source is recorded for it (the constant's comment and
-# SCIENCE_LOG name none), so its meaning is taken as a position in the field it
-# most likely matches: the app's earlier pooled open singles total table
+# sex. Its only recorded anchor is SCIENCE_LOG "HYROX Population Percentiles
+# (2026-05-06)": 60, 80, 100 and 120 min at the 5th, 15th, 35th and 60th
+# percentiles of a HyroxDataLab gender-mixed Open table, labelled with the band
+# names. Those anchors were hand-set and contradict the real results (60 min
+# sits below p1 of the S4-S6 field, not p5), and reading the thresholds at
+# them would push most athletes down a band. The meaning is taken instead as a
+# position in the app's earlier pooled open singles total table
 # (HYROX_TOTAL_PERCENTILE_TABLES.open_singles in
 # src/data/hyrox-population-distributions.ts, Kaggle jgug05/hyrox-results,
-# seasons 4 to 6, women and men pooled). This is a copy of that table; a test
-# asserts it equals the app's, so the two cannot drift apart.
+# seasons 4 to 6, women and men pooled): p1.0, p25.3, p73.5, p92.9. This is a
+# copy of that table; a test asserts it equals the app's, so the two cannot
+# drift apart.
 BAND_CALIBRATION_TABLE = [[3829, 1], [4163, 5], [4384, 10], [4793, 25], [5338, 50],
                           [6042, 75], [6853, 90], [7448, 95], [8856, 99]]
 
@@ -1638,10 +1643,13 @@ def emit(out_path, refresh_date, x):
     w(' * singles field. Each threshold is kept as a position in the field instead:')
     w(' * HYROX_S89_BAND_FIELD_PERCENTILES is each threshold\'s cumulative percentile in')
     w(' * the app\'s earlier pooled open singles total table (S4 to S6,')
-    w(' * HYROX_TOTAL_PERCENTILE_TABLES.open_singles), the field the thresholds most')
-    w(' * likely match; no calibration source is recorded for them. 3600 s sits below')
-    w(" * that table's p1, which the clamped lookup reads as p1, the finest percentile")
-    w(' * it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those')
+    w(' * HYROX_TOTAL_PERCENTILE_TABLES.open_singles). The only recorded anchor for the')
+    w(' * thresholds, the HyroxDataLab list in SCIENCE_LOG "HYROX Population Percentiles"')
+    w(' * (60, 80, 100, 120 min at p5, p15, p35, p60), was rejected: it was hand-set and')
+    w(' * contradicts the real results (60 min is below p1 of the S4 to S6 field), and')
+    w(' * reading the thresholds there would push most athletes down a band. 3600 s sits')
+    w(" * below that table's p1, which the clamped lookup reads as p1, the finest")
+    w(' * percentile it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those')
     w(' * percentiles in each format x sex field (type 7 quantile), plus each format')
     w(' * with its sexes pooled (the fallback for an unknown sex). Thresholds apply as')
     w(' * bandFromTime does: sec < threshold, first match wins, beginner above the last.')

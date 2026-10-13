@@ -12,12 +12,18 @@
  *
  * The exported tables (STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM,
  * SEED_ROXZONE_SEC) are Open Singles with women and men pooled, for callers
- * that pass no cohort. Callers that know the athlete pass the singles cohort
- * (hyroxSinglesCohortForState): stationSeedTimesFor / seedRunPaceSecKmFor /
- * seedRoxzoneSecFor with the target's weight family (Open or Pro singles,
- * so a Pro target's seeds are real Pro-weight times) and the athlete's own
- * sex. Seeds are one athlete's times; the doubles forecast scales them into
- * the pair's time with the doubles ratios (hyrox-doubles.ts).
+ * that pass no cohort. Callers that know the athlete read the seeds through
+ * hyrox-results.ts: hyroxSeedField picks the field the athlete's band was
+ * read in (the previous race's singles family, Open when no race is on file,
+ * at the athlete's own sex), stationSeedTimesFor / seedRunPaceSecKmFor /
+ * seedRoxzoneSecFor read that field's band medians, and
+ * hyroxStationSeedsAtTarget converts the station seeds to the target's solo
+ * loads per station (hyroxOpenToProSec / hyroxProToOpenSec, the difference in
+ * differences on the Pro and Open results) when the two differ. A Pro target
+ * whose band came from an Open race therefore seeds from the Open field's
+ * medians converted to Pro loads, never from the fitter Pro field's band.
+ * Seeds are one athlete's times; the doubles forecast scales them into the
+ * pair's time with the doubles ratios (hyrox-doubles.ts).
  *
  * History: until lane H3b (2026-10-13) these were hand-set from HyroxDataLab,
  * roxlyfe.com and Hyroxy.com aggregates (SCIENCE_LOG §L), Open division,

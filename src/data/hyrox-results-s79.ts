@@ -1396,10 +1396,13 @@ export const HYROX_S79_IMPROVEMENT_SUPPRESSED: ReadonlyArray<Pick<HyroxImproveme
  * singles field. Each threshold is kept as a position in the field instead:
  * HYROX_S89_BAND_FIELD_PERCENTILES is each threshold's cumulative percentile in
  * the app's earlier pooled open singles total table (S4 to S6,
- * HYROX_TOTAL_PERCENTILE_TABLES.open_singles), the field the thresholds most
- * likely match; no calibration source is recorded for them. 3600 s sits below
- * that table's p1, which the clamped lookup reads as p1, the finest percentile
- * it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those
+ * HYROX_TOTAL_PERCENTILE_TABLES.open_singles). The only recorded anchor for the
+ * thresholds, the HyroxDataLab list in SCIENCE_LOG "HYROX Population Percentiles"
+ * (60, 80, 100, 120 min at p5, p15, p35, p60), was rejected: it was hand-set and
+ * contradicts the real results (60 min is below p1 of the S4 to S6 field), and
+ * reading the thresholds there would push most athletes down a band. 3600 s sits
+ * below that table's p1, which the clamped lookup reads as p1, the finest
+ * percentile it resolves. HYROX_S89_BAND_THRESHOLDS_SEC is the total time at those
  * percentiles in each format x sex field (type 7 quantile), plus each format
  * with its sexes pooled (the fallback for an unknown sex). Thresholds apply as
  * bandFromTime does: sec < threshold, first match wins, beginner above the last.
