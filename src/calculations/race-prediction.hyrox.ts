@@ -246,9 +246,17 @@ interface StationInputs {
  * target format. Reads hyroxCalibrationCoverage (the per-station resolver every
  * calibrated-count surface reads).
  *
- * Weight regime per station: a race split carries its race's weights (the
- * history entry that describes the slot value, proWeights); a station test or
- * session best follows benchmarksAtProWeights, the athlete's toggle.
+ * Weight regime per station, from the history entry that describes the slot
+ * value (benchmarkEntryForSlotValue):
+ *   - a race split carries its race's weights (proWeights);
+ *   - a guided-session best carries the weights the session was prescribed
+ *     at (proWeights: the target was Pro, since the generators load stations
+ *     at the target's tier, hyroxLoadTierForState);
+ *   - a station test, or a value with no entry, follows
+ *     benchmarksAtProWeights, the athlete's toggle.
+ * Before (review 2026-10-13) a session best followed the toggle, so a round
+ * done at Open loads against a Pro race split was compared and stored as if
+ * the split were an Open time.
  *   - Open source → Pro target: multiply by HYROX_PRO_STATION_MULTIPLIER
  *   - Pro source  → Open target: divide by HYROX_PRO_STATION_MULTIPLIER
  *   - Same regime: identity
@@ -267,7 +275,7 @@ function stationInputs(hx: HyroxConfigOf): StationInputs {
     const entry = calibrated != null && slot
       ? benchmarkEntryForSlotValue(hx, station, slot, calibrated)
       : null;
-    const sourceIsPro = entry?.source === 'race' && entry.proWeights != null
+    const sourceIsPro = (entry?.source === 'race' || entry?.source === 'session') && entry.proWeights != null
       ? entry.proWeights
       : benchmarksArePro;
     let calibratedAtTarget: number | undefined;
@@ -369,24 +377,30 @@ function stationRatioFor(inputs: StationInputs, sb: SeedBasis): { ratio: number;
  *  (resolveHyroxStationBenchmarks). */
 export interface HyroxStationBenchmark {
   station: HyroxStation;
-  /** The benchmark as one athlete's time over the full station distance, for
-   *  every target format: a doubles race split (the pair's time) ÷ the
-   *  forecast's station ratio, anything else as stored (singles times, and
-   *  the doubles slot's solo tests and session bests). These are the terms
-   *  of the band seeds, of a station session (one athlete covers the full
+  /** The benchmark as one athlete's time over the full station distance, at
+   *  the target's weights, for every target format. It is the forecast's own
+   *  per-station value (StationInput.calibratedAtTarget, after the per-entry
+   *  Open/Pro conversion): a doubles race split (the pair's time) ÷ the
+   *  forecast's station ratio, anything else as is (singles times, and the
+   *  doubles slot's solo tests and session bests). These are the terms of a
+   *  station session at the target's load tier (one athlete covers the full
    *  distance) and of a guided session's best round, so the Stats Benchmarks
    *  ledger, the session generators' targets and the session-best check all
    *  read this one number. A doubles target's forecast scales it × the
    *  station ratio into the pair's time. Before the forecast's staleness
-   *  blend, Pro-weight adjustment and venue factors. Absent when the station
-   *  uses the population seed.
+   *  blend and venue factors. Absent when the station uses the population
+   *  seed.
    *
-   *  History (review 2026-10-13): a doubles target's race split was kept as
-   *  the pair's time here while its solo tests, the seeds and session bests
-   *  were one athlete's time. Plans prescribed the pair's time as a solo
-   *  target (about 30% too fast), and a solo session best that beat the
-   *  split's solo equivalent moved the Stats row and the next plan's target
-   *  slower. */
+   *  History (review 2026-10-13):
+   *   - a doubles target's race split was kept as the pair's time here while
+   *     its solo tests, the seeds and session bests were one athlete's time.
+   *     Plans prescribed the pair's time as a solo target (about 30% too
+   *     fast), and a solo session best that beat the split's solo equivalent
+   *     moved the Stats row and the next plan's target slower;
+   *   - the value was read at the weights it was stored at. An Open target
+   *     with a Pro race split prescribed the Pro time at Open loads (about
+   *     15% slow on the sleds), and a slower Open round replaced the split's
+   *     faster Open equivalent in the forecast. */
   sec?: number;
   /** The slot the value came from (absent for the legacy pooled field). */
   slot?: BenchmarkSlot;
@@ -408,12 +422,12 @@ export interface HyroxResolvedStationBenchmarks {
 
 /**
  * Per station, the athlete's benchmark from the forecast's own computation
- * (the per-station resolver, then the same doubles quantile mapping and
- * station ratio predictHyroxRace applies). One source for the Stats
- * Benchmarks ledger, the plan engine and add-session generator targets, and
- * the guided-session PB check, so a converted race split reads the same
- * everywhere, in one athlete's terms for every format, and a slower training
- * round never overwrites it.
+ * (the per-station resolver, the per-entry Open/Pro conversion, then the
+ * same doubles quantile mapping and station ratio predictHyroxRace applies).
+ * One source for the Stats Benchmarks ledger, the plan engine and add-session
+ * generator targets, and the guided-session PB check, so a converted race
+ * split reads the same everywhere, in one athlete's terms at the target's
+ * weights for every format, and a slower training round never overwrites it.
  *
  * The station ratio is computed only when a value is a doubles race split;
  * otherwise no value needs it.
@@ -429,9 +443,10 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
     if (p.calibrated == null) {
       return { station: p.station, teamTimeSplit: false, crossFormat: false };
     }
+    const atTarget = p.calibratedAtTarget!;
     return {
       station: p.station,
-      sec: p.isTeamTime ? p.calibrated / stationRatio : p.calibrated,
+      sec: p.isTeamTime ? atTarget / stationRatio : atTarget,
       ...(p.slot ? { slot: p.slot } : {}),
       teamTimeSplit: p.isTeamTime,
       crossFormat: p.crossFormat,
@@ -441,11 +456,13 @@ export function resolveHyroxStationBenchmarks(state: SimulatorState): HyroxResol
 }
 
 /** Station target times for the session generators (plan engine, add-session
- *  modal): resolveHyroxStationBenchmarks' `sec` per calibrated station (one
- *  athlete over the full station distance, in every format), to the whole
- *  second the Stats ledger shows (a converted split is fractional). The
- *  generators fall back to the band seed, also one athlete's time, for the
- *  rest. */
+ *  modal) and the benchmark a guided session's best round must beat
+ *  (hyrox-session-benchmarks.ts): resolveHyroxStationBenchmarks' `sec` per
+ *  calibrated station (one athlete over the full station distance, at the
+ *  target's weights, in every format), to the whole second the Stats ledger
+ *  shows (a converted split is fractional, a round is timed to the whole
+ *  second). The generators fall back to the band seed, also one athlete's
+ *  time, for the rest. */
 export function hyroxPlanningStationBenchmarks(state: SimulatorState): Partial<Record<HyroxStation, number>> {
   const out: Partial<Record<HyroxStation, number>> = {};
   for (const b of resolveHyroxStationBenchmarks(state)?.stations ?? []) {

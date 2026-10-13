@@ -395,8 +395,9 @@ export const HYROX_BENCHMARK_BASIS_LABEL: Record<HyroxBenchmarkBasis, string> = 
 export interface HyroxBenchmarkLedgerRow {
   station: HyroxStation;
   /** The athlete's benchmark for the station as one athlete's time over the
-   *  full station distance (resolveHyroxStationBenchmarks `sec`); absent when
-   *  the station still uses the population seed. */
+   *  full station distance at the target's weights
+   *  (resolveHyroxStationBenchmarks `sec`); absent when the station still
+   *  uses the population seed. */
   sec?: number;
   basis: HyroxBenchmarkBasis;
 }
@@ -408,8 +409,8 @@ export interface HyroxBenchmarkLedgerRow {
  * targets and the guided-session PB check, so the ledger, the plan and a
  * session-best update read one number per station.
  *
- * Every row is one athlete's time over the full station distance, the terms
- * of the band seeds shown for uncalibrated rows, in every format:
+ * Every row is one athlete's time over the full station distance at the
+ * target's weights, in every format:
  *  - A doubles race split (the pair's time) ÷ the forecast's station ratio.
  *    A singles target reads it as 'Converted from doubles race', a doubles
  *    target as 'Solo equivalent of doubles race' (its forecast scales it
@@ -419,10 +420,15 @@ export interface HyroxBenchmarkLedgerRow {
  *    confidence on it.
  *  - Anything else (the target's own times, a solo test from the doubles
  *    slot) shows as stored, 'Calibrated'.
- * The ledger shows the benchmark itself, before the forecast's staleness
- * blend, Pro-weight adjustment and venue factors. Stations the athlete has no
- * equipment for are listed too: the forecast reads their race splits, and the
- * count is the one every surface shows (hyroxCalibrationCoverage, out of 8).
+ * A value stored at the other weight regime (a Pro race split for an Open
+ * target, an Open test for a Pro target) shows converted to the target's
+ * weights, the per-entry Open/Pro conversion the forecast applies, so the row
+ * is the number the plan prescribes at the target's loads and the number a
+ * session round must beat. The ledger shows the benchmark before the
+ * forecast's staleness blend and venue factors. Uncalibrated rows show the
+ * band seed (Open weights). Stations the athlete has no equipment for are
+ * listed too: the forecast reads their race splits, and the count is the one
+ * every surface shows (hyroxCalibrationCoverage, out of 8).
  */
 export function hyroxBenchmarkLedger(
   state: SimulatorState,

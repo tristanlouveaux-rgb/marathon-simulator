@@ -340,9 +340,11 @@ function generateWeekSessions(
   const brickMin   = sessions.bricks   > 0 ? (brickHours   / sessions.bricks)   * 60 : 0;
 
   // Station target times: the forecast's per-station benchmarks as one
-  // athlete's time over the full station distance
+  // athlete's time over the full station distance at the target's weights
   // (hyroxPlanningStationBenchmarks), the values the Stats Benchmarks ledger
-  // shows, in the terms of the band seeds they replace. A doubles race split
+  // shows. The sessions load stations at the target's tier (loadTier), so a
+  // Pro race split is prescribed as its Open equivalent to an Open target,
+  // the forecast's own Open/Pro conversion. A doubles race split
   // (the pair's time) is read through the same station ratio the forecast
   // applies, for every target: a singles athlete whose times came from
   // doubles race splits trains to those times, not to population seeds, and

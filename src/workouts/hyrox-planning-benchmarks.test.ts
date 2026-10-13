@@ -31,7 +31,7 @@ import { getDefaultState, setState, getMutableState } from '@/state/store';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from './plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
-import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
+import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks, predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxBenchmarkLedger } from '@/ui/hyrox/stats-view';
 import { openHyroxAddSessionModal } from '@/ui/hyrox/add-session-modal';
 import { applyHyroxSessionBenchmarks } from '@/calculations/hyrox-session-benchmarks';
@@ -179,7 +179,9 @@ describe('doubles target with doubles race splits: one number per station for St
       ({ exerciseName: 'x', exerciseIndex: 0, setIndex, setCount: 2, reps: '', durationSec });
     const applied = applyHyroxSessionBenchmarks(session, [rec(0, best + 5), rec(1, best)], s);
     expect(applied).toHaveLength(1);
-    expect(applied[0].fromSec!).toBeCloseTo(rowBefore, 9);
+    // The benchmark the round beat is the target the plan prescribed.
+    expect(applied[0].fromSec).toBe(targetBefore);
+    expect(applied[0].fromSec).toBe(Math.round(rowBefore));
 
     const rowAfter = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'row_erg')!;
     expect(rowAfter.sec).toBe(best);
@@ -192,6 +194,44 @@ describe('doubles target with doubles race splits: one number per station for St
       expect(comp.durationSec).toBe(best);
     }
   });
+});
+
+describe('Open target with a Pro race split: plan, Stats and forecast read the Open equivalent', () => {
+  // Review 2026-10-13: the resolver read a split at the weights it was stored
+  // at. An Open Singles athlete with a 260 s Pro sled push split saw a
+  // forecast row of 226.1 but a plan target of 260 at Open loads (about 15%
+  // slow); a Pro Doubles split of 190 gave a forecast row of 232.4 and a plan
+  // target of 267. The density circuits programme sled pull, so it is the
+  // station checked here (same Pro multiplier as sled push).
+  const proSplit = (format: 'pro_singles' | 'pro_doubles', sec: number) => hyroxState({
+    format: 'open_singles',
+    ...(format === 'pro_singles'
+      ? { stationBenchmarksSingles: { sled_pull: sec } }
+      : { stationBenchmarksDoubles: { sled_pull: sec } }),
+    stationBenchmarkHistory: { sled_pull: [{ dateISO: today, sec, source: 'race' as const, format, proWeights: true }] },
+  });
+
+  for (const [format, sec] of [['pro_singles', 300], ['pro_doubles', 220]] as const) {
+    it(`${format} sled pull split of ${sec} s: the plan target is Math.round of the forecast's Open-weight row`, () => {
+      const s = proSplit(format, sec);
+      const line = predictHyroxRace(s)!.stations.find(l => l.station === 'sled_pull')!;
+      const target = hyroxPlanningStationBenchmarks(s).sled_pull!;
+      expect(target).toBe(Math.round(line.baseSec));
+      const row = hyroxBenchmarkLedger(s).rows.find(r => r.station === 'sled_pull')!;
+      expect(row.sec!).toBeCloseTo(line.baseSec, 9);
+      if (format === 'pro_singles') {
+        expect(target).toBe(Math.round(sec / 1.15));
+        expect(target).toBeLessThan(sec);
+      } else {
+        const ratio = resolveHyroxStationBenchmarks(s)!.stationRatio;
+        expect(target).toBe(Math.round(sec / 1.15 / ratio));
+        expect(target).toBeLessThan(Math.round(sec / ratio));
+      }
+      const pulls = densityComponents(s.wks).filter(c => c.type === 'sled_pull');
+      expect(pulls.length).toBeGreaterThan(0);
+      for (const comp of pulls) expect(comp.durationSec).toBe(target);
+    });
+  }
 });
 
 describe('the add-session modal prescribes the same station targets', () => {
