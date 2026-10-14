@@ -32,6 +32,7 @@ import { bandFromVdot } from '@/calculations/hyrox-staleness';
 import { getMutableState, getState } from './store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { hyroxOpenToProSec, hyroxSinglesCohortForState } from '@/calculations/hyrox-results';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 
 const SAMPLE_SPLITS = {
   ski_erg: 250,
@@ -153,17 +154,29 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
-  it('60-min singles previous + doubles target → the singles band (advanced)', () => {
+  it('60-min singles previous + doubles target → the singles band (the planning band, as for a singles target)', () => {
     initializeHyroxSimulator(buildOnboarding({
       hyroxFormat: 'open_doubles',
       hyroxPreviousTimeFormat: 'open_singles',
       previousHyroxTimeSec: 3600,            // 1:00:00 singles
       hyroxPreviousStationSplits: undefined,
     }));
-    // Bands on singles terms: 3600 is not under 3600 → advanced. The old rule
-    // (× 0.85 = 3060 → competitive) banded on doubles terms, and the doubles
-    // forecast then scaled that band's seeds by the doubles ratio again.
-    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
+    // Bands on Open Singles terms (hyroxPlanningBandFor, since the H2 merge):
+    // 3600 is under the pooled Open Singles competitive threshold (3774 s,
+    // S8-S9), so competitive, the band a singles target reads. The old rule
+    // (× 0.85) banded on doubles terms, and the doubles forecast then scaled
+    // that band's seeds by the doubles ratio again.
+    const doublesTarget = getState().hyroxConfig!.athleteBand;
+    expect(doublesTarget).toBe(hyroxPlanningBandFor(3600, 'open_singles', undefined));
+    expect(doublesTarget).toBe('competitive');
+    resetState();
+    initializeHyroxSimulator(buildOnboarding({
+      hyroxFormat: 'open_singles',
+      hyroxPreviousTimeFormat: 'open_singles',
+      previousHyroxTimeSec: 3600,
+      hyroxPreviousStationSplits: undefined,
+    }));
+    expect(getState().hyroxConfig!.athleteBand).toBe(doublesTarget);
   });
 
   it('same-format previous and target → no factor applied', () => {
