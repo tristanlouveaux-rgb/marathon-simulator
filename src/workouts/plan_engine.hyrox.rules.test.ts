@@ -357,6 +357,15 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
     // A training week holding easy erg work holds station or brick work too:
     // easy erg never takes the slot of the week's last station session or brick.
     if (ph !== 'taper' && !raceWeek && ergs.length > 0 && !ws.some(isWork)) out.push(`W${w}: easy erg work and no station session or brick`);
+    // The easy erg slot (round 7, bounded 2026-10-14): an easy run leaves for
+    // easy erg work only while the week's running (standalone runs and the
+    // run segments of station and brick sessions) stays at or above the D2
+    // running share, HYROX_RUN_SHARE x the chosen weekly minutes, and never
+    // in a deload.
+    if (notes(wk).some(n => /left out for an easy erg session/.test(n))) {
+      if (isDeload(i)) out.push(`W${w}: deload easy run left out for easy erg work`);
+      if (runningMin(wk) < HYROX_RUN_SHARE * hoursMin - EPS) out.push(`W${w}: easy run left out for easy erg work, running ${runningMin(wk).toFixed(1)} min under the ${HYROX_RUN_SHARE * hoursMin}-min running share`);
+    }
     // No standalone run under the run floor (the primer excepted): the plans
     // here have no logged runs, so the floor is HYROX_RUN_FLOOR_MIN. A taper
     // long run included (decision E: it rises to the floor when the long run
@@ -1063,7 +1072,10 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       // long-run cap, 60 min) with every slot taken, noted.
       expect(minutes(w2) >= detail[1].budgetMin - HYROX_RUN_FLOOR_MIN
         || notes(w2).some(n => /left unprescribed \(the chosen 4 sessions are full, an easy erg session at most 60 min\)/.test(n))).toBe(true);
-      expect(minutes(w2)).toBeGreaterThan(prev);
+      // Never less (equal at 6 and 7 h: the session count and the erg cap
+      // hold week 2, and since 2026-10-14 the easy erg slot never takes the
+      // running under the D2 share).
+      expect(minutes(w2)).toBeGreaterThanOrEqual(prev);
       prev = minutes(w2);
     }
   });
@@ -1404,8 +1416,15 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // the MTL cap and the chronic window cost 2 quality runs on this grid.
     // Round 7 lets easy erg work take an easy run's slot or MTL whenever the
     // week then holds more minutes, and the guard never sits under the
-    // nominal week 1: every variant now holds the bound and its quality runs
-    // on this grid.
+    // nominal week 1: every variant held the bound and its quality runs on
+    // this grid. Since 2026-10-14 the easy erg slot never takes the week's
+    // running under the D2 share, so one more hour that funds more running
+    // (two run-floor easy runs where the share funded none) can hold fewer
+    // minutes than the easy erg sessions those slots held: 7 sessions,
+    // competitive 8 to 9 h, peak weeks 480 to 386 min with running 174 to 214
+    // min. The bound holds for every week whose running did not rise and for
+    // the total those weeks lose; a week whose running rose (D2 funding it)
+    // is reported.
     // [name, onboarding, logged weekly TSS, logged run minutes]
     const doubles = { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>;
     const variants: Array<[string, Partial<OnboardingState>, number | undefined, number | undefined]> = [
@@ -1424,6 +1443,8 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     const tooFar: string[] = [];
     const weekTooFar: string[] = [];
     const qualityFell: string[] = [];
+    // Falls beyond one easy session in weeks whose running rose (reported).
+    const moreRunning: string[] = [];
     let pairs = 0;
     for (const [name, over, logged, runMin] of variants) {
       for (const band of BANDS) {
@@ -1439,16 +1460,24 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
             if (prev != null) {
               pairs++;
               const label = `${name} ${band} ${len}w ${h - 1}->${h} h`;
-              if (total < prev.total - EPS) {
-                fell.push(`${label}: ${prev.total} -> ${total} min`);
-                if (prev.total - total > easyMax + EPS) tooFar.push(`${label}: ${prev.total} -> ${total} min (more than the ${easyMax}-min easy session)`);
-              }
-              if (quality < prev.quality) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
+              // What the weeks whose running did not rise lose.
+              let sameRunFall = 0;
               weeks.forEach((wk, i) => {
                 const before = prev!.weeks[i];
                 if (!before) return;
-                if (minutes(before) - minutes(wk) > easyMax + EPS) weekTooFar.push(`${label} W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min`);
+                const fall = minutes(before) - minutes(wk);
+                const runRose = runningMin(wk) > runningMin(before) + EPS;
+                if (fall > EPS && !runRose) sameRunFall += fall;
+                if (fall > easyMax + EPS) {
+                  const line = `${label} W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min, running ${runningMin(before).toFixed(0)} -> ${runningMin(wk).toFixed(0)}`;
+                  if (runRose) moreRunning.push(line); else weekTooFar.push(line);
+                }
               });
+              if (total < prev.total - EPS) {
+                fell.push(`${label}: ${prev.total} -> ${total} min`);
+                if (sameRunFall > easyMax + EPS) tooFar.push(`${label}: ${prev.total} -> ${total} min, ${sameRunFall} min in weeks whose running did not rise (more than the ${easyMax}-min easy session)`);
+              }
+              if (quality < prev.quality) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
             }
             prev = { total, quality, weeks: structuredClone(weeks) };
           }
@@ -1458,6 +1487,7 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(pairs).toBeGreaterThan(variants.length * BANDS.length * lengths.length * 5);
     // The report: every pair whose total plan minutes fall.
     console.info(`[hyrox B report] ${fell.length} of ${pairs} adjacent-hour pairs hold fewer total plan minutes${fell.length > 0 ? `:\n  ${fell.join('\n  ')}` : ''}`);
+    console.info(`[hyrox B report] ${moreRunning.length} weeks fall by more than one easy session where one more hour funds more running${moreRunning.length > 0 ? `:\n  ${moreRunning.join('\n  ')}` : ''}`);
     expect(tooFar.slice(0, 10)).toEqual([]);
     expect(weekTooFar.slice(0, 10)).toEqual([]);
     expect(qualityFell.slice(0, 10)).toEqual([]);
@@ -1647,12 +1677,22 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // injured week; the swap (an easy run's slot freed for easy erg work)
     // does not run, even with every capacity open. The same athlete without
     // the injury swaps in some of these weeks.
+    // Since 2026-10-14 the swap keeps the week's running at or above the D2
+    // share, so it is rare: intermediate 7 h 24 weeks with 6 sessions (W9) is
+    // one of the 2 swaps in 17,760 training weeks of the default, 6- and
+    // 7-session grids, and stands in for the swap here.
     let swappedHealthy = 0;
     let weeks = 0;
+    const configs: Array<[AbilityBand, number, number, number]> = [['intermediate', 7, 24, 6]];
     for (const band of ['intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
       for (const hrs of [8, 10, 12]) {
-        for (const sess of [6, 7]) {
-          const s = structuredClone(build(band, hrs, 16, { hyroxWeeklySessionCount: sess } as Partial<OnboardingState>));
+        for (const sess of [6, 7]) configs.push([band, hrs, 16, sess]);
+      }
+    }
+    {
+      for (const [band, hrs, len, sess] of configs) {
+        {
+          const s = structuredClone(build(band, hrs, len, { hyroxWeeklySessionCount: sess } as Partial<OnboardingState>));
           const healthy = generateHyroxPlanDetailed(structuredClone(s)).detail;
           swappedHealthy += healthy.filter(d => d.adjustments.some(n => /left out for an easy erg session/.test(n))).length;
           for (const caps of [{ runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 }, { runCapacity: 100, upperLoadCapacity: 50, lowerLoadCapacity: 100 }]) {
