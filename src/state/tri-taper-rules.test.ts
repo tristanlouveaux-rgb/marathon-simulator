@@ -3,16 +3,19 @@
  * SCIENCE_LOG "Triathlon and cycling taper rebuild"), checked on plans built
  * through the onboarding initializers across distances (T100 included) and
  * cycling x plan lengths 2 to 24 weeks x low, typical and high hours x race
- * weekday.
+ * weekday x weekday hours (the default 40% split, and 0, 0.5 and 1 h).
  *
- * Every race weekday (Sunday, Monday, Thursday, Saturday):
+ * Every race weekday (Sunday, Monday, Thursday, Friday, Saturday):
  *   - the day before holds only a short activation (ride 20-30 min, run 5-10
  *     min; Allen, Byrn, the Triathlete guide), never the week's longest
  *     session and never heavier (minutes or load) than any earlier training
  *     day of race week; two days out is empty;
  *   - race-week sessions stay under their race-week caps (run 45 min, Byrn;
  *     bike 90 min, Allen; swim 45 min, Byrn), at most two training sessions a
- *     day, nothing on or after race day.
+ *     day, nothing on or after race day;
+ *   - no discipline at zero in any taper week (the race window's cut of taper
+ *     week 1 included);
+ *   - race-week gym only on a day holding fewer than two sessions.
  * Sunday and Monday races (no race-window cut, ISSUE-364), in addition:
  *   - taper length by race distance (sprint 1, others 2, cycling 2), race week
  *     only under 8 h of reference-week training (Goeringer);
@@ -32,8 +35,10 @@
  *     race-pace work (Dave Scott's 4 to 12 min sets); race week holds an
  *     opener; long course and cycling never above race intensity;
  *   - TRI_GENERATOR_VERSION bumped so stored plans regenerate.
- * Thursday and Saturday races keep the structural rules; their volume and
- * frequency gaps (race-window cut, fewer race-week days) are pinned below.
+ * Thursday to Saturday races keep the structural rules and the no-zero rule.
+ * Their volume and frequency gaps (the race window cuts taper week 1, race
+ * week has one to three training days) are pinned below with one case per
+ * weekday, as is a race week above a thin week before.
  */
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 
@@ -118,11 +123,15 @@ function raceDay(weeks: number, dow = 6): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function build(mode: Mode, race: string, hours: number): SimulatorState {
+interface BuildOpts { weekdayHours?: number; gym?: number }
+
+function build(mode: Mode, race: string, hours: number, o: BuildOpts = {}): SimulatorState {
   resetState();
   const ob = {
     ...defaultOnboardingState, name: 'QA', currentStep: 'initializing', experienceLevel: 'intermediate',
     customRaceDate: race, triTimeAvailableHoursPerWeek: hours,
+    ...(o.weekdayHours != null ? { triWeekdayHoursPerWeek: o.weekdayHours } : {}),
+    ...(o.gym != null ? { gymSessionsPerWeek: o.gym } : {}),
   };
   if (mode === 'cycling') {
     initializeCyclingSimulator({ ...ob, trainingMode: 'cycling', cyclingDistance: '160km' } as OnboardingState);
@@ -177,8 +186,8 @@ interface Plan {
   present: Disc[];
 }
 
-function plan(mode: Mode, weeks: number, hours: number, dow = 6): Plan {
-  const s = build(mode, raceDay(weeks, dow), hours);
+function plan(mode: Mode, weeks: number, hours: number, dow = 6, o: BuildOpts = {}): Plan {
+  const s = build(mode, raceDay(weeks, dow), hours, o);
   const tw = planTrainingWeeks(s);
   let taperStart = tw;
   while (taperStart > 1 && s.wks[taperStart - 2].ph === 'taper') taperStart--;
@@ -188,6 +197,34 @@ function plan(mode: Mode, weeks: number, hours: number, dow = 6): Plan {
 }
 
 const MODES: Mode[] = ['sprint', 'olympic', 't100', '70.3', 'ironman', 'cycling'];
+/** Weekday hours: the default split (40% of the week), then 0, 0.5 and 1 h
+ *  (the setup slider's low end, 0.5 h steps). */
+const WEEKDAY_HOURS: Array<number | undefined> = [undefined, 0, 0.5, 1];
+const wdTag = (wd: number | undefined) => (wd == null ? 'split' : `wd${wd}`);
+
+/** No discipline at zero in any taper week (Tristan, decision 5). */
+function zeroViolations(p: Plan): string[] {
+  const out: string[] = [];
+  for (let w = p.taperStart; w <= p.tw; w++) {
+    for (const d of p.present) {
+      const has = sessions(p.s.wks[w - 1]).some(x => (x.discipline ?? 'run') === d || (d === 'run' && x.t === 'brick'));
+      if (!has) out.push(`week ${w} no ${d}`);
+    }
+  }
+  return out;
+}
+
+/** Race-week gym takes a day with a slot left (two sessions a day at most,
+ *  commutes counted). */
+function gymViolations(p: Plan): string[] {
+  const rw = p.s.wks[p.tw - 1];
+  const out: string[] = [];
+  for (const g of (rw.triWorkouts ?? []).filter(w => w.t === 'gym')) {
+    const day = (rw.triWorkouts ?? []).filter(w => w.dayOfWeek === g.dayOfWeek && w.taperRole !== 'day_before');
+    if (day.length > TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY) out.push(`gym on ${DOW[g.dayOfWeek ?? 0]} with ${day.length - 1} other sessions`);
+  }
+  return out;
+}
 
 /** Rules every race weekday keeps: the day before, two days out, caps. */
 function structuralViolations(p: Plan): string[] {
@@ -343,16 +380,20 @@ function taperViolations(p: Plan): string[] {
   return out;
 }
 
-describe('race taper rules: distances x plan lengths 2-24 x hours, Sunday and Monday races', () => {
+describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hours, Sunday and Monday races', () => {
   for (const mode of MODES) {
     it(`${mode}`, () => {
       at(NOW);
       const found: string[] = [];
-      for (const weeks of LENGTHS) {
-        for (const hours of hoursFor(mode)) {
-          for (const dow of [6, 0]) {
-            const p = plan(mode, weeks, hours, dow);
-            for (const v of [...structuralViolations(p), ...taperViolations(p)]) found.push(`${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+      for (const wd of WEEKDAY_HOURS) {
+        for (const weeks of LENGTHS) {
+          for (const hours of hoursFor(mode)) {
+            for (const dow of [6, 0]) {
+              const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
+              for (const v of [...structuralViolations(p), ...taperViolations(p)]) {
+                found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+              }
+            }
           }
         }
       }
@@ -361,21 +402,42 @@ describe('race taper rules: distances x plan lengths 2-24 x hours, Sunday and Mo
   }
 });
 
-describe('race taper rules: Thursday and Saturday races keep the race-week structure', () => {
+describe('race taper rules: Thursday, Friday and Saturday races keep the race-week structure and every discipline', () => {
   for (const mode of MODES) {
     it(`${mode}`, () => {
       at(NOW);
       const found: string[] = [];
-      for (const weeks of LENGTHS) {
-        for (const hours of hoursFor(mode)) {
-          for (const dow of [3, 5]) {
-            for (const v of structuralViolations(plan(mode, weeks, hours, dow))) found.push(`${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+      for (const wd of WEEKDAY_HOURS) {
+        for (const weeks of LENGTHS) {
+          for (const hours of hoursFor(mode)) {
+            for (const dow of [3, 4, 5]) {
+              const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
+              for (const v of [...structuralViolations(p), ...zeroViolations(p)]) found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+            }
           }
         }
       }
       expect(found).toEqual([]);
     });
   }
+});
+
+describe('race-week gym counts toward two sessions a day', () => {
+  it('two gym sessions a week: no race-week day holds gym beside two other sessions', () => {
+    at(NOW);
+    const found: string[] = [];
+    for (const mode of MODES) {
+      for (const weeks of [4, 6, 12, 16]) {
+        for (const hours of hoursFor(mode)) {
+          for (const dow of [6, 0, 3, 4, 5]) {
+            const p = plan(mode, weeks, hours, dow, { gym: 2 });
+            for (const v of [...gymViolations(p), ...structuralViolations(p)]) found.push(`${mode} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+          }
+        }
+      }
+    }
+    expect(found).toEqual([]);
+  });
 });
 
 describe('known gaps (open questions for Tristan; SCIENCE_LOG limitations)', () => {
@@ -390,6 +452,46 @@ describe('known gaps (open questions for Tristan; SCIENCE_LOG limitations)', () 
     expect(sessions(p.s.wks[p.tw - 1]).length + 1).toBeLessThan(Math.ceil(0.8 * p.ref.total));
     // Race week: Monday's training (at most two sessions) and the day before.
     expect(new Set(training(p.s.wks[p.tw - 1]).map(w => w.dayOfWeek))).toEqual(new Set([0]));
+  });
+
+  it('Friday race, 70.3 16 weeks 10 h: the race window cuts taper week 1 (below the band and under 80%)', () => {
+    at(NOW);
+    const p = plan('70.3', 16, 10, 4);
+    const refSbr = DISCS.reduce((a, d) => a + p.ref.minutes[d], 0);
+    const t1 = DISCS.reduce((a, d) => a + minutes(sessions(p.s.wks[p.tw - 2]))[d], 0) / refSbr;
+    const rw = DISCS.reduce((a, d) => a + minutes(sessions(p.s.wks[p.tw - 1]))[d], 0) / refSbr;
+    expect((t1 + rw) / 2).toBeLessThan(0.40);
+    expect(sessions(p.s.wks[p.tw - 2]).length).toBeLessThan(Math.ceil(0.8 * p.ref.total));
+    // Race week itself lands on 0.30 and keeps 80%: two training days and the day before.
+    expect(Math.abs(rw - TRI_RACE_WEEK_FRACTION)).toBeLessThan(0.03);
+    expect(sessions(p.s.wks[p.tw - 1]).length + 1).toBeGreaterThanOrEqual(Math.ceil(0.8 * p.ref.total));
+    expect(zeroViolations(p)).toEqual([]);
+  });
+
+  it('Saturday race: the race window empties taper week 1\'s last day; cycling 16 weeks 10 h lands near 0.39, Ironman at 25 h below 0.35', () => {
+    at(NOW);
+    const mean = (p: Plan) => {
+      const refSbr = DISCS.reduce((a, d) => a + p.ref.minutes[d], 0);
+      const f = (w: number) => DISCS.reduce((a, d) => a + minutes(sessions(p.s.wks[w - 1]))[d], 0) / refSbr;
+      return (f(p.tw - 1) + f(p.tw)) / 2;
+    };
+    const cyc = plan('cycling', 16, 10, 5);
+    expect(mean(cyc)).toBeLessThan(0.40);
+    expect(mean(cyc)).toBeGreaterThan(0.37);
+    expect(mean(plan('ironman', 16, 25, 5))).toBeLessThan(0.35);
+    // 70.3 at 10 h holds the band on a Saturday.
+    expect(mean(plan('70.3', 16, 10, 5))).toBeGreaterThanOrEqual(0.40);
+  });
+
+  it('a one-week race week of openers sits above a thin week before (Olympic 6 weeks 5 h, Monday race: the week before is a deload)', () => {
+    at(NOW);
+    const p = plan('olympic', 6, 5, 0);
+    expect(p.tw - p.taperStart + 1).toBe(1);
+    const rw = minsOf(sessions(p.s.wks[p.tw - 1]));
+    const before = minsOf(sessions(p.s.wks[p.tw - 2]));
+    expect(rw).toBeGreaterThan(before);
+    // Every race-week training session is an opener (none left to trim).
+    expect(training(p.s.wks[p.tw - 1]).every(w => w.taperRole === 'opener')).toBe(true);
   });
 
   it('a one-week taper at high hours cannot hold 0.55 under the race-week caps (Ironman 3 weeks, 25 h)', () => {
@@ -450,6 +552,15 @@ describe('taper length', () => {
     const s = build('70.3', raceDay(16), 6);
     expect(triPlanTaperWeeks({ ...s, wks: [] }, () => triTaperOpts(s, 16).lowHours)).toBe(1);
     expect(triPlanTaperWeeks({ ...s, wks: [] })).toBe(2);
+  });
+
+  it('the forecast fallback keeps the short-plan rule (a 3-week Olympic plan tapers 1 week, as the plan does)', () => {
+    at(NOW);
+    const s = build('olympic', raceDay(3), 8);
+    const tw = planTrainingWeeks(s);
+    expect(computeTriPlanPhases('olympic', tw).map(p => p.ph)).toEqual(['build', 'peak', 'taper']);
+    expect(triPlanTaperWeeks({ ...s, wks: [] })).toBe(1);
+    expect(triPlanTaperWeeks(s)).toBe(1);
   });
 });
 
