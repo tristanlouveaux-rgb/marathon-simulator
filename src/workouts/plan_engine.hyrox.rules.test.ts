@@ -101,6 +101,13 @@
  * week whose long run a ceiling cut keeps no easy run above the run floor;
  * the B sweep asserts its bound and the quality runs for all nine variants;
  * the hours line holds against the real plan with one more session.
+ * Merge with fix/load-accounting and the round 7 review minors (2026-10-14):
+ * an easy run leaves for easy erg work only while the week's running stays at
+ * or above the D2 share, never in a deload; the B sweep's bound holds for the
+ * weeks whose running did not rise, and the weeks one more hour funds more
+ * running in are reported; a deload session with no same-type counterpart is
+ * held to its class's; the beginner fixture finishes at the pooled Open
+ * Singles beginner median (the planning band bands 7800 s novice).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
