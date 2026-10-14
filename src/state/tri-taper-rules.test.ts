@@ -61,7 +61,7 @@ import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
 import { getState, resetState } from './store';
 import { planTrainingWeeks, raceWeekLayout, triPlanTaperWeeks } from '@/workouts/race-week-layout';
-import { TRI_GENERATOR_VERSION, triTaperOpts, triTaperReference } from '@/workouts/plan_engine.triathlon';
+import { TRI_GENERATOR_VERSION, generateTriathlonPlan, triTaperOpts, triTaperReference } from '@/workouts/plan_engine.triathlon';
 import {
   computeTriPlanPhases,
   DEFAULT_WEEKLY_PEAK_HOURS,
@@ -125,7 +125,14 @@ function raceDay(weeks: number, dow = 6): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-interface BuildOpts { weekdayHours?: number; gym?: number }
+interface BuildOpts {
+  weekdayHours?: number;
+  gym?: number;
+  /** Three bidirectional 5 km commute days, the plan rebuilt with them. */
+  commute?: boolean;
+  /** A power meter (FTP 250) and a CSS of 1:40/100 m. */
+  power?: boolean;
+}
 
 function build(mode: Mode, race: string, hours: number, o: BuildOpts = {}): SimulatorState {
   resetState();
@@ -134,13 +141,19 @@ function build(mode: Mode, race: string, hours: number, o: BuildOpts = {}): Simu
     customRaceDate: race, triTimeAvailableHoursPerWeek: hours,
     ...(o.weekdayHours != null ? { triWeekdayHoursPerWeek: o.weekdayHours } : {}),
     ...(o.gym != null ? { gymSessionsPerWeek: o.gym } : {}),
+    ...(o.power ? { triBike: { ftp: 250, hasPowerMeter: true }, triSwim: { cssSecPer100m: 100 } } : {}),
   };
   if (mode === 'cycling') {
     initializeCyclingSimulator({ ...ob, trainingMode: 'cycling', cyclingDistance: '160km' } as OnboardingState);
   } else {
     initializeTriathlonSimulator({ ...ob, trainingMode: 'triathlon', triDistance: mode } as OnboardingState);
   }
-  return getState();
+  const s = getState();
+  if (o.commute) {
+    s.commuteConfig = { enabled: true, distanceKm: 5, isBidirectional: true, commuteDaysPerWeek: 3 };
+    s.wks = generateTriathlonPlan(s);
+  }
+  return s;
 }
 
 /** Swim, bike, run and brick sessions (no commute, no gym). */
@@ -448,6 +461,56 @@ describe('race taper rules: Thursday, Friday and Saturday races keep the race-we
   }
 });
 
+/** Thin reference weeks: gym, commutes, and both at 0 h weekdays with a
+ *  power meter (the settings where a Thursday race week lost its swim). */
+const THIN_WEEKS: Array<{ tag: string; o: BuildOpts }> = [
+  { tag: 'gym', o: { gym: 2 } },
+  { tag: 'commute', o: { commute: true } },
+  { tag: 'gym+commute wd0 power', o: { gym: 2, commute: true, weekdayHours: 0, power: true } },
+];
+
+describe('race taper rules: Thursday, Friday and Saturday races with gym and commutes keep every discipline', () => {
+  for (const mode of MODES) {
+    it(`${mode}`, () => {
+      at(NOW);
+      const found: string[] = [];
+      for (const { tag, o } of THIN_WEEKS) {
+        for (const weeks of LENGTHS) {
+          for (const hours of hoursFor(mode)) {
+            for (const dow of [3, 4, 5]) {
+              const p = plan(mode, weeks, hours, dow, o);
+              for (const v of [...structuralViolations(p), ...zeroViolations(p), ...doubleViolations(p), ...gymViolations(p)]) found.push(`${tag} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+            }
+          }
+        }
+      }
+      expect(found).toEqual([]);
+    });
+  }
+});
+
+describe('taper week 1 keeps its quality runs when gym and commutes fill the earlier days', () => {
+  it('Olympic 13 h, gym + commutes + 0 h weekdays: the threshold run the spacing rule would ease takes a free earlier day', () => {
+    at(NOW);
+    for (const dow of [6, 0]) {
+      for (const weeks of [5, 8, 16, 24]) {
+        const p = plan('olympic', weeks, 13, dow, THIN_WEEKS[2].o);
+        expect(p.tw - p.taperStart + 1).toBe(2);
+        const t1 = p.s.wks[p.tw - 2];
+        expect(qualityCounts(t1).run, `${weeks}w ${DOW[dow]}`).toBe(qualityCounts(p.refWeek).run);
+        // Never beside the long run or another hard run, never beside another training run.
+        for (const q of training(t1).filter(w => w.t === 'threshold')) {
+          const day = training(t1).filter(w => w.dayOfWeek === q.dayOfWeek && w !== q);
+          expect(day.some(w => (w.discipline ?? 'run') === 'run' || w.t === 'brick')).toBe(false);
+          for (const n of [q.dayOfWeek! - 1, q.dayOfWeek! + 1]) {
+            expect(training(t1).some(w => w.dayOfWeek === n && (isLongRun(w) || w.t === 'brick' || w.t === 'threshold'))).toBe(false);
+          }
+        }
+      }
+    }
+  });
+});
+
 describe('race-week gym counts toward two sessions a day', () => {
   it('two gym sessions a week: no race-week day holds gym beside two other sessions', () => {
     at(NOW);
@@ -578,6 +641,15 @@ describe('taper length', () => {
     const s = build('70.3', raceDay(16), 6);
     expect(triPlanTaperWeeks({ ...s, wks: [] }, () => triTaperOpts(s, 16).lowHours)).toBe(1);
     expect(triPlanTaperWeeks({ ...s, wks: [] })).toBe(2);
+  });
+
+  it('the forecast fallback leaves a Monday race\'s closing week out (Olympic 4 weeks 8 h, Monday race: 1 taper week, as the plan builds)', () => {
+    at(NOW);
+    const s = build('olympic', raceDay(4, 0), 8);
+    expect(s.tw).toBe(4);
+    expect(planTrainingWeeks(s)).toBe(3);
+    expect(triPlanTaperWeeks(s)).toBe(1);
+    expect(triPlanTaperWeeks({ ...s, wks: [] })).toBe(1);
   });
 
   it('the forecast fallback keeps the short-plan rule (a 3-week Olympic plan tapers 1 week, as the plan does)', () => {

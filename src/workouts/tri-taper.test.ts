@@ -253,6 +253,21 @@ describe('composeTriRaceWeek', () => {
     }
   });
 
+  it('Thursday race with no budget for an opener: it goes to the swim, not to the run that has its day-before jog (review: the swim was dropped)', () => {
+    // A thin reference week (sprint at 4 h with gym): 0.55 gives swim 16.5
+    // and bike 16.5 (under the 20-min day-before ride), run 33 with the 5-min
+    // jog. No budget holds an opener; Monday's two slots must carry the swim
+    // and the ride.
+    const out = composeTriRaceWeek(input70(THURSDAY, {
+      longCourse: false, fraction: 0.55, ctx: { ...ctx, shortCourse: true, bikeIF: 0.88 },
+      ref: { minutes: { swim: 30, bike: 30, run: 60 }, counts: { swim: 1, bike: 1, run: 2 }, total: 4 },
+    }));
+    for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d), d).toBe(true);
+    expect(out.filter(w => w.taperRole === 'opener').map(w => w.discipline)).toEqual(['swim']);
+    expect(out.filter(w => w.taperRole === 'day_before').map(w => w.discipline)).toEqual(['run']);
+    expect(shapeViolations(out)).toEqual([]);
+  });
+
   it('sessions that cannot fit the slots come off the discipline that loses least (review: the run always absorbed the cut)', () => {
     // Olympic 13 h reference (review's synthetic case): 0.55 gives swim 69,
     // bike 190, run 171; nine sessions for eight slots.
