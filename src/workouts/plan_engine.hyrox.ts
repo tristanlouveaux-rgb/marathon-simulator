@@ -40,12 +40,18 @@
  *      run and the week's last station work stay.
  *   6. Schedule with the hard-day and 48 h eccentric rules, Sunday to Monday
  *      included (scheduler.hyrox). A week the rules cannot hold loses a hard
- *      session to its easy sibling, then its lowest-priority session.
+ *      session to its easy sibling, then its lowest-priority session. Race
+ *      week takes the race-day rules' days (raceWeekDays); its circuit takes
+ *      the primer's day when that is its only one (a Thursday race). The week
+ *      before race week re-places station work its race window drops on a
+ *      free day 7 or more days out (placeWorkOutsideRaceWindow).
  *   7. Easy erg work (discipline 'erg'): what the sessions leave of the
  *      week's size becomes easy SkiErg or row work, up to the athlete's
  *      chosen session total, in the MTL the week leaves under the cap, each
  *      session up to the tier long-run cap. An easy run's slot (or its MTL)
- *      goes to it when the week then holds more minutes (round 7).
+ *      goes to it when the week then holds more minutes (round 7) and its
+ *      running stays at or above HYROX_RUN_SHARE of the chosen weekly
+ *      minutes, never in a deload (2026-10-14).
  *      Neither hard nor eccentric. It never fills what the injury gates took,
  *      nor the slot of the week's last station session or brick, nor a
  *      missing quality run's slot, and no slot moves with an active injury.
@@ -251,6 +257,16 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // takes an easy slot before the runs are sized; the hours line is checked
 // against the real plan with one more session; plans build in under 10 ms
 // (desktop Node).
+// Still v18 (unreleased; round 7 review minors and the merge, 2026-10-14): an
+// easy erg session takes an easy run's slot only while the week's running
+// stays at or above the D2 share, never in a deload; a Thursday race week's
+// circuit takes its one day 3 or more days out from the primer (an easy run
+// holds a lone primer's run slot), and the week before race week re-places
+// station work the race window drops on a free day 7 or more days out; a
+// deload session of a type the last loaded week did not hold takes the
+// lightest of its class there; the running share counts brick run segments
+// as the injury gates leave them; a limit easy erg work does not count
+// toward never takes it.
 // Still v18 (unreleased; merge of fix/load-accounting, 2026-10-14). One bump
 // carries everything since main's v17:
 // - H1: station MTL at the athlete's load tier (division, format and sex;
