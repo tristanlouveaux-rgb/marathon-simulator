@@ -1457,49 +1457,61 @@ function generateWeekSessions(
     return kept;
   };
 
-  // Easy erg work absorbs the hours the session count leaves (decision C,
-  // Tristan 2026-10-13): when the chosen sessions are full and easy erg work
-  // could hold at least HYROX_RUN_FLOOR_MIN of what is left, a training week
-  // frees a slot for it: its shortest easy run leaves, the easy runs left
-  // take its minutes (each no longer than the long run, the 110% single-run
-  // ceiling or the tier long-run cap), and the slot holds easy erg work, when
-  // that gives the week more minutes. One slot a week, never the long run,
-  // the quality run or the easy run standing in a missing quality run's slot.
-  // Only when the easy runs left keep every running minute (round 6: easy
-  // running ranks above easy erg work in the hierarchy's allocation), and
-  // never with an active injury: the injury gates and the capability
-  // substitution's offers decide that week (round 6; review 2026-10-13: with
-  // stations gated and runs open, 138 of 630 training weeks lost an easy run,
-  // the injured athlete's only gate-safe training, for an erg session the
-  // gates then dropped). Before (review
-  // 2026-10-13), one more hour funded another short run that took the easy
-  // erg's slot, so the week held less: intermediate 23 weeks at 7 h held 36 to
-  // 51 min less a week than at 6 h through build and peak (an easy run of 22
-  // min in place of an easy erg session of 60 to 75), and total plan minutes
-  // fell as hours rose in 26 band/length pairs. A product choice: no source
+  // Easy erg work absorbs the hours the session count or the MTL cap leaves
+  // (decision C, Tristan 2026-10-13; round 7, Tristan 2026-10-14): when the
+  // chosen sessions are full, or the MTL cap holds the easy erg work the free
+  // slots could take, a training week can give one easy run's slot (or its
+  // MTL) to easy erg work. The options, each the week without its shortest
+  // easy run:
+  //   - the easy runs left take its minutes (each no longer than the long run,
+  //     the 110% single-run ceiling or the tier long-run cap);
+  //   - nothing takes its minutes, so its MTL goes to easy erg work (less MTL
+  //     a minute) when the MTL cap is what holds the week.
+  // The schedule step (below) keeps the option whose week then holds the most
+  // minutes with its easy erg work, and the week as it is when none holds
+  // more. One slot a week, never the long run, the quality run or the easy
+  // run standing in a missing quality run's slot, and never with an active
+  // injury: the injury gates and the capability substitution's offers decide
+  // that week (round 6; review 2026-10-13: with stations gated and runs open,
+  // 138 of 630 training weeks lost an easy run, the injured athlete's only
+  // gate-safe training, for an erg session the gates then dropped). Round 6
+  // took the slot only when the easy runs left kept every running minute
+  // (easy running ranking above easy erg work), so one more hour that funded
+  // an easy run could take the slot, or the MTL room, a longer easy erg
+  // session held: with the 7-session choice, at a logged 200 TSS and with a
+  // logged 25-min run, 4, 10 and 2 adjacent-hour pairs of 972 fell by more
+  // than one easy session in total plan minutes (novice 24 weeks with a
+  // logged 25-min run, 6 to 7 h, W21: two 37-min easy runs in place of a
+  // 50-min easy run and a 75-min easy erg session). Round 7 lets easy erg
+  // work take the slot whenever the week then holds more minutes: lower
+  // impact, and it fills the chosen hours. Before (review 2026-10-13), one
+  // more hour funded another short run that took the easy erg's slot, so the
+  // week held less: intermediate 23 weeks at 7 h held 36 to 51 min less a
+  // week than at 6 h through build and peak. A product choice: no source
   // ranks an easy run against easy erg work when the session count binds.
-  const ergSlotFor = (ws: Workout[]): Workout[] => {
-    if (!trainingWeek) return ws;
-    if (!isPastWeek && injuryState?.active) return ws;
+  const ergSlotOptions = (ws: Workout[]): Array<{ ws: Workout[]; note: string }> => {
+    if (!trainingWeek) return [];
+    if (!isPastWeek && injuryState?.active) return [];
     const maxSessions = Math.min(inputs.maxSessions ?? 7, 7);
     const mtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg);
-    if (mtlPerMin == null) return ws;
+    if (mtlPerMin == null) return [];
     const maxEach = Math.min(HYROX_LONG_RUN[tier].capMin, inputs.easyMaxMin ?? Infinity);
-    // Free slots whose easy erg sessions, each at its longest, already hold
-    // what the week leaves: no slot to free. (Round 6: with one slot free and
-    // its session at the cap, one more hour funded a third 22-min easy run in
-    // the slot a 63-min easy erg session held, intermediate 4 weeks at 7 h
-    // with the 7-session choice, and the week held 29 min less than at 6 h.)
+    // What easy erg work can hold beside a week (its free slots, each at its
+    // longest, the ceilings' erg cap and the MTL the week leaves under the
+    // cap).
+    const mtlRoomOf = (x: readonly Workout[]) => hx.mtlCap - x.reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
+    const byMtlOf = (x: readonly Workout[]) => (mtlPerMin > 0 ? Math.max(0, mtlRoomOf(x)) / mtlPerMin : Infinity);
+    const unusedOf = (x: readonly Workout[]) => (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(x) - injuryFreedMin;
+    // Free slots whose easy erg sessions already hold what the week leaves:
+    // no slot or MTL to free. (Round 6: with one slot free and its session
+    // at the cap, one more hour funded a third 22-min easy run in the slot a
+    // 63-min easy erg session held.)
     const free = maxSessions - prescribed(ws).length - injuryFreedSlots;
-    const unusedNow = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(ws) - injuryFreedMin;
-    if (free > 0 && unusedNow - free * maxEach < HYROX_RUN_FLOOR_MIN) return ws;
+    const unusedNow = unusedOf(ws);
+    const holdsNow = free > 0 ? Math.min(free * maxEach, inputs.ergCapMin ?? Infinity, byMtlOf(ws)) : 0;
+    if (unusedNow - holdsNow < HYROX_RUN_FLOOR_MIN) return [];
     // What one easy erg session could hold beside a week.
-    const ergRoom = (x: readonly Workout[]): number => {
-      const unused = (inputs.fillMin ?? inputs.budgetMin) - hyroxPlannedMinutes(x) - injuryFreedMin;
-      const mtlRoom = hx.mtlCap - x.reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
-      const byMtl = mtlPerMin > 0 ? Math.max(0, mtlRoom) / mtlPerMin : Infinity;
-      return Math.floor(Math.min(unused, inputs.ergCapMin ?? Infinity, byMtl, maxEach));
-    };
+    const ergRoom = (x: readonly Workout[]): number => Math.floor(Math.min(unusedOf(x), inputs.ergCapMin ?? Infinity, byMtlOf(x), maxEach));
     // A week whose tier format calls for a quality run and that holds none
     // (the running share, a ceiling or the spacing left it out) keeps one
     // easy run in its slot, the longest: the slot the quality run takes when
@@ -1509,13 +1521,12 @@ function generateWeekSessions(
     const standIn = fmt != null && structureRuns >= 2 && !holdsQuality ? 1 : 0;
     const all = ws.filter(isPlainEasyRun).sort((a, b) => (a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0));
     const candidates = all.slice(0, Math.max(0, all.length - standIn));
-    if (candidates.length === 0) return ws;
-    // The shortest easy run gives up its slot; the easy runs left share the
-    // week's easy running, each no longer than the long run, the 110%
-    // single-run ceiling or the tier long-run cap.
+    if (candidates.length === 0) return [];
     const out = candidates[0];
     const rest = all.filter(w => w !== out);
     const easyMin = all.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    const why = free <= 0 ? 'the chosen sessions are full' : `MTL cap ${hx.mtlCap}`;
+    const options: Array<{ ws: Workout[]; note: string }> = [];
     // With an easy run standing in a missing quality run's slot, no easy run
     // grows past the quality run's length: when one more hour funds it, it
     // takes that slot without shortening the week.
@@ -1523,22 +1534,26 @@ function generateWeekSessions(
       ? (generateHyroxRun({ ...runParams, kind: fmt.kind, targetMinutes: 0, format: fmt, slotIndex: weekIndex }).estimatedDurationMin ?? Infinity)
       : Infinity;
     const each = rest.length > 0 ? Math.floor(Math.min(easyCapMin, HYROX_LONG_RUN[tier].capMin, qualityMin, easyMin / rest.length)) : 0;
-    const resized = new Map(rest.map(w => [w, (w.estimatedDurationMin ?? 0) >= each ? w : {
-      ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: each, slotIndex: weekIndex }),
-      ...(w.modReason ? { modReason: w.modReason } : {}),
-    }] as const));
-    const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
-    // The easy runs left keep the week's easy running (whole minutes: each
-    // run's share is rounded down).
-    const easyAfter = next.filter(isPlainEasyRun).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-    if (easyAfter < easyMin - rest.length) return ws;
+    if (rest.some(w => (w.estimatedDurationMin ?? 0) < each)) {
+      // The easy runs left take its minutes.
+      const resized = new Map(rest.map(w => [w, (w.estimatedDurationMin ?? 0) >= each ? w : {
+        ...generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: each, slotIndex: weekIndex }),
+        ...(w.modReason ? { modReason: w.modReason } : {}),
+      }] as const));
+      const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
+      const room = ergRoom(next);
+      if (room >= HYROX_RUN_FLOOR_MIN) {
+        const kept = next.filter(isPlainEasyRun).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+        options.push({ ws: next, note: `W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min, ${kept} of the ${easyMin} easy-run min kept by ${rest.length} easy run${rest.length === 1 ? '' : 's'} (${why})` });
+      }
+    }
+    // Nothing takes its minutes: its slot and MTL go to easy erg work.
+    const next = ws.filter(w => w !== out);
     const room = ergRoom(next);
-    if (room < HYROX_RUN_FLOOR_MIN) return ws;
-    const probe = generateHyroxEasyErg({ targetMinutes: room, stationAccess: hx.stationAccess, slotIndex: weekIndex, bodyWeightKg });
-    if ((probe?.estimatedDurationMin ?? 0) <= 0) return ws;
-    const kept = rest.length > 0 ? `, the easy running shared by ${rest.length} easy run${rest.length === 1 ? '' : 's'} of ${Math.max(each, ...rest.map(w => w.estimatedDurationMin ?? 0))} min` : '';
-    adjustments.push(`W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min${kept} (the chosen sessions are full)`);
-    return next;
+    if (room >= HYROX_RUN_FLOOR_MIN) {
+      options.push({ ws: next, note: `W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min (${why})` });
+    }
+    return options;
   };
 
   // Schedule. Race week: each session only on the days the race-day rules
@@ -1594,21 +1609,24 @@ function generateWeekSessions(
       // with its easy erg work than without the swap; otherwise the easy run
       // stays and the swap's notes go.
       const mark = adjustments.length;
-      let freed = ergSlotFor(week);
-      let ergs = easyErgFor(freed);
-      if (freed !== week) {
-        const swapNotes = adjustments.slice(mark);
+      const total = (ws: readonly Workout[], es: readonly Workout[]) => hyroxPlannedMinutes(ws) + hyroxPlannedMinutes(es);
+      let freed = week;
+      let ergs = easyErgFor(week);
+      let notes = adjustments.slice(mark);
+      adjustments.length = mark;
+      let best = total(freed, ergs);
+      for (const o of ergSlotOptions(week)) {
+        const es = easyErgFor(o.ws);
+        const ns = [o.note, ...adjustments.slice(mark)];
         adjustments.length = mark;
-        const plain = easyErgFor(week);
-        const total = (ws: readonly Workout[], es: readonly Workout[]) => hyroxPlannedMinutes(ws) + hyroxPlannedMinutes(es);
-        if (ergs.length > 0 && total(freed, ergs) > total(week, plain)) {
-          adjustments.length = mark;
-          adjustments.push(...swapNotes);
-        } else {
-          freed = week;
-          ergs = plain;
+        if (es.length > 0 && total(o.ws, es) > best + 1e-6) {
+          freed = o.ws;
+          ergs = es;
+          notes = ns;
+          best = total(o.ws, es);
         }
       }
+      adjustments.push(...notes);
       if (ergs.length > 0) {
         const again = findHyroxWeekSchedule([...freed, ...ergs], { prevSunday: inputs.prevSunday });
         if (again) {
