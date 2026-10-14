@@ -2861,22 +2861,32 @@ export function buildHyroxTrainingWeeks(
         a = best;
         if (!over(a)) return a;
       }
+      // Easy erg work gives way to the limits it counts toward (ergPerMin >
+      // 0). A limit it does not count toward (the race taper's station and
+      // brick work) is over by the same amount at any erg minutes, so it
+      // never takes the erg work: when only such limits are over after the
+      // cut, the erg work stays at the cut and the scale and the sheds (below)
+      // hold the station work. Before (2026-10-14 merge review), any station
+      // work over its cap took all the easy erg work, and a session the taper
+      // then shed left its minutes unprescribed: open doubles novice 12 weeks,
+      // taper week 1 held 158 min at 4 h and 79 at 5 h (63 min unprescribed).
+      let keptErg = 0;
       if (a.ergMin > 0) {
         let cut = 0;
-        let ergCan = true;
         for (const l of limits) {
+          if (l.ergPerMin <= 0) continue;
           const excess = l.of(a) - l.cap;
-          if (excess <= 1e-6) continue;
-          if (l.ergPerMin <= 0) { ergCan = false; break; }
-          cut = Math.max(cut, excess / l.ergPerMin);
+          if (excess > 1e-6) cut = Math.max(cut, excess / l.ergPerMin);
         }
-        if (ergCan && cut < a.ergMin) {
+        if (cut < a.ergMin) {
           ergCap = Math.max(0, Math.floor(a.ergMin - cut));
           a = make();
           if (!over(a)) return a;
+          const cutWeek = a;
+          if (!limits.some(l => l.ergPerMin > 0 && l.of(cutWeek) > l.cap + 1e-6)) keptErg = ergCap;
         }
       }
-      ergCap = 0;
+      ergCap = keptErg;
       a = make();
       const easyFull = phase !== 'taper' ? a.easyMin : 0;
       const setScale = (x: number) => {
