@@ -8,7 +8,9 @@
  *  - Run speed   → pooled marathon table (888,989 finishes, 5 majors)
  *  - VO2max      → FRIEND registry treadmill norms (Kaminsky 2015)
  *  - Bike FTP    → Coggan W/kg power-profile bands (bike-physics.ts)
- *  - HYROX       → real per-format finisher tables (89,868 rows, S4-S6)
+ *  - HYROX       → real format x sex finisher tables (HYROX results,
+ *                  seasons 8 and 9; src/data/hyrox-results-s79.ts, read
+ *                  through hyrox-results.ts)
  *
  * Two-numbers rule: any screen showing a placement next to a metric must
  * call these helpers with the same input the metric display uses.
@@ -30,11 +32,11 @@ import {
 import { lookupVo2Percentile, type Vo2Placement } from '@/data/vo2max-norms';
 import { wattsPerKgTier } from '@/calculations/bike-physics';
 import {
-  HYROX_TOTAL_PERCENTILE_TABLES,
-  lookupRealPercentile,
-} from '@/data/hyrox-population-distributions';
+  hyroxResultsTable,
+  hyroxFasterThanPct,
+  type HyroxResultsCohort,
+} from '@/calculations/hyrox-results';
 
-/** Matches the (unexported) Format union in hyrox-population-distributions. */
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
 export interface RunSpeedPlacement {
@@ -226,17 +228,21 @@ export interface HyroxPlacement {
 }
 
 /**
- * Place a HYROX finish time within the real per-format field.
- * Returns null when the format has no ingested data (pro_doubles).
+ * Place a HYROX finish time within the real field: the cohort's S8-S9 total
+ * table (hyroxResultsTable), or the format's pooled table when no cohort is
+ * given. The same lookup as every HYROX percentile surface (hyroxFasterThanPct).
  */
 export function hyroxPlacement(
   format: HyroxFormat,
   timeSec: number | null | undefined,
+  cohort?: HyroxResultsCohort,
 ): HyroxPlacement | null {
   if (timeSec == null || !isFinite(timeSec) || timeSec <= 0) return null;
-  const cumPct = lookupRealPercentile(HYROX_TOTAL_PERCENTILE_TABLES, format, timeSec);
-  if (cumPct == null) return null;
-  const scale = percentileScaleAnchors(HYROX_TOTAL_PERCENTILE_TABLES[format]);
+  const c: HyroxResultsCohort = cohort && cohort.format === format ? cohort : { format, sex: 'pooled' };
+  const table = hyroxResultsTable('total', c);
+  const fasterThanPct = hyroxFasterThanPct('total', timeSec, c);
+  if (!table || fasterThanPct == null) return null;
+  const scale = percentileScaleAnchors(table.map(([t, p]) => [t, p] as [number, number]));
   if (!scale) return null;
-  return { fasterThanPct: Math.max(0, Math.min(100, 100 - cumPct)), scale };
+  return { fasterThanPct, scale };
 }

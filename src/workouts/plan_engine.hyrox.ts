@@ -111,6 +111,8 @@ import {
   isHyroxLongRun, hyroxSundayFlags, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays,
   type HyroxPrevSunday,
 } from './scheduler.hyrox';
+import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
+import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
@@ -794,14 +796,6 @@ function isHyroxEasyRun(w: Workout): boolean {
 const STATION_SESSION_FLOOR_MIN = 35;
 const BRICK_SESSION_FLOOR_MIN = 20;
 
-/** The athlete's station benchmarks for the plan's format (the
- *  format-specific slot, falling back to the legacy pooled field). */
-function hyroxStationBenchmarksOf(hx: HyroxConfig): Partial<Record<HyroxStation, number>> | undefined {
-  const isDoublesFormat = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  return (isDoublesFormat ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles)
-    ?? hx.stationBenchmarks as Partial<Record<HyroxStation, number>> | undefined;
-}
-
 /**
  * The race taper's smallest station circuit: the week's first technique
  * circuit (race week: without the eccentric-heavy and sled stations) at the
@@ -830,8 +824,10 @@ export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: num
     phase: 'taper',
     slotIndex: weekIndex,
     bodyWeightKg: state.bodyWeightKg,
-    stationBenchmarks: hyroxStationBenchmarksOf(hx),
+    // The week's own station targets and loads (generateWeekSessions).
+    stationBenchmarks: hyroxPlanningStationBenchmarks(state),
     raceWeek,
+    loadTier: hyroxLoadTierForState(state),
   });
   c = withHyroxRounds(c, MIN_CIRCUIT_ROUNDS);
   for (;;) {
@@ -883,6 +879,8 @@ function generateWeekSessions(
     adjustments.push(`W${weekIndex}: ${counts.runs - inputs.maxRuns} run(s) left out (race week holds no more runs than the reference week's ${inputs.maxRuns})`);
     counts.runs = Math.max(0, inputs.maxRuns);
   }
+  // Station loads for MTL follow the athlete's division (hyrox-division.ts).
+  const loadTier = hyroxLoadTierForState(state);
 
   const scale = inputs.scale ?? 1;
   // Running: HYROX_RUN_SHARE of the chosen weekly minutes in a training week
@@ -976,8 +974,17 @@ function generateWeekSessions(
     return out;
   };
 
-  // Read benchmarks from the format-specific slot, falling back to legacy pooled field.
-  const stationBenchmarks = hyroxStationBenchmarksOf(hx);
+  // Station target times: the forecast's per-station benchmarks as one
+  // athlete's time over the full station distance at the target's weights
+  // (hyroxPlanningStationBenchmarks), the values the Stats Benchmarks ledger
+  // shows. The sessions load stations at the target's tier (loadTier), so a
+  // Pro race split is prescribed as its Open equivalent to an Open target,
+  // the forecast's own Open/Pro conversion. A doubles race split
+  // (the pair's time) is read through the same station ratio the forecast
+  // applies, for every target: a singles athlete whose times came from
+  // doubles race splits trains to those times, not to population seeds, and
+  // a doubles athlete is never prescribed the pair's time as a solo target.
+  const stationBenchmarks = hyroxPlanningStationBenchmarks(state);
 
   // ── Station sessions and bricks share the non-running budget ──────────────
   // Week 1, first station slot is the assessment for everyone. Users with
@@ -1033,6 +1040,7 @@ function generateWeekSessions(
       bodyWeightKg,
       stationBenchmarks,
       raceWeek: !!raceWeek,
+      loadTier,
     });
     const maxRounds = inputs.maxCircuitRounds;
     let out = w;
@@ -1061,7 +1069,7 @@ function generateWeekSessions(
   const nonRun: Workout[] = [];
   for (let i = 0; i < sKinds.length; i++) {
     if (needsAssessment && i === 0) {
-      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg }));
+      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier }));
       continue;
     }
     if (!raceWeekCircuitOk) continue;
@@ -1079,6 +1087,7 @@ function generateWeekSessions(
       slotIndex: i + weekIndex,
       bodyWeightKg,
       stationBenchmarks,
+      loadTier,
     })));
     nonRun.push(light ? { ...capped, n: 'Secondary Brick', hyroxLight: true } : capped);
   }

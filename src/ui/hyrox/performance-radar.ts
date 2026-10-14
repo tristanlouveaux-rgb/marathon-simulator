@@ -1,9 +1,12 @@
 /**
  * HYROX Performance Radar. 8-axis station percentile chart.
  *
- * Renders an octagon (one axis per HYROX station). Each axis represents the
- * percentile (0..100) the user beats vs the population: centre = bottom of
- * the field, outer ring = top 1%. The user's polygon is drawn over the grid.
+ * Renders an octagon (one axis per HYROX station). Each axis plots the
+ * station percentile against the field's race splits at that station
+ * (getStationPercentile on the athlete's cohort: format x sex, or the pair's
+ * division for doubles; HYROX results, seasons 8 and 9). Centre = slowest,
+ * outer ring = 100. The subtitle leads with the provenance. The user's
+ * polygon is drawn over the grid.
  *
  * **Layout**: SVG holds the geometry (rings, axis spokes, user polygon, dots).
  * Station labels are HTML <span> elements absolutely-positioned via left%/top%
@@ -17,18 +20,19 @@
 
 import { HYROX_STATION_ORDER, STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
-import {
-  POPULATION_DATA_AVAILABLE,
-  LAST_VERIFIED_SEASON,
-} from '@/data/hyrox-population-distributions';
 import type { HyroxStation } from '@/types/triathlon';
 import type { HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { hyroxResultsCaption, type HyroxResultsCohort } from '@/calculations/hyrox-results';
 
 interface RadarOpts {
   /** Per-station benchmark lines from the prediction. */
   stations: HyroxStationLine[];
-  /** Subset of stations to plot (pass active stations for doubles to get 4 axes). */
+  /** Subset of stations to plot (defaults to all 8). */
   axisOrder?: HyroxStation[];
+  /** Whose race splits each spoke compares with: the target format's cohort
+   *  (hyroxCohortForState). A doubles line is the pair's time, placed on the
+   *  pair's division. Default Open Singles, women and men pooled. */
+  cohort?: HyroxResultsCohort;
 }
 
 /* ── Geometry ───────────────────────────────────────────────
@@ -72,10 +76,13 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
   const N = axes.length;
   if (N < 3) return '';
 
+  const cohort: HyroxResultsCohort = opts.cohort ?? { format: 'open_singles', sex: 'pooled' };
   type AxisPoint = { station: HyroxStation; pct: number; label: string; calibrated: boolean };
   const points: AxisPoint[] = axes.map(st => {
     const line = opts.stations.find(l => l.station === st);
-    const pct = line ? getStationPercentile(st, line.baseSec) : 0;
+    // The line's own terms (the pair's time for doubles) against the
+    // cohort's race splits at this station.
+    const pct = line ? getStationPercentile(st, line.baseSec, cohort) : 0;
     return {
       station: st,
       pct,
@@ -173,10 +180,9 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
     `;
   }
 
-  // Lead-with-data subtitle (when real population data is available).
-  const subtitle = POPULATION_DATA_AVAILABLE
-    ? `Each spoke shows where you sit on that station vs ${LAST_VERIFIED_SEASON.replace(/\s*\(.*\)\s*/, '').trim()} field. Outer ring is top 1%.`
-    : 'Each spoke shows where you sit on that station vs the population. Outer ring is top 1%.';
+  // Provenance subtitle: the cohort's race splits (HYROX results, seasons 8
+  // and 9), then what a spoke means.
+  const subtitle = `${hyroxResultsCaption(cohort, 'ski_erg')} Each spoke places your station time among the field's race splits. Further out is faster.`;
 
   // Build the user polygon as a closed `<path>` so we can normalise its length
   // to 1 via `pathLength="1"` and animate stroke-dashoffset to draw it on. The

@@ -294,3 +294,51 @@ describe('buildHyroxProjection — plan adherence', () => {
     expect(Number.isFinite(proj.improvementSec)).toBe(true);
   });
 });
+
+// ─── Forecast optimism fixes (audit 2026-10-12, item 9) ─────────────────────
+describe('buildHyroxProjection: no double-counted volume, planned-slot adherence', () => {
+  const raceIn = (weeks: number) => new Date(Date.now() + weeks * 7 * 86400000).toISOString().slice(0, 10);
+
+  it('has no separate "Weekly volume" factor: sessions per week live in the horizons only', () => {
+    // Far above the band default (3+2+1): the old factor took up to 3% off for this.
+    const s = buildState({ runsPerWeek: 5, stationSessionsPerWeek: 3, bricksPerWeek: 2, raceDate: raceIn(10) }, { v: 45 } as Partial<SimulatorState>);
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    expect(proj.factors.find(f => f.name === 'Weekly volume')).toBeUndefined();
+  });
+
+  it('unplanned (adhoc) records do not count as completed planned sessions', () => {
+    const wk = () => ({
+      triWorkouts: [{ id: 'w0', t: 'station' }, { id: 'w1', t: 'station' }, { id: 'w2', t: 'station' }, { id: 'w3', t: 'station' }],
+      // Two planned slots done, plus two unplanned activities.
+      garminActuals: {
+        w0: { garminId: 'strava-a', durationSec: 1800 },
+        w1: { garminId: 'strava-b', durationSec: 1800 },
+        'adhoc-x': { garminId: 'strava-c', durationSec: 1800 },
+        'adhoc-y': { garminId: 'strava-d', durationSec: 1800 },
+      },
+    });
+    const s = buildState({}, { w: 5, wks: [wk(), wk(), wk(), wk(), wk()] } as unknown as Partial<SimulatorState>);
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    const f = proj.factors.find(x => x.name === 'Plan adherence');
+    expect(f).toBeDefined();
+    expect(f!.explanation).toContain('50%');
+  });
+});
+
+describe('predictHyroxRace: stations the plan never programmes bank no gain', () => {
+  it('no sled track: sled push and pull project no improvement; other stations still do', () => {
+    const raceDate = new Date(Date.now() + 12 * 7 * 86400000).toISOString().slice(0, 10);
+    const s = buildState({ stationAccess: { sled: 'never', skiErg: true, rowErg: true }, raceDate });
+    const p = predictHyroxRace(s)!;
+    const sled = p.projection!.stations.filter(x => x.station === 'sled_push' || x.station === 'sled_pull');
+    expect(sled.length).toBe(2);
+    for (const st of sled) {
+      expect(st.projectedSec).toBe(st.currentSec);
+      expect(st.improvementPct).toBe(0);
+    }
+    const ski = p.projection!.stations.find(x => x.station === 'ski_erg')!;
+    expect(ski.projectedSec).toBeLessThan(ski.currentSec);
+  });
+});

@@ -17,6 +17,7 @@ import { TL_PER_MIN } from '@/constants/sports';
 import type { HRProfile } from '@/calculations/heart-rate';
 import { initializeWeeks } from '@/workouts';
 import { archiveCurrentWksIfPopulated } from '@/state/initialization';
+import { cleanUpHyroxPartnerOnReset } from '@/data/hyroxPartnerSync';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
 import { isLongRun } from '@/workouts/long-run';
@@ -1443,13 +1444,17 @@ export function reset(): void {
   // Full wipe: clears the plan AND every logged activity, then restarts setup.
   showResetModal('wipe').then(async proceed => {
     if (proceed) {
+      // HYROX Doubles partner: end the link and delete the shared snapshot and
+      // code. Started first: it reads the owner stamp softResetState clears.
+      // Offline it fails at once and is retried at the next launch.
+      const partner = cleanUpHyroxPartnerOnReset('wipe');
       softResetState();
       // Clear the Supabase backup too. softResetState() only wipes localStorage;
       // the stale cloud row would otherwise be restored on the next launch
       // (restorePlanFromSupabase), so the reset wouldn't stick. Awaited so the
       // delete completes before location.reload() cancels the request.
       const { deletePlanSettings } = await import('@/data/planSettingsSync');
-      await deletePlanSettings();
+      await Promise.all([deletePlanSettings(), partner]);
       location.reload();
     }
   });
@@ -1465,10 +1470,14 @@ export function reset(): void {
 export function resetPlan(): void {
   showResetModal('reset').then(async proceed => {
     if (proceed) {
+      // HYROX Doubles partner: the snapshot goes now; the link is kept only if
+      // the rebuilt setup is doubles again (decided when setup ends,
+      // hyroxPartnerSync). Started before softResetState clears the stamp.
+      const partner = cleanUpHyroxPartnerOnReset('reset');
       archiveCurrentWksIfPopulated();
       softResetState({ preserveArchive: true });
       const { deletePlanSettings } = await import('@/data/planSettingsSync');
-      await deletePlanSettings();
+      await Promise.all([deletePlanSettings(), partner]);
       location.reload();
     }
   });

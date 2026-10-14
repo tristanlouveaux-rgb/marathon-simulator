@@ -31,15 +31,15 @@ function toRunAbilityBand(b: AbilityBand): RunAbilityBand {
     default:               return b;
   }
 }
-import {
-  HYROX_WEEKLY_SESSIONS,
-  HYROX_TAPER_DAYS,
-} from '@/constants/hyrox-constants';
+import { HYROX_TAPER_DAYS } from '@/constants/hyrox-constants';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
-import { hyroxMtlChronicVsPlan } from './mtl';
+import { hyroxMtlChronicVsPlan, isMtlSessionCompleted } from './mtl';
 import { bandFromVdot } from './hyrox-staleness';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { hyroxImprovementCeiling } from './hyrox-results';
+import { doublesTotalInSinglesTermsSec, hyroxDoublesTablesForState } from './hyrox-doubles';
+import { isHyroxDoublesFormat, resolveHyroxAthleteSex } from './hyrox-division';
 
 export interface HyroxProjectionFactor {
   /** Display name. */
@@ -173,6 +173,10 @@ function computeReadinessScore(physio: PhysiologyDayEntry[] | undefined): number
 /**
  * Compute plan adherence ratio (0..1) for the last N completed weeks.
  * Counts completed station/brick/run sessions vs planned, excluding the current week.
+ * A completion is a planned slot that holds a record (isMtlSessionCompleted,
+ * the same test the MTL sums use). Unplanned (adhoc) records in garminActuals
+ * do not count: they used to fill the numerator and could hide missed
+ * planned sessions (audit 2026-10-12).
  */
 function computeAdherence(state: SimulatorState, lookbackWeeks: number = 3): number {
   const wks = state.wks ?? [];
@@ -183,13 +187,13 @@ function computeAdherence(state: SimulatorState, lookbackWeeks: number = 3): num
   for (let i = startIdx; i < currentIdx; i++) {
     const wk = wks[i];
     if (!wk) continue;
-    const planned = (wk.triWorkouts ?? []).length;
-    // garminActuals is Record<workoutId, GarminActual>, NOT an array. Reading
-    // `.length` off it yields undefined, which turns completedCount into NaN and
-    // silently disables the adherence factor downstream (NaN < 0.95 is false).
-    // The `const wk: any` cast that used to be on the line above is what hid
-    // this from tsc; keep it typed.
-    const completed = Object.keys(wk.garminActuals ?? {}).length;
+    const plannedWorkouts = wk.triWorkouts ?? [];
+    const planned = plannedWorkouts.length;
+    // garminActuals is Record<workoutId, GarminActual>, NOT an array: count the
+    // planned slots that hold a record, keyed by slot id. Reading `.length`
+    // off the record once turned completedCount into NaN and silently
+    // disabled the factor (NaN < 0.95 is false); keep `wk` typed.
+    const completed = plannedWorkouts.filter(w => isMtlSessionCompleted(wk, w)).length;
     plannedCount += planned;
     completedCount += Math.min(completed, planned);
   }
@@ -223,8 +227,7 @@ function computeAdherence(state: SimulatorState, lookbackWeeks: number = 3): num
  * contribution to `improvementSec`. Sum of `factors[].deltaSec` equals
  * `improvementSec` (modulo rounding). Horizon factors (run/stations/roxzone
  * fitness trajectory) are emitted alongside the modulator factors (training
- * fitness, weekly volume, adherence, taper bonus, race-day readiness) for
- * full transparency.
+ * fitness, adherence, race-day readiness) for full transparency.
  */
 export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPrediction): HyroxProjection {
   const hx = state.hyroxConfig!;
@@ -338,26 +341,11 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
     }
   }
 
-  // Factor: sessions per week vs band default.
-  const defaults = HYROX_WEEKLY_SESSIONS[band];
-  const expectedSessions = defaults.runs + defaults.stations + defaults.bricks;
-  const actualSessions = (hx.runsPerWeek ?? defaults.runs)
-                        + (hx.stationSessionsPerWeek ?? defaults.stations)
-                        + (hx.bricksPerWeek ?? defaults.bricks);
-  if (expectedSessions > 0) {
-    const sessionRatio = actualSessions / expectedSessions;
-    // ratio > 1 = more sessions = faster → negative pct.
-    const sessionPct = -Math.max(-0.03, Math.min(0.03, (sessionRatio - 1) * 0.06));
-    const sessionSec = sessionPct * disciplineHorizonTotal;
-    if (Math.abs(sessionSec) >= 5) {
-      factorPct += sessionPct;
-      factors.push({
-        name: 'Weekly volume',
-        deltaSec: Math.round(sessionSec),
-        explanation: `${actualSessions} sessions/week vs band default of ${expectedSessions}.`,
-      });
-    }
-  }
+  // No "Weekly volume" factor. Sessions per week already drive the horizon
+  // projections above (stations: plannedHyroxSessionsPerWeek; run: runs +
+  // half the bricks), so a second ±3% for configured sessions against the band
+  // default counted the same volume twice and leaned high-session plans
+  // faster (audit 2026-10-12).
 
   // Factor: plan adherence.
   const adherence = computeAdherence(state);
@@ -395,6 +383,42 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
           explanation: `Recovery signals over the last 7 days indicate ${readinessLabel} readiness. HRV, sleep, and resting HR vs baseline.`,
         });
       }
+    }
+  }
+
+  // Factor: improvement ceiling from the results (tracking side). The
+  // projected gain to race day may not exceed what the top quarter of repeat
+  // HYROX athletes achieved over a comparable gap: the 75th percentile of the
+  // first-to-latest improvement, venue-relative, grouped by the mean of both
+  // races so regression to the mean is out (hyroxImprovementCeiling,
+  // HYROX_S79_IMPROVEMENT). Applied last, over every factor, as the same
+  // uniform modifier, so the factor list still sums to improvementSec.
+  // Optimistic end of what the data supports: the median repeat athlete
+  // improves about 4%, the ceiling sits at the upper quartile.
+  const hxFormat = hx.format ?? 'open_singles';
+  const singlesTotalSec = isHyroxDoublesFormat(hxFormat)
+    ? doublesTotalInSinglesTermsSec(currentTotalSec, hyroxDoublesTablesForState(state))
+    : currentTotalSec;
+  const ceiling = weeksRemaining > 0 && currentTotalSec > 0
+    ? hyroxImprovementCeiling({
+        format: hxFormat,
+        sex: resolveHyroxAthleteSex(state.biologicalSex, hx.division),
+        singlesTotalSec,
+        weeksRemaining,
+      })
+    : null;
+  if (ceiling && disciplineHorizonTotal > 0) {
+    const uncapped = disciplineHorizonTotal * (1 + factorPct);
+    const floorSec = currentTotalSec * (1 - ceiling.pct / 100);
+    if (uncapped < floorSec) {
+      const ceilingPct = floorSec / disciplineHorizonTotal - (1 + factorPct);
+      factorPct += ceilingPct;
+      const months = ceiling.cell.gapHalfSeasons === 'all' ? null : ceiling.cell.gapHalfSeasons * 6;
+      factors.push({
+        name: 'Results ceiling',
+        deltaSec: Math.round(ceilingPct * disciplineHorizonTotal),
+        explanation: `Gain held to ${ceiling.pct.toFixed(1)}%. A quarter of ${ceiling.cell.n.toLocaleString('en-US')} repeat HYROX athletes improved more than that${months ? ` over about ${months} months` : ''}, relative to each event's median.`,
+      });
     }
   }
 

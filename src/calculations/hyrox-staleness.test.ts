@@ -9,7 +9,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computeHyroxStaleness, bandFromVdot } from './hyrox-staleness';
+import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot } from './hyrox-staleness';
+import { predictHyroxRace } from './race-prediction.hyrox';
+import type { HyroxStation } from '@/types/triathlon';
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 
@@ -109,6 +111,64 @@ describe('computeHyroxStaleness', () => {
       raceDateOffsetMonths: 14, vdot: 60, ctlBaseline: 90,
     }));
     expect(r.confidenceCap).toBe('low');
+  });
+});
+
+describe('hyroxEntrySplitsWeight (lane H3c: a station value decays by its own date)', () => {
+  it('reads the race splits\' curve at the entry\'s age, with the same mitigation', () => {
+    for (const months of [3, 9, 14, 30]) {
+      const state = buildState({ raceDateOffsetMonths: months });
+      const race = computeHyroxStaleness(state);
+      expect(hyroxEntrySplitsWeight(dateNDaysAgo(months * 30.44), race.physiologyMitigation)).toBeCloseTo(race.splitsWeight, 2);
+    }
+  });
+  it('a missing, unparseable or future date is full trust', () => {
+    expect(hyroxEntrySplitsWeight(undefined, 0.5)).toBe(1);
+    expect(hyroxEntrySplitsWeight('not a date', 0.5)).toBe(1);
+    expect(hyroxEntrySplitsWeight(dateNDaysAgo(-30), 0.5)).toBe(1);
+  });
+});
+
+describe('the forecast decays each station by its own date (lane H3c)', () => {
+  // Times well away from the intermediate women's seeds, so the blend shows.
+  const SLOT: Record<HyroxStation, number> = { ski_erg: 255, sled_push: 140, sled_pull: 240, burpee_broad_jumps: 270, row_erg: 275, farmer_carry: 105, sandbag_lunges: 250, wall_balls: 330 };
+  const forecast = (o: { raceMonths?: number; source: 'full_test' | 'race'; entryMonths: number }) => {
+    const hist: Record<string, unknown[]> = {};
+    for (const [st, sec] of Object.entries(SLOT)) {
+      hist[st] = [{ dateISO: dateNDaysAgo(o.entryMonths * 30.44), sec, source: o.source, format: 'open_singles', ...(o.source === 'race' ? { proWeights: false } : {}) }];
+    }
+    const s = buildState({ raceDateOffsetMonths: o.raceMonths ?? null, vdot: 45 });
+    Object.assign(s.hyroxConfig!, { stationBenchmarksSingles: SLOT, stationBenchmarkHistory: hist });
+    (s as { biologicalSex?: string }).biologicalSex = 'female';
+    return { p: predictHyroxRace(s)!, s };
+  };
+  const line = (p: ReturnType<typeof predictHyroxRace>, st: HyroxStation) => p!.stations.find(l => l.station === st)!.baseSec;
+
+  it('a station test from last week is used as is, whatever the race\'s age', () => {
+    for (const raceMonths of [9, 18]) {
+      const { p } = forecast({ raceMonths, source: 'full_test', entryMonths: 0.25 });
+      for (const st of Object.keys(SLOT) as HyroxStation[]) expect(line(p, st)).toBeCloseTo(SLOT[st], 6);
+    }
+  });
+
+  it('a race split still decays by the race\'s age', () => {
+    const { p } = forecast({ raceMonths: 9, source: 'race', entryMonths: 9 });
+    expect(line(p, 'wall_balls')).toBeGreaterThan(SLOT.wall_balls);
+  });
+
+  it('an old station test decays by its own age, with a recent race or none on file', () => {
+    for (const raceMonths of [3, undefined]) {
+      const { p, s } = forecast({ raceMonths, source: 'full_test', entryMonths: 15 });
+      const w = hyroxEntrySplitsWeight(dateNDaysAgo(15 * 30.44), computePhysiologyMitigation(s));
+      expect(w).toBeLessThan(1);
+      expect(line(p, 'wall_balls')).toBeGreaterThan(SLOT.wall_balls);
+    }
+  });
+
+  it('a test and the race on the same date blend exactly as before', () => {
+    const test = forecast({ raceMonths: 9, source: 'full_test', entryMonths: 9 }).p;
+    const race = forecast({ raceMonths: 9, source: 'race', entryMonths: 9 }).p;
+    expect(test.totalSec).toBeCloseTo(race.totalSec, 0);
   });
 });
 

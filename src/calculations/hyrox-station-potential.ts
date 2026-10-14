@@ -17,8 +17,21 @@
  */
 
 import type { HyroxStation, AbilityBand } from '@/types/triathlon';
-import { STATION_SEED_TIMES_SEC, STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY, stationSeedTimesFor, type HyroxSeedFormat } from '@/constants/hyrox-benchmarks';
+import type { HyroxBandCellSex } from '@/data/hyrox-results-s79';
 import type { HyroxStationLine } from './race-prediction.hyrox';
+import { doublesStationTeamSec, type HyroxDoublesTables } from './hyrox-doubles';
+
+/** Whose band seeds the targets read, and (doubles) the mapping to a pair's
+ *  time. `seedsForBand` (the forecast's own seeds at the target's weights,
+ *  hyroxStationSeedsForState) wins over seedFormat/seedSex. Defaults: Open
+ *  Singles pooled seeds, each line's own teamRatio. */
+export interface StationPotentialOptions {
+  seedsForBand?: (band: AbilityBand) => Record<HyroxStation, number>;
+  seedFormat?: HyroxSeedFormat;
+  seedSex?: HyroxBandCellSex;
+  doublesTables?: HyroxDoublesTables;
+}
 
 const BAND_PROGRESSION: AbilityBand[] = [
   'total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive',
@@ -59,13 +72,22 @@ function nextBandUp(band: AbilityBand): AbilityBand {
 export function computeStationPotential(
   athleteBand: AbilityBand,
   stations: HyroxStationLine[],
+  opts: StationPotentialOptions = {},
 ): StationPotentialResult {
   const targetBand = nextBandUp(athleteBand);
-  const targetSeeds = STATION_SEED_TIMES_SEC[targetBand];
+  const targetSeeds = opts.seedsForBand
+    ? opts.seedsForBand(targetBand)
+    : stationSeedTimesFor(targetBand, opts.seedFormat ?? 'open_singles', opts.seedSex ?? 'pooled');
 
   const calibrated = stations.filter(l => l.source === 'calibrated');
   const result: StationPotential[] = calibrated.map(line => {
-    const targetSec = targetSeeds[line.station];
+    // Seeds are one athlete's times. A doubles line is the pair's time, so
+    // the target maps to a pair's time: per station on the athlete's doubles
+    // tables when given, else by the line's own ratio (teamRatio, absent = 1).
+    const seed = targetSeeds[line.station];
+    const targetSec = Math.round(line.teamRatio != null && opts.doublesTables
+      ? doublesStationTeamSec(line.station, seed, opts.doublesTables)
+      : seed * (line.teamRatio ?? 1));
     const savingSec = Math.max(0, line.baseSec - targetSec);
     return {
       station: line.station,

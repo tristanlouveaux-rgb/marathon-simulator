@@ -395,7 +395,8 @@ If no real data exists for a subset (e.g. unsupported race format), fall back to
 ### Layout
 
 - **Card**: canonical data-glass (`rgba(255,255,255,0.78) + blur(16px) + soft shadow + no border`).
-- **Subtitle leads with provenance** — finisher count, season, dataset name. "Live HYROX field. 89,868 finishers across S4–S6" beats "Distributions from results data".
+- **Subtitle leads with provenance, from one caption helper.** HYROX surfaces that place a time against the results data (the distributions card, the Stats rank card, the onboarding review) call `hyroxPopulationCaption(format)` (`src/calculations/hyrox-population.ts:124`). It names the format's finisher count (read from `HYROX_FORMAT_FINISHER_COUNTS`, never typed into UI code), that women and men are pooled, the seasons with years ("seasons 4 to 6 (2021/22 to 2023/24)"), the era caveat (Women Open did 75 wall balls then) and, for Open Doubles, that pairs of three load tiers are pooled. A format with no rows (Pro Doubles) gets a synthetic-scale caption instead. Example: "HYROX results: 50,364 Open Singles finishers, women and men together, seasons 4 to 6 (2021/22 to 2023/24). Women Open did 75 wall balls then (100 since 2024/25), so women's times in this data run faster than today's race." The old recommendation, "Live HYROX field. 89,868 finishers across S4–S6", is retired: "live" was untrue for a 2021 to 2024 snapshot, the count was hardcoded and was the all-format total rather than the format's own, and it hid the pooling and the era. A guard test (`hyrox-population-captions.test.ts`) fails on a hardcoded "89,868" anywhere in `src` outside the data file. When the data source changes (lane H3b will move to the S7 to S9 tables), the caption helper and its constants change, not the surfaces.
+- **Say what comes from the data and what does not.** A forecast is not "calibrated against" the results data when its station times come from the athlete's benchmarks or band seed times; `hyroxForecastProvenanceCaption` and `hyroxMethodologyCaption` say which numbers the data sets (finish percentiles, doubles ratios).
 - **Per-row layout**: label (left) + user time + tier label (right, e.g. "top 1%", "median", "bottom 25%") on top; chart underneath.
 - **Chart height**: 64px viewBox.
 - **One data colour**: `STROKE = #64748B` slate-500 line at 1.5px, `FILL = rgba(100,116,139,0.12)` underneath, `USER_LINE = #0F172A` slate-900 for the marker. Plus `rgba(0,0,0,0.10)` dashed for p25/p50/p75 guides. No chromatic accents.
@@ -442,7 +443,7 @@ Long axis labels ("Sandbag Lunges", "Burpee Broad Jumps") clip at the SVG viewBo
 
 ### Subtitle
 
-Same rule as distributions: lead with the data — "Each spoke shows where you sit on that station vs S4–S6 field. Outer ring is top 1%."
+Same rule as distributions: lead with provenance, and state what the axis really is. The HYROX radar plots **estimated** station percentiles: the results data has no per-station splits, so each station time is placed on the ability-band seed times at hand-picked percentiles (`getStationPercentile`, clamped 3 to 97). The subtitle says so: "Each spoke places your station time on the ability-band seed times. The results data has no per-station splits, so these are estimates. Further out is faster." (`performance-radar.ts:178`). The old recommendation, "Each spoke shows where you sit on that station vs S4–S6 field. Outer ring is top 1%.", is retired: no station comparison against the field exists, and the outer ring is 100, not a top-1% line. Station percentile chips elsewhere read "est. pN", and the targets card carries `STATION_PERCENTILE_CAVEAT`. Doubles lines are put in singles terms (`stationSinglesEquivalentSec`) before the lookup, since the seed anchors are singles times.
 
 ---
 

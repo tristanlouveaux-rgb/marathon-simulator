@@ -7,6 +7,10 @@ import {
   latestIsPR,
   latestStationTest,
   latestTestAgeMonths,
+  upsertRaceSplitEntry,
+  resolveHyroxBenchmarks,
+  hyroxCalibrationCoverage,
+  hyroxTestableStations,
   type StationTestEntry,
 } from './hyrox-station-history';
 import type { SimulatorState } from '@/types/state';
@@ -180,5 +184,116 @@ describe('hyrox-station-history', () => {
       });
       expect(latestImprovementSec(s, 'wall_balls', 'open_singles')).toBeNull();
     });
+  });
+});
+
+describe('upsertRaceSplitEntry: one entry per logged race and station (review 2026-10-12)', () => {
+  const race = (dateISO: string, sec: number, format: StationTestEntry['format'] = 'open_doubles') =>
+    ({ dateISO, sec, source: 'race' as const, format });
+
+  it('re-logging the same race (date and format) replaces its entry', () => {
+    let h = upsertRaceSplitEntry(undefined, race('2026-03-14', 300));
+    h = upsertRaceSplitEntry(h, race('2026-03-14', 280));
+    expect(h).toEqual([race('2026-03-14', 280)]);
+  });
+
+  it('a different date or format is a different race and is kept', () => {
+    let h = upsertRaceSplitEntry(undefined, race('2026-03-14', 300));
+    h = upsertRaceSplitEntry(h, race('2026-06-20', 290));
+    h = upsertRaceSplitEntry(h, race('2026-06-20', 400, 'open_singles'));
+    expect(h.map(e => `${e.dateISO} ${e.format} ${e.sec}`)).toEqual([
+      '2026-03-14 open_doubles 300',
+      '2026-06-20 open_doubles 290',
+      '2026-06-20 open_singles 400',
+    ]);
+  });
+
+  it('never removes tests, session bests or the manual backfill on the race date', () => {
+    const existing: StationTestEntry[] = [
+      { dateISO: '2026-03-14', sec: 310, source: 'half_test', format: 'open_doubles' },
+      { dateISO: '2026-03-14', sec: 305, source: 'manual', format: 'open_doubles' },
+      { dateISO: '2026-03-14', sec: 300, source: 'session', format: 'open_doubles' },
+    ];
+    const h = upsertRaceSplitEntry(existing, race('2026-03-14', 280));
+    expect(h.map(e => e.source).sort()).toEqual(['half_test', 'manual', 'race', 'session']);
+  });
+});
+
+describe('resolveHyroxBenchmarks: per-station benchmarks the forecast and every count read', () => {
+  it("per station, the target format's slot wins", () => {
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 260 }, slotOf: { ski_erg: 'singles' } });
+    expect(resolveHyroxBenchmarks({ format: 'pro_doubles', stationBenchmarksSingles: { ski_erg: 260 }, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
+  });
+
+  it("a station the target slot lacks comes from the other format's slot (review 2026-10-13)", () => {
+    // Before: per slot, the singles ski value hid the 2 doubles splits.
+    expect(resolveHyroxBenchmarks({
+      format: 'open_singles',
+      stationBenchmarksSingles: { ski_erg: 260 },
+      stationBenchmarksDoubles: { ski_erg: 200, row_erg: 210, wall_balls: 300 },
+    })).toEqual({
+      benchmarks: { ski_erg: 260, row_erg: 210, wall_balls: 300 },
+      slotOf: { ski_erg: 'singles', row_erg: 'doubles', wall_balls: 'doubles' },
+    });
+    expect(resolveHyroxBenchmarks({
+      format: 'open_doubles',
+      stationBenchmarksSingles: { ski_erg: 260, row_erg: 250 },
+      stationBenchmarksDoubles: { ski_erg: 200 },
+    })).toEqual({
+      benchmarks: { ski_erg: 200, row_erg: 250 },
+      slotOf: { ski_erg: 'doubles', row_erg: 'singles' },
+    });
+  });
+
+  it('the legacy pooled field only when neither slot holds a value', () => {
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarksDoubles: { ski_erg: 200 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksSingles: {}, stationBenchmarks: { ski_erg: 240 } }))
+      .toEqual({ benchmarks: { ski_erg: 240 }, slotOf: {} });
+    // A slot value hides the pooled field entirely: the boot migration copies
+    // the pooled values into a slot, where their slot says what they are.
+    expect(resolveHyroxBenchmarks({ format: 'open_singles', stationBenchmarksDoubles: { ski_erg: 200 }, stationBenchmarks: { row_erg: 240 } }))
+      .toEqual({ benchmarks: { ski_erg: 200 }, slotOf: { ski_erg: 'doubles' } });
+    expect(resolveHyroxBenchmarks({ format: 'open_singles' })).toEqual({ benchmarks: {}, slotOf: {} });
+  });
+});
+
+describe('hyroxCalibrationCoverage: the one "stations calibrated" count', () => {
+  const access = { sled: 'always' as const, skiErg: true, rowErg: true };
+
+  it('counts raced stations with a resolved benchmark, from either slot, out of 8', () => {
+    const c = hyroxCalibrationCoverage({
+      format: 'open_singles',
+      stationAccess: access,
+      stationBenchmarksSingles: { ski_erg: 260 },
+      stationBenchmarksDoubles: { row_erg: 210, wall_balls: 300 },
+    });
+    expect(c.total).toBe(8);
+    expect(c.testable).toHaveLength(8);
+    expect(c.calibrated).toEqual(['ski_erg', 'row_erg', 'wall_balls']);
+    expect(c.pending).toHaveLength(5);
+    expect(c.testablePending).toEqual(c.pending);
+  });
+
+  it('equipment access decides only what a test prompt lists, never the count', () => {
+    expect(hyroxTestableStations({ sled: 'never', skiErg: false, rowErg: true }))
+      .toEqual(['burpee_broad_jumps', 'row_erg', 'farmer_carry', 'sandbag_lunges', 'wall_balls']);
+    expect(hyroxTestableStations(undefined)).toHaveLength(8);
+    const c = hyroxCalibrationCoverage({
+      format: 'open_doubles',
+      stationAccess: { sled: 'never', skiErg: true, rowErg: true },
+      stationBenchmarksSingles: { sled_push: 200, ski_erg: 260 },
+    });
+    // The sled_push value counts: the forecast reads it.
+    expect(c.calibrated).toEqual(['ski_erg', 'sled_push']);
+    expect(c.total).toBe(8);
+    expect(c.pending).toHaveLength(6);
+    expect(c.testable).toHaveLength(6);
+    // sled_pull is pending but cannot be tested: not in the prompt list.
+    expect(c.pending).toContain('sled_pull');
+    expect(c.testablePending).not.toContain('sled_pull');
+    expect(c.testablePending).toHaveLength(5);
   });
 });

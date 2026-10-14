@@ -10,17 +10,19 @@
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
   computeDoublesCap,
-  SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES,
-  SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES,
 } from '@/constants/hyrox-constants';
-import type { AbilityBand, HyroxConfig, HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
+import { isHyroxProFormat } from '@/calculations/hyrox-division';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { localDateKey } from '@/utils/local-date';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -35,13 +37,6 @@ export interface HyroxPrevTimeUpdate {
 export interface HyroxPrevTimeUpdateResult {
   rebanded: boolean;
   planRegenerated: boolean;
-}
-
-function bandFromTime(sec: number): AbilityBand {
-  for (const { maxSec, band } of HYROX_TIME_TO_BAND_THRESHOLDS) {
-    if (sec < maxSec) return band;
-  }
-  return 'beginner';
 }
 
 export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrevTimeUpdateResult {
@@ -73,17 +68,35 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
         ...update.stationSplits,
       } as HyroxConfig['stationBenchmarksSingles'];
     }
+    // One history entry per split, source 'race', with the race's format and
+    // weights, so the entry describes the slot value it wrote. Without it a
+    // doubles race split logged after a half test read as a solo time and was
+    // scaled by the doubles ratio a second time (review 2026-10-12: 300 s
+    // became 212.8 s). The entry's proWeights also keeps a Pro race split from
+    // getting the Pro multiplier on top, without touching
+    // benchmarksAtProWeights, which describes station tests.
+    // Re-logging the same race (same date and format) replaces its earlier
+    // entries (upsertRaceSplitEntry) rather than duplicating them.
+    const raceDateISO = hx.hyroxPreviousRaceDate ?? localDateKey(new Date());
+    hx.stationBenchmarkHistory = hx.stationBenchmarkHistory ?? {};
+    for (const st of HYROX_STATION_ORDER) {
+      const sec = update.stationSplits[st];
+      if (sec == null) continue;
+      hx.stationBenchmarkHistory[st] = upsertRaceSplitEntry(hx.stationBenchmarkHistory[st], {
+        dateISO: raceDateISO,
+        sec,
+        source: 'race',
+        format: update.format,
+        proWeights: isHyroxProFormat(update.format),
+      });
+    }
   }
 
   const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const isPrevDoubles = update.format === 'open_doubles' || update.format === 'pro_doubles';
-  const adjusted =
-    isPrevDoubles && !targetIsDoubles
-      ? Math.round(update.timeSec * SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES)
-      : !isPrevDoubles && targetIsDoubles
-        ? Math.round(update.timeSec * SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES)
-        : update.timeSec;
-  const newBand = bandFromTime(adjusted);
+  // The planning band (hyroxPlanningBandFor): the finish in Open Singles
+  // terms, banded on the Open Singles field of the athlete's sex, so a Pro or
+  // Doubles race never lowers the plan for its heavier weights or partner.
+  const newBand = hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division);
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;

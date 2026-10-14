@@ -14,14 +14,26 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntrance } from '../page-flair';
 import { HYROX_MTL_CAP } from '@/constants/hyrox-constants';
 import { computeWeekActualMTL, computeWeekMTL, hyroxMtlAcwr } from '@/calculations/mtl';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_STATION_ORDER, SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
-import { getFinishTimePercentile, percentileLabel, percentileHeadline } from '@/calculations/hyrox-population';
-import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, resolveHyroxStationBenchmarks, hyroxStationSeedsForState } from '@/calculations/race-prediction.hyrox';
+import {
+  hyroxCohortForState,
+  hyroxSeedRunPaceSecKm,
+  hyroxCohortPlacement,
+  hyroxPlacementHeadline,
+  hyroxPlacementCaption,
+  hyroxPlacementFigure,
+  hyroxCohortLabel,
+  type HyroxCohortPlacement,
+} from '@/calculations/hyrox-results';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
+import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { renderPlanShapeCard } from '../plan-shape-chart';
+import { getHyroxPartnerCache, refreshHyroxPartnerCache, setHyroxPartnerCacheListener, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { SimulatorState } from '@/types/state';
+import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home')     import('../home-view').then(({ renderHomeView }) => renderHomeView());
@@ -65,28 +77,26 @@ export function renderHyroxStatsView(): void {
   const raceDays = raceDate ? daysUntil(raceDate) : null;
   const phase = (s.wks?.[s.w - 1] as any)?.ph as string | undefined;
 
-  // Read from format-specific benchmark slot, falling back to legacy pooled field.
-  const isDoublesFormat = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-  const benchmarks = (isDoublesFormat ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles) ?? hx.stationBenchmarks ?? {};
-  const access = hx.stationAccess;
-  const calibratable = HYROX_STATION_ORDER.filter(st => {
-    if (st === 'ski_erg' && !access.skiErg) return false;
-    if (st === 'row_erg' && !access.rowErg) return false;
-    if ((st === 'sled_push' || st === 'sled_pull') && access.sled === 'never') return false;
-    return true;
-  });
-  const calibrated = calibratable.filter(st => benchmarks[st] != null);
-  const pending = calibratable.filter(st => benchmarks[st] == null);
-
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
   // Population comparison
   const prediction = predictHyroxRace(s);
+
+  // Benchmarks ledger: the forecast's per-station benchmarks and its
+  // calibrated count (hyroxBenchmarkLedger), so Stats, Account, the benchmark
+  // card and the forecast agree.
+  const ledger = hyroxBenchmarkLedger(s);
+  // Seeds for untested stations and the run pace: real band medians of the
+  // athlete's singles field at the target's weights, the forecast's own.
+  const seeds = hyroxStationSeedsForState(s);
+  const seedRunPace = hyroxSeedRunPaceSecKm(s, band);
   const predTimeSec = prediction?.totalSec ?? hx.previousHyroxTimeSec;
-  const fasterThanPct = predTimeSec != null
-    ? getFinishTimePercentile(predTimeSec, hx.format ?? 'open_singles')
-    : null;
+  // The rank line: the finish placed in the athlete's own cohort (format x
+  // sex, or the pair's division), in their age group when the age is known
+  // (hyroxStatsRank, the one computation the circle, the bar and the line read).
+  const rank = hyroxStatsRank(s, predTimeSec);
+  const fasterThanPct = rank?.fasterThanPct ?? null;
 
   // Run-pace derivation chain (for the Critical Pace card). Surfaces the
   // VDOT → threshold → CP → HYROX pace wiring so the user can see how their
@@ -152,24 +162,24 @@ export function renderHyroxStatsView(): void {
         ${fasterThanPct != null ? `
         <div class="hxsf" style="padding:12px 20px 0;animation-delay:0.06s">
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:12px">Global rank</div>
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:12px">Field rank</div>
             <div style="display:flex;align-items:center;gap:16px">
-              <div style="flex-shrink:0;width:56px;height:56px;border-radius:50%;background:#f8f7f4;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">
-                ${fasterThanPct}%
+              <div style="flex-shrink:0;width:56px;height:56px;border-radius:50%;background:#f8f7f4;display:flex;align-items:center;justify-content:center;font-size:${rank!.beyond ? 16 : 19}px;font-weight:700;color:#0F172A;font-variant-numeric:tabular-nums">
+                ${hyroxPlacementFigure(rank!).replace(/</g, '&lt;').replace(/>/g, '&gt;')}
               </div>
               <div>
-                <div style="font-size:16px;font-weight:600;color:#0F172A">${percentileHeadline(fasterThanPct)}</div>
-                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">${percentileLabel(fasterThanPct)} · ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro division' : 'Open division'}</div>
+                <div style="font-size:16px;font-weight:600;color:#0F172A">${hyroxPlacementHeadline(rank!)}</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">${hyroxCohortLabel(rank!.cohort)}</div>
               </div>
             </div>
             <div style="margin-top:14px;position:relative;height:8px;background:linear-gradient(to right, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.20) 100%);border-radius:4px">
-              <div style="position:absolute;top:-3px;left:${fasterThanPct}%;transform:translateX(-50%);width:14px;height:14px;background:#0F172A;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>
+              ${fieldRankMarkerHtml(rank!)}
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:4px">
               <div style="font-size:10px;color:var(--c-faint)">Slowest</div>
               <div style="font-size:10px;color:var(--c-faint)">Fastest</div>
             </div>
-            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. Calibrated against 89,868 real HYROX finishers (Seasons 4–6): all global ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro' : 'Open'} division.</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. ${hyroxPlacementCaption(rank!)}${rank!.ageGroup && (format === 'open_doubles' || format === 'pro_doubles') ? ' Age group from your age; doubles age groups go by the pair.' : ''}</div>
           </div>
         </div>
         ` : ''}
@@ -214,12 +224,10 @@ export function renderHyroxStatsView(): void {
 
         <!-- Critical Pace derivation card -->
         ${cpComponents ? (() => {
-          const fmtPaceLocal = (secKm: number) => {
-            if (!Number.isFinite(secKm) || secKm <= 0) return '—';
-            const m = Math.floor(secKm / 60);
-            const ss = String(Math.round(secKm % 60)).padStart(2, '0');
-            return `${m}:${ss}`;
-          };
+          // Whole second with the minute carried (fmtModelPaceKm), as the
+          // forecast and Critical pace detail show the same paces.
+          const fmtPaceLocal = (secKm: number) =>
+            (!Number.isFinite(secKm) || secKm <= 0) ? '—' : fmtModelPaceKm(secKm);
           const v = s.v;
           const cpSec = Math.round(cpComponents.criticalPaceSecKm);
           const thresholdSec = Math.round(cpComponents.thresholdSecKm);
@@ -227,7 +235,7 @@ export function renderHyroxStatsView(): void {
           const cpRatio = cpComponents.cpRatio;
           const formatFactor = cpComponents.formatFactor;
           const personalOffset = cpComponents.personalOffsetSec;
-          const isDoubles = formatFactor < 1.0;
+          const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
           const offsetLabel = personalOffset === 0
             ? 'no race history yet'
             : `${personalOffset > 0 ? '+' : ''}${personalOffset} s/km from your race history`;
@@ -249,7 +257,7 @@ export function renderHyroxStatsView(): void {
                   </div>
                 </div>
                 <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
-                  Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles factor ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
+                  Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles run ratio ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
                 </div>
                 <div style="font-size:10px;color:var(--c-faint);padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);margin-top:10px">${offsetLabel} · tap for the trend and science</div>
               </div>
@@ -262,21 +270,31 @@ export function renderHyroxStatsView(): void {
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Benchmarks</div>
-              <div style="font-size:11px;color:var(--c-muted)">${calibrated.length} / ${calibratable.length} stations calibrated</div>
+              <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.total} stations calibrated</div>
             </div>
-            ${calibratable.map(st => renderBenchmarkRow(st, benchmarks[st], hx.athleteBand, s)).join('')}
-            ${renderRunPaceRow(hx.hyroxRunPaceSecKm, hx.athleteBand, hx.hyroxRunPaceSource)}
+            ${ledger.rows.map(row => renderBenchmarkRow(row, seeds[row.station], s)).join('')}
+            ${renderRunPaceRow(hx.hyroxRunPaceSecKm, seedRunPace, hx.hyroxRunPaceSource)}
             ${(format === 'pro_singles' || format === 'pro_doubles') ? `
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
                 <div>
                   <div style="font-size:13px;color:var(--c-black)">Calibrated at Pro weights</div>
-                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your benchmarks were set at Pro-division weights. Default off. We'll add the heavier-weight slowdown on top of your times.</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your station tests were done at Pro-division weights. Off adds the heavier-weight slowdown on top of your test times. Splits from a logged race follow that race's weights.</div>
                 </div>
                 <button id="hx-pro-weights-toggle" data-on="${hx.benchmarksAtProWeights ? 'true' : 'false'}" style="flex-shrink:0;padding:7px 12px;border-radius:100px;border:1px solid ${hx.benchmarksAtProWeights ? 'var(--c-black)' : 'rgba(0,0,0,0.18)'};background:${hx.benchmarksAtProWeights ? 'var(--c-black)' : '#fff'};color:${hx.benchmarksAtProWeights ? '#FDFCF7' : 'var(--c-black)'};font-size:12px;cursor:pointer">${hx.benchmarksAtProWeights ? 'On' : 'Off'}</button>
               </div>
             ` : ''}
           </div>
         </div>
+
+        ${isHyroxDoublesFormat(format) ? `
+        <!-- Doubles partner: drill-down to the Partner page -->
+        <div class="hxsf" style="padding:12px 20px 0;animation-delay:0.20s">
+          <div id="hx-stats-partner-row" role="button" tabindex="0" style="background:#fff;border-radius:16px;padding:14px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;cursor:pointer">
+            <div style="font-size:13px;font-weight:600;color:#0F172A">Partner</div>
+            <div id="hx-stats-partner-value" style="font-size:13px;color:var(--c-muted)">${escapeHtmlText(partnerRowLabel(getHyroxPartnerCache()))} ›</div>
+          </div>
+        </div>
+        ` : ''}
 
       </div>
 
@@ -290,6 +308,27 @@ export function renderHyroxStatsView(): void {
   document.getElementById('hx-stats-mtl-card')?.addEventListener('click', () => {
     import('../mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderHyroxStatsView()));
   });
+
+  // Partner row (doubles only) → Partner page. The label reads the session
+  // link cache; the first visit in a session fills it in the background, and
+  // any later cache change (a foreground re-read after the partner links or
+  // unlinks) updates the label in place while the row is on screen.
+  const partnerRow = document.getElementById('hx-stats-partner-row');
+  if (partnerRow) {
+    const openPartner = () => import('./partner-view').then(({ renderHyroxPartnerView }) => renderHyroxPartnerView());
+    partnerRow.addEventListener('click', openPartner);
+    partnerRow.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openPartner(); } });
+    setHyroxPartnerCacheListener((c) => {
+      const el = document.getElementById('hx-stats-partner-value');
+      if (el && c) el.textContent = `${partnerRowLabel(c)} ›`;
+    });
+    if (getHyroxPartnerCache() === undefined) {
+      void refreshHyroxPartnerCache(undefined, { readInvite: true }).then(c => {
+        const el = document.getElementById('hx-stats-partner-value');
+        if (el) el.textContent = `${partnerRowLabel(c) || 'Link'} ›`;
+      });
+    }
+  }
 
   // CP card tap → full drill-down page (critical pace over time + the science).
   document.getElementById('hx-stats-cp-card')?.addEventListener('click', () => {
@@ -317,6 +356,32 @@ export function renderHyroxStatsView(): void {
   });
 }
 
+/** Stats Partner row value, plain text: the partner's initials when linked,
+ *  "Link" when not, empty until the link has been checked this session (so a
+ *  linked athlete never sees "Link" flash first). Escape before putting it in
+ *  innerHTML (escapeHtmlText). */
+export function partnerRowLabel(cache: HyroxPartnerCache | undefined): string {
+  if (!cache) return '';
+  if (!cache.linked) return 'Link';
+  return cache.initials || 'Linked';
+}
+
+/** The partner's initials come from another user's row: escaped for innerHTML. */
+function escapeHtmlText(t: string | null | undefined): string {
+  return (t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/**
+ * The Stats rank line's placement: the finish (the forecast, else the
+ * previous time) in the athlete's cohort (hyroxCohortForState), in their age
+ * group when onboarding has an age (hyroxCohortPlacement). Doubles use the
+ * athlete's own age band: the partner's age is not on file.
+ */
+export function hyroxStatsRank(s: SimulatorState, timeSec: number | null | undefined): HyroxCohortPlacement | null {
+  if (!s.hyroxConfig) return null;
+  return hyroxCohortPlacement(timeSec, hyroxCohortForState(s), s.onboarding?.age);
+}
+
 function renderAcwrRow(acwr: number): string {
   const zone = acwr > 1.5 ? 'high' : acwr > 1.3 ? 'caution' : 'safe';
   const colour = zone === 'high' ? '#ef4444' : zone === 'caution' ? '#f59e0b' : '#7a845c';
@@ -342,15 +407,12 @@ function renderAcwrRow(acwr: number): string {
 
 function renderRunPaceRow(
   userSecKm: number | undefined,
-  band: string,
+  seedSecKm: number | undefined,
   source: 'user' | 'derived' | 'seed' | undefined,
 ): string {
-  const seedSecKm = (SEED_RUN_PACE_SEC_KM as Record<string, number>)[band];
-  const fmtPace = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = String(Math.round(s % 60)).padStart(2, '0');
-    return `${m}:${sec}`;
-  };
+  // Run pace (can be fractional): whole second with the minute carried, the
+  // forecast's formatter, never "4:60".
+  const fmtPace = (s: number) => fmtModelPaceKm(s);
 
   const hasUser = userSecKm != null;
   const sourceCaption =
@@ -376,21 +438,130 @@ function renderRunPaceRow(
   `;
 }
 
+/**
+ * The Field rank bar's marker. Inside the table: a dot at "faster than X%".
+ * Past a coarse table's end (placement.beyond) the share is a bound, so the
+ * bar shows the range it can be in (from the bar's end to the bound) and a
+ * hollow marker at the bound, matching the circle's "<25%" and the headline's
+ * "Slower than 75%" (review 2026-10-13: the dot sat at 25% as a point).
+ */
+export function fieldRankMarkerHtml(rank: Pick<HyroxCohortPlacement, 'fasterThanPct' | 'beyond' | 'tableRange'>): string {
+  if (!rank.beyond) {
+    return `<div data-hx-rank-marker="point" style="position:absolute;top:-3px;left:${rank.fasterThanPct}%;transform:translateX(-50%);width:14px;height:14px;background:#0F172A;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.25)"></div>`;
+  }
+  const bound = rank.beyond === 'slow' ? 100 - rank.tableRange[1] : 100 - rank.tableRange[0];
+  const span = rank.beyond === 'slow'
+    ? `left:0;width:${bound}%`
+    : `left:${bound}%;width:${100 - bound}%`;
+  return `
+    <div data-hx-rank-range="${rank.beyond}" style="position:absolute;top:0;${span};height:100%;border-radius:4px;background:rgba(15,23,42,0.35)"></div>
+    <div data-hx-rank-marker="bound" style="position:absolute;top:-3px;left:${bound}%;transform:translateX(-50%);width:14px;height:14px;background:#fff;border-radius:50%;border:2px solid #0F172A;box-sizing:border-box"></div>
+  `;
+}
+
+/** Where a Benchmarks-ledger value comes from (hyroxBenchmarkLedger). */
+export type HyroxBenchmarkBasis =
+  /** No athlete time: the row shows the band's population estimate. */
+  | 'seed'
+  /** The athlete's own time, stored in these terms. */
+  | 'calibrated'
+  /** Singles target: a doubles race split (the pair's time) ÷ the forecast's
+   *  station ratio, a singles time. */
+  | 'converted_from_doubles_race'
+  /** Doubles target: a doubles race split ÷ the forecast's station ratio, the
+   *  solo time the forecast scales back to the pair's time. */
+  | 'solo_of_doubles_race'
+  /** Doubles target: a singles benchmark, which the forecast scales × the
+   *  station ratio (a cross-format estimate). */
+  | 'from_singles';
+
+/** The ledger caption for each basis. */
+export const HYROX_BENCHMARK_BASIS_LABEL: Record<HyroxBenchmarkBasis, string> = {
+  seed: 'Population est.',
+  calibrated: 'Calibrated',
+  converted_from_doubles_race: 'Converted from doubles race',
+  solo_of_doubles_race: 'Solo equivalent of doubles race',
+  from_singles: 'From singles benchmark',
+};
+
+/** One Benchmarks-ledger row (hyroxBenchmarkLedger). */
+export interface HyroxBenchmarkLedgerRow {
+  station: HyroxStation;
+  /** The athlete's benchmark for the station as one athlete's time over the
+   *  full station distance at the target's weights
+   *  (resolveHyroxStationBenchmarks `sec`); absent when the station still
+   *  uses the population seed. */
+  sec?: number;
+  basis: HyroxBenchmarkBasis;
+  /** `sec` is the stored time converted to the race's weights (an Open test
+   *  for a Pro target, a Women Open test for a Mixed Doubles woman, a Pro
+   *  race split for an Open target): the row carries a load note. */
+  loadsConverted?: boolean;
+}
+
+/** The load note under a ledger row whose time was converted to the race's
+ *  weights (HyroxBenchmarkLedgerRow.loadsConverted). */
+export const HYROX_LEDGER_LOAD_NOTE = 'Converted to race weights';
+
+/**
+ * The Stats Benchmarks ledger: one row per raced station (all 8) and the
+ * calibrated count, from resolveHyroxStationBenchmarks, the forecast's own
+ * per-station computation. The same values feed the plan engine's station
+ * targets and the guided-session PB check, so the ledger, the plan and a
+ * session-best update read one number per station.
+ *
+ * Every row is one athlete's time over the full station distance at the
+ * target's weights, in every format:
+ *  - A doubles race split (the pair's time) ÷ the forecast's station ratio.
+ *    A singles target reads it as 'Converted from doubles race', a doubles
+ *    target as 'Solo equivalent of doubles race' (its forecast scales it
+ *    back to the pair's time).
+ *  - A singles benchmark read by a doubles target shows as stored, captioned
+ *    'From singles benchmark': the forecast flags it as converted and caps
+ *    confidence on it.
+ *  - Anything else (the target's own times, a solo test from the doubles
+ *    slot) shows as stored, 'Calibrated'.
+ * A value stored at the other weight regime (a Pro race split for an Open
+ * target, an Open test for a Pro target) shows converted to the target's
+ * weights, the per-entry Open/Pro conversion the forecast applies, so the row
+ * is the number the plan prescribes at the target's loads and the number a
+ * session round must beat. The ledger shows the benchmark before the
+ * forecast's staleness blend and venue factors. Uncalibrated rows show the
+ * band seed (Open weights). Stations the athlete has no equipment for are
+ * listed too: the forecast reads their race splits, and the count is the one
+ * every surface shows (hyroxCalibrationCoverage, out of 8).
+ */
+export function hyroxBenchmarkLedger(
+  state: SimulatorState,
+): { rows: HyroxBenchmarkLedgerRow[]; calibratedCount: number; total: number } {
+  const resolved = resolveHyroxStationBenchmarks(state);
+  if (!resolved) return { rows: [], calibratedCount: 0, total: HYROX_STATION_ORDER.length };
+  const doublesTarget = isHyroxDoublesFormat(state.hyroxConfig?.format);
+  const rows = resolved.stations.map((b): HyroxBenchmarkLedgerRow => {
+    if (b.sec == null) return { station: b.station, basis: 'seed' };
+    // 'from_singles' only for a value from the singles slot: a doubles
+    // target's own solo test is converted in the forecast too (it caps
+    // confidence), but it is not a singles benchmark.
+    const basis: HyroxBenchmarkBasis = b.teamTimeSplit
+      ? (doublesTarget ? 'solo_of_doubles_race' : 'converted_from_doubles_race')
+      : (doublesTarget && b.slot === 'singles' ? 'from_singles' : 'calibrated');
+    return { station: b.station, sec: b.sec, basis, ...(b.loadsConverted ? { loadsConverted: true } : {}) };
+  });
+  return { rows, calibratedCount: resolved.coverage.calibrated.length, total: resolved.coverage.total };
+}
+
 function renderBenchmarkRow(
-  station: HyroxStation,
-  userSec: number | undefined,
-  band: string,
+  row: HyroxBenchmarkLedgerRow,
+  seedSec: number | undefined,
   state: SimulatorState,
 ): string {
+  const { station, sec: userSec } = row;
   const display = STATION_DISPLAY[station];
-  const seedSec = (STATION_SEED_TIMES_SEC as any)[band]?.[station] as number | undefined;
   const hasUser = userSec != null;
 
-  const fmtSec = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = String(Math.round(s % 60)).padStart(2, '0');
-    return `${m}:${sec}`;
-  };
+  // Station times (doubles and Pro values are fractional): rounded before the
+  // minute split, as the station detail page and forecast rows show them.
+  const fmtSec = (s: number) => ftRounded(s);
 
   // Standalone benchmark times are max-effort with rest. Comparing them to the
   // 89k-finisher Kaggle dataset (which captures mid-race fatigued station
@@ -400,12 +571,14 @@ function renderBenchmarkRow(
   let calibratedRightCol = '';
   if (hasUser) {
     const ageMo = latestTestAgeMonths(state, station);
+    const label = HYROX_BENCHMARK_BASIS_LABEL[row.basis];
     const ageCaption = (ageMo != null && ageMo >= 4)
-      ? `Calibrated · ${Math.round(ageMo)} mo ago`
-      : 'Calibrated';
+      ? `${label} · ${Math.round(ageMo)} mo ago`
+      : label;
     calibratedRightCol = `
       <div style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums;text-align:right">${fmtSec(userSec!)}</div>
       <div style="font-size:10px;color:var(--c-muted);text-align:right">${ageCaption}</div>
+      ${row.loadsConverted ? `<div style="font-size:10px;color:var(--c-faint);text-align:right">${HYROX_LEDGER_LOAD_NOTE}</div>` : ''}
     `;
   }
 
@@ -419,7 +592,7 @@ function renderBenchmarkRow(
         ${hasUser
           ? calibratedRightCol
           : `<div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${seedSec ? fmtSec(seedSec) : '—'}</div>
-             <div style="font-size:10px;color:var(--c-faint)">Population est.</div>`
+             <div style="font-size:10px;color:var(--c-faint)">${HYROX_BENCHMARK_BASIS_LABEL.seed}</div>`
         }
       </div>
     </div>

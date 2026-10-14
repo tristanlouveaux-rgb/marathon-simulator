@@ -16,18 +16,17 @@ import { saveState } from '@/state/persistence';
 import type { SimulatorState } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
-import { predictHyroxRace, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
+import { predictHyroxRace, hyroxStationHistoryInTargetFrame, hyroxTargetFrameCaption, type HyroxStationLine } from '@/calculations/race-prediction.hyrox';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent, getFutureHyroxEvents, HYROX_WORLD_SERIES } from '@/data/hyrox-events';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
-import { HYROX_TIME_TO_BAND_THRESHOLDS } from '@/constants/hyrox-constants';
 import {
   latestTestAgeMonths,
-  bestStationTime,
-  getStationHistory,
-  latestImprovementSec,
+  hyroxCalibrationCoverage,
 } from '@/calculations/hyrox-station-history';
+import { hyroxBandThresholds, hyroxBandField, hyroxCohortLabel } from '@/calculations/hyrox-results';
+import { hyroxOpenSinglesTermsSec } from '@/calculations/hyrox-planning-band';
 import { buildBenchmarkTrendChart } from '@/ui/triathlon/benchmark-charts';
 import { fp, fmtModelPaceKm } from '@/utils/format';
 import { classifyHyroxSessionKind, type HyroxSessionKind } from '@/calculations/hyrox-session-classifier';
@@ -166,13 +165,11 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
   // Two paths: log a previous HYROX time (anchors the band), or test stations
   // (anchors per-station seeds). When neither is set the prediction leans on
   // the experience-level fallback only. We surface the asks prominently.
-  const stationsSingles = hx?.stationBenchmarksSingles ?? {};
-  const stationsDoubles = hx?.stationBenchmarksDoubles ?? {};
-  const stationsLegacy = hx?.stationBenchmarks ?? {};
-  const calibratedStationCount =
-    Object.keys(stationsSingles).length +
-    Object.keys(stationsDoubles).length +
-    Object.keys(stationsLegacy).length;
+  // Tested stations: hyroxCalibrationCoverage, the forecast's per-station
+  // resolver and the count Stats and Account show. Summing the keys of both
+  // slots and the legacy field counted a station once per place it was
+  // stored, so 2 tested stations could read as 4 or more.
+  const calibratedStationCount = hx ? hyroxCalibrationCoverage(hx).calibrated.length : 0;
   const sparseStations = calibratedStationCount < 4;
 
   const calibrationCard = (!prevSec || sparseStations) ? `
@@ -205,10 +202,25 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
     `
     : '';
 
-  // Band thresholds rendered as a stat list. The currently-active band is
+  // Band thresholds rendered as a stat list, for the field the band is read
+  // in (hyroxBandField: the planning field, Open Singles at the athlete's own
+  // sex, for every format, lane H3c), the same field the band seeds are read
+  // in (hyroxSeedField), so the thresholds and the seeds describe one field.
+  // A Pro or Doubles previous time is banded in Open Singles terms
+  // (hyroxPlanningBandFor), so the caption shows that converted time next to
+  // the thresholds it is compared with. The currently-active band is
   // highlighted so the user sees where they sit.
-  const bandRows = HYROX_TIME_TO_BAND_THRESHOLDS.map((t, i) => {
-    const prevMax = i > 0 ? HYROX_TIME_TO_BAND_THRESHOLDS[i - 1].maxSec : 0;
+  const bandCohort = hyroxBandField(s);
+  const prevFmt = hx?.hyroxPreviousTimeFormat;
+  const prevOpenTermsSec = prevSec != null && prevFmt && prevFmt !== 'open_singles'
+    ? hyroxOpenSinglesTermsSec(prevSec, prevFmt, s.biologicalSex, hx?.division)
+    : null;
+  const thresholdsCaption = prevOpenTermsSec != null
+    ? `${hyroxCohortLabel(bandCohort)}. Your ${fmtMmSs(prevSec!)} ${prevFmtLabel} time is ${fmtMmSs(Math.round(prevOpenTermsSec))} in Open Singles terms.`
+    : `${hyroxCohortLabel(bandCohort)}. Pro and Doubles times convert to Open Singles terms before banding.`;
+  const bandThresholds = hyroxBandThresholds(bandCohort);
+  const bandRows = bandThresholds.map((t, i) => {
+    const prevMax = i > 0 ? bandThresholds[i - 1].maxSec : 0;
     const rangeLabel = t.maxSec === Infinity
       ? `${fmtMmSs(prevMax)}+`
       : i === 0
@@ -252,7 +264,8 @@ function pageYou(s: SimulatorState): { title: string; subhead: string; body: str
     ${volumeCard}
 
     <div style="${CARD};margin-bottom:14px">
-      <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Band thresholds</div>
+      <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Band thresholds</div>
+      <div style="font-size:12px;color:${TEXT_L};margin-bottom:6px">${escapeText(thresholdsCaption)}</div>
       ${bandRows}
     </div>
 
@@ -272,7 +285,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
   const sourceCopy = prediction.runPaceSource === 'derived'
     ? `Updated from your VDOT (${vdot.toFixed(1)}). Recalculates from your runs as fitness changes.`
     : prediction.runPaceSource === 'seed'
-    ? `Population average for the ${s.hyroxConfig?.athleteBand ?? 'current'} band. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
+    ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band in the HYROX results. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
     : 'Set manually during onboarding. Updates from runs when better data is available.';
 
   const vdotSamples = (s.vdotHistory ?? [])
@@ -309,7 +322,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       ${vdotChart}
       ${statRow('Total run time', fmtMmSs(prediction.runSec))}
       ${cpRow}
-      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Population avg' : 'Set manually')}
+      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Band median' : 'Set manually')}
       ${cpLink}
     </div>
 
@@ -328,20 +341,31 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
   const total = prediction.stations.length;
   const calibrated = prediction.calibratedCount;
   const summedSec = prediction.stationsSec;
-  const format = s.hyroxConfig?.format ?? 'open_singles';
-
   // Aggregate improvement across all tested stations (sum of latest-vs-previous
-  // deltas where two same-format tests exist). Surfaces "you've trimmed 1:24
-  // off your stations". A real-data summary that mirrors VDOT's delta.
+  // deltas). Surfaces "you've trimmed 1:24 off your stations". A real-data
+  // summary that mirrors VDOT's delta.
+  // One frame per card: the rows are the forecast's lines (the pair's time
+  // for doubles), so the PR captions and this delta read every history entry
+  // in the line's own terms (hyroxStationHistoryInTargetFrame targetSec, the
+  // forecast's own conversion). A pair's split never sits next to a solo
+  // test, Pro next to Open, and a PR never reads slower than its row (review
+  // 2026-10-13: an Open Doubles row of 2:00 showed "PR 2:41", the PR's solo
+  // equivalent). The frame is labelled once on the card.
+  const frames = new Map(prediction.stations.map(l => [l.station, hyroxStationHistoryInTargetFrame(s, l.station)]));
   let totalImprovementSec = 0;
   let improvedCount = 0;
   for (const line of prediction.stations) {
     if (line.source !== 'calibrated') continue;
-    const delta = latestImprovementSec(s, line.station, format);
-    if (delta == null) continue;
-    totalImprovementSec += delta;
+    const hist = frames.get(line.station) ?? [];
+    if (hist.length < 2) continue;
+    totalImprovementSec += hist[hist.length - 1].targetSec - hist[hist.length - 2].targetSec;
     improvedCount += 1;
   }
+  const isDoublesTarget = s.hyroxConfig?.format === 'open_doubles' || s.hyroxConfig?.format === 'pro_doubles';
+  const anyConverted = prediction.stations.some(l => l.source === 'calibrated' && (frames.get(l.station) ?? []).some(e => e.targetConverted));
+  const frameNote = isDoublesTarget || anyConverted
+    ? `<div style="font-size:11px;color:${TEXT_L};margin-bottom:4px;line-height:1.4">${escapeText(hyroxTargetFrameCaption(s, 'line'))}</div>`
+    : '';
   const hasImprovementSignal = improvedCount > 0;
   const improvementGood = totalImprovementSec < 0;
 
@@ -350,12 +374,14 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
     const isCalibrated = line.source === 'calibrated';
     const ageMo = isCalibrated ? latestTestAgeMonths(s, line.station) : null;
     const ageCaption = ageMo != null && ageMo >= 4 ? ` · ${Math.round(ageMo)} mo ago` : '';
-    const best = isCalibrated ? bestStationTime(s, line.station, format) : null;
-    const hist = isCalibrated ? getStationHistory(s, line.station).filter(e => e.format === format) : [];
+    const hist = isCalibrated ? (frames.get(line.station) ?? []) : [];
+    const best = hist.reduce<{ targetSec: number } | null>((b, e) => (b == null || e.targetSec < b.targetSec ? e : b), null);
     const testCount = hist.length;
-    const isPR = best != null && Math.abs(best.sec - line.baseSec) < 0.5 && testCount >= 2;
-    const bestCaption = best != null && testCount >= 2 && best.sec < line.baseSec - 0.5
-      ? ` · PR ${fmtMmSs(best.sec)}`
+    // Compare in the row's own terms (targetSec: the pair's time for a
+    // doubles target), the frame the row value is in.
+    const isPR = best != null && Math.abs(best.targetSec - line.baseSec) < 0.5 && testCount >= 2;
+    const bestCaption = best != null && testCount >= 2 && best.targetSec < line.baseSec - 0.5
+      ? ` · PR ${fmtMmSs(best.targetSec)}`
       : isPR
       ? ' · PR'
       : '';
@@ -405,10 +431,11 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
 
     <div style="${CARD};margin-bottom:14px">
       <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Per-station breakdown</div>
+      ${frameNote}
       ${rows}
     </div>
 
-    ${captionCard('Untested stations use population averages from the seed table for your band. Testing each station replaces the seed with your personal time. Mosaic doubles a half-distance test for the actual race-pace estimate. Calibrating all 8 takes the seed-data caveat off the prediction.')}
+    ${captionCard('Untested stations use the median split of your ability band in the HYROX results. Testing each station replaces that median with your own time. Mosaic doubles a half-distance test for the race-pace estimate. Calibrating all 8 takes the seed-data caveat off the prediction.')}
   `;
 
   return { title: 'Stations', subhead: 'Personal anchors vs population seeds', body };

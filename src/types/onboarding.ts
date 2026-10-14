@@ -354,6 +354,11 @@ export interface OnboardingState {
   /** Competition format. */
   hyroxFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
+  /** Division category (HyroxDivision). Doubles: Women / Men / Mixed (Mixed only
+   *  for Open doubles). Singles: Women / Men, asked only when biologicalSex is
+   *  unset or 'prefer_not_to_say'. Copied to hyroxConfig.division at init. */
+  hyroxDivision?: 'women' | 'men' | 'mixed';
+
   /** Which format the user's *previous* HYROX time was set in (may differ from current target format). */
   hyroxPreviousTimeFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 

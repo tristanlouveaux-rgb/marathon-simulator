@@ -12,7 +12,8 @@
  */
 
 import type { SimulatorState } from '@/types/state';
-import type { HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
+import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 
 const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.44;
 
@@ -50,6 +51,26 @@ export function appendStationTest(
   next.push(entry);
   next.sort((a, b) => a.dateISO.localeCompare(b.dateISO));
   return next;
+}
+
+/**
+ * Record one logged race's split for a station, replacing any earlier 'race'
+ * entry for the same race. Race identity is what the log carries: the entry's
+ * date (race day, or the log date when the race is undated) and its format.
+ * Re-logging a race, e.g. to correct a typo, then rewrites its entries instead
+ * of adding a second set to the history list and sparkline (review
+ * 2026-10-12). A different date or format is a different race and is kept.
+ * Other sources (tests, session bests, the 'manual' boot backfill) are never
+ * touched. Returns the new array.
+ */
+export function upsertRaceSplitEntry(
+  existing: StationTestEntry[] | undefined,
+  entry: StationTestEntry & { source: 'race' },
+): StationTestEntry[] {
+  const kept = (existing ?? []).filter(e =>
+    !(e.source === 'race' && e.dateISO === entry.dateISO && e.format === entry.format),
+  );
+  return appendStationTest(kept, entry);
 }
 
 /** Latest test entry for a station; null if none. */
@@ -117,4 +138,170 @@ export function latestImprovementSec(
   const latest = hist[hist.length - 1];
   const prev = hist[hist.length - 2];
   return latest.sec - prev.sec;
+}
+
+/** A benchmark slot: `stationBenchmarksSingles` or `stationBenchmarksDoubles`. */
+export type BenchmarkSlot = 'singles' | 'doubles';
+
+function slotOfFormat(format: HyroxFormat): BenchmarkSlot {
+  return format === 'open_doubles' || format === 'pro_doubles' ? 'doubles' : 'singles';
+}
+
+/** The benchmarks a forecast reads (resolveHyroxBenchmarks). */
+export interface ResolvedHyroxBenchmarks {
+  /** Per station, the athlete's time as stored in its slot. A doubles race
+   *  split is still the pair's time here; the predictor converts it. */
+  benchmarks: Partial<Record<HyroxStation, number>>;
+  /** Per station, the slot its value came from. Empty when the values come
+   *  from the legacy pooled field. */
+  slotOf: Partial<Record<HyroxStation, BenchmarkSlot>>;
+}
+
+type BenchmarkMap = Partial<Record<HyroxStation, number>> | undefined;
+
+function hasAnyStationValue(b: BenchmarkMap): boolean {
+  return b != null && HYROX_STATION_ORDER.some(st => b[st] != null);
+}
+
+/**
+ * The benchmark set a forecast reads, resolved per station. One rule for the
+ * predictor, planning (resolveHyroxStationBenchmarks) and every surface that
+ * counts calibrated stations (hyroxCalibrationCoverage), so they all count
+ * and read the stations the forecast calibrates.
+ *  - Per station, the target format's slot when it holds a value for that
+ *    station.
+ *  - Else the other format's slot for that station. Its value reaches the
+ *    target through the doubles quantile mapping (hyrox-doubles.ts): a singles
+ *    time × the station ratio for a doubles target; for a singles target, a
+ *    doubles race split (the pair's time) ÷ the station ratio, and a solo test
+ *    from the doubles slot as is.
+ *  - When neither slot holds any value, the legacy pooled field (no slot).
+ *
+ * Per station, not per slot: one station test in the target's slot replaces
+ * that station's converted value and leaves the other stations' converted
+ * values in place. Per slot, a single singles ski test dropped the 7 other
+ * converted doubles splits back to population seeds and flipped the forecast
+ * to 'Provisional' (review 2026-10-13).
+ */
+export function resolveHyroxBenchmarks(
+  hx: Pick<HyroxConfig, 'format' | 'stationBenchmarksSingles' | 'stationBenchmarksDoubles' | 'stationBenchmarks'>,
+): ResolvedHyroxBenchmarks {
+  const own: BenchmarkSlot = slotOfFormat(hx.format);
+  const other: BenchmarkSlot = own === 'doubles' ? 'singles' : 'doubles';
+  const read = (slot: BenchmarkSlot): BenchmarkMap =>
+    (slot === 'doubles' ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles);
+  const ownValues = read(own);
+  const otherValues = read(other);
+  const benchmarks: Partial<Record<HyroxStation, number>> = {};
+  const slotOf: Partial<Record<HyroxStation, BenchmarkSlot>> = {};
+  if (!hasAnyStationValue(ownValues) && !hasAnyStationValue(otherValues)) {
+    const legacy = hx.stationBenchmarks;
+    for (const st of HYROX_STATION_ORDER) {
+      const v = legacy?.[st];
+      if (v != null) benchmarks[st] = v;
+    }
+    return { benchmarks, slotOf };
+  }
+  for (const st of HYROX_STATION_ORDER) {
+    const ownSec = ownValues?.[st];
+    if (ownSec != null) {
+      benchmarks[st] = ownSec;
+      slotOf[st] = own;
+      continue;
+    }
+    const otherSec = otherValues?.[st];
+    if (otherSec != null) {
+      benchmarks[st] = otherSec;
+      slotOf[st] = other;
+    }
+  }
+  return { benchmarks, slotOf };
+}
+
+/** Stations the athlete can test with the equipment they have
+ *  (stationAccess). No access record: all 8. */
+export function hyroxTestableStations(access?: HyroxConfig['stationAccess']): HyroxStation[] {
+  return HYROX_STATION_ORDER.filter(st => {
+    if (!access) return true;
+    if (st === 'ski_erg' && !access.skiErg) return false;
+    if (st === 'row_erg' && !access.rowErg) return false;
+    if ((st === 'sled_push' || st === 'sled_pull') && access.sled === 'never') return false;
+    return true;
+  });
+}
+
+/** Calibration coverage (hyroxCalibrationCoverage). */
+export interface HyroxCalibrationCoverage extends ResolvedHyroxBenchmarks {
+  /** The denominator every surface shows: all 8 raced stations. */
+  total: number;
+  /** Stations with an athlete time the forecast reads (a test, session best
+   *  or race split, from either slot), whether or not the athlete can test
+   *  the station today. */
+  calibrated: HyroxStation[];
+  /** Stations still on the population seed. */
+  pending: HyroxStation[];
+  /** Stations the athlete can test with the equipment they have
+   *  (hyroxTestableStations). */
+  testable: HyroxStation[];
+  /** Pending stations the athlete can test: the ones a test prompt lists. */
+  testablePending: HyroxStation[];
+}
+
+/**
+ * Which stations hold an athlete time and which still use the population
+ * seed: the one count behind "X / 8 stations calibrated" on the Forecast
+ * (predictHyroxRace().calibratedCount), Stats, Account, the benchmark card and
+ * the forecast chip detail. It reads resolveHyroxBenchmarks, the predictor's
+ * own resolver, and counts all 8 raced stations: a sled race split counts
+ * for an athlete with no sled to test on, because the forecast reads it.
+ * Equipment access only decides which pending stations a test prompt lists
+ * (testablePending). Before (review 2026-10-13) the Forecast counted raced
+ * stations and the other surfaces counted testable ones, so with no sled
+ * access and a sled split on file the Forecast read 8/8 and Stats 6/6.
+ */
+export function hyroxCalibrationCoverage(
+  hx: Pick<HyroxConfig, 'format' | 'stationBenchmarksSingles' | 'stationBenchmarksDoubles' | 'stationBenchmarks' | 'stationAccess'>,
+): HyroxCalibrationCoverage {
+  const resolved = resolveHyroxBenchmarks(hx);
+  const testable = hyroxTestableStations(hx.stationAccess);
+  const pending = HYROX_STATION_ORDER.filter(st => resolved.benchmarks[st] == null);
+  return {
+    ...resolved,
+    total: HYROX_STATION_ORDER.length,
+    calibrated: HYROX_STATION_ORDER.filter(st => resolved.benchmarks[st] != null),
+    pending,
+    testable,
+    testablePending: testable.filter(st => pending.includes(st)),
+  };
+}
+
+/** True for sources that record a race split: the logged race's own splits
+ *  ('race'), and 'manual', the boot migration's label for the onboarding seed,
+ *  which only ever held race splits. */
+export function isRaceSplitSource(source: StationTestSource): boolean {
+  return source === 'race' || source === 'manual';
+}
+
+/**
+ * The history entry that describes a benchmark slot's current value: the
+ * newest entry in the slot's format family (singles or doubles) whose time
+ * equals the value. Null when none matches, which means the value was written
+ * by a path that kept no history (race splits logged before 2026-10-12, or the
+ * legacy pooled benchmarks).
+ *
+ * Matching on the value, not taking the newest entry, keeps provenance right
+ * when an older race is logged after a newer test: the race split overwrites
+ * the slot but its entry is dated on race day, before the test.
+ */
+export function benchmarkEntryForSlotValue(
+  hx: Pick<HyroxConfig, 'stationBenchmarkHistory'>,
+  station: HyroxStation,
+  slot: BenchmarkSlot,
+  sec: number,
+): StationTestEntry | null {
+  const entries = (hx.stationBenchmarkHistory?.[station] ?? [])
+    .filter(e => slotOfFormat(e.format) === slot && Math.abs(e.sec - sec) < 0.5)
+    .slice()
+    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  return entries[entries.length - 1] ?? null;
 }

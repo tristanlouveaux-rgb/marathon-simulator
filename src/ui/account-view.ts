@@ -13,6 +13,7 @@ import { vt } from '@/calculations/vdot';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
 import { fp, fpModel } from '@/utils/format';
 import { syncAppleHealth, syncAppleHealthPhysiology, getLastAppleWorkoutDiag } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
@@ -707,20 +708,13 @@ function renderProfileGroup(): string {
     const runPace = deriveHyroxRunPace(s);
     const runPaceHint = runPace.source === 'seed' ? 'estimate · log a run' : undefined;
 
-    // Station calibration. Mirror the stats-view access filter so the
-    // denominator counts only stations the athlete can actually train.
-    const isDoublesFormat = hx?.format === 'open_doubles' || hx?.format === 'pro_doubles';
-    const benchmarks = (isDoublesFormat ? hx?.stationBenchmarksDoubles : hx?.stationBenchmarksSingles)
-      ?? hx?.stationBenchmarks ?? {};
-    const access = hx?.stationAccess;
-    const calibratable = HYROX_STATION_ORDER.filter(st => {
-      if (!access) return true;
-      if (st === 'ski_erg' && !access.skiErg) return false;
-      if (st === 'row_erg' && !access.rowErg) return false;
-      if ((st === 'sled_push' || st === 'sled_pull') && access.sled === 'never') return false;
-      return true;
-    });
-    const calibratedCount = calibratable.filter(st => benchmarks[st] != null).length;
+    // Station calibration: hyroxCalibrationCoverage, the forecast's
+    // per-station resolver, the same count and denominator (all 8 raced
+    // stations) the Forecast, Stats, the benchmark card and the chip detail
+    // show.
+    const coverage = hx ? hyroxCalibrationCoverage(hx) : null;
+    const stationTotal = coverage?.total ?? HYROX_STATION_ORDER.length;
+    const calibratedCount = coverage?.calibrated.length ?? 0;
 
     const prevSec = hx?.previousHyroxTimeSec;
     const targetSec = hx?.targetFinishTimeSec;
@@ -742,7 +736,7 @@ function renderProfileGroup(): string {
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
           ${card('Run pace', fpModel(runPace.paceSecKm, pref), runPaceHint)}
           ${card(finishLabel, finishValue, finishHint)}
-          ${card('Stations', `${calibratedCount}/${calibratable.length}`, 'calibrated')}
+          ${card('Stations', `${calibratedCount}/${stationTotal}`, 'calibrated')}
         </div>
       </div>`;
   } else {

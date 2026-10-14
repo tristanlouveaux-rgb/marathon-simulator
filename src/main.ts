@@ -37,6 +37,7 @@ import { isNative } from '@/utils/platform';
 import { installWebOverscrollBounce } from '@/ui/web-overscroll-bounce';
 import { initSharedFileIntake } from '@/data/shared-file-intake';
 import { mergeEnrichmentsFromServer } from '@/data/enrichmentSync';
+import { refreshHyroxPartnerOnForeground, resolvePendingHyroxPartnerCleanup, syncHyroxPartnerOnLaunch } from '@/data/hyroxPartnerSync';
 import { installPageSwipeNav } from '@/ui/page-swipe-nav';
 import '@/ui/strava-detail';
 
@@ -143,8 +144,13 @@ async function bootstrap(): Promise<void> {
   initSharedFileIntake();
   // On foreground, pull enrichments done on another device (throttled to 5 min
   // inside). Catches a web-app enrich while the phone was suspended.
+  // HYROX Doubles partner: re-read the link when a code is out or a link
+  // exists, so a partner redeeming the code (or unlinking) is picked up on
+  // resume. No-op outside doubles mode and before the launch check.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void mergeEnrichmentsFromServer();
+    if (document.visibilityState !== 'visible') return;
+    void mergeEnrichmentsFromServer();
+    void refreshHyroxPartnerOnForeground();
   });
 
   // Dev: install window.__debugForecast() for prediction-stack diagnostics.
@@ -350,6 +356,12 @@ async function launchApp(): Promise<void> {
     void import('@/ui/account-required-notice').then(({ maybeShowAccountRequiredNotice }) => {
       maybeShowAccountRequiredNotice();
     });
+
+    // HYROX Doubles partner: a Wipe everything (or a Reset plan whose setup
+    // has since ended outside doubles) that could not reach the server left
+    // a pending cleanup; run it now. One localStorage read when none is
+    // pending; never acts for another account (src/data/hyroxPartnerSync.ts).
+    void resolvePendingHyroxPartnerCleanup();
   }
 
   // One-time cleanup: the weekly-hours onboarding slider was removed (2026-06-01).
@@ -967,6 +979,11 @@ async function launchApp(): Promise<void> {
     } catch (err) {
       console.warn('[hyrox] personal run-pace offset refresh failed', err);
     }
+
+    // Doubles partner: read the link once per session and push this athlete's
+    // race snapshot when linked (src/data/hyroxPartnerSync.ts). Fire-and-forget;
+    // a no-op outside doubles mode, and when unlinked, offline or signed out.
+    void syncHyroxPartnerOnLaunch().catch(err => console.warn('[hyrox] partner sync failed', err));
   }
 
   // Check if onboarding is complete

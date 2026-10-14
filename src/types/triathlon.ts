@@ -59,6 +59,22 @@ export type HyroxSessionKind =
   | 'brick'
   | 'mini_brick';
 
+/**
+ * HYROX division category (26/27 Singles and Doubles rulebooks, s4.1).
+ * Doubles: 'women' | 'men' | 'mixed'. Mixed exists only in Open doubles (there is
+ * no Pro Mixed). Singles: 'women' | 'men', asked only when biologicalSex is unset
+ * or 'prefer_not_to_say'. Resolved to a load tier by `hyroxLoadTier`
+ * (src/calculations/hyrox-division.ts).
+ */
+export type HyroxDivision = 'women' | 'men' | 'mixed';
+
+/**
+ * HYROX station load tier (26/27 Singles rulebook s4.1). Three tiers cover every
+ * division: Women Open; Men Open, which Women Pro also races; Men Pro. Loads live
+ * in HYROX_LOAD_TIER_KG (src/constants/hyrox-benchmarks.ts).
+ */
+export type HyroxLoadTier = 'W-Open' | 'M-Open' | 'M-Pro';
+
 /** Athlete bias detected from accumulated performance data. */
 export type HyroxAthleteBias = 'quick_but_weak' | 'strong_but_slow' | 'balanced';
 
@@ -68,6 +84,11 @@ export type HyroxAthleteBias = 'quick_but_weak' | 'strong_but_slow' | 'balanced'
  */
 export interface HyroxConfig {
   format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+  /** Division category, which with format and biological sex sets the station
+   *  load tier (see `HyroxDivision`). Doubles: the pair's category. Singles: only
+   *  set when biologicalSex is unset or 'prefer_not_to_say'. Optional: unset
+   *  resolves from biologicalSex. */
+  division?: HyroxDivision;
   athleteBand: AbilityBand;
   hyroxPhase: 'base' | 'build' | 'peak' | 'taper';
   stationAccess: {
@@ -117,9 +138,14 @@ export interface HyroxConfig {
   /** Station benchmarks for Doubles format (seconds per station). Treated as Open-weight
    *  baseline unless `benchmarksAtProWeights` is true. */
   stationBenchmarksDoubles?: Partial<Record<HyroxStation, number>>;
-  /** When true, calibrated benchmarks were set at Pro-division weights, so the
-   *  predictor must NOT apply HYROX_PRO_STATION_MULTIPLIER on top when predicting Pro.
-   *  Default false: assume Open-weight baseline. */
+  /** When true, station tests were done at Pro-division weights, so the
+   *  predictor reads them at Pro loads and applies no Open-to-Pro conversion
+   *  on top when predicting Pro (and converts them Pro to Open for an Open
+   *  target). Default false: a Pro target's tests are at Open weights and
+   *  convert per station and sex with hyroxOpenToProSec (the difference in
+   *  differences on the Pro and Open results, hyrox-results.ts); any other
+   *  target's tests are at its own solo loads. Race splits and session bests
+   *  carry their own proWeights. */
   benchmarksAtProWeights?: boolean;
   /** Legacy pooled benchmarks — migrated to Singles/Doubles slots on first launch with new code. */
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;

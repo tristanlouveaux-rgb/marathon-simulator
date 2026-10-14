@@ -135,7 +135,8 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     expect(s.wks[1].ctlRatio).toBeUndefined();
     expect(plannedMinutes(week2)).toBe(fullWeek2); // a stamped ratio would cut it
     // 282 min since 2026-10-13 (generator v18): easy erg work fills week 2's
-    // budget (0.5875 x 8 h); 170 before.
+    // budget (0.5875 x 8 h), so lane H3b's real station seeds (223 before v18,
+    // 220 before H3b) no longer move the week's minutes; 170 before both.
     expect(fullWeek2).toBe(282);
   });
 

@@ -16,8 +16,35 @@
  *  - **PB-only**: a benchmark only ever improves (lower time) from a session; a
  *    slow day never degrades it. A station with no user benchmark yet is
  *    calibrated from the best round (better than the population estimate).
- *  - A **sanity floor** (the elite / competitive seed time) rejects implausibly
- *    fast times that are almost certainly a timing slip.
+ *  - The stored benchmark is the one the forecast reads
+ *    (resolveHyroxStationBenchmarks `sec`): per station from either format's
+ *    slot, so a converted race split from the other format counts as the
+ *    benchmark. A best round is one athlete's effort at the target's load
+ *    tier, and `sec` is in those terms for every format: a doubles race split
+ *    (the pair's time) ÷ the forecast's station ratio, and a value stored at
+ *    the other weight regime (a Pro race split for an Open target) converted
+ *    to the target's weights. The round is compared with that value to the
+ *    whole second (hyroxCalibratedStationBenchmarks), the number the Stats
+ *    ledger shows and the plan prescribes, so an improvement moves both
+ *    faster, never slower, and a sub-second tie with a fractional converted
+ *    value is not an improvement.
+ *    Before (review 2026-10-13) only the target format's slot was read: for
+ *    a singles athlete whose station times came from doubles race splits it
+ *    held nothing, so any round passed as an improvement and a slower
+ *    session time replaced the converted split in the forecast.
+ *  - A best round is stored with the weights it was done at: proWeights is
+ *    true when the target's solo loads are the Pro tier of the athlete's sex
+ *    (hyroxSoloLoadsArePro: a Pro target, or a woman in Mixed Doubles, who
+ *    trains at the pair's M-Open loads; the generators load stations at the
+ *    target's tier), and the forecast reads a session entry's proWeights the
+ *    way it reads a race split's.
+ *  - A **sanity floor** (the station split's timing-slip fence in the
+ *    results, hyroxStationLowerFenceSec) rejects implausibly fast times that
+ *    are almost certainly a timing slip.
+ *  - The percentile and the floor place the round in the athlete's singles
+ *    field (hyroxSoloFrame). A round at Pro-tier loads in an Open field (a
+ *    woman in Mixed Doubles: M-Open loads, Open Singles women field) converts
+ *    to the field's loads first (hyroxSoloToFieldSec).
  *
  * Mirrors the canonical benchmark write in `benchmark-card.ts`: scalar slot
  * (`hyroxConfig.stationBenchmarksSingles` / `…Doubles`) is authoritative for
@@ -29,9 +56,18 @@ import type { SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import type { SetRecord } from '@/guided/strength-controller';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getStationPercentile } from '@/calculations/hyrox-population';
+import {
+  hyroxSoloFrameForState,
+  hyroxSoloLoadsArePro,
+  hyroxSoloToFieldSec,
+  hyroxCohortLabel,
+  hyroxStationLowerFenceSec,
+  type HyroxResultsCohort,
+} from '@/calculations/hyrox-results';
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
+import { hyroxCalibratedStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 
 /** Race-pace HYROX sessions whose best-round times may improve a benchmark.
  *  Technique (65% pace) and the assessment (RPE 4 walkthrough) are excluded. */
@@ -45,12 +81,21 @@ export interface StationSessionResult {
   displayName: string;
   /** Fastest round recorded for this station this session (sec). */
   bestSec: number;
-  /** Current user benchmark for the active format (sec), or null if none yet. */
+  /** Current user benchmark, one athlete's time at the target's weights, to
+   *  the whole second (hyroxCalibratedStationBenchmarks), or null when the
+   *  station still uses the population seed. */
   benchmarkSec: number | null;
   /** benchmarkSec − bestSec (positive = faster than the benchmark). Null when no benchmark. */
   deltaSec: number | null;
-  /** "Faster than X%" of the field; null for non-race-pace sessions (not comparable). */
+  /** "Faster than X%" of the field's race splits at this station
+   *  (getStationPercentile on the athlete's singles field, hyroxSoloFrame:
+   *  own sex, the target's weight family; a best round is one athlete's time
+   *  at the target's loads, converted to the field's loads when they differ).
+   *  Null for non-race-pace sessions (not comparable). */
   percentile: number | null;
+  /** Who the percentile compares against, e.g. "Open Singles women"; null
+   *  with no percentile. */
+  percentileCohort: string | null;
   /** Race-pace session AND time passes the sanity floor — may write the benchmark. */
   eligible: boolean;
   /** eligible AND (no benchmark yet, or best round beats the stored benchmark). */
@@ -73,19 +118,30 @@ function isDoublesFormat(f: HyroxFormat): boolean {
   return f === 'open_doubles' || f === 'pro_doubles';
 }
 
-/** Format-aware current scalar benchmark for a station (null if none). */
-function readBenchmark(s: SimulatorState, station: HyroxStation): number | null {
-  const hx = s.hyroxConfig;
-  if (!hx) return null;
-  const slot = isDoublesFormat(currentFormat(s)) ? hx.stationBenchmarksDoubles : hx.stationBenchmarksSingles;
-  return slot?.[station] ?? hx.stationBenchmarks?.[station] ?? null;
+/** Per station, the benchmark a best round is compared with: the forecast's
+ *  resolved benchmark as one athlete's time at the target's weights, to the
+ *  whole second the Stats ledger shows and the plan prescribes
+ *  (hyroxCalibratedStationBenchmarks). Rounds are timed to the whole second, so
+ *  a round of 307 against a converted 307.4 is a tie, not a 0 s improvement
+ *  (review 2026-10-13). Stations on the population seed are absent. */
+function soloBenchmarks(s: SimulatorState): Map<HyroxStation, number> {
+  const out = new Map<HyroxStation, number>();
+  for (const [station, sec] of Object.entries(hyroxCalibratedStationBenchmarks(s))) {
+    if (sec != null) out.set(station as HyroxStation, sec);
+  }
+  return out;
 }
 
-/** A time below the elite (competitive) seed for a station is almost certainly a
- *  timing slip, not a real result — reject it as a benchmark candidate. Sourced
- *  bound (no invented number): the fastest band's seed time. */
-function passesSanityFloor(station: HyroxStation, sec: number): boolean {
-  const floor = STATION_SEED_TIMES_SEC.competitive[station];
+/** A round below the station's timing-slip fence in the results is almost
+ *  certainly a timing slip (e.g. h:mm:ss read as mm:ss), not a real result:
+ *  reject it as a benchmark candidate. Sourced bound (no invented number):
+ *  the station split's far-out lower fence in the athlete's singles cohort,
+ *  the rule the results ingest uses to drop slipped splits
+ *  (hyroxStationLowerFenceSec). Until lane H3b the floor was the
+ *  competitive band's seed, which became the real median of the top 1% and
+ *  would have rejected half of that 1%. */
+function passesSanityFloor(station: HyroxStation, sec: number, cohort: HyroxResultsCohort): boolean {
+  const floor = hyroxStationLowerFenceSec(station, cohort);
   return floor == null || sec >= floor;
 }
 
@@ -167,11 +223,17 @@ export function summariseHyroxSession(
   if (!components.length || !records.length) return [];
   const racePace = isRacePaceHyroxSession(workout.t);
   const best = bestRoundPerStation(components, records);
+  const benchmarks = soloBenchmarks(state);
+  const frame = hyroxSoloFrameForState(state);
+  const cohort = frame.field;
 
   const results: StationSessionResult[] = [];
   for (const [station, bestSec] of best) {
-    const benchmarkSec = readBenchmark(state, station);
-    const eligible = racePace && passesSanityFloor(station, bestSec);
+    const benchmarkSec = benchmarks.get(station) ?? null;
+    // The round in the field's own terms (a Mixed woman's M-Open round at
+    // W-Open loads), for the floor and the percentile.
+    const fieldSec = hyroxSoloToFieldSec(station, bestSec, frame);
+    const eligible = racePace && passesSanityFloor(station, fieldSec, cohort);
     const isImprovement = eligible && (benchmarkSec == null || bestSec < benchmarkSec);
     results.push({
       station,
@@ -179,7 +241,8 @@ export function summariseHyroxSession(
       bestSec,
       benchmarkSec,
       deltaSec: benchmarkSec == null ? null : benchmarkSec - bestSec,
-      percentile: racePace ? getStationPercentile(station, bestSec) : null,
+      percentile: racePace ? getStationPercentile(station, fieldSec, cohort) : null,
+      percentileCohort: racePace ? hyroxCohortLabel(cohort) : null,
       eligible,
       isImprovement,
     });
@@ -222,7 +285,10 @@ export function applyHyroxSessionBenchmarks(
       sec: r.bestSec,
       source: 'session',
       format,
-      proWeights: !!hx.benchmarksAtProWeights,
+      // The weights the round was done at: the generators load stations at
+      // the target's tier (hyroxLoadTierForState), the Pro tier of the
+      // athlete's sex for a Pro target and for a woman in Mixed Doubles.
+      proWeights: hyroxSoloLoadsArePro(format, state.biologicalSex, hx.division),
     });
     applied.push({ station: r.station, displayName: r.displayName, fromSec: r.benchmarkSec, toSec: r.bestSec });
   }
