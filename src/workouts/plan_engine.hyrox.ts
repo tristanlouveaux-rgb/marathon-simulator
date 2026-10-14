@@ -677,6 +677,12 @@ interface HyroxWeekInputs {
    *  it by a short logged run). One sized under it is left out. Unset:
    *  HYROX_RUN_FLOOR_MIN. */
   runFloorMin?: number;
+  /** The week's first schedulable weekday (workout-status firstTrackedDow)
+   *  and realRunningSignal(state), computed once per plan build
+   *  (buildHyroxTrainingWeeks) rather than at every build of the week. Unset:
+   *  computed here. */
+  firstDow?: number;
+  realRunning?: boolean;
 }
 
 /** What a training week over its size (the acute:chronic guard, the deload
@@ -847,7 +853,7 @@ function generateWeekSessions(
   const runBudget = inputs.runBudgetMin ?? inputs.budgetMin * HYROX_RUN_SHARE;
   const nonRunBudget = inputs.budgetMin * (1 - HYROX_RUN_SHARE);
   const easyPace = hyroxEasyRunPaceSecKm(band, hx.hyroxRunPaceSecKm);
-  const thresholdPaceSecKm = realRunningSignal(state) && state.pac?.t != null && state.pac.t > 0 ? state.pac.t : undefined;
+  const thresholdPaceSecKm = (inputs.realRunning ?? realRunningSignal(state)) && state.pac?.t != null && state.pac.t > 0 ? state.pac.t : undefined;
 
   // Commute runs are appended on top of the prescribed HYROX run sessions,
   // not substituted for them (revised 2026-05-20. See SCIENCE_LOG §AK).
@@ -1718,11 +1724,12 @@ function hyroxWeekForRace(
   state: SimulatorState, weekIndex: number, trainingWeeks: number,
   phase: HyroxPhase, layout: RaceWeekLayout | null, inputs: HyroxWeekInputs, adjustments: string[],
 ): Workout[] {
-  const firstDow = firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
+  const firstDow = inputs.firstDow ?? firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
   const raceWeek = isRaceWeek(weekIndex, trainingWeeks, state.continuousMode) ? { layout, firstDow } : undefined;
   // Sessions the race-day rules leave out are noted on the week (by slot id,
   // stamped in generateWeekSessions).
   const noteDropped = (before: readonly Workout[], after: readonly Workout[], why: string) => {
+    if (after.length === before.length) return;
     const kept = new Set(after.map(w => w.id ?? w.n));
     for (const w of before) if (w.commute !== true && !kept.has(w.id ?? w.n)) adjustments.push(`W${weekIndex}: ${w.n} left out (${why})`);
   };
@@ -2115,6 +2122,8 @@ export function buildHyroxTrainingWeeks(
   // Canonical TSS per minute of easy erg work and of an easy run (the
   // ceilings take them away first).
   const ergTssPerMin = plannedTssPerMin(HYROX_EASY_ERG_TYPE, HYROX_EASY_RPE);
+  // Read once per plan build: every build of every week reads them.
+  const realRunning = realRunningSignal(state);
   const easyRunTssPerMin = plannedTssPerMin('hyrox_run_easy', HYROX_EASY_RPE);
 
   const last = Math.min(upto, trainingWeeks);
@@ -2184,6 +2193,7 @@ export function buildHyroxTrainingWeeks(
   const buildWeek = (w: number, nominal = false): HyroxWeekDetail => {
     const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w);
     const effortMult = w >= (state.w ?? 1) ? effortNow : 1.0;
+    const firstDow = firstTrackedDow(state.planStartDate, w, state.planCreatedAt);
     // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR): reduce-only,
     // suppressed on deload/taper and past weeks, combined with effort under ONE clamp
     // [HYROX_ADAPTIVE_FLOOR, 1.15] so the two volume levers can't overstack.
@@ -2375,7 +2385,7 @@ export function buildHyroxTrainingWeeks(
         runBudgetMin: runBudgetAt(sizeMin), fillMin: fillAt(sizeMin), ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap,
         easyHoldMin, easyHoldRunBudgetMin: easyHoldMin != null ? runBudgetMin : undefined, ceilingSized: sized,
         longFixed, easyMaxMin, maxSessions: plusOne ? maxSessions + 1 : maxSessions, maxSessionsName, maxRuns, noAssessment,
-        runFloorMin, extraSession: plusOne,
+        runFloorMin, extraSession: plusOne, firstDow, realRunning,
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
