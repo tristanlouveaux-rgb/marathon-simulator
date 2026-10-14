@@ -203,13 +203,16 @@ const runningMin = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a +
   ? (w.estimatedDurationMin ?? 0)
   : (w.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0)), 0);
 const brickRunMin = (wk: Week | undefined) => runningMin(wk) - runs(wk).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-/** The race taper's smallest circuit, exempt from the 0.70 / 0.55 fractions
- *  in taper week 1 and race week (round 7): the week's shortest station
- *  circuit of at most MIN_CIRCUIT_ROUNDS rounds and MIN_CIRCUIT_STATIONS
- *  stations, in minutes (0: none). */
+/** The race taper's smallest station work, exempt from the 0.70 / 0.55
+ *  fractions in taper week 1 and race week (round 7): the week's shortest
+ *  station circuit of at most MIN_CIRCUIT_ROUNDS rounds and
+ *  MIN_CIRCUIT_STATIONS stations, or, in a week holding no circuit, its
+ *  shortest brick of at most MIN_CIRCUIT_ROUNDS rounds, in minutes (0: none). */
 const taperExemptMin = (wk: Week | undefined): number => {
-  const m = Math.min(Infinity, ...prescribed(wk).filter(x => isCircuit(x) && (x.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS
-    && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS).map(x => x.estimatedDurationMin ?? 0));
+  const circuits = prescribed(wk).some(isCircuit);
+  const m = Math.min(Infinity, ...prescribed(wk).filter(x => (circuits
+    ? isCircuit(x) && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS
+    : x.discipline === 'brick') && (x.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS).map(x => x.estimatedDurationMin ?? 0));
   return Number.isFinite(m) ? m : 0;
 };
 /** The athlete's chosen weekly session total (the stored counts). */

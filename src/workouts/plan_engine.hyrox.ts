@@ -2574,12 +2574,18 @@ export function buildHyroxTrainingWeeks(
     // long run and nothing more. The week-before ceiling (the taper never
     // rises), the reference week's station work and the race-week closing
     // rules still apply to it.
+    // A week holding no circuit exempts its shortest brick at
+    // MIN_CIRCUIT_ROUNDS rounds the same way, its station work then (a taper
+    // week 1 the reference week's counts held to a mini brick).
+    const isCircuitT = (x: Workout) => x.t === 'hyrox_station_technique' || x.t === 'hyrox_station_density';
     const exemptCircuitOf = (ws: readonly Workout[]): Workout | undefined => {
       if (!raceTaper) return undefined;
+      const p = prescribed(ws);
+      const circuits = p.some(isCircuitT);
       let best: Workout | undefined;
-      for (const x of prescribed(ws)) {
-        if (x.t !== 'hyrox_station_technique' && x.t !== 'hyrox_station_density') continue;
-        if ((x.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS || (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length > MIN_CIRCUIT_STATIONS) continue;
+      for (const x of p) {
+        if (circuits ? !isCircuitT(x) : x.discipline !== 'brick') continue;
+        if ((x.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS || (circuits && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length > MIN_CIRCUIT_STATIONS)) continue;
         if (!best || (x.estimatedDurationMin ?? 0) < (best.estimatedDurationMin ?? 0)) best = x;
       }
       return best;
@@ -3221,16 +3227,20 @@ export function buildHyroxTrainingWeeks(
         // run slot; the primer never leaves, SCIENCE_LOG CE update 4).
         const runsLeft = prescribed(cur.workouts).filter(x => x.discipline === 'run').length;
         // The race taper's smallest circuit (and week 1's assessment) never
-        // leaves for what exempts it; only another ceiling takes it.
+        // leaves for what exempts it, and leaves for another ceiling only
+        // when nothing else is left to go.
         const exempt = exemptCircuitOf(cur.workouts);
         const exemptOk = (l: (typeof limits)[number]) => l === fractionLimit || (raceWeek && l === beforeLimit);
         const exemptStays = !limits.some(l => !exemptOk(l) && l.of(cur) > l.cap + 1e-6);
-        const candidates = cur.workouts
+        const isExempt = (x: Workout) => x === exempt || (raceTaper && w === 1 && x.t === 'hyrox_assessment');
+        const all = cur.workouts
           .filter(x => taperDropRank(x, raceWeek) >= 0)
-          .filter(x => !(exemptStays && (x === exempt || (raceTaper && w === 1 && x.t === 'hyrox_assessment'))))
+          .filter(x => !(exemptStays && isExempt(x)))
           .filter(x => !workOnly || isHyroxWork(x))
           .filter(x => !(raceWeek && x.discipline === 'run' && !x.commute && runsLeft <= 1))
           .sort((a, b) => taperDropRank(a, raceWeek) - taperDropRank(b, raceWeek));
+        const others = raceTaper ? all.filter(x => !isExempt(x)) : all;
+        const candidates = others.length > 0 ? others : all;
         if (candidates.length === 0) break;
         const pool = raceWeek ? candidates.filter(x => taperDropRank(x, raceWeek) === taperDropRank(candidates[0], raceWeek)) : candidates;
         const pick = pool.find(x => !tooHeavy(withWorkouts(cur, cur.workouts.filter(y => y !== x)))) ?? candidates[0];
@@ -3247,18 +3257,19 @@ export function buildHyroxTrainingWeeks(
       // one), and in every taper week the week before.
       omitted = ['stations'];
       attempt = fit();
-      // A circuit already at MIN_CIRCUIT_STATIONS stations comes down to
-      // MIN_CIRCUIT_ROUNDS rounds before anything leaves for the fractions:
-      // the smallest circuit, which they exempt.
-      if (raceTaper && fractionLimit && fractionLimit.of(attempt) > fractionLimit.cap + 1e-6 && !exemptCircuitOf(attempt.workouts)) {
-        const c = prescribed(attempt.workouts)
-          .filter(x => (x.t === 'hyrox_station_technique' || x.t === 'hyrox_station_density')
-            && (x.hyroxComponents ?? []).filter(y => y.type !== 'run').length <= MIN_CIRCUIT_STATIONS)
+      // A circuit already at MIN_CIRCUIT_STATIONS stations (with no circuit,
+      // a brick) comes down to MIN_CIRCUIT_ROUNDS rounds before anything
+      // leaves: the smallest station work, which the fractions exempt.
+      if (raceTaper && over(attempt) && !exemptCircuitOf(attempt.workouts)) {
+        const p = prescribed(attempt.workouts);
+        const circuits = p.some(isCircuitT);
+        const c = p
+          .filter(x => (circuits ? isCircuitT(x) && (x.hyroxComponents ?? []).filter(y => y.type !== 'run').length <= MIN_CIRCUIT_STATIONS : x.discipline === 'brick'))
           .sort((x, y) => (x.estimatedDurationMin ?? 0) - (y.estimatedDurationMin ?? 0))[0];
-        if (c) {
+        if (c && (c.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS) {
           const cut = withHyroxRounds(c, MIN_CIRCUIT_ROUNDS);
           attempt = withWorkouts(attempt, attempt.workouts.map(x => (x === c ? cut : x)));
-          attempt.adjustments.push(`W${w}: ${c.n} cut to ${MIN_CIRCUIT_ROUNDS} rounds (taper: the smallest circuit, exempt from the ${fraction} fraction)`);
+          attempt.adjustments.push(`W${w}: ${c.n} cut to ${MIN_CIRCUIT_ROUNDS} rounds (taper: the smallest ${circuits ? 'circuit' : 'brick'}, exempt from the ${fraction} fraction)`);
         }
       }
       if (taperWork) shed(a => a.workMin > taperWork.min + 1e-6 || a.workMtl > taperWork.mtl + 1e-6, true, "taper: the reference week's station and brick work");
