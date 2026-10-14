@@ -2998,22 +2998,32 @@ export function buildHyroxTrainingWeeks(
     // least HYROX_RUN_FLOOR_MIN more of the week? The week is built again with
     // one more session in its structure and one more free slot, under the same
     // ceilings (fit sizes it). At the 7-session maximum: room under the guard
-    // and the MTL cap for one more easy session at the run floor.
-    const oneMoreSessionHolds = (plannedMin: number): boolean => {
+    // and the MTL cap for one more easy session at the run floor. Null when it
+    // would; otherwise what the week's note says instead (round 6 review, pass
+    // 3: weeks the line skipped still blamed the session count alone).
+    const oneMoreSessionShort = (plannedMin: number): string | null => {
       if (chosenSessions >= 7) {
         const easyRun = generateHyroxRun({ kind: 'run_easy', targetMinutes: HYROX_RUN_FLOOR_MIN, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm });
         const ergMtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, state.bodyWeightKg);
         const mtlNeed = HYROX_RUN_FLOOR_MIN * Math.max(ergMtlPerMin ?? 0, (easyRun.musculoTendonLoad ?? 0) / HYROX_RUN_FLOOR_MIN);
         const tssNeed = HYROX_RUN_FLOOR_MIN * Math.max(ergTssPerMin, easyRunTssPerMin);
         const mtl = prescribed(attempt.workouts).reduce((a, x) => a + (x.musculoTendonLoad ?? 0), 0);
-        return capTss - attempt.guardTss >= tssNeed - 1e-6 && hx.mtlCap - mtl >= mtlNeed - 1e-6;
+        if (capTss - attempt.guardTss < tssNeed - 1e-6) return `the acute:chronic guard leaves no room for a ${HYROX_RUN_FLOOR_MIN}-min session more`;
+        if (hx.mtlCap - mtl < mtlNeed - 1e-6) return `the MTL cap leaves no room for a ${HYROX_RUN_FLOOR_MIN}-min session more`;
+        return null;
       }
       const keep = { scale, ergCap, easyCap, sizeMin, omitted };
       plusOne = true;
       const plus = fit();
+      const plusSized = sizeMin < hoursMin - 1e-6;
       plusOne = false;
       ({ scale, ergCap, easyCap, sizeMin, omitted } = keep);
-      return !over(plus) && hyroxPlannedMinutes(plus.workouts) - plannedMin >= HYROX_RUN_FLOOR_MIN;
+      const more = hyroxPlannedMinutes(plus.workouts) - plannedMin;
+      if (!over(plus) && more >= HYROX_RUN_FLOOR_MIN) return null;
+      const holder = plusSized || plus.guardTss > capTss + 1e-6 ? 'the acute:chronic guard'
+        : plus.adjustments.some(n => /MTL cap \d+/.test(n)) ? 'the MTL cap'
+          : null;
+      return `one more session would add ${Math.max(0, Math.round(more))} min${holder ? ` under ${holder}` : ''}`;
     };
     const hoursWhy: string[] = [];
     if (phase !== 'taper') {
@@ -3096,9 +3106,10 @@ export function buildHyroxTrainingWeeks(
     if (phase !== 'taper' && !raceWeek && !deload && !injured && fitsAtFullSize && hoursMin > 0
       && budgetMin >= hoursMin - 0.5
       && sessionsHeld >= chosenSessions && hoursMin - plannedMin >= HYROX_RUN_FLOOR_MIN
-      && !attempt.adjustments.some(n => /MTL cap \d+/.test(n))
-      && oneMoreSessionHolds(plannedMin)) {
-      detail.hoursFit = { sessions: sessionsHeld, plannedMin, chosenHours: hoursMin / 60 };
+      && !attempt.adjustments.some(n => /MTL cap \d+/.test(n))) {
+      const short = oneMoreSessionShort(plannedMin);
+      if (short == null) detail.hoursFit = { sessions: sessionsHeld, plannedMin, chosenHours: hoursMin / 60 };
+      else hoursWhy.push(short);
     }
     // A training week HYROX_RUN_FLOOR_MIN or more under the chosen weekly
     // hours says so in its notes, with what holds it (decision C).
