@@ -18,9 +18,13 @@
  *      training week's planned load at most ACWR_SAFE_HIGH × the mean of the
  *      previous 4 planned weeks; weeks before week 1 count as the logged
  *      weekly load, else the nominal week 1, fixed when the plan is created).
+ *      A week the guard or the deload ceiling cannot hold at the chosen hours
+ *      is built at the largest size they hold, the same week at every chosen
+ *      hours above it.
  *      Taper weeks: taperFraction (0.70 then 0.55) of the reference week's
  *      planned minutes, with the reference week's station and brick sessions,
- *      minutes and MTL as ceilings.
+ *      minutes and MTL as ceilings (never under the taper's smallest
+ *      circuit).
  *   3. Sessions from the tier's weekly structure (HYROX_WEEKLY_STRUCTURE) and
  *      the athlete's session-count choice; no brick in base, before week 5 or
  *      in race week; race week holds no more runs than the reference week.
@@ -50,8 +54,10 @@
  *      growth for the quality run, the quality run); the long run shortens to
  *      the run floor and leaves before the week's last station session or
  *      brick, which leaves only when the week is still over without it.
- *   9. A loaded week the chosen session count holds under its size is marked
- *      for the plan view's hours line (HyroxHoursFit).
+ *   9. A loaded week the chosen session count holds under the chosen hours
+ *      (its phase budget at the hours, no ceiling sizing it, one more session
+ *      holding 20 min or more of it) is marked for the plan view's hours line
+ *      (HyroxHoursFit).
  *  10. Wrap into Week[].
  */
 
@@ -221,6 +227,14 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // with an active injury; deloads hold an easy run at the run floor and cut
 // circuit stations first; the plan view states when the chosen session count
 // holds a loaded week under its hours (Week.hyroxHoursFit).
+// Still v18 (unreleased; round 6 review, pass 2, 2026-10-14): a week the
+// guard or the deload ceiling cannot hold at the chosen hours is built at the
+// largest size they hold, the same week at every chosen hours above it (under
+// a binding guard total plan minutes fell by up to 240 min, and quality runs
+// with them, when one hour was added); the race taper's station ceilings never
+// sit under its smallest circuit, so race week keeps a circuit unless its days
+// or the fractions exclude it; the hours line shows only where the phase
+// budget is the chosen hours and one more session would hold 20 min more.
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -1625,7 +1639,9 @@ export interface HyroxWeekDetail {
   phase: HyroxPhase;
   deload: boolean;
   raceWeek: boolean;
-  /** Minute budget the week was built with (after the acute:chronic guard). */
+  /** Minute budget the week was built with: the phase budget at the week's
+   *  size, which is the chosen hours unless the acute:chronic guard or the
+   *  deload ceiling builds the week smaller (taper weeks: the taper budget). */
   budgetMin: number;
   /** Planned minutes and canonical TSS of the prescribed sessions. */
   plannedMin: number;
@@ -1661,13 +1677,16 @@ export interface HyroxWeekDetail {
 }
 
 /**
- * A loaded training week (not a deload, the taper or race week) that holds
- * the athlete's chosen session count and stays HYROX_RUN_FLOOR_MIN or more
- * under its size (the chosen weekly hours, or the phase budget when that is
- * lower) with no ceiling, MTL cap or injury holding it: more sessions would
- * hold more. The HYROX plan view states it in one line (round 6, item 7):
- * "Your 5 sessions fit about 6 h of your 8 h." Weeks short of the chosen
- * hours by design (the phase budget, a deload, the taper) carry none.
+ * A loaded training week (not a deload, the taper or race week) whose phase
+ * budget is the chosen weekly hours, that holds the athlete's chosen session
+ * count, stays HYROX_RUN_FLOOR_MIN or more under the chosen hours with no
+ * ceiling sizing or scaling it, no MTL cap and no injury holding it, and that
+ * one more chosen session would lift by HYROX_RUN_FLOOR_MIN or more (at the
+ * 7-session maximum: room under the guard and the MTL cap for one more easy
+ * session at the run floor). The HYROX plan view states it in one line (round
+ * 6, item 7): "Your 5 sessions fit about 6 h of your 8 h." Weeks short of the
+ * chosen hours by design (the phase budget, a deload, the taper) carry none;
+ * with peak at the full hours (HYROX_PEAK_MULT) that leaves peak weeks.
  */
 export interface HyroxHoursFit {
   /** Prescribed sessions the week holds (commute runs excluded). */
@@ -1945,18 +1964,28 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *      cannot place loses a hard session to its easy sibling, then its
  *      lowest-priority session);
  *    - the race taper at taperFraction (0.70, then 0.55) of the reference
- *      week, with its station and brick work as ceilings and never above the
- *      week before (taperDropRank sheds sessions until they hold);
+ *      week, with its station and brick work as ceilings (never under the
+ *      taper's smallest circuit, hyroxRaceTaperFloorCircuit) and never above
+ *      the week before (taperDropRank sheds sessions until they hold);
  *    - no brick in base, before HYROX_FIRST_BRICK_WEEK or in race week
  *      (weekSessionCounts), and the race-week closing rules
  *      (hyroxWeekForRace, raceWeekDays).
  * 2. WEEK SIZE = min(the chosen weekly hours, the acute:chronic guard
  *    (ACWR_SAFE_HIGH x the mean of the previous HYROX_CHRONIC_WINDOW_WEEKS
  *    planned weeks, the weeks before week 1 seeded per D4), the phase budget
- *    (week 1's assessment exempt), the deload or taper fraction). Plain
- *    proportional sizing (fit, as in round 4): easy erg work gives way first,
- *    then the station sessions, bricks and easy runs shrink by one scale; the
- *    room whole rounds leave goes back to easy running, then to easy erg work.
+ *    (week 1's assessment exempt), the deload or taper fraction).
+ *    - The guard and the deload ceiling do not depend on the chosen hours. A
+ *      week they cannot hold at the chosen hours is built at the largest size
+ *      in minutes they hold (a bisection over a fixed range, fit): its
+ *      budget-sized inputs (the station sessions' share of the phase budget,
+ *      the running share, the easy erg fill) read that size, and step 3
+ *      allocates inside it. So that week is the same at every chosen hours
+ *      above its size, and so are its load and every later week's guard.
+ *    - The weekly hours, the phase budget and the taper fractions use plain
+ *      proportional sizing (fit, as in round 4): easy erg work gives way
+ *      first, then the station sessions, bricks and easy runs shrink by one
+ *      scale; the room whole rounds leave goes back to easy running, then to
+ *      easy erg work.
  * 3. ALLOCATION inside the week size, in priority order:
  *    a. the tier quality run (when the phase calls for one) and the long run.
  *       A loaded week's long run is never shorter than the previous loaded
@@ -1976,21 +2005,33 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *    long-run growth for the quality run (D3), then the quality run. The one
  *    exception: b leaves only after the long run has shortened to the run
  *    floor and left the week, so every training week keeps HYROX work (the
- *    round-4 guarantee; in strict order, 1,179 training weeks at logged loads
- *    of 20 to 100 TSS and 326 at the default sessions held none).
+ *    round-4 guarantee). Measured 2026-10-14 on 629 plans (every band, its
+ *    hours grid, lengths 8 to 24), training weeks after week 1 without
+ *    station or brick work, strict order against this exception: 372 (340 at
+ *    2 h) against 0 at the nominal seed, 1,865 against 0 at a logged 20 TSS,
+ *    725 against 0 at 100 TSS. The exception costs quality runs (of 5,714
+ *    loaded weeks whose format calls for one): 4,543 against 4,641, 16
+ *    against 384 and 3,742 against 4,021.
  * 4. MTL CAP (the cap alone): easy erg work is sized inside what the cap
  *    leaves, then easy runs shorten and leave (never the long run or the
  *    quality run), then station rounds and stations go (never the week's
  *    last station session); a week still over the cap says so
  *    (enforceMTLCap).
  * 5. MONOTONICITY is reported, not enforced: one more chosen hour may
- *    restructure a week, and no quality run is removed to hold the minutes
- *    (the rules test reports every adjacent-hour pair whose total plan
- *    minutes fall and bounds the fall to one easy session).
+ *    restructure a week, and no quality run is removed to hold the minutes.
+ *    The rules test reports every adjacent-hour pair whose total plan
+ *    minutes fall and bounds the fall to one easy session (the tier long-run
+ *    cap) at the default sessions, in open doubles and at logged loads of 20,
+ *    50 and 100 TSS. With the 7-session choice and at 200 TSS a few pairs
+ *    fall further, all from step 3's easy running ranking above easy erg
+ *    work: one more hour funds an easy run that takes the slot, or the MTL
+ *    room, an easy erg session held.
  * Deloads also hold an easy run at the run floor under the shared scale and
  * take stations out of their circuits before an easy run leaves
  * (easyHoldMin). A loaded week the chosen session count holds under its size
- * is marked for the plan view (HyroxHoursFit).
+ * is marked for the plan view (HyroxHoursFit: the phase budget is the chosen
+ * hours, no ceiling sized the week, and one more chosen session would hold
+ * at least HYROX_RUN_FLOOR_MIN more of it).
  *
  * Each week reads the weeks before it:
  * the acute:chronic guard (planned TSS at most ACWR_SAFE_HIGH × the mean of the
@@ -2345,8 +2386,11 @@ export function buildHyroxTrainingWeeks(
     // exempt from the budget) and, in a taper week, the taper budget
     // (taperFraction × the reference week), the reference week's station and
     // brick minutes and MTL, and the week before (the taper never rises;
-    // running's rule, SCIENCE_LOG §CV.4). Plain proportional sizing, as in
-    // round 4: easy erg work gives way first (its minutes price linearly:
+    // running's rule, SCIENCE_LOG §CV.4). A week the guard or the deload
+    // ceiling cannot hold at the chosen hours is first built at the largest
+    // size they hold (fit, the size search); what is still over after that,
+    // and the hours, budget and taper limits, take plain proportional sizing,
+    // as in round 4: easy erg work gives way first (its minutes price linearly:
     // `ergPerMin`, what one minute adds to the limit), then every
     // budget-sized session shrinks by the same scale each round, so stations,
     // bricks and easy runs give way together. Session floors and fixed
@@ -2589,10 +2633,11 @@ export function buildHyroxTrainingWeeks(
       // week keeps HYROX work (the round-4 guarantee, review 2026-10-13: at a
       // logged load of 40 TSS or less, 578 to 679 loaded weeks held a lone
       // long run where a station session and a 20-min long run fitted). In
-      // order, at 20 to 100 TSS of logged load, 1,179 training weeks held no
-      // station session or brick, and 326 at the default sessions (mostly at
-      // 2 h). Before round 6 (2026-10-13) the quality run left before the
-      // brick.
+      // strict order, 372 training weeks held no station session or brick at
+      // the nominal seed (340 of them at 2 h), 1,865 at a logged 20 TSS and
+      // 725 at 100 TSS (the figures in the comment block at
+      // buildHyroxTrainingWeeks). Before round 6 (2026-10-13) the quality run
+      // left before the brick.
       const heldWork = hasHyroxWork(attempt.workouts);
       const isQ = (x: Workout) => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals';
       const deferred: HyroxGuardOmit[] = [];

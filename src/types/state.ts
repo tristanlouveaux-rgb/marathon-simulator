@@ -645,7 +645,8 @@ export interface Week {
    *  because the athlete's chosen session count binds (plan_engine.hyrox
    *  HyroxHoursFit). The HYROX plan view states it in one muted line ("Your 5
    *  sessions fit about 6 h of your 8 h."). Unset for deloads, the taper,
-   *  race week and weeks a ceiling, the MTL cap or an injury holds. */
+   *  race week, weeks whose phase budget sits under the chosen hours, and
+   *  weeks a ceiling, the MTL cap or an injury holds. */
   hyroxHoursFit?: { sessions: number; plannedMin: number; chosenHours: number };
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;

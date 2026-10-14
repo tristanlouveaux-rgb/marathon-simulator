@@ -21,8 +21,8 @@
  *     0.55 only by its fixed 25-min primer when the primer is all it holds;
  *     never above the week before, race week again excepted by the primer
  *     alone (SCIENCE_LOG §CE update 4); no more station and brick minutes, and
- *     no more station and brick MTL, than the reference week, unless the week
- *     holds just the taper's smallest circuit (round 6 review, pass 2); the taper long
+ *     no more station and brick MTL, than the reference week, or than the
+ *     taper's smallest circuit when that is larger (round 6 review, pass 2); the taper long
  *     run at most TAPER_LONG_RUN_FRACTION of the longest long run of the 4
  *     weeks before (review 2026-10-13: taper week 1 sat up to 0.98 of the
  *     reference week, race week up to 0.93);
@@ -81,7 +81,12 @@
  * brick runs alone may sit above it, with no easy run); a loaded week's long
  * run is never shorter than the previous loaded week's unless the week's
  * size cut it and the week says so; decision B is a report (total minutes
- * fall by at most one easy session), not a constraint.
+ * fall by at most one easy session), not a constraint. Pass 2 of the round-6
+ * review: a week the guard or the deload ceiling holds is the same week at
+ * every chosen hours above its size, race week keeps a circuit unless its
+ * days or the taper fractions exclude it, and the hours line marks only weeks
+ * whose phase budget is the chosen hours and where one more session holds
+ * 20 min or more.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
