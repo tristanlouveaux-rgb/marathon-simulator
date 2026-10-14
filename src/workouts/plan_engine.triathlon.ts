@@ -746,13 +746,17 @@ function generateWeekForTriathlon(
     const reference = triReference(state, totalWeeks, taper);
     return isRaceWeek(weekIndex, totalWeeks, state.continuousMode)
       ? triRaceWeek(state, weekIndex, totalWeeks, taper, reference, ctx)
-      : finishTriWeek(state, weekIndex, phase, triTaperWeekOne(state, weekIndex, totalWeeks, reference.parts));
+      : finishTriWeek(state, weekIndex, phase, triTaperWeekOne(state, weekIndex, totalWeeks, reference.parts), spreadTaperDoubles);
   }
   return finishTriWeek(state, weekIndex, phase, triWeekParts(state, weekIndex, totalWeeks, phase));
 }
 
 /** Injury gates, scheduling and slot ids for a week's parts. */
-function finishTriWeek(state: SimulatorState, weekIndex: number, phase: TrainingPhase, parts: TriWeekParts): Workout[] {
+function finishTriWeek(
+  state: SimulatorState, weekIndex: number, phase: TrainingPhase, parts: TriWeekParts,
+  /** A step between scheduling and the slot ids (taper week 1: spreadTaperDoubles). */
+  afterSchedule?: (scheduled: Workout[]) => Workout[],
+): Workout[] {
   // Apply discipline-gate filtering when an injury is active. 'no' drops the
   // discipline entirely; 'limited' collapses it to a single easy recovery
   // session that maintains the modality without aggravating the injury. The
@@ -777,8 +781,51 @@ function finishTriWeek(state: SimulatorState, weekIndex: number, phase: Training
     adapted.gym,
     triDayCaps(state, parts.weekHours),
   );
-  stampTriWorkoutIds(scheduled, weekIndex);
-  return scheduled;
+  const out = afterSchedule ? afterSchedule(scheduled) : scheduled;
+  stampTriWorkoutIds(out, weekIndex);
+  return out;
+}
+
+/**
+ * Taper week 1 (planning side): no discipline twice on one day. The week keeps
+ * every reference session at TRI_TAPER_FIRST_WEEK_FRACTION of its length
+ * (Tristan, decision 5), so for an athlete with few weekday hours the smaller
+ * sessions fit the weekend caps the scheduler fills first (its weekend
+ * two-a-day, step 3; SCIENCE_LOG §CZ limitation 9, ISSUE-379), and the brick
+ * that kept runs off Saturday has become the solo long ride: at 0 weekday
+ * hours Saturday held up to six sessions, two of each discipline. Two sessions
+ * of a discipline on one day give the stimulus of one with more fatigue (the
+ * scheduler's race-week rule), so frequency means separate days. Each extra
+ * session of a discipline on a day (the longest stays) moves to the day
+ * without that discipline holding the fewest sessions, nearest its own day
+ * among equals; a run never goes beside the long run or the brick (the
+ * scheduler's rule). With no such day it stays. Gym and commutes are left
+ * where the scheduler put them.
+ */
+function spreadTaperDoubles(ws: Workout[]): Workout[] {
+  const out = ws.map(w => ({ ...w }));
+  const counts = (w: Workout) => w.t !== 'gym' && !w.commute;
+  const discOf = (w: Workout) => w.discipline ?? 'run';
+  const holds = (dow: number, d: string) => out.some(w => w.dayOfWeek === dow && counts(w)
+    && (w.t === 'brick' ? d === 'bike' || d === 'run' : discOf(w) === d));
+  const runAnchored = (dow: number) => out.some(w => w.dayOfWeek === dow && (w.t === 'brick' || isLongRun(w)));
+  const perDay = (dow: number) => out.filter(w => w.dayOfWeek === dow).length;
+  for (let dow = 0; dow < 7; dow++) {
+    for (const d of ['swim', 'bike', 'run']) {
+      const same = out.filter(w => w.dayOfWeek === dow && counts(w) && w.t !== 'brick' && discOf(w) === d);
+      if (same.length < 2) continue;
+      const keep = same.reduce((b, w) => ((w.estimatedDurationMin ?? 0) > (b.estimatedDurationMin ?? 0) ? w : b), same[0]);
+      for (const w of same) {
+        if (w === keep || isLongRun(w)) continue;
+        const days = [0, 1, 2, 3, 4, 5, 6].filter(x => x !== dow && !holds(x, d) && !(d === 'run' && runAnchored(x)));
+        if (days.length === 0) continue;
+        const target = days.reduce((b, x) => ((perDay(x) - perDay(b)) || (Math.abs(x - dow) - Math.abs(b - dow))) < 0 ? x : b, days[0]);
+        w.dayOfWeek = target;
+        w.dayName = TRI_DAY_NAMES[target];
+      }
+    }
+  }
+  return out.map((w, i) => ({ w, i })).sort((a, b) => ((a.w.dayOfWeek ?? 0) - (b.w.dayOfWeek ?? 0)) || (a.i - b.i)).map(x => x.w);
 }
 
 function triGates(
