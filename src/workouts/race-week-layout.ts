@@ -77,9 +77,11 @@ export function racePlanCalendarWeeks(raceDateISO: string | null | undefined, no
  * engine, HYROX): the running layout (raceWeekLayout) from the plan start and
  * the race date, so these modes place race week and the closing week exactly
  * as running does. Race week is the week holding the day 3 days before race
- * day; a Monday to Wednesday race's own week is a closing week that holds only
- * the race. The generators phase and size the plan over `trainingWeeks` and
- * emit the closing week empty (raceClosing). Null without a plan start or race
+ * day; a Monday to Wednesday race's own week is a closing week (raceClosing).
+ * The generators phase and size the plan over `trainingWeeks`. HYROX emits the
+ * closing week empty; the triathlon engine (cycling included) puts a Tuesday
+ * or Wednesday race's day-before activation there, composed with race week,
+ * and nothing else. Null without a plan start or race
  * date, or when the layout does not match the plan's calendar length `tw` (a
  * plan whose length came from a weeks-until count): the generators then keep
  * the final week as race week.
@@ -96,7 +98,8 @@ export function storedPlanRaceLayout(
 /**
  * The date a stored-plan race forecast (triathlon, cycling, HYROX) measures
  * its weeks-to-race horizon to. Tracking side. With a closing week (a Monday
- * to Wednesday race's own week, which holds only the race), the horizon ends
+ * to Wednesday race's own week, which holds the race and at most the
+ * day-before activation), the horizon ends
  * with race week: the Sunday before race day. Otherwise race day itself.
  * Mirrors running, whose forecast horizon reads planTrainingWeeks, so a
  * Tuesday race forecasts exactly like the Sunday before it: the closing-week
