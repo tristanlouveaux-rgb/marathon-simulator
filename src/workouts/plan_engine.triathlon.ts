@@ -306,8 +306,9 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
  *  other days would break. Taper week 1 sits at TRI_TAPER_FIRST_WEEK_FRACTION
  *  of the reference week: at 0.85 the two-week mean cut would leave the
  *  41-60% band (mean fraction 0.38), and at 1.15 taper week 1 would be a 37%
- *  cut. Running leaves race week alone the same way. Elsewhere the day-before
- *  activation keeps its sourced minutes too. A double-periodization plan's
+ *  cut. (Running's taper weeks still take its effort multiplier: a mirror-rule
+ *  difference left for Tristan.) Elsewhere the day-before activation keeps its
+ *  sourced minutes too. A double-periodization plan's
  *  inter-cycle 'taper' weeks are recovery weeks, not the race taper, and
  *  scale as before. */
 function triEffortScalable(state: SimulatorState, weekIndex: number, trainingWeeks: number, workouts: Workout[]): Workout[] {
