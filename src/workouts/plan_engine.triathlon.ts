@@ -28,9 +28,7 @@ import {
   computeTriPlanPhases,
   TRI_LOW_HOURS_THRESHOLD_H,
   TRI_LOW_HOURS_TAPER_DISTANCES,
-  TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION,
-  TRI_RACE_WEEK_FRACTION,
-  TRI_TAPER_FIRST_WEEK_FRACTION,
+  triTaperFraction,
 } from '@/constants/triathlon-constants';
 import { plannedTssPerMin } from '@/constants';
 import { generateSwimSession, type SwimSessionKind } from './swim';
@@ -811,7 +809,9 @@ function generateWeekForTriathlon(
     const reference = triReference(state, totalWeeks, taper);
     return isRaceWeek(weekIndex, totalWeeks, state.continuousMode)
       ? triRaceWeek(state, weekIndex, totalWeeks, taper, reference, ctx)
-      : finishTriWeek(state, weekIndex, phase, triTaperWeekOne(state, weekIndex, totalWeeks, reference.parts), spreadTaperDoubles);
+      : finishTriWeek(state, weekIndex, phase, triTaperWeekOne(
+        state, weekIndex, totalWeeks, reference.parts, triTaperFraction(weekIndex - taper.start + 1, taper.weeks),
+      ), spreadTaperDoubles);
   }
   return finishTriWeek(state, weekIndex, phase, triWeekParts(state, weekIndex, totalWeeks, phase));
 }
@@ -975,6 +975,7 @@ function fitTaperSlots(slots: TaperSlot[], budget: number): number[] {
 /**
  * The first week of a two-week race taper (planning side, Tristan
  * 2026-10-13): the reference week's sessions at TRI_TAPER_FIRST_WEEK_FRACTION
+ * (triTaperFraction)
  * of each discipline's minutes. Every session stays (frequency 100% of the
  * reference), and each quality session stays quality, its kind through the
  * taper gate (tri-intensity-profile TRI_TAPER_INTENSITY_CEILING):
@@ -994,9 +995,12 @@ function fitTaperSlots(slots: TaperSlot[], budget: number): number[] {
  * steady variant (never "fasted (optional)", as in race week). Commutes and
  * gym stay as the week's own commitments.
  */
-function triTaperWeekOne(state: SimulatorState, weekIndex: number, totalWeeks: number, refParts: TriWeekParts): TriWeekParts {
+function triTaperWeekOne(
+  state: SimulatorState, weekIndex: number, totalWeeks: number, refParts: TriWeekParts,
+  /** The week's share of the reference week (triTaperFraction). */
+  f: number,
+): TriWeekParts {
   const tri = state.triConfig!;
-  const f = TRI_TAPER_FIRST_WEEK_FRACTION;
   const phase: TrainingPhase = 'taper';
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const own = triWeekParts(state, weekIndex, totalWeeks, phase);
@@ -1142,7 +1146,7 @@ function triRaceWeek(
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
   const cyclingOnly = triIsCyclingOnly(state);
-  const fraction = taper.weeks <= 1 ? TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION : TRI_RACE_WEEK_FRACTION;
+  const fraction = triTaperFraction(taper.weeks, taper.weeks);
   const ctx = triTaperCtx(state, weekIndex, totalWeeks, phase);
   const own = triWeekParts(state, weekIndex, totalWeeks, phase);
 

@@ -1190,6 +1190,8 @@ export function typedVolumeWeeklyTSS(
  * @param weekInPhase - For taper: which week within taper (1-indexed; totalPhaseWeeks = race week)
  * @param totalPhaseWeeks - For taper: total taper weeks
  * @param typedWeeklyTSS - typedVolumeWeeklyTSS: the typed weekly km's TSS, used when no history or EMA exists
+ * @param taperFractionOf - For taper: the plan's own taper fractions (a triathlon or cycling plan's
+ *   triTaperFraction, planned-week-target.ts); default taperMultiplier (running's ramp)
  */
 export function computePlannedWeekTSS(
   historicWeeklyTSS: number[] | undefined,
@@ -1200,6 +1202,7 @@ export function computePlannedWeekTSS(
   weekInPhase?: number,
   totalPhaseWeeks?: number,
   typedWeeklyTSS?: number,
+  taperFractionOf: (weekInTaper: number, totalTaperWeeks: number) => number = taperMultiplier,
 ): number {
   // 1. Determine baseline: median of history > EMA > typed km > fallback
   let baseline: number;
@@ -1225,7 +1228,7 @@ export function computePlannedWeekTSS(
   let multiplier: number;
   const ph = phase?.toLowerCase() ?? 'base';
   if (ph === 'taper') {
-    multiplier = taperMultiplier(weekInPhase ?? 0, totalPhaseWeeks ?? 3);
+    multiplier = taperFractionOf(weekInPhase ?? 0, totalPhaseWeeks ?? 3);
   } else {
     multiplier = tierMults[ph] ?? tierMults.base;
   }
@@ -1255,6 +1258,7 @@ export function computePlannedSignalB(
   totalPhaseWeeks?: number,
   sportBaselineByType?: Record<string, { avgSessionRawTSS: number; sessionsPerWeek: number }>,
   typedWeeklyTSS?: number,
+  taperFractionOf?: (weekInTaper: number, totalTaperWeeks: number) => number,
 ): number {
   // historicWeeklyTSS is Signal A. It includes cross-training at runSpec-discounted weight.
   // We need the running-only baseline so we can add the full Signal B cross-training budget
@@ -1284,6 +1288,7 @@ export function computePlannedSignalB(
   // The typed weekly km is running only, so it needs no cross-training correction.
   const runningTSS = computePlannedWeekTSS(
     runningOnlyTSS, runningOnlyCTL, phase, athleteTier, runsPerWeek, weekInPhase, totalPhaseWeeks, typedWeeklyTSS,
+    taperFractionOf,
   );
 
   return Math.round(runningTSS + crossTrainingBudget);

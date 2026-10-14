@@ -177,6 +177,21 @@ export const TRI_TAPER_FIRST_WEEK_FRACTION = 0.55;
 export const TRI_RACE_WEEK_FRACTION = 0.30;
 export const TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION = 0.55;
 
+/**
+ * Share of the reference week for race-taper week `weekInTaper` (1-indexed;
+ * `taperWeeks` = race week) of a triathlon or cycling plan (planning side):
+ * race week TRI_RACE_WEEK_FRACTION after a taper week, or
+ * TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION when race week is the whole taper;
+ * an earlier taper week TRI_TAPER_FIRST_WEEK_FRACTION. The one source for the
+ * generator's race week and the weekly load target (planned-week-target.ts:
+ * the AI Coach's Signal A and the unspentLoadItems settle), as taperFraction
+ * (phases.ts) is for running.
+ */
+export function triTaperFraction(weekInTaper: number, taperWeeks: number): number {
+  if (taperWeeks <= 1) return TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION;
+  return weekInTaper >= taperWeeks ? TRI_RACE_WEEK_FRACTION : TRI_TAPER_FIRST_WEEK_FRACTION;
+}
+
 /** Taper weeks keep at least this share of the reference week's sessions
  *  (Mujika 2011, a review for triathletes built on single-sport evidence:
  *  frequency above 80% avoids detraining; Pyne 2009: cut frequency about 20%
