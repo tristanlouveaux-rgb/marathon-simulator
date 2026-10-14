@@ -1350,84 +1350,55 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
 
 
 describe('HYROX round 5 decisions (2026-10-13)', () => {
-  it('B (reporting): one more chosen hour drops total plan minutes by at most one easy session', () => {
+  it('B (reporting): one more chosen hour drops total plan minutes by at most one easy session, and no quality run', () => {
     // Round 6 (2026-10-13): the hard decision-B constraint and the hours
     // ladder are dropped. One more hour may restructure a week (a quality run
     // the week's size now holds, one more easy run the larger running share
-    // funds in a slot an easy erg session held), and no quality run is
-    // removed to hold the minutes. The sweep reports every adjacent-hour pair
-    // whose total plan minutes fall. The bound is one easy session: the tier
-    // long-run cap (HYROX_LONG_RUN capMin), the longest easy session the plan
-    // prescribes (an easy erg session lengthens up to it). Asserted on total
-    // plan minutes and per training week, at the default sessions, in open
-    // doubles, with the 7-session choice and at logged weekly loads of 20, 50,
-    // 100 and 200 TSS (round 6 review, pass 2: under a binding guard the week
-    // was sized from the chosen hours, and at a logged 50 TSS 36 pairs fell by
-    // more than one easy session, up to 240 min; a week a fixed ceiling holds
-    // is now the same week at every chosen hours above its size).
-    // Quality runs are measured on this grid, not guaranteed: one more hour
-    // costs no quality run at the default sessions, in open doubles, with the
-    // 7-session choice and at logged 20, 50, 100 and 200 TSS. In open doubles
-    // at 100 TSS it can (round 6 review, pass 3: 2 pairs on this grid,
-    // beginner 16 and 24 weeks, 4 to 5 h): the larger hours size the station
-    // sessions and bricks larger, the MTL cap then cuts them to fewer rounds
-    // that hold less load, the chronic window carries the lower load forward,
-    // and a later week's acute:chronic guard no longer holds its quality run.
-    // There the test asserts that cause: each week that loses a quality run
-    // has a lower guard at the larger hours. With a logged 25-min run the
-    // quality runs hold on this grid (the review found 1 pair off it, novice
-    // 18 weeks 4 to 5 h).
-    // With the 7-session choice, at a logged 200 TSS and with a logged 25-min
-    // run a few pairs fall further, from one rule alone (an open question for
-    // Tristan): easy
-    // running ranks above easy erg work (step 3 of the hierarchy). With the
-    // chosen sessions full, a session slot goes to an easy run first, so one
-    // more hour that funds an easy run (or easy runs too long to merge under
-    // the long run's length) takes the slot an easy erg session of up to the
-    // tier long-run cap held; under the MTL cap, easy runs keep their MTL and
-    // easy erg work (less MTL a minute) gets what is left. The minutes the
-    // erg session held stay unprescribed. There the test asserts that every
-    // such pair comes from that rule: a week holding more easy-run minutes
-    // and fewer easy erg minutes, with minutes left unprescribed because the
-    // chosen sessions are full or the MTL cap holds them.
-    // [name, onboarding, logged weekly TSS, total bound asserted, quality runs
-    // asserted, logged run minutes]
+    // funds), and no quality run is removed to hold the minutes. The sweep
+    // reports every adjacent-hour pair whose total plan minutes fall. The
+    // bound is one easy session: the tier long-run cap (HYROX_LONG_RUN
+    // capMin), the longest easy session the plan prescribes (an easy erg
+    // session lengthens up to it). Asserted on total plan minutes and per
+    // training week, and quality runs measured on this grid (not guaranteed),
+    // for nine variants: the default sessions, open doubles, open doubles at
+    // a logged 100 TSS, the 7-session choice, logged 20, 50, 100 and 200 TSS
+    // and a logged 25-min run.
+    // History: under a binding guard the week was sized from the chosen hours
+    // (round 6 review, pass 2: at a logged 50 TSS 36 pairs fell by more than
+    // one easy session, up to 240 min); easy running ranked above easy erg
+    // work when the session count or the MTL cap was full (round 6, pass 3:
+    // the 7-session choice, 200 TSS and a logged 25-min run fell further, 4,
+    // 10 and 2 pairs of 972 on the review sweep); in open doubles at 100 TSS
+    // the MTL cap and the chronic window cost 2 quality runs on this grid.
+    // Round 7 lets easy erg work take an easy run's slot or MTL whenever the
+    // week then holds more minutes, and the guard never sits under the
+    // nominal week 1: every variant now holds the bound and its quality runs
+    // on this grid.
+    // [name, onboarding, logged weekly TSS, logged run minutes]
     const doubles = { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>;
-    const variants: Array<[string, Partial<OnboardingState>, number | undefined, boolean, boolean, number | undefined]> = [
-      ['default', {}, undefined, true, true, undefined],
-      ['open doubles', doubles, undefined, true, true, undefined],
-      ['open doubles 100 TSS', doubles, 100, true, false, undefined],
-      ['7 sessions', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, undefined, false, true, undefined],
-      ['logged 20 TSS', {}, 20, true, true, undefined],
-      ['logged 50 TSS', {}, 50, true, true, undefined],
-      ['logged 100 TSS', {}, 100, true, true, undefined],
-      ['logged 200 TSS', {}, 200, false, true, undefined],
-      ['logged 25-min run', {}, undefined, false, true, 25],
+    const variants: Array<[string, Partial<OnboardingState>, number | undefined, number | undefined]> = [
+      ['default', {}, undefined, undefined],
+      ['open doubles', doubles, undefined, undefined],
+      ['open doubles 100 TSS', doubles, 100, undefined],
+      ['7 sessions', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, undefined, undefined],
+      ['logged 20 TSS', {}, 20, undefined],
+      ['logged 50 TSS', {}, 50, undefined],
+      ['logged 100 TSS', {}, 100, undefined],
+      ['logged 200 TSS', {}, 200, undefined],
+      ['logged 25-min run', {}, undefined, 25],
     ];
-    const sum = (ws: Workout[]) => ws.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-    const easyRunMin = (wk: Week) => sum(prescribed(wk).filter(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w)));
-    const ergMin = (wk: Week) => sum(prescribed(wk).filter(isHyroxEasyErg));
-    // A week where the larger hours' easy running took easy erg work's slot
-    // or its MTL room.
-    const easyFirst = (before: Week, after: Week) => minutes(after) < minutes(before)
-      && easyRunMin(after) > easyRunMin(before) && ergMin(after) < ergMin(before)
-      && notes(after).some(n => /left unprescribed \((the chosen \d+ sessions are full|MTL cap \d+)/.test(n));
-    const unattributed: string[] = [];
-    let attributed = 0;
     const lengths = [2, 8, 12, 16, 19, 24];
     const fell: string[] = [];
     const tooFar: string[] = [];
     const weekTooFar: string[] = [];
     const qualityFell: string[] = [];
-    const qualityUnattributed: string[] = [];
-    let qualityAttributed = 0;
     let pairs = 0;
-    for (const [name, over, logged, assertTotal, assertQuality, runMin] of variants) {
+    for (const [name, over, logged, runMin] of variants) {
       for (const band of BANDS) {
         const easyMax = HYROX_LONG_RUN[hyroxTier(band)].capMin;
         const r = HYROX_HOURS_RANGE[band];
         for (const len of lengths) {
-          let prev: { total: number; quality: number; weeks: Week[]; s: SimulatorState } | null = null;
+          let prev: { total: number; quality: number; weeks: Week[] } | null = null;
           for (let h = Math.max(2, r.min); h <= Math.min(12, r.max); h++) {
             const s = build(band, h, len, over, logged, runMin);
             const weeks = s.wks.slice(0, planTrainingWeeks(s));
@@ -1438,34 +1409,16 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
               const label = `${name} ${band} ${len}w ${h - 1}->${h} h`;
               if (total < prev.total - EPS) {
                 fell.push(`${label}: ${prev.total} -> ${total} min`);
-                if (prev.total - total > easyMax + EPS) {
-                  const line = `${label}: ${prev.total} -> ${total} min (more than the ${easyMax}-min easy session)`;
-                  if (assertTotal) tooFar.push(line);
-                  else if (weeks.some((wk, i) => prev!.weeks[i] && easyFirst(prev!.weeks[i], wk))) attributed++;
-                  else unattributed.push(line);
-                }
+                if (prev.total - total > easyMax + EPS) tooFar.push(`${label}: ${prev.total} -> ${total} min (more than the ${easyMax}-min easy session)`);
               }
-              if (quality < prev.quality) {
-                const line = `${label}: ${prev.quality} -> ${quality} quality runs`;
-                if (assertQuality) qualityFell.push(line);
-                else {
-                  // Each week that loses a quality run has a lower guard at the
-                  // larger hours (the chronic window carries a lower load).
-                  const capsBefore = generateHyroxPlanDetailed(structuredClone(prev.s)).detail.map(d => d.acwrCapTss ?? Infinity);
-                  const capsAfter = generateHyroxPlanDetailed(structuredClone(s)).detail.map(d => d.acwrCapTss ?? Infinity);
-                  const lost = weeks.map((wk, i) => i).filter(i => prev!.weeks[i]
-                    && prescribed(weeks[i]).filter(isQuality).length < prescribed(prev!.weeks[i]).filter(isQuality).length);
-                  if (lost.length > 0 && lost.every(i => capsAfter[i] < capsBefore[i] - EPS)) qualityAttributed++;
-                  else qualityUnattributed.push(line);
-                }
-              }
+              if (quality < prev.quality) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
               weeks.forEach((wk, i) => {
                 const before = prev!.weeks[i];
                 if (!before) return;
                 if (minutes(before) - minutes(wk) > easyMax + EPS) weekTooFar.push(`${label} W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min`);
               });
             }
-            prev = { total, quality, weeks, s: structuredClone(s) };
+            prev = { total, quality, weeks: structuredClone(weeks) };
           }
         }
       }
@@ -1473,13 +1426,9 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(pairs).toBeGreaterThan(variants.length * BANDS.length * lengths.length * 5);
     // The report: every pair whose total plan minutes fall.
     console.info(`[hyrox B report] ${fell.length} of ${pairs} adjacent-hour pairs hold fewer total plan minutes${fell.length > 0 ? `:\n  ${fell.join('\n  ')}` : ''}`);
-    console.info(`[hyrox B report] ${attributed} pair(s) with the 7-session choice, a logged 200 TSS or a logged 25-min run fall by more than one easy session, each from easy running ranking above easy erg work`);
-    console.info(`[hyrox B report] ${qualityAttributed} pair(s) in open doubles at 100 TSS lose a quality run, each where the larger hours leave a lower acute:chronic guard`);
     expect(tooFar.slice(0, 10)).toEqual([]);
-    expect(unattributed.slice(0, 10)).toEqual([]);
     expect(weekTooFar.slice(0, 10)).toEqual([]);
     expect(qualityFell.slice(0, 10)).toEqual([]);
-    expect(qualityUnattributed.slice(0, 10)).toEqual([]);
   }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
