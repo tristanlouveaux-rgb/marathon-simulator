@@ -167,6 +167,13 @@ export function nameForBike(kind: BikeSessionKind): string {
   }
 }
 
+/** A bike target as a watt range (power meter and FTP known) or an HR-zone
+ *  label with its %FTP. Exported for the taper's race-pace sessions
+ *  (tri-taper.ts), which target the race's intensity factor. */
+export function bikeTargetLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number, workoutType?: string): string {
+  return pwLabel(ftp, hasPower, pct, workoutType);
+}
+
 function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number, workoutType?: string): string {
   if (hasPower && ftp) {
     const band = workoutType != null ? (BIKE_ADHERENCE_BAND[workoutType] ?? 0.07) : 0.07;
@@ -238,8 +245,8 @@ export function describeBikeSession(
     case 'endurance': {
       const variants = [
         () => `${pretty(minutes)} steady @ ${hasPower && ftp ? pw(0.65) : `Z2 endurance${hr('2')}`}. Conversational throughout.`,
-        () => `${pretty(minutes)} rolling endurance — stay in Z2${hasPower && ftp ? ` (${pw(0.65)})` : ''} on the flats, allow Z3 spikes on climbs. Recover on descents.`,
-        () => `${pretty(minutes)} fasted endurance (optional) @ ${pw(0.60)}. Low intensity, long duration — aerobic base.`,
+        () => `${pretty(minutes)} rolling endurance: stay in Z2${hasPower && ftp ? ` (${pw(0.65)})` : ''} on the flats, allow Z3 spikes on climbs. Recover on descents.`,
+        () => `${pretty(minutes)} fasted endurance (optional) @ ${pw(0.60)}. Low intensity, long duration. Builds aerobic base.`,
       ];
       return variants[idx % variants.length]();
     }

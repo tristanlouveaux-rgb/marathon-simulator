@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { ALL_TRI_DISTANCES } from '@/types/triathlon';
 import {
   RACE_LEG_DISTANCES,
-  TAPER_DAYS,
+  TRI_TAPER_WEEKS_BY_DISTANCE,
   PLAN_WEEKS_DEFAULT,
   PHASE_WEEKS,
   HOURS_RANGE,
@@ -21,14 +21,14 @@ import {
 } from '@/constants/triathlon-constants';
 import { RACE_INTENSITY_BY_DISTANCE } from '@/calculations/bike-physics';
 import { DURABILITY_THRESHOLDS } from '@/calculations/durability-cap';
-import { RUN_HORIZON_PARAMS_BY_DISTANCE, TRI_TAPER_WEEKS } from '@/constants/triathlon-horizon-params';
+import { RUN_HORIZON_PARAMS_BY_DISTANCE } from '@/constants/triathlon-horizon-params';
 import { RACE_READINESS_TARGETS } from '@/constants/race-readiness-targets';
 
 describe('triathlon distance completeness', () => {
   it('every per-format constant table has an entry for every distance', () => {
     for (const d of ALL_TRI_DISTANCES) {
       expect(RACE_LEG_DISTANCES[d], `RACE_LEG_DISTANCES[${d}]`).toBeDefined();
-      expect(TAPER_DAYS[d], `TAPER_DAYS[${d}]`).toBeDefined();
+      expect(TRI_TAPER_WEEKS_BY_DISTANCE[d], `TRI_TAPER_WEEKS_BY_DISTANCE[${d}]`).toBeDefined();
       expect(PLAN_WEEKS_DEFAULT[d], `PLAN_WEEKS_DEFAULT[${d}]`).toBeDefined();
       expect(PHASE_WEEKS[d], `PHASE_WEEKS[${d}]`).toBeDefined();
       expect(HOURS_RANGE[d], `HOURS_RANGE[${d}]`).toBeDefined();
@@ -39,9 +39,6 @@ describe('triathlon distance completeness', () => {
       expect(DURABILITY_THRESHOLDS[d], `DURABILITY_THRESHOLDS[${d}]`).toBeDefined();
       expect(RUN_HORIZON_PARAMS_BY_DISTANCE[d], `RUN_HORIZON_PARAMS_BY_DISTANCE[${d}]`).toBeDefined();
       expect(RACE_READINESS_TARGETS[d], `RACE_READINESS_TARGETS[${d}]`).toBeDefined();
-      for (const disc of ['swim', 'bike', 'run'] as const) {
-        expect(TRI_TAPER_WEEKS[disc][d], `TRI_TAPER_WEEKS[${disc}][${d}]`).toBeDefined();
-      }
     }
   });
 

@@ -364,16 +364,11 @@ export const RUN_HORIZON_PARAMS_BY_DISTANCE: Record<TriathlonDistance, Disciplin
  */
 export const TRI_K_SESSIONS = 0.7;
 
-/**
- * Per-discipline taper duration in weeks (used as `taper_weeks` argument).
- * Bike taper is shortest, swim longest (technique consolidation needs more
- * time per Mujika 2002).
- */
-export const TRI_TAPER_WEEKS: Record<'swim' | 'bike' | 'run', Record<TriathlonDistance, number>> = {
-  swim: { sprint: 1.0, olympic: 1.0,  t100: 1.5, '70.3': 1.5, ironman: 2.5 },
-  bike: { sprint: 0.5, olympic: 0.75, t100: 1.0, '70.3': 1.0, ironman: 2.0 },
-  run:  { sprint: 1.0, olympic: 1.0,  t100: 1.5, '70.3': 1.5, ironman: 3.0 },
-};
+// Taper duration (the `taper_weeks` argument) is the plan's own race taper
+// (triPlanTaperWeeks, race-week-layout.ts; Tristan 2026-10-13), shared by
+// swim, bike and run. The per-discipline table it replaced (swim 1 to 2.5,
+// bike 0.5 to 2, run 1 to 3 weeks) disagreed with the plan, which tapers all
+// three over the same weeks.
 
 /**
  * Map years of endurance training to the existing `experience_level` bucket

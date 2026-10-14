@@ -1,6 +1,8 @@
 import { addCalendarDays, calendarDayNumber, localDateKey, localMondayKey } from '@/utils/local-date';
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
+import type { TriathlonDistance } from '@/types/triathlon';
+import { computeTriPlanPhases, triRaceTaperWeeks } from '@/constants/triathlon-constants';
 
 /**
  * Where race day falls in a plan's calendar weeks (Monday to Sunday, week 1 =
@@ -75,9 +77,11 @@ export function racePlanCalendarWeeks(raceDateISO: string | null | undefined, no
  * engine, HYROX): the running layout (raceWeekLayout) from the plan start and
  * the race date, so these modes place race week and the closing week exactly
  * as running does. Race week is the week holding the day 3 days before race
- * day; a Monday to Wednesday race's own week is a closing week that holds only
- * the race. The generators phase and size the plan over `trainingWeeks` and
- * emit the closing week empty (raceClosing). Null without a plan start or race
+ * day; a Monday to Wednesday race's own week is a closing week (raceClosing).
+ * The generators phase and size the plan over `trainingWeeks`. HYROX emits the
+ * closing week empty; the triathlon engine (cycling included) puts a Tuesday
+ * or Wednesday race's day-before activation there, composed with race week,
+ * and nothing else. Null without a plan start or race
  * date, or when the layout does not match the plan's calendar length `tw` (a
  * plan whose length came from a weeks-until count): the generators then keep
  * the final week as race week.
@@ -94,7 +98,8 @@ export function storedPlanRaceLayout(
 /**
  * The date a stored-plan race forecast (triathlon, cycling, HYROX) measures
  * its weeks-to-race horizon to. Tracking side. With a closing week (a Monday
- * to Wednesday race's own week, which holds only the race), the horizon ends
+ * to Wednesday race's own week, which holds the race and at most the
+ * day-before activation), the horizon ends
  * with race week: the Sunday before race day. Otherwise race day itself.
  * Mirrors running, whose forecast horizon reads planTrainingWeeks, so a
  * Tuesday race forecasts exactly like the Sunday before it: the closing-week
@@ -222,4 +227,52 @@ export function planTaperWeeks(s: {
   }
   if (taper > 0) return taper;
   return computeRunningPlanPhases(training, s.rd).filter(p => p.ph === 'taper').length;
+}
+
+/**
+ * Race-taper weeks of a triathlon or cycling plan, for the forecast (tracking
+ * side; Tristan 2026-10-13: the forecast reads the plan's taper): the trailing
+ * 'taper' weeks of the plan's training weeks (a closing week excluded), or,
+ * before the plan's weeks exist, the trailing taper of the phases the plan
+ * engine will build (computeTriPlanPhases: the race distance's taper, cycling
+ * 2, race week only for a low-hours sprint or Olympic triathlete
+ * (triRaceTaperWeeks), the short-plan rule for a
+ * plan too short to hold it; `lowHours` is the plan engine's triTaperOpts for
+ * the plan's training weeks, resolved only when needed). Without the weeks,
+ * the training weeks come from the layout the generator uses
+ * (storedPlanRaceLayout), so a Monday to Wednesday race's closing week is
+ * left out as the plan leaves it out.
+ * Every discipline shares it, as the plan tapers all three over the same
+ * weeks. Undefined without a triathlon config.
+ */
+export function triPlanTaperWeeks(s: {
+  tw?: number;
+  planStartDate?: string;
+  wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
+  triConfig?: { distance: TriathlonDistance; disciplines?: ReadonlyArray<string>; raceDate?: string } | null;
+}, lowHours?: (trainingWeeks: number) => boolean): number | undefined {
+  if (!s.triConfig) return undefined;
+  const wks = s.wks ?? [];
+  const tw = s.tw ?? wks.length;
+  const built = tw > 0 && wks.length >= tw;
+  const training = built
+    ? planTrainingWeeks(s)
+    : (storedPlanRaceLayout(tw, s.planStartDate, s.triConfig.raceDate)?.trainingWeeks ?? planTrainingWeeks(s));
+  let taper = 0;
+  if (training > 0 && built) {
+    for (let i = training - 1; i >= 0 && wks[i]?.ph === 'taper'; i--) taper++;
+  }
+  if (taper > 0) return taper;
+  const d = s.triConfig.disciplines;
+  const cyclingOnly = !!d && d.length === 1 && d[0] === 'bike';
+  const opts = { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.(Math.max(1, training)) };
+  // The plan's own phases when its length is known, so a plan too short for
+  // the distance's taper keeps the short-plan taper here too.
+  if (training > 0) {
+    const ph = computeTriPlanPhases(s.triConfig.distance, training, opts);
+    let t = 0;
+    for (let i = ph.length - 1; i >= 0 && ph[i].ph === 'taper'; i--) t++;
+    if (t > 0) return t;
+  }
+  return triRaceTaperWeeks(s.triConfig.distance, opts);
 }

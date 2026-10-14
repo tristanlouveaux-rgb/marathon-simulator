@@ -44,6 +44,7 @@ import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
 import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { planTrainingWeeks, raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { TRI_RACE_WEEK_SESSION_CAP_MIN } from '@/workouts/tri-taper';
 import type { OnboardingState } from '@/types/onboarding';
 import type { SimulatorState } from '@/types';
 
@@ -151,6 +152,26 @@ function raceWeekSessions(s: SimulatorState): string[] {
   return (wk.triWorkouts ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
 }
 
+/** Race-week swim, bike and run minutes (brick legs in their discipline). */
+function raceWeekMinutes(s: SimulatorState): Record<'swim' | 'bike' | 'run', number> {
+  const m = { swim: 0, bike: 0, run: 0 };
+  for (const w of s.wks[planTrainingWeeks(s) - 1].triWorkouts ?? []) {
+    if (w.t === 'gym' || w.commute) continue;
+    if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline as 'swim' | 'bike' | 'run'] += sg.durationMin ?? 0;
+    else m[(w.discipline ?? 'run') as 'swim' | 'bike' | 'run'] += w.estimatedDurationMin ?? 0;
+  }
+  return m;
+}
+
+/** Every race-week training session of a discipline (no activation, no brick)
+ *  sits at its race-week cap (TRI_RACE_WEEK_SESSION_CAP_MIN): the week holds
+ *  less than its fraction because it has too few days for it. */
+function capLimited(s: SimulatorState, d: 'swim' | 'bike' | 'run'): boolean {
+  const ws = (s.wks[planTrainingWeeks(s) - 1].triWorkouts ?? [])
+    .filter(w => (w.discipline ?? 'run') === d && w.t !== 'brick' && w.t !== 'gym' && !w.commute && w.taperRole !== 'day_before');
+  return ws.length > 0 && ws.every(w => (w.estimatedDurationMin ?? 0) >= TRI_RACE_WEEK_SESSION_CAP_MIN[d] - 1);
+}
+
 describe('a Monday to Wednesday race forecasts like the Sunday before it', () => {
   it('Ironman on Wednesday 4 Nov forecasts the same as Sunday 1 Nov at plan creation (was 8.5 min faster)', () => {
     at('2026-10-11T12:00:00');
@@ -186,14 +207,50 @@ describe('a Monday to Wednesday race forecasts like the Sunday before it', () =>
           for (const [day, offset] of EARLY) {
             const race = addDays(sunday, offset);
             const early = forecasts(mode, race, now, sunWeeks);
-            // The same race-week sessions as the Sunday before, on its own days.
-            expect(raceWeekSessions(early.s), `${mode} ${day} ${race}`).toEqual(raceWeekSessions(sun.s));
+            // The same race-week volume per discipline as the Sunday before
+            // (HYROX: the same sessions), on its own days. Triathlon and
+            // cycling race weeks sit relative to race day (tri-taper.ts: the
+            // day-before activation and the rest day exist only when those
+            // days fall in race week), so their sessions differ within one
+            // floor-length session per discipline. A Sunday race week whose
+            // sessions of a discipline all sit at the race-week cap (a 2-week
+            // Ironman plan's one-week taper) has fewer training days than a
+            // Monday to Wednesday race week, which holds more of the same
+            // budget.
+            if (mode === 'hyrox') {
+              expect(raceWeekSessions(early.s), `${mode} ${day} ${race}`).toEqual(raceWeekSessions(sun.s));
+            } else {
+              const a = raceWeekMinutes(early.s);
+              const b = raceWeekMinutes(sun.s);
+              for (const d of ['swim', 'bike', 'run'] as const) {
+                const label = `${mode} ${day} ${race} ${d}: ${a[d]} vs ${b[d]}`;
+                if (capLimited(sun.s, d)) expect(a[d] - b[d], label).toBeGreaterThanOrEqual(-20);
+                else expect(Math.abs(a[d] - b[d]), label).toBeLessThanOrEqual(20);
+              }
+            }
             // Same training weeks, plus the closing week.
             expect(early.s.tw, `${mode} ${day} ${race}`).toBe(sunWeeks + 1);
             expect(early.s.wks[early.s.tw - 1].raceClosing, `${mode} ${day} ${race}`).toBe(true);
             expect(planTrainingWeeks(early.s)).toBe(sunWeeks);
             early.out.forEach((f, i) => {
-              expect(f, `${mode} ${day} ${race}, ${i === 0 ? 'plan creation' : `week ${i}`}`).toEqual(sun.out[i]);
+              const label = `${mode} ${day} ${race}, ${i === 0 ? 'plan creation' : `week ${i}`}`;
+              // The planned-dose window starts at wks[s.w] (s.w = 1 at plan
+              // creation, tri-volume-by-discipline).
+              const taperOnly = sun.s.wks.slice(Math.max(1, i), sunWeeks).every(w => w.ph === 'taper');
+              if (mode !== 'hyrox' && taperOnly) {
+                // With only taper weeks ahead the forecast reads race week's
+                // planned dose, and race week's sessions sit relative to race
+                // day (the Sunday race holds the day-before activation and its
+                // rest day; a Monday to Wednesday race's day before falls in
+                // the closing week, tri-taper.ts). Same budget, so the totals
+                // stay close: at most 0.28% apart in this sweep (an Ironman
+                // 2-week plan, 2.2 min), checked against 0.5%.
+                const a = (f as { totalSec: number }).totalSec;
+                const b = (sun.out[i] as { totalSec: number }).totalSec;
+                expect(Math.abs(a - b) / b, label).toBeLessThanOrEqual(0.005);
+              } else {
+                expect(f, label).toEqual(sun.out[i]);
+              }
               compared += 1;
             });
           }
