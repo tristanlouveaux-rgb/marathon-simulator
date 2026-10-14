@@ -232,7 +232,8 @@ export function planTaperWeeks(s: {
  * 'taper' weeks of the plan's training weeks (a closing week excluded), or,
  * before the plan's weeks exist, the trailing taper of the phases the plan
  * engine will build (computeTriPlanPhases: the race distance's taper, cycling
- * 2, race week only for a low-hours triathlete, the short-plan rule for a
+ * 2, race week only for a low-hours sprint or Olympic triathlete
+ * (triRaceTaperWeeks), the short-plan rule for a
  * plan too short to hold it; `lowHours` is the plan engine's triTaperOpts for
  * the plan's training weeks, resolved only when needed). Without the weeks,
  * the training weeks come from the layout the generator uses

@@ -126,8 +126,9 @@ export const IM_T1_SHARE_OF_TOTAL = 0.58;
  * plan); Ironman mostly 2 to 3 weeks (Fitzgerald and Goeringer 2; Barth 3;
  * Dave Scott 22 days). T100 has no source of its own: it takes 2, the value
  * of both neighbours (Olympic and 70.3). A plan too short for its taper keeps
- * the plan-length rule (computeTriPlanPhases). Athletes whose reference week
- * is under TRI_LOW_HOURS_THRESHOLD_H taper in race week only (Goeringer).
+ * the plan-length rule (computeTriPlanPhases). Sprint and Olympic athletes
+ * whose reference week is under TRI_LOW_HOURS_THRESHOLD_H taper in race week
+ * only (Goeringer; TRI_LOW_HOURS_TAPER_DISTANCES).
  */
 export const TRI_TAPER_WEEKS_BY_DISTANCE: Record<TriathlonDistance, number> = {
   sprint:    1,
@@ -147,11 +148,22 @@ export const CYCLING_TAPER_WEEKS = 2;
  * rather than two to three weeks", read as total weekly training). Below it
  * the taper is race week only, whose last two days are the lightest (the
  * lower end of his 2 to 3). One of them is a full rest day, which comes from
- * Friel and Allen; Goeringer himself avoids full rest days. Triathlon only:
- * cycling keeps its 2 weeks (Tristan's cycling scope, 2026-10-13, leaves the
- * low-hours rule out).
+ * Friel and Allen; Goeringer himself avoids full rest days. Sprint and Olympic
+ * only (TRI_LOW_HOURS_TAPER_DISTANCES). Cycling keeps its 2 weeks (Tristan's
+ * cycling scope, 2026-10-13, leaves the low-hours rule out).
  */
 export const TRI_LOW_HOURS_THRESHOLD_H = 8;
+
+/**
+ * The distances the low-hours taper applies to (orchestrator decision,
+ * 2026-10-14): sprint and Olympic. T100, 70.3 and Ironman keep their 2-week
+ * taper at every hour setting. A race-week-only taper would put the peak
+ * week's long sessions 7 to 8 days out, against the same coaches: Goeringer
+ * puts the longest Ironman run about 3 weeks out and the longest ride about
+ * 2; Dave Scott puts the last long run 18-22 days out and the last long ride
+ * 14-21. Sprint already tapers one week, so the rule changes only Olympic.
+ */
+export const TRI_LOW_HOURS_TAPER_DISTANCES: ReadonlyArray<TriathlonDistance> = ['sprint', 'olympic'];
 
 /**
  * Taper volume fractions of the reference week, per discipline (Tristan,
@@ -173,13 +185,14 @@ export const TRI_TAPER_MIN_SESSION_SHARE = 0.8;
 
 /**
  * Race taper weeks for a plan (planning side): race week only for a low-hours
- * triathlete, else the distance's length (cycling: CYCLING_TAPER_WEEKS).
+ * sprint or Olympic triathlete (TRI_LOW_HOURS_TAPER_DISTANCES), else the
+ * distance's length (cycling: CYCLING_TAPER_WEEKS).
  */
 export function triRaceTaperWeeks(
   distance: TriathlonDistance, opts: { cyclingOnly?: boolean; lowHours?: boolean } = {},
 ): number {
   if (opts.cyclingOnly) return CYCLING_TAPER_WEEKS;
-  if (opts.lowHours) return 1;
+  if (opts.lowHours && TRI_LOW_HOURS_TAPER_DISTANCES.includes(distance)) return 1;
   return TRI_TAPER_WEEKS_BY_DISTANCE[distance];
 }
 

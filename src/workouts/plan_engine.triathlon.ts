@@ -27,6 +27,7 @@ import type { InjuryState } from '@/types/injury';
 import {
   computeTriPlanPhases,
   TRI_LOW_HOURS_THRESHOLD_H,
+  TRI_LOW_HOURS_TAPER_DISTANCES,
   TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION,
   TRI_RACE_WEEK_FRACTION,
   TRI_TAPER_FIRST_WEEK_FRACTION,
@@ -677,16 +678,18 @@ function triIsCyclingOnly(state: SimulatorState): boolean {
 }
 
 /** Taper switches for a plan of `trainingWeeks` (planning side): cycling mode,
- *  and a triathlete whose reference week holds under TRI_LOW_HOURS_THRESHOLD_H
- *  of training (Goeringer's "under 8 h a week", read as total weekly
- *  training), who tapers in race week only. The reference week is the one the
+ *  and a sprint or Olympic triathlete (TRI_LOW_HOURS_TAPER_DISTANCES) whose
+ *  reference week holds under TRI_LOW_HOURS_THRESHOLD_H of training
+ *  (Goeringer's "under 8 h a week", read as total weekly training), who
+ *  tapers in race week only. T100, 70.3 and Ironman keep their 2 weeks at
+ *  every hour setting (lowHours false). The reference week is the one the
  *  distance's taper measures against (the last base, build or peak week
  *  before it that is not a deload), sized by its hour budget: swim, bike and
  *  run, the brick run, and commute runs (running load). Gym is left out: a
  *  taper cuts endurance volume, and race-week gym is handled on its own. */
 export function triTaperOpts(state: SimulatorState, trainingWeeks: number): { cyclingOnly: boolean; lowHours: boolean } {
   const cyclingOnly = triIsCyclingOnly(state);
-  if (cyclingOnly) return { cyclingOnly, lowHours: false };
+  if (cyclingOnly || !TRI_LOW_HOURS_TAPER_DISTANCES.includes(state.triConfig!.distance)) return { cyclingOnly, lowHours: false };
   const phases = computeTriPlanPhases(state.triConfig!.distance, trainingWeeks);
   let start = trainingWeeks;
   while (start > 1 && phases[start - 2]?.ph === 'taper') start--;

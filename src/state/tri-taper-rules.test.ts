@@ -319,9 +319,12 @@ function taperViolations(p: Plan): string[] {
   const cyclingOnly = mode === 'cycling';
   const { lowHours } = triTaperOpts(s, tw);
 
-  // Taper length by race distance; race week only under 8 h; a plan too
+  // Taper length by race distance; race week only under 8 h for sprint and
+  // Olympic (long course keeps 2 weeks at every hour setting); a plan too
   // short for its taper keeps one taper week.
-  const byDistance = cyclingOnly ? CYCLING_TAPER_WEEKS : lowHours ? 1 : TRI_TAPER_WEEKS_BY_DISTANCE[distance];
+  const shortCourseLow = lowHours && (distance === 'sprint' || distance === 'olympic');
+  if (lowHours && !shortCourseLow) out.push(`low hours flagged for ${distance}`);
+  const byDistance = cyclingOnly ? CYCLING_TAPER_WEEKS : shortCourseLow ? 1 : TRI_TAPER_WEEKS_BY_DISTANCE[distance];
   const expected = tw < byDistance + 2 ? 1 : byDistance;
   if (taperWeeks !== expected) out.push(`taper ${taperWeeks} weeks, expected ${expected}`);
   // The forecast reads the same taper.
@@ -630,7 +633,13 @@ describe('taper length', () => {
         expect(trailing(d, n), `${d} ${n}w`).toBe(2);
       }
       expect(computeTriPlanPhases('70.3', n, { cyclingOnly: true }).slice(-2).every(p => p.ph === 'taper')).toBe(true);
-      expect(computeTriPlanPhases('ironman', n, { lowHours: true }).slice(-2).map(p => p.ph)).not.toEqual(['taper', 'taper']);
+      // Low hours shortens the taper for Olympic only; long course keeps 2 weeks.
+      expect(computeTriPlanPhases('olympic', n, { lowHours: true }).slice(-2).map(p => p.ph)).not.toEqual(['taper', 'taper']);
+      for (const d of ['t100', '70.3', 'ironman'] as TriathlonDistance[]) {
+        expect(trailing(d, n), `${d} ${n}w`).toBe(2);
+        expect(computeTriPlanPhases(d, n, { lowHours: true }).filter(p => p.ph === 'taper').length, `${d} ${n}w low hours`)
+          .toBe(computeTriPlanPhases(d, n).filter(p => p.ph === 'taper').length);
+      }
     }
   });
 
@@ -640,29 +649,37 @@ describe('taper length', () => {
     expect(computeTriPlanPhases('olympic', 1).map(p => p.ph)).toEqual(['taper']);
   });
 
-  it('low hours: judged on the reference week\'s training, under 8 h (Goeringer)', () => {
+  it('low hours: judged on the reference week\'s training, under 8 h (Goeringer), sprint and Olympic only', () => {
     at(NOW);
-    expect(triTaperOpts(build('70.3', raceDay(16), 10), 16).lowHours).toBe(false);
-    expect(triTaperOpts(build('70.3', raceDay(16), 6), 16).lowHours).toBe(true);
-    expect(triTaperOpts(build('ironman', raceDay(16), 16), 16).lowHours).toBe(false);
+    expect(triTaperOpts(build('olympic', raceDay(16), 13), 16).lowHours).toBe(false);
     expect(triTaperOpts(build('olympic', raceDay(16), 5), 16).lowHours).toBe(true);
+    expect(triTaperOpts(build('olympic', raceDay(16), 6), 16).lowHours).toBe(true);
+    // T100, 70.3 and Ironman keep their 2-week taper at every hour setting.
+    for (const [d, h] of [['t100', 6], ['70.3', 6], ['ironman', 7], ['ironman', 16]] as Array<[TriathlonDistance, number]>) {
+      const s = build(d, raceDay(16), h);
+      expect(triTaperOpts(s, planTrainingWeeks(s)).lowHours, `${d} ${h} h`).toBe(false);
+      expect(s.wks.slice(-2).map(w => w.ph), `${d} ${h} h`).toEqual(['taper', 'taper']);
+    }
     // Cycling keeps its 2 weeks whatever the hours.
     expect(triTaperOpts(build('cycling', raceDay(16), 4), 16).lowHours).toBe(false);
   });
 
-  it('low hours counts commute runs (running load) but not gym: 10 h with three bidirectional 5 km commutes and two gym sessions is not low hours', () => {
+  it('low hours counts commute runs (running load) but not gym: Olympic 10 h with three bidirectional 5 km commutes and two gym sessions is not low hours', () => {
     at(NOW);
-    const s = build('70.3', raceDay(16), 10);
+    const s = build('olympic', raceDay(16), 10);
     s.commuteConfig = { enabled: true, distanceKm: 5, isBidirectional: true, commuteDaysPerWeek: 3 };
     s.gs = 2;
     expect(triTaperOpts(s, 16).lowHours).toBe(false);
   });
 
-  it('the forecast tapers like the plan before the plan exists (a low-hours onboarding forecast takes race week only)', () => {
+  it('the forecast tapers like the plan before the plan exists (a low-hours Olympic onboarding forecast takes race week only)', () => {
     at(NOW);
-    const s = build('70.3', raceDay(16), 6);
+    const s = build('olympic', raceDay(16), 5);
     expect(triPlanTaperWeeks({ ...s, wks: [] }, () => triTaperOpts(s, 16).lowHours)).toBe(1);
     expect(triPlanTaperWeeks({ ...s, wks: [] })).toBe(2);
+    // Long course keeps 2 weeks even when a caller passes low hours.
+    const l = build('70.3', raceDay(16), 6);
+    expect(triPlanTaperWeeks({ ...l, wks: [] }, () => true)).toBe(2);
   });
 
   it('the forecast fallback leaves a Monday race\'s closing week out (Olympic 4 weeks 8 h, Monday race: 1 taper week, as the plan builds)', () => {
