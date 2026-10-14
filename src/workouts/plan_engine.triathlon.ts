@@ -1035,15 +1035,19 @@ function triRaceWeek(
   const easyPace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm;
   // A one-week taper's race week never holds more than the week before (a
   // deload week there can sit near race week's fraction), read from that week
-  // as generated: after the scheduler and the race window, which can empty its
-  // last days (a Thursday or Friday race). Swim, bike, run and brick minutes;
-  // gym and commutes excluded, as race week counts them. The effort
-  // multiplier, applied after generation, is not included.
+  // as generated (injury gates and the scheduler applied), before the race
+  // window. The window's cut of a Thursday or Friday race's week before is
+  // taper already; capping race week by it would deepen race week below the
+  // band, and the forecast, which adds the cut back (Week.raceWindowCut),
+  // would move with the window (race-window-forecast.test.ts). Swim, bike,
+  // run and brick minutes; gym and commutes excluded, as race week counts
+  // them. The effort multiplier, applied after generation, is not included.
   let maxTotalMin: number | undefined;
   if (taper.weeks <= 1 && weekIndex > 1) {
     const prevPhase = triPlanPhases(state, totalWeeks)[weekIndex - 2]?.ph ?? 'peak';
-    const prev = triWeekForRace(state, weekIndex - 1, totalWeeks, prevPhase, genCtx?.layout ?? null).workouts;
-    maxTotalMin = prev
+    const prevFirstDow = firstTrackedDow(state.planStartDate, weekIndex - 1, state.planCreatedAt);
+    const prev = generateWeekForTriathlon(state, weekIndex - 1, totalWeeks, prevPhase, { layout: genCtx?.layout ?? null, firstDow: prevFirstDow });
+    maxTotalMin = dropSessionsOnOrAfterRaceDay(prev, weekIndex - 1, state.planStartDate, tri.raceDate)
       .filter(w => w.t !== 'gym' && !w.commute)
       .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   }
