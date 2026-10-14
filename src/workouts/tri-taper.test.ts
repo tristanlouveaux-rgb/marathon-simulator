@@ -225,6 +225,66 @@ describe('composeTriRaceWeek', () => {
     expect(mins(out)).toBeLessThanOrEqual(170);
   });
 
+  it('day caps choose days and never drop a session: a 0 h weekday athlete keeps race week at its fraction (review: one 31-min opener)', () => {
+    // triDayCaps at 0 weekday hours: weekday caps 0, weekend 1.2 x half the week.
+    const dayCapMin = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 360, 6: 360 };
+    const out = composeTriRaceWeek(input70(SUNDAY, { dayCapMin }));
+    const m = perDisc(out);
+    expect(Math.abs(m.swim - 0.3 * 96)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    expect(Math.abs(m.bike - 0.3 * 262)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    expect(Math.abs(m.run - 0.3 * 243)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d)).toBe(true);
+    expect(out.length + 1).toBeGreaterThanOrEqual(Math.ceil(0.8 * 8));
+    // Training sits on the weekdays (no weekend day is open before the race),
+    // as the normal week spills a 0 h weekday athlete's sessions there.
+    expect(out.filter(w => w.taperRole !== 'day_before').every(w => w.dayOfWeek! <= 3)).toBe(true);
+    expect(shapeViolations(out)).toEqual([]);
+  });
+
+  it('Thursday race with a thin weekday cap keeps its swim (review: the 32-min swim found 15 min of room and was left out)', () => {
+    for (const cap of [0, 9, 18]) {
+      const out = composeTriRaceWeek(input70(THURSDAY, {
+        longCourse: false, fraction: 0.55, ctx: { ...ctx, shortCourse: true, bikeIF: 0.88 },
+        ref: { minutes: { swim: 59, bike: 160, run: 144 }, counts: { swim: 2, bike: 2, run: 2 }, total: 6 },
+        dayCapMin: { 0: cap, 1: cap, 2: cap, 3: cap, 4: cap, 5: 300, 6: 300 },
+      }));
+      for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d), `cap ${cap} ${d}`).toBe(true);
+      expect(shapeViolations(out), `cap ${cap}`).toEqual([]);
+    }
+  });
+
+  it('sessions that cannot fit the slots come off the discipline that loses least (review: the run always absorbed the cut)', () => {
+    // Olympic 13 h reference (review's synthetic case): 0.55 gives swim 69,
+    // bike 190, run 171; nine sessions for eight slots.
+    const out = composeTriRaceWeek(input70(SUNDAY, {
+      longCourse: false, fraction: 0.55, ctx: { ...ctx, shortCourse: true, bikeIF: 0.83 },
+      ref: { minutes: { swim: 126, bike: 345, run: 311 }, counts: { swim: 3, bike: 3, run: 3 }, total: 9 },
+    }));
+    const m = perDisc(out);
+    const runs = out.filter(w => w.discipline === 'run' && w.taperRole !== 'day_before');
+    // The swim gives up a session and keeps its minutes in two; the run keeps
+    // three sessions, each at its 45-min race-week cap.
+    expect(out.filter(w => w.discipline === 'swim').length).toBe(2);
+    expect(runs.length).toBe(3);
+    expect(runs.every(w => w.estimatedDurationMin === TRI_RACE_WEEK_SESSION_CAP_MIN.run)).toBe(true);
+    expect(Math.abs(m.swim - 0.55 * 126)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    expect(Math.abs(m.bike - 0.55 * 345)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    expect(shapeViolations(out)).toEqual([]);
+  });
+
+  it('the day before drops the run first when ride plus run would outweigh the lightest day; every discipline keeps a session', () => {
+    // A thin bike budget (21 min at 0.30 of 70) and a 20-min swim opener as
+    // the lightest earlier day: ride 20 + run 5 would be heavier.
+    const out = composeTriRaceWeek(input70(SUNDAY, {
+      longCourse: false, ctx: { ...ctx, shortCourse: true, bikeIF: 0.88 },
+      ref: { minutes: { swim: 70, bike: 70, run: 150 }, counts: { swim: 2, bike: 2, run: 3 }, total: 7 },
+    }));
+    expect(out.filter(w => w.taperRole === 'day_before').map(w => w.discipline)).toEqual(['bike']);
+    expect(out.some(w => w.discipline === 'run' && w.taperRole !== 'day_before')).toBe(true);
+    for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d), d).toBe(true);
+    expect(shapeViolations(out)).toEqual([]);
+  });
+
   it('the day-before ride is never the week\'s longest session', () => {
     const out = composeTriRaceWeek(input70(SUNDAY, {
       fraction: 0.55,
