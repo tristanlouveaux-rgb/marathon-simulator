@@ -68,7 +68,7 @@ import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
-import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import type { InjuryState } from '@/types/injury';
 import {
   HYROX_WEEKLY_SESSIONS,
@@ -736,6 +736,11 @@ interface HyroxWeekInputs {
    *  computed here. */
   firstDow?: number;
   realRunning?: boolean;
+  /** The station target times (hyroxPlanningStationBenchmarks) and the
+   *  station load tier (hyroxLoadTierForState), read once per plan build:
+   *  every build of every week reads them. Unset: computed here. */
+  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
 }
 
 /** What a training week over its size (the acute:chronic guard, the deload
@@ -898,7 +903,7 @@ function generateWeekSessions(
     counts.runs = Math.max(0, inputs.maxRuns);
   }
   // Station loads for MTL follow the athlete's division (hyrox-division.ts).
-  const loadTier = hyroxLoadTierForState(state);
+  const loadTier = inputs.loadTier ?? hyroxLoadTierForState(state);
 
   const scale = inputs.scale ?? 1;
   // Running: HYROX_RUN_SHARE of the chosen weekly minutes in a training week
@@ -1013,7 +1018,7 @@ function generateWeekSessions(
   // applies, for every target: a singles athlete whose times came from
   // doubles race splits trains to those times, not to population seeds, and
   // a doubles athlete is never prescribed the pair's time as a solo target.
-  const stationBenchmarks = hyroxPlanningStationBenchmarks(state);
+  const stationBenchmarks = inputs.stationBenchmarks ?? hyroxPlanningStationBenchmarks(state);
 
   // ── Station sessions and bricks share the non-running budget ──────────────
   // Week 1, first station slot is the assessment for everyone. Users with
@@ -2456,6 +2461,8 @@ export function buildHyroxTrainingWeeks(
   const ergTssPerMin = plannedTssPerMin(HYROX_EASY_ERG_TYPE, HYROX_EASY_RPE);
   // Read once per plan build: every build of every week reads them.
   const realRunning = realRunningSignal(state);
+  const planStationBenchmarks = hyroxPlanningStationBenchmarks(state);
+  const planLoadTier = hyroxLoadTierForState(state);
   const easyRunTssPerMin = plannedTssPerMin('hyrox_run_easy', HYROX_EASY_RPE);
 
   const last = Math.min(upto, trainingWeeks);
@@ -2773,7 +2780,7 @@ export function buildHyroxTrainingWeeks(
         runBudgetMin: runBudgetAt(sizeMin), fillMin: fillAt(sizeMin), ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap,
         easyHoldMin, easyHoldRunBudgetMin: easyHoldMin != null ? runBudgetMin : undefined, ceilingSized: sized,
         longFixed, easyMaxMin, maxSessions: plusOne ? maxSessions + 1 : maxSessions, maxSessionsName, maxRuns, noAssessment,
-        runFloorMin, extraSession: plusOne, firstDow, realRunning, sessionMemo,
+        runFloorMin, extraSession: plusOne, firstDow, realRunning, sessionMemo, stationBenchmarks: planStationBenchmarks, loadTier: planLoadTier,
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
