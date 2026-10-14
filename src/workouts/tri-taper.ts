@@ -618,8 +618,8 @@ interface ComposedWeek {
  *      on every window day. An opener never takes the training slot a
  *      discipline with no activation and no brick needs for its only session
  *      (a Thursday race has one training day). When no budget holds one,
- *      race week still holds one opener, at the 4-min floor, in the
- *      discipline it overshoots least (its minimal opener less its budget
+ *      race week still holds one opener, at the 3-repeat floor (3 x 90 s,
+ *      Dave Scott's 4 min), in the discipline it overshoots least (its minimal opener less its budget
  *      left), never in such a slot. Openers are typed by their steady content
  *      (an endurance ride, an easy run, an endurance swim).
  *   4. The rest of each budget split into aerobic sessions: the reference
@@ -803,14 +803,14 @@ export function composeTriRaceWeekWithClosing(inp: TriRaceWeekInput): { week: Wo
       openers[d]++;
     }
     // Race week holds at least one opener: on the window day nearest the
-    // race, at the 4-min floor, when no budget held one. It goes to the
-    // discipline it overshoots least (its minimal opener less its budget left),
-    // the order's first among equals, so the week stays nearest its fraction
-    // (as the frequency sessions and the slot cuts do); never to an uncovered
-    // discipline's only slot. In a thin week (one session per discipline in
-    // the reference week) the run's 30.5-min opener against a few minutes of
-    // budget made race week heavier than taper week 1; the swim's sits nearest
-    // its budget.
+    // race, at the 3-repeat floor (3 x 90 s, Dave Scott's 4 min), when no
+    // budget held one. It goes to the discipline it overshoots least (its
+    // minimal opener less its budget left), the order's first among equals,
+    // so the week stays nearest its fraction (as the frequency sessions and
+    // the slot cuts do); never to an uncovered discipline's only slot. In a
+    // thin week (one session per discipline in the reference week) the run's
+    // 31-min opener against a few minutes of budget made race week heavier
+    // than taper week 1; the swim's sits nearest its budget.
     if (openerPlan.length === 0 && openerDays.length > 0) {
       const cands = order.filter(x => present[x]);
       const open = cands.filter(x => !crowds(x, [], slotsFree));

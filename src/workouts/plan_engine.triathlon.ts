@@ -1017,7 +1017,8 @@ interface TaperSlot {
  * starts at its share; a quality session rises to the minutes its sourced
  * main set needs (no longer than its reference session, except up to the
  * minutes that hold Dave Scott's 4-min floor: a 30-min reference run holds a
- * 30.5-min race-pace session of 3 x 90 s, not 2), and every session to
+ * 31-min race-pace session of 3 x 90 s, not a 30-min session of 2), and
+ * every session to
  * TRI_TAPER_SESSION_FLOOR_MIN. The excess comes off the longest sessions:
  * first the aerobic sessions down to the floor and quality sessions down to
  * their need (steady minutes go first), then quality sessions down to the
