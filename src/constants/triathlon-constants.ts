@@ -116,14 +116,18 @@ export const IM_T1_SHARE_OF_TOTAL = 0.58;
 
 /**
  * Race-taper length in weeks, by race distance (Tristan, 2026-10-13). No study
- * keys taper length to race distance; distance is a practical proxy. The
- * meta-analyses favour 8 to 14 days (Bosquet 2007 ES 0.59; Wang 2023), and
- * coaching uses 3 to 8 days for sprint (Dixon, Eriksson), about 10 to 14 for
- * Olympic and about 2 weeks for 70.3 and Ironman (Barth, Eriksson, Goeringer,
- * Fitzgerald). T100 has no source of its own: it takes 2, the value of both
- * neighbours (Olympic and 70.3). A plan too short for its taper keeps the
- * plan-length rule (computeTriPlanPhases). Athletes whose reference week is
- * under TRI_LOW_HOURS_THRESHOLD_H taper in race week only (Goeringer).
+ * keys taper length to race distance; distance is a practical proxy, and the
+ * moderator with some support is pre-taper load (Thomas & Busso 2005; Mujika
+ * in the Triathlete guide). The meta-analyses favour 8 to 14 days (Bosquet
+ * 2007 ES 0.59; Wang 2023). Coaching: sprint 3 to 8 days (Dixon, Eriksson);
+ * Olympic about 3 to 14 days, most often about 10, longer after an intense
+ * block (the Triathlete guide, Eriksson, Ricci, Dixon); 70.3 about 2 weeks
+ * (Barth, Eriksson; Allen effectively 3, a 20-25% cut before his two-week
+ * plan); Ironman mostly 2 to 3 weeks (Fitzgerald and Goeringer 2; Barth 3;
+ * Dave Scott 22 days). T100 has no source of its own: it takes 2, the value
+ * of both neighbours (Olympic and 70.3). A plan too short for its taper keeps
+ * the plan-length rule (computeTriPlanPhases). Athletes whose reference week
+ * is under TRI_LOW_HOURS_THRESHOLD_H taper in race week only (Goeringer).
  */
 export const TRI_TAPER_WEEKS_BY_DISTANCE: Record<TriathlonDistance, number> = {
   sprint:    1,
@@ -137,12 +141,15 @@ export const TRI_TAPER_WEEKS_BY_DISTANCE: Record<TriathlonDistance, number> = {
 export const CYCLING_TAPER_WEEKS = 2;
 
 /**
- * Low-hours threshold in hours of swim, bike and run in the reference week
- * (Goeringer, TrainingPeaks 2021: athletes under 8 h a week need "two to three
- * light days rather than two to three weeks"). Below it the taper is race week
- * only, whose last two days are already the lightest (the lower end of his 2
- * to 3). Triathlon only: cycling keeps its 2 weeks (Tristan's cycling scope,
- * 2026-10-13, leaves the low-hours rule out).
+ * Low-hours threshold in hours of training in the reference week: swim, bike
+ * and run, the brick run and commute runs; gym left out (Goeringer,
+ * TrainingPeaks 2021: athletes under 8 h a week need "two to three light days
+ * rather than two to three weeks", read as total weekly training). Below it
+ * the taper is race week only, whose last two days are the lightest (the
+ * lower end of his 2 to 3). One of them is a full rest day, which comes from
+ * Friel and Allen; Goeringer himself avoids full rest days. Triathlon only:
+ * cycling keeps its 2 weeks (Tristan's cycling scope, 2026-10-13, leaves the
+ * low-hours rule out).
  */
 export const TRI_LOW_HOURS_THRESHOLD_H = 8;
 

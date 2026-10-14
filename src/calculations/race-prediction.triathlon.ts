@@ -305,9 +305,11 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   // window gets no "training closure" credit (freshness, not endurance build).
   // The plan's own race taper (triPlanTaperWeeks), shared by swim, bike and
   // run as the plan tapers all three over the same weeks (Tristan
-  // 2026-10-13). It replaced a per-discipline table (Mujika 2002, Friel 2018:
-  // swim longest, bike shortest; Ironman run 3 weeks) that the plan never
-  // followed.
+  // 2026-10-13). It replaced a per-discipline table (swim longest, bike
+  // shortest; Ironman run 3 weeks; cited to Mujika 2002 and Friel 2018) that
+  // the plan never followed. Its Friel citation conflicts with Friel's own
+  // stagger in the coaching research (run tapered first, 3 weeks; bike 2;
+  // swim last, 1).
   const swimTaper = taperWeeks;
   const bikeTaper = taperWeeks;
   const runTaper  = taperWeeks;

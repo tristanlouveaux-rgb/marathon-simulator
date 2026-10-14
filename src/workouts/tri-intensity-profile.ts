@@ -53,7 +53,8 @@ export type TriRunQualityKind = 'threshold' | 'vo2';
  *
  * Taper rows mirror peak (Tristan, 2026-10-13: keep quality in the taper).
  * Cutting intensity in a taper gave ES -0.02 against 0.33 for keeping it
- * (Bosquet 2007; Wang 2023 -0.55 vs +0.25). The race taper itself takes its
+ * (Bosquet 2007); in Wang 2023, where a negative SMD favours the taper,
+ * keeping it gave -0.55 and cutting it +0.25. The race taper itself takes its
  * counts from the reference week (plan_engine.triathlon triTaperWeekOne);
  * these rows feed the inter-cycle taper weeks of 28+ week plans. The gate
  * below caps the intensity.
@@ -146,11 +147,14 @@ const LOW_INTENSITY_FALLBACK_RUN: TriRunQualityKind = 'threshold';
  *     swim keeps speed sets (25 to 75 m fast reps); the run stays at threshold
  *     (the run library has no short-effort session).
  *   - 'race_pace' (T100, 70.3, Ironman): quality is capped at race intensity
- *     (Alexander: "cap the intensity at my target race pace"). Threshold is
- *     above long-course race intensity, so the sub-threshold kinds the gate
- *     allowed before (threshold runs and swims, sweet-spot rides) give way to
- *     race-pace sessions (tri-taper.ts). Cycling mode, whose events last 1.5 h
- *     or more, takes this ceiling at its event's intensity factor.
+ *     (Alexander keeps taper sessions at "target race intensity level",
+ *     TrainingPeaks 2022; his "cap the intensity at my target race pace" is
+ *     from a Shimano interview seen only as a search snippet, medium
+ *     confidence). Threshold is above long-course race intensity, so the
+ *     sub-threshold kinds the gate allowed before (threshold runs and swims,
+ *     sweet-spot rides) give way to race-pace sessions (tri-taper.ts), held
+ *     inside Dave Scott's 4 to 12 min taper sets. Cycling mode, whose events
+ *     last 1.5 h or more, takes this ceiling at its event's intensity factor.
  */
 export const TRI_TAPER_INTENSITY_CEILING: Record<TriathlonDistance, 'short_efforts' | 'race_pace'> = {
   sprint:  'short_efforts',
