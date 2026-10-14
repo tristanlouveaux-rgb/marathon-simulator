@@ -5,9 +5,10 @@
  * generator. Every week of every plan must hold:
  *   - the acute:chronic guard: a training week's planned load (canonical TSS)
  *     at most ACWR_SAFE_HIGH x the mean of the previous 4 planned weeks, weeks
- *     before week 1 counting as the plan's chronic seed (D4: the logged weekly
- *     load, else the nominal week 1; deload weeks and the week after them
- *     included);
+ *     before week 1 counting as the plan's chronic seed (D4: the larger of the
+ *     logged weekly load and the nominal week 1; deload weeks and the week
+ *     after them included), or the nominal week 1 when that is larger (round
+ *     7: the guard never holds a week under the plan's own first week);
  *   - the single-run rule: no run longer than 110% of the longest run of the
  *     previous 4 weeks (LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, distance),
  *     within the metre the generator rounds distances to;
@@ -414,11 +415,13 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       // Week 1's assessment is exempt from week 1's guard (a fixed
       // calibration pass), and noted when the week sits above it.
       const exempt = w === 1 ? tss({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0;
-      if (exempt > 0 && tss(wk) > ACWR_SAFE_HIGH * chronic + EPS && !notes(wk).some(n => /by the assessment/.test(n))) out.push(`W1: planned ${tss(wk).toFixed(1)} TSS above the guard and no assessment note`);
+      // The guard never sits under the nominal week 1 (round 7).
+      const guardCap = Math.max(ACWR_SAFE_HIGH * chronic, detail[0]?.guardFloorTss ?? 0);
+      if (exempt > 0 && tss(wk) > guardCap + EPS && !notes(wk).some(n => /by the assessment/.test(n))) out.push(`W1: planned ${tss(wk).toFixed(1)} TSS above the guard and no assessment note`);
       // Over the guard only when the week holds just its last station session
       // or brick at its floor, and the week says so.
       const heldOver = lastWorkOnly(wk) && notes(wk).some(n => /planned load \d+ TSS above the \d+ TSS guard/.test(n));
-      if (!heldOver && tss(wk) - exempt > ACWR_SAFE_HIGH * chronic + EPS) out.push(`W${w}: planned ${(tss(wk) - exempt).toFixed(1)} TSS above ${(ACWR_SAFE_HIGH * chronic).toFixed(1)}`);
+      if (!heldOver && tss(wk) - exempt > guardCap + EPS) out.push(`W${w}: planned ${(tss(wk) - exempt).toFixed(1)} TSS above ${guardCap.toFixed(1)}`);
     }
     // Taper fractions, station work and the taper long run.
     if (ph === 'taper' && w >= taperStart) {
@@ -1075,12 +1078,15 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
     expect(held).toBeGreaterThanOrEqual(0);
   });
 
-  it('D4: the chronic window before week 1 is the logged weekly load when there is one (week 1 guarded), else the nominal week 1', () => {
+  it('D4: the chronic window before week 1 is the larger of the logged weekly load (week 1 guarded) and the nominal week 1, else the nominal week 1; no guard under the nominal week 1 (round 7)', () => {
+    const shape = (wks: Week[]) => wks.map(wk => prescribed(wk).map(w => `${w.dayOfWeek} ${w.t} ${w.estimatedDurationMin}`).join(' | '));
     for (const band of BANDS) {
-      const s = build(band, HYROX_HOURS_RANGE[band].default, 16);
+      const s = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16));
       const nominal = generateHyroxPlanDetailed(structuredClone(s)).detail;
       expect(nominal[0].chronicSeedSource).toBe('nominal');
       expect(nominal[0].acwrCapTss).toBeNull();
+      expect(nominal[0].guardFloorTss).toBe(nominal[0].chronicSeedTss);
+      for (const d of nominal) if (d.acwrCapTss != null) expect(d.acwrCapTss).toBeGreaterThanOrEqual(d.guardFloorTss - EPS);
       // The nominal week 1 (a station session in the assessment's slot, under
       // week 1's size) holds at least what week 1 holds besides the
       // assessment, which the phase budget exempts (round 6).
@@ -1091,14 +1097,24 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
       const low = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16, {}, 100));
       const logged = generateHyroxPlanDetailed(low).detail;
       expect(logged[0].chronicSeedSource).toBe('logged');
-      expect(logged[0].chronicSeedTss).toBe(100);
-      expect(logged[0].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * 100, 6);
+      // The nominal week 1 is the same plan's first week built without the
+      // guard; the seed is the larger of it and the logged load.
+      expect(logged[0].guardFloorTss).toBeCloseTo(nominal[0].guardFloorTss, 6);
+      const seed = Math.max(100, logged[0].guardFloorTss);
+      expect(logged[0].chronicSeedTss).toBeCloseTo(seed, 6);
+      expect(logged[0].acwrCapTss).toBeCloseTo(ACWR_SAFE_HIGH * seed, 6);
       // Week 1's assessment is exempt from week 1's guard (a fixed
       // calibration pass); the rest of week 1 is guarded.
       const assessment = prescribed({ triWorkouts: logged[0].workouts } as Week).filter(w => w.t === 'hyrox_assessment');
       expect(assessment).toHaveLength(1);
       expect(logged[0].guardExemptTss).toBeCloseTo(tss({ triWorkouts: assessment } as Week), 6);
-      expect(logged[0].plannedTss - logged[0].guardExemptTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * 100 + EPS);
+      expect(logged[0].plannedTss - logged[0].guardExemptTss).toBeLessThanOrEqual(ACWR_SAFE_HIGH * seed + EPS);
+      // A logged load under the nominal week 1 counts as that week (round 7):
+      // the plan is the plan with no logged load (at 20 TSS the guard held
+      // competitive plans to one short race-pace session a week).
+      const tiny = structuredClone(build(band, HYROX_HOURS_RANGE[band].default, 16, {}, 20));
+      expect(generateHyroxPlanDetailed(tiny).detail[0].chronicSeedTss).toBeCloseTo(nominal[0].guardFloorTss, 6);
+      expect(shape(tiny.wks)).toEqual(shape(s.wks));
       expect(logged[1].guardExemptTss).toBe(0);
       expect(nominal[0].guardExemptTss).toBe(0);
 

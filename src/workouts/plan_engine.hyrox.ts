@@ -16,8 +16,9 @@
  *      week right before the race taper, isHyroxDeloadWeek, × the effort /
  *      MTL-gap lever), the deload ceiling and the acute:chronic guard (a
  *      training week's planned load at most ACWR_SAFE_HIGH × the mean of the
- *      previous 4 planned weeks; weeks before week 1 count as the logged
- *      weekly load, else the nominal week 1, fixed when the plan is created).
+ *      previous 4 planned weeks, never under the nominal week 1; weeks
+ *      before week 1 count as the larger of the logged weekly load, fixed
+ *      when the plan is created, and the nominal week 1).
  *      A week the guard or the deload ceiling cannot hold at the chosen hours
  *      is built at the largest size they hold, the same week at every chosen
  *      hours above it.
@@ -1663,12 +1664,17 @@ export interface HyroxWeekDetail {
    *  weekly load); 0 otherwise. plannedTss - guardExemptTss <= acwrCapTss. */
   guardExemptTss: number;
   /** What the guard's chronic window counts each week before week 1 as
-   *  (canonical TSS, D4): the athlete's logged weekly load (signalBBaseline)
-   *  as stored when the plan was created (hyroxConfig.planChronicSeed),
-   *  otherwise the nominal week 1 (its structure with a station session in
-   *  the assessment's slot). The same on every week. */
+   *  (canonical TSS, D4): the larger of the athlete's logged weekly load
+   *  (signalBBaseline) as stored when the plan was created
+   *  (hyroxConfig.planChronicSeed) and the nominal week 1 (guardFloorTss);
+   *  with no logged load, the nominal week 1. The same on every week. */
   chronicSeedTss: number;
   chronicSeedSource: 'logged' | 'nominal';
+  /** The guard's floor (canonical TSS): the nominal week 1, the plan's own
+   *  first week as it builds without the guard (a station session in the
+   *  assessment's slot). No week's guard sits under it (round 7). The same on
+   *  every week. */
+  guardFloorTss: number;
   /** Deload weeks: HYROX_DELOAD_FACTOR × the last loaded week's planned
    *  minutes and TSS (null: not a deload week, or no loaded week before it). */
   deloadCapMin: number | null;
@@ -1982,7 +1988,8 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *      (hyroxWeekForRace, raceWeekDays).
  * 2. WEEK SIZE = min(the chosen weekly hours, the acute:chronic guard
  *    (ACWR_SAFE_HIGH x the mean of the previous HYROX_CHRONIC_WINDOW_WEEKS
- *    planned weeks, the weeks before week 1 seeded per D4), the phase budget
+ *    planned weeks, the weeks before week 1 seeded per D4, never under the
+ *    nominal week 1: round 7), the phase budget
  *    (week 1's assessment exempt), the deload or taper fraction).
  *    - The guard and the deload ceiling do not depend on the chosen hours. A
  *      week they cannot hold at the chosen hours is built at the largest size
@@ -2052,8 +2059,10 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  * the acute:chronic guard (planned TSS at most ACWR_SAFE_HIGH × the mean of the
  * previous HYROX_CHRONIC_WINDOW_WEEKS weeks; Tristan 2026-10-12, Gabbett 2016's
  * 0.8 to 1.3 sweet spot, the same bound as running's week-1 ACWR_SAFETY_CAP),
- * whose window counts each week before week 1 as the athlete's logged weekly
- * load when it exists, otherwise as the nominal week 1 (D4); the deload
+ * whose window counts each week before week 1 as the larger of the athlete's
+ * logged weekly load and the nominal week 1 (D4; round 7), and which never
+ * sits under the nominal week 1 (round 7: the plan's own first week as it
+ * builds without the guard, a station session in the assessment's slot); the deload
  * ceiling (the last loaded week × HYROX_DELOAD_FACTOR); the single-run rule
  * (110% of the longest run of the previous LONG_RUN_LOOKBACK_WEEKS weeks;
  * Frandsen 2025); the taper's reference week and the week before; and the
@@ -2139,14 +2148,15 @@ export function buildHyroxTrainingWeeks(
   const hoursMin = (hx.weeklyHoursAvailable ?? 0) * 60;
   // The weeks built so far, in order: each week's rules read them.
   const built: HyroxWeekDetail[] = [];
-  // The guard's chronic seed (D4): the logged weekly load, or the nominal
-  // week 1, computed when week 1 is built.
+  // The guard's chronic seed (D4) and its floor (round 7), both set when
+  // week 1 is built: the nominal week 1, and the seed the larger of it and
+  // the logged weekly load.
   let chronicSeedTss = loggedSeedTss;
-  let seedSet = chronicSeedSource === 'logged';
+  let guardFloorTss = 0;
   // What a week's rules read from the weeks before it: the deload and its
   // reference, the single-run ceiling, the acute:chronic guard and the
   // previous Sunday.
-  const historyLimits = (w: number) => {
+  const historyLimits = (w: number, unguarded = false) => {
     const prevSunday = built.length > 0 ? hyroxSundayFlags(built[built.length - 1].workouts) : null;
     const phase = (planPhases[w - 1]?.ph ?? 'base') as HyroxPhase;
     const raceWeek = isRaceWeek(w, trainingWeeks, state.continuousMode);
@@ -2186,8 +2196,16 @@ export function buildHyroxTrainingWeeks(
       for (let k = 1; k <= HYROX_CHRONIC_WINDOW_WEEKS; k++) sum += built[w - 1 - k]?.plannedTss ?? chronicSeedTss;
       return sum / HYROX_CHRONIC_WINDOW_WEEKS;
     };
-    const acwrCapTss = phase !== 'taper' && (w >= 2 || chronicSeedSource === 'logged')
-      ? ACWR_SAFE_HIGH * chronicMean()
+    // The guard never holds a week under the plan's own nominal week 1
+    // (round 7, Tristan 2026-10-14): with a logged load of about 25 TSS or
+    // less, sessions come in whole units, the guard held each week just under
+    // the smallest one that would fit, and the chronic window never grew
+    // (competitive plans of 12 weeks or more at 20 TSS: one short race-pace
+    // session a week, no run all plan). Running's week-1 ACWR safety cap
+    // likewise applies only above a minimum baseline, where the floors govern
+    // (athlete-archetype.ts ACWR_CAP_BASELINE_MIN).
+    const acwrCapTss = !unguarded && phase !== 'taper' && (w >= 2 || chronicSeedSource === 'logged')
+      ? Math.max(ACWR_SAFE_HIGH * chronicMean(), guardFloorTss)
       : null;
     // The Sunday-to-Monday spacing: the week before as built here, and at the
     // first replaced week also the week before as stored.
@@ -2199,7 +2217,7 @@ export function buildHyroxTrainingWeeks(
   // One week, built on the weeks before it. `nominal`: week 1 with a station
   // session in the assessment's slot (the D4 chronic seed, below).
   const buildWeek = (w: number, nominal = false): HyroxWeekDetail => {
-    const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w);
+    const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w, nominal);
     const effortMult = w >= (state.w ?? 1) ? effortNow : 1.0;
     const firstDow = firstTrackedDow(state.planStartDate, w, state.planCreatedAt);
     // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR): reduce-only,
@@ -3083,6 +3101,7 @@ export function buildHyroxTrainingWeeks(
       guardExemptTss: acwrCapTss != null ? guardExemptTss(attempt.workouts) : 0,
       chronicSeedTss,
       chronicSeedSource,
+      guardFloorTss,
       deloadCapMin,
       deloadCapTss,
       longRunMin: (() => {
@@ -3134,9 +3153,13 @@ export function buildHyroxTrainingWeeks(
     // alone), the seed was the solver's attempt, which at 2 h could sit over
     // the week's own size (novice 2 h 9 weeks: 185 TSS for a 66-min week) and
     // let week 3 jump 2.15 times week 2's load.
-    if (w === 1 && !seedSet) {
-      chronicSeedTss = buildWeek(1, true).plannedTss;
-      seedSet = true;
+    // Round 7 (Tristan 2026-10-14): the nominal week 1 is built without the
+    // guard for every plan. It is the guard's floor, and the chronic seed is
+    // the larger of it and the logged weekly load, so a logged load under the
+    // plan's own first week counts as that week.
+    if (w === 1) {
+      guardFloorTss = buildWeek(1, true).plannedTss;
+      chronicSeedTss = chronicSeedSource === 'logged' ? Math.max(loggedSeedTss, guardFloorTss) : guardFloorTss;
     }
     built.push(buildWeek(w));
   }
