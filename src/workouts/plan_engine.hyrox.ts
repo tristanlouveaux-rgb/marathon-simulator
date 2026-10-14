@@ -2138,11 +2138,12 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *      taper's smallest circuit, hyroxRaceTaperFloorCircuit) and never above
  *      the week before (taperDropRank sheds sessions until they hold). Its
  *      smallest circuit (MIN_CIRCUIT_ROUNDS rounds of MIN_CIRCUIT_STATIONS
- *      stations) is exempt from the fractions in taper week 1 and race week,
- *      week 1's assessment too when week 1 is the taper, and race week may
- *      sit above the week before only by holding the primer and that circuit
- *      and nothing else (round 7); the chosen hours cap every race taper
- *      week;
+ *      stations; in a week holding no circuit, its smallest brick at
+ *      MIN_CIRCUIT_ROUNDS rounds) is exempt from the fractions in taper week 1
+ *      and race week, week 1's assessment too when week 1 is the taper, and
+ *      leaves last for any other ceiling; race week may sit above the week
+ *      before only by holding the primer and that circuit and nothing else
+ *      (round 7); the chosen hours cap every race taper week;
  *    - no brick in base, before HYROX_FIRST_BRICK_WEEK or in race week
  *      (weekSessionCounts), and the race-week closing rules
  *      (hyroxWeekForRace, raceWeekDays).
