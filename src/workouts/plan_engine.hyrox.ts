@@ -1986,11 +1986,16 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *    (week 1's assessment exempt), the deload or taper fraction).
  *    - The guard and the deload ceiling do not depend on the chosen hours. A
  *      week they cannot hold at the chosen hours is built at the largest size
- *      in minutes they hold (a bisection over a fixed range, fit): its
+ *      in minutes they hold (a bisection over a fixed range, fit; it holds the
+ *      weekly hours and the phase budget too when the smallest week does): its
  *      budget-sized inputs (the station sessions' share of the phase budget,
  *      the running share, the easy erg fill) read that size, and step 3
  *      allocates inside it. So that week is the same at every chosen hours
- *      above its size, and so are its load and every later week's guard.
+ *      above its size, and so are its load and every later week's guard,
+ *      wherever the week's load rises with its size (whole rounds can make it
+ *      step down: the bisection then finds a size that holds, not always the
+ *      largest). Step 3 decides on feasibility checks (fitOrDefer, feasible)
+ *      and fits the week once (round 6 review, pass 3: performance).
  *    - The weekly hours, the phase budget and the taper fractions use plain
  *      proportional sizing (fit, as in round 4): easy erg work gives way
  *      first, then the station sessions, bricks and easy runs shrink by one
