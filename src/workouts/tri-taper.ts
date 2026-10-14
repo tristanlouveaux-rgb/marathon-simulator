@@ -556,6 +556,8 @@ export interface TriTaperRef {
 }
 
 export interface TriRaceWeekInput {
+  /** The disciplines race week trains: configured, and held by the reference
+   *  week. Race week adds no session, opener or activation in any other. */
   present: Record<TriDisc, boolean>;
   /** T100, 70.3, Ironman: Byrn's brick, a run and a swim opener. */
   longCourse: boolean;

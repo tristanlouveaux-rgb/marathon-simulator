@@ -294,6 +294,18 @@ function gymViolations(p: Plan): string[] {
  *  activation only, decision 3). Empty without a closing week. */
 const closingWeek = (p: Plan): Workout[] => (p.s.tw > p.tw ? p.s.wks[p.tw].triWorkouts ?? [] : []);
 
+/** Race week and the closing week add no discipline the reference week
+ *  never trains (review, 2026-10-14: gym and commutes can take a thin
+ *  long-course week's whole budget). */
+function presentViolations(p: Plan): string[] {
+  const out: string[] = [];
+  for (const w of [...sessions(p.s.wks[p.tw - 1]), ...closingWeek(p)]) {
+    const ds: Disc[] = w.t === 'brick' ? ['bike', 'run'] : [(w.discipline ?? 'run') as Disc];
+    for (const d of ds) if (!p.present.includes(d)) out.push(`race week ${w.n} in ${d}, which the reference week does not train`);
+  }
+  return out;
+}
+
 /** Rules every race weekday keeps: the day before, two days out, caps; the
  *  closing week holds the day-before activation and nothing else. */
 function structuralViolations(p: Plan): string[] {
@@ -432,7 +444,9 @@ function taperViolations(p: Plan): string[] {
       if (!longCourse && disc === 'run' && w.t === 'vo2') out.push(`week ${wkNum} VO2 run in the taper`);
     }
     if (race) {
-      if (!sessions(wk).some(w => w.taperRole === 'opener')) out.push('race week has no race-pace opener');
+      // An opener whenever the reference week trains a discipline (a week of
+      // gym and commutes alone gives race week nothing to open).
+      if (present.length > 0 && !sessions(wk).some(w => w.taperRole === 'opener')) out.push('race week has no race-pace opener');
       return;
     }
     // Quality kept: the count, and the work inside it.
@@ -562,7 +576,7 @@ describe('race taper rules: Sunday to Wednesday races with gym and commutes, dow
           for (const h of hours) {
             for (const dow of [6, 0, 1, 2]) {
               const p = plan(mode, weeks, h, dow, o);
-              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p), ...copyViolations(p), ...gymViolations(p)]) {
+              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p), ...copyViolations(p), ...gymViolations(p), ...presentViolations(p)]) {
                 found.push(`${tag} ${weeks}w ${h}h ${DOW[dow]}: ${v}`);
               }
             }
@@ -572,6 +586,23 @@ describe('race taper rules: Sunday to Wednesday races with gym and commutes, dow
       expect(found).toEqual([]);
     });
   }
+});
+
+describe('a reference week with no swim, bike or run (gym and commutes fill the budget)', () => {
+  it('T100 and 70.3 at 4 h with 2 gym sessions and three bidirectional commutes: race week adds no discipline and stays at or under taper week 1', () => {
+    at(NOW);
+    for (const mode of ['t100', '70.3'] as Mode[]) {
+      for (const dow of [6, 2]) {
+        const p = plan(mode, 16, 4, dow, { gym: 2, commute: true });
+        const tag = `${mode} 16w 4h ${DOW[dow]}`;
+        expect(p.present, tag).toEqual([]);
+        expect(presentViolations(p), tag).toEqual([]);
+        const t1 = minsOf(sessions(p.s.wks[p.tw - 2]));
+        const rw = minsOf([...sessions(p.s.wks[p.tw - 1]), ...closingWeek(p)]);
+        expect(rw, tag).toBeLessThanOrEqual(t1);
+      }
+    }
+  });
 });
 
 describe('taper week 1 keeps its quality runs when gym and commutes fill the earlier days', () => {

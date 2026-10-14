@@ -1264,7 +1264,13 @@ function triRaceWeek(
   const { week: composed, closing: closingActs } = composeTriRaceWeekWithClosing({
     closingDayBeforeDow,
     maxTotalMin,
-    present: { swim: disciplines.includes('swim'), bike: disciplines.includes('bike'), run: disciplines.includes('run') },
+    // The disciplines the reference week trains: race week adds none it never
+    // held (gym and commutes can fill a thin long-course week's budget).
+    present: {
+      swim: disciplines.includes('swim') && ref.minutes.swim > 0,
+      bike: disciplines.includes('bike') && ref.minutes.bike > 0,
+      run: disciplines.includes('run') && ref.minutes.run > 0,
+    },
     longCourse: !cyclingOnly && triTaperCapsAtRacePace(tri.distance),
     singleSport: cyclingOnly,
     fraction,
