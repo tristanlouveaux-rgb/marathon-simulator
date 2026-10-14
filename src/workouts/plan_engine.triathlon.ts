@@ -17,7 +17,7 @@
  * marathon training).
  */
 
-import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, spaceStoredPlanQualityRuns } from './race-day-rules';
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, spaceStoredPlanQualityRuns, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
@@ -60,6 +60,7 @@ import {
   triTaperThresholdRunNeedMin,
   triTaperVo2MicrosRide,
   TRI_RACE_PACE_MIN_REPS,
+  TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY,
   TRI_TAPER_MICROS_MIN_REPS,
   TRI_TAPER_SESSION_FLOOR_MIN,
   type TriTaperRef,
@@ -383,16 +384,30 @@ function triWeekForRace(
   const generated = dropSessionsOnOrAfterRaceDay(week, weekIndex, state.planStartDate, tri.raceDate);
   const raceWindowCut: TriRaceWindowCut = [];
   if (!layout) return { workouts: generated, raceWindowCut };
-  const cleared = clearStoredPlanRaceWindow(generated, {
+  const dropped: Workout[] = [];
+  let cleared = clearStoredPlanRaceWindow(generated, {
     weekIndex,
     layout,
     isLongSession: isTriLongSession,
     firstScheduleDow: firstDow,
     dayNames: TRI_DAY_NAMES,
-    // Tracking keeps the build prescription: the forecast's planned dose reads
-    // these back (Week.raceWindowCut, tri-volume-by-discipline).
-    onDrop: w => raceWindowCut.push({ discipline: w.discipline, estimatedDurationMin: w.estimatedDurationMin }),
+    onDrop: w => dropped.push(w),
   });
+  // A race-taper week keeps every discipline (Tristan 2026-10-13): when the
+  // race window took all of a discipline's sessions, one goes back on a day
+  // the window leaves open (taperWeekKeepsDisciplines).
+  const taper = triRaceTaper(state, trainingWeeks);
+  let reseated = new Set<Workout>();
+  if (taper && weekIndex >= taper.start && weekIndex < trainingWeeks) {
+    ({ workouts: cleared, reseated } = taperWeekKeepsDisciplines(generated, cleared, dropped, {
+      firstDow, lastDow: lastDowBefore(layout, weekIndex, RACE_DAY_CLEAR_DAYS),
+    }));
+  }
+  // Tracking keeps the build prescription: the forecast's planned dose reads
+  // the removed sessions back (Week.raceWindowCut, tri-volume-by-discipline).
+  for (const w of dropped) {
+    if (!reseated.has(w)) raceWindowCut.push({ discipline: w.discipline, estimatedDurationMin: w.estimatedDurationMin });
+  }
   // Rule 4's spacing: no quality run next to the long run, the brick or
   // another quality run in the last 13 days (running's rule; the brick and the
   // long run keep their back-to-back days).
@@ -407,6 +422,56 @@ function triWeekForRace(
     toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
   });
   return { workouts, raceWindowCut };
+}
+
+/** The latest weekday of plan week `weekIndex` more than `clearDays` days
+ *  before race day (-1 when the whole week is inside). */
+function lastDowBefore(layout: RaceWeekLayout, weekIndex: number, clearDays: number): number {
+  const weekStart = (weekIndex - 1) * 7;
+  let dow = 6;
+  while (dow >= 0 && layout.raceDayIndex - (weekStart + dow) <= clearDays) dow--;
+  return dow;
+}
+
+/**
+ * A race-taper week the race window cut keeps every discipline (planning side;
+ * Tristan 2026-10-13, decision 5: no discipline at zero in any taper week).
+ * For each discipline the generated week held and the cleared week holds none
+ * of (swim, bike and run sessions and the brick; gym and commutes aside), one
+ * removed session goes back at its own length: a quality session first (taper
+ * week 1 keeps the reference week's quality count), else the shortest. It
+ * takes a day the window leaves open (`firstDow` to `lastDow`, at least 7 days
+ * before race day) without that discipline, the one holding the fewest
+ * sessions, the latest among equals (nearest the day it was cut from). With no
+ * such day it stays out. Returns the week and the removed sessions put back.
+ */
+function taperWeekKeepsDisciplines(
+  generated: Workout[], cleared: Workout[], dropped: Workout[], opts: { firstDow: number; lastDow: number },
+): { workouts: Workout[]; reseated: Set<Workout> } {
+  const reseated = new Set<Workout>();
+  const counts = (w: Workout) => w.t !== 'gym' && !w.commute;
+  const has = (w: Workout, d: string) => counts(w) && ((w.discipline ?? 'run') === d || (w.t === 'brick' && (d === 'bike' || d === 'run')));
+  const quality = (w: Workout) => w.taperRole === 'race_pace' || isTriQualityRun(w)
+    || (w.discipline === 'swim' && (w.t === 'swim_threshold' || w.t === 'swim_speed'))
+    || (w.discipline === 'bike' && w.t !== 'bike_endurance' && w.t !== 'brick');
+  let out = [...cleared];
+  for (const d of ['swim', 'bike', 'run']) {
+    if (!generated.some(w => has(w, d)) || out.some(w => has(w, d))) continue;
+    const cand = dropped
+      .filter(w => counts(w) && w.t !== 'brick' && (w.discipline ?? 'run') === d)
+      .sort((a, b) => (Number(quality(b)) - Number(quality(a))) || ((a.estimatedDurationMin ?? 0) - (b.estimatedDurationMin ?? 0)))[0];
+    if (!cand) continue;
+    const days: number[] = [];
+    for (let dow = opts.lastDow; dow >= opts.firstDow; dow--) if (!out.some(w => w.dayOfWeek === dow && has(w, d))) days.push(dow);
+    if (days.length === 0) continue;
+    const perDay = (dow: number) => out.filter(w => w.dayOfWeek === dow).length;
+    const dow = days.reduce((b, x) => (perDay(x) < perDay(b) ? x : b), days[0]);
+    out.push({ ...cand, dayOfWeek: dow, dayName: TRI_DAY_NAMES[dow] });
+    reseated.add(cand);
+  }
+  if (reseated.size === 0) return { workouts: cleared, reseated };
+  out = out.map((w, i) => ({ w, i })).sort((a, b) => ((a.w.dayOfWeek ?? 0) - (b.w.dayOfWeek ?? 0)) || (a.i - b.i)).map(x => x.w);
+  return { workouts: out, reseated };
 }
 
 /** A threshold or VO2 run (the triathlon run quality kinds). */
@@ -967,13 +1032,18 @@ function triRaceWeek(
 
   const easyPace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm;
   // A one-week taper's race week never holds more than the week before (a
-  // deload week there can sit near race week's fraction).
+  // deload week there can sit near race week's fraction), read from that week
+  // as generated: after the scheduler and the race window, which can empty its
+  // last days (a Thursday or Friday race). Swim, bike, run and brick minutes;
+  // gym and commutes excluded, as race week counts them. The effort
+  // multiplier, applied after generation, is not included.
   let maxTotalMin: number | undefined;
   if (taper.weeks <= 1 && weekIndex > 1) {
     const prevPhase = triPlanPhases(state, totalWeeks)[weekIndex - 2]?.ph ?? 'peak';
-    const prev = triWeekParts(state, weekIndex - 1, totalWeeks, prevPhase);
-    const mins = (l: Workout[]) => l.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-    maxTotalMin = mins(prev.swim) + mins(prev.bike) + mins(prev.run) + (prev.brick?.estimatedDurationMin ?? 0);
+    const prev = triWeekForRace(state, weekIndex - 1, totalWeeks, prevPhase, genCtx?.layout ?? null).workouts;
+    maxTotalMin = prev
+      .filter(w => w.t !== 'gym' && !w.commute)
+      .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   }
   const composed = composeTriRaceWeek({
     maxTotalMin,
@@ -1023,7 +1093,12 @@ function triRaceWeek(
   const brick = composed.find(w => w.t === 'brick') ?? null;
   const byDisc = (d: string) => composed.filter(w => w.t !== 'brick' && (w.discipline ?? 'run') === d);
   const adapted = triGates(state, weekIndex, byDisc('swim'), byDisc('bike'), [...byDisc('run'), ...commutes], brick, own.gym);
-  const gymDays = fewestFirst([0, 1, 2, 3, 4, 5, 6].filter(dow => daysOut[dow] != null && daysOut[dow]! >= 4));
+  // Gym counts toward the two-a-day limit (TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY,
+  // commutes included in the day's count): it takes a day 4 or more days out
+  // with a slot left, and is left out when every such day is full.
+  const withCommutes = (dow: number) => perDay(dow) + commutes.filter(w => w.dayOfWeek === dow).length;
+  const gymDays = fewestFirst([0, 1, 2, 3, 4, 5, 6].filter(dow => daysOut[dow] != null && daysOut[dow]! >= 4
+    && withCommutes(dow) < TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY));
   const gym = adapted.gym.slice(0, gymDays.length)
     .map((w, i) => ({ ...w, dayOfWeek: gymDays[i], dayName: TRI_DAY_NAMES[gymDays[i]] }));
   const all = [...adapted.swim, ...adapted.bike, ...adapted.run, ...(adapted.brick ? [adapted.brick] : []), ...gym];
