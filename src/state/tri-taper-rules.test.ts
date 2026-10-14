@@ -251,6 +251,26 @@ function doubleViolations(p: Plan): string[] {
   return out;
 }
 
+/** Copy: no em dash in any taper-week session (CLAUDE.md copy rules), and no
+ *  long run in any week naming a segment as long as the run itself ("last
+ *  20min" in a 20-min run). */
+function copyViolations(p: Plan): string[] {
+  const out: string[] = [];
+  for (let w = p.taperStart; w <= p.s.tw; w++) {
+    for (const x of p.s.wks[w - 1].triWorkouts ?? []) {
+      if (`${x.n} ${x.d}`.includes('\u2014')) out.push(`week ${w} em dash: ${x.n}`);
+    }
+  }
+  for (const wk of p.s.wks) {
+    for (const x of wk.triWorkouts ?? []) {
+      if (x.t !== 'long') continue;
+      const seg = Number(/(?:last|First) (\d+)min/.exec(x.d)?.[1] ?? 0);
+      if (seg > 0 && seg >= (x.estimatedDurationMin ?? 0)) out.push(`week ${wk.w} long run of ${x.estimatedDurationMin} min names ${seg} min`);
+    }
+  }
+  return out;
+}
+
 /** Race-week gym takes a day with a slot left (two sessions a day at most,
  *  commutes counted). */
 function gymViolations(p: Plan): string[] {
@@ -438,7 +458,7 @@ describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hour
           for (const hours of hoursFor(mode)) {
             for (const dow of [6, 0]) {
               const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
-              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p)]) {
+              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p), ...copyViolations(p)]) {
                 found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
               }
             }

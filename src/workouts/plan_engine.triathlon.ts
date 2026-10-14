@@ -1667,10 +1667,13 @@ function fmtMin(mins: number): string {
   return `${m}min`;
 }
 
-const LONG_RUN_VARIANTS = [
-  (km: number, dur: string, easy: string) => `~${km}km (${dur}) @ ${easy}. Conversational throughout.`,
-  (km: number, dur: string, easy: string) => `~${km}km (${dur}) @ ${easy}, last 20min slightly quicker. Aerobic endurance with mild fatigue resistance.`,
-  (km: number, dur: string, easy: string) => `~${km}km (${dur}) — first 30min very relaxed, settle into ${easy} and hold.`,
+/** Long-run descriptions. `segMin`: the segment the copy names (the last 20
+ *  min, the first 30 min); a run no longer than it takes the plain variant, so
+ *  a 20-min taper long run never reads "last 20min slightly quicker". */
+const LONG_RUN_VARIANTS: Array<{ segMin: number; d: (km: number, dur: string, easy: string) => string }> = [
+  { segMin: 0, d: (km, dur, easy) => `~${km}km (${dur}) @ ${easy}. Conversational throughout.` },
+  { segMin: 20, d: (km, dur, easy) => `~${km}km (${dur}) @ ${easy}, last 20min slightly quicker. Aerobic endurance with mild fatigue resistance.` },
+  { segMin: 30, d: (km, dur, easy) => `~${km}km (${dur}). First 30min very relaxed, then settle into ${easy} and hold.` },
 ];
 
 const THRESHOLD_RUN_VARIANTS = [
@@ -1790,9 +1793,9 @@ function buildTriRun(
   if (isLong) {
     const r = roundMin(minutes);
     const km = Math.round(((r * 60) / pace) * 2) / 2;  // nearest 0.5 km
-    const idx = rotKey % LONG_RUN_VARIANTS.length;
+    const variant = LONG_RUN_VARIANTS[rotKey % LONG_RUN_VARIANTS.length];
     name = 'Long run';
-    desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r), easyLabel);
+    desc = (r > variant.segMin ? variant : LONG_RUN_VARIANTS[0]).d(km, fmtMin(r), easyLabel);
     t = 'long';
     rpe = phase === 'peak' ? 6 : 5;
     const total = r * plannedTssPerMin('long');
