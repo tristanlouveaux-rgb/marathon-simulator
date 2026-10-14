@@ -282,18 +282,3 @@ export function doublesBenchmarkIsTeamTime(
   return entry ? isRaceSplitSource(entry.source) : true;
 }
 
-/**
- * A previous HYROX finish time in singles terms, for the global band scale
- * (HYROX_TIME_TO_BAND_THRESHOLDS). A doubles time → doublesTotalInSinglesTermsSec;
- * a singles time as is.
- *
- * Superseded by hyroxPlanningBandFor (hyrox-planning-band.ts), which
- * converts the time to Open Singles terms of the athlete's sex (per station
- * for doubles, Open/Pro per loaded station) and bands it on that field.
- * Kept for the onboarding initializer (src/state/initialization.hyrox.ts,
- * lane H2), which still bands on the global scale until H2 switches it over.
- */
-export function hyroxBandingTimeSec(prevTimeSec: number, prevFormat: HyroxFormat): number {
-  if (!isHyroxDoublesFormat(prevFormat)) return prevTimeSec;
-  return Math.round(doublesTotalInSinglesTermsSec(prevTimeSec));
-}
