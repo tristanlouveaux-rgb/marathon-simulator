@@ -190,19 +190,43 @@ export function findHyroxWeekSchedule(
   const main = sessions.filter(w => w.commute !== true);
   const commutes = sessions.filter(w => w.commute === true);
   if (main.length > 7) return null;
-  const sorted = [...main].sort((a, b) => priority(a) - priority(b));
+  // Each session's priority, days and spacing flags, read once (the
+  // depth-first search below reads them at every step). The sort is stable,
+  // as before.
+  const sorted = main
+    .map(w => ({ w, p: priority(w) }))
+    .sort((a, b) => a.p - b.p)
+    .map(({ w }) => ({ w, days: candidateDays(w), hard: isHighIntensity(w), ecc: isEccentricSession(w) }));
   const placed: Placed[] = [];
+  const placedFlags: Array<{ day: number; hard: boolean; ecc: boolean }> = [];
   const used = new Set<number>();
+  const prevSunday = opts.prevSunday;
+  // conflicts(), on the flags read once.
+  const clashes = (s: { hard: boolean; ecc: boolean }, day: number): boolean => {
+    if (!s.hard && !s.ecc) return false;
+    if (day === 0 && prevSunday) {
+      if (s.hard && prevSunday.hard) return true;
+      if (s.ecc && prevSunday.eccentric) return true;
+    }
+    for (const p of placedFlags) {
+      if (Math.abs(p.day - day) > 1) continue;
+      if (s.hard && p.hard) return true;
+      if (s.ecc && p.ecc) return true;
+    }
+    return false;
+  };
   const dfs = (i: number): boolean => {
     if (i === sorted.length) return true;
     const session = sorted[i];
-    for (const day of candidateDays(session)) {
+    for (const day of session.days) {
       if (used.has(day)) continue;
-      if (conflicts(session, day, placed, opts.prevSunday)) continue;
+      if (clashes(session, day)) continue;
       used.add(day);
-      placed.push({ w: session, day });
+      placed.push({ w: session.w, day });
+      placedFlags.push({ day, hard: session.hard, ecc: session.ecc });
       if (dfs(i + 1)) return true;
       placed.pop();
+      placedFlags.pop();
       used.delete(day);
     }
     return false;

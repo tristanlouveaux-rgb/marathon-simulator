@@ -258,23 +258,26 @@ function trainingPhaseMultiplier(phase: 'base' | 'build' | 'peak', weekIndex: nu
 /** Sessions the week's own load and volume count: commute runs are the
  *  athlete's travel, appended on top of the plan (SCIENCE_LOG §AK), constant
  *  week to week, so the guard and the taper ignore them. */
-function prescribed(ws: readonly Workout[]): Workout[] {
-  return ws.filter(w => w.commute !== true);
+function prescribed(ws: readonly Workout[]): readonly Workout[] {
+  // The same list when it holds no commute run (callers only read it).
+  for (const w of ws) if (w.commute === true) return ws.filter(x => x.commute !== true);
+  return ws;
 }
 
 /** Planned minutes of a HYROX week (commute runs excluded). */
 export function hyroxPlannedMinutes(ws: readonly Workout[]): number {
-  return prescribed(ws).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+  let min = 0;
+  for (const w of ws) if (w.commute !== true) min += w.estimatedDurationMin ?? 0;
+  return min;
 }
 
 /** Planned load of a HYROX week in canonical TSS (commute runs excluded):
  *  duration × plannedTssPerMin(type, RPE), the valuation the planned-day
  *  pricer applies to HYROX sessions (ui/planned-day-tss.ts). */
 export function hyroxPlannedTss(ws: readonly Workout[]): number {
-  return prescribed(ws).reduce(
-    (a, w) => a + (w.estimatedDurationMin ?? 0) * plannedTssPerMin(w.t ?? '', w.rpe ?? w.r ?? 5),
-    0,
-  );
+  let tss = 0;
+  for (const w of ws) if (w.commute !== true) tss += (w.estimatedDurationMin ?? 0) * plannedTssPerMin(w.t ?? '', w.rpe ?? w.r ?? 5);
+  return tss;
 }
 
 // ─── Session kind selection ───────────────────────────────────────────────────
