@@ -40,7 +40,8 @@ const PLAN_START = '2026-09-28'; // a Monday
  *  with one extra session from the slider (4 runs) at the band's top hours, so
  *  week 1 holds two same-named Easy Runs (Wednesday and Friday) beside the
  *  Sunday Long Run (generator v18; before, the defaults gave Friday and Sunday
- *  Easy Runs). */
+ *  Easy Runs). No erg access: with ergs, round 7 gives one of the two Easy
+ *  Runs to a longer easy erg session. */
 function hyroxState(tw: number, band: AbilityBand = 'intermediate', extraRuns = 1): SimulatorState {
   const s = getDefaultState();
   s.eventType = 'hyrox';
@@ -52,7 +53,7 @@ function hyroxState(tw: number, band: AbilityBand = 'intermediate', extraRuns = 
     format: 'open_singles',
     athleteBand: band,
     hyroxPhase: 'base',
-    stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+    stationAccess: { sled: 'always', skiErg: false, rowErg: false },
     weeklyMTL: 0,
     mtlCap: HYROX_MTL_CAP[band],
     mtlHistory: [],

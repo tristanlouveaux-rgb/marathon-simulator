@@ -14,7 +14,9 @@
  *     since 2026-10-13 always, the session floors no longer an excuse), above
  *     it and above the week before only by the primer when the primer is all
  *     race week holds (SCIENCE_LOG §CE update 4: race week holds the primer
- *     whenever it holds a run);
+ *     whenever it holds a run); since round 7 (2026-10-14) the smallest
+ *     circuit is exempt from the fraction, and race week may sit above the
+ *     week before by the primer and that circuit when they are all it holds;
  *   - since 2026-10-13 (review of generator v18): race week keeps the peak
  *     structure minus the brick (the primer, the easy runs and the circuit),
  *     whatever a reference week thinned by the guard or the running share
@@ -70,6 +72,7 @@ import {
   RACE_WEEK_EXCLUDED_STATIONS, HYROX_HOURS_RANGE, HYROX_RACE_WEEK_PRIMER_MIN, HYROX_WEEKLY_STRUCTURE, hyroxTier,
 } from '@/constants/hyrox-constants';
 import { taperFraction } from '@/workouts/phases';
+import { MIN_CIRCUIT_ROUNDS, MIN_CIRCUIT_STATIONS } from '@/workouts/hyrox-generators';
 import { isHyroxDeloadWeek } from '@/workouts/plan_engine';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
@@ -184,8 +187,17 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   }
   const budget = taperFraction(tw - taperStart + 1, tw - taperStart + 1) * refMin;
   const before = tw > 1 ? prescribedMinutes(s.wks[tw - 2]) : Infinity;
-  const ceilingBefore = Math.max(before, HYROX_RACE_WEEK_PRIMER_MIN);
-  if (prescribedMinutes(wk) > Math.max(budget, HYROX_RACE_WEEK_PRIMER_MIN) + 1e-6) out.push(`race week ${prescribedMinutes(wk)} min above the ${Math.round(budget)}-min budget`);
+  // Round 7 (2026-10-14): the smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
+  // MIN_CIRCUIT_STATIONS stations) is exempt from the fraction, and race week
+  // may sit above the week before by the primer and that circuit when they
+  // are all it holds (2-h plans lost the circuit to the fraction).
+  const smallest = (wk.triWorkouts ?? []).filter(w => isStation(w) && (w.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS
+    && (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS)
+    .reduce((m, w) => Math.min(m, w.estimatedDurationMin ?? 0), Infinity);
+  const exempt = Number.isFinite(smallest) ? smallest : 0;
+  const primerMin = hard.reduce((m, w) => m + (w.estimatedDurationMin ?? 0), 0);
+  const ceilingBefore = Math.max(before, HYROX_RACE_WEEK_PRIMER_MIN, exempt > 0 ? primerMin + exempt : 0);
+  if (prescribedMinutes(wk) - exempt > Math.max(budget, HYROX_RACE_WEEK_PRIMER_MIN) + 1e-6) out.push(`race week ${prescribedMinutes(wk)} min (${exempt} exempt) above the ${Math.round(budget)}-min budget`);
   if (prescribedMinutes(wk) > ceilingBefore + 1e-6) out.push(`race week ${prescribedMinutes(wk)} min above the week before (${before})`);
   return out;
 }
