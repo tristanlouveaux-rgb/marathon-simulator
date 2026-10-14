@@ -147,16 +147,23 @@ beforeAll(() => {
 afterAll(() => { vi.restoreAllMocks(); });
 
 /** A plan from the real initializer. `loggedWeeklyTss`: the athlete's logged
- *  weekly load (signalBBaseline) when the plan is created. */
-function build(band: AbilityBand, hours: number, weeks: number, over: Partial<OnboardingState> = {}, loggedWeeklyTss?: number): SimulatorState {
+ *  weekly load (signalBBaseline) when the plan is created. `loggedRunMin`: a
+ *  run of that many minutes logged 10 days before the plan (no distance: its
+ *  duration stands in). */
+function build(band: AbilityBand, hours: number, weeks: number, over: Partial<OnboardingState> = {}, loggedWeeklyTss?: number, loggedRunMin?: number): SimulatorState {
   resetState();
-  if (loggedWeeklyTss != null) getMutableState().signalBBaseline = loggedWeeklyTss;
+  const ms = getMutableState();
+  if (loggedWeeklyTss != null) ms.signalBBaseline = loggedWeeklyTss;
+  if (loggedRunMin != null) {
+    ms.onboardingRunHistory = [{ startTime: new Date(Date.now() - 10 * 86400000).toISOString(), activityType: 'RUNNING', distKm: 0, durSec: loggedRunMin * 60 } as never];
+  }
   const sec = BAND_PREV_SEC[band];
   initializeHyroxSimulator({
     ...defaultOnboardingState, name: 'QA', currentStep: 'initializing',
     trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
     triTimeAvailableHoursPerWeek: hours, planDurationWeeks: weeks, customRaceDate: null,
     ...(sec != null ? { previousHyroxTimeSec: sec, hyroxPreviousTimeFormat: 'open_singles' } : {}),
+    ...(loggedRunMin != null ? { onboardingRunHistory: ms.onboardingRunHistory } : {}),
     ...over,
   } as OnboardingState);
   return getState();
@@ -1295,10 +1302,22 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // 100 and 200 TSS (round 6 review, pass 2: under a binding guard the week
     // was sized from the chosen hours, and at a logged 50 TSS 36 pairs fell by
     // more than one easy session, up to 240 min; a week a fixed ceiling holds
-    // is now the same week at every chosen hours above its size). One more
-    // hour also never costs the plan a quality run.
-    // With the 7-session choice and at a logged 200 TSS a few pairs fall
-    // further, from one rule alone (an open question for Tristan): easy
+    // is now the same week at every chosen hours above its size).
+    // Quality runs are measured on this grid, not guaranteed: one more hour
+    // costs no quality run at the default sessions, in open doubles, with the
+    // 7-session choice and at logged 20, 50, 100 and 200 TSS. In open doubles
+    // at 100 TSS it can (round 6 review, pass 3: 2 pairs on this grid,
+    // beginner 16 and 24 weeks, 4 to 5 h): the larger hours size the station
+    // sessions and bricks larger, the MTL cap then cuts them to fewer rounds
+    // that hold less load, the chronic window carries the lower load forward,
+    // and a later week's acute:chronic guard no longer holds its quality run.
+    // There the test asserts that cause: each week that loses a quality run
+    // has a lower guard at the larger hours. With a logged 25-min run the
+    // quality runs hold on this grid (the review found 1 pair off it, novice
+    // 18 weeks 4 to 5 h).
+    // With the 7-session choice, at a logged 200 TSS and with a logged 25-min
+    // run a few pairs fall further, from one rule alone (an open question for
+    // Tristan): easy
     // running ranks above easy erg work (step 3 of the hierarchy). With the
     // chosen sessions full, a session slot goes to an easy run first, so one
     // more hour that funds an easy run (or easy runs too long to merge under
@@ -1309,14 +1328,19 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // such pair comes from that rule: a week holding more easy-run minutes
     // and fewer easy erg minutes, with minutes left unprescribed because the
     // chosen sessions are full or the MTL cap holds them.
-    const variants: Array<[string, Partial<OnboardingState>, number | undefined, boolean]> = [
-      ['default', {}, undefined, true],
-      ['open doubles', { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>, undefined, true],
-      ['7 sessions', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, undefined, false],
-      ['logged 20 TSS', {}, 20, true],
-      ['logged 50 TSS', {}, 50, true],
-      ['logged 100 TSS', {}, 100, true],
-      ['logged 200 TSS', {}, 200, false],
+    // [name, onboarding, logged weekly TSS, total bound asserted, quality runs
+    // asserted, logged run minutes]
+    const doubles = { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>;
+    const variants: Array<[string, Partial<OnboardingState>, number | undefined, boolean, boolean, number | undefined]> = [
+      ['default', {}, undefined, true, true, undefined],
+      ['open doubles', doubles, undefined, true, true, undefined],
+      ['open doubles 100 TSS', doubles, 100, true, false, undefined],
+      ['7 sessions', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, undefined, false, true, undefined],
+      ['logged 20 TSS', {}, 20, true, true, undefined],
+      ['logged 50 TSS', {}, 50, true, true, undefined],
+      ['logged 100 TSS', {}, 100, true, true, undefined],
+      ['logged 200 TSS', {}, 200, false, true, undefined],
+      ['logged 25-min run', {}, undefined, false, true, 25],
     ];
     const sum = (ws: Workout[]) => ws.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
     const easyRunMin = (wk: Week) => sum(prescribed(wk).filter(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w)));
@@ -1333,15 +1357,17 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     const tooFar: string[] = [];
     const weekTooFar: string[] = [];
     const qualityFell: string[] = [];
+    const qualityUnattributed: string[] = [];
+    let qualityAttributed = 0;
     let pairs = 0;
-    for (const [name, over, logged, assertTotal] of variants) {
+    for (const [name, over, logged, assertTotal, assertQuality, runMin] of variants) {
       for (const band of BANDS) {
         const easyMax = HYROX_LONG_RUN[hyroxTier(band)].capMin;
         const r = HYROX_HOURS_RANGE[band];
         for (const len of lengths) {
-          let prev: { total: number; quality: number; weeks: Week[] } | null = null;
+          let prev: { total: number; quality: number; weeks: Week[]; s: SimulatorState } | null = null;
           for (let h = Math.max(2, r.min); h <= Math.min(12, r.max); h++) {
-            const s = build(band, h, len, over, logged);
+            const s = build(band, h, len, over, logged, runMin);
             const weeks = s.wks.slice(0, planTrainingWeeks(s));
             const total = weeks.reduce((a, wk) => a + minutes(wk), 0);
             const quality = weeks.reduce((a, wk) => a + prescribed(wk).filter(isQuality).length, 0);
@@ -1357,14 +1383,27 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
                   else unattributed.push(line);
                 }
               }
-              if (quality < prev.quality) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
+              if (quality < prev.quality) {
+                const line = `${label}: ${prev.quality} -> ${quality} quality runs`;
+                if (assertQuality) qualityFell.push(line);
+                else {
+                  // Each week that loses a quality run has a lower guard at the
+                  // larger hours (the chronic window carries a lower load).
+                  const capsBefore = generateHyroxPlanDetailed(structuredClone(prev.s)).detail.map(d => d.acwrCapTss ?? Infinity);
+                  const capsAfter = generateHyroxPlanDetailed(structuredClone(s)).detail.map(d => d.acwrCapTss ?? Infinity);
+                  const lost = weeks.map((wk, i) => i).filter(i => prev!.weeks[i]
+                    && prescribed(weeks[i]).filter(isQuality).length < prescribed(prev!.weeks[i]).filter(isQuality).length);
+                  if (lost.length > 0 && lost.every(i => capsAfter[i] < capsBefore[i] - EPS)) qualityAttributed++;
+                  else qualityUnattributed.push(line);
+                }
+              }
               weeks.forEach((wk, i) => {
                 const before = prev!.weeks[i];
                 if (!before) return;
                 if (minutes(before) - minutes(wk) > easyMax + EPS) weekTooFar.push(`${label} W${i + 1}: ${minutes(before)} -> ${minutes(wk)} min`);
               });
             }
-            prev = { total, quality, weeks };
+            prev = { total, quality, weeks, s: structuredClone(s) };
           }
         }
       }
@@ -1372,11 +1411,13 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(pairs).toBeGreaterThan(variants.length * BANDS.length * lengths.length * 5);
     // The report: every pair whose total plan minutes fall.
     console.info(`[hyrox B report] ${fell.length} of ${pairs} adjacent-hour pairs hold fewer total plan minutes${fell.length > 0 ? `:\n  ${fell.join('\n  ')}` : ''}`);
-    console.info(`[hyrox B report] ${attributed} pair(s) with the 7-session choice or a logged 200 TSS fall by more than one easy session, each from easy running ranking above easy erg work`);
+    console.info(`[hyrox B report] ${attributed} pair(s) with the 7-session choice, a logged 200 TSS or a logged 25-min run fall by more than one easy session, each from easy running ranking above easy erg work`);
+    console.info(`[hyrox B report] ${qualityAttributed} pair(s) in open doubles at 100 TSS lose a quality run, each where the larger hours leave a lower acute:chronic guard`);
     expect(tooFar.slice(0, 10)).toEqual([]);
     expect(unattributed.slice(0, 10)).toEqual([]);
     expect(weekTooFar.slice(0, 10)).toEqual([]);
     expect(qualityFell.slice(0, 10)).toEqual([]);
+    expect(qualityUnattributed.slice(0, 10)).toEqual([]);
   }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
