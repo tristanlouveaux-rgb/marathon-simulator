@@ -198,10 +198,25 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
     && (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS)
     .reduce((m, w) => Math.min(m, w.estimatedDurationMin ?? 0), Infinity);
   const exempt = Number.isFinite(smallest) ? smallest : 0;
-  const primerMin = hard.reduce((m, w) => m + (w.estimatedDurationMin ?? 0), 0);
+  // A primer that gave race week's one day 3 or more days out to the circuit
+  // (a Thursday race, 2026-10-14): the easy run holding its run slot counts
+  // in its place.
+  const standInMin = (wk.hyroxPlanNotes ?? []).some(n => n.endsWith("holds the primer's run slot"))
+    ? Math.max(0, ...(wk.triWorkouts ?? []).filter(w => w.t === 'hyrox_run_easy').map(w => w.estimatedDurationMin ?? 0))
+    : 0;
+  const primerMin = hard.reduce((m, w) => m + (w.estimatedDurationMin ?? 0), 0) + standInMin;
   const ceilingBefore = Math.max(before, HYROX_RACE_WEEK_PRIMER_MIN, exempt > 0 ? primerMin + exempt : 0);
   if (prescribedMinutes(wk) - exempt > Math.max(budget, HYROX_RACE_WEEK_PRIMER_MIN) + 1e-6) out.push(`race week ${prescribedMinutes(wk)} min (${exempt} exempt) above the ${Math.round(budget)}-min budget`);
   if (prescribedMinutes(wk) > ceilingBefore + 1e-6) out.push(`race week ${prescribedMinutes(wk)} min above the week before (${before})`);
+  // No taper or race week loses all its station work (round 7 decision 4),
+  // race dates included (2026-10-14: every Thursday race week held none, its
+  // one day 3 or more days out the primer's; a Thursday race's taper week 1
+  // lost its only mini brick to the race window). With the ergs, race week
+  // can hold a circuit; the week before holds station or brick work too.
+  const hasErgs = !!(s.hyroxConfig?.stationAccess.skiErg || s.hyroxConfig?.stationAccess.rowErg);
+  const work = (w: Workout) => isStation(w) || w.t === 'hyrox_brick' || w.t === 'hyrox_mini_brick';
+  if (hasErgs && !(wk.triWorkouts ?? []).some(work)) out.push('race week holds no station work');
+  if (tw > 1 && s.wks[tw - 2].ph === 'taper' && !(s.wks[tw - 2].triWorkouts ?? []).some(work)) out.push('taper week 1 holds no station or brick work');
   return out;
 }
 
@@ -291,6 +306,35 @@ describe('a Monday to Wednesday race: the primer 3 days out, the last session at
     ]);
     expect(s.wks[tw].raceClosing).toBe(true);
     expect(raceWeekViolations(s, '2026-11-18')).toEqual([]);
+  });
+});
+
+describe('a Thursday race: race week keeps its station work', () => {
+  it('intermediate, 8 h, Thursday race 17 December: the circuit takes Monday, 3 days out, and the primer gives it the day', () => {
+    at('2026-10-05T12:00:00');
+    const s = build({ customRaceDate: '2026-12-17' });
+    const tw = planTrainingWeeks(s);
+    // Race week runs Monday to Wednesday (3, 2 and 1 days out): its one day 3
+    // or more days out was the primer's and the circuit's only day, and race
+    // week held the primer and an easy run, no station work (2026-10-14).
+    const rw = s.wks[tw - 1];
+    expect((rw.triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
+      'Mon hyrox_station_technique',
+      'Wed hyrox_run_easy',
+    ]);
+    expect((rw.hyroxPlanNotes ?? []).some(n => /Tempo Run left out \(its day, race week's one day 3 or more days out, holds the Station Circuit: race week keeps its station work\)/.test(n))).toBe(true);
+    expect(raceWeekViolations(s, '2026-12-17')).toEqual([]);
+  });
+
+  it('a race week whose only run was the primer keeps an easy run at the run floor', () => {
+    at('2026-10-05T12:00:00');
+    const s = build({ customRaceDate: '2026-12-17', experienceLevel: 'beginner', triTimeAvailableHoursPerWeek: 2, previousHyroxTimeSec: undefined, hyroxPreviousTimeFormat: undefined });
+    const tw = planTrainingWeeks(s);
+    const rw = s.wks[tw - 1].triWorkouts ?? [];
+    expect(rw.some(isStation)).toBe(true);
+    expect(rw.filter(w => w.t === 'hyrox_run_easy').map(w => w.estimatedDurationMin)).toEqual([20]);
+    expect((s.wks[tw - 1].hyroxPlanNotes ?? []).some(n => n.endsWith("holds the primer's run slot"))).toBe(true);
+    expect(raceWeekViolations(s, '2026-12-17')).toEqual([]);
   });
 });
 

@@ -425,7 +425,11 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       // the run floor, one easy run at the floor (noted).
       const floorRun = primer.length === 0 && runs(wk).length === 1 && runs(wk)[0].estimatedDurationMin === HYROX_RUN_FLOOR_MIN
         && notes(wk).some(n => /race week holds a run/.test(n)) && notes(wk).some(n => /Tempo Run above the 110% single-run ceiling/.test(n));
-      if (runs(wk).length > 0 && primer.length !== 1 && !floorRun) out.push(`W${w}: race week holds ${primer.length} primers`);
+      // Or the primer gave race week's one day 3 or more days out to the
+      // circuit, so race week keeps its station work (a Thursday race,
+      // 2026-10-14), its run slot held by an easy run when it was the only run.
+      const gaveDay = primer.length === 0 && notes(wk).some(n => /Tempo Run left out \(its day, race week's one day 3 or more days out, holds the .*: race week keeps its station work\)/.test(n));
+      if (runs(wk).length > 0 && primer.length !== 1 && !floorRun && !gaveDay) out.push(`W${w}: race week holds ${primer.length} primers`);
       const refRW = lastLoaded(i);
       if (refRW >= 0 && runs(wks[refRW]).length > 0 && runs(wk).length === 0) out.push(`W${w}: race week holds no run, the reference week ${runs(wks[refRW]).length}`);
       for (const p of primer) {
@@ -508,7 +512,12 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const before = raceWeek ? Math.max(raw, HYROX_RACE_WEEK_PRIMER_MIN) : raw;
       // Race week sits above the week before only by holding the primer and
       // its smallest circuit and nothing else (round 7).
-      const primerAndCircuit = raceWeek && taperExemptMin(wk) > 0 ? ws.filter(isQuality).reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0) + taperExemptMin(wk) : 0;
+      // The easy run holding the primer's run slot counts as the primer
+      // (a primer that gave its day to the circuit, 2026-10-14).
+      const standInMin = notes(wk).some(n => n.endsWith("holds the primer's run slot"))
+        ? Math.max(0, ...ws.filter(x => x.t === 'hyrox_run_easy' && !isHyroxLongRun(x)).map(x => x.estimatedDurationMin ?? 0))
+        : 0;
+      const primerAndCircuit = raceWeek && taperExemptMin(wk) > 0 ? ws.filter(isQuality).reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0) + standInMin + taperExemptMin(wk) : 0;
       if (minutes(wk) > Math.max(before, primerAndCircuit) + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the week before (${raw})`);
       if (minutes(wk) > hoursMin + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the chosen hours`);
       if (long) {
