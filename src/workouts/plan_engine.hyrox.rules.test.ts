@@ -143,9 +143,13 @@ import { planTrainingWeeks, storedPlanRaceLayout } from './race-week-layout';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 
 const BANDS: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
-/** Previous open-singles finish time that bands an athlete; null = first-timer. */
+/** Previous open-singles finish time that bands an athlete; null = first-timer.
+ *  The planning band reads the pooled Open Singles field (no sex in these
+ *  fixtures; thresholds 3774, 4869, 6318 and 7853 s, S8-S9). Beginner is that
+ *  band's median finish (8662 s, HYROX_S89_BAND_SEEDS): the old 7800 s banded
+ *  beginner on the global scale but novice on the planning field. */
 const BAND_PREV_SEC: Record<AbilityBand, number | null> = {
-  total_beginner: null, beginner: 7800, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
+  total_beginner: null, beginner: 8662, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
 };
 const EPS = 1e-6;
 /** Distances are stored to the metre (generateHyroxRun), so the 110% rule is

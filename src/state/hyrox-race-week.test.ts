@@ -92,10 +92,13 @@ function at(localIso: string): void {
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-/** Previous open-singles finish time that bands an athlete (HYROX_TIME_TO_BAND_THRESHOLDS);
- *  a first-timer without running data is total_beginner (generator v18). */
+/** Previous open-singles finish time that bands an athlete on the planning
+ *  field (hyroxPlanningBandFor: the pooled Open Singles field here, thresholds
+ *  3774, 4869, 6318 and 7853 s, S8-S9); a first-timer without running data is
+ *  total_beginner (generator v18). Beginner is that band's median finish (8662
+ *  s, HYROX_S89_BAND_SEEDS): the old 7800 s bands novice on the planning field. */
 const BAND_PREV_SEC: Record<AbilityBand, number | null> = {
-  total_beginner: null, beginner: 7800, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
+  total_beginner: null, beginner: 8662, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
 };
 function bandOnboarding(band: AbilityBand): Partial<OnboardingState> {
   const sec = BAND_PREV_SEC[band];
