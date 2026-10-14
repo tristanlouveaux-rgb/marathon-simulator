@@ -2190,7 +2190,7 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  */
 export function buildHyroxTrainingWeeks(
   state: SimulatorState, trainingWeeks: number, layout: RaceWeekLayout | null, upto: number = trainingWeeks,
-  opts: { storedBoundaryWeek?: number } = {},
+  opts: { storedBoundaryWeek?: number; noHoursLine?: boolean } = {},
 ): HyroxWeekDetail[] {
   const hx = state.hyroxConfig!;
   const tier = hyroxTier(hx.athleteBand);
@@ -3311,7 +3311,7 @@ export function buildHyroxTrainingWeeks(
     const plannedMin = detail.plannedMin;
     const injured = !!(state as any).injuryState?.active && w >= (state.w ?? 1);
     const sessionsHeld = prescribed(attempt.workouts).length;
-    if (phase !== 'taper' && !raceWeek && !deload && !injured && fitsAtFullSize && hoursMin > 0
+    if (!opts.noHoursLine && phase !== 'taper' && !raceWeek && !deload && !injured && fitsAtFullSize && hoursMin > 0
       && budgetMin >= hoursMin - 0.5
       && sessionsHeld >= chosenSessions && hoursMin - plannedMin >= HYROX_RUN_FLOOR_MIN
       && !attempt.adjustments.some(n => /MTL cap \d+/.test(n))) {
@@ -3346,6 +3346,32 @@ export function buildHyroxTrainingWeeks(
       chronicSeedTss = chronicSeedSource === 'logged' ? Math.max(loggedSeedTss, guardFloorTss) : guardFloorTss;
     }
     built.push(buildWeek(w));
+  }
+  // The hours line, checked against the real plan with one more chosen
+  // session (round 7; review of round 6, pass 3: in 7 of about 2,700 marked
+  // weeks that plan added under HYROX_RUN_FLOOR_MIN to the week, or fewer
+  // minutes, because its earlier weeks, built larger, lowered the week's
+  // guard). The week-level check above still decides first (the line is
+  // judged per week); a marked week whose plan with one more session (the
+  // session counts the slider gives, applyHyroxSessionDelta) does not hold
+  // HYROX_RUN_FLOOR_MIN more of it loses the line, and its hours note says
+  // why. One more plan build, only for a plan with a marked week.
+  const marked = opts.noHoursLine ? [] : built.filter(d => d.hoursFit);
+  if (marked.length > 0 && chosenSessions < 7) {
+    const plusCounts = applyHyroxSessionDelta(def, chosenSessions + 1 - hyroxSessionTotal(def));
+    if (hyroxSessionTotal(plusCounts) > chosenSessions) {
+      const plusState: SimulatorState = { ...state, hyroxConfig: { ...hx, runsPerWeek: plusCounts.runs, stationSessionsPerWeek: plusCounts.stations, bricksPerWeek: plusCounts.bricks } };
+      const plus = buildHyroxTrainingWeeks(plusState, trainingWeeks, layout, marked[marked.length - 1].week, { storedBoundaryWeek: opts.storedBoundaryWeek, noHoursLine: true });
+      for (const d of marked) {
+        const more = (plus[d.week - 1]?.plannedMin ?? d.plannedMin) - d.plannedMin;
+        if (more >= HYROX_RUN_FLOOR_MIN) continue;
+        delete d.hoursFit;
+        const head = `W${d.week}: ${d.plannedMin} of the chosen `;
+        d.adjustments = d.adjustments.map(n => (n.startsWith(head) && n.endsWith(')')
+          ? `${n.slice(0, -1)}; the plan with one more session adds ${Math.max(0, Math.round(more))} min to this week)`
+          : n));
+      }
+    }
   }
   return built;
 }
