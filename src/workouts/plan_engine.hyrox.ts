@@ -1565,7 +1565,9 @@ function generateWeekSessions(
     const out = candidates[0];
     const rest = all.filter(w => w !== out);
     const easyMin = all.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-    const why = free <= 0 ? 'the chosen sessions are full' : `MTL cap ${hx.mtlCap}`;
+    // What holds the easy erg work now: the MTL cap when it holds less than
+    // the free slots could, otherwise the session count.
+    const why = free > 0 && byMtlOf(ws) < Math.min(free * maxEach, inputs.ergCapMin ?? Infinity) ? `MTL cap ${hx.mtlCap}` : 'the chosen sessions are full';
     const options: Array<{ ws: Workout[]; note: string }> = [];
     // With an easy run standing in a missing quality run's slot, no easy run
     // grows past the quality run's length: when one more hour funds it, it
