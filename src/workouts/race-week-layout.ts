@@ -2,7 +2,7 @@ import { addCalendarDays, calendarDayNumber, localDateKey, localMondayKey } from
 import { computeRunningPlanPhases } from './phases';
 import type { RaceDistance } from '@/types';
 import type { TriathlonDistance } from '@/types/triathlon';
-import { triRaceTaperWeeks } from '@/constants/triathlon-constants';
+import { computeTriPlanPhases, triRaceTaperWeeks } from '@/constants/triathlon-constants';
 
 /**
  * Where race day falls in a plan's calendar weeks (Monday to Sunday, week 1 =
@@ -230,9 +230,11 @@ export function planTaperWeeks(s: {
  * Race-taper weeks of a triathlon or cycling plan, for the forecast (tracking
  * side; Tristan 2026-10-13: the forecast reads the plan's taper): the trailing
  * 'taper' weeks of the plan's training weeks (a closing week excluded), or,
- * before the plan's weeks exist, the race distance's taper
- * (triRaceTaperWeeks; cycling 2), race week only for a low-hours triathlete
- * (`lowHours`, the plan engine's triTaperOpts, resolved only when needed).
+ * before the plan's weeks exist, the trailing taper of the phases the plan
+ * engine will build (computeTriPlanPhases: the race distance's taper, cycling
+ * 2, race week only for a low-hours triathlete, the short-plan rule for a
+ * plan too short to hold it; `lowHours` is the plan engine's triTaperOpts,
+ * resolved only when needed).
  * Every discipline shares it, as the plan tapers all three over the same
  * weeks. Undefined without a triathlon config.
  */
@@ -251,5 +253,14 @@ export function triPlanTaperWeeks(s: {
   if (taper > 0) return taper;
   const d = s.triConfig.disciplines;
   const cyclingOnly = !!d && d.length === 1 && d[0] === 'bike';
-  return triRaceTaperWeeks(s.triConfig.distance, { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.() });
+  const opts = { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.() };
+  // The plan's own phases when its length is known, so a plan too short for
+  // the distance's taper keeps the short-plan taper here too.
+  if (training > 0) {
+    const ph = computeTriPlanPhases(s.triConfig.distance, training, opts);
+    let t = 0;
+    for (let i = ph.length - 1; i >= 0 && ph[i].ph === 'taper'; i--) t++;
+    if (t > 0) return t;
+  }
+  return triRaceTaperWeeks(s.triConfig.distance, opts);
 }
