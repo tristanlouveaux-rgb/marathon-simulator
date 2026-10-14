@@ -342,6 +342,15 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
         out.push(`W${w}: longest run ${longestKm(wk).toFixed(2)} km above 110% of ${prev.toFixed(2)} km`);
       }
     }
+    // A week whose long run a ceiling cut or left out keeps no easy run longer
+    // than the run floor: lower priority gives way first (round 7; the
+    // review of round 6 found 2 to 36 deloads per variant holding an easy run
+    // of 36 to 40 min while a ceiling cut the long run).
+    if (notes(wk).some(n => /Long Run (cut from \d+ to \d+ min|left out) \((acute:chronic guard|weekly hours|base budget|build budget|peak budget|deload ceiling)\)/.test(n))) {
+      for (const e of ws.filter(x => x.t === 'hyrox_run_easy' && !isHyroxLongRun(x))) {
+        if ((e.estimatedDurationMin ?? 0) > HYROX_RUN_FLOOR_MIN) out.push(`W${w}: long run cut while an easy run of ${e.estimatedDurationMin} min stays`);
+      }
+    }
     // Deload ceiling: the last loaded week x HYROX_DELOAD_FACTOR.
     if (ph !== 'taper' && isDeload(i)) {
       const ref = lastLoaded(i);
@@ -735,8 +744,16 @@ describe('HYROX review fixes (2026-10-13)', () => {
     expect(worst).toBeLessThanOrEqual(HYROX_DELOAD_FACTOR + EPS);
   });
 
-  it('a deload holds no session longer, or with more rounds, than the same session in the last loaded week', () => {
-    for (const s of grid()) {
+  it('a deload holds no session longer, heavier (MTL) or with more rounds than the same session in the last loaded week', () => {
+    // Round 7 (review of round 6, pass 3): in 356 deload weeks at the default
+    // sessions a circuit with the reference week's rounds held more minutes
+    // and MTL (total_beginner 4 h 8 weeks W4: 67 min and 215 MTL against W3's
+    // 63 min and 155), the station rotation picking heavier stations. A
+    // deload session over its counterpart loses rounds, then stations.
+    let checked = 0;
+    const plans = [...grid(), ...BANDS.flatMap(band => [8, 12, 16, 20, 24].map(len => structuredClone(build(band, 4, len)))),
+      ...BANDS.flatMap(band => [8, 16, 24].map(len => structuredClone(build(band, HYROX_HOURS_RANGE[band].default, len, {}, 100))))];
+    for (const s of plans) {
       const tw = planTrainingWeeks(s);
       let last: Week | null = null;
       for (let i = 0; i < tw; i++) {
@@ -747,10 +764,15 @@ describe('HYROX review fixes (2026-10-13)', () => {
         for (const w of prescribed(wk).filter(x => (x.discipline === 'station' || x.discipline === 'brick') && x.t !== 'hyrox_assessment')) {
           const same = prescribed(last).filter(x => x.t === w.t);
           if (same.length === 0) continue;
-          expect(w.hyroxRounds ?? 0).toBeLessThanOrEqual(Math.max(...same.map(x => x.hyroxRounds ?? 0)));
+          checked++;
+          const label = `${s.hyroxConfig!.athleteBand} ${s.hyroxConfig!.weeklyHoursAvailable}h W${i + 1} ${w.n}`;
+          expect(w.hyroxRounds ?? 0, label).toBeLessThanOrEqual(Math.max(...same.map(x => x.hyroxRounds ?? 0)));
+          expect(w.estimatedDurationMin ?? 0, label).toBeLessThanOrEqual(Math.max(...same.map(x => x.estimatedDurationMin ?? 0)) + EPS);
+          expect(w.musculoTendonLoad ?? 0, label).toBeLessThanOrEqual(Math.max(...same.map(x => x.musculoTendonLoad ?? 0)) + EPS);
         }
       }
     }
+    expect(checked).toBeGreaterThan(100);
   });
 
   it('race week holds the primer whenever it holds a run: 10 min of tempo work, never sized from the budget', () => {
@@ -1598,10 +1620,11 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(deloads).toBeGreaterThan(100);
     // beginner 4 h 12 weeks: W7 holds an easy run of 20 min, a 59-min circuit,
     // a 49-min mini brick and a 38-min long run; the W8 deload keeps its easy
-    // run at the run floor and shortens the circuit and the mini brick.
+    // run at the run floor or above and shortens the circuit (a station out:
+    // no longer or heavier than W7's, round 7) and the mini brick.
     const s = build('beginner', 4, 12);
     expect(prescribed(s.wks[6]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
-    expect(prescribed(s.wks[7]).find(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))?.estimatedDurationMin).toBe(HYROX_RUN_FLOOR_MIN);
+    expect(prescribed(s.wks[7]).find(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))?.estimatedDurationMin).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN);
   });
 
   it('with an active injury the easy erg slot swap never runs, whatever the capacities (round 6, item 6)', () => {
