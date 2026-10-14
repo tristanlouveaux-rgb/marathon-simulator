@@ -592,33 +592,45 @@ interface ComposedWeek {
  *      PRIMER_MAX_DAYS_OUT), one per day, as many 90 s race-pace repeats as
  *      days to go (Friel), fewer when the discipline's budget is thin, never
  *      below Dave Scott's 4-min floor (3 repeats); a discipline whose budget
- *      cannot hold that much has no opener. Each holds its repeats inside the
- *      shortest warm-up and cool-down. Order (an app inference from the order
- *      coaches taper volume, run first and swim last): run, bike, swim; long
- *      course with a brick: run, swim (the brick carries the bike's builds);
- *      cycling: a ride on every window day.
+ *      cannot hold that much has no opener, and when fewer openers than
+ *      window days go in they take the days nearest the race. Each holds its
+ *      repeats inside the shortest warm-up and cool-down, and takes an equal
+ *      share of its discipline's budget when that is more (within the
+ *      race-week cap). Order (an app inference from the order coaches taper
+ *      volume, run first and swim last): run, bike, swim; long course with a
+ *      brick: run, swim (the brick carries the bike's builds); cycling: a ride
+ *      on every window day. Openers are typed by their steady content (an
+ *      endurance ride, an easy run, an endurance swim).
  *   4. The rest of each budget split into aerobic sessions: the reference
  *      count less the brick and the openers, sized at most the reference
  *      week's average session of that discipline (an app inference: race
  *      week holds no session longer than a normal one) and the race-week cap
  *      (TRI_RACE_WEEK_SESSION_CAP_MIN), and the nearest whole number of
- *      TRI_TAPER_SESSION_FLOOR_MIN sessions at most. Then, while race week
- *      holds fewer than TRI_TAPER_MIN_SESSION_SHARE of the reference
- *      sessions (the race counted as one, as it takes the long session's
- *      slot, and each day-before activation as one), one more session in the
- *      discipline with the most minutes per session left; frequency wins over
- *      the floor. Every discipline the plan has keeps a session (an
- *      activation counts).
- *   5. Aerobic sessions, biggest first, go to the days nearest 6 days out
- *      (the Monday of a Sunday race), one per discipline per day, at most
- *      TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY training sessions a day, within the
- *      athlete's day caps. A session no free day has room for is cut to the
- *      largest room left (at least the floor) or left out.
- *   6. The day before is sized last: the ride and run at their lower bounds,
+ *      TRI_TAPER_SESSION_FLOOR_MIN sessions at most. Sessions that cannot fit
+ *      the two-a-day slots (a max flow from disciplines to days) come off.
+ *      Then, while race week holds fewer than TRI_TAPER_MIN_SESSION_SHARE of
+ *      the reference sessions (the race counted as one, as it takes the long
+ *      session's slot, and each day-before activation as one), one more
+ *      session in the discipline it overshoots least; frequency wins over the
+ *      floor. Every discipline the plan has keeps a session (an activation
+ *      counts).
+ *   5. Aerobic sessions go to the days nearest 6 days out (the Monday of a
+ *      Sunday race), the discipline with the fewest free days first, biggest
+ *      first among equals, on a day that leaves the other sessions a place:
+ *      one per discipline per day, at most TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY
+ *      training sessions a day, within the athlete's day caps (hard, with the
+ *      scheduler's 15-min tolerance). A session no free day has room for is
+ *      cut to the largest room left (at least the floor) or left out.
+ *   6. A one-week taper's race week never holds more than the week before
+ *      (`maxTotalMin`): aerobic sessions come down toward the floor, then the
+ *      shortest go, while frequency holds.
+ *   7. The day before is sized last: the ride and run at their lower bounds,
  *      the run dropped when the two would outweigh (minutes or load) the
- *      lightest earlier training day, then both grown toward their caps
- *      (30 and 10 min) only with budget left unplaced and while the day stays
- *      the lightest.
+ *      lightest earlier training day (Byrn's day before is a run or a ride),
+ *      then both grown toward their caps (30 and 10 min) only with budget left
+ *      unplaced, while the day stays the lightest, no activation outruns the
+ *      week's longest training session, and the week stays under the week
+ *      before.
  * Pure. Returns the sessions with dayOfWeek and dayName set.
  */
 export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
