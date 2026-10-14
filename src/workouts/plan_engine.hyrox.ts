@@ -696,6 +696,9 @@ interface HyroxWeekInputs {
   /** The week as it would be with one more chosen weekly session (the hours
    *  line's check: buildHyroxTrainingWeeks). */
   extraSession?: boolean;
+  /** A deload week (the last loaded week its reference): easy erg work never
+   *  takes an easy run's slot there (generateWeekSessions ergSlotOptions). */
+  deload?: boolean;
   /** Set when a fixed ceiling (the acute:chronic guard, the deload ceiling)
    *  builds the week at a smaller size than the chosen hours: the notes name
    *  that ceiling for what the smaller size leaves out. */
@@ -1562,8 +1565,21 @@ function generateWeekSessions(
   // week held less: intermediate 23 weeks at 7 h held 36 to 51 min less a
   // week than at 6 h through build and peak. A product choice: no source
   // ranks an easy run against easy erg work when the session count binds.
+  // Two bounds (2026-10-14, after round 7):
+  //   - the week's running (standalone runs and the run segments of its
+  //     station and brick sessions, runningOf) stays at or above the D2
+  //     running share, HYROX_RUN_SHARE x the chosen weekly minutes: an
+  //     option that takes it under leaves the easy run in place. Round 7's
+  //     swap took competitive 12 h to 0.21 of the chosen hours as running in
+  //     the median training week (0.28 before);
+  //   - never in a deload: a deload ranks the easy run above the mini brick
+  //     and the secondary brick (round 7), and the swap traded a deload's
+  //     25-min easy run for a 52-min easy erg session while its 60-min
+  //     secondary brick stayed (competitive 12 and 20 h, 19 weeks, W16).
+  const runShareFloorMin = HYROX_RUN_SHARE * (hx.weeklyHoursAvailable ?? 0) * 60;
   const ergSlotOptions = (ws: Workout[]): Array<{ ws: Workout[]; note: string }> => {
     if (!trainingWeek) return [];
+    if (inputs.deload) return [];
     if (!isPastWeek && injuryState?.active) return [];
     const maxSessions = Math.min(inputs.maxSessions ?? 7, 7);
     const mtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg);
@@ -1617,7 +1633,7 @@ function generateWeekSessions(
       }] as const));
       const next = ws.filter(w => w !== out).map(w => resized.get(w) ?? w);
       const room = ergRoom(next);
-      if (room >= HYROX_RUN_FLOOR_MIN) {
+      if (room >= HYROX_RUN_FLOOR_MIN && runningOf(next) >= runShareFloorMin - 1e-6) {
         const kept = next.filter(isPlainEasyRun).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
         options.push({ ws: next, note: `W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min, ${kept} of the ${easyMin} easy-run min kept by ${rest.length} easy run${rest.length === 1 ? '' : 's'} (${why})` });
       }
@@ -1625,7 +1641,7 @@ function generateWeekSessions(
     // Nothing takes its minutes: its slot and MTL go to easy erg work.
     const next = ws.filter(w => w !== out);
     const room = ergRoom(next);
-    if (room >= HYROX_RUN_FLOOR_MIN) {
+    if (room >= HYROX_RUN_FLOOR_MIN && runningOf(next) >= runShareFloorMin - 1e-6) {
       options.push({ ws: next, note: `W${weekIndex}: Easy Run of ${out.estimatedDurationMin} min left out for an easy erg session of up to ${room} min (${why})` });
     }
     return options;
@@ -2662,7 +2678,7 @@ export function buildHyroxTrainingWeeks(
       const sized = sizeMin < hoursMin - 1e-6;
       const workouts = hyroxWeekForRace(state, w, trainingWeeks, phase, layout, {
         budgetMin: budgetAt(sizeMin), longRunMin, runCeilingKm, prevSunday: weekPrevSunday, scale, omit: omitted, capCounts,
-        maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, capSessionLoad: deloadRef != null, sessionRefs, ceilingName,
+        maxHardSessions, maxQualityRuns, prevRunMin, maxCircuitRounds, sessionCaps, capSessionLoad: deloadRef != null, deload: deloadRef != null, sessionRefs, ceilingName,
         runBudgetMin: runBudgetAt(sizeMin), fillMin: fillAt(sizeMin), ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap,
         easyHoldMin, easyHoldRunBudgetMin: easyHoldMin != null ? runBudgetMin : undefined, ceilingSized: sized,
         longFixed, easyMaxMin, maxSessions: plusOne ? maxSessions + 1 : maxSessions, maxSessionsName, maxRuns, noAssessment,
