@@ -1655,13 +1655,48 @@ function generateWeekSessions(
   let scheduled: Workout[];
   const placed = raceWeek?.layout ? { ...raceWeek, layout: raceWeek.layout } : null;
   if (raceWeek) {
-    const dropped: Workout[] = [];
-    scheduled = scheduleHyroxWeek(
-      [...week, ...easyErgFor(week)], band,
-      placed ? (w) => raceWeekDays(placed, weekIndex, w) : undefined,
-      { prevSunday: inputs.prevSunday, dropped },
-    );
-    for (const d of dropped) adjustments.push(`W${weekIndex}: ${d.n} left out (no race-week day the race-day rules allow)`);
+    const raceErgs = easyErgFor(week);
+    const scheduleRaceWeek = (ws: Workout[]) => {
+      const dropped: Workout[] = [];
+      const out = scheduleHyroxWeek(
+        ws, band,
+        placed ? (w) => raceWeekDays(placed, weekIndex, w) : undefined,
+        { prevSunday: inputs.prevSunday, dropped },
+      );
+      return { out, dropped };
+    };
+    let rw = scheduleRaceWeek([...week, ...raceErgs]);
+    // Race week keeps its station work (round 7 decision 4, completed
+    // 2026-10-14). A Thursday race week runs Monday to Wednesday, 3, 2 and 1
+    // days out: its one day PRIMER_MIN_DAYS_OUT or more days out is the
+    // primer's (raceWeekPrimerDow) and the circuit's only day, so the circuit
+    // was left out and race week held no station work (every Thursday race in
+    // the round 7 review). When the circuit finds no day and the week holds no
+    // other station work, the circuit takes the day and the primer is left
+    // out: the race-day rules drop a primer with no day (race-day-rules.ts,
+    // rule 2), and the last two days stay easy runs. A race week whose only
+    // run was the primer keeps a run: an easy run at the run floor (the
+    // single-run ceiling allowing), as race week holds a run whenever it
+    // holds a run slot. The race week before the fix kept the primer and no
+    // station work.
+    const primer = week.find(w => w.t === 'hyrox_run_tempo');
+    if (primer && rw.dropped.some(isHyroxWork) && !rw.out.some(isHyroxWork)) {
+      const altWs = week.filter(w => w !== primer);
+      let standIn: Workout | null = null;
+      if (!altWs.some(w => w.discipline === 'run' && w.commute !== true)) {
+        const m = Math.floor(Math.min(HYROX_RUN_FLOOR_MIN, ceilingMin));
+        if (m >= runFloor) standIn = generateHyroxRun({ ...runParams, kind: 'run_easy', targetMinutes: m, slotIndex: weekIndex });
+      }
+      const alt = scheduleRaceWeek([...altWs, ...(standIn ? [standIn] : []), ...raceErgs]);
+      const work = alt.out.find(isHyroxWork);
+      if (work) {
+        rw = alt;
+        adjustments.push(`W${weekIndex}: ${primer.n} left out (its day, race week's one day ${PRIMER_MIN_DAYS_OUT} or more days out, holds the ${work.n}: race week keeps its station work)`);
+        if (standIn && alt.out.some(w => w.discipline === 'run' && w.commute !== true)) adjustments.push(`W${weekIndex}: 1 easy run of ${standIn.estimatedDurationMin} min holds the primer's run slot`);
+      }
+    }
+    scheduled = rw.out;
+    for (const d of rw.dropped) adjustments.push(`W${weekIndex}: ${d.n} left out (no race-week day the race-day rules allow)`);
   } else {
     const heldWork = hasHyroxWork(week);
     let found = findHyroxWeekSchedule(week, { prevSunday: inputs.prevSunday });
@@ -1960,16 +1995,61 @@ function hyroxWeekForRace(
       return { ...run, id: w.id, dayOfWeek: w.dayOfWeek, dayName: w.dayName };
     });
   }
-  const windowed = clearStoredPlanRaceWindow(moveLongRunOutOfRaceWindow(generated, weekIndex, layout, firstDow), {
+  const windowDropped: Workout[] = [];
+  const cleared = clearStoredPlanRaceWindow(moveLongRunOutOfRaceWindow(generated, weekIndex, layout, firstDow), {
     weekIndex,
     layout,
     isLongSession: (w) => w.t === 'hyrox_brick',
     isHard: isHyroxHardSession,
     firstScheduleDow: firstDow,
     dayNames: HYROX_DAY_NAMES,
+    onDrop: (w) => windowDropped.push(w),
   });
+  const windowed = placeWorkOutsideRaceWindow(cleared, windowDropped, weekIndex, layout, firstDow, inputs.prevSunday, adjustments);
   noteDropped(generated, windowed, 'the last 6 days before race day');
   return windowed;
+}
+
+/**
+ * The week before race week (a Thursday to Saturday race): a station session
+ * or mini brick the race window dropped (clearStoredPlanRaceWindow: the last
+ * RACE_DAY_CLEAR_DAYS days before race day carry race-week sessions only)
+ * takes a free day at least RACE_DAY_CLEAR_DAYS + 1 days out, the latest
+ * first, where the hard-day and 48 h eccentric rules hold (the previous
+ * Sunday included), as the window rule moves a long session (running rule 3).
+ * Before (round 7 review, 2026-10-14), it was dropped even with Monday to
+ * Thursday free: 7 of 1,134 Thursday-race taper week 1s held no station
+ * work (total_beginner 2 h 10 weeks: a long run alone). The full brick keeps
+ * the window rule's own long-session move. Most important first (the
+ * scheduler's priority order).
+ */
+function placeWorkOutsideRaceWindow(
+  ws: Workout[], dropped: readonly Workout[], weekIndex: number, layout: RaceWeekLayout, firstDow: number,
+  prevSunday: HyroxPrevSunday | null, adjustments: string[],
+): Workout[] {
+  const order = (w: Workout) => (w.t === 'hyrox_assessment' ? 0 : w.t === 'hyrox_mini_brick' && !w.hyroxLight ? 1 : w.t === 'hyrox_station_density' ? 2 : w.t === 'hyrox_station_technique' ? 3 : 4);
+  const work = dropped.filter(w => isHyroxWork(w) && w.t !== 'hyrox_brick').sort((a, b) => order(a) - order(b));
+  if (work.length === 0) return ws;
+  const weekStart = (weekIndex - 1) * 7;
+  const first = Math.max(0, Math.min(7, firstDow));
+  let out = ws;
+  for (const w of work) {
+    const hard = isHyroxHardSession(w);
+    const ecc = isEccentricSession(w);
+    let day: number | null = null;
+    for (let dow = 6; dow >= first && day == null; dow--) {
+      if (layout.raceDayIndex - (weekStart + dow) <= RACE_DAY_CLEAR_DAYS) continue;
+      if (out.some(x => x.commute !== true && x.dayOfWeek === dow)) continue;
+      if (dow === 0 && prevSunday && ((hard && prevSunday.hard) || (ecc && prevSunday.eccentric))) continue;
+      const near = out.filter(x => x.commute !== true && (x.dayOfWeek === dow - 1 || x.dayOfWeek === dow + 1));
+      if (near.some(x => (hard && isHyroxHardSession(x)) || (ecc && isEccentricSession(x)))) continue;
+      day = dow;
+    }
+    if (day == null) continue;
+    out = [...out, { ...w, dayOfWeek: day, dayName: HYROX_DAY_NAMES[day] }].sort((a, b) => (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0));
+    adjustments.push(`W${weekIndex}: ${w.n} moved to ${HYROX_DAY_NAMES[day]}, ${layout.raceDayIndex - (weekStart + day)} days out (the last ${RACE_DAY_CLEAR_DAYS} days before race day carry race-week sessions only)`);
+  }
+  return out;
 }
 
 /**
@@ -2739,9 +2819,16 @@ export function buildHyroxTrainingWeeks(
     // circuit (13 race weeks at 2 h without one). Exempting the circuit
     // outright let race week rise up to 30 min above taper week 1 with an
     // easy run beside it (open doubles, total_beginner 4 h 10 weeks).
-    const primerMinOf = (a: Attempt) => (raceTaper && raceWeek
-      ? prescribed(a.workouts).filter(x => x.t === 'hyrox_run_tempo').reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0)
-      : 0);
+    // A race week whose primer gave its day to the circuit (generateWeekSessions:
+    // race week keeps its station work) counts the easy run holding the
+    // primer's run slot in the primer's place.
+    const primerMinOf = (a: Attempt) => {
+      if (!(raceTaper && raceWeek)) return 0;
+      const p = prescribed(a.workouts);
+      const tempo = p.filter(x => x.t === 'hyrox_run_tempo').reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0);
+      if (tempo > 0 || !a.adjustments.some(n => n.endsWith("holds the primer's run slot"))) return tempo;
+      return p.filter(isPlainEasyRun).reduce((m, x) => Math.max(m, x.estimatedDurationMin ?? 0), 0);
+    };
     if (beforeCapMin < Infinity) {
       limits.push({
         cap: beforeCapMin,
