@@ -83,6 +83,7 @@ import {
   TRI_TAPER_THRESHOLD_REPS,
   bikeKindForIntensity,
   triRaceBikeIntensity,
+  triQualityWorkMinutes,
   triTaperMicrosNeedMin,
   triTaperSubThresholdRideNeedMin,
   triTaperSwimPlan,
@@ -508,6 +509,22 @@ describe('taper week 1 keeps its quality runs when gym and commutes fill the ear
         }
       }
     }
+  });
+});
+
+describe('cycling taper week 1 (sub-threshold ceiling)', () => {
+  it('keeps the reference week\'s quality rides as sweet spot or tempo, each holding 75% of a reference ride\'s work (16 weeks 10 h)', () => {
+    at(NOW);
+    const p = plan('cycling', 16, 10, 6);
+    const work = (ws: Workout[]) => ws.filter(isQuality).map(w => triQualityWorkMinutes(w) ?? 0).sort((a, b) => b - a);
+    const t1 = training(p.s.wks[p.tw - 2]);
+    const q = work(t1);
+    const qRef = work(training(p.refWeek));
+    expect(q.length).toBe(qRef.length);
+    expect(t1.filter(isQuality).every(w => w.t === 'bike_sweet_spot' || w.t === 'bike_tempo')).toBe(true);
+    q.forEach((m, i) => expect(m).toBeGreaterThanOrEqual(0.75 * qRef[i] - 1e-9));
+    // Race week keeps its race-pace openers at the event's intensity.
+    expect(sessions(p.s.wks[p.tw - 1]).filter(w => w.taperRole === 'opener').length).toBeGreaterThan(0);
   });
 });
 

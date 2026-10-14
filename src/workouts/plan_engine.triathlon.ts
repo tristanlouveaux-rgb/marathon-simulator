@@ -64,6 +64,7 @@ import {
   TRI_RACE_PACE_MIN_REPS,
   TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY,
   TRI_TAPER_MICROS_MIN_REPS,
+  TRI_TAPER_QUALITY_WORK_SHARE,
   TRI_TAPER_SESSION_FLOOR_MIN,
   type TriTaperRef,
   type TriTaperSessionCtx,
@@ -1052,17 +1053,23 @@ function triTaperWeekOne(state: SimulatorState, weekIndex: number, totalWeeks: n
         }),
       };
     }
-    // Sweet spot or tempo (cycling's sub-threshold ceiling): the library's
-    // variant 0 sets its reps by length, so the 0.55 share holds fewer reps;
-    // never shorter than the variant's one-rep session.
-    const subThreshold = kind === 'sweet_spot' || kind === 'tempo' ? triTaperSubThresholdRideNeedMin() : 0;
-    return {
-      share, ref: b.min, need: subThreshold, minimal: subThreshold, quality: true,
-      build: m => generateBikeSession({
-        phase, skill: rating.bike as TriSkillSlider, weekIndex, totalWeeks, targetMinutes: m, kind,
-        ftp: tri.bike?.ftp, hasPowerMeter: tri.bike?.hasPowerMeter, slotIndex: i, variantIndex: 0,
-      }),
-    };
+    const ride = (m: number) => generateBikeSession({
+      phase, skill: rating.bike as TriSkillSlider, weekIndex, totalWeeks, targetMinutes: m, kind,
+      ftp: tri.bike?.ftp, hasPowerMeter: tri.bike?.hasPowerMeter, slotIndex: i, variantIndex: 0,
+    });
+    if (kind === 'sweet_spot' || kind === 'tempo') {
+      // Cycling's sub-threshold ceiling. The library's variant 0 sets its reps
+      // by length: the session rises to the minutes whose reps hold 75% of the
+      // reference session's work (Goeringer, as short course; no longer than
+      // the reference), and comes down toward the variant's one-rep session
+      // only when the discipline's steady minutes are spent.
+      const minimal = triTaperSubThresholdRideNeedMin();
+      const target = TRI_TAPER_QUALITY_WORK_SHARE * (triQualityWorkMinutes(b.w, css, swimSkill) ?? 0);
+      let need = minimal;
+      while (need < b.min && (triQualityWorkMinutes(ride(need)) ?? 0) < target - 1e-9) need++;
+      return { share, ref: b.min, need, minimal, quality: true, build: ride };
+    }
+    return { share, ref: b.min, need: 0, minimal: 0, quality: true, build: ride };
   };
   const bike = sized(refBikes.map(bikeSlot));
 
