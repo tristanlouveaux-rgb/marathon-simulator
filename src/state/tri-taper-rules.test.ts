@@ -36,7 +36,12 @@
  *     tempo with at least one library rep; race week holds an opener; long
  *     course never above race intensity, cycling never above sweet spot;
  *   - TRI_GENERATOR_VERSION bumped so stored plans regenerate.
- * Thursday to Saturday races keep the structural rules and the no-zero rule.
+ * Thursday to Saturday races keep the structural rules and the no-zero rule,
+ * also on thin reference weeks (two gym sessions, three bidirectional
+ * commutes, and both at 0 h weekdays with a power meter).
+ * Taper week 1 keeps its quality run when gym and commutes fill the earlier
+ * days, and cycling's taper week 1 keeps sweet spot or tempo at 75% of the
+ * reference work.
  * Their volume and frequency gaps (the race window cuts taper week 1, race
  * week has one to three training days) are pinned below with one case per
  * weekday, as is a race week above a thin week before.
