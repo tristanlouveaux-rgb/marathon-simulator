@@ -1137,6 +1137,8 @@ const PHASE_MULTIPLIERS: Record<string, Record<string, number>> = {
  * weekly load target and the sharpening-block generator share. 0.75 / 0.65 /
  * 0.55 over 3 weeks, 0.70 / 0.55 over 2, and 0.55 for a 1-week taper, whose
  * only week is race week (Tristan, 2026-10-05: race week reaches 0.55).
+ * Running and HYROX read it; a triathlon or cycling plan passes its own taper
+ * fractions instead (computePlannedWeekTSS `taperFractionOf`, triTaperFraction).
  */
 const taperMultiplier = taperFraction;
 
