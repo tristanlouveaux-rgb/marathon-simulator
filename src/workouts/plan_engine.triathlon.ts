@@ -144,9 +144,10 @@ import { isLongRun } from './long-run';
 // (sprint 1 week, others 2, cycling 2; race week only under 8 h), taper weeks
 // sized per discipline from the reference week (0.55 then 0.30, or 0.55 for a
 // one-week taper), quality kept with fewer reps (long course capped at race
-// intensity), race week composed from openers, Byrn's brick, a rest day 2 days
-// out and a capped activation the day before. Stored plans regenerate so
-// existing users get the new taper.
+// intensity, cycling at sweet spot or tempo), race week composed from openers,
+// Byrn's brick, a rest day 2 days out and a capped activation the day before.
+// Stored plans regenerate so existing users get the new taper. (Every later
+// change on this branch landed before any plan shipped at v24.)
 export const TRI_GENERATOR_VERSION = 24;
 
 /**
