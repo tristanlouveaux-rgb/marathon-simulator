@@ -858,9 +858,10 @@ function finishTriWeek(
  * sessions fit the weekend caps the scheduler fills first (its weekend
  * two-a-day, step 3; SCIENCE_LOG §CZ limitation 9, ISSUE-379), and the brick
  * that kept runs off Saturday has become the solo long ride: at 0 weekday
- * hours Saturday held up to six sessions, two of each discipline. Two sessions
- * of a discipline on one day give the stimulus of one with more fatigue (the
- * scheduler's race-week rule), so frequency means separate days. Each extra
+ * hours Saturday held up to six sessions, two of each discipline. A
+ * same-discipline double counts as one day of that discipline (a product
+ * rule, SCIENCE_LOG §CZ, not a physiological finding), so taper frequency
+ * means separate days. Each extra
  * session of a discipline on a day (the longest stays) moves to the day
  * without that discipline holding the fewest sessions, nearest its own day
  * among equals; a run never goes beside the long run or the brick (the
