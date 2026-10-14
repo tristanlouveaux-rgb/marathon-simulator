@@ -2801,6 +2801,27 @@ export function buildHyroxTrainingWeeks(
         }
         a = withErgRoom(a);
       }
+      if (over(a)) {
+        // The proportional solver stops over the week's size while the
+        // smallest week holds (whole rounds, the MTL cap's trims): the largest
+        // size whose week holds, by the size search (round 7). So fit() holds
+        // the week whenever its smallest week does, and a check of the
+        // smallest week answers for it (fitOrDefer, feasible).
+        const keep = { scale, ergCap, easyCap, sizeMin };
+        scale = 1;
+        ergCap = undefined;
+        easyCap = undefined;
+        if (!smallest) {
+          sizeMin = 0;
+          smallest = make();
+        }
+        if (!over(smallest)) {
+          const found = sizeSearch(over, hoursMin, smallest);
+          sizeMin = found.lo;
+          return found.best;
+        }
+        ({ scale, ergCap, easyCap, sizeMin } = keep);
+      }
       return a;
     };
     // What fit() would return, without the size search where its outcome is
