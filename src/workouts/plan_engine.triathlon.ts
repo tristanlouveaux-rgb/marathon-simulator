@@ -999,11 +999,13 @@ function triTaperWeekOne(state: SimulatorState, weekIndex: number, totalWeeks: n
  * taper week, TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION when race week is the whole
  * taper. Sessions sit relative to race day: the race-day layout when the plan
  * has one, else a Sunday race. Day caps are the athlete's normal ones (the
- * reference week's hours, triDayCaps). Gym keeps to days at least 4 days out
- * (Dave Scott: last strength session 5 or 4 days out); commute runs keep to
- * weekdays at least 3 days out without another run, so the last two days stay
- * light; both take the days holding the fewest sessions first. Sessions with
- * no day are left out, as the race-week scheduler did.
+ * reference week's hours, triDayCaps); they choose days, never drop a
+ * session. Commute runs keep to weekdays at least 3 days out without another
+ * run, so the last two days stay light. Gym keeps to days at least 4 days out
+ * (Dave Scott: last strength session 5 or 4 days out) holding fewer than
+ * TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY sessions (commutes counted). Both take
+ * the days holding the fewest sessions first; a commute or gym session with
+ * no day is left out, as the race-week scheduler did.
  */
 function triRaceWeek(
   state: SimulatorState, weekIndex: number, totalWeeks: number, taper: TriRaceTaper,

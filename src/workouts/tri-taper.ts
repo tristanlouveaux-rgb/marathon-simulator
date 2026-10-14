@@ -148,8 +148,8 @@ const THRESHOLD_REC_MIN = 1.5;
 /**
  * Race-day bike intensity factor: RACE_INTENSITY_BY_DISTANCE for triathlon
  * (bike-physics.ts: Allen & Coggan guidance for 70.3 and Ironman, Coyle 1984
- * fractional utilisation for sprint and Olympic, T100 interpolated just below
- * 70.3), CYCLING_EVENT_INTENSITY_FACTOR for a cycling event. A planning use
+ * fractional utilisation for sprint and Olympic, T100 placed just below 70.3
+ * with no source), CYCLING_EVENT_INTENSITY_FACTOR for a cycling event. A planning use
  * of the race-intensity fact: "race pace" in a workout is the intensity the
  * athlete will race at.
  */
@@ -559,8 +559,8 @@ export interface TriRaceWeekInput {
    *  race day). */
   daysOut: Array<number | null>;
   /** The athlete's per-day minute caps (their normal week's weekday and
-   *  weekend hours, triDayCaps). Hard caps, with the scheduler's 15-min
-   *  tolerance. */
+   *  weekend hours, triDayCaps), with the scheduler's 15-min tolerance. They
+   *  choose the day; they never drop or shrink a session. */
   dayCapMin?: Record<number, number>;
   ctx: TriTaperSessionCtx;
   /** Aerobic session builders (the engine's own swim, bike and run). */
@@ -584,8 +584,7 @@ interface ComposedWeek {
  * Compose race week from the reference week (planning side). Budget per
  * discipline = fraction x reference minutes. Steps:
  *   1. Long course: Byrn's brick on the opener-window day nearest the race
- *      (3 days out for a Sunday race), when the bike and run budgets and that
- *      day's cap hold it.
+ *      (3 days out for a Sunday race), when the bike and run budgets hold it.
  *   2. The day before: the activation's lower bounds (a 20-min ride, a 5-min
  *      run) come off the budgets first. Two days out stays empty (rest).
  *   3. Openers on the opener-window days (PRIMER_MIN_DAYS_OUT to
@@ -596,7 +595,7 @@ interface ComposedWeek {
  *      window days go in they take the days nearest the race. Each holds its
  *      repeats inside the shortest warm-up and cool-down, and takes an equal
  *      share of its discipline's budget when that is more (within the
- *      race-week cap). Order (an app inference from the order coaches taper
+ *      race-week cap and its day's room). Order (an app inference from the order coaches taper
  *      volume, run first and swim last): run, bike, swim; long course with a
  *      brick: run, swim (the brick carries the bike's builds); cycling: a ride
  *      on every window day. Openers are typed by their steady content (an
@@ -607,7 +606,9 @@ interface ComposedWeek {
  *      week holds no session longer than a normal one) and the race-week cap
  *      (TRI_RACE_WEEK_SESSION_CAP_MIN), and the nearest whole number of
  *      TRI_TAPER_SESSION_FLOOR_MIN sessions at most. Sessions that cannot fit
- *      the two-a-day slots (a max flow from disciplines to days) come off.
+ *      the two-a-day slots (a max flow from disciplines to days) come off one
+ *      at a time, the cut that moves its discipline least from its fraction
+ *      first (then the least per session), never a discipline's last.
  *      Then, while race week holds fewer than TRI_TAPER_MIN_SESSION_SHARE of
  *      the reference sessions (the race counted as one, as it takes the long
  *      session's slot, and each day-before activation as one), one more
@@ -618,16 +619,23 @@ interface ComposedWeek {
  *      Sunday race), the discipline with the fewest free days first, biggest
  *      first among equals, on a day that leaves the other sessions a place:
  *      one per discipline per day, at most TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY
- *      training sessions a day, within the athlete's day caps (hard, with the
- *      scheduler's 15-min tolerance). A session no free day has room for is
- *      cut to the largest room left (at least the floor) or left out.
- *   6. A one-week taper's race week never holds more than the week before
+ *      training sessions a day. The athlete's day caps (with the scheduler's
+ *      15-min tolerance) choose the day: the first with room, else the one
+ *      with the most room, at full length. Caps never drop or shrink a
+ *      session, as in the normal week (scheduleTriathlonWeek spills past
+ *      them).
+ *   6. A one-week taper's race week holds no more than the week before
  *      (`maxTotalMin`): aerobic sessions come down toward the floor, then the
- *      shortest go, while frequency holds.
- *   7. The day before is sized last: the ride and run at their lower bounds,
- *      the run dropped when the two would outweigh (minutes or load) the
- *      lightest earlier training day (Byrn's day before is a run or a ride),
- *      then both grown toward their caps (30 and 10 min) only with budget left
+ *      shortest go, while frequency holds. Openers, the activations' lower
+ *      bounds, frequency and every discipline's last session win over it, so
+ *      a thin week before (a deload, or one the race window emptied) can
+ *      still sit below race week.
+ *   7. The day before is sized last: the ride and run at their lower bounds
+ *      when the two stay under (minutes and load) the lightest earlier
+ *      training day; else the ride alone, else the run alone (Byrn's day
+ *      before is a run or a ride), else neither, the week rebuilt for each
+ *      choice so a discipline that loses its activation keeps a training
+ *      session; then both grown toward their caps (30 and 10 min) only with budget left
  *      unplaced, while the day stays the lightest, no activation outruns the
  *      week's longest training session, and the week stays under the week
  *      before.
