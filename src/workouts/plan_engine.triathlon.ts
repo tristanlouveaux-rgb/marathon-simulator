@@ -17,7 +17,7 @@
  * marathon training).
  */
 
-import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, spaceStoredPlanQualityRuns, RACE_DAY_CLEAR_DAYS } from './race-day-rules';
+import { dropSessionsOnOrAfterRaceDay, clearStoredPlanRaceWindow, spaceStoredPlanQualityRuns, RACE_DAY_CLEAR_DAYS, RACE_DAY_HARD_SPACING_DAYS } from './race-day-rules';
 import { storedPlanRaceLayout, type RaceWeekLayout } from './race-week-layout';
 import { firstTrackedDow } from '@/ui/workout-status';
 import type { SimulatorState, Week, Workout } from '@/types/state';
@@ -413,30 +413,62 @@ function triWeekForRace(
   // Rule 4's spacing: no quality run next to the long run, the brick or
   // another quality run in the last 13 days (running's rule; the brick and the
   // long run keep their back-to-back days).
-  const spaced = (isRun: (w: Workout) => boolean) => spaceStoredPlanQualityRuns(cleared, {
+  const isHardRun = (w: Workout) => isTriQualityRun(w) || isLongRun(w) || w.t === 'brick';
+  const spaced = spaceStoredPlanQualityRuns(cleared, {
     weekIndex,
     layout,
     isQualityRun: isTriQualityRun,
-    isHardRun: w => isTriQualityRun(w) || isLongRun(w) || w.t === 'brick',
-    isRun,
+    isHardRun,
+    isRun: w => (w.discipline ?? 'run') === 'run',
     firstScheduleDow: firstDow,
     dayNames: TRI_DAY_NAMES,
     toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
   });
-  // A moved quality run takes a day without a run, and without gym when it
-  // can: the scheduler puts gym on off-run days (gym has no discipline, so it
-  // reads as a run in both places). Only when that would ease a quality run
-  // may it take a gym day, as the scheduler's own fallback seats a run beside
-  // gym when no other day has room (placeByPreference step 4): taper week 1
-  // keeps the reference week's quality count (Tristan, decision 4). Commutes
-  // are runs.
-  let workouts = spaced(w => (w.discipline ?? 'run') === 'run');
-  const qualityRuns = (ws: Workout[]) => ws.filter(isTriQualityRun).length;
-  if (qualityRuns(workouts) < qualityRuns(cleared)) {
-    const onGymDays = spaced(w => w.t !== 'gym' && (w.discipline ?? 'run') === 'run');
-    if (qualityRuns(onGymDays) > qualityRuns(workouts)) workouts = onGymDays;
-  }
+  const workouts = reseatEasedQualityRuns(cleared, spaced, { weekIndex, layout, firstDow, isHardRun });
   return { workouts, raceWindowCut };
+}
+
+/**
+ * A quality run rule 4's spacing eased keeps its quality when a day allows it
+ * (planning side; Tristan, decision 4: taper week 1 keeps the reference
+ * week's quality count). The spacing rule moves a quality run to the nearest
+ * earlier day holding no run, reading gym (no discipline) and commutes as
+ * runs, so an athlete whose gym and commutes fill every earlier day loses the
+ * session (Olympic 13 h with gym, commutes and 0 h weekdays: the threshold
+ * run became an easy run). Here the eased run goes back as the quality run on
+ * an earlier day holding no training run (gym and commutes aside, as the
+ * reference week already seats a quality run beside a commute) where the
+ * spacing holds, the day holding the fewest sessions, the nearest among
+ * equals. With no such day it stays eased.
+ */
+function reseatEasedQualityRuns(
+  before: Workout[], after: Workout[],
+  opts: { weekIndex: number; layout: RaceWeekLayout; firstDow: number; isHardRun: (w: Workout) => boolean },
+): Workout[] {
+  const eased = after.filter(w => w.id && !isTriQualityRun(w) && before.some(b => b.id === w.id && isTriQualityRun(b)));
+  if (eased.length === 0) return after;
+  const weekStart = (opts.weekIndex - 1) * 7;
+  const daysOut = (dow: number) => opts.layout.raceDayIndex - (weekStart + dow);
+  const trainingRun = (w: Workout) => w.t !== 'gym' && !w.commute && ((w.discipline ?? 'run') === 'run' || w.t === 'brick');
+  let out = [...after];
+  for (const e of eased) {
+    const q = before.find(b => b.id === e.id)!;
+    const from = e.dayOfWeek ?? 0;
+    const others = (w: Workout) => w !== e;
+    const holds = (dow: number, pred: (w: Workout) => boolean) => out.some(w => others(w) && w.dayOfWeek === dow && pred(w));
+    const days: number[] = [];
+    for (let dow = from - 1; dow >= Math.max(0, opts.firstDow); dow--) {
+      if (holds(dow, trainingRun)) continue;
+      if (daysOut(dow) <= RACE_DAY_HARD_SPACING_DAYS && (holds(dow - 1, opts.isHardRun) || holds(dow + 1, opts.isHardRun))) continue;
+      days.push(dow);
+    }
+    if (days.length === 0) continue;
+    const perDay = (dow: number) => out.filter(w => others(w) && w.dayOfWeek === dow).length;
+    const dow = days.reduce((b, x) => (perDay(x) < perDay(b) ? x : b), days[0]);
+    out = out.map(w => (w === e ? { ...q, dayOfWeek: dow, dayName: TRI_DAY_NAMES[dow] } : w));
+  }
+  const order = new Map(out.map((w, i) => [w, i]));
+  return out.sort((a, b) => ((a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0)) || ((order.get(a) ?? 0) - (order.get(b) ?? 0)));
 }
 
 /** The latest weekday of plan week `weekIndex` more than `clearDays` days
