@@ -92,6 +92,15 @@
  * days or the taper fractions exclude it, and the hours line marks only weeks
  * whose phase budget is the chosen hours and where one more session holds
  * 20 min or more.
+ * Round 7 (2026-10-14): the guard never sits under the nominal week 1 and
+ * the chronic seed is the larger of the logged load and that week; the race
+ * taper's smallest circuit is exempt from its fractions (week 1's assessment
+ * too when week 1 is the taper), race week rising above the week before only
+ * by the primer and that circuit; no deload session longer or heavier than
+ * the last loaded week's; a deload's easy run ranks above the mini brick; a
+ * week whose long run a ceiling cut keeps no easy run above the run floor;
+ * the B sweep asserts its bound and the quality runs for all nine variants;
+ * the hours line holds against the real plan with one more session.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -369,6 +378,19 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const ref = lastLoaded(i);
       if (ref >= 0) {
         const r = wks[ref];
+        // The deload's easy run ranks above the mini brick (round 7): a
+        // deload holding a mini brick beside other station work, and no run
+        // besides the long run where the last loaded week held one, is one
+        // whose running share at the chosen hours cannot fund a run-floor easy
+        // run beside its long run, quality run and full-brick runs, or whose
+        // easy running the MTL cap cut.
+        const minis = ws.filter(x => x.t === 'hyrox_mini_brick');
+        if (prescribed(r).some(x => x.discipline === 'run' && !isHyroxLongRun(x)) && minis.length > 0
+          && ws.some(x => isWork(x) && x.t !== 'hyrox_mini_brick') && !ws.some(x => x.discipline === 'run' && !isHyroxLongRun(x))) {
+          const fixedRun = runs(wk).reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0)
+            + ws.filter(x => x.discipline === 'brick' && x.t !== 'hyrox_mini_brick').reduce((m, x) => m + (x.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (x.hyroxRounds ?? 1)) / 60, 0), 0);
+          if (HYROX_RUN_SHARE * hoursMin - fixedRun >= HYROX_RUN_FLOOR_MIN && !notes(wk).some(n => /MTL cap/.test(n))) out.push(`W${w}: deload holds a mini brick and no easy run where the running share funds one`);
+        }
         // Over it only when the week holds just its last station session or
         // brick at its floor, and the week says so.
         const heldOver = lastWorkOnly(wk) && notes(wk).some(n => /deload \d+ min \/ \d+ TSS above/.test(n));
@@ -1591,6 +1613,13 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
       }
     }
     expect(deloads).toBeGreaterThan(100);
+    // The easy run ranks above the mini brick in a deload (round 7):
+    // beginner 3 h 24 weeks, W20, leaves its mini brick so the running share
+    // funds the easy run's hold, and says so.
+    const b3 = build('beginner', 3, 24);
+    expect(prescribed(b3.wks[19]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
+    expect(prescribed(b3.wks[19]).some(w => w.t === 'hyrox_mini_brick')).toBe(false);
+    expect(notes(b3.wks[19]).some(n => /Mini Brick left out \(deload: the easy run ranks above it\)/.test(n))).toBe(true);
     // beginner 4 h 12 weeks: W7 holds an easy run of 20 min, a 59-min circuit,
     // a 49-min mini brick and a 38-min long run; the W8 deload keeps its easy
     // run at the run floor or above and shortens the circuit (a station out:
