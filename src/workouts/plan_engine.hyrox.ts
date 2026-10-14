@@ -1095,8 +1095,15 @@ function generateWeekSessions(
   // share: the run components of every station and brick session (today the
   // brick runs; the technique circuit's closing easy run is not a component
   // yet, it sits in the station content lane H2b owns, so the share does not
-  // see it until H2b makes it one).
-  const brickRunMin = nonRun
+  // see it until H2b makes it one). The sessions count as the injury gates
+  // leave them (current and future weeks): a brick the gates drop holds no
+  // running. Before (2026-10-14 merge review), a gated brick's run segments
+  // still took the easy runs' share, and the share then differed with the
+  // brick's station (an erg, or the farmer-carry fallback without ergs).
+  const shareNonRun = weekIndex < (state.w ?? 1)
+    ? nonRun
+    : applyHyroxInjuryGates(nonRun, (state as any).injuryState as InjuryState | undefined);
+  const brickRunMin = shareNonRun
     .filter(w => w.discipline === 'brick' || w.discipline === 'station')
     .reduce((sum, w) => sum + (w.hyroxComponents ?? [])
       .filter(c => c.type === 'run')
