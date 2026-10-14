@@ -411,16 +411,29 @@ function triWeekForRace(
   // Rule 4's spacing: no quality run next to the long run, the brick or
   // another quality run in the last 13 days (running's rule; the brick and the
   // long run keep their back-to-back days).
-  const workouts = spaceStoredPlanQualityRuns(cleared, {
+  const spaced = (isRun: (w: Workout) => boolean) => spaceStoredPlanQualityRuns(cleared, {
     weekIndex,
     layout,
     isQualityRun: isTriQualityRun,
     isHardRun: w => isTriQualityRun(w) || isLongRun(w) || w.t === 'brick',
-    isRun: w => (w.discipline ?? 'run') === 'run',
+    isRun,
     firstScheduleDow: firstDow,
     dayNames: TRI_DAY_NAMES,
     toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
   });
+  // A moved quality run takes a day without a run, and without gym when it
+  // can: the scheduler puts gym on off-run days (gym has no discipline, so it
+  // reads as a run in both places). Only when that would ease a quality run
+  // may it take a gym day, as the scheduler's own fallback seats a run beside
+  // gym when no other day has room (placeByPreference step 4): taper week 1
+  // keeps the reference week's quality count (Tristan, decision 4). Commutes
+  // are runs.
+  let workouts = spaced(w => (w.discipline ?? 'run') === 'run');
+  const qualityRuns = (ws: Workout[]) => ws.filter(isTriQualityRun).length;
+  if (qualityRuns(workouts) < qualityRuns(cleared)) {
+    const onGymDays = spaced(w => w.t !== 'gym' && (w.discipline ?? 'run') === 'run');
+    if (qualityRuns(onGymDays) > qualityRuns(workouts)) workouts = onGymDays;
+  }
   return { workouts, raceWindowCut };
 }
 
