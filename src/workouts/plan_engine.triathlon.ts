@@ -45,7 +45,7 @@ import {
 } from './tri-intensity-profile';
 import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES } from './scheduler.triathlon';
 import {
-  composeTriRaceWeek,
+  composeTriRaceWeekWithClosing,
   triDayBeforeRide,
   triQualityWorkMinutes,
   triRaceBikeIntensity,
@@ -140,13 +140,15 @@ import { isLongRun } from './long-run';
 // the capped paces (5:45/km).
 // v24: the race taper rebuild (tri-taper.ts, SCIENCE_LOG "Triathlon and
 // cycling taper rebuild", Tristan 2026-10-13). Taper length by race distance
-// (sprint 1 week, others 2, cycling 2; race week only under 8 h), taper weeks
-// sized per discipline from the reference week (0.55 then 0.30, or 0.55 for a
-// one-week taper), quality kept with fewer reps (long course capped at race
+// (sprint 1 week, others 2, cycling 2; race week only under 8 h for sprint and
+// Olympic), taper weeks sized per discipline from the reference week (0.55
+// then 0.30, or 0.55 for a one-week taper) and left alone by the effort
+// multiplier, quality kept with fewer reps (long course capped at race
 // intensity, cycling at sweet spot or tempo), race week composed from openers,
-// Byrn's brick, a rest day 2 days out and a capped activation the day before.
-// Stored plans regenerate so existing users get the new taper. (Every later
-// change on this branch landed before any plan shipped at v24.)
+// Byrn's brick, a rest day 2 days out and a capped activation the day before
+// (a Tuesday or Wednesday race's in the closing week). Stored plans regenerate
+// so existing users get the new taper. (Every later change on this branch
+// landed before any plan shipped at v24.)
 export const TRI_GENERATOR_VERSION = 24;
 
 /**
@@ -258,13 +260,17 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
   const planPhases = triPlanPhases(state, trainingWeeks);
   const weeks: Week[] = [];
+  // The closing week holds the race and, for a Tuesday or Wednesday race, the
+  // day-before activation race week composed with it (decision 3).
+  let closingWorkouts: Workout[] = [];
 
   for (let w = 1; w <= totalWeeks; w++) {
     const closing = w > trainingWeeks;
     const p = closing ? { ph: 'taper' as TrainingPhase } : planPhases[w - 1];
     const phase = p.ph;
     const built = closing ? null : triWeekForRace(state, w, trainingWeeks, phase, layout);
-    const weekWorkouts = built?.workouts ?? [];
+    if (built && w === trainingWeeks) closingWorkouts = built.closing;
+    const weekWorkouts = closing ? (w === trainingWeeks + 1 ? closingWorkouts : []) : (built?.workouts ?? []);
     const raceWindowCut = built?.raceWindowCut ?? [];
 
     weeks.push({
@@ -350,8 +356,13 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   const trainingWeeks = layout?.trainingWeeks ?? totalWeeks;
   const existing = state.wks[weekIndex - 1];
   if (weekIndex > trainingWeeks) {
-    // Closing week: it holds only the race.
-    return { ...existing, ph: 'taper', raceClosing: true, triWorkouts: [] };
+    // Closing week: the race and, for a Tuesday or Wednesday race, the
+    // day-before activation, composed with race week.
+    const raceWeekPhase = triPlanPhases(state, trainingWeeks)[trainingWeeks - 1]?.ph ?? 'taper';
+    const closingWorkouts = weekIndex === trainingWeeks + 1
+      ? triWeekForRace(state, trainingWeeks, trainingWeeks, raceWeekPhase, layout).closing
+      : [];
+    return { ...existing, ph: 'taper', raceClosing: true, triWorkouts: closingWorkouts };
   }
   const planPhases = triPlanPhases(state, trainingWeeks);
   const p = planPhases[weekIndex - 1];
@@ -391,15 +402,16 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
 function triWeekForRace(
   state: SimulatorState, weekIndex: number, trainingWeeks: number, phase: TrainingPhase,
   layout: RaceWeekLayout | null,
-): { workouts: Workout[]; raceWindowCut: TriRaceWindowCut } {
+): { workouts: Workout[]; raceWindowCut: TriRaceWindowCut; closing: Workout[] } {
   const tri = state.triConfig!;
   const firstDow = firstTrackedDow(state.planStartDate, weekIndex, state.planCreatedAt);
   // Race week places its sessions relative to race day itself (tri-taper.ts
   // composeTriRaceWeek: openers 3 to 5 days out, running's primer window).
-  const week = generateWeekForTriathlon(state, weekIndex, trainingWeeks, phase, { layout, firstDow });
+  const closing: Workout[] = [];
+  const week = generateWeekForTriathlon(state, weekIndex, trainingWeeks, phase, { layout, firstDow, closing });
   const generated = dropSessionsOnOrAfterRaceDay(week, weekIndex, state.planStartDate, tri.raceDate);
   const raceWindowCut: TriRaceWindowCut = [];
-  if (!layout) return { workouts: generated, raceWindowCut };
+  if (!layout) return { workouts: generated, raceWindowCut, closing };
   const dropped: Workout[] = [];
   let cleared = clearStoredPlanRaceWindow(generated, {
     weekIndex,
@@ -439,7 +451,7 @@ function triWeekForRace(
     toEasy: w => triEasedRun(state, weekIndex, trainingWeeks, phase, w),
   });
   const workouts = reseatEasedQualityRuns(cleared, spaced, { weekIndex, layout, firstDow, isHardRun });
-  return { workouts, raceWindowCut };
+  return { workouts, raceWindowCut, closing };
 }
 
 /**
@@ -680,6 +692,9 @@ interface TriWeekParts {
 interface TriWeekGenCtx {
   layout: RaceWeekLayout | null;
   firstDow: number;
+  /** Race week of a Tuesday or Wednesday race fills this with the closing
+   *  week's day-before activation (triRaceWeek). */
+  closing?: Workout[];
 }
 
 /** Cycling mode: the tri engine with the bike alone. */
@@ -1134,7 +1149,9 @@ function triTaperWeekOne(
  * (Dave Scott: last strength session 5 or 4 days out) holding fewer than
  * TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY sessions (commutes counted). Both take
  * the days holding the fewest sessions first; a commute or gym session with
- * no day is left out, as the race-week scheduler did.
+ * no day is left out, as the race-week scheduler did. A Tuesday or Wednesday
+ * race's day-before activation falls in the closing week: it goes to
+ * `genCtx.closing` with the closing week's injury gates and ids.
  */
 function triRaceWeek(
   state: SimulatorState, weekIndex: number, totalWeeks: number, taper: TriRaceTaper,
@@ -1180,7 +1197,11 @@ function triRaceWeek(
       .filter(w => w.t !== 'gym' && !w.commute)
       .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   }
-  const composed = composeTriRaceWeek({
+  // A Tuesday or Wednesday race with a closing week: the day before is that
+  // week's Monday or Tuesday (decision 3, 2026-10-14).
+  const closingDayBeforeDow = layout?.closingWeek && layout.raceDayOfWeek >= 1 ? layout.raceDayOfWeek - 1 : undefined;
+  const { week: composed, closing: closingActs } = composeTriRaceWeekWithClosing({
+    closingDayBeforeDow,
     maxTotalMin,
     present: { swim: disciplines.includes('swim'), bike: disciplines.includes('bike'), run: disciplines.includes('run') },
     longCourse: !cyclingOnly && triTaperCapsAtRacePace(tri.distance),
@@ -1242,6 +1263,17 @@ function triRaceWeek(
     .sort((a, b) => ((a.w.dayOfWeek ?? 0) - (b.w.dayOfWeek ?? 0)) || (a.i - b.i))
     .map(({ w }) => w);
   stampTriWorkoutIds(out, weekIndex);
+  // The closing week's day-before activation: the closing week's injury gates
+  // and ids.
+  if (closingActs.length > 0 && genCtx?.closing) {
+    const g = triGates(state, weekIndex + 1, [], closingActs.filter(w => w.discipline === 'bike'), closingActs.filter(w => w.discipline === 'run'), null, []);
+    const acts = [...g.bike, ...g.run]
+      .map((w, i) => ({ w, i }))
+      .sort((a, b) => ((a.w.dayOfWeek ?? 0) - (b.w.dayOfWeek ?? 0)) || (a.i - b.i))
+      .map(({ w }) => w);
+    stampTriWorkoutIds(acts, weekIndex + 1);
+    genCtx.closing.push(...acts);
+  }
   return out;
 }
 

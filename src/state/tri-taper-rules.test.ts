@@ -283,7 +283,12 @@ function gymViolations(p: Plan): string[] {
   return out;
 }
 
-/** Rules every race weekday keeps: the day before, two days out, caps. */
+/** A Tuesday or Wednesday race's closing week: its sessions (the day-before
+ *  activation only, decision 3). Empty without a closing week. */
+const closingWeek = (p: Plan): Workout[] => (p.s.tw > p.tw ? p.s.wks[p.tw].triWorkouts ?? [] : []);
+
+/** Rules every race weekday keeps: the day before, two days out, caps; the
+ *  closing week holds the day-before activation and nothing else. */
 function structuralViolations(p: Plan): string[] {
   const out: string[] = [];
   const { s, tw } = p;
@@ -291,7 +296,16 @@ function structuralViolations(p: Plan): string[] {
   const rw = s.wks[tw - 1];
   const dOut = (w: Workout) => layout.raceDayIndex - ((tw - 1) * 7 + (w.dayOfWeek ?? 0));
   const train = training(rw);
-  const db = sessions(rw).filter(w => w.taperRole === 'day_before');
+  const closing = closingWeek(p);
+  for (const w of closing) {
+    const d = layout.raceDayIndex - (tw * 7 + (w.dayOfWeek ?? 0));
+    if (w.taperRole !== 'day_before' || d !== 1) out.push(`closing week holds ${w.n} ${d} days out`);
+  }
+  // A day before inside the plan has its activation (in race week or the closing week).
+  const dbIndex = layout.raceDayIndex - 1;
+  const dbHas = [...sessions(rw), ...closing].some(w => w.taperRole === 'day_before');
+  if (dbIndex >= (tw - 1) * 7 && !dbHas && train.length > 0) out.push('no day-before activation');
+  const db = [...sessions(rw).filter(w => w.taperRole === 'day_before'), ...closing.filter(w => w.taperRole === 'day_before')];
   const longest = Math.max(0, ...train.map(w => w.estimatedDurationMin ?? 0));
   for (const w of rw.triWorkouts ?? []) {
     const d = dOut(w);
@@ -353,6 +367,9 @@ function taperViolations(p: Plan): string[] {
   const fractions = taperWeeks >= 2
     ? [TRI_TAPER_FIRST_WEEK_FRACTION, TRI_RACE_WEEK_FRACTION]
     : [TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION];
+  // A Tuesday or Wednesday race's closing-week activation belongs to race
+  // week's budget and frequency, as the day before does on other weekdays.
+  const closing = closingWeek(p).filter(w => w.taperRole === 'day_before');
   const refSbr = DISCS.reduce((a, d) => a + ref.minutes[d], 0);
   const delivered: number[] = [];
   let excused = false;
@@ -360,14 +377,17 @@ function taperViolations(p: Plan): string[] {
     const wkNum = tw - fractions.length + 1 + i;
     const wk = s.wks[wkNum - 1];
     const race = wkNum === tw;
-    const m = minutes(sessions(wk));
+    const m = minutes([...sessions(wk), ...(race ? closing : [])]);
     // Explained shortfalls in race week.
     const train = training(wk);
     const trainDays = race ? [...new Set(train.map(w => w.dayOfWeek))] : [];
     const daysFull = race && trainDays.length > 0 && trainDays.every(d => train.filter(w => w.dayOfWeek === d).length >= TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY);
     const before = s.wks[wkNum - 2];
+    // A one-week race week held to the week before (a deload there): the trim
+    // takes whole floor-length sessions, so it can land up to one floor
+    // session under it (SCIENCE_LOG limitation 8).
     const atWeekBefore = race && taperWeeks === 1 && before
-      && DISCS.reduce((a, d) => a + m[d], 0) >= DISCS.reduce((a, d) => a + minutes(sessions(before))[d], 0) - 1;
+      && DISCS.reduce((a, d) => a + m[d], 0) >= DISCS.reduce((a, d) => a + minutes(sessions(before))[d], 0) - TRI_TAPER_SESSION_FLOOR_MIN;
     const capped = (d: Disc) => race && train.filter(w => (w.discipline ?? 'run') === d && w.t !== 'brick').length > 0
       && train.filter(w => (w.discipline ?? 'run') === d && w.t !== 'brick')
         .every(w => (w.estimatedDurationMin ?? 0) >= TRI_RACE_WEEK_SESSION_CAP_MIN[d] - 1);
@@ -381,7 +401,7 @@ function taperViolations(p: Plan): string[] {
     delivered.push(DISCS.reduce((a, d) => a + m[d], 0) / refSbr);
     // Frequency: at least 80% of the reference week's sessions (the race and
     // the activations counted in race week), and no discipline at zero.
-    const n = sessions(wk).length + (race ? 1 : 0);
+    const n = sessions(wk).length + (race ? 1 + closing.length : 0);
     if (n < Math.ceil(0.8 * ref.total) && !daysFull) out.push(`week ${wkNum} ${n} sessions < 80% of ${ref.total}`);
     for (const d of present) {
       const has = sessions(wk).some(w => (w.discipline ?? 'run') === d || (d === 'run' && w.t === 'brick'));
@@ -448,7 +468,7 @@ function taperViolations(p: Plan): string[] {
   return out;
 }
 
-describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hours, Sunday and Monday races', () => {
+describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hours, Sunday to Wednesday races', () => {
   for (const mode of MODES) {
     it(`${mode}`, () => {
       at(NOW);
@@ -456,7 +476,7 @@ describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hour
       for (const wd of WEEKDAY_HOURS) {
         for (const weeks of LENGTHS) {
           for (const hours of hoursFor(mode)) {
-            for (const dow of [6, 0]) {
+            for (const dow of [6, 0, 1, 2]) {
               const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
               for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p), ...copyViolations(p)]) {
                 found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);

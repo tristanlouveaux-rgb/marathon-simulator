@@ -579,6 +579,11 @@ export interface TriRaceWeekInput {
   /** The week before race week's swim, bike and run minutes (a one-week
    *  taper): race week never holds more. */
   maxTotalMin?: number;
+  /** A Tuesday or Wednesday race with a closing week: the day before falls on
+   *  this weekday of the closing week (0 = Monday), outside `daysOut`. Its
+   *  activation is sized as on every other race weekday and returned apart
+   *  (composeTriRaceWeekWithClosing). */
+  closingDayBeforeDow?: number;
 }
 
 const loadOf = (w: Workout) => (w.aerobic ?? 0) + (w.anaerobic ?? 0);
@@ -610,10 +615,11 @@ interface ComposedWeek {
  *      brick: run, swim (the brick carries the bike's builds); cycling: a ride
  *      on every window day. An opener never takes the training slot a
  *      discipline with no activation and no brick needs for its only session
- *      (a Thursday race has one training day): it goes to that discipline
- *      instead, the one it overshoots least when no budget holds one.
- *      Openers are typed by their steady content (an endurance ride, an easy
- *      run, an endurance swim).
+ *      (a Thursday race has one training day). When no budget holds one,
+ *      race week still holds one opener, at the 4-min floor, in the
+ *      discipline it overshoots least (its minimal opener less its budget
+ *      left), never in such a slot. Openers are typed by their steady content
+ *      (an endurance ride, an easy run, an endurance swim).
  *   4. The rest of each budget split into aerobic sessions: the reference
  *      count less the brick and the openers, sized at most the reference
  *      week's average session of that discipline (an app inference: race
@@ -654,10 +660,30 @@ interface ComposedWeek {
  *      then both grown toward their caps (30 and 10 min) only with budget left
  *      unplaced, while the day stays the lightest, no activation outruns the
  *      week's longest training session, and the week stays under the week
- *      before.
+ *      before. A Tuesday or Wednesday race's day before falls in the closing
+ *      week (`closingDayBeforeDow`): its activation is sized the same way and
+ *      returned apart (composeTriRaceWeekWithClosing), and it never stands in
+ *      for a discipline in race week.
  * Pure. Returns the sessions with dayOfWeek and dayName set.
  */
 export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
+  return composeTriRaceWeekWithClosing(inp).week;
+}
+
+/**
+ * composeTriRaceWeek with the closing week's share: a Tuesday or Wednesday
+ * race (`closingDayBeforeDow`) has its day before in the closing week, which
+ * holds that activation and nothing else (orchestrator decision 3,
+ * 2026-10-14). The activation is sized by the same rule as on every other
+ * race weekday: its lower bounds come off race week's budgets, it counts as a
+ * session toward race week's frequency (as the race does), it is never
+ * heavier than any race-week training day and never longer than the week's
+ * longest training session, and it grows toward its caps only with budget
+ * left. It never stands in for a discipline in race week itself: race week
+ * keeps a training session in each discipline. `closing` holds the
+ * activations with their closing-week weekday set; empty otherwise.
+ */
+export function composeTriRaceWeekWithClosing(inp: TriRaceWeekInput): { week: Workout[]; closing: Workout[] } {
   const { present, ref, daysOut, ctx } = inp;
   const B: Record<TriDisc, number> = { swim: 0, bike: 0, run: 0 };
   for (const d of DISCS) B[d] = present[d] ? inp.fraction * ref.minutes[d] : 0;
@@ -665,6 +691,11 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   const dows = [0, 1, 2, 3, 4, 5, 6].filter(dow => daysOut[dow] != null && daysOut[dow]! >= 1);
   const dOut = (dow: number) => daysOut[dow] as number;
   const dbDow = dows.find(dow => dOut(dow) === 1);
+  // The day before in the closing week (a Tuesday or Wednesday race): its
+  // activation counts toward frequency and comes off the budgets, but gives
+  // race week no discipline.
+  const dbClosing = dbDow == null ? inp.closingDayBeforeDow ?? null : null;
+  const dbInWeek = dbDow != null;
   const train = dows.filter(dow => dOut(dow) > TRI_RACE_WEEK_REST_DAYS_OUT);
   // Opener window, furthest from the race first.
   const window = train
@@ -733,7 +764,10 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     // such discipline (a Thursday race has one training day, two slots), an
     // opener goes to one of them, not to a discipline already covered.
     const activation: Record<TriDisc, number> = { swim: 0, bike: dbRide > 0 ? 1 : 0, run: dbRun > 0 ? 1 : 0 };
-    const covered = (d: TriDisc) => activation[d] > 0 || (brickDow != null && (d === 'bike' || d === 'run'));
+    // The activations that give race week a discipline (none when the day
+    // before is in the closing week).
+    const inWeekAct: Record<TriDisc, number> = dbInWeek ? activation : { swim: 0, bike: 0, run: 0 };
+    const covered = (d: TriDisc) => inWeekAct[d] > 0 || (brickDow != null && (d === 'bike' || d === 'run'));
     const uncovered = DISCS.filter(d => present[d] && !covered(d));
     const slotsFree = train.reduce((a, dow) => a + Math.max(0, TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY - byDay[dow].length), 0);
     const crowds = (d: TriDisc, taken: TriDisc[], slots: number) =>
@@ -766,19 +800,21 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       used[d] += minutes;
       openers[d]++;
     }
-    // Race week holds at least one opener: the run's (or the discipline the
-    // order reaches first) on the window day nearest the race, at the 4-min
-    // floor, when no budget held one. When that would take an uncovered
-    // discipline's only slot, the opener goes to the uncovered discipline it
-    // overshoots least (its minimal opener less its budget), so the week
-    // stays nearest its fraction.
+    // Race week holds at least one opener: on the window day nearest the
+    // race, at the 4-min floor, when no budget held one. It goes to the
+    // discipline it overshoots least (its minimal opener less its budget left),
+    // the order's first among equals, so the week stays nearest its fraction
+    // (as the frequency sessions and the slot cuts do); never to an uncovered
+    // discipline's only slot. In a thin week (one session per discipline in
+    // the reference week) the run's 30.5-min opener against a few minutes of
+    // budget made race week heavier than taper week 1; the swim's sits nearest
+    // its budget.
     if (openerPlan.length === 0 && openerDays.length > 0) {
       const cands = order.filter(x => present[x]);
       const open = cands.filter(x => !crowds(x, [], slotsFree));
+      const pool = open.length > 0 ? open : cands;
       const over = (x: TriDisc) => openerMin(x) - Math.max(0, B[x] - used[x]);
-      const d = open.length > 0 && open.length < cands.length
-        ? open.reduce((b, x) => (over(x) < over(b) - 1e-9 ? x : b), open[0])
-        : cands[0];
+      const d = pool.length > 0 ? pool.reduce((b, x) => (over(x) < over(b) - 1e-9 ? x : b), pool[0]) : undefined;
       if (d) {
         const minutes = Math.max(floorMin, Math.ceil(triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx)));
         openerPlan.push({ d, dow: openerDays[openerDays.length - 1], reps: TRI_RACE_PACE_MIN_REPS, minutes });
@@ -808,7 +844,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       k = Math.min(k, rem[d] >= floorMin ? Math.floor(rem[d] / floorMin) : (rem[d] * 2 > floorMin ? 1 : 0));
       k = Math.min(k, freeDays(d));
       const hasRun = d === 'run' && brickDow != null;
-      if (fixedCount[d] + openers[d] + activation[d] + k === 0 && !hasRun) k = Math.min(1, freeDays(d)); // no discipline at zero
+      if (fixedCount[d] + openers[d] + inWeekAct[d] + k === 0 && !hasRun) k = Math.min(1, freeDays(d)); // no discipline at zero
       n[d] = Math.max(0, k);
     }
     // Slots: at most two training sessions a day, one per discipline. The
@@ -822,7 +858,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     const placeable = (pend: Record<TriDisc, number>) => slotFlow(pend, d => train.filter(dow => free(dow, d)), dow => TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY - byDay[dow].length);
     const unplaced = (pend: Record<TriDisc, number>) => pend.swim + pend.bike + pend.run - placeable(pend).total;
     const fits = (pend: Record<TriDisc, number>) => unplaced(pend) <= 0;
-    const keeps = (d: TriDisc) => fixedCount[d] + openers[d] + activation[d] + n[d] - 1 > 0 || (d === 'run' && brickDow != null);
+    const keeps = (d: TriDisc) => fixedCount[d] + openers[d] + inWeekAct[d] + n[d] - 1 > 0 || (d === 'run' && brickDow != null);
     const aerobicMin = (d: TriDisc, k: number) => (k > 0 ? k * Math.max(floorMin, Math.min(maxSize(d), rem[d] / k)) : 0);
     const cutCost = (d: TriDisc) => Math.abs(rem[d] - aerobicMin(d, n[d] - 1)) - Math.abs(rem[d] - aerobicMin(d, n[d]));
     while (!fits(n)) {
@@ -950,7 +986,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
           .filter(x => x.i >= 0)
           .filter(x => {
             const d = x.a.d;
-            const left = Object.values(byDay).flat().filter(w => (w.discipline ?? 'run') === d || (d === 'run' && w.t === 'brick')).length - 1 + activation[d];
+            const left = Object.values(byDay).flat().filter(w => (w.discipline ?? 'run') === d || (d === 'run' && w.t === 'brick')).length - 1 + inWeekAct[d];
             return left > 0 && sessionsNow() - 1 >= need;
           })
           .sort((x, y) => (byDay[x.a.dow][x.i].estimatedDurationMin ?? 0) - (byDay[y.a.dow][y.i].estimatedDurationMin ?? 0))[0];
@@ -967,7 +1003,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   };
 
   // 6. The day before.
-  if (dbDow == null) return flatten(build(0, 0).byDay, null, []);
+  if (dbDow == null && dbClosing == null) return { week: flatten(build(0, 0).byDay, null, []), closing: [] };
   let dbRide = present.bike && B.bike - (brickDow != null ? brickBike : 0) >= TRI_DAY_BEFORE_RIDE_MIN_MIN ? TRI_DAY_BEFORE_RIDE_MIN_MIN : 0;
   let dbRun = present.run && !inp.singleSport ? TRI_DAY_BEFORE_RUN_MIN_MIN : 0;
   const dayBefore = (ride: number, run: number) => [
@@ -997,7 +1033,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   // A choice that leaves a discipline with no session gives way to the next
   // one that keeps them all (decision 5); with none, the first that fits.
   const keepsAll = (w: ComposedWeek, ride: number, run: number) => DISCS.every(d => !present[d]
-    || (d === 'bike' && ride > 0) || (d === 'run' && run > 0)
+    || (dbInWeek && d === 'bike' && ride > 0) || (dbInWeek && d === 'run' && run > 0)
     || Object.values(w.byDay).flat().some(x => (x.t === 'brick' ? d === 'bike' || d === 'run' : (x.discipline ?? 'run') === d)));
   const combos: Array<[number, number]> = [[dbRide, dbRun], [dbRide, 0], [0, dbRun], [0, 0]];
   type Choice = { ride: number; run: number; wk: ComposedWeek; L: ReturnType<typeof lightest> };
@@ -1025,7 +1061,13 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   while (dbRide > 0 && dbRide < TRI_DAY_BEFORE_RIDE_MAX_MIN && spareBike > 0 && fitsUnder(dbRide + 1, dbRun, L) && underWeekBefore(dbRide + 1, dbRun)) { dbRide++; spareBike--; }
   let spareRun = left('run');
   while (dbRun > 0 && dbRun < TRI_DAY_BEFORE_RUN_MAX_MIN && spareRun > 0 && fitsUnder(dbRide, dbRun + 1, L) && underWeekBefore(dbRide, dbRun + 1)) { dbRun++; spareRun--; }
-  return flatten(wk.byDay, dbDow, dayBefore(dbRide, dbRun));
+  if (dbClosing != null) {
+    return {
+      week: flatten(wk.byDay, null, []),
+      closing: dayBefore(dbRide, dbRun).map(w => ({ ...w, dayOfWeek: dbClosing, dayName: DAY_NAMES[dbClosing] })),
+    };
+  }
+  return { week: flatten(wk.byDay, dbDow ?? null, dayBefore(dbRide, dbRun)), closing: [] };
 }
 
 /**

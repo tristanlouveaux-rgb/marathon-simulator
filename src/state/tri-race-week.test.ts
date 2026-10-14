@@ -15,7 +15,9 @@
  *     sessions a day (2026-10-14 review: one-week tapers and Thursday or
  *     Friday races stacked up to 487 min on one day);
  *   - frequency: race week plus the race keeps at least 80% of the reference
- *     week's sessions (Mujika 2011), and every discipline keeps a session;
+ *     week's sessions (Mujika 2011; a Tuesday or Wednesday race's closing-week
+ *     activation counted, as the day before is on every other race weekday),
+ *     and every discipline keeps a session in race week itself;
  *   - no long run, no solo long ride, no fasted ride; no discipline twice on
  *     one day; nothing on or after race day; never heavier than the week
  *     before; the last session at most 3 days out.
@@ -191,7 +193,10 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   const ref = [...s.wks].slice(0, taperStart - 1).reverse().find(w => w.ph !== 'taper' && (w.w ?? 0) % 4 !== 0);
   if (ref && (layout.closingWeek || layout.raceDayOfWeek === 6)) {
     const need = Math.ceil(0.8 * sessions(ref).length);
-    if (train.length + 1 < need) out.push(`frequency ${train.length} + race < ${need} (80% of ${sessions(ref).length})`);
+    // A Tuesday or Wednesday race's day-before activation sits in the closing
+    // week and counts as on every other race weekday (decision 3).
+    const closingActs = layout.closingWeek ? sessions(s.wks[tw]).filter(w => w.taperRole === 'day_before').length : 0;
+    if (train.length + closingActs + 1 < need) out.push(`frequency ${train.length} + ${closingActs} + race < ${need} (80% of ${sessions(ref).length})`);
     for (const disc of s.triConfig?.disciplines ?? ['swim', 'bike', 'run']) {
       const has = train.some(w => (w.discipline ?? 'run') === disc || (disc === 'run' && w.t === 'brick'));
       if (!has) out.push(`no ${disc} in race week`);
@@ -262,16 +267,14 @@ describe('the week before race week: no quality run next to the brick or the lon
 
 describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
   // Aerobic sessions take the days nearest 6 days out (the Monday of a Sunday
-  // race): for a Wednesday race, Thursday and Wednesday (6 and 7 days out),
-  // not Monday and Tuesday, which left 6 and 7 days out empty (2026-10-14
-  // review).
-  it('race week: aerobic sessions 7 and 6 days out, openers 5 and 4 days out, Byrn\'s brick 3 days out', () => {
+  // race): for a Wednesday race, Thursday (6 days out), not Monday and
+  // Tuesday, which left 6 and 7 days out empty (2026-10-14 review).
+  it('race week: aerobic sessions 6 days out, openers 5 and 4 days out, Byrn\'s brick 3 days out; the day before in the closing week', () => {
     at('2026-10-08T12:00:00');
     const s = build('70.3', '2026-11-18');
     expect(s.tw).toBe(7);
     const raceWeek = s.wks[5].triWorkouts ?? [];
     expect(raceWeek.map(w => `${DOW[w.dayOfWeek!]} ${w.t}${w.taperRole ? ` ${w.taperRole}` : ''}`)).toEqual([
-      'Wed bike_endurance',
       'Thu bike_endurance',
       'Thu easy',
       'Fri easy opener',
@@ -285,11 +288,17 @@ describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
     const last = raceWeek[raceWeek.length - 1];
     expect(last.estimatedDurationMin).toBe(60);
     expect(last.d).toContain('2×90s builds');
-    expect(raceWeek[3].d).toContain('5×90s @ race pace');
-    expect(raceWeek[4].d).toContain('4×90s @ race pace');
-    // The closing week holds only the race.
+    expect(raceWeek[2].d).toContain('5×90s @ race pace');
+    expect(raceWeek[3].d).toContain('4×90s @ race pace');
+    // The closing week holds the race and the day-before activation (decision
+    // 3, 2026-10-14): Tuesday's 20-min spin, Monday (2 days out) empty. The
+    // jog would make the day heavier (load) than Saturday's swim opener, so it
+    // goes first, as on every race weekday. The spin's 20 min came off race
+    // week's bike budget, so race week holds one aerobic ride, not two.
     expect(s.wks[6].raceClosing).toBe(true);
-    expect(s.wks[6].triWorkouts ?? []).toEqual([]);
+    expect((s.wks[6].triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.n} ${w.estimatedDurationMin}`)).toEqual([
+      'Tue Pre-race spin 20',
+    ]);
   });
 });
 

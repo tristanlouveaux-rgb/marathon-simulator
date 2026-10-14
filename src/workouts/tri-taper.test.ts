@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import type { Workout } from '@/types/state';
 import {
   composeTriRaceWeek,
+  composeTriRaceWeekWithClosing,
   triQualityWorkMinutes,
   triRacePaceSession,
   triRacePaceTargetReps,
@@ -297,6 +298,42 @@ describe('composeTriRaceWeek', () => {
     expect(out.filter(w => w.taperRole === 'day_before').map(w => w.discipline)).toEqual(['bike']);
     expect(out.some(w => w.discipline === 'run' && w.taperRole !== 'day_before')).toBe(true);
     for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d), d).toBe(true);
+    expect(shapeViolations(out)).toEqual([]);
+  });
+
+  it('Wednesday race with a closing week: the day-before activation goes to the closing week\'s Tuesday, sized as on a Sunday race; race week keeps every discipline itself (decision 3)', () => {
+    const { week, closing } = composeTriRaceWeekWithClosing(input70(WEDNESDAY, { closingDayBeforeDow: 1 }));
+    expect(week.some(w => w.taperRole === 'day_before')).toBe(false);
+    expect(closing.length).toBeGreaterThan(0);
+    expect(closing.every(w => w.taperRole === 'day_before' && w.dayOfWeek === 1)).toBe(true);
+    for (const w of closing) expect(w.estimatedDurationMin!).toBeLessThanOrEqual(w.discipline === 'bike' ? TRI_DAY_BEFORE_RIDE_MAX_MIN : TRI_DAY_BEFORE_RUN_MAX_MIN);
+    // Never heavier than any race-week training day, by minutes and load.
+    expect(shapeViolations([...week, ...closing])).toEqual([]);
+    // Race week itself holds every discipline (the activation does not stand in).
+    for (const d of ['swim', 'bike', 'run']) expect(week.some(w => w.discipline === d || (d === 'run' && w.t === 'brick')), d).toBe(true);
+    // The activation's minutes come off race week's budget: race week plus
+    // the closing week stays within a floor of 0.30 per discipline.
+    const m = perDisc([...week, ...closing]);
+    expect(Math.abs(m.bike - 0.30 * 262)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    expect(Math.abs(m.run - 0.30 * 243)).toBeLessThanOrEqual(TRI_TAPER_SESSION_FLOOR_MIN);
+    // composeTriRaceWeek returns race week alone; without the closing weekday nothing changes.
+    expect(composeTriRaceWeek(input70(WEDNESDAY, { closingDayBeforeDow: 1 }))).toEqual(week);
+    expect(composeTriRaceWeekWithClosing(input70(WEDNESDAY)).closing).toEqual([]);
+  });
+
+  it('a Sunday race ignores closingDayBeforeDow (its day before is in race week)', () => {
+    expect(composeTriRaceWeekWithClosing(input70(SUNDAY, { closingDayBeforeDow: 1 }))).toEqual({ week: composeTriRaceWeek(input70(SUNDAY)), closing: [] });
+  });
+
+  it('no budget for any opener (a 90-min reference week): the opener goes to the discipline it overshoots least, so race week stays under taper week 1', () => {
+    // T100 at 4 h with gym: one 30-min session per discipline. 0.30 leaves 9
+    // min each; the run's minimal opener is 30.5 min, the swim's 20.
+    const ref = { minutes: { swim: 30, bike: 30, run: 30 }, counts: { swim: 1, bike: 1, run: 1 }, total: 3 };
+    const out = composeTriRaceWeek(input70(SUNDAY, { ref }));
+    expect(out.filter(w => w.taperRole === 'opener').map(w => w.discipline)).toEqual(['swim']);
+    for (const d of ['swim', 'bike', 'run']) expect(out.some(w => w.discipline === d), d).toBe(true);
+    // Taper week 1 holds the three sessions at the 20-min floor (60 min).
+    expect(mins(out)).toBeLessThanOrEqual(3 * TRI_TAPER_SESSION_FLOOR_MIN);
     expect(shapeViolations(out)).toEqual([]);
   });
 
