@@ -2646,11 +2646,29 @@ export function buildHyroxTrainingWeeks(
       const f = fit();
       return { week: f, ok: !over(f), probe: f };
     };
-    // Would fit() hold the week within its size? The same answer as
-    // !over(fit()) (fitOrDefer). The solver's state is restored.
+    // Would fit() hold the week within its size? The answer of
+    // !over(fit()) (fitOrDefer), except that once the week is known to be held
+    // by a fixed ceiling, a smallest week holding every limit answers yes
+    // without the week at the chosen hours: fit() would return that week if
+    // it held, size the week if it is over a fixed ceiling, and otherwise
+    // scale it down toward the smallest week, which holds. The solver's state
+    // is restored.
+    // Set when that shortcut answered yes and fit() then did not hold the
+    // week: the week's checks are exact from then on (buildWeek's step 3).
+    let exactChecks = false;
     const feasible = (): boolean => {
       const keep = { scale, ergCap, easyCap, sizeMin };
-      const { ok } = fitOrDefer();
+      let ok: boolean;
+      if (fixedBound && !exactChecks) {
+        scale = 1;
+        ergCap = undefined;
+        easyCap = undefined;
+        sizeMin = 0;
+        const smallest = make();
+        ok = fixedOver(smallest) ? false : !over(smallest) ? true : fitOrDefer().ok;
+      } else {
+        ok = fitOrDefer().ok;
+      }
       ({ scale, ergCap, easyCap, sizeMin } = keep);
       return ok;
     };
@@ -2756,38 +2774,14 @@ export function buildHyroxTrainingWeeks(
       }
       const longWanted = longRunMin;
       let heldNote: string | undefined;
-      if (!pending && over(attempt) && attempt.workouts.some(isQ)) {
-        // D3: the long run gives up its growth, never the previous loaded
-        // week's length (at least LONG_SOFT_FLOOR_MIN), for the quality run.
-        const hold = Math.max(LONG_SOFT_FLOOR_MIN, prevLoadedLong ?? 0);
-        if (longWanted != null && longWanted > hold) {
-          longRunMin = hold;
-          if (feasible()) {
-            let lo = hold;
-            let hi = longWanted;
-            while (lo < hi) {
-              const mid = Math.ceil((lo + hi) / 2);
-              longRunMin = mid;
-              if (!feasible()) hi = mid - 1; else lo = mid;
-            }
-            longRunMin = lo;
-            pending = true;
-            if (lo < longWanted) heldNote = `W${w}: Long Run held at ${lo} min, not ${longWanted}, for the quality run (${ceilingName ?? 'acute:chronic guard'})`;
-          } else {
-            longRunMin = longWanted;
-          }
-        }
-        if (!pending) {
-          longRunMin = longWanted;
-          omitted = [...omitted, 'quality'];
-          if (feasible()) pending = true;
-          else attempt = fit();
-        }
-      }
+      // Set when bringBack fits the week on a feasibility check's yes: the
+      // fitted week must then hold its size.
+      let fittedOnYes = false;
       // What left on the way comes back, highest priority first, when it fits
       // (feasible), and the week is fitted once with what came back. A week
       // still over its size brings nothing back.
       const bringBack = () => {
+        fittedOnYes = false;
         if (!pending && over(attempt)) return;
         const before = omitted;
         for (const o of [...order].reverse()) {
@@ -2796,10 +2790,56 @@ export function buildHyroxTrainingWeeks(
           omitted = omitted.filter(x => x !== o);
           if (!feasible()) omitted = keep;
         }
-        if (omitted !== before || pending) attempt = fit();
+        if (omitted !== before || pending) {
+          attempt = fit();
+          fittedOnYes = true;
+        }
         pending = false;
       };
-      bringBack();
+      // Run `steps` once with the quick checks; if a quick yes left the fitted
+      // week over its size, run them again from the same start with exact
+      // checks (feasible). Measured 2026-10-14 on 4,736 plans: 1 week.
+      const checked = (steps: () => void) => {
+        const start = { omitted, longRunMin, attempt, pending, scale, ergCap, easyCap, sizeMin };
+        steps();
+        if (fittedOnYes && over(attempt) && !exactChecks) {
+          ({ omitted, longRunMin, attempt, pending, scale, ergCap, easyCap, sizeMin } = start);
+          exactChecks = true;
+          steps();
+        }
+      };
+      checked(() => {
+        heldNote = undefined;
+        if (!pending && over(attempt) && attempt.workouts.some(isQ)) {
+          // D3: the long run gives up its growth, never the previous loaded
+          // week's length (at least LONG_SOFT_FLOOR_MIN), for the quality run.
+          const hold = Math.max(LONG_SOFT_FLOOR_MIN, prevLoadedLong ?? 0);
+          if (longWanted != null && longWanted > hold) {
+            longRunMin = hold;
+            if (feasible()) {
+              let lo = hold;
+              let hi = longWanted;
+              while (lo < hi) {
+                const mid = Math.ceil((lo + hi) / 2);
+                longRunMin = mid;
+                if (!feasible()) hi = mid - 1; else lo = mid;
+              }
+              longRunMin = lo;
+              pending = true;
+              if (lo < longWanted) heldNote = `W${w}: Long Run held at ${lo} min, not ${longWanted}, for the quality run (${ceilingName ?? 'acute:chronic guard'})`;
+            } else {
+              longRunMin = longWanted;
+            }
+          }
+          if (!pending) {
+            longRunMin = longWanted;
+            omitted = [...omitted, 'quality'];
+            if (feasible()) pending = true;
+            else attempt = fit();
+          }
+        }
+        bringBack();
+      });
       // The long run toward the run floor, then out of the week. Never under
       // the run floor (review 2026-10-13: it was trimmed to 4 min under a
       // 50-TSS logged load, and the week after jumped to 110% of the start).
@@ -2834,7 +2874,7 @@ export function buildHyroxTrainingWeeks(
       trimLongToFloor();
       // Without the long run's growth (or the long run), what fits beside it
       // comes back.
-      if (longFixed) bringBack();
+      if (longFixed) checked(bringBack);
       // Last, the week's last station session or brick, only when the week is
       // still over its size without the long run. The long run then takes
       // back what fits, from the run floor up to the length it had: the
