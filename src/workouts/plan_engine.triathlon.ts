@@ -295,14 +295,27 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   return weeks;
 }
 
-/** Sessions the effort multiplier may scale. Race week is left alone: its
- *  sessions sit at sourced race-week lengths (openers, the brick, the
- *  race-week caps) and the day before must stay its lightest day, which a
- *  scale of 0.85 to 1.15 on the other days would break. Elsewhere the
- *  day-before activation keeps its sourced minutes too. */
+/** Sessions the effort multiplier may scale. Race-taper weeks are left alone
+ *  (orchestrator decision 2, 2026-10-14). Race week's sessions sit at sourced
+ *  race-week lengths (openers, the brick, the race-week caps) and the day
+ *  before must stay its lightest day, which a scale of 0.85 to 1.15 on the
+ *  other days would break. Taper week 1 sits at TRI_TAPER_FIRST_WEEK_FRACTION
+ *  of the reference week: at 0.85 the two-week mean cut would leave the
+ *  41-60% band (mean fraction 0.38), and at 1.15 taper week 1 would be a 37%
+ *  cut. Running leaves race week alone the same way. Elsewhere the day-before
+ *  activation keeps its sourced minutes too. A double-periodization plan's
+ *  inter-cycle 'taper' weeks are recovery weeks, not the race taper, and
+ *  scale as before. */
 function triEffortScalable(state: SimulatorState, weekIndex: number, trainingWeeks: number, workouts: Workout[]): Workout[] {
-  if (isRaceWeek(weekIndex, trainingWeeks, state.continuousMode)) return [];
-  return workouts.filter(w => w.taperRole !== 'day_before');
+  return triEffortScalesWeek(state, weekIndex, trainingWeeks) ? workouts.filter(w => w.taperRole !== 'day_before') : [];
+}
+
+/** Whether the effort multiplier scales plan week `weekIndex`: every week but
+ *  the race taper's (race week included). */
+function triEffortScalesWeek(state: SimulatorState, weekIndex: number, trainingWeeks: number): boolean {
+  if (isRaceWeek(weekIndex, trainingWeeks, state.continuousMode)) return false;
+  const taper = triRaceTaper(state, trainingWeeks);
+  return !(taper && weekIndex >= taper.start);
 }
 
 /**
@@ -322,7 +335,7 @@ function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: We
       const stamp = (state.wks?.[(wk.w ?? 1) - 1] as any)?.ctlRatioByDiscipline;
       applyTriEffortMultipliers(state, triEffortScalable(state, wk.w ?? 1, trainingWeeks, wk.triWorkouts), stamp);
       // The race window's removed sessions scale with the week they came from.
-      if (wk.raceWindowCut) applyTriEffortMultipliers(state, wk.raceWindowCut, stamp);
+      if (wk.raceWindowCut && triEffortScalesWeek(state, wk.w ?? 1, trainingWeeks)) applyTriEffortMultipliers(state, wk.raceWindowCut, stamp);
     }
   }
 }
@@ -352,7 +365,7 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   if (weekIndex >= (state.w ?? 1)) {
     const stamp = (state.wks[weekIndex - 1] as any)?.ctlRatioByDiscipline;
     applyTriEffortMultipliers(state, triEffortScalable(state, weekIndex, trainingWeeks, weekWorkouts), stamp);
-    applyTriEffortMultipliers(state, raceWindowCut, stamp);
+    if (triEffortScalesWeek(state, weekIndex, trainingWeeks)) applyTriEffortMultipliers(state, raceWindowCut, stamp);
   }
 
   const week: Week = {

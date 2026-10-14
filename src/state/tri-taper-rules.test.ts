@@ -701,6 +701,23 @@ describe('taper length', () => {
   });
 });
 
+describe('volume levers leave the race taper alone (decision 2)', () => {
+  it('a CTL-gap stamp of 0.9 shortens the weeks before the taper and leaves both taper weeks and race week as built', () => {
+    at(NOW);
+    for (const [mode, weeks, hours] of [['olympic', 16, 8], ['70.3', 16, 10], ['cycling', 12, 10]] as Array<[Mode, number, number]>) {
+      const p = plan(mode, weeks, hours, 6);
+      const plain = generateTriathlonPlan(p.s);
+      for (const wk of p.s.wks) (wk as Week & { ctlRatioByDiscipline?: Record<Disc, number> }).ctlRatioByDiscipline = { swim: 0.9, bike: 0.9, run: 0.9 };
+      const scaled = generateTriathlonPlan(p.s);
+      const before = p.taperStart - 1;
+      expect(minsOf(scaled[before - 1].triWorkouts ?? []), `${mode} week ${before}`).toBeLessThan(minsOf(plain[before - 1].triWorkouts ?? []));
+      for (let w = p.taperStart; w <= p.tw; w++) {
+        expect(scaled[w - 1].triWorkouts, `${mode} week ${w}`).toEqual(plain[w - 1].triWorkouts);
+      }
+    }
+  });
+});
+
 describe('generator version', () => {
   it('TRI_GENERATOR_VERSION is bumped for the taper rebuild (stored plans regenerate)', () => {
     expect(TRI_GENERATOR_VERSION).toBeGreaterThanOrEqual(24);
