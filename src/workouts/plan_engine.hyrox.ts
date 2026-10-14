@@ -2472,59 +2472,68 @@ export function buildHyroxTrainingWeeks(
     // range does not depend on the chosen hours, so the search lands on the
     // same size at every chosen hours above it (a session's whole rounds can
     // make the load step up and down with the size; a range that moved with
-    // the hours would land on different steps). Numerical choices with no
-    // physiological meaning.
+    // the hours would land on different steps). When the smallest week holds
+    // the weekly hours and the phase budget too, the search holds them as
+    // well, so the size it finds holds every limit of the week. Numerical
+    // choices with no physiological meaning.
     const fixedLimits = limits.filter(l => l.fixed);
     const fixedOver = (a: Attempt) => fixedLimits.some(l => l.of(a) > l.cap + 1e-6);
-    const fit = () => {
+    // Set once a build of the week at the chosen hours is over a fixed
+    // ceiling: the week's later builds (other sessions left out, another long
+    // run) try the smallest size first, and one over the ceiling there is over
+    // at every size (every budget-sized session is at its floor), so the
+    // build stops there. Before (round 6 review, pass 3), each build made the
+    // week at the chosen hours first, and a week the guard held cost up to 60
+    // builds.
+    let fixedBound = false;
+    const sizeSearch = (bad: (a: Attempt) => boolean, top: number, smallest: Attempt): { lo: number; best: Attempt } => {
+      let lo = 0;
+      let hi = top;
+      let best = smallest;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        sizeMin = mid;
+        const b = make();
+        if (bad(b)) hi = mid; else { lo = mid; best = b; }
+      }
+      return { lo, best };
+    };
+    // `full`: the week already built at the chosen hours with the solver
+    // reset (the first build of the week, below).
+    const fit = (full?: Attempt) => {
       scale = 1;
       ergCap = undefined;
       easyCap = undefined;
+      let smallest: Attempt | undefined;
+      if (fixedBound && !full) {
+        sizeMin = 0;
+        smallest = make();
+        // Even the smallest size is over the ceiling: every budget-sized
+        // session is at its floor there (station sessions 35 min, bricks 20,
+        // no easy run or easy erg work), so the scale has nothing left to
+        // shrink, and the omit order (below) takes it from here.
+        if (fixedOver(smallest)) return smallest;
+      }
       sizeMin = hoursMin;
-      let a = make();
+      let a = full ?? make();
       if (!over(a)) return a;
       if (fixedLimits.length > 0 && fixedOver(a)) {
-        sizeMin = 0;
-        const smallest = make();
-        if (!fixedOver(smallest)) {
-          let lo = 0;
-          let hi = HYROX_SIZE_SEARCH_MAX_MIN;
-          let best = smallest;
-          while (hi - lo > 1) {
-            const mid = Math.floor((lo + hi) / 2);
-            sizeMin = mid;
-            const b = make();
-            if (fixedOver(b)) hi = mid; else { lo = mid; best = b; }
-          }
-          if (lo < hoursMin) {
-            sizeMin = lo;
-            a = best;
-            if (!over(a)) return a;
-          } else {
-            // The week at the chosen hours is over while a larger size holds
-            // (the MTL cap trims a larger week's easy runs, or whole rounds
-            // step the load): the largest size under the chosen hours that
-            // holds, by the same bisection over 0 to the chosen hours.
-            lo = 0;
-            hi = hoursMin;
-            best = smallest;
-            while (hi - lo > 1) {
-              const mid = Math.floor((lo + hi) / 2);
-              sizeMin = mid;
-              const b = make();
-              if (fixedOver(b)) hi = mid; else { lo = mid; best = b; }
-            }
-            sizeMin = lo;
-            a = best;
-            if (!over(a)) return a;
-          }
-        } else {
-          // Even the smallest size is over the ceiling: every budget-sized
-          // session is at its floor there (station sessions 35 min, bricks 20,
-          // no easy run or easy erg work), so the scale has nothing left to
-          // shrink, and the omit order (below) takes it from here.
-          return smallest;
+        fixedBound = true;
+        if (!smallest) {
+          sizeMin = 0;
+          smallest = make();
+          if (fixedOver(smallest)) return smallest;
         }
+        const bad = over(smallest) ? fixedOver : over;
+        let { lo, best } = sizeSearch(bad, HYROX_SIZE_SEARCH_MAX_MIN, smallest);
+        // The week at the chosen hours is over while a larger size holds
+        // (the MTL cap trims a larger week's easy runs, or whole rounds step
+        // the load): the largest size under the chosen hours that holds, by
+        // the same bisection over 0 to the chosen hours.
+        if (lo >= hoursMin) ({ lo, best } = sizeSearch(bad, hoursMin, smallest));
+        sizeMin = lo;
+        a = best;
+        if (!over(a)) return a;
       }
       if (a.ergMin > 0) {
         let cut = 0;
@@ -2592,32 +2601,66 @@ export function buildHyroxTrainingWeeks(
       }
       return a;
     };
-    let attempt = fit();
-    // The week at full size fits its ceilings: no ceiling holds it (the
-    // hours line, below).
-    const fitsAtFullSize = scale === 1 && ergCap === undefined && easyCap === undefined && omitted.length === 0 && sizeMin >= hoursMin - 1e-6;
-    if (trainingCeiling && !deloadRef && !fitsAtFullSize) {
-      // Name the ceiling that binds hardest at full size in the notes: the
-      // guard, the weekly hours or the phase budget. The fitted week's state
-      // is kept unless the name changes and the week is fitted again.
-      const fitted = { scale, ergCap, easyCap, sizeMin };
+    // Would fit() hold the week within its size? The same answer as
+    // !over(fit()), without the size search where its outcome is known: the
+    // smallest week over a fixed ceiling (fit returns it), or holding every
+    // limit (the size search then finds a size that holds them all). The
+    // solver's state is restored.
+    const feasible = (): boolean => {
+      const keep = { scale, ergCap, easyCap, sizeMin };
       scale = 1;
       ergCap = undefined;
       easyCap = undefined;
-      sizeMin = hoursMin;
-      const full = make();
-      ({ scale, ergCap, easyCap, sizeMin } = fitted);
+      let ok: boolean | undefined;
+      let smallest: Attempt | undefined;
+      if (fixedBound) {
+        sizeMin = 0;
+        smallest = make();
+        if (fixedOver(smallest)) ok = false;
+      }
+      if (ok === undefined) {
+        sizeMin = hoursMin;
+        const a = make();
+        if (!over(a)) ok = true;
+        else if (fixedLimits.length > 0 && fixedOver(a)) {
+          fixedBound = true;
+          if (!smallest) {
+            sizeMin = 0;
+            smallest = make();
+          }
+          if (fixedOver(smallest)) ok = false;
+          else if (!over(smallest)) ok = true;
+        }
+      }
+      if (ok === undefined) ok = !over(fit());
+      ({ scale, ergCap, easyCap, sizeMin } = keep);
+      return ok;
+    };
+    // The week at the chosen hours with the solver reset: fit's first build,
+    // and what the notes name the binding ceiling from.
+    scale = 1;
+    ergCap = undefined;
+    easyCap = undefined;
+    sizeMin = hoursMin;
+    const fullWeek = make();
+    const nameBuilt = ceilingName;
+    if (trainingCeiling && !deloadRef && over(fullWeek)) {
+      // Name the ceiling that binds hardest at full size in the notes: the
+      // guard, the weekly hours or the phase budget. Named before the week is
+      // fitted, so it is fitted once (a week that holds at full size names
+      // none).
       const named: Array<[string | undefined, number]> = [
-        [undefined, capTss < Infinity && full.guardTss > 0 ? capTss / full.guardTss : Infinity],
-        ['weekly hours', full.min > 0 ? hoursCapMin / full.min : Infinity],
-        [`${phase} budget`, full.budgetedMin > 0 ? phaseCapMin / full.budgetedMin : Infinity],
+        [undefined, capTss < Infinity && fullWeek.guardTss > 0 ? capTss / fullWeek.guardTss : Infinity],
+        ['weekly hours', fullWeek.min > 0 ? hoursCapMin / fullWeek.min : Infinity],
+        [`${phase} budget`, fullWeek.budgetedMin > 0 ? phaseCapMin / fullWeek.budgetedMin : Infinity],
       ];
       const [name, r] = named.reduce((m, x) => (x[1] < m[1] ? x : m));
-      if (r < 1 - 1e-9 && name) {
-        ceilingName = name;
-        attempt = fit();
-      }
+      if (r < 1 - 1e-9 && name) ceilingName = name;
     }
+    let attempt = fit(ceilingName === nameBuilt ? fullWeek : undefined);
+    // The week at full size fits its ceilings: no ceiling holds it (the
+    // hours line, below).
+    const fitsAtFullSize = scale === 1 && ergCap === undefined && easyCap === undefined && omitted.length === 0 && sizeMin >= hoursMin - 1e-6;
     if (trainingCeiling) {
       // Step 3 of the hierarchy run backwards: a training week still over its
       // size after the scale leaves sessions out lowest priority first. The
@@ -2676,13 +2719,13 @@ export function buildHyroxTrainingWeeks(
         const hold = Math.max(LONG_SOFT_FLOOR_MIN, prevLoadedLong ?? 0);
         if (longWanted != null && longWanted > hold) {
           longRunMin = hold;
-          if (!over(fit())) {
+          if (feasible()) {
             let lo = hold;
             let hi = longWanted;
             while (lo < hi) {
               const mid = Math.ceil((lo + hi) / 2);
               longRunMin = mid;
-              if (over(fit())) hi = mid - 1; else lo = mid;
+              if (!feasible()) hi = mid - 1; else lo = mid;
             }
             longRunMin = lo;
             attempt = fit();
@@ -2697,18 +2740,19 @@ export function buildHyroxTrainingWeeks(
           attempt = fit();
         }
       }
-      // What left on the way comes back, highest priority first, when it fits.
-      // A trial that does not fit restores the week as it was (after the
-      // long run's trim, a fresh fit can land on a different scale).
+      // What left on the way comes back, highest priority first, when it fits
+      // (feasible), and the week is fitted once with what came back. A week
+      // still over its size brings nothing back.
       const bringBack = () => {
+        if (over(attempt)) return;
+        const before = omitted;
         for (const o of [...order].reverse()) {
-          if (!omitted.includes(o) || over(attempt)) continue;
-          const keep = { omitted, attempt, scale, ergCap, easyCap, sizeMin };
+          if (!omitted.includes(o)) continue;
+          const keep = omitted;
           omitted = omitted.filter(x => x !== o);
-          const trial = fit();
-          if (over(trial)) ({ omitted, attempt, scale, ergCap, easyCap, sizeMin } = keep);
-          else attempt = trial;
+          if (!feasible()) omitted = keep;
         }
+        if (omitted !== before) attempt = fit();
       };
       bringBack();
       // The long run toward the run floor, then out of the week. Never under
