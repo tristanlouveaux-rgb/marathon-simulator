@@ -75,6 +75,7 @@ import {
   TRI_TAPER_FIRST_WEEK_FRACTION,
   TRI_TAPER_WEEKS_BY_DISTANCE,
   CYCLING_TAPER_WEEKS,
+  HOURS_RANGE,
 } from '@/constants/triathlon-constants';
 import {
   TRI_TAPER_SESSION_FLOOR_MIN,
@@ -213,7 +214,11 @@ function plan(mode: Mode, weeks: number, hours: number, dow = 6, o: BuildOpts = 
   let taperStart = tw;
   while (taperStart > 1 && s.wks[taperStart - 2].ph === 'taper') taperStart--;
   const r = triTaperReference(s, tw)!;
-  const present = (s.triConfig?.disciplines ?? ['swim', 'bike', 'run']) as Disc[];
+  // The disciplines the reference week trains. With gym and commutes over the
+  // hour budget (sprint at 3 h with three bidirectional commutes) a training
+  // week holds no swim, bike or run at all; taper week 1 cannot keep what the
+  // reference never held.
+  const present = ((s.triConfig?.disciplines ?? ['swim', 'bike', 'run']) as Disc[]).filter(d => r.ref.minutes[d] > 0);
   return { s, mode, dow, tw, taperStart, refWeek: s.wks[r.refWeek - 1], ref: { minutes: r.ref.minutes, total: r.ref.total }, present };
 }
 
@@ -529,6 +534,35 @@ describe('race taper rules: Thursday, Friday and Saturday races with gym and com
             for (const dow of [3, 4, 5]) {
               const p = plan(mode, weeks, hours, dow, o);
               for (const v of [...structuralViolations(p), ...zeroViolations(p), ...doubleViolations(p), ...gymViolations(p)]) found.push(`${tag} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+            }
+          }
+        }
+      }
+      expect(found).toEqual([]);
+    });
+  }
+});
+
+describe('race taper rules: Sunday to Wednesday races with gym and commutes, down to the slider\'s lowest hours', () => {
+  // Thin reference weeks (gym and commutes take most of the budget) at the
+  // setup slider's minimum (HOURS_RANGE) as well: since decision 1 a T100,
+  // 70.3 or Ironman athlete at low hours tapers two weeks, so taper week 1's
+  // race-pace sessions hold Dave Scott's 3 x 90 s even when the reference
+  // session is 30 min (review: Ironman 6 h with gym held 2 x 90 s), and a race
+  // week with no budget for an opener takes the one that overshoots least.
+  for (const mode of MODES) {
+    it(`${mode}`, () => {
+      at(NOW);
+      const found: string[] = [];
+      const hours = [...new Set([mode === 'cycling' ? 4 : HOURS_RANGE[mode].min, ...hoursFor(mode)])];
+      for (const { tag, o } of THIN_WEEKS) {
+        for (const weeks of LENGTHS) {
+          for (const h of hours) {
+            for (const dow of [6, 0, 1, 2]) {
+              const p = plan(mode, weeks, h, dow, o);
+              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p), ...copyViolations(p), ...gymViolations(p)]) {
+                found.push(`${tag} ${weeks}w ${h}h ${DOW[dow]}: ${v}`);
+              }
             }
           }
         }
