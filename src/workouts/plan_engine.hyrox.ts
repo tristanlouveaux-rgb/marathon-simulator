@@ -695,6 +695,9 @@ interface HyroxWeekInputs {
    *  it by a short logged run). One sized under it is left out. Unset:
    *  HYROX_RUN_FLOOR_MIN. */
   runFloorMin?: number;
+  /** The station and brick sessions built so far this week, by their inputs
+   *  (buildHyroxTrainingWeeks, one map per week build). Unset: none kept. */
+  sessionMemo?: Map<string, { w: Workout; notes: string[] }>;
   /** The week's first schedulable weekday (workout-status firstTrackedDow)
    *  and realRunningSignal(state), computed once per plan build
    *  (buildHyroxTrainingWeeks) rather than at every build of the week. Unset:
@@ -982,10 +985,30 @@ function generateWeekSessions(
   const nonRunSlots = sKinds.length + bKinds.length;
   const share = nonRunSlots > 0 ? nonRunBudget / nonRunSlots : 0;
 
+  // A station or brick session, built once per week for the same inputs
+  // (sessionMemo; its notes replayed): the week's size search and
+  // feasibility checks rebuild the week many times with the same sessions.
+  const memoized = (key: string, build: () => Workout): Workout => {
+    const memo = inputs.sessionMemo;
+    if (!memo) return build();
+    const hit = memo.get(key);
+    if (hit) {
+      adjustments.push(...hit.notes);
+      return hit.w;
+    }
+    const mark = adjustments.length;
+    const w = build();
+    memo.set(key, { w, notes: adjustments.slice(mark) });
+    return w;
+  };
   const makeStation = (kind: 'station_technique' | 'station_density', i: number): Workout => {
+    const targetMinutes = clampDur(kind, share);
+    return memoized(`S|${kind}|${targetMinutes}|${i}|${omit.has('stations')}|${ceilingName}`, () => makeStationOf(kind, i, targetMinutes));
+  };
+  const makeStationOf = (kind: 'station_technique' | 'station_density', i: number, targetMinutes: number): Workout => {
     const w = generateHyroxStation({
       kind,
-      targetMinutes: clampDur(kind, share),
+      targetMinutes,
       band,
       stationAccess: hx.stationAccess,
       phase,
@@ -1029,17 +1052,17 @@ function generateWeekSessions(
   }
   for (let i = 0; i < bKinds.length; i++) {
     const { kind, light } = bKinds[i];
-    const b = generateHyroxBrick({
+    const targetMinutes = clampDur(kind, share);
+    const capped = memoized(`B|${kind}|${targetMinutes}|${i}|${ceilingName}`, () => capToRef(generateHyroxBrick({
       kind,
-      targetMinutes: clampDur(kind, share),
+      targetMinutes,
       band,
       stationAccess: hx.stationAccess,
       phase,
       slotIndex: i + weekIndex,
       bodyWeightKg,
       stationBenchmarks,
-    });
-    const capped = capToRef(b);
+    })));
     nonRun.push(light ? { ...capped, n: 'Secondary Brick', hyroxLight: true } : capped);
   }
   // Running inside station and brick sessions counts toward the running
@@ -2546,6 +2569,7 @@ export function buildHyroxTrainingWeeks(
     // caller gets its own notes array (callers add notes to the week they
     // keep).
     const weekBuilds: Map<string, Attempt> = new Map();
+    const sessionMemo: Map<string, { w: Workout; notes: string[] }> = new Map();
     const make = (): Attempt => {
       const key = `${sizeMin}|${scale}|${ergCap}|${easyCap}|${omitted.join(',')}|${longRunMin}|${longFixed}|${ergBlocked}|${plusOne}|${ceilingName}`;
       const hit = weekBuilds.get(key);
@@ -2563,7 +2587,7 @@ export function buildHyroxTrainingWeeks(
         runBudgetMin: runBudgetAt(sizeMin), fillMin: fillAt(sizeMin), ergCapMin: ergBlocked ? 0 : ergCap, easyRunCapMin: easyCap,
         easyHoldMin, easyHoldRunBudgetMin: easyHoldMin != null ? runBudgetMin : undefined, ceilingSized: sized,
         longFixed, easyMaxMin, maxSessions: plusOne ? maxSessions + 1 : maxSessions, maxSessionsName, maxRuns, noAssessment,
-        runFloorMin, extraSession: plusOne, firstDow, realRunning,
+        runFloorMin, extraSession: plusOne, firstDow, realRunning, sessionMemo,
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
@@ -2686,6 +2710,9 @@ export function buildHyroxTrainingWeeks(
     // week at the chosen hours first, and a week the guard held cost up to 60
     // builds.
     let fixedBound = false;
+    // Set once a build of the week at the chosen hours is over any limit
+    // (fitOrDefer checks the smallest week first from then on).
+    let heldAtHours = false;
     // The largest whole-minute size below `top` whose week is not `bad`, the
     // week at size 0 (`smallest`) not being bad: a bisection.
     const sizeSearch = (bad: (a: Attempt) => boolean, top: number, smallest: Attempt): { lo: number; best: Attempt } => {
@@ -2719,6 +2746,7 @@ export function buildHyroxTrainingWeeks(
       sizeMin = hoursMin;
       let a = full ?? make();
       if (!over(a)) return a;
+      heldAtHours = true;
       if (fixedLimits.length > 0 && fixedOver(a)) fixedBound = true;
       // `quick` (a caller that reads only whether the week holds): a training
       // week whose smallest week is over a limit holds at no size or scale
@@ -2851,14 +2879,18 @@ export function buildHyroxTrainingWeeks(
       ergCap = undefined;
       easyCap = undefined;
       let smallest: Attempt | undefined;
-      if (fixedBound) {
+      if (fixedBound || heldAtHours) {
+        // A week its size has held once: the smallest week first, which
+        // answers yes alone when it holds.
         sizeMin = 0;
         smallest = make();
-        if (fixedOver(smallest)) return { week: smallest, ok: false, probe: smallest };
+        if (fixedBound && fixedOver(smallest)) return { week: smallest, ok: false, probe: smallest };
+        if (!over(smallest)) return { week: null, ok: true, probe: smallest };
       }
       sizeMin = hoursMin;
       const a = make();
       if (!over(a)) return { week: a, ok: true, probe: a };
+      heldAtHours = true;
       if (fixedLimits.length > 0 && fixedOver(a)) fixedBound = true;
       if (!smallest) {
         sizeMin = 0;
