@@ -233,27 +233,35 @@ export function planTaperWeeks(s: {
  * before the plan's weeks exist, the trailing taper of the phases the plan
  * engine will build (computeTriPlanPhases: the race distance's taper, cycling
  * 2, race week only for a low-hours triathlete, the short-plan rule for a
- * plan too short to hold it; `lowHours` is the plan engine's triTaperOpts,
- * resolved only when needed).
+ * plan too short to hold it; `lowHours` is the plan engine's triTaperOpts for
+ * the plan's training weeks, resolved only when needed). Without the weeks,
+ * the training weeks come from the layout the generator uses
+ * (storedPlanRaceLayout), so a Monday to Wednesday race's closing week is
+ * left out as the plan leaves it out.
  * Every discipline shares it, as the plan tapers all three over the same
  * weeks. Undefined without a triathlon config.
  */
 export function triPlanTaperWeeks(s: {
   tw?: number;
+  planStartDate?: string;
   wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
-  triConfig?: { distance: TriathlonDistance; disciplines?: ReadonlyArray<string> } | null;
-}, lowHours?: () => boolean): number | undefined {
+  triConfig?: { distance: TriathlonDistance; disciplines?: ReadonlyArray<string>; raceDate?: string } | null;
+}, lowHours?: (trainingWeeks: number) => boolean): number | undefined {
   if (!s.triConfig) return undefined;
-  const training = planTrainingWeeks(s);
   const wks = s.wks ?? [];
+  const tw = s.tw ?? wks.length;
+  const built = tw > 0 && wks.length >= tw;
+  const training = built
+    ? planTrainingWeeks(s)
+    : (storedPlanRaceLayout(tw, s.planStartDate, s.triConfig.raceDate)?.trainingWeeks ?? planTrainingWeeks(s));
   let taper = 0;
-  if (training > 0 && wks.length >= training) {
+  if (training > 0 && built) {
     for (let i = training - 1; i >= 0 && wks[i]?.ph === 'taper'; i--) taper++;
   }
   if (taper > 0) return taper;
   const d = s.triConfig.disciplines;
   const cyclingOnly = !!d && d.length === 1 && d[0] === 'bike';
-  const opts = { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.() };
+  const opts = { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.(Math.max(1, training)) };
   // The plan's own phases when its length is known, so a plan too short for
   // the distance's taper keeps the short-plan taper here too.
   if (training > 0) {
