@@ -19,9 +19,13 @@
  *     check, not a sourced cap);
  *   - taper weeks at most taperFraction (0.70, then 0.55) of the reference
  *     week (the last loaded week before the taper), race week tolerated above
- *     0.55 only by its fixed 25-min primer when the primer is all it holds;
- *     never above the week before, race week again excepted by the primer
- *     alone (SCIENCE_LOG §CE update 4); no more station and brick minutes, and
+ *     0.55 only by its fixed 25-min primer when the primer is all it holds,
+ *     and the smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
+ *     MIN_CIRCUIT_STATIONS stations) exempt in both weeks, week 1's
+ *     assessment too when week 1 is the taper (round 7); never above the week
+ *     before, race week excepted by the primer alone (SCIENCE_LOG §CE update
+ *     4) or by the primer and its smallest circuit and nothing else (round
+ *     7); never above the chosen weekly hours; no more station and brick minutes, and
  *     no more station and brick MTL, than the reference week, or than the
  *     taper's smallest circuit when that is larger (round 6 review, pass 2); the taper long
  *     run at most TAPER_LONG_RUN_FRACTION of the longest long run of the 4
@@ -190,6 +194,15 @@ const runningMin = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a +
   ? (w.estimatedDurationMin ?? 0)
   : (w.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0)), 0);
 const brickRunMin = (wk: Week | undefined) => runningMin(wk) - runs(wk).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+/** The race taper's smallest circuit, exempt from the 0.70 / 0.55 fractions
+ *  in taper week 1 and race week (round 7): the week's shortest station
+ *  circuit of at most MIN_CIRCUIT_ROUNDS rounds and MIN_CIRCUIT_STATIONS
+ *  stations, in minutes (0: none). */
+const taperExemptMin = (wk: Week | undefined): number => {
+  const m = Math.min(Infinity, ...prescribed(wk).filter(x => isCircuit(x) && (x.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS
+    && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS).map(x => x.estimatedDurationMin ?? 0));
+  return Number.isFinite(m) ? m : 0;
+};
 /** The athlete's chosen weekly session total (the stored counts). */
 const chosenSessions = (s: SimulatorState) => {
   const hx = s.hyroxConfig!;
@@ -441,7 +454,10 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
         // Race week may sit above 0.55 by its fixed primer when the primer is
         // all it holds.
         const allowed = raceWeek ? Math.max(ceiling, HYROX_RACE_WEEK_PRIMER_MIN) : ceiling;
-        if (minutes(wk) > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min above ${taperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
+        // The smallest circuit is exempt from the fractions, and so is week
+        // 1's assessment when week 1 is the race taper (round 7).
+        const exemptMin = taperExemptMin(wk) + (w === 1 ? minutes({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0);
+        if (minutes(wk) - exemptMin > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min (${exemptMin} exempt) above ${taperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
         // Above the reference week's station and brick work only up to the
         // taper's smallest circuit (round 6 review, pass 2: MIN_CIRCUIT_ROUNDS
         // rounds of MIN_CIRCUIT_STATIONS stations, hyroxRaceTaperFloorCircuit).
@@ -452,7 +468,11 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       }
       const raw = w >= 2 ? minutes(wks[i - 1]) : Infinity;
       const before = raceWeek ? Math.max(raw, HYROX_RACE_WEEK_PRIMER_MIN) : raw;
-      if (minutes(wk) > before + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the week before (${raw})`);
+      // Race week sits above the week before only by holding the primer and
+      // its smallest circuit and nothing else (round 7).
+      const primerAndCircuit = raceWeek && taperExemptMin(wk) > 0 ? ws.filter(isQuality).reduce((m, x) => m + (x.estimatedDurationMin ?? 0), 0) + taperExemptMin(wk) : 0;
+      if (minutes(wk) > Math.max(before, primerAndCircuit) + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the week before (${raw})`);
+      if (minutes(wk) > hoursMin + EPS) out.push(`W${w}: taper ${minutes(wk)} min above the chosen hours`);
       if (long) {
         const prevLong = Math.max(0, ...wks.slice(Math.max(0, i - 4), i).map(x => prescribed(x).find(isHyroxLongRun)?.estimatedDurationMin ?? 0));
         const allowed = prevLong >= HYROX_RUN_FLOOR_MIN ? Math.max(HYROX_RUN_FLOOR_MIN, Math.round(prevLong * TAPER_LONG_RUN_FRACTION)) : Math.round(prevLong * TAPER_LONG_RUN_FRACTION);
@@ -931,11 +951,15 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
       let ref = -1;
       for (let k = tw - 3; k >= 0; k--) if (!deloadOf(s.wks.slice(0, tw))(k)) { ref = k; break; }
       const refWk = s.wks[ref];
-      expect(minutes(s.wks[tw - 2])).toBeLessThanOrEqual(0.70 * minutes(refWk) + EPS);
-      expect(minutes(s.wks[tw - 1])).toBeLessThanOrEqual(Math.max(0.55 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
+      // The smallest circuit is exempt from the fractions (round 7), and the
+      // reference week's station work caps the taper's unless that circuit is
+      // all the taper holds (round 6 review, pass 2).
+      expect(minutes(s.wks[tw - 2]) - taperExemptMin(s.wks[tw - 2])).toBeLessThanOrEqual(0.70 * minutes(refWk) + EPS);
+      expect(minutes(s.wks[tw - 1]) - taperExemptMin(s.wks[tw - 1])).toBeLessThanOrEqual(Math.max(0.55 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
       for (const wk of [s.wks[tw - 2], s.wks[tw - 1]]) {
-        expect(stationWork(wk).min).toBeLessThanOrEqual(stationWork(refWk).min + EPS);
-        expect(stationWork(wk).mtl).toBeLessThanOrEqual(stationWork(refWk).mtl + EPS);
+        const floor = hyroxRaceTaperFloorCircuit(s, wk.w, wk === s.wks[tw - 1]) ?? { min: 0, mtl: 0 };
+        expect(stationWork(wk).min).toBeLessThanOrEqual(Math.max(stationWork(refWk).min, floor.min) + EPS);
+        expect(stationWork(wk).mtl).toBeLessThanOrEqual(Math.max(stationWork(refWk).mtl, floor.mtl) + EPS);
         const refCircuitStations = Math.max(0, ...prescribed(refWk).filter(isCircuit).map(w => (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length));
         for (const c of prescribed(wk).filter(isCircuit)) {
           expect((c.hyroxComponents ?? []).filter(x => x.type !== 'run').length).toBeLessThanOrEqual(Math.max(MIN_CIRCUIT_STATIONS, refCircuitStations));
@@ -1669,17 +1693,21 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     }
   });
 
-  it('race week keeps a circuit whenever the athlete has the stations, the race-week days allow it and the taper fractions hold the primer beside the smallest circuit (round 6 review, pass 2)', () => {
+  it('race week keeps a circuit whenever the athlete has the stations, the race-week days allow it and the week before holds the primer beside the smallest circuit (round 6 review, pass 2; round 7)', () => {
     // Review: once the long run and the quality run came first, a reference
     // week holding a short race-pace block capped the taper's station work
     // under any circuit, and 106 to 249 of 1,020 race weeks per variant held
     // none (21 to 23, all at 2 h, at round 4). The taper's station ceilings now
     // never sit under its smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
-    // MIN_CIRCUIT_STATIONS stations). A race week without a circuit is one the
-    // race-day rules left no day for, or one whose 0.55 fraction (or the week
-    // before, the taper never rising) cannot hold the primer beside it.
+    // MIN_CIRCUIT_STATIONS stations), and round 7 exempts that circuit from
+    // the 0.70 / 0.55 fractions in taper week 1 and race week (2-h plans lost
+    // it to them: 123 taper weeks with no station work and 63 race weeks with
+    // no circuit per 1,080 plans). A race week without a circuit is one the
+    // race-day rules left no day for, or one whose week before (the taper
+    // never rising) cannot hold the primer beside it.
     let withCircuit = 0;
     let weeks = 0;
+    let taper1Work = 0;
     for (const [over, logged] of [[{}, undefined], [{ hyroxFormat: 'open_doubles' }, undefined], [{}, 100]] as Array<[Partial<OnboardingState>, number | undefined]>) {
       for (const band of BANDS) {
         if (HYROX_WEEKLY_STRUCTURE[hyroxTier(band)].peak.stations === 0) continue;
@@ -1691,6 +1719,9 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
             const rw = wks[tw - 1];
             const label = `${JSON.stringify(over)} ${logged ?? '-'} ${band} ${hrs}h ${len}w`;
             weeks++;
+            // Taper week 1 keeps station or brick work, 2-h plans included.
+            if (prescribed(wks[tw - 2]).some(isWork)) taper1Work++;
+            else expect(notes(wks[tw - 2]).some(n => /left out \((no race-week day|the taper never rises|taper: the reference week's station and brick work)/.test(n)), `${label} taper week 1`).toBe(true);
             if (prescribed(rw).some(isCircuit)) { withCircuit++; continue; }
             if (notes(rw).some(n => /Station Circuit left out \(no race-week day/.test(n))) continue;
             const isDeload = deloadOf(wks);
@@ -1700,17 +1731,15 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
             while (ref >= 0 && (wks[ref].ph === 'taper' || isDeload(ref))) ref--;
             const floor = hyroxRaceTaperFloorCircuit(s, tw, true);
             expect(floor, label).not.toBeNull();
-            const cap = Math.min(
-              ref >= 0 ? taperFraction(tw - taperStart + 1, tw - taperStart + 1) * minutes(wks[ref]) : Infinity,
-              tw >= 2 ? minutes(wks[tw - 2]) : Infinity,
-            );
+            const cap = tw >= 2 ? minutes(wks[tw - 2]) : Infinity;
             const primer = prescribed(rw).filter(isQuality).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
             expect(primer + floor!.min, label).toBeGreaterThan(cap + EPS);
           }
         }
       }
     }
-    expect(withCircuit).toBeGreaterThan(0.8 * weeks);
+    expect(withCircuit).toBeGreaterThan(0.95 * weeks);
+    expect(taper1Work).toBeGreaterThan(0.95 * weeks);
   }, 300000);
 
   it('the injury modal rebuilds every remaining week in one build, as the full plan builds them (round 6 review, pass 2)', () => {
