@@ -664,9 +664,11 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   // 1. Brick (long course).
   const brickBike = TRI_RACE_WEEK_BRICK_TOTAL_MIN - TRI_RACE_WEEK_BRICK_RUN_MIN;
   const brickCandidate = window.length > 0 ? window[window.length - 1] : undefined;
+  // Day caps choose days; they never drop or shrink a session (the normal
+  // week's scheduler spills past them the same way), so the brick goes in
+  // whenever the budgets hold it.
   const brickDow = inp.longCourse && present.bike && present.run && brickCandidate != null
     && B.bike >= brickBike && B.run >= TRI_RACE_WEEK_BRICK_RUN_MIN
-    && (capOf(brickCandidate) === undefined || capOf(brickCandidate)! + DAY_CAP_TOLERANCE_MIN >= TRI_RACE_WEEK_BRICK_TOTAL_MIN)
     ? brickCandidate
     : undefined;
 
@@ -716,10 +718,11 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     for (let i = 0; i < chosen.length; i++) {
       const d = chosen[i];
       const dow = days[i];
-      if (room(dow, dayMin) < triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx)) continue;
+      // Openers sit on their window day whatever its cap; the budget alone
+      // sets their repeats.
       const avail = B[d] - used[d];
       let reps = Math.min(dOut(dow), TRI_RACE_PACE_MAX_REPS);
-      while (reps > TRI_RACE_PACE_MIN_REPS && (triRacePaceNeedMin(d, reps, ctx) > avail + 0.5 || triRacePaceNeedMin(d, reps, ctx) > room(dow, dayMin))) reps--;
+      while (reps > TRI_RACE_PACE_MIN_REPS && triRacePaceNeedMin(d, reps, ctx) > avail + 0.5) reps--;
       const minutes = Math.min(TRI_RACE_WEEK_SESSION_CAP_MIN[d], Math.max(floorMin, Math.ceil(triRacePaceNeedMin(d, reps, ctx))));
       openerPlan.push({ d, dow, reps, minutes });
       used[d] += minutes;
@@ -766,15 +769,23 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     // Slots: at most two training sessions a day, one per discipline. The
     // pending sessions fit when a flow from disciplines to days carries them
     // all (each day at most its free slots, each discipline at most one per
-    // day). Sessions that cannot fit come off the discipline with the least
-    // per session, never its last.
+    // day). Sessions that cannot fit come off one at a time, the flow solved
+    // again after each cut: among the cuts that let more sessions fit, the one
+    // that moves its discipline least further from its fraction (its other
+    // sessions absorb the minutes up to their size cap), then the discipline
+    // with the least per session; never a discipline's last.
     const placeable = (pend: Record<TriDisc, number>) => slotFlow(pend, d => train.filter(dow => free(dow, d)), dow => TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY - byDay[dow].length);
-    const fits = (pend: Record<TriDisc, number>) => placeable(pend).total >= pend.swim + pend.bike + pend.run;
+    const unplaced = (pend: Record<TriDisc, number>) => pend.swim + pend.bike + pend.run - placeable(pend).total;
+    const fits = (pend: Record<TriDisc, number>) => unplaced(pend) <= 0;
     const keeps = (d: TriDisc) => fixedCount[d] + openers[d] + activation[d] + n[d] - 1 > 0 || (d === 'run' && brickDow != null);
+    const aerobicMin = (d: TriDisc, k: number) => (k > 0 ? k * Math.max(floorMin, Math.min(maxSize(d), rem[d] / k)) : 0);
+    const cutCost = (d: TriDisc) => Math.abs(rem[d] - aerobicMin(d, n[d] - 1)) - Math.abs(rem[d] - aerobicMin(d, n[d]));
     while (!fits(n)) {
-      const flow = placeable(n).byDisc;
-      const d = DISCS.filter(x => n[x] > flow[x] && keeps(x)).sort((a, b) => (rem[a] / n[a]) - (rem[b] / n[b]))[0]
-        ?? DISCS.filter(x => n[x] > 0 && keeps(x)).sort((a, b) => (rem[a] / n[a]) - (rem[b] / n[b]))[0];
+      const now = unplaced(n);
+      const cuts = DISCS.filter(x => n[x] > 0 && keeps(x));
+      const helpful = cuts.filter(x => unplaced({ ...n, [x]: n[x] - 1 }) < now);
+      const d = (helpful.length > 0 ? helpful : cuts)
+        .sort((a, b) => (cutCost(a) - cutCost(b)) || ((rem[a] / n[a]) - (rem[b] / n[b])))[0];
       if (!d) break;
       n[d]--;
     }
@@ -853,16 +864,13 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       const open = aerobicDays.filter(dow => free(dow, p.d));
       const days = open.filter(keepsRest).length > 0 ? open.filter(keepsRest) : open;
       if (days.length === 0) continue;
-      const roomy = days.find(dow => room(dow, dayMin) >= p.min);
-      let dow = roomy;
-      let minutes = p.min;
-      if (dow === undefined) {
-        // Cut to the largest room left, at least the floor; else left out.
-        const best = days.reduce((b, x) => (room(x, dayMin) > room(b, dayMin) ? x : b), days[0]);
-        if (room(best, dayMin) < floorMin) continue;
-        dow = best;
-        minutes = Math.floor(room(best, dayMin));
-      }
+      // The first day (nearest 6 days out) with room under its cap; else the
+      // day with the most room, at full length: the normal week's scheduler
+      // spills past the caps rather than cut or drop a session
+      // (scheduleTriathlonWeek), so race week does too.
+      const dow = days.find(x => room(x, dayMin) >= p.min)
+        ?? days.reduce((b, x) => (room(x, dayMin) > room(b, dayMin) ? x : b), days[0]);
+      const minutes = p.min;
       place(dow, inp.aerobic(p.d, minutes, p.slot), [p.d]);
       placed[p.d] += minutes;
       aerobicPlaced.push({ dow, d: p.d, slot: p.slot });
@@ -936,18 +944,22 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     const longestOk = L.longest === 0 || (ride <= L.longest && run <= L.longest);
     return ride + run <= L.min && ws.reduce((a, w) => a + loadOf(w), 0) <= L.load && longestOk;
   };
+  // The ride and run at their lower bounds when the day stays the lightest;
+  // else the ride alone (the run goes first), else the run alone (Byrn's day
+  // before is "run 5-15 min or ride under 30"), else neither. Each choice
+  // rebuilds the week, so a discipline whose activation goes keeps a
+  // training session.
+  const combos: Array<[number, number]> = [[dbRide, dbRun], [dbRide, 0], [0, dbRun], [0, 0]];
   let wk = build(dbRide, dbRun);
   let L = lightest(wk);
-  if (dbRun > 0 && !fitsUnder(dbRide, dbRun, L)) {
-    dbRun = 0;
-    wk = build(dbRide, dbRun);
-    L = lightest(wk);
-  }
-  // The ride sits at its lower bound, inside every earlier training session
-  // (each at least the floor, none lighter per minute than an endurance ride);
-  // it comes down only for a week whose sessions were cut below it.
-  while (dbRide > 0 && !fitsUnder(dbRide, dbRun, L)) {
-    dbRide = dbRide > TRI_DAY_BEFORE_RIDE_MIN_MIN ? TRI_DAY_BEFORE_RIDE_MIN_MIN : 0;
+  for (const [ride, run] of combos) {
+    if (ride !== dbRide || run !== dbRun) {
+      wk = build(ride, run);
+      L = lightest(wk);
+      dbRide = ride;
+      dbRun = run;
+    }
+    if (fitsUnder(ride, run, L)) break;
   }
   // Grow toward the caps with budget left unplaced, while the day stays the
   // lightest.
