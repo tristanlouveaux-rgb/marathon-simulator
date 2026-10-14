@@ -817,9 +817,20 @@ describe('HYROX review fixes (2026-10-13)', () => {
     // and MTL (total_beginner 4 h 8 weeks W4: 67 min and 215 MTL against W3's
     // 63 min and 155), the station rotation picking heavier stations. A
     // deload session over its counterpart loses rounds, then stations.
+    // A type the last loaded week did not hold is held to the lightest
+    // session of its class there (a circuit or a brick, 2026-10-14; the
+    // round 7 review: novice 4 h 10 to 12 weeks and open doubles 4 h 10 and
+    // 11 weeks, W4, held a Station Density heavier than W3's technique
+    // circuit, and this test skipped a session with no same-type
+    // counterpart).
     let checked = 0;
+    let byClass = 0;
+    const doubles = { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>;
     const plans = [...grid(), ...BANDS.flatMap(band => [8, 12, 16, 20, 24].map(len => structuredClone(build(band, 4, len)))),
-      ...BANDS.flatMap(band => [8, 16, 24].map(len => structuredClone(build(band, HYROX_HOURS_RANGE[band].default, len, {}, 100))))];
+      ...BANDS.flatMap(band => [8, 16, 24].map(len => structuredClone(build(band, HYROX_HOURS_RANGE[band].default, len, {}, 100)))),
+      ...[10, 11, 12].map(len => structuredClone(build('novice', 4, len))),
+      ...(['beginner', 'novice'] as AbilityBand[]).flatMap(band => [10, 11].map(len => structuredClone(build(band, 4, len, doubles))))];
+    const cls = (t: string) => (t === 'hyrox_brick' || t === 'hyrox_mini_brick' ? 'brick' : 'circuit');
     for (const s of plans) {
       const tw = planTrainingWeeks(s);
       let last: Week | null = null;
@@ -829,9 +840,12 @@ describe('HYROX review fixes (2026-10-13)', () => {
         if (!deloadOf(s.wks.slice(0, tw))(i)) { last = wk; continue; }
         if (!last) continue;
         for (const w of prescribed(wk).filter(x => (x.discipline === 'station' || x.discipline === 'brick') && x.t !== 'hyrox_assessment')) {
-          const same = prescribed(last).filter(x => x.t === w.t);
+          const work = prescribed(last).filter(x => (x.discipline === 'station' || x.discipline === 'brick') && x.t !== 'hyrox_assessment');
+          const sameType = work.filter(x => x.t === w.t);
+          const same = sameType.length > 0 ? sameType : work.filter(x => cls(x.t) === cls(w.t));
           if (same.length === 0) continue;
           checked++;
+          if (sameType.length === 0) byClass++;
           const label = `${s.hyroxConfig!.athleteBand} ${s.hyroxConfig!.weeklyHoursAvailable}h W${i + 1} ${w.n}`;
           expect(w.hyroxRounds ?? 0, label).toBeLessThanOrEqual(Math.max(...same.map(x => x.hyroxRounds ?? 0)));
           expect(w.estimatedDurationMin ?? 0, label).toBeLessThanOrEqual(Math.max(...same.map(x => x.estimatedDurationMin ?? 0)) + EPS);
@@ -840,6 +854,7 @@ describe('HYROX review fixes (2026-10-13)', () => {
       }
     }
     expect(checked).toBeGreaterThan(100);
+    expect(byClass).toBeGreaterThan(0);
   });
 
   it('race week holds the primer whenever it holds a run: 10 min of tempo work, never sized from the budget', () => {
