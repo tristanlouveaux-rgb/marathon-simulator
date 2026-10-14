@@ -745,11 +745,18 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       if (fixedCount[d] + openers[d] + activation[d] + k === 0 && !hasRun) k = Math.min(1, freeDays(d)); // no discipline at zero
       n[d] = Math.max(0, k);
     }
-    // Slots: at most two training sessions a day. Sessions over the slots
-    // come off the discipline with the least per session, never its last.
+    // Slots: at most two training sessions a day, one per discipline. The
+    // pending sessions fit when a flow from disciplines to days carries them
+    // all (each day at most its free slots, each discipline at most one per
+    // day). Sessions that cannot fit come off the discipline with the least
+    // per session, never its last.
+    const placeable = (pend: Record<TriDisc, number>) => slotFlow(pend, d => train.filter(dow => free(dow, d)), dow => TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY - byDay[dow].length);
+    const fits = (pend: Record<TriDisc, number>) => placeable(pend).total >= pend.swim + pend.bike + pend.run;
     const keeps = (d: TriDisc) => fixedCount[d] + openers[d] + activation[d] + n[d] - 1 > 0 || (d === 'run' && brickDow != null);
-    while (n.swim + n.bike + n.run > slotsLeft()) {
-      const d = DISCS.filter(x => n[x] > 0 && keeps(x)).sort((a, b) => (rem[a] / n[a]) - (rem[b] / n[b]))[0];
+    while (!fits(n)) {
+      const flow = placeable(n).byDisc;
+      const d = DISCS.filter(x => n[x] > flow[x] && keeps(x)).sort((a, b) => (rem[a] / n[a]) - (rem[b] / n[b]))[0]
+        ?? DISCS.filter(x => n[x] > 0 && keeps(x)).sort((a, b) => (rem[a] / n[a]) - (rem[b] / n[b]))[0];
       if (!d) break;
       n[d]--;
     }
@@ -761,7 +768,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       let bestOver = Infinity;
       let bestSize = -Infinity;
       for (const d of DISCS) {
-        if (!present[d] || n[d] >= freeDays(d)) continue;
+        if (!present[d] || !fits({ ...n, [d]: n[d] + 1 })) continue;
         // Frequency wins over the floor: the added session is floor length when
         // the budget is thinner, from the discipline it overshoots least
         // (then the one with the most minutes per session left).
@@ -807,13 +814,29 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     for (const d of DISCS) for (let i = 0; i < n[d]; i++) pending.push({ d, min: size[d], slot: openers[d] + i });
     const discOrder: Record<TriDisc, number> = { bike: 0, run: 1, swim: 2 };
     const aerobicPlaced: Array<{ dow: number; d: TriDisc; slot: number }> = [];
+    const pendingCount = () => {
+      const c: Record<TriDisc, number> = { swim: 0, bike: 0, run: 0 };
+      for (const q of pending) c[q.d]++;
+      return c;
+    };
     while (pending.length > 0) {
       pending.sort((a, b) => (freeDays(a.d) - freeDays(b.d)) || (b.min - a.min) || (discOrder[a.d] - discOrder[b.d]));
       const p = pending.shift()!;
-      const days = aerobicDays.filter(dow => free(dow, p.d));
+      // Days that leave the other pending sessions a place (the slot flow).
+      const rest = pendingCount();
+      const keepsRest = (dow: number) => {
+        occ[dow].add(p.d);
+        byDay[dow].push({} as Workout);
+        const ok = fits(rest);
+        byDay[dow].pop();
+        occ[dow].delete(p.d);
+        return ok;
+      };
+      const open = aerobicDays.filter(dow => free(dow, p.d));
+      const days = open.filter(keepsRest).length > 0 ? open.filter(keepsRest) : open;
       if (days.length === 0) continue;
-      const fits = days.find(dow => room(dow, dayMin) >= p.min);
-      let dow = fits;
+      const roomy = days.find(dow => room(dow, dayMin) >= p.min);
+      let dow = roomy;
       let minutes = p.min;
       if (dow === undefined) {
         // Cut to the largest room left, at least the floor; else left out.
@@ -918,6 +941,45 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   let spareRun = left('run');
   while (dbRun > 0 && dbRun < TRI_DAY_BEFORE_RUN_MAX_MIN && spareRun > 0 && fitsUnder(dbRide, dbRun + 1, L) && underWeekBefore(dbRide, dbRun + 1)) { dbRun++; spareRun--; }
   return flatten(wk.byDay, dbDow, dayBefore(dbRide, dbRun));
+}
+
+/**
+ * Max flow from disciplines to race-week days: each discipline sends its
+ * pending sessions, each may go to a day in `daysFor(d)` once, each day takes
+ * at most `capOf(day)`. Returns the sessions carried in total and per
+ * discipline.
+ */
+function slotFlow(
+  pend: Record<TriDisc, number>,
+  daysFor: (d: TriDisc) => number[],
+  capOf: (dow: number) => number,
+): { total: number; byDisc: Record<TriDisc, number> } {
+  // Nodes: 0 source, 1-3 disciplines, 4-10 days, 11 sink.
+  const N = 12;
+  const cap: number[][] = Array.from({ length: N }, () => new Array(N).fill(0));
+  DISCS.forEach((d, i) => {
+    cap[0][1 + i] = Math.max(0, pend[d]);
+    for (const dow of daysFor(d)) cap[1 + i][4 + dow] = 1;
+  });
+  for (let dow = 0; dow < 7; dow++) cap[4 + dow][11] = Math.max(0, capOf(dow));
+  const flowFrom = new Array(3).fill(0);
+  let total = 0;
+  for (;;) {
+    const prev = new Array(N).fill(-1);
+    prev[0] = 0;
+    const queue = [0];
+    while (queue.length > 0 && prev[11] < 0) {
+      const u = queue.shift()!;
+      for (let v = 0; v < N; v++) if (prev[v] < 0 && cap[u][v] > 0) { prev[v] = u; queue.push(v); }
+    }
+    if (prev[11] < 0) break;
+    for (let v = 11; v !== 0; v = prev[v]) { cap[prev[v]][v] -= 1; cap[v][prev[v]] += 1; }
+    let v = 11;
+    while (prev[v] !== 0) v = prev[v];
+    flowFrom[v - 1] += 1;
+    total += 1;
+  }
+  return { total, byDisc: { swim: flowFrom[0], bike: flowFrom[1], run: flowFrom[2] } };
 }
 
 function flatten(byDay: Record<number, Workout[]>, dbDow: number | null, dayBefore: Workout[]): Workout[] {

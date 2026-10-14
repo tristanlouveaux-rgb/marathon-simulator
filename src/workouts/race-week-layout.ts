@@ -231,14 +231,16 @@ export function planTaperWeeks(s: {
  * side; Tristan 2026-10-13: the forecast reads the plan's taper): the trailing
  * 'taper' weeks of the plan's training weeks (a closing week excluded), or,
  * before the plan's weeks exist, the race distance's taper
- * (triRaceTaperWeeks; cycling 2). Every discipline shares it, as the plan
- * tapers all three over the same weeks. Undefined without a triathlon config.
+ * (triRaceTaperWeeks; cycling 2), race week only for a low-hours triathlete
+ * (`lowHours`, the plan engine's triTaperOpts, resolved only when needed).
+ * Every discipline shares it, as the plan tapers all three over the same
+ * weeks. Undefined without a triathlon config.
  */
 export function triPlanTaperWeeks(s: {
   tw?: number;
   wks?: ReadonlyArray<{ ph?: string; raceClosing?: boolean } | null | undefined>;
   triConfig?: { distance: TriathlonDistance; disciplines?: ReadonlyArray<string> } | null;
-}): number | undefined {
+}, lowHours?: () => boolean): number | undefined {
   if (!s.triConfig) return undefined;
   const training = planTrainingWeeks(s);
   const wks = s.wks ?? [];
@@ -248,5 +250,6 @@ export function triPlanTaperWeeks(s: {
   }
   if (taper > 0) return taper;
   const d = s.triConfig.disciplines;
-  return triRaceTaperWeeks(s.triConfig.distance, { cyclingOnly: !!d && d.length === 1 && d[0] === 'bike' });
+  const cyclingOnly = !!d && d.length === 1 && d[0] === 'bike';
+  return triRaceTaperWeeks(s.triConfig.distance, { cyclingOnly, lowHours: !cyclingOnly && !!lowHours?.() });
 }

@@ -119,7 +119,8 @@ import {
 } from '@/constants/triathlon-course-factors';
 import type { InjuryState } from '@/types/injury';
 import { disciplineRecovery, recoveryDebitWeeks, type DisciplineRecovery } from './injury-recovery';
-import { raceForecastHorizonISO, triPlanTaperWeeks } from '@/workouts/race-week-layout';
+import { planTrainingWeeks, raceForecastHorizonISO, triPlanTaperWeeks } from '@/workouts/race-week-layout';
+import { triTaperOpts } from '@/workouts/plan_engine.triathlon';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
@@ -163,8 +164,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
 
   // ── Live projection inputs ───────────────────────────────────────────────
   const weeksRemaining = computeWeeksRemaining(state);
-  // The plan's race taper (tracking side reads the plan's taper).
-  const taperWeeks = triPlanTaperWeeks(state) ?? 0;
+  // The plan's race taper (tracking side reads the plan's taper). Before the
+  // plan's weeks exist, the low-hours rule (race week only) comes from the
+  // plan engine, so an onboarding forecast tapers as the plan will.
+  const taperWeeks = triPlanTaperWeeks(state, () => triTaperOpts(state, Math.max(1, planTrainingWeeks(state))).lowHours) ?? 0;
 
   // ── Injury-aware recovery debit (per discipline) ─────────────────────────
   // A current injury costs the athlete only the disciplines they have
