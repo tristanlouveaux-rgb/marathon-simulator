@@ -284,9 +284,19 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   // Apply per-discipline effort multiplier to upcoming weeks (week ≥ current).
   // Mirrors running's plan_engine `effortMultiplier` step. Past weeks are
   // intentionally left alone. We don't rewrite history.
-  applyTriEffortMultipliersToFutureWeeks(state, weeks);
+  applyTriEffortMultipliersToFutureWeeks(state, weeks, trainingWeeks);
 
   return weeks;
+}
+
+/** Sessions the effort multiplier may scale. Race week is left alone: its
+ *  sessions sit at sourced race-week lengths (openers, the brick, the
+ *  race-week caps) and the day before must stay its lightest day, which a
+ *  scale of 0.85 to 1.15 on the other days would break. Elsewhere the
+ *  day-before activation keeps its sourced minutes too. */
+function triEffortScalable(state: SimulatorState, weekIndex: number, trainingWeeks: number, workouts: Workout[]): Workout[] {
+  if (isRaceWeek(weekIndex, trainingWeeks, state.continuousMode)) return [];
+  return workouts.filter(w => w.taperRole !== 'day_before');
 }
 
 /**
@@ -296,7 +306,7 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
  * Skips weeks before `state.w` (those are completed/in-progress and
  * shouldn't have their planned durations re-scaled retroactively).
  */
-function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: Week[]): void {
+function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: Week[], trainingWeeks: number): void {
   const currentWeek = state.w ?? 1;
   for (const wk of weeks) {
     if ((wk.w ?? 0) < currentWeek) continue;
@@ -304,8 +314,7 @@ function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: We
       // The CTL-gap stamp lives on the STORED week (state.wks), not on this freshly-generated `wk`,
       // so look it up by week number. (Effort reads from `state` directly, so it never had this issue.)
       const stamp = (state.wks?.[(wk.w ?? 1) - 1] as any)?.ctlRatioByDiscipline;
-      // The day-before session's minutes are a sourced cap (tri-taper.ts).
-      applyTriEffortMultipliers(state, wk.triWorkouts.filter(w => w.taperRole !== 'day_before'), stamp);
+      applyTriEffortMultipliers(state, triEffortScalable(state, wk.w ?? 1, trainingWeeks, wk.triWorkouts), stamp);
       // The race window's removed sessions scale with the week they came from.
       if (wk.raceWindowCut) applyTriEffortMultipliers(state, wk.raceWindowCut, stamp);
     }
@@ -336,7 +345,7 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   // For a same-week or past-week regen, skip. Preserves historical duration.
   if (weekIndex >= (state.w ?? 1)) {
     const stamp = (state.wks[weekIndex - 1] as any)?.ctlRatioByDiscipline;
-    applyTriEffortMultipliers(state, weekWorkouts.filter(w => w.taperRole !== 'day_before'), stamp);
+    applyTriEffortMultipliers(state, triEffortScalable(state, weekIndex, trainingWeeks, weekWorkouts), stamp);
     applyTriEffortMultipliers(state, raceWindowCut, stamp);
   }
 
