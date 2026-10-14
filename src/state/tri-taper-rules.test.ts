@@ -14,7 +14,7 @@
  *     bike 90 min, Allen; swim 45 min, Byrn), at most two training sessions a
  *     day, nothing on or after race day;
  *   - no discipline at zero in any taper week (the race window's cut of taper
- *     week 1 included);
+ *     week 1 included), and no discipline twice on one day;
  *   - race-week gym only on a day holding fewer than two sessions.
  * Sunday and Monday races (no race-window cut, ISSUE-364), in addition:
  *   - taper length by race distance (sprint 1, others 2, cycling 2), race week
@@ -214,6 +214,22 @@ function zeroViolations(p: Plan): string[] {
   return out;
 }
 
+/** No discipline twice on one day in any taper week (taper week 1:
+ *  spreadTaperDoubles; race week: the composer's one per discipline a day). */
+function doubleViolations(p: Plan): string[] {
+  const out: string[] = [];
+  for (let w = p.taperStart; w <= p.tw; w++) {
+    const wk = p.s.wks[w - 1];
+    for (let d = 0; d < 7; d++) {
+      for (const disc of DISCS) {
+        const n = training(wk).filter(x => x.dayOfWeek === d && x.t !== 'brick' && (x.discipline ?? 'run') === disc).length;
+        if (n > 1) out.push(`week ${w} ${DOW[d]} ${n} ${disc} sessions`);
+      }
+    }
+  }
+  return out;
+}
+
 /** Race-week gym takes a day with a slot left (two sessions a day at most,
  *  commutes counted). */
 function gymViolations(p: Plan): string[] {
@@ -390,7 +406,7 @@ describe('race taper rules: distances x plan lengths 2-24 x hours x weekday hour
           for (const hours of hoursFor(mode)) {
             for (const dow of [6, 0]) {
               const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
-              for (const v of [...structuralViolations(p), ...taperViolations(p)]) {
+              for (const v of [...structuralViolations(p), ...doubleViolations(p), ...taperViolations(p)]) {
                 found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
               }
             }
@@ -412,7 +428,7 @@ describe('race taper rules: Thursday, Friday and Saturday races keep the race-we
           for (const hours of hoursFor(mode)) {
             for (const dow of [3, 4, 5]) {
               const p = plan(mode, weeks, hours, dow, { weekdayHours: wd });
-              for (const v of [...structuralViolations(p), ...zeroViolations(p)]) found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
+              for (const v of [...structuralViolations(p), ...zeroViolations(p), ...doubleViolations(p)]) found.push(`${wdTag(wd)} ${weeks}w ${hours}h ${DOW[dow]}: ${v}`);
             }
           }
         }
