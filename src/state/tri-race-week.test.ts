@@ -8,7 +8,12 @@
  *     PRIMER_MAX_DAYS_OUT);
  *   - two days out is empty (rest; Friel, Allen); the day before holds only a
  *     capped activation (ride at most 30 min, run at most 10 min; Allen, Byrn),
- *     never the week's longest session;
+ *     never the week's longest session and never heavier (minutes or load)
+ *     than any earlier training day of race week (the last two days lightest);
+ *   - no race-week session longer than its race-week cap (run 45 min, Byrn;
+ *     bike 90 min, Allen; swim 45 min, Byrn) and at most two training
+ *     sessions a day (2026-10-14 review: one-week tapers and Thursday or
+ *     Friday races stacked up to 487 min on one day);
  *   - frequency: race week plus the race keeps at least 80% of the reference
  *     week's sessions (Mujika 2011), and every discipline keeps a session;
  *   - no long run, no solo long ride, no fasted ride; no discipline twice on
@@ -41,6 +46,7 @@ import { getState, resetState } from './store';
 import { raceWeekLayout, planTrainingWeeks } from '@/workouts/race-week-layout';
 import { PRIMER_MIN_DAYS_OUT, PRIMER_MAX_DAYS_OUT, RACE_DAY_HARD_SPACING_DAYS } from '@/workouts/race-day-rules';
 import { isLongRun } from '@/workouts/long-run';
+import { TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY, TRI_RACE_WEEK_SESSION_CAP_MIN } from '@/workouts/tri-taper';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
 
@@ -144,6 +150,28 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   for (const w of train.filter(x => x.taperRole === 'day_before')) {
     if (longestOther > 0 && (w.estimatedDurationMin ?? 0) > longestOther) out.push(`the day before holds the longest session: ${w.n} ${w.estimatedDurationMin}`);
   }
+  // The day before is the lightest day of race week, by minutes and by load.
+  const load = (ws: Workout[]) => ws.reduce((a, w) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+  const mins = (ws: Workout[]) => ws.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+  const dayBefore = train.filter(w => w.taperRole === 'day_before');
+  if (dayBefore.length > 0) {
+    for (let d = 0; d < 7; d++) {
+      const day = train.filter(w => w.dayOfWeek === d && w.taperRole !== 'day_before');
+      if (day.length === 0) continue;
+      if (mins(dayBefore) > mins(day)) out.push(`the day before (${mins(dayBefore)} min) outweighs ${DOW[d]} (${mins(day)} min)`);
+      if (load(dayBefore) > load(day)) out.push(`the day before (load ${load(dayBefore)}) outweighs ${DOW[d]} (load ${load(day)})`);
+    }
+  }
+  // Race-week caps: session length and sessions per day.
+  for (const w of train) {
+    if (w.taperRole === 'day_before' || w.t === 'brick') continue;
+    const cap = TRI_RACE_WEEK_SESSION_CAP_MIN[(w.discipline ?? 'run') as 'swim' | 'bike' | 'run'];
+    if ((w.estimatedDurationMin ?? 0) > cap) out.push(`over the race-week cap: ${DOW[w.dayOfWeek ?? 0]} ${w.n} ${w.estimatedDurationMin} > ${cap}`);
+  }
+  for (let d = 0; d < 7; d++) {
+    const n = train.filter(w => w.dayOfWeek === d && w.taperRole !== 'day_before').length;
+    if (n > TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY) out.push(`${n} training sessions on ${DOW[d]}`);
+  }
   if (before && minutes(wk) > minutes(before)) out.push(`heavier than the week before: ${minutes(wk)} > ${minutes(before)}`);
   // The last session before race day is at most 3 days out.
   const daysOut = (wk.triWorkouts ?? []).map(dOut);
@@ -233,15 +261,19 @@ describe('the week before race week: no quality run next to the brick or the lon
 });
 
 describe('scenario tri-wednesday: 70.3 on Wednesday 18 November', () => {
-  it('race week: aerobic sessions early, openers 5 and 4 days out, Byrn\'s brick 3 days out', () => {
+  // Aerobic sessions take the days nearest 6 days out (the Monday of a Sunday
+  // race): for a Wednesday race, Thursday and Wednesday (6 and 7 days out),
+  // not Monday and Tuesday, which left 6 and 7 days out empty (2026-10-14
+  // review).
+  it('race week: aerobic sessions 7 and 6 days out, openers 5 and 4 days out, Byrn\'s brick 3 days out', () => {
     at('2026-10-08T12:00:00');
     const s = build('70.3', '2026-11-18');
     expect(s.tw).toBe(7);
     const raceWeek = s.wks[5].triWorkouts ?? [];
     expect(raceWeek.map(w => `${DOW[w.dayOfWeek!]} ${w.t}${w.taperRole ? ` ${w.taperRole}` : ''}`)).toEqual([
-      'Mon bike_endurance',
-      'Mon easy',
-      'Tue easy',
+      'Wed bike_endurance',
+      'Thu bike_endurance',
+      'Thu easy',
       'Fri easy opener',
       'Sat swim_endurance opener',
       'Sun brick opener',

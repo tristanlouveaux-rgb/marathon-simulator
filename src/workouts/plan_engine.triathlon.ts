@@ -957,7 +957,17 @@ function triRaceWeek(
   });
 
   const easyPace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm;
+  // A one-week taper's race week never holds more than the week before (a
+  // deload week there can sit near race week's fraction).
+  let maxTotalMin: number | undefined;
+  if (taper.weeks <= 1 && weekIndex > 1) {
+    const prevPhase = triPlanPhases(state, totalWeeks)[weekIndex - 2]?.ph ?? 'peak';
+    const prev = triWeekParts(state, weekIndex - 1, totalWeeks, prevPhase);
+    const mins = (l: Workout[]) => l.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    maxTotalMin = mins(prev.swim) + mins(prev.bike) + mins(prev.run) + (prev.brick?.estimatedDurationMin ?? 0);
+  }
   const composed = composeTriRaceWeek({
+    maxTotalMin,
     present: { swim: disciplines.includes('swim'), bike: disciplines.includes('bike'), run: disciplines.includes('run') },
     longCourse: !cyclingOnly && triTaperCapsAtRacePace(tri.distance),
     singleSport: cyclingOnly,

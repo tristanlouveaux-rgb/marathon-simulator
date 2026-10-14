@@ -560,6 +560,9 @@ export interface TriRaceWeekInput {
   /** Aerobic session builders (the engine's own swim, bike and run). */
   aerobic: (d: TriDisc, minutes: number, slot: number) => Workout;
   dayBeforeRide: (minutes: number) => Workout;
+  /** The week before race week's swim, bike and run minutes (a one-week
+   *  taper): race week never holds more. */
+  maxTotalMin?: number;
 }
 
 const loadOf = (w: Workout) => (w.aerobic ?? 0) + (w.anaerobic ?? 0);
@@ -677,19 +680,25 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     const order: TriDisc[] = inp.singleSport
       ? openerDays.map(() => 'bike' as TriDisc)
       : (brickDow != null ? (['run', 'swim'] as TriDisc[]) : (['run', 'bike', 'swim'] as TriDisc[]));
-    const queue = order.filter(d => present[d]);
     const openers: Record<TriDisc, number> = { swim: 0, bike: 0, run: 0 };
     const openerPlan: Array<{ d: TriDisc; dow: number; reps: number; minutes: number }> = [];
-    for (const dow of openerDays) {
-      // The next discipline in the order whose budget holds a minimal opener.
-      let qi = -1;
-      for (let i = 0; i < queue.length; i++) {
-        const d = queue[i];
-        if (B[d] - used[d] >= triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx) - 0.5 && room(dow, dayMin) >= triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx)) { qi = i; break; }
+    // The disciplines, in order, whose budget holds a minimal opener; they take
+    // the window days nearest the race (a thin week's single opener sits 3
+    // days out, so the last session before race day stays within 3 days).
+    const chosen: TriDisc[] = [];
+    {
+      const trial: Record<TriDisc, number> = { ...used };
+      for (const d of order) {
+        if (!present[d] || chosen.length >= openerDays.length) continue;
+        const min = Math.max(floorMin, triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx));
+        if (B[d] - trial[d] >= min - 0.5) { chosen.push(d); trial[d] += min; }
       }
-      if (qi < 0) continue;
-      const d = queue[qi];
-      queue.splice(qi, 1);
+    }
+    const days = openerDays.slice(openerDays.length - chosen.length);
+    for (let i = 0; i < chosen.length; i++) {
+      const d = chosen[i];
+      const dow = days[i];
+      if (room(dow, dayMin) < triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx)) continue;
       const avail = B[d] - used[d];
       let reps = Math.min(dOut(dow), TRI_RACE_PACE_MAX_REPS);
       while (reps > TRI_RACE_PACE_MIN_REPS && (triRacePaceNeedMin(d, reps, ctx) > avail + 0.5 || triRacePaceNeedMin(d, reps, ctx) > room(dow, dayMin))) reps--;
@@ -699,13 +708,13 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       openers[d]++;
     }
     // Race week holds at least one opener: the run's (or the discipline the
-    // order reaches first) on the first window day, at the 4-min floor, when
-    // no budget held one.
+    // order reaches first) on the window day nearest the race, at the 4-min
+    // floor, when no budget held one.
     if (openerPlan.length === 0 && openerDays.length > 0) {
       const d = order.find(x => present[x]);
       if (d) {
         const minutes = Math.max(floorMin, Math.ceil(triRacePaceNeedMin(d, TRI_RACE_PACE_MIN_REPS, ctx)));
-        openerPlan.push({ d, dow: openerDays[0], reps: TRI_RACE_PACE_MIN_REPS, minutes });
+        openerPlan.push({ d, dow: openerDays[openerDays.length - 1], reps: TRI_RACE_PACE_MIN_REPS, minutes });
         used[d] += minutes;
         openers[d]++;
       }
@@ -797,6 +806,7 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     const pending: Array<{ d: TriDisc; min: number; slot: number }> = [];
     for (const d of DISCS) for (let i = 0; i < n[d]; i++) pending.push({ d, min: size[d], slot: openers[d] + i });
     const discOrder: Record<TriDisc, number> = { bike: 0, run: 1, swim: 2 };
+    const aerobicPlaced: Array<{ dow: number; d: TriDisc; slot: number }> = [];
     while (pending.length > 0) {
       pending.sort((a, b) => (freeDays(a.d) - freeDays(b.d)) || (b.min - a.min) || (discOrder[a.d] - discOrder[b.d]));
       const p = pending.shift()!;
@@ -814,6 +824,50 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
       }
       place(dow, inp.aerobic(p.d, minutes, p.slot), [p.d]);
       placed[p.d] += minutes;
+      aerobicPlaced.push({ dow, d: p.d, slot: p.slot });
+    }
+
+    // Never heavier than the week before (race-week rule of 2026-10-08): a
+    // one-week taper whose week before is a deload can sit near it, and the
+    // floors can tip race week over. Aerobic sessions come down toward the
+    // floor, longest first, then the shortest go, while frequency holds and
+    // every discipline keeps a session.
+    if (inp.maxTotalMin != null) {
+      const totalMin = () => Object.values(byDay).flat().reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0) + dbRide + dbRun;
+      const sessionsNow = () => Object.values(byDay).reduce((a, l) => a + l.length, 0) + activation.bike + activation.run;
+      const find = (a: { dow: number; d: TriDisc; slot: number }) => byDay[a.dow].findIndex(w => !w.taperRole && w.t !== 'brick' && (w.discipline ?? 'run') === a.d);
+      let over = totalMin() - inp.maxTotalMin;
+      while (over > 0.5) {
+        const cand = aerobicPlaced
+          .map(a => ({ a, i: find(a) }))
+          .filter(x => x.i >= 0 && (byDay[x.a.dow][x.i].estimatedDurationMin ?? 0) > floorMin)
+          .sort((x, y) => (byDay[y.a.dow][y.i].estimatedDurationMin ?? 0) - (byDay[x.a.dow][x.i].estimatedDurationMin ?? 0))[0];
+        if (!cand) break;
+        const cur = byDay[cand.a.dow][cand.i].estimatedDurationMin ?? 0;
+        const next = Math.max(floorMin, Math.ceil(cur - over));
+        byDay[cand.a.dow][cand.i] = { ...inp.aerobic(cand.a.d, next, cand.a.slot), dayOfWeek: cand.a.dow, dayName: DAY_NAMES[cand.a.dow] };
+        dayMin[cand.a.dow] -= cur - next;
+        placed[cand.a.d] -= cur - next;
+        over -= cur - next;
+      }
+      while (over > 0.5) {
+        const cand = aerobicPlaced
+          .map(a => ({ a, i: find(a) }))
+          .filter(x => x.i >= 0)
+          .filter(x => {
+            const d = x.a.d;
+            const left = Object.values(byDay).flat().filter(w => (w.discipline ?? 'run') === d || (d === 'run' && w.t === 'brick')).length - 1 + activation[d];
+            return left > 0 && sessionsNow() - 1 >= need;
+          })
+          .sort((x, y) => (byDay[x.a.dow][x.i].estimatedDurationMin ?? 0) - (byDay[y.a.dow][y.i].estimatedDurationMin ?? 0))[0];
+        if (!cand) break;
+        const cur = byDay[cand.a.dow][cand.i].estimatedDurationMin ?? 0;
+        byDay[cand.a.dow].splice(cand.i, 1);
+        dayMin[cand.a.dow] -= cur;
+        placed[cand.a.d] -= cur;
+        over -= cur;
+        aerobicPlaced.splice(aerobicPlaced.indexOf(cand.a), 1);
+      }
     }
     return { byDay, placed };
   };
@@ -828,14 +882,18 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   ];
   const lightest = (wk: ComposedWeek) => {
     const days = Object.keys(wk.byDay).map(Number).filter(dow => dow !== dbDow && wk.byDay[dow].length > 0);
+    const all = days.flatMap(dow => wk.byDay[dow]);
     return {
       min: Math.min(Infinity, ...days.map(dow => wk.byDay[dow].reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0))),
       load: Math.min(Infinity, ...days.map(dow => wk.byDay[dow].reduce((a, w) => a + loadOf(w), 0))),
+      // The week's longest training session: no activation is longer.
+      longest: Math.max(0, ...all.map(w => w.estimatedDurationMin ?? 0)),
     };
   };
-  const fitsUnder = (ride: number, run: number, L: { min: number; load: number }) => {
+  const fitsUnder = (ride: number, run: number, L: { min: number; load: number; longest: number }) => {
     const ws = dayBefore(ride, run);
-    return ride + run <= L.min && ws.reduce((a, w) => a + loadOf(w), 0) <= L.load;
+    const longestOk = L.longest === 0 || (ride <= L.longest && run <= L.longest);
+    return ride + run <= L.min && ws.reduce((a, w) => a + loadOf(w), 0) <= L.load && longestOk;
   };
   let wk = build(dbRide, dbRun);
   let L = lightest(wk);
@@ -853,10 +911,12 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
   // Grow toward the caps with budget left unplaced, while the day stays the
   // lightest.
   const left = (d: TriDisc) => Math.max(0, Math.floor(B[d] - wk.placed[d] - (d === 'bike' ? dbRide : d === 'run' ? dbRun : 0)));
+  const trainingMin = Object.values(wk.byDay).flat().reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+  const underWeekBefore = (ride: number, run: number) => inp.maxTotalMin == null || trainingMin + ride + run <= inp.maxTotalMin;
   let spareBike = left('bike');
-  while (dbRide > 0 && dbRide < TRI_DAY_BEFORE_RIDE_MAX_MIN && spareBike > 0 && fitsUnder(dbRide + 1, dbRun, L)) { dbRide++; spareBike--; }
+  while (dbRide > 0 && dbRide < TRI_DAY_BEFORE_RIDE_MAX_MIN && spareBike > 0 && fitsUnder(dbRide + 1, dbRun, L) && underWeekBefore(dbRide + 1, dbRun)) { dbRide++; spareBike--; }
   let spareRun = left('run');
-  while (dbRun > 0 && dbRun < TRI_DAY_BEFORE_RUN_MAX_MIN && spareRun > 0 && fitsUnder(dbRide, dbRun + 1, L)) { dbRun++; spareRun--; }
+  while (dbRun > 0 && dbRun < TRI_DAY_BEFORE_RUN_MAX_MIN && spareRun > 0 && fitsUnder(dbRide, dbRun + 1, L) && underWeekBefore(dbRide, dbRun + 1)) { dbRun++; spareRun--; }
   return flatten(wk.byDay, dbDow, dayBefore(dbRide, dbRun));
 }
 
