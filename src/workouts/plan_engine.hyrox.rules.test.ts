@@ -1048,9 +1048,12 @@ describe('HYROX round 4 decisions (2026-10-13)', () => {
     // Beginner, 16 weeks, the chosen 4 sessions: base weeks hold 2 runs and a
     // circuit, so the fourth slot takes easy erg work sized from the unused
     // budget (the withdrawn 2026-10-13 draft sized it from unfunded run slots,
-    // so a larger budget that funded the runs held less volume).
+    // so a larger budget that funded the runs held less volume). From 5 h:
+    // at 4 h week 2's circuit on the real S8-S9 seeds (62 min, 2 rounds of 4
+    // stations) leaves 19 min of the 141-min budget, under the 20-min floor
+    // of an easy erg session (2026-10-14 merge).
     let prev = 0;
-    for (const hrs of [4, 5, 6]) {
+    for (const hrs of [5, 6, 7]) {
       const s = build('beginner', hrs, 16);
       const { detail } = generateHyroxPlanDetailed(structuredClone(s));
       const w2 = s.wks[1];
@@ -1627,11 +1630,14 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(prescribed(b3.wks[19]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
     expect(prescribed(b3.wks[19]).some(w => w.t === 'hyrox_mini_brick')).toBe(false);
     expect(notes(b3.wks[19]).some(n => /Mini Brick left out \(deload: the easy run ranks above it\)/.test(n))).toBe(true);
-    // beginner 4 h 12 weeks: W7 holds an easy run of 20 min, a 59-min circuit,
-    // a 49-min mini brick and a 38-min long run; the W8 deload keeps its easy
+    // beginner 5 h 12 weeks: W7 holds an easy run of 38 min, a 71-min circuit,
+    // a 60-min mini brick and a 38-min long run; the W8 deload keeps its easy
     // run at the run floor or above and shortens the circuit (a station out:
-    // no longer or heavier than W7's, round 7) and the mini brick.
-    const s = build('beginner', 4, 12);
+    // no longer or heavier than W7's, round 7) and the mini brick. (Before the
+    // 2026-10-14 merge the example was 4 h: with the real S8-S9 seeds its
+    // W7 circuit is heavier and the guard leaves W7's easy run out, so its
+    // deload holds none to keep.)
+    const s = build('beginner', 5, 12);
     expect(prescribed(s.wks[6]).some(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))).toBe(true);
     expect(prescribed(s.wks[7]).find(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w))?.estimatedDurationMin).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN);
   });
