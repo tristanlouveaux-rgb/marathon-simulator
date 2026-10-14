@@ -595,7 +595,7 @@ interface ComposedWeek {
  *      window days go in they take the days nearest the race. Each holds its
  *      repeats inside the shortest warm-up and cool-down, and takes an equal
  *      share of its discipline's budget when that is more (within the
- *      race-week cap and its day's room). Order (an app inference from the order coaches taper
+ *      race-week cap). Order (an app inference from the order coaches taper
  *      volume, run first and swim last): run, bike, swim; long course with a
  *      brick: run, swim (the brick carries the bike's builds); cycling: a ride
  *      on every window day. Openers are typed by their steady content (an
@@ -819,14 +819,14 @@ export function composeTriRaceWeek(inp: TriRaceWeekInput): Workout[] {
     // Openers share the discipline's budget with its aerobic sessions: an
     // opener takes the equal share when that is more than its repeats need
     // (the steady minutes around them grow, the repeats stay), within the
-    // race-week cap and its day's room.
+    // race-week cap. Its day is fixed, and day caps never shrink a session.
     for (const d of DISCS) {
       if (openers[d] === 0) continue;
       const pre = rem[d] + openerPlan.filter(o => o.d === d).reduce((a, o) => a + o.minutes, 0);
       const share = Math.min(maxSize(d), pre / (openers[d] + n[d]));
       for (const o of openerPlan) {
         if (o.d !== d) continue;
-        const grown = Math.floor(Math.min(TRI_RACE_WEEK_SESSION_CAP_MIN[d], share, o.minutes + room(o.dow, dayMin)));
+        const grown = Math.floor(Math.min(TRI_RACE_WEEK_SESSION_CAP_MIN[d], share));
         if (grown <= o.minutes) continue;
         byDay[o.dow] = byDay[o.dow].map(w => (w.taperRole === 'opener' && w.discipline === d && w.t !== 'brick'
           ? { ...triRacePaceSession({ discipline: d, minutes: grown, reps: o.reps, role: 'opener', ctx }), dayOfWeek: o.dow, dayName: DAY_NAMES[o.dow] }
