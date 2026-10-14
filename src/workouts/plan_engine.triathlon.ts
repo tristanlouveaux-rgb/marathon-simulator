@@ -779,14 +779,32 @@ function triReference(state: SimulatorState, trainingWeeks: number, taper: TriRa
   return { parts, ref };
 }
 
-/** A future week's sessions as the athlete trains them: the effort
- *  multiplier applied as applyTriEffortMultipliers applies it after
- *  generation (a brick by the bike multiplier, as its card), without the
- *  CTL-gap stamp. Past weeks (before state.w) keep their minutes, as the
- *  multiplier leaves past weeks alone. Copies; the input is not changed. */
+/** The state race-taper week `weekIndex` is sized at: the current state for
+ *  the current week and every later one; for a past week, the state as it
+ *  stood while that week was the current one (state.w set to it). The effort
+ *  multiplier reads the completed weeks before state.w
+ *  (triTrailingEffortScore), so a past taper week is read at the multiplier
+ *  it was last built at: the plan is rebuilt at every rollover
+ *  (rebakeFutureWeeksInPlace) and a week stops being rebuilt once it is
+ *  past. A Tuesday or Wednesday race's closing-week activation is composed
+ *  with race week, so at the rollover into the closing week, when race week
+ *  is past, the activation is rebuilt against race week as stored. Without
+ *  this, race week was recomposed there with no multiplier at all, and the
+ *  activation changed overnight: a 5-min jog added beside the spin, the spin
+ *  swapped or dropped, and the day before heavier than a stored race-week
+ *  day (review of 26183cf, 2026-10-14). */
+function triStateAtWeek(state: SimulatorState, weekIndex: number): SimulatorState {
+  return weekIndex >= (state.w ?? 1) ? state : { ...state, w: weekIndex };
+}
+
+/** A race-taper week's view of a week's sessions as the athlete trains
+ *  them: the effort multiplier applied as applyTriEffortMultipliers applies
+ *  it after generation (a brick by the bike multiplier, as its card), without
+ *  the CTL-gap stamp, at the multiplier in force for taper week `weekIndex`
+ *  (triStateAtWeek). Copies; the input is not changed. */
 function triAsTrained(state: SimulatorState, weekIndex: number, workouts: Workout[]): Workout[] {
   const out = workouts.map(w => ({ ...w }));
-  if (weekIndex >= (state.w ?? 1)) applyTriEffortMultipliers(state, out.filter(w => w.taperRole !== 'day_before'));
+  applyTriEffortMultipliers(triStateAtWeek(state, weekIndex), out.filter(w => w.taperRole !== 'day_before'));
   return out;
 }
 
@@ -797,16 +815,18 @@ function triAsTrained(state: SimulatorState, weekIndex: number, workouts: Workou
  *  its generated minutes. Sizing the taper from those minutes delivers its
  *  fractions (0.55 then 0.30, or 0.55) of the week trained, whatever m is.
  *  Sized from the generated minutes instead, the taper delivered 0.55/m and
- *  0.30/m of it: a 60-63% mean cut at m 1.15, outside the 41-60% band. The
- *  multiplier is the athlete's current one (applied to every future week
- *  alike). The CTL-gap stamp is left out: it is reduce-only and stamped on
+ *  0.30/m of it: a 60-63% mean cut at m 1.15, outside the 41-60% band. For
+ *  the current and later weeks the multiplier is the athlete's current one
+ *  (applied to every future week alike); a past taper week keeps the one it
+ *  was last built at (triStateAtWeek), so a rebuild after the week has
+ *  passed (the closing week's activation, a version-bump regeneration)
+ *  sizes it as the athlete had it. The CTL-gap stamp is left out: it is reduce-only and stamped on
  *  the week being entered, so leaving it out of the reference only lightens
  *  the cut against a stamped reference week. Brick legs scale with the
  *  brick's card. */
 function triTrainedReference(
   state: SimulatorState, weekIndex: number, reference: { parts: TriWeekParts; ref: TriTaperRef },
 ): { parts: TriWeekParts; ref: TriTaperRef } {
-  if (weekIndex < (state.w ?? 1)) return reference;
   const { parts } = reference;
   const swim = triAsTrained(state, weekIndex, parts.swim);
   const bike = triAsTrained(state, weekIndex, parts.bike);
@@ -837,7 +857,8 @@ function triTrainedReference(
 /** The reference week a plan's race taper is sized from (its week number and
  *  per-discipline minutes and counts), as the generator builds it: before
  *  any race-window cut and before the effort multiplier (triTrainedReference
- *  applies it for a future taper week), deload and holiday ignored. Null
+ *  applies it for each taper week, triStateAtWeek), deload and holiday
+ *  ignored. Null
  *  without a race taper (continuous mode). For tests and the forecast's
  *  checks. */
 export function triTaperReference(state: SimulatorState, trainingWeeks: number): { refWeek: number; ref: TriTaperRef } | null {
