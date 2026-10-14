@@ -32,8 +32,9 @@
  *   - quality kept: taper week 1 keeps the reference week's quality count per
  *     discipline, short course at 75% of the reference reps (Goeringer) unless
  *     the discipline has no steady minutes left, long course 3 to 8 x 90 s of
- *     race-pace work (Dave Scott's 4 to 12 min sets); race week holds an
- *     opener; long course and cycling never above race intensity;
+ *     race-pace work (Dave Scott's 4 to 12 min sets), cycling sweet spot or
+ *     tempo with at least one library rep; race week holds an opener; long
+ *     course never above race intensity, cycling never above sweet spot;
  *   - TRI_GENERATOR_VERSION bumped so stored plans regenerate.
  * Thursday to Saturday races keep the structural rules and the no-zero rule.
  * Their volume and frequency gaps (the race window cuts taper week 1, race
@@ -83,6 +84,7 @@ import {
   bikeKindForIntensity,
   triRaceBikeIntensity,
   triTaperMicrosNeedMin,
+  triTaperSubThresholdRideNeedMin,
   triTaperSwimPlan,
   triTaperThresholdRunNeedMin,
 } from '@/workouts/tri-taper';
@@ -344,11 +346,15 @@ function taperViolations(p: Plan): string[] {
       if (!has) out.push(`week ${wkNum} no ${d}`);
     }
     // Intensity ceiling in every taper week.
-    const longCourse = cyclingOnly || (distance !== 'sprint' && distance !== 'olympic');
+    // Long course caps at race intensity; cycling at sweet spot or tempo
+    // (the fact-check's sub-threshold ceiling); short course allows 30:30s.
+    const longCourse = !cyclingOnly && distance !== 'sprint' && distance !== 'olympic';
     const raceKind = bikeKindForIntensity(triRaceBikeIntensity(distance, cyclingOnly, '160km'));
     const allowedBike = longCourse
       ? new Set(['bike_endurance', `bike_${raceKind}`, 'brick'])
-      : new Set(['bike_endurance', 'bike_tempo', 'bike_sweet_spot', 'bike_vo2_micros', 'brick']);
+      : cyclingOnly
+        ? new Set(['bike_endurance', 'bike_tempo', 'bike_sweet_spot'])
+        : new Set(['bike_endurance', 'bike_tempo', 'bike_sweet_spot', 'bike_vo2_micros', 'brick']);
     for (const w of sessions(wk)) {
       const disc = w.discipline ?? 'run';
       if (disc === 'bike' && !allowedBike.has(w.t)) out.push(`week ${wkNum} ride above the taper ceiling: ${w.t}`);
@@ -375,6 +381,10 @@ function taperViolations(p: Plan): string[] {
       if (w.taperRole === 'race_pace') {
         const reps = Number(/(\d+)×90s/.exec(w.d)?.[1] ?? 0);
         if (reps < TRI_RACE_PACE_MIN_REPS || reps > TRI_RACE_PACE_MAX_REPS) out.push(`week ${wkNum} race-pace ${d} ${reps} x 90 s`);
+      } else if (w.t === 'bike_sweet_spot' || w.t === 'bike_tempo') {
+        // The library's variant 0 at the session's share: at least one rep.
+        const reps = Number(/Main: (\d+)×\d+min/.exec(w.d)?.[1] ?? 0);
+        if (reps < 1 || dur < triTaperSubThresholdRideNeedMin()) out.push(`week ${wkNum} ${w.t} ${reps} reps in ${dur} min`);
       } else if (w.t === 'bike_vo2_micros') {
         const reps = Number(/Main: (\d+)×\(30s/.exec(w.d)?.[1] ?? 0);
         if (reps < 4 || (reps < TRI_TAPER_MICROS_REPS && dur < triTaperMicrosNeedMin() && !steadyAtFloor('bike'))) out.push(`week ${wkNum} micros ${reps} reps in ${dur} min`);

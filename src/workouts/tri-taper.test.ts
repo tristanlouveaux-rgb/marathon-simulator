@@ -403,13 +403,18 @@ describe('race-pace sessions, openers and activations', () => {
 });
 
 describe('taper intensity gate (tri-intensity-profile)', () => {
-  it('long course and cycling cap taper quality at race pace', () => {
+  it('long course caps taper quality at race pace', () => {
     for (const d of ['t100', '70.3', 'ironman'] as const) {
       expect(selectRunQualityKind(d, 'taper', 0, 15)).toBe('race_pace');
       expect(selectSwimQualityKind(d, 'taper', 0, 15)).toBe('race_pace');
       expect(selectBikeQualityKind(d, 'taper', 0, 15)).toBe('race_pace');
     }
-    expect(selectBikeQualityKind('70.3', 'taper', 0, 15, true)).toBe('race_pace');
+  });
+
+  it('cycling keeps sub-threshold taper quality (sweet spot or tempo, the fact-check ceiling)', () => {
+    for (let w = 0; w < 6; w++) for (let slot = 0; slot < 3; slot++) {
+      expect(['sweet_spot', 'tempo']).toContain(selectBikeQualityKind('70.3', 'taper', slot, w, true));
+    }
   });
 
   it('sprint and Olympic allow short faster efforts: 30:30 rides, speed swims; runs stay at threshold', () => {

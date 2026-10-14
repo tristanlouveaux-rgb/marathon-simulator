@@ -387,6 +387,16 @@ export function triTaperVo2MicrosRide(input: {
   return { ...base, d: `${wu}min Warm up. Main: ${reps}×(30s @ ${on} / 30s @ ${off})${then}. ${cd}min Cool down.` };
 }
 
+/** Shortest rep of the library's sweet spot and tempo variant 0 (its sweet
+ *  spot reps are floored at 6 min; its tempo session at 26 min holds one 6-min
+ *  rep), above Dave Scott's 4-min floor. */
+const SUB_THRESHOLD_MIN_REP_MIN = 6;
+/** Minutes a sweet spot or tempo taper ride needs for one rep inside the
+ *  library's variant 0 warm-up and cool-down (15 + 5 min). */
+export function triTaperSubThresholdRideNeedMin(): number {
+  return BIKE_WU.min + BIKE_CD.min + SUB_THRESHOLD_MIN_REP_MIN;
+}
+
 /** Threshold run in taper week 1: 75% of the tri library's 4 x 6 min (3 x 6
  *  min, 90 s jog; Goeringer), the reps the session holds after the shortest
  *  warm-up and cool-down, at least one (6 min, above Dave Scott's 4-min

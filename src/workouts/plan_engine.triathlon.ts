@@ -42,6 +42,7 @@ import {
   selectRunQualityKind,
   TRI_BRICK_POLICY,
   triTaperCapsAtRacePace,
+  triTaperCeiling,
 } from './tri-intensity-profile';
 import { scheduleTriathlonWeek, DAY_NAMES as TRI_DAY_NAMES } from './scheduler.triathlon';
 import {
@@ -55,6 +56,7 @@ import {
   triTaperMicrosNeedMin,
   triTaperQualitySwim,
   triTaperSwimMinMin,
+  triTaperSubThresholdRideNeedMin,
   triTaperSwimPlan,
   triTaperThresholdRunDesc,
   triTaperThresholdRunNeedMin,
@@ -861,7 +863,7 @@ function triTaperCtx(state: SimulatorState, weekIndex: number, totalWeeks: numbe
   const pace = triWeekSizing(state, weekIndex, totalWeeks, phase).easyPaceSecPerKm
     ?? easyPaceSecPerKmFromSkill(rating.run as TriSkillSlider);
   return {
-    shortCourse: !triTaperCapsAtRacePace(tri.distance, cyclingOnly),
+    shortCourse: triTaperCeiling(tri.distance, cyclingOnly) === 'short_efforts',
     bikeIF: triRaceBikeIntensity(tri.distance, cyclingOnly, state.onboarding?.cyclingDistance),
     ftp: tri.bike?.ftp,
     hasPowerMeter: tri.bike?.hasPowerMeter,
@@ -932,9 +934,11 @@ function fitTaperSlots(slots: TaperSlot[], budget: number): number[] {
  *     reference swim holds. The cut falls on warm-up, cool-down and the
  *     discipline's steady minutes first; only a discipline with no steady
  *     minutes left shortens the main set, never below Dave Scott's 4 min.
- *   - Long course and cycling hold race-pace work inside Dave Scott's 4 to 12
- *     min sets (at most 75% of the reference session's work), as many 90 s
- *     repeats as the session's share holds.
+ *   - Long course holds race-pace work inside Dave Scott's 4 to 12 min sets
+ *     (at most 75% of the reference session's work), as many 90 s repeats as
+ *     the session's share holds.
+ *   - Cycling keeps sweet spot or tempo (its sub-threshold ceiling), the
+ *     library's variant 0 setting the reps by the session's share.
  * The brick (build and peak only, TRI_BRICK_POLICY) becomes the solo long
  * ride; its transition-run minutes join the runs. Endurance rides take the
  * steady variant (never "fasted (optional)", as in race week). Commutes and
@@ -1016,8 +1020,12 @@ function triTaperWeekOne(state: SimulatorState, weekIndex: number, totalWeeks: n
         }),
       };
     }
+    // Sweet spot or tempo (cycling's sub-threshold ceiling): the library's
+    // variant 0 sets its reps by length, so the 0.55 share holds fewer reps;
+    // never shorter than the variant's one-rep session.
+    const subThreshold = kind === 'sweet_spot' || kind === 'tempo' ? triTaperSubThresholdRideNeedMin() : 0;
     return {
-      share, ref: b.min, need: 0, minimal: 0, quality: true,
+      share, ref: b.min, need: subThreshold, minimal: subThreshold, quality: true,
       build: m => generateBikeSession({
         phase, skill: rating.bike as TriSkillSlider, weekIndex, totalWeeks, targetMinutes: m, kind,
         ftp: tri.bike?.ftp, hasPowerMeter: tri.bike?.hasPowerMeter, slotIndex: i, variantIndex: 0,

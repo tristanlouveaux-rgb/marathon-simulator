@@ -153,9 +153,10 @@ const LOW_INTENSITY_FALLBACK_RUN: TriRunQualityKind = 'threshold';
  *     confidence). Threshold is above long-course race intensity, so the
  *     sub-threshold kinds the gate allowed before (threshold runs and swims,
  *     sweet-spot rides) give way to race-pace sessions (tri-taper.ts), held
- *     inside Dave Scott's 4 to 12 min taper sets. Cycling mode, whose events
- *     last 1.5 h or more, takes this ceiling at its event's intensity factor.
+ *     inside Dave Scott's 4 to 12 min taper sets.
+ *   - 'sub_threshold' (cycling mode, CYCLING_TAPER_INTENSITY_CEILING).
  */
+export type TriTaperCeiling = 'short_efforts' | 'race_pace' | 'sub_threshold';
 export const TRI_TAPER_INTENSITY_CEILING: Record<TriathlonDistance, 'short_efforts' | 'race_pace'> = {
   sprint:  'short_efforts',
   olympic: 'short_efforts',
@@ -164,6 +165,18 @@ export const TRI_TAPER_INTENSITY_CEILING: Record<TriathlonDistance, 'short_effor
   ironman: 'race_pace',
 };
 
+/**
+ * Cycling mode's taper ceiling: the sub-threshold kinds (sweet spot, tempo)
+ * the taper gate allowed before the rebuild, which the fact-check gave as the
+ * corrected ceiling where Tristan's decisions do not set one (they cap 70.3
+ * and Ironman at race intensity and name no cycling ceiling). Keeping
+ * intensity has the strongest taper evidence (Bosquet 2007: cutting it ES
+ * -0.02, keeping it 0.33), and Neary 2003's cyclists held their interval
+ * intensity through the 7-day taper. Race week keeps race-pace openers at the
+ * event's intensity factor (tri-taper.ts).
+ */
+export const CYCLING_TAPER_INTENSITY_CEILING: TriTaperCeiling = 'sub_threshold';
+
 /** A taper quality slot filled by a race-pace session (tri-taper.ts). */
 export type TriRacePaceKind = 'race_pace';
 
@@ -171,10 +184,15 @@ const TAPER_SHORT_SWIM: readonly SwimSessionKind[] = ['threshold', 'speed'];
 const TAPER_SHORT_BIKE: readonly BikeSessionKind[] = ['sweet_spot', 'tempo', 'vo2_micros'];
 const TAPER_SHORT_RUN: readonly TriRunQualityKind[] = ['threshold'];
 
-/** True when this plan's taper caps quality at race intensity. Cycling mode
- *  always does (its distance field is a 70.3 placeholder). */
+/** The plan's taper intensity ceiling (cycling mode's distance field is a
+ *  70.3 placeholder, so cycling reads its own). */
+export function triTaperCeiling(distance: TriathlonDistance, cyclingOnly = false): TriTaperCeiling {
+  return cyclingOnly ? CYCLING_TAPER_INTENSITY_CEILING : TRI_TAPER_INTENSITY_CEILING[distance];
+}
+
+/** True when this plan's taper caps quality at race intensity. */
 export function triTaperCapsAtRacePace(distance: TriathlonDistance, cyclingOnly = false): boolean {
-  return cyclingOnly || TRI_TAPER_INTENSITY_CEILING[distance] === 'race_pace';
+  return triTaperCeiling(distance, cyclingOnly) === 'race_pace';
 }
 
 function gateLowIntensity<T>(
@@ -217,8 +235,10 @@ export function selectBikeQualityKind(
   weekIndex: number,
   cyclingOnly = false,
 ): BikeSessionKind | TriRacePaceKind {
-  if (phase === 'taper' && triTaperCapsAtRacePace(distance, cyclingOnly)) return 'race_pace';
-  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].bike, LOW_INTENSITY_BIKE, TAPER_SHORT_BIKE, phase, LOW_INTENSITY_FALLBACK_BIKE);
+  const ceiling = triTaperCeiling(distance, cyclingOnly);
+  if (phase === 'taper' && ceiling === 'race_pace') return 'race_pace';
+  const taperAllowed = ceiling === 'sub_threshold' ? LOW_INTENSITY_BIKE : TAPER_SHORT_BIKE;
+  const flavour = gateLowIntensity(TRI_QUALITY_FLAVOUR[distance].bike, LOW_INTENSITY_BIKE, taperAllowed, phase, LOW_INTENSITY_FALLBACK_BIKE);
   // Rotate within the flavour list across weeks/slots so variety is preserved.
   return flavour[Math.abs(weekIndex + slotIndex) % flavour.length];
 }
