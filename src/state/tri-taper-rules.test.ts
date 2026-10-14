@@ -41,7 +41,9 @@
  * commutes, and both at 0 h weekdays with a power meter).
  * Taper week 1 keeps its quality run when gym and commutes fill the earlier
  * days, and cycling's taper week 1 keeps sweet spot or tempo at 75% of the
- * reference work.
+ * reference work. A CTL-gap stamp leaves the taper as built; with an effort
+ * multiplier of 0.85 or 1.15 each taper week holds its fraction of the
+ * reference week as the athlete trains it.
  * Their volume and frequency gaps (the race window cuts taper week 1, race
  * week has one to three training days) are pinned below with one case per
  * weekday, as is a race week above a thin week before.
@@ -775,7 +777,21 @@ describe('taper length', () => {
   });
 });
 
-describe('volume levers leave the race taper alone (decision 2)', () => {
+/** Rates every swim, bike and run session of weeks 1 and 2 at its planned
+ *  RPE + `dev` and makes week 3 current, so triTrailingEffortScore reads
+ *  `dev` per discipline (effort multiplier 1 - 0.05 x dev, clamped). */
+function rateFirstWeeks(s: SimulatorState, dev: number): void {
+  s.w = 3;
+  for (const wk of s.wks.slice(0, 2)) {
+    wk.rated = {};
+    for (const w of wk.triWorkouts ?? []) {
+      const expected = w.rpe ?? w.r;
+      if (w.id && expected != null) wk.rated[w.id] = expected + dev;
+    }
+  }
+}
+
+describe('volume levers and the race taper (decision 2, review fix 2026-10-14)', () => {
   it('a CTL-gap stamp of 0.9 shortens the weeks before the taper and leaves both taper weeks and race week as built', () => {
     at(NOW);
     for (const [mode, weeks, hours] of [['olympic', 16, 8], ['70.3', 16, 10], ['cycling', 12, 10]] as Array<[Mode, number, number]>) {
@@ -787,6 +803,55 @@ describe('volume levers leave the race taper alone (decision 2)', () => {
       expect(minsOf(scaled[before - 1].triWorkouts ?? []), `${mode} week ${before}`).toBeLessThan(minsOf(plain[before - 1].triWorkouts ?? []));
       for (let w = p.taperStart; w <= p.tw; w++) {
         expect(scaled[w - 1].triWorkouts, `${mode} week ${w}`).toEqual(plain[w - 1].triWorkouts);
+      }
+    }
+  });
+
+  it('with an effort multiplier of 0.85 or 1.15 each taper week holds its fraction of the reference week as the athlete trains it', () => {
+    at(NOW);
+    const cases: Array<[Mode, number, number, number]> = [
+      ['olympic', 16, 8, 6], ['70.3', 16, 10, 6], ['ironman', 16, 16, 6], ['cycling', 16, 10, 6],
+      ['70.3', 16, 10, 2], ['sprint', 16, 6, 6],
+    ];
+    for (const [mode, weeks, hours, dow] of cases) {
+      const base = plan(mode, weeks, hours, dow);
+      // Fractions of the stored reference week with no effort history.
+      rateFirstWeeks(base.s, 0);
+      base.s.wks = generateTriathlonPlan(base.s);
+      const refIdx = triTaperReference(base.s, base.tw)!.refWeek - 1;
+      const frac = (s: SimulatorState, w: number) => {
+        const extra = w === base.tw && s.tw > base.tw ? sessions(s.wks[base.tw]) : [];
+        return minsOf([...sessions(s.wks[w - 1]), ...extra]) / minsOf(sessions(s.wks[refIdx]));
+      };
+      const plainFr: number[] = [];
+      for (let w = base.taperStart; w <= base.tw; w++) plainFr.push(frac(base.s, w));
+      for (const dev of [3, -3]) {
+        const p = plan(mode, weeks, hours, dow);
+        rateFirstWeeks(p.s, dev);
+        p.s.wks = generateTriathlonPlan(p.s);
+        const tag = `${mode} ${weeks}w ${hours}h ${DOW[dow]} m ${dev > 0 ? 0.85 : 1.15}`;
+        // The multiplier reached the reference week as stored.
+        const refRatio = minsOf(sessions(p.s.wks[refIdx])) / minsOf(sessions(base.s.wks[refIdx]));
+        expect(Math.abs(refRatio - (dev > 0 ? 0.85 : 1.15)), `${tag} reference ${refRatio.toFixed(3)}`).toBeLessThan(0.03);
+        const fr: number[] = [];
+        for (let w = p.taperStart; w <= p.tw; w++) fr.push(frac(p.s, w));
+        // Taper week 1 (and a one-week race week) at 0.55 of the reference
+        // week as trained; a two-week race week at 0.30, up to its floors
+        // (openers, the day before) at m 0.85. Before the review fix, the
+        // taper was sized from the generated week: at m 1.15 it held 0.55/m
+        // and 0.30/m of the week trained (0.48 and 0.26).
+        fr.forEach((f, i) => {
+          const last = i === fr.length - 1 && fr.length > 1;
+          const ok = last ? f >= TRI_RACE_WEEK_FRACTION - 0.03 && f <= 0.40 : Math.abs(f - TRI_TAPER_FIRST_WEEK_FRACTION) < 0.03;
+          expect(ok, `${tag} taper week ${i + 1}: ${f.toFixed(3)} (no effort history ${plainFr[i].toFixed(3)})`).toBe(true);
+        });
+        const mean = fr.reduce((a, f) => a + f, 0) / fr.length;
+        expect(mean, `${tag} mean ${mean.toFixed(3)}`).toBeGreaterThanOrEqual(0.40);
+        expect(mean, `${tag} mean ${mean.toFixed(3)}`).toBeLessThanOrEqual(0.60);
+        const q = { ...p, refWeek: p.s.wks[refIdx] };
+        expect(structuralViolations(q), tag).toEqual([]);
+        expect(doubleViolations(q), tag).toEqual([]);
+        expect(zeroViolations(q), tag).toEqual([]);
       }
     }
   });

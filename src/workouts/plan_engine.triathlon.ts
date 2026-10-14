@@ -142,8 +142,9 @@ import { isLongRun } from './long-run';
 // cycling taper rebuild", Tristan 2026-10-13). Taper length by race distance
 // (sprint 1 week, others 2, cycling 2; race week only under 8 h for sprint and
 // Olympic), taper weeks sized per discipline from the reference week (0.55
-// then 0.30, or 0.55 for a one-week taper) and left alone by the effort
-// multiplier, quality kept with fewer reps (long course capped at race
+// then 0.30, or 0.55 for a one-week taper) as the athlete trains it (the
+// effort multiplier applied to the reference week, not to the taper
+// sessions), quality kept with fewer reps (long course capped at race
 // intensity, cycling at sweet spot or tempo), race week composed from openers,
 // Byrn's brick, a rest day 2 days out and a capped activation the day before
 // (a Tuesday or Wednesday race's in the closing week). Stored plans regenerate
@@ -299,18 +300,17 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   return weeks;
 }
 
-/** Sessions the effort multiplier may scale. Race-taper weeks are left alone
- *  (orchestrator decision 2, 2026-10-14). Race week's sessions sit at sourced
- *  race-week lengths (openers, the brick, the race-week caps) and the day
- *  before must stay its lightest day, which a scale of 0.85 to 1.15 on the
- *  other days would break. Taper week 1 sits at TRI_TAPER_FIRST_WEEK_FRACTION
- *  of the reference week: at 0.85 the two-week mean cut would leave the
- *  41-60% band (mean fraction 0.38), and at 1.15 taper week 1 would be a 37%
- *  cut. (Running's taper weeks still take its effort multiplier: a mirror-rule
- *  difference left for Tristan.) Elsewhere the day-before activation keeps its
- *  sourced minutes too. A double-periodization plan's
- *  inter-cycle 'taper' weeks are recovery weeks, not the race taper, and
- *  scale as before. */
+/** Sessions the post-generation scale may change. Race-taper weeks are left
+ *  alone by it: the effort multiplier reaches them through their reference
+ *  week instead (triTrainedReference), so each taper week holds its fraction
+ *  of the week the athlete trains, whatever the multiplier. A scale applied
+ *  after composition would break race week's sourced lengths (openers, the
+ *  brick, the race-week caps) and its lightest day before the race, and
+ *  taper week 1's 20-min floor and its quality structures. The CTL-gap
+ *  stamp skips the taper (it is reduce-only, and the taper is already
+ *  reduced). Elsewhere the day-before activation keeps its sourced minutes.
+ *  A double-periodization plan's inter-cycle 'taper' weeks are recovery
+ *  weeks, not the race taper, and scale as before. */
 function triEffortScalable(state: SimulatorState, weekIndex: number, trainingWeeks: number, workouts: Workout[]): Workout[] {
   return triEffortScalesWeek(state, weekIndex, trainingWeeks) ? workouts.filter(w => w.taperRole !== 'day_before') : [];
 }
@@ -779,10 +779,67 @@ function triReference(state: SimulatorState, trainingWeeks: number, taper: TriRa
   return { parts, ref };
 }
 
+/** A future week's sessions as the athlete trains them: the effort
+ *  multiplier applied as applyTriEffortMultipliers applies it after
+ *  generation (a brick by the bike multiplier, as its card), without the
+ *  CTL-gap stamp. Past weeks (before state.w) keep their minutes, as the
+ *  multiplier leaves past weeks alone. Copies; the input is not changed. */
+function triAsTrained(state: SimulatorState, weekIndex: number, workouts: Workout[]): Workout[] {
+  const out = workouts.map(w => ({ ...w }));
+  if (weekIndex >= (state.w ?? 1)) applyTriEffortMultipliers(state, out.filter(w => w.taperRole !== 'day_before'));
+  return out;
+}
+
+/** The reference week as the athlete trains it, for sizing race-taper week
+ *  `weekIndex` (planning side; review of orchestrator decision 2,
+ *  2026-10-14). The effort multiplier scales every non-taper week after
+ *  generation, the reference week included, so the athlete trains it at m x
+ *  its generated minutes. Sizing the taper from those minutes delivers its
+ *  fractions (0.55 then 0.30, or 0.55) of the week trained, whatever m is.
+ *  Sized from the generated minutes instead, the taper delivered 0.55/m and
+ *  0.30/m of it: a 60-63% mean cut at m 1.15, outside the 41-60% band. The
+ *  multiplier is the athlete's current one (applied to every future week
+ *  alike). The CTL-gap stamp is left out: it is reduce-only and stamped on
+ *  the week being entered, so leaving it out of the reference only lightens
+ *  the cut against a stamped reference week. Brick legs scale with the
+ *  brick's card. */
+function triTrainedReference(
+  state: SimulatorState, weekIndex: number, reference: { parts: TriWeekParts; ref: TriTaperRef },
+): { parts: TriWeekParts; ref: TriTaperRef } {
+  if (weekIndex < (state.w ?? 1)) return reference;
+  const { parts } = reference;
+  const swim = triAsTrained(state, weekIndex, parts.swim);
+  const bike = triAsTrained(state, weekIndex, parts.bike);
+  const run = triAsTrained(state, weekIndex, parts.run);
+  let brick = parts.brick;
+  if (brick?.brickSegments) {
+    const total = brick.estimatedDurationMin ?? 0;
+    const trained = triAsTrained(state, weekIndex, [brick])[0].estimatedDurationMin ?? 0;
+    if (total > 0 && trained !== total) {
+      const [b, r] = brick.brickSegments;
+      const bikeMin = Math.round((b.durationMin ?? 0) * trained / total);
+      brick = {
+        ...brick,
+        estimatedDurationMin: trained,
+        brickSegments: [{ ...b, durationMin: bikeMin }, { ...r, durationMin: trained - bikeMin }],
+      };
+    }
+  }
+  const mins = (l: Workout[]) => l.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+  const brickBike = brick?.brickSegments?.[0]?.durationMin ?? 0;
+  const brickRun = brick?.brickSegments?.[1]?.durationMin ?? 0;
+  return {
+    parts: { ...parts, swim, bike, run, brick },
+    ref: { ...reference.ref, minutes: { swim: mins(swim), bike: mins(bike) + brickBike, run: mins(run) + brickRun } },
+  };
+}
+
 /** The reference week a plan's race taper is sized from (its week number and
  *  per-discipline minutes and counts), as the generator builds it: before
- *  any race-window cut, deload and holiday ignored. Null without a race
- *  taper (continuous mode). For tests and the forecast's checks. */
+ *  any race-window cut and before the effort multiplier (triTrainedReference
+ *  applies it for a future taper week), deload and holiday ignored. Null
+ *  without a race taper (continuous mode). For tests and the forecast's
+ *  checks. */
 export function triTaperReference(state: SimulatorState, trainingWeeks: number): { refWeek: number; ref: TriTaperRef } | null {
   const taper = triRaceTaper(state, trainingWeeks);
   if (!taper) return null;
@@ -822,7 +879,7 @@ function generateWeekForTriathlon(
   // hours multiplier. Race week is the final training week whatever its label.
   const taper = triRaceTaper(state, totalWeeks);
   if (taper && weekIndex >= taper.start) {
-    const reference = triReference(state, totalWeeks, taper);
+    const reference = triTrainedReference(state, weekIndex, triReference(state, totalWeeks, taper));
     return isRaceWeek(weekIndex, totalWeeks, state.continuousMode)
       ? triRaceWeek(state, weekIndex, totalWeeks, taper, reference, ctx)
       : finishTriWeek(state, weekIndex, phase, triTaperWeekOne(
@@ -1190,14 +1247,15 @@ function triRaceWeek(
   // band, and the forecast, which adds the cut back (Week.raceWindowCut),
   // would move with the window (race-window-forecast.test.ts). Swim, bike,
   // run and brick minutes; gym and commutes excluded, as race week counts
-  // them. The effort multiplier, applied after generation, is not included.
+  // them. The week is read as the athlete trains it (triAsTrained), with the
+  // effort multiplier, as race week's reference is (triTrainedReference).
   let maxTotalMin: number | undefined;
   if (taper.weeks <= 1 && weekIndex > 1) {
     const prevPhase = triPlanPhases(state, totalWeeks)[weekIndex - 2]?.ph ?? 'peak';
     const prevFirstDow = firstTrackedDow(state.planStartDate, weekIndex - 1, state.planCreatedAt);
     const prev = generateWeekForTriathlon(state, weekIndex - 1, totalWeeks, prevPhase, { layout: genCtx?.layout ?? null, firstDow: prevFirstDow });
-    maxTotalMin = dropSessionsOnOrAfterRaceDay(prev, weekIndex - 1, state.planStartDate, tri.raceDate)
-      .filter(w => w.t !== 'gym' && !w.commute)
+    maxTotalMin = triAsTrained(state, weekIndex, dropSessionsOnOrAfterRaceDay(prev, weekIndex - 1, state.planStartDate, tri.raceDate)
+      .filter(w => w.t !== 'gym' && !w.commute))
       .reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   }
   // A Tuesday or Wednesday race with a closing week: the day before is that
