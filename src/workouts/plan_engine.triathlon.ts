@@ -1655,7 +1655,7 @@ function applyTriInjuryGates(
       const a = w as any;
       const scaled: Workout = {
         ...w,
-        modReason: `Capacity ${cap}% — ${label} duration scaled to match your reported ability`,
+        modReason: `Capacity ${cap}%. ${label} duration scaled to match your reported ability`,
       } as Workout;
       const scaledAny = scaled as any;
       if (typeof a.estimatedDurationMin === 'number') {
@@ -1674,9 +1674,9 @@ function applyTriInjuryGates(
   const bikeCap  = effectiveCap('bike', getDisciplineCapacity(injuryState, 'bike'));
   const swimCap  = effectiveCap('swim', getDisciplineCapacity(injuryState, 'swim'));
 
-  const newSwim = scaleByCapacity(swim, swimCap, 'swim');
-  const newBike = scaleByCapacity(bike, bikeCap, 'bike');
-  const newRun  = scaleByCapacity(run,  runCap,  'run');
+  const newSwim = scaleByCapacity(swim, swimCap, 'Swim');
+  const newBike = scaleByCapacity(bike, bikeCap, 'Bike');
+  const newRun  = scaleByCapacity(run,  runCap,  'Run');
 
   // Brick = stacked intensity. Drop whenever either leg is restricted at all.
   const brickSafe = brick && bikeCap >= 100 && runCap >= 100;
