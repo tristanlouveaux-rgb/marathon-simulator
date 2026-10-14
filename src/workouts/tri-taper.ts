@@ -26,7 +26,8 @@ import { RACE_INTENSITY_BY_DISTANCE } from '@/calculations/bike-physics';
 import { bikeTargetLabel, generateBikeSession, loadForBike, rpeForBike, type BikeSessionKind } from './bike';
 import { estimateDistanceMetres, generateSwimSession, loadForSwim, rpeForSwim } from './swim';
 import { PRIMER_MAX_DAYS_OUT, PRIMER_MIN_DAYS_OUT } from './race-day-rules';
-import { loadForTriRun } from './rung-load';
+import { loadForTriRun, TRI_RUN_LOAD_SHARES } from './rung-load';
+import { plannedTssPerMin } from '@/constants';
 import { DAY_NAMES } from './scheduler.triathlon';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -476,14 +477,19 @@ export function triDayBeforeRide(input: {
   };
 }
 
-/** Day before the race, run: an easy jog with Allen's 5 x 10 s pickups. */
+/** Day before the race, run: an easy jog with Allen's 5 x 10 s pickups. Its
+ *  load is the canonical easy rate (plannedTssPerMin, the tri run shares)
+ *  to a tenth: whole-number rounding moves a 5 to 7 min jog off the easy rate
+ *  (5 min: 4.6 TSS would read 5, 1.0 a minute; Load Currency Law anchor 1). */
 export function triDayBeforeRun(minutes: number, easyLabel: string): Workout {
   const m = Math.round(minutes);
+  const total = m * plannedTssPerMin('easy');
+  const aerobic = Math.round(total * TRI_RUN_LOAD_SHARES.easy.aerobic * 10) / 10;
   return {
     n: 'Pre-race jog',
     d: `${m}min easy jog @ ${easyLabel}, with ${TRI_DAY_BEFORE_PICKUP_REPS}×${TRI_DAY_BEFORE_PICKUP_SEC}s pickups to race pace. Activation only.`,
     t: 'easy', discipline: 'run', r: 4, rpe: 4,
-    ...loadForTriRun('easy', m)!,
+    aerobic, anaerobic: Math.round((total - aerobic) * 10) / 10,
     estimatedDurationMin: m,
     taperRole: 'day_before',
   };
