@@ -251,6 +251,20 @@ import { stampTriWorkoutIds } from './plan_engine.triathlon';
 // takes an easy slot before the runs are sized; the hours line is checked
 // against the real plan with one more session; plans build in under 10 ms
 // (desktop Node).
+// Still v18 (unreleased; merge of fix/load-accounting, 2026-10-14). One bump
+// carries everything since main's v17:
+// - H1: station MTL at the athlete's load tier (division, format and sex;
+//   hyroxLoadTierForState through every station, brick and assessment);
+// - H3a/H3b: the real S8-S9 results, so untested stations and an unset race
+//   pace take the band seeds of the athlete's planning field at the target's
+//   loads (hyroxPlanningStationBenchmarks, hyroxStationSeedsAtTarget,
+//   hyroxSeedRunPaceSecKm), and the band thresholds come from that field;
+// - H3c: one planning band for every format (hyroxPlanningBandFor, Open
+//   Singles at the athlete's sex), read at onboarding too;
+// - H2: the weekly structure, constraint hierarchy, scheduler, deloads and
+//   taper above.
+// Band, seeds, MTL cap and plan weeks all change for Pro, Doubles and
+// sex-specific athletes, so every stored plan regenerates once.
 export const HYROX_GENERATOR_VERSION = 18;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
