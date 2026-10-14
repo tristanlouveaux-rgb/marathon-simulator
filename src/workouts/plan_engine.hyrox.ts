@@ -828,6 +828,7 @@ export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: num
     stationBenchmarks: hyroxPlanningStationBenchmarks(state),
     raceWeek,
     loadTier: hyroxLoadTierForState(state),
+    seed: state,
   });
   c = withHyroxRounds(c, MIN_CIRCUIT_ROUNDS);
   for (;;) {
@@ -888,7 +889,7 @@ function generateWeekSessions(
   // bricks share the rest of the week's budget, as before.
   const runBudget = inputs.runBudgetMin ?? inputs.budgetMin * HYROX_RUN_SHARE;
   const nonRunBudget = inputs.budgetMin * (1 - HYROX_RUN_SHARE);
-  const easyPace = hyroxEasyRunPaceSecKm(band, hx.hyroxRunPaceSecKm);
+  const easyPace = hyroxEasyRunPaceSecKm(band, hx.hyroxRunPaceSecKm, state);
   const thresholdPaceSecKm = (inputs.realRunning ?? realRunningSignal(state)) && state.pac?.t != null && state.pac.t > 0 ? state.pac.t : undefined;
 
   // Commute runs are appended on top of the prescribed HYROX run sessions,
@@ -1041,6 +1042,7 @@ function generateWeekSessions(
       stationBenchmarks,
       raceWeek: !!raceWeek,
       loadTier,
+      seed: state,
     });
     const maxRounds = inputs.maxCircuitRounds;
     let out = w;
@@ -1069,7 +1071,7 @@ function generateWeekSessions(
   const nonRun: Workout[] = [];
   for (let i = 0; i < sKinds.length; i++) {
     if (needsAssessment && i === 0) {
-      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier }));
+      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier, seed: state }));
       continue;
     }
     if (!raceWeekCircuitOk) continue;
@@ -1088,6 +1090,7 @@ function generateWeekSessions(
       bodyWeightKg,
       stationBenchmarks,
       loadTier,
+      seed: state,
     })));
     nonRun.push(light ? { ...capped, n: 'Secondary Brick', hyroxLight: true } : capped);
   }
@@ -1110,7 +1113,7 @@ function generateWeekSessions(
       .reduce((a, c) => a + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0), 0);
 
   // ── Runs: the long run, the quality run, then easy runs ───────────────────
-  const runParams = { band, phase, bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, thresholdPaceSecKm, maxHR: state.maxHR };
+  const runParams = { band, phase, bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, thresholdPaceSecKm, maxHR: state.maxHR, seed: state };
   const runs: Workout[] = [];
   // The running share left after the bricks' run segments: what the easy
   // runs get after the long run and the quality run (the hierarchy's
@@ -1922,7 +1925,7 @@ function hyroxWeekForRace(
       const hx = state.hyroxConfig!;
       const run = generateHyroxRun({
         kind: 'run_easy', targetMinutes: HYROX_DAY_BEFORE_RACE_MAX_RUN_MIN, band: hx.athleteBand, phase,
-        slotIndex: weekIndex, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm,
+        slotIndex: weekIndex, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state,
       });
       return { ...run, id: w.id, dayOfWeek: w.dayOfWeek, dayName: w.dayName };
     });
@@ -2275,7 +2278,7 @@ export function buildHyroxTrainingWeeks(
   const tier = hyroxTier(hx.athleteBand);
   const planPhases = computeHyroxPlanPhases(trainingWeeks);
   const phaseList = planPhases.map(p => p.ph as TrainingPhase);
-  const easyPace = hyroxEasyRunPaceSecKm(hx.athleteBand, hx.hyroxRunPaceSecKm);
+  const easyPace = hyroxEasyRunPaceSecKm(hx.athleteBand, hx.hyroxRunPaceSecKm, state);
   const start = hyroxLongRunStart(state, tier, easyPace);
   const lr = HYROX_LONG_RUN[tier];
   const storedBoundary = opts.storedBoundaryWeek ?? (state.w ?? 1);
@@ -3313,7 +3316,7 @@ export function buildHyroxTrainingWeeks(
     // 3: weeks the line skipped still blamed the session count alone).
     const oneMoreSessionShort = (plannedMin: number): string | null => {
       if (chosenSessions >= 7) {
-        const easyRun = generateHyroxRun({ kind: 'run_easy', targetMinutes: HYROX_RUN_FLOOR_MIN, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm });
+        const easyRun = generateHyroxRun({ kind: 'run_easy', targetMinutes: HYROX_RUN_FLOOR_MIN, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state });
         const ergMtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, state.bodyWeightKg);
         const mtlNeed = HYROX_RUN_FLOOR_MIN * Math.max(ergMtlPerMin ?? 0, (easyRun.musculoTendonLoad ?? 0) / HYROX_RUN_FLOOR_MIN);
         const tssNeed = HYROX_RUN_FLOOR_MIN * Math.max(ergTssPerMin, easyRunTssPerMin);

@@ -65,19 +65,21 @@ function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefine
   if (kind === 'run_easy' || kind === 'run_tempo' || kind === 'run_intervals') {
     draft = generateHyroxRun({
       kind, targetMinutes: targetMin, band: hx.athleteBand, phase, slotIndex,
-      bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm,
+      bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: getState(),
     });
   } else if (kind === 'station_technique' || kind === 'station_density') {
     draft = generateHyroxStation({
       kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(getState()),
+      seed: getState(),
     });
   } else {
     draft = generateHyroxBrick({
       kind, targetMinutes: targetMin, band: hx.athleteBand, stationAccess: hx.stationAccess,
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(getState()),
+      seed: getState(),
     });
   }
   return draft.musculoTendonLoad ?? 0;
@@ -242,6 +244,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       slotIndex,
       bodyWeightKg: ms.bodyWeightKg,
       runPaceSecKm: hx.hyroxRunPaceSecKm,
+      seed: ms,
     });
   } else if (kind === 'station_technique' || kind === 'station_density') {
     workout = generateHyroxStation({
@@ -254,6 +257,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       bodyWeightKg: ms.bodyWeightKg,
       stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
+      seed: ms,
     });
   } else {
     workout = generateHyroxBrick({
@@ -266,6 +270,7 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       bodyWeightKg: ms.bodyWeightKg,
       stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
+      seed: ms,
     });
   }
 

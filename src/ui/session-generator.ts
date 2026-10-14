@@ -1263,6 +1263,8 @@ export function openSessionGenerator(): void {
         // station MTL uses their race loads. Outside HYROX mode there is no
         // config: Open singles plus biological sex.
         loadTier: hyroxLoadTierForState(s),
+        // Band seeds from the same athlete's planning field (sex, format).
+        seed: s,
       });
     } else if (focus === 'running' && !injured && !isBeginnerOrNovice) {
       // World-class running strength: a rotating, balanced, evidence-based pool
