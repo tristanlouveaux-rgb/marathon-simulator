@@ -979,13 +979,24 @@ function generateWeekSessions(
       if (heavy(out)) {
         // At its floors and still longer or heavier (its stations differ
         // from the reference session's): the reference week's own session
-        // of that type, at no more rounds than this one.
-        const same = (inputs.sessionRefs ?? []).filter(r => r.t === out.t);
-        const pick = same.reduce<Workout | undefined>((m, r) => (!m || (r.musculoTendonLoad ?? 0) < (m.musculoTendonLoad ?? 0) ? r : m), undefined);
+        // of that type, at no more rounds than this one. With none of that
+        // type, the lightest of its class (sessionCapClass: a circuit or a
+        // brick), the counterpart the caps already read (sessionCapFor).
+        // Before (round 7 review, 2026-10-14), a type the reference week did
+        // not hold stayed as it was: novice 4 h 10 weeks, W4 held a Station
+        // Density of 28 min and 142 MTL against W3's technique circuit of 37
+        // min and 67 MTL.
+        const refs = inputs.sessionRefs ?? [];
+        const sameType = refs.filter(r => r.t === out.t);
+        const pool = sameType.length > 0 ? sameType : refs.filter(r => sessionCapClass(r.t) === sessionCapClass(out.t));
+        const pick = pool.reduce<Workout | undefined>((m, r) => (!m || (r.musculoTendonLoad ?? 0) < (m.musculoTendonLoad ?? 0) ? r : m), undefined);
         if (pick) {
+          const was = out.n;
           const { id: _id, dayOfWeek: _dow, dayName: _day, ...copy } = pick;
           out = withHyroxRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0));
-          adjustments.push(`W${weekIndex}: ${out.n} repeats the reference week's at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`);
+          adjustments.push(sameType.length > 0
+            ? `W${weekIndex}: ${out.n} repeats the reference week's at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`
+            : `W${weekIndex}: ${was} becomes the reference week's ${out.n} at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`);
         }
       }
     }
