@@ -35,6 +35,7 @@ import type { AbilityBand } from '@/types/triathlon';
 import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, computeDoublesCap, type HyroxSessionCounts } from '@/constants/hyrox-constants';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { hyroxStalenessAdjustedBand } from '@/calculations/hyrox-staleness';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 
 /** Generator version that moved the band defaults to the tier structure
@@ -246,9 +247,11 @@ function sendToReview(wk: Week, key: string, actual: GarminActual, appType: 'run
  * (hyroxPlanningBandFor), as setup, log-a-race and the format fix do. When
  * the previous time and its format are stored and the band differs, the band
  * moves and the MTL cap follows it (computeDoublesCap for a doubles target),
- * exactly as hyrox-prev-time-update.ts re-bands. A first-timer (no previous
- * time) keeps the band their running fitness gave. Returns true when it
- * re-banded.
+ * exactly as hyrox-prev-time-update.ts re-bands, with the initializer's
+ * staleness rule on top (an old race the physiology does not vouch for gives
+ * the slower of its band and the VDOT band, hyroxStalenessAdjustedBand). A
+ * first-timer (no previous time) keeps the band their running fitness gave.
+ * Returns true when it re-banded.
  */
 export function rebandStoredHyroxPlan(s: SimulatorState): boolean {
   const hx = s.hyroxConfig;
@@ -257,7 +260,10 @@ export function rebandStoredHyroxPlan(s: SimulatorState): boolean {
   const fmt = hx.hyroxPreviousTimeFormat;
   const known = fmt === 'open_singles' || fmt === 'pro_singles' || fmt === 'open_doubles' || fmt === 'pro_doubles';
   if (prev == null || !(prev > 0) || !known) return false;
-  const band = hyroxPlanningBandFor(prev, fmt, s.biologicalSex, hx.division);
+  const timeBand = hyroxPlanningBandFor(prev, fmt, s.biologicalSex, hx.division);
+  // The initializer's staleness rule on top, so a regeneration never undoes
+  // the slower band an old race was given (hyroxStalenessAdjustedBand).
+  const { band } = hyroxStalenessAdjustedBand({ ...s, hyroxConfig: { ...hx, athleteBand: timeBand } }, timeBand);
   if (band === hx.athleteBand) return false;
   const old = hx.athleteBand;
   hx.athleteBand = band;

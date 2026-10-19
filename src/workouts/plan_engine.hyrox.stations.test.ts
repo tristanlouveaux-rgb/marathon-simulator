@@ -337,6 +337,21 @@ describe('H2 integration review minors', () => {
     applyHyroxGeneratorRegen(d);
     expect(d.hyroxConfig!.athleteBand).toBe('novice');
     expect(d.hyroxConfig!.mtlCap).toBe(computeDoublesCap(HYROX_MTL_CAP.novice));
+    // An old race the physiology does not vouch for keeps the slower band the
+    // initializer gave it (its staleness rule, hyroxStalenessAdjustedBand):
+    // a 70-min finish four years ago with a VDOT of 40 stays novice.
+    const old = build('novice', 6, 16);
+    old.v = 40;
+    old.hyroxConfig!.previousHyroxTimeSec = 4200;
+    old.hyroxConfig!.hyroxPreviousTimeFormat = 'open_singles';
+    old.hyroxConfig!.hyroxPreviousRaceDate = new Date(Date.now() - 4 * 365 * 86400000).toISOString().slice(0, 10);
+    old.hyroxConfig!.athleteBand = 'novice';
+    old.hyroxConfig!.mtlCap = HYROX_MTL_CAP.novice;
+    old.hyroxConfig!.generatorVersion = HYROX_GENERATOR_VERSION - 1;
+    expect(hyroxPlanningBandFor(4200, 'open_singles', undefined)).toBe('advanced');
+    applyHyroxGeneratorRegen(old);
+    expect(old.hyroxConfig!.athleteBand).toBe('novice');
+    expect(old.hyroxConfig!.mtlCap).toBe(HYROX_MTL_CAP.novice);
     // A first-timer (no previous time) keeps the band their running fitness gave.
     const f = build('total_beginner', 4, 16);
     const band = f.hyroxConfig!.athleteBand;
