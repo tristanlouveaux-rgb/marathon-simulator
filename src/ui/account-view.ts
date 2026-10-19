@@ -2219,6 +2219,7 @@ function wireAccountHandlers(): void {
       garminActuals: wk.garminActuals,
       garminMatched: wk.garminMatched,
       rated: wk.rated,
+      ratedByAthlete: wk.ratedByAthlete,
     }));
 
     // Accept the history and rebuild
@@ -2240,6 +2241,7 @@ function wireAccountHandlers(): void {
         freshState.wks[i].garminActuals = old.garminActuals;
         freshState.wks[i].garminMatched = old.garminMatched;
         freshState.wks[i].rated = old.rated;
+        freshState.wks[i].ratedByAthlete = old.ratedByAthlete;
       }
     }
     saveState();

@@ -44,6 +44,7 @@ import { hyroxComponentSets } from './hyrox-session-shape';
 import { hyroxBeginnerRaceWeightWeek, hyroxRacePaceSets } from './hyrox-station-dose';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 
 const PREV: Record<AbilityBand, number | null> = {
   total_beginner: null, beginner: 8662, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
@@ -168,7 +169,12 @@ describe('the beginner load schedule in a plan', () => {
       const tech = (w: number) => s.wks[w - 1].triWorkouts!.find(x => x.t === 'hyrox_station_technique')!;
       // W5 (base) holds both sleds; W6, the next session holding them, too.
       expect(loadsOf(tech(5))).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
-      if (rating != null) s.wks[4].rated[tech(5).id!] = rating;
+      // The athlete's own rating (an estimate from a synced recording holds
+      // the load: hyrox-load-step-rating-source.test.ts).
+      if (rating != null) {
+        s.wks[4].rated[tech(5).id!] = rating;
+        noteRatingSource(s.wks[4], tech(5).id!, 'user');
+      }
       s.w = 6;
       if (injured) (s as unknown as { injuryState: unknown }).injuryState = { active: true, injuryPhase: 'acute', location: 'knee', runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 };
       const wks = generateHyroxPlan(s);

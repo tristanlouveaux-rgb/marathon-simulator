@@ -10,6 +10,7 @@
 import type { Workout } from '@/types/state';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { openGuidedStrength } from '@/ui/guided-strength-overlay';
@@ -248,6 +249,7 @@ function setRated(weekIdx: number, workout: Workout, value: number | 'skip'): vo
   if (!wk.rated) wk.rated = {};
   const key = (workout as any).id ?? workout.n;
   wk.rated[key] = value;
+  noteRatingSource(wk, key, 'user');
   if (value === 'skip') {
     dropInAppActual(wk, key); // a skipped session carries no load record
   } else {

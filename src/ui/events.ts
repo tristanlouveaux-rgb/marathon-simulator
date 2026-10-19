@@ -25,6 +25,7 @@ import { getActiveTab } from './tab-bar';
 import { dropPreOnboardSessions } from './workout-status';
 import { computeACWR, computeWeekActualTSS, getTrailingEffortScore, getWeeklyExcess, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { dropInAppActual, isInAppActual } from '@/calculations/in-app-activity';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
 import { resolveAcwrEpisodeChoice } from '@/calculations/acwr-ease-back';
@@ -482,6 +483,7 @@ export function rate(
   // Past-week retroactive rating: just record the RPE and return
   if (targetWeek !== undefined && targetWeek < s.w) {
     wk.rated[workoutId] = rpe;
+    noteRatingSource(wk, workoutId, 'user');
     saveState();
     return;
   }
@@ -500,6 +502,9 @@ export function rate(
   if (oldRPE !== undefined) s.rpeAdj -= oldRPE;
 
   wk.rated[workoutId] = rpe;
+  // Every rate() caller passes the athlete's own rating (a 1-tap RPE, Mark
+  // as done, the GPS completion modal), but the renderer's auto-rate.
+  noteRatingSource(wk, workoutId, 'user');
   const rpeDif = rpe - expected;
 
   // Joint RPE + HR logic
@@ -2023,6 +2028,7 @@ export function logActivity(): void {
       newRpe: rpe,
     });
     wk.rated[slot.n] = rpe;
+    noteRatingSource(wk, slot.n, 'user'); // the RPE the athlete typed in
 
     // Parse planned duration from slot description (e.g., "45min swimming")
     const durMatch = slot.d.match(/(\d+)min/);

@@ -667,6 +667,11 @@ export interface Week {
    *  and label. See src/workouts/phases.ts. */
   checkpoint?: boolean;
   rated: Record<string, number | 'skip'>; // Workout ratings
+  /** The RPE the athlete entered on a slot (an RPE prompt, a guided 1-tap
+   *  rating, Mark as done, the watch's self-reported RPE), as opposed to an
+   *  estimate derived from a synced recording. Counts only while `rated[id]`
+   *  still holds the same number (calculations/athlete-rating.ts). */
+  ratedByAthlete?: Record<string, number>;
   ratedChanges?: Record<string, number>;  // VDOT changes from ratings
   skip: SkippedWorkout[];               // Skipped workouts to carry forward
   /** Race-time penalty (seconds) charged into `s.timp` per workout id when a

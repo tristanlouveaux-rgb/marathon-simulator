@@ -140,6 +140,7 @@ import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { fmtAmount } from './hyrox-session-shape';
+import { athleteRatedRpe } from '@/calculations/athlete-rating';
 import {
   hyroxRacePaceSets, hyroxTechniqueSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
   hyroxBeginnerLoadFraction, hyroxLoadKgAt, type HyroxStationLoadMemory,
@@ -2699,10 +2700,14 @@ export function buildHyroxTrainingWeeks(
   // base and build when the athlete rated that session easier than its target
   // RPE, held otherwise, in peak, taper and deload weeks, and under an injury
   // that adapts or pauses strength work (current and future weeks). The
-  // memory replays the plan's own station sessions with the ratings stored on
-  // their slot ids (wk.rated), so the same ratings give the same loads at
-  // every rebuild. Intermediate and advanced athletes train at race weight
-  // (sheet): no schedule.
+  // memory replays the plan's own station sessions with the ratings the
+  // athlete entered on their slot ids (athleteRatedRpe: a guided 1-tap RPE,
+  // Mark as done, an RPE prompt, the watch's self-reported RPE), so the same
+  // ratings give the same loads at every rebuild. An estimate derived from a
+  // synced recording (deriveRPE reads a technique session's low average heart
+  // rate as RPE 3 or 4) holds the load: suggestNextWeight steps on the
+  // athlete's own effort report (lane H2b review). Intermediate and advanced
+  // athletes train at race weight (sheet): no schedule.
   const beginnerLoads = tier === 'beginner';
   const raceWeightWeek = hyroxBeginnerRaceWeightWeek(trainingWeeks);
   const loadMemory = new Map<HyroxStation, HyroxStationLoadMemory>();
@@ -2747,13 +2752,13 @@ export function buildHyroxTrainingWeeks(
   // station sessions held (bricks read the loads, they do not move them).
   const rememberLoads = (d: HyroxWeekDetail) => {
     if (!beginnerLoads) return;
-    const rated = state.wks?.[d.week - 1]?.rated ?? {};
+    const wk = state.wks?.[d.week - 1];
     for (const x of prescribed(d.workouts)) {
       if (x.t !== 'hyrox_station_technique' && x.t !== 'hyrox_station_density') continue;
-      const r = x.id != null ? rated[x.id] : undefined;
+      const r = x.id != null ? athleteRatedRpe(wk, x.id) : undefined;
       for (const c of x.hyroxComponents ?? []) {
         if (c.loadKg == null) continue;
-        loadMemory.set(c.type as HyroxStation, { kg: c.loadKg, ratedRpe: typeof r === 'number' ? r : undefined, targetRpe: x.rpe ?? x.r ?? 5 });
+        loadMemory.set(c.type as HyroxStation, { kg: c.loadKg, ratedRpe: r, targetRpe: x.rpe ?? x.r ?? 5 });
       }
     }
   };

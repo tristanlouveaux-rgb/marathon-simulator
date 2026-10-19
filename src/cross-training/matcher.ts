@@ -17,6 +17,7 @@ import {
 } from './load-matching';
 import { calculateWorkoutLoad } from '@/workouts';
 import { isLongRun } from '@/workouts/long-run';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 
 /**
  * Apply cross-training modifications to this week's workouts
@@ -151,6 +152,7 @@ export function applyCrossTrainingToWorkouts(
       if (result.wasReplaced) {
         const expectedRPE = w.rpe || w.r || 5;
         wk.rated[w.n] = expectedRPE;
+        noteRatingSource(wk, w.n, 'derived');
         w.autoCompleted = true;
         w.completedBySport = sport;
         budget.replacementConsumed += result.loadConsumed;
@@ -236,6 +238,7 @@ function findDirectMatch(
       w.originalDistance = w.d;
       w.d = '0km (replaced)';
       wk.rated[w.n] = workoutRPE;
+      noteRatingSource(wk, w.n, 'derived');
       w.autoCompleted = true;
       w.completedBySport = sport;
       return { matched: true, loadConsumed: wLoad };

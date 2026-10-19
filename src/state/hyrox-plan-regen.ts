@@ -37,6 +37,7 @@ import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, computeDoublesCap, type HyroxSess
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { hyroxStalenessAdjustedBand } from '@/calculations/hyrox-staleness';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
+import { moveRatingSource } from '@/calculations/athlete-rating';
 
 /** Generator version that moved the band defaults to the tier structure
  *  (HYROX_WEEKLY_STRUCTURE, lane H2a). */
@@ -180,6 +181,7 @@ export function rekeyNameKeyedHyroxSlots(wk: Week): void {
       if (!target || wk.rated[target] !== undefined) continue;
       wk.rated[target] = wk.rated[key];
       delete wk.rated[key];
+      moveRatingSource(wk, key, target);
     }
   }
 

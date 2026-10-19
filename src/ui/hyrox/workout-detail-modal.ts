@@ -11,6 +11,7 @@ import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getSubstitutionsFor, findSubstitution } from '@/constants/hyrox-substitutions';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
@@ -299,6 +300,7 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
   if (!wk.rated) wk.rated = {};
   const key = (workout as any).id ?? workout.n;
   wk.rated[key] = value;
+  noteRatingSource(wk, key, 'user');
   // A skipped session carries no load: drop an in-app record left on the slot.
   if (value === 'skip') dropInAppActual(wk, key);
   saveState();

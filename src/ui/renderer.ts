@@ -28,6 +28,7 @@ import { openGpsRecordingDetail } from './gps-completion-modal';
 import { findMatchingWorkout, type ExternalActivity } from '@/calculations/matching';
 import { isLongRun } from '@/workouts/long-run';
 import { showMatchProposal } from './sync-modal';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
@@ -1670,7 +1671,12 @@ export function setupSyncListener(): void {
       if (decision === 'match') {
         // Auto-rate with RPE 5 (moderate)
         if (window.rate) {
-          window.rate(matchedWorkout.id || matchedWorkout.n, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false, activity.avgHR);
+          const id = matchedWorkout.id || matchedWorkout.n;
+          window.rate(id, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false, activity.avgHR);
+          // The app chose the 5, not the athlete.
+          const ms = getMutableState();
+          const mwk = ms.wks?.[ms.w - 1];
+          if (mwk) { noteRatingSource(mwk, id, 'derived'); saveState(); }
         }
       } else if (decision === 'keep-both') {
         // Log as separate cross-training. Dispatch back as unmatched
