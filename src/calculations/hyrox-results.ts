@@ -825,8 +825,9 @@ export function hyroxRunLegShares(cohort: HyroxResultsCohort): number[] {
  * own median finish. Between two anchors each segment is interpolated
  * linearly in finish time; past the fastest or slowest anchor the end band's
  * split mix is scaled to the finish time. Medians do not add up (the 10
- * segment medians of a band sum to 0.5 to 1.3% under its median finish), so
- * the segments are then scaled together to sum to `totalSec`.
+ * segment medians of a band sum to within 1.3% of its median finish, nearly
+ * always under it), so the segments are then scaled together to sum to
+ * `totalSec`.
  *
  * Why not each segment's own quantile at the finish percentile: no finisher
  * sits at the same percentile in every segment, so per-segment quantiles run
