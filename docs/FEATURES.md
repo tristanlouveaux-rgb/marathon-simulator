@@ -202,6 +202,26 @@ Both paths write `garminPending` entries so ActivityReview can surface them for 
 
 **Test status**: ⚠️ The 2026-10-06 changes above are covered by the listed tests (they include HYROX station and run matcher paths); the station duration and day-tolerance rules have no dedicated test. Real-sync check still manual.
 
+### H5. HYROX Doubles partner (2026-10-13, lane HP)
+
+**What it does** (merged in `d8bdff7`, SCIENCE_LOG §DM; tables live in production since 2026-10-13, RUNBOOK "HYROX Doubles partner tables"): two Mosaic users racing HYROX Doubles link by an invite code. Each then sees the other's station benchmarks against their own, the pair's run pace and a pair forecast. Tristan's rules (2026-10-12): link by code, share only race numbers, either partner can unlink at any time, one partner at a time.
+
+**Entry** (`src/ui/hyrox/stats-view.ts:289`): a "Partner" row at the bottom of Stats, in doubles formats only. Its value reads "Link" when unlinked and the partner's initials when linked, and stays blank until the link has been read this session, so a linked athlete never sees "Link" flash. A foreground re-read that finds a new or ended link updates the label in place.
+
+**Not linked** (`src/ui/hyrox/partner-view.ts`, `renderHyroxPartnerView` `:141`): "Create code" shows the code as "ABCD-EFGH" with a Copy button (the clipboard, or the code text selected when the clipboard is refused) and "Single use. Expires in 24 h." One live code per user: a new code deletes the earlier one. "Partner's code" takes the code with or without the dash, in any case. While a code is on screen the page re-reads the link every 5 s; away from the page, the app re-reads it on foreground. Two partners entering each other's codes, at once or seconds apart, both end up linked. Each error is one line: "This code has expired or been used. Check the 8 characters." (unknown, expired and used codes share it), "Check the code. It has 8 characters.", "This is your own code. Your partner enters it on their phone.", "You already have a partner. Unlink first.", "That athlete already has a partner.", "Offline. Connect and try again.", "Something went wrong. Try again."
+
+**Linked**: the partner's initials and "Updated 13 Oct"; one row per station ("You lead by 12 s", "Partner leads by 8 s", "Level", or "Not comparable" with a reason: "No benchmark from you", "Pair time from a doubles race", "Race setups differ", "Load not known", "Not at the race loads"); Run pace, the slower partner's solo pace ("Your partner's solo pace, the slower of the two"); Pair forecast, an equal split of every station before course factors. A withheld forecast reads "Not available" and names what is missing: "Needs matching race setups.", "Station loads not known for your partner." or "Needs times at Men Open loads from your partner." A Mixed pair compares every station, because a woman's Women Open tests reach her snapshot at Men Open loads through lane H3b's per-sex conversions. Unlink asks inside the page: "Unlink from AB? Neither of you will see the other's numbers."
+
+**What the partner sees** (`src/calculations/hyrox-partner-snapshot.ts`, one typed row in `hyrox_partner_snapshots`): format, division, race tier, header initials, per-station benchmarks with their load tier and pair-time flags, the athlete's own forecast station lines and Roxzone, and their singles run pace. VDOT, LT, heart rate, sleep, activities, biological sex, the name and the plan never leave the device through this path.
+
+**Retention**: ending a link (either partner, Wipe everything, account deletion) deletes both partners' snapshots and any code either holds, and no row then records who linked with whom. A snapshot can be written only while its owner is linked. Account > Edit Plan away from doubles deletes the athlete's own snapshot and keeps the link; Reset plan deletes it at once and keeps the link only if the new setup ends in doubles. A Wipe or Reset plan made offline is retried at the next launch, per account.
+
+**Production**: migration applied 2026-10-13 through the SQL editor; the data-export and account-deletion edge-function changes are in source only. Until they are deployed, the export file has no partner tables. The app itself deletes partner data on account deletion and Wipe everything.
+
+**Key files**: `src/ui/hyrox/partner-view.ts`, `src/ui/hyrox/stats-view.ts`, `src/calculations/hyrox-partner-snapshot.ts`, `src/calculations/hyrox-partner-compare.ts`, `src/data/hyroxPartner.ts`, `src/data/hyroxPartnerSync.ts`, `src/ui/events.ts` (reset hooks), `src/ui/account-legal.ts`, `supabase/migrations/20261013000001_hyrox_partner.sql`, `supabase/rls-tests/20261013000001_hyrox_partner_rls_test.sql`.
+
+**Test status**: ✅ 136 unit tests at `5068d8b`: `hyrox-partner-snapshot.test.ts` (16), `hyrox-partner-compare.test.ts` (21), `data/hyroxPartner.test.ts` (31), `data/hyroxPartnerSync.test.ts` (33), `data/hyroxPartnerSync.chunk.test.ts` (1), `ui/hyrox/partner-view.test.ts` (34). ⚠️ The RLS test script passed on throwaway local PostgreSQL in every review round and has not run against production. ❌ Not device-verified.
+
 ---
 
 ## Triathlon Mode (MVP — behind `eventType === 'triathlon'` flag)

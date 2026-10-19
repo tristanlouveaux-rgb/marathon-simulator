@@ -8337,6 +8337,8 @@ Rows: open_singles 50,364 finishers, open_doubles 28,046 (`HYROX_FORMAT_FINISHER
 
 **Guards.** `hyrox-doubles.test.ts` (28: table reads, ratio shape, team-time detection by slot value, the inverse conversion, banding, forecast structure, the median and audit-regression checks, Pro Doubles placement), `race-prediction.hyrox.test.ts` (per-station resolution, converted lines, `crossFormatCapped` cases), `hyrox-format-band.test.ts`, `state/hyrox-doubles-onboarding.test.ts` (16: banding and race-split provenance through the real onboarding and logging paths, Pro weights of race splits against tests, the previous-format correction), `hyrox-station-history.test.ts`, `hyrox-session-benchmarks.test.ts` (resolver, Pro and doubles splits, whole-second ties), `workouts/hyrox-planning-benchmarks.test.ts` (11: plan target = round of the forecast row), `ui/hyrox/calibration-count-agreement.test.ts` (12: forecast, coverage, ledger, rendered Stats and the benchmark card agree; Account by source scan), `ui/hyrox/doubles-stations-caption.test.ts` (22), `ui/hyrox/benchmark-card-slot.test.ts` (4), `hyrox-run-pace.test.ts`. Not device-verified.
 
+> **Update 2026-10-13 (§DM, lane HP).** The HYROX Doubles partner pair forecast reads each partner's own doubles station and Roxzone lines and runs at the slower partner's singles pace, where this entry's single-athlete doubles forecast applies the cohort run ratio. Two identical partners therefore match the solo doubles stations and Roxzone and differ on the run (§DM limitation 1).
+
 ---
 
 ## §DI — HYROX forecast honesty: one volume count, planned-slot adherence, no gain without equipment, provenance captions (2026-10-12, lane H1)
@@ -8381,5 +8383,93 @@ station horizon weeks = 0 for a station not in availableStations(stationAccess)
 6. Pooled sexes and the S4 to S6 era remain until lane H3b wires the S7 to S9 tables (`src/data/hyrox-results-s79.ts`, merged unwired in `3e4b08d`).
 
 **Guards.** `race-projection.hyrox.test.ts` (18: no weekly-volume factor, planned-slot adherence ignoring adhoc records, no gain for unprogrammed stations), `hyrox-population-captions.test.ts` (8: caption content per format, the estimate caveat, the radar subtitle, provenance and methodology captions, the hardcoded-count guard). Not device-verified.
+
+---
+
+## §DM — HYROX Doubles pair forecast and station comparison from two athletes' snapshots (2026-10-13, lane HP)
+
+**Side.** Tracking. It describes how two linked athletes' current numbers compare and what the pair would race; neither plan changes (`hyrox-partner-compare.ts:4-5`, `hyrox-partner-snapshot.ts:4-5`).
+
+**Sources.** HYROX 26/27 Doubles rulebook as cited in the code: s4.1 (a Mixed pair races Men Open loads), s7.3 (partners run every 1 km leg together and enter and leave every station together), s8.8 (wall-ball target by the thrower's sex); the rules summary is in §DH. Lane H3b's per-sex Open/Pro station conversions (`hyroxOpenToProSec`, `hyroxProToOpenSec`, `hyrox-results.ts:614`, `:621`) and per-station doubles mapping (`doublesStationTeamSec`, `hyrox-doubles.ts:199`; `doublesRatioAt`, `:170`) on the S8 and S9 results tables (`src/data/hyrox-results-s79.ts`), SCIENCE_LOG §DK. Tristan's product decisions, 2026-10-12 (migration header, `20261013000001_hyrox_partner.sql:6-8`).
+
+**Supersedes.** Nothing that reached `fix/load-accounting`. Inside the lane, the first pair forecast (`ab0a3e6`, `029f087`, `673d3f6`) averaged the two partners' singles station times and applied one pooled S4 to S6 station ratio (`doublesRatioAt('stations', Σ means)`), took the slower partner's singles Roxzone × the Roxzone ratio, read converted values through `HYROX_PRO_STATION_MULTIPLIER` and withheld the forecast for a Mixed woman's Women Open times. `e742888` replaced it with each partner's own doubles forecast lines once lane H3b's conversions reached the branch (`c1834bd`).
+
+**Where.** `buildHyroxPartnerSnapshot` (`hyrox-partner-snapshot.ts:165`), `hyroxSoloStationTier` (`:124`), `hyroxSinglesRunPaceSecKm` (`:141`), `HYROX_PARTNER_SNAPSHOT_KEYS` (`:75`); `isTierIndependentStation` (`hyrox-partner-compare.ts:84`), `hyroxPairSetup` (`:153`), `compareStation` (`:165`), `pairForecastLoadGaps` (`:204`), `hyroxPairForecast` (`:227`), `compareHyroxPartners` (`:247`); copy in `src/ui/hyrox/partner-view.ts` (`PARTNER_REASON_COPY` `:76`, `withheldForecastText` `:91`, run caption `:436-438`). Merged in `d8bdff7` (`ab0a3e6`, `029f087`, `673d3f6`, `e742888`, `5dcde1b`).
+
+**Model.**
+
+```
+Snapshot (built on each athlete's own device; the whitelist)
+  stationSec[st]         = round(resolveHyroxStationBenchmarks(state) sec)   one athlete over the full station at their
+                           solo loads in the race (the Stats ledger value); absent = no benchmark
+  teamStations           = stations whose benchmark is a doubles race split (the pair's time)
+  stationTier[st]        = soloTier on every station, seeded ones too; absent when sex cannot be resolved
+  soloTier               = hyroxLoadTier(hyroxSoloLoadsArePro(format, sex, division) ? pro_singles : open_singles, sex)
+                           Women Open W-Open · Women Pro M-Open · Men Open M-Open · Men Pro M-Pro · a woman in Mixed M-Open
+  forecastStationSec[st] = round(predictHyroxRace(state) station baseSec)     pre-venue; doubles: the pair's time at the
+                           athlete's percentile in their own singles field, read from the pair's division table
+                           (doublesStationTeamSec; a Mixed woman's M-Open time enters the women's field via hyroxSoloToFieldSec)
+  roxzoneSec             = round(prediction roxzoneSec)                       doubles: Roxzone seed × doublesRatioAt('roxzone', seed)
+  runPaceSecKm           = round(deriveHyroxRunPace at the singles format)   no doubles run ratio; a hand-entered pace as entered
+  raceTier               = hyroxLoadTier(format, sex, division); null when the division is unknown
+
+Pair setup
+  pairFormat = the shared format, when it is a doubles format
+  pairTier   = the shared raceTier, when pairFormat exists and both divisions are known and equal
+
+Station comparison (viewer A, partner B)
+  no benchmark on either side             → not comparable (missing_you / missing_partner / missing_both)
+  either value a doubles race split       → not comparable (team_time)
+  loaded station (every station but SkiErg, Row Erg and Burpee Broad Jumps, whose race standard is the same in
+  every tier, derived from hyroxStationRaceStandard):
+    no pairTier                           → setup
+    a value at a known tier ≠ pairTier    → tier
+    a value with no tier                  → tier_unknown
+  otherwise lead = round(B) − round(A) in whole seconds: > 0 A leads, < 0 B leads, 0 level
+
+Pair forecast (only with a pairTier and every loaded station of both partners at it, seeded stations included)
+  stations = Σ_st (A.forecastStationSec[st] + B.forecastStationSec[st]) / 2
+  run      = 8 × max(A.runPaceSecKm, B.runPaceSecKm)
+  roxzone  = max(A.roxzoneSec, B.roxzoneSec)
+  total    = round(stations + run + roxzone)
+  withheld = setup (no pairTier) · loads (a loaded station at a known other tier; outranks) · loads_unknown (no stated tier)
+```
+
+| Case | Station rows | Pair forecast |
+|---|---|---|
+| Both at the pair's tier | "You lead by 12 s", "Partner leads by 8 s", "Level" | the time, "Equal split of every station." (plus " Before course factors." when the viewer has a venue) |
+| No benchmark | "Not comparable", "No benchmark from you" (from your partner, from either of you) | unaffected |
+| Doubles race split | "Not comparable", "Pair time from a doubles race" | unaffected |
+| Setups differ | loaded rows "Race setups differ", plus "Setups differ: you race Doubles Mixed, your partner Doubles Men." | "Not available", "Needs matching race setups." |
+| No biological sex on file in Mixed | loaded rows "Load not known" | "Station loads not known for your partner." (for you, for either of you) |
+| A row at another tier (written outside the builder) | loaded rows "Not at the race loads" | "Needs times at Men Open loads from your partner." (from you, from both of you) |
+
+**Constants.** None new in the model. Every ratio and conversion comes from lane H3b's code and tables, and the tier-independent stations are derived from `hyroxStationRaceStandard`, not a hand list. Engineering values outside the model: `PUSH_DEBOUNCE_MS` 4000 (`hyroxPartnerSync.ts:108`, coalesces a burst of saves) and `LINK_POLL_MS` 5000 (`partner-view.ts:50`, only while a code is on screen). Product defaults awaiting Tristan's confirmation (ISSUE-399 (e)): an 8-character code from a 31-character alphabet, 24 h expiry, one live code per user (migration `:26-27`, `:70-72`, `:132`).
+
+**Decisions.** Tristan, 2026-10-12: link by invite code; share only race-relevant numbers; either partner can unlink at any time; one partner at a time. The other rules here were set in review on 2026-10-13 (the forecast withheld while loads mix, the solo-pace label, the run at the slower partner's singles pace) and are open for his confirmation in ISSUE-399.
+
+**Why defensible.**
+- *Rule-consistent shape.* Partners run every leg together and pass every transition together (s7.3), so the slower partner sets the run and the Roxzone. They split the work inside every station, so each partner's line counts half.
+- *Same terms on both sides.* Each partner's station line is already the pair's time at that partner's percentile in their own singles field, read from the pair's division table. The comparison averages two estimates for the same race and converts nothing.
+- *One source per number.* `stationSec` is the Stats ledger value and `forecastStationSec` the Forecast's own line, both pinned by tests, so the Partner page agrees with each partner's own Stats and Forecast (CLAUDE.md, two numbers that mean the same thing).
+- *Identical partners reproduce the solo doubles forecast.* Two copies of one snapshot give the athlete's own doubles station sum within 4 s (whole-second rounding of eight lines) and the Roxzone exactly.
+- *A pair time cannot rank one athlete.* A doubles race split measures the pair, so it never decides a lead.
+- *No unsourced numbers.* No optimal-split saving is claimed, this module applies no cross-tier factor, and erg and burpee comparability follows the rulebook standards encoded in `hyroxStationRaceStandard`.
+- *Withholding over mixing.* A sum of station times recorded at different loads has no meaning, so the forecast is withheld and the caption names whose times are missing.
+
+**Effect.** Tested (`hyrox-partner-compare.test.ts`): identical partners as above (`:310`); a Mixed pair whose woman tested at Women Open loads compares every station and gets the same pair total from both sides; a Men Pro pair with Open-weight tests compares and gets a forecast; a Mixed partner with no sex on file withholds as loads_unknown; Men and Mixed partners read setup. Reviewer's probe at `5dcde1b` (identical partners on the real builder): the pair forecast is faster than the athlete's own doubles forecast by 176 s in Mixed (about 7% of the run), 112 s in Women Open, 96 s in Women Pro, 24 s in Men Open and 0 s in Men Pro; a Mixed intermediate man's Forecast reads 4419 s against a pair forecast of 4241 s. The gap is the run term alone (limitation 1). Implementer's QA harness at `5dcde1b` (untracked `qa/`): a Mixed pair, the woman built by the real snapshot builder with tests at Women Open loads, compared 8 of 8 stations with a pair forecast of 1:17:56.
+
+**Limitations.**
+1. Run term. The pair runs at 8 × the slower partner's singles pace, while each athlete's own doubles forecast applies the cohort doubles run ratio (`doublesRunPaceFactor`, `hyrox-run-pace.ts:117`; its comment gives S8 to S9 medians of 1.01 to 1.06 in the same-sex divisions, 0.98 for a Mixed pair against women's singles and 1.09 against men's). The real slower partner stands in for the part of the ratio that reflects a slower partner; any other part (field self-selection, doubles pacing) is dropped. Magnitudes under Effect. Open (ISSUE-399 (d)).
+2. Equal split. Each partner covers half of every station. A pair that gives the stronger partner more of a station is not modelled, and no optimal split is claimed.
+3. Mismatched percentiles. Each line is the pair time of two athletes near that partner's percentile (H3b's mapping assumption); a pair at two different percentiles is approximated by the mean of the two pair times.
+4. No venue factors: the lines are pre-venue, and the predictor applies none to Roxzone.
+5. Each partner's forecast conventions carry over: population seeds for untested stations, and the staleness blend.
+6. A hand-entered run pace is used as entered and may have been entered in doubles terms.
+7. History entries record format and Pro weights, not division (`src/types/triathlon.ts:168-175`), so a test logged under an earlier division is read at the current division's loads (H3b's convention, `race-prediction.hyrox.ts:393-410`) and carries the current tier in the snapshot.
+8. Freshness. The partner's numbers are their last push (launch, a foreground with a link, a debounced save, opening the Partner page); the page shows the update date.
+9. The 'tier' reason and the 'loads' withhold are reachable only by a row written outside the app's builder: every in-app snapshot at a matching setup is at the pair's tier.
+
+**Guards.** `hyrox-partner-compare.test.ts` (21), `hyrox-partner-snapshot.test.ts` (16: whitelist keys, no health or identity data from a state full of it, station seconds equal the Stats ledger, forecast lines equal the forecast, singles run pace, solo tiers per division), `ui/hyrox/partner-view.test.ts` (34, copy per case). Not device-verified.
 
 ---

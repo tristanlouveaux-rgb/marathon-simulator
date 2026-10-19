@@ -109,3 +109,66 @@ Strava/Garmin connect uses a full-page `window.location.href` redirect that work
 - Client + native plugin: `npx vite build` + `npx cap sync ios` run; `@mosaic/web-auth` is in the generated iOS Package.swift. **A TestFlight repush is REQUIRED** (native code) — Xcode rebuild + archive + upload. Pending.
 
 **Verify on device (after the repush):** tap Connect Strava in onboarding → the authorize page opens in an ASWebAuthenticationSession sheet (a system OAuth view, shows "…wants to use strava.com to sign in") → approve → the sheet **auto-dismisses** and onboarding advances with Strava connected. If it doesn't return: confirm the callback's redirect `Location` is `mosaic://oauth?strava=connected` and the `mosaic` scheme is registered. The self-heal still recovers the connection on the next render even if the return is missed.
+
+---
+
+## HYROX Doubles partner tables (Supabase): applied by hand, pending deploys, diagnosis
+
+HYROX Doubles partner matching (CHANGELOG 2026-10-13, SCIENCE_LOG §DM) keeps its data in three Supabase tables, RLS on for all three: `hyrox_partner_invites`, `hyrox_partner_links`, `hyrox_partner_snapshots`. The migration `supabase/migrations/20261013000001_hyrox_partner.sql` also defines five functions: two the client calls (`redeem_hyrox_partner_invite(text)`, `unlink_hyrox_partner()`, both SECURITY DEFINER) and three trigger functions (`hyrox_partner_invite_before_insert`, `hyrox_partner_snapshot_touch`, and `hyrox_partner_link_after_delete`, which is SECURITY DEFINER).
+
+**Applied 2026-10-13 by Tristan** to project `elnuiudfndsvtbfisaje`, by pasting the whole migration into the Supabase SQL editor (steps in `docs/audits/2026-10-13-partner-table-runbook.md`, a folder kept out of git on purpose). Verified: 3 tables, 2 functions, RLS on all 3. The table check (read-only):
+
+```sql
+select c.relname as table_name, c.relrowsecurity as rls_on
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relname like 'hyrox_partner_%' and c.relkind = 'r'
+order by 1;
+```
+
+Expected: `hyrox_partner_invites`, `hyrox_partner_links`, `hyrox_partner_snapshots`, each `rls_on = true`. A fuller read-only check of the functions and policies:
+
+```sql
+select p.proname, p.prosecdef, p.proconfig
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname like '%hyrox_partner%'
+order by 1;
+
+select tablename, policyname, cmd
+from pg_policies
+where schemaname = 'public' and tablename like 'hyrox_partner_%'
+order by 1, 2;
+```
+
+Expected: five functions, all with `search_path=public, pg_temp` in `proconfig`, and `prosecdef = true` for `hyrox_partner_link_after_delete`, `redeem_hyrox_partner_invite` and `unlink_hyrox_partner`; nine policies (invites `select_own`, `insert_own`, `delete_own`; links `select_member`; snapshots `select_own`, `select_partner`, `insert_own`, `update_own`, `delete_own`).
+
+**Not in the migration history.** Applied by hand, so `supabase_migrations.schema_migrations` has no row for `20261013000001`. This matches the existing drift: the tracker stops at `20260505` (`docs/SECURITY_SWEEP_REPORT.md`), and 10 local migrations are unapplied since `20260507` (Native OAuth section above). **Never run `supabase db push`**: it would apply that backlog, and it would try this migration a second time. The second apply ran cleanly twice in the reviewers' local tests, since every statement is guarded (IF NOT EXISTS, CREATE OR REPLACE, DROP ... IF EXISTS before each trigger and policy); the backlog is the danger. Scoped DDL keeps going through the SQL editor until the tracker is reconciled. The merge commit `d8bdff7` says "Migration NOT applied to prod", which was true at merge time and is now out of date.
+
+**The RLS test script** is `supabase/rls-tests/20261013000001_hyrox_partner_rls_test.sql`, outside `supabase/migrations/`, so the CLI never treats it as a migration. It has run only on throwaway local databases. Its header suggests the SQL editor while the audit runbook says not to run it on the live database; ISSUE-399 (c) holds the decision, and until then it stays off production.
+
+**Pending: two edge-function deploys** (edited in `49b92bf`). Until they are deployed, Account > Download my data has no partner tables, and account deletion relies on the app's own cleanup (`account-legal.ts:103`: unlink, then own snapshot and invite) plus the 30-day purge, which cascades every partner row. When Tristan chooses to deploy, from the repo root (both functions are `verify_jwt = false` in `supabase/config.toml:66`, `:71`, and check the token themselves):
+
+```bash
+supabase functions deploy export-user-data --project-ref elnuiudfndsvtbfisaje --no-verify-jwt
+```
+
+```bash
+supabase functions deploy delete-account --project-ref elnuiudfndsvtbfisaje --no-verify-jwt
+```
+
+After the deploy the export holds `hyrox_partner_snapshots` (own row), `hyrox_partner_links` (`user_id`, `created_at`; no `partner_id`) and `hyrox_partner_invites` (`owner_id`, `created_at`, `expires_at`; no code), and `delete-account` deletes the partner rows itself, so the partner stops reading the numbers even when the app's cleanup fails.
+
+**Diagnosing a Partner page error.** The page shows one line, plus a "Try again" button when the page could not load.
+- "Offline. Connect and try again.": the device reports offline, or a request failed at the network.
+- "Sign in to link a partner.": no session.
+- "Something went wrong. Try again." on opening the page: a server error, or this account's reset cleanup is still owed. The console tells them apart. A server error logs `[hyroxPartner] request failed:` with the PostgREST message (a missing relation or function means the tables are not there). An owed cleanup logs `[hyroxPartnerSync] pending cleanup failed:`; read the entries with `JSON.parse(localStorage.getItem('mosaic_hyrox_partner_cleanup') ?? 'null')`, one `{ userId, action }` per account. While the signed-in account has an entry the page reads nothing for it; every launch and every page open retries it, and the entry clears when the server step succeeds.
+- The same line after Link or Unlink: the function answered retry twice in a row (a lock race), or a server error.
+- "No numbers from your partner yet. ...": the partner has no snapshot. They have not opened Mosaic in doubles since linking, left doubles through Edit Plan, or are mid-way through a Reset plan setup.
+- Rows for one user (read-only, SQL editor; replace the uuid):
+
+```sql
+select * from hyrox_partner_links where user_id = '<uuid>' or partner_id = '<uuid>';
+select user_id, updated_at, format, division, race_tier from hyrox_partner_snapshots where user_id = '<uuid>';
+select owner_id, created_at, expires_at from hyrox_partner_invites where owner_id = '<uuid>';
+```
+
+A link is two rows, one per direction. A snapshot row exists only while its owner is linked (apart from the race in ISSUE-399 (i)). An owner holds at most one invite. For an edge-function 500, use the Supabase dashboard AI with the `execution_id` (section above).

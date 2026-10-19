@@ -51,6 +51,8 @@ Supabase project `elnuiudfndsvtbfisaje`. Read-only audit — no code/DB/RLS obje
 | route_safety_ratings | ON | yes | user_id | OK |
 | waitlist | ON | anon insert only | — | OK |
 
+> 2026-10-13 (lane HP): three new tables, RLS on. `hyrox_partner_invites`: own rows. `hyrox_partner_links`: rows naming the caller. `hyrox_partner_snapshots`: own row, plus the linked partner's row through the caller's link row, the first policy that lets one user read another's data (both users opted in through the invite code). Every client read also filters by the session user (`src/data/hyroxPartner.ts`). SCIENCE_LOG §DM, RUNBOOK "HYROX Doubles partner tables".
+
 ## Correct user_id source for client filters
 `await supabase.auth.getSession()` → `session.user.id` (await hydration; do not read before auth is ready). Stored `user_id` == this value by construction: `garmin-webhook/index.ts:106-121` and `sync-strava-activities/index.ts:869,1666` stamp it from the Supabase auth UUID. The loader's "0 rows" history was a stale JS-client session at that early call site, not an id mismatch.
 

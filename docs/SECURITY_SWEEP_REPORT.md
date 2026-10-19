@@ -62,6 +62,7 @@ The three "no policy" tables are secure-by-design: RLS enabled + no policy = den
 **✅ LIVE-VERIFIED 2026-06-03 (token restored):** queried prod directly via the Management API.
 - **All 23 public tables have `relrowsecurity = true`** — RLS enabled everywhere, no table exposed by missing RLS.
 - **Every policy scopes to `auth.uid()`** (`user_id = auth.uid()` qual/with_check). The ONLY non-scoped check is `waitlist.allow_anon_insert` (anon INSERT, `with_check true`) — correct for a public signup form (anon can add a row, cannot read the list; no SELECT policy exists). Minor: it's spam-insertable (no rate-limit) — not a leak.
+  - 2026-10-13 (lane HP): every partner policy also compares with `auth.uid()`. Two of them return another user's row to a linked partner: `hyrox_partner_links_select_member` (`partner_id = auth.uid()`) and `hyrox_partner_snapshots_select_partner` (EXISTS on the caller's link row).
 - **No `USING (true)` read policy anywhere.**
 - **`vo2_trend` dropped** — zero views remain in `public`.
 - **`garmin_activities`** now fully locked: SELECT (public) + ALL (authenticated), both `user_id = auth.uid()`.

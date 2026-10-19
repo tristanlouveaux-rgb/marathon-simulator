@@ -17,7 +17,7 @@ For ongoing reviews of code changes, use the `/security-review` slash command (p
 
 ## Storage (Supabase)
 
-- [x] **RLS enabled on every table** (audit 2026-05-17): `daily_metrics`, `sleep_summaries`, `activity_details`, `strava_tokens`, `garmin_tokens`, `user_plan_settings`, `coach_chat_usage`, `coach_narrative_cache`, `route_safety_ratings` all have ALTER + per-user SELECT policies. Service-role-only ephemeral tables (`strava_auth_requests`, `garmin_auth_requests`) intentionally have no user policy.
+- [x] **RLS enabled on every table** (audit 2026-05-17): `daily_metrics`, `sleep_summaries`, `activity_details`, `strava_tokens`, `garmin_tokens`, `user_plan_settings`, `coach_chat_usage`, `coach_narrative_cache`, `route_safety_ratings` all have ALTER + per-user SELECT policies. Service-role-only ephemeral tables (`strava_auth_requests`, `garmin_auth_requests`) intentionally have no user policy. Added 2026-10-13 (lane HP): `hyrox_partner_invites`, `hyrox_partner_links`, `hyrox_partner_snapshots`, RLS on, applied by hand through the SQL editor (RUNBOOK, HYROX Doubles partner tables). Two policies return another user's row by design: links (`partner_id = auth.uid()`) and the partner snapshot read (EXISTS on the caller's link row).
 - [ ] **Storage policies**: per-user bucket access — users can only read/write their own files, never others'.
 - [x] **No service-role key in client code** (audit 2026-05-17): `.env.local` contains only the anon JWT (role=anon, exp 2086). Bundle audit `grep -r "service_role\|sk_live\|sk-ant-" dist/` returns zero matches after `npx vite build`.
 
