@@ -138,6 +138,8 @@ import {
 import { taperFraction } from './phases';
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
+import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { fmtAmount } from './hyrox-session-shape';
 import {
   hyroxRacePaceSets, hyroxTechniqueSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
   hyroxBeginnerLoadFraction, hyroxLoadKgAt, type HyroxStationLoadMemory,
@@ -2723,6 +2725,24 @@ export function buildHyroxTrainingWeeks(
     }
     return out;
   };
+  // A load the rating moved above the last session's (the climb), noted on
+  // the week when its station work holds the station: the prescription shows
+  // the new load, the note says why.
+  const noteLoadSteps = (d: HyroxWeekDetail) => {
+    if (!beginnerLoads) return;
+    const held = new Set<HyroxStation>();
+    for (const x of prescribed(d.workouts)) {
+      if (!isHyroxWork(x)) continue;
+      for (const c of x.hyroxComponents ?? []) if (c.loadKg != null) held.add(c.type as HyroxStation);
+    }
+    const anchorOf = (st: HyroxStation) => hyroxLoadKgAt(st, planLoadTier, hyroxBeginnerLoadFraction(st, d.week, raceWeightWeek) ?? 1) ?? 0;
+    for (const st of held) {
+      const m = loadMemory.get(st);
+      const kg = d.workouts.flatMap(x => x.hyroxComponents ?? []).find(c => c.type === st && c.loadKg != null)?.loadKg;
+      if (!m || kg == null || kg <= m.kg + 1e-9 || kg <= anchorOf(st) + 1e-9) continue;
+      d.adjustments = [...d.adjustments, `W${d.week}: ${STATION_DISPLAY[st].name} load ${fmtAmount(m.kg)} to ${fmtAmount(kg)} kg (the last session holding it was rated easier than RPE ${m.targetRpe})`];
+    }
+  };
   // After a week is built: the load and the rating of each station its
   // station sessions held (bricks read the loads, they do not move them).
   const rememberLoads = (d: HyroxWeekDetail) => {
@@ -3904,6 +3924,7 @@ export function buildHyroxTrainingWeeks(
       chronicSeedTss = chronicSeedSource === 'logged' ? Math.max(loggedSeedTss, guardFloorTss) : guardFloorTss;
     }
     built.push(buildWeek(w));
+    noteLoadSteps(built[built.length - 1]);
     rememberLoads(built[built.length - 1]);
   }
   // The hours line, checked against the real plan with one more chosen

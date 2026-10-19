@@ -172,10 +172,16 @@ describe('the beginner load schedule in a plan', () => {
       s.w = 6;
       if (injured) (s as unknown as { injuryState: unknown }).injuryState = { active: true, injuryPhase: 'acute', location: 'knee', runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 };
       const wks = generateHyroxPlan(s);
+      notes = wks[5].hyroxPlanNotes ?? [];
       return loadsOf(wks[5].triWorkouts!.find(x => x.t === 'hyrox_station_technique'));
     };
+    let notes: string[] = [];
     expect(run(3)).toMatchObject({ sled_push: 52.5, sled_pull: 40 });
+    // The week says why the load moved.
+    expect(notes).toContain('W6: Sled Push load 50 to 52.5 kg (the last session holding it was rated easier than RPE 5)');
+    expect(notes).toContain('W6: Sled Pull load 37.5 to 40 kg (the last session holding it was rated easier than RPE 5)');
     expect(run(5)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
+    expect(notes.some(n => /load .* kg \(the last session/.test(n))).toBe(false);
     expect(run(8)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
     expect(run(null)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
     expect(run(3, true)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
