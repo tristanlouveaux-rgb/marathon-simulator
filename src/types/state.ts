@@ -188,6 +188,12 @@ export interface Workout extends WorkoutDefinition {
    *  scheduler's hard-day rule (scheduler.hyrox isHighIntensity) skips it.
    *  Undefined = an ordinary session. */
   hyroxLight?: boolean;
+  /** HYROX mode (lane H2b): the prescription a station session or brick was
+   *  written from. The generators build the description from it and the
+   *  components (hyrox-generators hyroxSessionText), so a cut of rounds or a
+   *  station (the MTL cap, the ceilings) rewrites the text from the session
+   *  itself. Absent on sessions generated before generator v19. */
+  hyroxSpec?: import('./triathlon').HyroxSessionSpec;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.

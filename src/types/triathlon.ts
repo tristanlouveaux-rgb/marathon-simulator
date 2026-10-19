@@ -228,6 +228,17 @@ export interface HyroxConfig {
    */
   planChronicSeed?: { source: 'logged' | 'nominal'; loggedTss?: number };
   /**
+   * The station the plan's race-pace sessions hold first (lane H2b): the
+   * forecast's weakest station (hyrox-weakest-link) when the plan was last
+   * built in full (created, the version regeneration, a re-band) or rebaked
+   * at a week rollover. Stored so every rebuild in between (an injury's
+   * rebuild, the hours line, a single week) reads the same station: the
+   * forecast reads today's date and the stored plan, so a live read would
+   * change the plan between rebuilds. null: no station known (no race date).
+   * Absent: read live (plan_engine.hyrox hyroxPlanWeakestStation).
+   */
+  planWeakestStation?: HyroxStation | null;
+  /**
    * Race outcome log. Actual race-day finish times against the target.
    * Idempotent on `dateISO`. Mirrors `triConfig.raceLog` for parity across
    * modes. Optional so existing state objects stay valid.
@@ -268,6 +279,52 @@ export interface HyroxComponent {
    *  (inter-station rest). The guided parser overrides this with the
    *  inter-round rest on the last component of each round. Absent = 0. */
   restAfterSec?: number;
+  /** The 1-based rounds this component appears in (lane H2b), ascending.
+   *  Absent: every round (hyroxRounds). A beginner's sled takes 4 sets of one
+   *  lane while the session's other stations take 2; a brick's two stations
+   *  alternate rounds. The duration, MTL, guided walk and description all
+   *  read the component's set count from it (hyrox-session-shape). */
+  inRounds?: number[];
+  /** Share of the station's race volume one set of this component covers
+   *  (lane H2b): 0.25 for a quarter-station set. Absent: the full station
+   *  (the assessment, sessions generated before generator v19). Only a
+   *  full-station time can teach a station benchmark
+   *  (hyrox-session-benchmarks). */
+  raceFraction?: number;
+  /** Prescribed load, kg (lane H2b): the sled total including the sled (0 =
+   *  the sled unloaded), the farmers carry per hand, the sandbag, the ball.
+   *  Absent for ergs and burpee broad jumps. */
+  loadKg?: number;
+  /** The prescribed load as a fraction of the race weight, set only when
+   *  under it (the beginner load schedule). */
+  loadPct?: number;
+}
+
+/** What a HYROX station session or brick prescribes beyond its components
+ *  (lane H2b; Workout.hyroxSpec). */
+export interface HyroxSessionSpec {
+  /** Technique and race-pace station sessions; the tier brick (beginner,
+   *  intermediate or the advanced key brick) and the advanced secondary
+   *  brick. */
+  format: 'technique' | 'race_pace' | 'brick' | 'secondary_brick';
+  /** Rest after every set (station sessions) or between rounds (bricks), s. */
+  restSec: number;
+  /** Bricks: the jog from each run to its station, seconds. Counted in the
+   *  duration, not a rest. */
+  transitionSec?: number;
+  /** Bricks: each round's run (metres), its pace (sec/km) and the effort it
+   *  is run at. */
+  runM?: number;
+  runPaceSecKm?: number;
+  runEffort?: 'race_no_faster' | 'race' | 'race_or_faster' | 'easy';
+  /** Wall-ball target height for the athlete (m); null when their sex is
+   *  unknown (both heights are named). */
+  wallBallTargetM: number | null;
+  /** Doubles: each partner trains half of every station. */
+  doubles?: boolean;
+  /** Race-pace sessions: the station the forecast ranks weakest
+   *  (hyrox-weakest-link), when the session holds it. */
+  weakest?: HyroxStation;
 }
 
 /** 1 (weakest) to 5 (strongest). Used for the three self-rating sliders that replace runner-type for tri users (§18.7). */
