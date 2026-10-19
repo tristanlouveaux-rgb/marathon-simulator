@@ -40,7 +40,7 @@ import type { SimulatorState, Workout } from '@/types';
 import type { HyroxStation } from '@/types/triathlon';
 import { generateHyroxPlan } from './plan_engine.hyrox';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
-import { athleteRatedRpe, noteRatingSource } from '@/calculations/athlete-rating';
+import { athleteRatedRpe, moveRatingSource, noteRatingSource } from '@/calculations/athlete-rating';
 import { completeStrengthSession } from '@/guided/strength-complete';
 import { isInAppActual } from '@/calculations/in-app-activity';
 
@@ -152,5 +152,15 @@ describe('athleteRatedRpe', () => {
     noteRatingSource(wk, 'b', 'user');
     expect(athleteRatedRpe(wk, 'b')).toBeUndefined();
     expect(athleteRatedRpe(undefined, 'a')).toBeUndefined();
+  });
+
+  it('moves with a rating that moves to another slot key (the version regeneration\'s re-key)', () => {
+    const wk = { rated: { 'Station Circuit': 3 } as Record<string, number | 'skip'> };
+    noteRatingSource(wk, 'Station Circuit', 'user');
+    wk.rated['W5-hyrox_station_technique-0'] = wk.rated['Station Circuit'];
+    delete wk.rated['Station Circuit'];
+    moveRatingSource(wk, 'Station Circuit', 'W5-hyrox_station_technique-0');
+    expect(athleteRatedRpe(wk, 'W5-hyrox_station_technique-0')).toBe(3);
+    expect(athleteRatedRpe(wk, 'Station Circuit')).toBeUndefined();
   });
 });
