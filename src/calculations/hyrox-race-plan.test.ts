@@ -3,7 +3,6 @@ import { predictHyroxRace } from './race-prediction.hyrox';
 import {
   buildHyroxRacePlan,
   hyroxGoalBackCalcOptions,
-  hyroxGoalFloorSec,
   hyroxRoxzoneAtGoalSec,
   roundToTotal,
 } from './hyrox-race-plan';
@@ -221,17 +220,6 @@ describe('doubles', () => {
     const pw = predictHyroxRace(w)!;
     const f = hyroxGoalBackCalcOptions(w, pw, pw.totalSec - 100).floors!;
     expect(f.runSec).toBe(hyroxCompetitiveFloors({ format: 'pro_doubles', sex: 'female' })!.runSec);
-  });
-});
-
-describe('hyroxGoalFloorSec', () => {
-  it('is the cohort floors, or the forecast where that is faster', () => {
-    const s = buildState();
-    const p = predictHyroxRace(s)!;
-    const f = hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!;
-    const floor = hyroxGoalFloorSec(s, p);
-    expect(floor).toBeLessThan(p.totalSec);
-    expect(floor).toBeGreaterThanOrEqual(f.runSec + Object.values(f.stationSec).reduce((a, b) => a + b, 0) - 1 - 600);
   });
 });
 

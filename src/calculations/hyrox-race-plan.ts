@@ -128,20 +128,6 @@ export function hyroxRoxzoneAtGoalSec(
   return prediction.roxzoneSec * (atGoal.segments.roxzone / atForecast.segments.roxzone);
 }
 
-/** The fastest finish the floors allow for this forecast: each component at
- *  its floor, or at the forecast where that is already faster. The goal
- *  modal's plausibility threshold for reading "1:05" as hours. */
-export function hyroxGoalFloorSec(state: SimulatorState, prediction: HyroxPrediction): number {
-  const cohort = hyroxCohortForState(state);
-  const floors = hyroxCompetitiveFloors(cohort);
-  if (!floors) return 0;
-  const stations = prediction.stations.reduce(
-    (sum, l) => sum + Math.min(l.adjustedSec, floors.stationSec[l.station] ?? l.adjustedSec),
-    0,
-  );
-  return Math.min(prediction.runSec, floors.runSec) + stations + Math.min(prediction.roxzoneSec, floors.roxzoneSec);
-}
-
 /** Round non-negative values to whole numbers that sum to `total` (largest
  *  remainder). */
 export function roundToTotal(values: number[], total: number): number[] {

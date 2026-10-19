@@ -17,7 +17,7 @@ import { getMutableState, getState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
-import { hyroxGoalBackCalcOptions, hyroxGoalFloorSec } from '@/calculations/hyrox-race-plan';
+import { hyroxGoalBackCalcOptions } from '@/calculations/hyrox-race-plan';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
 import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
@@ -72,14 +72,13 @@ export function parseHhMmSs(input: string, minPlausibleSec: number): number | nu
 }
 
 /**
- * The fastest finish the back-calc floors allow for this prediction: the
- * parse-disambiguation threshold. Floors from the athlete's own field
- * (hyroxGoalFloorSec: the top-1% medians per format and sex or division, the
- * pair's times for doubles); the legacy pooled seed only without a field.
+ * The parse-disambiguation threshold ("1:00" read as an hour when the
+ * minutes reading is impossibly fast): the legacy pooled competitive seeds
+ * and the run-pace minimum. Deliberately not the back-calc's cohort floors
+ * (hyroxGoalBackCalcOptions): those sit above an hour for most fields (Open
+ * Singles women 1:06), so "1:00" would read as one minute.
  */
 function populationFloorSec(prediction: HyroxPrediction): number {
-  const cohortFloor = hyroxGoalFloorSec(getState(), prediction);
-  if (cohortFloor > 0) return cohortFloor;
   const stationFloor = prediction.stations.reduce(
     (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0) * (l.teamRatio ?? 1),
     0,
