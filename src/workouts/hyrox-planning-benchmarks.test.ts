@@ -37,6 +37,7 @@ import { resolveHyroxStationBenchmarks, hyroxPlanningStationBenchmarks, hyroxCal
 import { hyroxBenchmarkLedger } from '@/ui/hyrox/stats-view';
 import { openHyroxAddSessionModal } from '@/ui/hyrox/add-session-modal';
 import { applyHyroxSessionBenchmarks } from '@/calculations/hyrox-session-benchmarks';
+import { HYROX_STATION_SET_FRACTION } from './hyrox-station-dose';
 import type { SetRecord } from '@/guided/strength-controller';
 import type { SimulatorState, Week } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
@@ -84,14 +85,19 @@ function hyroxState(hx: Partial<NonNullable<SimulatorState['hyroxConfig']>>): Si
   return s;
 }
 
-/** Every station component of the plan's race-pace density circuits: their
- *  durationSec is the station's target time. */
+/** Every station component of the plan's race-pace circuits: since lane H2b
+ *  each is one quarter-station set, and its durationSec is the station's
+ *  target time pro rata (setTarget). */
 function densityComponents(wks: Week[]): HyroxComponent[] {
   return wks.flatMap(wk => (wk.triWorkouts ?? []))
     .filter(w => w.t === 'hyrox_station_density')
     .flatMap(w => ((w as any).hyroxComponents ?? []) as HyroxComponent[])
     .filter(c => c.type !== 'run');
 }
+
+/** One quarter-station set's target (s): the station's target time pro rata,
+ *  to the whole second, as the race-pace generator prescribes it. */
+const setTarget = (fullSec: number) => Math.round(fullSec * HYROX_STATION_SET_FRACTION);
 
 const CASES = [
   {
@@ -131,7 +137,7 @@ describe('plan engine station targets come from the forecast\'s per-station benc
       expect(comps.length).toBeGreaterThan(0);
       for (const comp of comps) {
         const st = comp.type as HyroxStation;
-        expect(comp.durationSec).toBe(targets[st]);
+        expect(comp.durationSec).toBe(setTarget(targets[st]!));
       }
     });
   }
@@ -143,10 +149,10 @@ describe('plan engine station targets come from the forecast\'s per-station benc
     const seeds = STATION_SEED_TIMES_SEC.intermediate;
     for (const comp of densityComponents(s.wks)) {
       const st = comp.type as HyroxStation;
-      expect(comp.durationSec).not.toBe(seeds[st]);
+      expect(comp.durationSec).not.toBe(setTarget(seeds[st]));
       // Each split converts at its own station's ratio (lane H3b).
-      expect(comp.durationSec).toBe(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatios[st]!));
-      expect(comp.durationSec).toBe(Math.round(doublesStationSoloSec(st, DOUBLES_SPLITS[st])));
+      expect(comp.durationSec).toBe(setTarget(Math.round(DOUBLES_SPLITS[st] / resolved.stationRatios[st]!)));
+      expect(comp.durationSec).toBe(setTarget(Math.round(doublesStationSoloSec(st, DOUBLES_SPLITS[st]))));
     }
   });
 });
@@ -161,7 +167,7 @@ describe('untested stations: the plan prescribes the seed Stats and the forecast
     for (const st of HYROX_STATION_ORDER) expect(targets[st]).toBe(Math.round(seeds[st]));
     const comps = densityComponents(s.wks);
     expect(comps.length).toBeGreaterThan(0);
-    for (const comp of comps) expect(comp.durationSec).toBe(Math.round(seeds[comp.type as HyroxStation]));
+    for (const comp of comps) expect(comp.durationSec).toBe(setTarget(Math.round(seeds[comp.type as HyroxStation])));
     // Heavier loads than the Open pooled default on the sled push.
     expect(targets.sled_push!).toBeGreaterThan(STATION_SEED_TIMES_SEC.intermediate.sled_push);
   });
@@ -217,7 +223,7 @@ describe('doubles target with doubles race splits: one number per station for St
     expect(targetAfter).toBe(best);
     expect(targetAfter).toBeLessThan(targetBefore);
     for (const comp of densityComponents(s.wks).filter(c => c.type === 'row_erg')) {
-      expect(comp.durationSec).toBe(best);
+      expect(comp.durationSec).toBe(setTarget(best));
     }
   });
 });
@@ -257,7 +263,7 @@ describe('Open target with a Pro race split: plan, Stats and forecast read the O
       }
       const pulls = densityComponents(s.wks).filter(c => c.type === 'sled_pull');
       expect(pulls.length).toBeGreaterThan(0);
-      for (const comp of pulls) expect(comp.durationSec).toBe(target);
+      for (const comp of pulls) expect(comp.durationSec).toBe(setTarget(target));
     });
   }
 });
@@ -277,7 +283,7 @@ describe('the add-session modal prescribes the same station targets', () => {
     const comps = ((added as any).hyroxComponents ?? []) as HyroxComponent[];
     expect(comps.length).toBeGreaterThan(0);
     for (const comp of comps) {
-      expect(comp.durationSec).toBe(targets[comp.type as HyroxStation]);
+      expect(comp.durationSec).toBe(setTarget(targets[comp.type as HyroxStation]!));
     }
   });
 

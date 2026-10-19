@@ -134,10 +134,13 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     const week2 = advanceAndRegenerateWeek2(s);
     expect(s.wks[1].ctlRatio).toBeUndefined();
     expect(plannedMinutes(week2)).toBe(fullWeek2); // a stamped ratio would cut it
-    // 282 min since 2026-10-13 (generator v18): easy erg work fills week 2's
-    // budget (0.5875 x 8 h), so lane H3b's real station seeds (223 before v18,
-    // 220 before H3b) no longer move the week's minutes; 170 before both.
-    expect(fullWeek2).toBe(282);
+    // 255 min since lane H2b (generator v19): the technique session is the
+    // sheet's 0.5 x race volume (20 min), and the one free session slot's
+    // easy erg session stops at the intermediate cap (75 min), so the week
+    // sits 27 min under its budget (0.5875 x 8 h = 282) and says so. 282 under
+    // generator v18 (easy erg work filled the budget); 223 before v18, 220
+    // before H3b, 170 before both.
+    expect(fullWeek2).toBe(255);
   });
 
   it('a week with nothing done still reads 0 and still re-anchors next week down', () => {
