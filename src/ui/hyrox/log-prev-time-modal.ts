@@ -60,6 +60,11 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   let runSplitsSec: Array<number | null> | undefined = stored.runLegsSec;
   let runTotalSec: number | undefined = stored.runTotalSec;
   let roxzoneSec: number | undefined = stored.roxzoneSec;
+  // Untouched stored splits are kept only for the same result, and never
+  // rewritten into the station benchmarks (a later station test stays the
+  // current benchmark). Any edit or paste makes them this save's splits.
+  let splitsTouched = false;
+  const initialResult = { timeSec, format, raceEventId, raceDateISO };
   let splitsExpanded = false;
 
   const overlay = document.createElement('div');
@@ -233,6 +238,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     input.addEventListener('change', () => {
       const station = input.getAttribute('data-station') as HyroxStation;
       const raw = input.value.trim();
+      splitsTouched = true;
       if (raw === '') {
         delete splits[station];
         return;
@@ -269,6 +275,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     }
     // A paste is the result: its run legs, run total and Roxzone replace the
     // stored ones (absent when the text had none).
+    splitsTouched = true;
     runSplitsSec = result.runLegsSec;
     runTotalSec = result.runTotalSec;
     roxzoneSec = result.roxzoneSec;
@@ -337,15 +344,21 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   // Save
   saveBtn.addEventListener('click', () => {
     if (timeSec == null || format == null) return;
+    const sameResult = timeSec === initialResult.timeSec && format === initialResult.format
+      && raceEventId === initialResult.raceEventId && raceDateISO === initialResult.raceDateISO;
     applyHyroxPrevTimeUpdate({
       timeSec,
       format,
       raceEventId,
       raceDateISO,
-      stationSplits: Object.keys(splits).length > 0 ? splits : undefined,
-      runSplitsSec,
-      runTotalSec,
-      roxzoneSec,
+      ...(splitsTouched
+        ? {
+            stationSplits: Object.keys(splits).length > 0 ? splits : undefined,
+            runSplitsSec,
+            runTotalSec,
+            roxzoneSec,
+          }
+        : { keepPreviousSplits: sameResult }),
     });
     overlay.remove();
     onSaved?.();

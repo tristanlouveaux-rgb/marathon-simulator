@@ -74,4 +74,20 @@ describe('applyHyroxPrevTimeUpdate stores the whole result', () => {
     // September finish is not compared with them.
     expect(analyzeHyroxLoseTime(s).status).toBe('no_splits');
   });
+
+  it('re-saving the same result untouched keeps its splits and leaves a newer test as the benchmark', () => {
+    const s = init();
+    applyHyroxPrevTimeUpdate({
+      timeSec: 5400, format: 'open_singles', raceDateISO: '2026-03-14',
+      stationSplits: { ...STATIONS }, runSplitsSec: LEGS, roxzoneSec: 372,
+    });
+    // A station test after the race is the current SkiErg benchmark.
+    s.hyroxConfig!.stationBenchmarksSingles = { ...s.hyroxConfig!.stationBenchmarksSingles, ski_erg: 270 };
+    applyHyroxPrevTimeUpdate({ timeSec: 5400, format: 'open_singles', raceDateISO: '2026-03-14', keepPreviousSplits: true });
+    const hx = s.hyroxConfig!;
+    expect(hx.hyroxPreviousStationSplits).toEqual(STATIONS);
+    expect(hx.hyroxPreviousRunSplitsSec).toEqual(LEGS);
+    expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
+    expect(hx.stationBenchmarksSingles?.ski_erg).toBe(270);
+  });
 });
