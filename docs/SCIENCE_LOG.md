@@ -183,6 +183,8 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 
 **Limitations.** (1) The displayed "Current VO2max" can be a Daniels VDOT proxy (LT-derived or PB-median tiers), which understates lab VO2max for economy-poor athletes and overstates it for efficient ones; the placement inherits this. Acceptable because the placement always refers to the number the user is looking at (two-numbers rule). (2) FRIEND is a US clinical-referral population, not endurance athletes; well-trained users will cluster above the 90th percentile, where the table flattens (clamped at 95). (3) A 2022 FRIEND update exists (16,278 treadmill tests, ages 20-89; Mayo Clin Proc 2022;97(2):285-293) but its tables are paywalled and could not be verified; swap in when verifiable. The 2015/2022 p50 deltas are ~1-2 mL/kg/min. (4) Marathon finishers are a self-selected population; "faster than 64% of finishers" describes people who completed a major, not the general public. (5) Coggan W/kg bands are male 60-min-power referenced; female athletes read about one band low (documented at `wattsPerKgTier`).
 
+> **Update 2026-10-13 (§DK, lane H3b).** Item 4 and the refusal rules: the HYROX field position reads the S8 to S9 results of the field the previous race was raced in (its format, by sex for singles, by the pair's division for doubles; `review.ts:1415`), e.g. "Faster than 66% of Open Singles women" for 1:30:00, with `hyroxResultsCaption` underneath. Pro Doubles has data, so `hyroxPlacement` (`fitness-placement.ts:235`, which now takes the cohort) no longer returns null for it.
+
 ---
 
 ## §BJ — Adhoc strain anchor: unplanned sessions floor readiness via CTL/7 (2026-06-03)
@@ -1183,6 +1185,10 @@ In doubles each athlete runs all 8 legs but only completes 4 of 8 stations (part
 
 > **Superseded 2026-10-13 (§DH, `b739051`).** `DOUBLES_TO_SINGLES_PACE_FACTOR` and `convertHyroxRunPaceFormat` are removed. The premise was wrong: doubles partners split the work inside every station and run every leg together (26/27 Doubles rulebook s7.2, s7.3), and the results tables show open_doubles runs slower than open_singles (P50 2762 s against 2695 s). `formatFactor` for doubles is now `doublesRunPaceFactor` (`hyrox-run-pace.ts:110`): the percentile-matched doubles/singles run ratio at the athlete's singles run total, about 1.02 at P50, applied to the seed fallback too. The personal-offset back-computation of a doubles race uses the same ratios.
 
+> **Update 2026-10-13 (§DK, lane H3b).** `doublesRunPaceFactor` (`hyrox-run-pace.ts:117`) reads the athlete's doubles tables (the pair's division against the athlete's own-sex singles field, S8 to S9): at the median 1.01 to 1.06 in the same-sex divisions, 0.98 for a Mixed pair against women's singles and 1.09 against men's. The seed fallback pace is the band's median run total ÷ 8 in the athlete's field (`hyroxSeedRunPaceSecKm`). The recalibration flagged under "v1 calibration source" is done with cohort tables, not same-athlete pairs.
+
+> **Update 2026-10-13 (§DL, lane H3c, `f8269f4`).** On the S8-S9 tables (lane H3b) the median doubles/singles run ratio is 1.01 to 1.06 in the same-sex divisions, Open and Pro; a Mixed pair reads 0.98 against women's singles and 1.09 against men's (values in `HYROX_S89_PERCENTILES`, checked at `5068d8b`, unchanged at `d8432d2`). The "about 1.02 at P50" above is the S4 to S6 pooled value.
+
 ### Bayesian personalisation
 
 The population model (CP-ratio + format) is the **prior**. Each logged HYROX race provides an **observation** (back-computed run pace from `finish − stations − roxzone`, divided by 8). The **residual** `observed − model_at_that_format` updates a personal offset:
@@ -1511,6 +1517,8 @@ Initial wiring of §V only fed `confidenceCap` into `predictHyroxRace` — the p
 
 **Test coverage**: `race-prediction.hyrox.test.ts` adds 4 tests pinning the blend at fresh-race no-blend, `very_stale` blend toward seed, partial-mitigation band shift, and strong-physiology weight-recovery boundaries.
 
+> **Update 2026-10-13 (§DL, lane H3c, `3162847`): per-entry splits decay.** A station value now decays by its own date. A half test, full test or guided-session best reads `hyroxEntrySplitsWeight(entry.dateISO, mitigation)` (`hyrox-staleness.ts:168`): the same splits curve (`baseDecayAt`, `:136`) at the entry's age, with the same mitigation (the race's when a race date is on file, else `computePhysiologyMitigation(state)`, now exported). Race splits, the boot migration's 'manual' seed and slot values with no history entry keep the race-age `splitsWeight`; a race with no date is still 'unknown' (weight 1). `bandWeight` (the seed blend toward the VDOT band), the re-band gate and the confidence cap still read the race's age (ISSUE-398 (b)). Limitation: the curve was set for race splits and is applied to tests uncalibrated. `hyrox-staleness.test.ts` now has 17 tests (the Files line above says 11).
+
 ---
 
 ## §U — HYROX VDOT-Derived Run Pace + Provenance (2026-05-08)
@@ -1564,6 +1572,8 @@ VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX h
 - Ratio is back-calibrated to seed paces, not measured from longitudinal HYROX run-leg data.
 - `HYROX_FATIGUE_TO_THRESHOLD_RATIO` doesn't model temperature, altitude, or floor surface — those are layered separately by the venue model.
 
+> **Update 2026-10-13 (§DK, lane H3b).** `SEED_RUN_PACE_SEC_KM` is no longer hand-set: it is the Open Singles band median run total ÷ 8, women and men pooled (intermediate 305 to 329 s/km), and the seed fallback reads the athlete's own field (`hyroxSeedRunPaceSecKm`). The ratio table above was back-calibrated to the old seeds.
+
 ---
 
 ## §T — HYROX Bidirectional Cross-Format Same-Athlete Factor (2026-05-08)
@@ -1573,6 +1583,8 @@ VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX h
 **Supersedes §N.** The single-direction `DOUBLES_TO_SINGLES_FACTOR = 0.92` previously documented in §N was wrong-direction at the population level (singles is harder than doubles, not easier) and ignored the same-athlete picture. Replaced with two anchored constants.
 
 > **Superseded 2026-10-13 by §DH (lane H1, `c6f090b`, `88b0d52`, `8e07c12`).** Both constants are removed. Every target is banded on the previous time in singles terms: a doubles time converts with `doublesTotalInSinglesTermsSec` (the open_singles total at the same percentile of the ingested results, about × 1.125 at P50), a singles time stays as is (`hyroxBandingTimeSec`). The old doubles-target rule banded on doubles terms, so the doubles conversion ran twice. Per-station cross-format inference is now done through the same quantile mapping, and a converted station caps confidence at medium instead of forcing low. This entry is kept for history.
+
+> **Update 2026-10-13 (§DK, lane H3b).** The quantile mapping §DH describes now reads the S8 to S9 tables per station and per division. `doublesTotalInSinglesTermsSec` survives only in the improvement ceiling's band lookup (`race-projection.hyrox.ts:400`); banding moved to field-relative thresholds at this merge, then to lane H3c's planning band (§DL), which lane H2 (`d8432d2`) also gave the onboarding initializer when it removed `hyroxBandingTimeSec`. The "population data lower bound" below (the S4 to S6 cohort ratio 1.125) is history.
 
 **Files**: `src/constants/hyrox-constants.ts:32-36`, `src/state/initialization.hyrox.ts:111-124`, `src/calculations/hyrox-format-band.test.ts` (8 tests).
 
@@ -1753,6 +1765,8 @@ Both tests reflect Mujika & Padilla 2003 (*Med Sci Sports Exerc* 35(7):1182–11
 
 **Update 2026-10-13 (§DH, §DI, lane H1).** These tables now also drive the doubles forecast (percentile-matched open_doubles ÷ open_singles ratios) and the one doubles-to-singles total conversion. Every surface that cites them uses `hyroxPopulationCaption`: the format's finisher count, women and men together, seasons 4 to 6 (2021/22 to 2023/24), the 75-rep Women Open era note and, for Open Doubles, the pooled-pairs note. The docstring's percentile direction is corrected (cumulative = % at or faster). The S7 to S9 re-ingest (`src/data/hyrox-results-s79.ts`, merged in `3e4b08d`, lane H3a) is not wired yet; these tables stay live until lane H3b.
 
+> **Update 2026-10-13 (§DK, lane H3b).** No app code reads these tables any more. They stay as the calibration field of the band field percentiles (`HYROX_S89_BAND_FIELD_PERCENTILES`, pinned to this file's open singles total table by `hyrox-results-s79.test.ts`) and are read by tests. Every live percentile, the doubles mapping and the seeds read the S8 to S9 tables in `src/data/hyrox-results-s79.ts`.
+
 ---
 
 ## §Q — HYROX `hxFormat` workout tagging (deferred decision, 2026-05-07)
@@ -1792,6 +1806,8 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 - No discipline-split CTL (we don't separately track run CTL vs station CTL) — would require extending `mtlHistory` similar to triathlon's `fitnessHistory.{swimCtl, bikeCtl, runCtl}`. Listed as a follow-up.
 - Race-day fatigue interaction with venue factors not modelled separately — projection is applied to current total, then venue factors are already in that total via `predictHyroxRace`.
 
+> **Update 2026-10-13 (§DK, lane H3b).** A further factor, "Results ceiling", applied last: the projected gain may not exceed the upper-quartile gain of repeat HYROX athletes over a comparable gap (`hyroxImprovementCeiling`, `race-projection.hyrox.ts:389`). Its explanation reads "Gain held to N%. A quarter of N repeat HYROX athletes improved more than that over about 6 months, relative to each event's median." It rarely binds; the first known limitation (heuristic weights) stands.
+
 **Side**: tracking. Surfaced on the forecast view; not used for plan generation.
 
 ---
@@ -1808,6 +1824,8 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 **Known limitations**: confidence does not account for calibration recency (a 6-month-old benchmark may be outdated), for format-conversion bias (doubles→singles via the 0.92 factor introduces additional uncertainty), or for venue extrapolation accuracy.
 
 **Update 2026-10-13 (§DH).** The calibrated count is `hyroxCalibrationCoverage` (`hyrox-station-history.ts:262`): stations with an athlete time from either format's slot, out of all 8 raced stations, the same count the benchmark card, Stats, Account and the chip detail show. A station converted from the other format's benchmark counts as calibrated and caps confidence at medium in either direction (`crossFormatCapped` when that cap is what holds it there). The 0.92 limitation above is obsolete: format conversion goes through the quantile mapping and its uncertainty is the medium cap.
+
+> **Update 2026-10-13 (§DK, lane H3b).** Option A: for a doubles target every calibrated value except the target family's own doubles race splits counts as converted (singles values, the doubles slot's solo tests and session bests, doubles race splits from the other weight family), so only those splits reach high. At 6 or more calibrated stations the caption names what holds a medium forecast ("No race venue is set, so confidence is medium.", "The race is 9 months old, so confidence is medium."), and a race-age cap to low at 3 or more reads "8/8 stations calibrated. The race is 20 months old, so confidence is low." instead of "Mostly seed data".
 
 **Side**: tracking (prediction, not planning).
 
@@ -2576,6 +2594,8 @@ Sum-of-parts model:
 total = (runPaceSecKm × 8) + Σ(8 station times) + roxzoneSec
 ```
 where station times come from `stationBenchmarks` (calibrated) or `STATION_SEED_TIMES_SEC[band]` (population averages from HyroxDataLab + roxlyfe.com).
+
+> **Update 2026-10-13 (§DK, lane H3b).** Untested station times are the real band medians of the athlete's own-sex field at the target's weights (`hyroxStationSeedsAtTarget`), not HyroxDataLab and roxlyfe.com averages.
 
 Venue factors (heuristic — confidence low-medium, see `src/data/hyrox-venues.ts` for derivation):
 
@@ -6266,6 +6286,8 @@ Hidden entirely (`vo2 = null`, reason `'insufficient-sessions'`) below 3 session
 
 **Update 2026-10-13 (§DH, §DI).** Finish percentiles read the ingested S4 to S6 tables (§R) where a format has rows; the synthetic table above is the fallback for Pro Doubles, whose pair total is first converted to singles terms (`doublesTotalInSinglesTermsSec`). Station percentiles (`getStationPercentile`) are synthetic, placed on the band seed times at hand-picked percentiles (P5, P15, P35, P60, P80, P95), and are labelled as estimates ("est. pN").
 
+> **Update 2026-10-13 (§DK, lane H3b).** Finish percentiles read the S8 to S9 tables by format and sex (doubles by division), Pro Doubles included, so the synthetic table above is no longer read; station percentiles are real race-split percentiles. The 60/80/100/120-min anchors above were considered as the band thresholds' calibration and rejected (60 min sits below p1 of the S4 to S6 field, not p5); the thresholds are positions in the S4 to S6 open singles table re-expressed per field (§DK). The Stats rank line closes the age-group gap listed under limitations (pooled S7 to S9 age tables).
+
 ## VO2 Resolver Audit (2026-05-07)
 
 **Purpose.** Systematic audit of `getPhysiologicalVdot` resolver chain (`src/calculations/physiological-vdot.ts:144`) and supporting sync paths before adding conflict-surfacing UI (WS-2b).
@@ -6713,6 +6735,8 @@ This mirrors the brick generator's fill-the-budget intent (`generateFullBrick`),
 1. **Phone-stopwatch noise.** Times come from the user tapping "Complete set". The sanity floor catches gross slips; small mis-taps that still clear the floor could set a slightly-optimistic benchmark. PB-only means a later honest test cannot *raise* it back, so a bad tap can stick until beaten — accepted risk for a single-user dev build, revisit if it bites.
 2. **Doubles sanity floor uses the singles elite seed.** Doubles station times are faster (half the work), so the singles floor is conservative for doubles — it may occasionally decline to auto-update a legitimate fast doubles time. Errs toward not-updating (safe).
 3. **Raw fatigued time** (see "Conservative on fatigue").
+
+> **Update 2026-10-13 (§DK, lane H3b).** The sanity floor is the station split's timing-slip fence in the athlete's singles field (`hyroxStationLowerFenceSec`, the ingest's rule 6; Open Singles women: wall balls 87 s, sled push 54 s), with the round converted to that field's loads first. The competitive seed, once filled from the results, is the median split of the field's top 1% and would have rejected genuine elite rounds. Limitation 2 no longer applies: a guided round is one athlete's time and is compared with one athlete's benchmark (`hyroxCalibratedStationBenchmarks`), and the fence comes from the singles field. The summary's percentile reads "Faster than N% of Open Singles women on race splits".
 
 **Code.** `src/calculations/hyrox-session-benchmarks.ts` (`isRacePaceHyroxSession`, `summariseHyroxSession`, `applyHyroxSessionBenchmarks`). Wired from `src/guided/strength-complete.ts`; summary in `src/ui/guided-strength-overlay.ts` (`buildHyroxFinishSummary`). Source enum `'session'` added in `hyrox-station-history.ts` + `triathlon.ts`; label in `station-detail-view.ts`. Tests: `hyrox-session-benchmarks.test.ts` (9).
 
@@ -8228,6 +8252,8 @@ The old `STATION_EXTERNAL_LOAD_KG` table was labelled "Open weights" and mixed t
 5. World Championships: the 25/26 Singles rulebook and the hyroxus.com FAQ say under-60 Open qualifiers race Pro weights at Worlds; the 26/27 rulebooks do not restate it, so a World Championships target keeps the athlete's own tier (not implemented on purpose).
 6. Generator output changed without a `HYROX_GENERATOR_VERSION` bump (still 17); stored plans keep the old MTL until a regeneration.
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** Limitation 3: the Open-to-Pro conversion is now per station and per sex from the S8 to S9 Pro and Open singles results (a difference in differences, `hyroxProConversionAt`, `hyrox-results.ts:583`); `HYROX_PRO_STATION_MULTIPLIER` (`hyrox-constants.ts:40`) stands in only for an adjusted ratio below 1, which no loaded station reaches on the current tables. At the median women's sled push converts × 1.573 and men's × 1.405 (both were 1.15). Limitation 4: seeds are the real band medians of the athlete's own-sex field (`HYROX_S89_BAND_SEEDS`), converted per station to the target's loads, so the tier changes the seed times as well as the loads; a woman in Mixed Doubles is seeded and read at the Women Pro tier (M-Open). Limitation 6: lane H2 (`d8432d2`) bumped `HYROX_GENERATOR_VERSION` to 18, and existing plans regenerate on launch (`applyHyroxGeneratorRegen`).
+
 **Guards.** `hyrox-division.test.ts` (33: every division and format, Mixed under Pro, unknown sex, labels, loads sentence, race standard), `workouts/hyrox-load-tier-callers.test.ts` (5: every non-test generator call passes `loadTier`; mini brick farmer-carry MTL W-Open < M-Open < M-Pro; erg mini brick unchanged; full brick tier reaches MTL), `ui/wizard/steps/hyrox-setup-division.test.ts` (12: Division row visibility, prefill, Mixed cleared under Pro, `setupBand`), `constants/hyrox-rule-copy.test.ts` (3). Not device-verified.
 
 ---
@@ -8339,6 +8365,10 @@ Rows: open_singles 50,364 finishers, open_doubles 28,046 (`HYROX_FORMAT_FINISHER
 
 > **Update 2026-10-13 (§DM, lane HP).** The HYROX Doubles partner pair forecast reads each partner's own doubles station and Roxzone lines and runs at the slower partner's singles pace, where this entry's single-athlete doubles forecast applies the cohort run ratio. Two identical partners therefore match the solo doubles stations and Roxzone and differ on the run (§DM limitation 1).
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** The mapping now reads the S8 to S9 results through `hyrox-results.ts`, one ratio per station, with the pair's division against the athlete's own-sex singles field in the target's weight family (`hyroxDoublesTables`, `hyrox-doubles.ts:114`); §DK's per-division table replaces the Data table above. Limitations 2 to 5 no longer apply: divisions are separate tables, each station has its own ratio, the data is the 100-rep era, and Pro Doubles has its own rows (16,614 women's and 28,149 men's pairs). Limitation 6: the code now does option A (§DK; no report records it as Tristan's decision, ISSUE-395 (a)). Limitation 9: history views show one frame per card, labelled once. Limitation 10: untested stations read one seed at the target's weights on every surface, plan included. A value from the other weight regime converts per station and sex, not by `HYROX_PRO_STATION_MULTIPLIER`. Banding: at this merge setup, log-a-race and the previous-format fix banded a previous time in the field it was raced in, replaced by lane H3c's planning band (§DL), and lane H2 (`d8432d2`) moved the onboarding initializer to the same band and removed `hyroxBandingTimeSec`. The planned re-check is done.
+
+> **Update 2026-10-13 (§DL, lane H3c; lane H2, `d8432d2`).** `hyroxBandingTimeSec` is deleted (lane H2). Setup, Log a previous time, the previous-format fix and the onboarding initializer (`initialization.hyrox.ts:144`) band through `hyroxPlanningBandFor`: a doubles finish converts per component (each station with `doublesStationSoloSec`, run and Roxzone with `doublesRatioAtTeamTime`) into Open Singles terms of the athlete's own sex, and is banded on that field. `doublesTotalInSinglesTermsSec` stays live for the improvement ceiling (`race-projection.hyrox.ts:400`); its comment (`hyrox-doubles.ts:218`) still names the deleted helper.
+
 ---
 
 ## §DI — HYROX forecast honesty: one volume count, planned-slot adherence, no gain without equipment, provenance captions (2026-10-12, lane H1)
@@ -8382,7 +8412,481 @@ station horizon weeks = 0 for a station not in availableStations(stationAccess)
 5. Not fixed: a fresh half test is doubled into a full-station forecast with no fresh-to-race fade (`benchmark-card.ts:193`). No sourced fade constant exists in the code, the research files or the results tables (ISSUE-395).
 6. Pooled sexes and the S4 to S6 era remain until lane H3b wires the S7 to S9 tables (`src/data/hyrox-results-s79.ts`, merged unwired in `3e4b08d`).
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** Station percentiles are real: the forecast line's station time placed on the cohort's S8 to S9 race splits at that station (`hyroxStationPercentile`, `hyrox-results.ts:283`), shown as tiers ("top 27%", "median") with no "est." label, so limitation 4 no longer applies. Every caption reads `hyroxResultsCaption`, by sex or division ("HYROX results, seasons 8 and 9 (2025 to 2026), 119,468 Open Singles women finishers, via the open pyrox project."): the pooled-sex and 75-rep-era notes are gone and limitation 6 is done. The results now also set the band seed times and the Pro conversions, and the forecast hero detail and the methodology page say so (`hyrox-population.ts:94`, `:108`). The guided session summary reads "Faster than N% of Open Singles women on race splits". The projection gains a "Results ceiling" factor (§DK).
+
 **Guards.** `race-projection.hyrox.test.ts` (18: no weekly-volume factor, planned-slot adherence ignoring adhoc records, no gain for unprogrammed stations), `hyrox-population-captions.test.ts` (8: caption content per format, the estimate caveat, the radar subtitle, provenance and methodology captions, the hardcoded-count guard). Not device-verified.
+
+---
+
+## §DJ — HYROX results seasons 7 to 9: ingest, hygiene and the improvement data (2026-10-13, lane H3a)
+
+**Side.** Tracking: descriptive tables of what real finishers did (`scripts/ingest-hyrox-results-s79.py:26-27`). At `3e4b08d` nothing reads them. Planning consumers state their own use; lane H3b's wiring is §DK.
+
+**Sources.** Kaggle dataset "HYROX Race Results, Seasons 7-9 (Anonymised)" by Tanvi Jivani, built from public HYROX results via pyrox-client (MIT). Kaggle licence "Other"; the results are not licensed by HYROX (script `:5-9`, module `:4-7`, `HYROX_S79_SOURCE` `:115`, attribution string `HYROX_S79_ATTRIBUTION` `:116`: "HYROX results, seasons 7 to 9 (2024 to 2026), via the open pyrox project"). Two files: `hyrox_results_anonymised.parquet` (1,159,421 rows, one per result, times in minutes) and `repeat_athletes.csv` (77,913 pairs of a first and a latest race by the same athlete). The data's (season, calendar year) pairs are S7-2024, S7-2025, S8-2025, S8-2026 and S9-2026, so S7 is 2024/25, S8 2025/26 and S9 a partial 2026/27. Statistics: Tukey (1977), *Exploratory Data Analysis*, far-out fences; Dvoretzky-Kiefer-Wolfowitz inequality with Massart's constant (Massart 1990, *Ann Probab* 18:1269-1283); Hyndman and Fan (1996, *Am Stat* 50:361-365) type-7 quantiles; the exact two-sided sign test; Oldham (1962, *J Chronic Dis* 15:969-977) for change against initial value. Merged in `3e4b08d` (`b8ce51d`, `ddf5013`, `eb9434c`, `7cf2c1d`).
+
+**Supersedes.** Nothing at `3e4b08d`. The S4 to S6 tables (§R, `src/data/hyrox-population-distributions.ts`) stayed the live source until lane H3b (§DK).
+
+**Where.** Script: `ingest` (`:314`; R1 `:320`, R2 `:355`, R3 `:387`, R3b `:405`, R4 `:514`, share fence `:559-572`, R5 `:574`, R6 `:592` and `:627`), `log10_chance_match_bound` (`:165`), `sign_test_p` (`:185`), `to_sec` (`:205`), `quantile` (`:214`), `log_fences` (`:230`), `percentile_table` (`:238`), `DOUBLES_AGE_MAP` (`:274`), `map_age` (`:286`), `build_tables` (`:683`), `build_age_tables` (`:727`), `season_windows` (`:763`), `build_season_medians` (`:775`), `build_venue_spread` (`:795`), `build_same_venue_drift` (`:832`), `BAND_THRESHOLDS` (`:885`), `build_improvement` (`:1032`), `emit` (`:1216`). Module: `HYROX_S79_INGEST_REPORT` (`:143`), `HYROX_S79_CROSS_LABEL_RESOLUTIONS` (`:178`), `HYROX_S79_TOTAL_FENCES_SEC` (`:186`), `HYROX_S79_PERCENTILES` (`:232`), `HYROX_S89_PERCENTILES` (`:420`), `HYROX_S79_RUN_LEG_MEDIANS_SEC` (`:653`), `HYROX_S79_AGE_TOTAL_PERCENTILES` (`:753`), `HYROX_S79_SEASON_MEDIANS` (`:882`), `HYROX_S79_SAME_VENUE_SEASON_SHIFT` (`:916`), `HYROX_S79_VENUE_SPREAD` (`:950`), `HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS` (`:1122`), `HYROX_S79_IMPROVEMENT` (`:1129`), `HYROX_S79_IMPROVEMENT_REPORT` (`:1536`).
+
+**Model.**
+
+```
+sec = floor(minutes × 60 + 0.5)                                   whole seconds; null stays null
+
+R1  division relay, adaptive, elite, elite_doubles → excluded
+    open → open_singles, pro → pro_singles, doubles → open_doubles, pro_doubles → pro_doubles
+    any other division → the ingest stops
+R2  total null or ≤ 0 → dropped (reported per event and format)
+R3  identical labels and 18 timing fields (total, roxzone, 16 splits) → one copy kept, if B < α
+R3b same event, 18 timing fields identical, different (format, sex, age) label, B < α:
+      only the age label differs → one copy kept, left out of the age tables
+      format or sex differs → copies pooled per event and label pair; each copy votes for the label L minimising
+        z_L = |ln(work/run) − median_L| / IQR_L        (L's own format × sex cell, fully timed rows outside copy groups)
+      exact two-sided sign test p < α → keep the winning label's copies, drop the twins; else drop every copy
+    B = log10 C(n_event, 2) + Σ over timed fields log10( Σ_v share_v² )     (fields treated as independent)
+R4  per format × sex on ln(total): lo = exp(Q1 − 3·IQR), hi = exp(Q3 + 3·IQR)
+      total < lo → dropped
+      total > hi → kept only if all 16 splits timed, R5 passes, and max(segment) / total ≤ share_hi
+        share_hi = far-out upper fence of that share on fully timed, consistent rows inside both total fences
+R5  roxzone timed:   |total − Σ16 splits − roxzone| ≤ 17 s, else dropped
+    roxzone untimed: total − Σ16 splits inside the cell's roxzone far-out fences, else dropped
+R6  a missed split mat, or any split (or timed roxzone) below its far-out lower fence → total tables only
+
+Tables per format × sex × metric (total, run_total, work_total, roxzone, 8 stations):
+  breakpoint p = type-7 quantile of kept values, rounded to the second; cumulativePercentile = % at or under
+  grid = finest in the ladder with smallest gap ≥ 2ε(n), ε(n) = sqrt(ln(2/α) / (2n))
+  a format × sex cell is published only when every metric has n ≥ 119
+  S8-S9 set: the same rows restricted to seasons 8 and 9
+
+Improvement (repeat file, singles, first race a, latest race b, both totals inside the R4 fences):
+  relPct = (t_b / median_event(b)) / (t_a / median_event(a)) − 1     event = season × venue × year × format × sex, n ≥ 119
+  absPct = t_b / t_a − 1;   absMedianSec = median(t_b − t_a)
+  gap = window(b) − window(a)                                         window = one (season, calendar year) half-season
+  band = HYROX_TIME_TO_BAND_THRESHOLDS on t_a (first_race) or on (t_a + t_b) / 2 (mean_of_races)
+  each cell: [p25, median, p75] of relPct and absPct; cells under 119 withheld
+```
+
+**Hygiene counts** (`HYROX_S79_INGEST_REPORT`).
+
+| Rule | Rows |
+|---|---|
+| Input | 1,159,421 |
+| R1 excluded divisions (relay 7,111, adaptive 232, elite 229, elite_doubles 232) | 7,804 |
+| R2 zero totals (2,282 Vienna 2026 Open Singles, 2 Guadalajara 2025 Open Doubles; none null) | 2,284 |
+| R3 exact duplicates | 1,044 |
+| R3b age-only copies / resolved twins (Mechelen 2026) / isolated pairs | 54 / 520 / 136 |
+| R4 below the lower fence | 33 |
+| R4 above the upper fence: kept / missed mat / one dominant segment / inconsistent (in R5) | 571 / 86 / 88 / 12 of 757 |
+| R5 sum off by more than 17 s / implied Roxzone outside its fences | 3,068 / 1,358 |
+| R6 total only: missed mat / split below its fence | 14,743 / 7,633 |
+| Kept for totals / splits / Roxzone | 1,142,946 / 1,120,570 / 1,055,444 |
+
+Mechelen 2026 resolutions (`HYROX_S79_CROSS_LABEL_RESOLUTIONS`): women 225 votes for Pro Singles against 15, 13 abstained, p 2.99e-49; men 249 against 18, p 3.76e-53.
+
+**Pooled medians, seasons 7 to 9** (`HYROX_S79_PERCENTILES` p50, m:ss; n = total-table rows).
+
+| Format, sex | n | Total | Runs | Work | Roxzone | Sled push | Wall balls |
+|---|---|---|---|---|---|---|---|
+| Open Singles women | 162,792 | 95:57 | 46:44 | 40:54 | 8:02 | 2:52 | 6:42 |
+| Open Singles men | 295,627 | 87:57 | 41:52 | 38:11 | 7:28 | 3:02 | 7:02 |
+| Pro Singles women | 25,178 | 87:04 | 40:29 | 39:32 | 6:40 | 3:54 | 6:18 |
+| Pro Singles men | 55,200 | 81:16 | 37:06 | 37:31 | 6:19 | 3:44 | 6:48 |
+| Open Doubles women | 182,049 | 88:01 | 49:17 | 30:35 | 7:53 | 1:51 | 4:22 |
+| Open Doubles men | 175,038 | 76:22 | 42:25 | 26:52 | 6:49 | 1:50 | 4:23 |
+| Open Doubles mixed | 190,881 | 82:55 | 45:40 | 29:37 | 7:17 | 2:11 | 4:34 |
+| Pro Doubles women | 20,748 | 79:57 | 42:56 | 30:10 | 6:37 | 2:27 | 4:12 |
+| Pro Doubles men | 35,394 | 70:01 | 37:14 | 26:53 | 5:40 | 2:12 | 4:12 |
+
+Seasons 8 and 9 only (`HYROX_S89_PERCENTILES` p50): Open Singles women total 96:56, wall balls 6:54, sled push 2:57 (n 119,468); men 88:48, 7:17, 3:09 (n 210,236).
+
+**Season effects** (`HYROX_S79_SEASON_MEDIANS`, `HYROX_S79_SAME_VENUE_SEASON_SHIFT`). Raw median totals, Open women: S7 93:23, S8 96:17, S9 101:01; Open men 86:02, 87:57, 94:19. Same venue, same half of the season, one year apart: Open Singles total +12 to +120 s (smallest total IQR in the format 1,418 s), Open Doubles +36 to +149 s (1,017 s), Pro −314 to +100 s on 2 to 24 venues. Station step at S7 to S8: Open Singles wall balls +30 to +33 s and sled push +13 to +20 s; Pro Singles sled push +29 to +40 s. From S8-2025 to S9-2026 Open women's wall balls move +14 s more and the total +65 s.
+
+**Improvement** (`HYROX_S79_IMPROVEMENT`, `relPct` median; negative = faster; 75,332 athletes).
+
+| Band | Grouped by first race | n | Grouped by mean of both races | n |
+|---|---|---|---|---|
+| Competitive (under 1:00) | +1.8% | 229 | −2.2% | 279 |
+| Advanced (1:00 to 1:20) | −2.1% | 20,711 | −3.9% | 22,928 |
+| Intermediate (1:20 to 1:40) | −4.0% | 34,729 | −4.2% | 34,945 |
+| Novice (1:40 to 2:00) | −6.6% | 14,051 | −4.3% | 12,647 |
+| Beginner (2:00 and over) | −9.9% | 5,612 | −4.1% | 4,533 |
+| All | −4.1% (p25 −9.7%, p75 +1.7%; raw −4.0%, −204 s) | 75,332 | | |
+
+By gap (relPct median): about 6 months −3.6% (n 39,169), 12 months −4.6% (23,573), 18 months −4.6% (10,656), 24 months −6.2% (1,934). By format and sex: Open women −4.3% (21,353), Open men −4.5% (44,865), Pro women −1.2% (1,619), Pro men −1.5% (7,495). The typical gain from first to latest race is about 4%. Grouping on the first race builds in regression to the mean: an athlete banded beginner on one slow race tends to post a faster next race whatever the training, so the first-race beginner figure of −9.9% falls to −4.1% when the band is read on the mean of both races. 179 cells published, 76 withheld.
+
+**Constants.**
+- `TUKEY_FAR_OUT_K` = 3 (`:76`): Tukey's far-out rule, on the log scale because times are positive and right-skewed.
+- `CONSISTENCY_TOLERANCE_SEC` = 17 (`:86`): 17 segments plus the total, each rounded to the whole second, can differ from their true sum by less than 18 s; residuals are integers, so 17 s is the largest gap rounding explains.
+- `DKW_ALPHA` = `ALPHA` = 0.05 (`:95`, `:126`): one significance level for the DKW band, the chance-match bound and the sign test.
+- Grid ladder minimums 73,778 / 4,612 / 738 / 328 / 119 (`:107-122`): derived from ε(n) at half each grid's smallest gap; 119 is `MIN_CELL_N`. A test re-derives them.
+- Share fence `share_hi` (0.197 to 0.234 across published cells, `HYROX_S79_TOTAL_FENCES_SEC.maxSegmentShare`): fitted per cell from the data by the same far-out rule.
+- `CURRENT_JUDGING_SEASONS` = (8, 9) (`:132`): chosen from the same-venue station step in the data.
+- `BAND_THRESHOLDS` (`:885`): a copy of `HYROX_TIME_TO_BAND_THRESHOLDS` (60, 80, 100, 120 min), applied the way the onboarding initializer's `bandFromTime` applied them at `3e4b08d` (the first threshold the time is under; lane H2, `d8432d2`, later replaced that function with the planning band, §DL); emitted and pinned by a test.
+No hand-picked number: every threshold comes from the timing format, a named rule or the data (script `:22-24`).
+
+**Decisions.** None by Tristan in this lane. The implementer chose three things, open for confirmation in ISSUE-396: pooled S7 to S9 as the main set with the S8 and S9 set alongside; keeping above-fence totals that their own splits corroborate (the first review's option A); and the R3b sign-test hybrid. Lane H3b's brief later settled which set feeds what (decision 1: S8 and S9 for percentiles, seeds, band thresholds and conversions; pooled S7 to S9 for age groups) and treated Pro Doubles mixed rows as data errors (decision 3).
+
+**Why defensible.**
+- *Reproduced independently.* The final reviewer re-implemented every rule from the raw files and matched every drop count, the kept-row totals and all 108 pooled tables at every breakpoint (reviewer's probe at `7cf2c1d`). In the same probe a looser, separate hygiene (total above zero, exact dedupe, all splits timed, 17 s tolerance) agrees within 0 to 5 s from p1 to p95.
+- *Resolution set by cell size.* The DKW ladder guarantees neighbouring breakpoints are resolved at 95% for the cell's n, so a thin cell gets fewer breakpoints.
+- *Timing rules come from the timing format.* The 17 s bound is a hard rounding limit; a missed mat sometimes folds its time into a neighbour, so those rows keep only their start-to-finish total.
+- *Label errors are tested.* A copy is treated as one result only when a chance match is implausible by more than 25 orders of magnitude, and a cross-label set resolves only on a significant sign test; work-to-run ratio separates singles from doubles because doubles partners split the stations and run together.
+- *Venue removed, regression to the mean exposed.* Normalising by the event's own median removes course and venue effects; reporting both band groupings shows how much of the beginner gain is selection on a slow first race.
+
+**Effect.** At `3e4b08d` none: no consumer. Pinned by tests (`hyrox-results-s79.test.ts`): the smoke medians (Open women within 60 s of 95:55, Open men within 60 s of 87:57, 6:42 inside the women's wall-ball p45 to p55 band); S8 and S9 wall-ball and sled-push medians above the pooled ones in Open Singles; the improvement band thresholds equal the app's. Review fixes, from the committed tables at `ddf5013` and `7cf2c1d`: Pro Doubles women's work total p99 3032 to 2992 s and sled push p99 331 to 317 s; p99 totals Open women 10227 to 10265 s and Pro women 9354 to 9450 s; medians move 4 s or less.
+
+**Limitations.**
+1. Venues differ. Event medians as a share of the pooled median, p10 to p90 of events, Open men: run total 0.94 to 1.15, sled push 0.84 to 1.23, sled pull 0.88 to 1.20, Roxzone 0.77 to 1.31; widest single-cell ranges sled push 0.70 to 1.88, sled pull 0.75 to 1.69, Roxzone 0.54 to 2.04 (`HYROX_S79_VENUE_SPREAD`). Event medians mix venue with field strength; the data cannot separate them.
+2. The S7 to S8 station step is attributed to a judging change without a rulebook check, and drift continues inside the S8 and S9 set (+14 s Open women's wall balls, S8-2025 to S9-2026). The Women Open rep change (75 to 100) came in 2024/25 (§DG), which is S7, so it does not explain the step, and Open men's wall balls step by +33 s too.
+3. The one-dominant-segment rule uses a share fence fitted on mostly sub-2 h finishers, while the share rises with total time. Reviewer's probe at `7cf2c1d`: 51 of the 88 dropped rows look like genuine slow finishers (2.8 to 5.4 h, share under 0.4, mostly wall balls); p99 totals read 0 to 24 s fast (Pro Singles women 9450 against 9474 s), p95 7 s or less, medians unchanged. The script comment's "a genuine slow finisher is slow throughout" (`:559-565`) does not hold for them.
+4. R5 drops cluster at a few S7-2025 doubles events, with residuals just past 17 s (reviewer's probe: Manchester 736 of 2,199 Open Doubles rows, Toulouse 897 of 2,664, Auckland 426 of 1,640, Guadalajara 148 of 643). Pooled tables move 1 s or less, but the Open Doubles women's S7-2025 to S8-2026 same-venue shift reads +149 s against +130 s with those totals kept, and +149 s is the upper end of the field-drift range quoted in the improvement header.
+5. The improvement figure is first-to-latest, with an unknown number of races between, for athletes who raced again (survivor sample). relPct includes field drift: a slower field flatters it. The repeat file has no month (`monthsBetweenNonEmpty` 0), so gap g means roughly 6g months, anywhere from 6(g − 1) to 6(g + 1). The dataset's own relative columns give −2.3% (`authorRelMedianPct`); their venue-typical time drifts against the recomputed event median across seasons (implementer's and first reviewer's probes: +2.9% in S7-2024 to −2.5% in S9-2026), so they are not used. Repeat-athlete linkage is the dataset author's and cannot be checked here.
+6. The improvement normaliser needs an event cell of 119 rows: 2,556 repeat pairs are dropped for that, among them 44 at Taipei S7-2025 Pro men, whose cell fell to 117 after the R3b isolated-pair drops (implementer's and final reviewer's probes).
+7. R2 is one division published with zero times plus 2 stray zeros; no row has a null total. The file holds finishers only, so the tables carry no DNF or DNS information.
+8. Doubles age groups use 10-year bands so S7 can be pooled. The dataset carries one age label per team; how HYROX assigns it cannot be checked from the data.
+9. The chance-match bound treats fields as independent; they are positively correlated (a fast athlete is fast everywhere), and the margin (10^-27.1 against 0.05) absorbs that.
+10. Two report fields are single results (`keptAboveFenceMaxTotalSec` 21735, `droppedAboveFenceOneSegmentTotalRangeSec` [10109, 107488]), and the fences export publishes lo, hi and share for the withheld Pro Doubles mixed cell (39 rows). ISSUE-396 (e), (f).
+11. Licence: the dataset's Kaggle licence is "Other" and the underlying results are HYROX's. Whether derived aggregates may be used commercially is undecided (ISSUE-396 (a)).
+
+**Guards.** `src/data/hyrox-results-s79.test.ts` (29 at `3e4b08d`, 36 at `5068d8b` after H3b): provenance, size under 400 KB, the DKW ladder, every table monotonic and on its grid with the resolution check, lower fence respected, row accounting across every rule, R2 by event, per-cell fence counts, every above-fence row classified, cross-label bounds and resolutions, published plus suppressed counts, shared split row sets, season partitions, same-venue coverage, the S8 and S9 set (grids, counts, the station step), venue spread, age tables, improvement minimums and counts, the band-threshold pin, smoke medians. No user-facing surface at `3e4b08d`; nothing to device-verify.
+
+---
+
+## §DK — HYROX reads the S8 to S9 results: per-station percentiles, per-division conversions, band seeds and the improvement ceiling (2026-10-13, lane H3b)
+
+**Side.** Mostly tracking: finish and station percentiles, the age and sex rank line, the doubles mapping and the Open-to-Pro conversion inside the forecast, and the improvement ceiling on the race-day projection. Two planning inputs read the same numbers: the band seeds are the plan's station targets for untested stations (`hyroxPlanningStationBenchmarks`), and at this merge the field-relative thresholds set the band (MTL cap, sessions, hours, plan weeks) in setup, log-a-race and the previous-format fix (replaced for planning by lane H3c, §DL). The Open-to-Pro conversion serves both sides because a station prescribed at the target's tier and that station's forecast time describe the same work at the same loads.
+
+**Sources.** Kaggle "HYROX Race Results, Seasons 7-9 (Anonymised)" (Tanvi Jivani), built with pyrox-client (MIT) from public HYROX results; ingested by lane H3a (`3e4b08d`) into `src/data/hyrox-results-s79.ts`, aggregates only. This lane extends `scripts/ingest-hyrox-results-s79.py` (pooled-by-format tables, season labels, band thresholds, band seeds, station lower fences); the product reviewer (at `f4b7bf7`) and the statistics reviewer (at `9dc35bc`) reproduced the module byte for byte from the raw files (outside the repo). Repeat-athlete improvement cells grouped by the mean of both races (Oldham's method, per the data module) remove the regression to the mean that grouping by the first race builds in. HYROX 26/27 rulebooks for the load tiers (§DG). Merged in `ee19331` (`a4060ba`, `ee9e742`, `71f85dc`, `6c98b78`, `64f9c44`, `f4b7bf7`, `0ae4c96`, `a4db61f`, `db68f21`, `8457518`, `9dc35bc`).
+
+**Supersedes.** §DH's single aggregate station ratio on the pooled S4 to S6 tables and its Pro Doubles fallback to the Open ratios; §DI's synthetic station percentiles ("est. pN") and pooled-sex S4 to S6 captions; §DG limitation 3, `HYROX_PRO_STATION_MULTIPLIER` (sleds 1.15, other loaded stations 1.08, both sexes), now a fallback; the hand-set HyroxDataLab, roxlyfe.com and Hyroxy.com seed times (race-specific course factors entry); the competitive-seed session floor (§AP).
+
+**Where.** `src/calculations/hyrox-results.ts`: cohorts `hyroxResultsCohort` `:106`, `hyroxSinglesCohort` `:123`; solo frame `hyroxSoloLoadsArePro` `:143`, `hyroxSoloFrame` `:177`, `hyroxSoloToFieldSec` `:189`, `hyroxFieldToSoloSec` `:195`; tables `hyroxResultsTable` `:226`, `hyroxFasterThanPct` `:265`, `hyroxStationPercentile` `:283`, `hyroxStationLowerFenceSec` `:297`; captions `hyroxResultsCaption` `:345`, `hyroxCohortLabel` `:320`; age `hyroxCohortPlacement` `:409`, `hyroxPlacementHeadline` `:459`, `hyroxPlacementFigure` `:475`; bands `hyroxBandThresholds` `:499`, `hyroxBandFor` `:506`, `hyroxBandForPreviousTime` `:534`; Pro `hyroxProConversionAt` `:583`, `hyroxOpenToProSec` `:614`, `hyroxProToOpenSec` `:621`; ceiling `hyroxImprovementGapFor` `:633`, `hyroxImprovementCeiling` `:672`; seeds `hyroxBandField` `:716`, `hyroxSeedField` `:728`, `hyroxStationSeedsAtTarget` `:745`, `hyroxSeedRunPaceSecKm` `:758`. `hyrox-doubles.ts`: `hyroxDoublesTables` `:114`, `doublesStationTeamSec` `:199`, `doublesStationSoloSec` `:208`. `race-prediction.hyrox.ts`: `convertToTarget` `:366`, `entryIsPro` `:410`, `stationInputs` `:458` (option A `:478`), `hyroxStationHistoryInTargetFrame` `:524`, `hyroxCalibratedStationBenchmarks` `:753`, `hyroxPlanningStationBenchmarks` `:769`. `race-projection.hyrox.ts:389-423` (ceiling). `hyrox-session-benchmarks.ts:143` (floor). `src/constants/hyrox-benchmarks.ts:62-102` (seed readers). Data: `HYROX_S89_BAND_FIELD_PERCENTILES` `:1417`, `HYROX_S89_BAND_THRESHOLDS_SEC` `:1420`, `HYROX_S89_BAND_SEEDS` `:1427`, `HYROX_S79_STATION_LOWER_FENCES_SEC` `:197`.
+
+**Model.**
+
+```
+Cohort (whose results a time is placed against)
+  singles: biologicalSex → single-sex division pick → the format's pooled S8-S9 table
+  doubles: division (resolveHyroxDivision: else sex) → pooled; Mixed under Pro → the athlete's sex;
+           pro_doubles 'mixed' (25 rows S8-S9, 39 rows S7-S9) suppressed, never selected
+  singles cohort of a doubles athlete: own sex, the target's weight family (Open or Pro Singles)
+
+Percentiles: tables [sec, % at or faster], linear between breakpoints, clamped at the end breakpoints
+  fasterThan(x) = round(100 − cum(x))
+  finish:  forecast total (pair's total for doubles, no conversion) in the cohort's S8-S9 total table
+  station: forecast line baseSec (venue-neutral; pair's time for doubles) in the cohort's station table
+  rank:    known sex and an age inside a published cell → that age group's table (pooled S7-S9),
+           else the S8-S9 sex cell; past the table's slow end:
+           headline "Slower than {last p}% of …", figure "<{100 − last p}%"
+
+Doubles mapping, per metric m (each station, Roxzone, run total, 8-station total)
+  tables  = hyroxDoublesTables(format, sex, division): pair's division (target family) vs own-sex singles
+  x_f     = hyroxProToOpenSec(m, x, female) for a woman in Mixed Doubles (M-Open solo loads, W-Open field),
+            x otherwise
+  p       = cum_singles_m(x_f);  ratio_m = doubles_m(p) / singles_m(p);  pair_m = x_f × ratio_m
+  solo_m(pair) = pair ÷ ratio read at the pair's percentile in the doubles table, back to solo loads
+
+Open-to-Pro, per loaded station m and sex s (difference in differences, S8-S9 singles tables)
+  r_m(p)   = pro_singles_s,m(p) / open_singles_s,m(p)
+  r_ref(p) = geomean over {SkiErg, row, burpee broad jumps, run total} of r(p)
+  M_m(p)   = r_m(p) / r_ref(p);   M < 1 or a missing table → HYROX_PRO_STATION_MULTIPLIER[m] (fallback)
+  p        = the Open-weight time's percentile in the Open singles field (p50 with no time)
+  openToPro(x) = x × M_m(p(x));  proToOpen = fixed point of the inverse (start + 6 iterations)
+  women: W-Open → M-Open loads (Women Pro races M-Open); men: M-Open → M-Pro; unknown sex: pooled
+  SkiErg, row, burpee broad jumps: × 1
+
+Load family of a stored time (entryIsPro)
+  race split or session best with proWeights → that;  toggle benchmarksAtProWeights on → Pro;
+  race split with no weight record, or a slot value with no entry → Open;
+  station test → hyroxSoloLoadsArePro(entry.format) (a test logged under a Pro format stays Open)
+convertToTarget: solo time → the target's solo loads; doubles race split → solo time in its own family
+  (doublesStationSoloSec) → target loads; a split from the other family maps back to the target's
+  pair time (teamCrossFamily)
+
+Band seeds (one athlete's times at the target's loads)
+  seed(band, m) = median split m of the field's finishers whose total is in the band (HYROX_S89_BAND_SEEDS)
+  field at this merge = the band field's singles family at the athlete's sex, Open with no race
+                        (lane H3c: Open Singles at the athlete's sex for every format, §DL)
+  → Open-to-Pro per station when the target's solo loads are the Pro tier (Pro → Open when the
+    field was Pro and the target Open, at this merge)
+  run pace = median run total ÷ 8;  Roxzone = median Roxzone;  total_beginner → the beginner cell
+
+Field-relative bands
+  P_k = cum percentile of 3600, 4800, 6000, 7200 s in the S4-S6 pooled open singles total table,
+        clamped: 1.0, 25.3211, 73.5085, 92.916                         (HYROX_S89_BAND_FIELD_PERCENTILES)
+  threshold_k(format, sex) = type-7 quantile of that S8-S9 field's totals at P_k
+  band = first k with total < threshold_k, else beginner
+
+Improvement ceiling (tracking; applied last as one more uniform factor)
+  gap  = clamp(round(months / 6), 1, 4), months = weeks × 7 / (365.25 / 12)
+  band = HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS (3600/4800/6000/7200 s) on the singles-terms current total
+         (doubles: doublesTotalInSinglesTermsSec on the athlete's tables)
+  cell = mean_of_races (singles format × sex × band × gap) → all gaps → all singles × band × gap
+         → all singles × band → first_race band 'all' (format × sex × gap) → all singles band 'all' × gap
+  ceilingPct = −relPct p25 of the cell
+  if projected < current × (1 − ceilingPct/100): a 'Results ceiling' factor lifts it to that floor
+
+Session-best floor: round in the field's loads ≥ HYROX_S79_STATION_LOWER_FENCES_SEC[field][m]
+  (the split's log-scale Tukey far-out lower fence, ingest rule 6; pooled → the lowest published cell)
+
+Confidence (option A)
+  doubles target: converted = every calibrated value except the target family's own doubles race splits
+  singles target: converted = a doubles race split
+  any converted station: high → medium (the §DH rule)
+```
+
+**Data (computed from the committed tables with the code's formula, at p50).**
+
+Open-to-Pro multiplier:
+
+| Sex (loads) | Sled push | Sled pull | Farmers | Sandbag | Wall balls | r_ref |
+|---|---|---|---|---|---|---|
+| Women (W-Open → M-Open) | 1.573 | 1.149 | 1.295 | 1.133 | 1.066 | 0.866 |
+| Men (M-Open → M-Pro) | 1.405 | 1.298 | 1.131 | 1.066 | 1.082 | 0.878 |
+| Pooled | 1.473 | 1.248 | 1.188 | 1.096 | 1.089 | |
+| Before (both sexes) | 1.15 | 1.15 | 1.08 | 1.08 | 1.08 | |
+
+The multiplier rises with percentile (women's sled push 1.526 at p10, 1.700 at p90). Its lowest value on any loaded station, sex and percentile from p1 to p99 is 1.006 (men's sandbag lunges near p2), so the fallback never fires.
+
+Doubles ratio, pair ÷ singles at the same percentile:
+
+| Division vs singles field | SkiErg | Sled push | Sled pull | BBJ | Row | Farmers | Sandbag | Wall balls | Run total | Roxzone | 8 stations |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Open Doubles women vs women | 0.912 | 0.638 | 0.734 | 0.638 | 0.943 | 0.807 | 0.726 | 0.645 | 1.054 | 0.974 | 0.747 |
+| Open Doubles men vs men | 0.891 | 0.598 | 0.678 | 0.575 | 0.929 | 0.759 | 0.673 | 0.616 | 1.015 | 0.908 | 0.703 |
+| Open Doubles mixed vs women | 0.821 | 0.763 | 0.693 | 0.531 | 0.868 | 0.793 | 0.773 | 0.676 | 0.977 | 0.901 | 0.723 |
+| Open Doubles mixed vs men | 0.949 | 0.714 | 0.804 | 0.640 | 0.980 | 0.835 | 0.756 | 0.641 | 1.093 | 0.969 | 0.773 |
+| Pro Doubles women vs Pro women | 0.919 | 0.627 | 0.764 | 0.674 | 0.951 | 0.739 | 0.772 | 0.662 | 1.062 | 0.990 | 0.763 |
+| Pro Doubles men vs Pro men | 0.899 | 0.579 | 0.720 | 0.620 | 0.931 | 0.758 | 0.713 | 0.612 | 1.006 | 0.892 | 0.717 |
+
+H1 read one aggregate station ratio for every station (pooled open_doubles ÷ pooled open_singles 8-station total, S4 to S6; 0.714 at P50). A Mixed woman's row applies to her W-Open-equivalent time.
+
+Band thresholds, S8 to S9 (s; band = first threshold the total is under):
+
+| Field | competitive | advanced | intermediate | novice |
+|---|---|---|---|---|
+| Open Singles women | 4135 (68:55) | 5188 (86:28) | 6617 (110:17) | 8184 (136:24) |
+| Open Singles men | 3701 | 4708 | 6115 | 7627 |
+| Pro Singles women / men | 3747 / 3462 | 4651 / 4322 | 5922 / 5560 | 7323 / 6886 |
+| Open Doubles women / men / mixed | 3967 / 3396 / 3544 | 4848 / 4167 / 4516 | 5894 / 5167 / 5611 | 6936 / 6188 / 6739 |
+| Pro Doubles women / men | 3555 / 3154 | 4344 / 3811 | 5324 / 4673 | 6395 / 5548 |
+| Global scale (before, every field) | 3600 | 4800 | 6000 | 7200 |
+
+Intermediate seeds (s): Open Singles women (n 57,583) SkiErg 319, sled push 176, sled pull 349, burpee broad jumps 409, row 332, farmers 140, sandbag 316, wall balls 413, Roxzone 485, run 352 s/km. Open Singles men (n 101,268) 276, 188, 301, 340, 295, 133, 325, 437, Roxzone 450, run 315 s/km. Hand-set before (Open, sexes averaged): 267, 221, 306, 319, 284, 130, 296, 421, Roxzone 390, run 305 s/km.
+
+Improvement cells (mean of races, gap 1, relPct p25 / median): Open Singles women intermediate (n 6,065) −7.9% / −3.6%; Open Singles men novice (n 3,520) −11.3% / −4.5%; Pro Singles men advanced (n 1,836) −5.9% / −1.4%; Open Singles women beginner (n 1,199) −11.3% / −4.1%.
+
+**Constants.**
+- None new is hand-set. Every ratio, multiplier, threshold, seed and fence is read from the committed tables.
+- `HYROX_S89_BAND_FIELD_PERCENTILES` (1.0, 25.3211, 73.5085, 92.916): the global thresholds' positions in the S4 to S6 pooled open singles total table, chosen as the calibration because it was the app's only real-results field when the thresholds were last used. The only recorded anchor list (HYROX Population Percentiles, 2026-05-06: 60 to 120 min at p5, p15, p35, p60, gender-mixed HyroxDataLab Open) was rejected: hand-set, and 60 min sits below p1 (3829 s) of the real S4 to S6 field; reading the thresholds at it would push most athletes down a band. 3600 s clamps to p1, the finest percentile that table resolves.
+- Reference segments for the difference in differences (SkiErg, row, burpee broad jumps, run total): the unloaded segments, a pragmatic choice set in the lane brief. Sensitivity (implementer's probe, confirmed by the statistics reviewer): SkiErg and row alone give multipliers about 6% lower, and women's wall balls drop to 0.998, below the sanity check.
+- Sanity check M ≥ 1: a product rule. A heavier load cannot make a station faster, so a ratio below 1 means the cohort gap swamped the load effect and the fallback stands in.
+- `HYROX_PRO_STATION_MULTIPLIER` (`hyrox-constants.ts:40`): unsourced, kept as the fallback only.
+- Gap mapping round(months / 6), clamped 1 to 4: the data's own definition (gap g means about 6g months, anywhere from 6(g−1) to 6(g+1)).
+- Session floor: the ingest's rule-6 fence, the bound the ingest already uses to drop slipped splits.
+
+**Decisions.** The lane brief's decisions (orchestrator, 2026-10-13; no report records them as Tristan's own): (1) S8 to S9 tables for percentiles, seeds, bands and conversions, pooled S7 to S9 for age groups; (2) real station percentiles with provenance captions; (3) the cohort rule above; (4) per-station, per-division doubles mapping; (5) the difference in differences for Open-to-Pro; (6) seeds at the target's weights; (7) field-relative bands; (8) the improvement ceiling; (9) the age and sex rank line; (10) H1 minors: option A, the race-age caption, one-frame history. Review round (2026-10-13): the woman in Mixed Doubles is read at the Women Pro tier (statistics reviewer's fix); option A covers doubles race splits from the other weight family (product reviewer's option); the HyroxDataLab anchors are cited and rejected.
+
+**Why defensible.**
+- *Real data over hand-set anchors.* The station percentiles, seeds and conversions now come from about 850,000 current-era results with per-station splits; the previous anchors were hand-picked percentiles of hand-set seeds and an unsourced one-set-for-both-sexes Pro factor.
+- *The right comparison group.* Women and men race different loads and targets (§DG), so a pooled table misplaces both; the sex cell (or the pair's division) places a time among people who did the same work. Age groups use the pooled S7 to S9 tables because their cells are small; the sex cells use S8 to S9 because the S8 judging step moved wall balls and sled push at the same venues.
+- *Percentile matching, per station.* Pairs gain most where the work splits cleanly (sleds, burpee broad jumps, wall balls: about 0.53 to 0.80) and little on one shared erg (0.82 to 0.98); one aggregate ratio mis-scaled every station. Matching at the athlete's percentile keeps a fast athlete against fast pairs.
+- *Difference in differences.* The Pro field is fitter (r_ref 0.866 women, 0.878 men: 12 to 13% faster on unloaded work at the same percentile), so a raw Pro/Open ratio understates the load effect; dividing by the unloaded ratio removes the cohort gap and leaves the load. The women's larger relative load jump (sled push 102 to 152 kg against 152 to 202 kg) shows in the data (1.573 against 1.405).
+- *A band is a position in a field.* Keeping each threshold at its field percentile stops women and doubles athletes being banded against a male-dominated singles scale (40.4% of Open Singles women move up a band; probe below).
+- *The improvement ceiling is outcome data.* It bounds the projection's gain by what the top quarter of repeat athletes achieved, with regression to the mean removed by mean-of-races grouping. Field drift and survivorship both flatter relPct, which keeps the ceiling at the optimistic end, the end Tristan's calibration rule asks for (memory: prediction optimistic-end-of-defensible).
+- *One number per surface.* Every station percentile surface calls `hyroxStationPercentile` with the same cohort; seeds come from `hyroxStationSeedsAtTarget` everywhere, plan included; every history view converts through `convertToTarget`, the forecast's own conversion.
+
+**Effect.** Tested: the median of each of Open Singles women, Open Singles men, Pro Doubles men and Open Doubles mixed bands intermediate, and a women's Open time just under 86:28 bands advanced (intermediate on the old scale) (`hyrox-results.test.ts`); the multiplier is at least 1 for every loaded station and sex at p10, p25, p50, p75 and p90, and women's sled push converts more than men's at p50; the women 30 to 34 table's p40 reads "Faster than 60% of women aged 30 to 34"; a Mixed woman's planning targets equal a Women Pro athlete's, a test at her seed-at-target value leaves every line unchanged, and an M-Open round at the converted women's median reads within 1 of 50% of "Open Singles women" (`hyrox-mixed-woman-loads.test.ts`); an Open Doubles row of 2:00 with splits of 105 and 120 s shows "PR 1:45" and one frame caption, and a slow women's 65 to 69 forecast shows "<25%" (`results-wiring.test.ts`); option A caps a doubles target reading solo tests in the doubles slot and one reading other-family splits (`race-prediction.hyrox.test.ts`); a pinned week-2 plan moved from 220 to 223 planned minutes (`hyrox-mtl-completion.test.ts`; lane H2 re-pins it at 282, easy erg work filling the budget).
+
+Implementer's probe, `3e4b08d` against `f4b7bf7` (the review round changed none of these forecasts); P1 at London, the rest venue-neutral:
+
+| Persona | Forecast | Rank line | Wall-ball percentile | Gain to race day |
+|---|---|---|---|---|
+| P1 Open Singles woman 32, 8 tests, 16 wk | 1:24:15 → 1:25:50 (Roxzone seed 390 → 485 s) | "63% of finishers" → "Faster than 72% of women aged 30 to 34" | est. p67 → 51 | −53 s → −53 s |
+| P2 Open Singles man 41, 4 tests, 12 wk | 1:07:18 → 1:08:44 | 96% → 95% of men aged 40 to 44 | 84 → 84 | −40 s → −40 s |
+| P3 Open Doubles mixed woman 29, singles tests | 1:13:23 → 1:13:26 | 68% → 77% of mixed pairs aged 16 to 29 | 65 → 48 | −78 s → −77 s |
+| P4 Pro Singles man, Open race, Open-weight tests | 1:17:15 → 1:19:26 (stations 2221 → 2292 s) | 67% → 57% of men aged 35 to 39 | 67 → 51 | −52 s → −50 s |
+| P5 Pro Doubles women, 8 Pro doubles splits | 1:08:18 → 1:10:49 (run 2136 → 2232 s) | 67% → 79% of women's pairs aged 30 to 39 | 81 → 62 | −40 s → −42 s |
+| P6 first-HYROX woman, total_beginner | 1:57:52 → 2:08:42 | 8% → 8% of women aged 25 to 29 | 3 → 5 | −176 s → −190 s |
+| P7 novice man 45, no tests, 30 wk | 1:33:21 → 1:42:08 | 41% → 29% of men aged 45 to 49 | 40 → 20 | −168 s → −169 s |
+
+Band moves when the global scale gave way to field-relative thresholds, all S8 to S9 total rows (implementer's recomputation from the ingest's cleaned rows, reproduced exactly by the statistics reviewer at `9dc35bc`; doubles "before" uses H1's S4 to S6 singles-terms conversion): Open Singles women 40.4% up; men 6.3% up, 3.7% down; Pro Singles women 1.5% up, 8.2% down; Pro Singles men 34.4% down; Open Doubles women 57.8% up, men 0.8% up and 9.3% down, mixed 28.8% up; Pro Doubles women 7.7% up, men 49.3% down. The planning side of this was replaced by lane H3c (§DL).
+
+Statistics reviewer's probe at `9dc35bc`: forecast station lines for Open Doubles women, a Mixed man, a Mixed woman and Pro Doubles men match an independent ECDF-then-quantile computation on the rows within about 1 s; with no tests the Mixed woman's pair forecast (4966 s) sits beside a Mixed man's at the same band (4971 s). Implementer's probe: the improvement ceiling binds for no persona (modelled gains 1.0 to 2.8%, ceilings 5.9 to 11.3%).
+
+**Limitations.**
+1. Cohort comparisons. The doubles mapping and the Pro conversion compare fields, not the same athletes; the mapping assumes assortative pairing (a pair at p is two athletes near p), and the difference in differences assumes the unloaded ability gap carries to the loaded stations.
+2. Station percentiles place the forecast's station time, which treats a fresh test as the race-day time (no within-station fade, ISSUE-395 (f)), against fatigued race splits.
+3. Seeds are race splits (in-race fatigue) used as targets for fresh station sessions.
+4. Venue variation is in every table (sled stations vary most, `HYROX_S79_VENUE_SPREAD`), and the pooled S7 to S9 age tables read slightly fast on wall balls and sled push (pre-S8 judging), so the Stats rank line and the all-ages "Where you sit" total row use different table sets.
+5. Coarse age cells (women 65 to 69, n 289, p25 to p75) give only a bound past their ends.
+6. The improvement ceiling never binds for typical plans, so projections sit below the repeat athletes' median gain (3.6% for Open Singles women intermediate at gap 1); any horizon up to about 9 months reads the 6-month cell; doubles read their singles family; the band lookup uses the cells' global thresholds on a singles-terms total (ISSUE-397 (b)).
+7. Mixed Doubles assumptions: a previous doubles race is taken to be in the current division; a Mixed pair with no biological sex stays Open; a test's load family follows the format it was logged under, and at this merge the test entry modal named no loads (lane H3c adds them, `hyroxStationTestLoadTier`, §DL) (ISSUE-397 (c)).
+8. Field-relative planning bands lowered Pro athletes' plans for choosing heavier weights (34.4% of Pro Singles men and 49.3% of Pro Doubles men moved down); replaced by lane H3c's planning band (§DL).
+9. At this merge the onboarding initializer (H2-owned) still banded on the global scale through `hyroxBandingTimeSec` and seeded its run-pace observation from pooled tables; lane H2 (`d8432d2`) moved it to `hyroxPlanningBandFor` with the athlete's doubles tables (`initialization.hyrox.ts:144`, `:287`, `:290`) and removed `hyroxBandingTimeSec`.
+10. At this merge the generator fallbacks (run pace, the week-1 assessment, the gym session generator's HYROX brick) read the Open Singles pooled seeds and `HYROX_GENERATOR_VERSION` was not bumped; lane H2 (`d8432d2`) passes the athlete as `seed` to the run, station, brick and assessment generators (they read `hyroxStationSeedsAtTarget` and `hyroxSeedRunPaceSecKm`) and bumps the version to 18. The goal back-calculation floors still read the pooled seeds (ISSUE-397 (d)).
+11. The session floor catches timing slips, not merely implausible rounds (ISSUE-397 (e)).
+12. `bandFromVdot` (`hyrox-staleness.ts:58`) still mirrors the global scale; lane H2 (`d8432d2`) also uses it to band first-timers (ISSUE-397 (a)).
+13. Unread tables: `HYROX_S79_RUN_LEG_MEDIANS_SEC` (the run-leg fatigue model keeps its hand-set rates, §M), the pooled S7 to S9 format x sex tables, the venue spread and the season medians have no app reader.
+
+**Guards.** `hyrox-results.test.ts` (31 at `ee19331`: cohort rules incl. no Pro Mixed, real percentiles, captions, age placement and headline, field-relative bands, the Pro conversion's sanity check and inverse, ceiling lookups, the fence, seeds), `hyrox-mixed-woman-loads.test.ts` (12), `ui/hyrox/results-wiring.test.ts` (16 at `ee19331`, jsdom), `data/hyrox-results-s79.test.ts` (36: pooled tables add up, labels, thresholds at their field percentile in every cell and pinned to the S4 to S6 table, seeds ordered and inside their band, fences below each cell's fastest split, size under 400 KB), `hyrox-doubles.test.ts` (32), `race-prediction.hyrox.test.ts` (37), `ui/hyrox/doubles-stations-caption.test.ts` (26), `hyrox-population-captions.test.ts` (9: no hardcoded count, incl. the S8 to S9 pooled counts), `hyrox-station-potential.test.ts` (9), `workouts/hyrox-planning-benchmarks.test.ts` (13). Not device-verified.
+
+> **Superseded in part 2026-10-13 by §DL (lane H3c, `d7bc44b`).**
+> 1. *Planning band.* The field-relative band (`hyroxBandForPreviousTime(prevTimeSec, prevFormat, biologicalSex, division)`: the previous finish banded on `HYROX_S89_BAND_THRESHOLDS_SEC` of the field it was raced in, the previous race's format at the athlete's sex for singles and the doubles division for doubles, with no conversion) is no longer read by planning. `setupBand`, `applyHyroxPrevTimeUpdate` and `applyHyroxPrevFormatChange` call `hyroxPlanningBandFor` (`hyrox-planning-band.ts:141`): the finish in Open Singles terms, banded on the Open Singles field of the athlete's own sex. Lane H3b's merge note for the initializer (`hyroxBandForPreviousTime`) was applied with `hyroxPlanningBandFor` instead (lane H2, `d8432d2`, `initialization.hyrox.ts:144`). This answers lane H3b's open question (34.4% of Pro Singles men and 49.3% of Pro Doubles men a band lower): no Pro finish now bands lower than under the field-relative rule (tested). `hyroxBandForPreviousTime` (`hyrox-results.ts:534`) stays as a descriptive helper with no app caller. `setupBand` read the time on the global 60/80/100/120-minute scale until the previous format was picked; it now reads it as an Open Singles finish.
+> 2. *Seed field.* `hyroxBandField` returned the previous race's field (Open Singles with no race) and `hyroxSeedField` its singles family at the athlete's sex, so a Pro-raced band read the Pro Singles band medians (converted Pro to Open for an Open target). Both now return Open Singles at the athlete's sex for every format; a target whose solo loads are the Pro tier converts the medians Open to Pro per loaded station. No seed reads the Pro band cells of `HYROX_S89_BAND_SEEDS`, and `HyroxSeedStateInput` no longer reads `hyroxPreviousTimeFormat`.
+> 3. *Back-computed race.* `seedRoxzoneSecForFormat` and `estimateStationsAndRoxzoneFromBand` read the band medians of `tables.singles.format` (Pro Singles for a Pro race); they now read Open Singles at `tables.singles.sex`, the station seeds converted to Pro loads for a Pro-family race.
+> 4. *Chip detail.* The Band thresholds list showed the previous race's field, captioned "<cohort>. Each band holds the same place in every format and sex field."; it now lists the own-sex Open Singles field, captioned "<cohort>. Your <time> <format> time is <time> in Open Singles terms." for a Pro or Doubles previous time, else "<cohort>. Pro and Doubles times convert to Open Singles terms before banding."
+> 5. *Where you sit.* The total row's tier names its cohort ("top 22% of women"), the option lane H3b left open; the other rows keep the short label.
+> 6. *Field rank bar.* Past a coarse age table's end the bar drew a solid dot at the bound beside the "<25%" circle; it now draws the range and a hollow marker at the bound.
+> Display ranks (the Stats rank line, the review's Field position, station percentiles) are unchanged.
+
+---
+
+## §DL — HYROX planning band from the own-sex Open Singles field; per-entry staleness; cohort-named ranks (2026-10-13, lane H3c)
+
+**Side.** Planning: the planning band prescribes. It sets: the MTL cap (`HYROX_MTL_CAP`) on a re-band, and at onboarding since lane H2 (`d8432d2`); the weekly session structure, whose row the band's tier picks since lane H2 (`hyroxTier`, `HYROX_WEEKLY_STRUCTURE`); the setup step's hours range (`HYROX_HOURS_RANGE`), sessions default (`HYROX_WEEKLY_SESSIONS`) and default plan length (`HYROX_DEFAULT_PLAN_WEEKS`, used only without a race date, and setup requires a race or a date); and the seeds behind untested-station targets (`hyroxPlanningStationBenchmarks`, `race-prediction.hyrox.ts:769`). Tracking: the display ranks (Stats rank line, Where you sit, the review's Field position, station percentiles) describe and stay in the athlete's own cohort (format × sex or division × age); the per-entry decay is a forecast blend; the copy changes label tracking numbers. The forecast's band seeds read the planning field too, so the band a plan is built on and the seeds the forecast uses describe one field.
+
+**Sources.** The S8-S9 HYROX results tables wired in lane H3b (§DK): `HYROX_S89_PERCENTILES` (per format × sex or division: the 8 stations, run total, Roxzone and total; `src/data/hyrox-results-s79.ts:420`), `HYROX_S89_BAND_THRESHOLDS_SEC` (`:1420`) and `HYROX_S89_BAND_SEEDS` (`:1427`). The conversions are lane H3b's: the doubles quantile mapping (`doublesStationSoloSec`, `doublesRatioAtTeamTime`; §DH, §DK) and the Open/Pro difference in differences (`hyroxProToOpenSec`; §DK). The decay curve and the physiology mitigation are §V's (Mujika & Padilla 2000, Coyle et al. 1984; the splits-slower-than-band split is coach-derived). Merged in `d7bc44b` (`3b4203a`, `f8269f4`, `3162847`, `a8e1d29`, `83fc9bc`, `7298eb2`).
+
+**Supersedes.** In §DK (lane H3b): the field-relative band as the planning band (`hyroxBandForPreviousTime` in setup, Log a previous time and the previous-format fix); the seed field (the previous race's singles family); the band medians behind the seed Roxzone and the back-computed race stations (`tables.singles.format`); the chip detail thresholds field and caption; the forecast total row's unnamed tier; the Field rank bar's point marker past a table bound. In §V: the race-age splits weight for every calibrated station (kept by lane H3b). Notes appended to §DK, §V, §DH and §AA below.
+
+**Where.** `src/calculations/hyrox-planning-band.ts` (new: `composition` `:80`, `hyroxOpenSinglesTermsSec` `:101`, `hyroxPlanningBandFor` `:141`); `hyrox-results.ts` (`hyroxPlanningField` `:521`, `hyroxBandFor` `:506`, `hyroxBandForPreviousTime` `:534`, `HyroxSeedStateInput` `:702`, `hyroxBandField` `:716`, `hyroxSeedField` `:728`, `hyroxStationSeedsAtTarget` `:745`); `hyrox-doubles.ts` (`seedRoxzoneSecForFormat` `:255`); `hyrox-personal-pace.ts` (`estimateStationsAndRoxzoneFromBand` `:85`); band writers `setupBand` (`hyrox-setup.ts:56`), `applyHyroxPrevTimeUpdate` (`hyrox-prev-time-update.ts:99`), `applyHyroxPrevFormatChange` (`hyrox-prev-format-fix.ts:115`) and, since lane H2 (`d8432d2`), `initializeHyroxSimulator` (`initialization.hyrox.ts:144`). Staleness: `hyrox-staleness.ts` (`computePhysiologyMitigation` `:72`, `applyMitigation` `:124`, `baseDecayAt` `:136`, `monthsSince` `:153`, `hyroxEntrySplitsWeight` `:168`, `computeHyroxStaleness` `:174`); `race-prediction.hyrox.ts` (`StationInput.ownDateISO` `:285`, set at `:480`; `SeedBasis.mitigation` `:614`; `stationBase` weight `:646`; race-age confidence cap `:1038-1039`). Copy: `hyroxTierLabelIn` (`hyrox-population.ts:146`), `calibrationBannerCtaLabel` (`forecast-view.ts:466`), `fieldRankMarkerHtml` (`stats-view.ts:448`), `HYROX_LEDGER_LOAD_NOTE` (`stats-view.ts:504`), `hyroxStationTestLoadTier` (`race-prediction.hyrox.ts:429`), `stationTestLoadNote` (`benchmark-card.ts:164`), the chip detail thresholds caption (`forecast-chip-detail-view.ts:214-220`).
+
+**Model.**
+
+```
+Planning field   F = Open Singles at resolveHyroxAthleteSex(biologicalSex, division)
+                     (biological sex; else a 'women' or 'men' division pick); else Open Singles pooled   hyroxPlanningField
+Planning band    band = first threshold of HYROX_S89_BAND_THRESHOLDS_SEC.open_singles[F.sex] with T_open < maxSec;
+                 beginner above the last                                                                 hyroxPlanningBandFor
+
+T_open = hyroxOpenSinglesTermsSec(T, format, sex, division)
+  Open Singles finish, T ≤ 0 or not finite:  T_open = T
+  1. Composition. R = hyroxResultsCohort(format, sex, division)   (singles: the athlete's sex; doubles: the pair's division)
+     p   = cumulative percentile of T in R's total table
+     c_m = R_m(p) for m ∈ {8 stations, run_total, roxzone};  c_m ← c_m × T / Σ c_m          (parts sum to the finish)
+  2. Doubles. S = hyroxSinglesCohort(format, sex, division)       (own sex, the race's weight family)
+     station m:      solo_m = doublesStationSoloSec(m, c_m, {singles: S, doubles: R})
+                     (no Mixed-woman flag, so solo_m is in S's own terms: a woman in Mixed maps to Open Singles women)
+     run, Roxzone:   solo_m = c_m ÷ ratioD_m(c_m)                   doublesRatioAtTeamTime
+     Singles: S = R, solo_m = c_m
+  3. Pro. If S is Pro Singles (Pro Singles, or Pro Doubles after step 2):
+     solo_m ← hyroxProToOpenSec(m, solo_m, S.sex) for sled push, sled pull, farmers carry, sandbag lunges, wall balls;
+     SkiErg, row, burpee broad jumps, run and Roxzone unchanged
+  4. T_open = Σ solo_m                                (a missing results table returns T)
+
+Seeds (forecast, plan targets for untested stations, Stats seed rows, station detail, benchmark card)
+  seed field  = Open Singles at F.sex, every format, with or without a race on file       hyroxSeedField
+  station     = HYROX_S89_BAND_SEEDS.open_singles[F.sex][band] median, converted Open → Pro per loaded station
+                (hyroxOpenToProSec) when hyroxSoloLoadsArePro(target): every Pro target, a woman in Mixed Doubles
+  run pace, Roxzone = the same cell (no load step)
+Back-computed race (personal run-pace offset; the initializer, with the race's tables since lane H2)
+  stations = the Open Singles band medians at tables.singles.sex, converted Open → Pro when the race's singles field
+             is Pro Singles; doubles → the pair's time per station (doublesStationTeamSec)
+  Roxzone  = the Open Singles band median (doubles × the Roxzone ratio)
+```
+
+Per-entry staleness:
+
+```
+age(d)        = (now − d) / 30.44 days;  d missing, unparseable or in the future → weight 1
+baseSplits(a) = 1.0                        a < 6
+                1.0 − 0.2 × (a − 6) / 6     6 ≤ a < 12
+                0.8 − 0.2 × (a − 12) / 12   12 ≤ a < 24
+                0.6                        a ≥ 24                                       baseDecayAt (§V)
+w(b, m)       = b + (1 − b) × (m − 0.5) × 2,  m ∈ [0.5, 1]                              applyMitigation (§V)
+m             = the race's physiologyMitigation when a race date is on file, else computePhysiologyMitigation(state)
+
+weight of a station value (the history entry that describes the slot value, benchmarkEntryForSlotValue):
+  half test, full test, guided-session best     → w(baseSplits(age(entry.dateISO)), m)          hyroxEntrySplitsWeight
+  race split, 'manual', no matching entry       → the race's splitsWeight (unchanged)
+singles line = w × value + (1 − w) × seed
+doubles line = w × pair's split + (1 − w) × seed mapped to the pair      (a doubles race split)
+             = the blended solo value mapped per station                (anything else)
+Unchanged: bandWeight (the seed blend toward the VDOT band) and the confidence cap (medium from 6 months,
+low from 12) read the race's age.
+```
+
+Formula values of the entry weight with no physiology evidence (m = 0.5): 1.00 up to 6 months, 0.90 at 9, 0.80 at 12, 0.75 at 15, 0.70 at 18, 0.60 from 24. At m = 1 the weight is 1 at every age.
+
+Copy rules:
+
+```
+Total row (Where you sit)   hyroxTierLabelIn(f, cohort) = tier == 'median' ? 'median among ' + noun : tier + ' of ' + noun
+                            tier = hyroxTierLabel(f); noun = hyroxCohortNoun(cohort): women, men, mixed pairs,
+                            women's pairs, men's pairs, or "<Format> finishers" for a pooled cohort
+Other rows                  hyroxTierLabel(f)
+Field rank bar              beyond 'slow': bound = 100 − tableRange[1], range 0 → bound, hollow marker at bound
+                            beyond 'fast': bound = 100 − tableRange[0], range bound → 100, hollow marker at bound
+                            inside the table: solid dot at fasterThanPct
+Test load tier              entryIsPro(target format, a half test): woman → M-Open, man → M-Pro; else W-Open / M-Open;
+                            null without a HYROX config or a known sex                           hyroxStationTestLoadTier
+Test modal line             doubles target, loaded station, known sex:
+                            "Test at <tier name> loads<', the weights your pair races' for a Mixed woman>: <load>."
+                            + " Testing at Pro loads? Turn on Calibrated at Pro weights in Stats first." (Pro, toggle off)
+Ledger load note            soloIsPro ≠ target soloPro at a loaded station → "Converted to race weights"
+Calibration CTA             confidence low, or every station converted → "Test your stations"; else "Calibrate the rest"
+```
+
+**Planning cut-offs as raw finish times in each race field** (s; competitive / advanced / intermediate / novice). Planning: inverted from `hyroxOpenSinglesTermsSec` at `5068d8b` (docs-pass probe; the implementer's report gives the same values to within 1 s; lane H2 did not touch the conversion or the tables, so they hold at `d8432d2`). Lane H3b field-relative: `HYROX_S89_BAND_THRESHOLDS_SEC`.
+
+| Race field | Planning (H3c) | Field-relative (H3b) |
+|---|---|---|
+| Open Singles women | 4135 / 5188 / 6617 / 8184 (1:08:55, 1:26:28, 1:50:17, 2:16:24) | same |
+| Open Singles men | 3701 / 4708 / 6115 / 7627 (1:01:41, 1:18:28, 1:41:55, 2:07:07) | same |
+| Open Singles, sex unknown | 3774 / 4869 / 6318 / 7853 | same |
+| Pro Singles women | 4272 / 5422 / 6986 / 8730 | 3747 / 4651 / 5922 / 7323 |
+| Pro Singles men | 3816 / 4912 / 6467 / 8177 | 3462 / 4322 / 5560 / 6886 |
+| Open Doubles women | 3944 / 4840 / 5912 / 7002 | 3967 / 4848 / 5894 / 6936 |
+| Open Doubles men | 3368 / 4171 / 5193 / 6222 | 3396 / 4167 / 5167 / 6188 |
+| Open Doubles mixed, woman | 3596 / 4508 / 5619 / 6781 | 3544 / 4516 / 5611 / 6739 |
+| Open Doubles mixed, man | 3589 / 4514 / 5629 / 6778 | 3544 / 4516 / 5611 / 6739 |
+| Open Doubles mixed, sex unknown | 3582 / 4519 / 5620 / 6761 | 3544 / 4516 / 5611 / 6739 |
+| Pro Doubles women | 4019 / 4958 / 6150 / 7438 | 3555 / 4344 / 5324 / 6395 |
+| Pro Doubles men | 3427 / 4238 / 5296 / 6386 | 3154 / 3811 / 4673 / 5548 |
+
+Field sizes (S8-S9, `HYROX_S89_PERCENTILES` counts): Open Singles women 119,468 and men 210,236; Pro Singles women 18,932 and men 40,403; Open Doubles women's pairs 137,988, men's 130,717, mixed 146,936; Pro Doubles women's 16,614, men's 28,149.
+
+**Constants.** None new.
+- Band cut-offs: `HYROX_S89_BAND_THRESHOLDS_SEC.open_singles` (data, lane H3b): the finish times at `HYROX_S89_BAND_FIELD_PERCENTILES` (1.0, 25.3211, 73.5085, 92.916; `hyrox-results-s79.ts:1417`), the positions the old 60/80/100/120-minute scale held in the S4 to S6 pooled Open Singles table. A calibration choice inherited from lane H3b (§DK), not a physiological boundary.
+- Seeds: `HYROX_S89_BAND_SEEDS` (data, lane H3b): the median split of the finishers in each band of each field.
+- Conversions: computed from the tables. `hyroxProConversionAt` falls back to `HYROX_PRO_STATION_MULTIPLIER` (unsourced, §DG limitation 3) only when the difference-in-differences ratio falls below 1; lane H3b's test pins source 'data' for every loaded station and sex from p10 to p90 (`hyrox-results.test.ts:180`), and the docs-pass probe at `5068d8b` found no fallback from p1 to p99 (`hyrox-results.ts` is unchanged at `d8432d2`). `hyroxProToOpenSec` inverts by 6 fixed-point steps (a numerical choice, lane H3b).
+- Staleness: `FRESH_MO` 6, `STALE_MO` 12, `VERY_STALE_MO` 24 (`hyrox-staleness.ts:51-53`), the splits weights 1.0 / 0.8 / 0.6 and the mitigation clamp [0.5, 1]: §V's (directional thresholds; coach-derived splits curve; the clamp a design choice). Applying the same curve to station tests and session bests is a product choice from the lane brief; it was never calibrated for tests.
+- `MS_PER_MONTH` = 30.44 days (`:54`): the mean Gregorian month (365.25 ÷ 12 = 30.4375), rounded.
+- `setupBand(...) ?? 'novice'` in the time-entry handler (`hyrox-setup.ts:552`) is an unreachable fallback (setupBand is null only without a time, and the handler has just stored one), the same fallback the step already used at `:162`, `:1048` and `:1059`.
+
+**Decisions (lane H3c brief, 2026-10-13).** Orchestrator decisions, recorded as such in code (`hyrox-planning-band.ts:10`), not yet confirmed by Tristan; lane H3b had raised (1), the seed field, (3) and the cohort naming as open questions. (1) One planning field for every format, Open Singles at the athlete's own sex, a Pro or Doubles finish converted first; display ranks stay cohort-specific. (2) The forecast total row names its cohort. (3) Station tests and session bests decay by their own date; race splits by the race's. (4) Copy: the CTA rule, the rank bound, the test load line, the ledger note and the seed provenance. (5) The doubles ratio comments quote the S8-S9 data per division.
+
+**Why defensible.**
+- *One field.* The band sets planning inputs meant to track training capacity. Lane H3b read a finish in the field it was raced in, and the Pro fields are fitter (faster on unloaded segments at the same percentile, the difference-in-differences reference r_ref < 1, §DK), so the same athlete planned a band lower for choosing heavier weights (lane H3b's probe: 34.4% of Pro Singles men and 49.3% of Pro Doubles men a band lower than on the global scale). A doubles finish also holds a partner's share of every station. Converting to one athlete at Open loads and banding in one field per sex takes both format effects out, so the plan follows ability and a format change never moves the plan by itself.
+- *Open Singles.* It is the largest field per sex (119,468 women and 210,236 men against 18,932 and 40,403 in Pro Singles), one athlete at the Open tier of their own sex with no partner or load step, and the field the seeds are read in, so a band and its seed medians describe one field.
+- *Own sex.* The S8-S9 tables differ by sex; reading women against a pooled or male-dominated field misplaced them (lane H3b's finding on the global scale).
+- *No new numbers.* The conversion chains mappings already derived from the results data; it is monotonic in the finish and the identity on Open Singles (tested), and it moves in the expected directions: a Pro finish converts faster, a same-sex doubles finish slower, Pro Doubles faster than Open Doubles on the same clock, and in a Mixed pair the man faster than the woman (tested).
+- *Per-entry decay.* §V decays evidence for the fitness and skill lost since it was produced; a station test's evidence date is its own date. Reading the race's age pulled a week-old test toward the band median and left an old test at full weight beside a recent race.
+- *Cohort-named ranks.* Two surfaces gave percentiles of the same finish in different cohorts (the forecast row: all Open Singles women, S8-S9; Stats: women aged 30 to 34, S7 to S9) with no cohort on the row. Naming the cohort removes the apparent contradiction without changing either number.
+- *Bound as a bound.* Past a coarse age table's end the share is known only as a bound; a point marker overstated what the data supports.
+- *Load notes and provenance.* The forecast converts times across load families, so the athlete needs the loads a test is read at and a mark on converted rows; a band median from real results is not a "population average".
+
+**Effect.** Tested: the planning band equals `hyroxBandFor` of the converted time for 14 format, sex and division cases from 2700 to 12600 s in 45 s steps; no Pro finish bands lower than under lane H3b; the pooled Open Doubles median bands like the pooled Open Singles median; a Pro-raced band seeds like an Open-raced one; the back-computed Pro Singles race stations are the Open medians converted to Pro (`hyrox-planning-band.test.ts`, `hyrox-results.test.ts`). A station test from last week is used as is with a 9- or 18-month-old race; a race split still decays; a 15-month-old test decays with a 3-month-old race or none; a test and the race on the same date blend exactly as a race split does (`hyrox-staleness.test.ts`). Every new copy string is pinned (`results-wiring.test.ts`, `benchmark-card-slot.test.ts`, `doubles-stations-caption.test.ts`, `pb-age-surfaces.test.ts`).
+- Band moves against lane H3b's field-relative bands (implementer's probe on the cleaned S8-S9 rows, up / down): Pro Singles women 64.4 / 0%, men 52.6 / 0%; Pro Doubles women 65.0 / 0%, men 53.4 / 0%; Open Doubles women 1.2 / 0.5%, men 1.4 / 0.2%, mixed 0.9 to 1.2 / 0 to 0.4%; Open Singles unchanged. The reviewer's recomputation from the percentile tables lands within about 1 point (Pro Singles men 53.6% up, women 65.3%; Pro Doubles men 54.1%, women 66.0%; Open Doubles 1.0 to 1.5% up, 0 to 0.5% down). Band shares under the planning band (implementer's probe): about 1 / 24 / 48 / 19 / 7% competitive to beginner in Open Singles and every Open Doubles cell; Pro Singles women 11.1 / 46.6 / 32.6 / 7.7 / 2.0%, men 6.8 / 44.7 / 37.7 / 8.5 / 2.2%.
+- Converted finishes (docs-pass probes at `5068d8b` and `d8432d2`): Pro Singles man 1:30:00 is 1:25:49 in Open Singles terms (intermediate either way) and 1:20:00 is 1:16:47 (advanced; intermediate under lane H3b); Pro Singles woman 1:30:00 is 1:26:08 (advanced; was intermediate); Pro Doubles women's pair 1:15:00, 1:17:42 (advanced; was intermediate); Open Doubles Mixed 1:15:00, 1:26:19 for the woman and 1:18:12 for the man (advanced either way); Open Doubles women's pair 1:20:00, 1:25:39 (advanced either way). Through the real initializer at `d8432d2` (docs-pass probe) the five women's cases and the Pro Singles man at 1:20:00 initialise advanced, the band setup shows once the previous format is picked: MTL cap 1600 for singles and 1040 for doubles, build week 3 runs, 2 station sessions and 1 brick.
+- Personas (implementer's probe at the lane tip, before lane H2; band set directly, no station tests): the four Pro cases above move intermediate to advanced, so the MTL cap goes 1300 to 1600 (`HYROX_MTL_CAP`), the hours range's maximum 14 to 16 h and the default plan 18 to 20 weeks. At the lane tip sessions stayed 3 runs, 2 station sessions and 1 brick; since lane H2 (`d8432d2`) the move also changes the tier (`hyroxTier`), so the build week goes from 3 runs, 1 station session and 1 brick to 3, 2 and 1 (`HYROX_WEEKLY_STRUCTURE`, `hyrox-constants.ts:330`). No-test forecasts: Pro Singles man 1:20:05 to 1:14:21 (1:19:01 to 1:16:21 with VDOT 48 and the race-anchored run offset), Pro Singles woman 1:26:05 to 1:22:41, Pro Doubles men 1:09:22 to 1:05:24, Pro Doubles women 1:19:20 to 1:16:55.
+- Per-entry decay (implementer's probe, Open Singles woman, intermediate, VDOT 45, test values well away from the seeds): race 9 months old and 8 tests a week old 1:17:46 to 1:17:10; race 18 months old 1:18:56 to 1:17:10; race 18 months old with 4 race splits and 4 fresh tests 1:18:56 to 1:18:13 (the splits still decay); no race date and tests 10 months old 1:17:10 to 1:17:57; race 3 months old and tests 15 months old 1:17:10 to 1:18:39. Confidence unchanged in every case.
+
+**Limitations.**
+1. The composition is the race field's average split pattern at the athlete's percentile, not the athlete's own splits. Logged splits are not used, so the band stays a function of the finish alone and every band writer agrees (ISSUE-398 (i)).
+2. Each conversion is a cohort comparison: a pair is read as two athletes near the same place in their own singles fields, and the Pro and Open fields are assumed to differ on loaded work by the load alone (§DK).
+3. The band is coarse. An athlete near a cut-off takes the band median's seeds: the Pro Singles man at 1:20:00 plans advanced and his no-test forecast reads 1:14:21, faster than the race he ran (implementer's probe, confirmed by the reviewer; the reviewer measured an Open man at 1:18 forecasting 1:11:40 under lane H3b too; ISSUE-398 (e)).
+4. At the lane tip the onboarding initializer still banded on the global scale, so setup and the first plan could disagree (docs-pass probe at `5068d8b`: an Open Singles woman at 1:25:00 read advanced in setup and initialised intermediate). Resolved by lane H2 (`d8432d2`): the initializer reads `hyroxPlanningBandFor` (`initialization.hyrox.ts:144`) and both read advanced. Stored bands from before are kept (limitation 11).
+5. `bandFromVdot` (`hyrox-staleness.ts:58`) is one VDOT scale for both sexes, mirroring the global finish scale; it picks the band the stale-race seed blend leans toward (`race-prediction.hyrox.ts:599`), the initializer's staleness re-band (`initialization.hyrox.ts:194-196`) and, since lane H2 (`d8432d2`), a first-timer's band (`firstTimerBand`, `initialization.hyrox.ts:77`) (ISSUE-397 (a)).
+6. Per-entry decay reuses the race splits' curve, never calibrated for station tests or session bests. The confidence cap and the staleness note still read the race's age, so 8 fresh tests beside an 18-month-old race read low, and tests 15 months old can read high (ISSUE-398 (b)).
+7. A race split from a race with no date never decays; its history entry carries the log date, which the rule does not use (ISSUE-398 (h)).
+8. Two doubles-to-singles total conversions coexist: the planning band's per-component conversion to Open Singles terms, and the improvement ceiling's total-percentile `doublesTotalInSinglesTermsSec` to the race family's singles terms (`race-projection.hyrox.ts:400`). Docs-pass probe: 3 to 10 s apart for Open Doubles pairs at 1:10 to 1:20.
+9. A Mixed pair with no biological sex on file plans on the pooled Open Singles field.
+10. This merge did not bump `HYROX_GENERATOR_VERSION` (17), so stored plans kept the old station targets; lane H2 bumped it to 18 (`d8432d2`, `plan_engine.hyrox.ts:284`), and every stored plan regenerates once.
+11. Existing athletes keep their stored band until they log a previous time or correct its format. The v18 regeneration (lane H2) migrates session counts (`migratePreV18HyroxSessionCounts`, `hyrox-plan-regen.ts:64`) and does not re-derive the band (ISSUE-398 (a)).
+
+**Guards.** `hyrox-planning-band.test.ts` (13), `hyrox-staleness.test.ts` (17; 6 new), `hyrox-results.test.ts` (32; seed-field cases changed), `ui/hyrox/results-wiring.test.ts` (21; 5 new, jsdom), `ui/hyrox/benchmark-card-slot.test.ts` (10; 6 new), `ui/hyrox/doubles-stations-caption.test.ts` (30; 4 new), `ui/pb-age-surfaces.test.ts` (5; one assertion added), `state/hyrox-doubles-onboarding.test.ts` (16; one description changed). All pass at `d8432d2` (144 tests). Not device-verified.
 
 ---
 
