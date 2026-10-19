@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   generateHyroxStation, generateHyroxBrick, withHyroxRounds, withoutHyroxStation, hyroxStationToCut,
-  hyroxMinRounds, hyroxStationRowText, hyroxSessionNotes, HYROX_EASY_PASS_TIME_FACTOR, MIN_CIRCUIT_ROUNDS,
+  hyroxMinRounds, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown, HYROX_EASY_PASS_TIME_FACTOR, MIN_CIRCUIT_ROUNDS,
   type StationParams, type BrickParams,
 } from './hyrox-generators';
 import { hyroxComponentSets, hyroxSessionDurationSec } from './hyrox-session-shape';
@@ -88,6 +88,20 @@ describe('technique station session', () => {
       }
     }
     expect(withSleds.d).toContain('Sled Push: 4 × 1 lane (12.5 m)');
+    // The header says which rounds hold which stations, matching the lines
+    // (lane H2b review: '4 rounds, one set of each station a round' read
+    // against '2 ×' lines for the other stations).
+    const others = stationsOf(withSleds).filter(c => c.type !== 'sled_push' && c.type !== 'sled_pull');
+    expect(withSleds.d).not.toContain('one set of each station a round');
+    expect(withSleds.d).toContain('4 rounds, 2 min rest after every set. Rounds 1 and 2: every station.');
+    const sledNames = stationsOf(withSleds).filter(c => c.type === 'sled_push' || c.type === 'sled_pull').map(c => (c.type === 'sled_push' ? 'Sled Push' : 'Sled Pull'));
+    expect(withSleds.d).toContain(`Rounds 3 and 4: ${sledNames.join(' and ')} only.`);
+    expect(hyroxRoundsBreakdown(withSleds)).toBe(`Rounds 1 and 2: every station. Rounds 3 and 4: ${sledNames.join(' and ')} only.`);
+    expect(others.length).toBeGreaterThan(0);
+    // A session whose stations all run every round keeps the one-line shape.
+    const noSleds = [wk1, wk2].find(w => w !== withSleds)!;
+    expect(hyroxRoundsBreakdown(noSleds)).toBeNull();
+    expect(noSleds.d).toContain('one set of each station a round');
   });
 
   it('beginner base holds none of the eccentric-heavy stations; race week none of them nor the sleds', () => {
@@ -205,7 +219,22 @@ describe('bricks by tier', () => {
       expect(stationsOf(w).every(c => ['ski_erg', 'row_erg', 'sled_push', 'sled_pull', 'farmer_carry'].includes(c.type))).toBe(true);
       expect(w.d).toContain('800 m easy');
       expect(w.d).toContain('A lighter flow, not a hard session.');
+      // Technique effort: no station above the technique dose (2 sets, 0.5 x).
+      for (const c of stationsOf(w)) expect(setsOf(w, c)).toBeLessThanOrEqual(2);
     }
+  });
+
+  it('a secondary brick with one usable station keeps it to the technique dose (0.5 x), the other rounds run straight on', () => {
+    // No ergs and no sled: the farmers carry is the only secondary station.
+    const w = brick({ kind: 'mini_brick', band: 'advanced', phase: 'peak', slotIndex: 0, secondary: true, stationAccess: { sled: 'never', skiErg: false, rowErg: false } });
+    expect(stationsOf(w).map(c => c.type)).toEqual(['farmer_carry']);
+    const [fc] = stationsOf(w);
+    expect(fc.inRounds).toEqual([1, 3]);
+    expect(setsOf(w, fc)).toBe(2);
+    expect(w.d).toContain('in rounds 1 and 3.');
+    // The main brick's single-station formats keep a station every round.
+    const b = brick({ kind: 'mini_brick', band: 'beginner', slotIndex: 0, stationAccess: { sled: 'never', skiErg: false, rowErg: false } });
+    expect(setsOf(b, stationsOf(b)[0])).toBe(3);
   });
 
   it('the taper\'s brick takes the beginner structure on ergs', () => {

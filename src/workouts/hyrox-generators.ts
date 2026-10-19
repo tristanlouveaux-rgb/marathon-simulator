@@ -591,6 +591,36 @@ function roundsPhrase(rs: readonly number[]): string {
   return `rounds ${rs.slice(0, -1).join(', ')} and ${rs[rs.length - 1]}`;
 }
 
+/**
+ * Which rounds of a station session hold which stations, when not every
+ * station runs every round (a beginner technique session's sleds take 4
+ * single-lane sets while the other stations take 2, HyroxComponent.inRounds):
+ * "Rounds 1 and 2: every station. Rounds 3 and 4: Sled Push and Sled Pull
+ * only." Null when every station runs every round (lane H2b review).
+ */
+export function hyroxRoundsBreakdown(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds'>): string | null {
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const stations = (w.hyroxComponents ?? []).filter(c => c.type !== 'run');
+  if (stations.every(c => hyroxComponentRounds(c, rounds).length === rounds)) return null;
+  const inRound = (r: number) => stations.filter(c => hyroxComponentRounds(c, rounds).includes(r));
+  const groups: Array<{ rs: number[]; held: HyroxComponent[] }> = [];
+  for (let r = 1; r <= rounds; r++) {
+    const held = inRound(r);
+    const last = groups[groups.length - 1];
+    if (last && last.held.length === held.length && last.held.every((c, i) => c === held[i])) last.rs.push(r);
+    else groups.push({ rs: [r], held });
+  }
+  const names = (cs: HyroxComponent[]) => {
+    const ns = cs.map(c => STATION_DISPLAY[c.type as HyroxStation].name);
+    return ns.length === 1 ? ns[0] : `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+  };
+  return groups.map(g => {
+    const which = roundsPhrase(g.rs);
+    const what = g.held.length === stations.length ? 'every station' : g.held.length === 0 ? 'no station' : `${names(g.held)} only`;
+    return `${which.charAt(0).toUpperCase()}${which.slice(1)}: ${what}.`;
+  }).join(' ');
+}
+
 /** The wall-ball target as copy: "to 2.70 m", or both heights when unknown. */
 function wallBallTargetPhrase(m: number | null): string {
   return m != null
@@ -645,9 +675,14 @@ export function hyroxSessionText(w: Workout): string {
     const head = tech
       ? `Technique at RPE ${w.rpe}: smooth, repeatable movement, no time target.`
       : `Race pace at RPE ${w.rpe}: every set at or just above race pace.`;
+    // Not every station in every round (a beginner session's sleds): the
+    // rounds say which stations they hold, so the header matches the lines.
+    const breakdown = hyroxRoundsBreakdown(w);
     const shape = rounds === 1
       ? `1 round, one set of each station, ${fmtRestPhrase(spec.restSec)} rest after every set.`
-      : `${rounds} rounds, one set of each station a round, ${fmtRestPhrase(spec.restSec)} rest after every set.`;
+      : breakdown
+        ? `${rounds} rounds, ${fmtRestPhrase(spec.restSec)} rest after every set. ${breakdown}`
+        : `${rounds} rounds, one set of each station a round, ${fmtRestPhrase(spec.restSec)} rest after every set.`;
     const lines = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name}: ${hyroxComponentSets(c, rounds)} × ${stationPrescription(c, spec, !tech)}.`);
     const weakest = spec.weakest && stations.some(c => c.type === spec.weakest)
       ? [`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`]
@@ -986,8 +1021,16 @@ export function generateHyroxBrick(params: BrickParams): Workout {
     mtl: computeComponentMTL((runSec / 60) * format.rounds, runRpe, easy ? 'run_easy' : 'run_tempo', undefined, p.bodyWeightKg),
     restAfterSec: 0, // into the station after the transition jog, race-like
   };
+  // A secondary brick runs at technique effort, so no station takes more
+  // than the technique dose (0.5 x race volume, HYROX_STATION_FORMATS
+  // .technique). With one usable station (no ergs and no sled: the farmers
+  // carry alone) it keeps the first station's alternate rounds and the other
+  // rounds run straight on; before, the one station took all 4 rounds, the
+  // full race volume (lane H2b review).
+  const lightSingle = !!p.secondary && stations.length === 1 && format.stations === 2;
+  const alternation: 1 | 2 = stations.length > 1 || lightSingle ? 2 : 1;
   const stationComps = stations.map((st, i) => {
-    const inRounds = hyroxBrickStationRounds(format.rounds, stations.length === 1 ? 1 : 2, (i % 2) as 0 | 1, doubles);
+    const inRounds = hyroxBrickStationRounds(format.rounds, alternation, (i % 2) as 0 | 1, doubles);
     return stationComponent({
       station: st,
       sets: inRounds.length,

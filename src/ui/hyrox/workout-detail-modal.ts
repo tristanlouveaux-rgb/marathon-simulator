@@ -15,7 +15,7 @@ import { noteRatingSource } from '@/calculations/athlete-rating';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
-import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
@@ -468,12 +468,15 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
       ? `${fmtRest(workout.hyroxSpec.restSec)} rest after every set · Technique, RPE ${workout.rpe ?? 5}`
       : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace`;
     const notes = hyroxSessionNotes(workout);
+    // Not every station in every round (a beginner session's sleds).
+    const breakdown = hyroxRoundsBreakdown(workout);
 
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:16px">
           <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} round${rounds === 1 ? '' : 's'}</div>
           <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
+          ${breakdown ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${esc(breakdown)}</div>` : ''}
         </div>
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
