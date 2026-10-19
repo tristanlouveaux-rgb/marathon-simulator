@@ -33,7 +33,9 @@
 import type { GarminActual, GarminPendingItem, SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
-import { HYROX_WEEKLY_SESSIONS, type HyroxSessionCounts } from '@/constants/hyrox-constants';
+import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, computeDoublesCap, type HyroxSessionCounts } from '@/constants/hyrox-constants';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 
 /** Generator version that moved the band defaults to the tier structure
  *  (HYROX_WEEKLY_STRUCTURE, lane H2a). */
@@ -237,6 +239,35 @@ function sendToReview(wk: Week, key: string, actual: GarminActual, appType: 'run
 }
 
 /**
+ * A stored plan regenerates on the planning band (H2 integration review,
+ * 2026-10-14): the band its initializer wrote may sit on the old global
+ * 60/80/100/120-minute scale, while the planning band reads the athlete's
+ * previous finish in Open Singles terms on their own sex's field
+ * (hyroxPlanningBandFor), as setup, log-a-race and the format fix do. When
+ * the previous time and its format are stored and the band differs, the band
+ * moves and the MTL cap follows it (computeDoublesCap for a doubles target),
+ * exactly as hyrox-prev-time-update.ts re-bands. A first-timer (no previous
+ * time) keeps the band their running fitness gave. Returns true when it
+ * re-banded.
+ */
+export function rebandStoredHyroxPlan(s: SimulatorState): boolean {
+  const hx = s.hyroxConfig;
+  if (!hx) return false;
+  const prev = hx.previousHyroxTimeSec;
+  const fmt = hx.hyroxPreviousTimeFormat;
+  const known = fmt === 'open_singles' || fmt === 'pro_singles' || fmt === 'open_doubles' || fmt === 'pro_doubles';
+  if (prev == null || !(prev > 0) || !known) return false;
+  const band = hyroxPlanningBandFor(prev, fmt, s.biologicalSex, hx.division);
+  if (band === hx.athleteBand) return false;
+  const old = hx.athleteBand;
+  hx.athleteBand = band;
+  const baseCap = HYROX_MTL_CAP[band];
+  hx.mtlCap = isHyroxDoublesFormat(hx.format) ? computeDoublesCap(baseCap) : baseCap;
+  console.log(`[hyrox] stored plan re-banded on the planning band: ${old} → ${band} (MTL cap ${hx.mtlCap})`);
+  return true;
+}
+
+/**
  * Regenerate the HYROX plan when the generator version has bumped. Mutates
  * `s` in place; returns true when it regenerated (the caller saves).
  */
@@ -246,6 +277,7 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
   const savedVersion = hx.generatorVersion ?? 0;
   if (savedVersion >= HYROX_GENERATOR_VERSION) return false;
   migratePreV18HyroxSessionCounts(s);
+  rebandStoredHyroxPlan(s);
   // A plan built before the chronic seed was stored (D4) fixes it now, so the
   // rollovers and single-week rebuilds after this one read the same value.
   ensureHyroxChronicSeed(s);
