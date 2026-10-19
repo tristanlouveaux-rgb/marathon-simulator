@@ -471,3 +471,12 @@ describe('Stats entry row', () => {
     expect(text('#hx-stats-partner-value')).toBe('Link ›');
   });
 });
+
+describe('partner sharing disclosure', () => {
+  it('the policy-matching disclosure names exactly the shared fields and the unlink right', async () => {
+    const mod = await import('./partner-view');
+    const d = mod.PARTNER_SHARING_DISCLOSURE;
+    for (const f of ['station times', 'run pace', 'Roxzone time', 'forecast splits', 'race format', 'division', 'initials', 'unlink']) expect(d).toContain(f);
+    expect(d).not.toMatch(/\u2014/);
+  });
+});

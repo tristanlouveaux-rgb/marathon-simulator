@@ -365,6 +365,9 @@ function renderBody(vs: ViewState): string {
   return renderLinked(vs);
 }
 
+/** Shown before linking: what a link shares (privacy policy, 'HYROX Doubles partners'). Keep in step with the policy and the snapshot whitelist. */
+export const PARTNER_SHARING_DISCLOSURE = 'Linking shares your station times, run pace, Roxzone time, forecast splits, race format, division and initials with your partner. Nothing else. Either of you can unlink at any time.';
+
 function renderUnlinked(vs: Extract<ViewState, { kind: 'unlinked' }>): string {
   const codeRow = vs.invite
     ? `
@@ -395,6 +398,7 @@ function renderUnlinked(vs: Extract<ViewState, { kind: 'unlinked' }>): string {
         </div>
         ${messageLine(vs.message)}
       </div>
+      <div id="hxp-disclosure" style="font-size:11px;color:${TEXT_S};margin-top:12px;line-height:1.4">${PARTNER_SHARING_DISCLOSURE}</div>
     </div>`;
 }
 
