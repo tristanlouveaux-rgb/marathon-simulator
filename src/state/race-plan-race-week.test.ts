@@ -3,9 +3,15 @@
  * race week relative to race day for every race weekday, on the running layout
  * (raceWeekLayout, storedPlanRaceLayout):
  *   - race week (taper, race-week content) is the week holding race day minus 3;
- *   - a Monday to Wednesday race's own week is a closing week with no sessions;
+ *   - a Monday to Wednesday race's own week is a closing week. It holds only
+ *     the race, except a Tuesday or Wednesday triathlon or cycling race's
+ *     day-before activation (decision 3, 2026-10-14: a spin of at most 30
+ *     min and a jog of at most 10, the day before race day); HYROX's stays
+ *     empty;
  *   - the 6 days before race day hold race-week sessions only: no long run,
- *     brick or long ride, nothing from a peak (or any non-race) week;
+ *     brick or long ride, nothing from a peak (or any non-race) week; the
+ *     60-min race-week brick of a long-course plan (Byrn, tri-taper.ts) is
+ *     race-week content;
  *   - nothing on or after race day, and the plan's final week holds race day.
  *
  * "The 7 days before race day" is read as the 7-day week ending on race day:
@@ -87,8 +93,11 @@ function build(mode: Mode, race: string): SimulatorState {
   return getState();
 }
 
-/** Long run, triathlon brick, solo long ride, full HYROX brick, HYROX long run. */
+/** Long run, triathlon brick, solo long ride, full HYROX brick, HYROX long
+ *  run. The 60-min race-week brick of a long-course plan (Byrn; tri-taper.ts,
+ *  taperRole 'opener') is race-week content, not a long session. */
 function isLongSession(w: Workout): boolean {
+  if (w.t === 'brick' && w.taperRole === 'opener') return false;
   return isLongRun(w) || w.t === 'brick' || w.t === 'hyrox_brick' || w.longRide === true || isHyroxLongRun(w);
 }
 
@@ -114,12 +123,24 @@ describe('race week sits relative to race day for every race weekday', () => {
           expect(s.tw).toBe(layout.calendarWeeks);
           expect(s.wks.length).toBe(s.tw);
           expect(Math.floor(R / 7) + 1).toBe(s.tw);
-          // Monday to Wednesday races (and only those) close with an empty race-day week.
+          // Monday to Wednesday races (and only those) close with a race-day
+          // week holding only the race and, for a Tuesday or Wednesday
+          // triathlon or cycling race, the day-before activation.
           expect(layout.closingWeek).toBe(RACES.indexOf(race) <= 2);
           if (layout.closingWeek) {
             expect(s.wks[s.tw - 1].raceClosing).toBe(true);
             expect(s.wks[s.tw - 1].ph).toBe('taper');
-            expect(s.wks[s.tw - 1].triWorkouts ?? []).toEqual([]);
+            const closing = s.wks[s.tw - 1].triWorkouts ?? [];
+            if (mode === 'hyrox' || layout.raceDayOfWeek === 0) expect(closing).toEqual([]);
+            else {
+              expect(closing.length, 'day-before activation').toBeGreaterThan(0);
+              for (const w of closing) {
+                expect(w.taperRole, w.n).toBe('day_before');
+                expect(w.dayOfWeek, w.n).toBe(layout.raceDayOfWeek - 1);
+                expect(w.estimatedDurationMin ?? 0, w.n).toBeLessThanOrEqual(w.discipline === 'bike' ? 30 : 10);
+              }
+              expect(new Set(closing.map(w => w.id)).size).toBe(closing.length);
+            }
           }
           expect(s.wks.filter(w => w.raceClosing).length).toBe(layout.closingWeek ? 1 : 0);
 
@@ -134,7 +155,13 @@ describe('race week sits relative to race day for every race weekday', () => {
               // Nothing on or after race day.
               expect(daysOut, `w${wk.w} ${w.n} on or after race day`).toBeGreaterThan(0);
               if (daysOut > RACE_DAY_CLEAR_DAYS) continue;
-              // The 6 days before race day: race-week sessions only.
+              // The 6 days before race day: race-week sessions only, and the
+              // closing week's day-before activation.
+              if (wk.raceClosing) {
+                expect(w.taperRole, `w${wk.w} ${w.n}`).toBe('day_before');
+                expect(daysOut, `w${wk.w} ${w.n}`).toBe(1);
+                continue;
+              }
               expect(wk.w, `w${wk.w} ${DOW[w.dayOfWeek]} ${w.n}, ${daysOut} days out`).toBe(raceWeek);
               expect(wk.ph, `w${wk.w} ${w.n}`).toBe('taper');
               expect(isLongSession(w), `w${wk.w} ${w.n}, ${daysOut} days out`).toBe(false);
@@ -173,22 +200,45 @@ describe('a Monday to Wednesday race trains like the Sunday before it', () => {
         expect(s.wks.slice(0, 6).map(w => w.ph)).toEqual(sundayWeeks.map(w => w.ph));
         // Weeks before race week are identical.
         expect(s.wks.slice(0, 5).map(w => w.triWorkouts)).toEqual(sundayWeeks.slice(0, 5).map(w => w.ws));
-        // Race week: the same sessions, each placed relative to its own race
-        // day by the race-day rules (so their days differ).
-        const content = (ws: Workout[] | undefined) => (ws ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
-        expect(content(s.wks[5].triWorkouts), `${mode} ${race}`).toEqual(content(sundayWeeks[5].ws));
+        // Race week: the same volume per discipline (the same reference week
+        // and fraction). Its sessions sit relative to their own race day, so
+        // they differ for triathlon and cycling (tri-taper.ts: the day-before
+        // activation and the rest day 2 days out exist only when those days
+        // fall in race week); within one floor-length session per discipline.
+        if (mode === 'hyrox') {
+          const content = (ws: Workout[] | undefined) => (ws ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
+          expect(content(s.wks[5].triWorkouts), `${mode} ${race}`).toEqual(content(sundayWeeks[5].ws));
+        } else {
+          const perDisc = (ws: Workout[] | undefined) => {
+            const m: Record<string, number> = { swim: 0, bike: 0, run: 0 };
+            for (const w of ws ?? []) {
+              if (w.t === 'gym' || w.commute) continue;
+              if (w.t === 'brick' && w.brickSegments) for (const sg of w.brickSegments) m[sg.discipline] += sg.durationMin ?? 0;
+              else m[w.discipline ?? 'run'] += w.estimatedDurationMin ?? 0;
+            }
+            return m;
+          };
+          // A Tuesday or Wednesday race's day-before activation sits in the closing week.
+          const a = perDisc([...(s.wks[5].triWorkouts ?? []), ...(s.wks[6].triWorkouts ?? [])]);
+          const b = perDisc(sundayWeeks[5].ws);
+          for (const d of ['swim', 'bike', 'run']) expect(Math.abs(a[d] - b[d]), `${mode} ${race} ${d}: ${a[d]} vs ${b[d]}`).toBeLessThanOrEqual(20);
+        }
       }
     });
   }
 });
 
 describe('regenerating a single week keeps the layout', () => {
-  it('triathlon: the closing week stays empty and race week matches the plan', () => {
+  it('triathlon: the closing week stays empty (Monday race) or keeps its day-before activation (Wednesday race), and race week matches the plan', () => {
     at('2026-10-11T12:00:00');
     const s = build('70.3', '2026-11-16');
     expect(regenerateTriathlonWeek(s, 7)).toMatchObject({ ph: 'taper', raceClosing: true, triWorkouts: [] });
     expect(regenerateTriathlonWeek(s, 6)?.triWorkouts).toEqual(s.wks[5].triWorkouts);
     expect(regenerateTriathlonWeek(s, 5)?.triWorkouts).toEqual(s.wks[4].triWorkouts);
+    const wed = build('70.3', '2026-11-18');
+    expect((wed.wks[6].triWorkouts ?? []).length).toBeGreaterThan(0);
+    expect(regenerateTriathlonWeek(wed, 7)).toMatchObject({ ph: 'taper', raceClosing: true, triWorkouts: wed.wks[6].triWorkouts });
+    expect(regenerateTriathlonWeek(wed, 6)?.triWorkouts).toEqual(wed.wks[5].triWorkouts);
   });
 
   it('HYROX: the closing week stays empty and the week before race week matches the plan', () => {

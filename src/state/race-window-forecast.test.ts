@@ -224,9 +224,11 @@ describe('the race window does not move the triathlon forecast', () => {
   // than the Sunday before it. Where that extra week moves a 4-week-cycle
   // deload week (isFourWeekCycleDeloadWeek, x0.7) into the peak block, the
   // peak dose is lower whatever the race window does (70.3, Thursday 3 Dec:
-  // +1.1 min, the same on 6df2908). Those cases (6 of 15 per distance, 3 and
-  // 7 weeks out) are covered by the with-or-without-window test above and
-  // skipped here.
+  // +1.1 min, the same on 6df2908). Those cases are covered by the
+  // with-or-without-window test above and skipped here: 6 of 15 per distance
+  // before the taper rebuild (2026-10-13), 3 of 15 since 70.3 and Ironman
+  // plans of 4 to 8 weeks taper 2 weeks instead of 1 (tri-taper.ts), which
+  // moves the peak block off the deload week in more of them.
   for (const distance of ['70.3', 'ironman'] as TriathlonDistance[]) {
     it(`${distance}, 4- to 8-week plans: a Thursday to Saturday race forecasts no slower than the Sunday before it`, () => {
       at('2026-10-11T12:00:00');
@@ -244,7 +246,7 @@ describe('the race window does not move the triathlon forecast', () => {
           expect(later.totalSec, `${distance} ${day}, ${weeksOut} weeks out`).toBeLessThanOrEqual(sunTotal);
         }
       }
-      expect(compared).toBe(9);
+      expect(compared).toBe(12);
     });
   }
 });

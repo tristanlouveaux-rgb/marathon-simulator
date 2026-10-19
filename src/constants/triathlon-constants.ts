@@ -111,15 +111,105 @@ export const IM_T1_SHARE_OF_TOTAL = 0.58;
 // Periodisation
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Taper duration ranges in days. Lower bound used for "tight" taper, upper for "conservative".
- *  Scales with race duration (Mujika 2002/2010 detraining onset). Short course tapers less. */
-export const TAPER_DAYS: Record<TriathlonDistance, [number, number]> = {
-  sprint:    [4, 7],
-  olympic:   [5, 8],
-  t100:      [7, 10],
-  '70.3':    [7, 10],
-  'ironman': [14, 21],
+// ── Race taper (planning side; SCIENCE_LOG "Triathlon and cycling taper rebuild") ──
+// Replaces TAPER_DAYS (sprint 4-7 ... Ironman 14-21 days), which nothing read.
+
+/**
+ * Race-taper length in weeks, by race distance (Tristan, 2026-10-13). No study
+ * keys taper length to race distance; distance is a practical proxy, and the
+ * moderator with some support is pre-taper load (Thomas & Busso 2005; Mujika
+ * in the Triathlete guide). The meta-analyses favour 8 to 14 days (Bosquet
+ * 2007 ES 0.59; Wang 2023). Coaching: sprint 3 to 8 days (Dixon, Eriksson);
+ * Olympic about 3 to 14 days, most often about 10, longer after an intense
+ * block (the Triathlete guide, Eriksson, Ricci, Dixon); 70.3 about 2 weeks
+ * (Barth, Eriksson; Allen effectively 3, a 20-25% cut before his two-week
+ * plan); Ironman mostly 2 to 3 weeks (Fitzgerald and Goeringer 2; Barth 3;
+ * Dave Scott 22 days). T100 has no source of its own: it takes 2, the value
+ * of both neighbours (Olympic and 70.3). A plan too short for its taper keeps
+ * the plan-length rule (computeTriPlanPhases). Sprint and Olympic athletes
+ * whose reference week is under TRI_LOW_HOURS_THRESHOLD_H taper in race week
+ * only (Goeringer; TRI_LOW_HOURS_TAPER_DISTANCES).
+ */
+export const TRI_TAPER_WEEKS_BY_DISTANCE: Record<TriathlonDistance, number> = {
+  sprint:    1,
+  olympic:   2,
+  t100:      2,
+  '70.3':    2,
+  'ironman': 2,
 };
+
+/** Cycling mode's race taper (Tristan, 2026-10-13: cycling stays 2 weeks). */
+export const CYCLING_TAPER_WEEKS = 2;
+
+/**
+ * Low-hours threshold in hours of training in the reference week: swim, bike
+ * and run, the brick run and commute runs; gym left out (Goeringer,
+ * TrainingPeaks 2021: athletes under 8 h a week need "two to three light days
+ * rather than two to three weeks", read as total weekly training). Below it
+ * the taper is race week only, whose last two days are the lightest (the
+ * lower end of his 2 to 3). One of them is a full rest day, which comes from
+ * Friel and Allen; Goeringer himself avoids full rest days. Sprint and Olympic
+ * only (TRI_LOW_HOURS_TAPER_DISTANCES). Cycling keeps its 2 weeks (Tristan's
+ * cycling scope, 2026-10-13, leaves the low-hours rule out).
+ */
+export const TRI_LOW_HOURS_THRESHOLD_H = 8;
+
+/**
+ * The distances the low-hours taper applies to (orchestrator decision,
+ * 2026-10-14): sprint and Olympic. T100, 70.3 and Ironman keep their 2-week
+ * taper at every hour setting. A race-week-only taper would put the peak
+ * week's long sessions 7 to 8 days out, against the same coaches: Goeringer
+ * puts the longest Ironman run about 3 weeks out and the longest ride about
+ * 2; Dave Scott puts the last long run 18-22 days out and the last long ride
+ * 14-21. Sprint already tapers one week, so the rule changes only Olympic.
+ */
+export const TRI_LOW_HOURS_TAPER_DISTANCES: ReadonlyArray<TriathlonDistance> = ['sprint', 'olympic'];
+
+/**
+ * Taper volume fractions of the reference week, per discipline (Tristan,
+ * 2026-10-13). A two-week taper is 0.55 then 0.30: a 57.5% mean cut, inside
+ * the 41-60% band with the largest effect in Bosquet 2007 (ES 0.72) and Wang
+ * 2023 (SMD -0.77). A one-week taper's race week is 0.55, a 45% cut, inside
+ * the band (running's one-week taperFraction, phases.ts). Race excluded, as
+ * the studies end the taper at the test.
+ */
+export const TRI_TAPER_FIRST_WEEK_FRACTION = 0.55;
+export const TRI_RACE_WEEK_FRACTION = 0.30;
+export const TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION = 0.55;
+
+/**
+ * Share of the reference week for race-taper week `weekInTaper` (1-indexed;
+ * `taperWeeks` = race week) of a triathlon or cycling plan (planning side):
+ * race week TRI_RACE_WEEK_FRACTION after a taper week, or
+ * TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION when race week is the whole taper;
+ * an earlier taper week TRI_TAPER_FIRST_WEEK_FRACTION. The one source for the
+ * generator's race week and the weekly load target (planned-week-target.ts:
+ * the AI Coach's Signal A and the unspentLoadItems settle), as taperFraction
+ * (phases.ts) is for running.
+ */
+export function triTaperFraction(weekInTaper: number, taperWeeks: number): number {
+  if (taperWeeks <= 1) return TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION;
+  return weekInTaper >= taperWeeks ? TRI_RACE_WEEK_FRACTION : TRI_TAPER_FIRST_WEEK_FRACTION;
+}
+
+/** Taper weeks keep at least this share of the reference week's sessions
+ *  (Mujika 2011, a review for triathletes built on single-sport evidence:
+ *  frequency above 80% avoids detraining; Pyne 2009: cut frequency about 20%
+ *  at most). */
+export const TRI_TAPER_MIN_SESSION_SHARE = 0.8;
+
+/**
+ * Race taper weeks for a plan (planning side): race week only for a low-hours
+ * sprint or Olympic triathlete (TRI_LOW_HOURS_TAPER_DISTANCES), else the
+ * distance's length (cycling: CYCLING_TAPER_WEEKS).
+ */
+export function triRaceTaperWeeks(
+  distance: TriathlonDistance, opts: { cyclingOnly?: boolean; lowHours?: boolean } = {},
+): number {
+  if (opts.cyclingOnly) return CYCLING_TAPER_WEEKS;
+  if (opts.lowHours && TRI_LOW_HOURS_TAPER_DISTANCES.includes(distance)) return 1;
+  return TRI_TAPER_WEEKS_BY_DISTANCE[distance];
+}
 
 /** Default plan durations in weeks. Lower bound = aggressive, upper = typical.
  *  Friel Triathlete's Training Bible per-distance base/build norms. */
@@ -205,7 +295,9 @@ export function phasesForLen(
  * so any user already running a default-length plan sees the same numbers.
  *
  * Taper capped at 2 (Mujika & Padilla 2003). Tri detraining bites sooner than
- * running because of the cross-training fatigue load.
+ * running because of the cross-training fatigue load. These ratios now set
+ * the race taper only for plans too short to hold the distance's taper;
+ * computeTriPlanPhases otherwise fixes it at triRaceTaperWeeks (2026-10-13).
  *
  * Double-periodization threshold is **28 weeks** for tri. Sooner than running's
  * 33. Because tri's monotony pain shows earlier when training across three
@@ -305,9 +397,22 @@ const TRI_PHASE_CONFIGS: Record<TriathlonDistance, PhaseConfig> = {
  * Compute per-week phases for a triathlon plan. Returned array length equals
  * `totalWeeks`; index i corresponds to plan week i+1. Plans ≥28 weeks switch
  * to double periodization with a Checkpoint (TT) week at the end of cycle 1.
+ *
+ * The race taper is `triRaceTaperWeeks` long (race distance, cycling, low
+ * hours; Tristan 2026-10-13), not a share of the plan. A plan too short to
+ * hold that taper plus one build and one peak week (the single arc's minimum)
+ * keeps the plan-length rule (taperRatio, at most taperCap), which gives
+ * these plans a one-week taper.
  */
-export function computeTriPlanPhases(distance: TriathlonDistance, totalWeeks: number): PlanPhaseWeek[] {
-  return computePlanPhases(totalWeeks, TRI_PHASE_CONFIGS[distance]);
+export function computeTriPlanPhases(
+  distance: TriathlonDistance,
+  totalWeeks: number,
+  opts: { cyclingOnly?: boolean; lowHours?: boolean } = {},
+): PlanPhaseWeek[] {
+  const cfg = TRI_PHASE_CONFIGS[distance];
+  const taper = triRaceTaperWeeks(distance, opts);
+  if (totalWeeks < taper + 2) return computePlanPhases(totalWeeks, cfg);
+  return computePlanPhases(totalWeeks, { ...cfg, taperMin: taper, taperCap: taper });
 }
 
 // ───────────────────────────────────────────────────────────────────────────

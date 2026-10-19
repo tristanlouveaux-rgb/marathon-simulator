@@ -73,8 +73,8 @@ function staleTriPlan(): SimulatorState {
 }
 
 describe('applyTriGeneratorRegen after the launch refresh', () => {
-  it('TRI_GENERATOR_VERSION is 23 (the bump that regenerates pre-cap plans)', () => {
-    expect(TRI_GENERATOR_VERSION).toBe(23);
+  it('TRI_GENERATOR_VERSION is 24 (the bump that regenerates pre-taper-rebuild plans)', () => {
+    expect(TRI_GENERATOR_VERSION).toBe(24);
   });
 
   it('a stale plan regenerates at the capped run paces when the refresh runs first', () => {

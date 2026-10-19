@@ -45,7 +45,13 @@
  *     1-indexed position (1 = first taper week, taperWeeks = race week) feeds
  *     the existing taperMultiplier ramp: 0.75 / 0.65 / 0.55 over 3 weeks and
  *     0.70 / 0.55 over 2 (Tristan, 2026-10-05). A 1-week taper is race week
- *     alone and targets 0.55 too (taperFraction, phases.ts).
+ *     alone and targets 0.55 too (taperFraction, phases.ts). A triathlon or
+ *     cycling plan reads its own taper's fractions (triTaperFraction,
+ *     triathlon-constants.ts: 0.55 then 0.30, or 0.55 when race week is the
+ *     whole taper), the shares its generator builds the taper weeks at, so the
+ *     AI Coach's Signal A and the unspentLoadItems settle read one source for
+ *     one quantity (orchestrator decision 4, 2026-10-14). HYROX keeps the
+ *     running ramp.
  *   - Any other 'taper'-labelled week is a recovery week, not a race taper:
  *     continuous mode labels each block's 4th (deload) week 'taper'
  *     (initialization.ts, events.ts block append) and double-periodization plans
@@ -63,6 +69,7 @@ import { computePlannedSignalB, computePlannedWeekTSS, computeDecayedCarry, type
 import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, isHyroxDeloadWeek, isSharpeningDeloadWeek } from '@/workouts/plan_engine';
 import { isSharpeningBlock } from '@/workouts/phases';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
+import { triTaperFraction } from '@/constants/triathlon-constants';
 
 /** The state fields the target reads. Structural so persistence's raw `migrated` object fits. */
 export type PlannedTargetState = Pick<
@@ -180,11 +187,14 @@ export function computePlannedWeekTarget(
   // of a running plan (Tristan, 2026-10-09; triathlon and HYROX keep runs/week x 50).
   // History and the EMA still win when a sync wrote them.
   const typed = typedVolumeWeeklyTSS(s);
+  // A triathlon or cycling race taper takes its generator's fractions; running
+  // and HYROX the running ramp (taperFraction).
+  const taperOf = s.eventType === 'triathlon' ? triTaperFraction : undefined;
   const at = (phase: string, weekInPhase?: number, totalPhaseWeeks?: number): number => (
     signal === 'A'
-      ? computePlannedWeekTSS(s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, typed)
+      ? computePlannedWeekTSS(s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, typed, taperOf)
       : computePlannedSignalB(
-        s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, s.sportBaselineByType, typed,
+        s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, s.sportBaselineByType, typed, taperOf,
       )
   );
   if (r.phase !== 'taper') return at(r.phase);

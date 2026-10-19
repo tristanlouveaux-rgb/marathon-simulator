@@ -193,8 +193,14 @@ describe('triathlon: QA scenario tri-wednesday (70.3, Wednesday race in week 7)'
     const wedRow = found[0].closest('.tri-day-row') as HTMLElement;
     expect(wedRow.getAttribute('data-tri-day-drop')).toBe('2');
     expect(wedRow.textContent).not.toContain('Rest');
-    // Display only.
-    expect(resolveTriWeekWorkouts(s, 7)).toHaveLength(0);
+    // Display only: the card never enters the list. The closing week holds
+    // the day-before activation on Tuesday and nothing else (decision 3,
+    // 2026-10-14), and the plan view renders it on that row.
+    const closing = resolveTriWeekWorkouts(s, 7);
+    expect(closing.length).toBeGreaterThan(0);
+    expect(closing.every(w => w.taperRole === 'day_before' && w.dayOfWeek === 1)).toBe(true);
+    const tueRow = document.querySelector('.tri-day-row[data-tri-day-drop="1"]') as HTMLElement;
+    expect(tueRow.textContent).toContain('Pre-race spin');
     expect(JSON.stringify(s.wks)).toBe(before);
 
     document.body.innerHTML = '<div id="app-root"></div>';

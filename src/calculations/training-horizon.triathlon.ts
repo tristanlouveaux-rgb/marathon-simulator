@@ -26,7 +26,6 @@ import {
   BIKE_HORIZON_PARAMS,
   RUN_HORIZON_PARAMS_BY_DISTANCE,
   TRI_K_SESSIONS,
-  TRI_TAPER_WEEKS,
   type DisciplineHorizonParams,
 } from '@/constants/triathlon-horizon-params';
 import type { TriathlonDistance } from '@/types/triathlon';
@@ -206,15 +205,4 @@ export function applyTriHorizonRun(input: TriHorizonRunInput): TriHorizonResult 
   const projected = input.baseline + input.baseline * (improvementPct / 100);
   console.log(`[TriHorizon:run] dist=${input.triathlon_distance} band=${input.ability_band} sess=${input.sessions_per_week} weeks_rem=${input.weeks_remaining} → max_gain=${params.max_gain_pct[input.ability_band]} week=${components.week_factor.toFixed(3)} sess=${components.session_factor.toFixed(3)} exp=${(EXP_FACTORS[input.experience_level ?? 'intermediate'] ?? 1.0).toFixed(2)} undertrain=${components.undertrain_penalty.toFixed(2)} taper=${components.taper_bonus.toFixed(2)} → improvement_pct=${improvementPct.toFixed(2)} VDOT ${input.baseline.toFixed(1)} → ${projected.toFixed(1)} (+${(projected - input.baseline).toFixed(2)})`);
   return { improvement_pct: improvementPct, projected, components };
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Helper: pick taper weeks per discipline
-// ───────────────────────────────────────────────────────────────────────────
-
-export function defaultTaperWeeks(
-  discipline: 'swim' | 'bike' | 'run',
-  triathlonDistance: TriathlonDistance,
-): number {
-  return TRI_TAPER_WEEKS[discipline][triathlonDistance];
 }
