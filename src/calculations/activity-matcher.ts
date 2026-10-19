@@ -1816,13 +1816,9 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             if (!tw.rated) tw.rated = {};
             if (!tw.garminMatched) tw.garminMatched = {};
             const prior = tw.garminActuals![guidedId];
-            // The athlete's guided rating stays (matchHyroxStationRow's rule).
-            const mine = athleteRatedRpe(tw, guidedId);
-            const rpe = mine ?? deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
-            if (mine == null) {
-              tw.rated[guidedId] = rpe;
-              noteRatingSource(tw, guidedId, deriveRpeSource(row));
-            }
+            const rpe = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
+            tw.rated[guidedId] = rpe;
+            noteRatingSource(tw, guidedId, deriveRpeSource(row));
             tw.garminMatched[row.garmin_id] = guidedId;
             tw.garminActuals![guidedId] = {
               ...prior,
