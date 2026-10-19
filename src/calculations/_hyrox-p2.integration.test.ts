@@ -217,6 +217,22 @@ describe('HYROX P2 integration — effortMultiplier wired into real generator', 
     expect(hardVol).toBeLessThan(neutralVol);
   });
 
+  it('INTEGRATION: in a base week the lever never flips direction (EASY at or above NEUTRAL, HARD at or below)', () => {
+    // Lane H2b review: in base the technique session is a fixed dose and the
+    // easy erg session sits at its cap, so an EASY rating adds nothing
+    // upward there (the lever reaches race-pace sets and erg fill from
+    // build). It must still never hold a base week below NEUTRAL.
+    const BASE = 3;
+    const plan = (st: SimulatorState) => generateHyroxPlan(st)[BASE - 1];
+    const neutral = plan(buildState(7, 7, 7, 7, BASE));
+    const easy = plan(buildState(7, 4, 7, 4, BASE));
+    const hard = plan(buildState(5, 9, 5, 9, BASE));
+    expect(neutral?.ph).toBe('base');
+    const vol = (w: typeof neutral) => totalDurationMin(w?.triWorkouts ?? []);
+    expect(vol(easy)).toBeGreaterThanOrEqual(vol(neutral));
+    expect(vol(hard)).toBeLessThanOrEqual(vol(neutral));
+  });
+
   it('INTEGRATION: EASY→NEUTRAL→HARD volume is strictly ordered', () => {
     const neutralState = buildState(7, 7, 7, 7, CURRENT);
     const easyState    = buildState(7, 4, 7, 4, CURRENT);
