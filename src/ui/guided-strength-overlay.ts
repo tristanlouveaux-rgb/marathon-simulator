@@ -24,7 +24,7 @@ import { GpsTracker } from '@/gps/tracker';
 import { createGpsProvider } from '@/gps/providers';
 import { formatKm, formatPace } from '@/utils/format';
 import { getState } from '@/state/store';
-import { summariseHyroxSession, summariseHyroxRuns } from '@/calculations/hyrox-session-benchmarks';
+import { summariseHyroxSession, summariseHyroxRuns, isRacePaceHyroxSession } from '@/calculations/hyrox-session-benchmarks';
 import type { SetRecord } from '@/guided/strength-controller';
 import type { TrainingPhase } from '@/types/training';
 import type { RirBucket } from '@/types/strength-log';
@@ -912,7 +912,8 @@ function fmtDelta(sec: number): string {
  * the athlete can see fade across the brick — no benchmark, run fitness lives in
  * pace/VDOT. Station rows show the best round, field rank, and whether it beat
  * (and updated) the stored benchmark. Technique rows show "Technique pace" since
- * the times are submaximal by design. Mirrors `summariseHyroxSession` /
+ * the times are submaximal by design; quarter-station race-pace sets (lane
+ * H2b) say they are set times. Mirrors `summariseHyroxSession` /
  * `summariseHyroxRuns`.
  */
 function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string {
@@ -940,7 +941,8 @@ function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string
         : 'New session best recorded.';
       sub = `<div style="font-size:11px;color:#15803d;margin-top:2px">${detail}</div>`;
     } else if (r.percentile == null) {
-      sub = `<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Technique pace</div>`;
+      // A quarter-station set is a set time, not a station time (lane H2b).
+      sub = `<div style="font-size:11px;color:var(--c-faint);margin-top:2px">${r.partial && isRacePaceHyroxSession(workout.t) ? 'Set time, not a full station' : 'Technique pace'}</div>`;
     } else {
       // Station percentile against the field's race splits at this station
       // (getStationPercentile on the athlete's singles cohort).

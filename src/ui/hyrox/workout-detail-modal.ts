@@ -14,7 +14,7 @@ import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
-import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
@@ -30,10 +30,13 @@ function renderStationRow(
   if (!display) return '';
   const subId = workout.hyroxStationSubs?.[station];
   const sub = subId ? findSubstitution(station, subId) : undefined;
-  const distStr = c.reps ? `${c.reps} reps` : display.distance;
+  // Lane H2b sessions: the station's sets and prescription ("2 × 250 m,
+  // damper 6"); an older session: its amount.
+  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout) : c.reps ? `${c.reps} reps` : display.distance;
   const targetStr = c.durationSec ? ftRounded(c.durationSec) : '—';
-  const targetLabel = options.context === 'technique' ? 'per round'
-                     : options.context === 'density' ? 'target' : '';
+  const perSet = !!workout.hyroxSpec;
+  const targetLabel = options.context === 'technique' ? (perSet ? 'per set' : 'per round')
+                     : options.context === 'density' ? (perSet ? 'target a set' : 'target') : '';
   const showTargetCol = options.context !== 'breakdown';
   // Equipment-swap demoted to a small icon button on the right of the row.
   // When a swap is active, an inline "Swapped" badge sits beside the title and
@@ -456,15 +459,21 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 3;
     const interStation = stationComponents[0]?.restAfterSec ?? 60;
     const interRound = workout.hyroxRoundRestSec ?? 180;
+    // Lane H2b: one rest after every set, and the session's closing notes.
+    const restLine = workout.hyroxSpec
+      ? `${fmtRest(workout.hyroxSpec.restSec)} rest after every set · Technique, RPE ${workout.rpe ?? 5}`
+      : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace`;
+    const notes = hyroxSessionNotes(workout);
 
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} rounds</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace</div>
+          <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} round${rounds === 1 ? '' : 's'}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
         </div>
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
+        ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
         ${runFinishMin ? `
           <div style="padding:12px 14px;border-radius:10px;background:rgba(122,132,92,0.07);border:1px solid rgba(122,132,92,0.15);margin-top:14px">
             <div style="font-size:12px;font-weight:600;color:#4f5a3b">Easy run to finish</div>
@@ -482,15 +491,21 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 2;
     const interStation = stationComponents[0]?.restAfterSec ?? 30;
     const interRound = workout.hyroxRoundRestSec ?? 120;
+    // Lane H2b: one rest after every set, and the session's closing notes.
+    const restLine = workout.hyroxSpec
+      ? `${fmtRest(workout.hyroxSpec.restSec)} rest after every set · RPE ${workout.rpe ?? 7}`
+      : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only`;
+    const notes = hyroxSessionNotes(workout);
 
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(184,116,44,0.06);border:1px solid rgba(184,116,44,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} rounds · Race pace</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only</div>
+          <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} round${rounds === 1 ? '' : 's'} · Race pace</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
         </div>
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
+        ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
       </div>
       ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
   }

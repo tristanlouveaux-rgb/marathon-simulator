@@ -17,12 +17,20 @@
 
 import type { Workout } from '@/types/state';
 import { fmtModelPaceKm } from '@/utils/format';
-import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxSessionSpec, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
 import { HYROX_EASY_ERG_TYPE } from './hyrox-easy-erg';
-import { STATION_DISPLAY, HYROX_STATION_ORDER, stationExternalLoadKg } from '@/constants/hyrox-benchmarks';
+import { STATION_DISPLAY, HYROX_STATION_ORDER, stationExternalLoadKg, SLED_EXTERNAL_LOAD_FRACTION, WALL_BALL_TARGET_M } from '@/constants/hyrox-benchmarks';
 import { hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm, type HyroxSeedStateInput } from '@/calculations/hyrox-results';
-import { HYROX_DEFAULT_LOAD_TIER } from '@/calculations/hyrox-division';
+import { HYROX_DEFAULT_LOAD_TIER, hyroxWallBallTargetM, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
+import {
+  hyroxComponentAmount, hyroxComponentRounds, hyroxComponentSets, hyroxSessionDurationSec, fmtAmount,
+} from './hyrox-session-shape';
+import {
+  HYROX_STATION_SET_FRACTION, HYROX_STATION_FORMATS, HYROX_STATIONS_PER_SESSION, HYROX_BEGINNER_SLED_SETS,
+  HYROX_ERG_DAMPER, HYROX_BRICK_FORMATS, hyroxStationSetAmount, hyroxRaceLoadKg, hyroxDoublesSets,
+  hyroxTechniqueSets, hyroxRacePaceSets, hyroxBrickStationRounds, isHyroxSled, type HyroxBrickFormat,
+} from './hyrox-station-dose';
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
   HYROX_INTERVAL_HR_FRACTION, HYROX_QUALITY_WARMUP_MIN, HYROX_QUALITY_COOLDOWN_MIN,
@@ -61,8 +69,29 @@ export interface RunParams {
   seed?: HyroxSeedStateInput;
 }
 
-export interface StationParams {
+/** What a station session or brick prescribes beyond its structure (lane
+ *  H2b). Every field is optional: absent, it follows the athlete in `seed`. */
+interface HyroxPrescriptionParams {
+  /** Prescribed load per loaded station, kg (the beginner load schedule,
+   *  plan_engine.hyrox). Absent for a station: its race weight at `loadTier`
+   *  (intermediate and advanced athletes train at race weight, sheet). */
+  stationLoads?: Partial<Record<HyroxStation, number>>;
+  /** Wall-ball target height (m); null names both. Absent: from `seed`
+   *  (hyroxWallBallTargetM: biological sex, then the division pick). */
+  wallBallTargetM?: number | null;
+  /** Doubles: each partner trains half of every station (sheet). Absent: from
+   *  `seed`'s format. */
+  doubles?: boolean;
+}
+
+export interface StationParams extends HyroxPrescriptionParams {
+  /** station_technique: the technique format; station_density: the
+   *  race-pace format (the type name predates lane H2b). */
   kind: 'station_technique' | 'station_density';
+  /** The longest the session may run (minutes): the week's share of its
+   *  budget (plan_engine.hyrox). The dose is the sheet's; a smaller target
+   *  takes whole rounds off it, never under MIN_CIRCUIT_ROUNDS (doubles: the
+   *  technique dose). */
   targetMinutes: number;
   band: AbilityBand;
   stationAccess: HyroxConfig['stationAccess'];
@@ -72,18 +101,38 @@ export interface StationParams {
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   /** Race week (technique circuits only): leave out RACE_WEEK_EXCLUDED_STATIONS. */
   raceWeek?: boolean;
-  /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
-   *  Absent: HYROX_DEFAULT_LOAD_TIER. */
+  /** Station load tier (hyroxLoadTierForState) for the loads and the MTL
+   *  external loads. Absent: HYROX_DEFAULT_LOAD_TIER. */
   loadTier?: HyroxLoadTier;
   /** The athlete whose band seeds stand in for an untested station or an
    *  unset race pace: the planning field (Open Singles at their sex) at the
    *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
    *  Absent: the pooled Open Singles field. */
   seed?: HyroxSeedStateInput;
+  /** Race-pace sessions: the week's nominal size relative to the plan's peak
+   *  week (its phase multiplier x the deload factor x the effort lever, ÷
+   *  HYROX_PEAK_MULT), the volume progression (hyroxRacePaceSets). Absent: 1,
+   *  the full race-pace dose. */
+  doseFraction?: number;
+  /** Race-pace sessions: the minutes the week's size gives the session (its
+   *  share of the budget at the size the week is built at, under the
+   *  ceilings' scale, without the target's 35-min floor). The race-pace sets
+   *  step down until the session fits it, never under the technique dose, so
+   *  the dose rides the acute:chronic guard and the ceilings that size the
+   *  week. Absent: no limit. */
+  doseMinutes?: number;
+  /** Race-pace sessions: the forecast's weakest station
+   *  (hyrox-weakest-link), held first when the athlete can train it. */
+  weakest?: HyroxStation;
 }
 
-export interface BrickParams {
+export interface BrickParams extends HyroxPrescriptionParams {
+  /** brick: the tier brick (intermediate 4 x 800 m, advanced key brick 6 x
+   *  800 m); mini_brick: the beginner brick (3 x 400 m), also the taper's
+   *  downgraded brick, on ergs in a taper week. */
   kind: 'brick' | 'mini_brick';
+  /** The longest the brick may run (minutes); whole rounds come off a longer
+   *  brick, never under MIN_CIRCUIT_ROUNDS. */
   targetMinutes: number;
   band: AbilityBand;
   stationAccess: HyroxConfig['stationAccess'];
@@ -91,14 +140,21 @@ export interface BrickParams {
   slotIndex: number;
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
-  /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
-   *  Absent: HYROX_DEFAULT_LOAD_TIER. */
+  /** Station load tier (hyroxLoadTierForState) for the loads and the MTL
+   *  external loads. Absent: HYROX_DEFAULT_LOAD_TIER. */
   loadTier?: HyroxLoadTier;
   /** The athlete whose band seeds stand in for an untested station or an
    *  unset race pace: the planning field (Open Singles at their sex) at the
    *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
    *  Absent: the pooled Open Singles field. */
   seed?: HyroxSeedStateInput;
+  /** HYROX race pace (sec/km) for the brick's runs, as generateHyroxRun reads
+   *  it; the band seed pace when unset. */
+  runPaceSecKm?: number;
+  /** The advanced peak secondary brick: 4 x 800 m easy into ergs, sleds or
+   *  the farmers carry at technique effort, not a hard session
+   *  (`hyroxLight`). */
+  secondary?: boolean;
 }
 
 // ─── Station availability helpers ────────────────────────────────────────────
@@ -188,38 +244,22 @@ function fmtPace(secPerKm: number): string {
 }
 
 /**
- * Coach dose ceiling (max rounds) per ability band. Sourced from the HYROX
- * research doc §3.5 brick dosing (docs/research/hyrox.md lines 169-171):
- *   beginner tier ≤4, novice/intermediate ≤6, advanced/competitive ≤8.
- * Used as the upper clamp so race-pace station volume never exceeds the band's
- * prescribed dose, regardless of how large a slot the scheduler hands us.
- * The tiers come from hyroxTier, the single band-to-tier mapping.
- * See SCIENCE_LOG §AO.
+ * The floor a cut takes a circuit or brick down to (rounds). The weekly MTL
+ * cap (plan_engine.hyrox enforceMTLCap), the deload and taper caps and a small
+ * week target cut rounds down to it, never below. In a station session a
+ * round is one quarter-station set of each station, so 2 rounds is the
+ * technique dose (0.5 x race volume, HYROX_STATION_FORMATS). A doubles
+ * technique session is 1 round (half of every station, hyroxDoublesSets): it
+ * starts under the floor and no cut takes a round from it.
  */
-function bandMaxRounds(band: AbilityBand): number {
-  switch (hyroxTier(band)) {
-    case 'advanced':     return 8;
-    case 'intermediate': return 6;
-    default:             return 4;
-  }
-}
-
-/** A circuit or brick session is at least this many rounds (below this it is a
- *  single pass, i.e. the calibration assessment, not a training circuit). The
- *  weekly MTL cap (plan_engine.hyrox enforceMTLCap) cuts rounds down to it. */
 export const MIN_CIRCUIT_ROUNDS = 2;
 
-/**
- * Rounds that best fill a time budget given one round's duration: nearest whole
- * number of rounds to the slot (so the session fills the time the scheduler
- * allocated rather than always under- or over-shooting), floored at 2 rounds
- * and capped at the band's coach dose ceiling. The budget does the filling; the
- * band cap prevents over-dosing race-pace volume on a large slot.
- */
-function fillRounds(budgetSec: number, roundDurSec: number, bandMax: number): number {
-  if (roundDurSec <= 0) return MIN_CIRCUIT_ROUNDS;
-  const raw = Math.round(budgetSec / roundDurSec);
-  return Math.max(MIN_CIRCUIT_ROUNDS, Math.min(bandMax, raw));
+/** The floor a cut takes this session to (rounds): MIN_CIRCUIT_ROUNDS, or a
+ *  doubles station session's technique dose (1 round, half of every station).
+ *  A brick's rounds are runs both partners run in full, so its floor stays. */
+export function hyroxMinRounds(w: Pick<Workout, 't' | 'hyroxSpec'>): number {
+  const station = w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density';
+  return station && w.hyroxSpec?.doubles ? hyroxTechniqueSets(true) : MIN_CIRCUIT_ROUNDS;
 }
 
 // ─── Run session generator ────────────────────────────────────────────────────
@@ -371,6 +411,24 @@ export function generateHyroxRun(params: RunParams): Workout {
 export function withHyroxRounds(w: Workout, rounds: number): Workout {
   const old = w.hyroxRounds ?? 0;
   if (!(old > 0) || !(rounds >= 1) || rounds >= old) return w;
+  if (w.hyroxSpec) {
+    // Lane H2b sessions: each component keeps the sets it holds in the first
+    // `rounds` rounds (hyroxComponentSets), its MTL in proportion; a
+    // component left with no set leaves. The duration and the description
+    // come from the session again.
+    const comps = (w.hyroxComponents ?? [])
+      .map(c => {
+        const before = hyroxComponentSets(c, old);
+        const after = hyroxComponentSets(c, rounds);
+        return {
+          ...c,
+          mtl: before > 0 ? (c.mtl * after) / before : 0,
+          ...(c.inRounds ? { inRounds: c.inRounds.filter(r => r <= rounds) } : {}),
+        };
+      })
+      .filter(c => hyroxComponentSets(c, rounds) > 0);
+    return finishHyroxSession({ ...w, hyroxComponents: comps, hyroxRounds: rounds });
+  }
   const f = rounds / old;
   const comps = (w.hyroxComponents ?? []).map(c => ({ ...c, mtl: c.mtl * f }));
   const mtl = comps.reduce((sum, c) => sum + c.mtl, 0);
@@ -406,6 +464,19 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
   if (idx < 0 || stationCount <= MIN_CIRCUIT_STATIONS) return w;
   const removed = comps[idx];
   const rest = comps.filter((_, i) => i !== idx);
+  if (w.hyroxSpec) {
+    // Lane H2b sessions: the rounds shrink to the last round a station left
+    // still holds (a beginner's sleds taking 4 rounds against 2 for the
+    // others); the duration and the description come from the session again.
+    const old = w.hyroxRounds ?? 1;
+    const rounds = Math.max(1, ...rest.map(c => {
+      const rs = hyroxComponentRounds(c, old);
+      return rs.length > 0 ? rs[rs.length - 1] : 0;
+    }));
+    const { weakest: _weakest, ...unled } = w.hyroxSpec;
+    const spec = w.hyroxSpec.weakest === station ? unled : w.hyroxSpec;
+    return finishHyroxSession({ ...w, hyroxComponents: rest, hyroxRounds: rounds, hyroxSpec: spec });
+  }
   const rounds = Math.max(1, w.hyroxRounds ?? 1);
   const cutSec = rounds * ((removed.durationSec ?? 0) + (removed.restAfterSec ?? 0));
   const mtl = rest.reduce((sum, c) => sum + c.mtl, 0);
@@ -493,339 +564,465 @@ export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
 
 // ─── Station session generators ───────────────────────────────────────────────
 
-export function generateHyroxStation(params: StationParams): Workout {
-  const { kind, targetMinutes, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks } = params;
-  const dur = Math.round(targetMinutes);
+/** An easy pass over a station takes 1.2 x its race split: the week-1
+ *  assessment's existing estimate (RPE 4). A technique set (RPE 5, controlled
+ *  pace, no time target) reuses it as its duration estimate: a technique set
+ *  is slower than race pace, never faster (the old circuit's 0.65 x the seed
+ *  time sat faster than race pace at RPE 5). */
+export const HYROX_EASY_PASS_TIME_FACTOR = 1.2;
 
-  if (kind === 'station_technique') {
-    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek, loadTier: params.loadTier, seed: params.seed });
-  }
-  return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
+/** Implement name for "the nearest lighter ..." in a load below race weight. */
+const LIGHTER_IMPLEMENT: Partial<Record<HyroxStation, string>> = {
+  farmer_carry: 'pair',
+  sandbag_lunges: 'sandbag',
+  wall_balls: 'ball',
+};
+
+const DOUBLES_LINE = 'Doubles: half of every station, each partner\'s share of the race.';
+
+/** Rest as copy: "2 min", "90 s", "30 s". */
+function fmtRestPhrase(sec: number): string {
+  return sec >= 60 && sec % 60 === 0 ? `${sec / 60} min` : `${sec} s`;
 }
 
-function generateStationTechnique(p: {
-  dur: number;
-  band: AbilityBand;
-  stationAccess: HyroxConfig['stationAccess'];
-  phase: 'base' | 'build' | 'peak' | 'taper';
-  slotIndex: number;
+/** "rounds 1 and 3", "rounds 1, 3 and 5", "round 2". */
+function roundsPhrase(rs: readonly number[]): string {
+  if (rs.length === 1) return `round ${rs[0]}`;
+  return `rounds ${rs.slice(0, -1).join(', ')} and ${rs[rs.length - 1]}`;
+}
+
+/** The wall-ball target as copy: "to 2.70 m", or both heights when unknown. */
+function wallBallTargetPhrase(m: number | null): string {
+  return m != null
+    ? `to ${m.toFixed(2)} m`
+    : `to ${WALL_BALL_TARGET_M.female.toFixed(2)} m (women) or ${WALL_BALL_TARGET_M.male.toFixed(2)} m (men)`;
+}
+
+/** A station component's load as copy: "152 kg incl. sled", "sled unloaded",
+ *  "2 × 9.6 kg (60% of race weight, or the nearest lighter pair)", "6 kg ball
+ *  to 2.70 m". Empty for a station with no load. */
+function loadPhrase(c: HyroxComponent, wallBallTargetM: number | null): string {
+  if (c.loadKg == null) return '';
+  const st = c.type as HyroxStation;
+  const kg = fmtAmount(c.loadKg);
+  let core: string;
+  if (st === 'sled_push' || st === 'sled_pull') core = c.loadKg <= 0 ? 'sled unloaded' : `${kg} kg incl. sled`;
+  else if (st === 'farmer_carry') core = `2 × ${kg} kg`;
+  else if (st === 'sandbag_lunges') core = `${kg} kg sandbag`;
+  else core = `${kg} kg ball ${wallBallTargetPhrase(wallBallTargetM)}`;
+  if (c.loadPct == null || c.loadKg <= 0) return core;
+  const lighter = LIGHTER_IMPLEMENT[st];
+  return `${core} (${Math.round(c.loadPct * 100)}% of race weight${lighter ? `, or the nearest lighter ${lighter}` : ''})`;
+}
+
+/** A station component's prescription as copy, without the set count:
+ *  "250 m, damper 6", "1 lane (12.5 m), 50 kg incl. sled (50% of race
+ *  weight)", "25 reps, 6 kg ball to 3.00 m". */
+function stationPrescription(c: HyroxComponent, spec: HyroxSessionSpec, withTarget: boolean): string {
+  const st = c.type as HyroxStation;
+  const parts = [hyroxComponentAmount(c)];
+  if (st === 'ski_erg' || st === 'row_erg') parts.push(`damper ${HYROX_ERG_DAMPER}`);
+  const load = loadPhrase(c, spec.wallBallTargetM);
+  if (load) parts.push(load);
+  else if (st === 'wall_balls') parts.push(`ball ${wallBallTargetPhrase(spec.wallBallTargetM)}`);
+  if (withTarget && c.durationSec) parts.push(`about ${fmtSec(c.durationSec)} a set`);
+  return parts.join(', ');
+}
+
+/**
+ * The description of a lane H2b station session or brick, written from its
+ * spec and components (one source: a cut of rounds or a station rewrites it
+ * through finishHyroxSession).
+ */
+export function hyroxSessionText(w: Workout): string {
+  const spec = w.hyroxSpec;
+  if (!spec) return w.d ?? '';
+  const comps = w.hyroxComponents ?? [];
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const stations = comps.filter(c => c.type !== 'run');
+  if (spec.format === 'technique' || spec.format === 'race_pace') {
+    const tech = spec.format === 'technique';
+    const head = tech
+      ? `Technique at RPE ${w.rpe}: smooth, repeatable movement, no time target.`
+      : `Race pace at RPE ${w.rpe}: every set at or just above race pace.`;
+    const shape = rounds === 1
+      ? `1 round, one set of each station, ${fmtRestPhrase(spec.restSec)} rest after every set.`
+      : `${rounds} rounds, one set of each station a round, ${fmtRestPhrase(spec.restSec)} rest after every set.`;
+    const lines = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name}: ${hyroxComponentSets(c, rounds)} × ${stationPrescription(c, spec, !tech)}.`);
+    const weakest = spec.weakest && stations.some(c => c.type === spec.weakest)
+      ? [`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`]
+      : [];
+    return [head, shape, ...lines, ...weakest, ...(spec.doubles ? [DOUBLES_LINE] : [])].join(' ');
+  }
+  // Bricks.
+  const pace = spec.runPaceSecKm != null ? `~${fmtPace(Math.round(spec.runPaceSecKm))}/km` : '';
+  const run = `${fmtAmount(spec.runM ?? 0)} m`;
+  const runPhrase = spec.runEffort === 'easy' ? `${run} easy${pace ? ` (${pace})` : ''}`
+    : spec.runEffort === 'race_no_faster' ? `${run} at HYROX race pace${pace ? ` (${pace})` : ''}, no faster`
+      : spec.runEffort === 'race_or_faster' ? `${run} at HYROX race pace${pace ? ` (${pace})` : ''} or faster, the last rounds fastest (negative split)`
+        : `${run} at HYROX race pace${pace ? ` (${pace})` : ''}`;
+  const jog = spec.transitionSec ? `, a ${spec.transitionSec} s jog to the station` : '';
+  const secondary = spec.format === 'secondary_brick';
+  const effort = secondary ? ` at technique effort (RPE ${w.rpe})` : '';
+  const stationText = (c: HyroxComponent) => `${STATION_DISPLAY[c.type as HyroxStation].name} ${stationPrescription(c, spec, false)}`;
+  const own = (c: HyroxComponent) => hyroxComponentRounds(c, rounds);
+  const everyRound = (c: HyroxComponent) => own(c).length === rounds;
+  const stationPart = stations.length === 1 && everyRound(stations[0])
+    ? `then ${stationText(stations[0])}${effort}.`
+    : stations.length === 1
+      ? `then ${stationText(stations[0])}${effort} in ${roundsPhrase(own(stations[0]))}.`
+      : `then the station${effort}, alternating: ${stations.map(c => `${stationText(c)} (${roundsPhrase(own(c))})`).join('; ')}.`;
+  const covered = new Set(stations.flatMap(own));
+  const partnerTurn = covered.size < rounds;
+  const rest = (w.hyroxRoundRestSec ?? 0) > 0
+    ? `${fmtRestPhrase(w.hyroxRoundRestSec ?? 0)} rest between rounds.`
+    : 'No rest beyond the jog.';
+  return [
+    `${rounds} rounds: ${runPhrase}${jog}, ${stationPart}`,
+    rest,
+    ...(secondary ? ['A lighter flow, not a hard session.'] : []),
+    ...(spec.doubles ? [partnerTurn ? `${DOUBLES_LINE} Rounds without a station are the partner's turn.` : DOUBLES_LINE] : []),
+  ].join(' ');
+}
+
+/** One station's line for a session view (detail modal, card): "2 × 250 m,
+ *  damper 6", "4 × 1 lane (12.5 m), sled unloaded"; race pace adds the set
+ *  target. A component generated before generator v19 shows its amount. */
+export function hyroxStationRowText(c: HyroxComponent, w: Workout): string {
+  const sets = hyroxComponentSets(c, Math.max(1, w.hyroxRounds ?? 1));
+  if (!w.hyroxSpec) return hyroxComponentAmount(c);
+  return `${sets} × ${stationPrescription(c, w.hyroxSpec, w.hyroxSpec.format === 'race_pace')}`;
+}
+
+/** What a lane H2b station session adds below its stations: the weakest
+ *  station and the doubles split (the description's closing sentences). */
+export function hyroxSessionNotes(w: Workout): string[] {
+  const spec = w.hyroxSpec;
+  if (!spec) return [];
+  const out: string[] = [];
+  if (spec.weakest && (w.hyroxComponents ?? []).some(c => c.type === spec.weakest)) out.push(`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`);
+  if (spec.doubles) out.push(DOUBLES_LINE);
+  return out;
+}
+
+/** A lane H2b session's MTL, duration and description from its components. */
+function finishHyroxSession(w: Workout): Workout {
+  const comps = w.hyroxComponents ?? [];
+  const out: Workout = {
+    ...w,
+    musculoTendonLoad: comps.reduce((sum, c) => sum + c.mtl, 0),
+    estimatedDurationMin: Math.max(1, Math.round(hyroxSessionDurationSec(w) / 60)),
+  };
+  out.d = hyroxSessionText(out);
+  return out;
+}
+
+/** The athlete's prescription inputs: explicit params first, else the
+ *  athlete in `seed`. */
+function prescriptionOf(p: HyroxPrescriptionParams & { seed?: HyroxSeedStateInput }): { wallBallTargetM: number | null; doubles: boolean } {
+  return {
+    wallBallTargetM: p.wallBallTargetM !== undefined
+      ? p.wallBallTargetM
+      : hyroxWallBallTargetM(p.seed?.biologicalSex, p.seed?.hyroxConfig?.division),
+    doubles: p.doubles ?? isHyroxDoublesFormat(p.seed?.hyroxConfig?.format),
+  };
+}
+
+/**
+ * One station component of a lane H2b session: `sets` quarter-station sets
+ * (in `inRounds` when not every round), each `setSec` long, at the station's
+ * prescribed load (`loadKg`; absent, race weight at the tier). MTL from
+ * mtl.ts over every set's minutes at the session RPE, the external load the
+ * prescribed one (sleds: SLED_EXTERNAL_LOAD_FRACTION of the sled total, the
+ * rule stationExternalLoadKg applies to race weight; an unloaded sled carries
+ * none here, its own mass unknown).
+ */
+function stationComponent(p: {
+  station: HyroxStation;
+  sets: number;
+  inRounds?: number[];
+  setSec: number;
+  rpe: number;
+  restAfterSec: number;
+  loadTier: HyroxLoadTier;
+  loadKg?: number;
   bodyWeightKg?: number;
-  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
-  raceWeek?: boolean;
-  loadTier?: HyroxLoadTier;
-  seed?: HyroxSeedStateInput;
-}): Workout {
-  // Up to 4 stations at 65% of seed time (technique pace), 60s between stations
-  // and 3 min between rounds. Round count fills the station-work budget (slot
-  // minus the run finish), clamped to the band's coach range — controlled pace
-  // sustains more volume than race-pace density. Duration follows the work.
-  // Race week: no eccentric-heavy or sled station (RACE_WEEK_EXCLUDED_STATIONS).
-  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 4, p.raceWeek ? RACE_WEEK_EXCLUDED_STATIONS : []);
-  // Beginners: remove eccentric-heavy stations entirely. Quad DOMS from burpees/lunges
-  // on Week 1 kills adherence. Introduce progressively from build phase.
-  if ((p.band === 'total_beginner' || p.band === 'beginner') && p.phase === 'base') {
-    const safe = stations.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
+}): HyroxComponent {
+  const st = p.station;
+  const amount = hyroxStationSetAmount(st);
+  const race = hyroxRaceLoadKg(st, p.loadTier);
+  const kg = race == null ? undefined : Math.min(race, p.loadKg ?? race);
+  const externalKg = kg == null ? undefined : isHyroxSled(st) ? kg * SLED_EXTERNAL_LOAD_FRACTION : kg;
+  const mtl = computeComponentMTL((p.setSec / 60) * p.sets, p.rpe, st, externalKg, p.bodyWeightKg);
+  return {
+    type: st,
+    ...(st === 'wall_balls' ? { reps: amount } : { distanceM: amount }),
+    durationSec: Math.round(p.setSec),
+    mtl,
+    restAfterSec: p.restAfterSec,
+    raceFraction: HYROX_STATION_SET_FRACTION,
+    ...(p.inRounds ? { inRounds: p.inRounds } : {}),
+    ...(kg != null ? { loadKg: kg } : {}),
+    ...(kg != null && race != null && kg < race - 1e-9 ? { loadPct: kg / race } : {}),
+  };
+}
+
+/** The largest round count from `rounds` down to `floor` whose session fits
+ *  `targetMinutes`; `floor` when none does. */
+function fitToTarget(w: Workout, targetMinutes: number, floor: number): Workout {
+  let out = w;
+  while ((out.hyroxRounds ?? 1) > floor && (out.estimatedDurationMin ?? 0) > targetMinutes + 1e-9) {
+    out = withHyroxRounds(out, (out.hyroxRounds ?? 1) - 1);
+  }
+  return out;
+}
+
+export function generateHyroxStation(params: StationParams): Workout {
+  return params.kind === 'station_technique' ? generateStationTechnique(params) : generateStationRacePace(params);
+}
+
+/**
+ * Technique station session (sheet technique.station_session): 0.5 x race
+ * volume per station in quarter-station sets (2 sets; doubles 1), RPE 5, 2 min
+ * rest after every set, one set of each station a round. Beginners: 4
+ * stations rotated so each recurs every 2 weeks, none of the eccentric-heavy
+ * stations in base (existing rule), sleds as 4 sets of one lane (doubles 2),
+ * loads on the beginner schedule (`stationLoads`). Intermediate and advanced:
+ * 3 stations at race weight. Race week leaves out the eccentric-heavy and sled
+ * stations (RACE_WEEK_EXCLUDED_STATIONS). Replaces the old circuit: 2 to 4
+ * rounds of the full race distance per station at 65% of the seed time,
+ * faster than race pace, at RPE 5, plus an easy-run finish.
+ */
+function generateStationTechnique(p: StationParams): Workout {
+  const tier = hyroxTier(p.band);
+  const { wallBallTargetM, doubles } = prescriptionOf(p);
+  const fmt = HYROX_STATION_FORMATS.technique;
+  const loadTier = p.loadTier ?? HYROX_DEFAULT_LOAD_TIER;
+  const raceExclude = p.raceWeek ? RACE_WEEK_EXCLUDED_STATIONS : [];
+  const count = HYROX_STATIONS_PER_SESSION[tier];
+  let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, count, raceExclude);
+  if (tier === 'beginner' && p.phase === 'base') {
+    // No lunges, burpee broad jumps or wall balls in a beginner's base
+    // (existing rule), kept whenever MIN_CIRCUIT_STATIONS others remain.
+    const safe = pickStations(p.stationAccess, p.phase, p.slotIndex, count, [...raceExclude, ...ECCENTRIC_HEAVY_STATIONS]);
     if (safe.length >= MIN_CIRCUIT_STATIONS) stations = safe;
   }
-
-  const INTER_STATION_REST = 60;
-  const INTER_ROUND_REST = 180;
-
-  // Per-station technique work (one round) and the run finish that closes the session.
-  const perStationSec = stations.map(s => Math.round(stationSeedSec(s, p.band, p.stationBenchmarks, p.seed) * 0.65));
-  const runFinishMin = Math.min(20, Math.round(p.dur * 0.4));
-  const easyPace = hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band) * 1.2;
-  const runKm = Math.round((runFinishMin * 60) / easyPace * 10) / 10;
-
-  // Round duration = station work + within-round rests + one inter-round rest.
-  const workPerRoundSec = perStationSec.reduce((sum, s) => sum + s, 0);
-  const roundDurSec = workPerRoundSec + Math.max(0, stations.length - 1) * INTER_STATION_REST + INTER_ROUND_REST;
-  const stationBudgetSec = Math.max(0, (p.dur - runFinishMin) * 60);
-  const rounds = fillRounds(stationBudgetSec, roundDurSec, bandMaxRounds(p.band));
-
-  const components: HyroxComponent[] = [];
-  let totalMTL = 0;
-  const stationLines = stations.map((s, i) => {
-    const display = STATION_DISPLAY[s];
-    const techSec = perStationSec[i];
-    const workMinTotal = (techSec / 60) * rounds;
-    const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[s];
-    const stationMTL = computeComponentMTL(workMinTotal, 5, s, externalKg, p.bodyWeightKg);
-    totalMTL += stationMTL;
-
-    components.push({
-      type: s,
-      distanceM: s === 'wall_balls' ? undefined : parseInt(display.distance),
-      reps: s === 'wall_balls' ? 50 : undefined,  // half reps for technique
-      durationSec: techSec,
-      mtl: stationMTL,
-      restAfterSec: INTER_STATION_REST,
+  const baseSets = hyroxTechniqueSets(doubles);
+  const sledSets = doubles ? hyroxDoublesSets(HYROX_BEGINNER_SLED_SETS) : HYROX_BEGINNER_SLED_SETS;
+  const setsOf = (st: HyroxStation) => (tier === 'beginner' && isHyroxSled(st) ? sledSets : baseSets);
+  const rounds = Math.max(...stations.map(setsOf));
+  const components = stations.map(st => {
+    const sets = setsOf(st);
+    return stationComponent({
+      station: st,
+      sets,
+      ...(sets < rounds ? { inRounds: Array.from({ length: sets }, (_, i) => i + 1) } : {}),
+      setSec: stationSeedSec(st, p.band, p.stationBenchmarks, p.seed) * HYROX_STATION_SET_FRACTION * HYROX_EASY_PASS_TIME_FACTOR,
+      rpe: fmt.rpe,
+      restAfterSec: fmt.restSec,
+      loadTier,
+      loadKg: p.stationLoads?.[st],
+      bodyWeightKg: p.bodyWeightKg,
     });
-
-    return `${display.name} (${s === 'wall_balls' ? '50 reps' : display.distance}, ~${fmtSec(techSec)})`;
   });
-
-  // Total prescribed time = station work + all rests across rounds + run finish.
-  const stationTotalSec =
-    workPerRoundSec * rounds +
-    rounds * Math.max(0, stations.length - 1) * INTER_STATION_REST +
-    Math.max(0, rounds - 1) * INTER_ROUND_REST;
-  const estimatedDurationMin = Math.round(stationTotalSec / 60) + runFinishMin;
-
-  // Session name: generic. The station list lives inside the modal body where
-  // it has space; cramming station names into the headline reads as noise.
-  const sessionName = 'Station Circuit';
-
-  return {
-    n: sessionName,
-    d: `${rounds} rounds: ${stationLines.join(' + ')}. Technique focus, controlled pace. Rest 60s between stations, 3 min between rounds. Then ${runFinishMin} min easy run (~${runKm} km) — practice the station-to-run transition.`,
+  const w = finishHyroxSession({
+    n: 'Station Circuit',
+    d: '',
     t: 'hyrox_station_technique',
     discipline: 'station',
-    r: 5,
-    rpe: 5,
-    estimatedDurationMin,
-    musculoTendonLoad: totalMTL,
+    r: fmt.rpe,
+    rpe: fmt.rpe,
     hyroxComponents: components,
     hyroxRounds: rounds,
-    hyroxRoundRestSec: INTER_ROUND_REST,
-  };
+    hyroxRoundRestSec: fmt.restSec,
+    hyroxSpec: { format: 'technique', restSec: fmt.restSec, wallBallTargetM, ...(doubles ? { doubles: true } : {}) },
+  });
+  return fitToTarget(w, p.targetMinutes, Math.min(rounds, hyroxMinRounds(w)));
 }
 
-function generateStationDensity(p: {
-  dur: number;
-  band: AbilityBand;
-  stationAccess: HyroxConfig['stationAccess'];
-  phase: 'base' | 'build' | 'peak' | 'taper';
-  slotIndex: number;
-  bodyWeightKg?: number;
-  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
-  loadTier?: HyroxLoadTier;
-  seed?: HyroxSeedStateInput;
-}): Workout {
-  // Time-capped station circuit (research §7.2: "station work for time / AMRAP").
-  // Pick the race's primary discriminators (2 high-MTL) + 1 erg, then run the
-  // circuit at race pace for as many rounds as fill the slot, clamped to the
-  // band's coach range. 30s between stations, 2 min between rounds. Duration
-  // follows the actual work, not the raw slot budget.
+/**
+ * Race-pace station session (sheet technique.station_session): 3 stations,
+ * the forecast's weakest first when the athlete can train it, at race weight,
+ * RPE 7, 90 s rest after every set, each set at or just above race pace (the
+ * race split pro rata, the set's target). Volume: the race-pace dose of the
+ * week (hyroxRacePaceSets: 2 to 4 quarter-station sets as the week grows
+ * toward peak, the full 1.0 x race volume at peak; doubles half). Replaces the
+ * density circuit: 2 to 4 rounds of the full race volume at race pace (300
+ * wall balls for an intermediate at 8 h a week).
+ */
+function generateStationRacePace(p: StationParams): Workout {
+  const { wallBallTargetM, doubles } = prescriptionOf(p);
+  const fmt = HYROX_STATION_FORMATS.race_pace;
+  const loadTier = p.loadTier ?? HYROX_DEFAULT_LOAD_TIER;
+  const count = HYROX_STATIONS_PER_SESSION[hyroxTier(p.band)];
   const avail = availableStations(p.stationAccess);
-  const highMTL: HyroxStation[] = ['wall_balls', 'sled_pull', 'sandbag_lunges', 'burpee_broad_jumps']
-    .filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
-  const ergBased: HyroxStation[] = ['row_erg', 'ski_erg'].filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
-
-  // Rotate the two high-MTL picks + an erg by slotIndex for week-to-week variety.
-  const h1 = highMTL[p.slotIndex % Math.max(1, highMTL.length)];
-  const h2 = highMTL[(p.slotIndex + 1) % Math.max(1, highMTL.length)];
-  const erg = ergBased[p.slotIndex % Math.max(1, ergBased.length)];
-  const selectedStations: HyroxStation[] = [];
-  for (const s of [h1, h2, erg]) {
-    if (s && !selectedStations.includes(s)) selectedStations.push(s);
-  }
-  // Fallback: ensure at least two stations even on sparse equipment.
-  if (selectedStations.length < 2) {
-    for (const s of avail) {
-      if (!selectedStations.includes(s)) { selectedStations.push(s); if (selectedStations.length >= 2) break; }
-    }
-  }
-  if (selectedStations.length === 0) selectedStations.push('row_erg');
-
-  const INTER_STATION_REST = 30;
-  const INTER_ROUND_REST = 120;
-
-  const perStationSec = selectedStations.map(s => stationSeedSec(s, p.band, p.stationBenchmarks, p.seed));
-  const workPerRoundSec = perStationSec.reduce((sum, s) => sum + s, 0);
-  const roundDurSec = workPerRoundSec + Math.max(0, selectedStations.length - 1) * INTER_STATION_REST + INTER_ROUND_REST;
-  const rounds = fillRounds(p.dur * 60, roundDurSec, bandMaxRounds(p.band));
-
-  const components: HyroxComponent[] = [];
-  let totalMTL = 0;
-  const stationLines = selectedStations.map((s, i) => {
-    const display = STATION_DISPLAY[s];
-    const seedSec = perStationSec[i];
-    const workMinTotal = (seedSec / 60) * rounds;
-    const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[s];
-    const stationMTL = computeComponentMTL(workMinTotal, 7, s, externalKg, p.bodyWeightKg);
-    totalMTL += stationMTL;
-
-    components.push({
-      type: s,
-      distanceM: s === 'wall_balls' ? undefined : parseInt(display.distance),
-      reps: s === 'wall_balls' ? 100 : undefined,
-      durationSec: seedSec,
-      mtl: stationMTL,
-      restAfterSec: INTER_STATION_REST,
-    });
-    return `${display.name} (${display.distance}, target ${fmtSec(seedSec)})`;
-  });
-
-  const totalSec =
-    workPerRoundSec * rounds +
-    rounds * Math.max(0, selectedStations.length - 1) * INTER_STATION_REST +
-    Math.max(0, rounds - 1) * INTER_ROUND_REST;
-  const estimatedDurationMin = Math.round(totalSec / 60);
-
-  return {
-    n: 'Station Density',
-    d: `${rounds} rounds: ${stationLines.join(' → ')}. Race-pace effort, 30s rest between stations, 2 min between rounds. No running — station-only focus.`,
+  const weakest = p.weakest && avail.includes(p.weakest) ? p.weakest : undefined;
+  const stations = weakest
+    ? [weakest, ...pickStations(p.stationAccess, p.phase, p.slotIndex, count - 1, [weakest])]
+    : pickStations(p.stationAccess, p.phase, p.slotIndex, count);
+  const sets = hyroxRacePaceSets(p.doseFraction ?? 1, doubles);
+  const components = stations.map(st => stationComponent({
+    station: st,
+    sets,
+    setSec: stationSeedSec(st, p.band, p.stationBenchmarks, p.seed) * HYROX_STATION_SET_FRACTION,
+    rpe: fmt.rpe,
+    restAfterSec: fmt.restSec,
+    loadTier,
+    loadKg: p.stationLoads?.[st],
+    bodyWeightKg: p.bodyWeightKg,
+  }));
+  const w = finishHyroxSession({
+    n: 'Race-Pace Stations',
+    d: '',
     t: 'hyrox_station_density',
     discipline: 'station',
-    r: 7,
-    rpe: 7,
-    estimatedDurationMin,
-    musculoTendonLoad: totalMTL,
+    r: fmt.rpe,
+    rpe: fmt.rpe,
     hyroxComponents: components,
-    hyroxRounds: rounds,
-    hyroxRoundRestSec: INTER_ROUND_REST,
-  };
+    hyroxRounds: sets,
+    hyroxRoundRestSec: fmt.restSec,
+    hyroxSpec: {
+      format: 'race_pace', restSec: fmt.restSec, wallBallTargetM,
+      ...(doubles ? { doubles: true } : {}),
+      ...(weakest ? { weakest } : {}),
+    },
+  });
+  // The week's size: race-pace sets step down to fit the minutes it gives
+  // the session (doseMinutes), never under the technique dose.
+  const techniqueSets = hyroxTechniqueSets(doubles);
+  let sized = w;
+  while ((sized.hyroxRounds ?? 1) > techniqueSets && p.doseMinutes != null && (sized.estimatedDurationMin ?? 0) > p.doseMinutes + 1e-9) {
+    sized = withHyroxRounds(sized, (sized.hyroxRounds ?? 1) - 1);
+  }
+  return fitToTarget(sized, p.targetMinutes, Math.min(sized.hyroxRounds ?? 1, hyroxMinRounds(sized)));
+}
+
+/** The station a cut takes out of a circuit (the MTL cap, the ceilings, the
+ *  deload and taper caps): the heaviest by MTL, never a race-pace session's
+ *  weakest station while another is left (the sheet's race-pace session
+ *  includes the weakest). Null when the session holds no station. */
+export function hyroxStationToCut(w: Workout): HyroxStation | null {
+  const st = (w.hyroxComponents ?? []).filter(c => c.type !== 'run');
+  if (st.length === 0) return null;
+  const pool = st.filter(c => c.type !== w.hyroxSpec?.weakest);
+  return (pool.length > 0 ? pool : st).reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation;
 }
 
 // ─── Brick session generators ─────────────────────────────────────────────────
 
+/** Brick station priority (the existing build/peak order, research doc
+ *  s4.5's high-impact discriminators first). */
+const BRICK_STATION_PRIORITY: HyroxStation[] = ['wall_balls', 'sled_pull', 'sandbag_lunges', 'burpee_broad_jumps', 'farmer_carry', 'row_erg', 'ski_erg', 'sled_push'];
+
+/** The secondary brick's stations: ergs, sleds or the farmers carry (sheet). */
+const SECONDARY_BRICK_STATIONS: HyroxStation[] = ['row_erg', 'ski_erg', 'sled_push', 'sled_pull', 'farmer_carry'];
+
+/** `n` stations from `pool` (the athlete's, in pool order), rotated by slot. */
+function rotate(pool: readonly HyroxStation[], slotIndex: number, n: number): HyroxStation[] {
+  const out: HyroxStation[] = [];
+  for (let i = 0; i < n && i < pool.length; i++) out.push(pool[(Math.abs(slotIndex) * n + i) % pool.length]);
+  return out;
+}
+
+/** A brick's stations in round order (the first takes round 1). */
+function brickStations(p: BrickParams, format: HyroxBrickFormat): HyroxStation[] {
+  const avail = availableStations(p.stationAccess);
+  const has = (s: HyroxStation) => avail.includes(s);
+  if (p.phase === 'taper' && (p.kind === 'mini_brick' || p.secondary)) {
+    // A taper brick protects eccentric and heavy load: ergs, else the farmers
+    // carry (the existing mini brick's stations).
+    const ergs = (['row_erg', 'ski_erg'] as HyroxStation[]).filter(has);
+    return ergs.length > 0 ? rotate(ergs, p.slotIndex, Math.min(format.stations, ergs.length)) : ['farmer_carry'];
+  }
+  if (p.secondary) {
+    const pool = SECONDARY_BRICK_STATIONS.filter(has);
+    return rotate(pool.length > 0 ? pool : avail, p.slotIndex, format.stations);
+  }
+  const pool = BRICK_STATION_PRIORITY.filter(has);
+  if (format.eccentricStation) {
+    const ecc = pool.filter(s => ECCENTRIC_HEAVY_STATIONS.includes(s));
+    const other = pool.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
+    if (ecc.length > 0 && other.length > 0) return [rotate(ecc, p.slotIndex, 1)[0], rotate(other, p.slotIndex, 1)[0]];
+  }
+  return rotate(pool.length > 0 ? pool : avail, p.slotIndex, format.stations);
+}
+
+/**
+ * Brick (sheet bricks.structure, HYROX_BRICK_FORMATS): rounds of a run then a
+ * quarter-station dose (HYROX_STATION_SET_FRACTION) of one station, or of two
+ * alternating rounds. Beginner (and the taper's downgraded brick, on ergs):
+ * 3 x 400 m at goal race pace, no faster, loads on the beginner schedule.
+ * Intermediate: 4 x 800 m at goal race pace, race weight. Advanced key brick:
+ * 6 x 800 m at race pace or faster with a negative split, one eccentric
+ * station, the 30 s jog only. Secondary brick (advanced peak): 4 x 800 m easy
+ * into ergs, sleds or the farmers carry at technique effort, not a hard
+ * session. Goal race pace is priced at the athlete's HYROX run pace (the band
+ * seed without one), as the intermediate peak intervals are (a goal pace from
+ * the target finish is an open question for the forecast lane). Doubles: each
+ * station on every other one of its rounds (hyroxBrickStationRounds).
+ * Replaces the full brick (2 to 6 rounds of 1 km plus the full station each
+ * round: 6 x 100 wall balls at 8 h a week) and the mini brick (2 to 4 rounds
+ * of 500 m plus a full 1,000 m erg).
+ */
 export function generateHyroxBrick(params: BrickParams): Workout {
-  const { kind, targetMinutes, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks } = params;
-  const dur = Math.round(targetMinutes);
-
-  if (kind === 'mini_brick') {
-    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
-  }
-  return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
-}
-
-function generateFullBrick(p: {
-  dur: number;
-  band: AbilityBand;
-  stationAccess: HyroxConfig['stationAccess'];
-  phase: 'base' | 'build' | 'peak' | 'taper';
-  slotIndex: number;
-  bodyWeightKg?: number;
-  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
-  loadTier?: HyroxLoadTier;
-  seed?: HyroxSeedStateInput;
-}): Workout {
-  // N rounds of (1km run + 1 station). Pick a key station based on phase.
-  // Phase progression: base → erg-based stations, build/peak → high-MTL stations.
-  const avail = availableStations(p.stationAccess);
-  let stationPool: HyroxStation[];
-  if (p.phase === 'base') {
-    stationPool = avail.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
-    if (stationPool.length === 0) stationPool = avail;
-  } else {
-    // Build/peak: cycle through high-impact discriminators (research doc §4.5)
-    const priority: HyroxStation[] = ['wall_balls', 'sled_pull', 'sandbag_lunges', 'burpee_broad_jumps', 'farmer_carry', 'row_erg', 'ski_erg', 'sled_push'];
-    stationPool = priority.filter(s => avail.includes(s));
-    if (stationPool.length === 0) stationPool = avail;
-  }
-  const station = stationPool[p.slotIndex % stationPool.length];
-  const stationDisplay = STATION_DISPLAY[station];
-  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks, p.seed);
-
-  // Run: 1km at seed race pace
-  const runSeedSec = hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band);  // seconds for 1km at seed pace
-  const transitionSec = 30;  // jog between run and station
-  const roundDurSec = runSeedSec + stationSeedSec_ + transitionSec;
-
-  // How many full rounds fit in targetMinutes (minus 5min setup/cool-down)?
-  const usableMin = Math.max(p.dur - 5, p.dur * 0.9);
-  const rawRounds = Math.floor((usableMin * 60) / roundDurSec);
-  const rounds = Math.max(2, Math.min(6, rawRounds));
-
-  // MTL for all run components
-  const runDurMinTotal = (runSeedSec / 60) * rounds;
-  const runMTL = computeComponentMTL(runDurMinTotal, 7, 'run_tempo', undefined, p.bodyWeightKg);
-
-  // MTL for station component
-  const stationDurMinTotal = (stationSeedSec_ / 60) * rounds;
-  const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[station];
-  const stationMTL = computeComponentMTL(stationDurMinTotal, 7, station, externalKg, p.bodyWeightKg);
-
-  const components: HyroxComponent[] = [
-    {
-      type: 'run',
-      distanceM: 1000,
-      durationSec: runSeedSec,
-      mtl: runMTL,
-      restAfterSec: 0,  // straight into the station, race-like
-    },
-    {
-      type: station,
-      distanceM: station === 'wall_balls' ? undefined : parseInt(stationDisplay.distance),
-      reps: station === 'wall_balls' ? 100 : undefined,
-      durationSec: stationSeedSec_,
-      mtl: stationMTL,
-      restAfterSec: 0,  // last of round → inter-round rest applies (hyroxRoundRestSec)
-    },
-  ];
-
-  return {
-    n: 'HYROX Brick',
-    d: `${rounds} rounds: 1km run, then straight into ${stationDisplay.name} (${stationDisplay.distance}) — just like race day. 2 min rest between rounds.`,
-    t: 'hyrox_brick',
-    discipline: 'brick',
-    r: 7,
-    rpe: 7,
-    estimatedDurationMin: p.dur,
-    musculoTendonLoad: runMTL + stationMTL,
-    hyroxComponents: components,
-    hyroxRounds: rounds,
-    hyroxRoundRestSec: 120,  // "2 min rest between rounds" (description)
+  const p = params;
+  const tier = hyroxTier(p.band);
+  const format = p.secondary ? HYROX_BRICK_FORMATS.secondary
+    : p.kind === 'mini_brick' ? HYROX_BRICK_FORMATS.beginner
+      : HYROX_BRICK_FORMATS[tier];
+  const { wallBallTargetM, doubles } = prescriptionOf(p);
+  const loadTier = p.loadTier ?? HYROX_DEFAULT_LOAD_TIER;
+  const stations = brickStations(p, format);
+  const racePace = p.runPaceSecKm ?? hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band);
+  const easy = format.runEffort === 'easy';
+  const runPace = easy ? hyroxEasyRunPaceSecKm(p.band, p.runPaceSecKm, p.seed) : racePace;
+  const runSec = (format.runM / 1000) * runPace;
+  const runRpe = easy ? HYROX_EASY_RPE : format.rpe;
+  const run: HyroxComponent = {
+    type: 'run',
+    distanceM: format.runM,
+    durationSec: Math.round(runSec),
+    mtl: computeComponentMTL((runSec / 60) * format.rounds, runRpe, easy ? 'run_easy' : 'run_tempo', undefined, p.bodyWeightKg),
+    restAfterSec: 0, // into the station after the transition jog, race-like
   };
-}
-
-function generateMiniBrick(p: {
-  dur: number;
-  band: AbilityBand;
-  stationAccess: HyroxConfig['stationAccess'];
-  phase: 'base' | 'build' | 'peak' | 'taper';
-  slotIndex: number;
-  bodyWeightKg?: number;
-  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
-  loadTier?: HyroxLoadTier;
-  seed?: HyroxSeedStateInput;
-}): Workout {
-  // Beginner-friendly: 500m run + 1 erg station. Builds the run-to-station
-  // transition pattern without the full eccentric load of race-distance bricks.
-  const avail = availableStations(p.stationAccess);
-  const ergs: HyroxStation[] = ['row_erg', 'ski_erg'].filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
-  const station: HyroxStation = ergs[p.slotIndex % Math.max(1, ergs.length)] ?? 'farmer_carry';
-  const stationDisplay = STATION_DISPLAY[station];
-  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks, p.seed);
-
-  // 500m run at seed pace
-  const runSeedSec = Math.round(hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band) * 0.5);
-  const transitionSec = 30;
-  const roundDurSec = runSeedSec + stationSeedSec_ + transitionSec;
-
-  const usableMin = Math.max(p.dur - 5, p.dur * 0.9);
-  const rawRounds = Math.floor((usableMin * 60) / roundDurSec);
-  const rounds = Math.max(2, Math.min(4, rawRounds));
-
-  const runDurMinTotal = (runSeedSec / 60) * rounds;
-  const runMTL = computeComponentMTL(runDurMinTotal, 6, 'run_easy', undefined, p.bodyWeightKg);
-  const stationDurMinTotal = (stationSeedSec_ / 60) * rounds;
-  // External load at the athlete's tier, as generateFullBrick. Only the
-  // farmer-carry fallback (no ski or row erg) carries one; ergs have none, so
-  // their MTL is unchanged. Before 2026-10-13 the mini brick passed no
-  // external load, so that fallback carried none for anyone.
-  const externalKg = stationExternalLoadKg(p.loadTier ?? HYROX_DEFAULT_LOAD_TIER)[station];
-  const stationMTL = computeComponentMTL(stationDurMinTotal, 6, station, externalKg, p.bodyWeightKg);
-
-  const components: HyroxComponent[] = [
-    { type: 'run', distanceM: 500, durationSec: runSeedSec, mtl: runMTL, restAfterSec: 0 },
-    { type: station, durationSec: stationSeedSec_, mtl: stationMTL, restAfterSec: 0 },
-  ];
-
-  return {
-    n: 'Mini Brick',
-    d: `${rounds} rounds: 500m run + ${stationDisplay.name} (${stationDisplay.distance}). Build the run-to-station transition. 2 min rest between rounds.`,
-    t: 'hyrox_mini_brick',
+  const stationComps = stations.map((st, i) => {
+    const inRounds = hyroxBrickStationRounds(format.rounds, stations.length === 1 ? 1 : 2, (i % 2) as 0 | 1, doubles);
+    return stationComponent({
+      station: st,
+      sets: inRounds.length,
+      ...(inRounds.length < format.rounds ? { inRounds } : {}),
+      setSec: stationSeedSec(st, p.band, p.stationBenchmarks, p.seed) * HYROX_STATION_SET_FRACTION,
+      rpe: format.rpe,
+      restAfterSec: 0, // the last set of its round: the round rest follows
+      loadTier,
+      loadKg: p.stationLoads?.[st],
+      bodyWeightKg: p.bodyWeightKg,
+    });
+  });
+  const name = p.secondary ? 'Secondary Brick' : p.kind === 'mini_brick' ? 'Mini Brick' : 'HYROX Brick';
+  const w = finishHyroxSession({
+    n: name,
+    d: '',
+    t: p.kind === 'mini_brick' || p.secondary ? 'hyrox_mini_brick' : 'hyrox_brick',
     discipline: 'brick',
-    r: 6,
-    rpe: 6,
-    estimatedDurationMin: p.dur,
-    musculoTendonLoad: runMTL + stationMTL,
-    hyroxComponents: components,
-    hyroxRounds: rounds,
-    hyroxRoundRestSec: 120,
-  };
+    r: format.rpe,
+    rpe: format.rpe,
+    hyroxComponents: [run, ...stationComps],
+    hyroxRounds: format.rounds,
+    hyroxRoundRestSec: format.roundRestSec,
+    ...(p.secondary ? { hyroxLight: true } : {}),
+    hyroxSpec: {
+      format: p.secondary ? 'secondary_brick' : 'brick',
+      restSec: format.roundRestSec,
+      transitionSec: format.transitionSec,
+      runM: format.runM,
+      runPaceSecKm: runPace,
+      runEffort: format.runEffort,
+      wallBallTargetM,
+      ...(doubles ? { doubles: true } : {}),
+    },
+  });
+  return fitToTarget(w, p.targetMinutes, Math.min(format.rounds, MIN_CIRCUIT_ROUNDS));
 }
 
 // ─── Assessment session (Week 1 only) ────────────────────────────────────────
@@ -858,7 +1055,7 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
   const components: HyroxComponent[] = stations.map(station => {
     const display = STATION_DISPLAY[station];
     const seedSec = seeds[station];
-    const easyDurSec = Math.round(seedSec * 1.2);
+    const easyDurSec = Math.round(seedSec * HYROX_EASY_PASS_TIME_FACTOR);
     const easyDurMin = easyDurSec / 60;
     const stationMTL = computeComponentMTL(
       easyDurMin, 4, station,

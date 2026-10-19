@@ -14,6 +14,7 @@
 import type { Workout } from '@/types';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { hyroxComponentAmount, hyroxSessionWalk, fmtAmount } from '@/workouts/hyrox-session-shape';
 import { normalizeExerciseKey, cleanExerciseName } from '@/calculations/strength-exercise-key';
 
 /** One working set in the flattened guided sequence. */
@@ -182,7 +183,10 @@ export function strengthCardSummary(workout: Workout): string | null {
 // station clock.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Describe one HYROX component as a name + target for the guided UI. */
+/** Describe one HYROX component as a name + target for the guided UI: one
+ *  set's amount (hyroxComponentAmount: "250 m", "1 lane (12.5 m)", "25 reps";
+ *  a session generated before generator v19 carries the full station) and its
+ *  load when it has one. */
 function describeHyroxComponent(c: HyroxComponent): { name: string; amount: string } {
   if (c.type === 'run') {
     const distM = c.distanceM ?? 1000;
@@ -192,11 +196,15 @@ function describeHyroxComponent(c: HyroxComponent): { name: string; amount: stri
       : `${distM} m`;
     return { name: 'Run', amount };
   }
-  const display = STATION_DISPLAY[c.type as HyroxStation];
+  const station = c.type as HyroxStation;
+  const display = STATION_DISPLAY[station];
   const name = display?.name ?? String(c.type);
-  // Prefer the component's explicit reps; otherwise the race-standard distance/reps.
-  const amount = typeof c.reps === 'number' ? `${c.reps} reps` : (display?.distance ?? '');
-  return { name, amount };
+  const amount = hyroxComponentAmount(c);
+  if (c.loadKg == null) return { name, amount };
+  const load = station === 'sled_push' || station === 'sled_pull'
+    ? (c.loadKg <= 0 ? 'sled unloaded' : `${fmtAmount(c.loadKg)} kg incl. sled`)
+    : station === 'farmer_carry' ? `2 × ${fmtAmount(c.loadKg)} kg` : `${fmtAmount(c.loadKg)} kg`;
+  return { name, amount: `${amount}, ${load}` };
 }
 
 /** Parse a HYROX station/brick workout into the same flat guided shape used
@@ -220,34 +228,22 @@ export function parseHyroxSession(workout: Workout): StrengthSession | null {
   const components = (workout as any).hyroxComponents as HyroxComponent[] | undefined;
   if (!components || components.length === 0) return null;
 
-  const rounds = Math.max(1, Math.round((workout as any).hyroxRounds ?? 1));
-  const roundRestSec = Math.max(0, Math.round((workout as any).hyroxRoundRestSec ?? 0));
-
-  const sets: GuidedSet[] = [];
-  for (let r = 0; r < rounds; r++) {
-    components.forEach((c, ci) => {
-      const { name, amount } = describeHyroxComponent(c);
-      const isLastComponent = ci === components.length - 1;
-      const isFinalRound = r === rounds - 1;
-      // Rest after this set: inter-round rest after the last component of a
-      // round (except the final round), the component's own inter-station rest
-      // otherwise, and none on the very last set.
-      let restSec: number;
-      if (isLastComponent && isFinalRound) restSec = 0;
-      else if (isLastComponent) restSec = roundRestSec;
-      else restSec = Math.max(0, Math.round(c.restAfterSec ?? 0));
-
-      sets.push({
-        exerciseName: name,
-        exerciseIndex: ci,
-        setIndex: r,
-        setCount: rounds,
-        reps: amount,
-        cue: '',
-        restSec,
-      });
-    });
-  }
+  // The session's walk (hyrox-session-shape): every set in order, a component
+  // with `inRounds` only in those rounds, the rest after each set. setIndex
+  // and setCount are the component's own (a beginner's sled holds 4 sets of a
+  // lane while the other stations hold 2).
+  const sets: GuidedSet[] = hyroxSessionWalk(workout).map(s => {
+    const { name, amount } = describeHyroxComponent(s.component);
+    return {
+      exerciseName: name,
+      exerciseIndex: s.ci,
+      setIndex: s.setIndex,
+      setCount: s.setCount,
+      reps: amount,
+      cue: '',
+      restSec: s.restSec,
+    };
+  });
 
   return {
     title: workout.n || 'HYROX session',

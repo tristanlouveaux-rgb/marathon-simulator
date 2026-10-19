@@ -11,7 +11,7 @@ import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 import { strengthCardSummary } from '@/guided/strength-model';
-import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText } from '@/workouts/hyrox-generators';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ function workoutDisc(w: Workout): HyroxDisc {
 
 // ─── Component list renderer ─────────────────────────────────────────────────
 
-function renderComponents(components: HyroxComponent[]): string {
+function renderComponents(components: HyroxComponent[], w: Workout): string {
   if (!components.length) return '';
   const lines = components.map(c => {
     if (c.type === 'run') {
@@ -54,7 +54,8 @@ function renderComponents(components: HyroxComponent[]): string {
     }
     const display = STATION_DISPLAY[c.type as HyroxStation];
     if (!display) return '';
-    const dist = c.reps ? `${c.reps} reps` : display.distance;
+    // Lane H2b sessions: the station's sets and prescription; older ones: the amount.
+    const dist = w.hyroxSpec ? hyroxStationRowText(c, w) : c.reps ? `${c.reps} reps` : display.distance;
     return `<li style="margin-bottom:2px">${display.name}, ${dist}</li>`;
   });
 
@@ -126,7 +127,7 @@ export function renderHyroxWorkoutCard(
            paragraph. Runs and single-line cross-training keep their line. -->
       ${showComponents ? '' : renderCardDescription(w)}
       <!-- Component list for station/brick -->
-      ${showComponents ? renderComponents(components!) : ''}
+      ${showComponents ? renderComponents(components!, w) : ''}
       <!-- Taper eccentric warning -->
       ${showTaperWarning ? `
         <div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:rgba(184,116,44,0.07);border:1px solid rgba(184,116,44,0.2);font-size:11px;color:#8a5820;line-height:1.4">

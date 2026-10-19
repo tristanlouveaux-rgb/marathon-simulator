@@ -6,9 +6,13 @@
  * improvements, following the "Manually-set Benchmarks Yield to Improvements"
  * rule (CLAUDE.md) and the science in SCIENCE_LOG §AP:
  *
- *  - Only **race-pace** sessions teach the benchmark (density, brick). Technique
- *    runs at 65% of seed pace by design — its times are submaximal and must
- *    never feed the benchmark. They are still surfaced in the session summary.
+ *  - Only **race-pace** sessions teach the benchmark (density, brick), and only
+ *    over a full station: since lane H2b (generator v19) station sessions and
+ *    bricks prescribe quarter-station sets (HyroxComponent.raceFraction 0.25),
+ *    and a set time is not a station time, so those sets teach nothing until a
+ *    full-station session (the race simulations of part 2) exists. Technique
+ *    times are submaximal by design and never feed the benchmark. They are
+ *    still surfaced in the session summary.
  *  - The candidate is the athlete's **best (fastest) round** for each station.
  *    It is measured under in-circuit fatigue, so it is a *conservative* proxy
  *    for a fresh single-station benchmark: beating the stored benchmark even
@@ -100,6 +104,17 @@ export interface StationSessionResult {
   eligible: boolean;
   /** eligible AND (no benchmark yet, or best round beats the stored benchmark). */
   isImprovement: boolean;
+  /** Every set of the station covered part of it (a quarter-station set):
+   *  the times are set times, not station times. */
+  partial: boolean;
+}
+
+/** True when every component of `station` in the session covers part of the
+ *  station (raceFraction under 1). A component with no raceFraction (the
+ *  assessment, a session generated before generator v19) is the full station. */
+function isPartialStation(components: readonly HyroxComponent[], station: HyroxStation): boolean {
+  const own = components.filter(c => c.type === station);
+  return own.length > 0 && own.every(c => c.raceFraction != null && c.raceFraction < 1);
 }
 
 /** A benchmark write that actually happened, for logging / the summary banner. */
@@ -233,7 +248,13 @@ export function summariseHyroxSession(
     // The round in the field's own terms (a Mixed woman's M-Open round at
     // W-Open loads), for the floor and the percentile.
     const fieldSec = hyroxSoloToFieldSec(station, bestSec, frame);
-    const eligible = racePace && passesSanityFloor(station, fieldSec, cohort);
+    // A set covering part of the station (lane H2b: quarter-station sets,
+    // HyroxComponent.raceFraction) is no station time: a quarter of the
+    // distance is not paced like the whole, so it neither teaches the
+    // benchmark nor takes a percentile against race splits.
+    const partial = isPartialStation(components, station);
+    const comparable = racePace && !partial;
+    const eligible = comparable && passesSanityFloor(station, fieldSec, cohort);
     const isImprovement = eligible && (benchmarkSec == null || bestSec < benchmarkSec);
     results.push({
       station,
@@ -241,10 +262,11 @@ export function summariseHyroxSession(
       bestSec,
       benchmarkSec,
       deltaSec: benchmarkSec == null ? null : benchmarkSec - bestSec,
-      percentile: racePace ? getStationPercentile(station, fieldSec, cohort) : null,
-      percentileCohort: racePace ? hyroxCohortLabel(cohort) : null,
+      percentile: comparable ? getStationPercentile(station, fieldSec, cohort) : null,
+      percentileCohort: comparable ? hyroxCohortLabel(cohort) : null,
       eligible,
       isImprovement,
+      partial,
     });
   }
   return results;
