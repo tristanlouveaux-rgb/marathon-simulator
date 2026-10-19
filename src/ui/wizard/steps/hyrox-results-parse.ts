@@ -42,6 +42,16 @@ export function parseHyroxResultsText(text: string): {
   runPaceSecKm?: number;
   /** "Total time" parsed from the export, in seconds. Used for sanity-check display. */
   totalRaceSec?: number;
+  /** Run 1 to run 8 ("Running 3  04:51"), seconds; null where a leg was not
+   *  in the text. Absent when no leg was found. */
+  runLegsSec?: Array<number | null>;
+  /** The 8 runs together: the sum of the legs when all 8 were found, else a
+   *  "Run Total" line. */
+  runTotalSec?: number;
+  /** Total Roxzone time ("Roxzone Time", "Roxzone Total", "Total Roxzone",
+   *  or a single bare "Roxzone" line). Several bare "Roxzone" lines are
+   *  per-transition times and are not summed. */
+  roxzoneSec?: number;
 } {
   const STATION_PATTERNS: Array<{ pattern: RegExp; station: HyroxStation }> = [
     { pattern: /ski[\s-]*erg/i,              station: 'ski_erg' },
@@ -73,6 +83,16 @@ export function parseHyroxResultsText(text: string): {
       if (s < 60 && m <= 30) return m * 60 + s;
     }
     return null;
+  }
+
+  /** The time after a label: on the label's own line first (so a later
+   *  line's h:mm:ss never wins over this line's mm:ss), else within
+   *  `windowLen` characters (a copy that breaks the time onto the next line). */
+  function timeNear(start: number, windowLen: number): number | null {
+    const window = text.slice(start, start + windowLen);
+    const nl = window.indexOf('\n');
+    const sameLine = nl >= 0 ? window.slice(0, nl) : window;
+    return extractTimeSec(sameLine) ?? extractTimeSec(window);
   }
 
   const stations: Partial<Record<HyroxStation, number>> = {};
@@ -190,15 +210,18 @@ export function parseHyroxResultsText(text: string): {
   }
 
   // Parse run leg times: lines like "Running 1  00:03:22" or "Run 1  3:22"
-  // Average all found run legs to derive a 1km pace.
+  // Average all found run legs to derive a 1km pace. Legs 1 to 8 are also
+  // kept by number (first time per leg) for "where you lost time".
   const runLegTimes: number[] = [];
-  const RUN_LINE_RE = /\brun(?:ning)?\s+\d+\b/gi;
+  const runLegsByNumber: Array<number | null> = new Array(8).fill(null);
+  const RUN_LINE_RE = /\brun(?:ning)?\s+(\d+)\b/gi;
   let runMatch: RegExpExecArray | null;
   while ((runMatch = RUN_LINE_RE.exec(text)) !== null) {
-    const after = text.slice(runMatch.index + runMatch[0].length, runMatch.index + runMatch[0].length + 60);
-    const sec = extractTimeSec(after);
+    const sec = timeNear(runMatch.index + runMatch[0].length, 60);
     if (sec != null && sec >= HYROX_RUN_PACE_MIN_SEC_KM && sec <= 720) { // 3:10–12:00/km
       runLegTimes.push(sec);
+      const leg = Number(runMatch[1]);
+      if (leg >= 1 && leg <= 8 && runLegsByNumber[leg - 1] == null) runLegsByNumber[leg - 1] = sec;
     }
   }
 
@@ -233,5 +256,51 @@ export function parseHyroxResultsText(text: string): {
     }
   }
 
-  return { stations, stationSource, runPaceSecKm, totalRaceSec: totalSec ?? undefined };
+  // Run total: the legs when all 8 were found, else a "Run Total" line
+  // (bounded like a leg: 8 x 3:10 to 8 x 12:00).
+  let runTotalSec: number | undefined;
+  if (runLegsByNumber.every(v => v != null)) {
+    runTotalSec = (runLegsByNumber as number[]).reduce((a, b) => a + b, 0);
+  } else {
+    const runTotalLine = /\brun(?:ning)?\s+total\b/i.exec(text);
+    if (runTotalLine) {
+      const sec = timeNear(runTotalLine.index + runTotalLine[0].length, 80);
+      if (sec != null && sec >= HYROX_RUN_PACE_MIN_SEC_KM * 8 && sec <= 720 * 8) runTotalSec = sec;
+    }
+  }
+
+  // Roxzone total. "Roxzone In / Out" timestamp lines and numbered
+  // transitions are skipped; several bare "Roxzone" times are per-transition
+  // and not summed. Same 25-min ceiling as a station (the results' Roxzone
+  // p99 is under 20 min in every field).
+  let roxzoneSec: number | undefined;
+  const roxTotalLine = /\b(?:roxzone\s+(?:time|total)|total\s+roxzone)\b/i.exec(text);
+  const roxTimeAfter = (index: number, length: number): number | null => {
+    const sec = timeNear(index + length, 60);
+    return sec != null && sec > 0 && sec <= STATION_MAX_SEC ? sec : null;
+  };
+  if (roxTotalLine) {
+    roxzoneSec = roxTimeAfter(roxTotalLine.index, roxTotalLine[0].length) ?? undefined;
+  } else {
+    // Not "Roxzone In/Out" and not a numbered transition ("Roxzone 3 0:24");
+    // a time right after the label ("Roxzone 05:48") is fine.
+    const BARE_ROX_RE = /\broxzone\b(?!\s*(?:in|out|time|total)\b)(?!\s*\d+\b(?!:))/gi;
+    const bare: number[] = [];
+    let rm: RegExpExecArray | null;
+    while ((rm = BARE_ROX_RE.exec(text)) !== null) {
+      const sec = roxTimeAfter(rm.index, rm[0].length);
+      if (sec != null) bare.push(sec);
+    }
+    if (bare.length === 1) roxzoneSec = bare[0];
+  }
+
+  return {
+    stations,
+    stationSource,
+    runPaceSecKm,
+    totalRaceSec: totalSec ?? undefined,
+    ...(runLegsByNumber.some(v => v != null) ? { runLegsSec: runLegsByNumber } : {}),
+    ...(runTotalSec != null ? { runTotalSec } : {}),
+    ...(roxzoneSec != null ? { roxzoneSec } : {}),
+  };
 }

@@ -71,3 +71,72 @@ describe('parseHyroxResultsText — forgiving phone copy', () => {
     expect(totalRaceSec).toBeUndefined();
   });
 });
+
+describe('parseHyroxResultsText — run legs and Roxzone for "where you lost time"', () => {
+  const fullCopy = `
+    Running 1   00:04:31
+    1000m SkiErg   00:04:47
+    Running 2   00:04:52
+    50m Sled Push   00:03:05
+    Running 3   00:05:10
+    50m Sled Pull   00:05:20
+    Running 4   00:05:02
+    80m Burpee Broad Jump   00:05:40
+    Running 5   00:05:15
+    1000m Row   00:04:58
+    Running 6   00:05:08
+    200m Farmers Carry   00:02:05
+    Running 7   00:05:12
+    100m Sandbag Lunges   00:05:01
+    Running 8   00:05:44
+    Wall Balls   00:06:30
+    Roxzone Time   00:06:12
+    Run Total   00:40:54
+    Total time  01:30:02
+  `;
+
+  it('keeps each run leg by number and sums the run total from them', () => {
+    const r = parseHyroxResultsText(fullCopy);
+    expect(r.runLegsSec).toEqual([271, 292, 310, 302, 315, 308, 312, 344]);
+    expect(r.runTotalSec).toBe(271 + 292 + 310 + 302 + 315 + 308 + 312 + 344);
+    expect(r.roxzoneSec).toBe(372);
+    expect(r.totalRaceSec).toBe(5402);
+    // The station times are unchanged by the run and Roxzone lines.
+    expect(r.stations.ski_erg).toBe(287);
+    expect(r.stations.row_erg).toBe(298);
+    expect(Object.keys(r.stations)).toHaveLength(8);
+  });
+
+  it('a partial copy keeps the legs it found; a Run Total line gives the total', () => {
+    const r = parseHyroxResultsText(`
+      Running 1  04:31
+      Running 3  05:10
+      Run Total  00:40:54
+    `);
+    expect(r.runLegsSec).toEqual([271, null, 310, null, null, null, null, null]);
+    expect(r.runTotalSec).toBe(2454);
+  });
+
+  it('Roxzone In/Out timestamps and numbered transitions are not a Roxzone total', () => {
+    const exportText = `
+      SkiErg In    10:43:16
+      SkiErg Out   10:47:28
+      Roxzone In   10:47:30
+      Roxzone Out  10:48:01
+    `;
+    expect(parseHyroxResultsText(exportText).roxzoneSec).toBeUndefined();
+    expect(parseHyroxResultsText('Roxzone 1  0:24\nRoxzone 2  0:31').roxzoneSec).toBeUndefined();
+  });
+
+  it('one bare Roxzone line is the total; several are per-transition and not summed', () => {
+    expect(parseHyroxResultsText('Roxzone   05:48').roxzoneSec).toBe(348);
+    expect(parseHyroxResultsText('Roxzone 0:24\nSkiErg 4:40\nRoxzone 0:31').roxzoneSec).toBeUndefined();
+  });
+
+  it('no run or Roxzone lines: the fields are absent', () => {
+    const r = parseHyroxResultsText('SkiErg 04:12\nSled Push 02:48');
+    expect(r.runLegsSec).toBeUndefined();
+    expect(r.runTotalSec).toBeUndefined();
+    expect(r.roxzoneSec).toBeUndefined();
+  });
+});
