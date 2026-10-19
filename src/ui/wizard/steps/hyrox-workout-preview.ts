@@ -52,15 +52,15 @@ const STATION_CARDS: HyroxWorkoutCard[] = [
   {
     kind: 'station_technique',
     name: 'Station technique',
-    oneLine: 'Skill-focused circuits at controlled effort. Form first.',
-    example: '3 rounds: 4 stations × race distance, 60s between stations, 3 min between rounds. RPE 5.',
+    oneLine: 'Short sets at controlled effort. Form first.',
+    example: '2 sets of each station, a quarter of the race distance each: half the race volume. 2 min rest after every set. RPE 5.',
     science: 'Motor pattern stability, Schmidt & Lee 2014.',
   },
   {
     kind: 'station_density',
-    name: 'Station density',
-    oneLine: 'AMRAP-style higher-volume station work. Race specificity.',
-    example: '2 rounds at race pace, 30s between stations, 2 min between rounds. RPE 7.',
+    name: 'Race-pace stations',
+    oneLine: 'Race weight at race pace, the forecast\'s weakest station first. Race specificity.',
+    example: 'Quarter-station sets at race pace, building to the full race volume by peak. 90 s rest after every set. RPE 7.',
     science: 'Specificity + lactate clearance, Sparkes & Behm 2010.',
   },
 ];
@@ -70,14 +70,14 @@ const BRICK_CARDS: HyroxWorkoutCard[] = [
     kind: 'brick',
     name: 'Brick session',
     oneLine: 'Run + station rounds in race order. The signature HYROX session.',
-    example: '4 × (1 km run + 1 station). Builds the run-to-station transition that decides finish times.',
+    example: '4 × (800 m at race pace + a quarter of a station), two stations alternating. Builds the run-to-station transition that decides finish times.',
     science: 'Compound conditioning, Coffey & Hawley 2017.',
   },
   {
     kind: 'mini_brick',
     name: 'Mini brick',
-    oneLine: 'Shorter brick for early phases or beginner athletes.',
-    example: '4 × (500m run + erg). Half the volume, same transition stimulus.',
+    oneLine: 'Shorter brick for beginner athletes and the taper.',
+    example: '3 × (400 m at race pace, no faster + a quarter of one station). The same transition at a lower dose.',
     science: 'Progressive overload, Issurin 2010.',
   },
 ];
@@ -124,7 +124,7 @@ export function renderHyroxWorkoutPreview(container: HTMLElement, _state: Onboar
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
             What your training looks like
           </h2>
-          <p class="hwp-intro">Seven session types. Each one earns its place. Variety ramps as your base develops: base phase leans aerobic, build phase adds tempo and density, peak phase gets race-specific bricks.</p>
+          <p class="hwp-intro">Seven session types. Each one earns its place. Variety ramps as your base develops: base phase leans aerobic, build phase adds tempo and race-pace stations, peak phase gets race-specific bricks.</p>
         </div>
 
         <div style="width:100%;max-width:720px">

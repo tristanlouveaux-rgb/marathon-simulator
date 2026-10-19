@@ -134,7 +134,7 @@ import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import {
   hyroxRacePaceSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
-  type HyroxStationLoadMemory,
+  hyroxBeginnerLoadFraction, hyroxLoadKgAt, type HyroxStationLoadMemory,
 } from './hyrox-station-dose';
 
 /**
@@ -2357,6 +2357,32 @@ export function refreshHyroxPlanWeakestStation(state: SimulatorState): boolean {
   if (hx.planWeakestStation === next) return false;
   hx.planWeakestStation = next;
   return true;
+}
+
+/**
+ * A beginner's station loads for a stored plan week, for a session added to
+ * it (the add-session modal): the load the week's station sessions prescribe
+ * for each station they hold (the schedule and its RPE steps, as the plan
+ * built them), else the schedule's anchor for the week. Undefined for the
+ * intermediate and advanced tiers, who train at race weight.
+ */
+export function hyroxStoredWeekStationLoads(state: SimulatorState, weekIndex: number): Partial<Record<HyroxStation, number>> | undefined {
+  const hx = state.hyroxConfig;
+  if (!hx || hyroxTier(hx.athleteBand) !== 'beginner') return undefined;
+  const totalWeeks = state.tw || 16;
+  const layout = storedPlanRaceLayout(totalWeeks, state.planStartDate, hx.raceDate);
+  const raceWeightWeek = hyroxBeginnerRaceWeightWeek(layout?.trainingWeeks ?? totalWeeks);
+  const loadTier = hyroxLoadTierForState(state);
+  const out: Partial<Record<HyroxStation, number>> = {};
+  for (const st of HYROX_LOADED_STATIONS) {
+    const kg = hyroxLoadKgAt(st, loadTier, hyroxBeginnerLoadFraction(st, weekIndex, raceWeightWeek) ?? 1);
+    if (kg != null) out[st] = kg;
+  }
+  for (const w of state.wks?.[weekIndex - 1]?.triWorkouts ?? []) {
+    if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
+    for (const c of w.hyroxComponents ?? []) if (c.loadKg != null) out[c.type as HyroxStation] = c.loadKg;
+  }
+  return out;
 }
 
 /** The stricter of two previous-Sunday readings: hard or eccentric if either

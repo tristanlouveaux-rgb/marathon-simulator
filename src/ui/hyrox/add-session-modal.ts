@@ -22,6 +22,7 @@ import {
 import { scheduleHyroxWeek } from '@/workouts/scheduler.hyrox';
 import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
 import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
+import { hyroxStoredWeekStationLoads } from '@/workouts/plan_engine.hyrox';
 import type { Workout } from '@/types/state';
 
 type SessionKind =
@@ -48,10 +49,10 @@ const OPTIONS: SessionOption[] = [
   { kind: 'run_easy',         label: 'Easy run',          caption: 'Zone 2 aerobic. Recovery-friendly.',     defaultMin: 45, minMin: 25, maxMin: 90 },
   { kind: 'run_tempo',        label: 'Tempo run',         caption: 'Threshold work, sustained effort.',      defaultMin: 40, minMin: 30, maxMin: 70 },
   { kind: 'run_intervals',    label: 'Interval run',      caption: 'VO2 max efforts, hard repeats.',         defaultMin: 35, minMin: 25, maxMin: 60 },
-  { kind: 'station_technique',label: 'Station technique', caption: 'Skill + form, lower intensity.',         defaultMin: 50, minMin: 35, maxMin: 75 },
-  { kind: 'station_density',  label: 'Station density',   caption: 'AMRAP-style higher-volume work.',        defaultMin: 45, minMin: 30, maxMin: 65 },
+  { kind: 'station_technique',label: 'Station technique', caption: 'Half the race volume per station, RPE 5.', defaultMin: 50, minMin: 35, maxMin: 75 },
+  { kind: 'station_density',  label: 'Race-pace stations', caption: 'Race weight at race pace, 90 s rest.',     defaultMin: 45, minMin: 30, maxMin: 65 },
   { kind: 'brick',            label: 'Brick',             caption: 'Run + station rounds, race-specific.',   defaultMin: 60, minMin: 45, maxMin: 100 },
-  { kind: 'mini_brick',       label: 'Mini brick',        caption: 'Shorter brick, 500m + erg, beginner.',  defaultMin: 35, minMin: 25, maxMin: 50 },
+  { kind: 'mini_brick',       label: 'Mini brick',        caption: 'Shorter brick, 3 x 400 m into one station.', defaultMin: 35, minMin: 25, maxMin: 50 },
 ];
 
 /** Generate a draft workout for a session kind to read its real MTL.
@@ -73,6 +74,8 @@ function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefine
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(getState()),
       seed: getState(),
+      // A beginner's loads for the week (lane H2b); race weight otherwise.
+      stationLoads: hyroxStoredWeekStationLoads(getState(), getState().w ?? 1),
     });
   } else {
     draft = generateHyroxBrick({
@@ -80,6 +83,8 @@ function draftMtlFor(kind: SessionKind, hx: any, bodyWeightKg: number | undefine
       phase, slotIndex, bodyWeightKg, stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(getState()),
       seed: getState(),
+      runPaceSecKm: hx.hyroxRunPaceSecKm,
+      stationLoads: hyroxStoredWeekStationLoads(getState(), getState().w ?? 1),
     });
   }
   return draft.musculoTendonLoad ?? 0;
@@ -258,6 +263,8 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
       seed: ms,
+      // A beginner's loads for the week (lane H2b); race weight otherwise.
+      stationLoads: hyroxStoredWeekStationLoads(ms, ms.w ?? 1),
     });
   } else {
     workout = generateHyroxBrick({
@@ -271,6 +278,8 @@ function addSession(kind: SessionKind, durationMin?: number): void {
       stationBenchmarks: benchmarks,
       loadTier: hyroxLoadTierForState(ms),
       seed: ms,
+      runPaceSecKm: hx.hyroxRunPaceSecKm,
+      stationLoads: hyroxStoredWeekStationLoads(ms, ms.w ?? 1),
     });
   }
 
