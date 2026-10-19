@@ -224,8 +224,14 @@ export function computeDoublesCap(singlesCap: number): number {
 
 // ─── Ability band derivation from previous HYROX time ───────────────────────
 
-/** Thresholds for mapping a previous HYROX finish time to an ability band.
- *  Times are in seconds. Evaluated in order; the first matching maxSec wins. */
+/** The original global finish-time scale for the ability bands (seconds;
+ *  evaluated in order, the first matching maxSec wins). KEPT FOR REFERENCE
+ *  AND CALIBRATION ONLY: no app code bands with it. Every format bands
+ *  through the planning band (hyroxPlanningBandFor, hyrox-planning-band.ts:
+ *  the finish in Open Singles terms on the athlete's own sex's field; pooled
+ *  thresholds 3774, 4869, 6318 and 7853 s, S8-S9). It stays as the anchor the
+ *  band-field percentiles were read at (hyrox-population.ts,
+ *  HYROX_S89_BAND_FIELD_PERCENTILES) and in the results data tests. */
 export const HYROX_TIME_TO_BAND_THRESHOLDS: Array<{ maxSec: number; band: AbilityBand }> = [
   { maxSec: 60 * 60,        band: 'competitive' },   // sub-1:00:00
   { maxSec: 80 * 60,        band: 'advanced' },       // sub-1:20:00
@@ -288,11 +294,14 @@ export type HyroxTier = 'beginner' | 'intermediate' | 'advanced';
 
 /**
  * Tier of an ability band: Beginner = total_beginner (no previous race) and
- * beginner (2:00:00+); Intermediate = novice (1:40 to 2:00) and intermediate
- * (1:20 to 1:40); Advanced = advanced (1:00 to 1:20) and competitive (sub-1:00).
- * The bands come from HYROX_TIME_TO_BAND_THRESHOLDS. Single source for the
- * grouping the generators already used (the station dose ceiling,
- * hyrox-generators bandMaxRounds) and the weekly structure below.
+ * beginner; Intermediate = novice and intermediate; Advanced = advanced and
+ * competitive. The bands come from the planning band (hyroxPlanningBandFor:
+ * the athlete's finish in Open Singles terms on their own sex's field; on the
+ * pooled field the thresholds are 3774, 4869, 6318 and 7853 s, S8-S9), not
+ * the old global 1:00 / 1:20 / 1:40 / 2:00 scale
+ * (HYROX_TIME_TO_BAND_THRESHOLDS, kept for reference). Single source for the
+ * grouping the station doses (hyrox-station-dose.ts) and the weekly structure
+ * below read.
  */
 export function hyroxTier(band: AbilityBand): HyroxTier {
   switch (band) {

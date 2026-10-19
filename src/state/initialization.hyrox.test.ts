@@ -127,9 +127,11 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
       previousHyroxTimeSec: 3600,            // 1:00:00 doubles
       hyroxPreviousStationSplits: undefined,
     }));
-    // Singles terms via the data ratio (doublesTotalInSinglesTermsSec):
-    // 3600 → about 4053 (67:33) → advanced (sub-80 min singles).
-    // Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60). Confirms direction.
+    // The planning band (hyroxPlanningBandFor): the doubles finish in Open
+    // Singles terms on the athlete's field (the pooled field here: band
+    // thresholds 3774, 4869, 6318 and 7853 s, S8-S9) lands between 3774 and
+    // 4869 s, so advanced. Pre-fix: 3600 × 0.92 = 3312 → competitive (sub-60
+    // on the old global scale). Confirms direction.
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
@@ -140,9 +142,11 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
       previousHyroxTimeSec: 4200,            // 1:10:00 doubles, about P22 of the doubles field
       hyroxPreviousStationSplits: undefined,
     }));
-    // Singles terms via the data ratio: about 4724 (78:44) → advanced
-    // (sub-80 min singles). The old × 1.22 rule read 85:24 → intermediate,
-    // while a doubles target banded the same time on the data ratio.
+    // The planning band: the doubles finish in Open Singles terms lands
+    // between 3774 and 4869 s on the pooled field, so advanced, for a singles
+    // or a doubles target alike. The old × 1.22 rule read 85:24 →
+    // intermediate, while a doubles target banded the same time on the data
+    // ratio.
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
     resetState();
     initializeHyroxSimulator(buildOnboarding({
@@ -186,7 +190,8 @@ describe('initializeHyroxSimulator — same-athlete cross-format band derivation
       previousHyroxTimeSec: 4500,            // 1:15:00 singles
       hyroxPreviousStationSplits: undefined,
     }));
-    // 4500 → bandFromTime(<4800) → advanced (sub-1:20:00 singles).
+    // 4500 s on the planning band: between the pooled Open Singles
+    // thresholds 3774 and 4869 s, so advanced.
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
   });
 
