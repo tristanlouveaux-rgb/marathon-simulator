@@ -18,6 +18,15 @@ describe('classifyHyroxSessionKind', () => {
     expect(classifyHyroxSessionKind(run('CYCLING'), slot('run'))).toBe('run');
   });
 
+  it('an easy erg slot is not a station session: other, labelled by the slot (discipline erg, or the old station)', () => {
+    for (const discipline of ['erg', 'station']) {
+      const erg = { t: 'hyrox_erg_easy', discipline, n: 'Easy Erg' } as unknown as Workout;
+      const rowRecord = { activityType: null, manualSport: 'rowing' };
+      expect(classifyHyroxSessionKind(rowRecord, erg)).toBe('other');
+      expect(classifyHyroxActual(rowRecord, erg)).toEqual({ kind: 'other', label: 'Easy Erg' });
+    }
+  });
+
   it('matched-slot discipline overrides raw activity type — strength matched to brick is a brick', () => {
     const strengthActual = { activityType: 'STRENGTH_TRAINING' };
     expect(classifyHyroxSessionKind(strengthActual, slot('brick'))).toBe('brick');

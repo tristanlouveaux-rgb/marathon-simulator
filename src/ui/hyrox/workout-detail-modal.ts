@@ -14,6 +14,7 @@ import { saveState } from '@/state/persistence';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
+import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
@@ -108,7 +109,10 @@ export function openHyroxWorkoutDetail(workout: Workout, weekIdx?: number): void
 
   const rawDisc = workout.discipline as string;
   const wt = (workout.t || '') as string;
+  // Easy erg work is time-defined aerobic work: the cross-training layout
+  // (Mark as Done, Adjust, Skip), not the guided station flow.
   const disc: HyroxDisc =
+    isHyroxEasyErg(workout) ? 'cross' :
     rawDisc === 'station' ? 'station' :
     rawDisc === 'brick'   ? 'brick' :
     (wt === 'gym' || wt === 'strength') ? 'strength' :
@@ -296,24 +300,25 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
 }
 
 /**
- * HYROX Mark as Done on a time-defined session (a run, or an injury
- * cross-training session: bike, row erg, swim): store the session's planned
- * load as its activity record (audit B9; cross sessions by decision
- * 2026-10-06), mirroring the running plan card and triathlon Mark as Done
- * through the same recordPlannedSessionDone. Tracking side: the session's own
- * estimatedDurationMin at the rated RPE, stamped on the planned day. A run
- * carries no sport tag; a cross session is tagged cycling / rowing / swimming
- * (plannedSessionRecordSport), so Signal A weights it at that sport's runSpec
- * and never as a run. The record is what makes a ticked cross session count
- * like a recorded one in every load signal, once. It adds no muscle-tendon
- * load: these offers carry no musculoTendonLoad and the MTL sums read
- * wk.triWorkouts only, so a cross session, ticked or recorded, adds 0 MTL and
- * does not move the MTL adherence check (open question: accept 0, or price
- * them). A watch copy
- * that syncs later supersedes it in place (matchAndAutoComplete). A
- * future-week session keeps the rating only, as on the running plan card: the
- * matcher would not find its record when today's watch copy syncs. Stations
- * and bricks complete through completeStrengthSession (quick done).
+ * HYROX Mark as Done on a time-defined session (a run, an easy erg session,
+ * or an injury cross-training session: bike, row erg, swim): store the
+ * session's planned load as its activity record (audit B9; cross sessions by
+ * decision 2026-10-06), mirroring the running plan card and triathlon Mark as
+ * Done through the same recordPlannedSessionDone. Tracking side: the
+ * session's own estimatedDurationMin at the rated RPE, stamped on the planned
+ * day. A run carries no sport tag; a cross session is tagged cycling / rowing
+ * / swimming, and an easy erg session rowing (plannedSessionRecordSport), so
+ * Signal A weights it at that sport's runSpec and never as a run. The record
+ * is what makes a ticked session count like a recorded one in every load
+ * signal, once. Muscle-tendon load: the injury offers carry no
+ * musculoTendonLoad and the MTL sums read wk.triWorkouts only, so a cross
+ * session, ticked or recorded, adds 0 MTL (open question: accept 0, or price
+ * them); an easy erg slot carries its own MTL, which the record lets the MTL
+ * sums count as done (isMtlSessionCompleted). A watch copy that syncs later
+ * supersedes it in place (matchAndAutoComplete). A future-week session keeps
+ * the rating only, as on the running plan card: the matcher would not find
+ * its record when today's watch copy syncs. Stations and bricks complete
+ * through completeStrengthSession (quick done).
  */
 function recordHxSessionDone(weekIdx: number, workout: Workout, rpe: number): void {
   const s = getMutableState();

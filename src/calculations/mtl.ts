@@ -21,6 +21,7 @@ import type { HyroxStation } from '@/types/triathlon';
 import type { Week, SimulatorState, Workout } from '@/types/state';
 import { STATION_MTL_FACTORS, RUN_MTL_FACTORS } from '@/constants/hyrox-constants';
 import { ctlAdherenceRatio, ROLLING_ACWR_MIN_OBSERVED_DAYS } from '@/calculations/fitness-model';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 export type RunIntensity = 'run_easy' | 'run_tempo' | 'run_intervals';
 
@@ -128,43 +129,42 @@ export function computeWeekActualMTL(wk: Week): number {
   );
 }
 
-export interface DisciplineMTL { run: number; station: number; brick: number; }
+/** Weekly MTL by discipline. `erg`: easy erg work (decision D), its own
+ *  bucket, neither station nor run load. */
+export interface DisciplineMTL { run: number; station: number; brick: number; erg: number; }
+
+/** The MTL bucket of a session: easy erg work by its type (a plan stored
+ *  before decision D carries discipline 'station' on it), station and brick
+ *  by discipline, everything else run. */
+function mtlBucket(w: Workout): keyof DisciplineMTL {
+  if (isHyroxEasyErg(w)) return 'erg';
+  const disc = (w as { discipline?: string }).discipline;
+  return disc === 'station' ? 'station' : disc === 'brick' ? 'brick' : 'run';
+}
 
 /** Discipline-split weekly MTL (planned): each workout's MTL bucketed by
  *  discipline. Used by plan-engine cap enforcement at generation time. */
 export function computeWeekMTLByDiscipline(wk: Week): DisciplineMTL {
-  const workouts = wk.triWorkouts ?? [];
-  let run = 0, station = 0, brick = 0;
-  for (const w of workouts) {
-    const mtl = w.musculoTendonLoad ?? 0;
-    const disc = (w as { discipline?: string }).discipline;
-    if (disc === 'station') station += mtl;
-    else if (disc === 'brick') brick += mtl;
-    else run += mtl;
-  }
-  return { run, station, brick };
+  const out: DisciplineMTL = { run: 0, station: 0, brick: 0, erg: 0 };
+  for (const w of wk.triWorkouts ?? []) out[mtlBucket(w)] += w.musculoTendonLoad ?? 0;
+  return out;
 }
 
 /** Discipline-split weekly MTL (actuals): only completed workouts
  *  (isMtlSessionCompleted) contribute. Used by the CTL/ATL impulse-response EMAs
  *  so chronic and acute reflect completed training, mirroring running CTL/ATL. */
 export function computeWeekActualMTLByDiscipline(wk: Week): DisciplineMTL {
-  const workouts = wk.triWorkouts ?? [];
-  let run = 0, station = 0, brick = 0;
-  for (const w of workouts) {
+  const out: DisciplineMTL = { run: 0, station: 0, brick: 0, erg: 0 };
+  for (const w of wk.triWorkouts ?? []) {
     if (!isMtlSessionCompleted(wk, w)) continue;
-    const mtl = w.musculoTendonLoad ?? 0;
-    const disc = (w as { discipline?: string }).discipline;
-    if (disc === 'station') station += mtl;
-    else if (disc === 'brick') brick += mtl;
-    else run += mtl;
+    out[mtlBucket(w)] += w.musculoTendonLoad ?? 0;
   }
-  return { run, station, brick };
+  return out;
 }
 
 export interface DisciplineFitnessFatigue {
-  runMtlCTL: number; stationMtlCTL: number; brickMtlCTL: number;
-  runMtlATL: number; stationMtlATL: number; brickMtlATL: number;
+  runMtlCTL: number; stationMtlCTL: number; brickMtlCTL: number; ergMtlCTL: number;
+  runMtlATL: number; stationMtlATL: number; brickMtlATL: number; ergMtlATL: number;
 }
 
 /**
@@ -197,10 +197,10 @@ function observedBaselineWeeklyMTL(
 
 /**
  * Discipline-split CTL/ATL. Separate impulse-response EMAs per
- * run / station / brick. Reads **completed** workouts only
+ * run / station / brick / easy erg. Reads **completed** workouts only
  * (isMtlSessionCompleted), mirroring how running CTL/ATL is fed by actual TSS
  * rather than planned. Each EMA starts at that discipline's observed baseline
- * (observedBaselineWeeklyMTL), so the three sum to computeMTLFitnessFatigue.
+ * (observedBaselineWeeklyMTL), so the four sum to computeMTLFitnessFatigue.
  * Returns daily-equivalent values (÷7).
  */
 export function computeMTLFitnessFatigueByDiscipline(
@@ -213,9 +213,11 @@ export function computeMTLFitnessFatigueByDiscipline(
   const runSeed     = observedBaselineWeeklyMTL(weeks, currentWeekIndex, wk => computeWeekActualMTLByDiscipline(wk).run);
   const stationSeed = observedBaselineWeeklyMTL(weeks, currentWeekIndex, wk => computeWeekActualMTLByDiscipline(wk).station);
   const brickSeed   = observedBaselineWeeklyMTL(weeks, currentWeekIndex, wk => computeWeekActualMTLByDiscipline(wk).brick);
+  const ergSeed     = observedBaselineWeeklyMTL(weeks, currentWeekIndex, wk => computeWeekActualMTLByDiscipline(wk).erg);
   let runCtl = runSeed, runAtl = runSeed;
   let stationCtl = stationSeed, stationAtl = stationSeed;
   let brickCtl = brickSeed, brickAtl = brickSeed;
+  let ergCtl = ergSeed, ergAtl = ergSeed;
   const limit = Math.min(currentWeekIndex + 1, weeks.length);
   for (let i = 0; i < limit; i++) {
     const m = computeWeekActualMTLByDiscipline(weeks[i]);
@@ -225,6 +227,8 @@ export function computeMTLFitnessFatigueByDiscipline(
     stationAtl = stationAtl * ATL_DECAY + m.station * (1 - ATL_DECAY);
     brickCtl   = brickCtl   * CTL_DECAY + m.brick   * (1 - CTL_DECAY);
     brickAtl   = brickAtl   * ATL_DECAY + m.brick   * (1 - ATL_DECAY);
+    ergCtl     = ergCtl     * CTL_DECAY + m.erg     * (1 - CTL_DECAY);
+    ergAtl     = ergAtl     * ATL_DECAY + m.erg     * (1 - ATL_DECAY);
   }
 
   return {
@@ -234,6 +238,8 @@ export function computeMTLFitnessFatigueByDiscipline(
     stationMtlATL: stationAtl / 7,
     brickMtlCTL: brickCtl / 7,
     brickMtlATL: brickAtl / 7,
+    ergMtlCTL: ergCtl / 7,
+    ergMtlATL: ergAtl / 7,
   };
 }
 

@@ -215,6 +215,19 @@ export interface HyroxConfig {
    */
   generatorVersion?: number;
   /**
+   * What the plan generator's acute:chronic guard counts each week before
+   * week 1 as (plan_engine.hyrox D4), fixed when the plan is created: the
+   * athlete's logged weekly load in canonical TSS at that moment
+   * (`source: 'logged'`, `loggedTss`: signalBBaseline), or the nominal week 1
+   * (`source: 'nominal'`, rebuilt from the plan config). Every later
+   * regeneration (week rollover, an injury's single-week rebuild, a
+   * generator version bump) reads this, never the live signalBBaseline: every
+   * Strava or Apple sync refreshes that rolling median, and it comes to hold
+   * the plan's own weeks. Absent on a plan built before 2026-10-13: the live
+   * value, until the version regeneration or a rebuild stores one.
+   */
+  planChronicSeed?: { source: 'logged' | 'nominal'; loggedTss?: number };
+  /**
    * Race outcome log. Actual race-day finish times against the target.
    * Idempotent on `dateISO`. Mirrors `triConfig.raceLog` for parity across
    * modes. Optional so existing state objects stay valid.

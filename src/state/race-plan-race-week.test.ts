@@ -48,6 +48,7 @@ vi.stubGlobal('alert', vi.fn());
 
 import { initializeTriathlonSimulator } from './initialization.triathlon';
 import { initializeCyclingSimulator } from './initialization.cycling';
+import { isHyroxLongRun } from '@/workouts/scheduler.hyrox';
 import { initializeHyroxSimulator } from './initialization.hyrox';
 import { getState, resetState } from './store';
 import { raceWeekLayout } from '@/workouts/race-week-layout';
@@ -92,12 +93,12 @@ function build(mode: Mode, race: string): SimulatorState {
   return getState();
 }
 
-/** Long run, triathlon brick, solo long ride, full HYROX brick. The 60-min
- *  race-week brick of a long-course plan (Byrn; tri-taper.ts, taperRole
- *  'opener') is race-week content, not a long session. */
+/** Long run, triathlon brick, solo long ride, full HYROX brick, HYROX long
+ *  run. The 60-min race-week brick of a long-course plan (Byrn; tri-taper.ts,
+ *  taperRole 'opener') is race-week content, not a long session. */
 function isLongSession(w: Workout): boolean {
   if (w.t === 'brick' && w.taperRole === 'opener') return false;
-  return isLongRun(w) || w.t === 'brick' || w.t === 'hyrox_brick' || w.longRide === true;
+  return isLongRun(w) || w.t === 'brick' || w.t === 'hyrox_brick' || w.longRide === true || isHyroxLongRun(w);
 }
 
 // Race weekdays Monday 16 to Sunday 22 November 2026.
@@ -170,7 +171,9 @@ describe('race week sits relative to race day for every race weekday', () => {
           // The week before race week keeps its long sessions, 7 or more days out.
           const before = s.wks[raceWeek - 2].triWorkouts ?? [];
           if (mode === 'cycling') expect(before.some(w => w.longRide), 'long ride').toBe(true);
-          else if (mode === 'hyrox') expect(before.some(w => w.t === 'hyrox_brick'), 'HYROX brick').toBe(true);
+          // HYROX since 2026-10-12: the week before race week is the first
+          // taper week (2-week taper, no full brick); its long run is kept.
+          else if (mode === 'hyrox') expect(before.some(w => isHyroxLongRun(w)), 'HYROX long run').toBe(true);
           else {
             expect(before.some(w => isLongRun(w)), 'long run').toBe(true);
             expect(before.some(w => w.t === 'brick' || w.longRide), 'brick or long ride').toBe(true);

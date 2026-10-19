@@ -69,9 +69,11 @@ function recording(startMs: number, km: number, min: number): GpsRecording {
 
 function hyroxState(): SimulatorState {
   resetState();
+  // An intermediate band from a previous finish time (1:30:00 open singles):
+  // since 2026-10-12 a first-timer without running data is banded beginner.
   initializeHyroxSimulator({
     trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
-    triTimeAvailableHoursPerWeek: 8,
+    triTimeAvailableHoursPerWeek: 8, previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles',
   } as any);
   const s = getMutableState();
   expect(s.eventType).toBe('hyrox');
@@ -147,14 +149,15 @@ describe('triathlon: GPS run started from a tri card', () => {
 describe('HYROX: GPS run started from a HYROX card', () => {
   it('records the run on that HYROX slot, and the synced watch copy keeps the HYROX card done', () => {
     hyroxState();
-    const fri = stored(w => w.n === 'Easy Run' && w.dayOfWeek === 4);
+    // Week 1's easy run is the Sunday long run (generator v18).
+    const fri = stored(w => w.n === 'Long Run' && w.dayOfWeek === 6);
     expect(fri).toBeDefined();
     const key = keyOf(fri);
-    vi.setSystemTime(on(4, 8));
-    const startMs = on(4, 7).getTime();
+    vi.setSystemTime(on(6, 8));
+    const startMs = on(6, 7).getTime();
     const rec = recording(startMs, 5.7, 35);
 
-    handleCompletedRecording(rec, 'Easy Run');
+    handleCompletedRecording(rec, 'Long Run');
 
     expect(wk1().rated[key]).toBe(7);
     expect(wk1().garminActuals?.[key]?.garminId).toBe(`guided-${rec.id}`);

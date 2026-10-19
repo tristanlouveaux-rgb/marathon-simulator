@@ -46,7 +46,7 @@ import { predictCyclingEvent } from '@/calculations/race-prediction.cycling';
 import { planTrainingWeeks, raceForecastHorizonISO } from '@/workouts/race-week-layout';
 import { TRI_RACE_WEEK_SESSION_CAP_MIN } from '@/workouts/tri-taper';
 import type { OnboardingState } from '@/types/onboarding';
-import type { SimulatorState } from '@/types';
+import type { SimulatorState, Workout } from '@/types';
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); localStorageMock.clear(); });
@@ -149,7 +149,12 @@ const EARLY: Array<[string, number]> = [['Monday', 1], ['Tuesday', 2], ['Wednesd
  */
 function raceWeekSessions(s: SimulatorState): string[] {
   const wk = s.wks[planTrainingWeeks(s) - 1];
-  return (wk.triWorkouts ?? []).map(w => `${w.t}|${w.n}|${w.estimatedDurationMin}`).sort();
+  // HYROX easy runs are listed without minutes: since 2026-10-12 the run on
+  // the day before race day is at most 20 min (taper.content), and only a
+  // Thursday to Sunday race has that day inside race week (a Monday to
+  // Wednesday race's day before is the closing week's rest day).
+  const minutes = (w: Workout) => (w.t === 'hyrox_run_easy' ? '' : String(w.estimatedDurationMin));
+  return (wk.triWorkouts ?? []).map(w => `${w.t}|${w.n}|${minutes(w)}`).sort();
 }
 
 /** Race-week swim, bike and run minutes (brick legs in their discipline). */

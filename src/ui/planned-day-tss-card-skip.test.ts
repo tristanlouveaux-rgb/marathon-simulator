@@ -35,10 +35,18 @@ function skipFromCard(s: SimulatorState, w: Workout): void {
   s.wks[0].rated[w.id ?? w.n] = 'skip';
 }
 
+/** An intermediate athlete (1:30:00 open singles) on 14 h with 6 sessions a
+ *  week: week 1 holds a Tuesday Tempo Run and two Easy Runs beside the Sunday
+ *  Long Run (generator v18). */
 function hyroxState(): SimulatorState {
+  // No erg access: with ergs, the plan generator (round 7) gives one of week
+  // 1's two Easy Runs to a longer easy erg session, and the same-named case
+  // below needs both.
   initializeHyroxSimulator({
     trainingMode: 'hyrox', hyroxFormat: 'open_singles', experienceLevel: 'intermediate',
-    triTimeAvailableHoursPerWeek: 8,
+    triTimeAvailableHoursPerWeek: 14, hyroxWeeklySessionCount: 6,
+    previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles',
+    hyroxHasSkiErg: false, hyroxHasRowErg: false,
   } as any);
   const s = getMutableState();
   expect(s.eventType).toBe('hyrox');

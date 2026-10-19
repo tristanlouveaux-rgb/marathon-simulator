@@ -110,7 +110,7 @@ export function computeTriAdherence(
     for (const workout of planned) {
       const disc = workout.discipline;
       // Only tri disciplines (swim/bike/run) have adherence summary slots.
-      if (!disc || disc === 'station' || disc === 'brick') continue;
+      if (!disc || disc === 'station' || disc === 'brick' || disc === 'erg') continue;
       const summary = out[disc as Discipline];
       if (!summary) continue;
 

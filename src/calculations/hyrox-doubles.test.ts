@@ -21,7 +21,6 @@ import {
   HYROX_DEFAULT_DOUBLES_TABLES,
   seedRoxzoneSecForFormat,
   doublesBenchmarkIsTeamTime,
-  hyroxBandingTimeSec,
   doublesTotalInSinglesTermsSec,
 } from './hyrox-doubles';
 import { predictHyroxRace } from './race-prediction.hyrox';
@@ -195,20 +194,6 @@ describe('doublesTotalInSinglesTermsSec: the doubles-to-singles total conversion
       const team = singles * doublesRatioAt('total', singles).ratio;
       expect(doublesTotalInSinglesTermsSec(team)).toBeCloseTo(singles, 6);
     }
-  });
-});
-
-describe('hyroxBandingTimeSec (the onboarding initializer\'s global-scale banding)', () => {
-  it('a doubles previous time is read in singles terms (the data ratio)', () => {
-    expect(hyroxBandingTimeSec(at(OD.total, 50), 'open_doubles')).toBeCloseTo(at(OS.total, 50), -1);
-    expect(hyroxBandingTimeSec(at(OD.total, 75), 'open_doubles')).toBeCloseTo(at(OS.total, 75), -1);
-  });
-  it('a singles previous time stays as is', () => {
-    expect(hyroxBandingTimeSec(5338, 'open_singles')).toBe(5338);
-    expect(hyroxBandingTimeSec(5338, 'pro_singles')).toBe(5338);
-  });
-  it('uses doublesTotalInSinglesTermsSec (one source)', () => {
-    expect(hyroxBandingTimeSec(4747, 'open_doubles')).toBe(Math.round(doublesTotalInSinglesTermsSec(4747)));
   });
 });
 

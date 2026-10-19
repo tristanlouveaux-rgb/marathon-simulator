@@ -144,8 +144,8 @@ describe('HYROX MTL load ratio for a plan-compliant athlete', () => {
     expect(series).toHaveLength(6);
     expect(series[5]).toEqual({ mtlCTL: r.chronic, mtlATL: r.acute }); // the MTL page's trend ends on the printed numbers
     const split = computeMTLFitnessFatigueByDiscipline(s.wks, s.w - 1);
-    expect(split.runMtlCTL + split.stationMtlCTL + split.brickMtlCTL).toBeCloseTo(r.chronic, 9);
-    expect(split.runMtlATL + split.stationMtlATL + split.brickMtlATL).toBeCloseTo(r.acute, 9);
+    expect(split.runMtlCTL + split.stationMtlCTL + split.brickMtlCTL + split.ergMtlCTL).toBeCloseTo(r.chronic, 9);
+    expect(split.runMtlATL + split.stationMtlATL + split.brickMtlATL + split.ergMtlATL).toBeCloseTo(r.acute, 9);
   });
 });
 

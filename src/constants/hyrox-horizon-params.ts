@@ -20,6 +20,7 @@
  */
 
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import { HYROX_TAPER_WEEKS_MIN } from './hyrox-constants';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Station-class mapping
@@ -383,12 +384,14 @@ export const ROXZONE_HORIZON_PARAMS: HyroxHorizonParams = {
 export const HYROX_K_SESSIONS = 0.7;
 
 /**
- * Hyrox-wide taper duration in weeks. Hyrox is a 1-2hr event with a roughly
- * bike-like taper protocol (per Mujika 2010 review of high-intensity event
- * tapers). Single value rather than per-class because the session structure
- * (multi-station Hyrox workouts) doesn't taper independently per class.
+ * Hyrox-wide taper duration in weeks: the plan's 2-week race taper
+ * (HYROX_TAPER_WEEKS_MIN, Bosquet et al. 2007: 8 to 14 days), so the forecast's
+ * taper window matches the plan the athlete follows. Single value rather than
+ * per-class because the session structure (multi-station Hyrox workouts)
+ * doesn't taper independently per class. Was 1.5 (Mujika 2010 review of
+ * high-intensity event tapers) until 2026-10-12.
  */
-export const HYROX_TAPER_WEEKS = 1.5;
+export const HYROX_TAPER_WEEKS = HYROX_TAPER_WEEKS_MIN;
 
 /**
  * Lookup helper. Returns the horizon params for a given station class.

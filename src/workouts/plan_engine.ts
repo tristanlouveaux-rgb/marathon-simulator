@@ -286,6 +286,27 @@ export function isFourWeekCycleDeloadWeek(weekIndex: number, phase: TrainingPhas
 }
 
 /**
+ * HYROX deload rule (Tristan 2026-10-13, D5): the 4-week cycle
+ * (isFourWeekCycleDeloadWeek), except the week right before the race taper,
+ * which never deloads, as running's sharpening block skips that deload
+ * (isSharpeningDeloadWeek): the taper is the reduction, and a deload there
+ * made the taper's reference week the loaded week before it, so taper week 1
+ * sat below the deload and race week below both (lengths 10, 14, 18 and 22:
+ * 148 of 629 plans before the change). The race taper is the last contiguous
+ * run of 'taper' weeks in `phases` (a closing week appended after race week
+ * is part of that run). `phase` overrides phases[weekIndex - 1]. Shared by the
+ * HYROX engine and the weekly load target (planned-week-target.ts), so the
+ * plan and the target agree. Triathlon keeps isFourWeekCycleDeloadWeek.
+ */
+export function isHyroxDeloadWeek(weekIndex: number, phases: readonly TrainingPhase[], phase?: TrainingPhase): boolean {
+  const ph = phase ?? phases[weekIndex - 1] ?? 'base';
+  if (!isFourWeekCycleDeloadWeek(weekIndex, ph)) return false;
+  let firstTaper = phases.length + 1;
+  for (let j = phases.length; j >= 1 && phases[j - 1] === 'taper'; j--) firstTaper = j;
+  return firstTaper > phases.length || weekIndex !== firstTaper - 1;
+}
+
+/**
  * Race week = the final week of a race plan, whatever its phase label. It
  * carries the race, so the plan seats a short primer instead of a full quality
  * session (SCIENCE_LOG §CE) and no long run: the race is the week's long effort.

@@ -97,8 +97,10 @@ export interface Workout extends WorkoutDefinition {
   t: string;                    // Workout type
   /** Triathlon or HYROX discipline the workout belongs to.
    *  Undefined = running (default for back-compat).
-   *  'station' and 'brick' are HYROX-only values. */
-  discipline?: Discipline | 'station' | 'brick';
+   *  'station', 'brick' and 'erg' are HYROX-only values: 'erg' is easy erg
+   *  work (hyrox_erg_easy), easy aerobic volume on the SkiErg or the row erg,
+   *  neither a station session nor a run. */
+  discipline?: Discipline | 'station' | 'brick' | 'erg';
   /** Brick workouts carry two ordered segments (bike → run typically). Only set when t === 'brick'. */
   brickSegments?: import('./triathlon').BrickSegments['segments'];
   rpe?: number;                 // Expected RPE (alternative to r)
@@ -181,6 +183,11 @@ export interface Workout extends WorkoutDefinition {
   /** HYROX mode: prescribed rest in seconds BETWEEN rounds (inter-round rest),
    *  distinct from per-component inter-station rest. Absent = 0. */
   hyroxRoundRestSec?: number;
+  /** HYROX mode: a brick that is not a hard session (the advanced peak
+   *  secondary brick, parameter sheet 2026-10-12 bricks.structure). The
+   *  scheduler's hard-day rule (scheduler.hyrox isHighIntensity) skips it.
+   *  Undefined = an ordinary session. */
+  hyroxLight?: boolean;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
@@ -635,6 +642,19 @@ export interface Week {
    *  plan's build prescription, as running's forecast reads plan-engine
    *  targets). Unset when the window removed nothing. */
   raceWindowCut?: Array<Pick<Workout, 'discipline' | 'estimatedDurationMin'>>;
+  /** HYROX mode: what the plan generator's rules changed in this week, one
+   *  line each (sessions left out, demoted or cut to fewer rounds or
+   *  stations, and why), so a plan can be diagnosed from a state dump.
+   *  Written by plan_engine.hyrox at every generation; not shown in the UI.
+   *  Unset when the rules changed nothing. */
+  hyroxPlanNotes?: string[];
+  /** HYROX mode: set when a loaded training week cannot reach its size
+   *  because the athlete's chosen session count binds (plan_engine.hyrox
+   *  HyroxHoursFit). The HYROX plan view states it in one muted line ("Your 5
+   *  sessions fit about 6 h of your 8 h."). Unset for deloads, the taper,
+   *  race week, weeks whose phase budget sits under the chosen hours, and
+   *  weeks a ceiling, the MTL cap or an injury holds. */
+  hyroxHoursFit?: { sessions: number; plannedMin: number; chosenHours: number };
   /** True for the time-trial week at the end of cycle 1 in double-periodization
    *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
    *  the workout generator and Phase Timeline read this flag to swap content

@@ -936,7 +936,7 @@ async function launchApp(): Promise<void> {
         const { computeWeekMTL } = await import('@/calculations/mtl');
         mutable.hyroxConfig.weeklyMTL = computeWeekMTL(weeks[currentIdx] ?? { triWorkouts: [] } as any);
         const mtlAcwr = computeMtlAcwr(weeks, currentIdx);
-        console.log(`[hyrox] MTL CTL/ATL refreshed: CTL=${mtlCTL.toFixed(1)} ATL=${mtlATL.toFixed(1)} ACWR=${mtlAcwr.ratio != null ? mtlAcwr.ratio.toFixed(2) : `withheld (${mtlAcwr.reason})`} · run=${split.runMtlCTL.toFixed(1)} station=${split.stationMtlCTL.toFixed(1)} brick=${split.brickMtlCTL.toFixed(1)}`);
+        console.log(`[hyrox] MTL CTL/ATL refreshed: CTL=${mtlCTL.toFixed(1)} ATL=${mtlATL.toFixed(1)} ACWR=${mtlAcwr.ratio != null ? mtlAcwr.ratio.toFixed(2) : `withheld (${mtlAcwr.reason})`} · run=${split.runMtlCTL.toFixed(1)} station=${split.stationMtlCTL.toFixed(1)} brick=${split.brickMtlCTL.toFixed(1)} erg=${split.ergMtlCTL.toFixed(1)}`);
       }
       saveState();
     } catch (err) {

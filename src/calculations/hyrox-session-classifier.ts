@@ -18,7 +18,8 @@
  *
  * Both calls follow the same precedence:
  *   1. Matched planned slot's `discipline` wins (a strength session matched
- *      to a brick is still a brick. The plan defines the bucket).
+ *      to a brick is still a brick. The plan defines the bucket). An easy
+ *      erg slot is not a station session: 'other', labelled by the slot.
  *   2. Strength detection (`isStrengthActual`) → station, so untagged gym
  *      uploads land in the right bucket.
  *   3. `classifyActivity` on the raw activityType → run if applicable.
@@ -30,11 +31,13 @@ import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { getEffectiveSport } from '@/ui/sport-picker-modal';
 import { SPORT_LABELS } from '@/constants';
 import type { Workout } from '@/types/state';
+import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 
 export type HyroxSessionKind = 'run' | 'station' | 'brick' | 'other';
 
 /** Lean classifier — kind only, for counting / aggregation. */
 export function classifyHyroxSessionKind(actual: unknown, matchedSlot: Workout | null): HyroxSessionKind {
+  if (matchedSlot && isHyroxEasyErg(matchedSlot)) return 'other';
   if (matchedSlot) {
     const disc = (matchedSlot as { discipline?: string }).discipline;
     if (disc === 'station' || disc === 'brick' || disc === 'run') return disc;
@@ -51,6 +54,7 @@ export function classifyHyroxActual(
   actual: unknown,
   matchedSlot: Workout | null,
 ): { kind: HyroxSessionKind; label: string } {
+  if (matchedSlot && isHyroxEasyErg(matchedSlot)) return { kind: 'other', label: matchedSlot.n || 'Easy Erg' };
   if (matchedSlot) {
     const d = (matchedSlot as { discipline?: string }).discipline;
     if (d === 'station' || d === 'brick') {

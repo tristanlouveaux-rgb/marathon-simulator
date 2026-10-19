@@ -442,6 +442,10 @@ describe('classifyWorkoutKind', () => {
     expect(classifyWorkoutKind({ t: 'hyrox_mini_brick', n: 'Mini Brick', d: '' })).toBe('strength');
   });
 
+  it('easy erg work runs on HYROX stations (SkiErg, row erg): strength, never a run', () => {
+    expect(classifyWorkoutKind({ t: 'hyrox_erg_easy', n: 'Easy Erg', d: '43 min easy on the SkiErg. Conversational effort (RPE 4).' })).toBe('strength');
+  });
+
   it('strength/gym/lift type → strength', () => {
     expect(classifyWorkoutKind({ t: 'strength', n: 'Strength', d: '' })).toBe('strength');
     expect(classifyWorkoutKind({ t: 'gym', n: 'Gym', d: '' })).toBe('gym' === 'gym' ? 'strength' : 'strength');

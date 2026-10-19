@@ -27,4 +27,15 @@ describe('plannedHyroxSessionsPerWeek', () => {
     expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(5.5, 9);
     expect(plannedHyroxSessionsPerWeek(stateWith([{ sessions: 0, raceClosing: true }]), 4)).toBe(0);
   });
+
+  // Easy erg work (plan generator v18) is easy aerobic volume on the ergs,
+  // not a Hyrox-style session: it does not count toward the station horizon
+  // (review 2026-10-13: counting it made a beginner's forecast up to 49 s
+  // faster).
+  it('does not count easy erg work as a Hyrox-style session', () => {
+    const s = stateWith([{ sessions: 4 }, { sessions: 4 }]);
+    s.wks[0].triWorkouts!.push({ id: 'erg-1', t: 'hyrox_erg_easy', discipline: 'station' } as never);
+    s.wks[1].triWorkouts!.push({ id: 'erg-2', t: 'hyrox_erg_easy', discipline: 'station' } as never);
+    expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(4, 9);
+  });
 });

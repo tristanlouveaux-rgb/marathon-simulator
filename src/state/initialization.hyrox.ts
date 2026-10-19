@@ -19,19 +19,23 @@ import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { localMondayKey, localDateKey } from '@/utils/local-date';
 import { racePlanCalendarWeeks } from '@/workouts/race-week-layout';
 import {
-  HYROX_TIME_TO_BAND_THRESHOLDS,
   HYROX_MTL_CAP,
   HYROX_DEFAULT_PLAN_WEEKS,
   HYROX_WEEKLY_SESSIONS,
   HYROX_HOURS_RANGE,
+  applyHyroxSessionDelta,
+  hyroxSessionTotal,
+  hyroxTier,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateHyroxPlan, hyroxChronicSeedSnapshot, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
+import { hasRealRunningFitnessSignal, resolveRunningVdot } from '@/calculations/physiological-vdot';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { seedRoxzoneSecForFormat, hyroxBandingTimeSec } from '@/calculations/hyrox-doubles';
+import { seedRoxzoneSecForFormat, hyroxDoublesTables } from '@/calculations/hyrox-doubles';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { appendStationTest } from '@/calculations/hyrox-station-history';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { derivePopulationRunPace } from '@/calculations/hyrox-run-pace';
@@ -45,58 +49,59 @@ import type { SimulatorState } from '@/types/state';
 
 // ─── Band derivation ─────────────────────────────────────────────────────────
 
-/** Derive ability band from a previous HYROX finish time (seconds). */
-function bandFromTime(sec: number): AbilityBand {
-  for (const { maxSec, band } of HYROX_TIME_TO_BAND_THRESHOLDS) {
-    if (sec < maxSec) return band;
-  }
-  return 'beginner';
-}
+const BAND_ORDER: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
 
-/** Derive ability band from onboarding experience level when no finish time is given. */
-function bandFromExperience(exp: string | undefined): AbilityBand {
-  switch (exp) {
-    case 'total_beginner': return 'total_beginner';
-    case 'beginner':       return 'beginner';
-    case 'novice':         return 'novice';
-    case 'intermediate':   return 'intermediate';
-    case 'advanced':       return 'advanced';
-    case 'competitive':    return 'competitive';
-    default:               return 'novice';
-  }
+/** Highest band a first-timer is placed in: the top of the intermediate tier
+ *  (hyroxTier; Tristan 2026-10-13, D7). */
+const FIRST_TIMER_MAX_BAND: AbilityBand = 'intermediate';
+
+/**
+ * Band of a first-timer (no usable previous HYROX time). The parameter sheet's
+ * level mapping (2026-10-12) puts a first race in the beginner tier
+ * ('total_beginner', no previous race; findyouredge: first race, no specific
+ * HYROX prep). Existing running-fitness evidence can place the athlete higher:
+ * with a real running-fitness signal (hasRealRunningFitnessSignal, the
+ * canonical gate) the band is the higher of 'total_beginner' and the VDOT band
+ * (bandFromVdot, the thresholds the staleness re-band already uses).
+ *
+ * A first-timer is capped at the intermediate tier (the 'intermediate' band)
+ * whatever their running fitness (Tristan 2026-10-13, D7): the advanced tier
+ * doses two station sessions and race-pace stations from base, which needs
+ * station history a first race does not have. Before, a 35:00 10K first-timer
+ * (VDOT 60) went straight to 'competitive'.
+ *
+ * Before 2026-10-12 the band came from onboarding's experienceLevel, which the
+ * HYROX flow never asks: every first-timer took the running default (or
+ * 'novice'), whatever their fitness.
+ */
+function firstTimerBand(s: SimulatorState): AbilityBand {
+  let realSignal = false;
+  try { realSignal = hasRealRunningFitnessSignal(s); } catch { realSignal = false; }
+  if (!realSignal) return 'total_beginner';
+  const vdotBand = bandFromVdot(resolveRunningVdot(s));
+  if (!vdotBand) return 'total_beginner';
+  if (hyroxTier(vdotBand) === 'advanced') return FIRST_TIMER_MAX_BAND;
+  return BAND_ORDER.indexOf(vdotBand) > 0 ? vdotBand : 'total_beginner';
 }
 
 // ─── Session count distribution ──────────────────────────────────────────────
 
 /**
- * Distribute a user-chosen total session count across runs/stations/bricks.
- * Adjusts the band defaults by adding/removing sessions in priority order:
- * - Reducing: remove bricks first, then stations (never below 1), then runs (never below 2).
- * - Adding:   add runs first (up to 5), then bricks (up to 3), then stations.
+ * Distribute a user-chosen total session count across runs/stations/bricks for
+ * the athlete's build week (HYROX_WEEKLY_SESSIONS, the tier's build row). The
+ * plan engine applies the same choice to every phase (weekSessionCounts).
+ * - Adding: easy runs up to 5. Never extra bricks or stations (parameter
+ *   sheet sessions.weekly; before 2026-10-12 up to 3 bricks). Easy erg work
+ *   comes next in the sheet; the plan engine adds it to a week's free slots,
+ *   up to this total, so the stored counts never hold it.
+ * - Reducing: bricks first, then stations (never below 1), then runs (never below 1).
  */
 function distributeSessionCount(
   target: number,
   band: AbilityBand,
 ): { runs: number; stations: number; bricks: number } {
   const base = HYROX_WEEKLY_SESSIONS[band];
-  let { runs, stations, bricks } = base;
-  let delta = target - (runs + stations + bricks);
-
-  while (delta > 0) {
-    if (runs < 5) { runs++; }
-    else if (bricks < 3) { bricks++; }
-    else { stations++; }
-    delta--;
-  }
-  while (delta < 0) {
-    if (bricks > 0) { bricks--; }
-    else if (stations > 1) { stations--; }
-    else if (runs > 1) { runs--; }
-    else { break; }
-    delta++;
-  }
-
-  return { runs, stations, bricks };
+  return applyHyroxSessionDelta(base, target - hyroxSessionTotal(base));
 }
 
 // ─── Initializer ─────────────────────────────────────────────────────────────
@@ -115,11 +120,10 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
         ? (rawFormat as 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles')
         : 'open_singles';
 
-    // Derive ability band from the previous time in singles terms (the band
-    // thresholds and seed times are singles times): hyroxBandingTimeSec. A
-    // doubles previous time is converted with the data ratio the doubles
-    // forecast uses (doublesTotalInSinglesTermsSec), for either target; a
-    // singles time stays as is.
+    // Derive ability band from the previous time: the planning band
+    // (hyroxPlanningBandFor), the finish in Open Singles terms banded on the
+    // Open Singles field of the athlete's own sex, for every format. Setup,
+    // log-a-race and the previous-format fix read the same helper.
     const prevTimeSec = state.previousHyroxTimeSec;
     const prevFmt = state.hyroxPreviousTimeFormat;
     // Format must be one of the four known values to be trusted. A missing or
@@ -133,12 +137,12 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       console.warn('[hyrox init] previousHyroxTimeSec set but hyroxPreviousTimeFormat unknown — skipping band derivation and benchmark seeding');
     }
     const isTargetDoubles = format === 'open_doubles' || format === 'pro_doubles';
-    const adjustedPrevTimeSec = (prevTimeSec != null && prevFormatKnown)
-      ? hyroxBandingTimeSec(prevTimeSec, prevFmt)
-      : null;
-    const timeBasedBand: AbilityBand = adjustedPrevTimeSec != null
-      ? bandFromTime(adjustedPrevTimeSec)
-      : bandFromExperience(state.experienceLevel as string | undefined);
+    const hasPrevTime = prevTimeSec != null && prevFormatKnown;
+    // First-timers (no usable previous time) are banded after fitness is
+    // resolved below (firstTimerBand); 'total_beginner' stands in until then.
+    let timeBasedBand: AbilityBand = hasPrevTime
+      ? hyroxPlanningBandFor(prevTimeSec, prevFmt, state.biologicalSex, state.hyroxDivision)
+      : 'total_beginner';
 
     // Resolve fitness before the band (review round 5, 2026-10-12). The
     // staleness re-band and the personal run-pace offset below read s.v and
@@ -169,6 +173,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     s.rw = provisionalSessions.runs;
     s.epw = provisionalSessions.runs + provisionalSessions.stations + provisionalSessions.bricks;
     refreshBlendedFitness(s);
+    if (!hasPrevTime) timeBasedBand = firstTimerBand(s);
 
     // Staleness-aware band: when the previous race is old enough that we
     // partially distrust it AND the user's current VDOT implies a different
@@ -187,10 +192,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       },
     } as any);
     const vdotBand = bandFromVdot(s.v);
-    const bandOrder: AbilityBand[] = ['total_beginner','beginner','novice','intermediate','advanced','competitive'];
     let band: AbilityBand = timeBasedBand;
     if (stalenessProbe.bandWeight < 0.7 && vdotBand && vdotBand !== timeBasedBand) {
-      band = bandOrder.indexOf(timeBasedBand) < bandOrder.indexOf(vdotBand) ? timeBasedBand : vdotBand;
+      band = BAND_ORDER.indexOf(timeBasedBand) < BAND_ORDER.indexOf(vdotBand) ? timeBasedBand : vdotBand;
       if (band !== timeBasedBand) {
         console.log(`[hyrox init] re-banded ${timeBasedBand} → ${band} due to staleness (months ago: ${stalenessProbe.ageMonths?.toFixed(1)}, VDOT: ${s.v?.toFixed(1)}, mitigation: ${stalenessProbe.physiologyMitigation.toFixed(2)})`);
       }
@@ -280,10 +284,10 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
         );
         // Splits give the stations; Roxzone is the band seed in the race's
         // format (doubles: × the percentile-matched Roxzone ratio).
-        roxzoneSec = seedRoxzoneSecForFormat(band, prevFormat);
+        roxzoneSec = seedRoxzoneSecForFormat(band, prevFormat, hyroxDoublesTables(prevFormat, state.biologicalSex, state.hyroxDivision));
         stationsFromSplits = true;
       } else {
-        const est = estimateStationsAndRoxzoneFromBand(band, prevFormat);
+        const est = estimateStationsAndRoxzoneFromBand(band, prevFormat, hyroxDoublesTables(prevFormat, state.biologicalSex, state.hyroxDivision));
         stationsTotalSec = est.stationsTotalSec;
         roxzoneSec = est.roxzoneSec;
       }
@@ -375,6 +379,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       raceEventId: state.hyroxRaceEventId,
       venueId: state.hyroxVenueId ?? (state.hyroxRaceEventId ? getVenueIdForEvent(state.hyroxRaceEventId) : undefined),
       generatorVersion: HYROX_GENERATOR_VERSION,
+      // The guard's chronic seed (plan engine D4), fixed for this plan's
+      // life: the logged weekly load as it stands now, before the plan.
+      planChronicSeed: hyroxChronicSeedSnapshot(s.signalBBaseline),
     };
 
     s.hyroxConfig = hyroxConfig;

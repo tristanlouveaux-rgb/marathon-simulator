@@ -31,7 +31,52 @@
  */
 
 import type { GarminActual, GarminPendingItem, SimulatorState, Week, Workout } from '@/types/state';
-import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import type { AbilityBand } from '@/types/triathlon';
+import { ensureHyroxChronicSeed, generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { HYROX_WEEKLY_SESSIONS, type HyroxSessionCounts } from '@/constants/hyrox-constants';
+
+/** Generator version that moved the band defaults to the tier structure
+ *  (HYROX_WEEKLY_STRUCTURE, lane H2a). */
+const TIER_DEFAULTS_VERSION = 18;
+
+/** The band default session counts before generator v18: HYROX_WEEKLY_SESSIONS
+ *  as it stood until 2026-10-12 (hyrox-constants.ts at e5e4aad). The
+ *  initializer stored them as the athlete's counts when the session slider
+ *  was left at its default. */
+const PRE_V18_WEEKLY_SESSIONS: Record<AbilityBand, HyroxSessionCounts> = {
+  total_beginner: { runs: 2, stations: 2, bricks: 0 },
+  beginner:       { runs: 2, stations: 2, bricks: 1 },
+  novice:         { runs: 3, stations: 2, bricks: 1 },
+  intermediate:   { runs: 3, stations: 2, bricks: 1 },
+  advanced:       { runs: 3, stations: 2, bricks: 1 },
+  competitive:    { runs: 3, stations: 2, bricks: 1 },
+};
+
+/**
+ * Stored session counts that equal the old band default become the new one
+ * (review 2026-10-13). The plan engine reads the stored total against the new
+ * default (weekSessionCounts), so an untouched beginner (5 against 4) or
+ * novice / intermediate state (6 against 5) gained an easy run every week, and
+ * the race projection credited a weekly-volume bonus, though the athlete chose
+ * nothing. A count the athlete set on the slider differs from the old default
+ * row and is kept. Returns true when it rewrote the counts.
+ */
+export function migratePreV18HyroxSessionCounts(s: SimulatorState): boolean {
+  const hx = s.hyroxConfig;
+  if (!hx || (hx.generatorVersion ?? 0) >= TIER_DEFAULTS_VERSION) return false;
+  const old = PRE_V18_WEEKLY_SESSIONS[hx.athleteBand];
+  const next = HYROX_WEEKLY_SESSIONS[hx.athleteBand];
+  if (!old || !next) return false;
+  if (hx.runsPerWeek !== old.runs || hx.stationSessionsPerWeek !== old.stations || hx.bricksPerWeek !== old.bricks) return false;
+  if (old.runs === next.runs && old.stations === next.stations && old.bricks === next.bricks) return false;
+  hx.runsPerWeek = next.runs;
+  hx.stationSessionsPerWeek = next.stations;
+  hx.bricksPerWeek = next.bricks;
+  s.rw = next.runs;
+  s.epw = next.runs + next.stations + next.bricks;
+  console.log(`[hyrox] session counts moved to the v18 ${hx.athleteBand} default (${next.runs}/${next.stations}/${next.bricks})`);
+  return true;
+}
 
 /** True for a session the athlete added (its own id survives the regen). */
 function hasUserAddedId(w: Workout): boolean {
@@ -200,6 +245,10 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
   if (!hx || !s.wks?.length) return false;
   const savedVersion = hx.generatorVersion ?? 0;
   if (savedVersion >= HYROX_GENERATOR_VERSION) return false;
+  migratePreV18HyroxSessionCounts(s);
+  // A plan built before the chronic seed was stored (D4) fixes it now, so the
+  // rollovers and single-week rebuilds after this one read the same value.
+  ensureHyroxChronicSeed(s);
   const freshWeeks = generateHyroxPlan(s);
   if (freshWeeks.length === 0) return false;
   for (let i = 0; i < Math.min(s.wks.length, freshWeeks.length); i++) {
@@ -210,6 +259,12 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
     // own week is a closing week with no sessions; the flag follows the fresh plan.
     if (freshWeeks[i].raceClosing) wk.raceClosing = true;
     else delete wk.raceClosing;
+    // The generator's notes on the week (sessions its rules changed) follow it.
+    if (freshWeeks[i].hyroxPlanNotes) wk.hyroxPlanNotes = freshWeeks[i].hyroxPlanNotes;
+    else delete wk.hyroxPlanNotes;
+    // The session-count hours line follows the week too.
+    if (freshWeeks[i].hyroxHoursFit) wk.hyroxHoursFit = freshWeeks[i].hyroxHoursFit;
+    else delete wk.hyroxHoursFit;
     rekeyNameKeyedHyroxSlots(wk);
   }
   hx.generatorVersion = HYROX_GENERATOR_VERSION;

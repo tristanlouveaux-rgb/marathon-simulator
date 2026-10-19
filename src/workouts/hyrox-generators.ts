@@ -19,20 +19,46 @@ import type { Workout } from '@/types/state';
 import { fmtModelPaceKm } from '@/utils/format';
 import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxStation } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, SEED_RUN_PACE_SEC_KM, HYROX_STATION_ORDER, stationExternalLoadKg } from '@/constants/hyrox-benchmarks';
+import { HYROX_EASY_ERG_TYPE } from './hyrox-easy-erg';
+import { STATION_DISPLAY, HYROX_STATION_ORDER, stationExternalLoadKg } from '@/constants/hyrox-benchmarks';
+import { hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm, type HyroxSeedStateInput } from '@/calculations/hyrox-results';
 import { HYROX_DEFAULT_LOAD_TIER } from '@/calculations/hyrox-division';
-import { ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS } from '@/constants/hyrox-constants';
+import {
+  ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
+  HYROX_INTERVAL_HR_FRACTION, HYROX_QUALITY_WARMUP_MIN, HYROX_QUALITY_COOLDOWN_MIN,
+  HYROX_TEMPO_MIN_WORK_MIN, HYROX_EASY_RPE,
+  type HyroxQualityFormat,
+} from '@/constants/hyrox-constants';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface RunParams {
   kind: 'run_easy' | 'run_tempo' | 'run_intervals';
+  /** Easy runs and the taper tempo: the session length. A quality run with a
+   *  `format` takes the format's own length. */
   targetMinutes: number;
   band: AbilityBand;
   phase: 'base' | 'build' | 'peak' | 'taper';
   slotIndex: number;
   bodyWeightKg?: number;
+  /** HYROX race pace (sec/km); the band seed pace when unset. */
   runPaceSecKm?: number;
+  /** Quality-run format of a training week (HYROX_QUALITY_FORMATS). Unset for
+   *  a taper or race-week tempo, which is sized by targetMinutes. */
+  format?: HyroxQualityFormat;
+  /** Threshold pace (sec/km) from the fitness model (s.pac.t, which follows
+   *  s.lt) when the athlete has a real running-fitness signal. Unset: a tempo
+   *  runs at HYROX race pace with no multiplier and is labelled race pace. */
+  thresholdPaceSecKm?: number;
+  /** The week's long run (an easy run named Long Run, `longRun: true`). */
+  longRun?: boolean;
+  /** Max HR (bpm) when known, to state the interval heart-rate target in bpm. */
+  maxHR?: number;
+  /** The athlete whose band seeds stand in for an untested station or an
+   *  unset race pace: the planning field (Open Singles at their sex) at the
+   *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
+   *  Absent: the pooled Open Singles field. */
+  seed?: HyroxSeedStateInput;
 }
 
 export interface StationParams {
@@ -49,6 +75,11 @@ export interface StationParams {
   /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
    *  Absent: HYROX_DEFAULT_LOAD_TIER. */
   loadTier?: HyroxLoadTier;
+  /** The athlete whose band seeds stand in for an untested station or an
+   *  unset race pace: the planning field (Open Singles at their sex) at the
+   *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
+   *  Absent: the pooled Open Singles field. */
+  seed?: HyroxSeedStateInput;
 }
 
 export interface BrickParams {
@@ -63,6 +94,11 @@ export interface BrickParams {
   /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
    *  Absent: HYROX_DEFAULT_LOAD_TIER. */
   loadTier?: HyroxLoadTier;
+  /** The athlete whose band seeds stand in for an untested station or an
+   *  unset race pace: the planning field (Open Singles at their sex) at the
+   *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
+   *  Absent: the pooled Open Singles field. */
+  seed?: HyroxSeedStateInput;
 }
 
 // ─── Station availability helpers ────────────────────────────────────────────
@@ -124,13 +160,16 @@ export function raceWeekCircuitStations(access: HyroxConfig['stationAccess']): H
  *  (generateStationTechnique) uses the same floor. */
 export const MIN_CIRCUIT_STATIONS = 2;
 
-/** Get seed time (sec) for a station and band, using user benchmark if available. */
+/** Get seed time (sec) for a station and band, using user benchmark if
+ *  available, else the band seed in the athlete's planning field at the
+ *  target's loads (hyroxStationSeedsAtTarget). */
 function stationSeedSec(
   station: HyroxStation,
   band: AbilityBand,
-  benchmarks?: Partial<Record<HyroxStation, number>>
+  benchmarks?: Partial<Record<HyroxStation, number>>,
+  seed?: HyroxSeedStateInput,
 ): number {
-  return benchmarks?.[station] ?? STATION_SEED_TIMES_SEC[band][station];
+  return benchmarks?.[station] ?? hyroxStationSeedsAtTarget(seed ?? {}, band)[station];
 }
 
 /** Format a station time as "m:ss", rounded to the whole second before the
@@ -154,24 +193,21 @@ function fmtPace(secPerKm: number): string {
  *   beginner tier ≤4, novice/intermediate ≤6, advanced/competitive ≤8.
  * Used as the upper clamp so race-pace station volume never exceeds the band's
  * prescribed dose, regardless of how large a slot the scheduler hands us.
+ * The tiers come from hyroxTier, the single band-to-tier mapping.
  * See SCIENCE_LOG §AO.
  */
 function bandMaxRounds(band: AbilityBand): number {
-  switch (band) {
-    case 'competitive':
-    case 'advanced':
-      return 8;
-    case 'intermediate':
-    case 'novice':
-      return 6;
-    default: // beginner, total_beginner
-      return 4;
+  switch (hyroxTier(band)) {
+    case 'advanced':     return 8;
+    case 'intermediate': return 6;
+    default:             return 4;
   }
 }
 
-/** A circuit session is at least this many rounds (below this it is a single
- *  pass, i.e. the calibration assessment, not a training circuit). */
-const MIN_CIRCUIT_ROUNDS = 2;
+/** A circuit or brick session is at least this many rounds (below this it is a
+ *  single pass, i.e. the calibration assessment, not a training circuit). The
+ *  weekly MTL cap (plan_engine.hyrox enforceMTLCap) cuts rounds down to it. */
+export const MIN_CIRCUIT_ROUNDS = 2;
 
 /**
  * Rounds that best fill a time budget given one round's duration: nearest whole
@@ -195,58 +231,117 @@ function fillRounds(budgetSec: number, roundDurSec: number, bandMax: number): nu
  * HyroxDataLab. 20% slower is a physiologically reasonable easy training pace
  * (Maffetone; Seiler 2010). Prices easy runs and commute runs alike.
  */
-export function hyroxEasyRunPaceSecKm(band: AbilityBand, runPaceSecKm?: number): number {
-  return Math.round((runPaceSecKm ?? SEED_RUN_PACE_SEC_KM[band]) * 1.2);
+export function hyroxEasyRunPaceSecKm(band: AbilityBand, runPaceSecKm?: number, seed?: HyroxSeedStateInput): number {
+  return Math.round((runPaceSecKm ?? hyroxSeedRunPaceSecKm(seed ?? {}, band)) * 1.2);
+}
+
+/** Length of a standalone HYROX run (km): the sum of its run components.
+ *  The single-run rule (Frandsen 2025, measured in distance) and the rule that
+ *  no run is longer than the long run read this. */
+export function hyroxRunLengthKm(w: Pick<Workout, 'hyroxComponents'>): number {
+  return (w.hyroxComponents ?? []).filter(c => c.type === 'run')
+    .reduce((sum, c) => sum + (c.distanceM ?? 0), 0) / 1000;
 }
 
 export function generateHyroxRun(params: RunParams): Workout {
   const { kind, targetMinutes, band, bodyWeightKg } = params;
-  const dur = Math.round(targetMinutes);
+  let dur = Math.round(targetMinutes);
 
   let name: string;
   let desc: string;
   let rpe: number;
   let mtlKind: 'run_easy' | 'run_tempo' | 'run_intervals';
+  let distanceKm: number;
+  // MTL per segment (mtl.ts computeComponentMTL is linear in minutes): warm-up,
+  // cool-down and jog recoveries at the easy-run RPE, the work at the session
+  // RPE, standing rest none. Before 2026-10-12 the whole session (warm-up and
+  // cool-down included) carried the session RPE.
+  let mtlSegments: Array<{ min: number; rpe: number; kind: 'run_easy' | 'run_tempo' | 'run_intervals' }> | null = null;
 
-  const racePace = params.runPaceSecKm ?? SEED_RUN_PACE_SEC_KM[band];
-  const easyPace = hyroxEasyRunPaceSecKm(band, params.runPaceSecKm);
-  const easyDistKm = Math.round((dur * 60) / easyPace * 10) / 10;
+  const racePace = params.runPaceSecKm ?? hyroxSeedRunPaceSecKm(params.seed ?? {}, band);
+  const easyPace = hyroxEasyRunPaceSecKm(band, params.runPaceSecKm, params.seed);
+  const kmAt = (min: number, paceSecKm: number) => (min * 60) / paceSecKm;
+  const round1 = (km: number) => Math.round(km * 10) / 10;
+  const warm = HYROX_QUALITY_WARMUP_MIN;
+  const cool = HYROX_QUALITY_COOLDOWN_MIN;
+  // Tempo pace: the fitness model's threshold pace when the athlete has a real
+  // running-fitness signal, otherwise HYROX race pace with no multiplier
+  // (parameter sheet intervals.pace_source). The old race pace x 0.97
+  // "threshold" had no source.
+  const tempoPace = params.thresholdPaceSecKm ?? racePace;
+  const tempoLabel = params.thresholdPaceSecKm != null ? 'threshold pace' : 'HYROX race pace';
 
   switch (kind) {
     case 'run_easy': {
-      name = 'Easy Run';
-      desc = `${dur} min easy at ${fmtPace(easyPace)}/km (~${easyDistKm} km). Fully conversational — you should be able to speak in complete sentences.`;
-      rpe = 4;
+      distanceKm = kmAt(dur, easyPace);
+      if (params.longRun) {
+        name = 'Long Run';
+        desc = `${dur} min easy at ${fmtPace(easyPace)}/km (~${round1(distanceKm)} km). Zone 2, fully conversational. The week's longest run.`;
+      } else {
+        name = 'Easy Run';
+        desc = `${dur} min easy at ${fmtPace(easyPace)}/km (~${round1(distanceKm)} km). Fully conversational: complete sentences are easy.`;
+      }
+      rpe = HYROX_EASY_RPE;
       mtlKind = 'run_easy';
       break;
     }
     case 'run_tempo': {
-      const warmCool = 15;  // 10 warm-up + 5 cool-down
-      const tempoMin = Math.max(10, dur - warmCool);
+      const fmt = params.format?.kind === 'run_tempo' ? params.format : null;
+      const tempoMin = fmt ? fmt.workMin : Math.max(HYROX_TEMPO_MIN_WORK_MIN, dur - (warm + cool));
+      // The duration is what the description prescribes: warm-up, tempo work
+      // and cool-down (a taper tempo sized under 25 min used to keep the
+      // smaller number beside a 25-min prescription).
+      dur = warm + tempoMin + cool;
+      distanceKm = kmAt(warm + cool, easyPace) + kmAt(tempoMin, tempoPace);
+      mtlSegments = [{ min: warm + cool, rpe: 4, kind: 'run_easy' }, { min: tempoMin, rpe: 7, kind: 'run_tempo' }];
       name = 'Tempo Run';
-      desc = `10 min easy warm-up. ${tempoMin} min at threshold pace (~${fmtPace(Math.round(racePace * 0.97))}/km) — comfortably hard, can say short phrases. 5 min easy cool-down.`;
+      desc = `${warm} min easy warm-up. ${tempoMin} min at ${tempoLabel} (~${fmtPace(Math.round(tempoPace))}/km), comfortably hard, short phrases only. ${cool} min easy cool-down.`;
       rpe = 7;
       mtlKind = 'run_tempo';
       break;
     }
     case 'run_intervals': {
-      // e.g. 8 × 400m with 90s jog recovery
-      const warmCool = 15;
-      const workMin = Math.max(8, dur - warmCool);
-      // Each rep ~90s hard + 90s recovery = 3 min/rep
-      const reps = Math.max(4, Math.min(12, Math.round(workMin / 3)));
+      const fmt = params.format?.kind === 'run_intervals' ? params.format : null;
+      if (fmt && fmt.target === 'race_pace') {
+        // 1 km reps at HYROX race pace with standing rest (intermediate peak).
+        // The sheet names goal race pace; the pace here is the athlete's
+        // current HYROX run pace (hyroxRunPaceSecKm, the band seed without
+        // one), so it is labelled HYROX race pace, as the no-signal tempo is
+        // (review 2026-10-13). A goal pace from the target finish time is
+        // an open question for the forecast lane.
+        const repSec = fmt.repKm * racePace;
+        dur = Math.round(warm + (fmt.reps * repSec) / 60 + (fmt.reps - 1) * fmt.recoveryMin + cool);
+        distanceKm = kmAt(warm + cool, easyPace) + fmt.reps * fmt.repKm;
+        mtlSegments = [{ min: warm + cool, rpe: 4, kind: 'run_easy' }, { min: (fmt.reps * repSec) / 60, rpe: 8, kind: 'run_intervals' }];
+        desc = `${warm} min easy warm-up. ${fmt.reps} × ${fmt.repKm} km at HYROX race pace (~${fmtPace(Math.round(racePace))}/km), ${fmt.recoveryMin} min rest between reps. ${cool} min easy cool-down.`;
+      } else {
+        // Heart-rate reps with an easy jog between them (beginner and advanced
+        // peak). Without a format (not reached by the plan engine) the
+        // beginner peak format applies.
+        const f = fmt && fmt.target === 'hr' ? fmt : { reps: 4, repMin: 3, recoveryMin: 3 };
+        dur = warm + f.reps * f.repMin + (f.reps - 1) * f.recoveryMin + cool;
+        // Distance estimate for the run rules: reps at tempo pace, jogs easy.
+        distanceKm = kmAt(warm + cool + (f.reps - 1) * f.recoveryMin, easyPace) + kmAt(f.reps * f.repMin, tempoPace);
+        mtlSegments = [
+          { min: warm + cool + (f.reps - 1) * f.recoveryMin, rpe: 4, kind: 'run_easy' },
+          { min: f.reps * f.repMin, rpe: 8, kind: 'run_intervals' },
+        ];
+        const bpm = params.maxHR && params.maxHR > 0 ? ` (~${Math.round(params.maxHR * HYROX_INTERVAL_HR_FRACTION)} bpm)` : '';
+        desc = `${warm} min easy warm-up. ${f.reps} × ${f.repMin} min at about ${Math.round(HYROX_INTERVAL_HR_FRACTION * 100)}% of max HR${bpm}, ${f.recoveryMin} min easy jog between reps. ${cool} min easy cool-down.`;
+      }
       name = 'Interval Run';
-      desc = `10 min easy warm-up. ${reps} × 400m at ~${fmtPace(Math.round(racePace * 0.88))}/km, 90s jog recovery. 5 min cool-down.`;
       rpe = 8;
       mtlKind = 'run_intervals';
       break;
     }
   }
 
-  const mtl = computeComponentMTL(dur, rpe, mtlKind, undefined, bodyWeightKg);
+  const mtl = mtlSegments
+    ? mtlSegments.reduce((sum, seg) => sum + computeComponentMTL(seg.min, seg.rpe, seg.kind, undefined, bodyWeightKg), 0)
+    : computeComponentMTL(dur, rpe, mtlKind, undefined, bodyWeightKg);
   const component: HyroxComponent = {
     type: 'run',
-    distanceM: Math.round(easyDistKm * 1000),
+    distanceM: Math.round(distanceKm * 1000),
     durationSec: dur * 60,
     mtl,
   };
@@ -261,6 +356,138 @@ export function generateHyroxRun(params: RunParams): Workout {
     estimatedDurationMin: dur,
     musculoTendonLoad: mtl,
     hyroxComponents: [component],
+    ...(params.longRun && kind === 'run_easy' ? { longRun: true } : {}),
+  };
+}
+
+/**
+ * The same station or brick session with fewer rounds (the weekly MTL cap,
+ * plan_engine.hyrox enforceMTLCap). Cuts real volume: the component MTLs
+ * scale with the rounds (MTL is linear in work minutes, mtl.ts
+ * computeComponentMTL), the duration drops by the removed rounds' work and
+ * rest, and the description's round count follows. Before 2026-10-12 the cap
+ * scaled only the reported MTL numbers and left the session as prescribed.
+ */
+export function withHyroxRounds(w: Workout, rounds: number): Workout {
+  const old = w.hyroxRounds ?? 0;
+  if (!(old > 0) || !(rounds >= 1) || rounds >= old) return w;
+  const f = rounds / old;
+  const comps = (w.hyroxComponents ?? []).map(c => ({ ...c, mtl: c.mtl * f }));
+  const mtl = comps.reduce((sum, c) => sum + c.mtl, 0);
+  const n = comps.length;
+  const perRoundSec = comps.reduce((sum, c) => sum + (c.durationSec ?? 0), 0)
+    + Math.max(0, n - 1) * (comps[0]?.restAfterSec ?? 0)
+    + (w.hyroxRoundRestSec ?? 0);
+  const est = Math.max(1, Math.round((w.estimatedDurationMin ?? 0) - ((old - rounds) * perRoundSec) / 60));
+  return {
+    ...w,
+    hyroxComponents: comps,
+    musculoTendonLoad: mtl,
+    hyroxRounds: rounds,
+    estimatedDurationMin: est,
+    d: (w.d ?? '').replace(/^\d+ rounds/, `${rounds} rounds`),
+  };
+}
+
+/**
+ * The same station circuit without one of its stations (the weekly MTL cap,
+ * plan_engine.hyrox enforceMTLCap, once every session is at
+ * MIN_CIRCUIT_ROUNDS). Cuts real volume: the station's component leaves, the
+ * duration drops by its work and the rest after it in every round, the MTL is
+ * the sum of what is left, and the station leaves the description's list. A
+ * circuit keeps at least MIN_CIRCUIT_STATIONS stations; a brick or a session
+ * without the station is returned unchanged.
+ */
+export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout {
+  if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') return w;
+  const comps = w.hyroxComponents ?? [];
+  const idx = comps.findIndex(c => c.type === station);
+  const stationCount = comps.filter(c => c.type !== 'run').length;
+  if (idx < 0 || stationCount <= MIN_CIRCUIT_STATIONS) return w;
+  const removed = comps[idx];
+  const rest = comps.filter((_, i) => i !== idx);
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const cutSec = rounds * ((removed.durationSec ?? 0) + (removed.restAfterSec ?? 0));
+  const mtl = rest.reduce((sum, c) => sum + c.mtl, 0);
+  const name = STATION_DISPLAY[station].name;
+  // The station list sits between "N rounds: " and the first ". "; its entries
+  // are "Name (...)" joined by " + " (technique) or " → " (density).
+  const m = /^(\d+ rounds: )(.*?)(\. .*)$/.exec(w.d ?? '');
+  let d = w.d ?? '';
+  if (m) {
+    const sep = m[2].includes(' → ') ? ' → ' : ' + ';
+    const kept = m[2].split(sep).filter(line => !line.startsWith(`${name} (`));
+    d = `${m[1]}${kept.join(sep)}${m[3]}`;
+  }
+  return {
+    ...w,
+    hyroxComponents: rest,
+    musculoTendonLoad: mtl,
+    estimatedDurationMin: Math.max(1, Math.round((w.estimatedDurationMin ?? 0) - cutSec / 60)),
+    d,
+  };
+}
+
+// ─── Easy erg session ─────────────────────────────────────────────────────────
+
+export { HYROX_EASY_ERG_TYPE, isHyroxEasyErg } from './hyrox-easy-erg';
+
+/** The ergs an athlete can use for easy erg work, in alternation order. */
+function easyErgStations(access: HyroxConfig['stationAccess']): HyroxStation[] {
+  const avail = availableStations(access);
+  return (['ski_erg', 'row_erg'] as HyroxStation[]).filter(s => avail.includes(s));
+}
+
+/** MTL per minute of the athlete's heaviest easy erg (the weekly MTL cap sizes
+ *  easy erg work with it), or null without erg access. */
+export function hyroxEasyErgMtlPerMin(access: HyroxConfig['stationAccess'], bodyWeightKg?: number): number | null {
+  const ergs = easyErgStations(access);
+  if (ergs.length === 0) return null;
+  // Ergs carry no external load at any load tier (stationExternalLoadKg).
+  return Math.max(...ergs.map(s => computeComponentMTL(1, HYROX_EASY_RPE, s, undefined, bodyWeightKg)));
+}
+
+/** Parameters of an easy erg session. */
+export interface EasyErgParams {
+  targetMinutes: number;
+  stationAccess: HyroxConfig['stationAccess'];
+  /** Alternates the SkiErg and the row erg across a plan's sessions. */
+  slotIndex: number;
+  bodyWeightKg?: number;
+}
+
+/**
+ * Easy erg session: continuous easy work on the SkiErg or the row erg (the
+ * athlete's ergs only, alternating by slot), at the easy RPE
+ * (HYROX_EASY_RPE). The parameter sheet's split.running_share row sends the
+ * hours the running share and the station sessions leave unprescribed to easy
+ * erg work, not to more running (Brandt 2025, n=11, suggests swapping some
+ * running for rowing or SkiErg; untested). Aerobic volume with no running
+ * impact: no eccentric station, not a hard session. MTL from mtl.ts at the
+ * erg's own factors. Returns null without erg access. Planning side.
+ */
+export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
+  const ergs = easyErgStations(p.stationAccess);
+  if (ergs.length === 0) return null;
+  const station = ergs[Math.abs(p.slotIndex) % ergs.length];
+  const dur = Math.max(1, Math.round(p.targetMinutes));
+  // Ergs carry no external load at any load tier (stationExternalLoadKg).
+  const mtl = computeComponentMTL(dur, HYROX_EASY_RPE, station, undefined, p.bodyWeightKg);
+  return {
+    n: 'Easy Erg',
+    d: `${dur} min easy on the ${STATION_DISPLAY[station].name}. Conversational effort (RPE ${HYROX_EASY_RPE}). Aerobic volume without running impact.`,
+    t: HYROX_EASY_ERG_TYPE,
+    // Its own discipline (decision D, Tristan 2026-10-13): every surface that
+    // counts station sessions by discipline leaves it out.
+    discipline: 'erg',
+    r: HYROX_EASY_RPE,
+    rpe: HYROX_EASY_RPE,
+    estimatedDurationMin: dur,
+    musculoTendonLoad: mtl,
+    // No hyroxComponents: it is one continuous time-defined block, not a
+    // station set. Components would route it to the guided station player
+    // (one 1000 m SkiErg set) and the session recap would file its full
+    // length as a station time.
   };
 }
 
@@ -271,9 +498,9 @@ export function generateHyroxStation(params: StationParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'station_technique') {
-    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek, loadTier: params.loadTier });
+    return generateStationTechnique({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, raceWeek: params.raceWeek, loadTier: params.loadTier, seed: params.seed });
   }
-  return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
+  return generateStationDensity({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
 }
 
 function generateStationTechnique(p: {
@@ -286,6 +513,7 @@ function generateStationTechnique(p: {
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   raceWeek?: boolean;
   loadTier?: HyroxLoadTier;
+  seed?: HyroxSeedStateInput;
 }): Workout {
   // Up to 4 stations at 65% of seed time (technique pace), 60s between stations
   // and 3 min between rounds. Round count fills the station-work budget (slot
@@ -304,9 +532,9 @@ function generateStationTechnique(p: {
   const INTER_ROUND_REST = 180;
 
   // Per-station technique work (one round) and the run finish that closes the session.
-  const perStationSec = stations.map(s => Math.round(stationSeedSec(s, p.band, p.stationBenchmarks) * 0.65));
+  const perStationSec = stations.map(s => Math.round(stationSeedSec(s, p.band, p.stationBenchmarks, p.seed) * 0.65));
   const runFinishMin = Math.min(20, Math.round(p.dur * 0.4));
-  const easyPace = SEED_RUN_PACE_SEC_KM[p.band] * 1.2;
+  const easyPace = hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band) * 1.2;
   const runKm = Math.round((runFinishMin * 60) / easyPace * 10) / 10;
 
   // Round duration = station work + within-round rests + one inter-round rest.
@@ -372,6 +600,7 @@ function generateStationDensity(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   loadTier?: HyroxLoadTier;
+  seed?: HyroxSeedStateInput;
 }): Workout {
   // Time-capped station circuit (research §7.2: "station work for time / AMRAP").
   // Pick the race's primary discriminators (2 high-MTL) + 1 erg, then run the
@@ -402,7 +631,7 @@ function generateStationDensity(p: {
   const INTER_STATION_REST = 30;
   const INTER_ROUND_REST = 120;
 
-  const perStationSec = selectedStations.map(s => stationSeedSec(s, p.band, p.stationBenchmarks));
+  const perStationSec = selectedStations.map(s => stationSeedSec(s, p.band, p.stationBenchmarks, p.seed));
   const workPerRoundSec = perStationSec.reduce((sum, s) => sum + s, 0);
   const roundDurSec = workPerRoundSec + Math.max(0, selectedStations.length - 1) * INTER_STATION_REST + INTER_ROUND_REST;
   const rounds = fillRounds(p.dur * 60, roundDurSec, bandMaxRounds(p.band));
@@ -456,9 +685,9 @@ export function generateHyroxBrick(params: BrickParams): Workout {
   const dur = Math.round(targetMinutes);
 
   if (kind === 'mini_brick') {
-    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
+    return generateMiniBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
   }
-  return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier });
+  return generateFullBrick({ dur, band, stationAccess, phase, slotIndex, bodyWeightKg, stationBenchmarks, loadTier: params.loadTier, seed: params.seed });
 }
 
 function generateFullBrick(p: {
@@ -470,6 +699,7 @@ function generateFullBrick(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   loadTier?: HyroxLoadTier;
+  seed?: HyroxSeedStateInput;
 }): Workout {
   // N rounds of (1km run + 1 station). Pick a key station based on phase.
   // Phase progression: base → erg-based stations, build/peak → high-MTL stations.
@@ -486,10 +716,10 @@ function generateFullBrick(p: {
   }
   const station = stationPool[p.slotIndex % stationPool.length];
   const stationDisplay = STATION_DISPLAY[station];
-  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks);
+  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks, p.seed);
 
   // Run: 1km at seed race pace
-  const runSeedSec = SEED_RUN_PACE_SEC_KM[p.band];  // seconds for 1km at seed pace
+  const runSeedSec = hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band);  // seconds for 1km at seed pace
   const transitionSec = 30;  // jog between run and station
   const roundDurSec = runSeedSec + stationSeedSec_ + transitionSec;
 
@@ -549,6 +779,7 @@ function generateMiniBrick(p: {
   bodyWeightKg?: number;
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   loadTier?: HyroxLoadTier;
+  seed?: HyroxSeedStateInput;
 }): Workout {
   // Beginner-friendly: 500m run + 1 erg station. Builds the run-to-station
   // transition pattern without the full eccentric load of race-distance bricks.
@@ -556,10 +787,10 @@ function generateMiniBrick(p: {
   const ergs: HyroxStation[] = ['row_erg', 'ski_erg'].filter(s => avail.includes(s as HyroxStation)) as HyroxStation[];
   const station: HyroxStation = ergs[p.slotIndex % Math.max(1, ergs.length)] ?? 'farmer_carry';
   const stationDisplay = STATION_DISPLAY[station];
-  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks);
+  const stationSeedSec_ = stationSeedSec(station, p.band, p.stationBenchmarks, p.seed);
 
   // 500m run at seed pace
-  const runSeedSec = Math.round(SEED_RUN_PACE_SEC_KM[p.band] * 0.5);
+  const runSeedSec = Math.round(hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band) * 0.5);
   const transitionSec = 30;
   const roundDurSec = runSeedSec + stationSeedSec_ + transitionSec;
 
@@ -606,6 +837,11 @@ export interface AssessmentParams {
   /** Station load tier (hyroxLoadTierForState) for the MTL external loads.
    *  Absent: HYROX_DEFAULT_LOAD_TIER. */
   loadTier?: HyroxLoadTier;
+  /** The athlete whose band seeds stand in for an untested station or an
+   *  unset race pace: the planning field (Open Singles at their sex) at the
+   *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
+   *  Absent: the pooled Open Singles field. */
+  seed?: HyroxSeedStateInput;
 }
 
 /**
@@ -617,10 +853,11 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
   const { band, stationAccess, bodyWeightKg } = params;
   const stations = availableStations(stationAccess);
   const externalLoads = stationExternalLoadKg(params.loadTier ?? HYROX_DEFAULT_LOAD_TIER);
+  const seeds = hyroxStationSeedsAtTarget(params.seed ?? {}, band);
 
   const components: HyroxComponent[] = stations.map(station => {
     const display = STATION_DISPLAY[station];
-    const seedSec = STATION_SEED_TIMES_SEC[band][station];
+    const seedSec = seeds[station];
     const easyDurSec = Math.round(seedSec * 1.2);
     const easyDurMin = easyDurSec / 60;
     const stationMTL = computeComponentMTL(

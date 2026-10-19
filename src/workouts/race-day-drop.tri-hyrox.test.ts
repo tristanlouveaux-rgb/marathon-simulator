@@ -81,10 +81,16 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
     const noRace = generateHyroxPlan(hyroxState(6, ''));
     expect(weeks.slice(0, 4).map(w => w.triWorkouts?.length)).toEqual(noRace.slice(0, 4).map(w => w.triWorkouts?.length));
     // Week 5's Friday to Sunday are 6 to 4 days out (race-window rule): its
-    // brick moves to Thursday, 7 days out.
+    // long run moves to Thursday, 7 days out. Since 2026-10-12 week 5 is the
+    // first week of the 2-week taper (no full brick; its long run is the long
+    // session the window moves, as running's is).
     const weekBefore = weeks[4].triWorkouts ?? [];
     for (const w of weekBefore) expect(w.dayOfWeek ?? 0, w.n).toBeLessThan(4);
-    expect(weekBefore.find(w => w.t === 'hyrox_brick')?.dayOfWeek).toBe(3);
-    expect((noRace[5].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 3)).toBe(true);
+    expect(weekBefore.find(w => w.n === 'Long Run')?.dayOfWeek).toBe(3);
+    // Without the race date week 5's long run keeps its Sunday. (Race week
+    // itself no longer shows the difference: since 2026-10-13 it holds no more
+    // runs than the reference week, here the primer and one easy run, which
+    // the no-race plan places early in the week too.)
+    expect((noRace[4].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 4)).toBe(true);
   });
 });

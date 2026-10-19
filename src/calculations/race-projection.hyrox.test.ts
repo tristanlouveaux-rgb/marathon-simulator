@@ -61,7 +61,9 @@ function buildState(overrides: Partial<SimulatorState['hyroxConfig']> = {}, extr
       mtlCap: 1300,
       mtlHistory: [],
       runsPerWeek: 3,
-      stationSessionsPerWeek: 2,
+      // The intermediate band default (HYROX_WEEKLY_SESSIONS: 3 runs, 1
+      // station session, 1 brick since 2026-10-12), so no volume factor fires.
+      stationSessionsPerWeek: 1,
       bricksPerWeek: 1,
       weeklyHoursAvailable: 8,
       ...overrides,

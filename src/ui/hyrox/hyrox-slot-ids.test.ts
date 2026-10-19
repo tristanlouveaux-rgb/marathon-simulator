@@ -36,8 +36,13 @@ import type { AbilityBand } from '@/types/triathlon';
 
 const PLAN_START = '2026-09-28'; // a Monday
 
-/** A HYROX state built from the band defaults the onboarding initializer uses. */
-function hyroxState(tw: number, band: AbilityBand = 'intermediate'): SimulatorState {
+/** A HYROX state built from the band defaults the onboarding initializer uses,
+ *  with one extra session from the slider (4 runs) at the band's top hours, so
+ *  week 1 holds two same-named Easy Runs (Wednesday and Friday) beside the
+ *  Sunday Long Run (generator v18; before, the defaults gave Friday and Sunday
+ *  Easy Runs). No erg access: with ergs, round 7 gives one of the two Easy
+ *  Runs to a longer easy erg session. */
+function hyroxState(tw: number, band: AbilityBand = 'intermediate', extraRuns = 1): SimulatorState {
   const s = getDefaultState();
   s.eventType = 'hyrox';
   s.trackOnly = false;
@@ -48,14 +53,14 @@ function hyroxState(tw: number, band: AbilityBand = 'intermediate'): SimulatorSt
     format: 'open_singles',
     athleteBand: band,
     hyroxPhase: 'base',
-    stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+    stationAccess: { sled: 'always', skiErg: false, rowErg: false },
     weeklyMTL: 0,
     mtlCap: HYROX_MTL_CAP[band],
     mtlHistory: [],
-    runsPerWeek: HYROX_WEEKLY_SESSIONS[band].runs,
+    runsPerWeek: HYROX_WEEKLY_SESSIONS[band].runs + extraRuns,
     stationSessionsPerWeek: HYROX_WEEKLY_SESSIONS[band].stations,
     bricksPerWeek: HYROX_WEEKLY_SESSIONS[band].bricks,
-    weeklyHoursAvailable: HYROX_HOURS_RANGE[band].default,
+    weeklyHoursAvailable: extraRuns > 0 ? HYROX_HOURS_RANGE[band].max : HYROX_HOURS_RANGE[band].default,
     generatorVersion: HYROX_GENERATOR_VERSION,
   };
   s.wks = generateHyroxPlan(s);
@@ -104,19 +109,19 @@ describe('generated HYROX sessions carry a slot id unique within their week', ()
 
   it('ids follow the triathlon engine format W{week}-{type}-{idx}', () => {
     const s = hyroxState(16);
-    const [fri, sun] = easyRuns(s.wks[0]);
-    expect(fri.id).toBe('W1-hyrox_run_easy-0');
-    expect(sun.id).toBe('W1-hyrox_run_easy-1');
+    const [wed, fri] = easyRuns(s.wks[0]);
+    expect(wed.id).toBe('W1-hyrox_run_easy-0');
+    expect(fri.id).toBe('W1-hyrox_run_easy-1');
   });
 });
 
 describe('Mark as Done on one of two same-named sessions', () => {
-  it('Friday Easy Run done leaves the Sunday Easy Run not done', () => {
+  it('Wednesday Easy Run done leaves the Friday Easy Run not done', () => {
     const s = hyroxState(16);
     setState(s);
     const wk = getMutableState().wks[0];
-    const [fri, sun] = easyRuns(wk);
-    expect([fri.dayOfWeek, sun.dayOfWeek]).toEqual([4, 6]);
+    const [fri, sun] = easyRuns(wk); // Wednesday, Friday
+    expect([fri.dayOfWeek, sun.dayOfWeek]).toEqual([2, 4]);
 
     openHyroxWorkoutDetail(fri, 0);
     (document.querySelector('#hx-detail-mark-done') as HTMLButtonElement).click();
@@ -138,8 +143,8 @@ describe('two synced Easy Runs on their own days', () => {
     const sec = fri.estimatedDurationMin! * 60;
 
     matchAndAutoComplete([
-      runRow({ garmin_id: 'strava-FRI', start_time: new Date(2026, 9, 2, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }),
-      runRow({ garmin_id: 'strava-SUN', start_time: new Date(2026, 9, 4, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }),
+      runRow({ garmin_id: 'strava-FRI', start_time: new Date(2026, 8, 30, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }), // Wednesday
+      runRow({ garmin_id: 'strava-SUN', start_time: new Date(2026, 9, 2, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }), // Friday
     ]);
 
     expect(wk.garminMatched!['strava-FRI']).toBe(fri.id);
@@ -151,15 +156,15 @@ describe('two synced Easy Runs on their own days', () => {
 
 describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
   /** The same plan as generator v13 stored it: no session ids. */
-  function v13State(): SimulatorState {
-    const s = hyroxState(16);
+  function v13State(extraRuns = 1): SimulatorState {
+    const s = hyroxState(16, 'intermediate', extraRuns);
     for (const wk of s.wks) for (const w of wk.triWorkouts ?? []) delete w.id;
     s.hyroxConfig!.generatorVersion = 13;
     return s;
   }
 
   it('a rating on the week\'s only Easy Run moves to that session\'s new id', () => {
-    const s = v13State();
+    const s = v13State(0); // the band defaults: weeks with one Easy Run
     const idx = s.wks.findIndex(wk => (wk.triWorkouts ?? []).filter(w => w.n === 'Easy Run').length === 1);
     expect(idx).toBeGreaterThanOrEqual(0);
     s.wks[idx].rated = { 'Easy Run': 5 };
@@ -175,7 +180,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
   it('with two Easy Runs, a synced run follows the session on its own day; a bare rating stays under the name', () => {
     const s = v13State();
     const wk = s.wks[0];
-    const sundayStart = new Date(2026, 9, 4, 12, 0, 0).toISOString();
+    const sundayStart = new Date(2026, 9, 2, 12, 0, 0).toISOString(); // Friday, the second Easy Run's day
     wk.garminActuals = {
       'Easy Run': { garminId: 'strava-SUN', startTime: sundayStart, distanceKm: 5, durationSec: 2100, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null },
     };
@@ -194,7 +199,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
     expect(w2.rated).toEqual({ 'Easy Run': 3 });
   });
 
-  /** Week 1 of a v13 plan holding a synced Tuesday run under the shared name 'Easy Run' (Easy Runs are Fri and Sun). */
+  /** Week 1 of a v13 plan holding a synced Tuesday run under the shared name 'Easy Run' (Easy Runs are Wed and Fri). */
   function v13WithTuesdayEasyRun(): { s: SimulatorState; tuesday: string } {
     const s = v13State();
     const wk = s.wks[0];
@@ -241,7 +246,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
     const wk = s.wks[0];
     const [genFri] = easyRuns(wk);
     wk.triWorkouts!.push({ ...genFri, addedManually: true } as Workout); // same name, same day, no id
-    const friday = new Date(2026, 9, 2, 12, 0, 0).toISOString();
+    const friday = new Date(2026, 8, 30, 12, 0, 0).toISOString(); // Wednesday, genFri's day
     wk.garminActuals = {
       'Easy Run': { garminId: 'strava-FRI', startTime: friday, distanceKm: 5, durationSec: 2100, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null },
     };
@@ -249,7 +254,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
 
     applyHyroxGeneratorRegen(s);
 
-    expect(wk.triWorkouts!.filter(w => w.n === 'Easy Run' && w.dayOfWeek === 4)).toHaveLength(2);
+    expect(wk.triWorkouts!.filter(w => w.n === 'Easy Run' && w.dayOfWeek === 2)).toHaveLength(2);
     expect(wk.garminActuals).toEqual({});
     expect(wk.garminMatched).toEqual({ 'strava-FRI': '__pending__' });
     expect(wk.garminPending!.map(p => p.garminId)).toEqual(['strava-FRI']);

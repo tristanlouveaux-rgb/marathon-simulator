@@ -499,11 +499,12 @@ async function handleSaveInjury(): Promise<void> {
   // explicit regen of the current + future weeks here. Past weeks are preserved
   // (the gate skips them, and regen carries over each week's actuals/rated/skip).
   if (eventType === 'hyrox' && s.wks?.length) {
-    const { regenerateHyroxWeek } = await import('@/workouts/plan_engine.hyrox');
-    for (let wi = s.w; wi <= s.wks.length; wi++) {
-      const regen = regenerateHyroxWeek(s, wi);
-      if (regen) s.wks[wi - 1] = regen;
-    }
+    // One build for every remaining week (each regenerateHyroxWeek call
+    // rebuilt the plan up to its week).
+    const { regenerateHyroxWeeksFrom } = await import('@/workouts/plan_engine.hyrox');
+    regenerateHyroxWeeksFrom(s, s.w).forEach((regen, i) => {
+      if (regen) s.wks[s.w - 1 + i] = regen;
+    });
     saveState();
   } else if ((eventType === 'triathlon' || eventType === 'cycling') && s.wks?.length) {
     const { regenerateTriathlonWeek } = await import('@/workouts/plan_engine.triathlon');
