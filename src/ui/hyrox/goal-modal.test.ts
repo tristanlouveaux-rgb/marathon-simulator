@@ -56,6 +56,7 @@ describe('goal back-calculation rows: fractional times never print ":60"', () =>
     achievedSec: 4500,
     shortfallSec: 0,
     caveat: null,
+    floorSource: 'legacy',
   };
   const html = renderResultBody(result);
 

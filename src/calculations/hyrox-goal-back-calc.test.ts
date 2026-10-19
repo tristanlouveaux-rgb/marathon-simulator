@@ -125,3 +125,55 @@ describe('computeGoalBackCalc', () => {
     expect(r.stationTargets.some(t => t.deltaSec < 0)).toBe(true);
   });
 });
+
+describe('computeGoalBackCalc options: cohort floors and the Roxzone at the goal', () => {
+  const floors = {
+    stationSec: Object.fromEntries(Object.entries(STATION_SEED_TIMES_SEC.intermediate).map(([st, sec]) => [st, sec - 20])),
+    runSec: 2440 - 160,
+  };
+
+  it('cohort floors cap every component; floorSource says so', () => {
+    const p = buildPrediction();
+    const r = computeGoalBackCalc(p, p.totalSec - 5000, { floors });
+    expect(r.floorSource).toBe('cohort');
+    expect(r.feasibility).toBe('unrealistic');
+    for (const t of r.stationTargets) expect(t.targetSec).toBeCloseTo(floors.stationSec[t.station]!, 6);
+    expect(r.runPaceTarget.targetSecKm * 8).toBeCloseTo(floors.runSec, 6);
+    expect(r.caveat).toContain('top 1% of finishers in your field');
+    // Without options the legacy floors stand.
+    expect(computeGoalBackCalc(p, p.totalSec - 100).floorSource).toBe('legacy');
+  });
+
+  it('a Roxzone target takes its share of the gain; the rest is distributed', () => {
+    const p = buildPrediction();
+    const r = computeGoalBackCalc(p, p.totalSec - 100, { roxzoneTargetSec: p.roxzoneSec - 10 });
+    expect(r.roxzoneSec).toBe(p.roxzoneSec - 10);
+    expect(r.gainNeededSec).toBeCloseTo(90, 6);
+    expect(r.achievedSec).toBeCloseTo(p.totalSec - 100, 6);
+  });
+
+  it('the Roxzone never absorbs more than the whole gain', () => {
+    const p = buildPrediction();
+    const r = computeGoalBackCalc(p, p.totalSec - 5, { roxzoneTargetSec: p.roxzoneSec - 50 });
+    expect(r.roxzoneSec).toBe(p.roxzoneSec - 5);
+    expect(r.gainNeededSec).toBe(0);
+    expect(r.achievedSec).toBeCloseTo(p.totalSec - 5, 6);
+  });
+
+  it('a slower goal holds the Roxzone at the forecast\'s', () => {
+    const p = buildPrediction();
+    const r = computeGoalBackCalc(p, p.totalSec + 100, { roxzoneTargetSec: p.roxzoneSec + 30 });
+    expect(r.feasibility).toBe('already_on_pace');
+    expect(r.roxzoneSec).toBe(p.roxzoneSec);
+  });
+
+  it('the gain is measured from the lines, not a totalSec rounded apart from them', () => {
+    // The forecast rounds the run and each line separately: here the lines
+    // sum 1 s over totalSec. Measured from totalSec this read 'unrealistic'.
+    const p = { ...buildPrediction(), totalSec: buildPrediction().totalSec - 1 };
+    const r = computeGoalBackCalc(p, p.totalSec - 60);
+    expect(r.feasibility).toBe('achievable');
+    expect(r.shortfallSec).toBe(0);
+    expect(r.achievedSec).toBeCloseTo(p.totalSec - 60, 6);
+  });
+});
