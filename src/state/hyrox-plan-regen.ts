@@ -35,7 +35,7 @@ import type { AbilityBand } from '@/types/triathlon';
 import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, computeDoublesCap, type HyroxSessionCounts } from '@/constants/hyrox-constants';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
-import { hyroxStalenessAdjustedBand } from '@/calculations/hyrox-staleness';
+import { hyroxStoredRaceBand } from '@/calculations/hyrox-staleness';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { moveRatingSource } from '@/calculations/athlete-rating';
 
@@ -265,7 +265,7 @@ export function rebandStoredHyroxPlan(s: SimulatorState): boolean {
   const timeBand = hyroxPlanningBandFor(prev, fmt, s.biologicalSex, hx.division);
   // The initializer's staleness rule on top, so a regeneration never undoes
   // the slower band an old race was given (hyroxStalenessAdjustedBand).
-  const { band } = hyroxStalenessAdjustedBand({ ...s, hyroxConfig: { ...hx, athleteBand: timeBand } }, timeBand);
+  const band = hyroxStoredRaceBand(s, timeBand);
   if (band === hx.athleteBand) return false;
   const old = hx.athleteBand;
   hx.athleteBand = band;

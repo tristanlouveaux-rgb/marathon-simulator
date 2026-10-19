@@ -45,6 +45,8 @@ import { hyroxBeginnerRaceWeightWeek, hyroxRacePaceSets } from './hyrox-station-
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { noteRatingSource } from '@/calculations/athlete-rating';
+import { applyHyroxPrevTimeUpdate } from '@/state/hyrox-prev-time-update';
+import { applyHyroxPrevFormatChange } from '@/state/hyrox-prev-format-fix';
 
 const PREV: Record<AbilityBand, number | null> = {
   total_beginner: null, beginner: 8662, novice: 6600, intermediate: 5400, advanced: 4200, competitive: 3300,
@@ -365,5 +367,29 @@ describe('H2 integration review minors', () => {
     applyHyroxGeneratorRegen(f);
     expect(f.hyroxConfig!.athleteBand).toBe(band);
     expect(getState().hyroxConfig!.generatorVersion).toBe(HYROX_GENERATOR_VERSION);
+  });
+
+  it('(c) every path that bands a stored previous race applies the staleness rule: log-a-race and the format fix give the regeneration\'s band', () => {
+    const fourYearsAgo = new Date(Date.now() - 4 * 365 * 86400000).toISOString().slice(0, 10);
+    // Log-a-race: the 70-min finish four years ago with a VDOT of 40 stays
+    // novice (its time alone bands advanced), the band the version
+    // regeneration and the initializer give it.
+    const logged = build('novice', 6, 16);
+    logged.v = 40;
+    applyHyroxPrevTimeUpdate({ timeSec: 4200, format: 'open_singles', raceDateISO: fourYearsAgo });
+    expect(getState().hyroxConfig!.athleteBand).toBe('novice');
+    // A recent race is trusted: advanced.
+    const recent = build('novice', 6, 16);
+    recent.v = 40;
+    applyHyroxPrevTimeUpdate({ timeSec: 4200, format: 'open_singles', raceDateISO: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10) });
+    expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
+    // The format fix on the same old race: novice whichever format it is filed under.
+    const fixed = build('novice', 6, 16);
+    fixed.v = 40;
+    fixed.hyroxConfig!.previousHyroxTimeSec = 4200;
+    fixed.hyroxConfig!.hyroxPreviousTimeFormat = 'pro_singles';
+    fixed.hyroxConfig!.hyroxPreviousRaceDate = fourYearsAgo;
+    applyHyroxPrevFormatChange('open_singles');
+    expect(getState().hyroxConfig!.athleteBand).toBe('novice');
   });
 });

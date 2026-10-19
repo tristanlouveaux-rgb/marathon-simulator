@@ -19,6 +19,7 @@ import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan }
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { hyroxStoredRaceBand } from '@/calculations/hyrox-staleness';
 import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
@@ -96,7 +97,9 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   // The planning band (hyroxPlanningBandFor): the finish in Open Singles
   // terms, banded on the Open Singles field of the athlete's sex, so a Pro or
   // Doubles race never lowers the plan for its heavier weights or partner.
-  const newBand = hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division);
+  // The initializer's staleness rule on top (hyroxStoredRaceBand): an old
+  // race gives the slower of its band and the VDOT band, on every path.
+  const newBand = hyroxStoredRaceBand(s, hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division));
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;
