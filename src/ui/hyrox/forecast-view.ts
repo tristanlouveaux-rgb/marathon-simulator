@@ -30,7 +30,7 @@ import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
-import { buildRacePlanEntryCard } from './race-plan-view';
+import { buildRacePlanEntryCard, renderHyroxRacePlanView } from './race-plan-view';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
 
 function fmtMmSs(sec: number): string {
@@ -1219,10 +1219,9 @@ export function renderHyroxForecastView(): void {
 
   // Race plan entry → race plan sub-page.
   const racePlanEntry = document.getElementById('hx-race-plan-entry');
-  const openRacePlan = () => import('./race-plan-view').then(({ renderHyroxRacePlanView }) => renderHyroxRacePlanView());
-  racePlanEntry?.addEventListener('click', () => { void openRacePlan(); });
+  racePlanEntry?.addEventListener('click', () => renderHyroxRacePlanView());
   racePlanEntry?.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openRacePlan(); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); renderHyroxRacePlanView(); }
   });
 
   // Where you lost time: paste invite, all segments, link to Where to gain.
