@@ -30,6 +30,8 @@ import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { buildRacePlanEntryCard } from './race-plan-view';
+import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -623,7 +625,7 @@ function renderWhereToGainCard(prediction: HyroxPrediction): string {
     `;
   }).join('');
   return `
-    <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
+    <div id="hx-where-to-gain" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px;scroll-margin-top:24px">
       <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Where to gain</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.5">Highest-impact stations at your current training dose. Total gain available: ~${Math.round(totalGain)} sec.</div>
       ${rows}
@@ -1097,8 +1099,15 @@ export function renderHyroxForecastView(): void {
             </div>
           `}
 
+          <!-- Race plan: goal splits and race clock (drill-down) -->
+          ${buildRacePlanEntryCard(s)}
+
           <!-- Skills analysis (strengths vs limiters) -->
           ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
+
+          <!-- Where you lost time (past race), then where to gain (training):
+               one story, adjacent. -->
+          ${buildLoseTimeCard(s, topWeakestLinks(prediction, 2).length > 0)}
 
           <!-- Where to gain (top stations ranked by absolute gainable seconds) -->
           ${renderWhereToGainCard(prediction)}
@@ -1207,6 +1216,17 @@ export function renderHyroxForecastView(): void {
       });
     });
   });
+
+  // Race plan entry → race plan sub-page.
+  const racePlanEntry = document.getElementById('hx-race-plan-entry');
+  const openRacePlan = () => import('./race-plan-view').then(({ renderHyroxRacePlanView }) => renderHyroxRacePlanView());
+  racePlanEntry?.addEventListener('click', () => { void openRacePlan(); });
+  racePlanEntry?.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void openRacePlan(); }
+  });
+
+  // Where you lost time: paste invite, all segments, link to Where to gain.
+  wireLoseTimeCard(() => renderHyroxForecastView());
 
   // Per-station row tap → station detail sub-page (ISSUE-193).
   document.querySelectorAll<HTMLElement>('[data-hx-station-row]').forEach(row => {
