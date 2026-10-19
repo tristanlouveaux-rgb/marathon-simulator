@@ -139,7 +139,7 @@ import { taperFraction } from './phases';
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import {
-  hyroxRacePaceSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
+  hyroxRacePaceSets, hyroxTechniqueSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
   hyroxBeginnerLoadFraction, hyroxLoadKgAt, type HyroxStationLoadMemory,
 } from './hyrox-station-dose';
 
@@ -1151,14 +1151,13 @@ function generateWeekSessions(
   // a fixed ceiling holds stays the same week at every chosen hours above it.
   const doseFraction = inputs.doseFraction ?? 1;
   const doseMinutes = share * scale;
-  const makeStation = (kind: 'station_technique' | 'station_density', i: number): Workout => {
-    const targetMinutes = clampDur(kind, share);
-    // Session lengths are whole minutes, so the fit reads floor(doseMinutes).
-    const dose = kind === 'station_density' ? `${hyroxRacePaceSets(doseFraction, isHyroxDoublesFormat(hx.format))}|${Math.floor(doseMinutes + 1e-9)}` : '';
-    return memoized(`S|${kind}|${targetMinutes}|${i}|${omit.has('stations')}|${ceilingName}|${dose}`, () => makeStationOf(kind, i, targetMinutes));
-  };
-  const makeStationOf = (kind: 'station_technique' | 'station_density', i: number, targetMinutes: number): Workout => {
-    const w = generateHyroxStation({
+  // A station session at its target, before the week's size fits the
+  // race-pace dose: built once per week build for the same inputs, with each
+  // round count it can be cut to (the size search rebuilds the week at many
+  // sizes, and the dose's fit only picks one of a few round counts).
+  const stationAt = (kind: 'station_technique' | 'station_density', i: number, targetMinutes: number): Workout => memoized(
+    `G|${kind}|${targetMinutes}|${i}|${kind === 'station_density' ? hyroxRacePaceSets(doseFraction, isHyroxDoublesFormat(hx.format)) : 0}`,
+    () => generateHyroxStation({
       kind,
       targetMinutes,
       band,
@@ -1171,10 +1170,28 @@ function generateWeekSessions(
       loadTier,
       seed: state,
       doseFraction,
-      doseMinutes,
       weakest: inputs.weakestStation ?? undefined,
       stationLoads: inputs.stationLoads,
-    });
+    }),
+  );
+  const roundsAt = (base: Workout, key: string, rounds: number): Workout => memoized(`${key}|r${rounds}`, () => withHyroxRounds(base, rounds));
+  const makeStation = (kind: 'station_technique' | 'station_density', i: number): Workout => {
+    const targetMinutes = clampDur(kind, share);
+    const base = stationAt(kind, i, targetMinutes);
+    let rounds = base.hyroxRounds ?? 1;
+    if (kind === 'station_density') {
+      // The race-pace sets step down to the minutes the week's size gives the
+      // session (doseMinutes), never under the technique dose: the generator's
+      // doseMinutes fit, read off the cached round counts.
+      const floor = hyroxTechniqueSets(isHyroxDoublesFormat(hx.format));
+      const key = `G|${kind}|${targetMinutes}|${i}`;
+      while (rounds > floor && (roundsAt(base, key, rounds).estimatedDurationMin ?? 0) > doseMinutes + 1e-9) rounds--;
+    }
+    return memoized(`S|${kind}|${targetMinutes}|${i}|${omit.has('stations')}|${ceilingName}|${rounds}`, () => makeStationOf(kind, i, targetMinutes, rounds));
+  };
+  const makeStationOf = (kind: 'station_technique' | 'station_density', i: number, targetMinutes: number, rounds: number): Workout => {
+    const base = stationAt(kind, i, targetMinutes);
+    const w = rounds < (base.hyroxRounds ?? 1) ? roundsAt(base, `G|${kind}|${targetMinutes}|${i}`, rounds) : base;
     const maxRounds = inputs.maxCircuitRounds;
     let out = w;
     if (maxRounds != null && (out.hyroxRounds ?? 0) > maxRounds) {
