@@ -14,7 +14,7 @@ import {
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
 import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
-import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
+import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
@@ -115,6 +115,8 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
     // Same plan, same start: it keeps the chronic seed stored when it was
     // created (D4), or stores one now if it predates them.
     ensureHyroxChronicSeed(s);
+    // The race-pace sessions' weakest station, from the forecast now (lane H2b).
+    refreshHyroxPlanWeakestStation(s);
     s.wks = generateHyroxPlan(s);
     redistributeArchivedActivitiesToNewPlan();
     planRegenerated = true;

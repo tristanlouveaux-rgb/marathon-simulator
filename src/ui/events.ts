@@ -831,7 +831,11 @@ async function rebakeFutureWeeksInPlace(s: ReturnType<typeof getMutableState>): 
   if (!s.wks?.length) return;
   let fresh: typeof s.wks = [];
   if (s.eventType === 'hyrox') {
-    fresh = (await import('@/workouts/plan_engine.hyrox')).generateHyroxPlan(s);
+    const engine = await import('@/workouts/plan_engine.hyrox');
+    // The race-pace sessions' weakest station, from the forecast at the
+    // rollover (lane H2b), stored so the week's later rebuilds read it.
+    engine.refreshHyroxPlanWeakestStation(s);
+    fresh = engine.generateHyroxPlan(s);
   } else if (s.eventType === 'triathlon') {
     fresh = (await import('@/workouts/plan_engine.triathlon')).generateTriathlonPlan(s);
   }

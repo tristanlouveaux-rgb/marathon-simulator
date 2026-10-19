@@ -22,7 +22,7 @@ import {
   HYROX_MTL_CAP,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
+import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { isHyroxProFormat } from '@/calculations/hyrox-division';
@@ -130,6 +130,8 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
     // Same plan, same start: it keeps the chronic seed stored when it was
     // created (D4), or stores one now if it predates them.
     ensureHyroxChronicSeed(s);
+    // The race-pace sessions' weakest station, from the forecast now (lane H2b).
+    refreshHyroxPlanWeakestStation(s);
     s.wks = generateHyroxPlan(s);
     redistributeArchivedActivitiesToNewPlan();
   }

@@ -111,14 +111,17 @@ import { plannedTssPerMin } from '@/constants';
 import {
   generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS, MIN_CIRCUIT_ROUNDS, hyroxRunLengthKm,
   withHyroxRounds, withoutHyroxStation, generateHyroxEasyErg, hyroxEasyErgMtlPerMin, isHyroxEasyErg, HYROX_EASY_ERG_TYPE,
+  hyroxStationToCut, hyroxMinRounds,
 } from './hyrox-generators';
 import {
   findHyroxWeekSchedule, scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, isHardRun, isEccentricSession,
   isHyroxLongRun, hyroxSundayFlags, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays,
   type HyroxPrevSunday,
 } from './scheduler.hyrox';
-import { hyroxLoadTierForState } from '@/calculations/hyrox-division';
-import { hyroxPlanningStationBenchmarks } from '@/calculations/race-prediction.hyrox';
+import { hyroxLoadTierForState, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
+import { hyroxPlanningStationBenchmarks, predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
+import { injuryStrengthDecision } from './injury-strength';
 import { getDisciplineCapacity } from '@/injury/engine';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
@@ -129,6 +132,10 @@ import {
 import { taperFraction } from './phases';
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
+import {
+  hyroxRacePaceSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
+  type HyroxStationLoadMemory,
+} from './hyrox-station-dose';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
@@ -500,7 +507,7 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
     let best = -1;
     for (let i = 0; i < out.length; i++) {
       const s = out[i];
-      if (!mtlCuttable(s) || (s.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS) continue;
+      if (!mtlCuttable(s) || (s.hyroxRounds ?? 0) <= hyroxMinRounds(s)) continue;
       if (best < 0 || mtlOf(s) > mtlOf(out[best])) best = i;
     }
     if (best >= 0) {
@@ -516,10 +523,9 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
       if (circuit < 0 || mtlOf(s) > mtlOf(out[circuit])) circuit = i;
     }
     if (circuit >= 0) {
-      const heaviest = (out[circuit].hyroxComponents ?? [])
-        .filter(c => c.type !== 'run')
-        .reduce((a, c) => (c.mtl > a.mtl ? c : a));
-      out[circuit] = withoutHyroxStation(out[circuit], heaviest.type as HyroxStation);
+      // The heaviest station, never a race-pace session's weakest station
+      // while another is left (hyroxStationToCut).
+      out[circuit] = withoutHyroxStation(out[circuit], hyroxStationToCut(out[circuit]) as HyroxStation);
       stationCuts++;
       continue;
     }
@@ -757,6 +763,23 @@ interface HyroxWeekInputs {
    *  every build of every week reads them. Unset: computed here. */
   stationBenchmarks?: Partial<Record<HyroxStation, number>>;
   loadTier?: HyroxLoadTier;
+  /** The week's prescribed load per loaded station (kg): the beginner load
+   *  schedule with its RPE autoregulation (buildHyroxTrainingWeeks,
+   *  hyroxBeginnerStationLoadKg). Unset: race weight (intermediate and
+   *  advanced athletes train at race weight). */
+  stationLoads?: Partial<Record<HyroxStation, number>>;
+  /** Training weeks: the week's nominal size relative to the plan's peak
+   *  week, its phase multiplier x the deload factor x the effort / MTL-gap
+   *  lever ÷ HYROX_PEAK_MULT (the race-pace volume progression,
+   *  hyroxRacePaceSets). It does not read the chosen hours, so a week a fixed
+   *  ceiling holds is the same week at every chosen hours above its size; the
+   *  ceilings reach the dose through the session's share of the week's size
+   *  (doseMinutes). Unset: 1. */
+  doseFraction?: number;
+  /** The forecast's weakest station (hyrox-weakest-link on predictHyroxRace),
+   *  read once per plan build: the race-pace session holds it first. Null or
+   *  unset: none known (no race date, no projection). */
+  weakestStation?: HyroxStation | null;
 }
 
 /** What a training week over its size (the acute:chronic guard, the deload
@@ -851,7 +874,9 @@ const BRICK_SESSION_FLOOR_MIN = 20;
  * when the week cannot hold a circuit (race week without enough of the
  * remaining stations, or stations the injury gates drop).
  */
-export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: number, raceWeek: boolean): { min: number; mtl: number } | null {
+export function hyroxRaceTaperFloorCircuit(
+  state: SimulatorState, weekIndex: number, raceWeek: boolean, stationLoads?: Partial<Record<HyroxStation, number>>,
+): { min: number; mtl: number } | null {
   const hx = state.hyroxConfig!;
   if (raceWeek && raceWeekCircuitStations(hx.stationAccess).length < MIN_CIRCUIT_STATIONS) return null;
   let c = generateHyroxStation({
@@ -867,12 +892,14 @@ export function hyroxRaceTaperFloorCircuit(state: SimulatorState, weekIndex: num
     raceWeek,
     loadTier: hyroxLoadTierForState(state),
     seed: state,
+    // The week's own loads (the beginner schedule; buildHyroxTrainingWeeks).
+    stationLoads,
   });
-  c = withHyroxRounds(c, MIN_CIRCUIT_ROUNDS);
+  c = withHyroxRounds(c, hyroxMinRounds(c));
   for (;;) {
     const st = (c.hyroxComponents ?? []).filter(x => x.type !== 'run');
     if (st.length <= MIN_CIRCUIT_STATIONS) break;
-    const next = withoutHyroxStation(c, st.reduce((m, x) => (x.mtl > m.mtl ? x : m)).type as HyroxStation);
+    const next = withoutHyroxStation(c, hyroxStationToCut(c) as HyroxStation);
     if (next === c) break;
     c = next;
   }
@@ -956,7 +983,7 @@ function generateWeekSessions(
     if (!refCap) return w;
     let out = w;
     if ((out.hyroxRounds ?? 0) > refCap.rounds) {
-      const rounds = Math.max(MIN_CIRCUIT_ROUNDS, refCap.rounds);
+      const rounds = Math.max(hyroxMinRounds(out), refCap.rounds);
       adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
       out = withHyroxRounds(out, rounds);
     }
@@ -965,7 +992,7 @@ function generateWeekSessions(
     for (;;) {
       const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
       if (st.length <= maxStations) break;
-      const next = withoutHyroxStation(out, st.reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation);
+      const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
       if (next === out) break;
       out = next;
       cut++;
@@ -983,14 +1010,14 @@ function generateWeekSessions(
       let rounds = 0;
       let stations = 0;
       while (heavy(out)) {
-        if ((out.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS) {
+        if ((out.hyroxRounds ?? 0) > hyroxMinRounds(out)) {
           out = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
           rounds++;
           continue;
         }
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
-        const next = withoutHyroxStation(out, st.reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation);
+        const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
         if (next === out) break;
         out = next;
         stations++;
@@ -1075,9 +1102,21 @@ function generateWeekSessions(
     memo.set(key, { w, notes: adjustments.slice(mark) });
     return w;
   };
+  // The race-pace volume progression (lane H2b, Tristan 2026-10-12): the
+  // dose steps from the technique volume toward the race-pace volume as the
+  // week grows toward peak (inputs.doseFraction, the nominal ramp:
+  // hyroxRacePaceSets), and down to fit the minutes the week's size gives the
+  // session (its share at the week's size and scale, without the target's
+  // 35-min floor), so it rides the acute:chronic guard and the ceilings that
+  // size the week. Both read the week's size, never the chosen hours: a week
+  // a fixed ceiling holds stays the same week at every chosen hours above it.
+  const doseFraction = inputs.doseFraction ?? 1;
+  const doseMinutes = share * scale;
   const makeStation = (kind: 'station_technique' | 'station_density', i: number): Workout => {
     const targetMinutes = clampDur(kind, share);
-    return memoized(`S|${kind}|${targetMinutes}|${i}|${omit.has('stations')}|${ceilingName}`, () => makeStationOf(kind, i, targetMinutes));
+    // Session lengths are whole minutes, so the fit reads floor(doseMinutes).
+    const dose = kind === 'station_density' ? `${hyroxRacePaceSets(doseFraction, isHyroxDoublesFormat(hx.format))}|${Math.floor(doseMinutes + 1e-9)}` : '';
+    return memoized(`S|${kind}|${targetMinutes}|${i}|${omit.has('stations')}|${ceilingName}|${dose}`, () => makeStationOf(kind, i, targetMinutes));
   };
   const makeStationOf = (kind: 'station_technique' | 'station_density', i: number, targetMinutes: number): Workout => {
     const w = generateHyroxStation({
@@ -1092,6 +1131,10 @@ function generateWeekSessions(
       raceWeek: !!raceWeek,
       loadTier,
       seed: state,
+      doseFraction,
+      doseMinutes,
+      weakest: inputs.weakestStation ?? undefined,
+      stationLoads: inputs.stationLoads,
     });
     const maxRounds = inputs.maxCircuitRounds;
     let out = w;
@@ -1106,8 +1149,7 @@ function generateWeekSessions(
       for (;;) {
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
-        const heaviest = st.reduce((a, c) => (c.mtl > a.mtl ? c : a));
-        const next = withoutHyroxStation(out, heaviest.type as HyroxStation);
+        const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
         if (next === out) break;
         out = next;
         cut++;
@@ -1129,7 +1171,10 @@ function generateWeekSessions(
   for (let i = 0; i < bKinds.length; i++) {
     const { kind, light } = bKinds[i];
     const targetMinutes = clampDur(kind, share);
-    const capped = memoized(`B|${kind}|${targetMinutes}|${i}|${ceilingName}`, () => capToRef(generateHyroxBrick({
+    // The secondary brick (advanced peak) is its own format (lane H2b):
+    // 4 x 800 m easy into ergs, sleds or the farmers carry at technique
+    // effort, `hyroxLight` (not a hard session).
+    nonRun.push(memoized(`B|${kind}|${light}|${targetMinutes}|${i}|${ceilingName}`, () => capToRef(generateHyroxBrick({
       kind,
       targetMinutes,
       band,
@@ -1140,8 +1185,10 @@ function generateWeekSessions(
       stationBenchmarks,
       loadTier,
       seed: state,
-    })));
-    nonRun.push(light ? { ...capped, n: 'Secondary Brick', hyroxLight: true } : capped);
+      runPaceSecKm: hx.hyroxRunPaceSecKm,
+      stationLoads: inputs.stationLoads,
+      secondary: light,
+    }))));
   }
   // Running inside station and brick sessions counts toward the running
   // share: the run components of every station and brick session (today the
@@ -2274,6 +2321,44 @@ export function ensureHyroxChronicSeed(state: SimulatorState): boolean {
   return true;
 }
 
+/**
+ * The forecast's weakest station now (hyrox-weakest-link: the largest gain
+ * the forecast's horizon model projects at the current training dose, the
+ * forecast view's "Where to gain"), the station the race-pace session holds
+ * first (sheet technique.station_session; the5krunner: one weekly session on
+ * the weakest station). The same computation the forecast view shows. Null
+ * without a projection (no race date, race day past) or on a partial state.
+ * It reads today's date and the stored plan. Planning side.
+ */
+export function hyroxLiveWeakestStation(state: SimulatorState): HyroxStation | null {
+  try {
+    return topWeakestLinks(predictHyroxRace(state), 1)[0]?.station ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The weakest station a plan build reads: the one stored when the plan was
+ *  last built in full or rebaked (hyroxConfig.planWeakestStation), so the
+ *  rebuilds in between give the same plan; the live forecast when none is
+ *  stored. */
+export function hyroxPlanWeakestStation(state: SimulatorState): HyroxStation | null {
+  const stored = state.hyroxConfig?.planWeakestStation;
+  return stored !== undefined ? stored : hyroxLiveWeakestStation(state);
+}
+
+/** Store the forecast's weakest station now on the plan (a full build: the
+ *  plan's creation, the version regeneration, a re-band, a rollover rebake).
+ *  Returns true when it changed. */
+export function refreshHyroxPlanWeakestStation(state: SimulatorState): boolean {
+  const hx = state.hyroxConfig;
+  if (!hx) return false;
+  const next = hyroxLiveWeakestStation(state);
+  if (hx.planWeakestStation === next) return false;
+  hx.planWeakestStation = next;
+  return true;
+}
+
 /** The stricter of two previous-Sunday readings: hard or eccentric if either
  *  says so (null when both Sundays are empty). */
 function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null): HyroxPrevSunday | null {
@@ -2414,7 +2499,7 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  */
 export function buildHyroxTrainingWeeks(
   state: SimulatorState, trainingWeeks: number, layout: RaceWeekLayout | null, upto: number = trainingWeeks,
-  opts: { storedBoundaryWeek?: number; noHoursLine?: boolean } = {},
+  opts: { storedBoundaryWeek?: number; noHoursLine?: boolean; weakestStation?: HyroxStation | null } = {},
 ): HyroxWeekDetail[] {
   const hx = state.hyroxConfig!;
   const tier = hyroxTier(hx.athleteBand);
@@ -2480,6 +2565,58 @@ export function buildHyroxTrainingWeeks(
   const planStationBenchmarks = hyroxPlanningStationBenchmarks(state);
   const planLoadTier = hyroxLoadTierForState(state);
   const easyRunTssPerMin = plannedTssPerMin('hyrox_run_easy', HYROX_EASY_RPE);
+  // The forecast's weakest station (lane H2b): the race-pace session holds it
+  // first. One forecast per plan build; the hours line's rebuild reuses it.
+  const weakestStation = opts.weakestStation !== undefined ? opts.weakestStation : hyroxPlanWeakestStation(state);
+  // The beginner load schedule (lane H2b, sheet technique.station_session):
+  // sleds unloaded in weeks 1 and 2, then 50% of race weight, the other loaded
+  // stations at 60%, race weight from 4 weeks before race week (no race
+  // simulation yet). Between those anchors each station's load steps from the
+  // last station session that held it, the way strength-progression's
+  // suggestNextWeight steps a lift: up 2.5% (at least one 2.5 kg plate) in
+  // base and build when the athlete rated that session easier than its target
+  // RPE, held otherwise, in peak, taper and deload weeks, and under an injury
+  // that adapts or pauses strength work (current and future weeks). The
+  // memory replays the plan's own station sessions with the ratings stored on
+  // their slot ids (wk.rated), so the same ratings give the same loads at
+  // every rebuild. Intermediate and advanced athletes train at race weight
+  // (sheet): no schedule.
+  const beginnerLoads = tier === 'beginner';
+  const raceWeightWeek = hyroxBeginnerRaceWeightWeek(trainingWeeks);
+  const loadMemory = new Map<HyroxStation, HyroxStationLoadMemory>();
+  const injuryKind = injuryStrengthDecision((state as any).injuryState as InjuryState | undefined).kind;
+  const stationLoadsFor = (w: number, phase: HyroxPhase, deload: boolean): Partial<Record<HyroxStation, number>> | undefined => {
+    if (!beginnerLoads) return undefined;
+    const out: Partial<Record<HyroxStation, number>> = {};
+    for (const st of HYROX_LOADED_STATIONS) {
+      const kg = hyroxBeginnerStationLoadKg({
+        station: st,
+        loadTier: planLoadTier,
+        weekIndex: w,
+        raceWeightWeek,
+        phase,
+        deload: deload || phase === 'taper',
+        injuryKind: w >= (state.w ?? 1) ? injuryKind : 'normal',
+        memory: loadMemory.get(st),
+      });
+      if (kg != null) out[st] = kg;
+    }
+    return out;
+  };
+  // After a week is built: the load and the rating of each station its
+  // station sessions held (bricks read the loads, they do not move them).
+  const rememberLoads = (d: HyroxWeekDetail) => {
+    if (!beginnerLoads) return;
+    const rated = state.wks?.[d.week - 1]?.rated ?? {};
+    for (const x of prescribed(d.workouts)) {
+      if (x.t !== 'hyrox_station_technique' && x.t !== 'hyrox_station_density') continue;
+      const r = x.id != null ? rated[x.id] : undefined;
+      for (const c of x.hyroxComponents ?? []) {
+        if (c.loadKg == null) continue;
+        loadMemory.set(c.type as HyroxStation, { kg: c.loadKg, ratedRpe: typeof r === 'number' ? r : undefined, targetRpe: x.rpe ?? x.r ?? 5 });
+      }
+    }
+  };
 
   const last = Math.min(upto, trainingWeeks);
   // The chosen weekly hours (minutes): a ceiling on every training week.
@@ -2561,6 +2698,7 @@ export function buildHyroxTrainingWeeks(
     // MTL-gap re-anchor (mirror of running's CTL-gap, SCIENCE_LOG §BR): reduce-only,
     // suppressed on deload/taper and past weeks, combined with effort under ONE clamp
     // [HYROX_ADAPTIVE_FLOOR, 1.15] so the two volume levers can't overstack.
+    const stationLoads = stationLoadsFor(w, phase, deload);
     const mtlGapMult = (w >= (state.w ?? 1) && !deload && phase !== 'taper')
       ? ctlGapMultiplier((state.wks?.[w - 1] as any)?.ctlRatio ?? 1)
       : 1.0;
@@ -2680,7 +2818,7 @@ export function buildHyroxTrainingWeeks(
     // minutes and MTL, never under the taper's smallest circuit
     // (hyroxRaceTaperFloorCircuit), still inside the 0.70 / 0.55 fractions.
     const refWork = taperRef ? stationWorkOf(taperRef.workouts) : undefined;
-    const floorCircuit = refWork ? hyroxRaceTaperFloorCircuit(state, w, raceWeek) : null;
+    const floorCircuit = refWork ? hyroxRaceTaperFloorCircuit(state, w, raceWeek, stationLoads) : null;
     const taperWork = refWork && floorCircuit
       ? { min: Math.max(refWork.min, floorCircuit.min), mtl: Math.max(refWork.mtl, floorCircuit.mtl) }
       : refWork;
@@ -2797,6 +2935,7 @@ export function buildHyroxTrainingWeeks(
         easyHoldMin, easyHoldRunBudgetMin: easyHoldMin != null ? runBudgetMin : undefined, ceilingSized: sized,
         longFixed, easyMaxMin, maxSessions: plusOne ? maxSessions + 1 : maxSessions, maxSessionsName, maxRuns, noAssessment,
         runFloorMin, extraSession: plusOne, firstDow, realRunning, sessionMemo, stationBenchmarks: planStationBenchmarks, loadTier: planLoadTier,
+        stationLoads, weakestStation, doseFraction: phase === 'taper' ? undefined : budgetPerHourMin / HYROX_PEAK_MULT,
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
@@ -3447,10 +3586,10 @@ export function buildHyroxTrainingWeeks(
         const c = p
           .filter(x => (circuits ? isCircuitT(x) && (x.hyroxComponents ?? []).filter(y => y.type !== 'run').length <= MIN_CIRCUIT_STATIONS : x.discipline === 'brick'))
           .sort((x, y) => (x.estimatedDurationMin ?? 0) - (y.estimatedDurationMin ?? 0))[0];
-        if (c && (c.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS) {
-          const cut = withHyroxRounds(c, MIN_CIRCUIT_ROUNDS);
+        if (c && (c.hyroxRounds ?? 0) > hyroxMinRounds(c)) {
+          const cut = withHyroxRounds(c, hyroxMinRounds(c));
           attempt = withWorkouts(attempt, attempt.workouts.map(x => (x === c ? cut : x)));
-          attempt.adjustments.push(`W${w}: ${c.n} cut to ${MIN_CIRCUIT_ROUNDS} rounds (taper: the smallest ${circuits ? 'circuit' : 'brick'}, exempt from the ${fraction} fraction)`);
+          attempt.adjustments.push(`W${w}: ${c.n} cut to ${hyroxMinRounds(c)} rounds (taper: the smallest ${circuits ? 'circuit' : 'brick'}, exempt from the ${fraction} fraction)`);
         }
       }
       if (taperWork) shed(a => a.workMin > taperWork.min + 1e-6 || a.workMtl > taperWork.mtl + 1e-6, true, "taper: the reference week's station and brick work");
@@ -3613,6 +3752,7 @@ export function buildHyroxTrainingWeeks(
       chronicSeedTss = chronicSeedSource === 'logged' ? Math.max(loggedSeedTss, guardFloorTss) : guardFloorTss;
     }
     built.push(buildWeek(w));
+    rememberLoads(built[built.length - 1]);
   }
   // The hours line, checked against the real plan with one more chosen
   // session (round 7; review of round 6, pass 3: in 7 of about 2,700 marked
@@ -3628,7 +3768,7 @@ export function buildHyroxTrainingWeeks(
     const plusCounts = applyHyroxSessionDelta(def, chosenSessions + 1 - hyroxSessionTotal(def));
     if (hyroxSessionTotal(plusCounts) > chosenSessions) {
       const plusState: SimulatorState = { ...state, hyroxConfig: { ...hx, runsPerWeek: plusCounts.runs, stationSessionsPerWeek: plusCounts.stations, bricksPerWeek: plusCounts.bricks } };
-      const plus = buildHyroxTrainingWeeks(plusState, trainingWeeks, layout, marked[marked.length - 1].week, { storedBoundaryWeek: opts.storedBoundaryWeek, noHoursLine: true });
+      const plus = buildHyroxTrainingWeeks(plusState, trainingWeeks, layout, marked[marked.length - 1].week, { storedBoundaryWeek: opts.storedBoundaryWeek, noHoursLine: true, weakestStation });
       for (const d of marked) {
         const more = (plus[d.week - 1]?.plannedMin ?? d.plannedMin) - d.plannedMin;
         if (more >= HYROX_RUN_FLOOR_MIN) continue;

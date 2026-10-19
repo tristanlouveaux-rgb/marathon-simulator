@@ -28,7 +28,7 @@ import {
   hyroxTier,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { generateHyroxPlan, hyroxChronicSeedSnapshot, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateHyroxPlan, hyroxChronicSeedSnapshot, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
@@ -413,6 +413,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Generate the full plan via plan engine.
     s.wks = generateHyroxPlan(s);
+    // The race-pace sessions' weakest station (lane H2b) read from the
+    // forecast of the plan just built (the forecast counts the plan's
+    // sessions), stored so later rebuilds read the same station; the plan is
+    // built again when that station differs from the first build's.
+    if (refreshHyroxPlanWeakestStation(s)) s.wks = generateHyroxPlan(s);
 
     s.initialBaseline = null;
     s.currentFitness = null;
