@@ -32,12 +32,14 @@ function renderStationRow(
   const sub = subId ? findSubstitution(station, subId) : undefined;
   // Lane H2b sessions: the station's sets and prescription ("2 × 250 m,
   // damper 6"); an older session: its amount.
-  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout) : c.reps ? `${c.reps} reps` : display.distance;
+  // The race-pace set target sits in its own column, so the row leaves it out.
+  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout, false) : c.reps ? `${c.reps} reps` : display.distance;
   const targetStr = c.durationSec ? ftRounded(c.durationSec) : '—';
   const perSet = !!workout.hyroxSpec;
-  const targetLabel = options.context === 'technique' ? (perSet ? 'per set' : 'per round')
+  const targetLabel = options.context === 'technique' ? 'per round'
                      : options.context === 'density' ? (perSet ? 'target a set' : 'target') : '';
-  const showTargetCol = options.context !== 'breakdown';
+  // A lane H2b technique session sets no time target: no target column.
+  const showTargetCol = options.context !== 'breakdown' && !(perSet && options.context === 'technique');
   // Equipment-swap demoted to a small icon button on the right of the row.
   // When a swap is active, an inline "Swapped" badge sits beside the title and
   // the icon flips to a revert tooltip. No more triple-stacked grey buttons.

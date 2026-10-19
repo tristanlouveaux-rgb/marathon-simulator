@@ -687,11 +687,12 @@ export function hyroxSessionText(w: Workout): string {
 
 /** One station's line for a session view (detail modal, card): "2 × 250 m,
  *  damper 6", "4 × 1 lane (12.5 m), sled unloaded"; race pace adds the set
- *  target. A component generated before generator v19 shows its amount. */
-export function hyroxStationRowText(c: HyroxComponent, w: Workout): string {
+ *  target unless the view shows it apart (`withTarget` false). A component
+ *  generated before generator v19 shows its amount. */
+export function hyroxStationRowText(c: HyroxComponent, w: Workout, withTarget = true): string {
   const sets = hyroxComponentSets(c, Math.max(1, w.hyroxRounds ?? 1));
   if (!w.hyroxSpec) return hyroxComponentAmount(c);
-  return `${sets} × ${stationPrescription(c, w.hyroxSpec, w.hyroxSpec.format === 'race_pace')}`;
+  return `${sets} × ${stationPrescription(c, w.hyroxSpec, withTarget && w.hyroxSpec.format === 'race_pace')}`;
 }
 
 /** What a lane H2b station session adds below its stations: the weakest
