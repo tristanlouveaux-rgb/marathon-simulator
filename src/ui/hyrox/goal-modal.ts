@@ -13,10 +13,11 @@
  *   - Modal closes back to the forecast view (not Home)
  */
 
-import { getMutableState } from '@/state/store';
+import { getMutableState, getState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
+import { hyroxGoalBackCalcOptions, hyroxGoalFloorSec } from '@/calculations/hyrox-race-plan';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
 import { ftRounded, fmtModelPaceKm } from '@/utils/format';
 
@@ -71,13 +72,14 @@ export function parseHhMmSs(input: string, minPlausibleSec: number): number | nu
 }
 
 /**
- * Competitive population floor for this prediction's format: the fastest a
- * HYROX could realistically be from the band-elite seeds. Used both as the
- * parse-disambiguation threshold and (implicitly) the back-calc floor.
+ * The fastest finish the back-calc floors allow for this prediction: the
+ * parse-disambiguation threshold. Floors from the athlete's own field
+ * (hyroxGoalFloorSec: the top-1% medians per format and sex or division, the
+ * pair's times for doubles); the legacy pooled seed only without a field.
  */
 function populationFloorSec(prediction: HyroxPrediction): number {
-  // Same floor as the back-calc: singles seeds, × the doubles ratio on a
-  // doubles line (the pair's time).
+  const cohortFloor = hyroxGoalFloorSec(getState(), prediction);
+  if (cohortFloor > 0) return cohortFloor;
   const stationFloor = prediction.stations.reduce(
     (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0) * (l.teamRatio ?? 1),
     0,
@@ -98,7 +100,9 @@ export function renderResultBody(result: GoalBackCalcResult): string {
     ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
     : result.feasibility === 'stretch'
     ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">Stretch target.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
-    : `<div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">Distributed proportional to each component's headroom against the band's competitive floor.</div>`;
+    : `<div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">${result.floorSource === 'cohort'
+      ? "Spread by each component's headroom to the top-1% median of your field."
+      : "Distributed proportional to each component's headroom against the band's competitive floor."}</div>`;
 
   const runRow = result.runPaceTarget.deltaSecKm < -0.5 ? `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.05)">
@@ -134,7 +138,12 @@ export function renderResultBody(result: GoalBackCalcResult): string {
   `;
 }
 
-export function openHyroxGoalModal(prediction: HyroxPrediction): void {
+/**
+ * `opts.onChange` runs after a save or clear, so the view that opened the
+ * modal re-renders (default: the forecast view, which opens it from the
+ * hero; the race plan passes its own).
+ */
+export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange?: () => void } = {}): void {
   const existing = document.getElementById('hx-goal-modal');
   if (existing) existing.remove();
 
@@ -185,7 +194,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     // Always echo the resolved interpretation so an ambiguous entry like "1:00"
     // (read as 1 hour) is visible and correctable.
     if (echoEl) echoEl.textContent = `Target: ${ftRounded(sec)}`;
-    const result = computeGoalBackCalc(prediction, sec);
+    const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(getState(), prediction, sec));
     resultEl.innerHTML = renderResultBody(result);
   };
   computeAndRender();
@@ -199,8 +208,10 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
   // after save/clear or the chip stays stale until the user navigates away.
   // Dynamic import: forecast-view imports this modal, so a static import here
   // would be circular.
-  const refreshForecast = () =>
+  const refreshForecast = () => {
+    if (opts.onChange) { opts.onChange(); return; }
     import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
+  };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.getElementById('hx-goal-close')?.addEventListener('click', close);
 
