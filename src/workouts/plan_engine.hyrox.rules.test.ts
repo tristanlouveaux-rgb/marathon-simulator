@@ -1478,8 +1478,24 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // the same way are reported too: a deload 0.75 of a smaller loaded week
     // can no longer hold the 80-min intermediate peak intervals beside the
     // long run (intermediate 19 weeks, 6 to 7 h, W16).
-    // Open question for Tristan: the D2 floor on the erg slot (integration
-    // open question 1) now costs more minutes than it did.
+    // PENDING TRISTAN'S DECISION (lane H2b open question 1; the H2b review
+    // asked that this split not ship on the implementer's judgement). The
+    // D2 floor on the erg slot (round 7 review minors, 2026-10-14) and this
+    // bound now conflict. Measured on this grid (2,916 pairs):
+    //   (a) keep the floor (this branch): 164 pairs fall, 83 past the bound
+    //       only downstream of a running-rise week, 9 lose a quality run the
+    //       same way, worst 700 min (7 sessions intermediate 24 weeks, 7 to
+    //       8 h); median running share of competitive 12 h stays 0.30;
+    //   (b) no floor: 28 pairs fall, 2 past the bound (the one-slot-a-week
+    //       rule, 7 sessions intermediate 19 and 24 weeks, 8 to 9 h), no
+    //       quality run lost; competitive 12 h running falls to 0.21 of the
+    //       hours, the drop the floor was added to stop (0.29 at the H2
+    //       merge);
+    //   (c) floor on the 'nothing takes its minutes' option only: 187 pairs
+    //       fall, 68 past the bound, 8 lose a quality run.
+    // Until he decides, the split below stands, and the counts it reports
+    // may not grow (the ratchet at the end): a change that loses more
+    // minutes or quality runs downstream fails here.
     // [name, onboarding, logged weekly TSS, logged run minutes]
     const doubles = { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>;
     const variants: Array<[string, Partial<OnboardingState>, number | undefined, number | undefined]> = [
@@ -1504,6 +1520,7 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // Pairs over the bound only through weeks after a week whose running rose
     // (reported, lane H2b).
     const downstream: string[] = [];
+    let downstreamQuality = 0;
     let pairs = 0;
     for (const [name, over, logged, runMin] of variants) {
       for (const band of BANDS) {
@@ -1553,7 +1570,10 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
               }
               if (quality < prev.quality) {
                 if (qualityLost > 0) qualityFell.push(`${label}: ${prev.quality} -> ${quality} quality runs`);
-                else downstream.push(`${label}: ${prev.quality} -> ${quality} quality runs, ${downstreamQualityLost} lost after a week whose running rose`);
+                else {
+                  downstream.push(`${label}: ${prev.quality} -> ${quality} quality runs, ${downstreamQualityLost} lost after a week whose running rose`);
+                  downstreamQuality++;
+                }
               }
             }
             prev = { total, quality, weeks: structuredClone(weeks) };
@@ -1569,6 +1589,13 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(tooFar.slice(0, 10)).toEqual([]);
     expect(weekTooFar.slice(0, 10)).toEqual([]);
     expect(qualityFell.slice(0, 10)).toEqual([]);
+    // Ratchet while open question 1 is pending (measured 2026-10-20 at the
+    // lane H2b review fixes): no more falling pairs, downstream falls,
+    // downstream quality losses or running-rise week falls than now.
+    expect(fell.length).toBeLessThanOrEqual(164);
+    expect(downstream.length - downstreamQuality).toBeLessThanOrEqual(83);
+    expect(downstreamQuality).toBeLessThanOrEqual(9);
+    expect(moreRunning.length).toBeLessThanOrEqual(20);
   }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {
