@@ -16,6 +16,7 @@ import { getPastHyroxEvents, getHyroxEventById } from '@/data/hyrox-events';
 import { STATION_DISPLAY, STATION_MIN_SEC, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { HyroxStation } from '@/types/triathlon';
 import { parseHyroxResultsText } from '@/ui/wizard/steps/hyrox-results-parse';
+import { hyroxPastRaceSplits } from '@/calculations/hyrox-lose-time';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -52,7 +53,13 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   let format: HyroxFormat | undefined = hx.hyroxPreviousTimeFormat;
   let raceEventId: string | undefined = hx.hyroxPreviousTimeRaceId;
   let raceDateISO: string | undefined = hx.hyroxPreviousRaceDate;
-  let splits: Partial<Record<HyroxStation, number>> = {};
+  // The result on file opens filled in, so re-saving it keeps its splits
+  // (applyHyroxPrevTimeUpdate replaces them with what this save carries).
+  const stored = hyroxPastRaceSplits(hx);
+  let splits: Partial<Record<HyroxStation, number>> = { ...stored.stations };
+  let runSplitsSec: Array<number | null> | undefined = stored.runLegsSec;
+  let runTotalSec: number | undefined = stored.runTotalSec;
+  let roxzoneSec: number | undefined = stored.roxzoneSec;
   let splitsExpanded = false;
 
   const overlay = document.createElement('div');
@@ -130,7 +137,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
             return `
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
                 <div style="flex:1;font-size:13px;color:var(--c-black)">${display.name}<span style="display:block;font-size:11px;color:var(--c-faint)">${display.distance}</span></div>
-                <input type="text" class="lpt-split-input" data-station="${st}" placeholder="mm:ss" style="width:80px;text-align:center;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(0,0,0,0.10);background:rgba(255,255,255,0.95);font-size:13px;font-family:inherit;outline:none" autocomplete="off">
+                <input type="text" class="lpt-split-input" data-station="${st}" placeholder="mm:ss" value="${splits[st] != null ? fmtMmSs(splits[st]!) : ''}" style="width:80px;text-align:center;flex-shrink:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(0,0,0,0.10);background:rgba(255,255,255,0.95);font-size:13px;font-family:inherit;outline:none" autocomplete="off">
               </div>
             `;
           }).join('')}
@@ -260,6 +267,11 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
         : 'Nothing to read yet. Copy your result page, then paste or tap "Paste from clipboard".';
       return;
     }
+    // A paste is the result: its run legs, run total and Roxzone replace the
+    // stored ones (absent when the text had none).
+    runSplitsSec = result.runLegsSec;
+    runTotalSec = result.runTotalSec;
+    roxzoneSec = result.roxzoneSec;
     // Fields from the looser fallback scan get an amber "check this" border;
     // it clears when the user focuses the field (see focus handler below).
     let lowConfidenceCount = 0;
@@ -286,6 +298,10 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     status.style.display = 'block';
     const parts: string[] = [];
     if (stationCount > 0) parts.push(`${stationCount} of 8 station times`);
+    const runCount = (result.runLegsSec ?? []).filter(v => v != null).length;
+    if (runCount > 0) parts.push(`${runCount} of 8 runs`);
+    else if (result.runTotalSec != null) parts.push('the run total');
+    if (result.roxzoneSec != null) parts.push('the Roxzone time');
     if (result.totalRaceSec != null) parts.push(`finish ${fmtMmSs(result.totalRaceSec)}`);
     const missing = stationCount > 0 && stationCount < 8 ? ` Add the other ${8 - stationCount} below.` : '';
     const review = lowConfidenceCount > 0
@@ -327,6 +343,9 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       raceEventId,
       raceDateISO,
       stationSplits: Object.keys(splits).length > 0 ? splits : undefined,
+      runSplitsSec,
+      runTotalSec,
+      roxzoneSec,
     });
     overlay.remove();
     onSaved?.();

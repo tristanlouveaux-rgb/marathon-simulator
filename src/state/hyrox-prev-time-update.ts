@@ -32,6 +32,12 @@ export interface HyroxPrevTimeUpdate {
   raceEventId?: string;
   raceDateISO?: string;
   stationSplits?: Partial<Record<HyroxStation, number>>;
+  /** Run 1 to run 8 from the pasted result; null where a leg was missing. */
+  runSplitsSec?: Array<number | null>;
+  /** The 8 runs together (Run Total). */
+  runTotalSec?: number;
+  /** Total Roxzone time. */
+  roxzoneSec?: number;
 }
 
 export interface HyroxPrevTimeUpdateResult {
@@ -52,10 +58,21 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   hx.hyroxPreviousRaceDate =
     (update.raceEventId && getHyroxEventById(update.raceEventId)?.date) || update.raceDateISO;
 
+  // The previous result's own splits ("where you lost time" reads them with
+  // its finish): all four fields are replaced together on every save, so a
+  // new finish logged without splits never sits beside an older race's.
+  // The modal opens with the stored splits filled in, so re-saving the same
+  // race keeps them.
+  hx.hyroxPreviousStationSplits = update.stationSplits && Object.keys(update.stationSplits).length > 0
+    ? { ...update.stationSplits }
+    : undefined;
+  hx.hyroxPreviousRunSplitsSec = update.runSplitsSec && update.runSplitsSec.some(v => v != null)
+    ? [...update.runSplitsSec]
+    : undefined;
+  hx.hyroxPreviousRunTotalSec = update.runTotalSec && update.runTotalSec > 0 ? update.runTotalSec : undefined;
+  hx.hyroxPreviousRoxzoneSec = update.roxzoneSec && update.roxzoneSec > 0 ? update.roxzoneSec : undefined;
+
   if (update.stationSplits && Object.keys(update.stationSplits).length > 0) {
-    (hx as { hyroxPreviousStationSplits?: Partial<Record<HyroxStation, number>> }).hyroxPreviousStationSplits = {
-      ...update.stationSplits,
-    };
     const isPrevDoubles = update.format === 'open_doubles' || update.format === 'pro_doubles';
     if (isPrevDoubles) {
       hx.stationBenchmarksDoubles = {

@@ -182,6 +182,18 @@ export interface HyroxConfig {
    *  Used by the race-age staleness model. Without it, the model can't decay
    *  trust on year-old benchmarks vs current physiology. */
   hyroxPreviousRaceDate?: string;
+  /** Station splits logged with the previous result ("Log a previous HYROX"
+   *  modal; the race's own format, the pair's times for doubles). Written by
+   *  applyHyroxPrevTimeUpdate, which replaces all four previous-result split
+   *  fields together, so they always belong to the result on file. */
+  hyroxPreviousStationSplits?: Partial<Record<HyroxStation, number>>;
+  /** Run 1 to run 8 of the previous result, seconds; null where a leg was not
+   *  in the pasted text. "Where you lost time" (hyrox-lose-time.ts). */
+  hyroxPreviousRunSplitsSec?: Array<number | null>;
+  /** The previous result's 8 runs together (Run Total), seconds. */
+  hyroxPreviousRunTotalSec?: number;
+  /** The previous result's total Roxzone time, seconds. */
+  hyroxPreviousRoxzoneSec?: number;
   /** User-updated run pace for forecast (sec/km). Overrides population default for band. */
   hyroxRunPaceSecKm?: number;
   /** Provenance of `hyroxRunPaceSecKm`. 'user' = manually entered, 'derived' =
