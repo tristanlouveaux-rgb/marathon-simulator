@@ -121,7 +121,7 @@ describe('the beginner load step reads the athlete\'s own rating', () => {
     const inApp = s.wks[4].garminActuals![t.id!];
     expect(isInAppActual(inApp)).toBe(true);
     // The watch read the session harder (RPE 6 by heart-rate reserve 0.77).
-    matchAndAutoComplete([hiitRow(s, { start_time: inApp.startTime, avg_hr: 160 })]);
+    matchAndAutoComplete([hiitRow(s, { start_time: inApp.startTime!, avg_hr: 160 })]);
     expect(s.wks[4].garminActuals![t.id!].garminId).toBe('strava-hiit-1');
     expect(s.wks[4].rated[t.id!]).toBe(3);
     expect(week6Loads(s)).toMatchObject({ sled_push: 52.5, sled_pull: 40 });

@@ -28,14 +28,17 @@ import { suggestNextWeight } from '@/calculations/strength-progression';
 // ─── Sets ────────────────────────────────────────────────────────────────────
 
 /**
- * One station set is a quarter of the station's race volume: the sheet's
- * 0.25 x column (250 m on an erg, one 12.5 m sled lane, 20 m of burpee broad
- * jumps, 50 m of farmers carry, 25 m of lunges, 25 wall balls). The brick's
- * per-round station dose is the same quarter (bricks.structure: 0.25 x per
- * round, the low end of Rox Lyfe's 20 to 25 wall balls after each run and
- * Rundida's one sled lane). Technique (0.5 x) is 2 sets a station and race
- * pace (1.0 x) 4, so the volume progression moves in quarters of the race
- * volume, and a sled set is one race lane.
+ * One station set is a quarter of the station's race volume (250 m on an erg,
+ * one 12.5 m sled lane, 20 m of burpee broad jumps, 50 m of farmers carry,
+ * 25 m of lunges, 25 wall balls). Inside technique and race-pace sessions
+ * this set size is a product choice: the sheet says only 'short sets' there
+ * (its race-pace example uses 10-rep EMOM sets). It is consistent with the
+ * sheet's 0.25 x column of the per-station volume table and its one-lane
+ * sled set. The brick's per-round station dose is the sheet's own quarter
+ * (bricks.structure: 0.25 x per round, the low end of Rox Lyfe's 20 to 25
+ * wall balls after each run and Rundida's one sled lane). Technique (0.5 x)
+ * is 2 sets a station and race pace (1.0 x) 4, so the volume progression
+ * moves in quarters of the race volume, and a sled set is one race lane.
  */
 export const HYROX_STATION_SET_FRACTION = 0.25;
 
@@ -103,14 +106,20 @@ export function hyroxTechniqueSets(doubles: boolean): number {
  * Sets a station takes in a race-pace session: the volume progression
  * (Tristan 2026-10-12, running's lever). The dose steps from the technique
  * volume toward the race-pace volume as the week's size grows toward peak,
- * in whole quarters of the race volume, rounded down (the sheet's
- * conservative end): sets = floor(RACE_SETS x doseFraction), held between the
- * technique sets and the race sets. doseFraction is the week's size relative
- * to the plan's peak week (week budget ÷ chosen hours x HYROX_PEAK_MULT), so
- * the dose rides the phase ramp, the deload, the acute:chronic guard and the
- * effort lever that size the week. At the nominal multipliers: base 0.55 to
- * 0.74 holds 2 sets (0.5 x), 0.75 to 0.99 (late base, build at 0.92) 3 (0.75
- * x), peak at 1.00 the full 4 (1.0 x). Doubles take half (hyroxDoublesSets).
+ * in whole quarters of the race volume, rounded down (a product choice in
+ * line with the sheet's low-end principle; the sheet states no rounding
+ * rule): sets = floor(RACE_SETS x doseFraction), held between the technique
+ * sets and the race sets. doseFraction is the week's nominal size relative to
+ * the plan's peak week: its phase multiplier x the deload factor x the
+ * effort / MTL-gap lever ÷ HYROX_PEAK_MULT. It never reads the chosen hours
+ * (plan_engine.hyrox.ts passes budgetPerHourMin ÷ HYROX_PEAK_MULT); the
+ * acute:chronic guard and the ceilings reach the dose through the session's
+ * share of the week's size (doseMinutes in the generator). At the nominal
+ * multipliers: base 0.55 to 0.74 holds 2 sets (0.5 x), 0.75 to 0.99 (late
+ * base, build at 0.92) 3 (0.75 x), peak at 1.00 the full 4 (1.0 x); a base or
+ * build deload 2 (0.5 x), a peak deload (1.00 x HYROX_DELOAD_FACTOR 0.75) 3
+ * (0.75 x), never above the reference week's session. Doubles take half
+ * (hyroxDoublesSets).
  */
 export function hyroxRacePaceSets(doseFraction: number, doubles: boolean): number {
   const f = Number.isFinite(doseFraction) ? doseFraction : 1;

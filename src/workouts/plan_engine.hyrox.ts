@@ -306,12 +306,16 @@ import {
 //   race weight, RPE 7, 90 s rest. The old circuits (2 to 6 x race volume,
 //   65% of the seed time at RPE 5, the easy-run finish) are gone;
 // - the race-pace dose steps 0.5 x, 0.75 x, 1.0 x with the week's nominal
-//   size toward peak and down to the session's share of the week's size;
+//   size toward peak (0.5 x in base and build deloads, 0.75 x in a peak
+//   deload, never above the reference week's session) and down to the
+//   session's share of the week's size;
 // - beginner loads: sleds unloaded weeks 1-2, then 50%, other loaded
 //   stations 60%, race weight 4 weeks out, stepped between those anchors from
-//   the logged RPE on the last station session (suggestNextWeight);
+//   the athlete's own rating on the last station session (suggestNextWeight;
+//   an RPE derived from a synced recording holds the load, athleteRatedRpe);
 // - bricks by tier (3 x 400 m, 4 x 800 m, the advanced key 6 x 800 m and the
-//   peak secondary 4 x 800 m easy), 0.25 x of a station per round;
+//   peak secondary 4 x 800 m easy), 0.25 x of a station per round, no
+//   secondary-brick station above the technique dose;
 // - every prescription states damper 6, sled lanes, the wall-ball target by
 //   sex, the tier's loads and, for doubles, half of every station (half the
 //   sets);
@@ -320,7 +324,9 @@ import {
 //   leaves a week still over its hours; the race taper's brick is capped to
 //   the reference week's brick of its type; a Thursday race's taper week 1
 //   keeps its station work over the tempo; the version regeneration re-bands
-//   a stored plan on the planning band (rebandStoredHyroxPlan).
+//   a stored plan on the planning band (rebandStoredHyroxPlan) with the
+//   initializer's staleness rule, as log-a-race and the format fix do
+//   (hyroxStoredRaceBand).
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
