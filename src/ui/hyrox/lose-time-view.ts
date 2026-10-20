@@ -175,8 +175,11 @@ function navigateTab(tab: TabId): void {
   else if (tab === 'forecast') import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
 }
 
+/** The paste modal with the race splits first and open: they are what every
+ *  entry here ("Raced HYROX before?", "Add the splits", "Update result") is
+ *  for. */
 function openPasteModal(onSaved: () => void): void {
-  import('./log-prev-time-modal').then(({ openHyroxLogPrevTimeModal }) => openHyroxLogPrevTimeModal(onSaved));
+  import('./log-prev-time-modal').then(({ openHyroxLogPrevTimeModal }) => openHyroxLogPrevTimeModal(onSaved, { focusSplits: true }));
 }
 
 /** Render the drill-down into #app-root. */

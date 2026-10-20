@@ -64,6 +64,26 @@ beforeEach(() => {
   document.body.innerHTML = '';
 });
 
+describe('the race splits section', () => {
+  it('from the forecast chip detail: last, collapsed, "Race splits (optional)"', () => {
+    init();
+    openHyroxLogPrevTimeModal();
+    expect($<HTMLDivElement>('#lpt-splits-body').style.display).toBe('none');
+    expect($<HTMLDivElement>('#lpt-splits-toggle').textContent!.replace(/\s+/g, ' ').trim()).toBe('Race splits (optional) ▼');
+    expect($('#lpt-time').compareDocumentPosition($('#lpt-paste-clip-btn')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('focused (where you lost time): first, expanded, the toggle still collapses it', () => {
+    init();
+    openHyroxLogPrevTimeModal(undefined, { focusSplits: true });
+    const body = $<HTMLDivElement>('#lpt-splits-body');
+    expect(body.style.display).toBe('block');
+    expect($('#lpt-paste-clip-btn').compareDocumentPosition($('#lpt-time')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    $<HTMLDivElement>('#lpt-splits-toggle').click();
+    expect(body.style.display).toBe('none');
+  });
+});
+
 describe('a different result never carries the stored result\'s splits', () => {
   it('new finish + one edited station: only that station is stored; runs and Roxzone cleared', () => {
     const s = init();

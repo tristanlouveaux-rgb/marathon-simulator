@@ -370,6 +370,38 @@ describe('where you lost time', () => {
     expect(idx).toEqual([...idx].sort((a, b) => a - b));
   });
 
+  it('the paste invitations and "Update result" open the modal on the race splits, first and expanded', async () => {
+    const raceDate = new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10);
+    const opened = async (click: () => void) => {
+      click();
+      await vi.waitFor(() => expect(document.getElementById('lpt-splits-body')).not.toBeNull());
+      const body = document.getElementById('lpt-splits-body')!;
+      expect(body.style.display).toBe('block');
+      // The splits (paste box first) sit above the finish time.
+      const paste = document.getElementById('lpt-paste-clip-btn')!;
+      const time = document.getElementById('lpt-time')!;
+      expect(paste.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const toggle = document.getElementById('lpt-splits-toggle')!.textContent!;
+      expect(toggle).toContain('Race splits');
+      expect(toggle).not.toContain('optional');
+      expect(toggle).not.toContain('Station split times');
+      (document.querySelector('#lpt-cancel') as HTMLButtonElement).click();
+      expect(document.getElementById('lpt-splits-body')).toBeNull();
+    };
+    // Forecast tab, no result: "Raced HYROX before?".
+    setState(hyroxState({ raceDate }, { biologicalSex: 'male' }));
+    renderHyroxForecastView();
+    await opened(() => (document.getElementById('hx-lose-time-paste') as HTMLButtonElement).click());
+    // Forecast tab, a finish without splits: "Add the splits".
+    setState(hyroxState({ raceDate, previousHyroxTimeSec: 5071, hyroxPreviousTimeFormat: 'open_singles' }));
+    renderHyroxForecastView();
+    await opened(() => (document.getElementById('hx-lose-time-paste') as HTMLButtonElement).click());
+    // The drill-down: "Update result".
+    setState(hyroxState(pastResult()));
+    renderHyroxLoseTimeView();
+    await opened(() => (document.getElementById('lt-update') as HTMLButtonElement).click());
+  });
+
   it('signs: plus for time lost, the minus sign for time gained', () => {
     expect(fmtLostSigned(72)).toBe('+1:12');
     expect(fmtLostSigned(-20.4)).toBe('\u22120:20');
