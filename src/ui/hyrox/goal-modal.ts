@@ -1,8 +1,8 @@
 /**
  * HYROX goal modal: the race plan's goal step.
  *
- * Opened from the Forecast hero ("Set a target finish ›") and the race plan
- * ("Change goal ›", openRacePlanGoalModal). The athlete enters a target
+ * Opened from the Forecast hero ("Set a goal ›") and the race plan
+ * ("Change goal ›", openRacePlanGoalModal). The athlete enters a goal
  * finish; the modal shows one feasibility line from the goal
  * back-calculation (the race plan's own sentence, graded against the
  * Forecast hero's likely range) and a save lands on the race plan, which
@@ -110,11 +110,11 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:20px;padding:24px;max-width:420px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.18)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-        <div style="font-size:17px;font-weight:700;color:#0F172A">Set a target finish</div>
+        <div style="font-size:17px;font-weight:700;color:#0F172A">Set a goal</div>
         <button id="hx-goal-close" style="background:none;border:none;cursor:pointer;color:var(--c-faint);font-size:20px;line-height:1;padding:0">×</button>
       </div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. The race plan paces every leg to your target.</div>
-      <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Target time (mm:ss or h:mm:ss)</label>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. The race plan paces every leg to your goal.</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Goal time (mm:ss or h:mm:ss)</label>
       <input
         id="hx-goal-input"
         type="text"
@@ -124,8 +124,8 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
       <div id="hx-goal-echo" style="font-size:12px;color:var(--c-muted);min-height:16px;margin-bottom:14px"></div>
       <div id="hx-goal-result"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
-        <button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear target</button>
-        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save target</button>
+        <button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear goal</button>
+        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save goal</button>
       </div>
     </div>
   `;
@@ -146,7 +146,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
     }
     // Always echo the resolved interpretation so an ambiguous entry like "1:00"
     // (read as 1 hour) is visible and correctable.
-    if (echoEl) echoEl.textContent = `Target: ${ftRounded(sec)}`;
+    if (echoEl) echoEl.textContent = `Goal: ${ftRounded(sec)}`;
     const st = getState();
     const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(st, prediction, sec));
     resultEl.innerHTML = renderResultBody(result, { goalSec: sec, forecastSec: prediction.totalSec, cohort: hyroxCohortForState(st) });

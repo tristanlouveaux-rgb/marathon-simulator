@@ -141,12 +141,12 @@ export function renderRacePlanBody(plan: HyroxRacePlan): string {
 /**
  * Doubles with no goal (no Race order card): the Forecast tab's entry row,
  * one line and a caption, no numbers. Opens the race plan at the forecast.
- * With a goal the hero's target line ("Target H:MM:SS · Race plan ›") is the
+ * With a goal the hero's goal line ("Goal H:MM:SS · Race plan ›") is the
  * entry, for singles and doubles alike, so this row is not shown.
  */
 export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'>): string {
   if ((state.hyroxConfig?.targetFinishTimeSec ?? 0) > 0) return '';
-  const caption = 'Race clock for every leg at your forecast. Set a goal to pace every leg.';
+  const caption = 'Race clock for every leg at your forecast.';
   return `
     <div id="hx-race-plan-entry" role="button" tabindex="0" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;gap:12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <span style="flex:1;min-width:0">
@@ -160,7 +160,7 @@ export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'
 
 /**
  * Open the goal modal as the race plan's goal step (the Forecast hero's
- * "Set a target finish ›", the race plan's "Change goal ›"). After a save
+ * "Set a goal ›", the race plan's "Change goal ›"). After a save
  * that sets a goal the race plan opens on it. After a clear the view that
  * opened the modal stays: the Forecast tab, or the race plan for doubles
  * (it shows the forecast's clock); singles clearing on the race plan return

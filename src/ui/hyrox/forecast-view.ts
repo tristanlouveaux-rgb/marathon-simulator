@@ -99,8 +99,8 @@ function renderHyroxRaceOutcomeRetroCard(s: SimulatorState): string {
   return `
     <div style="background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px;margin-bottom:14px">
       <div style="font-size:11px;font-weight:600;color:#5a8050;margin-bottom:6px">Last race</div>
-      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your target by ${gapTxt}</div>
-      <div style="font-size:12px;color:#64748B;line-height:1.5">Target ${fmtMmSs(latest.targetTotalSec)}, actual ${fmtMmSs(latest.actualTotalSec)}.</div>
+      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your goal by ${gapTxt}</div>
+      <div style="font-size:12px;color:#64748B;line-height:1.5">Goal ${fmtMmSs(latest.targetTotalSec)}, actual ${fmtMmSs(latest.actualTotalSec)}.</div>
     </div>
   `;
 }
@@ -815,7 +815,7 @@ function buildHyroxHero(
     ? `<div style="font-size:12px;color:var(--c-muted);margin-top:8px;font-variant-numeric:tabular-nums">Likely ${fmtMmSs(rangeLow)}–${fmtMmSs(rangeHigh)}</div>`
     : '';
 
-  // Target delta line: "On pace vs target" / "+X min vs target" / "−X min vs target".
+  // Goal delta line: "On pace vs goal" / "+X min vs goal" / "−X min vs goal".
   // Falls back to race-day projection delta when no target is set, so the slot
   // always carries useful information.
   const target = hx.targetFinishTimeSec ?? 0;
@@ -823,9 +823,9 @@ function buildHyroxHero(
   let deltaTxt = '';
   let deltaColor = 'var(--c-muted)';
   if (target > 0) {
-    if (Math.abs(delta) < 60) { deltaTxt = 'On pace vs target'; deltaColor = '#1F7A3D'; }
-    else if (delta > 0)        { deltaTxt = `+${Math.round(delta / 60)} min vs target`; deltaColor = '#9A6A20'; }
-    else                       { deltaTxt = `−${Math.round(-delta / 60)} min vs target`; deltaColor = '#1F7A3D'; }
+    if (Math.abs(delta) < 60) { deltaTxt = 'On pace vs goal'; deltaColor = '#1F7A3D'; }
+    else if (delta > 0)        { deltaTxt = `+${Math.round(delta / 60)} min vs goal`; deltaColor = '#9A6A20'; }
+    else                       { deltaTxt = `−${Math.round(-delta / 60)} min vs goal`; deltaColor = '#1F7A3D'; }
   } else if (proj.weeksRemaining > 0 && Math.abs(proj.improvementSec) >= 60) {
     const min = Math.round(Math.abs(proj.improvementSec) / 60);
     deltaTxt = proj.improvementSec < 0 ? `Projected −${min} min by race day` : `Projected +${min} min by race day`;
@@ -961,8 +961,8 @@ function buildHyroxHero(
   // "Change goal ›" edits it); without one it opens the goal modal, and a
   // save lands on the race plan.
   const targetLine = hx.targetFinishTimeSec
-    ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Race plan ›`
-    : `Set a target finish ›`;
+    ? `Goal ${fmtMmSs(hx.targetFinishTimeSec)} · Race plan ›`
+    : `Set a goal ›`;
 
   const prevRaceLink = prevTimeSec != null ? (() => {
     const label = (() => {
@@ -1112,7 +1112,7 @@ export function renderHyroxForecastView(): void {
           `}
 
           <!-- Race plan, doubles with no goal (no Race order card; with a goal
-               the hero's target line is the entry, as for singles) -->
+               the hero's goal line is the entry, as for singles) -->
           ${(hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? buildRacePlanEntryCard(s) : ''}
 
           <!-- Skills analysis (strengths vs limiters) -->
@@ -1191,7 +1191,7 @@ export function renderHyroxForecastView(): void {
       renderHyroxChipDetail('stations'));
   });
 
-  // Hero target line: the race plan's entry. With a goal it opens the race
+  // Hero goal line: the race plan's entry. With a goal it opens the race
   // plan; without one the goal modal (ISSUE-196), whose save lands on the
   // race plan and whose clear stays here.
   const targetCta = document.getElementById('hx-set-target-cta');
