@@ -4755,6 +4755,25 @@ export function buildHyroxTrainingWeeks(
             continue;
           }
         }
+        // A long run that cannot stay the week's longest run inside the
+        // fraction stays as an easy run at the run floor when that fits, so
+        // the week keeps its run count (sheet taper.content). Review round 3:
+        // beside a 25-min tempo and the week's last brick, 3 to 8 of 370
+        // doubles plans a variant lost the taper long run (a total_beginner
+        // 2-h open doubles taper week 1 went from 0.64 to 0.41 of the
+        // reference week, a 61.5% two-week cut).
+        if (isHyroxLongRun(pick) && (pick.estimatedDurationMin ?? 0) > runFloorMin) {
+          const easy: Workout = {
+            ...generateHyroxRun({ kind: 'run_easy', targetMinutes: runFloorMin, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state }),
+            id: pick.id, dayOfWeek: pick.dayOfWeek, dayName: pick.dayName,
+          };
+          const held = withWorkouts(cur, cur.workouts.map(x => (x === pick ? easy : x)));
+          if (!tooHeavy(held)) {
+            attempt = held;
+            attempt.adjustments.push(`W${w}: Long Run held as a ${runFloorMin}-min easy run (${why}; the long run cannot stay the week's longest run)`);
+            continue;
+          }
+        }
         attempt = withWorkouts(cur, cur.workouts.filter(x => x !== pick));
         attempt.adjustments.push(`W${w}: ${pick.n} left out (${why})`);
       }
