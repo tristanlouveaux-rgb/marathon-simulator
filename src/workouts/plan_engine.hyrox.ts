@@ -422,6 +422,15 @@ import {
 // - taper week 1 counts its brick run legs against the week before's
 //   running, both as the running share counts them;
 // - the 15-min station floor reads the warm-up the session holds.
+// Still v19 (unreleased; part 2 review fixes, round 6, 2026-10-20):
+// - a restricted side's station held as one set keeps its side's capacity
+//   share of that set (a partial set), so doubles reload gradually;
+// - equal restrictions hold each side to its own share, both sides' stations
+//   cut first;
+// - a station session warms up on the way with the highest capacity of its
+//   own (a jog, the SkiErg, the Row Erg as full-body), keeping its share;
+// - with no warm-up left, round 1 at easy effort is written into the session
+//   (text, detail view, MTL) and the 15-min floor counts no warm-up for it.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -2606,8 +2615,9 @@ function generateWeekSessions(
  *   scales duration linearly (a lane H2b station session: the combination
  *   of its rounds and stations within the capacity's share with the most
  *   work on the most restricted side, its stations cut from the more
- *   restricted side first, scaleStationSession; its warm-up off the
- *   restricted side when the athlete has a way, `stationAccess`).
+ *   restricted side first and a restricted side's single set at its
+ *   capacity's share, scaleStationSession; its warm-up on the way with the
+ *   highest capacity of its own among the athlete's, `stationAccess`).
  *   Exported for its tests.
  * - Brick = stations + runs stacked → dropped whenever either input
  *   capacity is below 100 (any restriction risks aggravation under

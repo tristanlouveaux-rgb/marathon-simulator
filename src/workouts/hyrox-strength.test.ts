@@ -24,7 +24,12 @@
  *     most restricted-side work within the shares, so that work never falls
  *     as the capacity rises, holds each of two unequally restricted sides to
  *     its own share, and its warm-up moves off the restricted side or keeps
- *     the restricted capacity's share (review round 5).
+ *     the restricted capacity's share (review round 5); a restricted side's
+ *     single set keeps its capacity's share of that set, equal restrictions
+ *     hold each side to its own share, the warm-up takes the way with the
+ *     highest capacity of its own (the Row Erg full-body), and with no
+ *     warm-up left round 1 at easy effort is written into the session and the
+ *     15-min floor counts no warm-up for it (review round 6).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
