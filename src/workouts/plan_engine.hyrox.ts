@@ -1069,7 +1069,11 @@ const HYROX_MIN_STATION_SESSION_MIN = 15;
  */
 function holdsStationFloor(w: Workout): boolean {
   if (!(w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') || !w.hyroxSpec) return true;
-  return Math.round(hyroxSessionWorkMin(w) + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN;
+  // The warm-up the session holds (the injury gates shorten one under a
+  // restriction, review rounds 4 and 5; the weekly MTL cap cuts gated
+  // sessions), else the planned one (a circuit cut before its warm-up is set).
+  const warmupMin = w.hyroxSpec.warmup?.min ?? HYROX_SESSION_WARMUP_MIN;
+  return Math.round(hyroxSessionWorkMin(w) + warmupMin) >= HYROX_MIN_STATION_SESSION_MIN;
 }
 
 /** True when a circuit holds no station a cut may take: MIN_CIRCUIT_STATIONS
