@@ -20,7 +20,11 @@
  *     that small), keeps its warm-up and runs 15 min or more, singles and
  *     doubles (review round 3); under a one-sided restriction it cuts the
  *     restricted side's stations first and holds that side's share too, and
- *     a jog warm-up follows the run capacity (review round 4).
+ *     a jog warm-up follows the run capacity (review round 4); it keeps the
+ *     most restricted-side work within the shares, so that work never falls
+ *     as the capacity rises, holds each of two unequally restricted sides to
+ *     its own share, and its warm-up moves off the restricted side or keeps
+ *     the restricted capacity's share (review round 5).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 

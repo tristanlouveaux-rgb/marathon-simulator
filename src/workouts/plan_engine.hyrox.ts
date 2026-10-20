@@ -409,6 +409,18 @@ import {
 // - a station session's jog warm-up (no erg) follows the run capacity;
 // - the week before taper week 1 counts its race simulation's run legs as
 //   running, so taper week 1 after a sim week keeps its run count.
+// Still v19 (unreleased; part 2 review fixes, round 5, 2026-10-20):
+// - under a partial station capacity a station session keeps, within the
+//   shares, the most work on the most restricted side, then the most station
+//   work, so the injured side's work never falls as its capacity rises;
+// - with both sides restricted unequally, each holds the share at its own
+//   capacity;
+// - a station session's warm-up moves off the restricted side when the
+//   athlete has a way (a jog, the Row Erg or the SkiErg), else keeps the
+//   restricted capacity's share; with no warm-up left the first round at
+//   easy effort serves as one;
+// - taper week 1 counts its brick run legs against the week before's
+//   running, both as the running share counts them.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
