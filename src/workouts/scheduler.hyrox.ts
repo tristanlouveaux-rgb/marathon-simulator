@@ -47,15 +47,17 @@ export function isHighIntensity(w: Workout): boolean {
   if (w.hyroxLight === true) return false;
   return w.t === 'hyrox_brick' ||
     w.t === 'hyrox_mini_brick' ||
+    w.t === 'hyrox_sim' ||
     w.t === 'hyrox_run_intervals' ||
     w.t === 'hyrox_run_tempo' ||
     w.t === 'hyrox_station_density';
 }
 
-/** Hard runs: quality runs and hard bricks (at most HYROX_MAX_HARD_RUNS a week). */
+/** Hard runs: quality runs, hard bricks and race simulations (at most
+ *  HYROX_MAX_HARD_RUNS a week; the sheet counts sims as hard runs). */
 export function isHardRun(w: Workout): boolean {
   if (!isHighIntensity(w)) return false;
-  return w.t === 'hyrox_brick' || w.t === 'hyrox_mini_brick' ||
+  return w.t === 'hyrox_brick' || w.t === 'hyrox_mini_brick' || w.t === 'hyrox_sim' ||
     w.t === 'hyrox_run_intervals' || w.t === 'hyrox_run_tempo';
 }
 
@@ -93,7 +95,7 @@ export const HYROX_TEMPO_HOME_DOW = TEMPO_DAYS[0];
  */
 export function hyroxPreferredDays(w: Pick<Workout, 't'> & { longRun?: boolean; hyroxLight?: boolean }): number[] {
   if (w.t === 'hyrox_assessment') return [0, 1, 2];      // Assessment: Mon first (needs to be early in week)
-  if (w.t === 'hyrox_brick') return [5, 3, 6, 4];       // Sat primary, Thu secondary
+  if (w.t === 'hyrox_brick' || w.t === 'hyrox_sim') return [5, 3, 6, 4]; // Sat primary, Thu secondary (a sim takes the brick's slot)
   if (w.t === 'hyrox_mini_brick' && w.hyroxLight) return [3, 4, 2, 1]; // secondary brick: midweek
   if (w.t === 'hyrox_mini_brick') return [4, 5, 2, 3];  // Fri primary
   if (w.t === 'hyrox_station_density') return [1, 3, 2, 4];   // Tue/Thu
@@ -119,7 +121,7 @@ export function hyroxSundayFlags(week: readonly Workout[]): HyroxPrevSunday | nu
 
 function priority(w: Workout): number {
   if (w.t === 'hyrox_assessment') return -1; // always scheduled first → gets Monday
-  if (w.t === 'hyrox_brick') return 0;
+  if (w.t === 'hyrox_brick' || w.t === 'hyrox_sim') return 0;
   if (w.t === 'hyrox_mini_brick' && !w.hyroxLight) return 1;
   if (w.t === 'hyrox_run_intervals') return 2;
   if (w.t === 'hyrox_station_density') return 3;

@@ -257,7 +257,7 @@ describe('real plans: no second run on the long-run or brick day', () => {
       expect(weekdayRunDoubles(s.wks), lvl).toEqual([]);
       expect(runDoublesOnAnchorDays(s.wks), lvl).toEqual([]);
     }
-  });
+  }, 30000); // About 5 s alone: vitest's 5 s default timed it out beside the HYROX suites (2026-10-20).
 
   it('cycling (tri engine, no runs) still schedules every ride', () => {
     at('2026-10-04T12:00:00');

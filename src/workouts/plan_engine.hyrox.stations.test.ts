@@ -37,7 +37,7 @@ import type { SimulatorState, Week, Workout } from '@/types';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { HYROX_MTL_CAP, computeDoublesCap, hyroxTier } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
-import { generateHyroxPlan, generateHyroxPlanDetailed, HYROX_GENERATOR_VERSION } from './plan_engine.hyrox';
+import { generateHyroxPlan, hyroxSimWeeks, generateHyroxPlanDetailed, HYROX_GENERATOR_VERSION } from './plan_engine.hyrox';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxEasyErg } from './hyrox-generators';
 import { hyroxComponentSets } from './hyrox-session-shape';
@@ -96,7 +96,10 @@ describe('station sessions by tier and phase', () => {
       const i = k + 1;
       const st = prescribed(wk).filter(w => w.discipline === 'station' && !isHyroxEasyErg(w));
       if (wk.ph === 'base') expect(st.every(w => w.t === 'hyrox_station_technique' && w.hyroxRounds === 2)).toBe(true);
-      if (wk.ph === 'build' || wk.ph === 'peak') {
+      // A full-sim week runs its race-pace session in the technique format
+      // (lane H2b part 2).
+      const fullSimWeek = prescribed(wk).some(w => w.t === 'hyrox_sim' && w.hyroxSpec?.simKind === 'full');
+      if ((wk.ph === 'build' || wk.ph === 'peak') && !fullSimWeek) {
         const rp = st.filter(w => w.t === 'hyrox_station_density');
         expect(rp).toHaveLength(1);
         const deload = isHyroxDeloadWeek(i + 1, phases);
@@ -118,6 +121,8 @@ describe('station sessions by tier and phase', () => {
     s.wks.slice(1, planTrainingWeeks(s)).forEach((wk, k) => {
       const i = k + 1;
       if (isHyroxDeloadWeek(i + 1, phases) || wk.ph === 'taper') return;
+      // A race simulation takes the key brick's slot (lane H2b part 2).
+      if (prescribed(wk).some(w => w.t === 'hyrox_sim')) return;
       const types = prescribed(wk).filter(isWork).map(w => w.t).sort();
       if (wk.ph === 'base') expect(types).toEqual(['hyrox_station_density', 'hyrox_station_technique']);
       if (wk.ph === 'build') expect(types).toEqual(['hyrox_brick', 'hyrox_station_density', 'hyrox_station_technique']);
@@ -151,7 +156,9 @@ describe('the beginner load schedule in a plan', () => {
   it('sleds unloaded in weeks 1-2, then 50%; the others the standard implement at or below 60%; race weight from the race-weight week; bricks read the same loads', () => {
     const s = build('beginner', 5, 16, { biologicalSex: 'female' } as Partial<OnboardingState>);
     const tw = planTrainingWeeks(s);
-    const rw = hyroxBeginnerRaceWeightWeek(tw);
+    // Race weight from the week before the planned full sim (lane H2b part 2).
+    const fullSim = [...hyroxSimWeeks(s, tw).entries()].find(([, v]) => v.kind === 'full')?.[0] ?? null;
+    const rw = hyroxBeginnerRaceWeightWeek(tw, fullSim);
     for (let w = 2; w <= tw; w++) {
       for (const x of prescribed(s.wks[w - 1]).filter(isWork)) {
         for (const c of stations(x)) {
@@ -223,9 +230,11 @@ describe('doubles, prescriptions and the MTL cap in the plan', () => {
   it('every station session and brick states damper 6, sled lanes and the wall-ball target', () => {
     const s = build('advanced', 10, 16, { biologicalSex: 'male' } as Partial<OnboardingState>);
     for (const w of s.wks.flatMap(wk => prescribed(wk)).filter(x => isWork(x) && x.t !== 'hyrox_assessment')) {
+      // A race simulation holds full stations (lane H2b part 2).
+      const sim = w.t === 'hyrox_sim';
       for (const c of stations(w)) {
-        if (c.type === 'ski_erg' || c.type === 'row_erg') expect(w.d).toMatch(/250 m, damper 6/);
-        if (c.type === 'sled_push' || c.type === 'sled_pull') expect(w.d).toMatch(/1 lane \(12\.5 m\)/);
+        if (c.type === 'ski_erg' || c.type === 'row_erg') expect(w.d).toMatch(sim ? /1000 m, damper 6/ : /250 m, damper 6/);
+        if (c.type === 'sled_push' || c.type === 'sled_pull') expect(w.d).toMatch(sim ? /4 lanes \(50 m\)/ : /1 lane \(12\.5 m\)/);
         if (c.type === 'wall_balls') expect(w.d).toContain('6 kg ball to 3.00 m');
       }
       expect(w.d).not.toMatch(/—/);

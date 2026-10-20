@@ -28,7 +28,7 @@ import {
 } from './hyrox-session-shape';
 import {
   HYROX_STATION_SET_FRACTION, HYROX_STATION_FORMATS, HYROX_STATIONS_PER_SESSION, HYROX_BEGINNER_SLED_SETS,
-  HYROX_ERG_DAMPER, HYROX_BRICK_FORMATS, hyroxStationSetAmount, hyroxRaceLoadKg, hyroxDoublesSets,
+  HYROX_ERG_DAMPER, HYROX_BRICK_FORMATS, hyroxStationSetAmount, hyroxStationRaceAmount, hyroxRaceLoadKg, hyroxDoublesSets,
   hyroxTechniqueSets, hyroxRacePaceSets, hyroxBrickStationRounds, isHyroxSled, type HyroxBrickFormat,
 } from './hyrox-station-dose';
 import {
@@ -726,6 +726,21 @@ export function hyroxSessionText(w: Workout): string {
       : [];
     return [...opening, head, shape, ...lines, ...weakest, ...(spec.doubles ? [DOUBLES_LINE] : []), ...closing].join(' ');
   }
+  if (spec.format === 'race_sim') {
+    const pace = spec.runPaceSecKm != null ? ` (~${fmtPace(Math.round(spec.runPaceSecKm))}/km)` : '';
+    const full = spec.simKind === 'full';
+    const effort = spec.runEffort === 'race_no_faster'
+      ? 'Controlled effort, no faster than race pace.'
+      : 'Race effort: treat it as data on pacing, not as a race.';
+    const list = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name} ${stationPrescription(c, spec, false)}`).join('; ');
+    return [
+      ...(spec.warmup ? [warmupPhrase(spec.warmup)] : []),
+      `${full ? 'Full' : 'Half'} race simulation: ${rounds} rounds of 1 km at HYROX race pace${pace}, each into the next station at its full race volume: ${list}.`,
+      `A ${spec.transitionSec ?? 0} s jog into each station, no other rest.`,
+      effort,
+      ...(spec.doubles ? [DOUBLES_LINE] : []),
+    ].join(' ');
+  }
   // Bricks.
   const pace = spec.runPaceSecKm != null ? `~${fmtPace(Math.round(spec.runPaceSecKm))}/km` : '';
   const run = `${fmtAmount(spec.runM ?? 0)} m`;
@@ -1184,6 +1199,122 @@ export function generateHyroxBrick(params: BrickParams): Workout {
     },
   });
   return fitToTarget(w, p.targetMinutes, Math.min(format.rounds, MIN_CIRCUIT_ROUNDS));
+}
+
+// ─── Race simulations (lane H2b part 2) ──────────────────────────────────────
+
+/** Parameters of a race simulation. */
+export interface SimParams extends HyroxPrescriptionParams {
+  /** The full race (8 x 1 km and the 8 stations) or a half (4 x 1 km and 4
+   *  stations at 1.0 x). */
+  kind: 'full' | 'half';
+  /** Half sims alternate the race's first and second halves (0, 1, ...). */
+  halfIndex?: number;
+  band: AbilityBand;
+  stationAccess: HyroxConfig['stationAccess'];
+  slotIndex: number;
+  bodyWeightKg?: number;
+  stationBenchmarks?: Partial<Record<HyroxStation, number>>;
+  loadTier?: HyroxLoadTier;
+  seed?: HyroxSeedStateInput;
+  /** HYROX race pace (sec/km) for the 1 km runs; the band seed without one. */
+  runPaceSecKm?: number;
+}
+
+/** Transition between a run and its station in a race simulation (s): the
+ *  bricks' existing 30 s jog (HYROX_BRICK_FORMATS transitionSec). */
+const SIM_TRANSITION_SEC = HYROX_BRICK_FORMATS.beginner.transitionSec;
+
+/**
+ * Race simulation (parameter sheet sims.schedule, revised): rounds of a 1 km
+ * run at HYROX race pace into the next station of the race at its full race
+ * volume, in race order; the full sim is the 8 runs and 8 stations, a half
+ * sim 4 and 4 (the race's first half, then its second half the next time),
+ * at 1.0 x race volume. Race weight, except a beginner's half sim before the
+ * race-weight start, which takes the week's beginner loads (`stationLoads`;
+ * sheet: technique-schedule loads until the race-weight start). The 30 s jog
+ * into each station is counted (the bricks' transition), no other rest. The
+ * effort: beginners steady race effort (a half sim controlled, no faster than
+ * race pace), intermediate and advanced race effort; RPE the tier brick's
+ * (HYROX_BRICK_FORMATS: 6 beginner, 7 intermediate and advanced, the
+ * existing brick values; a product choice, the sheet gives no sim RPE). A
+ * station the athlete cannot train is left out and its run continues. Doubles:
+ * each partner trains half of every station, said once; the station's MTL is
+ * the partner's half. Every station is a full station, so a guided sim at
+ * race weight can teach the station benchmarks (hyrox-session-benchmarks).
+ * Planning side.
+ */
+export function generateHyroxSim(p: SimParams): Workout {
+  const tier = hyroxTier(p.band);
+  const { wallBallTargetM, doubles } = prescriptionOf(p);
+  const loadTier = p.loadTier ?? HYROX_DEFAULT_LOAD_TIER;
+  const avail = availableStations(p.stationAccess);
+  const order = p.kind === 'full'
+    ? HYROX_STATION_ORDER
+    : (Math.abs(p.halfIndex ?? 0) % 2 === 0 ? HYROX_STATION_ORDER.slice(0, 4) : HYROX_STATION_ORDER.slice(4));
+  const stations = order.filter(st => avail.includes(st));
+  const rounds = order.length;
+  const rpe = HYROX_BRICK_FORMATS[tier].rpe;
+  const racePace = p.runPaceSecKm ?? hyroxSeedRunPaceSecKm(p.seed ?? {}, p.band);
+  const runSec = racePace;
+  const run: HyroxComponent = {
+    type: 'run',
+    distanceM: 1000,
+    durationSec: Math.round(runSec),
+    mtl: computeComponentMTL((runSec / 60) * rounds, rpe, 'run_tempo', undefined, p.bodyWeightKg),
+    restAfterSec: 0,
+  };
+  const stationComps: HyroxComponent[] = stations.map(st => {
+    const round = order.indexOf(st) + 1;
+    const race = hyroxRaceLoadKg(st, loadTier);
+    const own = p.stationLoads?.[st];
+    const kg = race == null ? undefined : Math.min(race, own ?? race);
+    const externalKg = kg == null ? undefined : isHyroxSled(st) ? kg * SLED_EXTERNAL_LOAD_FRACTION : kg;
+    const sec = stationSeedSec(st, p.band, p.stationBenchmarks, p.seed);
+    // Doubles: the partner's half of the station's work.
+    const workMin = (sec / 60) * (doubles ? 0.5 : 1);
+    const amount = hyroxStationRaceAmount(st);
+    return {
+      type: st,
+      ...(st === 'wall_balls' ? { reps: amount } : { distanceM: amount }),
+      durationSec: Math.round(sec),
+      mtl: computeComponentMTL(workMin, rpe, st, externalKg, p.bodyWeightKg),
+      restAfterSec: 0,
+      raceFraction: 1,
+      inRounds: [round],
+      ...(kg != null ? { loadKg: kg } : {}),
+      ...(kg != null && race != null && kg < race - 1e-9 ? { loadPct: kg / race } : {}),
+    };
+  });
+  const runEffort: NonNullable<HyroxSessionSpec['runEffort']> = tier === 'beginner' && p.kind === 'half' ? 'race_no_faster' : 'race';
+  return finishHyroxSession({
+    n: p.kind === 'full' ? 'Race Simulation' : 'Half Race Simulation',
+    d: '',
+    t: 'hyrox_sim',
+    discipline: 'brick',
+    r: rpe,
+    rpe,
+    hyroxComponents: [run, ...stationComps],
+    hyroxRounds: rounds,
+    hyroxRoundRestSec: 0,
+    hyroxSpec: {
+      format: 'race_sim',
+      simKind: p.kind,
+      restSec: 0,
+      transitionSec: SIM_TRANSITION_SEC,
+      runM: 1000,
+      runPaceSecKm: racePace,
+      runEffort,
+      wallBallTargetM,
+      warmup: hyroxSessionWarmup(p.stationAccess, p.slotIndex, p.bodyWeightKg, true),
+      ...(doubles ? { doubles: true } : {}),
+    },
+  });
+}
+
+/** True for a race simulation (lane H2b part 2). */
+export function isHyroxSim(w: Pick<Workout, 't'>): boolean {
+  return w.t === 'hyrox_sim';
 }
 
 // ─── Assessment session (Week 1 only) ────────────────────────────────────────

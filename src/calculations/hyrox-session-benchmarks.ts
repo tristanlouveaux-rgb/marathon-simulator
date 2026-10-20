@@ -73,10 +73,12 @@ import {
 import { appendStationTest, type HyroxFormat } from '@/calculations/hyrox-station-history';
 import { hyroxCalibratedStationBenchmarks } from '@/calculations/race-prediction.hyrox';
 
-/** Race-pace HYROX sessions whose best-round times may improve a benchmark.
- *  Technique (65% pace) and the assessment (RPE 4 walkthrough) are excluded. */
+/** Race-pace HYROX sessions whose best-round times may improve a benchmark:
+ *  race-pace station sessions, bricks and race simulations (lane H2b part
+ *  2, whose full stations are the first station times a planned session
+ *  holds). Technique and the assessment (RPE 4 walkthrough) are excluded. */
 export function isRacePaceHyroxSession(t: string | undefined): boolean {
-  return t === 'hyrox_station_density' || t === 'hyrox_brick';
+  return t === 'hyrox_station_density' || t === 'hyrox_brick' || t === 'hyrox_sim';
 }
 
 /** Per-station outcome of a guided session, for the end-of-session summary. */
@@ -115,6 +117,13 @@ export interface StationSessionResult {
 function isPartialStation(components: readonly HyroxComponent[], station: HyroxStation): boolean {
   const own = components.filter(c => c.type === station);
   return own.length > 0 && own.every(c => c.raceFraction != null && c.raceFraction < 1);
+}
+
+/** True when the station ran below race weight in the session (a beginner's
+ *  load schedule, HyroxComponent.loadPct; lane H2b part 2: a beginner's half
+ *  sim before the race-weight start): its time is no race time either. */
+function isReducedLoadStation(components: readonly HyroxComponent[], station: HyroxStation): boolean {
+  return components.some(c => c.type === station && c.loadPct != null);
 }
 
 /** A benchmark write that actually happened, for logging / the summary banner. */
@@ -253,7 +262,7 @@ export function summariseHyroxSession(
     // distance is not paced like the whole, so it neither teaches the
     // benchmark nor takes a percentile against race splits.
     const partial = isPartialStation(components, station);
-    const comparable = racePace && !partial;
+    const comparable = racePace && !partial && !isReducedLoadStation(components, station);
     const eligible = comparable && passesSanityFloor(station, fieldSec, cohort);
     const isImprovement = eligible && (benchmarkSec == null || bestSec < benchmarkSec);
     results.push({

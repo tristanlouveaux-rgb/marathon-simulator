@@ -186,9 +186,15 @@ function raceWeekViolations(s: SimulatorState, race: string): string[] {
   while (taperStart > 1 && s.wks[taperStart - 2].ph === 'taper') taperStart--;
   let refMin = (s.hyroxConfig?.weeklyHoursAvailable ?? 0) * 60;
   const phases = s.wks.slice(0, tw).map(w => w.ph);
+  // The reference week skips a race-simulation week while an earlier loaded
+  // week exists (lane H2b part 2).
+  let firstRef = -1;
   for (let i = taperStart - 2; i >= 0; i--) {
-    if (s.wks[i].ph !== 'taper' && !isHyroxDeloadWeek(i + 1, phases)) { refMin = prescribedMinutes(s.wks[i]); break; }
+    if (s.wks[i].ph === 'taper' || isHyroxDeloadWeek(i + 1, phases)) continue;
+    if (firstRef < 0) firstRef = i;
+    if (!(s.wks[i].triWorkouts ?? []).some(w => w.t === 'hyrox_sim')) { firstRef = i; break; }
   }
+  if (firstRef >= 0) refMin = prescribedMinutes(s.wks[firstRef]);
   const budget = hyroxTaperFraction(tw - taperStart + 1, tw - taperStart + 1) * refMin;
   const before = tw > 1 ? prescribedMinutes(s.wks[tw - 2]) : Infinity;
   // Round 7 (2026-10-14): the smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
