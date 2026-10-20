@@ -128,7 +128,7 @@ import { hyroxStrengthContent, runningStrengthPhaseMinutes } from './gym';
 import type { HyroxStrengthBlock } from '@/types/triathlon';
 import {
   findHyroxWeekSchedule, scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, isHardRun, isEccentricSession,
-  isHyroxLongRun, hyroxSundayFlags, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays, isHyroxStrengthSession,
+  isHyroxLongRun, hyroxSundayFlags, HYROX_DAY_NAMES, HYROX_TEMPO_HOME_DOW, hyroxPreferredDays, isHyroxStrengthSession, hyroxPlacedSource,
   type HyroxPrevSunday,
 } from './scheduler.hyrox';
 import { hyroxLoadTierForState, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
@@ -1273,12 +1273,18 @@ function generateWeekSessions(
   // week before race week holds one light block (the first station
   // session's; heavy lifting stops 7 days out, sheet taper.content), race
   // week none (sheet: 0).
+  const blockCache = new Map<number, HyroxStrengthBlock | null>();
   const blockFor = (i: number): HyroxStrengthBlock | null => {
-    if (raceWeek) return null;
+    const hit = blockCache.get(i);
+    if (hit !== undefined) return hit;
+    let block: HyroxStrengthBlock | null = null;
     const light = kindPhase === 'taper';
-    if (light && i > 0) return null;
-    const c = hyroxStrengthContent(band, kindPhase, weekIndex + i, { minutes: HYROX_STRENGTH_BLOCK_MIN, light, deload: !!inputs.deload });
-    return { name: c.name, lines: c.lines, min: HYROX_STRENGTH_BLOCK_MIN, rpe: c.rpe, ...(light ? { light: true } : {}), eccentric: c.eccentric };
+    if (!raceWeek && !(light && i > 0)) {
+      const c = hyroxStrengthContent(band, kindPhase, weekIndex + i, { minutes: HYROX_STRENGTH_BLOCK_MIN, light, deload: !!inputs.deload });
+      block = { name: c.name, lines: c.lines, min: HYROX_STRENGTH_BLOCK_MIN, rpe: c.rpe, ...(light ? { light: true } : {}), eccentric: c.eccentric };
+    }
+    blockCache.set(i, block);
+    return block;
   };
   // A brick opens with an easy jog warm-up (lane H2b part 2; its first leg a
   // run).
@@ -2252,7 +2258,20 @@ function generateWeekSessions(
         }
       }
       adjustments.push(...notes);
-      if (ergs.length > 0 || freed !== week) {
+      // Finishers only (the same sessions, in the same order): a finisher
+      // changes no session's spacing flags or preferred days, so the week
+      // keeps its placement (performance: one search a build, not two).
+      const sameSlots = ergs.length === 0 && freed !== week && freed.length === week.length
+        && freed.every((x, k) => x === week[k] || (x.t === week[k].t && x.n === week[k].n));
+      if (sameSlots && found) {
+        const placedWeek = week;
+        const carried = scheduled.map(x => {
+          const k = placedWeek.indexOf(hyroxPlacedSource.get(x) as Workout);
+          return k >= 0 ? { ...freed[k], dayOfWeek: x.dayOfWeek, dayName: x.dayName } : x;
+        });
+        week = freed;
+        scheduled = carried;
+      } else if (ergs.length > 0 || freed !== week) {
         const again = findHyroxWeekSchedule([...freed, ...ergs], { prevSunday: inputs.prevSunday });
         if (again) {
           week = freed;

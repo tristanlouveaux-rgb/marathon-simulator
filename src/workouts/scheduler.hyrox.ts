@@ -158,8 +158,15 @@ function candidateDays(session: Workout): number[] {
   return [...pref, ...rest];
 }
 
+/** Each placed copy's source session (findHyroxWeekSchedule's input), so a
+ *  caller can carry a placement over to an edited copy of the same week
+ *  (plan_engine.hyrox: the finishers change no session's spacing flags). */
+export const hyroxPlacedSource = new WeakMap<Workout, Workout>();
+
 function withDay(w: Workout, day: number): Workout {
-  return { ...w, dayOfWeek: day, dayName: DAY_NAMES[day] };
+  const out = { ...w, dayOfWeek: day, dayName: DAY_NAMES[day] };
+  hyroxPlacedSource.set(out, w);
+  return out;
 }
 
 /** Commute legs grouped by commute day ("Commute 2 (morning)" and "(evening)"). */

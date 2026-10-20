@@ -63,11 +63,15 @@ export function hyroxSessionWalk(w: Pick<Workout, 'hyroxComponents' | 'hyroxRoun
   const rounds = Math.max(1, Math.round(w.hyroxRounds ?? 1));
   const roundRest = Math.max(0, Math.round(w.hyroxRoundRestSec ?? 0));
   const transition = Math.max(0, Math.round(w.hyroxSpec?.transitionSec ?? 0));
-  const setCount = comps.map(c => hyroxComponentSets(c, rounds));
+  // Each component's rounds, read once (the walk runs at every duration,
+  // cut and text of a session).
+  const roundSets = comps.map(c => new Set(hyroxComponentRounds(c, rounds)));
+  const setCount = roundSets.map(rs => rs.size);
   const seen = comps.map(() => 0);
   const out: HyroxWalkSet[] = [];
   for (let r = 1; r <= rounds; r++) {
-    const inRound = comps.map((c, ci) => ({ c, ci })).filter(x => hyroxComponentRounds(x.c, rounds).includes(r));
+    const inRound: Array<{ c: HyroxComponent; ci: number }> = [];
+    for (let ci = 0; ci < comps.length; ci++) if (roundSets[ci].has(r)) inRound.push({ c: comps[ci], ci });
     inRound.forEach((x, k) => {
       const next = inRound[k + 1];
       out.push({
