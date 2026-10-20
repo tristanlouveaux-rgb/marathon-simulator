@@ -3780,9 +3780,14 @@ export function buildHyroxTrainingWeeks(
         // warm-up, light strength block and finisher count inside the
         // fractions. Before, the warm-up and block were exempt too, and
         // beginner taper week 1 sat at 0.67 to 0.85 of the reference week.
+        // In race week its warm-up is exempt too, a fixed part of the exempt
+        // circuit (it holds no block), so race week keeps its run count
+        // (taper.content) beside the primer and the circuit (review round 2:
+        // with the warm-up inside 0.30, 23 of 168 race weeks held fewer runs
+        // than the reference week, 4 before; total_beginner 10 of 24).
         exemptMin: (() => {
           const e = exemptCircuitOf(workouts);
-          return e ? hyroxSessionWorkMin(e) : 0;
+          return e ? hyroxSessionWorkMin(e) + (raceWeek ? (e.hyroxSpec?.warmup?.min ?? 0) : 0) : 0;
         })() + (raceTaper ? hyroxPlannedMinutes(assessmentOf(workouts)) : 0),
         // The solver's inputs the week was built with (make), so it can be
         // built again with its strength (addStrength).

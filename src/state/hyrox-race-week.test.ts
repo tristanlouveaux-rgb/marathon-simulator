@@ -310,10 +310,13 @@ describe('a Monday to Wednesday race: the primer 3 days out, the last session at
     // Saturday easy run beside the exempt circuit and primer. Since the part-2
     // review (2026-10-20) only the exempt circuit's station work sits outside
     // the 0.30 (its warm-up counts inside it) and strength takes only the
-    // reference week's spare minutes, so race week holds the circuit and the
-    // primer, the decided 0.30 with no room for the easy run.
+    // reference week's spare minutes, so race week held the circuit and the
+    // primer only. Since review round 2 the exempt circuit's warm-up is
+    // exempt in race week too (sheet taper.content: keep the run count), so
+    // the Saturday easy run is back.
     expect((s.wks[tw - 1].triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Wed hyrox_station_technique',
+      'Sat hyrox_run_easy',
       'Sun hyrox_run_tempo',
     ]);
     expect(s.wks[tw].raceClosing).toBe(true);

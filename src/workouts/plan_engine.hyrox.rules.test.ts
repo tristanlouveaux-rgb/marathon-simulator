@@ -142,7 +142,7 @@ import {
 import { isHyroxDeloadWeek, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS, TAPER_LONG_RUN_FRACTION, LONG_SOFT_FLOOR_MIN } from './plan_engine';
 import { isHighIntensity, isHardRun, isEccentricSession, isHyroxLongRun } from './scheduler.hyrox';
 import {
-  hyroxRunLengthKm, generateHyroxRun, generateHyroxStation, withHyroxRounds, withoutHyroxStation,
+  hyroxRunLengthKm, generateHyroxRun, generateHyroxStation, withHyroxRounds, withoutHyroxStation, hyroxStationToCut,
   generateHyroxEasyErg, isHyroxEasyErg, MIN_CIRCUIT_ROUNDS, MIN_CIRCUIT_STATIONS, hyroxSessionWorkMin,
 } from './hyrox-generators';
 import { resolvePlannedWeekPhase } from '@/calculations/planned-week-target';
@@ -235,26 +235,39 @@ const runningMin = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a +
   ? (w.estimatedDurationMin ?? 0)
   : (w.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0)), 0);
 const brickRunMin = (wk: Week | undefined) => runningMin(wk) - runs(wk).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+/** A circuit holding no station a cut may take (the engine's
+ *  stationsAtFloor): MIN_CIRCUIT_STATIONS or fewer, or one fewer would take
+ *  its warm-up and station work under 15 min (a doubles circuit, lane H2b
+ *  part 2 review round 2). */
+const stationsAtFloor = (x: Workout): boolean => {
+  const st = (x.hyroxComponents ?? []).filter(c => c.type !== 'run');
+  if (st.length <= MIN_CIRCUIT_STATIONS) return true;
+  const next = withoutHyroxStation(x, hyroxStationToCut(x) as HyroxStation);
+  return next === x || Math.round(hyroxSessionWorkMin(next) + (x.hyroxSpec?.warmup?.min ?? 0)) < 15;
+};
 /** The race taper's smallest station work, exempt from the taper
  *  fractions in taper week 1 and race week (round 7): the week's shortest
- *  station circuit of at most MIN_CIRCUIT_ROUNDS rounds and
- *  MIN_CIRCUIT_STATIONS stations, or, in a week holding no circuit, its
+ *  station circuit of at most MIN_CIRCUIT_ROUNDS rounds holding no station a
+ *  cut may take (stationsAtFloor), or, in a week holding no circuit, its
  *  shortest brick of at most MIN_CIRCUIT_ROUNDS rounds (0: none). `work`:
  *  its station work alone, what the fractions exempt (lane H2b part 2
  *  review: its warm-up, strength block and finisher count inside them; the
- *  engine's exemptMin); otherwise the session without its finisher, what
- *  race week may hold above the week before. */
+ *  engine's exemptMin), in race week with its warm-up (review round 2: race
+ *  week keeps its run count); otherwise the session without its finisher,
+ *  what race week may hold above the week before. */
 const taperExemptSession = (wk: Week | undefined): Workout | undefined => {
   const circuits = prescribed(wk).some(isCircuit);
   return prescribed(wk).filter(x => (circuits
-    ? isCircuit(x) && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS
+    ? isCircuit(x) && stationsAtFloor(x)
     : x.discipline === 'brick') && (x.hyroxRounds ?? 0) <= MIN_CIRCUIT_ROUNDS)
     .reduce<Workout | undefined>((m, x) => (!m || (x.estimatedDurationMin ?? 0) < (m.estimatedDurationMin ?? 0) ? x : m), undefined);
 };
-const taperExemptMin = (wk: Week | undefined, work = true): number => {
+const taperExemptMin = (wk: Week | undefined, work = true, raceWeek = false): number => {
   const e = taperExemptSession(wk);
   if (!e) return 0;
-  return work ? hyroxSessionWorkMin(e) : (e.estimatedDurationMin ?? 0) - (e.hyroxSpec?.finisher?.min ?? 0);
+  return work
+    ? hyroxSessionWorkMin(e) + (raceWeek ? (e.hyroxSpec?.warmup?.min ?? 0) : 0)
+    : (e.estimatedDurationMin ?? 0) - (e.hyroxSpec?.finisher?.min ?? 0);
 };
 /** The athlete's chosen weekly session total (the stored counts). */
 const chosenSessions = (s: SimulatorState) => {
@@ -536,11 +549,12 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
         const allowed = raceWeek ? Math.max(ceiling, HYROX_RACE_WEEK_PRIMER_MIN) : ceiling;
         // The smallest circuit is exempt from the fractions, and so is week
         // 1's assessment when week 1 is the race taper (round 7).
-        const exemptMin = taperExemptMin(wk) + (w === 1 ? minutes({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0);
+        const exemptMin = taperExemptMin(wk, true, raceWeek) + (w === 1 ? minutes({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0);
         // Race week holding the primer (or the easy run in its slot) and the
         // smallest circuit and nothing else may sit above it: the primer never
-        // leaves, the circuit never leaves for the fraction, and since the part
-        // 2 review the circuit's warm-up counts inside the fraction.
+        // leaves and the circuit never leaves for the fraction (with the
+        // circuit's warm-up exempt in race week since review round 2, only a
+        // primer above 0.30 of a small reference week does).
         const onlyPrimerAndCircuit = raceWeek && ws.length === 2 && !!taperExemptSession(wk) && ws.some(x => isQuality(x) || x.t === 'hyrox_run_easy');
         if (!onlyPrimerAndCircuit && minutes(wk) - exemptMin > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min (${exemptMin} exempt) above ${hyroxTaperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
         // Above the reference week's station and brick work only up to the
@@ -1084,6 +1098,39 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(checked).toBe(16);
   });
 
+  it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
+    // Sheet taper.content: keep the run count. The exempt circuit's warm-up
+    // is exempt in race week (a fixed part of the exempt circuit), so a race
+    // week holds fewer runs than the reference week only when 0.30, less
+    // what it holds besides the exempt circuit's warm-up and station work,
+    // has no room for an easy run at the run floor.
+    let plans = 0;
+    let fewer = 0;
+    const wrong: string[] = [];
+    for (const band of BANDS) {
+      for (const hrs of hoursGrid(band)) {
+        for (const len of [12, 16, 20, 24]) {
+          const s = build(band, hrs, len);
+          const tw = planTrainingWeeks(s);
+          plans++;
+          const rw = s.wks[tw - 1];
+          const ref = s.wks[refLoadedWeek(s.wks, tw - 2, deloadOf(s.wks.slice(0, tw)))];
+          if (runs(rw).length >= runs(ref).length) continue;
+          fewer++;
+          const budget = generateHyroxPlanDetailed(structuredClone(s)).detail[tw - 1].budgetMin;
+          const room = budget - (minutes(rw) - taperExemptMin(rw, true, true));
+          if (room >= HYROX_RUN_FLOOR_MIN) wrong.push(`${band} ${hrs}h ${len}w: race week ${runs(rw).length} runs against ${runs(ref).length}, ${room.toFixed(0)} min of room`);
+        }
+      }
+    }
+    expect(plans).toBeGreaterThan(140);
+    expect(wrong.slice(0, 10)).toEqual([]);
+    // Measured 2026-10-20 (review round 2): 2 of 96 on the probe grid, both
+    // total_beginner 3 h 12 and 16 weeks (0.30 of the reference week, 38 and
+    // 43 min, beside a 25-min primer).
+    expect(fewer).toBeLessThanOrEqual(Math.ceil(plans * 0.05));
+  }, 300000);
+
   it('the race taper holds its fractions and the reference week caps its station work (reviewer examples)', () => {
     // Review: total_beginner 4 h 11 w taper week 1 at 0.93 of the reference
     // week with a 61-min circuit against 32; novice 6 h 11 w at 0.96, race
@@ -1097,7 +1144,7 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
       // reference week's station work caps the taper's unless that circuit is
       // all the taper holds (round 6 review, pass 2).
       expect(minutes(s.wks[tw - 2]) - taperExemptMin(s.wks[tw - 2])).toBeLessThanOrEqual(0.55 * minutes(refWk) + EPS);
-      expect(minutes(s.wks[tw - 1]) - taperExemptMin(s.wks[tw - 1])).toBeLessThanOrEqual(Math.max(0.30 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
+      expect(minutes(s.wks[tw - 1]) - taperExemptMin(s.wks[tw - 1], true, true)).toBeLessThanOrEqual(Math.max(0.30 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
       for (const wk of [s.wks[tw - 2], s.wks[tw - 1]]) {
         const floor = hyroxRaceTaperFloorCircuit(s, wk.w, wk === s.wks[tw - 1]) ?? { min: 0, mtl: 0 };
         expect(stationWork(wk).min).toBeLessThanOrEqual(Math.max(stationWork(refWk).min, floor.min) + EPS);
