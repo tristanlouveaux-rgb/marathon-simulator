@@ -114,6 +114,10 @@ export interface HyroxRacePlan {
   caveat: string | null;
   /** 16 legs in race order. */
   legs: HyroxRacePlanLeg[];
+  /** forecastSec is the forecast's own Roxzone (prediction.roxzoneSec,
+   *  rounded), the number the Forecast tab plots; so is splitSec when the
+   *  splits are the forecast's. The race clock carries the forecast's
+   *  rounding remainder instead, so it ends on the forecast. */
   roxzone: { splitSec: number; forecastSec: number };
   /** Race clock after each run, then the finish. */
   checkpoints: HyroxRacePlanCheckpoint[];
@@ -209,10 +213,12 @@ export function hyroxRaceClock(
 
 /**
  * The forecast's race clock: predictHyroxRace's own lines as they are (each
- * run leg's durationSec, each station's adjustedSec), the Roxzone taking the
- * rounding remainder (totalSec minus the 16 lines) so the clock ends on the
- * forecast. The one forecast clock: the race plan and the Forecast tab's Race
- * order card both read it.
+ * run leg's durationSec, each station's adjustedSec), the Roxzone time inside
+ * the clock taking the rounding remainder (totalSec minus the 16 lines) so the
+ * clock ends on the forecast. The one forecast clock: the race plan and the
+ * Forecast tab's Race order card both read it. A Roxzone row shows the
+ * forecast's own prediction.roxzoneSec (HyroxRacePlan.roxzone), never this
+ * remainder.
  */
 export function hyroxForecastRaceClock(
   prediction: Pick<HyroxPrediction, 'totalSec' | 'runSec' | 'runLegs' | 'stations'>,
@@ -330,6 +336,9 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
   }
 
   const legs: HyroxRacePlanLeg[] = clock.legs.map((l, i) => ({ ...l, forecastSec: forecast.legs[i].splitSec }));
+  // The forecast's Roxzone as the forecast states it; only the clock carries
+  // the rounding remainder (hyroxForecastRaceClock).
+  const forecastRoxzoneSec = Math.round(prediction.roxzoneSec);
   return {
     goalSec,
     basis,
@@ -339,7 +348,7 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
     shortfallSec,
     caveat,
     legs,
-    roxzone: { splitSec: clock.roxzoneSec, forecastSec: forecast.roxzoneSec },
+    roxzone: { splitSec: basis === 'forecast' ? forecastRoxzoneSec : clock.roxzoneSec, forecastSec: forecastRoxzoneSec },
     checkpoints: clock.checkpoints,
     isDoubles,
     cohort,

@@ -97,7 +97,7 @@ describe('buildHyroxRacePlan: shape and clock', () => {
     plan.checkpoints.slice(0, 8).forEach((c, k) => expect(c.clockSec).toBe(plan.legs[2 * k].clockSec));
   });
 
-  it('no goal: the splits are the forecast\'s own lines, the Roxzone takes the rounding remainder', () => {
+  it('no goal: the splits are the forecast\'s own lines and Roxzone; the clock carries the rounding remainder', () => {
     for (const hx of [{}, { format: 'open_doubles' as const, division: 'mixed' as const }, { venueId: 'mexico-city-exh' }]) {
       const { plan, prediction } = planFor(buildState(hx));
       expect(plan.basis).toBe('forecast');
@@ -110,8 +110,11 @@ describe('buildHyroxRacePlan: shape and clock', () => {
         expect(l.splitSec).toBe(prediction.stations.find(x => x.station === l.station)!.adjustedSec);
       });
       const lines = plan.legs.reduce((a, l) => a + l.splitSec, 0);
-      expect(plan.roxzone.splitSec).toBe(prediction.totalSec - lines);
-      expect(Math.abs(plan.roxzone.splitSec - prediction.roxzoneSec)).toBeLessThanOrEqual(8);
+      // The Roxzone row is the forecast's own number (Where you sit plots
+      // it); the clock's Roxzone is the remainder, within the lines' rounding.
+      expect(plan.roxzone.splitSec).toBe(Math.round(prediction.roxzoneSec));
+      expect(hyroxForecastRaceClock(prediction).roxzoneSec).toBe(prediction.totalSec - lines);
+      expect(Math.abs(prediction.totalSec - lines - plan.roxzone.splitSec)).toBeLessThanOrEqual(8);
     }
   });
 });
@@ -134,10 +137,10 @@ describe('buildHyroxRacePlan: same source as the forecast', () => {
     plan.legs.filter(l => l.kind === 'station').forEach(l => {
       expect(l.forecastSec).toBe(prediction.stations.find(x => x.station === l.station)!.adjustedSec);
     });
-    // The Roxzone carries the forecast's rounding remainder, so the 17
-    // forecast lines sum to the forecast.
-    expect(plan.legs.reduce((a, l) => a + l.forecastSec, 0) + plan.roxzone.forecastSec).toBe(prediction.totalSec);
-    expect(Math.abs(plan.roxzone.forecastSec - prediction.roxzoneSec)).toBeLessThanOrEqual(8);
+    // The Roxzone is the forecast's own; the 17 forecast lines sum to the
+    // forecast within the lines' own rounding (the clock ends on it exactly).
+    expect(plan.roxzone.forecastSec).toBe(Math.round(prediction.roxzoneSec));
+    expect(Math.abs(plan.legs.reduce((a, l) => a + l.forecastSec, 0) + plan.roxzone.forecastSec - prediction.totalSec)).toBeLessThanOrEqual(8);
   });
 });
 
