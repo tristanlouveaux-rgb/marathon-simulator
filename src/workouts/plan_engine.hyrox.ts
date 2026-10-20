@@ -420,7 +420,8 @@ import {
 //   restricted capacity's share; with no warm-up left the first round at
 //   easy effort serves as one;
 // - taper week 1 counts its brick run legs against the week before's
-//   running, both as the running share counts them.
+//   running, both as the running share counts them;
+// - the 15-min station floor reads the warm-up the session holds.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
