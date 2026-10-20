@@ -191,7 +191,13 @@ describe('buildCapabilityOffers: HYROX easy erg work is aerobic time', () => {
     expect((s.wks[wi].triWorkouts ?? []).some(isHyroxEasyErg)).toBe(false);
     const offers = await buildCapabilityOffers(s);
     const aerobic = offers.find(o => o.workout.discipline === 'bike');
-    expect(aerobic?.workout.estimatedDurationMin).toBe(ergMin + brickMin);
+    // The gated week's running share no longer pays for the dropped brick's
+    // run segments, so it can fund an easy run (the round-7 rule); the offer
+    // nets that running (lane H2b part 2: the week chosen here is a peak week
+    // whose easy erg session stands in a run slot).
+    const runMin = (wk: typeof ungated) => (wk.triWorkouts ?? []).filter(w => w.discipline === 'run' && !w.commute).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    expect(aerobic?.workout.estimatedDurationMin).toBe(ergMin + brickMin - (runMin(s.wks[wi]) - runMin(ungated)));
+    expect(ergMin).toBeGreaterThan(0);
   });
 });
 
