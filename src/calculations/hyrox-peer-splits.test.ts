@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HYROX_PEER_SEGMENTS,
   hyroxCompetitiveFloors,
+  hyroxPeerResidualWeights,
   hyroxPeerSplitsAt,
   hyroxRunLegShares,
   hyroxResultsTable,
@@ -29,14 +30,15 @@ describe('hyroxPeerSplitsAt: finishers at the same finish time', () => {
     }
   });
 
-  it('at a band\'s own median finish the split mix is that band\'s real medians', () => {
+  it('at a band\'s own median finish: the band\'s real medians plus the gap spread by skew', () => {
     const cell = HYROX_S89_BAND_SEEDS.open_singles.female!.intermediate!;
     const p = hyroxPeerSplitsAt(OS_W, cell.medians.total)!;
     const rawSum = HYROX_PEER_SEGMENTS.reduce((a, k) => a + cell.medians[k], 0);
-    const k = cell.medians.total / rawSum;
-    for (const seg of HYROX_PEER_SEGMENTS) expect(p.segments[seg]).toBeCloseTo(cell.medians[seg] * k, 6);
+    const gap = cell.medians.total - rawSum;
+    const w = hyroxPeerResidualWeights(OS_W)!;
+    for (const seg of HYROX_PEER_SEGMENTS) expect(p.segments[seg]).toBeCloseTo(cell.medians[seg] + gap * w[seg], 6);
     // The medians fall short of the median finish by under 1.3%.
-    expect(Math.abs(k - 1)).toBeLessThan(0.013);
+    expect(Math.abs(gap) / cell.medians.total).toBeLessThan(0.013);
   });
 
   it('agrees with each table\'s median at the median finish (within 2.5% a segment)', () => {
@@ -45,7 +47,7 @@ describe('hyroxPeerSplitsAt: finishers at the same finish time', () => {
       const p = hyroxPeerSplitsAt(cohort, secondsAtPercentileIn(total, 50))!;
       for (const seg of HYROX_PEER_SEGMENTS) {
         const median = secondsAtPercentileIn(hyroxResultsTable(seg, cohort)!, 50);
-        // The scaling to the finish lifts every segment about 1% over its own
+        // The medians' gap lifts the skewed segments a little over their own
         // median (medians are not additive); the shape matches.
         expect(Math.abs(p.segments[seg] - median) / median).toBeLessThan(0.025);
       }
@@ -58,14 +60,16 @@ describe('hyroxPeerSplitsAt: finishers at the same finish time', () => {
     for (const seg of HYROX_PEER_SEGMENTS) expect(fast.segments[seg]).toBeLessThan(slow.segments[seg]);
   });
 
-  it('past the fastest band keeps its split mix, scaled to the finish', () => {
+  it('past the fastest band keeps its split mix, scaled to the finish, plus the gap by skew', () => {
     const top = HYROX_S89_BAND_SEEDS.open_singles.male!.competitive!.medians;
-    const p = hyroxPeerSplitsAt(OS_M, top.total - 200)!;
+    const t = top.total - 200;
+    const p = hyroxPeerSplitsAt(OS_M, t)!;
     expect(p.position).toBe('faster');
-    const rawSum = HYROX_PEER_SEGMENTS.reduce((a, k) => a + top[k], 0);
-    expect(p.segments.wall_balls / p.segments.ski_erg).toBeCloseTo(top.wall_balls / top.ski_erg, 6);
-    expect(sumSegments(p.segments)).toBeCloseTo(top.total - 200, 6);
-    expect(rawSum).toBeGreaterThan(0);
+    const k = t / top.total;
+    const rawSum = HYROX_PEER_SEGMENTS.reduce((a, s) => a + top[s] * k, 0);
+    const w = hyroxPeerResidualWeights(OS_M)!;
+    for (const seg of HYROX_PEER_SEGMENTS) expect(p.segments[seg]).toBeCloseTo(top[seg] * k + (t - rawSum) * w[seg], 6);
+    expect(sumSegments(p.segments)).toBeCloseTo(t, 6);
   });
 
   it('Roxzone scales with the finish time (the data does not hold it constant)', () => {
@@ -77,6 +81,49 @@ describe('hyroxPeerSplitsAt: finishers at the same finish time', () => {
   it('rejects a missing finish', () => {
     expect(hyroxPeerSplitsAt(OS_W, 0)).toBeNull();
     expect(hyroxPeerSplitsAt(OS_W, NaN)).toBeNull();
+  });
+});
+
+const ALL_COHORTS: HyroxResultsCohort[] = [
+  OS_W, OS_M,
+  { format: 'pro_singles', sex: 'female' }, PS_M,
+  { format: 'open_doubles', sex: 'female' }, { format: 'open_doubles', sex: 'male' }, OD_X,
+  { format: 'pro_doubles', sex: 'female' }, { format: 'pro_doubles', sex: 'male' },
+  { format: 'open_singles', sex: 'pooled' }, { format: 'pro_singles', sex: 'pooled' },
+  { format: 'open_doubles', sex: 'pooled' }, { format: 'pro_doubles', sex: 'pooled' },
+];
+const BANDS = ['competitive', 'advanced', 'intermediate', 'novice', 'beginner'] as const;
+
+describe('the medians\' additivity gap goes to the skewed segments (review 3)', () => {
+  it('weights are each segment\'s Bowley skew from the cohort\'s own table, summing to 1', () => {
+    for (const cohort of ALL_COHORTS) {
+      const w = hyroxPeerResidualWeights(cohort)!;
+      expect(HYROX_PEER_SEGMENTS.reduce((a, s) => a + w[s], 0)).toBeCloseTo(1, 9);
+      const skew = (seg: string) => {
+        const t = hyroxResultsTable(seg as never, cohort)!;
+        const q = (pct: number) => secondsAtPercentileIn(t, pct);
+        return Math.max(0, (q(75) - q(50)) - (q(50) - q(25)));
+      };
+      const total = HYROX_PEER_SEGMENTS.reduce((a, s) => a + skew(s), 0);
+      for (const seg of HYROX_PEER_SEGMENTS) expect(w[seg]).toBeCloseTo(skew(seg) / total, 9);
+    }
+  });
+
+  it('the run total takes its skew share, not half the gap: at every band\'s median finish in every cohort it is under 26 s and below the size-proportional share', () => {
+    for (const cohort of ALL_COHORTS) {
+      const cells = HYROX_S89_BAND_SEEDS[cohort.format][cohort.sex] ?? HYROX_S89_BAND_SEEDS[cohort.format].pooled!;
+      for (const b of BANDS) {
+        const m = cells[b]?.medians;
+        if (!m) continue;
+        const p = hyroxPeerSplitsAt(cohort, m.total)!;
+        const rawSum = HYROX_PEER_SEGMENTS.reduce((a, s) => a + m[s], 0);
+        const gap = m.total - rawSum;
+        const runShare = p.segments.run_total - m.run_total;
+        const proportional = gap * (m.run_total / rawSum);
+        expect(Math.abs(runShare)).toBeLessThan(26);
+        expect(Math.abs(runShare)).toBeLessThanOrEqual(Math.abs(proportional) + 1e-9);
+      }
+    }
   });
 });
 

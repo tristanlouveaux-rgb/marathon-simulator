@@ -781,7 +781,8 @@ export const HYROX_PEER_SEGMENTS: readonly HyroxPeerSegment[] = ['run_total', ..
 export interface HyroxPeerSplits {
   cohort: HyroxResultsCohort;
   totalSec: number;
-  /** Seconds per segment, scaled so the 10 segments sum to totalSec. */
+  /** Seconds per segment: the band medians at totalSec plus the medians'
+   *  additivity gap spread by skew, so the 10 segments sum to totalSec. */
   segments: Record<HyroxPeerSegment, number>;
   /** segments.run_total over the 8 legs, by the cohort's median leg shape. */
   runLegsSec: number[];
@@ -816,6 +817,29 @@ export function hyroxRunLegShares(cohort: HyroxResultsCohort): number[] {
 }
 
 /**
+ * Each segment's weight in the medians' additivity gap (hyroxPeerSplitsAt):
+ * its right skew in the cohort's own S8-S9 results table, the Bowley
+ * numerator (p75 - p50) - (p50 - p25), as a share of the 10 segments' total.
+ * A right-skewed split's mean sits above its median, and the means are what
+ * add up to the finish, so the gap between the summed medians and the median
+ * finish belongs mostly to the skewed segments (Open Singles women: run total
+ * 94 s, wall balls 40 s, Roxzone 36 s, SkiErg 4 s). A segment with no right
+ * skew gets none. Null without a published table for every segment.
+ */
+export function hyroxPeerResidualWeights(cohort: HyroxResultsCohort): Record<HyroxPeerSegment, number> | null {
+  const skew = {} as Record<HyroxPeerSegment, number>;
+  for (const seg of HYROX_PEER_SEGMENTS) {
+    const table = hyroxResultsTable(seg, cohort);
+    if (!table) return null;
+    const q = (pct: number) => secondsAtPercentileIn(table, pct);
+    skew[seg] = Math.max(0, (q(75) - q(50)) - (q(50) - q(25)));
+  }
+  const sum = HYROX_PEER_SEGMENTS.reduce((a, seg) => a + skew[seg], 0);
+  if (!(sum > 0)) return null;
+  return Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, skew[seg] / sum])) as Record<HyroxPeerSegment, number>;
+}
+
+/**
  * The peer reference for a finish time: what finishers in the cohort who
  * finished in `totalSec` typically spend on each segment.
  *
@@ -824,10 +848,15 @@ export function hyroxRunLegShares(cohort: HyroxResultsCohort): number[] {
  * five bands from the top 1% to the slowest 7%), each band anchored at its
  * own median finish. Between two anchors each segment is interpolated
  * linearly in finish time; past the fastest or slowest anchor the end band's
- * split mix is scaled to the finish time. Medians do not add up (the 10
+ * split mix is scaled to the finish time. Medians do not add up: the 10
  * segment medians of a band sum to within 1.3% of its median finish, nearly
- * always under it), so the segments are then scaled together to sum to
- * `totalSec`.
+ * always under it. That gap (finish minus the summed medians) is spread by
+ * each segment's right skew in the cohort's results (hyroxPeerResidualWeights),
+ * so the reference sums to `totalSec` and an athlete at their peers' typical
+ * mix loses nothing anywhere. Spreading it by segment size instead put about
+ * half of it on the run total (19 to 33 s at the band median finishes), so a
+ * typical runner read 20 to 30 s gained on Running; by skew the run takes 4
+ * to 25 s, its own share (lane rp review 3).
  *
  * Why not each segment's own quantile at the finish percentile: no finisher
  * sits at the same percentile in every segment, so per-segment quantiles run
@@ -836,9 +865,11 @@ export function hyroxRunLegShares(cohort: HyroxResultsCohort): number[] {
  * about 180 s on the Roxzone for the slowest band). The conditional medians are the field's own
  * answer to "what do athletes who finish in this time do".
  *
- * Limits: cohort medians, not the same athletes; one leg shape for every
- * finish time; venues differ (sled surface, run course, Roxzone layout), and
- * the band medians mix every venue. Side of the line: tracking.
+ * Limits: cohort medians, not the same athletes; the skew weights are the
+ * whole field's, not the skew among finishers at one time (the data has no
+ * per-band quartiles); one leg shape for every finish time; venues differ
+ * (sled surface, run course, Roxzone layout), and the band medians mix every
+ * venue. Side of the line: tracking.
  */
 export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number): HyroxPeerSplits | null {
   if (!Number.isFinite(totalSec) || totalSec <= 0) return null;
@@ -864,9 +895,13 @@ export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number):
     const w = (totalSec - a.total) / (b.total - a.total);
     raw = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, a[seg] + w * (b[seg] - a[seg])])) as Record<HyroxPeerSegment, number>;
   }
-  const sum = HYROX_PEER_SEGMENTS.reduce((acc, seg) => acc + raw[seg], 0);
-  const k = totalSec / sum;
-  const segments = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, raw[seg] * k])) as Record<HyroxPeerSegment, number>;
+  const residual = totalSec - HYROX_PEER_SEGMENTS.reduce((acc, seg) => acc + raw[seg], 0);
+  const weights = hyroxPeerResidualWeights(cohort);
+  const rawSum = totalSec - residual;
+  const segments = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [
+    seg,
+    raw[seg] + residual * (weights ? weights[seg] : raw[seg] / rawSum),
+  ])) as Record<HyroxPeerSegment, number>;
   const runLegsSec = hyroxRunLegShares(cohort).map(sh => segments.run_total * sh);
   return { cohort, totalSec, segments, runLegsSec, position };
 }

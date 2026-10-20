@@ -10,8 +10,9 @@
  * race's format; singles by the athlete's sex, doubles by the pair's
  * division, hyroxResultsCohort). The peers are hyroxPeerSplitsAt at the
  * result's finish time: the real median split of every segment among
- * finishers in each band of that field, interpolated by finish time and
- * scaled to sum to the finish (hyrox-results.ts). Each segment's time lost is
+ * finishers in each band of that field, interpolated by finish time, with the
+ * medians' additivity gap spread by each segment's skew so they sum to the
+ * finish (hyrox-results.ts). Each segment's time lost is
  * the athlete's split minus the peers'. When all 17 segments are known, time
  * lost and time gained balance to zero; the ranking shows where the time went.
  *
@@ -32,9 +33,9 @@
  * Limits: the peers are cohort medians, not the same athletes; venues differ
  * (sled surface and lane, run course length, Roxzone layout), so a segment
  * can read slow at a slow venue; the run-leg shape is one shape for every
- * finish time; the scaling of the peers to the finish puts about half of the
- * medians' additivity gap on the run total, so a typical athlete reads 20 to
- * 30 s gained on Running (SCIENCE_LOG §DO).
+ * finish time; the medians' additivity gap (up to 67 s at a band's median
+ * finish) is spread by the whole field's skew per segment, an estimate of
+ * where finishers at one time spend it (SCIENCE_LOG §DO).
  */
 
 import type { SimulatorState } from '@/types/state';

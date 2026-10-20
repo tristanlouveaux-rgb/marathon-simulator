@@ -12,12 +12,15 @@ import {
   type HyroxPastRaceSplits,
 } from './hyrox-lose-time';
 import {
+  HYROX_PEER_SEGMENTS,
+  hyroxPeerResidualWeights,
   hyroxPeerSplitsAt,
   hyroxResultsTable,
   secondsAtPercentileIn,
   type HyroxResultsCohort,
 } from './hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { HYROX_S89_BAND_SEEDS } from '@/data/hyrox-results-s79';
 import type { SimulatorState } from '@/types/state';
 import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 
@@ -46,6 +49,32 @@ describe('compareWithPeers: quantile-free peer comparison', () => {
     const run = segs.find(s => s.key === 'run_total')!;
     expect(run.legs!.map(l => l.leg)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     for (const l of run.legs!) expect(Math.abs(l.lostSec)).toBeLessThan(1e-6);
+  });
+
+  it('every cohort: an athlete at the band\'s own segment medians, with the medians\' gap on the skewed segments, reads Running (and every segment) level', () => {
+    const cohorts: HyroxResultsCohort[] = [
+      OS_W, { format: 'open_singles', sex: 'male' },
+      { format: 'pro_singles', sex: 'female' }, { format: 'pro_singles', sex: 'male' },
+      { format: 'open_doubles', sex: 'female' }, { format: 'open_doubles', sex: 'male' }, { format: 'open_doubles', sex: 'mixed' },
+      { format: 'pro_doubles', sex: 'female' }, { format: 'pro_doubles', sex: 'male' },
+    ];
+    for (const cohort of cohorts) {
+      const w = hyroxPeerResidualWeights(cohort)!;
+      for (const band of ['competitive', 'advanced', 'intermediate', 'novice', 'beginner'] as const) {
+        const m = HYROX_S89_BAND_SEEDS[cohort.format][cohort.sex]![band]!.medians;
+        const gap = m.total - HYROX_PEER_SEGMENTS.reduce((a, seg) => a + m[seg], 0);
+        const at = (seg: (typeof HYROX_PEER_SEGMENTS)[number]) => m[seg] + gap * w[seg];
+        const segs = compareWithPeers(cohort, m.total, {
+          stations: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, at(st)])) as Record<HyroxStation, number>,
+          runTotalSec: at('run_total'),
+          roxzoneSec: at('roxzone'),
+        });
+        expect(segs).toHaveLength(10);
+        const run = segs.find(sg => sg.key === 'run_total')!;
+        expect(Math.abs(run.lostSec)).toBeLessThan(HYROX_LOSE_TIME_MATERIAL_SEC);
+        for (const sg of segs) expect(Math.abs(sg.lostSec)).toBeLessThan(0.5);
+      }
+    }
   });
 
   it('a result at every table\'s median (finish = their sum) loses under 10 s on any segment', () => {

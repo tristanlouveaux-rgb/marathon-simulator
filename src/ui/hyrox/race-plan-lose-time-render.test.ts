@@ -242,7 +242,7 @@ describe('where you lost time', () => {
     const legs = r.hyroxPreviousRunSplitsSec!.map((v, i) => (v as number) + (i === 0 ? 30 : 20));
     const s = hyroxState({ ...r, hyroxPreviousRunSplitsSec: legs, hyroxPreviousRoxzoneSec: r.hyroxPreviousRoxzoneSec! - 170 });
     const lt = analyzeHyroxLoseTime(s);
-    expect(lt.headline).toBe('Most time lost on Running: 2:50 slower than athletes finishing in 1:24:31');
+    expect(lt.headline).toBe('Most time lost on Running: 2:51 slower than athletes finishing in 1:24:31');
     document.body.innerHTML = renderLoseTimeBody(lt, true);
     const run = document.querySelectorAll('[data-lt-seg="run_total"]');
     expect(run.length).toBe(1);
