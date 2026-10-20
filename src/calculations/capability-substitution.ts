@@ -46,13 +46,14 @@ export interface CapabilityOffer {
 type CapabilityMode = 'hyrox' | 'triathlon';
 
 /** Is this an aerobic (engine-building) session for the mode? HYROX: runs,
- *  bricks, commute runs and easy erg work (continuous easy aerobic volume on
- *  the SkiErg or row erg; the station gate drops it, so an injury that does
- *  frees its minutes for the substitute). */
+ *  bricks, race simulations (runs and stations stacked, as a brick), commute
+ *  runs and easy erg work (continuous easy aerobic volume on the SkiErg or row
+ *  erg; the station gate drops it, so an injury that does frees its minutes
+ *  for the substitute). */
 function isAerobic(w: Workout, mode: CapabilityMode): boolean {
   const t = (w.t || '') as string;
   if (mode === 'hyrox') {
-    return t.startsWith('hyrox_run_') || t === 'hyrox_brick' || t === 'hyrox_mini_brick'
+    return t.startsWith('hyrox_run_') || t === 'hyrox_brick' || t === 'hyrox_mini_brick' || t === 'hyrox_sim'
       || isHyroxEasyErg(w)
       || (t === 'easy' && (w as { commute?: boolean }).commute === true);
   }

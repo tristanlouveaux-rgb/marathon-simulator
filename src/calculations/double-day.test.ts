@@ -163,6 +163,18 @@ describe('computeWeekDoubleDayDays — brick exclusion', () => {
     expect(computeWeekDoubleDayDays(wk, PLAN_START)).toEqual([]);
   });
 
+  it('suppresses bonus on a planned HYROX race simulation day (its runs and stations logged apart)', () => {
+    const wk = emptyWeek(1);
+    wk.triWorkouts = [
+      { n: 'Race Simulation', t: 'hyrox_sim', d: '', r: 7, dayOfWeek: 5 } as Workout,
+    ];
+    wk.garminActuals = {
+      W1: makeActual({ garminId: 'g1', startTime: '2026-01-10T08:00:00Z', durationSec: 3600 }),
+      W2: makeActual({ garminId: 'g2', startTime: '2026-01-10T10:00:00Z', durationSec: 3600 }),
+    };
+    expect(computeWeekDoubleDayDays(wk, PLAN_START)).toEqual([]);
+  });
+
   it('collapses an unplanned bike→run pair (≤30 min gap) into one virtual session', () => {
     const wk = emptyWeek();
     // bike → run within 15 min = unplanned brick; bike+run together count as one session.

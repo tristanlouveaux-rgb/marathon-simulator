@@ -199,5 +199,38 @@ describe('buildCapabilityOffers: HYROX easy erg work is aerobic time', () => {
     expect(aerobic?.workout.estimatedDurationMin).toBe(ergMin + brickMin - (runMin(s.wks[wi]) - runMin(ungated)));
     expect(ergMin).toBeGreaterThan(0);
   });
+
+  it('a race simulation the injury rebuild drops counts in the dropped aerobic minutes (runs and stations stacked, as a brick)', async () => {
+    const band = 'intermediate' as const;
+    const s = getDefaultState();
+    s.eventType = 'hyrox';
+    s.planStartDate = '2026-09-28';
+    s.w = 1;
+    s.tw = 18;
+    s.hyroxConfig = {
+      format: 'open_singles', athleteBand: band, hyroxPhase: 'base',
+      stationAccess: { sled: 'always', skiErg: true, rowErg: true },
+      weeklyMTL: 0, mtlCap: HYROX_MTL_CAP[band], mtlHistory: [],
+      runsPerWeek: HYROX_WEEKLY_SESSIONS[band].runs, stationSessionsPerWeek: HYROX_WEEKLY_SESSIONS[band].stations,
+      bricksPerWeek: HYROX_WEEKLY_SESSIONS[band].bricks, weeklyHoursAvailable: 8,
+      generatorVersion: HYROX_GENERATOR_VERSION,
+    };
+    s.wks = generateHyroxPlan(s);
+    const wi = s.wks.findIndex(wk => (wk.triWorkouts ?? []).some(w => w.t === 'hyrox_sim'));
+    expect(wi).toBeGreaterThanOrEqual(0);
+    s.w = wi + 1;
+    const ungated = s.wks[wi];
+    const min = (ws: typeof ungated.triWorkouts, f: (w: NonNullable<typeof ws>[number]) => boolean) => (ws ?? []).filter(f).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
+    const simMin = min(ungated.triWorkouts, w => w.t === 'hyrox_sim');
+    const ergMin = min(ungated.triWorkouts, isHyroxEasyErg);
+    s.injuryState = injury({ runCapacity: 100, bikeCapacity: 100, lowerLoadCapacity: 100, upperLoadCapacity: 0 });
+    s.wks[wi] = regenerateHyroxWeek(s, wi + 1)!;
+    expect((s.wks[wi].triWorkouts ?? []).some(w => w.t === 'hyrox_sim')).toBe(false);
+    const offers = await buildCapabilityOffers(s);
+    const aerobic = offers.find(o => o.workout.discipline === 'bike');
+    const runMin = (wk: typeof ungated) => min(wk.triWorkouts, w => w.discipline === 'run' && !w.commute);
+    expect(simMin).toBeGreaterThan(0);
+    expect(aerobic?.workout.estimatedDurationMin).toBe(simMin + ergMin - (runMin(s.wks[wi]) - runMin(ungated)));
+  });
 });
 
