@@ -17,7 +17,7 @@ import { STATION_DISPLAY, STATION_MIN_SEC, HYROX_STATION_ORDER } from '@/constan
 import type { HyroxDivision, HyroxStation } from '@/types/triathlon';
 import { parseHyroxResultsText } from '@/ui/wizard/steps/hyrox-results-parse';
 import { hyroxPastRaceSplits } from '@/calculations/hyrox-lose-time';
-import { hyroxDivisionOptions, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
+import { hyroxDivisionOptions, isHyroxDoublesFormat, resolveHyroxDivision } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -182,7 +182,10 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
 
   const saveBtn = overlay.querySelector('#lpt-save') as HTMLButtonElement;
   const refreshSave = (): void => {
-    const ok = timeSec != null && timeSec > 0 && format != null;
+    // A doubles result needs its division (preselected from biological sex
+    // when known, paintDivision), so the comparison field is never guessed.
+    const ok = timeSec != null && timeSec > 0 && format != null
+      && (!isHyroxDoublesFormat(format) || division != null);
     saveBtn.disabled = !ok;
     saveBtn.style.opacity = ok ? '1' : '0.5';
   };
@@ -241,6 +244,9 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     divisionRow.style.display = doubles ? 'block' : 'none';
     const options = format ? hyroxDivisionOptions(format, s.biologicalSex) ?? [] : [];
     if (division && doubles && !options.includes(division)) division = undefined;
+    // Nothing picked yet: the division biological sex implies (a same-sex
+    // pair), still one tap to change; unknown sex leaves it to the athlete.
+    if (doubles && !division && format) division = resolveHyroxDivision(format, s.biologicalSex) ?? undefined;
     overlay.querySelectorAll<HTMLButtonElement>('[data-division]').forEach(b => {
       const d = b.getAttribute('data-division') as HyroxDivision;
       const active = d === division;
@@ -254,8 +260,13 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     btn.addEventListener('click', () => {
       division = btn.getAttribute('data-division') as HyroxDivision;
       paintDivision();
+      refreshSave();
     });
   });
+  // A stored doubles result logged before its division was recorded opens
+  // with the division biological sex implies, shown and changeable.
+  paintDivision();
+  refreshSave();
 
   // Format pills
   overlay.querySelectorAll<HTMLButtonElement>('[data-fmt]').forEach(btn => {

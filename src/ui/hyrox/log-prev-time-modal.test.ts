@@ -149,6 +149,39 @@ describe('division of a doubles result', () => {
     expect(s.hyroxConfig!.hyroxPreviousTimeDivision).toBe('mixed');
   });
 
+  it('a singles athlete picking a doubles format gets the sex-implied division preselected; Mixed is one tap', () => {
+    const s = init();
+    openHyroxLogPrevTimeModal();
+    $<HTMLButtonElement>('[data-fmt="open_doubles"]').click();
+    const women = $<HTMLButtonElement>('[data-division="women"]');
+    expect(women.style.background).toBe('var(--c-black)');
+    expect($<HTMLButtonElement>('#lpt-save').disabled).toBe(false);
+    save();
+    expect(s.hyroxConfig!.hyroxPreviousTimeDivision).toBe('women');
+  });
+
+  it('unknown sex: nothing is preselected and Save waits for a division', () => {
+    const s = init();
+    s.biologicalSex = undefined;
+    openHyroxLogPrevTimeModal();
+    $<HTMLButtonElement>('[data-fmt="open_doubles"]').click();
+    const saveBtn = $<HTMLButtonElement>('#lpt-save');
+    expect(saveBtn.disabled).toBe(true);
+    $<HTMLButtonElement>('[data-division="mixed"]').click();
+    expect(saveBtn.disabled).toBe(false);
+    save();
+    expect(s.hyroxConfig!.hyroxPreviousTimeDivision).toBe('mixed');
+  });
+
+  it('a stored doubles result with no division opens with the sex-implied division shown', () => {
+    const s = init();
+    s.hyroxConfig!.hyroxPreviousTimeFormat = 'open_doubles';
+    s.hyroxConfig!.hyroxPreviousTimeDivision = undefined;
+    openHyroxLogPrevTimeModal();
+    expect($<HTMLButtonElement>('[data-division="women"]').style.background).toBe('var(--c-black)');
+    expect($<HTMLButtonElement>('#lpt-save').disabled).toBe(false);
+  });
+
   it('Pro Doubles has no Mixed; a singles result stores no division', () => {
     const s = init();
     openHyroxLogPrevTimeModal();
