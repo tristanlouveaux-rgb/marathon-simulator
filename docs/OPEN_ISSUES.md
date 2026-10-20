@@ -8,6 +8,32 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+> **2026-10-20, HYROX meeting prep (screenshot pass, claims check and partner research): ISSUE-404 to ISSUE-406.** Sources: `docs/meetings/_research-shots.md`, `_research-check.md`, `_research-context.md`.
+
+### ISSUE-404: HYROX results data rights after the 15 October cease-and-desist letters *(P1, 2026-10-20, business and legal risk; needs Tristan's decision and a lawyer's view)* — OPEN
+
+On 15 October 2026 HYROX reportedly sent cease-and-desist letters to at least eight results sites and apps (RoxOpt and HyCoach confirmed). They demand that recipients stop scraping, delete all HYROX data including derived datasets, and stop commercial use of the HYROX name. The letters cite German database right (§87b UrhG), GDPR (no athlete consent) and trademark, and say HYROX is "currently not in a position to grant a commercial licence". Source: the5krunner, citing Hybrid Fitness Media (https://the5krunner.com/2026/10/15/hyrox-cease-and-desist-scrapers/). No statement from HYROX itself was found. hyrox.com terms (clause 6.1) ban text and data mining and scraping.
+
+Mosaic exposure: `src/data/hyrox-results-s79.ts` (seasons 7 to 9, from the Kaggle "HYROX Race Results, Seasons 7-9 (Anonymised)" dataset built with pyrox) and `src/data/hyrox-population-distributions.ts` (seasons 4 to 6, Kaggle jgug05, in the App Store build). Both ship aggregate tables only, never rows. They feed the forecast's percentiles and seeds, field rank, Where you sit, Where you lost time, the race plan's floors, the Doubles and Pro conversions, and the planning band. In-app captions credit "HYROX results ... via the open pyrox project".
+
+Decide after the 21 October meeting: (a) seek a licence or a consent-based route (athletes connect their own results); (b) prepare a fallback that removes or replaces the results-derived tables without breaking the forecast and plan (inventory every consumer of `hyrox-results.ts` and `hyrox-population-distributions.ts` first); (c) review in-app HYROX naming against the brand guidelines (no HYROX in product names; descriptive use only).
+
+### ISSUE-405: HYROX Station Circuit (technique) per-round targets read faster than race pace *(P1, 2026-10-20, seen in the meeting screenshot pass)* — OPEN
+
+A technique circuit's per-round target is 65% of the full-station race time shown against the full station distance, e.g. SkiErg 1000 m in 2:46 "at technique pace" for an athlete whose race SkiErg is 4:08 (`src/workouts/hyrox-generators.ts:535`, the seed × 0.65; shown by `src/ui/hyrox/workout-detail-modal.ts:35`). Either the distance or the time is wrong for a technique round. Check whether lane `fix/hyrox-h2b` (complete station sessions, unmerged) already changes this before fixing on `fix/load-accounting`.
+
+### ISSUE-406: HYROX small bugs found in the meeting screenshot pass *(P2, 2026-10-20)* — OPEN
+
+(a) **Forecast week off by one.** The Forecast sub-line reads "Week 7 of 17" while Home, Plan and Stats read Week 6: `src/ui/hyrox/forecast-view.ts:1118` adds 1 to `s.w`, which is already 1-based (`stats-view.ts:143` uses `s.w`).
+(b) **Home coach line ignores HYROX hard sessions.** `hyrox_run_tempo` and the station types are not in `HARD_WORKOUT_TYPES` (`src/workouts/scheduler.ts:8-11`; `src/ui/planned-day-tss.ts:69-71`; `src/calculations/daily-coach.ts:874`), so a Tempo Run day can read "Easy effort today allows recovery".
+(c) **Passive step load reads as training.** Any step load before the session flips Home to "Light session was the right call." (`daily-coach.ts:265`, `:997`).
+(d) **Two run paces on screen.** The plan uses the stored pace (4:28/km; `plan_engine.hyrox.ts:930`, `:1165`) while the Forecast and Stats show the derived pace (4:07/km); the Forecast chip says "Set manually" while Stats says "Updated from your runs" for the same value (`forecast-view.ts:921-923`).
+(e) **Station targets fixed at plan build.** A future Station Density keeps the 7:20 Wall Balls target after a 6:34 half-test.
+(f) **Race order footer** says "4.5 sessions/wk" while the Training chip says 5/wk.
+(g) **Week 1 assessment wording overpromises.** It says the times calibrate benchmarks, but the assessment is excluded from benchmark learning (`hyrox-session-benchmarks.ts:73-76`; wording `hyrox-generators.ts:880`; FEATURES H1 repeats it).
+(h) **Onboarding title** reads "Hyrox setup", not "HYROX" (`src/ui/wizard/steps/hyrox-setup.ts:214`); the setup step leaves a plain strip in the top safe area, and the Back pill overlaps hint text mid-scroll.
+(i) The hero chips' mid-word breaks are ISSUE-402 (n); seen at 390 px too.
+
 > **2026-10-20, HYROX race plan and where you lost time (lane rp): open questions (ISSUE-402) and a data bug (ISSUE-403).** Raised in the implementer and reviewer reports for `feat/hyrox-race-plan` (merged in `63c5942`; CHANGELOG 2026-10-20; SCIENCE_LOG §DO). Notes added to ISSUE-397 (d), ISSUE-196 and ISSUE-399 (a). None of the lane's changes is marked fixed: they are unit-tested, not device-verified (`docs/DEVICE_TESTS.md`).
 
 ### ISSUE-402: HYROX race plan and where you lost time open questions *(P2, 2026-10-20, needs Tristan's decisions)* — OPEN
