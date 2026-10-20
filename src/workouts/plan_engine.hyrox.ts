@@ -52,7 +52,10 @@
  *      before race week re-places station work its race window drops on a
  *      free day 7 or more days out (placeWorkOutsideRaceWindow).
  *   7. Spare minutes (lane H2b part 2): what the sessions leave of the
- *      week's size goes first to the station sessions' easy erg finishers
+ *      week's size goes first to strength (the station sessions' blocks,
+ *      then the standalone session: the week is sized without it and built
+ *      again with what its limits leave, addStrength; review 2026-10-20),
+ *      then to the station sessions' easy erg finishers
  *      (each session up to the tier long-run cap), then to easy erg sessions
  *      (discipline 'erg') in free slots, up to the athlete's chosen session
  *      total, in the MTL the week leaves under the cap, each session up to
@@ -127,7 +130,7 @@ import {
   hyroxStationToCut, hyroxMinRounds, withHyroxStationLoads,
   hyroxSessionWarmup, withHyroxSessionParts, withHyroxFinisher, hyroxSessionWorkMin, generateHyroxSim, isHyroxSim,
 } from './hyrox-generators';
-import { hyroxStrengthContent, runningStrengthPhaseMinutes } from './gym';
+import { hyroxStrengthContent, hyroxStrengthLength } from './gym';
 import type { HyroxStrengthBlock } from '@/types/triathlon';
 import {
   findHyroxWeekSchedule, scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, isHardRun, isEccentricSession,
@@ -681,7 +684,8 @@ interface HyroxRaceWeek {
 }
 
 /** A reference week's per-session caps (sessionCapsOf). */
-type HyroxSessionCaps = Partial<Record<string, { min: number; rounds: number; stations: number; mtl: number }>>;
+type HyroxSessionCap = { min: number; rounds: number; stations: number; mtl: number; totalMin: number; totalMtl: number };
+type HyroxSessionCaps = Partial<Record<string, HyroxSessionCap>>;
 
 /** Cap class of a station or brick session type. */
 function sessionCapClass(t: string): 'circuit' | 'brick' {
@@ -691,7 +695,7 @@ function sessionCapClass(t: string): 'circuit' | 'brick' {
 /** The cap for a session type: its own entry, else its class's (a deload or
  *  taper week holding a type the reference week did not, e.g. the taper's
  *  technique circuit after a race-pace peak). */
-function sessionCapFor(caps: HyroxSessionCaps | undefined, t: string): { min: number; rounds: number; stations: number; mtl: number } | undefined {
+function sessionCapFor(caps: HyroxSessionCaps | undefined, t: string): HyroxSessionCap | undefined {
   if (!caps) return undefined;
   return caps[t] ?? caps[sessionCapClass(t)];
 }
@@ -870,14 +874,17 @@ interface HyroxWeekInputs {
   /** The latest weekday the sim may take (hyroxSimLastDow: 14 or more days
    *  before race day). Unset: any day. */
   simLastDow?: number;
+  /** The most minutes of strength the week may hold (the station sessions'
+   *  blocks, then the standalone session): what its size leaves after its
+   *  runs and station work (buildHyroxTrainingWeeks addStrength). Unset: no
+   *  strength (the week is sized without it). */
+  strengthMaxMin?: number;
 }
 
 /** What a training week over its size (the acute:chronic guard, the deload
  *  ceiling, the weekly hours, the phase budget) leaves out, in this order,
  *  when cutting easy erg work and scaling the station work and easy runs
- *  down to their floors still leave it above: easy runs, the standalone
- *  strength session (lane H2b part 2: the block in the station session
- *  stays), stations out of
+ *  down to their floors still leave it above: easy runs, stations out of
  *  each circuit down to MIN_CIRCUIT_STATIONS (the circuit stays; a station
  *  session's floor is 2 rounds of every station, 50 to 65 min, so before
  *  2026-10-13 a deload at low hours lost the whole circuit), the technique
@@ -894,13 +901,30 @@ interface HyroxWeekInputs {
  *  leaves only when the week is still over without the long run, and the
  *  long run then takes back what fits. Within the station work, a product
  *  order: no source ranks sessions for this. */
-const HYROX_GUARD_OMIT_ORDER = ['easy', 'strength', 'stations', 'technique', 'light', 'brick'] as const;
+// Strength (the station sessions' blocks and the standalone session) is in no
+// omit group: it is added after the week is sized, from what the week's size
+// leaves (buildHyroxTrainingWeeks addStrength; lane H2b part 2 review).
+const HYROX_GUARD_OMIT_ORDER = ['easy', 'stations', 'technique', 'light', 'brick'] as const;
 
 /** Upper end of the week-size search under a fixed ceiling
  *  (buildHyroxTrainingWeeks fit): the largest weekly hours any band can
  *  choose (HYROX_HOURS_RANGE), in minutes. */
 const HYROX_SIZE_SEARCH_MAX_MIN = Math.max(...Object.values(HYROX_HOURS_RANGE).map(r => r.max)) * 60;
 type HyroxGuardOmit = typeof HYROX_GUARD_OMIT_ORDER[number] | 'quality';
+
+/** The size solver's inputs a week build reads (buildHyroxTrainingWeeks). */
+interface WeekBuildInputs {
+  sizeMin: number;
+  scale: number;
+  ergCap: number | undefined;
+  easyCap: number | undefined;
+  omitted: HyroxGuardOmit[];
+  longRunMin: number | null;
+  longFixed: boolean;
+  ergBlocked: boolean;
+  plusOne: boolean;
+  ceilingName: string | undefined;
+}
 
 /**
  * Days a race-week session may take, in order of preference (the running
@@ -1114,14 +1138,10 @@ export function hyroxRaceTaperFloorCircuit(
     if (next === c) break;
     c = next;
   }
-  // With the parts the week's own circuit holds (lane H2b part 2): the
-  // warm-up, and in the week before race week the light strength block
-  // (race week holds none).
-  const light = raceWeek ? null : hyroxStrengthContent(hx.athleteBand, 'taper', weekIndex, { minutes: HYROX_STRENGTH_BLOCK_MIN, light: true });
-  c = withHyroxSessionParts(c, {
-    warmup: hyroxSessionWarmup(hx.stationAccess, weekIndex, state.bodyWeightKg),
-    strength: light ? { name: light.name, lines: light.lines, min: HYROX_STRENGTH_BLOCK_MIN, rpe: light.rpe, light: true, eccentric: light.eccentric } : null,
-  });
+  // With its warm-up, as the week's own circuit holds it (lane H2b part 2).
+  // The light strength block of the week before race week is no station work
+  // (stationWorkOf): it takes the week's spare minutes (addTaperBlock).
+  c = withHyroxSessionParts(c, { warmup: hyroxSessionWarmup(hx.stationAccess, weekIndex, state.bodyWeightKg) });
   const injuryState = (state as any).injuryState as InjuryState | undefined;
   const [gated] = weekIndex < (state.w ?? 1) ? [c] : applyHyroxInjuryGates([c], injuryState);
   if (!gated) return null;
@@ -1156,8 +1176,9 @@ function generateWeekSessions(
     if (counts.strength != null) counts.strength = Math.min(counts.strength, inputs.capCounts.strength ?? 0);
   }
   // A deload holds one strength session fewer (gym.ts generateGymWorkouts'
-  // deload rule): the standalone session goes, the station session's block
-  // stays (lane H2b part 2).
+  // deload rule): the standalone session goes; the station session's block
+  // stays when the deload's spare minutes hold it and the session stays no
+  // longer than its counterpart in the last loaded week (the strength step).
   if (inputs.deload && (counts.strength ?? 0) > 0) {
     counts.strength = (counts.strength ?? 0) - 1;
     adjustments.push(`W${weekIndex}: standalone strength session left out (deload: one strength session fewer)`);
@@ -1298,12 +1319,12 @@ function generateWeekSessions(
           // At this week's own beginner loads, never the heavier loads the
           // reference week's session held (Tristan 2026-10-20: a deload
           // after a load step copied the stepped load).
-          // Without the reference session's finisher: this week's spare
-          // minutes size its own (lane H2b part 2).
-          out = withHyroxFinisher(withHyroxStationLoads(
+          // Without the reference session's finisher and strength block:
+          // this week's spare minutes size its own (lane H2b part 2).
+          out = withHyroxSessionParts(withHyroxFinisher(withHyroxStationLoads(
             withHyroxRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0)),
             inputs.stationLoads, loadTier, bodyWeightKg,
-          ), 0, hx.stationAccess, weekIndex, bodyWeightKg);
+          ), 0, hx.stationAccess, weekIndex, bodyWeightKg), { strength: null });
           adjustments.push(sameType.length > 0
             ? `W${weekIndex}: ${out.n} repeats the reference week's at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`
             : `W${weekIndex}: ${was} becomes the reference week's ${out.n} at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`);
@@ -1447,10 +1468,10 @@ function generateWeekSessions(
     const base = stationAt(kind, i, targetMinutes);
     const w = rounds < (base.hyroxRounds ?? 1) ? roundsAt(base, `G|${kind}|${targetMinutes}|${i}`, rounds) : base;
     const maxRounds = inputs.maxCircuitRounds;
-    // Lane H2b part 2: the warm-up and the strength block open the session
-    // (sheet: every station session opens with a strength block), before
-    // the reference week's caps read its length.
-    let out = withHyroxSessionParts(w, { warmup: hyroxSessionWarmup(hx.stationAccess, i + weekIndex, bodyWeightKg), strength: blockFor(i) });
+    // Lane H2b part 2: the warm-up opens the session, before the reference
+    // week's caps read its length. Its strength block comes after the week
+    // is sized, from what the size leaves (the strength step, below).
+    let out = withHyroxSessionParts(w, { warmup: hyroxSessionWarmup(hx.stationAccess, i + weekIndex, bodyWeightKg) });
     if (maxRounds != null && (out.hyroxRounds ?? 0) > maxRounds) {
       adjustments.push(`W${weekIndex}: ${out.n} cut to ${maxRounds} rounds (the week before's)`);
       out = withHyroxRounds(out, maxRounds);
@@ -1473,6 +1494,8 @@ function generateWeekSessions(
   };
 
   const nonRun: Workout[] = [];
+  // Each station session's place in nonRun and its slot (blockFor).
+  const stationSlots: Array<{ at: number; i: number }> = [];
   for (let i = 0; i < sKinds.length; i++) {
     if (needsAssessment && i === 0) {
       // A beginner's assessment takes the week's loads: the sleds unloaded
@@ -1481,6 +1504,7 @@ function generateWeekSessions(
       continue;
     }
     if (!raceWeekCircuitOk) continue;
+    stationSlots.push({ at: nonRun.length, i });
     nonRun.push(makeStation(sKinds[i], i));
   }
   for (let i = 0; i < bKinds.length; i++) {
@@ -1523,30 +1547,6 @@ function generateWeekSessions(
       stationLoads: inputs.stationLoads,
       secondary: light,
     }), i))));
-  }
-  // The standalone strength session (lane H2b part 2): beginner and
-  // intermediate base weeks hold one beside the station session's block
-  // (sheet sessions.weekly and strength.sessions), drawn from gym.ts by band
-  // and phase at its phase length (runningStrengthPhaseMinutes: 45 min in
-  // base), shrinking with the week's scale like the other budget-sized
-  // sessions, never under the block length (HYROX_STRENGTH_BLOCK_MIN; the
-  // running pool's exercise count follows the length). One session a day
-  // keeps it off a run day (the sheet: at least 6 h from a run on the same
-  // day; the plan cannot model hours).
-  const strengthSlots = counts.strength ?? 0;
-  if (strengthSlots > 0 && omit.has('strength')) guardNote('standalone strength session');
-  const strengthMin = Math.max(HYROX_STRENGTH_BLOCK_MIN, Math.min(runningStrengthPhaseMinutes(kindPhase), Math.round(runningStrengthPhaseMinutes(kindPhase) * scale)));
-  for (let i = 0; i < strengthSlots && !omit.has('strength'); i++) {
-    const c = hyroxStrengthContent(band, kindPhase, weekIndex + 3 + i, { minutes: strengthMin, standalone: true, deload: !!inputs.deload });
-    nonRun.push({
-      t: 'gym',
-      n: 'Strength',
-      d: c.lines.join('\n'),
-      r: c.rpe,
-      rpe: c.rpe,
-      estimatedDurationMin: strengthMin,
-      ...(c.eccentric ? { hyroxEccentric: true } : {}),
-    });
   }
   // Running inside station and brick sessions counts toward the running
   // share: the run components of every station and brick session (today the
@@ -1846,6 +1846,70 @@ function generateWeekSessions(
   }
   if (longRun) runs.unshift(longRun);
 
+  // ── Strength: the week's spare minutes, after its runs and station work ──
+  // (lane H2b part 2 review, 2026-10-20). Parameter sheet split.running_share:
+  // running is 40% of the weekly hours and the other 60% holds the station
+  // session, strength and brick station work, so strength never takes a
+  // running minute, a quality run or HYROX work. The week is sized without it
+  // (strengthMaxMin unset: none); buildHyroxTrainingWeeks then builds it
+  // again with the minutes its size leaves (addStrength), and this step
+  // spends them: the station sessions' blocks first (sheet: every station
+  // session opens with a strength block; a station session's slot order),
+  // then the standalone session (beginner and intermediate base weeks, sheet
+  // sessions.weekly), at its content's length (hyroxStrengthLength) or what is
+  // left, never under HYROX_STRENGTH_BLOCK_MIN. What it spends comes out of
+  // the easy erg finishers and easy erg sessions (sized after it, fillSpare),
+  // which rank below it. Before (part 2), the blocks were fixed parts of every
+  // station session and the standalone session ranked above easy runs, so in
+  // low-hours base weeks strength displaced running (beginner base: 62 of 75
+  // weeks under 0.40 of the week as running, against 35 at part 1).
+  let strengthLeft = Math.max(0, inputs.strengthMaxMin ?? 0);
+  const strengthPhase = inputs.strengthMaxMin != null;
+  const spareWhy = 'strength takes the minutes the week\'s size leaves after its runs and station work';
+  for (const { at, i } of stationSlots) {
+    const block = blockFor(i);
+    if (!block) continue;
+    // A deload session is no longer than its counterpart in the last loaded
+    // week (sessionCaps): a block that would make it longer is left out (a
+    // deload reduces; it never adds what its reference week did not hold).
+    const refCap = sessionCapFor(inputs.sessionCaps, nonRun[at].t);
+    if (refCap && (nonRun[at].estimatedDurationMin ?? 0) + block.min > refCap.totalMin + 1e-6) {
+      if (strengthPhase) adjustments.push(`W${weekIndex}: strength block left out of the ${nonRun[at].n} (${ceilingName}: no longer than the reference week's)`);
+      continue;
+    }
+    if (strengthLeft >= block.min) {
+      nonRun[at] = withHyroxSessionParts(nonRun[at], { strength: block });
+      strengthLeft -= block.min;
+    } else if (strengthPhase) {
+      adjustments.push(`W${weekIndex}: strength block left out of the ${nonRun[at].n} (${spareWhy})`);
+    }
+  }
+  // The standalone session: one a day keeps it off a run day (sheet
+  // strength.concurrent: at least 6 h from a run on the same day; the plan
+  // cannot model hours). Its template rotates past the blocks' (slot
+  // weekIndex + the station slots), so the week never repeats a block.
+  const strengthSlots = counts.strength ?? 0;
+  for (let k = 0; k < strengthSlots; k++) {
+    const full = hyroxStrengthLength(band, kindPhase);
+    const len = Math.min(full, Math.floor(strengthLeft));
+    if (len < HYROX_STRENGTH_BLOCK_MIN) {
+      if (strengthPhase) adjustments.push(`W${weekIndex}: standalone strength session left out (${spareWhy})`);
+      continue;
+    }
+    if (len < full) adjustments.push(`W${weekIndex}: Strength session ${len} min, not ${full} (${spareWhy})`);
+    strengthLeft -= len;
+    const c = hyroxStrengthContent(band, kindPhase, weekIndex + sKinds.length + k, { minutes: len, standalone: true, deload: !!inputs.deload });
+    nonRun.push({
+      t: 'gym',
+      n: 'Strength',
+      d: c.lines.join('\n'),
+      r: c.rpe,
+      rpe: c.rpe,
+      estimatedDurationMin: len,
+      ...(c.eccentric ? { hyroxEccentric: true } : {}),
+    });
+  }
+
   const workouts: Workout[] = [...runs, ...nonRun];
 
   // Add commute runs. Appended on top of prescribed HYROX sessions (model
@@ -2039,7 +2103,7 @@ function generateWeekSessions(
   const finisherRoomOf = (w: Workout): number => {
     if (!(w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') || !w.hyroxSpec) return 0;
     const ref = sessionCapFor(inputs.sessionCaps, w.t);
-    const cap = Math.min(sessionCapMin, ref?.min ?? Infinity);
+    const cap = Math.min(sessionCapMin, ref?.totalMin ?? Infinity);
     const own = (w.estimatedDurationMin ?? 0) - (w.hyroxSpec.finisher?.min ?? 0);
     let room = cap - own;
     // A deload or taper session is no heavier than its counterpart either
@@ -2047,7 +2111,7 @@ function generateWeekSessions(
     if (ref) {
       const perMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg) ?? 0;
       const ownMtl = (w.musculoTendonLoad ?? 0) - (w.hyroxSpec.finisher?.mtl ?? 0);
-      if (perMin > 0) room = Math.min(room, (ref.mtl - ownMtl) / perMin);
+      if (perMin > 0) room = Math.min(room, (ref.totalMtl - ownMtl) / perMin);
     }
     return Math.max(0, Math.floor(room + 1e-9));
   };
@@ -2794,16 +2858,23 @@ function runningOf(ws: readonly Workout[]): number {
 /** Longest duration, most rounds, most stations and highest MTL per station
  *  and brick session type in a week, and per class ('circuit': technique or race pace;
  *  'brick': brick or mini brick). The deload's and the race taper's
- *  per-session caps (sessionCapFor). */
+ *  per-session caps (sessionCapFor). `min` and `mtl` are the session without
+ *  its strength block and finisher (its station work and warm-up: the parts
+ *  its week's size gives it, lane H2b part 2 review); `totalMin` and
+ *  `totalMtl` the whole session, which a finisher fills up to. */
 function sessionCapsOf(ws: readonly Workout[]): HyroxSessionCaps {
   const out: HyroxSessionCaps = {};
   const raise = (key: string, w: Workout) => {
     const cur = out[key];
+    const extraMin = (w.hyroxSpec?.strength?.min ?? 0) + (w.hyroxSpec?.finisher?.min ?? 0);
+    const extraMtl = w.hyroxSpec?.finisher?.mtl ?? 0;
     out[key] = {
-      min: Math.max(cur?.min ?? 0, w.estimatedDurationMin ?? 0),
+      min: Math.max(cur?.min ?? 0, (w.estimatedDurationMin ?? 0) - extraMin),
       rounds: Math.max(cur?.rounds ?? 0, w.hyroxRounds ?? 0),
       stations: Math.max(cur?.stations ?? 0, (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length),
-      mtl: Math.max(cur?.mtl ?? 0, w.musculoTendonLoad ?? 0),
+      mtl: Math.max(cur?.mtl ?? 0, (w.musculoTendonLoad ?? 0) - extraMtl),
+      totalMin: Math.max(cur?.totalMin ?? 0, w.estimatedDurationMin ?? 0),
+      totalMtl: Math.max(cur?.totalMtl ?? 0, w.musculoTendonLoad ?? 0),
     };
   };
   for (const w of prescribed(ws)) {
@@ -2817,14 +2888,14 @@ function sessionCapsOf(ws: readonly Workout[]): HyroxSessionCaps {
 
 /** Station and brick work of a week: minutes and MTL (the race taper holds
  *  no more of either than its reference week). Easy erg work is not station
- *  work, nor is a station session's easy erg finisher (lane H2b part 2: it
- *  is the week's spare minutes, ergMinOf). */
+ *  work, nor is a station session's easy erg finisher or strength block (lane
+ *  H2b part 2: both take the week's spare minutes, ergMinOf and addStrength). */
 function stationWorkOf(ws: readonly Workout[]): { min: number; mtl: number } {
   let min = 0;
   let mtl = 0;
   for (const w of prescribed(ws)) {
     if (!isHyroxWork(w)) continue;
-    min += (w.estimatedDurationMin ?? 0) - (w.hyroxSpec?.finisher?.min ?? 0);
+    min += (w.estimatedDurationMin ?? 0) - (w.hyroxSpec?.finisher?.min ?? 0) - (w.hyroxSpec?.strength?.min ?? 0);
     mtl += (w.musculoTendonLoad ?? 0) - (w.hyroxSpec?.finisher?.mtl ?? 0);
   }
   return { min, mtl };
@@ -3047,6 +3118,14 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *    c. the other station and brick sessions the tier structure holds;
  *    d. easy running, up to HYROX_RUN_SHARE x the chosen weekly minutes
  *       (standalone runs plus brick runs);
+ *    d'. strength (lane H2b part 2 review, 2026-10-20): the station
+ *       sessions' blocks, then the standalone session, from the minutes the
+ *       week's limits leave once a to d are sized (addStrength: the week is
+ *       sized without it, then built again with it, kept only when every
+ *       limit holds no further over and its running, quality runs, hard
+ *       sessions, HYROX work, long run and sim stay); the easy erg finishers
+ *       and sessions (e) give way to it. A deload's block keeps its session
+ *       no longer than its counterpart in the last loaded week;
  *    e. easy erg work for the minutes left, within the athlete's chosen
  *       session count, each session up to the tier long-run cap (60/75/90
  *       min), in its own discipline ('erg'), never a station session. When
@@ -3054,7 +3133,7 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *       its MTL) goes to it whenever the week then holds more minutes (round
  *       7; round 6 required the easy runs left to keep every running minute),
  *       never with an active injury (ergSlotOptions).
- *    A week over its size gives way in reverse order: e, d, c, then a's
+ *    A week over its size gives way in reverse order: e, d', d, c, then a's
  *    long-run growth for the quality run (D3), then the quality run. The one
  *    exception: b leaves only after the long run has shortened to the run
  *    floor and left the week, so every training week keeps HYROX work (the
@@ -3570,12 +3649,28 @@ export function buildHyroxTrainingWeeks(
         // plan whose week 1 is the race taper (a fixed calibration pass, as
         // the guard and the phase budget exempt it): exempt from the
         // fractions (round 7).
-        // (Its finisher is the week's spare minutes, not exempt.)
-        exemptMin: (() => { const e = exemptCircuitOf(workouts); return (e?.estimatedDurationMin ?? 0) - (e?.hyroxSpec?.finisher?.min ?? 0); })() + (raceTaper ? hyroxPlannedMinutes(assessmentOf(workouts)) : 0),
+        // Only its station work is exempt (lane H2b part 2 review): its
+        // warm-up, light strength block and finisher count inside the
+        // fractions. Before, the warm-up and block were exempt too, and
+        // beginner taper week 1 sat at 0.67 to 0.85 of the reference week.
+        exemptMin: (() => {
+          const e = exemptCircuitOf(workouts);
+          return e ? hyroxSessionWorkMin(e) : 0;
+        })() + (raceTaper ? hyroxPlannedMinutes(assessmentOf(workouts)) : 0),
+        // The solver's inputs the week was built with (make), so it can be
+        // built again with its strength (addStrength).
+        built: undefined as WeekBuildInputs | undefined,
       };
     };
     // Set while the hours line checks the week with one more chosen session.
     let plusOne = false;
+    // The minutes of strength the week's build may hold (addStrength): unset
+    // while the week is sized, so strength never shapes its size.
+    let strengthMax: number | undefined;
+    const inputsNow = (): WeekBuildInputs => ({ sizeMin, scale, ergCap, easyCap, omitted, longRunMin, longFixed, ergBlocked, plusOne, ceilingName });
+    const setInputs = (x: WeekBuildInputs) => {
+      ({ sizeMin, scale, ergCap, easyCap, omitted, longRunMin, longFixed, ergBlocked, plusOne, ceilingName } = x);
+    };
     // The week's builds by their inputs: the size search, the feasibility
     // check and the fit that follows it build some weeks more than once. Each
     // caller gets its own notes array (callers add notes to the week they
@@ -3583,10 +3678,11 @@ export function buildHyroxTrainingWeeks(
     const weekBuilds: Map<string, Attempt> = new Map();
     const sessionMemo: Map<string, { w: Workout; notes: string[] }> = new Map();
     const make = (): Attempt => {
-      const key = `${sizeMin}|${scale}|${ergCap}|${easyCap}|${omitted.join(',')}|${longRunMin}|${longFixed}|${ergBlocked}|${plusOne}|${ceilingName}`;
+      const key = `${sizeMin}|${scale}|${ergCap}|${easyCap}|${omitted.join(',')}|${longRunMin}|${longFixed}|${ergBlocked}|${plusOne}|${ceilingName}|${strengthMax}`;
       const hit = weekBuilds.get(key);
       if (hit) return { ...hit, adjustments: [...hit.adjustments] };
       const a = makeWeek();
+      a.built = inputsNow();
       weekBuilds.set(key, { ...a, adjustments: [...a.adjustments] });
       return a;
     };
@@ -3603,6 +3699,7 @@ export function buildHyroxTrainingWeeks(
         stationLoads, weakestStation, doseFraction: phase === 'taper' ? undefined : budgetPerHourMin / HYROX_PEAK_MULT,
         sim: nominal ? undefined : sim,
         simLastDow: hyroxSimLastDow(layout, w, trainingWeeks) ?? undefined,
+        strengthMaxMin: strengthMax,
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
@@ -3951,6 +4048,152 @@ export function buildHyroxTrainingWeeks(
       ({ scale, ergCap, easyCap, sizeMin } = keep);
       return ok;
     };
+    // Strength from what the week's size leaves (lane H2b part 2 review,
+    // 2026-10-20; parameter sheet split.running_share: running is 40% of the
+    // weekly hours, the other 60% holds the station session, strength and
+    // brick station work). The week is sized and allocated without strength
+    // (every build above: strengthMax unset); then it is built again with the
+    // same inputs and the minutes its limits leave for strength (the station
+    // sessions' blocks first, then the standalone session; generateWeekSessions
+    // spends them before the easy erg finishers and sessions, which rank
+    // below it). The rebuilt week is kept only when it holds every limit no
+    // further over than the week without strength and keeps its running,
+    // quality runs, hard sessions, HYROX work, long run and race simulation;
+    // otherwise the strength steps down: the standalone session shortens to
+    // what is left, then leaves, then the blocks leave, the last station
+    // session's first. So strength never costs a running minute, a quality
+    // run or HYROX work, in a deload neither (the long run outranks the
+    // block). Before (part 2), the blocks were fixed parts of every station
+    // session and the standalone session sat above easy runs in the omit
+    // order: 20 of 1,340 training weeks held no running (part 1: 0).
+    const gymTssPerMin = plannedTssPerMin('gym', 5);
+    const isQualityRun = (x: Workout) => x.t === 'hyrox_run_tempo' || x.t === 'hyrox_run_intervals';
+    const strengthOf = (ws: readonly Workout[]): { blocks: number; standalone: number } => {
+      let blocks = 0;
+      let standalone = 0;
+      for (const x of prescribed(ws)) {
+        blocks += x.hyroxSpec?.strength?.min ?? 0;
+        if (isHyroxStrengthSession(x)) standalone += x.estimatedDurationMin ?? 0;
+      }
+      return { blocks, standalone };
+    };
+    const keepsWeek = (base: Attempt, b: Attempt): boolean => {
+      const pb = prescribed(base.workouts);
+      const pa = prescribed(b.workouts);
+      const n = (ws: readonly Workout[], f: (x: Workout) => boolean) => ws.filter(f).length;
+      return runningOf(b.workouts) >= runningOf(base.workouts) - 1e-6
+        && n(pa, isQualityRun) >= n(pb, isQualityRun)
+        && n(pa, isHyroxWork) >= n(pb, isHyroxWork)
+        && n(pa, isHyroxHardSession) >= n(pb, isHyroxHardSession)
+        && (!pb.some(isHyroxLongRun) || pa.some(isHyroxLongRun))
+        && (!pb.some(isHyroxSim) || pa.some(isHyroxSim));
+    };
+    const addStrength = (base: Attempt): Attempt => {
+      if (phase === 'taper' || raceWeek || !base.built) return base;
+      const keep = inputsNow();
+      setInputs(base.built);
+      let x = HYROX_SIZE_SEARCH_MAX_MIN;
+      let demand = 0;
+      let found: Attempt | undefined;
+      for (let i = 0; i < 12 && x >= HYROX_STRENGTH_BLOCK_MIN; i++) {
+        strengthMax = x;
+        const b = make();
+        strengthMax = undefined;
+        const { blocks, standalone } = strengthOf(b.workouts);
+        const total = blocks + standalone;
+        if (i === 0) demand = total;
+        if (total <= 0) break;
+        // The limits the strength takes the week past (beyond the week
+        // without it), by how much.
+        const past = limits
+          .map(l => ({ l, e: l.of(b) - Math.max(l.cap, l.of(base)) }))
+          .filter(o => o.e > 1e-6);
+        const kept = keepsWeek(base, b);
+        if (past.length === 0 && kept) { found = b; break; }
+        // Easy erg work (the finishers and easy erg sessions) ranks below
+        // strength: it gives way first, by what the limits need of it.
+        if (kept && b.ergMin > 0 && past.every(o => o.l.ergPerMin > 0)) {
+          const need = Math.max(...past.map(o => o.e / o.l.ergPerMin));
+          const next = Math.max(0, Math.floor(b.ergMin - need));
+          if (next < (ergCap ?? Infinity) && next < b.ergMin) { ergCap = next; continue; }
+        }
+        // Then the strength steps down: the standalone session to what is
+        // left, then out, then the blocks, the last station session's first.
+        let worst = 0;
+        for (const o of past) worst = Math.max(worst, o.e / (o.l.ergPerMin === 1 || o.l.ergPerMin <= 0 ? 1 : gymTssPerMin));
+        const shorter = total - Math.ceil(worst);
+        x = kept && standalone > 0 && shorter - blocks >= HYROX_STRENGTH_BLOCK_MIN ? shorter
+          : standalone > 0 ? blocks
+            : blocks - HYROX_STRENGTH_BLOCK_MIN;
+        // The erg work back as it was for the smaller strength.
+        ergCap = base.built.ergCap;
+      }
+      setInputs(keep);
+      if (found) return found;
+      if (demand > 0) base.adjustments.push(`W${w}: no strength block or session (strength takes the minutes the week's size leaves after its runs and station work)`);
+      return base;
+    };
+    // The week before race week's light block (sheet strength.sessions: 1
+    // light; the first station session's): added to its station session when
+    // the taper's limits hold it, the minutes from the week's spare, then from
+    // its finishers (taper weeks are shed after they are sized, so this edits
+    // the week in place rather than building it again). Its exercises carry
+    // jumps, so it is eccentric: none when that breaks the 48 h rule.
+    const addTaperBlock = (base: Attempt): Attempt => {
+      if (phase !== 'taper' || raceWeek) return base;
+      if (w >= (state.w ?? 1) && injuryKind !== 'normal') return base;
+      const ws = base.workouts;
+      const at = ws.findIndex(x => (x.t === 'hyrox_station_technique' || x.t === 'hyrox_station_density') && !!x.hyroxSpec && !x.hyroxSpec.strength);
+      if (at < 0) return base;
+      const c = hyroxStrengthContent(hx.athleteBand, 'taper', w, { minutes: HYROX_STRENGTH_BLOCK_MIN, light: true });
+      const block: HyroxStrengthBlock = { name: c.name, lines: c.lines, min: HYROX_STRENGTH_BLOCK_MIN, rpe: c.rpe, light: true, eccentric: c.eccentric };
+      // No longer than its counterpart in the reference week (sessionCaps).
+      const refCap = sessionCapFor(sessionCaps, ws[at].t);
+      const ownMin = (ws[at].estimatedDurationMin ?? 0) - (ws[at].hyroxSpec?.finisher?.min ?? 0);
+      if (refCap && ownMin + block.min > refCap.totalMin + 1e-6) {
+        base.adjustments.push(`W${w}: light strength block left out (taper: no session longer than the reference week's)`);
+        return base;
+      }
+      const day = ws[at].dayOfWeek;
+      if (block.eccentric && !isEccentricSession(ws[at]) && day != null) {
+        const near = ws.some(x => x !== ws[at] && x.commute !== true && x.dayOfWeek != null && Math.abs(x.dayOfWeek - day) === 1 && isEccentricSession(x));
+        if (near || (day === 0 && weekPrevSunday?.eccentric)) {
+          base.adjustments.push(`W${w}: light strength block left out (the 48 h rule: an eccentric session the day before or after)`);
+          return base;
+        }
+      }
+      // The minutes: the fraction's spare first, then the finishers (this
+      // session's, then the others').
+      const spare = fractionLimit ? Math.max(0, Math.floor(fractionLimit.cap - fractionLimit.of(base))) : 0;
+      let need = Math.max(0, block.min - spare);
+      const out = [...ws];
+      const order = [at, ...out.map((_, k) => k).filter(k => k !== at)];
+      for (const k of order) {
+        const f = out[k].hyroxSpec?.finisher?.min ?? 0;
+        if (need <= 0 || f <= 0) continue;
+        const give = Math.min(f, need);
+        const left = f - give < HYROX_FINISHER_MIN_MIN ? 0 : f - give;
+        need -= f - left;
+        out[k] = withHyroxFinisher(out[k], left, hx.stationAccess, w + k, state.bodyWeightKg);
+      }
+      // The session with its block stays within its counterpart's length.
+      if (refCap) {
+        const f = out[at].hyroxSpec?.finisher?.min ?? 0;
+        const room = Math.max(0, Math.floor(refCap.totalMin - ownMin - block.min + 1e-9));
+        if (f > room) out[at] = withHyroxFinisher(out[at], room < HYROX_FINISHER_MIN_MIN ? 0 : room, hx.stationAccess, w + at, state.bodyWeightKg);
+      }
+      out[at] = withHyroxSessionParts(out[at], { strength: block });
+      const b = attemptOf(out, [...base.adjustments]);
+      const beyond = limits.some(l => l.of(b) > Math.max(l.cap, l.of(base)) + 1e-6);
+      if (beyond) {
+        base.adjustments.push(`W${w}: light strength block left out (taper: ${Math.round(budgetMin)} min, ${hyroxTaperFraction(w - taperStart + 1, taperLen)} of the reference week)`);
+        return base;
+      }
+      b.adjustments = b.adjustments.filter(n => !/easy erg finisher/.test(n));
+      const fins = out.filter(x => (x.hyroxSpec?.finisher?.min ?? 0) > 0).map(x => `${x.hyroxSpec!.finisher!.min}-min easy erg finisher on the ${x.n}`);
+      if (fins.length > 0) b.adjustments.push(`W${w}: ${fins.join(', ')} (spare minutes)`);
+      return b;
+    };
     // The week at the chosen hours with the solver reset: fit's first build,
     // and what the notes name the binding ceiling from.
     scale = 1;
@@ -4204,6 +4447,8 @@ export function buildHyroxTrainingWeeks(
         }
         trimLongToFloor();
       }
+      // Strength from what the week's size leaves (addStrength).
+      attempt = addStrength(attempt);
       // The long run held for the quality run, said on the week that keeps
       // the quality run. Before (round 6 review, pass 3) the note was lost
       // whenever a later step built the week again.
@@ -4296,6 +4541,10 @@ export function buildHyroxTrainingWeeks(
       if (taperWork) shed(a => a.workMin > taperWork.min + 1e-6 || a.workMtl > taperWork.mtl + 1e-6, true, "taper: the reference week's station and brick work");
       shed(raceTaper ? over : (a: Attempt) => a.min > beforeCapMin + 1e-6, false);
     }
+    // Strength: a training week's from what its size leaves (a week with a
+    // ceiling took it above), the week before race week's light block.
+    if (phase !== 'taper' && !trainingCeiling) attempt = addStrength(attempt);
+    if (phase === 'taper') attempt = addTaperBlock(attempt);
 
     // What holds a training week under the chosen weekly hours (decision C,
     // Tristan 2026-10-13), read from the limit that binds (review 2026-10-13:
@@ -4328,7 +4577,7 @@ export function buildHyroxTrainingWeeks(
       }
       const keep = { scale, ergCap, easyCap, sizeMin, omitted };
       plusOne = true;
-      const plus = fit();
+      const plus = addStrength(fit());
       const plusSized = sizeMin < hoursMin - 1e-6;
       plusOne = false;
       ({ scale, ergCap, easyCap, sizeMin, omitted } = keep);

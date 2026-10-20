@@ -343,7 +343,8 @@ export interface HyroxSessionCounts {
  * (lane H2b part 2, sheet sessions.weekly: 2 runs + 1 station session + 1
  * strength, 3 runs + 1 station session + 1 strength), in the slot the brick
  * takes from build; every station session opens with a strength block
- * (HYROX_STRENGTH_SESSIONS counts it). Taper weeks keep the peak structure (Bosquet et al. 2007: no benefit from
+ * (HYROX_STRENGTH_SESSIONS counts it), both from the minutes the week's
+ * size leaves after its runs and station work. Taper weeks keep the peak structure (Bosquet et al. 2007: no benefit from
  * cutting frequency); race week has no brick (the race is the week's brick).
  * No brick before plan week HYROX_FIRST_BRICK_WEEK or in base (bricks.timing).
  */
@@ -375,7 +376,13 @@ export const HYROX_WEEKLY_STRUCTURE: Record<HyroxTier, Record<'base' | 'build' |
  * base and build the blocks of its two station sessions, every peak the one
  * station session's block. The week before race week holds 1 light session
  * (the first station session's block, the activation template: heavy lifting
- * stops 7 days out) and race week none. Planning side.
+ * stops 7 days out) and race week none. These are the most a week holds:
+ * strength takes only the minutes the week's limits leave once its runs and
+ * station work are sized (plan_engine.hyrox addStrength; lane H2b part 2
+ * review, 2026-10-20: running is 40% of the weekly hours and the other 60%
+ * holds the station session, strength and brick station work, sheet
+ * split.running_share), so a low-hours, guard-held or deload week holds
+ * fewer. Planning side.
  */
 export const HYROX_STRENGTH_SESSIONS: Record<HyroxTier, Record<'base' | 'build' | 'peak', number>> = {
   beginner:     { base: 2, build: 1, peak: 1 },

@@ -148,6 +148,21 @@ export function runningStrengthPhaseMinutes(phase: TrainingPhase): number {
   return RUNNING_STRENGTH_PHASE[phase].min;
 }
 
+/**
+ * Minutes a HYROX standalone strength session runs at its content (lane H2b
+ * part 2 review, 2026-10-20). Intermediate and above draw the running pool,
+ * which sizes its exercise count by the phase length (RUNNING_STRENGTH_PHASE:
+ * 45 min in base), so they take that length. The bodyweight and novice
+ * templates hold 4 exercises, which the pool's own sizing rule
+ * (running-pool exerciseCountForTime: 4 exercises up to 20 min) puts at its
+ * shortest session, 20 min (RUNNING_STRENGTH_PHASE taper). Before, a
+ * template session was booked at 45 min for those 4 exercises.
+ */
+export function hyroxStrengthLength(band: HyroxAbilityBand, phase: TrainingPhase): number {
+  const template = band === 'total_beginner' || band === 'beginner' || band === 'novice';
+  return template ? RUNNING_STRENGTH_PHASE.taper.min : RUNNING_STRENGTH_PHASE[phase].min;
+}
+
 /** True for a prescription line that loads the lower body heavily (an
  *  "@X% 1RM" lift: every loaded line in these templates and the running pool
  *  is a lower-body lift) or holds plyometrics (jumps, bounds, hops): the
@@ -159,8 +174,13 @@ function isEccentricStrengthLine(line: string): boolean {
 
 /**
  * Strength content for a HYROX plan (lane H2b part 2; parameter sheet
- * strength.content: heavy compound lifts, single-leg work, Romanian
- * deadlifts, calf raises with isometric holds, plyometrics). Drawn from this
+ * strength.content). What the pools hold of the sheet's list: lower-body
+ * compound lifts (squat, deadlift, Romanian deadlift, hip thrust), single-leg
+ * work, calf raises and plyometrics, with core work. What they do not hold:
+ * upper-body compound lifts (press, pull-up), the grip and elbow tolerance
+ * work for the pulls and carries (Chittenden 2026; untested), and the
+ * heavier-than-race sled work the sheet places closer to race day (a known
+ * limit, SCIENCE_LOG §DP). Drawn from this
  * module's own dosing by ability band, as generateGymWorkouts draws it:
  * total_beginner and beginner the bodyweight templates, novice the novice
  * templates, intermediate and above the rotating running-strength pool at
