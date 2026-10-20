@@ -60,10 +60,20 @@ export function isHardRun(w: Workout): boolean {
 }
 
 /** True for a session holding an eccentric-heavy station (sandbag lunges,
- *  burpee broad jumps, wall balls; ECCENTRIC_HEAVY_STATIONS). Two such
- *  sessions need 48 h between them. */
+ *  burpee broad jumps, wall balls; ECCENTRIC_HEAVY_STATIONS), heavy
+ *  lower-body strength or plyometrics (lane H2b part 2: a station session's
+ *  strength block, hyroxSpec.strength.eccentric, or a standalone strength
+ *  session, hyroxEccentric; sheet eccentric.min_gap). Two such sessions need
+ *  48 h between them. */
 export function isEccentricSession(w: Workout): boolean {
+  if (w.hyroxEccentric === true || w.hyroxSpec?.strength?.eccentric === true) return true;
   return (w.hyroxComponents ?? []).some(c => (ECCENTRIC_HEAVY_STATIONS as string[]).includes(c.type as string));
+}
+
+/** A standalone HYROX strength session (lane H2b part 2): a gym session in
+ *  the plan, neither hard nor a run. */
+export function isHyroxStrengthSession(w: Pick<Workout, 't' | 'hyroxComponents'>): boolean {
+  return (w.t === 'gym' || w.t === 'strength') && !(w.hyroxComponents && w.hyroxComponents.length > 0);
 }
 
 /** The HYROX long run (plan_engine.hyrox): the week's one long easy run. */
@@ -92,6 +102,7 @@ export function hyroxPreferredDays(w: Pick<Workout, 't'> & { longRun?: boolean; 
   if (w.t === 'hyrox_run_intervals') return [3, 1, 4, 2]; // Thu/Tue
   if (w.t === 'hyrox_run_easy' && w.longRun) return [6, 0, 5, 2, 4]; // long run: Sunday first
   if (isHyroxEasyErg(w)) return [2, 4, 0, 6, 5, 3, 1];  // easy erg: whatever day is left, midweek first
+  if (isHyroxStrengthSession(w)) return [4, 1, 0, 5, 2, 3, 6]; // strength: Friday, else Tuesday (one session a day keeps it off a run day)
   // easy run: bookend
   return [0, 6, 2, 4, 5];
 }
@@ -115,6 +126,7 @@ function priority(w: Workout): number {
   if (w.t === 'hyrox_run_tempo') return 4;
   if (w.t === 'hyrox_station_technique') return 5;
   if (w.t === 'hyrox_mini_brick') return 5.5; // secondary (light) brick
+  if (isHyroxStrengthSession(w)) return 5.6; // standalone strength (base)
   if (isHyroxLongRun(w)) return 5.8;
   if (isHyroxEasyErg(w)) return 6.5; // easy erg work: placed last, on a day left free
   return 6; // easy run
@@ -161,14 +173,18 @@ function commuteGroups(commutes: readonly Workout[]): Workout[][] {
 
 /** Place commute legs after the prescribed sessions: a free day first (easy-run
  *  preference order), else beside an easy run, else beside any session that is
- *  not hard. Each commute day's legs share a day. */
+ *  neither hard nor strength (the sheet keeps strength 6 h from a run on the
+ *  same day; the plan cannot model hours, so it keeps them apart). Each
+ *  commute day's legs share a day. */
 function placeCommutes(main: Workout[], commutes: readonly Workout[]): Workout[] {
   const used = new Set(main.map(w => w.dayOfWeek));
   const out = [...main];
   const order = [0, 6, 2, 4, 5, 1, 3];
+  const strengthDay = (d: number) => out.some(w => w.dayOfWeek === d && (isHyroxStrengthSession(w) || !!w.hyroxSpec?.strength));
   for (const group of commuteGroups(commutes)) {
     let day = order.find(d => !used.has(d));
     if (day == null) day = order.find(d => out.some(w => w.dayOfWeek === d && w.t === 'hyrox_run_easy' && !w.longRun));
+    if (day == null) day = order.find(d => !strengthDay(d) && !out.some(w => w.dayOfWeek === d && isHighIntensity(w)));
     if (day == null) day = order.find(d => !out.some(w => w.dayOfWeek === d && isHighIntensity(w)));
     if (day == null) day = 0;
     used.add(day);

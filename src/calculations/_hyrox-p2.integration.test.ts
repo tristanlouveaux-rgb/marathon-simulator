@@ -115,13 +115,18 @@ function buildState(
   } as unknown as SimulatorState;
 }
 
-/** The week the volume checks read: week 9, a loaded build week of the
- *  16-week plan. Since lane H2b (2026-10-19) the base week's technique
- *  session is a fixed dose (the sheet's 0.5 x race volume) and its easy erg
- *  session already sits at the tier cap, so the lever moves nothing upward
- *  there; in a build week it moves the race-pace dose (its sets follow the
- *  week's nominal size, the effort lever included) and the easy erg fill. */
-const CURRENT = 9;
+/** The week the volume checks read: week 3, a loaded base week of the
+ *  16-week plan (lane H2b part 2, decision 7: base weeks respond upward
+ *  too). A base week's phase budget sits under the chosen hours, and the
+ *  station session's easy erg finisher is the lever: an EASY rating raises
+ *  the budget and the finisher takes it (up to the session cap), a HARD one
+ *  lowers it. Part 1 read build week 9, because base did not move upward
+ *  then (the fixed technique dose, the easy erg session at its cap). */
+const CURRENT = 3;
+/** A loaded build week: at the default sessions it is held by the session
+ *  count and the session caps (the hours line), so an EASY rating moves only
+ *  the long run, whose growth comes out of the easy runs' running share. */
+const BUILD = 9;
 
 // ─── Helper: sum estimatedDurationMin for a generated week's workouts ────────
 
@@ -217,20 +222,27 @@ describe('HYROX P2 integration — effortMultiplier wired into real generator', 
     expect(hardVol).toBeLessThan(neutralVol);
   });
 
-  it('INTEGRATION: in a base week the lever never flips direction (EASY at or above NEUTRAL, HARD at or below)', () => {
-    // Lane H2b review: in base the technique session is a fixed dose and the
-    // easy erg session sits at its cap, so an EASY rating adds nothing
-    // upward there (the lever reaches race-pace sets and erg fill from
-    // build). It must still never hold a base week below NEUTRAL.
-    const BASE = 3;
-    const plan = (st: SimulatorState) => generateHyroxPlan(st)[BASE - 1];
-    const neutral = plan(buildState(7, 7, 7, 7, BASE));
-    const easy = plan(buildState(7, 4, 7, 4, BASE));
-    const hard = plan(buildState(5, 9, 5, 9, BASE));
-    expect(neutral?.ph).toBe('base');
+  it('INTEGRATION: in a build week held by its session count the lever never flips direction (EASY at or above NEUTRAL, HARD below)', () => {
+    // Part 2: the build week at the default sessions is held by the session
+    // count and the caps, so EASY can only lengthen the long run (never past
+    // the tier cap), and its growth comes out of the easy runs' share: the
+    // week stays level (290 = 290 min). HARD still cuts (261).
+    const plan = (st: SimulatorState) => generateHyroxPlan(st)[BUILD - 1];
+    const neutral = plan(buildState(7, 7, 7, 7, BUILD));
+    const easy = plan(buildState(7, 4, 7, 4, BUILD));
+    const hard = plan(buildState(5, 9, 5, 9, BUILD));
+    expect(neutral?.ph).toBe('build');
     const vol = (w: typeof neutral) => totalDurationMin(w?.triWorkouts ?? []);
     expect(vol(easy)).toBeGreaterThanOrEqual(vol(neutral));
-    expect(vol(hard)).toBeLessThanOrEqual(vol(neutral));
+    expect(vol(hard)).toBeLessThan(vol(neutral));
+  });
+
+  it('INTEGRATION: a base week is checked (decision 7 reads base, the finisher its lever)', () => {
+    const neutral = generateHyroxPlan(buildState(7, 7, 7, 7, CURRENT))[CURRENT - 1];
+    const easy = generateHyroxPlan(buildState(7, 4, 7, 4, CURRENT))[CURRENT - 1];
+    expect(neutral?.ph).toBe('base');
+    const finisher = (w: typeof neutral) => (w?.triWorkouts ?? []).reduce((a, x) => a + (x.hyroxSpec?.finisher?.min ?? 0), 0);
+    expect(finisher(easy)).toBeGreaterThan(finisher(neutral));
   });
 
   it('INTEGRATION: EASY→NEUTRAL→HARD volume is strictly ordered', () => {

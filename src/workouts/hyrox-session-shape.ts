@@ -20,6 +20,8 @@
 import type { Workout } from '@/types/state';
 import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { plannedTssPerMin } from '@/constants/sports';
+import { HYROX_EASY_RPE } from '@/constants/hyrox-constants';
 
 /** Length of one HYROX sled lane (m). Sled push and pull run as 4 lanes of
  *  12.5 m (26/27 Singles rulebook s8; the parameter sheet's rules_to_code), so
@@ -84,10 +86,52 @@ export function hyroxSessionWalk(w: Pick<Workout, 'hyroxComponents' | 'hyroxRoun
   return out;
 }
 
-/** Length of a session (seconds): every set's work, the rest after it and
- *  the transition jogs. */
-export function hyroxSessionDurationSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec' | 'hyroxSpec'>): number {
+/** Minutes of a session's parts around its station work (lane H2b part 2):
+ *  the warm-up, the strength block and the easy erg finisher. */
+export function hyroxSessionPartsMin(w: Pick<Workout, 'hyroxSpec'>): { easy: number; strength: number } {
+  const spec = w.hyroxSpec;
+  return {
+    easy: (spec?.warmup?.min ?? 0) + (spec?.finisher?.min ?? 0),
+    strength: spec?.strength?.min ?? 0,
+  };
+}
+
+/** Length of a session's station work (seconds): every set's work, the rest
+ *  after it and the transition jogs. */
+export function hyroxSessionWorkSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec' | 'hyroxSpec'>): number {
   return hyroxSessionWalk(w).reduce((sum, s) => sum + (s.component.durationSec ?? 0) + s.restSec + s.transitionSec, 0);
+}
+
+/** Length of a session (seconds): its station work and the parts around it
+ *  (the warm-up, the strength block, the finisher). */
+export function hyroxSessionDurationSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec' | 'hyroxSpec'>): number {
+  const parts = hyroxSessionPartsMin(w);
+  return hyroxSessionWorkSec(w) + (parts.easy + parts.strength) * 60;
+}
+
+/**
+ * Planned load of a HYROX session in canonical TSS (the Load Currency Law:
+ * planned sessions price at plannedTssPerMin of their type). A lane H2b part
+ * 2 session prices each part at its own effort: the warm-up and the finisher
+ * at the easy RPE (HYROX_EASY_RPE), the strength block at its RPE as a gym
+ * session, the station work at the session's RPE. Any other session: its
+ * duration at its type and RPE, as before. One source for the plan engine
+ * (hyroxPlannedTss: the acute:chronic guard, the deload and taper ceilings)
+ * and the planned-day pricer (ui/planned-day-tss.ts).
+ */
+export function hyroxSessionPlannedTss(w: Pick<Workout, 't' | 'rpe' | 'r' | 'estimatedDurationMin' | 'hyroxSpec'>): number {
+  const dur = w.estimatedDurationMin ?? 0;
+  const rpe = w.rpe ?? w.r ?? 5;
+  const rate = plannedTssPerMin(w.t ?? '', rpe);
+  if (!w.hyroxSpec) return dur * rate;
+  const parts = hyroxSessionPartsMin(w);
+  if (parts.easy + parts.strength <= 0) return dur * rate;
+  // The injury gates scale a session's length; the parts keep theirs, so the
+  // work is what is left (never negative).
+  const work = Math.max(0, dur - parts.easy - parts.strength);
+  return work * rate
+    + parts.easy * plannedTssPerMin('', HYROX_EASY_RPE)
+    + parts.strength * plannedTssPerMin('gym', w.hyroxSpec.strength?.rpe ?? rpe);
 }
 
 /** Format a number for a prescription: whole numbers bare, else one decimal

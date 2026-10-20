@@ -17,14 +17,14 @@
 
 import type { Workout } from '@/types/state';
 import { fmtModelPaceKm } from '@/utils/format';
-import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxSessionSpec, HyroxStation } from '@/types/triathlon';
+import type { AbilityBand, HyroxConfig, HyroxComponent, HyroxLoadTier, HyroxSessionSpec, HyroxStation, HyroxStrengthBlock } from '@/types/triathlon';
 import { computeComponentMTL } from '@/calculations/mtl';
 import { HYROX_EASY_ERG_TYPE } from './hyrox-easy-erg';
 import { STATION_DISPLAY, HYROX_STATION_ORDER, stationExternalLoadKg, SLED_EXTERNAL_LOAD_FRACTION, WALL_BALL_TARGET_M } from '@/constants/hyrox-benchmarks';
 import { hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm, type HyroxSeedStateInput } from '@/calculations/hyrox-results';
 import { HYROX_DEFAULT_LOAD_TIER, hyroxWallBallTargetM, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import {
-  hyroxComponentAmount, hyroxComponentRounds, hyroxComponentSets, hyroxSessionDurationSec, fmtAmount,
+  hyroxComponentAmount, hyroxComponentRounds, hyroxComponentSets, hyroxSessionDurationSec, hyroxSessionWorkSec, fmtAmount,
 } from './hyrox-session-shape';
 import {
   HYROX_STATION_SET_FRACTION, HYROX_STATION_FORMATS, HYROX_STATIONS_PER_SESSION, HYROX_BEGINNER_SLED_SETS,
@@ -34,7 +34,7 @@ import {
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
   HYROX_INTERVAL_HR_FRACTION, HYROX_QUALITY_WARMUP_MIN, HYROX_QUALITY_COOLDOWN_MIN,
-  HYROX_TEMPO_MIN_WORK_MIN, HYROX_EASY_RPE,
+  HYROX_TEMPO_MIN_WORK_MIN, HYROX_EASY_RPE, HYROX_SESSION_WARMUP_MIN,
   type HyroxQualityFormat,
 } from '@/constants/hyrox-constants';
 
@@ -715,7 +715,16 @@ export function hyroxSessionText(w: Workout): string {
     const weakest = spec.weakest && stations.some(c => c.type === spec.weakest)
       ? [`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`]
       : [];
-    return [head, shape, ...lines, ...weakest, ...(spec.doubles ? [DOUBLES_LINE] : [])].join(' ');
+    // Part 2: the warm-up and the strength block first, the finisher last.
+    const opening = [
+      ...(spec.warmup ? [warmupPhrase(spec.warmup)] : []),
+      ...(spec.strength ? [`Strength first (${spec.strength.min} min, RPE ${spec.strength.rpe}${spec.strength.light ? ', light' : ''}): ${strengthBlockPhrase(spec.strength)}.`] : []),
+      ...(spec.warmup || spec.strength ? ['Then the stations.'] : []),
+    ];
+    const closing = spec.finisher
+      ? [`Finisher: ${spec.finisher.min} min easy on the ${STATION_DISPLAY[spec.finisher.station].name} (RPE ${HYROX_EASY_RPE}).`]
+      : [];
+    return [...opening, head, shape, ...lines, ...weakest, ...(spec.doubles ? [DOUBLES_LINE] : []), ...closing].join(' ');
   }
   // Bricks.
   const pace = spec.runPaceSecKm != null ? `~${fmtPace(Math.round(spec.runPaceSecKm))}/km` : '';
@@ -741,6 +750,7 @@ export function hyroxSessionText(w: Workout): string {
     ? `${fmtRestPhrase(w.hyroxRoundRestSec ?? 0)} rest between rounds.`
     : 'No rest beyond the jog.';
   return [
+    ...(spec.warmup ? [warmupPhrase(spec.warmup)] : []),
     `${rounds} rounds: ${runPhrase}${jog}, ${stationPart}`,
     rest,
     ...(secondary ? ['A lighter flow, not a hard session.'] : []),
@@ -769,16 +779,95 @@ export function hyroxSessionNotes(w: Workout): string[] {
   return out;
 }
 
-/** A lane H2b session's MTL, duration and description from its components. */
+/** A lane H2b session's MTL, duration and description from its components
+ *  and the parts around them (part 2: the warm-up and the finisher carry
+ *  easy-erg or easy-run MTL; the strength block carries none, mtl.ts has no
+ *  strength factor). */
 function finishHyroxSession(w: Workout): Workout {
   const comps = w.hyroxComponents ?? [];
   const out: Workout = {
     ...w,
-    musculoTendonLoad: comps.reduce((sum, c) => sum + c.mtl, 0),
+    musculoTendonLoad: comps.reduce((sum, c) => sum + c.mtl, 0) + (w.hyroxSpec?.warmup?.mtl ?? 0) + (w.hyroxSpec?.finisher?.mtl ?? 0),
     estimatedDurationMin: Math.max(1, Math.round(hyroxSessionDurationSec(w) / 60)),
   };
   out.d = hyroxSessionText(out);
   return out;
+}
+
+// ─── Session parts (lane H2b part 2) ─────────────────────────────────────────
+
+/** Minutes of a session's station work (no warm-up, strength block or
+ *  finisher): what the week's share and the race-pace dose fit. */
+export function hyroxSessionWorkMin(w: Workout): number {
+  return w.hyroxSpec ? hyroxSessionWorkSec(w) / 60 : (w.estimatedDurationMin ?? 0);
+}
+
+/**
+ * The warm-up opening a station session or brick (HYROX_SESSION_WARMUP_MIN,
+ * the existing run warm-up length): easy on one of the athlete's ergs (the
+ * other one from the finisher's when both exist), or an easy jog without
+ * one; a brick opens with a jog (`run`), its first leg a run. MTL from mtl.ts
+ * at the easy RPE.
+ */
+export function hyroxSessionWarmup(
+  access: HyroxConfig['stationAccess'], slotIndex: number, bodyWeightKg?: number, run = false,
+): NonNullable<HyroxSessionSpec['warmup']> {
+  const ergs = easyErgStations(access);
+  const min = HYROX_SESSION_WARMUP_MIN;
+  if (run || ergs.length === 0) {
+    return { min, mode: 'run', mtl: computeComponentMTL(min, HYROX_EASY_RPE, 'run_easy', undefined, bodyWeightKg) };
+  }
+  const station = ergs[(Math.abs(slotIndex) + 1) % ergs.length];
+  return { min, mode: station, mtl: computeComponentMTL(min, HYROX_EASY_RPE, station, undefined, bodyWeightKg) };
+}
+
+/** The same session with its warm-up and strength block set (null clears
+ *  one; undefined keeps it), its MTL, duration and text again. */
+export function withHyroxSessionParts(
+  w: Workout, parts: { warmup?: HyroxSessionSpec['warmup'] | null; strength?: HyroxStrengthBlock | null },
+): Workout {
+  if (!w.hyroxSpec) return w;
+  const spec: HyroxSessionSpec = { ...w.hyroxSpec };
+  if (parts.warmup === null) delete spec.warmup; else if (parts.warmup) spec.warmup = parts.warmup;
+  if (parts.strength === null) delete spec.strength; else if (parts.strength) spec.strength = parts.strength;
+  return finishHyroxSession({ ...w, hyroxSpec: spec });
+}
+
+/**
+ * The same station session with an easy erg finisher of `minutes` (0 or
+ * less clears it): continuous easy work on one of the athlete's ergs at the
+ * easy RPE, the session's lever for the week's spare minutes (plan_engine
+ * .hyrox). Without erg access, or for a session with no lane H2b spec, the
+ * session is returned without one.
+ */
+export function withHyroxFinisher(
+  w: Workout, minutes: number, access: HyroxConfig['stationAccess'], slotIndex: number, bodyWeightKg?: number,
+): Workout {
+  if (!w.hyroxSpec) return w;
+  const ergs = easyErgStations(access);
+  const min = Math.floor(minutes);
+  if (min <= 0 || ergs.length === 0) {
+    if (!w.hyroxSpec.finisher) return w;
+    const { finisher: _f, ...spec } = w.hyroxSpec;
+    return finishHyroxSession({ ...w, hyroxSpec: spec });
+  }
+  const station = ergs[Math.abs(slotIndex) % ergs.length];
+  if (w.hyroxSpec.finisher?.min === min && w.hyroxSpec.finisher.station === station) return w;
+  const mtl = computeComponentMTL(min, HYROX_EASY_RPE, station, undefined, bodyWeightKg);
+  return finishHyroxSession({ ...w, hyroxSpec: { ...w.hyroxSpec, finisher: { min, station, mtl } } });
+}
+
+/** A strength block's exercises as copy: each line without its cue and rest
+ *  notes ("4x5 Back Squat @80% 1RM"). */
+function strengthBlockPhrase(b: HyroxStrengthBlock): string {
+  return b.lines.map(l => l.replace(/\s*\([^)]*\)/g, '').trim()).filter(Boolean).join(', ');
+}
+
+/** The warm-up as copy: "Warm-up: 10 min easy on the Row." */
+function warmupPhrase(wu: NonNullable<HyroxSessionSpec['warmup']>): string {
+  return wu.mode === 'run'
+    ? `Warm-up: ${wu.min} min easy jog.`
+    : `Warm-up: ${wu.min} min easy on the ${STATION_DISPLAY[wu.mode].name}.`;
 }
 
 /** The athlete's prescription inputs: explicit params first, else the
@@ -831,11 +920,11 @@ function stationComponent(p: {
   };
 }
 
-/** The largest round count from `rounds` down to `floor` whose session fits
- *  `targetMinutes`; `floor` when none does. */
+/** The largest round count from `rounds` down to `floor` whose station work
+ *  fits `targetMinutes`; `floor` when none does. */
 function fitToTarget(w: Workout, targetMinutes: number, floor: number): Workout {
   let out = w;
-  while ((out.hyroxRounds ?? 1) > floor && (out.estimatedDurationMin ?? 0) > targetMinutes + 1e-9) {
+  while ((out.hyroxRounds ?? 1) > floor && hyroxSessionWorkMin(out) > targetMinutes + 1e-9) {
     out = withHyroxRounds(out, (out.hyroxRounds ?? 1) - 1);
   }
   return out;
@@ -955,7 +1044,7 @@ function generateStationRacePace(p: StationParams): Workout {
   // the session (doseMinutes), never under the technique dose.
   const techniqueSets = hyroxTechniqueSets(doubles);
   let sized = w;
-  while ((sized.hyroxRounds ?? 1) > techniqueSets && p.doseMinutes != null && (sized.estimatedDurationMin ?? 0) > p.doseMinutes + 1e-9) {
+  while ((sized.hyroxRounds ?? 1) > techniqueSets && p.doseMinutes != null && hyroxSessionWorkMin(sized) > p.doseMinutes + 1e-9) {
     sized = withHyroxRounds(sized, (sized.hyroxRounds ?? 1) - 1);
   }
   return fitToTarget(sized, p.targetMinutes, Math.min(sized.hyroxRounds ?? 1, hyroxMinRounds(sized)));

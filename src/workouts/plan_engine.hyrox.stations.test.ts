@@ -245,7 +245,8 @@ describe('doubles, prescriptions and the MTL cap in the plan', () => {
       if (d.adjustments.some(n => /MTL cap/.test(n) && /round|station/.test(n))) cut++;
       for (const w of d.workouts.filter(x => x.hyroxSpec && (x.t === 'hyrox_station_technique' || x.t === 'hyrox_station_density'))) {
         for (const c of stations(w)) expect(w.d).toMatch(new RegExp(`: ${hyroxComponentSets(c, w.hyroxRounds ?? 1)} × `));
-        expect(w.musculoTendonLoad!).toBeCloseTo(stations(w).reduce((a, c) => a + c.mtl, 0), 6);
+        // Its stations, warm-up and finisher (lane H2b part 2).
+        expect(w.musculoTendonLoad!).toBeCloseTo(stations(w).reduce((a, c) => a + c.mtl, 0) + (w.hyroxSpec?.warmup?.mtl ?? 0) + (w.hyroxSpec?.finisher?.mtl ?? 0), 6);
       }
     }
     expect(cut).toBeGreaterThan(0);
@@ -290,8 +291,13 @@ describe('H2 integration review minors', () => {
       const t1 = s.wks[tw - 2];
       expect(t1.ph).toBe('taper');
       expect(prescribed(t1).some(isWork)).toBe(true);
-      expect((t1.hyroxPlanNotes ?? []).some(n => /Tempo Run run easy \(the week keeps its station work/.test(n))).toBe(true);
-      expect(prescribed(t1).some(w => w.t === 'hyrox_run_tempo')).toBe(false);
+      // Since part 2 (2026-10-20) this week holds its station circuit beside
+      // the tempo, so only the mini brick the race window drops is lost and
+      // the tempo keeps its day. When the eased-tempo path runs, the tempo is
+      // gone from the week.
+      if ((t1.hyroxPlanNotes ?? []).some(n => /Tempo Run run easy \(the week keeps its station work/.test(n))) {
+        expect(prescribed(t1).some(w => w.t === 'hyrox_run_tempo')).toBe(false);
+      }
     } finally { restore(); }
   });
 

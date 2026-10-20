@@ -299,10 +299,12 @@ describe('a Monday to Wednesday race: the primer 3 days out, the last session at
     // 114 before), so the circuit, the Saturday easy run and the primer all
     // fit in its 0.55.
     // Since 2026-10-19 race week holds 0.30 of the reference week (0.55
-    // before, which also held a Saturday easy run): the circuit and the
-    // primer, both exempt from the fraction.
+    // before); since part 2 (2026-10-20) the reference week holds its
+    // strength block, warm-up and finisher, so 0.30 of it again holds the
+    // Saturday easy run beside the exempt circuit and primer.
     expect((s.wks[tw - 1].triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Wed hyrox_station_technique',
+      'Sat hyrox_run_easy',
       'Sun hyrox_run_tempo',
     ]);
     expect(s.wks[tw].raceClosing).toBe(true);
@@ -319,8 +321,11 @@ describe('a Thursday race: race week keeps its station work', () => {
     // or more days out was the primer's and the circuit's only day, and race
     // week held the primer and an easy run, no station work (2026-10-14).
     const rw = s.wks[tw - 1];
+    // Since part 2 (2026-10-20) the fuller reference week leaves race week
+    // room for a second easy run.
     expect((rw.triWorkouts ?? []).map(w => `${DOW[w.dayOfWeek!]} ${w.t}`)).toEqual([
       'Mon hyrox_station_technique',
+      'Tue hyrox_run_easy',
       'Wed hyrox_run_easy',
     ]);
     expect((rw.hyroxPlanNotes ?? []).some(n => /Tempo Run left out \(its day, race week's one day 3 or more days out, holds the Station Circuit: race week keeps its station work\)/.test(n))).toBe(true);

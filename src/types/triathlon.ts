@@ -300,13 +300,50 @@ export interface HyroxComponent {
   loadPct?: number;
 }
 
+/** The strength block that opens a HYROX station session (lane H2b part 2;
+ *  parameter sheet: every station session opens with a strength block),
+ *  drawn from the gym.ts pools (hyroxStrengthContent). */
+export interface HyroxStrengthBlock {
+  /** The gym.ts session it is drawn from, e.g. 'Running Strength'. */
+  name: string;
+  /** Exercise lines in the gym line format: "{sets}x{reps} {Name} [@X% 1RM]
+   *  ({cue}) ({rest})", the strength parser's input. */
+  lines: string[];
+  /** Minutes the block takes (HYROX_STRENGTH_BLOCK_MIN). */
+  min: number;
+  /** The block's RPE (the pool's or template's own). */
+  rpe: number;
+  /** The week before race week: the light activation session, no heavy
+   *  lifting (sheet strength.sessions: 1 light). */
+  light?: boolean;
+  /** Holds heavy lower-body strength or plyometrics: the session falls under
+   *  the 48 h eccentric rule (sheet eccentric.min_gap). */
+  eccentric: boolean;
+}
+
 /** What a HYROX station session or brick prescribes beyond its components
  *  (lane H2b; Workout.hyroxSpec). */
 export interface HyroxSessionSpec {
   /** Technique and race-pace station sessions; the tier brick (beginner,
    *  intermediate or the advanced key brick) and the advanced secondary
-   *  brick. */
-  format: 'technique' | 'race_pace' | 'brick' | 'secondary_brick';
+   *  brick; a race simulation (lane H2b part 2). */
+  format: 'technique' | 'race_pace' | 'brick' | 'secondary_brick' | 'race_sim';
+  /** Race simulations: the full race (8 x 1 km and 8 stations) or a half
+   *  (4 x 1 km and 4 stations at 1.0 x). */
+  simKind?: 'full' | 'half';
+  /** Lane H2b part 2: the warm-up before the session's first block (the
+   *  existing 10-min run warm-up, HYROX_QUALITY_WARMUP_MIN): easy on the erg,
+   *  or an easy jog without one (a brick's is a jog). MTL at the easy RPE. */
+  warmup?: { min: number; mode: HyroxStation | 'run'; mtl: number };
+  /** Station sessions: the strength block that opens the session. */
+  strength?: HyroxStrengthBlock;
+  /** Station sessions: the easy erg finisher, the session's lever: it takes
+   *  the week's spare minutes up to the session cap (plan_engine.hyrox).
+   *  MTL at the easy RPE. */
+  finisher?: { min: number; station: HyroxStation; mtl: number };
+  /** Beginner loads the athlete's rating raised for this session (one short
+   *  note on the session card). */
+  loadSteps?: Array<{ station: HyroxStation; fromKg: number; toKg: number }>;
   /** Rest after every set (station sessions) or between rounds (bricks), s. */
   restSec: number;
   /** Bricks: the jog from each run to its station, seconds. Counted in the

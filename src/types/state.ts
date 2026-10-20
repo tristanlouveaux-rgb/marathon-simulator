@@ -194,6 +194,12 @@ export interface Workout extends WorkoutDefinition {
    *  station (the MTL cap, the ceilings) rewrites the text from the session
    *  itself. Absent on sessions generated before generator v19. */
   hyroxSpec?: import('./triathlon').HyroxSessionSpec;
+  /** HYROX mode (lane H2b part 2): a standalone strength session holding
+   *  heavy lower-body strength or plyometrics, so the 48 h eccentric rule
+   *  spaces it (scheduler.hyrox isEccentricSession; sheet eccentric.min_gap).
+   *  A station session's strength block carries its own flag
+   *  (hyroxSpec.strength.eccentric). */
+  hyroxEccentric?: boolean;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
