@@ -79,7 +79,6 @@ describe('buildHyroxRacePlan: shape and clock', () => {
     expect(sum).toBe(fc - 240);
     expect(plan.planSec).toBe(fc - 240);
     expect(plan.legs[15].clockSec).toBe(fc - 240);
-    expect(plan.checkpoints[plan.checkpoints.length - 1]).toEqual({ label: 'Finish', clockSec: fc - 240 });
   });
 
   it('the clock is each leg added to the last, with the Roxzone shared around the stations', () => {
@@ -95,8 +94,6 @@ describe('buildHyroxRacePlan: shape and clock', () => {
       prev = l.clockSec;
     });
     expect(roxSeen).toBe(plan.roxzone.splitSec);
-    // Checkpoints are the run clocks.
-    plan.checkpoints.slice(0, 8).forEach((c, k) => expect(c.clockSec).toBe(plan.legs[2 * k].clockSec));
   });
 
   it('no goal: the splits are the forecast\'s own lines and Roxzone; the clock carries the rounding remainder', () => {

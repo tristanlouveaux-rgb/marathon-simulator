@@ -4,8 +4,9 @@
  *  - Visual constraints (UX_PATTERNS): no capitals-only labels, no heavy
  *    letter-spacing, no em dash, at most 2 non-neutral colours (these use none).
  *  - The race plan page: 16 legs in race order, the clock ends on the goal,
- *    the forecast column only beside a goal, the unrealistic line, the doubles
- *    caption, the Checkpoints toggle.
+ *    the forecast column only beside a goal (never beside a goal at the
+ *    forecast), the unrealistic line, the doubles caption, no checkpoints
+ *    toggle (the Clock column is the clock after every run).
  *  - The Forecast tab: the race plan entry row and the lose-time card sit
  *    above "Where to gain"; the empty states are one line.
  */
@@ -119,16 +120,29 @@ describe('race plan page', () => {
     expect(app().textContent).toContain('Change goal');
   });
 
-  it('the Checkpoints toggle shows the clock after each run and the finish', () => {
+  it('one splits card, no Splits / Checkpoints toggle: the Clock column is the clock after every run', () => {
     setState(hyroxState({ targetFinishTimeSec: 5000 }));
     renderHyroxRacePlanView();
-    const cp = document.getElementById('rp-checkpoints')!;
-    expect(cp.style.display).toBe('none');
-    (app().querySelector('[data-rp-mode="checkpoints"]') as HTMLButtonElement).click();
-    expect(cp.style.display).toBe('');
-    expect(document.getElementById('rp-splits')!.style.display).toBe('none');
-    expect([...cp.querySelectorAll('[data-rp-checkpoint]')].map(el => el.getAttribute('data-rp-checkpoint')))
-      .toEqual(['Run 1', 'Run 2', 'Run 3', 'Run 4', 'Run 5', 'Run 6', 'Run 7', 'Run 8', 'Finish']);
+    expect(document.getElementById('rp-splits')).not.toBeNull();
+    expect(document.getElementById('rp-checkpoints')).toBeNull();
+    expect(app().querySelector('[data-rp-mode]')).toBeNull();
+    expect(app().textContent).not.toContain('Checkpoints');
+  });
+
+  it('a goal at the forecast is the forecast\'s plan: Split / Clock only, the time named once', () => {
+    const fc = predictHyroxRace(hyroxState({}))!.totalSec;
+    const s = hyroxState({ targetFinishTimeSec: fc });
+    setState(s);
+    renderHyroxRacePlanView();
+    const head = document.getElementById('rp-splits')!.firstElementChild!.textContent!.replace(/\s+/g, ' ').trim();
+    expect(head).toBe('Split Clock');
+    expect(document.getElementById('rp-splits')!.textContent).not.toContain('Forecast');
+    expect(app().querySelector('[data-rp-subhead]')!.textContent).toBe(`Splits for your ${ftRounded(fc)} goal. Matches your forecast.`);
+    expect(app().querySelector('#rp-feasibility')).toBeNull();
+    expect(app().textContent).toContain('Change goal');
+    const plan = buildHyroxRacePlan(s, predictHyroxRace(s)!);
+    expect(plan.basis).toBe('forecast');
+    plan.legs.forEach(l => expect(l.splitSec).toBe(l.forecastSec));
   });
 
   it('no goal: the forecast is the target, no forecast column, "Set a goal"', () => {
@@ -153,7 +167,8 @@ describe('race plan page', () => {
   });
 
   it('the subhead names the time the Wall Balls clock reaches (goal, no goal, unrealistic)', () => {
-    for (const hx of [{ targetFinishTimeSec: 5300 }, {}, { targetFinishTimeSec: 3600 }]) {
+    const fc = predictHyroxRace(hyroxState({}))!.totalSec;
+    for (const hx of [{ targetFinishTimeSec: 5300 }, {}, { targetFinishTimeSec: 3600 }, { targetFinishTimeSec: fc }]) {
       setState(hyroxState(hx));
       renderHyroxRacePlanView();
       const sub = app().querySelector('[data-rp-subhead]')!.textContent!;
@@ -178,13 +193,54 @@ describe('race plan page', () => {
 });
 
 describe('goal modal', () => {
-  it('no goal yet: the forecast is offered, and the line says so', () => {
+  it('no goal yet: "Set a goal", the forecast offered, the line says so, no echo, no Clear goal', () => {
     const s = hyroxState({});
     setState(s);
     const p = predictHyroxRace(s)!;
     openHyroxGoalModal(p);
+    const modal = document.getElementById('hx-goal-modal')!;
+    expect(modal.textContent).toContain('Set a goal');
     expect((document.getElementById('hx-goal-input') as HTMLInputElement).value).toBe(ftRounded(p.totalSec));
     expect(document.querySelector('[data-goal-feasibility]')!.textContent!.trim()).toBe('Matches your forecast.');
+    expect(document.getElementById('hx-goal-echo')!.textContent).toBe('');
+    expect(document.getElementById('hx-goal-clear')).toBeNull();
+  });
+
+  it('saving the offered forecast unchanged sets no goal and opens the race plan at the forecast', () => {
+    const s = hyroxState({ raceDate: new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10) });
+    setState(s);
+    renderHyroxForecastView();
+    (document.getElementById('hx-set-target-cta') as HTMLButtonElement).click();
+    return vi.waitFor(() => expect(document.getElementById('hx-goal-save')).not.toBeNull()).then(() => {
+      (document.getElementById('hx-goal-save') as HTMLButtonElement).click();
+      expect(s.hyroxConfig!.targetFinishTimeSec).toBeUndefined();
+      expect(document.getElementById('hx-goal-modal')).toBeNull();
+      const sub = app().querySelector('[data-rp-subhead]')!.textContent!;
+      expect(sub).toBe(`Splits for your ${ftRounded(predictHyroxRace(s)!.totalSec)} forecast`);
+      expect(document.getElementById('rp-splits')!.textContent).not.toContain('Forecast');
+    });
+  });
+
+  it('a goal on file: "Change goal" with Clear goal; the echo only when the input reads differently', () => {
+    const s = hyroxState({ targetFinishTimeSec: 5000 });
+    setState(s);
+    openHyroxGoalModal(predictHyroxRace(s)!);
+    expect(document.getElementById('hx-goal-modal')!.textContent).toContain('Change goal');
+    expect(document.getElementById('hx-goal-modal')!.textContent).not.toContain('Set a goal');
+    expect(document.getElementById('hx-goal-clear')).not.toBeNull();
+    const input = document.getElementById('hx-goal-input') as HTMLInputElement;
+    const echo = document.getElementById('hx-goal-echo')!;
+    expect(input.value).toBe('1:23:20');
+    expect(echo.textContent).toBe('');
+    input.value = '1:00';
+    input.dispatchEvent(new Event('input'));
+    expect(echo.textContent).toBe('Goal: 1:00:00');
+    input.value = '80:00';
+    input.dispatchEvent(new Event('input'));
+    expect(echo.textContent).toBe('Goal: 1:20:00');
+    input.value = '1:20:00';
+    input.dispatchEvent(new Event('input'));
+    expect(echo.textContent).toBe('');
   });
 
   it('an unrealistic goal reads the race plan\'s one sentence', () => {

@@ -15,13 +15,15 @@
  *    field's fastest published split, its p1 row; venue-neutral, each
  *    carrying the forecast line's venue seconds) and the Roxzone at the goal
  *    scaled from the forecast's by the real results (below).
- *  - Goal slower than (or equal to) the forecast: each component is the
+ *  - Goal slower than the forecast: each component is the
  *    forecast's, eased by how finishers at the goal time differ from
  *    finishers at the forecast time (hyroxPeerSplitsAt, segment by segment),
  *    then scaled to sum to the goal.
- *  - No goal, or a goal the floors cannot reach ('unrealistic'): the splits
- *    are the forecast's own lines (hyroxForecastRaceClock), so the page never
- *    lists splits that sum to neither the goal nor the forecast.
+ *  - No goal, a goal at the forecast (the same whole second: the goal modal
+ *    offers the forecast), or a goal the floors cannot reach ('unrealistic'):
+ *    the splits are the forecast's own lines (hyroxForecastRaceClock), so the
+ *    page never lists splits that sum to neither the goal nor the forecast,
+ *    and never a goal column that repeats the forecast column.
  *
  * Roxzone at the goal: forecast Roxzone x peer Roxzone at the goal / peer
  * Roxzone at the forecast (hyroxPeerSplitsAt in the target's cohort). Finishers
@@ -77,18 +79,10 @@ export interface HyroxRaceClockLeg {
   clockSec: number;
 }
 
-export interface HyroxRacePlanCheckpoint {
-  /** "Run 1" to "Run 8", then "Finish". */
-  label: string;
-  clockSec: number;
-}
-
-/** 16 legs in race order with the race clock, the Roxzone, the checkpoints. */
+/** 16 legs in race order with the race clock and the Roxzone. */
 export interface HyroxRaceClock {
   legs: HyroxRaceClockLeg[];
   roxzoneSec: number;
-  /** Race clock after each run, then the finish. */
-  checkpoints: HyroxRacePlanCheckpoint[];
   /** The finish: the legs and the Roxzone together. */
   totalSec: number;
 }
@@ -102,7 +96,7 @@ export interface HyroxRacePlan {
   /** The athlete's goal; null when none is set. */
   goalSec: number | null;
   /** What the splits are: the goal's, or the forecast's own lines (no goal,
-   *  or a goal the floors cannot reach). */
+   *  a goal at the forecast, or a goal the floors cannot reach). */
   basis: 'goal' | 'forecast';
   /** predictHyroxRace().totalSec. */
   forecastSec: number;
@@ -123,8 +117,6 @@ export interface HyroxRacePlan {
    *  splits are the forecast's. The race clock carries the forecast's
    *  rounding remainder instead, so it ends on the forecast. */
   roxzone: { splitSec: number; forecastSec: number };
-  /** Race clock after each run, then the finish. */
-  checkpoints: HyroxRacePlanCheckpoint[];
   isDoubles: boolean;
   cohort: HyroxResultsCohort;
 }
@@ -234,22 +226,19 @@ export function hyroxRaceClock(
   const before = shares.map(sh => Math.floor(sh / 2));
   const after = shares.map((sh, i) => sh - before[i]);
   const legs: HyroxRaceClockLeg[] = [];
-  const checkpoints: HyroxRacePlanCheckpoint[] = [];
   let clock = 0;
   for (let k = 0; k < 8; k++) {
     if (k > 0) clock += after[k - 1];
     const runSec = runLegsSec[k] ?? 0;
     clock += runSec;
     legs.push({ kind: 'run', label: `Run ${k + 1}`, legNumber: k + 1, splitSec: runSec, clockSec: clock });
-    checkpoints.push({ label: `Run ${k + 1}`, clockSec: clock });
     const st = HYROX_STATION_ORDER[k];
     const stSec = stationSec[st] ?? 0;
     clock += before[k] + stSec;
     if (k === 7) clock += after[7];
     legs.push({ kind: 'station', label: STATION_DISPLAY[st].name, legNumber: k + 1, station: st, splitSec: stSec, clockSec: clock });
   }
-  checkpoints.push({ label: 'Finish', clockSec: clock });
-  return { legs, roxzoneSec, checkpoints, totalSec: clock };
+  return { legs, roxzoneSec, totalSec: clock };
 }
 
 /**
@@ -338,7 +327,8 @@ function clockForComponents(prediction: HyroxPrediction, comps: Components, tota
 
 /**
  * The race plan for the athlete's goal (hyroxConfig.targetFinishTimeSec), or
- * the forecast's own lines when no goal is set or the goal is out of reach.
+ * the forecast's own lines when no goal is set, the goal is the forecast, or
+ * the goal is out of reach.
  * `prediction` is predictHyroxRace's result for the same state; its numbers
  * fill the forecast column as they are.
  */
@@ -355,7 +345,11 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
   let shortfallSec = 0;
   let caveat: string | null = null;
   let likelyRangeSec: [number, number] | null = null;
-  if (goalSec != null && goalSec < prediction.totalSec) {
+  if (goalSec != null && Math.round(goalSec) === Math.round(prediction.totalSec)) {
+    // A goal at the forecast is the forecast's plan: its own lines, no goal
+    // column beside an identical forecast column.
+    feasibility = 'already_on_pace';
+  } else if (goalSec != null && goalSec < prediction.totalSec) {
     const back = computeGoalBackCalc(prediction, goalSec, hyroxGoalBackCalcOptions(state, prediction, goalSec));
     feasibility = back.feasibility;
     shortfallSec = back.shortfallSec;
@@ -373,9 +367,7 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
   } else if (goalSec != null) {
     feasibility = 'already_on_pace';
     basis = 'goal';
-    if (goalSec > prediction.totalSec) {
-      clock = clockForComponents(prediction, easedComponents(prediction, cohort, goalSec), Math.round(goalSec));
-    }
+    clock = clockForComponents(prediction, easedComponents(prediction, cohort, goalSec), Math.round(goalSec));
   }
 
   const legs: HyroxRacePlanLeg[] = clock.legs.map((l, i) => ({ ...l, forecastSec: forecast.legs[i].splitSec }));
@@ -393,7 +385,6 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
     likelyRangeSec,
     legs,
     roxzone: { splitSec: basis === 'forecast' ? forecastRoxzoneSec : clock.roxzoneSec, forecastSec: forecastRoxzoneSec },
-    checkpoints: clock.checkpoints,
     isDoubles,
     cohort,
   };

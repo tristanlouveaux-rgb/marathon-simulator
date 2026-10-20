@@ -2,14 +2,15 @@
  * HYROX race plan sub-page, a drill-down from the Forecast tab.
  *
  * Every leg in race order with the goal split, the race clock at the end of
- * the leg and the forecast's own split (muted); a Checkpoints view lists the
- * clock after each run. Numbers come from buildHyroxRacePlan
- * (hyrox-race-plan.ts), whose forecast columns are predictHyroxRace's own.
+ * the leg and the forecast's own split (muted). The Clock column already
+ * gives the clock after every run, so there is no separate checkpoints view.
+ * Numbers come from buildHyroxRacePlan (hyrox-race-plan.ts), whose forecast
+ * columns are predictHyroxRace's own.
  *
  * Pattern: the page skeleton is renderHyroxChipDetail
  * (forecast-chip-detail-view.ts), the rows the Race order grid
- * (forecast-view.ts renderRaceOrderTable), the toggle the Race order /
- * Station order control. Neutrals only, no section capitals.
+ * (forecast-view.ts renderRaceOrderTable). Neutrals only, no section
+ * capitals.
  *
  * Side: tracking (forecast column) and planning (goal splits).
  */
@@ -50,11 +51,14 @@ export function racePlanFeasibilityLine(plan: Pick<HyroxRacePlan, 'feasibility' 
 }
 
 /** Subhead under the title. Names only the time the splits sum to; a goal
- *  plan adds the forecast. */
-export function racePlanSubhead(plan: Pick<HyroxRacePlan, 'basis' | 'planSec' | 'forecastSec'>): string {
-  return plan.basis === 'goal'
-    ? `Splits for your ${fmt(plan.planSec)} goal. Forecast ${fmt(plan.forecastSec)}.`
-    : `Splits for your ${fmt(plan.planSec)} forecast`;
+ *  plan adds the forecast. A goal at the forecast (the forecast's own plan)
+ *  names the time once, with the goal modal's own sentence. */
+export function racePlanSubhead(plan: Pick<HyroxRacePlan, 'basis' | 'planSec' | 'forecastSec' | 'goalSec' | 'feasibility' | 'likelyRangeSec' | 'cohort'>): string {
+  if (plan.basis === 'goal') return `Splits for your ${fmt(plan.planSec)} goal. Forecast ${fmt(plan.forecastSec)}.`;
+  if (plan.goalSec != null && plan.feasibility === 'already_on_pace') {
+    return `Splits for your ${fmt(plan.planSec)} goal. ${hyroxGoalFeasibilityLine(plan)}`;
+  }
+  return `Splits for your ${fmt(plan.planSec)} forecast`;
 }
 
 function legRow(leg: HyroxRacePlanLeg, withForecast: boolean, first: boolean): string {
@@ -101,27 +105,8 @@ export function renderRacePlanSplits(plan: HyroxRacePlan): string {
   `;
 }
 
-/** The checkpoints card: the race clock after each run, then the finish. */
-export function renderRacePlanCheckpoints(plan: HyroxRacePlan): string {
-  const rows = plan.checkpoints.map((c, i) => `
-    <div data-rp-checkpoint="${c.label}" style="display:flex;justify-content:space-between;align-items:baseline;padding:9px 0;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:13px">
-      <span style="color:${c.label === 'Finish' ? TEXT_M : TEXT_S}">${c.label === 'Finish' ? 'Finish' : `After ${c.label}`}</span>
-      <span style="color:${TEXT_M};font-weight:600;font-variant-numeric:tabular-nums">${fmt(c.clockSec)}</span>
-    </div>
-  `).join('');
-  return `
-    <div id="rp-checkpoints" style="${CARD};margin-bottom:14px;display:none">
-      ${rows}
-      <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:10px">Race clock as each run ends.</div>
-    </div>
-  `;
-}
-
-const TOGGLE_ON = 'border:1px solid var(--c-black);background:var(--c-black);color:#FDFCF7';
-const TOGGLE_OFF = 'border:1px solid rgba(0,0,0,0.12);background:transparent;color:var(--c-muted)';
-
-/** Page body below the title: the feasibility line, the goal link, the
- *  toggle and both cards. */
+/** Page body below the title: the feasibility line, the goal link and the
+ *  splits card. */
 export function renderRacePlanBody(plan: HyroxRacePlan): string {
   const line = racePlanFeasibilityLine(plan);
   return `
@@ -129,12 +114,7 @@ export function renderRacePlanBody(plan: HyroxRacePlan): string {
     <div style="text-align:center;margin-bottom:14px">
       <button id="rp-goal-link" type="button" style="${LINK}">${plan.goalSec != null ? 'Change goal ›' : 'Set a goal ›'}</button>
     </div>
-    <div role="tablist" style="display:flex;gap:8px;margin-bottom:12px">
-      <button type="button" data-rp-mode="splits" role="tab" aria-selected="true" style="flex:1;padding:8px 10px;border-radius:10px;${TOGGLE_ON};font-size:12px;font-weight:500;cursor:pointer">Splits</button>
-      <button type="button" data-rp-mode="checkpoints" role="tab" aria-selected="false" style="flex:1;padding:8px 10px;border-radius:10px;${TOGGLE_OFF};font-size:12px;font-weight:500;cursor:pointer">Checkpoints</button>
-    </div>
     ${renderRacePlanSplits(plan)}
-    ${renderRacePlanCheckpoints(plan)}
   `;
 }
 
@@ -161,10 +141,12 @@ export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'
 /**
  * Open the goal modal as the race plan's goal step (the Forecast hero's
  * "Set a goal ›", the race plan's "Change goal ›"). After a save
- * that sets a goal the race plan opens on it. After a clear the view that
- * opened the modal stays: the Forecast tab, or the race plan for doubles
- * (it shows the forecast's clock); singles clearing on the race plan return
- * to the Forecast tab, whose Race order card is the forecast's plan.
+ * that sets a goal the race plan opens on it; saving the offered forecast
+ * unchanged sets no goal and opens the race plan at the forecast. After a
+ * clear the view that opened the modal stays: the Forecast tab, or the race
+ * plan for doubles (it shows the forecast's clock); singles clearing on the
+ * race plan return to the Forecast tab, whose Race order card is the
+ * forecast's plan.
  */
 export function openRacePlanGoalModal(from: 'forecast' | 'race-plan' = 'race-plan'): void {
   const current = predictHyroxRace(getState());
@@ -179,6 +161,7 @@ export function openRacePlanGoalModal(from: 'forecast' | 'race-plan' = 'race-pla
         else if (from === 'race-plan' && isHyroxDoublesFormat(hx?.format)) renderHyroxRacePlanView();
         else void toForecast();
       },
+      onKeepForecast: () => renderHyroxRacePlanView(),
     });
   });
 }
@@ -235,22 +218,5 @@ export function renderHyroxRacePlanView(): void {
     import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
   });
   document.getElementById('rp-goal-link')?.addEventListener('click', () => openRacePlanGoalModal('race-plan'));
-  root.querySelectorAll<HTMLButtonElement>('[data-rp-mode]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.getAttribute('data-rp-mode');
-      const splits = document.getElementById('rp-splits');
-      const checkpoints = document.getElementById('rp-checkpoints');
-      if (!splits || !checkpoints) return;
-      splits.style.display = mode === 'splits' ? '' : 'none';
-      checkpoints.style.display = mode === 'checkpoints' ? '' : 'none';
-      root.querySelectorAll<HTMLButtonElement>('[data-rp-mode]').forEach(b => {
-        const on = b === btn;
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-        b.style.background = on ? 'var(--c-black)' : 'transparent';
-        b.style.color = on ? '#FDFCF7' : 'var(--c-muted)';
-        b.style.borderColor = on ? 'var(--c-black)' : 'rgba(0,0,0,0.12)';
-      });
-    });
-  });
   wireTabBarHandlers(navigateTab);
 }
