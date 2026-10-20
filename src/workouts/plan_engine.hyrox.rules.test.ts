@@ -1154,6 +1154,44 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(checked).toBe(16);
   }, 60000);
 
+  it('a taper long run that cannot stay the week\'s longest run stays as an easy run at the run floor when that fits, so taper week 1 keeps its run count (review round 3: beside a 25-min tempo and the week\'s last brick, 3 to 8 of 370 doubles plans a variant lost the taper long run)', () => {
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+      ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+      ['7-session open doubles women', { hyroxFormat: 'open_doubles', hyroxDivision: 'women', biologicalSex: 'female', hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>],
+    ];
+    let held = 0;
+    const off: string[] = [];
+    for (const [name, over] of variants) {
+      for (const band of ['total_beginner', 'beginner'] as AbilityBand[]) {
+        for (let hrs = HYROX_HOURS_RANGE[band].min; hrs <= 8; hrs++) {
+          for (const len of [12, 16, 20]) {
+            const s = build(band, hrs, len, over);
+            const tw = planTrainingWeeks(s);
+            const wk = s.wks[tw - 2];
+            if (wk?.ph !== 'taper') continue;
+            const label = `${name} ${band} ${hrs}h ${len}w W${tw - 1}`;
+            if (notes(wk).some(n => /Long Run held as a \d+-min easy run/.test(n))) {
+              held++;
+              const easy = prescribed(wk).filter(x => x.t === 'hyrox_run_easy' && !isHyroxLongRun(x));
+              if (!easy.some(x => x.estimatedDurationMin === HYROX_RUN_FLOOR_MIN)) off.push(`${label}: held with no ${HYROX_RUN_FLOOR_MIN}-min easy run`);
+              if (prescribed(wk).some(isHyroxLongRun)) off.push(`${label}: held beside a long run`);
+            }
+            if (notes(wk).some(n => /Long Run left out \(taper/.test(n))) {
+              // Left out only when an easy run at the run floor would take the
+              // week above 0.55 of the reference week.
+              const ref = s.wks[refLoadedWeek(s.wks, tw - 2, deloadOf(s.wks.slice(0, tw)))];
+              const ceiling = hyroxTaperFraction(1, 2) * minutes(ref);
+              if (minutes(wk) + HYROX_RUN_FLOOR_MIN - taperExemptMin(wk) <= ceiling + EPS) off.push(`${label}: long run left out where a ${HYROX_RUN_FLOOR_MIN}-min easy run fits (${minutes(wk)} min, ${taperExemptMin(wk).toFixed(1)} exempt, ceiling ${ceiling.toFixed(1)})`);
+            }
+          }
+        }
+      }
+    }
+    expect(held).toBeGreaterThan(0);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 300000);
+
   it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
     // Sheet taper.content: keep the run count. The exempt circuit's warm-up
     // is exempt in race week (a fixed part of the exempt circuit), so a race
