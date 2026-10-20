@@ -33,13 +33,16 @@ describe('station sets and formats', () => {
     expect(hyroxTechniqueSets(false)).toBe(2);
   });
 
-  it('race-pace sets step from the technique dose to the race dose as the week grows toward peak, rounded down', () => {
+  it('race-pace sets step from the technique dose to the race dose as the week grows toward peak, to the nearest quarter (Tristan 2026-10-20)', () => {
     expect(hyroxRacePaceSets(0.55, false)).toBe(2); // base week 1
-    expect(hyroxRacePaceSets(0.74, false)).toBe(2);
-    expect(hyroxRacePaceSets(0.75, false)).toBe(3);
+    expect(hyroxRacePaceSets(0.62, false)).toBe(2);
+    expect(hyroxRacePaceSets(0.625, false)).toBe(3); // 2.5 sets round up
     expect(hyroxRacePaceSets(0.85, false)).toBe(3); // base at its top
-    expect(hyroxRacePaceSets(0.92, false)).toBe(3); // build
-    expect(hyroxRacePaceSets(0.92 * 0.75, false)).toBe(2); // a build deload
+    expect(hyroxRacePaceSets(0.87, false)).toBe(3);
+    expect(hyroxRacePaceSets(0.875, false)).toBe(4); // 1.0 x from 0.875 of peak
+    expect(hyroxRacePaceSets(0.92, false)).toBe(4); // build: the sheet's 1.0 x (floor() held it at 3)
+    expect(hyroxRacePaceSets(0.92 * 0.75, false)).toBe(3); // a build deload
+    expect(hyroxRacePaceSets(0.55 * 0.75, false)).toBe(2); // a base deload
     expect(hyroxRacePaceSets(1.0, false)).toBe(4); // peak: the full race volume
     expect(hyroxRacePaceSets(1.15, false)).toBe(4); // never above the race dose
     expect(hyroxRacePaceSets(0, false)).toBe(2); // never under the technique dose

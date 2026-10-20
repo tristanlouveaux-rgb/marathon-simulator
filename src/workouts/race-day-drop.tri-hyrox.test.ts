@@ -84,13 +84,20 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
     // long run moves to Thursday, 7 days out. Since 2026-10-12 week 5 is the
     // first week of the 2-week taper (no full brick; its long run is the long
     // session the window moves, as running's is).
+    // Since 2026-10-19 taper week 1 holds 0.55 of the reference week (0.70
+    // before): this fixture's MTL cap of 60 holds the reference week to 74
+    // min, so the 41-min taper week keeps its circuit and leaves the 42-min
+    // long run out (noted). A long run it holds sits on Thursday.
     const weekBefore = weeks[4].triWorkouts ?? [];
     for (const w of weekBefore) expect(w.dayOfWeek ?? 0, w.n).toBeLessThan(4);
-    expect(weekBefore.find(w => w.n === 'Long Run')?.dayOfWeek).toBe(3);
+    const long = weekBefore.find(w => w.n === 'Long Run');
+    if (long) expect(long.dayOfWeek).toBe(3);
+    else expect((weeks[4].hyroxPlanNotes ?? []).join(' | ')).toMatch(/Long Run left out \(taper/);
     // Without the race date week 5's long run keeps its Sunday. (Race week
     // itself no longer shows the difference: since 2026-10-13 it holds no more
     // runs than the reference week, here the primer and one easy run, which
     // the no-race plan places early in the week too.)
-    expect((noRace[4].triWorkouts ?? []).some(w => (w.dayOfWeek ?? 0) >= 4)).toBe(true);
+    const noRaceLong = (noRace[4].triWorkouts ?? []).find(w => w.n === 'Long Run');
+    if (noRaceLong) expect(noRaceLong.dayOfWeek).toBeGreaterThanOrEqual(4);
   });
 });

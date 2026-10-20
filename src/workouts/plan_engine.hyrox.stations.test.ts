@@ -104,7 +104,8 @@ describe('station sessions by tier and phase', () => {
         // Never above the week's nominal size; a held week takes sets off.
         expect(rp[0].hyroxRounds!).toBeLessThanOrEqual(hyroxRacePaceSets(nominal, false));
         expect(rp[0].hyroxRounds!).toBeGreaterThanOrEqual(2);
-        if (wk.ph === 'build' && !deload) expect(rp[0].hyroxRounds).toBe(3);
+        // Build at 0.92 of peak rounds to the full 1.0 x (nearest quarter, 2026-10-20).
+        if (wk.ph === 'build' && !deload) expect(rp[0].hyroxRounds).toBe(4);
         if (wk.ph === 'peak' && rp[0].hyroxRounds === 4) peakFull++;
       }
     });

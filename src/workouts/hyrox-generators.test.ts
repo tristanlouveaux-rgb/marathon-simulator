@@ -143,9 +143,10 @@ describe('race-pace station session', () => {
     expect(hyroxSessionNotes(w)).toEqual(["Sled Pull is the forecast's weakest station."]);
   });
 
-  it('the dose follows the week toward peak: 2, 3, then 4 sets (0.5 x, 0.75 x, 1.0 x)', () => {
+  it('the dose follows the week toward peak: 2, 3, then 4 sets (0.5 x, 0.75 x, 1.0 x), to the nearest quarter', () => {
     expect(station({ doseFraction: 0.6 }).hyroxRounds).toBe(2);
-    expect(station({ doseFraction: 0.92 }).hyroxRounds).toBe(3);
+    expect(station({ doseFraction: 0.8 }).hyroxRounds).toBe(3);
+    expect(station({ doseFraction: 0.92 }).hyroxRounds).toBe(4); // build: the sheet's 1.0 x
     expect(station({ doseFraction: 1 }).hyroxRounds).toBe(4);
     expect(station({}).hyroxRounds).toBe(4); // no fraction: the full dose
     const peak = station({ doseFraction: 1, weakest: 'wall_balls' });

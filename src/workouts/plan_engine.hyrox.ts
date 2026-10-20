@@ -306,9 +306,10 @@ import {
 //   race weight, RPE 7, 90 s rest. The old circuits (2 to 6 x race volume,
 //   65% of the seed time at RPE 5, the easy-run finish) are gone;
 // - the race-pace dose steps 0.5 x, 0.75 x, 1.0 x with the week's nominal
-//   size toward peak (0.5 x in base and build deloads, 0.75 x in a peak
-//   deload, never above the reference week's session) and down to the
-//   session's share of the week's size;
+//   size toward peak, to the nearest quarter (1.0 x from 0.875 of peak, so
+//   build holds the sheet's 1.0 x; 0.5 x in base deloads, 0.75 x in build
+//   and peak deloads, never above the reference week's session) and down to
+//   the session's share of the week's size;
 // - beginner loads: sleds unloaded weeks 1-2, then 50%, other loaded
 //   stations 60%, race weight 4 weeks out, stepped between those anchors from
 //   the athlete's own rating on the last station session (suggestNextWeight;

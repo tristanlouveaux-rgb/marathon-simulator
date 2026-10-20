@@ -106,24 +106,24 @@ export function hyroxTechniqueSets(doubles: boolean): number {
  * Sets a station takes in a race-pace session: the volume progression
  * (Tristan 2026-10-12, running's lever). The dose steps from the technique
  * volume toward the race-pace volume as the week's size grows toward peak,
- * in whole quarters of the race volume, rounded down (a product choice in
- * line with the sheet's low-end principle; the sheet states no rounding
- * rule): sets = floor(RACE_SETS x doseFraction), held between the technique
- * sets and the race sets. doseFraction is the week's nominal size relative to
+ * in whole quarters of the race volume, rounded to the nearest quarter
+ * (Tristan 2026-10-20; halves round up): sets = round(RACE_SETS x
+ * doseFraction), held between the technique sets and the race sets. Before,
+ * floor() held intermediate build at 0.75 x where the sheet lists 1.0 x. doseFraction is the week's nominal size relative to
  * the plan's peak week: its phase multiplier x the deload factor x the
  * effort / MTL-gap lever ÷ HYROX_PEAK_MULT. It never reads the chosen hours
  * (plan_engine.hyrox.ts passes budgetPerHourMin ÷ HYROX_PEAK_MULT); the
  * acute:chronic guard and the ceilings reach the dose through the session's
  * share of the week's size (doseMinutes in the generator). At the nominal
- * multipliers: base 0.55 to 0.74 holds 2 sets (0.5 x), 0.75 to 0.99 (late
- * base, build at 0.92) 3 (0.75 x), peak at 1.00 the full 4 (1.0 x); a base or
- * build deload 2 (0.5 x), a peak deload (1.00 x HYROX_DELOAD_FACTOR 0.75) 3
- * (0.75 x), never above the reference week's session. Doubles take half
- * (hyroxDoublesSets).
+ * multipliers: base 0.55 to 0.62 holds 2 sets (0.5 x), 0.625 to 0.87 3
+ * (0.75 x), 0.875 and above (build at 0.92, peak at 1.00) the full 4 (1.0 x);
+ * a base deload 2 (0.5 x), a build deload (0.92 x 0.75 = 0.69) and a peak
+ * deload (1.00 x HYROX_DELOAD_FACTOR 0.75) 3 (0.75 x), never above the
+ * reference week's session. Doubles take half (hyroxDoublesSets).
  */
 export function hyroxRacePaceSets(doseFraction: number, doubles: boolean): number {
   const f = Number.isFinite(doseFraction) ? doseFraction : 1;
-  const sets = Math.max(TECHNIQUE_SETS, Math.min(RACE_SETS, Math.floor(RACE_SETS * f + 1e-9)));
+  const sets = Math.max(TECHNIQUE_SETS, Math.min(RACE_SETS, Math.floor(RACE_SETS * f + 0.5 + 1e-9)));
   return doubles ? hyroxDoublesSets(sets) : sets;
 }
 
