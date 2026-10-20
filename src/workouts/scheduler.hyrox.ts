@@ -207,10 +207,13 @@ function placeCommutes(main: Workout[], commutes: readonly Workout[]): Workout[]
  * exists. Depth-first over the sessions in priority order, each trying its
  * preferred days first, so the result is the greedy placement whenever that
  * one is legal. Commute runs are placed afterwards (placeCommutes).
+ * `opts.allowedDays`: the days a session may take (null: every day), e.g. a
+ * race simulation in the week two weeks before race week only on days 14 or
+ * more days before race day (plan_engine.hyrox hyroxSimLastDow).
  */
 export function findHyroxWeekSchedule(
   sessions: readonly Workout[],
-  opts: { prevSunday?: HyroxPrevSunday | null } = {},
+  opts: { prevSunday?: HyroxPrevSunday | null; allowedDays?: (w: Workout) => readonly number[] | null } = {},
 ): Workout[] | null {
   const main = sessions.filter(w => w.commute !== true);
   const commutes = sessions.filter(w => w.commute === true);
@@ -218,10 +221,14 @@ export function findHyroxWeekSchedule(
   // Each session's priority, days and spacing flags, read once (the
   // depth-first search below reads them at every step). The sort is stable,
   // as before.
+  const daysOf = (w: Workout): number[] => {
+    const allowed = opts.allowedDays?.(w);
+    return allowed ? candidateDays(w).filter(d => allowed.includes(d)) : candidateDays(w);
+  };
   const sorted = main
     .map(w => ({ w, p: priority(w) }))
     .sort((a, b) => a.p - b.p)
-    .map(({ w }) => ({ w, days: candidateDays(w), hard: isHighIntensity(w), ecc: isEccentricSession(w) }));
+    .map(({ w }) => ({ w, days: daysOf(w), hard: isHighIntensity(w), ecc: isEccentricSession(w) }));
   const placed: Placed[] = [];
   const placedFlags: Array<{ day: number; hard: boolean; ecc: boolean }> = [];
   const used = new Set<number>();
@@ -287,7 +294,7 @@ export function scheduleHyroxWeek(
   opts: { prevSunday?: HyroxPrevSunday | null; dropped?: Workout[] } = {},
 ): Workout[] {
   if (!allowedDays) {
-    const found = findHyroxWeekSchedule(sessions, opts);
+    const found = findHyroxWeekSchedule(sessions, { prevSunday: opts.prevSunday });
     if (found) return found;
   }
   const usedDays = new Set<number>();

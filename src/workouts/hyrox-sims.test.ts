@@ -4,7 +4,9 @@
  *   - the planner: beginners and intermediates hold a full sim in the
  *     eligible week nearest 4 weeks before race week, half sims every 4th
  *     loaded week of build and peak; never in the race taper, a deload or
- *     before HYROX_FIRST_BRICK_WEEK; advanced athletes no full sim unless 16
+ *     before HYROX_FIRST_BRICK_WEEK, and never in the final 14 days before
+ *     race day, by date (a Thursday to Saturday race's week before the taper
+ *     holds days inside them); advanced athletes no full sim unless 16
  *     weeks without a race, their half sims at least 6 weeks apart;
  *   - the session: rounds of 1 km at race pace into the race's stations in
  *     order, full station volumes, the 30 s jog, a warm-up jog;
@@ -15,7 +17,7 @@
  *     that would drop a brick plans no sim;
  *   - a beginner's race weight starts the week before the planned full sim.
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 
 const store: Record<string, string> = {};
 vi.stubGlobal('localStorage', {
@@ -39,7 +41,7 @@ import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlan, hyroxSimWeeks } from './plan_engine.hyrox';
 import { computeHyroxPlanPhases } from '@/constants/hyrox-constants';
-import { planTrainingWeeks } from './race-week-layout';
+import { planTrainingWeeks, storedPlanRaceLayout } from './race-week-layout';
 import { generateHyroxSim } from './hyrox-generators';
 import { hyroxStationRaceAmount } from './hyrox-station-dose';
 import { isHighIntensity, isHardRun, isEccentricSession, isHyroxLongRun } from './scheduler.hyrox';
@@ -123,6 +125,46 @@ describe('the race simulation planner', () => {
     const recent = structuredClone(s);
     recent.hyroxConfig!.hyroxPreviousRaceDate = s.planStartDate;
     expect([...hyroxSimWeeks(recent, tw).values()].some(v => v.kind === 'full')).toBe(false);
+  });
+
+  describe('never in the final 14 days before race day, by date', () => {
+    const tz = process.env.TZ;
+    afterEach(() => {
+      vi.useRealTimers();
+      if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+    });
+    it('Thursday to Sunday races: every sim 14 or more days out; the week before the taper keeps its sim on an earlier day (review 2026-10-20: a Saturday half sim fell 12 or 13 days before a Thursday or Friday race)', () => {
+      process.env.TZ = 'Europe/London';
+      let sims = 0;
+      let beforeTaperThuFri = 0;
+      const close: string[] = [];
+      for (const onboard of ['2026-10-05T09:00:00', '2026-10-07T09:00:00']) {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date(onboard));
+        for (const band of ['beginner', 'novice', 'intermediate'] as AbilityBand[]) {
+          for (let k = 72; k <= 168; k += 3) {
+            const race = new Date(new Date(onboard).getTime() + k * 86400000).toISOString().slice(0, 10);
+            const dow = (new Date(`${race}T12:00:00`).getDay() + 6) % 7;
+            if (dow < 3) continue;
+            const s = build(band, HYROX_HOURS_RANGE[band].default, 16, { customRaceDate: race } as Partial<OnboardingState>);
+            const layout = storedPlanRaceLayout(s.tw, s.planStartDate, s.hyroxConfig!.raceDate);
+            expect(layout, race).not.toBeNull();
+            s.wks.forEach((wk, i) => {
+              const sim = simOf(wk);
+              if (!sim) return;
+              sims++;
+              const out = layout!.raceDayIndex - (i * 7 + (sim.dayOfWeek ?? 0));
+              if (out < 14) close.push(`${band} race ${race} W${i + 1} ${sim.dayName} ${out} days out`);
+              if (i + 1 === layout!.trainingWeeks - 2 && (layout!.raceDayOfWeek === 3 || layout!.raceDayOfWeek === 4)) beforeTaperThuFri++;
+            });
+          }
+        }
+        vi.useRealTimers();
+      }
+      expect(sims).toBeGreaterThan(80);
+      expect(close).toEqual([]);
+      expect(beforeTaperThuFri).toBeGreaterThan(0);
+    }, 120000);
   });
 
   it('a session count that leaves no brick leaves no sim', () => {
