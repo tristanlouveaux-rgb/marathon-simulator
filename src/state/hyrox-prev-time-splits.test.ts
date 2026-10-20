@@ -138,4 +138,29 @@ describe('the past doubles result reads the division it was raced in everywhere'
     expect(typeof unrecorded.hyroxConfig!.personalRunPaceOffsetSec).toBe('number');
     expect(unrecorded.hyroxConfig!.personalRunPaceOffsetSec).not.toBe(offsetFromPast);
   });
+
+  it('no sex on file, a Women pick, a Mixed race: run pace reads her own women\'s field, as her planning band does', () => {
+    // hyroxPlanningBandFor's rule: the athlete's sex from biological sex,
+    // then the current division, then the race's; the race division names
+    // the race field only.
+    const noSex = doublesAthlete('women');
+    noSex.hyroxConfig!.format = 'open_singles';
+    noSex.biologicalSex = undefined;
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(noSex.hyroxConfig!.athleteBand).toBe(hyroxPlanningBandFor(4700, 'open_doubles', 'female', 'women', 'mixed'));
+    const offsetNoSex = noSex.hyroxConfig!.personalRunPaceOffsetSec;
+    expect(typeof offsetNoSex).toBe('number');
+    // The same athlete with her sex on file: the same women's field.
+    const withSex = doublesAthlete('women');
+    withSex.hyroxConfig!.format = 'open_singles';
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(offsetNoSex).toBe(withSex.hyroxConfig!.personalRunPaceOffsetSec);
+    // No pick either: the pooled field, a different pace.
+    const pooled = doublesAthlete('women');
+    pooled.hyroxConfig!.format = 'open_singles';
+    pooled.hyroxConfig!.division = undefined;
+    pooled.biologicalSex = undefined;
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(pooled.hyroxConfig!.personalRunPaceOffsetSec).not.toBe(offsetNoSex);
+  });
 });
