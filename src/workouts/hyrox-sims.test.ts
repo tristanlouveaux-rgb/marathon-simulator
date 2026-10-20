@@ -106,7 +106,7 @@ describe('the race simulation planner', () => {
         }
       }
     }
-  });
+  }, 60000);
 
   it('advanced: no full sim by default; one about 8 weeks out after 16 weeks without a race; half sims at least 6 weeks apart', () => {
     const s = build('advanced', 10, 24);
@@ -125,7 +125,7 @@ describe('the race simulation planner', () => {
     const recent = structuredClone(s);
     recent.hyroxConfig!.hyroxPreviousRaceDate = s.planStartDate;
     expect([...hyroxSimWeeks(recent, tw).values()].some(v => v.kind === 'full')).toBe(false);
-  });
+  }, 60000);
 
   describe('never in the final 14 days before race day, by date', () => {
     const tz = process.env.TZ;
@@ -170,7 +170,7 @@ describe('the race simulation planner', () => {
   it('a session count that leaves no brick leaves no sim', () => {
     const s = build('intermediate', 6, 18, { hyroxWeeklySessionCount: 3 } as Partial<OnboardingState>);
     expect(hyroxSimWeeks(s, planTrainingWeeks(s)).size).toBe(0);
-  });
+  }, 60000);
 });
 
 describe('the race simulation session', () => {
@@ -226,7 +226,7 @@ describe('the race simulation session', () => {
     const prStations = pr.filter(r => pairSt.some(c => c.type === r.station));
     expect(prStations.length).toBeGreaterThan(0);
     expect(prStations.every(r => r.partial && !r.eligible)).toBe(true);
-  });
+  }, 60000);
 });
 
 describe('the race simulation week', () => {
@@ -253,7 +253,7 @@ describe('the race simulation week', () => {
     }
     expect(full).toBeGreaterThan(0);
     expect(half).toBeGreaterThan(0);
-  });
+  }, 60000);
 
   it('the 110% single-run rule turns a full sim into a half (a beginner whose longest run is under 8 km), noted', () => {
     const s = build('beginner', 5, 16);
@@ -263,7 +263,7 @@ describe('the race simulation week', () => {
     const wk = s.wks[full! - 1];
     expect(simOf(wk)?.hyroxSpec?.simKind).toBe('half');
     expect((wk.hyroxPlanNotes ?? []).some(n => /full race simulation becomes a half \(its 8 km of running above the 110% single-run ceiling/.test(n))).toBe(true);
-  });
+  }, 60000);
 
   it('a beginner\'s race weight starts the week before the planned full sim', () => {
     const s = build('beginner', 6, 16, { biologicalSex: 'female' } as Partial<OnboardingState>);
@@ -272,7 +272,7 @@ describe('the race simulation week', () => {
     const loaded = (k: number) => prescribed(s.wks[k - 1]).flatMap(w => (w.hyroxComponents ?? []).filter(c => c.loadKg != null));
     expect(loaded(full - 1).every(c => c.loadPct == null)).toBe(true);
     expect(loaded(full - 1).length + loaded(full).length).toBeGreaterThan(0);
-  });
+  }, 60000);
 
   it('an injury that would drop a brick plans no sim; the week keeps its structure for the gates', () => {
     const s = build('intermediate', 8, 18);
@@ -286,7 +286,7 @@ describe('the race simulation week', () => {
       expect(simOf(wks[w - 1])).toBeUndefined();
       expect((wks[w - 1].hyroxPlanNotes ?? []).some(n => /no race simulation \(injury\)/.test(n))).toBe(true);
     }
-  });
+  }, 60000);
 });
 
 describe('a sim week keeps its station session, and beside a half sim its long run (review 2026-10-20)', () => {

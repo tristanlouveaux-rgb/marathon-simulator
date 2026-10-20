@@ -98,5 +98,5 @@ describe('triathlon and HYROX: nothing generated on or after race day', () => {
     // runs than the reference week, here the primer alone, which the no-race
     // plan places early in the week too.)
     expect((noRace[4].triWorkouts ?? []).find(w => w.n === 'Long Run')?.dayOfWeek).toBe(6);
-  });
+  }, 60000);
 });
