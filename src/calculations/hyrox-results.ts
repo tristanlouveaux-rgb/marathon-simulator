@@ -66,6 +66,7 @@ import {
   seedRunPaceSecKmFor,
   seedRoxzoneSecFor,
   HYROX_STATION_ORDER,
+  STATION_DISPLAY,
   type HyroxSeedFormat,
 } from '@/constants/hyrox-benchmarks';
 import {
@@ -343,14 +344,26 @@ export function hyroxCohortNoun(cohort: HyroxResultsCohort): string {
  * Provenance caption for anything placed on the S8-S9 tables: seasons with
  * years, the cohort's finisher count, and the source. E.g. "HYROX results,
  * seasons 8 and 9 (2025 to 2026), 119,468 Open Singles women finishers, via
- * the open pyrox project."
+ * the open pyrox project." A split table's count is the finishers with that
+ * split timed, a little under the finish count, so it says which table it
+ * counts ("118,063 Open Singles women finishers with a timed SkiErg"): one tab
+ * shows both, and two bare counts for one field read as a contradiction.
  */
 export function hyroxResultsCaption(cohort: HyroxResultsCohort, metric: HyroxResultsMetric = 'total'): string {
   const n = hyroxResultsCount(metric, cohort).toLocaleString('en-US');
   const who = cohort.sex === 'pooled'
     ? `${hyroxFormatName(cohort.format)} finishers (women and men${cohort.format === 'open_doubles' ? ', and mixed pairs' : ''})`
     : `${hyroxCohortLabel(cohort)} finishers`;
-  return `HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${n} ${who}, ${HYROX_RESULTS_VIA}.`;
+  const timed = metric === 'total' ? '' : ` with a timed ${resultsMetricName(metric)}`;
+  return `HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${n} ${who}${timed}, ${HYROX_RESULTS_VIA}.`;
+}
+
+/** A split table's name in a caption: the station, "run total", "Roxzone". */
+function resultsMetricName(metric: Exclude<HyroxResultsMetric, 'total'>): string {
+  if (metric === 'run_total') return 'run total';
+  if (metric === 'work_total') return 'station total';
+  if (metric === 'roxzone') return 'Roxzone';
+  return STATION_DISPLAY[metric].name;
 }
 
 // ─── Age groups (pooled seasons 7 to 9) ─────────────────────────────────────
