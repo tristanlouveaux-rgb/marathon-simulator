@@ -500,6 +500,41 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
 }
 
 /**
+ * The same station session with one station's single set cut to `fraction`
+ * of its amount, rounded down to a whole metre or rep: its time, MTL and
+ * share of the race volume follow in proportion (the injury gate's partial
+ * set, applyHyroxInjuryGates: a restricted side's station the session holds
+ * as one set, which no cut of rounds can reduce, keeps the capacity's share
+ * of that set, as a run keeps the capacity's share of its duration). Null
+ * when the station holds other than one set, `fraction` is not under 1, or
+ * the amount would fall under one metre or rep.
+ */
+export function withHyroxPartialSet(w: Workout, station: HyroxStation, fraction: number): Workout | null {
+  if (!w.hyroxSpec || !(fraction > 0) || fraction >= 1) return null;
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const comps = w.hyroxComponents ?? [];
+  const idx = comps.findIndex(c => c.type === station);
+  if (idx < 0) return null;
+  const c = comps[idx];
+  if (hyroxComponentSets(c, rounds) !== 1) return null;
+  const reps = typeof c.reps === 'number';
+  const old = reps ? (c.reps as number) : (c.distanceM ?? 0);
+  if (!(old > 0)) return null;
+  const amount = Math.floor(old * fraction + 1e-9);
+  if (amount < 1) return null;
+  const ratio = amount / old;
+  const next: HyroxComponent = {
+    ...c,
+    ...(reps ? { reps: amount } : { distanceM: amount }),
+    // Rounded down, as the amount is: the set never runs above its share.
+    durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9),
+    mtl: c.mtl * ratio,
+    ...(c.raceFraction != null ? { raceFraction: c.raceFraction * ratio } : {}),
+  };
+  return finishHyroxSession({ ...w, hyroxComponents: comps.map((x, i) => (i === idx ? next : x)) });
+}
+
+/**
  * The same station session or brick with no station loaded above `loads`
  * (kg per station): a deload or taper week that repeats the reference week's
  * session takes its own week's beginner loads, never the heavier loads the
@@ -716,8 +751,9 @@ export function hyroxSessionText(w: Workout): string {
       ? [`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`]
       : [];
     // Part 2: the warm-up and the strength block first, the finisher last.
+    // With no warm-up left (the injury gates), round 1 at easy effort is it.
     const opening = [
-      ...(spec.warmup ? [warmupPhrase(spec.warmup)] : []),
+      ...(spec.warmup ? [warmupPhrase(spec.warmup)] : spec.warmupRound ? [`Warm-up: round 1 at easy effort (RPE ${HYROX_EASY_RPE}).`] : []),
       ...(spec.strength ? [`Strength first (${spec.strength.min} min, RPE ${spec.strength.rpe}${spec.strength.light ? ', light' : ''}): ${strengthBlockPhrase(spec.strength)}.`] : []),
       ...(spec.warmup || spec.strength ? ['Then the stations.'] : []),
     ];
@@ -813,9 +849,19 @@ export function hyroxLoadStepNote(w: Workout): string | null {
  *  strength factor). */
 function finishHyroxSession(w: Workout): Workout {
   const comps = w.hyroxComponents ?? [];
+  // Round 1 at the easy RPE as the warm-up (hyroxSpec.warmupRound): its
+  // sets' MTL at that RPE (mtl.ts is linear in the RPE).
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  const rpe = w.rpe ?? w.r ?? 0;
+  const easyCut = w.hyroxSpec?.warmupRound && rpe > HYROX_EASY_RPE
+    ? comps.reduce((sum, c) => {
+      const rs = hyroxComponentRounds(c, rounds);
+      return sum + (rs.includes(1) ? (c.mtl / rs.length) * (1 - HYROX_EASY_RPE / rpe) : 0);
+    }, 0)
+    : 0;
   const out: Workout = {
     ...w,
-    musculoTendonLoad: comps.reduce((sum, c) => sum + c.mtl, 0) + (w.hyroxSpec?.warmup?.mtl ?? 0) + (w.hyroxSpec?.finisher?.mtl ?? 0),
+    musculoTendonLoad: comps.reduce((sum, c) => sum + c.mtl, 0) - easyCut + (w.hyroxSpec?.warmup?.mtl ?? 0) + (w.hyroxSpec?.finisher?.mtl ?? 0),
     estimatedDurationMin: Math.max(1, Math.round(hyroxSessionDurationSec(w) / 60)),
   };
   out.d = hyroxSessionText(out);
@@ -857,13 +903,16 @@ export function hyroxWarmupOn(
 }
 
 /** The same session with its warm-up and strength block set (null clears
- *  one; undefined keeps it), its MTL, duration and text again. */
+ *  one; undefined keeps it) and round 1 as the warm-up or not
+ *  (`warmupRound`: true sets it, false clears it), its MTL, duration and text
+ *  again. */
 export function withHyroxSessionParts(
-  w: Workout, parts: { warmup?: HyroxSessionSpec['warmup'] | null; strength?: HyroxStrengthBlock | null },
+  w: Workout, parts: { warmup?: HyroxSessionSpec['warmup'] | null; strength?: HyroxStrengthBlock | null; warmupRound?: boolean },
 ): Workout {
   if (!w.hyroxSpec) return w;
   const spec: HyroxSessionSpec = { ...w.hyroxSpec };
   if (parts.warmup === null) delete spec.warmup; else if (parts.warmup) spec.warmup = parts.warmup;
+  if (parts.warmupRound === true) spec.warmupRound = true; else if (parts.warmupRound === false) delete spec.warmupRound;
   if (parts.strength === null) delete spec.strength; else if (parts.strength) spec.strength = parts.strength;
   return finishHyroxSession({ ...w, hyroxSpec: spec });
 }

@@ -335,6 +335,10 @@ export interface HyroxSessionSpec {
    *  existing 10-min run warm-up, HYROX_QUALITY_WARMUP_MIN): easy on the erg,
    *  or an easy jog without one (a brick's is a jog). MTL at the easy RPE. */
   warmup?: { min: number; mode: HyroxStation | 'run'; mtl: number };
+  /** Station sessions with no warm-up left (the injury gates: run capacity
+   *  0 and no erg): the first round's sets run at the easy RPE
+   *  (HYROX_EASY_RPE) as the warm-up. */
+  warmupRound?: boolean;
   /** Station sessions: the strength block that opens the session. */
   strength?: HyroxStrengthBlock;
   /** Station sessions: the easy erg finisher, the session's lever: it takes

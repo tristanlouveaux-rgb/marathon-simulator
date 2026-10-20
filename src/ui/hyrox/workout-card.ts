@@ -62,7 +62,7 @@ function renderComponents(components: HyroxComponent[], w: Workout): string {
   // Lane H2b part 2: the parts around the stations, one muted line each.
   const spec = w.hyroxSpec;
   const before = [
-    ...(spec?.warmup ? [`${spec.warmup.min} min warm-up`] : []),
+    ...(spec?.warmup ? [`${spec.warmup.min} min warm-up`] : spec?.warmupRound ? ['round 1 easy as the warm-up'] : []),
     ...(spec?.strength ? [`${spec.strength.min} min strength${spec.strength.light ? ' (light)' : ''}`] : []),
   ].join(', then ');
   const after = spec?.finisher ? `Then ${spec.finisher.min} min easy erg.` : '';

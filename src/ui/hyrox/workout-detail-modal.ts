@@ -445,9 +445,10 @@ function renderSessionParts(workout: Workout, accent: string): { opening: string
   const spec = workout.hyroxSpec;
   if (!spec) return { opening: '', closing: '' };
   const muted = (t: string) => `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-bottom:8px">${esc(t)}</div>`;
+  // With no warm-up left (the injury gates), round 1 at easy effort is it.
   const warm = spec.warmup
     ? muted(spec.warmup.mode === 'run' ? `Warm-up: ${spec.warmup.min} min easy jog.` : `Warm-up: ${spec.warmup.min} min easy on the ${STATION_DISPLAY[spec.warmup.mode as HyroxStation]?.name ?? 'erg'}.`)
-    : '';
+    : spec.warmupRound ? muted(`Warm-up: round 1 at easy effort (RPE ${HYROX_EASY_RPE}).`) : '';
   let strength = '';
   if (spec.strength) {
     const parsed = parseStrengthSession({ t: 'gym', n: spec.strength.name, d: spec.strength.lines.join('\n') } as Workout);
