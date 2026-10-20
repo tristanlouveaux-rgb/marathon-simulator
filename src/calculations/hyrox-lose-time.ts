@@ -31,8 +31,14 @@
  * stations and no run data the rest of the race is one segment, "Running and
  * Roxzone".
  *
- * Materiality: a segment within HYROX_LOSE_TIME_MATERIAL_SEC of its peers is
- * level, neither lost nor gained.
+ * Materiality: a segment is level, neither lost nor gained, within
+ * HYROX_LOSE_TIME_MATERIAL_SEC of its peers plus its own share of the
+ * medians' additivity gap (hyroxPeerSplitsAt residualSec). That share is an
+ * estimate (the whole field's skew, not the skew among finishers at one
+ * time), so it widens the band rather than counting as time lost or gained:
+ * a runner at the field's median run is never read as having gained on
+ * Running. An implied segment's own share is all it gets; the rest of the gap
+ * it carries is time the athlete spent there (SCIENCE_LOG §DO).
  *
  * Limits: the peers are cohort medians, not the same athletes; venues differ
  * (sled surface and lane, run course length, Roxzone layout), so a segment
@@ -50,11 +56,13 @@ import { isHyroxDoublesFormat } from './hyrox-division';
 import { ftRounded } from '@/utils/format';
 
 /**
- * Seconds inside which a segment is level with its peers. The method's own
- * measured uncertainty: linear interpolation of the band medians and a
- * quantile-plus-residual hybrid place the same peer split 0 to 15 s apart
- * (SCIENCE_LOG §DO, lane rp probe over the 14 published cells). A smaller
- * difference is below what the comparison can resolve; venues vary more.
+ * Seconds inside which a segment is level with its peers, before its own
+ * share of the additivity gap is added (HyroxLoseTimeSegment.levelBandSec).
+ * The method's own measured uncertainty: linear interpolation of the band
+ * medians and a quantile-plus-residual hybrid place the same peer split 0 to
+ * 15 s apart (SCIENCE_LOG §DO, lane rp probe over the 14 published cells). A
+ * smaller difference is below what the comparison can resolve; venues vary
+ * more.
  */
 export const HYROX_LOSE_TIME_MATERIAL_SEC = 15;
 
@@ -134,6 +142,9 @@ export interface HyroxLoseTimeSegment {
   legs?: HyroxLoseTimeLeg[];
   /** Running compared over some of the 8 legs only: how many. */
   partialLegs?: number;
+  /** Level within this many seconds either way: HYROX_LOSE_TIME_MATERIAL_SEC
+   *  plus the segment's own share of the peers' additivity gap. */
+  levelBandSec: number;
 }
 
 export interface HyroxLoseTime {
@@ -149,10 +160,10 @@ export interface HyroxLoseTime {
   divisionAssumed?: boolean;
   /** Every compared segment, most time lost first. */
   segments: HyroxLoseTimeSegment[];
-  /** Segments at least HYROX_LOSE_TIME_MATERIAL_SEC slower than the peers,
-   *  most lost first. */
+  /** Segments at least their level band slower than the peers, most lost
+   *  first. */
   losses: HyroxLoseTimeSegment[];
-  /** Segments at least HYROX_LOSE_TIME_MATERIAL_SEC faster, most gained first. */
+  /** Segments at least their level band faster, most gained first. */
   gains: HyroxLoseTimeSegment[];
   /** Inside the band either way: level with the peers, in race order
    *  (Running, the stations, the Roxzone). */
@@ -194,7 +205,7 @@ export function hyroxLoseTimeHeadline(
   const who = `${hyroxPeerNoun(format)} finishing in ${ftRounded(totalSec)}`;
   if (losses[0]) return `Most time lost ${onSegment(losses[0])}: ${fmtLostTime(losses[0].lostSec)} slower than ${who}`;
   if (gains[0]) return `Most time gained ${onSegment(gains[0])}: ${fmtLostTime(gains[0].lostSec)} faster than ${who}`;
-  return `Within ${HYROX_LOSE_TIME_MATERIAL_SEC}s of ${who} on every segment`;
+  return `Level with ${who} on every segment`;
 }
 
 /**
@@ -209,9 +220,18 @@ export function compareWithPeers(
   const peers = hyroxPeerSplitsAt(cohort, totalSec);
   if (!peers) return [];
   const out: HyroxLoseTimeSegment[] = [];
+  const r = peers.residualSec;
+  // The segment's own share of the additivity gap: Running over some legs
+  // takes those legs' part of the run's share.
+  const shareOf = (key: HyroxLoseTimeKey, legs?: HyroxLoseTimeLeg[]): number => {
+    if (key === 'run_roxzone') return r.run_total + r.roxzone;
+    if (key === 'run_total' && legs && legs.length < 8) return r.run_total * legs.reduce((a, l) => a + peers.runLegShares[l.leg - 1], 0);
+    return r[key];
+  };
   const add = (key: HyroxLoseTimeKey, label: string, athleteSec: number, peerSec: number, implied = false, extra: Partial<HyroxLoseTimeSegment> = {}) => {
     if (!(athleteSec > 0) || !(peerSec > 0)) return;
-    out.push({ key, label, athleteSec, peerSec, lostSec: athleteSec - peerSec, implied, ...extra });
+    const levelBandSec = HYROX_LOSE_TIME_MATERIAL_SEC + Math.abs(shareOf(key, extra.partialLegs ? extra.legs : undefined));
+    out.push({ key, label, athleteSec, peerSec, lostSec: athleteSec - peerSec, implied, ...extra, levelBandSec });
   };
 
   const known = HYROX_STATION_ORDER.filter(st => (splits.stations[st] ?? 0) > 0);
@@ -269,6 +289,18 @@ export function hyroxTopLostSegment(lt: Pick<HyroxLoseTime, 'losses'>): HyroxLos
   return lt.losses[0] ?? null;
 }
 
+/** Each segment as lost, gained or level against its own level band
+ *  (HYROX_LOSE_TIME_MATERIAL_SEC plus its share of the additivity gap):
+ *  losses most lost first, gains most gained first, level in race order. */
+export function classifyHyroxLoseTime(segments: HyroxLoseTimeSegment[]): Pick<HyroxLoseTime, 'losses' | 'gains' | 'level'> {
+  const band = (s: HyroxLoseTimeSegment) => Math.round(s.levelBandSec);
+  const losses = segments.filter(s => Math.round(s.lostSec) >= band(s)).sort((a, b) => b.lostSec - a.lostSec);
+  const gains = segments.filter(s => Math.round(s.lostSec) <= -band(s)).sort((a, b) => a.lostSec - b.lostSec);
+  const level = segments.filter(s => !losses.includes(s) && !gains.includes(s))
+    .sort((a, b) => raceOrderIndex(a.key) - raceOrderIndex(b.key));
+  return { losses, gains, level };
+}
+
 /** "Where you lost time" for the athlete's previous result. */
 export function analyzeHyroxLoseTime(state: Pick<SimulatorState, 'hyroxConfig' | 'biologicalSex'>): HyroxLoseTime {
   const hx = state.hyroxConfig;
@@ -287,11 +319,7 @@ export function analyzeHyroxLoseTime(state: Pick<SimulatorState, 'hyroxConfig' |
   const cohort = hyroxResultsCohort(format, state.biologicalSex, pastDivision ?? hx.division);
   const segments = compareWithPeers(cohort, totalSec, hyroxPastRaceSplits(hx));
   if (segments.length === 0) return { status: 'no_splits', totalSec, format, cohort, divisionAssumed, ...empty };
-  const m = HYROX_LOSE_TIME_MATERIAL_SEC;
-  const losses = segments.filter(s => Math.round(s.lostSec) >= m);
-  const gains = segments.filter(s => Math.round(s.lostSec) <= -m).sort((a, b) => a.lostSec - b.lostSec);
-  const level = segments.filter(s => !losses.includes(s) && !gains.includes(s))
-    .sort((a, b) => raceOrderIndex(a.key) - raceOrderIndex(b.key));
+  const { losses, gains, level } = classifyHyroxLoseTime(segments);
   return {
     status: 'ok',
     totalSec,

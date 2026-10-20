@@ -797,8 +797,14 @@ export interface HyroxPeerSplits {
   /** Seconds per segment: the band medians at totalSec plus the medians'
    *  additivity gap spread by skew, so the 10 segments sum to totalSec. */
   segments: Record<HyroxPeerSegment, number>;
+  /** Each segment's share of the medians' additivity gap (included in
+   *  `segments`): an estimate, so "Where you lost time" widens a segment's
+   *  level band by it (hyrox-lose-time.ts). */
+  residualSec: Record<HyroxPeerSegment, number>;
   /** segments.run_total over the 8 legs, by the cohort's median leg shape. */
   runLegsSec: number[];
+  /** The cohort's median leg shape: share of the run total per leg. */
+  runLegShares: number[];
   /** totalSec against the band anchors: between two (interpolated), or
    *  faster than the fastest band's median finish / slower than the slowest
    *  (the end band's split mix, scaled to totalSec). */
@@ -911,12 +917,14 @@ export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number):
   const residual = totalSec - HYROX_PEER_SEGMENTS.reduce((acc, seg) => acc + raw[seg], 0);
   const weights = hyroxPeerResidualWeights(cohort);
   const rawSum = totalSec - residual;
-  const segments = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [
+  const residualSec = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [
     seg,
-    raw[seg] + residual * (weights ? weights[seg] : raw[seg] / rawSum),
+    residual * (weights ? weights[seg] : raw[seg] / rawSum),
   ])) as Record<HyroxPeerSegment, number>;
-  const runLegsSec = hyroxRunLegShares(cohort).map(sh => segments.run_total * sh);
-  return { cohort, totalSec, segments, runLegsSec, position };
+  const segments = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, raw[seg] + residualSec[seg]])) as Record<HyroxPeerSegment, number>;
+  const runLegShares = hyroxRunLegShares(cohort);
+  const runLegsSec = runLegShares.map(sh => segments.run_total * sh);
+  return { cohort, totalSec, segments, residualSec, runLegsSec, runLegShares, position };
 }
 
 /** The competitive anchor of a cohort: the median split of every segment

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyzeHyroxLoseTime,
+  classifyHyroxLoseTime,
   compareWithPeers,
   fmtLostTime,
   hyroxLoseTimeHeadline,
@@ -195,7 +196,7 @@ describe('segments from what was pasted', () => {
 
 describe('headline copy', () => {
   const seg = (key: HyroxLoseTimeSegment['key'], label: string, lostSec: number): HyroxLoseTimeSegment =>
-    ({ key, label, athleteSec: 300 + lostSec, peerSec: 300, lostSec, implied: false });
+    ({ key, label, athleteSec: 300 + lostSec, peerSec: 300, lostSec, implied: false, levelBandSec: HYROX_LOSE_TIME_MATERIAL_SEC });
 
   it('names the segment, the seconds and the finish in full', () => {
     const base = peerResult(OS_W, 5070);
@@ -218,7 +219,7 @@ describe('headline copy', () => {
     expect(hyroxLoseTimeHeadline([], [seg('run_total', 'Running', -29)], 'open_singles', 5400))
       .toBe('Most time gained on Running: 29s faster than athletes finishing in 1:30:00');
     expect(hyroxLoseTimeHeadline([], [], 'pro_singles', 3480))
-      .toBe('Within 15s of athletes finishing in 58:00 on every segment');
+      .toBe('Level with athletes finishing in 58:00 on every segment');
   });
 
   it('formats', () => {
@@ -260,8 +261,62 @@ describe('materiality', () => {
     expect(HYROX_LOSE_TIME_MATERIAL_SEC).toBe(15);
   });
 
+  it('each segment\'s level band is 15 s plus its own share of the peers\' additivity gap', () => {
+    const p = hyroxPeerSplitsAt(OS_W, 5400)!;
+    const r = p.residualSec;
+    const full = compareWithPeers(OS_W, 5400, peerResult(OS_W, 5400));
+    for (const sg of full) expect(sg.levelBandSec).toBeCloseTo(HYROX_LOSE_TIME_MATERIAL_SEC + Math.abs(r[sg.key as keyof typeof r]), 9);
+    // Stations only: "Running and Roxzone" carries both shares.
+    const st = compareWithPeers(OS_W, 5400, { stations: peerResult(OS_W, 5400).stations });
+    expect(st.find(sg => sg.key === 'run_roxzone')!.levelBandSec).toBeCloseTo(HYROX_LOSE_TIME_MATERIAL_SEC + r.run_total + r.roxzone, 9);
+    // Three legs only: those legs' part of the run's share.
+    const legs = compareWithPeers(OS_W, 5400, { stations: {}, runLegsSec: [300, 300, 300, null, null, null, null, null] });
+    const share = p.runLegShares[0] + p.runLegShares[1] + p.runLegShares[2];
+    expect(legs.find(sg => sg.key === 'run_total')!.levelBandSec).toBeCloseTo(HYROX_LOSE_TIME_MATERIAL_SEC + r.run_total * share, 9);
+    // The shares are the gap itself, spread: they sum to the finish minus
+    // the interpolated medians.
+    expect(HYROX_PEER_SEGMENTS.reduce((a, seg) => a + r[seg], 0)).toBeGreaterThan(0);
+  });
+
+  // Every published cell with band seeds: singles women, men and pooled;
+  // doubles women, men, mixed and pooled (Open and Pro).
+  const ALL_COHORTS: HyroxResultsCohort[] = (['open_singles', 'pro_singles', 'open_doubles', 'pro_doubles'] as const)
+    .flatMap(format => (['female', 'male', 'mixed', 'pooled'] as const).map(sex => ({ format, sex })))
+    .filter(c => hyroxResultsTable('total', c) != null && hyroxPeerSplitsAt(c, 5000) != null);
+
+  it('every cohort: an athlete at the median of every timed table (8 stations, run total, Roxzone) who finished at the median finish reads level everywhere', () => {
+    expect(ALL_COHORTS.length).toBeGreaterThanOrEqual(11);
+    for (const cohort of ALL_COHORTS) {
+      const med = (m: Parameters<typeof hyroxResultsTable>[0]) => secondsAtPercentileIn(hyroxResultsTable(m, cohort)!, 50);
+      const stations = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, med(st)])) as Record<HyroxStation, number>;
+      const segs = compareWithPeers(cohort, med('total'), { stations, runTotalSec: med('run_total'), roxzoneSec: med('roxzone') });
+      expect(segs).toHaveLength(10);
+      const { losses, gains, level } = classifyHyroxLoseTime(segs);
+      expect({ cohort, losses: losses.map(sg => sg.key), gains: gains.map(sg => sg.key) }).toEqual({ cohort, losses: [], gains: [] });
+      expect(level).toHaveLength(10);
+    }
+  });
+
+  it('every cohort: with the Roxzone implied from the finish, Running at the median run reads level (at the median finish and at every band median)', () => {
+    for (const cohort of ALL_COHORTS) {
+      const med = (m: Parameters<typeof hyroxResultsTable>[0]) => secondsAtPercentileIn(hyroxResultsTable(m, cohort)!, 50);
+      const stations = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, med(st)])) as Record<HyroxStation, number>;
+      const atMedians = classifyHyroxLoseTime(compareWithPeers(cohort, med('total'), { stations, runTotalSec: med('run_total') }));
+      expect(atMedians.level.map(sg => sg.key)).toContain('run_total');
+      const cells = HYROX_S89_BAND_SEEDS[cohort.format];
+      const bySex = cells[cohort.sex as keyof typeof cells] ?? cells.pooled;
+      for (const band of ['competitive', 'advanced', 'intermediate', 'novice', 'beginner'] as const) {
+        const m = bySex?.[band]?.medians;
+        if (!m) continue;
+        const st = Object.fromEntries(HYROX_STATION_ORDER.map(k => [k, m[k]])) as Record<HyroxStation, number>;
+        const c = classifyHyroxLoseTime(compareWithPeers(cohort, m.total, { stations: st, runTotalSec: m.run_total }));
+        expect({ cohort, band, runLevel: c.level.some(sg => sg.key === 'run_total') }).toEqual({ cohort, band, runLevel: true });
+      }
+    }
+  });
+
   it('the top lost segment is the biggest material loss, Running and the Roxzone included', () => {
-    const l = (key: HyroxLoseTimeSegment['key'], lostSec: number) => ({ key, label: String(key), athleteSec: 1, peerSec: 1, lostSec, implied: false });
+    const l = (key: HyroxLoseTimeSegment['key'], lostSec: number) => ({ key, label: String(key), athleteSec: 1, peerSec: 1, lostSec, implied: false, levelBandSec: HYROX_LOSE_TIME_MATERIAL_SEC });
     expect(hyroxTopLostSegment({ losses: [l('run_total', 90), l('roxzone', 50), l('wall_balls', 30)] })?.key).toBe('run_total');
     expect(hyroxTopLostSegment({ losses: [l('wall_balls', 30)] })?.key).toBe('wall_balls');
     expect(hyroxTopLostSegment({ losses: [] })).toBeNull();
