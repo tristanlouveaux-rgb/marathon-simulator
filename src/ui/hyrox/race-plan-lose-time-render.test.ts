@@ -26,7 +26,7 @@ vi.mock('@/data/supabaseClient', () => ({
 import { getDefaultState, setState } from '@/state/store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { buildHyroxRacePlan } from '@/calculations/hyrox-race-plan';
-import { analyzeHyroxLoseTime } from '@/calculations/hyrox-lose-time';
+import { analyzeHyroxLoseTime, fmtLostTime } from '@/calculations/hyrox-lose-time';
 import { hyroxPeerSplitsAt } from '@/calculations/hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
@@ -447,7 +447,9 @@ describe('where you lost time', () => {
     const raceDate = new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10);
     const opened = async (click: () => void) => {
       click();
-      await vi.waitFor(() => expect(document.getElementById('lpt-splits-body')).not.toBeNull());
+      // The modal is a dynamic import: a cold transform can take over the
+      // default 1 s (seen once under --maxWorkers=2).
+      await vi.waitFor(() => expect(document.getElementById('lpt-splits-body')).not.toBeNull(), { timeout: 5000 });
       const body = document.getElementById('lpt-splits-body')!;
       expect(body.style.display).toBe('block');
       // The splits (paste box first) sit above the finish time.
@@ -475,9 +477,11 @@ describe('where you lost time', () => {
     await opened(() => (document.getElementById('lt-update') as HTMLButtonElement).click());
   });
 
-  it('signs: plus for time lost, the minus sign for time gained', () => {
+  it('signs: plus for time lost, the minus sign for time gained; m:ss from a minute up, "Ns" below', () => {
     expect(fmtLostSigned(72)).toBe('+1:12');
-    expect(fmtLostSigned(-20.4)).toBe('\u22120:20');
+    expect(fmtLostSigned(-20.4)).toBe('\u221220s');
+    expect(fmtLostSigned(-59.4)).toBe('\u221259s');
+    expect(fmtLostSigned(59.6)).toBe('+1:00');
   });
 });
 
@@ -532,7 +536,7 @@ describe('Forecast tab placement', () => {
     // The gain is the run total's, from the same projection.
     const proj = buildHyroxProjection(s, predictHyroxRace(s)!);
     const runGain = Math.round(proj.byDiscipline.run.currentSec - proj.byDiscipline.run.projectedSec);
-    if (runGain >= 1) expect(run.textContent).toContain(`\u2212${runGain}s`);
+    if (runGain >= 1) expect(run.textContent).toContain(`\u2212${fmtLostTime(runGain)}`);
     // The pace cell is per leg; the caption says the gain is the 8 legs' total.
     if (runGain >= 1) expect(run.textContent).toContain('Most time lost in your last race · 8-run total');
     expectVisualConstraints(gain.outerHTML);
@@ -545,6 +549,72 @@ describe('Forecast tab placement', () => {
     const gain = document.getElementById('hx-where-to-gain')!;
     expect(gain.querySelector('[data-wtg-segment="run_total"]')!.textContent).toContain('Most time lost in your last race');
     expectVisualConstraints(gain.outerHTML);
+  });
+
+  it('a Roxzone loss: the Where to gain subhead says "plus the Roxzone", as the headline says "in the Roxzone"', () => {
+    const p = hyroxPeerSplitsAt({ format: 'open_singles', sex: 'female' }, 5071)!;
+    const stations = Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, Math.round(p.segments[st]) - 8])) as Record<HyroxStation, number>;
+    const legs = p.runLegsSec.map(Math.round);
+    const rox = 5071 - legs.reduce((a, b) => a + b, 0) - HYROX_STATION_ORDER.reduce((a, st) => a + stations[st], 0);
+    setState(hyroxState({
+      previousHyroxTimeSec: 5071, hyroxPreviousTimeFormat: 'open_singles', hyroxPreviousRaceDate: '2026-03-14',
+      hyroxPreviousStationSplits: stations, hyroxPreviousRunSplitsSec: legs, hyroxPreviousRoxzoneSec: rox, raceDate: raceDate(),
+    }));
+    renderHyroxForecastView();
+    expect(document.querySelector('[data-lt-headline]')!.textContent).toContain('Most time lost in the Roxzone');
+    const gain = document.getElementById('hx-where-to-gain')!;
+    expect(gain.querySelector('[data-wtg-segment="roxzone"]')).not.toBeNull();
+    expect(gain.textContent).toContain('plus the Roxzone, where your last race lost the most');
+    expect(gain.textContent).not.toContain('plus Roxzone');
+  });
+
+  it('one number rule on the Forecast tab: every time lost, gained or saved is m:ss from a minute up and "Ns" below', () => {
+    setState(hyroxState({ ...pastResult(), raceDate: raceDate(), stationBenchmarksSingles: { wall_balls: 410, sled_push: 300, sandbag_lunges: 330, burpee_broad_jumps: 330 } }));
+    renderHyroxForecastView();
+    const ok = (txt: string) => {
+      // A seconds figure of 60 or more never appears as "Ns".
+      for (const m of txt.matchAll(/(\d+)s\b/g)) expect(Number(m[1])).toBeLessThan(60);
+      // m:ss below a minute never appears as "0:SS".
+      expect(txt).not.toMatch(/(^|[^\d:])0:\d\d/);
+    };
+    const gain = document.getElementById('hx-where-to-gain')!;
+    const sub = gain.children[1].textContent!;
+    expect(sub).toMatch(/Total gain available: ~(\d+s|\d+:\d\d)\./);
+    ok(gain.textContent!);
+    ok(document.getElementById('hx-lose-time')!.textContent!);
+    const bt = document.getElementById('hx-biggest-targets')!;
+    expect(bt).not.toBeNull();
+    ok(bt.textContent!);
+    // Now and the target in m:ss; the saving in Where to gain's neutral cell,
+    // no tinted pill; the station time once per row.
+    const row = bt.querySelector('[data-bt-station]')!;
+    expect(row.textContent).toMatch(/\d+:\d\d now \u2192 \d+:\d\d at /);
+    expect(row.textContent).not.toMatch(/\d+s now/);
+    const now = row.textContent!.match(/(\d+:\d\d) now/)![1];
+    expect(row.textContent!.split(now).length - 1).toBe(1);
+    expect(bt.outerHTML).not.toMatch(/rgba\(34,\s*197,\s*94/);
+    expect(bt.outerHTML).not.toContain('#15803D');
+    expectVisualConstraints(bt.outerHTML);
+    // The lose-time drill-down follows the same rule.
+    renderHyroxLoseTimeView();
+    ok(app().textContent!);
+  });
+
+  it('Biggest targets sits below Performance radar and Where you sit, with the per-station percentile content', () => {
+    setState(hyroxState({ ...pastResult(), raceDate: raceDate(), stationBenchmarksSingles: { wall_balls: 410, sled_push: 300, sandbag_lunges: 330, burpee_broad_jumps: 330 } }));
+    renderHyroxForecastView();
+    const titles = [...app().querySelectorAll('div')]
+      .filter(el => el.children.length === 0 && ['Where you lost time', 'Where to gain', 'Performance radar', 'Where you sit', 'Biggest targets'].includes(el.textContent!.trim()))
+      .map(el => el.textContent!.trim());
+    expect(titles).toEqual(['Where you lost time', 'Where to gain', 'Performance radar', 'Where you sit', 'Biggest targets']);
+  });
+
+  it('doubles Run legs rows read "Run 1" to "Run 8", the names the race plan uses', () => {
+    setState(hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: raceDate() }));
+    renderHyroxForecastView();
+    const txt = app().textContent!;
+    for (let i = 1; i <= 8; i++) expect(txt).toContain(`Run ${i}`);
+    expect(txt).not.toMatch(/\bR[1-8]\b/);
   });
 
   it('Where to gain without a past result: the top 2 only', () => {

@@ -161,8 +161,9 @@ export interface HyroxLoseTime {
   headline: string | null;
 }
 
-/** "1:12" from a minute, "40s" under it (the Forecast tab's one seconds
- *  suffix, as in Where to gain's "−13s"). */
+/** The Forecast tab's one number rule for a time lost, gained or saved:
+ *  "1:12" (m:ss) from a minute up, "40s" under a minute. Where you lost time,
+ *  Where to gain and Biggest targets all use it. */
 export function fmtLostTime(sec: number): string {
   const t = Math.round(Math.abs(sec));
   if (t < 60) return `${t}s`;

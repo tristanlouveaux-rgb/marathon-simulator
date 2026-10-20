@@ -23,7 +23,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
-import { analyzeHyroxLoseTime, hyroxPeerNoun, type HyroxLoseTime, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
+import { analyzeHyroxLoseTime, fmtLostTime, hyroxPeerNoun, type HyroxLoseTime, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
 import { hyroxPlacementWho, hyroxResultsCaption } from '@/calculations/hyrox-results';
 import { ftRounded } from '@/utils/format';
 
@@ -33,11 +33,10 @@ const GLASS = 'background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-web
 const CARD = 'background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:16px';
 const LINK = 'font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;padding:0;cursor:pointer';
 
-/** "+1:12" / "−0:20": seconds lost (plus) or gained (minus). */
+/** "+1:12" / "−20s": seconds lost (plus) or gained (minus), by the Forecast
+ *  tab's one number rule (fmtLostTime: m:ss from a minute, "Ns" under). */
 export function fmtLostSigned(lostSec: number): string {
-  const t = Math.round(Math.abs(lostSec));
-  const body = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-  return `${lostSec >= 0 ? '+' : '−'}${body}`;
+  return `${lostSec >= 0 ? '+' : '−'}${fmtLostTime(lostSec)}`;
 }
 
 /**
