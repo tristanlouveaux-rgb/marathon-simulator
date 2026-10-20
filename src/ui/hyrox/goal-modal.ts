@@ -141,8 +141,8 @@ export function openHyroxGoalModal(
         value="${ftRounded(initialTarget)}"
         style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:6px"
       />
-      <div id="hx-goal-echo" style="font-size:12px;color:var(--c-muted);min-height:16px;margin-bottom:14px"></div>
-      <div id="hx-goal-result"></div>
+      <div id="hx-goal-echo" style="display:none;font-size:12px;color:var(--c-muted);margin:2px 0 4px"></div>
+      <div id="hx-goal-result" style="margin-top:10px"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
         ${hasGoal ? '<button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear goal</button>' : ''}
         <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save goal</button>
@@ -160,14 +160,17 @@ export function openHyroxGoalModal(
     if (!inputEl || !resultEl) return;
     const sec = parseHhMmSs(inputEl.value, floorSec);
     if (sec == null) {
-      if (echoEl) echoEl.textContent = '';
+      if (echoEl) { echoEl.textContent = ''; echoEl.style.display = 'none'; }
       resultEl.innerHTML = `<div style="font-size:12px;color:#ef4444;padding:8px 0">Enter time as mm:ss (e.g. 75:00) or h:mm:ss (e.g. 1:15:00).</div>`;
       return;
     }
     // Echo the resolved interpretation when it reads differently from the
     // input, so an ambiguous entry like "1:00" (read as 1 hour) is visible
     // and correctable; an input that already shows it is not repeated.
-    if (echoEl) echoEl.textContent = goalEchoText(inputEl.value, sec);
+    if (echoEl) {
+      echoEl.textContent = goalEchoText(inputEl.value, sec);
+      echoEl.style.display = echoEl.textContent ? 'block' : 'none';
+    }
     const st = getState();
     const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(st, prediction, sec));
     resultEl.innerHTML = renderResultBody(result, { goalSec: sec, forecastSec: prediction.totalSec, cohort: hyroxCohortForState(st) });

@@ -696,7 +696,7 @@ export function renderWhereToGainCard(
   const shown = [...top.map(r => stationGainRow(r, r.source === 'calibrated' ? 'Your time' : 'Estimated')), ...(bridge ? [bridge] : [])];
   const totalGain = shown.reduce((sum, r) => sum + r.gainSec, 0);
   const rows = shown.map((r, i) => `
-      <div ${r.attr} style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
+      <div ${r.attr} style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
         <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
           <span style="color:var(--c-black)">${r.name}</span>
           <span style="font-size:10px;color:var(--c-faint)">${r.sub}</span>
