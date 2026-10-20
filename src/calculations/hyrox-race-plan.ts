@@ -9,13 +9,12 @@
  *
  * Goal splits:
  *  - Goal faster than the forecast: computeGoalBackCalc (headroom-weighted),
- *    with floors from the athlete's own field (hyroxCompetitiveFloors: the
- *    median split of the top 1% of finishers, per format and sex or doubles
- *    division, the pair's times for doubles; the field's fastest published
- *    split, its p1 row, for a component the forecast already has at or past
- *    that median; headroom measured on the venue-neutral lines) and the
- *    Roxzone at the goal scaled from the forecast's by the real results
- *    (below).
+ *    with floors from the athlete's own field (hyroxCompetitiveFloors, per
+ *    format and sex or doubles division, the pair's times for doubles: one
+ *    floor per component, the faster of the top-1% median split and the
+ *    field's fastest published split, its p1 row; venue-neutral, each
+ *    carrying the forecast line's venue seconds) and the Roxzone at the goal
+ *    scaled from the forecast's by the real results (below).
  *  - Goal slower than (or equal to) the forecast: each component is the
  *    forecast's, eased by how finishers at the goal time differ from
  *    finishers at the forecast time (hyroxPeerSplitsAt, segment by segment),
@@ -28,9 +27,8 @@
  * Roxzone at the forecast (hyroxPeerSplitsAt in the target's cohort). Finishers
  * at 1:20 spend far less time in the Roxzone than finishers at 1:40, so it is
  * no longer held constant; the ratio keeps the forecast's own Roxzone when the
- * goal equals the forecast. It is floored by the same tier rule as the run
- * and the stations (the cohort's top-1% Roxzone median, or its p1 Roxzone
- * once the forecast is at or past that median), never above the forecast's.
+ * goal equals the forecast. It is floored like the run and the stations (the
+ * cohort's fast-end Roxzone), never above the forecast's.
  *
  * Run legs: the goal run total split with the forecast's per-leg fatigue model
  * (prediction.runLegs[].fatigueMultiplier, PER_STATION_FATIGUE_RATE_BY_BAND),
@@ -140,7 +138,9 @@ export function hyroxGoalBackCalcOptions(
   const floors = hyroxCompetitiveFloors(cohort);
   const roxzoneTargetSec = hyroxRoxzoneAtGoalSec(cohort, prediction, goalSec);
   return {
-    ...(floors ? { floors: { stationSec: floors.stationSec, runSec: floors.runSec, roxzoneSec: floors.roxzoneSec, fastest: floors.fastest } } : {}),
+    // One floor per component, the cohort's fast end (min of the top-1%
+    // median and the p1 split), the same for every athlete in the field.
+    ...(floors ? { floors: { stationSec: floors.fastest.stationSec, runSec: floors.fastest.runSec, roxzoneSec: floors.fastest.roxzoneSec } } : {}),
     ...(roxzoneTargetSec != null ? { roxzoneTargetSec } : {}),
   };
 }

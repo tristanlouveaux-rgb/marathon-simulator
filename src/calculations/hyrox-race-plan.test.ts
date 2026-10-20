@@ -42,14 +42,13 @@ function planFor(state: SimulatorState) {
 }
 
 /** The fastest time the cohort floors allow (venue-neutral state): per
- *  component the top-1% median while the forecast is slower, else the p1
- *  split, and never above the forecast's own. */
-function tieredFloorSum(s: SimulatorState, p: ReturnType<typeof predictHyroxRace> & object): number {
-  const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
-  const tier = (cur: number, med: number, fast: number) => Math.min(cur, cur > med ? med : fast);
-  return tier(p.runSec, f.runSec, f.fastest.runSec)
-    + HYROX_STATION_ORDER.reduce((a, st) => a + tier(p.stations.find(l => l.station === st)!.adjustedSec, f.stationSec[st], f.fastest.stationSec[st]), 0)
-    + tier(p.roxzoneSec, f.roxzoneSec, f.fastest.roxzoneSec);
+ *  component the field's fast end (min of the top-1% median and the p1
+ *  split), never above the forecast's own. */
+function floorSum(s: SimulatorState, p: ReturnType<typeof predictHyroxRace> & object): number {
+  const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!.fastest;
+  return Math.min(p.runSec, f.runSec)
+    + HYROX_STATION_ORDER.reduce((a, st) => a + Math.min(p.stations.find(l => l.station === st)!.adjustedSec, f.stationSec[st]), 0)
+    + Math.min(p.roxzoneSec, f.roxzoneSec);
 }
 
 const RACE_ORDER = [
@@ -156,17 +155,23 @@ describe('buildHyroxRacePlan: run fade', () => {
 });
 
 describe('floors from the real results, per sex and division', () => {
-  it('a woman\'s floors are the Open Singles women\'s top-1% medians, a man\'s the men\'s', () => {
+  it('a woman\'s floors are the Open Singles women\'s fast ends, a man\'s the men\'s', () => {
     const w = buildState();
     const m = buildState({}, { biologicalSex: 'male' });
     const pw = predictHyroxRace(w)!;
     const pm = predictHyroxRace(m)!;
     const fw = hyroxGoalBackCalcOptions(w, pw, pw.totalSec - 300).floors!;
     const fm = hyroxGoalBackCalcOptions(m, pm, pm.totalSec - 300).floors!;
-    expect(fw.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.stationSec);
-    expect(fm.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'male' })!.stationSec);
-    expect(fw.roxzoneSec).toBe(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.roxzoneSec);
+    const cw = hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!;
+    expect(fw.stationSec).toEqual(cw.fastest.stationSec);
+    expect(fm.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'male' })!.fastest.stationSec);
+    expect(fw.roxzoneSec).toBe(cw.fastest.roxzoneSec);
+    expect(fw.runSec).toBe(cw.fastest.runSec);
     expect(fw.runSec).toBeGreaterThan(fm.runSec);
+    // The fast end is never slower than the top-1% median.
+    for (const st of HYROX_STATION_ORDER) expect(cw.fastest.stationSec[st]).toBeLessThanOrEqual(cw.stationSec[st]);
+    expect(cw.fastest.runSec).toBeLessThanOrEqual(cw.runSec);
+    expect(cw.fastest.roxzoneSec).toBeLessThanOrEqual(cw.roxzoneSec);
   });
 
   it('an aggressive goal holds every station at or above its floor', () => {
@@ -182,7 +187,7 @@ describe('floors from the real results, per sex and division', () => {
     const s = buildState({ format: 'pro_singles' }, { biologicalSex: 'male' });
     const p = predictHyroxRace(s)!;
     const f = hyroxGoalBackCalcOptions(s, p, p.totalSec - 200).floors!;
-    expect(f.runSec).toBe(hyroxCompetitiveFloors({ format: 'pro_singles', sex: 'male' })!.runSec);
+    expect(f.runSec).toBe(hyroxCompetitiveFloors({ format: 'pro_singles', sex: 'male' })!.fastest.runSec);
   });
 });
 
@@ -225,7 +230,7 @@ describe('the top band keeps headroom (review 3: every faster goal read unrealis
     }
   });
 
-  it('a component at or past its top-1% median is floored at the cohort\'s p1 split, never above it', () => {
+  it('every component is floored at the field\'s fast end, never above it', () => {
     const [, base] = cases[0];
     const p = predictHyroxRace(base)!;
     const f = hyroxCompetitiveFloors(hyroxCohortForState(base))!;
@@ -244,9 +249,70 @@ describe('the top band keeps headroom (review 3: every faster goal read unrealis
     expect(r.feasibility).toBe('unrealistic');
     for (const t of r.stationTargets) {
       const line = p.stations.find(l => l.station === t.station)!;
-      expect(t.targetSec).toBeCloseTo(f.stationSec[t.station] + (line.adjustedSec - line.baseSec), 6);
+      expect(t.targetSec).toBeCloseTo(f.fastest.stationSec[t.station] + (line.adjustedSec - line.baseSec), 6);
     }
-    expect(r.runPaceTarget.targetSecKm * 8).toBeGreaterThan(f.runSec);
+    expect(r.runPaceTarget.targetSecKm * 8).toBeGreaterThan(f.fastest.runSec);
+  });
+});
+
+describe('one floor per component for every athlete (review 4: the tier stepped at the median)', () => {
+  const men = hyroxCompetitiveFloors({ format: 'open_singles', sex: 'male' })!;
+  /** A competitive Open Singles man, every station at its top-1% median + d. */
+  const atMedianPlus = (d: number, extra: Partial<NonNullable<SimulatorState['hyroxConfig']>> = {}) => buildState({
+    athleteBand: 'competitive',
+    stationBenchmarksSingles: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, men.stationSec[st] + d])) as never,
+    ...extra,
+  }, { biologicalSex: 'male' });
+  /** The fastest time the floors allow for run and stations: the lines less
+   *  their headroom (computeGoalBackCalc, a goal a minute faster). */
+  const linesFloor = (s: SimulatorState) => {
+    const p = predictHyroxRace(s)!;
+    const r = computeGoalBackCalc(p, p.totalSec - 60, hyroxGoalBackCalcOptions(s, p, p.totalSec - 60));
+    return { p, r, floor: p.runSec + p.stations.reduce((a, l) => a + l.adjustedSec, 0) - r.totalHeadroomSec };
+  };
+
+  it('the floor sum never falls as the forecast gets slower (stations at the median - 10 to + 30 s)', () => {
+    let prev = -Infinity;
+    let prevTotal = -Infinity;
+    for (let d = -10; d <= 30; d++) {
+      const { p, floor } = linesFloor(atMedianPlus(d));
+      expect(p.totalSec).toBeGreaterThan(prevTotal);
+      expect(floor).toBeGreaterThanOrEqual(prev - 1e-6);
+      prev = floor;
+      prevTotal = p.totalSec;
+    }
+  });
+
+  it('the floor sum never falls as the run gets slower (run pace 3:30 to 4:00/km)', () => {
+    let prev = -Infinity;
+    for (let pace = 210; pace <= 240; pace++) {
+      const { floor } = linesFloor(atMedianPlus(0, { hyroxRunPaceSecKm: pace }));
+      expect(floor).toBeGreaterThanOrEqual(prev - 1e-6);
+      prev = floor;
+    }
+  });
+
+  it('a 1 s step across the median moves headroom by that second, no more', () => {
+    const base = linesFloor(atMedianPlus(0));
+    for (const d of [-1, 1]) {
+      const step = linesFloor(atMedianPlus(d));
+      const linesMoved = (step.p.runSec + step.p.stations.reduce((a, l) => a + l.adjustedSec, 0))
+        - (base.p.runSec + base.p.stations.reduce((a, l) => a + l.adjustedSec, 0));
+      expect(Math.abs(step.r.totalHeadroomSec - base.r.totalHeadroomSec - linesMoved)).toBeLessThanOrEqual(1e-6);
+      expect(Math.abs(linesMoved)).toBeLessThanOrEqual(8);
+    }
+  });
+
+  it('just past the median, 60 and 120 s faster goals still reach (review 4 measured them unrealistic at + 1 and + 3 s)', () => {
+    for (const d of [0, 1, 3, 10]) {
+      const s = atMedianPlus(d);
+      const p = predictHyroxRace(s)!;
+      for (const gain of [60, 120]) {
+        const goal = p.totalSec - gain;
+        expect([d, gain, computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(s, p, goal)).feasibility])
+          .not.toEqual([d, gain, 'unrealistic']);
+      }
+    }
   });
 });
 
@@ -260,7 +326,7 @@ describe('Roxzone at the goal', () => {
     expect(hyroxRoxzoneAtGoalSec(cohort, p, p.totalSec + 600)!).toBeGreaterThan(p.roxzoneSec);
   });
 
-  it('never below the cohort\'s tier Roxzone floor unless the forecast\'s own is', () => {
+  it('never below the cohort\'s fast-end Roxzone unless the forecast\'s own is', () => {
     const cases: Array<[Partial<NonNullable<SimulatorState['hyroxConfig']>>, Partial<SimulatorState>]> = [
       [{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }],
       [{ format: 'open_doubles', division: 'mixed' }, {}], [{ format: 'pro_singles' }, { biologicalSex: 'male' }],
@@ -269,9 +335,7 @@ describe('Roxzone at the goal', () => {
       const base = buildState(hx, top);
       const p = predictHyroxRace(base)!;
       const f = hyroxCompetitiveFloors(hyroxCohortForState(base))!;
-      // The tier floor: the median while the forecast is slower, else p1.
-      const floor = p.roxzoneSec > f.roxzoneSec ? f.roxzoneSec : f.fastest.roxzoneSec;
-      const lowest = Math.min(floor, p.roxzoneSec);
+      const lowest = Math.min(f.fastest.roxzoneSec, p.roxzoneSec);
       for (const goal of [2800, 3300, 3600, 3900, 4200, p.totalSec - 600, p.totalSec - 60]) {
         const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(base, p, goal));
         expect(r.roxzoneSec).toBeGreaterThanOrEqual(lowest - 1e-6);
@@ -312,12 +376,12 @@ describe('unrealistic goals', () => {
     for (const [hx, top] of [[{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }]] as const) {
       const s = buildState(hx, top);
       const p = predictHyroxRace(s)!;
-      const floorSum = tieredFloorSum(s, p);
+      const fastest = floorSum(s, p);
       for (const goal of [2800, 3000, 3300]) {
         const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(s, p, goal));
         expect(r.feasibility).toBe('unrealistic');
-        expect(r.achievedSec).toBeCloseTo(floorSum, 0);
-        expect(r.shortfallSec).toBe(Math.round(floorSum - goal));
+        expect(r.achievedSec).toBeCloseTo(fastest, 0);
+        expect(r.shortfallSec).toBe(Math.round(fastest - goal));
       }
     }
   });
@@ -326,10 +390,11 @@ describe('unrealistic goals', () => {
     const s = buildState({}, { biologicalSex: 'male' });
     const p = predictHyroxRace(s)!;
     const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
-    const r = computeGoalBackCalc(p, f.totalSec, hyroxGoalBackCalcOptions(s, p, f.totalSec));
+    const goal = Math.ceil(floorSum(s, p)) + 5;
+    const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(s, p, goal));
     expect(r.feasibility).toBe('stretch');
-    expect(r.achievedSec).toBeCloseTo(f.totalSec, 0);
-    expect(r.roxzoneSec).toBeGreaterThanOrEqual(Math.min(p.roxzoneSec, f.roxzoneSec));
+    expect(r.achievedSec).toBeCloseTo(goal, 0);
+    expect(r.roxzoneSec).toBeGreaterThanOrEqual(Math.min(p.roxzoneSec, f.fastest.roxzoneSec) - 1e-6);
   });
 
   it('an achievable goal is never flagged by the forecast\'s own rounding', () => {
@@ -367,7 +432,7 @@ describe('doubles', () => {
     const s = buildState({ format: 'open_doubles', division: 'mixed' });
     const p = predictHyroxRace(s)!;
     const opts = hyroxGoalBackCalcOptions(s, p, p.totalSec - 300);
-    expect(opts.floors!.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_doubles', sex: 'mixed' })!.stationSec);
+    expect(opts.floors!.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_doubles', sex: 'mixed' })!.fastest.stationSec);
     const plan = buildHyroxRacePlan(buildState({ format: 'open_doubles', division: 'mixed', targetFinishTimeSec: p.totalSec - 300 }), p);
     expect(plan.isDoubles).toBe(true);
     expect(plan.cohort).toEqual({ format: 'open_doubles', sex: 'mixed' });
@@ -382,7 +447,7 @@ describe('doubles', () => {
     const w = buildState({ format: 'pro_doubles', division: 'women' });
     const pw = predictHyroxRace(w)!;
     const f = hyroxGoalBackCalcOptions(w, pw, pw.totalSec - 100).floors!;
-    expect(f.runSec).toBe(hyroxCompetitiveFloors({ format: 'pro_doubles', sex: 'female' })!.runSec);
+    expect(f.runSec).toBe(hyroxCompetitiveFloors({ format: 'pro_doubles', sex: 'female' })!.fastest.runSec);
   });
 });
 

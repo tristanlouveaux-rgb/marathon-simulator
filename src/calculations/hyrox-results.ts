@@ -908,19 +908,19 @@ export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number):
 
 /** The competitive anchor of a cohort: the median split of every segment
  *  among the top 1% of its finishers (the competitive band seed), and the
- *  fastest split its S8-S9 table publishes per segment (the p1 row). The goal
- *  back-calculation's floors (hyrox-race-plan.ts): the median while the
- *  forecast is slower than it, the p1 split once it is at or past it. Null
- *  without a cell. */
+ *  cohort's fast end per segment, the faster of that median and the fastest
+ *  split its S8-S9 table publishes (the p1 row). The goal back-calculation's
+ *  floors are the fast end, one per component for every athlete in the field
+ *  (hyrox-race-plan.ts hyroxGoalBackCalcOptions). Null without a cell. */
 export interface HyroxCompetitiveFloors {
   stationSec: Record<HyroxStation, number>;
   runSec: number;
   roxzoneSec: number;
   /** The band's median finish. */
   totalSec: number;
-  /** The fastest published split per segment (the cohort's p1 row; Pro Mixed,
-   *  which does not exist, reads the pooled Pro Doubles table like the band
-   *  seeds). */
+  /** The fast end per segment: min(top-1% median, the cohort's p1 row; Pro
+   *  Mixed, which does not exist, reads the pooled Pro Doubles table like the
+   *  band seeds). */
   fastest: { stationSec: Record<HyroxStation, number>; runSec: number; roxzoneSec: number };
 }
 

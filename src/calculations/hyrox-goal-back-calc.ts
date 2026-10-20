@@ -17,26 +17,27 @@
  * Floors (opts.floors): the athlete's own field, per format and sex or
  * doubles division (hyroxCompetitiveFloors in hyrox-results.ts; the pair's
  * times for doubles), passed by hyroxGoalBackCalcOptions (hyrox-race-plan.ts).
- * Per component: the median split of the top 1% of finishers while the
- * forecast is slower than it; once the forecast is at or past that median,
- * the fastest split the cohort's table publishes (its p1 row, opts.floors
- * .fastest), never the forecast itself, so a top-band athlete keeps headroom.
- * The floors are venue-neutral results, so headroom is measured on the
- * forecast's venue-neutral lines: each floor carries the line's own venue
- * seconds (station adjustedSec - baseSec; the run, runSec less the pre-venue
- * run). Without opts.floors the legacy floors stand:
+ * One floor per component for every athlete: the cohort's fast end, the
+ * faster of the top-1% median split and the fastest split the cohort's table
+ * publishes (its p1 row). A floor belongs to the field: it never moves with the
+ * athlete's own forecast, so the fastest time the floors allow never jumps as
+ * a forecast crosses a band median (review 4: a tier that switched from the
+ * median to p1 at the median moved a competitive man's floor sum 93 s when
+ * each of his stations went 1 s slower).
+ * The floors are venue-neutral results, so each carries the forecast line's own
+ * venue seconds (station adjustedSec - baseSec; the run, runSec less the
+ * pre-venue run). Without opts.floors the legacy floors stand:
  * `STATION_SEED_TIMES_SEC['competitive']` (Open, sexes pooled) x the line's
  * doubles ratio, and `HYROX_RUN_PACE_MIN_SEC_KM` x 8.
  *
  * Roxzone: held at the forecast's unless opts.roxzoneTargetSec gives the
  * Roxzone at the goal (the race plan scales it with finish time from the
  * real results). It never absorbs more than the whole gain, and never goes
- * below its tier floor (the cohort's top-1% Roxzone median, or its fastest
- * published Roxzone once the forecast is at or past that median), and a
- * floor never lifts it above the forecast's own Roxzone. When every
- * other component sits at its floor and the goal is still out of reach, the
- * Roxzone gives up to its own floor, so the fastest time the floors allow
- * (achievedSec) is the floor sum whatever the goal.
+ * below its floor (the cohort's fast-end Roxzone), and a floor never lifts it
+ * above the forecast's own Roxzone. When every other component sits at its
+ * floor and the goal is still out of reach, the Roxzone gives up to its own
+ * floor, so the fastest time the floors allow (achievedSec) is the floor sum
+ * whatever the goal.
  */
 
 import type { HyroxPrediction } from './race-prediction.hyrox';
@@ -58,22 +59,15 @@ export interface GoalRunPaceTarget {
   deltaSecKm: number;
 }
 
-/** One tier of floors, venue-neutral, in the forecast lines' own terms (the
- *  pair's time for doubles). */
-export interface GoalBackCalcFloorTier {
+/** Floors from the athlete's own field, venue-neutral, in the forecast
+ *  lines' own terms (the pair's time for doubles): one per component. */
+export interface GoalBackCalcFloors {
   stationSec: Partial<Record<HyroxStation, number>>;
   /** The 8 run legs together. */
   runSec: number;
   /** The Roxzone floor. Without it the Roxzone has no floor beyond the
    *  whole-gain clamp. */
   roxzoneSec?: number;
-}
-
-/** Floors from the athlete's own field: the top-1% medians, and the fastest
- *  published split for a component the forecast already has at or past its
- *  median. */
-export interface GoalBackCalcFloors extends GoalBackCalcFloorTier {
-  fastest?: GoalBackCalcFloorTier;
 }
 
 export interface GoalBackCalcOptions {
@@ -120,17 +114,13 @@ export function computeGoalBackCalc(
   const floors = opts.floors;
   const floorSource: GoalBackCalcResult['floorSource'] = floors ? 'cohort' : 'legacy';
   const totalGain = prediction.totalSec - targetTotalSec;
-  // The tier for one component: the top-1% median while the venue-neutral
-  // forecast is slower than it, else the fastest published split.
-  const tierFloor = (neutralSec: number, median: number, fastest: number | undefined): number =>
-    neutralSec > median ? median : (fastest ?? median);
   // The run's venue seconds: runSec less the pre-venue run (rawSec is the
   // pre-venue run + stations + Roxzone; the Roxzone takes no venue factor).
   const rawRunSec = prediction.rawSec - stationLines.reduce((sum, l) => sum + l.baseSec, 0) - prediction.roxzoneSec;
   const runVenueSec = prediction.courseFactors?.length && rawRunSec > 0 ? currentRunSec - rawRunSec : 0;
   // Roxzone floor (no venue factor), never above the forecast's own Roxzone.
   const roxzoneFloorSec = floors?.roxzoneSec != null
-    ? Math.min(prediction.roxzoneSec, tierFloor(prediction.roxzoneSec, floors.roxzoneSec, floors.fastest?.roxzoneSec))
+    ? Math.min(prediction.roxzoneSec, floors.roxzoneSec)
     : null;
   // Roxzone at the goal, never absorbing more than the whole gain and never
   // below its floor.
@@ -138,10 +128,10 @@ export function computeGoalBackCalc(
     ? Math.max(opts.roxzoneTargetSec, prediction.roxzoneSec - totalGain, roxzoneFloorSec ?? -Infinity)
     : prediction.roxzoneSec;
 
-  // Floor for the run: the field's tier floor plus the run's venue seconds,
-  // else 8 legs at the legacy minimum pace.
+  // Floor for the run: the field's floor plus the run's venue seconds, else
+  // 8 legs at the legacy minimum pace.
   const runFloorSec = floors
-    ? tierFloor(currentRunSec - runVenueSec, floors.runSec, floors.fastest?.runSec) + runVenueSec
+    ? floors.runSec + runVenueSec
     : HYROX_RUN_PACE_MIN_SEC_KM * 8;
 
   // Component slots. Each row gets a `currentSec` and a `floorSec`. We
@@ -152,13 +142,12 @@ export function computeGoalBackCalc(
       kind: 'station' as const,
       station: line.station,
       currentSec: line.adjustedSec,
-      // Cohort floors are already in the line's terms (tiered on the
-      // venue-neutral line, plus the line's venue seconds). Legacy floors are
-      // singles seed times; a doubles line is the pair's time, so its floor
-      // scales by the same doubles ratio (teamRatio, absent = 1).
+      // Cohort floors are already in the line's terms (venue-neutral, plus
+      // the line's venue seconds). Legacy floors are singles seed times; a
+      // doubles line is the pair's time, so its floor scales by the same
+      // doubles ratio (teamRatio, absent = 1).
       floorSec: floors?.stationSec[line.station] != null
-        ? tierFloor(line.baseSec, floors.stationSec[line.station]!, floors.fastest?.stationSec[line.station])
-          + (line.adjustedSec - line.baseSec)
+        ? floors.stationSec[line.station]! + (line.adjustedSec - line.baseSec)
         : STATION_SEED_TIMES_SEC.competitive[line.station] * (line.teamRatio ?? 1),
     })),
   ];
