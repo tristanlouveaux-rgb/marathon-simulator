@@ -382,6 +382,18 @@ import {
 //   the long run leaves;
 // - under a partial station capacity a station session loses rounds, keeps
 //   its warm-up, and leaves the week under 15 min.
+// Still v19 (unreleased; part 2 review fixes, round 2, 2026-10-20):
+// - no cut takes a station session under 15 min (holdsStationFloor: a doubles
+//   session at its floor ran 13 to 14 min);
+// - under a partial station capacity the station work keeps the capacity's
+//   share of its own (the warm-up outside the share);
+// - race week's exempt circuit keeps its warm-up outside the 0.30, so race
+//   week keeps its run count;
+// - the week before race week holds its light block, its minutes from the
+//   spare, the finishers and running above its floors, inside 0.55;
+// - the taper long run stays the week's longest run;
+// - the session cap (the tier long-run cap) bounds the finisher's fill, not
+//   the strength block.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -1965,6 +1977,12 @@ function generateWeekSessions(
       if (strengthPhase) adjustments.push(`W${weekIndex}: strength block left out of the ${nonRun[at].n} (${ceilingName}: no longer than the reference week's)`);
       continue;
     }
+    // The session cap (the tier long-run cap) bounds the finisher's fill
+    // (finisherRoomOf), not the block: a beginner-tier technique session of
+    // 33 to 48 min of station work runs to 78 min with its warm-up and block
+    // and no finisher (review round 2). Leaving the block out there instead
+    // took beginner-tier build weeks at the sheet's count from 31 of 48 to 1
+    // at the default hours, and peak weeks from 16 of 22 to 0.
     if (strengthLeft >= block.min) {
       nonRun[at] = withHyroxSessionParts(nonRun[at], { strength: block });
       strengthLeft -= block.min;
