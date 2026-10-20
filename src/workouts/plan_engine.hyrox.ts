@@ -394,6 +394,13 @@ import {
 // - the taper long run stays the week's longest run;
 // - the session cap (the tier long-run cap) bounds the finisher's fill, not
 //   the strength block.
+// Still v19 (unreleased; part 2 review fixes, round 3, 2026-10-20):
+// - under a partial station capacity a station session keeps the combination
+//   of its rounds and stations with the most station work within the
+//   capacity's share (the smallest when none is that small), not whole rounds
+//   alone;
+// - a taper long run that cannot stay the week's longest run stays as an easy
+//   run at the run floor when that fits, so taper week 1 keeps its run count.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -1978,9 +1985,11 @@ function generateWeekSessions(
       continue;
     }
     // The session cap (the tier long-run cap) bounds the finisher's fill
-    // (finisherRoomOf), not the block: a beginner-tier technique session of
-    // 33 to 48 min of station work runs to 78 min with its warm-up and block
-    // and no finisher (review round 2). Leaving the block out there instead
+    // (finisherRoomOf), not the block: a beginner-tier singles technique
+    // session of 31 to 55 min of station work runs to 77 to 85 min with its
+    // warm-up and block and no finisher (85: pro singles women; 78 with no
+    // division; doubles sessions stay within the cap; review rounds 2 and 3).
+    // Leaving the block out there instead
     // took beginner-tier build weeks at the sheet's count from 31 of 48 to 1
     // at the default hours, and peak weeks from 16 of 22 to 0.
     if (strengthLeft >= block.min) {
