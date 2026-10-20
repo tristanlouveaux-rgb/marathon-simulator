@@ -1111,32 +1111,45 @@ export interface AssessmentParams {
    *  target's loads (hyroxStationSeedsAtTarget, hyroxSeedRunPaceSecKm).
    *  Absent: the pooled Open Singles field. */
   seed?: HyroxSeedStateInput;
+  /** The week's beginner loads (kg per loaded station; plan_engine.hyrox):
+   *  a beginner's week-1 assessment runs the sleds unloaded and the carry,
+   *  sandbag and ball at the schedule's implements (sheet
+   *  technique.station_session: sleds unloaded in weeks 1 and 2; Tristan
+   *  2026-10-20). Absent: race weight (intermediate and advanced athletes). */
+  stationLoads?: Partial<Record<HyroxStation, number>>;
 }
 
 /**
  * Week 1 HYROX Assessment. One easy pass through all accessible stations.
  * RPE 4 throughout. Purpose is to record split times, not to train hard.
- * Low MTL by design.
+ * Low MTL by design. A beginner's pass takes the week's loads
+ * (`stationLoads`: the sleds unloaded), and the description says those
+ * stations' times are not race times.
  */
 export function generateHyroxAssessment(params: AssessmentParams): Workout {
   const { band, stationAccess, bodyWeightKg } = params;
   const stations = availableStations(stationAccess);
-  const externalLoads = stationExternalLoadKg(params.loadTier ?? HYROX_DEFAULT_LOAD_TIER);
+  const loadTier = params.loadTier ?? HYROX_DEFAULT_LOAD_TIER;
+  const externalLoads = stationExternalLoadKg(loadTier);
   const seeds = hyroxStationSeedsAtTarget(params.seed ?? {}, band);
 
   const components: HyroxComponent[] = stations.map(station => {
-    const display = STATION_DISPLAY[station];
     const seedSec = seeds[station];
     const easyDurSec = Math.round(seedSec * HYROX_EASY_PASS_TIME_FACTOR);
     const easyDurMin = easyDurSec / 60;
-    const stationMTL = computeComponentMTL(
-      easyDurMin, 4, station,
-      externalLoads[station] ?? 0,
-      bodyWeightKg
-    );
-    void display;
-    return { type: station, durationSec: easyDurSec, mtl: stationMTL };
+    // A beginner's load below race weight (the sleds unloaded): its external
+    // load in MTL, stationComponent's rule (a sled's share of the total).
+    const race = hyroxRaceLoadKg(station, loadTier);
+    const own = params.stationLoads?.[station];
+    const kg = race != null && own != null ? Math.min(race, own) : undefined;
+    const externalKg = kg != null ? (isHyroxSled(station) ? kg * SLED_EXTERNAL_LOAD_FRACTION : kg) : (externalLoads[station] ?? 0);
+    const stationMTL = computeComponentMTL(easyDurMin, 4, station, externalKg, bodyWeightKg);
+    return {
+      type: station, durationSec: easyDurSec, mtl: stationMTL,
+      ...(kg != null && race != null && kg < race - 1e-9 ? { loadKg: kg, loadPct: kg / race } : {}),
+    };
   });
+  const reduced = components.filter(c => c.loadKg != null).map(c => STATION_DISPLAY[c.type as HyroxStation].name);
 
   const totalMTL = components.reduce((sum, c) => sum + c.mtl, 0);
   const totalDurMin = Math.round(
@@ -1145,9 +1158,12 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
 
   const stationList = stations.map(st => STATION_DISPLAY[st].name).join(', ');
 
+  const reducedNote = reduced.length > 0
+    ? ` This week the sleds run unloaded and the other loaded stations take beginner loads, so the ${reduced.join(', ')} times are not race times: leave them out of your benchmarks.`
+    : '';
   return {
     n: 'HYROX Assessment',
-    d: `Easy walkthrough of all ${stations.length} stations: ${stationList}. One round each at comfortable effort. Note your time per station and enter them in the app — this calibrates your training plan.`,
+    d: `Easy walkthrough of all ${stations.length} stations: ${stationList}. One round each at comfortable effort. Note your time per station and enter it in the app: it calibrates your training plan.${reducedNote}`,
     t: 'hyrox_assessment',
     discipline: 'station',
     r: 4,

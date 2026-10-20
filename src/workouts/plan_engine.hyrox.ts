@@ -1234,7 +1234,9 @@ function generateWeekSessions(
   const nonRun: Workout[] = [];
   for (let i = 0; i < sKinds.length; i++) {
     if (needsAssessment && i === 0) {
-      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier, seed: state }));
+      // A beginner's assessment takes the week's loads: the sleds unloaded
+      // (sheet: weeks 1 and 2), the carry, sandbag and ball at the schedule.
+      nonRun.push(generateHyroxAssessment({ band, stationAccess: hx.stationAccess, bodyWeightKg, loadTier, seed: state, stationLoads: inputs.stationLoads }));
       continue;
     }
     if (!raceWeekCircuitOk) continue;

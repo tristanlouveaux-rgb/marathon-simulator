@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   generateHyroxStation, generateHyroxBrick, withHyroxRounds, withoutHyroxStation, hyroxStationToCut,
   hyroxMinRounds, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown, HYROX_EASY_PASS_TIME_FACTOR, MIN_CIRCUIT_ROUNDS,
-  withHyroxStationLoads,
+  withHyroxStationLoads, generateHyroxAssessment,
   type StationParams, type BrickParams,
 } from './hyrox-generators';
 import { hyroxComponentSets, hyroxSessionDurationSec } from './hyrox-session-shape';
@@ -327,6 +327,21 @@ describe('prescriptions: damper, lanes, the wall-ball target, loads, doubles', (
     // Heavier loads than the session's are ignored.
     expect(withHyroxStationLoads(w, { sled_push: 100, farmer_carry: 16 }, 'W-Open', 65)).toBe(w);
     expect(withHyroxStationLoads(w, undefined, 'W-Open', 65)).toBe(w);
+  });
+
+  it('a beginner\'s week-1 assessment runs the sleds unloaded at the week\'s loads and says those times are not race times (2026-10-20)', () => {
+    const own = { sled_push: 0, sled_pull: 0, farmer_carry: 8, sandbag_lunges: 5, wall_balls: 2 };
+    const beginner = generateHyroxAssessment({ band: 'beginner', stationAccess: FULL_ACCESS, loadTier: 'W-Open', seed: WOMAN, stationLoads: own, bodyWeightKg: 65 });
+    const raceWeight = generateHyroxAssessment({ band: 'beginner', stationAccess: FULL_ACCESS, loadTier: 'W-Open', seed: WOMAN, bodyWeightKg: 65 });
+    const sled = beginner.hyroxComponents!.find(c => c.type === 'sled_push')!;
+    expect(sled.loadKg).toBe(0);
+    expect(beginner.hyroxComponents!.find(c => c.type === 'farmer_carry')!.loadKg).toBe(8);
+    expect(beginner.hyroxComponents!.find(c => c.type === 'ski_erg')!.loadKg).toBeUndefined();
+    expect(beginner.musculoTendonLoad!).toBeLessThan(raceWeight.musculoTendonLoad!);
+    expect(beginner.d).toMatch(/the Sled Push, Sled Pull, Farmer Carry, Sandbag Lunges, Wall Balls times are not race times/);
+    expect(raceWeight.hyroxComponents!.every(c => c.loadKg == null)).toBe(true);
+    expect(raceWeight.d).not.toMatch(/not race times/);
+    for (const w of [beginner, raceWeight]) expect(w.d).not.toMatch(/\u2014/);
   });
 
   it('no description holds an em dash', () => {
