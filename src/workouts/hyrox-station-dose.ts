@@ -88,10 +88,14 @@ const RACE_SETS = Math.round(HYROX_STATION_FORMATS.race_pace.volumeFraction / HY
 /** Sets of the technique volume (2). */
 const TECHNIQUE_SETS = Math.round(HYROX_STATION_FORMATS.technique.volumeFraction / HYROX_STATION_SET_FRACTION);
 
+/** Doubles: each partner's share of every station (sheet; the rules set no
+ *  minimum split, and the plan trains 50/50). */
+export const HYROX_DOUBLES_STATION_SHARE = 0.5;
+
 /**
- * Doubles: each partner trains half of every station (sheet; the rules set no
- * minimum split, and the plan trains 50/50). Half the sets, rounded up to a
- * whole set, so a station is never dropped and a sled set stays one lane.
+ * Doubles: each partner trains half of every station (HYROX_DOUBLES_STATION_SHARE).
+ * Half the sets, rounded up to a whole set, so a station is never dropped and
+ * a sled set stays one lane.
  */
 export function hyroxDoublesSets(sets: number): number {
   return Math.max(1, Math.ceil(sets / 2));

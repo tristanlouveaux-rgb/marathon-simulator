@@ -29,7 +29,7 @@ import {
 import {
   HYROX_STATION_SET_FRACTION, HYROX_STATION_FORMATS, HYROX_STATIONS_PER_SESSION, HYROX_BEGINNER_SLED_SETS,
   HYROX_ERG_DAMPER, HYROX_BRICK_FORMATS, hyroxStationSetAmount, hyroxStationRaceAmount, hyroxRaceLoadKg, hyroxDoublesSets,
-  hyroxTechniqueSets, hyroxRacePaceSets, hyroxBrickStationRounds, isHyroxSled, type HyroxBrickFormat,
+  hyroxTechniqueSets, hyroxRacePaceSets, hyroxBrickStationRounds, isHyroxSled, HYROX_DOUBLES_STATION_SHARE, type HyroxBrickFormat,
 } from './hyrox-station-dose';
 import {
   ECCENTRIC_HEAVY_STATIONS, RACE_WEEK_EXCLUDED_STATIONS, hyroxTier,
@@ -735,7 +735,7 @@ export function hyroxSessionText(w: Workout): string {
     const list = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name} ${stationPrescription(c, spec, false)}`).join('; ');
     return [
       ...(spec.warmup ? [warmupPhrase(spec.warmup)] : []),
-      `${full ? 'Full' : 'Half'} race simulation: ${rounds} rounds of 1 km at HYROX race pace${pace}, each into the next station at its full race volume: ${list}.`,
+      `${full ? 'Full' : 'Half'} race simulation: ${rounds} rounds of 1 km at HYROX race pace${pace}, each into the next station at ${spec.doubles ? 'your half of its race volume' : 'its full race volume'}: ${list}.`,
       `A ${spec.transitionSec ?? 0} s jog into each station, no other rest.`,
       effort,
       ...(spec.doubles ? [DOUBLES_LINE] : []),
@@ -1252,10 +1252,11 @@ const SIM_TRANSITION_SEC = HYROX_BRICK_FORMATS.beginner.transitionSec;
  * (HYROX_BRICK_FORMATS: 6 beginner, 7 intermediate and advanced, the
  * existing brick values; a product choice, the sheet gives no sim RPE). A
  * station the athlete cannot train is left out and its run continues. Doubles:
- * each partner trains half of every station, said once; the station's MTL is
- * the partner's half. Every station is a full station, so a guided sim at
- * race weight can teach the station benchmarks (hyrox-session-benchmarks).
- * Planning side.
+ * each partner trains half of every station, said once; the station's amount,
+ * time and MTL are the partner's half (raceFraction 0.5), so a doubles sim
+ * teaches no station benchmark. A singles sim's stations are full stations,
+ * so a guided sim at race weight can teach the station benchmarks
+ * (hyrox-session-benchmarks). Planning side.
  */
 export function generateHyroxSim(p: SimParams): Workout {
   const tier = hyroxTier(p.band);
@@ -1283,17 +1284,22 @@ export function generateHyroxSim(p: SimParams): Workout {
     const own = p.stationLoads?.[st];
     const kg = race == null ? undefined : Math.min(race, own ?? race);
     const externalKg = kg == null ? undefined : isHyroxSled(st) ? kg * SLED_EXTERNAL_LOAD_FRACTION : kg;
-    const sec = stationSeedSec(st, p.band, p.stationBenchmarks, p.seed);
-    // Doubles: the partner's half of the station's work.
-    const workMin = (sec / 60) * (doubles ? 0.5 : 1);
-    const amount = hyroxStationRaceAmount(st);
+    // Doubles: the partner's half of the station (its amount, time and MTL),
+    // a partial station (raceFraction 0.5), so its time neither teaches a
+    // benchmark nor takes a percentile against full race splits
+    // (hyrox-session-benchmarks isPartialStation; review 2026-10-20: a
+    // doubles athlete's half-station time read as a full-station
+    // improvement).
+    const share = doubles ? HYROX_DOUBLES_STATION_SHARE : 1;
+    const sec = stationSeedSec(st, p.band, p.stationBenchmarks, p.seed) * share;
+    const amount = hyroxStationRaceAmount(st) * share;
     return {
       type: st,
-      ...(st === 'wall_balls' ? { reps: amount } : { distanceM: amount }),
+      ...(st === 'wall_balls' ? { reps: Math.round(amount) } : { distanceM: amount }),
       durationSec: Math.round(sec),
-      mtl: computeComponentMTL(workMin, rpe, st, externalKg, p.bodyWeightKg),
+      mtl: computeComponentMTL(sec / 60, rpe, st, externalKg, p.bodyWeightKg),
       restAfterSec: 0,
-      raceFraction: 1,
+      raceFraction: share,
       inRounds: [round],
       ...(kg != null ? { loadKg: kg } : {}),
       ...(kg != null && race != null && kg < race - 1e-9 ? { loadPct: kg / race } : {}),

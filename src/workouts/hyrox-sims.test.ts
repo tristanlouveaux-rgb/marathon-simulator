@@ -210,6 +210,22 @@ describe('the race simulation session', () => {
     const light = generateHyroxSim({ kind: 'half', band: 'beginner', stationAccess: FULL_ACCESS, slotIndex: 1, stationLoads: { sled_push: 50, sled_pull: 37.5 } });
     const lr = summariseHyroxSession(light, (light.hyroxComponents ?? []).map((c, i) => ({ exerciseIndex: i, setIndex: 0, durationSec: c.durationSec ?? 60, exerciseName: String(c.type) })) as never, s);
     expect(lr.find(r => r.station === 'sled_push')?.eligible).toBe(false);
+    // Doubles: each station is the partner's half (raceFraction 0.5, half the
+    // amount and time), a partial station: it neither teaches a benchmark nor
+    // takes a percentile (review 2026-10-20).
+    const pair = generateHyroxSim({ kind: 'half', band: 'intermediate', stationAccess: FULL_ACCESS, slotIndex: 1, doubles: true });
+    const pairSt = (pair.hyroxComponents ?? []).filter(c => c.type !== 'run');
+    const solo = (sim.hyroxComponents ?? []).filter(c => c.type !== 'run');
+    pairSt.forEach((c, i) => {
+      expect(c.raceFraction).toBe(0.5);
+      expect(c.reps ?? c.distanceM).toBe(hyroxStationRaceAmount(c.type as HyroxStation) / 2);
+      expect(c.durationSec).toBeCloseTo((solo[i].durationSec ?? 0) / 2, -1);
+    });
+    expect(pair.d).toMatch(/your half of its race volume/);
+    const pr = summariseHyroxSession(pair, (pair.hyroxComponents ?? []).map((c, i) => ({ exerciseIndex: i, setIndex: 0, durationSec: (c.durationSec ?? 60) * 0.9, exerciseName: String(c.type) })) as never, s);
+    const prStations = pr.filter(r => pairSt.some(c => c.type === r.station));
+    expect(prStations.length).toBeGreaterThan(0);
+    expect(prStations.every(r => r.partial && !r.eligible)).toBe(true);
   });
 });
 
