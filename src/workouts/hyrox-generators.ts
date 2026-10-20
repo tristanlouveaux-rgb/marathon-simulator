@@ -842,11 +842,18 @@ export function hyroxSessionWarmup(
 ): NonNullable<HyroxSessionSpec['warmup']> {
   const ergs = easyErgStations(access);
   const min = HYROX_SESSION_WARMUP_MIN;
-  if (run || ergs.length === 0) {
-    return { min, mode: 'run', mtl: computeComponentMTL(min, HYROX_EASY_RPE, 'run_easy', undefined, bodyWeightKg) };
-  }
-  const station = ergs[(Math.abs(slotIndex) + 1) % ergs.length];
-  return { min, mode: station, mtl: computeComponentMTL(min, HYROX_EASY_RPE, station, undefined, bodyWeightKg) };
+  if (run || ergs.length === 0) return hyroxWarmupOn('run', min, bodyWeightKg);
+  return hyroxWarmupOn(ergs[(Math.abs(slotIndex) + 1) % ergs.length], min, bodyWeightKg);
+}
+
+/** A warm-up of `min` minutes easy on `mode` (an erg, or a jog: `run`), MTL
+ *  from mtl.ts at the easy RPE: the warm-up hyroxSessionWarmup opens a
+ *  session with, and the one the injury gates move it to off a restricted
+ *  side (applyHyroxInjuryGates). */
+export function hyroxWarmupOn(
+  mode: HyroxStation | 'run', min: number, bodyWeightKg?: number,
+): NonNullable<HyroxSessionSpec['warmup']> {
+  return { min, mode, mtl: computeComponentMTL(min, HYROX_EASY_RPE, mode === 'run' ? 'run_easy' : mode, undefined, bodyWeightKg) };
 }
 
 /** The same session with its warm-up and strength block set (null clears
