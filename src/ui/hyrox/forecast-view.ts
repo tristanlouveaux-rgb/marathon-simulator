@@ -605,7 +605,9 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
  *  - a station: its horizon line from the same ranking (weakestLinkRowFor);
  *  - Running: the race-day run projection (buildHyroxProjection byDiscipline
  *    .run), as average pace per 1 km leg, the numbers behind the Race order
- *    card's "Average run pace" row; the gain is the run total's;
+ *    card's "Average run pace" row; the gain is the run total's, which the
+ *    caption says ("8-run total"), since it is not the pace cell's
+ *    difference;
  *  - the Roxzone (or Running and Roxzone, a stations-only paste): the same
  *    projection's Roxzone (and run) totals.
  *
@@ -658,13 +660,16 @@ function lostMostGainRow(
     // Average pace per 1 km leg, rounded as the Race order card rounds it.
     const cur = Math.round(run.currentSec / 8);
     const next = Math.round(run.projectedSec / 8);
+    const gainSec = Math.max(0, run.currentSec - run.projectedSec);
     return {
       attr: 'data-wtg-segment="run_total"',
       name: seg.label,
-      sub: LOST_MOST_SUB,
+      // The gain is the 8 legs together, not the per-leg pace difference
+      // the cell shows; the total keeps the subhead's sum.
+      sub: gainSec >= 1 ? `${LOST_MOST_SUB} · 8-run total` : LOST_MOST_SUB,
       cell: cur - next >= 1 ? `${fmtPace(cur).replace('/km', '')} → ${fmtPace(next)}` : fmtPace(cur),
       currentCell: fmtPace(cur),
-      gainSec: Math.max(0, run.currentSec - run.projectedSec),
+      gainSec,
     };
   }
   const cur = seg.key === 'roxzone' ? rox.currentSec : run.currentSec + rox.currentSec;
@@ -710,7 +715,7 @@ export function renderWhereToGainCard(
   return `
     <div id="hx-where-to-gain" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px;scroll-margin-top:24px">
       <div style="font-size:13px;font-weight:600;color:var(--c-black)">Where to gain</div>
-      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${bridge.name}, where your last race lost the most` : ''}. Total gain available: ~${Math.round(totalGain)} sec.</div>
+      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${bridge.name}, where your last race lost the most` : ''}. Total gain available: ~${Math.round(totalGain)}s.</div>
       ${rows}
     </div>
   `;

@@ -180,9 +180,10 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
     `;
   }
 
-  // Provenance subtitle: the cohort's race splits (HYROX results, seasons 8
-  // and 9), then what a spoke means.
-  const subtitle = `${hyroxResultsCaption(cohort, 'ski_erg')} Each spoke places your station time among the field's race splits. Further out is faster.`;
+  // Provenance subtitle: the cohort's race results (HYROX results, seasons 8
+  // and 9) with the field's finisher count (the radar has 8 spokes, so no
+  // one station's split count), then what a spoke means.
+  const subtitle = `${hyroxResultsCaption(cohort)} Each spoke places your station time among the field's race splits. Further out is faster.`;
 
   // Build the user polygon as a closed `<path>` so we can normalise its length
   // to 1 via `pathLength="1"` and animate stroke-dashoffset to draw it on. The

@@ -319,7 +319,8 @@ describe('where you lost time', () => {
     expect(txt).toContain('Your 1:24:31 against athletes who finished in the same time');
     expect(txt).toContain('Time lost');
     expect(txt).toContain('Time gained');
-    expect(txt).toContain('Typical splits of Open Singles women who finished near your time.');
+    expect(txt).toContain('Typical splits of Open Singles women who finished in the same time.');
+    expect(txt).not.toContain('near your time');
     expect(txt).toContain('Open Singles women finishers');
     const lt = analyzeHyroxLoseTime(s);
     // Every compared segment shows once: a row, or the level line.
@@ -352,7 +353,7 @@ describe('where you lost time', () => {
       hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 },
     }, { biologicalSex: 'male' });
     const html = renderLoseTimeBody(analyzeHyroxLoseTime(s), false);
-    expect(html).toContain('Typical splits of Open Doubles men\'s pairs who finished near your time.');
+    expect(html).toContain('Typical splits of Open Doubles men\'s pairs who finished in the same time.');
     expect(html).toContain('Division not recorded with this result; set it with Update result.');
     expect(html).not.toContain('current division');
     const rec = hyroxState({
@@ -460,6 +461,8 @@ describe('Forecast tab placement', () => {
     const proj = buildHyroxProjection(s, predictHyroxRace(s)!);
     const runGain = Math.round(proj.byDiscipline.run.currentSec - proj.byDiscipline.run.projectedSec);
     if (runGain >= 1) expect(run.textContent).toContain(`\u2212${runGain}s`);
+    // The pace cell is per leg; the caption says the gain is the 8 legs' total.
+    if (runGain >= 1) expect(run.textContent).toContain('Most time lost in your last race · 8-run total');
     expectVisualConstraints(gain.outerHTML);
   });
 

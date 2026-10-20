@@ -211,19 +211,26 @@ describe('headline copy', () => {
 
   it('doubles compare with pairs; under a minute reads in seconds', () => {
     expect(hyroxLoseTimeHeadline([seg('sled_push', 'Sled Push', 40)], [], 'open_doubles', 4400))
-      .toBe('Most time lost on Sled Push: 40 sec slower than pairs finishing in 1:13:20');
+      .toBe('Most time lost on Sled Push: 40s slower than pairs finishing in 1:13:20');
   });
 
   it('no material loss: the most gained, else level everywhere', () => {
     expect(hyroxLoseTimeHeadline([], [seg('run_total', 'Running', -29)], 'open_singles', 5400))
-      .toBe('Most time gained on Running: 29 sec faster than athletes finishing in 1:30:00');
+      .toBe('Most time gained on Running: 29s faster than athletes finishing in 1:30:00');
     expect(hyroxLoseTimeHeadline([], [], 'pro_singles', 3480))
-      .toBe('Within 15 sec of athletes finishing in 58:00 on every segment');
+      .toBe('Within 15s of athletes finishing in 58:00 on every segment');
   });
 
   it('formats', () => {
     expect(fmtLostTime(72.4)).toBe('1:12');
-    expect(fmtLostTime(-40)).toBe('40 sec');
+    expect(fmtLostTime(-40)).toBe('40s');
+  });
+
+  it('the Roxzone reads "in the Roxzone", lost or gained', () => {
+    expect(hyroxLoseTimeHeadline([seg('roxzone', 'Roxzone', 63)], [], 'open_singles', 5071))
+      .toBe('Most time lost in the Roxzone: 1:03 slower than athletes finishing in 1:24:31');
+    expect(hyroxLoseTimeHeadline([], [seg('roxzone', 'Roxzone', -41)], 'open_singles', 5071))
+      .toBe('Most time gained in the Roxzone: 41s faster than athletes finishing in 1:24:31');
   });
 
   it('no em dash', () => {

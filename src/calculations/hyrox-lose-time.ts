@@ -161,16 +161,22 @@ export interface HyroxLoseTime {
   headline: string | null;
 }
 
-/** "1:12" from a minute, "40 sec" under it. */
+/** "1:12" from a minute, "40s" under it (the Forecast tab's one seconds
+ *  suffix, as in Where to gain's "−13s"). */
 export function fmtLostTime(sec: number): string {
   const t = Math.round(Math.abs(sec));
-  if (t < 60) return `${t} sec`;
+  if (t < 60) return `${t}s`;
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
 /** Who finished in the same time: athletes (singles) or pairs (doubles). */
 export function hyroxPeerNoun(format: HyroxFormat): string {
   return isHyroxDoublesFormat(format) ? 'pairs' : 'athletes';
+}
+
+/** "on Wall Balls", "on Running", "in the Roxzone". */
+function onSegment(seg: Pick<HyroxLoseTimeSegment, 'key' | 'label'>): string {
+  return seg.key === 'roxzone' ? 'in the Roxzone' : `on ${seg.label}`;
 }
 
 /**
@@ -185,9 +191,9 @@ export function hyroxLoseTimeHeadline(
   totalSec: number,
 ): string {
   const who = `${hyroxPeerNoun(format)} finishing in ${ftRounded(totalSec)}`;
-  if (losses[0]) return `Most time lost on ${losses[0].label}: ${fmtLostTime(losses[0].lostSec)} slower than ${who}`;
-  if (gains[0]) return `Most time gained on ${gains[0].label}: ${fmtLostTime(gains[0].lostSec)} faster than ${who}`;
-  return `Within ${HYROX_LOSE_TIME_MATERIAL_SEC} sec of ${who} on every segment`;
+  if (losses[0]) return `Most time lost ${onSegment(losses[0])}: ${fmtLostTime(losses[0].lostSec)} slower than ${who}`;
+  if (gains[0]) return `Most time gained ${onSegment(gains[0])}: ${fmtLostTime(gains[0].lostSec)} faster than ${who}`;
+  return `Within ${HYROX_LOSE_TIME_MATERIAL_SEC}s of ${who} on every segment`;
 }
 
 /**

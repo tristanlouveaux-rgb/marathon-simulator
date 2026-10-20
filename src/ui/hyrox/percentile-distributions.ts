@@ -244,9 +244,9 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
   // Run = teal mirrors the canonical Run LT colour.
   const rows: Array<{ label: string; metric: HyroxResultsMetric; sec: number; accent: string; fill: string }> = [
     { label: 'Total finish time', metric: 'total', sec: prediction.totalSec, accent: '#F472B6', fill: 'rgba(244,114,182,0.10)' },
-    { label: 'Run total (8 × 1km)', metric: 'run_total', sec: prediction.runSec, accent: '#14B8A6', fill: 'rgba(20,184,166,0.10)' },
+    { label: 'Running', metric: 'run_total', sec: prediction.runSec, accent: '#14B8A6', fill: 'rgba(20,184,166,0.10)' },
     { label: `Stations total (8 stations${isDoubles ? ', pair' : ''})`, metric: 'work_total', sec: prediction.stationsSec, accent: '#FB923C', fill: 'rgba(251,146,60,0.10)' },
-    { label: 'RoxZone transitions', metric: 'roxzone', sec: prediction.roxzoneSec, accent: '#8B5CF6', fill: 'rgba(139,92,246,0.10)' },
+    { label: 'Roxzone', metric: 'roxzone', sec: prediction.roxzoneSec, accent: '#8B5CF6', fill: 'rgba(139,92,246,0.10)' },
   ];
   const metrics: MetricChart[] = [];
   for (const r of rows) {
