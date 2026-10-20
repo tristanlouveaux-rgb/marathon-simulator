@@ -1063,6 +1063,27 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     }
   });
 
+  it('a taper week 1 a few minutes over its fraction shortens its long run toward the run floor before the long run leaves (lane H2b part 2 review)', () => {
+    // With the smallest circuit's warm-up counted inside the fractions, a 2-h
+    // taper week 1 holding the circuit and the taper long run sat 3 min over
+    // 0.55 and lost the long run: 0.16 to 0.22 of the reference week.
+    let checked = 0;
+    for (const band of ['novice', 'intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+      for (const len of [12, 16, 20, 24]) {
+        const s = build(band, 2, len);
+        const tw = planTrainingWeeks(s);
+        const wk = s.wks[tw - 2];
+        const long = prescribed(wk).find(isHyroxLongRun);
+        checked++;
+        expect(long, `${band} ${len}w`).toBeDefined();
+        expect(long!.estimatedDurationMin ?? 0).toBeGreaterThanOrEqual(HYROX_RUN_FLOOR_MIN);
+        const ref = s.wks[refLoadedWeek(s.wks, tw - 2, deloadOf(s.wks.slice(0, tw)))];
+        expect(minutes(wk) / minutes(ref), `${band} ${len}w`).toBeGreaterThan(0.45);
+      }
+    }
+    expect(checked).toBe(16);
+  });
+
   it('the race taper holds its fractions and the reference week caps its station work (reviewer examples)', () => {
     // Review: total_beginner 4 h 11 w taper week 1 at 0.93 of the reference
     // week with a 61-min circuit against 32; novice 6 h 11 w at 0.96, race

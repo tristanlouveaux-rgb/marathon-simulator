@@ -4568,6 +4568,29 @@ export function buildHyroxTrainingWeeks(
         const pool = raceWeek ? candidates.filter(x => taperDropRank(x, raceWeek) === taperDropRank(candidates[0], raceWeek)) : candidates;
         const pick = pool.find(x => !tooHeavy(withWorkouts(cur, cur.workouts.filter(y => y !== x)))) ?? candidates[0];
         const why = fixedWhy ?? whyOf(cur);
+        // The taper long run shortens toward the run floor before it leaves
+        // (as a training week's ceilings trim it: decision E). Lane H2b part
+        // 2 review: with the smallest circuit's warm-up counted inside the
+        // fractions, a 2-h taper week 1 was 3 min over and lost its whole
+        // long run, holding 0.16 to 0.22 of the reference week.
+        if (isHyroxLongRun(pick) && (pick.estimatedDurationMin ?? 0) > runFloorMin) {
+          const remake = (m: number): Workout => ({
+            ...generateHyroxRun({ kind: 'run_easy', targetMinutes: m, longRun: true, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state }),
+            id: pick.id, dayOfWeek: pick.dayOfWeek, dayName: pick.dayName,
+          });
+          const at = (m: number) => withWorkouts(cur, cur.workouts.map(x => (x === pick ? remake(m) : x)));
+          if (!tooHeavy(at(runFloorMin))) {
+            let lo = runFloorMin;
+            let hi = (pick.estimatedDurationMin ?? runFloorMin) - 1;
+            while (lo < hi) {
+              const mid = Math.ceil((lo + hi) / 2);
+              if (tooHeavy(at(mid))) hi = mid - 1; else lo = mid;
+            }
+            attempt = at(lo);
+            attempt.adjustments.push(`W${w}: Long Run cut from ${pick.estimatedDurationMin} to ${lo} min (${why})`);
+            continue;
+          }
+        }
         attempt = withWorkouts(cur, cur.workouts.filter(x => x !== pick));
         attempt.adjustments.push(`W${w}: ${pick.n} left out (${why})`);
       }
