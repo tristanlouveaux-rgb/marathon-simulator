@@ -107,14 +107,51 @@ describe('a different result never carries the stored result\'s splits', () => {
     expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
   });
 
-  it('a different format counts as a different result', () => {
+  it('a different race date counts as a different result', () => {
+    const s = init();
+    openHyroxLogPrevTimeModal();
+    const sel = $<HTMLSelectElement>('#lpt-race');
+    sel.value = 'other';
+    sel.dispatchEvent(new Event('change'));
+    const month = $<HTMLInputElement>('#lpt-race-date');
+    month.value = '2025-11';
+    month.dispatchEvent(new Event('change'));
+    expect($<HTMLDivElement>('#lpt-splits-note').style.display).toBe('block');
+    save();
+    expect(s.hyroxConfig!.hyroxPreviousStationSplits).toBeUndefined();
+    expect(s.hyroxConfig!.hyroxPreviousRoxzoneSec).toBeUndefined();
+  });
+});
+
+describe('a format correction is the same race (review 4: singles to doubles cleared the pasted splits)', () => {
+  it('correcting only the format keeps every split on screen and saves them with the result', () => {
+    const s = init();
+    openHyroxLogPrevTimeModal();
+    $<HTMLButtonElement>('[data-fmt="open_doubles"]').click();
+    expect($<HTMLInputElement>('.lpt-split-input[data-station="ski_erg"]').value).toBe('4:47');
+    expect($<HTMLDivElement>('#lpt-splits-note').style.display).toBe('none');
+    save();
+    const hx = s.hyroxConfig!;
+    expect(hx.hyroxPreviousTimeFormat).toBe('open_doubles');
+    expect(hx.hyroxPreviousTimeDivision).toBe('women');
+    expect(hx.hyroxPreviousStationSplits).toEqual(STATIONS);
+    expect(hx.hyroxPreviousRunSplitsSec).toEqual(LEGS);
+    expect(hx.hyroxPreviousRunTotalSec).toBe(2554);
+    expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
+    // Stored values are not written as doubles station benchmarks.
+    expect(hx.stationBenchmarksDoubles).toBeUndefined();
+  });
+
+  it('a format correction plus one edit: the race keeps its other splits; only the edit becomes a benchmark', () => {
     const s = init();
     openHyroxLogPrevTimeModal();
     $<HTMLButtonElement>('[data-fmt="pro_singles"]').click();
     setStation('sled_push', '3:20');
     save();
-    expect(s.hyroxConfig!.hyroxPreviousStationSplits).toEqual({ sled_push: 200 });
-    expect(s.hyroxConfig!.hyroxPreviousRoxzoneSec).toBeUndefined();
+    const hx = s.hyroxConfig!;
+    expect(hx.hyroxPreviousStationSplits).toEqual({ ...STATIONS, sled_push: 200 });
+    expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
+    expect(hx.stationBenchmarksSingles?.sled_push).toBe(200);
   });
 });
 

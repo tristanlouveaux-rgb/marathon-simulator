@@ -62,10 +62,13 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   // (applyHyroxPrevTimeUpdate replaces them with what this save carries).
   // Every value remembers where it came from: 'stored' (the result on file)
   // or 'session' (typed or pasted here). Stored values belong to the stored
-  // result only: when the finish, format or race moves away from it they are
-  // cleared on screen (and come back if it moves back), so one save never
-  // carries splits from two races. Stored station values are never written
-  // into the station benchmarks again (a later station test stays current).
+  // race only: when the finish or the race (event or date) moves away from it
+  // they are cleared on screen (and come back if it moves back), so one save
+  // never carries splits from two races. A format correction alone (same
+  // finish, event and date) is the same race: its splits stay and are saved
+  // with the result, so where you lost time re-reads them in the corrected
+  // field. Stored station values are never written into the station
+  // benchmarks again (a later station test stays current).
   const stored = hyroxPastRaceSplits(hx);
   let splits: Partial<Record<HyroxStation, number>> = { ...stored.stations };
   const stationOrigin: Partial<Record<HyroxStation, 'stored' | 'session'>> = {};
@@ -76,7 +79,9 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   let runOrigin: 'stored' | 'session' = 'stored';
   let splitsTouched = false;
   const initialResult = { timeSec, format, raceEventId, raceDateISO };
-  const isSameResult = (): boolean => timeSec === initialResult.timeSec && format === initialResult.format
+  // The same race: finish, event and date. The format is not part of it (a
+  // corrected format is the same race filed in the right field).
+  const isSameResult = (): boolean => timeSec === initialResult.timeSec
     && raceEventId === initialResult.raceEventId && raceDateISO === initialResult.raceDateISO;
   let storedShown = true;
   let splitsExpanded = false;
@@ -194,8 +199,8 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   const splitInputs = (): HTMLInputElement[] => [...overlay.querySelectorAll<HTMLInputElement>('.lpt-split-input')];
   const statusEl = (): HTMLDivElement => overlay.querySelector('#lpt-parse-status') as HTMLDivElement;
   /**
-   * The finish, format or race changed: stored splits leave the screen when
-   * the result is no longer the stored one, and return when it is again.
+   * The finish or race changed: stored splits leave the screen when the race
+   * is no longer the stored one, and return when it is again.
    * `quiet` leaves the status line to the caller (a paste writes its own).
    */
   const onResultChange = (quiet = false): void => {
@@ -447,6 +452,10 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   saveBtn.addEventListener('click', () => {
     if (timeSec == null || format == null) return;
     const sameResult = isSameResult();
+    // A format correction re-files the same race: its splits are saved with
+    // the result under the corrected format (stored values, so never as
+    // benchmarks), not left behind in the old format's history.
+    const formatChanged = format !== initialResult.format;
     // What is on screen belongs to this result (stored values left the
     // screen when the result changed); only typed or pasted stations become
     // station benchmarks.
@@ -463,7 +472,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       raceEventId,
       raceDateISO,
       division: isHyroxDoublesFormat(format) ? division : undefined,
-      ...(sameResult && !splitsTouched
+      ...(sameResult && !splitsTouched && !formatChanged
         ? { keepPreviousSplits: true }
         : {
             stationSplits: Object.keys(resultSplits).length > 0 ? resultSplits : undefined,
