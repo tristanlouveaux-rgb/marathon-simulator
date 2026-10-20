@@ -289,6 +289,42 @@ describe('the race simulation week', () => {
   });
 });
 
+describe('a sim week keeps its station session, and beside a half sim its long run (review 2026-10-20)', () => {
+  it('at low hours a sim that would cost the week either steps down (full to half to none), the week keeping its brick, and says so', () => {
+    // Before, at 2 h the acute:chronic guard kept the sim (the brick slot,
+    // the last to go) and dropped the station session and the long run: 7
+    // weeks held the sim alone (beginner and total_beginner, 10 to 16 weeks).
+    let simWeeks = 0;
+    let steppedDown = 0;
+    const lost: string[] = [];
+    for (const band of ['total_beginner', 'beginner', 'novice'] as AbilityBand[]) {
+      for (const h of [2, 3, 4]) {
+        for (const len of [8, 10, 12, 16]) {
+          const s = build(band, h, len);
+          const tw = planTrainingWeeks(s);
+          for (let i = 0; i < tw; i++) {
+            const wk = s.wks[i];
+            const sim = simOf(wk);
+            if ((wk.hyroxPlanNotes ?? []).some(n => /race simulation.*\(it leaves the week without|the full sim leaves the week without/.test(n))) steppedDown++;
+            if (!sim) continue;
+            simWeeks++;
+            const ws = prescribed(wk);
+            const station = ws.some(w => w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density' || w.t === 'hyrox_assessment');
+            const long = sim.hyroxSpec?.simKind === 'full' || ws.some(isHyroxLongRun);
+            if (!station || !long) lost.push(`${band} ${h}h ${len}w W${i + 1}: ${ws.map(w => w.n).join(', ')}`);
+            // The notes name the sim, never "the chosen N sessions are full"
+            // beside a week the sim's slots hold to fewer.
+            for (const n of wk.hyroxPlanNotes ?? []) expect(n, `${band} ${h}h ${len}w W${i + 1}`).not.toMatch(/the chosen \d+ sessions are full/);
+          }
+        }
+      }
+    }
+    expect(simWeeks).toBeGreaterThan(10);
+    expect(steppedDown).toBeGreaterThan(0);
+    expect(lost).toEqual([]);
+  }, 120000);
+});
+
 describe('no standalone station session under 15 min (lane H2b part 2, Q11)', () => {
   it('every station session, brick, sim and strength session on the sweep runs 15 min or more (part 1: 694 of 2,109 under 15)', () => {
     // 6 bands x default hours x 12, 16 and 20 weeks x 4 variants (part 1's

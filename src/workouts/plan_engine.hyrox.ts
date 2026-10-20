@@ -619,7 +619,12 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
       out = out.filter((_, i) => i !== tech);
       continue;
     }
-    adjustments.push(`W${weekIndex}: MTL ${Math.round(total())} above the ${cap} cap with every station and brick session at its floor`);
+    // A race simulation is never cut (mtlCuttable): the note names it when
+    // it is what holds the week above the cap (review 2026-10-20).
+    const simIn = out.find(isHyroxSim);
+    adjustments.push(simIn
+      ? `W${weekIndex}: MTL ${Math.round(total())} above the ${cap} cap: the race simulation holds ${Math.round(mtlOf(simIn))} and is never cut, every other station and brick session is at its floor`
+      : `W${weekIndex}: MTL ${Math.round(total())} above the ${cap} cap with every station and brick session at its floor`);
     break;
   }
   if (roundCuts > 0) adjustments.push(`W${weekIndex}: ${roundCuts} station or brick round(s) cut (MTL cap ${cap})`);
@@ -2015,6 +2020,12 @@ function generateWeekSessions(
     // The run slots a race simulation takes are not free (simSlotsTaken).
     const maxSessions = Math.min(inputs.maxSessions ?? 7, 7) - simSlotsTaken;
     const sessionsName = inputs.maxSessionsName ?? `${maxSessions} sessions`;
+    // A sim week's notes name the sim (review 2026-10-20: "the chosen 5
+    // sessions are full" read wrong beside a week of 3 sessions).
+    const simSlotsName = sim ? (sim.kind === 'full' ? 'brick, long-run and quality-run slots' : 'brick and quality-run slots') : null;
+    const fullWhy = (rest = '') => (simSlotsName
+      ? `the race simulation takes the ${simSlotsName}, the other sessions are full${rest}`
+      : `${sessionsName} are full${rest}`);
     // Free slots: the structure's (a slot the phase leaves empty, one the
     // guard or the session count frees) and the run slots the running share
     // leaves unfunded (part 2). Easy erg work stands in an unfunded run slot
@@ -2031,7 +2042,7 @@ function generateWeekSessions(
     if (freeAll <= 0) {
       // The session count binds: the athlete's chosen total is never exceeded
       // (D1), so what is left stays unprescribed, and the week says so.
-      adjustments.push(`W${weekIndex}: ${Math.round(unused)} min left unprescribed (${sessionsName} are full)`);
+      adjustments.push(`W${weekIndex}: ${Math.round(unused)} min left unprescribed (${fullWhy()})`);
       return [];
     }
     const mtlPerMin = hyroxEasyErgMtlPerMin(hx.stationAccess, bodyWeightKg);
@@ -2079,8 +2090,8 @@ function generateWeekSessions(
     const left = Math.round(total - k1 * each - k2 * runEach);
     if (!held && left >= HYROX_RUN_FLOOR_MIN) {
       adjustments.push(runSlots > 0
-        ? `W${weekIndex}: ${left} min left unprescribed (${sessionsName} are full; the running share leaves ${runSlots} run slot${runSlots === 1 ? '' : 's'} unfunded, easy erg work holds ${runEach} min of each)`
-        : `W${weekIndex}: ${left} min left unprescribed (${sessionsName} are full, an easy erg session at most ${maxEach} min)`);
+        ? `W${weekIndex}: ${left} min left unprescribed (${fullWhy(`; the running share leaves ${runSlots} run slot${runSlots === 1 ? '' : 's'} unfunded, easy erg work holds ${runEach} min of each`)})`
+        : `W${weekIndex}: ${left} min left unprescribed (${fullWhy(`, an easy erg session at most ${maxEach} min`)})`);
     }
     if (keptEach < each) adjustments.push(`W${weekIndex}: easy erg sessions cut to ${keptEach} min (injury: station capacity)`);
     return kept;
@@ -4624,8 +4635,12 @@ export function buildHyroxTrainingWeeks(
         // finisher full, lane H2b part 2); bricks hold fixed formats.
         const work = ws.filter(x => x.t === 'hyrox_station_technique' || x.t === 'hyrox_station_density');
         const workAtCap = work.every(x => (x.estimatedDurationMin ?? 0) >= lr.capMin - 1);
-        if (runsAtShare && !standIn && ergsAtCap && workAtCap) hoursWhy.push(`${maxSessionsName} are full, each session at its longest`);
-        else hoursWhy.push(`${maxSessionsName} are full${holds.length > 0 ? `, ${holds.join(', ')}` : ''}`);
+        const simIn = ws.find(isHyroxSim);
+        const whoFull = simIn
+          ? `the race simulation takes the ${simIn.hyroxSpec?.simKind === 'full' ? 'brick, long-run and quality-run slots' : 'brick and quality-run slots'}, the other sessions are full`
+          : `${maxSessionsName} are full`;
+        if (runsAtShare && !standIn && ergsAtCap && workAtCap) hoursWhy.push(`${whoFull}, each session at its longest`);
+        else hoursWhy.push(`${whoFull}${holds.length > 0 ? `, ${holds.join(', ')}` : ''}`);
       }
       if (/no erg access/.test(n)) hoursWhy.push('no erg access for easy erg work');
       if (/injury/.test(n)) hoursWhy.push('the injury gates');
@@ -4710,21 +4725,51 @@ export function buildHyroxTrainingWeeks(
     let sim = sims.get(w);
     let d = buildWeek(w, false, sim);
     const holdsSim = (x: HyroxWeekDetail) => prescribed(x.workouts).some(isHyroxSim);
-    while (sim && !holdsSim(d)) {
-      // The week's own rules dropped the sim (the injury gates, the 110%
-      // single-run rule): the week was built without it, and says why.
-      if (d.adjustments.some(n => /no race simulation \(/.test(n))) break;
-      // A full sim the 110% rule made a half: said; otherwise the size.
-      const ruled = d.adjustments.some(n => /race simulation becomes a half/.test(n));
-      const was = sim;
-      sim = was.kind === 'full' && !ruled ? { kind: 'half', halfIndex: 0 } : undefined;
-      const next = buildWeek(w, false, sim);
-      if (!ruled) {
-        next.adjustments = [...next.adjustments, sim
-          ? `W${w}: the week holds a half race simulation, not the full (the full sim does not fit the week)`
-          : `W${w}: no race simulation (it does not fit the week): the week keeps its brick`];
+    // What a sim week must keep (review 2026-10-20): its station session, and
+    // beside a half sim its long run (sheet sims.week_volume: a half sim takes
+    // the brick slot and the quality run drops, so its week's own check
+    // assumes the long run stays; a full sim takes the long run's slot by
+    // design). A sim week that holds the sim without one of them (the
+    // acute:chronic guard keeps the brick slot, where the sim sits, longest)
+    // steps down: full to half, half to none, the week then keeping its
+    // brick, a far shorter session for the guard to hold. Before, at 2 h a
+    // half-sim week could hold the sim alone (6 of 146 sim weeks).
+    const simKeeps = (x: HyroxWeekDetail, kind: HyroxSimWeek['kind'] | undefined): number => {
+      const p = prescribed(x.workouts);
+      const station = p.some(q => q.t === 'hyrox_station_technique' || q.t === 'hyrox_station_density' || q.t === 'hyrox_assessment');
+      const long = kind === 'full' || p.some(isHyroxLongRun);
+      return (station ? 1 : 0) + (long ? 1 : 0);
+    };
+    for (let step = 0; sim && step < 4; step++) {
+      if (!holdsSim(d)) {
+        // The week's own rules dropped the sim (the injury gates, the 110%
+        // single-run rule): the week was built without it, and says why.
+        if (d.adjustments.some(n => /no race simulation \(/.test(n))) break;
+        // A full sim the 110% rule made a half: said; otherwise the size.
+        const ruled = d.adjustments.some(n => /race simulation becomes a half/.test(n));
+        const was: HyroxSimWeek = sim;
+        sim = was.kind === 'full' && !ruled ? { kind: 'half', halfIndex: 0 } : undefined;
+        const next = buildWeek(w, false, sim);
+        if (!ruled) {
+          next.adjustments = [...next.adjustments, sim
+            ? `W${w}: the week holds a half race simulation, not the full (the full sim does not fit the week)`
+            : `W${w}: no race simulation (it does not fit the week): the week keeps its brick`];
+        }
+        d = next;
+        continue;
       }
-      d = next;
+      // The sim the week holds (the 110% rule may have made a full sim a
+      // half inside the week's build).
+      const heldKind = prescribed(d.workouts).find(isHyroxSim)?.hyroxSpec?.simKind ?? sim.kind;
+      if (simKeeps(d, heldKind) >= 2) break;
+      const down: HyroxSimWeek | undefined = heldKind === 'full' ? { kind: 'half', halfIndex: 0 } : undefined;
+      const alt = buildWeek(w, false, down);
+      const lost = prescribed(d.workouts).some(q => q.t === 'hyrox_station_technique' || q.t === 'hyrox_station_density') ? 'its long run' : 'its station session';
+      alt.adjustments = [...alt.adjustments, down
+        ? `W${w}: the week holds a half race simulation, not the full (the full sim leaves the week without ${lost})`
+        : `W${w}: no race simulation (it leaves the week without ${lost}): the week keeps its brick`];
+      d = alt;
+      sim = down;
     }
     built.push(d);
     noteLoadSteps(built[built.length - 1]);
