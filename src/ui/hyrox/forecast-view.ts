@@ -770,7 +770,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string,
 
   return `
     <div class="hf" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Biggest targets</div>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Biggest targets</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:2px">Closing the gap to ${targetBandLabel}-band on these would deliver the most time back. ${STATION_PERCENTILE_CAVEAT}</div>
       ${limiterRows}
       ${totalSavingLine}
@@ -1144,7 +1144,7 @@ export function renderHyroxForecastView(): void {
             const stationOrderRows = renderRaceOrderTable(prediction, projectedRunSec, s, 'station');
             return `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Race order</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Race order</div>
               <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px;line-height:1.4">Race order shows your race-day clock at each split. Station order groups the disciplines and shows where the horizon model expects gain by race day.</div>
               <div role="tablist" style="display:flex;gap:8px;margin-bottom:12px">
                 <button type="button" data-hx-order="race" role="tab" aria-selected="true" style="flex:1;padding:8px 10px;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#FDFCF7;font-size:12px;font-weight:500;cursor:pointer">Race order</button>
@@ -1172,12 +1172,12 @@ export function renderHyroxForecastView(): void {
           `;
           })() : `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Run legs</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Run legs</div>
               <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px">${projectedRunSec ? 'Each 1km. Bar shows in-race fatigue. Right column shows projected race-day pace gain.' : 'Each 1km. Pace drifts with cumulative station fatigue.'}</div>
               ${renderRunLegsTable(prediction.runLegs, prediction.runSec, projectedRunSec)}
             </div>
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Your stations</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Your stations</div>
               <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">${doublesStationsCaption(prediction, hyroxCohortLabel(hyroxCohortForState(s)))}</div>
               ${renderStationsTable(prediction.stations, s)}
             </div>
@@ -1187,15 +1187,15 @@ export function renderHyroxForecastView(): void {
                the hero's goal line is the entry, as for singles) -->
           ${(hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? buildRacePlanEntryCard(s) : ''}
 
-          <!-- Skills analysis (strengths vs limiters) -->
-          ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
-
           <!-- Where you lost time (past race), then where to gain (training):
-               one story, adjacent. -->
+               one story, adjacent, before any other per-station numbers. -->
           ${buildLoseTimeCard(s)}
 
           <!-- Where to gain (top stations ranked by absolute gainable seconds) -->
           ${renderWhereToGainCard(prediction, s, proj)}
+
+          <!-- Skills analysis (biggest targets: the gap to the next band) -->
+          ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
 
           <!-- Performance radar (8-axis percentile) -->
           ${renderPerformanceRadar({ stations: prediction.stations, cohort: hyroxCohortForState(s) })}

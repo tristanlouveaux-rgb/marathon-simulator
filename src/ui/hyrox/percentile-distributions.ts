@@ -284,7 +284,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
       .hx-pd-pill     { animation: hxPdFade 250ms ease forwards; }
     </style>
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;padding:18px 20px 14px;margin-bottom:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Where you sit</div>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Where you sit</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px;line-height:1.4">${subtitle}</div>
       ${metrics.map((m, i) => renderDistributionRow(m, i)).join('')}
     </div>
