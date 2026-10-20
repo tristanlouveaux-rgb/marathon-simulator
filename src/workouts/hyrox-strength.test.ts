@@ -13,7 +13,9 @@
  *     (HYROX_STRENGTH_SESSIONS), the week before race week at most the light
  *     block, race week none, a deload no standalone session;
  *   - the standalone session takes its own day, never repeats its week's
- *     block, and a template session runs its content's 20 min.
+ *     block, and a template session runs its content's 20 min;
+ *   - under a partial station capacity a station session loses rounds, keeps
+ *     its warm-up and runs 15 min or more.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -39,7 +41,7 @@ import {
   HYROX_STRENGTH_BLOCK_MIN, hyroxTier, hyroxBaseMultiplier,
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
-import { generateHyroxPlanDetailed } from './plan_engine.hyrox';
+import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom } from './plan_engine.hyrox';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession } from './scheduler.hyrox';
 
@@ -201,5 +203,39 @@ describe('strength counts and sessions', () => {
       }
     }
     expect(standalones).toBeGreaterThan(20);
+  }, 120000);
+});
+
+describe('a station session under a partial station capacity', () => {
+  it('loses rounds, keeps its warm-up and runs 15 min or more (review: 491 sessions under 15 min at a lower-body capacity of 50)', () => {
+    let sessions = 0;
+    const short: string[] = [];
+    for (const band of BANDS) {
+      for (const len of [12, 16]) {
+        const s = build(band, HYROX_HOURS_RANGE[band].default, len);
+        for (const w0 of [1, 6]) {
+          const inj = structuredClone(s);
+          inj.w = w0;
+          (inj as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 50, upperLoadCapacity: 100, lowerLoadCapacity: 50, location: 'knee' };
+          const wks = regenerateHyroxWeeksFrom(inj, w0);
+          wks.forEach((wk, k) => {
+            const ungated = s.wks[w0 - 1 + k];
+            for (const w of prescribed(wk ?? undefined)) {
+              if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
+              sessions++;
+              const label = `${band} ${len}w W${w0 + k} ${w.n}`;
+              if ((w.estimatedDurationMin ?? 0) < 15) short.push(`${label} ${w.estimatedDurationMin}`);
+              expect(w.hyroxSpec?.warmup, label).toBeDefined();
+              expect(w.hyroxSpec?.finisher, label).toBeUndefined();
+              const same = prescribed(ungated).find(x => x.t === w.t);
+              if (same) expect(w.hyroxRounds ?? 0, label).toBeLessThanOrEqual(same.hyroxRounds ?? 0);
+              expect(w.d, label).toMatch(new RegExp(`^Warm-up`));
+            }
+          });
+        }
+      }
+    }
+    expect(sessions).toBeGreaterThan(50);
+    expect(short).toEqual([]);
   }, 120000);
 });

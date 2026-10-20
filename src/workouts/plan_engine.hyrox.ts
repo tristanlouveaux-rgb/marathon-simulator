@@ -364,6 +364,21 @@ import {
 //   a load above its week's own; a beginner's week-1 assessment runs the sleds
 //   unloaded; the long run keeps the tier cap under the effort lever; a load
 //   step shows on the session card.
+// Still v19 (unreleased; part 2 review fixes, 2026-10-20):
+// - strength takes only the minutes the week's limits leave once its runs and
+//   station work are sized (the blocks, then the standalone session; the
+//   easy erg work gives way to it), so it never costs running, a quality run
+//   or HYROX work; a template standalone session runs its content's 20 min
+//   and never repeats its week's block; a deload's block keeps its session no
+//   longer than the last loaded week's;
+// - race simulations never in the final 14 days before race day, by date;
+//   a sim that would cost its week the long run or the station session steps
+//   down (full to half to none); a doubles sim's stations are the partner's
+//   half; a sim week's notes name the sim;
+// - only the race taper's smallest circuit's station work sits outside the
+//   taper fractions (its warm-up and light block count inside);
+// - under a partial station capacity a station session loses rounds, keeps
+//   its warm-up, and leaves the week under 15 min.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -977,6 +992,10 @@ function isHyroxEasyRun(w: Workout): boolean {
  *  target never goes under these, whatever the week's size or scale. */
 const STATION_SESSION_FLOOR_MIN = 35;
 const BRICK_SESSION_FLOOR_MIN = 20;
+/** No station session under 15 min (lane H2b part 2 brief, decision 8: part
+ *  1 held 582 sessions of 15 min or less, Q11). The injury gates leave out a
+ *  station session their capacity cuts under it. */
+const HYROX_MIN_STATION_SESSION_MIN = 15;
 
 /** A plan week's race simulation: the full race or a half (the race's
  *  first half for halfIndex 0, its second half for 1, alternating). */
@@ -2527,6 +2546,28 @@ function applyHyroxInjuryGates(
     return scaled as Workout;
   };
 
+  // A lane H2b station session under a partial station capacity (review
+  // 2026-10-20): fewer rounds of its station work, down to one, until it
+  // holds the capacity's share of its length; its warm-up stays, its
+  // finisher goes (none is planned under an injury) and the strength
+  // decision below takes its block. A session that still runs under
+  // HYROX_MIN_STATION_SESSION_MIN leaves the week. Before, the duration alone
+  // was scaled (an 11-min session kept its 10-min warm-up and full sets in its
+  // description, and its planned load priced 1 min of station work).
+  const scaleStationSession = (w: Workout, cap: number): Workout | null => {
+    const target = ((w.estimatedDurationMin ?? 0) * cap) / 100;
+    let s0 = w;
+    if (s0.hyroxSpec?.finisher) {
+      const { finisher: _f, ...spec } = s0.hyroxSpec;
+      s0 = withHyroxSessionParts({ ...s0, hyroxSpec: spec }, {});
+    }
+    while ((s0.hyroxRounds ?? 1) > 1 && (s0.estimatedDurationMin ?? 0) > target + 1e-9) {
+      s0 = withHyroxRounds(s0, (s0.hyroxRounds ?? 1) - 1);
+    }
+    if ((s0.estimatedDurationMin ?? 0) < HYROX_MIN_STATION_SESSION_MIN) return null;
+    return { ...s0, modReason: `Capacity ${cap}%: fewer station rounds to match your reported ability` };
+  };
+
   // Strength (lane H2b part 2): the injury's strength decision, as gym.ts
   // takes it (injury-strength.ts): 'none' pauses loaded strength, 'adapted'
   // swaps a standalone session for the region-safe one; a station session's
@@ -2553,6 +2594,11 @@ function applyHyroxInjuryGates(
     if (isStation(w)) {
       if (stationCap <= 0) continue;
       if (stationCap >= 100) { out.push(w); continue; }
+      if ((w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && w.hyroxSpec) {
+        const scaled = scaleStationSession(w, stationCap);
+        if (scaled) out.push(scaled);
+        continue;
+      }
       out.push(scaleWorkout(w, stationCap, 'stations'));
       continue;
     }
