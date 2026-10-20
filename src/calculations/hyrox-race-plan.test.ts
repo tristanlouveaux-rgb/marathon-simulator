@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import {
   buildHyroxRacePlan,
+  hyroxForecastRaceClock,
   hyroxGoalBackCalcOptions,
   hyroxRoxzoneAtGoalSec,
   roundToTotal,
@@ -50,7 +51,7 @@ describe('buildHyroxRacePlan: shape and clock', () => {
     const { plan } = planFor(buildState());
     expect(plan.legs.map(l => l.label)).toEqual(RACE_ORDER);
     expect(plan.legs.filter(l => l.kind === 'station').map(l => l.station)).toEqual(HYROX_STATION_ORDER);
-    expect(plan.roxzone.goalSec).toBeGreaterThan(0);
+    expect(plan.roxzone.splitSec).toBeGreaterThan(0);
   });
 
   it('legs and Roxzone sum to the goal; the clock ends on it', () => {
@@ -58,9 +59,10 @@ describe('buildHyroxRacePlan: shape and clock', () => {
     const fc = predictHyroxRace(state)!.totalSec;
     const s = buildState({ targetFinishTimeSec: fc - 240 });
     const { plan } = planFor(s);
-    expect(plan.goalSource).toBe('goal');
+    expect(plan.basis).toBe('goal');
+    expect(plan.goalSec).toBe(fc - 240);
     expect(plan.feasibility).not.toBe('unrealistic');
-    const sum = plan.legs.reduce((a, l) => a + l.goalSec, 0) + plan.roxzone.goalSec;
+    const sum = plan.legs.reduce((a, l) => a + l.splitSec, 0) + plan.roxzone.splitSec;
     expect(sum).toBe(fc - 240);
     expect(plan.planSec).toBe(fc - 240);
     expect(plan.legs[15].clockSec).toBe(fc - 240);
@@ -72,26 +74,44 @@ describe('buildHyroxRacePlan: shape and clock', () => {
     let prev = 0;
     let roxSeen = 0;
     plan.legs.forEach((l, i) => {
-      const gap = l.clockSec - prev - l.goalSec;
+      const gap = l.clockSec - prev - l.splitSec;
       expect(gap).toBeGreaterThanOrEqual(0);
       // No Roxzone before Run 1.
       if (i === 0) expect(gap).toBe(0);
       roxSeen += gap;
       prev = l.clockSec;
     });
-    expect(roxSeen).toBe(plan.roxzone.goalSec);
+    expect(roxSeen).toBe(plan.roxzone.splitSec);
     // Checkpoints are the run clocks.
     plan.checkpoints.slice(0, 8).forEach((c, k) => expect(c.clockSec).toBe(plan.legs[2 * k].clockSec));
   });
 
-  it('no goal: the forecast is the target, its splits fill both columns', () => {
-    const { plan, prediction } = planFor(buildState());
-    expect(plan.goalSource).toBe('forecast');
-    expect(plan.goalSec).toBe(prediction.totalSec);
-    expect(plan.legs[15].clockSec).toBe(prediction.totalSec);
-    plan.legs.filter(l => l.kind === 'station').forEach(l => {
-      expect(Math.abs(l.goalSec - l.forecastSec)).toBeLessThanOrEqual(1);
-    });
+  it('no goal: the splits are the forecast\'s own lines, the Roxzone takes the rounding remainder', () => {
+    for (const hx of [{}, { format: 'open_doubles' as const, division: 'mixed' as const }, { venueId: 'mexico-city-exh' }]) {
+      const { plan, prediction } = planFor(buildState(hx));
+      expect(plan.basis).toBe('forecast');
+      expect(plan.goalSec).toBeNull();
+      expect(plan.feasibility).toBeNull();
+      expect(plan.planSec).toBe(prediction.totalSec);
+      expect(plan.legs[15].clockSec).toBe(prediction.totalSec);
+      plan.legs.filter(l => l.kind === 'run').forEach((l, k) => expect(l.splitSec).toBe(prediction.runLegs[k].durationSec));
+      plan.legs.filter(l => l.kind === 'station').forEach(l => {
+        expect(l.splitSec).toBe(prediction.stations.find(x => x.station === l.station)!.adjustedSec);
+      });
+      const lines = plan.legs.reduce((a, l) => a + l.splitSec, 0);
+      expect(plan.roxzone.splitSec).toBe(prediction.totalSec - lines);
+      expect(Math.abs(plan.roxzone.splitSec - prediction.roxzoneSec)).toBeLessThanOrEqual(8);
+    }
+  });
+});
+
+describe('one forecast race clock', () => {
+  it('hyroxForecastRaceClock is the no-goal plan\'s clock', () => {
+    const { plan, prediction } = planFor(buildState({ venueId: 'mexico-city-exh' }));
+    const fc = hyroxForecastRaceClock(prediction);
+    expect(fc.legs.map(l => l.clockSec)).toEqual(plan.legs.map(l => l.clockSec));
+    expect(fc.legs.map(l => l.splitSec)).toEqual(plan.legs.map(l => l.splitSec));
+    expect(fc.totalSec).toBe(prediction.totalSec);
   });
 });
 
@@ -103,14 +123,17 @@ describe('buildHyroxRacePlan: same source as the forecast', () => {
     plan.legs.filter(l => l.kind === 'station').forEach(l => {
       expect(l.forecastSec).toBe(prediction.stations.find(x => x.station === l.station)!.adjustedSec);
     });
-    expect(plan.roxzone.forecastSec).toBe(Math.round(prediction.roxzoneSec));
+    // The Roxzone carries the forecast's rounding remainder, so the 17
+    // forecast lines sum to the forecast.
+    expect(plan.legs.reduce((a, l) => a + l.forecastSec, 0) + plan.roxzone.forecastSec).toBe(prediction.totalSec);
+    expect(Math.abs(plan.roxzone.forecastSec - prediction.roxzoneSec)).toBeLessThanOrEqual(8);
   });
 });
 
 describe('buildHyroxRacePlan: run fade', () => {
   it('goal run legs follow the forecast\'s per-leg fatigue model, not a flat split', () => {
     const { plan, prediction } = planFor(buildState({ targetFinishTimeSec: 5200 }));
-    const runs = plan.legs.filter(l => l.kind === 'run').map(l => l.goalSec);
+    const runs = plan.legs.filter(l => l.kind === 'run').map(l => l.splitSec);
     expect(runs[7]).toBeGreaterThan(runs[0]);
     for (let k = 1; k < 8; k++) expect(runs[k]).toBeGreaterThanOrEqual(runs[k - 1]);
     const m = prediction.runLegs.map(l => l.fatigueMultiplier);
@@ -128,6 +151,7 @@ describe('floors from the real results, per sex and division', () => {
     const fm = hyroxGoalBackCalcOptions(m, pm, pm.totalSec - 300).floors!;
     expect(fw.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.stationSec);
     expect(fm.stationSec).toEqual(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'male' })!.stationSec);
+    expect(fw.roxzoneSec).toBe(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.roxzoneSec);
     expect(fw.runSec).toBeGreaterThan(fm.runSec);
   });
 
@@ -157,6 +181,26 @@ describe('Roxzone at the goal', () => {
     expect(hyroxRoxzoneAtGoalSec(cohort, p, p.totalSec - 600)!).toBeLessThan(p.roxzoneSec);
     expect(hyroxRoxzoneAtGoalSec(cohort, p, p.totalSec + 600)!).toBeGreaterThan(p.roxzoneSec);
   });
+
+  it('never below the cohort\'s competitive Roxzone unless the forecast\'s own is', () => {
+    const cases: Array<[Partial<NonNullable<SimulatorState['hyroxConfig']>>, Partial<SimulatorState>]> = [
+      [{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }],
+      [{ format: 'open_doubles', division: 'mixed' }, {}], [{ format: 'pro_singles' }, { biologicalSex: 'male' }],
+    ];
+    for (const [hx, top] of cases) {
+      const base = buildState(hx, top);
+      const p = predictHyroxRace(base)!;
+      const floor = hyroxCompetitiveFloors(hyroxCohortForState(base))!.roxzoneSec;
+      const lowest = Math.min(floor, p.roxzoneSec);
+      for (const goal of [2800, 3300, 3600, 3900, 4200, p.totalSec - 600, p.totalSec - 60]) {
+        const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(base, p, goal));
+        expect(r.roxzoneSec).toBeGreaterThanOrEqual(lowest - 1e-6);
+        const plan = buildHyroxRacePlan(buildState({ ...hx, targetFinishTimeSec: goal }, top), p);
+        // Whole-second rounding can take a second off.
+        expect(plan.roxzone.splitSec).toBeGreaterThanOrEqual(Math.floor(lowest) - 1);
+      }
+    }
+  });
 });
 
 describe('goal slower than the forecast', () => {
@@ -165,20 +209,50 @@ describe('goal slower than the forecast', () => {
     const fc = predictHyroxRace(base)!.totalSec;
     const { plan } = planFor(buildState({ targetFinishTimeSec: fc + 600 }));
     expect(plan.feasibility).toBe('already_on_pace');
+    expect(plan.basis).toBe('goal');
     expect(plan.legs[15].clockSec).toBe(fc + 600);
-    plan.legs.forEach(l => expect(l.goalSec).toBeGreaterThanOrEqual(l.forecastSec - 1));
-    expect(plan.roxzone.goalSec).toBeGreaterThan(plan.roxzone.forecastSec);
+    plan.legs.forEach(l => expect(l.splitSec).toBeGreaterThanOrEqual(l.forecastSec - 1));
+    expect(plan.roxzone.splitSec).toBeGreaterThan(plan.roxzone.forecastSec);
   });
 });
 
 describe('unrealistic goals', () => {
-  it('are flagged; the splits stop at the floors and the clock ends at that time', () => {
-    const { plan } = planFor(buildState({ targetFinishTimeSec: 3000 }));
+  it('are flagged; the splits fall back to the forecast\'s own lines and the clock ends on the forecast', () => {
+    const { plan, prediction } = planFor(buildState({ targetFinishTimeSec: 3000 }));
     expect(plan.feasibility).toBe('unrealistic');
+    expect(plan.goalSec).toBe(3000);
     expect(plan.shortfallSec).toBeGreaterThan(0);
-    expect(plan.planSec).toBeGreaterThan(3000);
-    expect(plan.legs[15].clockSec).toBe(plan.planSec);
-    expect(plan.planSec - plan.goalSec).toBeCloseTo(plan.shortfallSec, -1);
+    expect(plan.basis).toBe('forecast');
+    expect(plan.planSec).toBe(prediction.totalSec);
+    expect(plan.legs[15].clockSec).toBe(prediction.totalSec);
+    plan.legs.forEach(l => expect(l.splitSec).toBe(l.forecastSec));
+  });
+
+  it('the fastest time the floors allow does not depend on the goal: the floor sum', () => {
+    for (const [hx, top] of [[{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }]] as const) {
+      const s = buildState(hx, top);
+      const p = predictHyroxRace(s)!;
+      const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+      const floorSum = Math.min(p.runSec, f.runSec)
+        + HYROX_STATION_ORDER.reduce((a, st) => a + Math.min(p.stations.find(l => l.station === st)!.adjustedSec, f.stationSec[st]), 0)
+        + Math.min(p.roxzoneSec, f.roxzoneSec);
+      for (const goal of [2800, 3000, 3300]) {
+        const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(s, p, goal));
+        expect(r.feasibility).toBe('unrealistic');
+        expect(r.achievedSec).toBeCloseTo(floorSum, 0);
+        expect(r.shortfallSec).toBe(Math.round(floorSum - goal));
+      }
+    }
+  });
+
+  it('just inside the floor sum the Roxzone gives up to its floor: a stretch, not unrealistic', () => {
+    const s = buildState({}, { biologicalSex: 'male' });
+    const p = predictHyroxRace(s)!;
+    const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+    const r = computeGoalBackCalc(p, f.totalSec, hyroxGoalBackCalcOptions(s, p, f.totalSec));
+    expect(r.feasibility).toBe('stretch');
+    expect(r.achievedSec).toBeCloseTo(f.totalSec, 0);
+    expect(r.roxzoneSec).toBeGreaterThanOrEqual(Math.min(p.roxzoneSec, f.roxzoneSec));
   });
 
   it('an achievable goal is never flagged by the forecast\'s own rounding', () => {
@@ -196,6 +270,18 @@ describe('unrealistic goals', () => {
         expect(plan.legs[15].clockSec).toBe(fc - 60);
       }
     }
+  });
+});
+
+describe('stretch goals', () => {
+  it('carry the back-calculation\'s caveat (the goal modal\'s own line) and still sum to the goal', () => {
+    const s = buildState({}, { biologicalSex: 'male' });
+    const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+    const { plan } = planFor(buildState({ targetFinishTimeSec: f.totalSec + 120 }, { biologicalSex: 'male' }));
+    expect(plan.feasibility).toBe('stretch');
+    expect(plan.caveat).toBeTruthy();
+    expect(plan.basis).toBe('goal');
+    expect(plan.legs[15].clockSec).toBe(f.totalSec + 120);
   });
 });
 
