@@ -7278,6 +7278,8 @@ The trust level is threaded as `weeklyRunKmIsEstimate` into `blendPredictions` �
 
 **Provisional gating.** Any non-high confidence surfaces an inline calibration banner rather than leaving the caveat behind the confidence badge: `low` (cross-format or seed-dominated) → strong "Provisional forecast"; `medium` (partially calibrated) → soft "Sharpen your forecast" with the calibrated-station count. Both explicitly tell the user a station assessment makes the prediction more accurate and name the protocol (half distance, race effort) so they do it right. This is the calibration-honesty half of the same problem: a doubles-time-only athlete racing singles is correctly *not* given per-station singles estimates inferred from doubles (not defensible — 4 vs 8 stations, partner rest; see race-prediction.hyrox.ts:190), so the number rests on band seeds and the UI must say so. **Confidence: high** (this is a display/uncertainty-communication change; no user-facing number's underlying math changed).
 
+**Update 2026-10-20 (§DO).** The hero's "Likely" line and goal feasibility read one helper, `hyroxLikelyRangeSec` (`race-projection.hyrox.ts:104`): the forecast ± this band. A reachable goal faster than the range's fast end is graded a stretch.
+
 ## §BZ — Engine vs race-readiness: capacity is not buried by training volume; the forecast credits the plan's ramp (2026-06-16, ISSUE-297)
 
 **Context.** A 20:00 5K with no other data, ~8 km/wk, marathon target was shown a ~3:50–4:00 "today" marathon that was then *written back into the global engine* `s.v` (VDOT 50 → ~40), and a 20-week forecast barely faster than today (~3:40). Re-running produced different answers (3:33 vs 4:00). Ground truth: a 40:00-10K runner (the same engine class) has actually run ~3:10. Tristan's framing was exact: a low-mileage runner whom the plan ramps "through the long haul" must not be predicted as a permanently low-mileage runner. Full diagnostic: `docs/PREDICTION_FEEDBACK_LOOP_DIAGNOSTIC.md`.
@@ -8748,7 +8750,7 @@ Statistics reviewer's probe at `9dc35bc`: forecast station lines for Open Double
 7. Mixed Doubles assumptions: a previous doubles race is taken to be in the current division; a Mixed pair with no biological sex stays Open; a test's load family follows the format it was logged under, and at this merge the test entry modal named no loads (lane H3c adds them, `hyroxStationTestLoadTier`, §DL) (ISSUE-397 (c)).
 8. Field-relative planning bands lowered Pro athletes' plans for choosing heavier weights (34.4% of Pro Singles men and 49.3% of Pro Doubles men moved down); replaced by lane H3c's planning band (§DL).
 9. At this merge the onboarding initializer (H2-owned) still banded on the global scale through `hyroxBandingTimeSec` and seeded its run-pace observation from pooled tables; lane H2 (`d8432d2`) moved it to `hyroxPlanningBandFor` with the athlete's doubles tables (`initialization.hyrox.ts:144`, `:287`, `:290`) and removed `hyroxBandingTimeSec`.
-10. At this merge the generator fallbacks (run pace, the week-1 assessment, the gym session generator's HYROX brick) read the Open Singles pooled seeds and `HYROX_GENERATOR_VERSION` was not bumped; lane H2 (`d8432d2`) passes the athlete as `seed` to the run, station, brick and assessment generators (they read `hyroxStationSeedsAtTarget` and `hyroxSeedRunPaceSecKm`) and bumps the version to 18. The goal back-calculation floors still read the pooled seeds (ISSUE-397 (d)).
+10. At this merge the generator fallbacks (run pace, the week-1 assessment, the gym session generator's HYROX brick) read the Open Singles pooled seeds and `HYROX_GENERATOR_VERSION` was not bumped; lane H2 (`d8432d2`) passes the athlete as `seed` to the run, station, brick and assessment generators (they read `hyroxStationSeedsAtTarget` and `hyroxSeedRunPaceSecKm`) and bumps the version to 18. The goal back-calculation floors still read the pooled seeds (ISSUE-397 (d)). Since `63c5942` (2026-10-20) the race plan and the goal modal pass cohort floors, one per component at the field's fast end (§DO).
 11. The session floor catches timing slips, not merely implausible rounds (ISSUE-397 (e)).
 12. `bandFromVdot` (`hyrox-staleness.ts:58`) still mirrors the global scale; lane H2 (`d8432d2`) also uses it to band first-timers (ISSUE-397 (a)).
 13. Unread tables: `HYROX_S79_RUN_LEG_MEDIANS_SEC` (the run-leg fatigue model keeps its hand-set rates, §M), the pooled S7 to S9 format x sex tables, the venue spread and the season medians have no app reader.
@@ -9128,5 +9130,98 @@ Attributed probes: before, at `d8bdff7` (research app audit, Sunday race, no gym
 22. Not device-verified.
 
 **Guards.** `state/tri-taper-rules.test.ts` (43), `state/tri-taper-effort.test.ts` (7: discrimination checked by the verification fixer: the 5 matrix tests fail at `d5a7f39`, the 2 walk tests at `ba5e09b`, all pass at `dfe3b76`; the reviewer's mutations of the multiplier mapping and of `triAsTrained` fail all 5 matrix tests), `workouts/tri-taper.test.ts` (32), `state/tri-race-week.test.ts` (16), `state/race-plan-race-week.test.ts` (93), `state/race-closing-week-forecast.test.ts` (15), `state/race-window-forecast.test.ts` (21), `calculations/planned-week-target.test.ts` (28), `ui/race-day-card.test.ts` (8), `workouts/plan_engine.triathlon.test.ts` (34), `state/tri-plan-regen.test.ts` (6), `constants/tri-distance-completeness.test.ts` (3). Not device-verified.
+
+---
+
+## §DO: HYROX race plan and where you lost time: peers from the real band medians, one fast-end floor per component, feasibility on the forecast's likely range, the Roxzone at the goal (2026-10-20, lane rp)
+
+**Side.** Tracking: the peer reference, "Where you lost time" and the race plan's forecast column describe the field and a race already run. Planning: the race plan's goal splits prescribe race-day pacing. Goal feasibility grades a prescription against a tracking band (the forecast's likely range). Nothing here changes the training plan or the forecast; `predictHyroxRace` is unchanged.
+
+**Sources.** The HYROX results tables (`src/data/hyrox-results-s79.ts`, §DJ, §DK): `HYROX_S89_BAND_SEEDS` (`:1427`), the median split of every segment (run total, 8 stations, Roxzone) among the finishers of each of 5 bands per cohort, band edges at the field's p1, p25.3, p73.5 and p92.9 (`HYROX_S89_BAND_FIELD_PERCENTILES`, `:1417`); `HYROX_S89_PERCENTILES` (`:420`), each segment's distribution, whose first row is p1 in every published cell; `HYROX_S79_RUN_LEG_MEDIANS_SEC` (`:653`), the median of each 1 km leg over seasons 7 to 9, the only per-leg data. Bowley's quartile skewness (its numerator (p75 − p50) − (p50 − p25)). The largest-remainder (Hamilton) rounding rule. The forecast band `hyroxForecastBandPct` (§BY). The headroom-weighted back-calculation (ISSUE-196). One new constant, `HYROX_LOSE_TIME_MATERIAL_SEC` = 15, from the method's own measured disagreement (below; pending Tristan's sign-off, ISSUE-402 (d)).
+
+**Supersedes.** The back-calculation's floors (the pooled Open Singles competitive seed × the line's team ratio, and `HYROX_RUN_PACE_MIN_SEC_KM` × 8; ISSUE-397 (d)), its stretch rule (gain above 70% of total headroom, with "Most athletes would need 6+ months of focused training", no source) and its constant Roxzone. These stay only as the legacy path when no cohort floors are passed (`floorSource: 'legacy'`). Inside the lane, before the merge: per-segment quantile mapping (the brief's peer method), the additivity gap spread by segment size (`bd77c8a` moved it to skew), a tiered floor (the top-1% median while the forecast is slower than it, p1 at or past it; `1977c7f` removed it) and a flat 15 s level band (`ec5ed04` widened it by each segment's gap share).
+
+**Where.** `hyroxPeerResidualWeights` (`hyrox-results.ts:848`), `hyroxPeerSplitsAt` (`:893`), `hyroxRunLegShares` (`:825`), `hyroxCompetitiveFloors` (`:956`, the fast end through `fastestPublishedSec`, `:951`); `computeGoalBackCalc` (`hyrox-goal-back-calc.ts:123`: venue seconds `:137`, `:167`; Roxzone floor `:139`; gain from the lines `:177-180`; the Roxzone gives to its floor `:283`; grading `:301-307`); `hyroxGoalBackCalcOptions` (`hyrox-race-plan.ts:130`), `hyroxGoalFeasibilityLine` (`:161`), `hyroxRoxzoneAtGoalSec` (`:184`), `roundToTotal` (`:197`), `hyroxRaceClock` (`:220`), `hyroxForecastRaceClock` (`:253`), `easedComponents` (`:297`), `clockForComponents` (`:310`), `buildHyroxRacePlan` (`:335`); `hyroxLikelyRangeSec` (`race-projection.hyrox.ts:104`); `compareWithPeers` (`hyrox-lose-time.ts:215`), `classifyHyroxLoseTime` (`:295`), `analyzeHyroxLoseTime` (`:305`). Merged in `63c5942`.
+
+**Model.**
+
+```
+Peers at finish T in cohort c (hyroxPeerSplitsAt)
+  anchors      = c's band cells, sorted by median finish (Pro Mixed reads the pooled Pro Doubles cell)
+  raw_s(T)     = band medians of segment s, linear in finish time between the two anchors around T;
+                 past the fastest or slowest anchor: that band's medians x T / its median finish
+  gap(T)       = T - sum_s raw_s(T)                       medians do not add up
+  w_s          = max(0, (p75 - p50) - (p50 - p25)) of s in c's S8-S9 table, normalised to sum to 1
+                 (size weights raw_s / sum raw only when no table is right-skewed)
+  residual_s   = gap(T) x w_s
+  peer_s(T)    = raw_s(T) + residual_s                    sum_s peer_s(T) = T
+  peer legs    = peer_run_total x c's median leg shares (seasons 7 to 9; pooled: mean of the sex cells' shares)
+
+Where you lost time (analyzeHyroxLoseTime)
+  c            = the previous result's format; singles by sex; doubles by hyroxPreviousTimeDivision,
+                 else the current division (flagged in the caption)
+  lost_s       = athlete_s - peer_s(T)                    positive = slower than the peers
+  band_s       = 15 + |residual_s|                        Running and Roxzone: 15 + |residual_run + residual_rox|;
+                                                          Running over k pasted legs: 15 + |residual_run x those legs' shares|
+  lost if round(lost_s) >= round(band_s); gained if round(lost_s) <= -round(band_s); else level
+  implied      = T minus the timed segments: the Roxzone; Running when the Roxzone is pasted without run data;
+                 Running and Roxzone when only the 8 stations are known
+
+Race plan, goal G, forecast F (buildHyroxRacePlan)
+  no goal, round(G) = round(F), or G unrealistic: the forecast's own lines (hyroxForecastRaceClock)
+  G < F: computeGoalBackCalc(F, G, opts)
+     floor_station = min(top-1% band median, p1)_station + (adjustedSec - baseSec)    the line's venue seconds
+     floor_run     = min(top-1% band median, p1)_run_total + (runSec - pre-venue run)  only with a venue
+     floor_rox     = min(min(top-1% band median, p1)_roxzone, F_rox)
+     rox(G)        = max(F_rox x peer_rox(G) / peer_rox(F), F_rox - (F - G), floor_rox)
+     gain          = (runSec + sum of station lines + F_rox) - G - (F_rox - rox(G))
+     allocate gain by headroom (line - floor), capped at the floors; still short: the Roxzone gives to floor_rox
+     unrealistic if still short; else stretch if G < likely_fast; else achievable
+  G > F: component_s = F_s x peer_s(G) / peer_s(F) for run total, each station, Roxzone; scaled to sum to G
+  run leg k   = run total x fatigueMultiplier_k / sum of the 8 multipliers  (predictHyroxRace's own shape)
+  splits      = the 17 values rounded by largest remainder to sum to round(G)
+  clock       = Roxzone split in 8 shares (largest remainder); share k half before station k, half after
+
+Likely range (hyroxLikelyRangeSec, the Forecast hero's "Likely X-Y")
+  likely      = F -/+ F x hyroxForecastBandPct(confidence, weeks to race)
+                (§BY: 4% base, +1% beyond 4 weeks, +1% beyond 12, +1% medium or +2% low calibration)
+```
+
+**Measured.**
+- *Medians do not add up.* Docs-pass computation over all 65 `HYROX_S89_BAND_SEEDS` cells: the gap between a band's median finish and the sum of its 10 segment medians reaches 67 s and 1.53% of the finish in the published sex and division cells (Open Singles men, advanced) and 76 s and 1.69% in the pooled Open Singles cell; 9 of the 65 cells sum above their median finish (Open Singles women beginner −11 s, Open Doubles mixed beginner −29 s). Open Singles women, band by band: 3989 against 4027, 4775 against 4839, 5756 against 5800, 7110 against 7151, 8999 against 8988. The `hyroxPeerSplitsAt` comment's "within 1.3%" undercounts.
+- *Skew weights.* Open Singles women's Bowley numerators: run total 94 s, wall balls 40 s, Roxzone 36 s, SkiErg 4 s (code comment; the run total checks out against the table, (3219 − 2817) − (2817 − 2509) = 94). The run's share of the gap at each band's median finish stays under 26 s in every cohort and never above its size-proportional share (test-pinned); spreading by size put 19 to 33 s on the run (code comment), so a typical runner read 20 to 30 s gained on Running.
+- *Why not per-segment quantile mapping* (the split at the athlete's finish percentile in each segment table). It assumes an athlete sits at the same percentile in every segment, which no finisher does, so segment quantiles are more extreme than what finishers at a given time actually do. Implementer's probe over the 14 published cells, at each band's median finish, raw quantile minus band median: top band run total 22 to 95 s fast, Roxzone 35 to 51 s fast, stations 2 to 24 s fast; slowest band Roxzone 100 to 177 s slow, wall balls 52 to 109 s slow, run total 14 to 53 s slow; the intermediate band within 8 s. Segment quantiles do not add up either: for Open Singles women at p10 they sum to 4514 s against a 4730 s finish, at p90 to 8045 s against 7774 s, and rescaling them uniformly moves the run total by up to 240 s at the slow end. Interpolated band medians agree with a quantile-plus-residual hybrid within 0 to 15 s, mostly 5 s or less (implementer's probe). At the median finish the peer profile is within 2.5% of each table's median (test-pinned).
+- *The level band.* 15 s is that 0 to 15 s disagreement between two defensible peer methods: a smaller difference is below what the comparison resolves. With a flat 15 s band (before `ec5ed04`), an athlete at the p50 of every timed table who finished at the p50 finish read "Time gained: Running" of −15 to −26 s in 10 of 11 cohorts, against bands that now run 23 to 33 s on Running (final and polish statistics reviewers' probes). With it, that athlete reads all 10 segments level in all 13 cohorts with band seeds (test-pinned; the closest segment sits 6.4 to 10.5 s inside its band, polish statistics reviewer), and Running at the median run with the Roxzone implied reads level at the p50 finish and at every band median in every cohort (test-pinned).
+- *Floors.* For unrealistic goals the fastest time the floors allow is one constant per athlete, the floor sum, whatever the goal: 3781 s for an Open Singles woman, 3385 s for an Open Singles man, 3306 s for an Open Doubles mixed pair (final statistics reviewer's probe, 210 plans over 14 fixtures). Doubles floors read the division's own tables (Open Doubles run total: mixed 1838 s, women 2053 s, men 1736 s; Pro Doubles men 1587 s; reviewer's probe). The tiered floor that `1977c7f` removed made a competitive Open Singles man's floor sum (run and stations) jump from 3164 to 3257 s when each station went 1 s slower, so a goal read achievable for one athlete and out of reach for a man 16 s slower; with one floor it stays 3164 s for stations at the median −1 to +30 s, and headroom reads 153, 161, 177 and 233 s at +0, +1, +3 and +10 s (fixer's probe; the monotonicity and the 1 s step are test-pinned).
+- *Feasibility.* Real `predictHyroxRace` on the lane's fixtures, race about 12 weeks out (band 7%): an intermediate Open Singles man forecast 1:29:45, likely 1:23:28 to 1:36:02, reads achievable for goals 1 to 5 min faster and stretch from 10 min; a competitive man at 1:16:45 reads unrealistic 25 min faster. Before, the intermediate man read achievable up to 20 min faster and a first-timer up to 28 min (fixer's probe).
+- *Roxzone scales with finish time.* Open Singles women's Roxzone p10 335 s, p50 494 s, p90 785 s (`HYROX_S89_PERCENTILES`), so holding it constant made a faster goal take all its gain from the run and the stations.
+- *Run leg shape.* The median legs (`HYROX_S79_RUN_LEG_MEDIANS_SEC`) put Run 1 10.5% under the mean leg and Run 8 11.3% over it for Open Singles women, 11.8% under and 13.0% over for men, legs 4 to 7 near flat (docs-pass computation). The forecast's linear fade (`PER_STATION_FATIGUE_RATE_BY_BAND`, 0.006 per station at intermediate) gives about ±2% (implementer's probe ±2.1%).
+- *Forecast clock.* The Roxzone row shows round(prediction.roxzoneSec); the clock's Roxzone is the remainder after the 16 rounded lines. Over 192 forecasts the two differ by 0 s in 95, 1 s in 73, 2 s in 19 and 3 s in 5 (fixer's probe).
+
+**Why it is defensible.**
+- *Peers.* The band medians are the field's own answer to "what do finishers at this time do in each segment", a conditional median estimated from the data; linear interpolation between band anchors is the simplest estimate between them. Quantile mapping answers a different question (an athlete at percentile p everywhere), which the data refute.
+- *Gap by skew.* For a right-skewed split the mean sits above the median, and means add up (the mean finish is the sum of the segment means), so the shortfall of summed medians belongs mostly to the most right-skewed segments. The Bowley numerator is a quartile-only proxy for that mean-minus-median distance, which is all the published tables allow. A pragmatic allocation, so the level band absorbs each segment's share rather than counting it as time lost or gained.
+- *One fast-end floor per component.* A goal back-calculation needs a lower bound per component. The top-1% band median is what the field's fastest 1% typically do; p1 is the fastest 1% at that one segment; the smaller of the two is never slower than a real result in the field. A floor belongs to the field, never to the athlete's forecast, so the fastest time the floors allow cannot jump as a forecast crosses a band median.
+- *Feasibility.* Grading against the hero's likely range adds no constant and says what the athlete already sees: a goal outside the range the forecast calls likely is a stretch.
+- *Roxzone at the goal.* A ratio of peer Roxzones keeps the forecast's own Roxzone when the goal equals the forecast and follows the real relation between finish time and Roxzone time elsewhere.
+- *Rounding.* Largest remainder gives whole seconds that sum exactly to the goal, each within 1 s of its value.
+
+**Limitations.**
+1. Peers are cohort medians, not the same athletes; "finished in the same time" is a typical mix, not a prescription.
+2. The skew weights are the whole field's, not the skew among finishers at one finish time (the tables have no per-band quartiles), so a segment's share is an estimate; the run's may run a few seconds high.
+3. *Implied segments carry the rest of the gap.* An athlete at every timed median with the Roxzone implied reads a Roxzone loss of +28 to +65 s at the p50 finish and up to +64 s at band medians, except the beginner bands (−23 to +17 s), a few doubles bands and the Pro Singles men's and pooled competitive cells, which read level (polish fixer's and statistics reviewer's probes). With the Roxzone pasted and no run data, implied Running reads a loss in 5 of 13 cohorts at the p50 finish (Open Singles men +33 s against a band of 33.1, Open Singles pooled +36 against 32.8, Pro Singles women +29 against 29.0, Pro Singles men +41 against 31.4, Pro Singles pooled +43 against 33.3) and in 18 band cells at band medians, up to +50 s (polish statistics reviewer's probe). The arithmetic is right (the implied time is time the athlete spent there); whether an implied segment's band should absorb the whole gap is ISSUE-402 (c).
+4. `classifyHyroxLoseTime` rounds both the time lost and the band before comparing, so a segment up to about 1 s inside its band can read lost or gained (Open Doubles pooled advanced, implied Running 34.6 against 35.4; reviewer's probe). It matches the whole seconds on screen.
+5. Venues differ (sled surface and lanes, run course length, Roxzone layout) and the band medians mix every venue; no venue adjustment is applied to the past result. The drill-down caption says so.
+6. One leg shape for every finish time; 5 anchors 800 to 1800 s of finish time apart (Open Singles women 4027, 4839, 5800, 7151, 8988 s).
+7. The race plan's goal legs follow the forecast's near-even fade while the field's legs run about ±11% (above). "Where you lost time" names no leg until the shape is decided (ISSUE-402 (e)).
+8. The likely range is centred on today's forecast, as the hero shows it, not on the race-day projection (`buildHyroxProjection` `confidenceRangeSec` is centred there). Feasibility centre: ISSUE-402 (a).
+9. For competitive-band athletes the likely range can reach below the floor sum, and "unrealistic" is tested first, so a goal inside the hero's own range reads out of reach (an Open Singles woman on competitive seeds: forecast 3988 s, likely 3749 to 4227 s, floor sum 3781 s; goals 3749 to 3780 s; final statistics reviewer's probe). ISSUE-402 (j).
+10. The fast end is the p1 row for most segments, so goals near the top are graded against the fastest 1% at each segment.
+11. Pro Singles women's p1 run total (1724 s) and their top band's run total (1784 s) and Roxzone (256 s) medians equal the Open Singles men's exactly, a suspected cross-label in the ingest (ISSUE-403). Until a re-ingest, Pro women's run and Roxzone floors and the fast end of their peer reference read men's values.
+12. The S8 and S9 tables carry the current wall-ball and sled-push judging (§DJ), so older results read slow on those two stations.
+13. The clock spreads the Roxzone evenly around the stations; real layouts vary.
+14. The results paste's run-leg and Roxzone patterns have not been checked against a real hyresult.com page (ISSUE-402 (h)). Not device-verified.
+
+**Guards.** `calculations/hyrox-peer-splits.test.ts` (14: segments sum to the finish; band medians plus the gap by skew at a band's own finish; within 2.5% of each table's median at the median finish; monotone in finish time; the run's gap share under 26 s and below the size share in every cohort; leg shares; floors per sex and division, Pro Mixed pooled), `calculations/hyrox-lose-time.test.ts` (34: a result at the peer profile loses 0; level bands; every-cohort median checks; ranking; segment assembly; headline copy; empty states; cohorts), `calculations/hyrox-race-plan.test.ts` (32: race order, sums and clock, the forecast's own numbers, run fade, floors per sex, Pro and division, the floor-sum monotonicity and 1 s step, Roxzone at the goal, slower goals, unrealistic and stretch goals, the likely-range grading, doubles, `roundToTotal`), `calculations/hyrox-goal-back-calc.test.ts` (18), `ui/hyrox/race-plan-lose-time-render.test.ts` (39, jsdom).
 
 ---
