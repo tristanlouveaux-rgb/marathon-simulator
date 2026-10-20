@@ -23,9 +23,13 @@
  * Roxzone). Running is ranked whole: eight 1 km legs ranked one by one against
  * whole stations split one loss into eight small ones and named the wrong
  * segment for the common profile (strong stations, slower runs). The legs stay
- * on the Running segment as detail, in race order (peer legs split by the
- * field's median leg shape). With the 8 stations and no run data the rest of
- * the race is one segment, "Running and Roxzone".
+ * on the Running segment as data, in race order (peer legs split by the
+ * field's median leg shape), but no leg is named on screen: the field's legs
+ * run Run 1 about 11% under the mean leg and Run 8 11 to 13% over, while the
+ * race plan prescribes the forecast's near-even legs, so naming a leg would
+ * contradict the app's own pacing until that leg shape is decided. With the 8
+ * stations and no run data the rest of the race is one segment, "Running and
+ * Roxzone".
  *
  * Materiality: a segment within HYROX_LOSE_TIME_MATERIAL_SEC of its peers is
  * level, neither lost nor gained.
@@ -150,7 +154,8 @@ export interface HyroxLoseTime {
   losses: HyroxLoseTimeSegment[];
   /** Segments at least HYROX_LOSE_TIME_MATERIAL_SEC faster, most gained first. */
   gains: HyroxLoseTimeSegment[];
-  /** Inside the band either way: level with the peers, in ranked order. */
+  /** Inside the band either way: level with the peers, in race order
+   *  (Running, the stations, the Roxzone). */
   level: HyroxLoseTimeSegment[];
   /** "Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24:31". */
   headline: string | null;
@@ -183,16 +188,6 @@ export function hyroxLoseTimeHeadline(
   if (losses[0]) return `Most time lost on ${losses[0].label}: ${fmtLostTime(losses[0].lostSec)} slower than ${who}`;
   if (gains[0]) return `Most time gained on ${gains[0].label}: ${fmtLostTime(gains[0].lostSec)} faster than ${who}`;
   return `Within ${HYROX_LOSE_TIME_MATERIAL_SEC} sec of ${who} on every segment`;
-}
-
-/**
- * The run leg with the most time lost (or, when Running is a gain, the most
- * gained). Null without at least two legs.
- */
-export function hyroxLoseTimeKeyLeg(seg: Pick<HyroxLoseTimeSegment, 'legs' | 'lostSec'>): HyroxLoseTimeLeg | null {
-  const legs = seg.legs ?? [];
-  if (legs.length < 2) return null;
-  return legs.reduce((best, l) => (seg.lostSec >= 0 ? l.lostSec > best.lostSec : l.lostSec < best.lostSec) ? l : best);
 }
 
 /**
@@ -252,6 +247,13 @@ export function compareWithPeers(
   return out.sort((a, b) => b.lostSec - a.lostSec);
 }
 
+/** Where a segment falls in the results' own order: the running, the 8
+ *  stations in race order, the Roxzone. */
+const RACE_ORDER_KEYS: readonly HyroxLoseTimeKey[] = ['run_roxzone', 'run_total', ...HYROX_STATION_ORDER, 'roxzone'];
+function raceOrderIndex(key: HyroxLoseTimeKey): number {
+  return RACE_ORDER_KEYS.indexOf(key);
+}
+
 /** The station with the most time lost (a material loss), or null. "Where to
  *  gain" names it too, so the past race and training read as one story. */
 export function hyroxTopLostStation(lt: Pick<HyroxLoseTime, 'losses'>): HyroxStation | null {
@@ -280,7 +282,8 @@ export function analyzeHyroxLoseTime(state: Pick<SimulatorState, 'hyroxConfig' |
   const m = HYROX_LOSE_TIME_MATERIAL_SEC;
   const losses = segments.filter(s => Math.round(s.lostSec) >= m);
   const gains = segments.filter(s => Math.round(s.lostSec) <= -m).sort((a, b) => a.lostSec - b.lostSec);
-  const level = segments.filter(s => !losses.includes(s) && !gains.includes(s));
+  const level = segments.filter(s => !losses.includes(s) && !gains.includes(s))
+    .sort((a, b) => raceOrderIndex(a.key) - raceOrderIndex(b.key));
   return {
     status: 'ok',
     totalSec,

@@ -23,7 +23,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
-import { analyzeHyroxLoseTime, hyroxLoseTimeKeyLeg, hyroxPeerNoun, type HyroxLoseTime, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
+import { analyzeHyroxLoseTime, hyroxPeerNoun, type HyroxLoseTime, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
 import { hyroxPlacementWho, hyroxResultsCaption } from '@/calculations/hyrox-results';
 import { ftRounded } from '@/utils/format';
 
@@ -50,15 +50,12 @@ export function loseTimeInviteLine(lt: Pick<HyroxLoseTime, 'status' | 'totalSec'
 
 /**
  * The drill-down caption: "41:20 against 38:24", from the finish when
- * implied; Running adds the leg with the most lost (or gained), or how many
- * legs it covers.
+ * implied; Running over some legs only says how many. No leg is named: the
+ * field's leg shape and the race plan's even legs differ (hyrox-lose-time.ts).
  */
 export function loseTimeSegmentCaption(seg: HyroxLoseTimeSegment): string {
   const scope = seg.partialLegs ? `${seg.partialLegs} of 8 runs: ` : '';
-  let text = `${scope}${ftRounded(seg.athleteSec)} against ${ftRounded(seg.peerSec)}${seg.implied ? ', from your finish' : ''}`;
-  const leg = hyroxLoseTimeKeyLeg(seg);
-  if (leg) text += `. Most on Run ${leg.leg}, ${fmtLostSigned(leg.lostSec)}`;
-  return text;
+  return `${scope}${ftRounded(seg.athleteSec)} against ${ftRounded(seg.peerSec)}${seg.implied ? ', from your finish' : ''}`;
 }
 
 function segmentRow(seg: HyroxLoseTimeSegment, first: boolean, withCaption: boolean): string {
@@ -133,12 +130,14 @@ export function renderLoseTimeBody(lt: HyroxLoseTime, hasWhereToGain: boolean): 
   const levelLine = lt.level.length > 0
     ? `<div data-lt-level style="font-size:12px;color:${TEXT_S};line-height:1.5;margin:0 4px 14px">Level with your peers: ${lt.level.map(seg => seg.label).join(', ')}.</div>`
     : '';
-  const divisionNote = lt.divisionAssumed ? ' Compared in your current division.' : '';
+  // A doubles result logged without its division: the field used is named in
+  // the line above; say the division was not recorded and where to set it.
+  const divisionNote = lt.divisionAssumed ? ' Division not recorded with this result; set it with Update result.' : '';
   return `
     ${section('Time lost', lost)}
     ${section('Time gained', gained)}
     ${levelLine}
-    <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin:0 4px 14px">Median splits of ${hyroxPlacementWho({ cohort: lt.cohort, ageGroup: null })} who finished near your time.${divisionNote} ${hyroxResultsCaption(lt.cohort)} Venues differ, so a sled lane or run course can move a segment.</div>
+    <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin:0 4px 14px">Typical splits of ${hyroxPlacementWho({ cohort: lt.cohort, ageGroup: null })} who finished near your time.${divisionNote} ${hyroxResultsCaption(lt.cohort)} Venues differ, so a sled lane or run course can move a segment.</div>
     <div style="display:flex;justify-content:space-between;gap:12px;margin:0 4px">
       <button id="lt-update" type="button" style="${LINK}">Update result ›</button>
       ${hasWhereToGain ? `<button id="lt-gain" type="button" style="${LINK}">Where training can gain ›</button>` : ''}

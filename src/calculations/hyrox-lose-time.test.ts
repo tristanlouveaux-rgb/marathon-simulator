@@ -4,7 +4,6 @@ import {
   compareWithPeers,
   fmtLostTime,
   hyroxLoseTimeHeadline,
-  hyroxLoseTimeKeyLeg,
   hyroxPastRaceSplits,
   hyroxTopLostStation,
   HYROX_LOSE_TIME_MATERIAL_SEC,
@@ -127,17 +126,13 @@ describe('compareWithPeers: quantile-free peer comparison', () => {
     expect(lt.headline).toBe('Most time lost on Running: 2:56 slower than athletes finishing in 1:30:00');
   });
 
-  it('the Running segment keeps its legs in race order; the key leg is the one that lost the most', () => {
+  it('the Running segment keeps its legs in race order', () => {
     const base = peerResult(OS_W, 5400);
     const legs = base.runLegsSec!.map((v, i) => v! + (i === 6 ? 40 : 5));
     const segs = compareWithPeers(OS_W, 5400, { ...base, runLegsSec: legs, roxzoneSec: base.roxzoneSec! - 75 });
     const run = segs.find(s => s.key === 'run_total')!;
     expect(run.legs!.map(l => l.leg)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(hyroxLoseTimeKeyLeg(run)!.leg).toBe(7);
-    expect(hyroxLoseTimeKeyLeg(run)!.lostSec).toBeCloseTo(40, 6);
-    // A gain on Running names the leg with the most gained.
-    const fast = compareWithPeers(OS_W, 5400, { ...base, runLegsSec: base.runLegsSec!.map((v, i) => v! - (i === 0 ? 30 : 4)), roxzoneSec: base.roxzoneSec! + 58 });
-    expect(hyroxLoseTimeKeyLeg(fast.find(s => s.key === 'run_total')!)!.leg).toBe(1);
+    expect(run.legs![6].lostSec).toBeCloseTo(40, 6);
   });
 });
 
@@ -250,6 +245,8 @@ describe('materiality', () => {
     expect(lt.gains.map(s => s.key)).toEqual(['row_erg']);
     expect(lt.level.map(s => s.key)).toContain('burpee_broad_jumps');
     expect(lt.losses.length + lt.gains.length + lt.level.length).toBe(lt.segments.length);
+    // Level segments read in race order: the running, the stations, the Roxzone.
+    expect(lt.level.map(s => s.key)).toEqual(['run_total', 'sled_push', 'sled_pull', 'burpee_broad_jumps', 'farmer_carry', 'sandbag_lunges', 'wall_balls', 'roxzone']);
   });
 
   it('the band is the method\'s measured uncertainty, 15 s', () => {

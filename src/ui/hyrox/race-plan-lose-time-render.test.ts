@@ -225,7 +225,7 @@ describe('where you lost time', () => {
     expect(txt).toContain('Your 1:24:31 against athletes who finished in the same time');
     expect(txt).toContain('Time lost');
     expect(txt).toContain('Time gained');
-    expect(txt).toContain('Median splits of Open Singles women who finished near your time.');
+    expect(txt).toContain('Typical splits of Open Singles women who finished near your time.');
     expect(txt).toContain('Open Singles women finishers');
     const lt = analyzeHyroxLoseTime(s);
     // Every compared segment shows once: a row, or the level line.
@@ -237,7 +237,7 @@ describe('where you lost time', () => {
     expectVisualConstraints(renderLoseTimeBody(lt, true));
   });
 
-  it('the drill-down: Running is one row; its caption names the leg that lost the most', () => {
+  it('the drill-down: Running is one row; its caption names no leg (the race plan\'s legs are near-even)', () => {
     const r = pastResult();
     const legs = r.hyroxPreviousRunSplitsSec!.map((v, i) => (v as number) + (i === 0 ? 30 : 20));
     const s = hyroxState({ ...r, hyroxPreviousRunSplitsSec: legs, hyroxPreviousRoxzoneSec: r.hyroxPreviousRoxzoneSec! - 170 });
@@ -246,23 +246,34 @@ describe('where you lost time', () => {
     document.body.innerHTML = renderLoseTimeBody(lt, true);
     const run = document.querySelectorAll('[data-lt-seg="run_total"]');
     expect(run.length).toBe(1);
-    expect(run[0].textContent).toContain('Most on Run 1, +0:30');
+    expect(run[0].textContent).not.toContain('Most on');
     expect(document.body.textContent).not.toMatch(/\bRun [2-8]\b/);
   });
 
-  it('a doubles result logged without its division says it is compared in the current one', () => {
+  it('a doubles result logged without its division names the field used and where to set the division', () => {
+    // A singles man now: the field is men's pairs (his sex), named in the line.
     const s = hyroxState({
-      format: 'open_doubles', division: 'mixed',
+      format: 'open_singles',
       previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles',
       hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 },
-    });
-    expect(renderLoseTimeBody(analyzeHyroxLoseTime(s), false)).toContain('Compared in your current division.');
+    }, { biologicalSex: 'male' });
+    const html = renderLoseTimeBody(analyzeHyroxLoseTime(s), false);
+    expect(html).toContain('Typical splits of Open Doubles men\'s pairs who finished near your time.');
+    expect(html).toContain('Division not recorded with this result; set it with Update result.');
+    expect(html).not.toContain('current division');
     const rec = hyroxState({
       format: 'open_doubles', division: 'mixed', hyroxPreviousTimeDivision: 'mixed',
       previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles',
       hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 },
     });
-    expect(renderLoseTimeBody(analyzeHyroxLoseTime(rec), false)).not.toContain('Compared in your current division.');
+    expect(renderLoseTimeBody(analyzeHyroxLoseTime(rec), false)).not.toContain('Division not recorded');
+  });
+
+  it('level segments are listed in race order', () => {
+    const lt = analyzeHyroxLoseTime(hyroxState(pastResult()));
+    const order = ['Running', 'SkiErg', 'Sled Push', 'Sled Pull', 'Burpee Broad Jumps', 'Row Erg', 'Farmer Carry', 'Sandbag Lunges', 'Wall Balls', 'Roxzone'];
+    const idx = lt.level.map(seg => order.indexOf(seg.label));
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
   });
 
   it('signs: plus for time lost, the minus sign for time gained', () => {
