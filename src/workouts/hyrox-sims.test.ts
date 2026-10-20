@@ -355,5 +355,42 @@ describe('no standalone station session under 15 min (lane H2b part 2, Q11)', ()
     expect(sessions).toBeGreaterThan(2000);
     expect(short.slice(0, 10)).toEqual([]);
   }, 120000);
+
+  it('doubles across the hours grid and plans of 8 to 24 weeks, deload, guard-held and taper weeks included: no station session or brick under 15 min (review round 2: 756 open doubles sessions at 13 to 14 min, a warm-up and one set of two stations)', () => {
+    // A cut (the guard's station cut, the deload and taper caps, the phase
+    // budget, the MTL cap) stops at the last round or station that keeps a
+    // station session at 15 min (holdsStationFloor); the week then leaves
+    // another session out, as the hierarchy orders.
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+      ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+      ['7-session open doubles women', { hyroxFormat: 'open_doubles', hyroxDivision: 'women', biologicalSex: 'female', hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>],
+    ];
+    const short: string[] = [];
+    let sessions = 0;
+    let deloadOrTaper = 0;
+    for (const [name, over] of variants) {
+      for (const band of ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+        const r = HYROX_HOURS_RANGE[band];
+        for (let h = r.min; h <= r.max; h++) {
+          for (const len of [8, 10, 12, 14, 16, 18, 20, 24]) {
+            const s = build(band, h, len, over);
+            const phases = s.wks.map(w => w.ph);
+            s.wks.forEach((wk, i) => {
+              for (const w of prescribed(wk)) {
+                if (!(w.discipline === 'station' || w.discipline === 'brick') || w.t === 'hyrox_erg_easy') continue;
+                sessions++;
+                if (wk.ph === 'taper' || isHyroxDeloadWeek(i + 1, phases)) deloadOrTaper++;
+                if ((w.estimatedDurationMin ?? 0) < 15) short.push(`${name} ${band} ${h}h ${len}w W${wk.w} ${w.n} ${w.estimatedDurationMin}`);
+              }
+            });
+          }
+        }
+      }
+    }
+    expect(sessions).toBeGreaterThan(30000);
+    expect(deloadOrTaper).toBeGreaterThan(5000);
+    expect(short.slice(0, 10)).toEqual([]);
+  }, 300000);
 });
 

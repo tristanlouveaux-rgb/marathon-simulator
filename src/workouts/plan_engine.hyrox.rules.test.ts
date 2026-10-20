@@ -1609,8 +1609,11 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // h: under the guard one more hour lengthens build week 3's easy runs by
     // 15 min and its easy erg session gives up 28, and the deload and the
     // taper read the smaller week); none past the bound, no quality run lost.
+    // With the 15-min station floor (review round 2: a cut stops at the
+    // last round or station that keeps a station session at 15 min): 20,
+    // the new ones open doubles novice and intermediate, the worst 13 min.
     // A change that makes one more hour hold less again shows here first.
-    expect(fell.length).toBeLessThanOrEqual(18);
+    expect(fell.length).toBeLessThanOrEqual(20);
   }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {

@@ -113,6 +113,7 @@ import {
   HYROX_HOURS_RANGE,
   HYROX_STRENGTH_BLOCK_MIN,
   HYROX_FINISHER_MIN_MIN,
+  HYROX_SESSION_WARMUP_MIN,
   applyHyroxSessionDelta,
   hyroxSessionTotal,
   hyroxTier,
@@ -600,28 +601,39 @@ function enforceMTLCap(sessions: Workout[], cap: number, adjustments: string[], 
   let roundCuts = 0;
   let stationCuts = 0;
   while (total() > cap) {
+    // No cut takes a station session under its floor (holdsStationFloor).
     let best = -1;
+    let bestNext: Workout | null = null;
     for (let i = 0; i < out.length; i++) {
       const s = out[i];
       if (!mtlCuttable(s) || (s.hyroxRounds ?? 0) <= hyroxMinRounds(s)) continue;
-      if (best < 0 || mtlOf(s) > mtlOf(out[best])) best = i;
+      if (best >= 0 && mtlOf(s) <= mtlOf(out[best])) continue;
+      const next = withHyroxRounds(s, (s.hyroxRounds ?? 0) - 1);
+      if (!holdsStationFloor(next)) continue;
+      best = i;
+      bestNext = next;
     }
-    if (best >= 0) {
-      out[best] = withHyroxRounds(out[best], (out[best].hyroxRounds ?? 0) - 1);
+    if (best >= 0 && bestNext) {
+      out[best] = bestNext;
       roundCuts++;
       continue;
     }
     let circuit = -1;
+    let circuitNext: Workout | null = null;
     for (let i = 0; i < out.length; i++) {
       const s = out[i];
       if (s.t !== 'hyrox_station_technique' && s.t !== 'hyrox_station_density') continue;
       if ((s.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS) continue;
-      if (circuit < 0 || mtlOf(s) > mtlOf(out[circuit])) circuit = i;
-    }
-    if (circuit >= 0) {
+      if (circuit >= 0 && mtlOf(s) <= mtlOf(out[circuit])) continue;
       // The heaviest station, never a race-pace session's weakest station
       // while another is left (hyroxStationToCut).
-      out[circuit] = withoutHyroxStation(out[circuit], hyroxStationToCut(out[circuit]) as HyroxStation);
+      const next = withoutHyroxStation(s, hyroxStationToCut(s) as HyroxStation);
+      if (next === s || !holdsStationFloor(next)) continue;
+      circuit = i;
+      circuitNext = next;
+    }
+    if (circuit >= 0 && circuitNext) {
+      out[circuit] = circuitNext;
       stationCuts++;
       continue;
     }
@@ -999,6 +1011,42 @@ const BRICK_SESSION_FLOOR_MIN = 20;
  *  station session their capacity cuts under it. */
 const HYROX_MIN_STATION_SESSION_MIN = 15;
 
+/**
+ * A station session's floor (lane H2b part 2 review, 2026-10-20): its
+ * warm-up and station work run HYROX_MIN_STATION_SESSION_MIN or more (its
+ * strength block and finisher are not counted: they come from the week's
+ * spare minutes). No cut takes a station session under it: the ceilings'
+ * station cut, the deload and race-taper caps, race week's rounds, the
+ * weekly MTL cap and the taper's smallest circuit stop at the last round or
+ * station that keeps it, so a week still over its limit then leaves another
+ * session out, as the hierarchy orders. Singles sessions never reach it
+ * (their floor, 2 rounds of 2 stations, runs 17 min or more). Before, a
+ * doubles session at its floor (one set of two stations at the partner's
+ * half, 3 to 5 min of station work) ran 13 to 14 min with its 10-min warm-up:
+ * 756 such sessions on the review's open doubles grid, 503 of them race-pace.
+ * True for any other session.
+ */
+function holdsStationFloor(w: Workout): boolean {
+  if (!(w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') || !w.hyroxSpec) return true;
+  return Math.round(hyroxSessionWorkMin(w) + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN;
+}
+
+/** True when a circuit holds no station a cut may take: MIN_CIRCUIT_STATIONS
+ *  or fewer, or one fewer would take it under its floor (holdsStationFloor). */
+function stationsAtFloor(w: Workout): boolean {
+  if ((w.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= MIN_CIRCUIT_STATIONS) return true;
+  const next = withoutHyroxStation(w, hyroxStationToCut(w) as HyroxStation);
+  return next === w || !holdsStationFloor(next);
+}
+
+/** The fewest rounds, from `rounds` up to the session's own, that keep a
+ *  station session at its floor (holdsStationFloor). */
+function floorRounds(w: Workout, rounds: number): number {
+  let r = Math.max(1, Math.min(rounds, w.hyroxRounds ?? rounds));
+  while (r < (w.hyroxRounds ?? r) && !holdsStationFloor(withHyroxRounds(w, r))) r++;
+  return r;
+}
+
 /** A plan week's race simulation: the full race or a half (the race's
  *  first half for halfIndex 0, its second half for 1, alternating). */
 export interface HyroxSimWeek { kind: 'full' | 'half'; halfIndex: number }
@@ -1156,12 +1204,15 @@ export function hyroxRaceTaperFloorCircuit(
     // The week's own loads (the beginner schedule; buildHyroxTrainingWeeks).
     stationLoads,
   });
-  c = withHyroxRounds(c, hyroxMinRounds(c));
+  // At the floor a station session keeps (holdsStationFloor): a doubles
+  // circuit keeps a station or a round more than MIN_CIRCUIT_STATIONS and its
+  // one-set technique dose would leave it.
+  c = withHyroxRounds(c, floorRounds(c, hyroxMinRounds(c)));
   for (;;) {
     const st = (c.hyroxComponents ?? []).filter(x => x.type !== 'run');
     if (st.length <= MIN_CIRCUIT_STATIONS) break;
     const next = withoutHyroxStation(c, hyroxStationToCut(c) as HyroxStation);
-    if (next === c) break;
+    if (next === c || !holdsStationFloor(next)) break;
     c = next;
   }
   // With its warm-up, as the week's own circuit holds it (lane H2b part 2).
@@ -1282,9 +1333,12 @@ function generateWeekSessions(
     if (!refCap) return w;
     let out = w;
     if ((out.hyroxRounds ?? 0) > refCap.rounds) {
-      const rounds = Math.max(hyroxMinRounds(out), refCap.rounds);
-      adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
-      out = withHyroxRounds(out, rounds);
+      // Never under the session's floor (holdsStationFloor).
+      const rounds = floorRounds(out, Math.max(hyroxMinRounds(out), refCap.rounds));
+      if (rounds < (out.hyroxRounds ?? 0)) {
+        adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
+        out = withHyroxRounds(out, rounds);
+      }
     }
     const maxStations = Math.max(MIN_CIRCUIT_STATIONS, refCap.stations);
     let cut = 0;
@@ -1292,7 +1346,7 @@ function generateWeekSessions(
       const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
       if (st.length <= maxStations) break;
       const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
-      if (next === out) break;
+      if (next === out || !holdsStationFloor(next)) break;
       out = next;
       cut++;
     }
@@ -1308,16 +1362,20 @@ function generateWeekSessions(
       };
       let rounds = 0;
       let stations = 0;
+      // Neither takes a station session under its floor (holdsStationFloor).
       while (heavy(out)) {
         if ((out.hyroxRounds ?? 0) > hyroxMinRounds(out)) {
-          out = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
-          rounds++;
-          continue;
+          const fewer = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
+          if (holdsStationFloor(fewer)) {
+            out = fewer;
+            rounds++;
+            continue;
+          }
         }
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
         const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
-        if (next === out) break;
+        if (next === out || !holdsStationFloor(next)) break;
         out = next;
         stations++;
       }
@@ -1348,7 +1406,7 @@ function generateWeekSessions(
           // Without the reference session's finisher and strength block:
           // this week's spare minutes size its own (lane H2b part 2).
           out = withHyroxSessionParts(withHyroxFinisher(withHyroxStationLoads(
-            withHyroxRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0)),
+            withHyroxRounds(copy as Workout, floorRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0))),
             inputs.stationLoads, loadTier, bodyWeightKg,
           ), 0, hx.stationAccess, weekIndex, bodyWeightKg), { strength: null });
           adjustments.push(sameType.length > 0
@@ -1499,8 +1557,12 @@ function generateWeekSessions(
     // is sized, from what the size leaves (the strength step, below).
     let out = withHyroxSessionParts(w, { warmup: hyroxSessionWarmup(hx.stationAccess, i + weekIndex, bodyWeightKg) });
     if (maxRounds != null && (out.hyroxRounds ?? 0) > maxRounds) {
-      adjustments.push(`W${weekIndex}: ${out.n} cut to ${maxRounds} rounds (the week before's)`);
-      out = withHyroxRounds(out, maxRounds);
+      // Never under the session's floor (holdsStationFloor).
+      const r = floorRounds(out, maxRounds);
+      if (r < (out.hyroxRounds ?? 0)) {
+        adjustments.push(`W${weekIndex}: ${out.n} cut to ${r} rounds (the week before's)`);
+        out = withHyroxRounds(out, r);
+      }
     }
     out = capToRef(out);
     if (omit.has('stations')) {
@@ -1510,7 +1572,7 @@ function generateWeekSessions(
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
         const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
-        if (next === out) break;
+        if (next === out || !holdsStationFloor(next)) break;
         out = next;
         cut++;
       }
@@ -3695,7 +3757,7 @@ export function buildHyroxTrainingWeeks(
       let best: Workout | undefined;
       for (const x of p) {
         if (circuits ? !isCircuitT(x) : x.discipline !== 'brick') continue;
-        if ((x.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS || (circuits && (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length > MIN_CIRCUIT_STATIONS)) continue;
+        if ((x.hyroxRounds ?? 0) > MIN_CIRCUIT_ROUNDS || (circuits && !stationsAtFloor(x))) continue;
         if (!best || (x.estimatedDurationMin ?? 0) < (best.estimatedDurationMin ?? 0)) best = x;
       }
       return best;
@@ -4618,12 +4680,14 @@ export function buildHyroxTrainingWeeks(
         const p = prescribed(attempt.workouts);
         const circuits = p.some(isCircuitT);
         const c = p
-          .filter(x => (circuits ? isCircuitT(x) && (x.hyroxComponents ?? []).filter(y => y.type !== 'run').length <= MIN_CIRCUIT_STATIONS : x.discipline === 'brick'))
+          .filter(x => (circuits ? isCircuitT(x) && stationsAtFloor(x) : x.discipline === 'brick'))
           .sort((x, y) => (x.estimatedDurationMin ?? 0) - (y.estimatedDurationMin ?? 0))[0];
-        if (c && (c.hyroxRounds ?? 0) > hyroxMinRounds(c)) {
-          const cut = withHyroxRounds(c, hyroxMinRounds(c));
+        // Never under the session's floor (holdsStationFloor).
+        const r = c ? floorRounds(c, hyroxMinRounds(c)) : 0;
+        if (c && (c.hyroxRounds ?? 0) > r) {
+          const cut = withHyroxRounds(c, r);
           attempt = withWorkouts(attempt, attempt.workouts.map(x => (x === c ? cut : x)));
-          attempt.adjustments.push(`W${w}: ${c.n} cut to ${hyroxMinRounds(c)} rounds (taper: the smallest ${circuits ? 'circuit' : 'brick'}, exempt from the ${fraction} fraction)`);
+          attempt.adjustments.push(`W${w}: ${c.n} cut to ${r} rounds (taper: the smallest ${circuits ? 'circuit' : 'brick'}, exempt from the ${fraction} fraction)`);
         }
       }
       if (taperWork) shed(a => a.workMin > taperWork.min + 1e-6 || a.workMtl > taperWork.mtl + 1e-6, true, "taper: the reference week's station and brick work");
