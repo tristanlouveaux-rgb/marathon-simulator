@@ -14,8 +14,9 @@
  *     block, race week none, a deload no standalone session;
  *   - the standalone session takes its own day, never repeats its week's
  *     block, and a template session runs its content's 20 min;
- *   - under a partial station capacity a station session loses rounds, keeps
- *     its warm-up and runs 15 min or more.
+ *   - under a partial station capacity a station session loses rounds until
+ *     its station work holds the capacity's share of its own, keeps its
+ *     warm-up and runs 15 min or more.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -41,7 +42,9 @@ import {
   HYROX_STRENGTH_BLOCK_MIN, hyroxTier, hyroxBaseMultiplier,
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
-import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom } from './plan_engine.hyrox';
+import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates } from './plan_engine.hyrox';
+import { hyroxSessionWorkMin, withHyroxRounds } from './hyrox-generators';
+import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession } from './scheduler.hyrox';
 
@@ -237,5 +240,40 @@ describe('a station session under a partial station capacity', () => {
     }
     expect(sessions).toBeGreaterThan(50);
     expect(short).toEqual([]);
+  }, 120000);
+
+  it('keeps the capacity\'s share of its own station work, as a run keeps the capacity\'s share of its duration (review round 2: the warm-up counted in the target, so at 50 the station work kept a median 31%, minimum 13%)', () => {
+    // The largest round count whose station work is at most the capacity's
+    // share of the ungated session's station work; one round more is above
+    // it. The warm-up stays outside the share.
+    const inj = { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 50, location: 'knee' } as unknown as InjuryState;
+    let checked = 0;
+    const off: string[] = [];
+    for (const band of BANDS) {
+      for (const len of [12, 16]) {
+        const s = build(band, HYROX_HOURS_RANGE[band].default, len);
+        for (const wk of s.wks) {
+          for (const u of prescribed(wk)) {
+            if (u.t !== 'hyrox_station_technique' && u.t !== 'hyrox_station_density') continue;
+            const [g] = applyHyroxInjuryGates([u], inj);
+            const label = `${band} ${len}w W${wk.w} ${u.n}`;
+            const share = 0.5 * hyroxSessionWorkMin(u);
+            if (!g) {
+              // Left out: under 15 min at the round count the share allows.
+              continue;
+            }
+            checked++;
+            const work = hyroxSessionWorkMin(g);
+            if (work > share + 1e-6 && (g.hyroxRounds ?? 1) > 1) off.push(`${label}: ${work.toFixed(1)} of ${hyroxSessionWorkMin(u).toFixed(1)} min`);
+            const more = withHyroxRounds(u, (g.hyroxRounds ?? 1) + 1);
+            if ((g.hyroxRounds ?? 1) + 1 <= (u.hyroxRounds ?? 1) && hyroxSessionWorkMin(more) <= share + 1e-6) off.push(`${label}: one round more (${hyroxSessionWorkMin(more).toFixed(1)} min) still within ${share.toFixed(1)}`);
+            expect(g.hyroxSpec?.warmup, label).toBeDefined();
+            expect(g.estimatedDurationMin ?? 0, label).toBeGreaterThanOrEqual(15);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+    expect(off.slice(0, 10)).toEqual([]);
   }, 120000);
 });
