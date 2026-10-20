@@ -402,6 +402,13 @@ import {
 //   alone;
 // - a taper long run that cannot stay the week's longest run stays as an easy
 //   run at the run floor when that fits, so taper week 1 keeps its run count.
+// Still v19 (unreleased; part 2 review fixes, round 4, 2026-10-20):
+// - under a one-sided restriction the injury cut takes the restricted side's
+//   stations first (HYROX_STATION_REGION), and the restricted side's station
+//   work holds the share of its own whenever a shape allows it;
+// - a station session's jog warm-up (no erg) follows the run capacity;
+// - the week before taper week 1 counts its race simulation's run legs as
+//   running, so taper week 1 after a sim week keeps its run count.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
