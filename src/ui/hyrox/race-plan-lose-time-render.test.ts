@@ -309,12 +309,18 @@ describe('Forecast tab placement', () => {
     expect(gain.textContent).not.toContain('last race');
   });
 
-  it('singles: the race plan is a link in the Race order card; lose-time sits right above "Where to gain"', () => {
+  it('the hero\'s target line is the race plan\'s entry; no link in the Race order card; lose-time sits right above "Where to gain"', () => {
     setState(hyroxState({ ...pastResult(), raceDate: raceDate(), targetFinishTimeSec: 5000 }));
     renderHyroxForecastView();
+    const cta = document.getElementById('hx-set-target-cta')!;
+    expect(cta.textContent).toBe('Target 1:23:20 · Race plan ›');
+    expect(cta.getAttribute('data-has-goal')).toBe('1');
+    expect(document.getElementById('hx-race-plan-link')).toBeNull();
     expect(document.getElementById('hx-race-plan-entry')).toBeNull();
-    const link = document.getElementById('hx-race-plan-link')!;
-    expect(link.textContent).toBe('Race plan for your goal ›');
+    cta.click();
+    expect(document.querySelector('[data-rp-subhead]')!.textContent).toContain('goal');
+    setState(hyroxState({ ...pastResult(), raceDate: raceDate(), targetFinishTimeSec: 5000 }));
+    renderHyroxForecastView();
     const lose = document.getElementById('hx-lose-time');
     expect(lose).not.toBeNull();
     const gain = document.getElementById('hx-where-to-gain');
@@ -322,18 +328,29 @@ describe('Forecast tab placement', () => {
     expect(lose!.nextElementSibling).toBe(gain);
   });
 
-  it('singles without a goal: the link leads with setting one', () => {
+  it('without a goal the hero line sets one (the goal modal), and the Race order card heads its columns Split and Clock with Run N legs', () => {
     setState(hyroxState({ raceDate: raceDate() }));
     renderHyroxForecastView();
-    expect(document.getElementById('hx-race-plan-link')!.textContent).toBe('Set a goal for a race plan ›');
+    const cta = document.getElementById('hx-set-target-cta')!;
+    expect(cta.textContent).toBe('Set a target finish ›');
+    expect(cta.getAttribute('data-has-goal')).toBe('0');
+    const head = document.querySelector('#hx-rows-race')!.firstElementChild!.textContent!.replace(/\s+/g, ' ').trim();
+    expect(head).toBe('Split Clock');
+    const rows = document.querySelector('#hx-rows-race')!.textContent!;
+    expect(rows).toContain('Run 1');
+    expect(rows).not.toMatch(/\bR1\b/);
   });
 
-  it('doubles (no Race order card): the entry row, with no numbers', () => {
-    setState(hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: raceDate(), targetFinishTimeSec: 4600 }));
+  it('doubles without a goal (no Race order card): the entry row, with no numbers; with a goal the hero line is the entry', () => {
+    setState(hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: raceDate() }));
     renderHyroxForecastView();
     const entry = document.getElementById('hx-race-plan-entry');
     expect(entry).not.toBeNull();
     expect(entry!.textContent).not.toMatch(/\d/);
+    setState(hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: raceDate(), targetFinishTimeSec: 4600 }));
+    renderHyroxForecastView();
+    expect(document.getElementById('hx-race-plan-entry')).toBeNull();
+    expect(document.getElementById('hx-set-target-cta')!.textContent).toContain('Race plan ›');
   });
 
   it('one forecast clock: the Race order card\'s clock after every leg is the race plan\'s', () => {

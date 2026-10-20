@@ -27,8 +27,11 @@ import { ftRounded } from '@/utils/format';
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
 const CARD = 'background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:16px';
-const GRID = 'display:grid;grid-template-columns:minmax(0,1fr) 52px 64px 52px;align-items:center;column-gap:10px';
-const GRID_NO_FC = 'display:grid;grid-template-columns:minmax(0,1fr) 52px 64px;align-items:center;column-gap:10px';
+// Numeric columns sized to their widest value at 13px ("10:12" splits,
+// "1:34:35" clock), so the longest label (Burpee Broad Jumps) stays on one
+// line at 375 px.
+const GRID = 'display:grid;grid-template-columns:minmax(0,1fr) 46px 56px 46px;align-items:center;column-gap:8px';
+const GRID_NO_FC = 'display:grid;grid-template-columns:minmax(0,1fr) 46px 56px;align-items:center;column-gap:8px';
 const LINK = 'font:inherit;font-size:12px;color:var(--c-muted);background:none;border:none;padding:0;cursor:pointer';
 
 function fmt(sec: number): string {
@@ -138,29 +141,14 @@ export function renderRacePlanBody(plan: HyroxRacePlan): string {
 }
 
 /**
- * Singles: the race plan link in the Race order card's footer (that card
- * already shows the forecast's splits and clock, so the race plan is the goal
- * view). With no goal it leads with setting one.
- */
-export function buildRacePlanLink(state: Pick<SimulatorState, 'hyroxConfig'>): string {
-  const hasGoal = (state.hyroxConfig?.targetFinishTimeSec ?? 0) > 0;
-  return `
-    <div style="margin-top:10px">
-      <button id="hx-race-plan-link" type="button" data-has-goal="${hasGoal ? '1' : '0'}" style="${LINK}">${hasGoal ? 'Race plan for your goal ›' : 'Set a goal for a race plan ›'}</button>
-    </div>
-  `;
-}
-
-/**
- * Doubles (no Race order card): the Forecast tab's entry row, one line and a
- * caption, no numbers (the goal already shows in the hero). Opens the race
- * plan.
+ * Doubles with no goal (no Race order card): the Forecast tab's entry row,
+ * one line and a caption, no numbers. Opens the race plan at the forecast.
+ * With a goal the hero's target line ("Target H:MM:SS · Race plan ›") is the
+ * entry, for singles and doubles alike, so this row is not shown.
  */
 export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'>): string {
-  const hasGoal = (state.hyroxConfig?.targetFinishTimeSec ?? 0) > 0;
-  const caption = hasGoal
-    ? 'Goal split and race clock for every leg, beside the forecast.'
-    : 'Set a goal to pace every leg. Until then it shows the race clock at your forecast.';
+  if ((state.hyroxConfig?.targetFinishTimeSec ?? 0) > 0) return '';
+  const caption = 'Race clock for every leg at your forecast. Set a goal to pace every leg.';
   return `
     <div id="hx-race-plan-entry" role="button" tabindex="0" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;gap:12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <span style="flex:1;min-width:0">
@@ -173,21 +161,25 @@ export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'
 }
 
 /**
- * Open the goal modal from a race plan entry point. After a save the race
- * plan opens on the new goal; after a clear, singles return to the Forecast
- * tab (its Race order card is the forecast's plan) and doubles stay on the
- * race plan at the forecast.
+ * Open the goal modal as the race plan's goal step (the Forecast hero's
+ * "Set a target finish ›", the race plan's "Change goal ›"). After a save
+ * that sets a goal the race plan opens on it. After a clear the view that
+ * opened the modal stays: the Forecast tab, or the race plan for doubles
+ * (it shows the forecast's clock); singles clearing on the race plan return
+ * to the Forecast tab, whose Race order card is the forecast's plan.
  */
-export function openRacePlanGoalModal(): void {
+export function openRacePlanGoalModal(from: 'forecast' | 'race-plan' = 'race-plan'): void {
   const current = predictHyroxRace(getState());
   if (!current) return;
+  const toForecast = () => import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
   import('./goal-modal').then(({ openHyroxGoalModal }) => {
     openHyroxGoalModal(current, {
       onChange: () => {
         const hx = getState().hyroxConfig;
         const hasGoal = (hx?.targetFinishTimeSec ?? 0) > 0;
-        if (hasGoal || isHyroxDoublesFormat(hx?.format)) renderHyroxRacePlanView();
-        else import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
+        if (hasGoal) renderHyroxRacePlanView();
+        else if (from === 'race-plan' && isHyroxDoublesFormat(hx?.format)) renderHyroxRacePlanView();
+        else void toForecast();
       },
     });
   });
@@ -244,7 +236,7 @@ export function renderHyroxRacePlanView(): void {
   document.getElementById('rp-account-btn')?.addEventListener('click', () => {
     import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
   });
-  document.getElementById('rp-goal-link')?.addEventListener('click', () => openRacePlanGoalModal());
+  document.getElementById('rp-goal-link')?.addEventListener('click', () => openRacePlanGoalModal('race-plan'));
   root.querySelectorAll<HTMLButtonElement>('[data-rp-mode]').forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.getAttribute('data-rp-mode');

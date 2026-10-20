@@ -31,7 +31,7 @@ import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
-import { buildRacePlanEntryCard, buildRacePlanLink, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
+import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
 
@@ -252,7 +252,7 @@ function renderRunLegRow(
     return `
       <div style="display:grid;grid-template-columns:auto 1fr 72px 60px;align-items:center;gap:12px;padding:9px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:12px">
         <span style="display:flex;align-items:center;gap:10px;min-width:0">
-          <span style="width:24px;color:var(--c-faint);font-weight:600;font-size:11px">R${leg.legNumber}</span>
+          <span style="width:36px;color:var(--c-faint);font-weight:600;font-size:11px;white-space:nowrap">Run ${leg.legNumber}</span>
           <div style="width:120px;max-width:30vw;height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden">
             <div style="height:100%;width:${Math.max(2, barPct)}%;background:${barColour};border-radius:2px"></div>
           </div>
@@ -277,7 +277,7 @@ function renderRunLegRow(
 
   return `
     <div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:13px">
-      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px">R${leg.legNumber}</span>
+      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px;white-space:nowrap">Run ${leg.legNumber}</span>
       <span style="flex:1"></span>
       <span style="min-width:${showProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:12px">${paceCell}</span>
       <span style="min-width:40px;text-align:right;color:var(--c-faint);font-variant-numeric:tabular-nums;font-size:11px">${deltaCell}</span>
@@ -959,8 +959,11 @@ function buildHyroxHero(
     : '';
   const runPaceSourceNote = hyroxRunPaceSourceNote(s, prediction.runPaceSource);
 
+  // The race plan's entry: with a goal it opens the race plan (where
+  // "Change goal ›" edits it); without one it opens the goal modal, and a
+  // save lands on the race plan.
   const targetLine = hx.targetFinishTimeSec
-    ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Edit ›`
+    ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Race plan ›`
     : `Set a target finish ›`;
 
   const prevRaceLink = prevTimeSec != null ? (() => {
@@ -988,7 +991,7 @@ function buildHyroxHero(
             <div style="font-size:54px;font-weight:300;color:var(--c-black);letter-spacing:-0.03em;line-height:1;margin-top:10px;font-variant-numeric:tabular-nums">${fmtMmSs(prediction.totalSec)}</div>
             ${rangeLine}
             ${deltaTxt ? `<div style="font-size:13px;color:${deltaColor};margin-top:8px;font-weight:500">${deltaTxt}</div>` : ''}
-            <button id="hx-set-target-cta" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
+            <button id="hx-set-target-cta" data-has-goal="${hx.targetFinishTimeSec ? '1' : '0'}" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
           </div>
           ${provisionalBanner}
           ${renderHyroxInjuryNote(s)}
@@ -1089,12 +1092,11 @@ export function renderHyroxForecastView(): void {
                   <span></span>
                   <span></span>
                   <span style="text-align:right">Split</span>
-                  <span style="text-align:right">Total</span>
+                  <span style="text-align:right">Clock</span>
                 </div>
                 ${raceOrderRows}
               </div>
               <div id="hx-rows-station" style="display:none">${stationOrderRows}</div>
-              ${buildRacePlanLink(s)}
               ${prediction.projection ? renderTrajectoryFooter(prediction.projection) : ''}
             </div>
           `;
@@ -1111,7 +1113,8 @@ export function renderHyroxForecastView(): void {
             </div>
           `}
 
-          <!-- Race plan (doubles; singles reach it from the Race order card) -->
+          <!-- Race plan, doubles with no goal (no Race order card; with a goal
+               the hero's target line is the entry, as for singles) -->
           ${(hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? buildRacePlanEntryCard(s) : ''}
 
           <!-- Skills analysis (strengths vs limiters) -->
@@ -1190,13 +1193,13 @@ export function renderHyroxForecastView(): void {
       renderHyroxChipDetail('stations'));
   });
 
-  // "Set a target finish" CTA → goal-back-calc modal (ISSUE-196).
-  document.getElementById('hx-set-target-cta')?.addEventListener('click', () => {
-    const currentPrediction = predictHyroxRace(getState());
-    if (!currentPrediction) return;
-    import('./goal-modal').then(({ openHyroxGoalModal }) => {
-      openHyroxGoalModal(currentPrediction);
-    });
+  // Hero target line: the race plan's entry. With a goal it opens the race
+  // plan; without one the goal modal (ISSUE-196), whose save lands on the
+  // race plan and whose clear stays here.
+  const targetCta = document.getElementById('hx-set-target-cta');
+  targetCta?.addEventListener('click', () => {
+    if (targetCta.getAttribute('data-has-goal') === '1') renderHyroxRacePlanView();
+    else openRacePlanGoalModal('forecast');
   });
 
   // "Previous race format · Change" affordance → opens a small modal listing
@@ -1229,13 +1232,7 @@ export function renderHyroxForecastView(): void {
     });
   });
 
-  // Race plan: singles link in the Race order card (no goal: set one first),
-  // doubles entry row.
-  const racePlanLink = document.getElementById('hx-race-plan-link');
-  racePlanLink?.addEventListener('click', () => {
-    if (racePlanLink.getAttribute('data-has-goal') === '1') renderHyroxRacePlanView();
-    else openRacePlanGoalModal();
-  });
+  // Race plan entry row (doubles with no goal).
   const racePlanEntry = document.getElementById('hx-race-plan-entry');
   racePlanEntry?.addEventListener('click', () => renderHyroxRacePlanView());
   racePlanEntry?.addEventListener('keydown', (e: KeyboardEvent) => {
