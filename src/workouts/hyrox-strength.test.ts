@@ -437,3 +437,55 @@ describe('a station session under a partial station capacity', () => {
     }
   }, 60000);
 });
+
+describe('a station session\'s jog warm-up under a run restriction', () => {
+  it('follows the run capacity: with neither erg, no jog under run capacity 0, a 5-min jog under 50, every station session at 15 min or more (review round 4: under run capacity 0, 175 of 175 station sessions opened with a 10-min jog)', () => {
+    const NO_ERGS = { hyroxHasSkiErg: false, hyroxHasRowErg: false } as Partial<OnboardingState>;
+    const cases: Array<[number, number]> = [[0, 100], [0, 50], [50, 100], [50, 50]];
+    let ungatedJogs = 0; let sessions = 0; let stationOnly = 0;
+    const off: string[] = [];
+    for (const band of BANDS) {
+      for (const len of [12, 16]) {
+        const s = build(band, HYROX_HOURS_RANGE[band].default, len, NO_ERGS);
+        const ungated = s.wks.flatMap(wk => prescribed(wk)).filter(w => w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density');
+        ungatedJogs += ungated.filter(w => w.hyroxSpec?.warmup?.mode === 'run' && w.hyroxSpec.warmup.min === 10).length;
+        for (const [runCap, lower] of cases) {
+          const inj = { active: true, runCapacity: runCap, upperLoadCapacity: 100, lowerLoadCapacity: lower, location: 'knee' } as unknown as InjuryState;
+          // The gate alone, on the ungated sessions (station capacity 100:
+          // only the warm-up changes).
+          if (lower === 100) {
+            for (const u of ungated) {
+              const [g] = applyHyroxInjuryGates([u], inj);
+              stationOnly++;
+              if (!g) {
+                if (Math.round(hyroxSessionWorkMin(u) + runCap / 10) >= 15) off.push(`${band} ${len}w ${u.n} run ${runCap}: left out with ${hyroxSessionWorkMin(u).toFixed(1)} min of station work`);
+                continue;
+              }
+              if (hyroxSessionWorkMin(g) !== hyroxSessionWorkMin(u)) off.push(`${band} ${len}w ${u.n} run ${runCap}: station work changed`);
+              expect(g.modReason ?? '').toMatch(/^Run capacity /);
+            }
+          }
+          // The rebuilt plan.
+          const st = structuredClone(s);
+          st.w = 1;
+          (st as unknown as { injuryState: unknown }).injuryState = inj;
+          for (const wk of regenerateHyroxWeeksFrom(st, 1)) {
+            for (const w of prescribed(wk ?? undefined)) {
+              if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
+              sessions++;
+              const label = `${band} ${len}w W${wk?.w} ${w.n} run ${runCap} lower ${lower}`;
+              const wu = w.hyroxSpec?.warmup;
+              if (runCap === 0 && wu) off.push(`${label}: ${wu.min}-min ${wu.mode} warm-up`);
+              if (runCap === 50 && !(wu?.mode === 'run' && wu.min === 5)) off.push(`${label}: warm-up ${wu ? `${wu.min} min ${wu.mode}` : 'none'}`);
+              if (Math.round(hyroxSessionWorkMin(w) + (wu?.min ?? 0)) < 15) off.push(`${label}: ${hyroxSessionWorkMin(w).toFixed(1)} min of station work and ${wu?.min ?? 0} min of warm-up`);
+            }
+          }
+        }
+      }
+    }
+    expect(ungatedJogs).toBeGreaterThan(150);
+    expect(stationOnly).toBeGreaterThan(300);
+    expect(sessions).toBeGreaterThan(300);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 120000);
+});

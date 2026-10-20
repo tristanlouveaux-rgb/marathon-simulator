@@ -2731,7 +2731,23 @@ export function applyHyroxInjuryGates(
       out.push(w0);
       continue;
     }
-    const w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
+    let w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
+    // A station session's jog warm-up (an athlete with neither erg,
+    // hyroxSessionWarmup) is running, so the run capacity takes it as it
+    // takes a run (review round 4: under a run capacity of 0, 175 of 175 such
+    // station sessions opened with a 10-min jog): it leaves at 0 and holds
+    // the capacity's share of the planned HYROX_SESSION_WARMUP_MIN in
+    // between, rounded as scaleWorkout rounds a run (of the planned length,
+    // so a deload's copy of a gated reference session is not cut twice); the
+    // 15-min rule follows.
+    const isStationSession = (w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && !!w.hyroxSpec;
+    const jog = runCap < 100 && isStationSession && w.hyroxSpec?.warmup?.mode === 'run' ? w.hyroxSpec.warmup : undefined;
+    let jogNote: string | undefined;
+    if (jog) {
+      const min = runCap <= 0 ? 0 : Math.min(jog.min, Math.max(1, Math.round((HYROX_SESSION_WARMUP_MIN * runCap) / 100)));
+      w = withHyroxSessionParts(w, { warmup: min > 0 ? { ...jog, min, mtl: (jog.mtl * min) / jog.min } : null });
+      jogNote = min > 0 ? `Run capacity ${runCap}%: warm-up jog cut to ${min} min.` : `Run capacity ${runCap}%: no warm-up jog.`;
+    }
     if (isRun(w)) {
       if (runCap <= 0) continue;
       if (runCap >= 100) { out.push(w); continue; }
@@ -2740,10 +2756,15 @@ export function applyHyroxInjuryGates(
     }
     if (isStation(w)) {
       if (stationCap <= 0) continue;
-      if (stationCap >= 100) { out.push(w); continue; }
-      if ((w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && w.hyroxSpec) {
+      if (stationCap >= 100) {
+        if (!jog) { out.push(w); continue; }
+        if (Math.round(hyroxSessionWorkMin(w) + (w.hyroxSpec?.warmup?.min ?? 0)) < HYROX_MIN_STATION_SESSION_MIN) continue;
+        out.push({ ...w, modReason: jogNote });
+        continue;
+      }
+      if (isStationSession) {
         const scaled = scaleStationSession(w, stationCap);
-        if (scaled) out.push(scaled);
+        if (scaled) out.push(jogNote ? { ...scaled, modReason: `${scaled.modReason}. ${jogNote}` } : scaled);
         continue;
       }
       out.push(scaleWorkout(w, stationCap, 'stations'));
