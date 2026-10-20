@@ -28,6 +28,7 @@ import { buildHyroxRacePlan } from '@/calculations/hyrox-race-plan';
 import { analyzeHyroxLoseTime } from '@/calculations/hyrox-lose-time';
 import { hyroxPeerSplitsAt } from '@/calculations/hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
+import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
 import { renderHyroxRacePlanView, renderRacePlanBody, buildRacePlanEntryCard, racePlanFeasibilityLine } from './race-plan-view';
 import { renderHyroxLoseTimeView, renderLoseTimeBody, buildLoseTimeCard, fmtLostSigned } from './lose-time-view';
 import { renderHyroxForecastView } from './forecast-view';
@@ -174,33 +175,44 @@ describe('race plan page', () => {
 });
 
 describe('where you lost time', () => {
-  it('the card: headline, the top 3 losses, both links', () => {
+  it('the card: the headline alone when nothing else is material, and one link', () => {
     const s = hyroxState(pastResult());
-    const html = buildLoseTimeCard(s, true);
-    expect(html).toContain('Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24.');
+    const html = buildLoseTimeCard(s);
+    expect(html).toContain('Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24:31.');
     document.body.innerHTML = html;
-    const rows = [...document.querySelectorAll('[data-lt-seg]')];
-    expect(rows.length).toBeLessThanOrEqual(3);
-    expect(rows[0].getAttribute('data-lt-seg')).toBe('wall_balls');
-    expect(rows[0].textContent).toContain('+1:12');
+    // The headline's segment is not repeated as a row; nothing else is material.
+    expect(document.querySelectorAll('[data-lt-seg]').length).toBe(0);
     expect(document.getElementById('hx-lose-time-all')).not.toBeNull();
-    expect(document.getElementById('hx-lose-time-gain')).not.toBeNull();
+    expect(document.getElementById('hx-lose-time-gain')).toBeNull();
     expectVisualConstraints(html);
   });
 
-  it('without "Where to gain" on the page the link is left out', () => {
-    expect(buildLoseTimeCard(hyroxState(pastResult()), false)).not.toContain('hx-lose-time-gain');
+  it('the card: other material losses under the headline, never the headline\'s own segment', () => {
+    const r = pastResult();
+    const st = { ...r.hyroxPreviousStationSplits! } as Record<HyroxStation, number>;
+    st.sled_pull += 40;
+    st.ski_erg += 20;
+    const s = hyroxState({ ...r, hyroxPreviousStationSplits: st, hyroxPreviousRoxzoneSec: r.hyroxPreviousRoxzoneSec! - 60 });
+    document.body.innerHTML = buildLoseTimeCard(s);
+    const rows = [...document.querySelectorAll('[data-lt-seg]')].map(el => el.getAttribute('data-lt-seg'));
+    expect(rows).toEqual(['sled_pull', 'ski_erg']);
   });
 
   it('no past result: one line inviting a paste', () => {
-    const html = buildLoseTimeCard(hyroxState({}), true);
+    const html = buildLoseTimeCard(hyroxState({}));
     expect(html).toContain('Paste a past result to compare each segment with athletes who finished in the same time.');
     expect(html).toContain('data-lt-status="no_result"');
     expectVisualConstraints(html);
   });
 
+  it('a first-timer with no result gets no card', () => {
+    expect(buildLoseTimeCard(hyroxState({ athleteBand: 'total_beginner' }))).toBe('');
+    // A past result still shows, whatever the band.
+    expect(buildLoseTimeCard(hyroxState({ ...pastResult(), athleteBand: 'total_beginner' }))).toContain('Most time lost on');
+  });
+
   it('a finish without splits: one line asking for them', () => {
-    const html = buildLoseTimeCard(hyroxState({ previousHyroxTimeSec: 5071, hyroxPreviousTimeFormat: 'open_singles' }), true);
+    const html = buildLoseTimeCard(hyroxState({ previousHyroxTimeSec: 5071, hyroxPreviousTimeFormat: 'open_singles' }));
     expect(html).toContain('Add the splits from your 1:24:31 to compare each segment');
     expectVisualConstraints(html);
   });
@@ -210,9 +222,10 @@ describe('where you lost time', () => {
     setState(s);
     renderHyroxLoseTimeView();
     const txt = app().textContent!;
-    expect(txt).toContain('Your 1:24:31 against athletes who finished in 1:24');
+    expect(txt).toContain('Your 1:24:31 against athletes who finished in the same time');
     expect(txt).toContain('Time lost');
     expect(txt).toContain('Time gained');
+    expect(txt).toContain('Median splits of Open Singles women who finished near your time.');
     expect(txt).toContain('Open Singles women finishers');
     const lt = analyzeHyroxLoseTime(s);
     // Every compared segment shows once: a row, or the level line.
@@ -220,7 +233,36 @@ describe('where you lost time', () => {
     const level = app().querySelector('[data-lt-level]')?.textContent ?? '';
     const levelCount = level ? level.replace('Level with your peers: ', '').replace(/\.$/, '').split(', ').length : 0;
     expect(rows + levelCount).toBe(lt.segments.length);
+    expect(lt.segments.length).toBe(10);
     expectVisualConstraints(renderLoseTimeBody(lt, true));
+  });
+
+  it('the drill-down: Running is one row; its caption names the leg that lost the most', () => {
+    const r = pastResult();
+    const legs = r.hyroxPreviousRunSplitsSec!.map((v, i) => (v as number) + (i === 0 ? 30 : 20));
+    const s = hyroxState({ ...r, hyroxPreviousRunSplitsSec: legs, hyroxPreviousRoxzoneSec: r.hyroxPreviousRoxzoneSec! - 170 });
+    const lt = analyzeHyroxLoseTime(s);
+    expect(lt.headline).toBe('Most time lost on Running: 2:50 slower than athletes finishing in 1:24:31');
+    document.body.innerHTML = renderLoseTimeBody(lt, true);
+    const run = document.querySelectorAll('[data-lt-seg="run_total"]');
+    expect(run.length).toBe(1);
+    expect(run[0].textContent).toContain('Most on Run 1, +0:30');
+    expect(document.body.textContent).not.toMatch(/\bRun [2-8]\b/);
+  });
+
+  it('a doubles result logged without its division says it is compared in the current one', () => {
+    const s = hyroxState({
+      format: 'open_doubles', division: 'mixed',
+      previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles',
+      hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 },
+    });
+    expect(renderLoseTimeBody(analyzeHyroxLoseTime(s), false)).toContain('Compared in your current division.');
+    const rec = hyroxState({
+      format: 'open_doubles', division: 'mixed', hyroxPreviousTimeDivision: 'mixed',
+      previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles',
+      hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 },
+    });
+    expect(renderLoseTimeBody(analyzeHyroxLoseTime(rec), false)).not.toContain('Compared in your current division.');
   });
 
   it('signs: plus for time lost, the minus sign for time gained', () => {
@@ -231,6 +273,30 @@ describe('where you lost time', () => {
 
 describe('Forecast tab placement', () => {
   const raceDate = () => new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10);
+
+  it('the two cards name the same station: Where to gain adds the station the last race lost the most on', () => {
+    setState(hyroxState({ ...pastResult(), raceDate: raceDate() }));
+    renderHyroxForecastView();
+    expect(document.querySelector('[data-lt-headline]')!.textContent).toContain('Wall Balls');
+    const gain = document.getElementById('hx-where-to-gain')!;
+    const wb = gain.querySelector('[data-wtg-station="wall_balls"]');
+    expect(wb).not.toBeNull();
+    const top2 = topWeakestLinks(predictHyroxRace(hyroxState({ ...pastResult(), raceDate: raceDate() })), 2).map(r => r.station);
+    if (!top2.includes('wall_balls')) {
+      expect(wb!.textContent).toContain('Most time lost in your last race');
+      expect(gain.textContent).toContain('plus Wall Balls, where your last race lost the most');
+      expect(gain.querySelectorAll('[data-wtg-station]').length).toBe(3);
+    }
+    expectVisualConstraints(gain.outerHTML);
+  });
+
+  it('Where to gain without a past result: the top 2 only', () => {
+    setState(hyroxState({ raceDate: raceDate() }));
+    renderHyroxForecastView();
+    const gain = document.getElementById('hx-where-to-gain')!;
+    expect(gain.querySelectorAll('[data-wtg-station]').length).toBeLessThanOrEqual(2);
+    expect(gain.textContent).not.toContain('last race');
+  });
 
   it('singles: the race plan is a link in the Race order card; lose-time sits right above "Where to gain"', () => {
     setState(hyroxState({ ...pastResult(), raceDate: raceDate(), targetFinishTimeSec: 5000 }));

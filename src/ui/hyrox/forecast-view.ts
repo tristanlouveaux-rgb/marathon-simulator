@@ -20,7 +20,8 @@ import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxFo
 import { hyroxCohortForState, hyroxCohortLabel } from '@/calculations/hyrox-results';
 import { hyroxDoublesTablesForState } from '@/calculations/hyrox-doubles';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
-import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
+import { topWeakestLinks, weakestLinkRowFor, type WeakestLinkRow } from '@/calculations/hyrox-weakest-link';
+import { analyzeHyroxLoseTime, hyroxTopLostStation } from '@/calculations/hyrox-lose-time';
 import { computeStationPotential } from '@/calculations/hyrox-station-potential';
 import { renderPerformanceRadar } from './performance-radar';
 import { renderPercentileDistributions } from './percentile-distributions';
@@ -597,33 +598,47 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
  * the user's current training dose (per ISSUE-194). Reads the weakest-link
  * helper which reuses the existing per-station horizon model.
  *
+ * The station where the last race lost the most ("Where you lost time",
+ * directly above) is added when it is not in the top 2, with its own horizon
+ * line from the same ranking, so both cards name it.
+ *
  * Hidden when no race date is set (projection produces no gain) or when no
  * station has ≥1 second of gain available.
  */
-function renderWhereToGainCard(prediction: HyroxPrediction): string {
+export function renderWhereToGainCard(prediction: HyroxPrediction, state: Pick<SimulatorState, 'hyroxConfig' | 'biologicalSex'>): string {
   const top = topWeakestLinks(prediction, 2);
   if (top.length === 0) return '';
-  const totalGain = top.reduce((sum, r) => sum + r.gainableSec, 0);
-  const rows = top.map((r, i) => {
+  const lostStation = hyroxTopLostStation(analyzeHyroxLoseTime(state));
+  const bridge: WeakestLinkRow | null = lostStation && !top.some(r => r.station === lostStation)
+    ? weakestLinkRowFor(prediction, lostStation)
+    : null;
+  const shown = bridge ? [...top, bridge] : top;
+  const totalGain = shown.reduce((sum, r) => sum + r.gainableSec, 0);
+  const rows = shown.map((r, i) => {
     const display = STATION_DISPLAY[r.station];
-    const sub = r.source === 'calibrated' ? 'Your time' : 'Estimated';
+    const sub = r === bridge ? 'Most time lost in your last race' : r.source === 'calibrated' ? 'Your time' : 'Estimated';
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
+      <div data-wtg-station="${r.station}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
         <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
           <span style="color:var(--c-black)">${display.name}</span>
-          <span style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em">${sub}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${sub}</span>
         </span>
+        ${r.gainableSec >= 1 ? `
         <span style="display:flex;gap:14px;align-items:baseline;flex-shrink:0">
           <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(r.currentSec)} → ${fmtMmSs(r.projectedSec)}</span>
           <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:40px;text-align:right">−${Math.round(r.gainableSec)}s</span>
-        </span>
+        </span>` : `
+        <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0">
+          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(r.currentSec)}</span>
+          <span style="font-size:11px;color:var(--c-faint)">No gain at this dose</span>
+        </span>`}
       </div>
     `;
   }).join('');
   return `
     <div id="hx-where-to-gain" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px;scroll-margin-top:24px">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Where to gain</div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.5">Highest-impact stations at your current training dose. Total gain available: ~${Math.round(totalGain)} sec.</div>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black)">Where to gain</div>
+      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${STATION_DISPLAY[bridge.station].name}, where your last race lost the most` : ''}. Total gain available: ~${Math.round(totalGain)} sec.</div>
       ${rows}
     </div>
   `;
@@ -1104,10 +1119,10 @@ export function renderHyroxForecastView(): void {
 
           <!-- Where you lost time (past race), then where to gain (training):
                one story, adjacent. -->
-          ${buildLoseTimeCard(s, topWeakestLinks(prediction, 2).length > 0)}
+          ${buildLoseTimeCard(s)}
 
           <!-- Where to gain (top stations ranked by absolute gainable seconds) -->
-          ${renderWhereToGainCard(prediction)}
+          ${renderWhereToGainCard(prediction, s)}
 
           <!-- Performance radar (8-axis percentile) -->
           ${renderPerformanceRadar({ stations: prediction.stations, cohort: hyroxCohortForState(s) })}
