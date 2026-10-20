@@ -12,8 +12,8 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntra
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, hyroxStationSeedsForState, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
-import { buildHyroxProjection, hyroxLikelyRangeSec } from '@/calculations/race-projection.hyrox';
-import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { buildHyroxProjection, hyroxLikelyRangeSec, type HyroxProjection } from '@/calculations/race-projection.hyrox';
+import { STATION_DISPLAY, HYROX_STATION_ORDER as STATION_KEYS } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption, hyroxTierLabel } from '@/calculations/hyrox-population';
@@ -21,7 +21,7 @@ import { hyroxCohortForState, hyroxCohortLabel } from '@/calculations/hyrox-resu
 import { hyroxDoublesTablesForState } from '@/calculations/hyrox-doubles';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
 import { topWeakestLinks, weakestLinkRowFor, type WeakestLinkRow } from '@/calculations/hyrox-weakest-link';
-import { analyzeHyroxLoseTime, hyroxTopLostStation } from '@/calculations/hyrox-lose-time';
+import { analyzeHyroxLoseTime, hyroxTopLostSegment, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
 import { computeStationPotential } from '@/calculations/hyrox-station-potential';
 import { renderPerformanceRadar } from './performance-radar';
 import { renderPercentileDistributions } from './percentile-distributions';
@@ -598,47 +598,119 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
  * the user's current training dose (per ISSUE-194). Reads the weakest-link
  * helper which reuses the existing per-station horizon model.
  *
- * The station where the last race lost the most ("Where you lost time",
- * directly above) is added when it is not in the top 2, with its own horizon
- * line from the same ranking, so both cards name it.
+ * The segment where the last race lost the most ("Where you lost time",
+ * directly above) is added when it is not already in the top 2, with its own
+ * forecast line, so both cards name it and the past race and training read as
+ * one story:
+ *  - a station: its horizon line from the same ranking (weakestLinkRowFor);
+ *  - Running: the race-day run projection (buildHyroxProjection byDiscipline
+ *    .run), as average pace per 1 km leg, the numbers behind the Race order
+ *    card's "Average run pace" row; the gain is the run total's;
+ *  - the Roxzone (or Running and Roxzone, a stations-only paste): the same
+ *    projection's Roxzone (and run) totals.
  *
  * Hidden when no race date is set (projection produces no gain) or when no
  * station has ≥1 second of gain available.
  */
-export function renderWhereToGainCard(prediction: HyroxPrediction, state: Pick<SimulatorState, 'hyroxConfig' | 'biologicalSex'>): string {
+interface WhereToGainRow {
+  /** data-wtg-station for a station, data-wtg-segment otherwise. */
+  attr: string;
+  name: string;
+  sub: string;
+  /** "4:40 → 4:28", or the current value alone when nothing moves. */
+  cell: string;
+  /** The current value alone, for "No gain at this dose". */
+  currentCell: string;
+  gainSec: number;
+}
+
+const LOST_MOST_SUB = 'Most time lost in your last race';
+
+function stationGainRow(r: WeakestLinkRow, sub: string): WhereToGainRow {
+  return {
+    attr: `data-wtg-station="${r.station}"`,
+    name: STATION_DISPLAY[r.station].name,
+    sub,
+    cell: `${fmtMmSs(r.currentSec)} → ${fmtMmSs(r.projectedSec)}`,
+    currentCell: fmtMmSs(r.currentSec),
+    gainSec: r.gainableSec,
+  };
+}
+
+/** The bridge row for the last race's biggest loss, or null when it is
+ *  already shown or has no forecast line. */
+function lostMostGainRow(
+  prediction: HyroxPrediction,
+  proj: HyroxProjection,
+  top: WeakestLinkRow[],
+  seg: HyroxLoseTimeSegment | null,
+): WhereToGainRow | null {
+  if (!seg) return null;
+  const station = (STATION_KEYS as readonly string[]).includes(seg.key) ? seg.key as HyroxStationLine['station'] : null;
+  if (station) {
+    if (top.some(r => r.station === station)) return null;
+    const row = weakestLinkRowFor(prediction, station);
+    return row ? stationGainRow(row, LOST_MOST_SUB) : null;
+  }
+  const run = proj.byDiscipline.run;
+  const rox = proj.byDiscipline.roxzone;
+  if (seg.key === 'run_total') {
+    // Average pace per 1 km leg, rounded as the Race order card rounds it.
+    const cur = Math.round(run.currentSec / 8);
+    const next = Math.round(run.projectedSec / 8);
+    return {
+      attr: 'data-wtg-segment="run_total"',
+      name: seg.label,
+      sub: LOST_MOST_SUB,
+      cell: cur - next >= 1 ? `${fmtPace(cur).replace('/km', '')} → ${fmtPace(next)}` : fmtPace(cur),
+      currentCell: fmtPace(cur),
+      gainSec: Math.max(0, run.currentSec - run.projectedSec),
+    };
+  }
+  const cur = seg.key === 'roxzone' ? rox.currentSec : run.currentSec + rox.currentSec;
+  const next = seg.key === 'roxzone' ? rox.projectedSec : run.projectedSec + rox.projectedSec;
+  return {
+    attr: `data-wtg-segment="${seg.key}"`,
+    name: seg.label,
+    sub: LOST_MOST_SUB,
+    cell: `${fmtMmSs(cur)} → ${fmtMmSs(next)}`,
+    currentCell: fmtMmSs(cur),
+    gainSec: Math.max(0, cur - next),
+  };
+}
+
+export function renderWhereToGainCard(
+  prediction: HyroxPrediction,
+  state: SimulatorState,
+  proj: HyroxProjection = buildHyroxProjection(state, prediction),
+): string {
   const top = topWeakestLinks(prediction, 2);
   if (top.length === 0) return '';
-  const lostStation = hyroxTopLostStation(analyzeHyroxLoseTime(state));
-  const bridge: WeakestLinkRow | null = lostStation && !top.some(r => r.station === lostStation)
-    ? weakestLinkRowFor(prediction, lostStation)
-    : null;
-  const shown = bridge ? [...top, bridge] : top;
-  const totalGain = shown.reduce((sum, r) => sum + r.gainableSec, 0);
-  const rows = shown.map((r, i) => {
-    const display = STATION_DISPLAY[r.station];
-    const sub = r === bridge ? 'Most time lost in your last race' : r.source === 'calibrated' ? 'Your time' : 'Estimated';
-    return `
-      <div data-wtg-station="${r.station}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
+  const lostMost = hyroxTopLostSegment(analyzeHyroxLoseTime(state));
+  const bridge = lostMostGainRow(prediction, proj, top, lostMost);
+  const shown = [...top.map(r => stationGainRow(r, r.source === 'calibrated' ? 'Your time' : 'Estimated')), ...(bridge ? [bridge] : [])];
+  const totalGain = shown.reduce((sum, r) => sum + r.gainSec, 0);
+  const rows = shown.map((r, i) => `
+      <div ${r.attr} style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
         <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
-          <span style="color:var(--c-black)">${display.name}</span>
-          <span style="font-size:10px;color:var(--c-faint)">${sub}</span>
+          <span style="color:var(--c-black)">${r.name}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${r.sub}</span>
         </span>
-        ${r.gainableSec >= 1 ? `
+        ${r.gainSec >= 1 ? `
         <span style="display:flex;gap:14px;align-items:baseline;flex-shrink:0">
-          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(r.currentSec)} → ${fmtMmSs(r.projectedSec)}</span>
-          <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:40px;text-align:right">−${Math.round(r.gainableSec)}s</span>
+          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${r.cell}</span>
+          <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:40px;text-align:right">−${Math.round(r.gainSec)}s</span>
         </span>` : `
         <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0">
-          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(r.currentSec)}</span>
+          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${r.currentCell}</span>
           <span style="font-size:11px;color:var(--c-faint)">No gain at this dose</span>
         </span>`}
       </div>
-    `;
-  }).join('');
+    `).join('');
   return `
     <div id="hx-where-to-gain" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px;scroll-margin-top:24px">
       <div style="font-size:13px;font-weight:600;color:var(--c-black)">Where to gain</div>
-      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${STATION_DISPLAY[bridge.station].name}, where your last race lost the most` : ''}. Total gain available: ~${Math.round(totalGain)} sec.</div>
+      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${bridge.name}, where your last race lost the most` : ''}. Total gain available: ~${Math.round(totalGain)} sec.</div>
       ${rows}
     </div>
   `;
@@ -1123,7 +1195,7 @@ export function renderHyroxForecastView(): void {
           ${buildLoseTimeCard(s)}
 
           <!-- Where to gain (top stations ranked by absolute gainable seconds) -->
-          ${renderWhereToGainCard(prediction, s)}
+          ${renderWhereToGainCard(prediction, s, proj)}
 
           <!-- Performance radar (8-axis percentile) -->
           ${renderPerformanceRadar({ stations: prediction.stations, cohort: hyroxCohortForState(s) })}

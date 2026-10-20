@@ -254,11 +254,12 @@ function raceOrderIndex(key: HyroxLoseTimeKey): number {
   return RACE_ORDER_KEYS.indexOf(key);
 }
 
-/** The station with the most time lost (a material loss), or null. "Where to
- *  gain" names it too, so the past race and training read as one story. */
-export function hyroxTopLostStation(lt: Pick<HyroxLoseTime, 'losses'>): HyroxStation | null {
-  const seg = lt.losses.find(l => (HYROX_STATION_ORDER as readonly string[]).includes(l.key));
-  return seg ? (seg.key as HyroxStation) : null;
+/** The segment with the most time lost (a material loss): a station,
+ *  Running, the Roxzone, or Running and Roxzone; null without one. "Where to
+ *  gain" names it too, with its own forecast line, so the past race and
+ *  training read as one story. */
+export function hyroxTopLostSegment(lt: Pick<HyroxLoseTime, 'losses'>): HyroxLoseTimeSegment | null {
+  return lt.losses[0] ?? null;
 }
 
 /** "Where you lost time" for the athlete's previous result. */

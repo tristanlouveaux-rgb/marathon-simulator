@@ -29,6 +29,7 @@ import { analyzeHyroxLoseTime } from '@/calculations/hyrox-lose-time';
 import { hyroxPeerSplitsAt } from '@/calculations/hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
+import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
 import { renderHyroxRacePlanView, renderRacePlanBody, buildRacePlanEntryCard, racePlanFeasibilityLine } from './race-plan-view';
 import { renderHyroxLoseTimeView, renderLoseTimeBody, buildLoseTimeCard, fmtLostSigned } from './lose-time-view';
 import { renderHyroxForecastView } from './forecast-view';
@@ -326,6 +327,51 @@ describe('Forecast tab placement', () => {
       expect(gain.textContent).toContain('plus Wall Balls, where your last race lost the most');
       expect(gain.querySelectorAll('[data-wtg-station]').length).toBe(3);
     }
+    expectVisualConstraints(gain.outerHTML);
+  });
+
+  // A Pro Singles man's 1:18:20 (strong stations, slower runs) and a Mixed
+  // Doubles pair's 1:12:00: Running is the biggest loss for both.
+  const PRO_MAN = {
+    previousHyroxTimeSec: 4700, hyroxPreviousTimeFormat: 'pro_singles' as const, hyroxPreviousRaceDate: '2026-03-14',
+    hyroxPreviousStationSplits: { ski_erg: 255, sled_push: 185, sled_pull: 260, burpee_broad_jumps: 230, row_erg: 280, farmer_carry: 100, sandbag_lunges: 220, wall_balls: 300 },
+    hyroxPreviousRunSplitsSec: [265, 278, 292, 295, 300, 296, 298, 326], hyroxPreviousRoxzoneSec: 520,
+  };
+  const MIXED_PAIR = {
+    format: 'open_doubles' as const, division: 'mixed' as const,
+    previousHyroxTimeSec: 4320, hyroxPreviousTimeFormat: 'open_doubles' as const, hyroxPreviousTimeDivision: 'mixed' as const, hyroxPreviousRaceDate: '2026-03-14',
+    hyroxPreviousStationSplits: { ski_erg: 240, sled_push: 110, sled_pull: 190, burpee_broad_jumps: 180, row_erg: 260, farmer_carry: 95, sandbag_lunges: 190, wall_balls: 200 },
+    hyroxPreviousRunSplitsSec: [300, 310, 322, 325, 330, 328, 327, 345], hyroxPreviousRoxzoneSec: 268,
+  };
+
+  it('a Running loss: Where to gain adds Running at the Race order card\'s own average pace, current to race day', () => {
+    const s = hyroxState({ ...PRO_MAN, raceDate: raceDate() }, { biologicalSex: 'male' });
+    setState(s);
+    renderHyroxForecastView();
+    expect(document.querySelector('[data-lt-headline]')!.textContent).toContain('Most time lost on Running');
+    const gain = document.getElementById('hx-where-to-gain')!;
+    const run = gain.querySelector('[data-wtg-segment="run_total"]')!;
+    expect(run).not.toBeNull();
+    expect(run.textContent).toContain('Running');
+    expect(run.textContent).toContain('Most time lost in your last race');
+    expect(gain.textContent).toContain('plus Running, where your last race lost the most');
+    // The same pace cell as the Race order card's "Average run pace" row.
+    const avgLabel = [...document.querySelectorAll('span')].find(el => el.textContent === 'Average run pace')!;
+    const avgCell = avgLabel.parentElement!.parentElement!.lastElementChild!.textContent!.trim();
+    expect(run.textContent).toContain(avgCell);
+    // The gain is the run total's, from the same projection.
+    const proj = buildHyroxProjection(s, predictHyroxRace(s)!);
+    const runGain = Math.round(proj.byDiscipline.run.currentSec - proj.byDiscipline.run.projectedSec);
+    if (runGain >= 1) expect(run.textContent).toContain(`\u2212${runGain}s`);
+    expectVisualConstraints(gain.outerHTML);
+  });
+
+  it('a Mixed pair whose biggest loss is Running gets the Running row too (no Race order card for doubles)', () => {
+    setState(hyroxState({ ...MIXED_PAIR, raceDate: raceDate() }));
+    renderHyroxForecastView();
+    expect(document.querySelector('[data-lt-headline]')!.textContent).toContain('Most time lost on Running');
+    const gain = document.getElementById('hx-where-to-gain')!;
+    expect(gain.querySelector('[data-wtg-segment="run_total"]')!.textContent).toContain('Most time lost in your last race');
     expectVisualConstraints(gain.outerHTML);
   });
 

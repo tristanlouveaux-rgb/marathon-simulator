@@ -5,7 +5,7 @@ import {
   fmtLostTime,
   hyroxLoseTimeHeadline,
   hyroxPastRaceSplits,
-  hyroxTopLostStation,
+  hyroxTopLostSegment,
   HYROX_LOSE_TIME_MATERIAL_SEC,
   type HyroxLoseTimeSegment,
   type HyroxPastRaceSplits,
@@ -253,10 +253,11 @@ describe('materiality', () => {
     expect(HYROX_LOSE_TIME_MATERIAL_SEC).toBe(15);
   });
 
-  it('the top lost station skips Running and the Roxzone', () => {
+  it('the top lost segment is the biggest material loss, Running and the Roxzone included', () => {
     const l = (key: HyroxLoseTimeSegment['key'], lostSec: number) => ({ key, label: String(key), athleteSec: 1, peerSec: 1, lostSec, implied: false });
-    expect(hyroxTopLostStation({ losses: [l('run_total', 90), l('roxzone', 50), l('wall_balls', 30)] })).toBe('wall_balls');
-    expect(hyroxTopLostStation({ losses: [l('run_total', 90)] })).toBeNull();
+    expect(hyroxTopLostSegment({ losses: [l('run_total', 90), l('roxzone', 50), l('wall_balls', 30)] })?.key).toBe('run_total');
+    expect(hyroxTopLostSegment({ losses: [l('wall_balls', 30)] })?.key).toBe('wall_balls');
+    expect(hyroxTopLostSegment({ losses: [] })).toBeNull();
   });
 });
 
