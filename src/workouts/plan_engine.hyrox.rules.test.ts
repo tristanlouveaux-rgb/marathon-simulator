@@ -1223,6 +1223,33 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
+  it('taper week 1 never runs more than the week before, both counted as the running share counts them (standalone runs plus the run legs of station, brick and sim sessions), open singles and 7-session open singles, every band and hour (review round 5: the taper week counted its standalone runs only, so 13 of 360 seven-session open singles taper weeks after a sim week ran up to 9.9 min more than the sim week with their mini brick\'s legs)', () => {
+    const variants: Array<[string, Partial<OnboardingState>, number[]]> = [
+      ['open singles', {}, [10, 20, 24]],
+      ['7-session open singles', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>, [10, 20, 22, 24]],
+    ];
+    let checked = 0; let afterSim = 0;
+    const off: string[] = [];
+    for (const [name, over, lens] of variants) {
+      for (const band of BANDS) {
+        for (let hrs = HYROX_HOURS_RANGE[band].min; hrs <= HYROX_HOURS_RANGE[band].max; hrs++) {
+          for (const len of lens) {
+            const s = build(band, hrs, len, over);
+            const i = planTrainingWeeks(s) - 2;
+            const wk = s.wks[i];
+            if (wk?.ph !== 'taper' || !s.wks[i - 1]) continue;
+            checked++;
+            if (prescribed(s.wks[i - 1]).some(w => w.t === 'hyrox_sim')) afterSim++;
+            if (runningMin(wk) > runningMin(s.wks[i - 1]) + 1e-6) off.push(`${name} ${band} ${hrs}h ${len}w W${i + 1}: ${runningMin(wk).toFixed(1)} min of running against ${runningMin(s.wks[i - 1]).toFixed(1)} (${prescribed(wk).map(w => `${w.n} ${w.estimatedDurationMin}`).join(', ')})`);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(300);
+    expect(afterSim).toBeGreaterThan(100);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 300000);
+
   it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
     // Sheet taper.content: keep the run count. The exempt circuit's warm-up
     // is exempt in race week (a fixed part of the exempt circuit), so a race
