@@ -187,27 +187,27 @@ describe('floors from the real results, per sex and division', () => {
 });
 
 describe('the top band keeps headroom (review 3: every faster goal read unrealistic)', () => {
-  const today = new Date().toISOString().slice(0, 10);
   const cases: Array<[string, SimulatorState]> = [
     ['Open Singles man, competitive band (seeds = the top-1% medians)', buildState({ athleteBand: 'competitive' }, { biologicalSex: 'male' })],
     ['Open Singles woman, competitive band', buildState({ athleteBand: 'competitive' })],
+    // A 1:05:00 woman's forecast (review 3: 3692 s): competitive seeds and a
+    // 3:32/km run, well past her field's top-1% run median.
     ['Open Singles woman whose forecast is under her field\'s top-1% median', buildState({
-      athleteBand: 'competitive', previousHyroxTimeSec: 3900, hyroxPreviousTimeFormat: 'open_singles',
-      personalRunPaceOffsetSec: -37, personalRunPaceOffsetUpdatedAtISO: today,
+      athleteBand: 'competitive', previousHyroxTimeSec: 3900, hyroxPreviousTimeFormat: 'open_singles', hyroxRunPaceSecKm: 212,
     })],
   ];
 
-  it('the fixtures are what they say: forecast at, or under, the top-1% median finish', () => {
-    const [, man] = cases[0];
-    const [, woman] = cases[1];
-    const [, fast] = cases[2];
-    for (const s of [man, woman]) {
+  it('the fixtures are what they say: stations at the top-1% medians; the third forecast past them', () => {
+    for (const [, s] of cases) {
       const p = predictHyroxRace(s)!;
       const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
       for (const st of HYROX_STATION_ORDER) expect(p.stations.find(l => l.station === st)!.adjustedSec).toBeCloseTo(f.stationSec[st], 0);
     }
-    const pf = predictHyroxRace(fast)!;
-    expect(pf.totalSec).toBeLessThan(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.totalSec);
+    const pf = predictHyroxRace(cases[2][1])!;
+    const fw = hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!;
+    expect(pf.totalSec).toBe(3692);
+    expect(pf.totalSec).toBeLessThan(fw.totalSec);
+    expect(pf.runSec).toBeLessThan(fw.fastest.runSec);
   });
 
   it('goals 30 to 120 s faster are achievable or a stretch, never unrealistic, in the race plan and the goal modal path', () => {
