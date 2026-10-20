@@ -56,7 +56,25 @@ describe('applyHyroxPrevTimeUpdate stores the whole result', () => {
     expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
     const lt = analyzeHyroxLoseTime(s);
     expect(lt.status).toBe('ok');
-    expect(lt.segments).toHaveLength(17);
+    // 8 stations, Running (the 8 legs together) and the Roxzone.
+    expect(lt.segments).toHaveLength(10);
+  });
+
+  it('benchmarkSplits limits what reaches the station benchmarks; a doubles result keeps its division', () => {
+    const s = init();
+    s.hyroxConfig!.stationBenchmarksDoubles = { ski_erg: 250 } as NonNullable<typeof s.hyroxConfig>['stationBenchmarksDoubles'];
+    applyHyroxPrevTimeUpdate({
+      timeSec: 4800, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14',
+      stationSplits: { ski_erg: 260, wall_balls: 300 }, benchmarkSplits: { wall_balls: 300 },
+    });
+    const hx = s.hyroxConfig!;
+    expect(hx.hyroxPreviousStationSplits).toEqual({ ski_erg: 260, wall_balls: 300 });
+    expect(hx.stationBenchmarksDoubles?.ski_erg).toBe(250);
+    expect(hx.stationBenchmarksDoubles?.wall_balls).toBe(300);
+    expect(hx.hyroxPreviousTimeDivision).toBe('mixed');
+    // A singles result carries no division.
+    applyHyroxPrevTimeUpdate({ timeSec: 5400, format: 'open_singles', division: 'mixed' });
+    expect(hx.hyroxPreviousTimeDivision).toBeUndefined();
   });
 
   it('a new finish logged without splits clears the older race\'s', () => {

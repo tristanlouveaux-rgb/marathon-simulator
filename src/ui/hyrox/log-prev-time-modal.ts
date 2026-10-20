@@ -14,9 +14,10 @@ import { getState } from '@/state/store';
 import { applyHyroxPrevTimeUpdate } from '@/state/hyrox-prev-time-update';
 import { getPastHyroxEvents, getHyroxEventById } from '@/data/hyrox-events';
 import { STATION_DISPLAY, STATION_MIN_SEC, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import type { HyroxStation } from '@/types/triathlon';
+import type { HyroxDivision, HyroxStation } from '@/types/triathlon';
 import { parseHyroxResultsText } from '@/ui/wizard/steps/hyrox-results-parse';
 import { hyroxPastRaceSplits } from '@/calculations/hyrox-lose-time';
+import { hyroxDivisionOptions, isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -53,18 +54,31 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   let format: HyroxFormat | undefined = hx.hyroxPreviousTimeFormat;
   let raceEventId: string | undefined = hx.hyroxPreviousTimeRaceId;
   let raceDateISO: string | undefined = hx.hyroxPreviousRaceDate;
+  // A doubles result's division (the pair's category), so "where you lost
+  // time" compares it with the field it was raced in.
+  let division: HyroxDivision | undefined = hx.hyroxPreviousTimeDivision
+    ?? (isHyroxDoublesFormat(hx.format) ? hx.division : undefined);
   // The result on file opens filled in, so re-saving it keeps its splits
   // (applyHyroxPrevTimeUpdate replaces them with what this save carries).
+  // Every value remembers where it came from: 'stored' (the result on file)
+  // or 'session' (typed or pasted here). Stored values belong to the stored
+  // result only: when the finish, format or race moves away from it they are
+  // cleared on screen (and come back if it moves back), so one save never
+  // carries splits from two races. Stored station values are never written
+  // into the station benchmarks again (a later station test stays current).
   const stored = hyroxPastRaceSplits(hx);
   let splits: Partial<Record<HyroxStation, number>> = { ...stored.stations };
+  const stationOrigin: Partial<Record<HyroxStation, 'stored' | 'session'>> = {};
+  for (const st of Object.keys(stored.stations) as HyroxStation[]) stationOrigin[st] = 'stored';
   let runSplitsSec: Array<number | null> | undefined = stored.runLegsSec;
   let runTotalSec: number | undefined = stored.runTotalSec;
   let roxzoneSec: number | undefined = stored.roxzoneSec;
-  // Untouched stored splits are kept only for the same result, and never
-  // rewritten into the station benchmarks (a later station test stays the
-  // current benchmark). Any edit or paste makes them this save's splits.
+  let runOrigin: 'stored' | 'session' = 'stored';
   let splitsTouched = false;
   const initialResult = { timeSec, format, raceEventId, raceDateISO };
+  const isSameResult = (): boolean => timeSec === initialResult.timeSec && format === initialResult.format
+    && raceEventId === initialResult.raceEventId && raceDateISO === initialResult.raceDateISO;
+  let storedShown = true;
   let splitsExpanded = false;
 
   const overlay = document.createElement('div');
@@ -101,6 +115,14 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
           ${formatOptions.map(o => fmtCell(o, format === o.id)).join('')}
         </div>
         <div style="font-size:11px;color:var(--c-faint);margin-top:6px;line-height:1.5">Doubles times scale differently to singles. Getting this right matters.</div>
+        <div id="lpt-division-row" style="display:${isHyroxDoublesFormat(format) ? 'block' : 'none'};margin-top:10px">
+          <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px">Division</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+            ${(['women', 'men', 'mixed'] as HyroxDivision[]).map(d => `
+              <button data-division="${d}" type="button" style="padding:9px 8px;border-radius:12px;border:1px solid ${division === d ? 'var(--c-black)' : 'rgba(0,0,0,0.10)'};background:${division === d ? 'var(--c-black)' : 'rgba(255,255,255,0.95)'};color:${division === d ? '#FDFCF7' : 'var(--c-black)'};font-size:13px;cursor:pointer;display:${d === 'mixed' && format === 'pro_doubles' ? 'none' : 'block'}">${d === 'women' ? 'Women' : d === 'men' ? 'Men' : 'Mixed'}</button>
+            `).join('')}
+          </div>
+        </div>
       </div>
 
       <!-- Race event -->
@@ -129,6 +151,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
           <div style="font-size:12px;color:var(--c-muted)">Station split times <span style="color:var(--c-faint)">(optional)</span></div>
           <span id="lpt-splits-chev" style="font-size:12px;color:var(--c-faint);transition:transform 0.2s">▼</span>
         </div>
+        <div id="lpt-splits-note" style="display:none;font-size:11px;color:var(--c-faint);margin-top:6px;line-height:1.5">Splits from your previous result were cleared. Paste or enter this race's splits.</div>
         <div id="lpt-splits-body" style="display:none;margin-top:12px">
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px;line-height:1.5">Open hyresult.com, search your name, open your result, and go to the Timings tab. Copy as much of the splits as you can. A rough selection is fine. Tap "Paste from clipboard", or paste manually below.</div>
           <a id="lpt-results-open" href="https://hyresult.com/" target="_blank" rel="noopener" style="display:block;margin:0 0 8px;padding:10px 12px;border-radius:10px;background:transparent;border:1px solid var(--c-border);color:var(--c-black);font-size:13px;font-weight:500;text-align:center;text-decoration:none">Search hyresult.com →</a>
@@ -165,15 +188,73 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   };
   refreshSave();
 
+  const splitInputs = (): HTMLInputElement[] => [...overlay.querySelectorAll<HTMLInputElement>('.lpt-split-input')];
+  const statusEl = (): HTMLDivElement => overlay.querySelector('#lpt-parse-status') as HTMLDivElement;
+  /**
+   * The finish, format or race changed: stored splits leave the screen when
+   * the result is no longer the stored one, and return when it is again.
+   * `quiet` leaves the status line to the caller (a paste writes its own).
+   */
+  const onResultChange = (quiet = false): void => {
+    const same = isSameResult();
+    if (same === storedShown) return;
+    storedShown = same;
+    let moved = 0;
+    for (const input of splitInputs()) {
+      const st = input.getAttribute('data-station') as HyroxStation;
+      if (stationOrigin[st] !== 'stored') continue;
+      const v = stored.stations[st];
+      if (v == null) continue;
+      if (same) { splits[st] = v; input.value = fmtMmSs(v); } else { delete splits[st]; input.value = ''; }
+      moved++;
+    }
+    if (runOrigin === 'stored') {
+      const hadRuns = stored.runLegsSec != null || stored.runTotalSec != null || stored.roxzoneSec != null;
+      runSplitsSec = same ? stored.runLegsSec : undefined;
+      runTotalSec = same ? stored.runTotalSec : undefined;
+      roxzoneSec = same ? stored.roxzoneSec : undefined;
+      if (hadRuns) moved++;
+    }
+    if (moved > 0) {
+      const note = overlay.querySelector('#lpt-splits-note') as HTMLDivElement;
+      note.style.display = same ? 'none' : 'block';
+      if (!quiet && same) statusEl().style.display = 'none';
+    }
+  };
+
   // Time input
   const timeInput = overlay.querySelector('#lpt-time') as HTMLInputElement;
   timeInput.addEventListener('input', () => {
     const sec = parseTime(timeInput.value);
     timeSec = !isNaN(sec) && sec > 0 ? sec : undefined;
+    onResultChange();
     refreshSave();
   });
   timeInput.addEventListener('change', () => {
     if (timeSec != null) timeInput.value = fmtMmSs(timeSec);
+  });
+
+  // Division pills (doubles formats only)
+  const divisionRow = overlay.querySelector('#lpt-division-row') as HTMLDivElement;
+  const paintDivision = (): void => {
+    const doubles = isHyroxDoublesFormat(format);
+    divisionRow.style.display = doubles ? 'block' : 'none';
+    const options = format ? hyroxDivisionOptions(format, s.biologicalSex) ?? [] : [];
+    if (division && doubles && !options.includes(division)) division = undefined;
+    overlay.querySelectorAll<HTMLButtonElement>('[data-division]').forEach(b => {
+      const d = b.getAttribute('data-division') as HyroxDivision;
+      const active = d === division;
+      b.style.display = options.includes(d) ? 'block' : 'none';
+      b.style.borderColor = active ? 'var(--c-black)' : 'rgba(0,0,0,0.10)';
+      b.style.background = active ? 'var(--c-black)' : 'rgba(255,255,255,0.95)';
+      b.style.color = active ? '#FDFCF7' : 'var(--c-black)';
+    });
+  };
+  overlay.querySelectorAll<HTMLButtonElement>('[data-division]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      division = btn.getAttribute('data-division') as HyroxDivision;
+      paintDivision();
+    });
   });
 
   // Format pills
@@ -186,6 +267,8 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
         b.style.background = active ? 'var(--c-black)' : 'rgba(255,255,255,0.95)';
         b.style.color = active ? '#FDFCF7' : 'var(--c-black)';
       });
+      paintDivision();
+      onResultChange();
       refreshSave();
     });
   });
@@ -209,11 +292,13 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       raceDateISO = undefined;
       raceDateRow.style.display = 'none';
     }
+    onResultChange();
   });
   raceDateInput.addEventListener('change', () => {
     const v = raceDateInput.value;
     if (v && /^\d{4}-\d{2}$/.test(v)) raceDateISO = `${v}-15`;
     else if (!v) raceDateISO = undefined;
+    onResultChange();
   });
 
   // Splits accordion
@@ -239,6 +324,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       const station = input.getAttribute('data-station') as HyroxStation;
       const raw = input.value.trim();
       splitsTouched = true;
+      stationOrigin[station] = 'session';
       if (raw === '') {
         delete splits[station];
         return;
@@ -279,6 +365,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
     runSplitsSec = result.runLegsSec;
     runTotalSec = result.runTotalSec;
     roxzoneSec = result.roxzoneSec;
+    runOrigin = 'session';
     // Fields from the looser fallback scan get an amber "check this" border;
     // it clears when the user focuses the field (see focus handler below).
     let lowConfidenceCount = 0;
@@ -288,6 +375,7 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       if (sec == null) return;
       input.value = fmtMmSs(sec);
       splits[station] = sec;
+      stationOrigin[station] = 'session';
       if (result.stationSource[station] === 'fallback') {
         input.style.borderColor = 'var(--c-caution)';
         input.dataset.lowConfidence = '1';
@@ -302,6 +390,9 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
       timeInput.value = fmtMmSs(result.totalRaceSec);
       refreshSave();
     }
+    // A pasted finish from another race clears the stored stations the
+    // paste did not replace.
+    onResultChange(true);
     status.style.display = 'block';
     const parts: string[] = [];
     if (stationCount > 0) parts.push(`${stationCount} of 8 station times`);
@@ -344,21 +435,32 @@ export function openHyroxLogPrevTimeModal(onSaved?: () => void): void {
   // Save
   saveBtn.addEventListener('click', () => {
     if (timeSec == null || format == null) return;
-    const sameResult = timeSec === initialResult.timeSec && format === initialResult.format
-      && raceEventId === initialResult.raceEventId && raceDateISO === initialResult.raceDateISO;
+    const sameResult = isSameResult();
+    // What is on screen belongs to this result (stored values left the
+    // screen when the result changed); only typed or pasted stations become
+    // station benchmarks.
+    const sessionSplits = Object.fromEntries(
+      (Object.keys(splits) as HyroxStation[]).filter(st => stationOrigin[st] === 'session').map(st => [st, splits[st]]),
+    ) as Partial<Record<HyroxStation, number>>;
+    // A different result keeps only this session's values, whatever the
+    // screen shows; the same result keeps its stored ones beside them.
+    const resultSplits = sameResult ? splits : sessionSplits;
+    const keepRuns = sameResult || runOrigin === 'session';
     applyHyroxPrevTimeUpdate({
       timeSec,
       format,
       raceEventId,
       raceDateISO,
-      ...(splitsTouched
-        ? {
-            stationSplits: Object.keys(splits).length > 0 ? splits : undefined,
-            runSplitsSec,
-            runTotalSec,
-            roxzoneSec,
-          }
-        : { keepPreviousSplits: sameResult }),
+      division: isHyroxDoublesFormat(format) ? division : undefined,
+      ...(sameResult && !splitsTouched
+        ? { keepPreviousSplits: true }
+        : {
+            stationSplits: Object.keys(resultSplits).length > 0 ? resultSplits : undefined,
+            benchmarkSplits: sessionSplits,
+            runSplitsSec: keepRuns ? runSplitsSec : undefined,
+            runTotalSec: keepRuns ? runTotalSec : undefined,
+            roxzoneSec: keepRuns ? roxzoneSec : undefined,
+          }),
     });
     overlay.remove();
     onSaved?.();

@@ -13,14 +13,14 @@ import {
   HYROX_MTL_CAP,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
+import type { HyroxConfig, HyroxDivision, HyroxStation } from '@/types/triathlon';
 import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { getHyroxEventById } from '@/data/hyrox-events';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { upsertRaceSplitEntry } from '@/calculations/hyrox-station-history';
-import { isHyroxProFormat } from '@/calculations/hyrox-division';
+import { isHyroxDoublesFormat, isHyroxProFormat } from '@/calculations/hyrox-division';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { localDateKey } from '@/utils/local-date';
 
@@ -31,7 +31,15 @@ export interface HyroxPrevTimeUpdate {
   format: HyroxFormat;
   raceEventId?: string;
   raceDateISO?: string;
+  /** A doubles result's division (the pair's category). Ignored for singles. */
+  division?: HyroxDivision;
+  /** The result's station splits (hyroxPreviousStationSplits). */
   stationSplits?: Partial<Record<HyroxStation, number>>;
+  /** The splits entered or pasted in this save, written to the station
+   *  benchmarks and history. Default: stationSplits. The modal leaves out
+   *  values it only re-showed from the stored result, so a station test
+   *  logged since stays the current benchmark. */
+  benchmarkSplits?: Partial<Record<HyroxStation, number>>;
   /** Run 1 to run 8 from the pasted result; null where a leg was missing. */
   runSplitsSec?: Array<number | null>;
   /** The 8 runs together (Run Total). */
@@ -61,6 +69,9 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   hx.hyroxPreviousTimeRaceId = update.raceEventId;
   hx.hyroxPreviousRaceDate =
     (update.raceEventId && getHyroxEventById(update.raceEventId)?.date) || update.raceDateISO;
+  // The division a doubles result was raced in; singles carry none.
+  const prevDivision = isHyroxDoublesFormat(update.format) ? update.division : undefined;
+  hx.hyroxPreviousTimeDivision = prevDivision;
 
   // The previous result's own splits ("where you lost time" reads them with
   // its finish): all four fields are replaced together on every save, so a
@@ -78,17 +89,18 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
     hx.hyroxPreviousRoxzoneSec = update.roxzoneSec && update.roxzoneSec > 0 ? update.roxzoneSec : undefined;
   }
 
-  if (!update.keepPreviousSplits && update.stationSplits && Object.keys(update.stationSplits).length > 0) {
+  const benchmarkSplits = update.benchmarkSplits ?? update.stationSplits;
+  if (!update.keepPreviousSplits && benchmarkSplits && Object.keys(benchmarkSplits).length > 0) {
     const isPrevDoubles = update.format === 'open_doubles' || update.format === 'pro_doubles';
     if (isPrevDoubles) {
       hx.stationBenchmarksDoubles = {
         ...(hx.stationBenchmarksDoubles ?? {}),
-        ...update.stationSplits,
+        ...benchmarkSplits,
       } as HyroxConfig['stationBenchmarksDoubles'];
     } else {
       hx.stationBenchmarksSingles = {
         ...(hx.stationBenchmarksSingles ?? {}),
-        ...update.stationSplits,
+        ...benchmarkSplits,
       } as HyroxConfig['stationBenchmarksSingles'];
     }
     // One history entry per split, source 'race', with the race's format and
@@ -103,7 +115,7 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
     const raceDateISO = hx.hyroxPreviousRaceDate ?? localDateKey(new Date());
     hx.stationBenchmarkHistory = hx.stationBenchmarkHistory ?? {};
     for (const st of HYROX_STATION_ORDER) {
-      const sec = update.stationSplits[st];
+      const sec = benchmarkSplits[st];
       if (sec == null) continue;
       hx.stationBenchmarkHistory[st] = upsertRaceSplitEntry(hx.stationBenchmarkHistory[st], {
         dateISO: raceDateISO,
