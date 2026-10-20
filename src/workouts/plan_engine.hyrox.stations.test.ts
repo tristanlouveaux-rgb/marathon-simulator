@@ -41,7 +41,7 @@ import { generateHyroxPlan, generateHyroxPlanDetailed, HYROX_GENERATOR_VERSION }
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxEasyErg } from './hyrox-generators';
 import { hyroxComponentSets } from './hyrox-session-shape';
-import { hyroxBeginnerRaceWeightWeek, hyroxRacePaceSets } from './hyrox-station-dose';
+import { hyroxBeginnerRaceWeightWeek, hyroxRacePaceSets, hyroxLoadKgAt } from './hyrox-station-dose';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 import { noteRatingSource } from '@/calculations/athlete-rating';
@@ -148,7 +148,7 @@ describe('station sessions by tier and phase', () => {
 });
 
 describe('the beginner load schedule in a plan', () => {
-  it('sleds unloaded in weeks 1-2, then 50%; the others 60%; race weight from 4 weeks before race week; bricks read the same loads', () => {
+  it('sleds unloaded in weeks 1-2, then 50%; the others the standard implement at or below 60%; race weight from the race-weight week; bricks read the same loads', () => {
     const s = build('beginner', 5, 16, { biologicalSex: 'female' } as Partial<OnboardingState>);
     const tw = planTrainingWeeks(s);
     const rw = hyroxBeginnerRaceWeightWeek(tw);
@@ -160,7 +160,9 @@ describe('the beginner load schedule in a plan', () => {
           if (w >= rw) expect(c.loadPct, `W${w} ${x.n} ${c.type}`).toBeUndefined();
           else if (sled && w <= 2) expect(c.loadKg).toBe(0);
           else if (sled) expect(c.loadKg).toBe(c.type === 'sled_push' ? 50 : 37.5); // 50% of 102 / 78, to the plate
-          else expect(c.loadPct).toBeCloseTo(0.6, 9);
+          // The implement at or below 60% (W-Open: 8 kg kettlebells, a 5 kg
+          // sandbag, a 2 kg ball: HYROX_IMPLEMENT_SIZES_KG).
+          else expect(c.loadKg).toBe(hyroxLoadKgAt(c.type as HyroxStation, 'W-Open', 0.6));
         }
       }
     }

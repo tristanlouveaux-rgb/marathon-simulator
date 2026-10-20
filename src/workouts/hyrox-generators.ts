@@ -499,6 +499,41 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
   };
 }
 
+/**
+ * The same station session or brick with no station loaded above `loads`
+ * (kg per station): a deload or taper week that repeats the reference week's
+ * session takes its own week's beginner loads, never the heavier loads the
+ * reference week held (Tristan 2026-10-20). Each lowered component's MTL is
+ * recomputed at its new external load (stationComponent's rule); a session
+ * without lane H2b components, or with nothing to lower, is returned
+ * unchanged.
+ */
+export function withHyroxStationLoads(
+  w: Workout, loads: Partial<Record<HyroxStation, number>> | undefined, loadTier: HyroxLoadTier, bodyWeightKg?: number,
+): Workout {
+  if (!loads || !w.hyroxSpec) return w;
+  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+  let changed = false;
+  const comps = (w.hyroxComponents ?? []).map(c => {
+    if (c.type === 'run' || c.loadKg == null) return c;
+    const st = c.type as HyroxStation;
+    const cap = loads[st];
+    if (cap == null || cap >= c.loadKg - 1e-9) return c;
+    changed = true;
+    const race = hyroxRaceLoadKg(st, loadTier);
+    const externalKg = isHyroxSled(st) ? cap * SLED_EXTERNAL_LOAD_FRACTION : cap;
+    const minutes = ((c.durationSec ?? 0) / 60) * hyroxComponentSets(c, rounds);
+    const { loadPct: _pct, ...rest } = c;
+    return {
+      ...rest,
+      loadKg: cap,
+      ...(race != null && cap < race - 1e-9 ? { loadPct: cap / race } : {}),
+      mtl: computeComponentMTL(minutes, w.rpe ?? w.r ?? 5, st, externalKg, bodyWeightKg),
+    };
+  });
+  return changed ? finishHyroxSession({ ...w, hyroxComponents: comps }) : w;
+}
+
 // ─── Easy erg session ─────────────────────────────────────────────────────────
 
 export { HYROX_EASY_ERG_TYPE, isHyroxEasyErg } from './hyrox-easy-erg';
@@ -571,13 +606,6 @@ export function generateHyroxEasyErg(p: EasyErgParams): Workout | null {
  *  time sat faster than race pace at RPE 5). */
 export const HYROX_EASY_PASS_TIME_FACTOR = 1.2;
 
-/** Implement name for "the nearest lighter ..." in a load below race weight. */
-const LIGHTER_IMPLEMENT: Partial<Record<HyroxStation, string>> = {
-  farmer_carry: 'pair',
-  sandbag_lunges: 'sandbag',
-  wall_balls: 'ball',
-};
-
 const DOUBLES_LINE = 'Doubles: half of every station, each partner\'s share of the race.';
 
 /** Rest as copy: "2 min", "90 s", "30 s". */
@@ -629,8 +657,9 @@ function wallBallTargetPhrase(m: number | null): string {
 }
 
 /** A station component's load as copy: "152 kg incl. sled", "sled unloaded",
- *  "2 × 9.6 kg (60% of race weight, or the nearest lighter pair)", "6 kg ball
- *  to 2.70 m". Empty for a station with no load. */
+ *  "2 × 8 kg (50% of race weight)", "6 kg ball to 2.70 m". A fixed implement
+ *  below race weight is a standard size (HYROX_IMPLEMENT_SIZES_KG), so the
+ *  share named is the implement's own. Empty for a station with no load. */
 function loadPhrase(c: HyroxComponent, wallBallTargetM: number | null): string {
   if (c.loadKg == null) return '';
   const st = c.type as HyroxStation;
@@ -641,8 +670,7 @@ function loadPhrase(c: HyroxComponent, wallBallTargetM: number | null): string {
   else if (st === 'sandbag_lunges') core = `${kg} kg sandbag`;
   else core = `${kg} kg ball ${wallBallTargetPhrase(wallBallTargetM)}`;
   if (c.loadPct == null || c.loadKg <= 0) return core;
-  const lighter = LIGHTER_IMPLEMENT[st];
-  return `${core} (${Math.round(c.loadPct * 100)}% of race weight${lighter ? `, or the nearest lighter ${lighter}` : ''})`;
+  return `${core} (${Math.round(c.loadPct * 100)}% of race weight)`;
 }
 
 /** A station component's prescription as copy, without the set count:

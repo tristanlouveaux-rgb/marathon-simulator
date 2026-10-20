@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   generateHyroxStation, generateHyroxBrick, withHyroxRounds, withoutHyroxStation, hyroxStationToCut,
   hyroxMinRounds, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown, HYROX_EASY_PASS_TIME_FACTOR, MIN_CIRCUIT_ROUNDS,
+  withHyroxStationLoads,
   type StationParams, type BrickParams,
 } from './hyrox-generators';
 import { hyroxComponentSets, hyroxSessionDurationSec } from './hyrox-session-shape';
@@ -297,19 +298,35 @@ describe('prescriptions: damper, lanes, the wall-ball target, loads, doubles', (
     expect(carry.d).toContain('Farmer Carry: 4 × 50 m, 2 × 32 kg');
   });
 
-  it('a beginner\'s loads below race weight say so: the sled unloaded, 50%, 60% and the nearest lighter implement', () => {
-    const loads = { sled_push: 0, sled_pull: 37.5, farmer_carry: 9.6, sandbag_lunges: 6, wall_balls: 2.4 };
+  it('a beginner\'s loads below race weight say so: the sled unloaded, 50%, and the implement\'s own share of race weight', () => {
+    const loads = { sled_push: 0, sled_pull: 37.5, farmer_carry: 8, sandbag_lunges: 5, wall_balls: 2 };
     const a = station({ kind: 'station_technique', band: 'beginner', slotIndex: 8, seed: WOMAN, loadTier: 'W-Open', stationLoads: loads });
     const b = station({ kind: 'station_technique', band: 'beginner', slotIndex: 7, seed: WOMAN, loadTier: 'W-Open', stationLoads: loads });
     const text = `${a.d} ${b.d}`;
     expect(text).toContain('Sled Push: 4 × 1 lane (12.5 m), sled unloaded.');
     expect(text).toContain('Sled Pull: 4 × 1 lane (12.5 m), 37.5 kg incl. sled (48% of race weight).');
-    expect(text).toContain('Farmer Carry: 2 × 50 m, 2 × 9.6 kg (60% of race weight, or the nearest lighter pair).');
-    expect(text).toContain('Sandbag Lunges: 2 × 25 m, 6 kg sandbag (60% of race weight, or the nearest lighter sandbag).');
-    expect(text).toContain('Wall Balls: 2 × 25 reps, 2.4 kg ball to 2.70 m (60% of race weight, or the nearest lighter ball).');
+    expect(text).toContain('Farmer Carry: 2 × 50 m, 2 × 8 kg (50% of race weight).');
+    expect(text).toContain('Sandbag Lunges: 2 × 25 m, 5 kg sandbag (50% of race weight).');
+    expect(text).toContain('Wall Balls: 2 × 25 reps, 2 kg ball to 2.70 m (50% of race weight).');
     const carry = stationsOf(b).find(c => c.type === 'farmer_carry')!;
-    expect(carry.loadKg).toBe(9.6);
-    expect(carry.loadPct).toBeCloseTo(0.6, 9);
+    expect(carry.loadKg).toBe(8);
+    expect(carry.loadPct).toBeCloseTo(0.5, 9);
+  });
+
+  it('withHyroxStationLoads lowers a load to the week\'s own, never raises one, and recomputes the MTL (deload and taper copies, 2026-10-20)', () => {
+    const stepped = { sled_push: 52.5, sled_pull: 40, farmer_carry: 12, sandbag_lunges: 10, wall_balls: 4 };
+    const w = station({ kind: 'station_technique', band: 'beginner', slotIndex: 8, seed: WOMAN, loadTier: 'W-Open', stationLoads: stepped, bodyWeightKg: 65 });
+    const own = { sled_push: 50, sled_pull: 37.5, farmer_carry: 8, sandbag_lunges: 5, wall_balls: 2 };
+    const lowered = withHyroxStationLoads(w, own, 'W-Open', 65);
+    for (const c of stationsOf(lowered)) {
+      if (c.loadKg == null) continue;
+      expect(c.loadKg).toBe(own[c.type as keyof typeof own]);
+    }
+    expect(lowered.musculoTendonLoad!).toBeLessThan(w.musculoTendonLoad!);
+    expect(lowered.estimatedDurationMin).toBe(w.estimatedDurationMin);
+    // Heavier loads than the session's are ignored.
+    expect(withHyroxStationLoads(w, { sled_push: 100, farmer_carry: 16 }, 'W-Open', 65)).toBe(w);
+    expect(withHyroxStationLoads(w, undefined, 'W-Open', 65)).toBe(w);
   });
 
   it('no description holds an em dash', () => {

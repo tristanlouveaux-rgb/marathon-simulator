@@ -10,6 +10,7 @@ import {
   HYROX_STATION_SET_FRACTION, HYROX_STATION_FORMATS, HYROX_BEGINNER_LOADS, HYROX_BRICK_FORMATS,
   hyroxStationSetAmount, hyroxRacePaceSets, hyroxTechniqueSets, hyroxDoublesSets,
   hyroxBeginnerRaceWeightWeek, hyroxBeginnerLoadFraction, hyroxLoadKgAt, hyroxRaceLoadKg,
+  HYROX_BEGINNER_MIN_REDUCED_WEEKS, HYROX_IMPLEMENT_SIZES_KG,
   hyroxRpeToRir, hyroxBeginnerStationLoadKg, hyroxBrickStationRounds,
 } from './hyrox-station-dose';
 import { STRENGTH_MIN_INCREMENT_KG } from '@/constants/strength-constants';
@@ -62,11 +63,19 @@ describe('station sets and formats', () => {
 });
 
 describe('the beginner load schedule', () => {
-  it('race weight from 4 weeks before race week, never inside the unloaded sled weeks', () => {
+  it('race weight from the week before the full sim, else 4 weeks before race week; a reduced-load week always comes first (2026-10-20)', () => {
     expect(hyroxBeginnerRaceWeightWeek(16)).toBe(12);
     expect(hyroxBeginnerRaceWeightWeek(8)).toBe(4);
-    expect(hyroxBeginnerRaceWeightWeek(6)).toBe(HYROX_BEGINNER_LOADS.sledUnloadedWeeks + 1);
-    expect(hyroxBeginnerRaceWeightWeek(2)).toBe(3);
+    // The week before the full sim.
+    expect(hyroxBeginnerRaceWeightWeek(16, 12)).toBe(11);
+    // Plans of 7 weeks or fewer keep one reduced-load week after the
+    // unloaded sled weeks (before, a 6-week plan reached race weight in week 3).
+    const earliest = HYROX_BEGINNER_LOADS.sledUnloadedWeeks + HYROX_BEGINNER_MIN_REDUCED_WEEKS + 1;
+    expect(earliest).toBe(4);
+    expect(hyroxBeginnerRaceWeightWeek(7)).toBe(earliest);
+    expect(hyroxBeginnerRaceWeightWeek(6)).toBe(earliest);
+    expect(hyroxBeginnerRaceWeightWeek(2)).toBe(earliest);
+    expect(hyroxBeginnerLoadFraction('sled_push', 3, hyroxBeginnerRaceWeightWeek(7))).toBe(0.5);
   });
 
   it('sleds unloaded in weeks 1 and 2, then 50%; the other loaded stations 60%; race weight from the race-weight week', () => {
@@ -84,14 +93,23 @@ describe('the beginner load schedule', () => {
     for (const st of ['ski_erg', 'row_erg', 'burpee_broad_jumps'] as const) expect(hyroxBeginnerLoadFraction(st, 5, rw)).toBeNull();
   });
 
-  it('a sled load rounds down to the 2.5 kg plate step; an implement keeps the exact figure', () => {
+  it('a sled load rounds down to the 2.5 kg plate step; an implement takes the largest standard size at or below the fraction', () => {
     expect(hyroxLoadKgAt('sled_push', 'W-Open', 0.5)).toBe(50); // 51 kg, at or below
     expect(hyroxLoadKgAt('sled_pull', 'M-Open', 0.5)).toBe(50); // 51.5 kg
     expect(hyroxLoadKgAt('sled_pull', 'M-Pro', 0.5)).toBe(75); // 76.5 kg
     expect(hyroxLoadKgAt('sled_push', 'W-Open', 0)).toBe(0); // unloaded
-    expect(hyroxLoadKgAt('farmer_carry', 'W-Open', 0.6)).toBe(9.6);
-    expect(hyroxLoadKgAt('sandbag_lunges', 'M-Open', 0.6)).toBe(12);
-    expect(hyroxLoadKgAt('wall_balls', 'W-Open', 0.6)).toBe(2.4);
+    expect(hyroxLoadKgAt('farmer_carry', 'W-Open', 0.6)).toBe(8); // 9.6 kg: the 8 kg kettlebells
+    expect(hyroxLoadKgAt('farmer_carry', 'M-Open', 0.6)).toBe(12); // 14.4 kg
+    expect(hyroxLoadKgAt('sandbag_lunges', 'M-Open', 0.6)).toBe(10); // 12 kg: two 5 kg inner bags
+    expect(hyroxLoadKgAt('sandbag_lunges', 'W-Open', 0.6)).toBe(5); // 6 kg
+    expect(hyroxLoadKgAt('wall_balls', 'W-Open', 0.6)).toBe(2); // 2.4 kg
+    expect(hyroxLoadKgAt('wall_balls', 'M-Pro', 0.6)).toBe(4); // 5.4 kg
+    // Every race weight sits on its ladder.
+    for (const tier of ['W-Open', 'M-Open', 'M-Pro'] as const) {
+      for (const st of ['farmer_carry', 'sandbag_lunges', 'wall_balls'] as const) {
+        expect(HYROX_IMPLEMENT_SIZES_KG[st]).toContain(hyroxRaceLoadKg(st, tier));
+      }
+    }
     expect(hyroxLoadKgAt('wall_balls', 'M-Pro', 1)).toBe(9);
     expect(hyroxLoadKgAt('ski_erg', 'M-Pro', 1)).toBeNull();
   });
@@ -115,8 +133,15 @@ describe('RPE autoregulation, as strength-progression\'s suggestNextWeight', () 
     expect(hyroxBeginnerStationLoadKg({ ...base, memory: { kg: 50, ratedRpe: 4, targetRpe: 5 } })).toBe(50 + STRENGTH_MIN_INCREMENT_KG);
     // Base climbs too.
     expect(hyroxBeginnerStationLoadKg({ ...base, phase: 'base', memory: { kg: 50, ratedRpe: 3, targetRpe: 5 } })).toBe(52.5);
-    // An implement steps by at least one plate too.
-    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'farmer_carry', memory: { kg: 9.6, ratedRpe: 4, targetRpe: 5 } })).toBeCloseTo(12.1, 9);
+    // A fixed implement steps to the next standard size (2026-10-20), never
+    // a 2.5 kg plate: 8 kg kettlebells to 12, a 2 kg ball to 4, a 5 kg
+    // sandbag to 10.
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'farmer_carry', memory: { kg: 8, ratedRpe: 4, targetRpe: 5 } })).toBe(12);
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'wall_balls', memory: { kg: 2, ratedRpe: 4, targetRpe: 5 } })).toBe(4);
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'sandbag_lunges', memory: { kg: 5, ratedRpe: 4, targetRpe: 5 } })).toBe(10);
+    // A held implement keeps its size; race weight is the ceiling.
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'wall_balls', memory: { kg: 2, ratedRpe: 5, targetRpe: 5 } })).toBe(2);
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'wall_balls', memory: { kg: 4, ratedRpe: 3, targetRpe: 5 } })).toBe(4);
   });
 
   it('on target or harder, or unrated: hold', () => {
@@ -144,10 +169,10 @@ describe('RPE autoregulation, as strength-progression\'s suggestNextWeight', () 
     expect(hyroxBeginnerStationLoadKg({ ...base, weekIndex: 12, memory: { kg: 60, targetRpe: 5 } })).toBe(102);
     // A climb never passes race weight.
     expect(hyroxBeginnerStationLoadKg({ ...base, memory: { kg: 101, ratedRpe: 3, targetRpe: 5 } })).toBe(102);
-    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'wall_balls', memory: { kg: 2.4, ratedRpe: 3, targetRpe: 5 } })).toBe(4);
-    // No memory: the anchor.
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'wall_balls', memory: { kg: 2, ratedRpe: 3, targetRpe: 5 } })).toBe(4);
+    // No memory: the anchor (a 6 kg sandbag share is the 5 kg bag).
     expect(hyroxBeginnerStationLoadKg({ ...base, weekIndex: 1 })).toBe(0);
-    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'sandbag_lunges' })).toBe(6);
+    expect(hyroxBeginnerStationLoadKg({ ...base, station: 'sandbag_lunges' })).toBe(5);
     expect(hyroxBeginnerStationLoadKg({ ...base, station: 'row_erg' })).toBeNull();
   });
 });

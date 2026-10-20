@@ -118,7 +118,7 @@ import { plannedTssPerMin } from '@/constants';
 import {
   generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS, MIN_CIRCUIT_ROUNDS, hyroxRunLengthKm,
   withHyroxRounds, withoutHyroxStation, generateHyroxEasyErg, hyroxEasyErgMtlPerMin, isHyroxEasyErg, HYROX_EASY_ERG_TYPE,
-  hyroxStationToCut, hyroxMinRounds,
+  hyroxStationToCut, hyroxMinRounds, withHyroxStationLoads,
 } from './hyrox-generators';
 import {
   findHyroxWeekSchedule, scheduleHyroxWeek, isHighIntensity as isHyroxHardSession, isHardRun, isEccentricSession,
@@ -1090,7 +1090,13 @@ function generateWeekSessions(
         if (pick) {
           const was = out.n;
           const { id: _id, dayOfWeek: _dow, dayName: _day, ...copy } = pick;
-          out = withHyroxRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0));
+          // At this week's own beginner loads, never the heavier loads the
+          // reference week's session held (Tristan 2026-10-20: a deload
+          // after a load step copied the stepped load).
+          out = withHyroxStationLoads(
+            withHyroxRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0)),
+            inputs.stationLoads, loadTier, bodyWeightKg,
+          );
           adjustments.push(sameType.length > 0
             ? `W${weekIndex}: ${out.n} repeats the reference week's at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`
             : `W${weekIndex}: ${was} becomes the reference week's ${out.n} at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`);

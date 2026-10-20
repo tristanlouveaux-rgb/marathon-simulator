@@ -152,12 +152,55 @@ export function hyroxRaceLoadKg(station: HyroxStation, tier: HyroxLoadTier): num
 }
 
 /**
+ * Standard implement sizes (kg) for the fixed implements (product facts, not
+ * physiology): a beginner's load is the largest size at or below the
+ * schedule's fraction of race weight (sheet: "the nearest implement at or
+ * below it"), and a load step moves to the next size up (Tristan
+ * 2026-10-20), never the 2.5 kg plate step a sled takes. Every HYROX race
+ * weight is on its ladder.
+ *   - Farmers carry (kettlebells; HYROX races 2 x 16, 24 or 32 kg): Rogue
+ *     Kettlebells are sold at 4, 6, 8, 12, 16, 20, 24, 28 and 32 kg in this
+ *     range (roguefitness.com/rogue-kettlebells, checked 2026-10-20).
+ *   - Wall balls (HYROX races 4, 6 or 9 kg): the Centr x HYROX Competition
+ *     Wall Ball (Centr is HYROX's official equipment provider) comes in 2,
+ *     4, 6, 9 and 12 kg, the 4, 6 and 9 kg balls the competition weights
+ *     (shop.hyroxequipment.centr.com, checked 2026-10-20).
+ *   - Sandbags (HYROX races 10, 20 or 30 kg): the Centr x HYROX Competition
+ *     Sandbag comes in 10, 20 and 30 kg, filled with 5 kg inner bags (2, 4
+ *     and 6 of them; centr.com, checked 2026-10-20), so a bag loads in 5 kg
+ *     steps.
+ */
+export const HYROX_IMPLEMENT_SIZES_KG: Partial<Record<HyroxStation, readonly number[]>> = {
+  farmer_carry: [4, 6, 8, 12, 16, 20, 24, 28, 32],
+  wall_balls: [2, 4, 6, 9, 12],
+  sandbag_lunges: [5, 10, 15, 20, 25, 30],
+};
+
+/** The largest standard size at or below `kg` (the smallest size when
+ *  `kg` sits under it), or `kg` for a station with no ladder. */
+export function hyroxImplementAtOrBelow(station: HyroxStation, kg: number): number {
+  const sizes = HYROX_IMPLEMENT_SIZES_KG[station];
+  if (!sizes) return kg;
+  let pick = sizes[0];
+  for (const x of sizes) if (x <= kg + 1e-9) pick = x;
+  return pick;
+}
+
+/** The next standard size above `kg`, or `kg` at the top of the ladder or
+ *  for a station with no ladder. */
+export function hyroxImplementAbove(station: HyroxStation, kg: number): number {
+  const sizes = HYROX_IMPLEMENT_SIZES_KG[station];
+  if (!sizes) return kg;
+  return sizes.find(x => x > kg + 1e-9) ?? kg;
+}
+
+/**
  * The beginner load schedule (sheet technique.station_session, Centr's
  * beginner plan at the low end of each range):
  *   - sleds unloaded in plan weeks 1 and 2, then 50% of race sled weight;
  *   - the other loaded stations (farmers carry, sandbag, wall ball) at 60%;
- *   - race weight from the week before the full sim, or 4 weeks out without
- *     one (race sims are part 2: none yet), so the race is not the first
+ *   - race weight from the week before the full sim, or 4 weeks before race
+ *     week in a plan with no full sim, so the race is not the first
  *     race-weight session.
  */
 export const HYROX_BEGINNER_LOADS = {
@@ -167,14 +210,25 @@ export const HYROX_BEGINNER_LOADS = {
   raceWeightWeeksOut: 4,
 } as const;
 
+/** Reduced-load weeks a beginner holds after the unloaded sled weeks, before
+ *  race weight, whatever the plan's length (Tristan 2026-10-20: plans of 7
+ *  weeks or fewer keep at least one reduced-load week; before, a 7-week plan
+ *  took the sleds from unloaded to race weight in week 3). */
+export const HYROX_BEGINNER_MIN_REDUCED_WEEKS = 1;
+
 /**
- * First plan week at race weight for a beginner: 4 weeks before race week
- * (`raceWeekIndex`, the plan's final training week), never inside the
- * unloaded sled weeks. In a plan of 7 weeks or fewer the reduced-load weeks
- * shrink or vanish (an open question).
+ * First plan week at race weight for a beginner: the week before the full
+ * race simulation (`fullSimWeek`, sheet technique.station_session: race
+ * weight from the week before the full sim, so the sim is not the first
+ * race-weight session), or 4 weeks before race week (`raceWeekIndex`, the
+ * plan's final training week) in a plan with no full sim. Never before the
+ * unloaded sled weeks and HYROX_BEGINNER_MIN_REDUCED_WEEKS reduced-load
+ * weeks after them.
  */
-export function hyroxBeginnerRaceWeightWeek(raceWeekIndex: number): number {
-  return Math.max(HYROX_BEGINNER_LOADS.sledUnloadedWeeks + 1, raceWeekIndex - HYROX_BEGINNER_LOADS.raceWeightWeeksOut);
+export function hyroxBeginnerRaceWeightWeek(raceWeekIndex: number, fullSimWeek?: number | null): number {
+  const earliest = HYROX_BEGINNER_LOADS.sledUnloadedWeeks + HYROX_BEGINNER_MIN_REDUCED_WEEKS + 1;
+  const start = fullSimWeek != null ? fullSimWeek - 1 : raceWeekIndex - HYROX_BEGINNER_LOADS.raceWeightWeeksOut;
+  return Math.max(earliest, start);
 }
 
 /** The beginner schedule's fraction of race weight for a loaded station in
@@ -191,9 +245,11 @@ export function hyroxBeginnerLoadFraction(station: HyroxStation, weekIndex: numb
  * A fraction of race weight as a prescribed load (kg). Sleds take plates, so
  * the sled total rounds down to the plate step (STRENGTH_MIN_INCREMENT_KG,
  * 2.5 kg, strength-progression's real plate jump): at or below the fraction.
- * The farmers carry, sandbag and wall ball are fixed implements: the exact
- * figure, and the prescription names "the nearest lighter" implement (sheet:
- * the nearest implement at or below it). No implement ladder is sourced.
+ * The farmers carry, sandbag and wall ball are fixed implements: the largest
+ * standard size at or below the fraction (HYROX_IMPLEMENT_SIZES_KG; sheet:
+ * the nearest implement at or below it), never above race weight. Before
+ * (lane H2b part 1) the exact figure, with "or the nearest lighter" in the
+ * prescription.
  */
 export function hyroxLoadKgAt(station: HyroxStation, tier: HyroxLoadTier, fraction: number): number | null {
   const race = hyroxRaceLoadKg(station, tier);
@@ -201,7 +257,7 @@ export function hyroxLoadKgAt(station: HyroxStation, tier: HyroxLoadTier, fracti
   if (fraction >= 1) return race;
   const kg = race * Math.max(0, fraction);
   if (isHyroxSled(station)) return Math.floor(kg / STRENGTH_MIN_INCREMENT_KG + 1e-9) * STRENGTH_MIN_INCREMENT_KG;
-  return Math.round(kg * 10) / 10;
+  return Math.min(race, hyroxImplementAtOrBelow(station, kg));
 }
 
 /**
@@ -227,12 +283,15 @@ export interface HyroxStationLoadMemory {
 
 /**
  * A beginner's load for a station in a plan week: the schedule's anchor, or
- * the load the last session held, stepped exactly as strength-progression's
- * suggestNextWeight steps a lift (a 2.5% step, at least one 2.5 kg plate;
- * climbs only in base and build when the last session felt easier than its
- * target RPE; holds in peak, taper and deload weeks; suppressed by an injury
- * that adapts or pauses strength work), whichever is heavier, never above
- * race weight. Null for a station with no load.
+ * the load the last session held, stepped when strength-progression's
+ * suggestNextWeight steps a lift (climbs only in base and build when the last
+ * session felt easier than its target RPE; holds in peak, taper and deload
+ * weeks; suppressed by an injury that adapts or pauses strength work),
+ * whichever is heavier, never above race weight. A sled steps as a lift does
+ * (2.5%, at least one 2.5 kg plate); a fixed implement steps to the next
+ * standard size (HYROX_IMPLEMENT_SIZES_KG, Tristan 2026-10-20: a plate step
+ * took a 2.4 kg wall ball to race weight in one or two steps). Null for a
+ * station with no load.
  */
 export function hyroxBeginnerStationLoadKg(args: {
   station: HyroxStation;
@@ -249,7 +308,7 @@ export function hyroxBeginnerStationLoadKg(args: {
   if (race == null || fraction == null) return null;
   const anchor = hyroxLoadKgAt(args.station, args.loadTier, fraction) ?? 0;
   const m = args.memory;
-  const stepped = m
+  const suggested = m
     ? suggestNextWeight({
         lastWeightKg: m.kg,
         lastRir: hyroxRpeToRir(m.ratedRpe, m.targetRpe),
@@ -258,6 +317,9 @@ export function hyroxBeginnerStationLoadKg(args: {
         injuryKind: args.injuryKind,
       }).weightKg
     : 0;
+  // A fixed implement climbs to the next standard size, holds otherwise.
+  const ladder = HYROX_IMPLEMENT_SIZES_KG[args.station] != null;
+  const stepped = m && ladder ? (suggested > m.kg + 1e-9 ? hyroxImplementAbove(args.station, m.kg) : m.kg) : suggested;
   return Math.min(race, Math.max(anchor, stepped));
 }
 
